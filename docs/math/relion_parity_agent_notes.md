@@ -4803,3 +4803,29 @@ same-device equivalence or numerical noise.
   (SHA-256
   `5b89f65cc77923b9292cb346fc47360fd4dbb8b184a33f7395b2b0560b3416bb`).
 - This remains diagnostic/non-gating; map quality remains FSC/FSC-AUC.
+
+# 2026-07-21: exact case-7 control closes cross-H100 reproducibility
+
+- State-component job `11449766` completed its `all_relion_repeat` arm on
+  `della-h19g1`, H100 UUID
+  `GPU-2ee3da91-970a-6714-84df-530aefe04a08`. Independent prior exact job
+  `11442740` ran on `della-h20g3`, H100 UUID
+  `GPU-2dcba0de-4bea-ece2-85aa-34ebe8d3d949`.
+- The new repeat contains/ranks the immutable RELION target first and includes
+  it in reconstruction support for all 24 images, including each predeclared
+  tail subtype.
+- Prior exact versus repeated exact has support Jaccard `1/1/1`, posterior TV
+  `0/0/0`, zero winner displacement, and identical latent/physical winners
+  for 24/24 images under every audited representation.
+- This rejects allocation/GPU-specific arithmetic as the case-7 panel cause.
+  It does not yet choose maps versus poses; wait for both remaining component
+  arms and the independent residual panel before touching production logic.
+- New capture-manifest/refinement/wall-time SHA-256 values:
+  `31cf0d14eb831eb9c022658ad0af85a137f658f92041bb21bf599b82e66f5a0b`,
+  `c4978e29cbdef4e69a10fd4fc2c50ba2fa62196da9ee5f4f0fb5607d06eb51ef`,
+  `781979ef966a6bff2c42914efcf42646e38a98a39dd895310f6614e67f7cb521`.
+- Durable note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_state_component_77bcf3bd_20260721T034700Z/provenance/ALL_RELION_REPEAT_CROSS_ALLOCATION_RESULT_20260721T0551-0400.md`
+  (SHA-256
+  `8f145d75670f08e0136d253bafdc5d43630d84e31f46ed882983067857b3a45d`).
+- This remains diagnostic/non-gating; correlation was not computed.

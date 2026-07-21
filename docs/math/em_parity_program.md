@@ -8114,3 +8114,30 @@ and `378084186e3dc48804dfabd35bfcc639b8951cc175ef68a2af2f378fe7a628f0`.
 The submission note SHA-256 is
 `90ac71d738a3710816681b70a50ce1ffffa7c6f67116ff6cc4e125f36f96d0e2`.
 This is diagnostic/non-gating; correlation is not computed.
+
+## 2026-07-21 case-7 exact control is reproducible across H100 allocations
+
+The first arm of state-component science job `11449766`,
+`all_relion_repeat`, completed successfully on `della-h19g1` and a different
+physical H100 from independent exact control job `11442740` on `della-h20g3`.
+All 24 immutable RELION targets are present, in reconstruction support, and
+rank 1 in the new repeat, including all predeclared tail failure subtypes.
+
+Across the 24 images, the prior and repeated exact controls have candidate,
+physical-pose, and reconstruction-support Jaccard `1/1/1`; latent and physical
+posterior TV `0/0/0`; zero best-pose displacement; and identical latent and
+physical winners for 24/24 images. Thus the exact-state/reference control is
+fully reproducible under the audited posterior/support metrics across GPU
+allocations. Allocation-specific arithmetic is not a viable explanation for
+the resident-versus-exact case-7 response. The map-only, pose-only, and
+residual arms remain necessary before changing production code.
+
+The new capture-manifest, refinement-result, and wall-time SHA-256 values are
+`31cf0d14eb831eb9c022658ad0af85a137f658f92041bb21bf599b82e66f5a0b`,
+`c4978e29cbdef4e69a10fd4fc2c50ba2fa62196da9ee5f4f0fb5607d06eb51ef`,
+and `781979ef966a6bff2c42914efcf42646e38a98a39dd895310f6614e67f7cb521`.
+The durable partial-result note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_state_component_77bcf3bd_20260721T034700Z/provenance/ALL_RELION_REPEAT_CROSS_ALLOCATION_RESULT_20260721T0551-0400.md`
+(SHA-256
+`8f145d75670f08e0136d253bafdc5d43630d84e31f46ed882983067857b3a45d`).
+This is diagnostic/non-gating; correlation was not computed.
