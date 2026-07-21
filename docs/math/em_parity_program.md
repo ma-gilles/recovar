@@ -7497,3 +7497,31 @@ and seal-manifest SHA-256 is
 `ac9c9d440cdc540d7ec318ef9fd38e98162c374800652dc7f64a8df0a2426e05`.
 This accepts the newly crossed prefix quality, not terminal acceptance or
 single-control attribution. Correlation was not computed.
+
+## 2026-07-21 case-9 cap decomposition and case-33 seal repair
+
+Exact 2x2 source-function arithmetic at the case-9 iteration-11 half-2 OOM
+geometry gives caps 8,707 for 190M/4GiB, 3,879 for 64M/4GiB, 4,353 for
+190M/2GiB, and 3,879 for 64M/2GiB. Thus either single knob lowers the failed
+cap, while the 64M row target alone reproduces the successful bundle's cap
+exactly. The 2GiB-only arm is 474 rows (12.2%) larger. The outer-tail guard is
+inactive because the maximum local width equals the planned rotation block.
+
+No single-knob arm has run on a GPU, so this calculation does not establish
+which individual control completes science or isolate the allocator. The
+JSON and method-note SHA-256 values are
+`521d9bc9a94bd8eb97d2c272b6090bc55bdc2a44aff6a44608a130df2668c73c`
+and
+`336915db44e4ab1123789bbfbbd80c6feaa7e02b1584da3c86e9d18bfec021b6`.
+Root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/case9_cap_decomposition_20260721T012100`.
+No map metric or correlation was computed by this arithmetic audit.
+
+Separately, pending case-33 sealer job `11440295` originally depended on
+`afterok:11440102`; that would omit durable rejection if the audit failed.
+At 2026-07-21T01:18:49-04:00 its live dependency was repaired in place to
+`afterany:11440102`. No launcher, threshold, science artifact, or sealer code
+changed. The audit note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case33_full_currenthead_7605c1b0_20260720T222000Z/provenance/SEALER_DEPENDENCY_REPAIR_20260721T011849-0400.md`
+(SHA-256
+`083f41579db12f73efe2bc923c75802aed3120c893a1917cad2ba217007bcf25`).

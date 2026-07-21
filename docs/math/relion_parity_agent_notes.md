@@ -4544,3 +4544,21 @@ same-device equivalence or numerical noise.
   `ac9c9d440cdc540d7ec318ef9fd38e98162c374800652dc7f64a8df0a2426e05`.
   Terminal acceptance and single-control attribution remain pending;
   correlation was not computed.
+
+# 2026-07-21: case-9 cap attribution remains factorial
+
+- Exact source-function caps at the failed iteration-11 half-2 geometry are
+  8,707 (190M/4GiB), 3,879 (64M/4GiB), 4,353 (190M/2GiB), and 3,879
+  (64M/2GiB). The 64M knob alone reproduces the successful bundle's cap; the
+  2GiB-only arm remains 12.2% larger.
+- Both single knobs reduce the failed arithmetic cap, but neither has a GPU
+  completion result. Do not attribute the bundled success to one knob or
+  change production defaults before terminal acceptance.
+- Result root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/case9_cap_decomposition_20260721T012100`;
+  JSON SHA-256
+  `521d9bc9a94bd8eb97d2c272b6090bc55bdc2a44aff6a44608a130df2668c73c`.
+- Case-33 sealer `11440295` was also repaired from `afterok:11440102` to
+  `afterany:11440102`, ensuring its existing fail-closed logic executes on a
+  negative audit. No science or threshold changed. Dependency-audit SHA-256:
+  `083f41579db12f73efe2bc923c75802aed3120c893a1917cad2ba217007bcf25`.
