@@ -8383,3 +8383,60 @@ observational for a nonmatching target, while the cross-commit timing reduction
 is real. The durable classification is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case11_siggate_cleanrepeat_fa0c93fc_20260721T174000Z/provenance/CAUSAL_CLASSIFICATION.md`.
 Correlation is not computed.
+
+## 2026-07-21 uninterrupted K=4 class-2 pre-scatter diagnostic
+
+The accepted same-A100 K=4 trajectory at `ac5177d2` first fails the direct
+cross-engine map gate at iteration 10, class 2: FSC-AUC is
+`0.994676799 < 0.995`. Fixed-stat reconstruction closes when RECOVAR's own
+`Ft_y`/`Ft_ctf` are replayed, while swapping RELION tau into the RELION-factor
+replay leaves essentially the full gap. The remaining boundary is therefore
+upstream in the accumulated source numerator/weight rather than tau or the
+reconstructor.
+
+An iteration-9 RELION continuation is not an admissible substitute for the
+live iteration-10 boundary. Even after exact particle-order and follower
+replay, the best continuation's class-2 map versus the uninterrupted canonical
+map has FSC-AUC `0.9707791`. Those continuation artifacts are rejected as
+science and preserved only as orchestration history under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_bpref_capture_ac5177d2_20260720T084530Z/`.
+
+The replacement diagnostic runs an uninterrupted clean RELION control, an
+uninterrupted passive-capture RELION arm with exact control dispatch replay,
+and current-head RECOVAR sequentially on one physical A100. The RELION
+diagnostic source is commit `186e0b8`; its binary SHA-256 is
+`54d7abea3d3ab472b89c6a5632805b83994e5ab01e8fa5353a5adcf38f086a10`.
+RECOVAR is detached and clean at
+`77a348c59c28fb0848413af4ec3333192cad5add`. Grid correction and forced final
+all-data after non-convergence are unset.
+
+The frozen panel contains 96 unique class-2 particles, 16 each from stable
+controls, Pmax tails, rotation tails, translation tails, support mismatches,
+and RELION-class-2/RECOVAR-winner disagreements. It is balanced 48/48 across
+the canonical follower owners, and its identity SHA-256 is
+`b1c85f635cc342aded1cbe95ffac9d99e0b9ed5afb432dd85f40f9b0e0d085be`.
+RELION captures native class-2 source rows at iteration 10. RECOVAR captures
+the corresponding soft-posterior contribution rows and observational device
+geometry at iteration 10, half 1. Target-scoped diagnostic modes are checked
+shadows; production score, reduction, and adjoint outputs remain authoritative.
+
+Initial science job `11480222` was cancelled after 1m45s, before iteration 1,
+because the launcher omitted the RECOVAR device-geometry shadow required for
+the intended comparison. Its partial directories are preserved and excluded.
+Superseding uninterrupted science job `11480333` runs from
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_class2_prescatter_panel_ac5177d2_20260721T215100Z/`.
+The first dependent audit `11480576` was cancelled while pending at zero wall
+time after local preflight caught an incorrect panel-status expectation in the
+run-scoped comparator. Corrected audit `11480664` waits on
+`afterok:11480333`; the corrected comparator SHA-256 is
+`35843376457d496c0dac2568372d53ccbad6b74c438bc2e40a8f6c5bf7633542`.
+It passes `py_compile`, Ruff, the actual 96-particle panel contract, and a
+synthetic two-rotation soft-class exact-operand test.
+
+The audit predeclares the classification order: rotation support first,
+reached-scatter pixel support second, then complex numerator and real weight.
+RELION values are converted by `-1/N^2` for data and `1/N^4` for weight with
+physical `N=256`; current-size is layout only. Capture inertness is gated with
+shellwise FSC/FSC-AUC, intermediate operands use exact/relative-L2 metrics,
+and correlation is not computed. No K=4 production change is justified until
+science `11480333` and audit `11480664` complete.
