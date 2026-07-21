@@ -4509,3 +4509,19 @@ same-device equivalence or numerical noise.
   200-input manifest SHA-256
   `35487dd427726a6ba09dc843f4db136f23e2d7ca2a47ee3ec9317e062ffd85ff`.
   Terminal FSC/FSC-AUC gates remain pending; correlation was not computed.
+
+# 2026-07-21: case-10 completes terminal half-1 M-step
+
+- Science job `11421265` completed final all-data half 1 at size 384 on A100
+  `GPU-4bccbe72-c64a-5f5f-1fa8-ecf0bf6acf37` and proceeded to half 2.
+- The `(771, 771, 771)` x-half BPref M-step ran at tail cap 60, completed
+  49,878 chunks/49,933 particles in 4,964.2 seconds, then completed host
+  Hermitian enforcement and both accumulator repacks. Total half-1 wall time
+  was 6,693.4 seconds.
+- The half-1 manifest SHA-256 is
+  `fead22d62f6e7302e7b931f3e10269f6df87fd65382cf7ccb3a26b43de9502b6`.
+  Durable checkpoint:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_tail_lowcap_accept_9d172278_20260720T164557Z/provenance/CASE10_TERMINAL_HALF1_MSTEP_CHECKPOINT_20260721T0113-0400.md`.
+- This accepts the bundled low-cap half-1 memory boundary only. Half 2,
+  terminal FSC/FSC-AUC, and the fail-closed sealer remain pending; correlation
+  was not computed.

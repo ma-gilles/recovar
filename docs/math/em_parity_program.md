@@ -7450,3 +7450,24 @@ Sealed root:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/case9_lowcap_prefix10_compare_20260721T005600`.
 Terminal FSC/FSC-AUC audits remain pending, so this does not yet justify a
 production-default change. Correlation was not computed.
+
+## 2026-07-21 case-10 terminal half-1 memory checkpoint
+
+Case-10 low-cap job `11421265` completed the physical-iteration-16 final
+all-data half-1 path at `current_size=384` on A100
+`GPU-4bccbe72-c64a-5f5f-1fa8-ecf0bf6acf37`. The x-half outer-tail guard
+reduced the fine M-step cap from 863 to 60 for the `(771, 771, 771)` BPref
+accumulator. All 49,878 chunks and 49,933 particles completed in 4,964.2
+seconds; Hermitian enforcement and both large-accumulator repacks completed,
+the half-1 manifest was written, and half 2 started. Total half-1 wall time was
+6,693.4 seconds.
+
+This directly accepts the bundled low-cap package across the extreme half-1
+terminal M-step memory boundary, but it neither isolates the three controls
+nor accepts terminal map quality. The manifest SHA-256 is
+`fead22d62f6e7302e7b931f3e10269f6df87fd65382cf7ccb3a26b43de9502b6`;
+the durable checkpoint is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_tail_lowcap_accept_9d172278_20260720T164557Z/provenance/CASE10_TERMINAL_HALF1_MSTEP_CHECKPOINT_20260721T0113-0400.md`.
+Grid correction and forced after-max finalization were unset. Final
+FSC/FSC-AUC audits and the sealer remain pending; correlation was not
+computed.
