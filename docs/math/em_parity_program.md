@@ -7602,3 +7602,38 @@ The refinement archive and launcher-summary JSON SHA-256 values are
 and `13e8a4600a6c47e8b03e7977a4b11eeb5b32291bdaff272a34742ecb4b573f1b`.
 Case 9 still bundles the allocator and both cap overrides, so it does not
 alone establish single-control causality. Correlation was not used as a gate.
+
+## 2026-07-21 case-33 complete numbered trajectory
+
+The frozen read-only audit of all 14 numbered case-33 rows passes. Current
+sizes are exactly `[56, 68, 100, 128, 128, 128, 128, 128, 128, 128, 128,
+128, 128, 128]`; every row passes the merged cross-engine FSC-AUC threshold
+0.995 and RECOVAR-minus-RELION merged GT FSC-AUC threshold -0.002. At
+iteration 14, merged cross-engine FSC-AUC is `0.9983139369494863`, RECOVAR
+merged-versus-GT is `0.799559821719684`, RELION merged-versus-GT is
+`0.7961875736492268`, and the GT delta is `+0.0033722480704572178`.
+
+The last row also exposes a half-specific discrepancy that the passing merged
+gate must not hide: half-1 cross-engine FSC-AUC is `0.9504239364636927`,
+versus `0.9970095099604138` for half 2. The half-1 minimum non-DC shell FSC
+is `0.7437240350067739` at shell 17. RELION half 1 versus GT is
+`0.7337998926958064`, below RECOVAR half 1 (`0.7987987477020957`) and RELION
+half 2 (`0.7990197613205833`), while RECOVAR's merged GT metric improves on
+RELION. This localizes the late-row discrepancy to RELION half-1 state/map
+behavior rather than a symmetric RECOVAR quality loss; terminal products and
+state provenance still require inspection.
+
+The analyzer consumed exactly 57 hashed numerical inputs from explicit
+numbered-map stages. Its JSON and shellwise-NPZ SHA-256 values are
+`d45e0c203e8f823bc311a5d2fcc12a0e564b74e31b68ddc4148bc552cd777f2d`
+and `b5bfcfb8ca9c9472bec04616a48575c350a24891bc4cb1f905fa7c00914cf452`.
+The sealed audit root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_numbered14_20260721T021800`;
+its method-note and seal-manifest SHA-256 values are
+`618aab5bc2adf02c52e9a8be2d3c3a9efb4066086c384da78ae54f01d1bda029`
+and `fccc6abdb15c2b3f7ca85f12155ff3b389502e00ece8d20e49dde60598d3fc02`.
+An initial invocation against a full RELION directory correctly failed closed
+before numerical evaluation because it exposed final products to a
+numbered-only RECOVAR stage; that error is retained in the seal. Science job
+`11440100` is still running its valid final all-data pass, followed by audit
+`11440102` and sealer `11440295`. Correlation was not computed.
