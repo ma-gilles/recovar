@@ -7385,6 +7385,39 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
         "local_fused_posterior_it-01_image_2.npz",
     ]
 
+    target_only_score_dump_dir = tmp_path / "target_only_score_dump"
+    target_only_fused_dump_dir = tmp_path / "target_only_fused_dump"
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", str(target_only_score_dump_dir))
+    monkeypatch.setenv(
+        "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR", str(target_only_fused_dump_dir)
+    )
+    monkeypatch.setenv(LOCAL_SCORE_DUMP_TARGET_ONLY_ENV, "1")
+
+    target_only_result = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        **common_kwargs,
+    )
+
+    target_only_profile = target_only_result[-1]
+    assert int(target_only_profile["n_chunks"]) == 1
+    assert int(target_only_profile["big_jit_bucket_count"]) == 1
+    assert int(target_only_profile["big_jit_debug_bucket_count"]) == 1
+    assert sorted(
+        path.name
+        for path in target_only_score_dump_dir.glob("local_score_it*_image_*.npz")
+    ) == ["local_score_it-01_image_2.npz"]
+    assert sorted(
+        path.name
+        for path in target_only_fused_dump_dir.glob(
+            "local_fused_posterior_it*_image_*.npz"
+        )
+    ) == ["local_fused_posterior_it-01_image_2.npz"]
+
 
 def test_local_score_debug_force_split_only_splits_target_bucket(monkeypatch, rng, tmp_path):
     dataset = RawRealImageDataset(3, rng)
