@@ -4708,6 +4708,13 @@ same-device equivalence or numerical noise.
   `81b0d743ca3a6c0217598a31cf9f5105b19ea9f7d67f4ea82126c57616bbc174`).
 - Do not build the v3 aggregate until independent jobs `11432810`,
   `11432811`, `11421266`, and `11421267` are terminal and consumed.
+- Submitted builder `11452420` waits `afterany` on those four audits; sealer
+  `11452421` waits `afterany:11452420`. Preterminal self-test resolved 34 rows,
+  with only cases 9/10 structurally incomplete due to pending audits.
+- Job registry:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_full34_superseding_v3_33ff4287_20260721T044600Z/JOB_REGISTRY.md`
+  (SHA-256
+  `77842f24be89f021d3f95ed6c0f7b89b15a534f1e2369003edbe99fa911f18fd`).
 
 # 2026-07-21: residual panel now distinguishes support loss from score loss
 
@@ -4717,13 +4724,14 @@ same-device equivalence or numerical noise.
 - The 0.001-degree/0.001-pixel target matcher aligns STAR rows by image
   identity. Functional smoke image 11540 proves a target-present score-loss
   path: resident ranks the target second and selects a 1.875-degree neighbor;
-  exact state/reference promotes the same target to rank 1.
+  exact state/reference promotes the same target to rank 1. The resident
+  target/winner posterior ratio is `0.9696178825` (log gap `0.03085322066`).
 - Analyzer/audit-launcher SHA-256 values:
-  `99e752156b3d778dbd9ee3c4ba6add68d51851d87a0d3315940f72fc28423987`,
-  `2edc96b3ac0e89b0532130cfe80c4535344f69e8f8fc0d2dfc44071bc0d4269c`.
+  `5e3479b827df78dab166455ab9a2a72503d6d4db3884961fcb136b1ee181ac56`,
+  `86615bdfdcc042d351d34778e8d27d3cd7e831c44c14778c65ab6282d2e992b5`.
 - Amendment note:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_residual_posterior_77bcf3bd_20260721T042500Z/provenance/ANALYZER_V2_AMENDMENT_20260721T0455-0400.md`
   (SHA-256
-  `cfb40feabb5500b29c34caa9055046db473658c53ea8ca2afb600278929756b8`).
+  `696740a5ec112d77f2beec6c1aa061bfeada05d9904fa4281b088d861552b011`).
 - This remains diagnostic/non-gating; correlation is not computed and map
   quality remains FSC/FSC-AUC.
