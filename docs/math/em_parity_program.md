@@ -7637,3 +7637,47 @@ before numerical evaluation because it exposed final products to a
 numbered-only RECOVAR stage; that error is retained in the seal. Science job
 `11440100` is still running its valid final all-data pass, followed by audit
 `11440102` and sealer `11440295`. Correlation was not computed.
+
+## 2026-07-21 case-33 terminal rejection and state localization
+
+Case-33 science job `11440100` subsequently completed `0:0` after 4:14:05.
+It converged after 14 numbered rows and ran the unforced final all-data pass
+at size 128 with grid correction off. A local exact mirror of pending audit
+job `11440102` rejects exactly one map gate: terminal merged cross-engine
+FSC-AUC is `0.9727626280594356`, below 0.995. Half-1 and half-2 cross-engine
+values are `0.972007960452858` and `0.995298199193914`. This is not a GT
+quality loss: RECOVAR merged-versus-GT FSC-AUC is `0.9769353607293773`,
+RELION is `0.9457523102520277`, and the delta is favorable by
+`+0.031183050477349594`. Correlation was not computed.
+
+An exact-identity diagnostic aligns all 400,000 particles by unique
+`rlnImageName` and rules out a simple row-order error. Iteration 13 remains
+closely aligned, but iteration 14 is half-specific: half-1 rotation-geodesic
+p95 is `1.0449055358065685e-5` degrees while half 2 is
+`0.922373453820857` degrees. RELION's own `run_it014_data.star` Pmax column
+is internally asymmetric, with half means `0.16330775623382404` and
+`0.8677921732644837`; both were near 0.165 one row earlier. In contrast,
+RELION optimiser `rlnAvePmax=0.163466` agrees with RECOVAR's M-step average
+`0.16395849217264247` to `+0.0004924921726424669`. The particle Pmax column
+therefore is not a coherent whole-dataset oracle at this boundary.
+
+Final sampling parameters are not the gap: expected rotational/translational
+accuracy matches `0.533` degrees / `0.6715` Angstrom, perturbation is
+`-0.46612`, HEALPix order is 7 with fine order 8, and the translation grid
+matches RELION's `1.53` / `1.02` Angstrom range/step. Terminal pose differences
+remain measurable (angular-error p95 `1.806696629320861` degrees), but the
+combination of accepted numbered merged maps, favorable terminal GT FSC-AUC,
+matched final sampling, and a half-asymmetric RELION particle checkpoint does
+not justify an algorithm change without an independent coherent oracle.
+
+The particle-state diagnostic JSON and compact-array SHA-256 values are
+`aac7dacdd0ffdc33dda5ecffe0c71170a6e9312b9df7571e06115e19fae8a2d5`
+and `b76919b053ce59e5679bcfd6f3d8ecc19c18396a78e83ad7245cfdd8c1d31672`.
+Root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_particle_state_terminal_20260721T024500`.
+The complete durable note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case33_full_currenthead_7605c1b0_20260720T222000Z/provenance/CASE33_TERMINAL_REJECTION_AND_STATE_DIAGNOSTIC_20260721T0250-0400.md`
+(SHA-256
+`8b1208b54ffe1b97f216cf58adcfe7670f1f5936d9b21bb2d744c5ced2f04c34`).
+Submitted audit `11440102` and `afterany` sealer `11440295` remain the durable
+scheduler graph.
