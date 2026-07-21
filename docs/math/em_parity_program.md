@@ -8168,3 +8168,39 @@ The scheduler/result note is
 (SHA-256
 `e4cc94f33a99976ecb51bdd7b8fdbdf1c0d6e1b25be66f8796d8dd637a5524c1`).
 Correlation was not computed or gated.
+
+## 2026-07-21 strict K=1 v3 audit graph repaired fail-closed
+
+Right-sizing the four pending independent audits exposed two distinct issues.
+The intermediate audits fit comfortably and completed successfully: case 9
+job `11432810` used 543884 KiB in 24 seconds and case 10 job `11421267` used
+622232 KiB in 20 seconds. Complete trajectory audits exceeded 8 GiB and jobs
+`11432811`/`11421266` terminated `OUT_OF_MEMORY 0:125`. More importantly, the
+pre-existing v3 registry had case-9 trajectory/intermediate roles reversed,
+and the builder accepted any terminal Slurm state, which could permit an OOM
+job when stale local artifacts existed.
+
+Pending builder/sealer `11452420`/`11452421` were canceled without running.
+Trajectory retries `11454201` and `11454202` use one CPU, 32 GiB, and 30
+minutes. The corrected role registry is case 9 trajectory `11454201`,
+intermediate `11432810`; case 10 trajectory `11454202`, intermediate
+`11421267`. Builder validation now rejects infrastructure outcomes while
+allowing only `COMPLETED 0:0` or the audit launchers' intentional fail-closed
+`FAILED 2:0`.
+
+Corrected builder `11454286` waits `afterany:11454201:11454202`; sealer
+`11454287` waits on the builder. Direct batch-script inspection verifies both
+aggregate jobs use one CPU, 8 GiB, 30 minutes, and revalidate their manifests.
+Both static/eligibility manifests pass, and a corrected preterminal build
+resolves 32/34 rows with only the two running trajectory retries incomplete.
+
+Durable graph-repair and resource-result notes are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_full34_superseding_v3_33ff4287_20260721T044600Z/provenance/V3_GRAPH_REPAIR_20260721T0610-0400.md`
+(SHA-256
+`b3dd960f88c70cd9f4caeb07ebec3d730ef465a5259de4cfedd9726cc3ad648a`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_full34_superseding_v3_33ff4287_20260721T044600Z/provenance/AUDIT_RESOURCE_RIGHTSIZE_20260721T0601-0400.md`
+(SHA-256
+`7036091ba125a8f98d13d2ee5e9bdb124f6ca5724ec9a4fcf6b3c44a011a7936`).
+No acceptance threshold, fixture, science artifact, or FSC/FSC-AUC result was
+changed; correlation remains uncomputed and ungated.

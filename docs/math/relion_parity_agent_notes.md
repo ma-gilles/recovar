@@ -4853,3 +4853,35 @@ same-device equivalence or numerical noise.
   (SHA-256
   `e4cc94f33a99976ecb51bdd7b8fdbdf1c0d6e1b25be66f8796d8dd637a5524c1`).
 - Correlation was not computed or gated.
+
+# 2026-07-21: strict K=1 v3 graph repaired after audit OOM/role discovery
+
+- Case-9 intermediate `11432810` and case-10 intermediate `11421267`
+  completed at 543884 and 622232 KiB MaxRSS. Their complete trajectory peers
+  `11432811` and `11421266` hit the 8-GiB cgroup and ended
+  `OUT_OF_MEMORY 0:125`.
+- Audit inspection also proved the pre-existing case-9 registry fields were
+  reversed: `11432810` is intermediate, while `11432811` was trajectory.
+- Builder `11452420` and sealer `11452421` were canceled before running. The
+  old builder accepted any terminal state and therefore was not safe against
+  OOM plus stale output files.
+- New trajectory retries are `11454201` (case 9) and `11454202` (case 10),
+  each one CPU/32 GiB/30 minutes. The corrected registry binds case-9
+  intermediate `11432810` and case-10 intermediate `11421267`.
+- Corrected builder `11454286` waits on both retries; sealer `11454287` waits
+  on the builder. Aggregate launchers are one CPU/8 GiB/30 minutes and their
+  submitted snapshots directly verify the manifest gates.
+- Builder outcome validation now rejects infrastructure states including OOM
+  while permitting successful `0:0` and intentional fail-closed `2:0` exits.
+- Corrected preterminal closure is 32/34, with only the two running trajectory
+  retries incomplete. Static and eligibility manifests both pass.
+- Durable notes:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_full34_superseding_v3_33ff4287_20260721T044600Z/provenance/V3_GRAPH_REPAIR_20260721T0610-0400.md`
+  (SHA-256
+  `b3dd960f88c70cd9f4caeb07ebec3d730ef465a5259de4cfedd9726cc3ad648a`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_full34_superseding_v3_33ff4287_20260721T044600Z/provenance/AUDIT_RESOURCE_RIGHTSIZE_20260721T0601-0400.md`
+  (SHA-256
+  `7036091ba125a8f98d13d2ee5e9bdb124f6ca5724ec9a4fcf6b3c44a011a7936`).
+- No science artifact or FSC/FSC-AUC threshold changed; correlation remains
+  uncomputed and ungated.
