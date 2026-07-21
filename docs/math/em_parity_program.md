@@ -7168,8 +7168,12 @@ RECOVAR to convergence and permits final all-data only after convergence.
 `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT`,
 `RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER`, and forced current sizes are unset.
 Iteration 1 completed in 832.4 seconds and scheduled the expected `56 -> 68`
-boundary exactly. The causal `68 -> 100` full-run boundary and all subsequent
-FSC/FSC-AUC gates remain pending; this paragraph is not an acceptance claim.
+boundary exactly. Iteration 2 then completed in 1,234.1 seconds, retained the
+inclusive shell-34 state (`res_shell=34`), and scheduled the causal
+`68 -> 100` boundary exactly (`raw=100`, `quantized=100`). This accepts the
+schedule correction in the autonomous 400k-particle run as well as the bounded
+replay. All subsequent convergence, final-map, and FSC/FSC-AUC gates remain
+pending; this paragraph is not a full case-33 acceptance claim.
 
 Dependent job `11440102` runs both the shellwise FSC/FSC-AUC trajectory gate
 and the intermediate topology/artifact audit. Dependent sealer `11440295`

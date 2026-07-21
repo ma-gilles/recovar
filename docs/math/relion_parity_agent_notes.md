@@ -4419,7 +4419,11 @@ same-device equivalence or numerical noise.
   H100 `della-h20g2`, reusing the immutable 400k fixture/RELION oracle. It is
   autonomous to convergence, with grid correction, forced after-max final,
   and forced current sizes unset. Iteration 1 completed in 832.4 seconds and
-  scheduled `56 -> 68` exactly. Full FSC/FSC-AUC acceptance remains pending.
+  scheduled `56 -> 68` exactly. Iteration 2 completed in 1,234.1 seconds,
+  retained `res_shell=34`, and scheduled the causal `68 -> 100` boundary
+  exactly (`raw=100`, `quantized=100`). This accepts the corrected autonomous
+  schedule boundary; full convergence/final FSC/FSC-AUC acceptance remains
+  pending.
 - Case-33 dependent audit `11440102` gates shellwise FSC/FSC-AUC and
   intermediate topology. Sealer `11440295` additionally requires exact Git,
   H100, convergence, final-path, grid-off, exit-status, and submission-hash
