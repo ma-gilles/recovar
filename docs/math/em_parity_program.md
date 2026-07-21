@@ -7525,3 +7525,24 @@ changed. The audit note is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case33_full_currenthead_7605c1b0_20260720T222000Z/provenance/SEALER_DEPENDENCY_REPAIR_20260721T011849-0400.md`
 (SHA-256
 `083f41579db12f73efe2bc923c75802aed3120c893a1917cad2ba217007bcf25`).
+
+## 2026-07-21 case-33 iteration-11 FSC checkpoint
+
+Current-head job `11440100` remains effectively identical to RELION through
+the late numbered prefix. At iteration 11, half-1, half-2, and merged
+cross-engine FSC-AUC are `0.9999997772584983`, `0.9999998224078882`, and
+`0.9999998956685751`; the merged GT FSC-AUC delta is
+`-0.000007236484065309412`. The worst merged non-DC shell FSC is
+`0.9999990820988931` at shell 62.
+
+All 11 frozen rows pass the 0.995 cross-engine and -0.002 GT-delta gates.
+Analyzer status 2 is solely incomplete live topology (11 RECOVAR versus 14
+RELION numbered rows). The audit used explicit numbered-map links and seals
+45 consumed inputs with manifest SHA-256
+`6b4520d7ff872606ae060da476aafd37d95e269f7206febf2c1b9fb13cee9795`.
+The root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it11_20260721T012700`;
+its seal-manifest SHA-256 is
+`2c2a682287b04dd7b1d272961f40ece77a934b5da9ee1c0b4315f4eb31c26b4b`.
+Iterations 12--14 and terminal acceptance remain pending; correlation was not
+computed.

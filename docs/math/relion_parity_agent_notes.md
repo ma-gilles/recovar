@@ -4562,3 +4562,18 @@ same-device equivalence or numerical noise.
   `afterany:11440102`, ensuring its existing fail-closed logic executes on a
   negative audit. No science or threshold changed. Dependency-audit SHA-256:
   `083f41579db12f73efe2bc923c75802aed3120c893a1917cad2ba217007bcf25`.
+
+# 2026-07-21: case-33 iteration 11 remains effectively exact
+
+- Iteration-11 half-1/half-2/merged cross-engine FSC-AUC is
+  `0.9999997772584983`/`0.9999998224078882`/`0.9999998956685751`; merged GT
+  FSC-AUC delta is `-0.000007236484065309412`.
+- Worst merged non-DC shell FSC is `0.9999990820988931` at shell 62. All 11
+  frozen numbered rows pass; status 2 is only incomplete 11-versus-14
+  topology.
+- Exact 45-input manifest SHA-256:
+  `6b4520d7ff872606ae060da476aafd37d95e269f7206febf2c1b9fb13cee9795`.
+  Sealed root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it11_20260721T012700`.
+- Terminal convergence/final FSC/FSC-AUC remains pending; correlation was not
+  computed.
