@@ -8277,3 +8277,86 @@ The authoritative note is
 `312594539d2b6932c86aadb727afe885417282c509e5be63ab2652b689435671`).
 Clean component reruns must use unfiltered parent passes. A residual panel may
 be selected only from a clean unfiltered full-population run.
+
+## 2026-07-21 clean case-7 component and population results
+
+The clean unfiltered reruns supersede the quarantined case-7 captures above.
+Science/audit jobs `11455669`/`11455726` completed the 24-particle component
+panel at `c1ee409b`. The independent exact-state/reference repeat remains
+identical to its prior cross-allocation control: candidate, physical-pose, and
+reconstruction-support Jaccard are all one, posterior TV is zero, all 24
+winners match, and the best-pose displacement is zero.
+
+Restoring only RECOVAR target-boundary poses is essentially inert: median
+posterior TV is zero, its maximum physical-pose TV is
+`4.60258837567923e-6`, and no winner or reconstruction support changes.
+Restoring only RECOVAR target-boundary maps produces median physical-pose TV
+`0.0023821552614138467` and maximum `0.008934585995142925`, but still changes
+no winner or reconstruction support. All immutable RELION targets remain
+present, in reconstruction support, and rank one. Thus target-boundary maps,
+not poses, contain a measurable local seed, but neither component alone
+recreates a discrete selected-particle failure.
+
+Clean full-population science job `11455783` independently ran resident and
+exact-RELION-state/reference trajectories with all capture variables unset.
+Exact replay improves absolute iteration-11 Pmax agreement for
+`98099/100000` particles. Median absolute Pmax error drops from
+`0.005740753383636499` to `0.0001427888574600522`. At the 0.1-degree rotation
+threshold, the resident tail has 1093 particles and the exact tail has 22:
+1083 close, 12 open, 10 persist, and 98895 remain stable. These are clean
+diagnostic population counts, not a map-quality gate.
+
+The predeclared six-persistent-targets-per-half residual panel is impossible:
+one half contains only four clean persistent rows. Selector retry `11476493`
+therefore uses the deterministic balanced fallback of four persistent and six
+opened targets per half, each with a stable control: 40 unique particles.
+Downstream residual science/audit `11476527`/`11476528` are dependency-gated
+on that selector and source-pinned to `fa0c93fc`. Correlation was not computed
+in any of these diagnostics.
+
+Complete component JSON/Markdown are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_state_component_clean_c1ee409b_20260721T070100Z/provenance/`.
+The clean population split and selector retry audit trail are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_cohort_base_clean_c1ee409b_20260721T071000Z/provenance/`.
+
+## 2026-07-21 current-head case-2 strict-boundary closure
+
+Strict K=1 v3 identified historical case 2 iteration 3 as the earliest ledger
+failure, with merged GT FSC-AUC delta `-0.003274589`. That row used older code
+whose first structural mismatch was current size 162 versus RELION 164. The
+later high-shell route should produce 164, so job `11456044` reran RELION and
+current-head RECOVAR sequentially for four numbered iterations on one H100 at
+commit `c1ee409b`.
+
+The numbered topology audit passes exactly through all four boundaries.
+Audit retry `11476398` uses numbered-only views because final all-data was
+explicitly skipped; it completed `0:0` without changing the GPU outputs.
+Merged cross-engine FSC-AUC is `0.999999999797`, `0.999999889449`,
+`0.999995387764`, and `0.999987472525` at iterations 1--4. The corresponding
+RECOVAR-minus-RELION merged GT FSC-AUC deltas are `+1.87897086223e-8`,
+`+3.53042218848e-7`, `-4.70789998291e-6`, and `+1.74529697717e-5`.
+
+Current head therefore closes the historical case-2 failure by FSC/FSC-AUC;
+the old strict-v3 ledger remains an immutable historical record rather than
+an active defect. The audit report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case2_currenthead_it4_samegpu_c1ee409b_20260721T072000Z/analysis_numbered_retry/k1_fsc_trajectory.json`.
+Correlation was not computed.
+
+## 2026-07-21 significance-capture boundary gate
+
+Configured significance dumping previously activated diagnostic score-block
+collection at every global boundary, even when its requested iteration and
+current size could not match. In the joint first-iteration path, merely
+setting the dump directory could also run a full significance pass that
+science otherwise skipped. This is observationally intended work with a real
+performance cost: at clean case-7 iteration 4, the capture-configured arm took
+998.7 seconds versus 800.8 seconds without capture. Two pass-1 intervals
+account for 187.4 of the 197.9 extra seconds.
+
+Commit `fa0c93fc` moves the iteration/current-size predicate to the boundary
+before diagnostic collection and before the optional first-iteration probe.
+The affected complete unit-module set passes 417 tests with 109 warnings.
+Same-H100 causal science/audit `11476473`/`11476474` compare `c1ee409b` and
+`fa0c93fc` on the 3k/128 case with an impossible future dump target. The audit
+requires exact scientific arrays and maps and reports FSC/FSC-AUC and E-step
+timing; its result is pending. Correlation is not computed.
