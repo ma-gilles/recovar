@@ -7210,6 +7210,16 @@ GT-delta gates, verifies exact topology and finite artifacts, requires
 convergence-only final all-data with grid correction off, and proves exact
 RELION/RECOVAR physical-GPU UUID identity.
 
+Case 10 has now crossed its terminal scheduling boundary correctly.  RECOVAR
+completed numbered iteration 15 at `current_size=68`, HEALPix order 5, then
+declared convergence and entered physical iteration 16 as the Nyquist
+combined-data iteration (`current_size=384`).  This matches the RELION
+trajectory's 15 numbered rows followed by its combined-data terminal row.
+The run did not use the after-max escape hatch, and the grid-correction
+override remains unset/off.  Science job `11421265` is still executing that
+terminal row, so all final-map and shellwise FSC/FSC-AUC gates remain pending;
+this is a convergence/topology checkpoint, not case acceptance.
+
 A read-only real-artifact control on completed 400k case 34 passed this sealer:
 all 162 referenced shellwise curves reopened, final merged cross-engine
 FSC-AUC was `0.9957574121481196`, and the RECOVAR-minus-RELION merged GT
