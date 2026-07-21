@@ -4597,3 +4597,26 @@ same-device equivalence or numerical noise.
 - This is a bundled low-cap memory-boundary acceptance only; terminal
   FSC/FSC-AUC, the sealer, and single-control attribution remain pending.
   Correlation was not computed.
+
+# 2026-07-21: case-7 selected tail closes directly to RELION under exact state
+
+- A read-only exact-identity comparison closes the missing target check in the
+  iteration-11 panel. In the updated `77bcf3bd` resident arm, 11/12 selected
+  tail rotations and 7/12 translations differ from RELION by more than
+  `0.001`; the exact-state/reference arm places all 12 rotations and all 12
+  translations within `0.001`.
+- Tail median absolute Pmax error contracts `107.515x`, from
+  `0.02562694075012209` to `0.00023835652923584472`; the maximum contracts
+  `150.670x`, from `0.15097260182571415` to `0.0010020107574463255`.
+- The closure is panel-specific. Across all 100,000 particles, the exact arm
+  still has rotation-geodesic p95 `1.8445827782316297` degrees and Pmax
+  absolute-error p95 `0.2693974259247777`. Do not infer a general replay fix
+  or relax a gate.
+- Durable note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/provenance/CASE7_EXACT_ARM_RELION_TARGET_CLOSURE_20260721T0408-0400.md`
+  (SHA-256
+  `4d2f28a593e0ae9e9104f54275ed2ab96fdbd4a71ff4ed91e798f707b3710823`).
+- Active same-H100 state-component job `11449766` passed source/import/GPU
+  preflight and entered the intended sparse iteration-1 path. Its scratch-only
+  96-input analyzer passed a completed-capture smoke audit. Grid correction
+  and forced after-max finalization are unset; correlation is not computed.

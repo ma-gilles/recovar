@@ -7805,6 +7805,35 @@ The complete durable note is
 `9ee603c6295459d890264d255c25da8fbe9469b4581281bfda2f4b26a19ecc08`).
 This bounded posterior diagnostic is non-gating; correlation was not computed.
 
+### Direct RELION-target closure for the selected case-7 cohort
+
+A read-only identity-aligned follow-up verifies that the exact-state/reference
+arm moves the selected particles to RELION's physical iteration-11 target,
+not merely away from the resident arm.  In the updated `77bcf3bd` resident
+run, 11/12 selected tail rotations and 7/12 translations differ from RELION
+by more than `0.001`; the exact arm places all 12 rotations and all 12
+translations within `0.001`.  Tail median absolute Pmax error contracts
+`107.515x`, from `0.02562694075012209` to `0.00023835652923584472`, and the
+maximum contracts `150.670x`, from `0.15097260182571415` to
+`0.0010020107574463255`.
+
+This closure is cohort-specific.  Across all 100,000 particles, the same
+exact arm still has rotation-geodesic p95 `1.8445827782316297` degrees and
+Pmax absolute-error p95 `0.2693974259247777`.  It therefore does not justify
+a production state replay or relaxed gate; the active component intervention
+must be interpreted only as a causal split for this sealed ambiguous cohort.
+The complete note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/provenance/CASE7_EXACT_ARM_RELION_TARGET_CLOSURE_20260721T0408-0400.md`
+(SHA-256
+`4d2f28a593e0ae9e9104f54275ed2ab96fdbd4a71ff4ed91e798f707b3710823`).
+The identity-aligned JSON SHA-256 values are
+`0be054fc856cfb1f5cb3af29fc3f2e63e513801c2856dc2450d6fee62de3559d`
+for the exact arm and
+`987c76da42c8ba12c22d1a08985369573a9cae1e9e6f0827b7ba234afa1b2464`
+for the resident arm.  Significant-support totals are not interpreted because
+the archived RECOVAR trajectory and RELION serialized counts have different
+ownership semantics.  Correlation was not computed.
+
 ## 2026-07-21 case-10 final-transition FSC decomposition
 
 The final-only case-10 rejection begins in the unfiltered final half maps, not
