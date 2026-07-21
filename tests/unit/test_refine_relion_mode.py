@@ -11724,6 +11724,47 @@ class TestRelionModeSmokeTest:
             for half_dvp in truncated
         )
 
+    @pytest.mark.parametrize(
+        ("current_size", "grid_size", "boundary_fsc", "expected_next_size"),
+        [
+            (68, 128, 0.9487659, 100),
+            (100, 256, 0.5574918, 164),
+        ],
+    )
+    def test_current_resolution_boundary_reproduces_matrix_growth(
+        self,
+        current_size,
+        grid_size,
+        boundary_fsc,
+        expected_next_size,
+    ):
+        """Cases 2, 3, and 33 grow from RELION's supported boundary shell."""
+        boundary_shell = current_size // 2
+        fsc = np.zeros(grid_size // 2 + 1, dtype=np.float32)
+        fsc[: boundary_shell + 1] = boundary_fsc
+        fsc[0] = 1.0
+        data_vs_prior = regularization_module.fsc_to_relion_ssnr(fsc, tau2_fudge=1.0)
+
+        truncated = iteration_loop_module._truncate_data_vs_prior_for_current_size(
+            data_vs_prior,
+            current_size=current_size,
+            grid_size=grid_size,
+        )
+        resolution_shell = regularization_module.resolution_from_data_vs_prior(
+            truncated,
+            allow_high_res_recovery=True,
+        )
+        next_size = regularization_module.compute_current_size_relion(
+            resolution_shell,
+            grid_size,
+            ave_Pmax=1.0,
+            has_high_fsc_at_limit=True,
+            incr_size=10,
+        )
+
+        assert resolution_shell == boundary_shell
+        assert next_size == expected_next_size
+
     def test_k1_growth_fsc_keeps_case15_size68_boundary_shell(self):
         """Case 15 iter 8 must scan shell 34 and grow 68 -> 78 like RELION."""
         fsc = np.zeros(65, dtype=np.float32)
