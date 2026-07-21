@@ -8450,8 +8450,15 @@ all-data after non-convergence are unset.
 The frozen panel contains 96 unique class-2 particles, 16 each from stable
 controls, Pmax tails, rotation tails, translation tails, support mismatches,
 and RELION-class-2/RECOVAR-winner disagreements. It is balanced 48/48 across
-the canonical follower owners, and its identity SHA-256 is
-`b1c85f635cc342aded1cbe95ffac9d99e0b9ed5afb432dd85f40f9b0e0d085be`.
+the canonical follower owners. The payload's `identity_sha256`
+`b1c85f635cc342aded1cbe95ffac9d99e0b9ed5afb432dd85f40f9b0e0d085be`
+is the full 100,000-row source-identity-order digest, not the selected-panel
+digest. The selected contract is independently pinned by `panel96.json` SHA
+`03fce7f4943e9bbddb82ecee03574ed9a3d103f0b372afceb546fc9ae09d9cb9`,
+one-based selected-index NPY SHA
+`2e163ec980dd948f81bf960919a760f941dd359fa26d9a13a891f935c2bc9b60`,
+and selection-manifest SHA
+`1f8a1341fdf9f087c5e52a2a7231ea8baddd09e4d7a485c984a2dfcf26aa1c50`.
 RELION captures native class-2 source rows at iteration 10. RECOVAR captures
 the corresponding soft-posterior contribution rows and observational device
 geometry at iteration 10, half 1. Target-scoped diagnostic modes are checked
@@ -8485,8 +8492,23 @@ Class 1--4 FSC-AUC values are `0.991321933`, `0.989710691`, `0.987441885`, and
 and `0.0107270`. This is explicitly descriptive and non-gating. The control
 uses the capture-instrumented RELION binary, whereas the canonical run used
 the older dispatch-instrumented binary, so the result bounds binary-build/GPU
-trajectory sensitivity rather than RECOVAR parity. The formal observer gate
-remains clean control versus passive capture with the same new binary and
-exact control dispatch replay. The diagnostic JSON is
+trajectory sensitivity rather than RECOVAR parity. Current size, resolution,
+and HEALPix schedule still agree through iteration 4, but average Pmax is
+`0.265957` canonical versus `0.265868` control at iteration 3 and `0.598995`
+versus `0.597916` at iteration 4. The formal observer gate remains clean
+control versus passive capture with the same new binary and exact control
+dispatch replay. The diagnostic JSON is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_class2_prescatter_panel_ac5177d2_20260721T215100Z/analysis/CONTROL_IT003_VS_CANONICAL.json`;
 correlation is not computed.
+
+The capture-instrumented control is also materially slower: numbered
+iterations 1--4 take approximately 20 minutes each, versus 5--7 minutes in
+accepted canonical job `11386135`. Instantaneous allocation telemetry during
+iteration 5 showed low GPU utilization and both followers in I/O wait, so the
+slowdown is not assigned solely to capture arithmetic. Two control-rate
+RELION arms plus the prior 32,876-second RECOVAR runtime project beyond the
+submitted 16-hour limit. Slurm denied an in-place extension of `11480333` to
+24 hours. The job remains uninterrupted; if it cannot seal its declared
+completion artifacts, dependent audit `11480664` must remain fail-closed.
+Run-scoped recovery policy and telemetry are in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_class2_prescatter_panel_ac5177d2_20260721T215100Z/provenance/TIME_LIMIT_RISK.md`.
