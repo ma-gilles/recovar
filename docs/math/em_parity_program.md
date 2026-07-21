@@ -7203,6 +7203,19 @@ oracle=14); this remains provisional rather than terminal acceptance.  The
 The method note SHA-256 is
 `e87f10f2baa44f379c482be551d827c9054fa84f450960336d8a52e243bd9a04`.
 
+Iteration 4 completed at `current_size=128`, reported 8.77 A, and retained
+`current_size=128` for iteration 5, matching RELION.  Its half-1/half-2/merged
+cross-engine FSC-AUC is `0.999999564536`/`0.999999659947`/`0.999999801784`,
+and its merged GT delta is `+2.19454e-6`.  The worst reopened merged non-DC
+shell FSC is `0.999997819649` at shell 62.  The read-only analyzer exits 2
+solely for the expected incomplete topology (`RECOVAR=4`, `RELION=14`).  The
+17 exact inputs are sealed under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it4_20260721T000100`;
+the input-manifest SHA-256 is
+`d37193a81ca2a9e3d297c7c5a5c92a6698324ae82a6273397272a62298b181fb`
+and the method-note SHA-256 is
+`04dca2557829ff22c967ff4989fa42a3a0a0da3db8baf8b0fa79a89a8856eb32`.
+
 Dependent job `11440102` runs both the shellwise FSC/FSC-AUC trajectory gate
 and the intermediate topology/artifact audit. Dependent sealer `11440295`
 then fail-closes on exact source provenance, science/audit exit status,
