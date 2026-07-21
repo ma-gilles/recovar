@@ -4429,7 +4429,9 @@ same-device equivalence or numerical noise.
   `+1.5702e-8`/`+8.6502e-8`.  Its nonzero status is the expected incomplete
   `RECOVAR=2 RELION=14` topology, not a numeric gate failure.  Method note:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it2_20260720T225300/PROVISIONAL_AUDIT.md`
-  (SHA-256 `79aaf56233ba141f74ee4af47e03ddcefa55ecd34f5b3a9f7e621a0e4fbdcc2b`).
+  (SHA-256 `d070a5c58af2b49d87d85d09adaadbb709d583d4b7f0baf16a790b2d9eed84d1`;
+  exact input-manifest SHA-256
+  `36974a77ecfe360e756fca54864ce08e72db12182b156b4cb868c50a3b8be6a4`).
 - Case-33 dependent audit `11440102` gates shellwise FSC/FSC-AUC and
   intermediate topology. Sealer `11440295` additionally requires exact Git,
   H100, convergence, final-path, grid-off, exit-status, and submission-hash

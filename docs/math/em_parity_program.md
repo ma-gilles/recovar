@@ -7184,7 +7184,9 @@ correctly exits nonzero solely because only two of the 14 RELION numbered rows
 exist in RECOVAR while science is active; it is not terminal acceptance.  Its
 method note is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it2_20260720T225300/PROVISIONAL_AUDIT.md`
-(SHA-256 `79aaf56233ba141f74ee4af47e03ddcefa55ecd34f5b3a9f7e621a0e4fbdcc2b`).
+(SHA-256 `d070a5c58af2b49d87d85d09adaadbb709d583d4b7f0baf16a790b2d9eed84d1`).
+Its exact nine-input MRC manifest has SHA-256
+`36974a77ecfe360e756fca54864ce08e72db12182b156b4cb868c50a3b8be6a4`.
 
 Dependent job `11440102` runs both the shellwise FSC/FSC-AUC trajectory gate
 and the intermediate topology/artifact audit. Dependent sealer `11440295`
