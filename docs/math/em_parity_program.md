@@ -8321,6 +8321,34 @@ Complete component JSON/Markdown are under
 The clean population split and selector retry audit trail are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_cohort_base_clean_c1ee409b_20260721T071000Z/provenance/`.
 
+## 2026-07-21 K=1 residual-panel live trajectory checkpoint
+
+Science job `11477130` runs the clean 24-particle residual-panel resident arm
+and exact-RELION-state/reference arm sequentially on one H100. The resident
+capture is complete with 24 unique, hash-verified iteration-11 posterior
+files. The exact arm remains active, so these are interim trajectory
+invariants rather than the residual-panel conclusion; dependent audit
+`11477132` remains gated on science completion.
+
+The two arms have identical printed iteration-1 science state: current size
+56, HEALPix order 3, resolution 30.22 A, average Pmax 1.0000, and unchanged
+tau/noise/correction summaries. At iteration 2, after the exact arm replaces
+the incoming references and state with RELION iteration 1, a small support
+split appears independently in both halves. Half-1 support work is
+120380 resident versus 120382 exact; half 2 is 120780 versus 120781. In each
+half, the exact arm has one additional net image in the size-16 bucket and one
+fewer in size 32. Occupancy in the 64/128/256 tails is unchanged.
+
+The split is visible in the completed iteration-2 state without changing its
+schedule. Average Pmax is 0.676258 resident versus 0.676240 exact. Printed
+normalization/correction extrema differ at approximately `1e-6`--`1e-5`,
+while tau2 remains equal at printed precision. Both arms select resolution
+27.20 A, next current size 104, and HEALPix order 3. Capture activation remains
+false before iteration 11, and target-only parent filtering is unset. This
+supports an early incoming-reference-dependent posterior/support divergence,
+but does not identify a production repair before the iteration-11
+target/control audit lands. Correlation is not computed.
+
 ## 2026-07-21 current-head case-2 strict-boundary closure
 
 Strict K=1 v3 identified historical case 2 iteration 3 as the earliest ledger
