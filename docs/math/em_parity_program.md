@@ -7979,6 +7979,55 @@ The amendment note is
 (SHA-256
 `696740a5ec112d77f2beec6c1aa061bfeada05d9904fa4281b088d861552b011`).
 
+Applying this discriminator to the already completed panel24 proves that its
+resident tail is a mixed boundary. All 12 exact-state captures contain and
+rank the RELION target first. Resident captures split into one already-correct
+winner, seven target-present rank-2 near ties (target/winner ratios
+`0.8657448936`--`0.9859998237`), and four missing targets. Three missing cases
+are displaced only by one `0.0835`-pixel translation-child step; the fourth is
+missing the target rotation by `1.844585` degrees. Exact incoming
+state/reference therefore repairs both local search support and relative
+posterior scoring.
+
+All 12 stable controls contain and rank the RELION target first in both arms,
+with candidate-support Jaccard 1 and median posterior TV `0.00905826257`.
+The tail median posterior TV is `0.05901374049`, with three support-shift cases
+at approximately 1. This rejects a single support-only or scoring-only repair.
+Analyzer/JSON SHA-256 values are
+`4ab6c895ed626e1949e423835ba67e117727a43777413b9cefc18426d98e42ed`
+and
+`2c779f535b372221e6739a8550c355d32f3fd8ed1d73de346f978a74e2271743`.
+The durable note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/provenance/CASE7_COMPLETED_PANEL_RELION_TARGET_RANK_20260721T0512-0400.md`
+(SHA-256
+`8180615c7d242f192e9b9e7a6997ae46f4ae6c483e10c25e07a979933f2ced8e`).
+
+The already-running state-component science job `11449766` is unchanged, but
+before any iteration-11 captures existed its dependent audit `11450599` was
+upgraded to test every arm directly against the immutable RELION target pose.
+The v2 audit retains posterior TV, winner displacement, and reconstruction
+support Jaccard, and now reports target presence/support membership, rank,
+mass, target/winner posterior ratio, nearest-support displacement, and winner
+displacement. This makes `restore_recovar_poses` an explicit discriminator for
+support/centering loss and `restore_recovar_maps` one for relative score/rank
+loss instead of inferring either from arm-to-arm TV alone.
+
+Target matching uses `0.001` degree and `0.001` pixel tolerances and aligns the
+immutable STAR by particle identity. The completed-capture target-summary
+smoke passed. Analyzer, shared target helper, RELION STAR, audit launcher, and
+contract SHA-256 values are
+`44c16b56cd4cbf077b2b47848d1a8c13616cb5558ad55e279c1126b0eaf39e42`,
+`5e3479b827df78dab166455ab9a2a72503d6d4db3884961fcb136b1ee181ac56`,
+`022865cdc40d4d4c5813078d81f6f421f2f54949d04e4762498659ce271a9b55`,
+`75cea671eb0926770854834cddd2a927e67e04ba9626764afdbb2f3c8e194ce4`,
+and
+`f97a1038f1f50543841f6b738b1043fbd06d79ec770695607e5d5b6cec168b94`.
+The amendment is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_state_component_77bcf3bd_20260721T034700Z/provenance/ANALYZER_V2_AMENDMENT_20260721T0518-0400.md`
+(SHA-256
+`0658833c449617880621f9e1e249d8cf4e9048a0a279d6f49c06da0a67e1e412`).
+The audit remains diagnostic/non-gating and does not compute correlation.
+
 ## 2026-07-21 case-10 final-transition FSC decomposition
 
 The final-only case-10 rejection begins in the unfiltered final half maps, not

@@ -4735,3 +4735,51 @@ same-device equivalence or numerical noise.
   `696740a5ec112d77f2beec6c1aa061bfeada05d9904fa4281b088d861552b011`).
 - This remains diagnostic/non-gating; correlation is not computed and map
   quality remains FSC/FSC-AUC.
+
+# 2026-07-21: completed case-7 tail mixes support loss and score loss
+
+- In the completed 12-tail panel, exact state/reference contains and ranks the
+  RELION target first for all 12.
+- Resident state has one rank-1 target, seven target-present rank-2 near ties
+  (target/winner ratios `0.8657448936`--`0.9859998237`), and four absent
+  targets.
+- Three absent targets miss only one `0.0835`-pixel translation-child step;
+  one misses the rotation by `1.844585` degrees. Exact replay repairs both
+  local search support and relative scoring.
+- All 12 stable controls contain/rank the target first in both arms;
+  candidate-support Jaccard is 1 and median posterior TV is `0.00905826257`,
+  versus tail median TV `0.05901374049`.
+- Analyzer/JSON SHA-256 values:
+  `4ab6c895ed626e1949e423835ba67e117727a43777413b9cefc18426d98e42ed`,
+  `2c779f535b372221e6739a8550c355d32f3fd8ed1d73de346f978a74e2271743`.
+- Durable note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/provenance/CASE7_COMPLETED_PANEL_RELION_TARGET_RANK_20260721T0512-0400.md`
+  (SHA-256
+  `8180615c7d242f192e9b9e7a6997ae46f4ae6c483e10c25e07a979933f2ced8e`).
+- Do not implement a single support-only or scoring-only production change
+  from this mixed cohort. Component and residual jobs remain decisive.
+
+# 2026-07-21: state-component audit upgraded to target-rank v2
+
+- Science job `11449766` was not changed. Before any iteration-11 captures
+  existed, dependent audit `11450599` was extended to test every arm against
+  the immutable RELION target pose.
+- In addition to TV, winner displacement, and support Jaccard, the audit now
+  reports target presence/support membership, rank, mass, target/winner
+  posterior ratio, nearest-support displacement, and winner displacement.
+- This directly tests `restore_recovar_poses` for support/centering loss and
+  `restore_recovar_maps` for relative score/rank loss. It does not infer those
+  mechanisms from arm-to-arm TV alone.
+- Target tolerances are `0.001` degree and `0.001` pixel; the STAR is aligned
+  by particle identity. A completed-capture target-summary smoke passed.
+- Analyzer/helper/STAR/audit/contract SHA-256 values:
+  `44c16b56cd4cbf077b2b47848d1a8c13616cb5558ad55e279c1126b0eaf39e42`,
+  `5e3479b827df78dab166455ab9a2a72503d6d4db3884961fcb136b1ee181ac56`,
+  `022865cdc40d4d4c5813078d81f6f421f2f54949d04e4762498659ce271a9b55`,
+  `75cea671eb0926770854834cddd2a927e67e04ba9626764afdbb2f3c8e194ce4`,
+  `f97a1038f1f50543841f6b738b1043fbd06d79ec770695607e5d5b6cec168b94`.
+- Amendment:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_state_component_77bcf3bd_20260721T034700Z/provenance/ANALYZER_V2_AMENDMENT_20260721T0518-0400.md`
+  (SHA-256
+  `0658833c449617880621f9e1e249d8cf4e9048a0a279d6f49c06da0a67e1e412`).
+- This remains diagnostic/non-gating; map quality remains FSC/FSC-AUC.
