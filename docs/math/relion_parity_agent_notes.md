@@ -5287,3 +5287,26 @@ same-device equivalence or numerical noise.
 - Absolute iteration 10, exact dispatch/order replay, inertness,
   original-clean closure, and same-A100 RECOVAR gates are unchanged. No
   production edit is authorized before the dependent evidence.
+
+# 2026-07-22: K=4 owner-cap failure exposes an internal-part-ID join bug
+
+- Restart-pair science job `11494295` completed its exact iteration-10 control
+  in 13m42s, then failed closed after sealing 92/96 capture artifacts when MPI
+  rank 1 attempted its 49th target under the exact cap of 48. RECOVAR and
+  audits `11494296`/`11494297` did not run.
+- All 92 headers prove `dispatch_owner(part_id) == mpi_rank - 1`, while none
+  has `part_id + 1 == stack_index`. The v1 selector incorrectly treated the
+  dispatch log's `source_index` as canonical stack/source row instead of
+  RELION's internal zero-based `part_id` after STAR reordering. Its apparent
+  48/48 owner split was therefore not a runtime split.
+- The v2 selector joins canonical identity to the live data-STAR row/internal
+  `part_id` through `rlnImageName`, then indexes dispatch ownership. The new
+  panel verifies 48/48 exactly, 0 owner mismatches, 96 unique internal IDs,
+  and 0/96 accidental `part_id + 1 == stack_index` identities. Six categories
+  remain fixed at 16 targets each.
+- Failed-root classification:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_pair_rankfix_absiter10_owner48_class2_prescatter_ac5177d2_20260722T072700Z/provenance/FAILURE_PART_ID_OWNER_JOIN_20260722.md`.
+- Corrected preflight:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_pair_rankfix_absiter10_partowner48_class2_prescatter_ac5177d2_20260722T080000Z/provenance/PREFLIGHT_PART_ID_OWNER48_20260722.md`.
+- This is harness rejection, not parity evidence. Correlation was not
+  computed, and no production EM source changed.
