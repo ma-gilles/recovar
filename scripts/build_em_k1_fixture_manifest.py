@@ -66,6 +66,9 @@ def build_manifest(
     scorecard_cases = scorecard.get("cases")
     if not isinstance(scorecard_cases, list) or not scorecard_cases:
         raise ValueError("scorecard cases must be a non-empty list")
+    frozen_case_definitions_sha256 = scorecard.get("frozen_case_definitions_sha256")
+    if not isinstance(frozen_case_definitions_sha256, str) or len(frozen_case_definitions_sha256) != 64:
+        raise ValueError("scorecard must record a frozen_case_definitions_sha256 digest")
     known_ids = {case.get("id") for case in scorecard_cases}
     unknown_overrides = sorted(set(source_overrides) - known_ids)
     if unknown_overrides:
@@ -92,7 +95,9 @@ def build_manifest(
         source_files = sorted(path for path in data_dir.iterdir() if path.is_file())
         if not source_files:
             raise ValueError(f"fixture data directory is empty for {case_id}: {data_dir}")
-        particle_stacks = [path for path in source_files if path.name.startswith("particles.") and path.suffix == ".mrcs"]
+        particle_stacks = [
+            path for path in source_files if path.name.startswith("particles.") and path.suffix == ".mrcs"
+        ]
         if len(particle_stacks) != 1:
             raise ValueError(f"expected one particle stack for {case_id}, found {len(particle_stacks)}")
         files = []
@@ -118,6 +123,7 @@ def build_manifest(
         "suite_id": f"{scorecard['suite_id']}-artifact-pinned-v2",
         "suite_version": 2,
         "frozen_denominator": scorecard["frozen_denominator"],
+        "frozen_case_definitions_sha256": frozen_case_definitions_sha256,
         "source_scorecard": str(scorecard_path.relative_to(scorecard_path.parents[2])),
         "source_scorecard_sha256": sha256_file(scorecard_path),
         "fixture_root_policy": "Runtime root supplied separately; source_data_dir is root-relative.",

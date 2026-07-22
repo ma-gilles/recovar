@@ -1,0 +1,1981 @@
+{
+  "cases": [
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "2ededbae30376cca41b2698de6aa06299b0257dd268bc9c88bb0ab2ff57f66e4",
+          "size": 3600165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "931aa867283cb271056af09da9daf7101bb3fe6449b8678255cc7320b612f1ab",
+          "size": 637
+        },
+        {
+          "name": "particles.256.mrcs",
+          "sha256": "7a81919eb7b82dfc1cda242ad238f27fab2f174a7f6610c40f28d5e5ba472cfa",
+          "size": 26214401024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "ca71f44bb03df009ce2f700d42dcae1458a5d5d8f2b28dac30c6a563c8acd2e2",
+          "size": 13859127
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "80eb8d58d4b4d2acabe13caad1c9e1796d4585cd5eb1c63c4e3275d91fdb947a",
+          "size": 4400216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "0f30618180676e1a9358bf314743b5102f30d9856e3395233e81f5fc5ca71494",
+          "size": 67109888
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "343941674d03547a11e0acbaa5a59e9dfd57f7f0eb0b59f6b8bd7585f4b56c81",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "ca3ae01476ceb7b166d4e5eac220d7202f4205c6773484f83503540d3030312d",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "c0f03bae1649a729d3317bd4dca45cb2f4bbafd88aafa09ff13c01f0f5d8acb2",
+          "size": 67109888
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "ab34cc035eb932d2bba30c883cc1e999e40b987cf1decdca4e240e2d076bcddc",
+          "size": 16402623
+        }
+      ],
+      "id": "k1-01",
+      "name": "baseline_100k_g256_white_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/1_baseline_100k_g256_white_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "2bd14b3c6aadc9eaac6e940685f6f3e652bd7e7b6156b4ea93eb7ce179ff7980",
+          "size": 7200165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "1b9330aafe2ac02a27f5731b76042d3c0bbd7dbaf0b6cc57859ef653c6bccc47",
+          "size": 637
+        },
+        {
+          "name": "particles.256.mrcs",
+          "sha256": "5530222ddca727df840a1bc842594dd179a5984fb4e1fecc780dffa4d0d7ac81",
+          "size": 52428801024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "cd7e277c4be8a03848b4d8c6131974abcb295aa029ff2cbad87cfa8f30809199",
+          "size": 28051721
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "cf86237f2fd31c8809a3d19042bc8d85313b340eb8acf2a729985e5f3edc8caa",
+          "size": 8800216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "94d07db8d3bfca4d8ad42a24177942edcd00401eff2b057354cb4034d000d4b3",
+          "size": 67109888
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "cfb1e686dd20eb73bd153f4b6bb9c300905e510416df55dcb92bcbd9dd06a299",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "e1d488983e4fa270622b6ebaf8d19d2b00b9356ea4a9195137db69c5475f6865",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "5abd68c7cb950bae13b9f0207195233f72efa5edc63ebc19dfb54937f57937ff",
+          "size": 67109888
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "8d3d02a8c0bf4a16869b7868d9c72885bdfad137ef5b2a505f15e8a40ab8dc67",
+          "size": 32802626
+        }
+      ],
+      "id": "k1-02",
+      "name": "more_images_200k_g256_white_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/2_more_images_200k_g256_white_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "30d9c4ac75dc97f269704b920c255a6ed618745b5421532cc2132cb5aeb352b9",
+          "size": 10800165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "90c2be36105e6a3d915550b79f0f4404eba7a860c7df719088d40b77b4b433f8",
+          "size": 637
+        },
+        {
+          "name": "particles.256.mrcs",
+          "sha256": "456e53f9644af2df7acc801156df11d7bb6141e986df59fdddd7dc4bbdbbb03e",
+          "size": 78643201024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "0dae64504494f143d49d1c89688f7414cb87c664373e9d4fd87259b425827816",
+          "size": 42244006
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "6f7d285a74b79e4b7541b36858eebff3db3dac1e404428ebbf2456fe99ea8946",
+          "size": 13200216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "0f06a134705c886bde1ec72e7edd873ae08d57aa1c510cf40b8354cb5e8735e8",
+          "size": 67109888
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "510992423f74f08b00583895d71a6372c1e7c2ed11dd7284075d8027899cd42b",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "ebc3dabc26d212dd1b349a97d59025cfa926f0f36a42a61f26670952ad0703d0",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "ca5f3e339da6d825f1aafa25211c94cc9029830c344c34f58000932a68b5e3ba",
+          "size": 67109888
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "76cf609f22181c68893348f975b5267117380aef393fc308feffb21be5ecb5d1",
+          "size": 49202626
+        }
+      ],
+      "id": "k1-03",
+      "name": "more_images_300k_g256_white_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/3_more_images_300k_g256_white_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "2ededbae30376cca41b2698de6aa06299b0257dd268bc9c88bb0ab2ff57f66e4",
+          "size": 3600165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "86d2c58fc681be58a6fb23205086c0f85f1fafcad9774521ab542a896cc7fb0e",
+          "size": 637
+        },
+        {
+          "name": "particles.256.mrcs",
+          "sha256": "b0f1430d5884e71b9d09e9ff955b19502c2df84ee0b411ab40ffa4f8cc090ef2",
+          "size": 26214401024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "0a90714711cdf0a1820d46fa82460d828b87e1ecbd2e49de645170863546ac98",
+          "size": 13859127
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "80eb8d58d4b4d2acabe13caad1c9e1796d4585cd5eb1c63c4e3275d91fdb947a",
+          "size": 4400216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "f9d9addbe7ec8d735d25ca99eb7f4ca7fd51d1b1610183bf1ee81979fbecb785",
+          "size": 67109888
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "80edbb08999250697f9622d1893b416d481daa250b197b8b3c0dd762bea34c06",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "ebe236605620f16297a959b37b3fac48df3917bd3c2fe458875cbe41f3021f40",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "beffccd2b5b9e4dba765751b2e8e7933229deb70e65061de97a486264066dec9",
+          "size": 67109888
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "864a080b19f85c91cfc602dfd567d00ed2c7a5cc8041a4321b6a355066750d48",
+          "size": 16402625
+        }
+      ],
+      "id": "k1-04",
+      "name": "high_noise_100k_g256_white_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/4_high_noise_100k_g256_white_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "2ededbae30376cca41b2698de6aa06299b0257dd268bc9c88bb0ab2ff57f66e4",
+          "size": 3600165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "504e3d318ce178f085d743689dddfa55c540693e25e17edecf68b026bc3351b1",
+          "size": 638
+        },
+        {
+          "name": "particles.256.mrcs",
+          "sha256": "26ddc6fcaab550ed281dbba6bf1de15f11908da0e4d05190da4c04f17fa26e17",
+          "size": 26214401024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "078363915af39e644c0540d6e1ad020e41d94c3c7ee298e28cf39d4788cd384c",
+          "size": 13859127
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "80eb8d58d4b4d2acabe13caad1c9e1796d4585cd5eb1c63c4e3275d91fdb947a",
+          "size": 4400216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "e7a0158e7de088ff3f74dcef5746fa8fef0cf8ea96bbe50ef2434c60013f4754",
+          "size": 67109888
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "dad07dcb7818b93ea2e3d4dc7d76d8e009049be24e18014da309544cb4314b8b",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "c0351452a32fdc8fa035973db37f66731dc913b566fa368eb9725599daa1f56f",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "fbb7bbcba5ad804a6d4d78bac87f024f3a876c82f21f9397c5278961b30eda47",
+          "size": 67109888
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "8d59820b41bbade9675550bb4f0d56c092c5ef009c4f61d50101e5613badc2c3",
+          "size": 16402631
+        }
+      ],
+      "id": "k1-05",
+      "name": "very_high_noise_100k_g256_white_noise10_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/5_very_high_noise_100k_g256_white_noise10_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "05b04995920ca9d07b95241344244ce4f21c1d3a85a153575b4762ed4dc4e97d",
+          "size": 3600165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "443c6119afe5c8071be05c3219612d6b4e0b5c41f17d6de3bef982c061544ad2",
+          "size": 635
+        },
+        {
+          "name": "particles.256.mrcs",
+          "sha256": "40dc571917c3643be0b7a4181f7006b96fac55c3a08d4b2d2c47f7ca25d974ab",
+          "size": 26214401024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "27fb1ca0a707c5c2fe1e04ca463490433b00e32332782fc0cf2db3cbb939ac54",
+          "size": 12985512
+        },
+        {
+          "name": "particles_relion_identity_ctf.json",
+          "sha256": "be6d28845fdbc9c6767932b9b643dc56e93675c45fec5a140d458dda3b855b8b",
+          "size": 796
+        },
+        {
+          "name": "particles_relion_identity_ctf.star",
+          "sha256": "744b0737a390b668b9f4b4fa3f45dedb5b2be63772e82bbb5f3c54213907f450",
+          "size": 13185511
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "80eb8d58d4b4d2acabe13caad1c9e1796d4585cd5eb1c63c4e3275d91fdb947a",
+          "size": 4400216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "c5c727de531912858c0efa53ac6d4db6bfbc15f811493b0c082cd5e88028035f",
+          "size": 67109888
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "54050d8ba783169287769204c6ebb97f7c2dc4d604dac8d452794689dd6171dc",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "3a3afc1cbf6689f8fa876fe55b52b32b3b643677930f54611aa904d0f14833da",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "175ae0090eb1391b869b0cf19e06f045fb3d590b5c1f972bebcf6356f64bcf80",
+          "size": 67109888
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "1034fd43a2cba97c79c85a49e079b1dba8e6264d19aaa4f5bc9f1e457ce3b155",
+          "size": 16402624
+        }
+      ],
+      "id": "k1-06",
+      "name": "noctf_control_100k_g256_white_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/6_noctf_control_100k_g256_white_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "2ededbae30376cca41b2698de6aa06299b0257dd268bc9c88bb0ab2ff57f66e4",
+          "size": 3600165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "edb4dde67bff3ad25b6114a3a2773dca323c1f123f5c6030bb9f925c83635e72",
+          "size": 640
+        },
+        {
+          "name": "particles.256.mrcs",
+          "sha256": "a799a90687b26dceba5832a2de2729fe92d8718ca795c89d65795dc2cb9ea25c",
+          "size": 26214401024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "12186134dba0deda4a04a131658f03850d5987e9cd8fd7f8730fb556b5d14316",
+          "size": 13891193
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "d54a94ddee12896683bcf3abfbd6a21d907e0e6d734adfaa23ad6634c14750f5",
+          "size": 4400216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "dbfee63217b860f92d1a01e13cab0e2ffd05f667e1815f1ebd42c39d6cc537b4",
+          "size": 67109888
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "a9e8d59db37dedc48357d6d2ecbbcce53c3bf73724a3575f86ae69eaf0b845b0",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "0795025cf219fd024c8ad39ce1c229b06c2402eacc681d0fa9cfb286a84f5e53",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "20e0560e98faddd849075b2b3a3937ec51d27d9fbbf49599f2b9ff765f9137dd",
+          "size": 67109888
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "cfb4d3a033db47fc0bdde1398c0f78f69d9ca18af7a5d7b3408b0b1227747656",
+          "size": 16402632
+        }
+      ],
+      "id": "k1-07",
+      "name": "anisotropic_100k_g256_white_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/7_anisotropic_100k_g256_white_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "2ededbae30376cca41b2698de6aa06299b0257dd268bc9c88bb0ab2ff57f66e4",
+          "size": 3600165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "a4e9d0470db8c97101161feea51199075b1f2917590553229fb4f00fdb0cd76d",
+          "size": 640
+        },
+        {
+          "name": "particles.256.mrcs",
+          "sha256": "a6b215beaf1cf139a5f9e6b3d3aa2a4f27e111d3d1db7be47b28b515ea226249",
+          "size": 26214401024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "dfb709cf21d66ec7e987ca1b0124abad0220419105e0c5d5f1b8fad858438afd",
+          "size": 13891193
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "d54a94ddee12896683bcf3abfbd6a21d907e0e6d734adfaa23ad6634c14750f5",
+          "size": 4400216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "c78ad813dbc162de6fbbe6bfa9174f06d9e2ee3991c5da7aa68df68afc0aa2b7",
+          "size": 67109888
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "de3a67c5d8dc25adb79cd3926477dc54c7cfd316c9881668a8783064cc39bfae",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "7ab86f759de39701a207bec2c33886e697786b05098cf1bf52aa02ab2046f1da",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "f97adbc34fe01a16c99121152562eb6e84a5f3104301c6fb1c75d33524f17082",
+          "size": 67109888
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "312a33c711e9cd32263b51a7d1c66ce41fa434b52a3cb4f1278404ca55bb3ee2",
+          "size": 16402643
+        }
+      ],
+      "id": "k1-08",
+      "name": "anisotropic_high_noise_100k_g256_white_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/8_anisotropic_high_noise_100k_g256_white_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "330eef540c805a667c30a800331380b0c64fac904d52cab0472da1a5abe82c0f",
+          "size": 3600165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "7ee94931aa3534e6624fb7c41c50bb380948b250e5ccd1dd8ee44880dda61a80",
+          "size": 649
+        },
+        {
+          "name": "particles.384.mrcs",
+          "sha256": "2cc610c34ddd16acf29f9c20e007e05d21a483ae4be5e9a7a49c88476a07c826",
+          "size": 58982401024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "08db45d93068d10f03971fb264c55cee2c393db0607589e43c0ffdbad939318d",
+          "size": 13859127
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "80eb8d58d4b4d2acabe13caad1c9e1796d4585cd5eb1c63c4e3275d91fdb947a",
+          "size": 4400216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "6062a8d04358d3fac41a9a96b5640778564b37b4ce2d9c039d0c0435912c0eb6",
+          "size": 226493440
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "43481053ff0301a0bc8a0ddb8e1003a91d36270ce64475bad116ce993bb4bd94",
+          "size": 226493440
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "fb30d4879d1fe995a97beb375b2b55783e6e33dcfc3c9013de1ca9a1c154bd2e",
+          "size": 226493440
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "f41384945912c06e1aef45deb28734e89114c86f9df432d3c50499d4e2763e08",
+          "size": 226493440
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "4b6cad0d812b7b8a3763716d482a23b78540dfe4a27fbfb927e0c633b67765f4",
+          "size": 16402873
+        }
+      ],
+      "id": "k1-09",
+      "name": "high_res_near_nyquist_100k_g384_white_noise1_bf0",
+      "source_data_dir": "em_k1_case9_bucketcap_accept_9d172278_20260720T095000Z/cases/9_high_res_near_nyquist_100k_g384_white_noise1_bf0/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "330eef540c805a667c30a800331380b0c64fac904d52cab0472da1a5abe82c0f",
+          "size": 3600165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "41053ab6b142eb2696b76114e1cdd5fb4068c4afe519f809c8a746fc4d23c09c",
+          "size": 654
+        },
+        {
+          "name": "particles.384.mrcs",
+          "sha256": "6abfc7829307ed63cc1b8b24ba99ec1afca25e5467876ef056034a9dd8779585",
+          "size": 58982401024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "3be82df3627e0d6c3c12d1eb42e1ab0c7feb09117bb66a38cc53c0621e9f8436",
+          "size": 13891193
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "d54a94ddee12896683bcf3abfbd6a21d907e0e6d734adfaa23ad6634c14750f5",
+          "size": 4400216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "1053bc53d60f7f796c5e327c322009561ef3a1dc99a4402bc6ee6e0128b9cda8",
+          "size": 226493440
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "d6ad559e0485f887762a1bccb5fac273716be4b0901e82c7aabfe4bb2649acce",
+          "size": 226493440
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "f07e43d2a6e1b1872712f1e7e01adc2d2fcba249b17c6859f7b5355a0d4a2869",
+          "size": 226493440
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "d1d52afee6161d295f907a7dc633bb2cc3b7c7d2d575f6347297567375af78c2",
+          "size": 226493440
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "b54585881c749bd8cdab556d3d3b9ea740474a58ea62d632c573980f0d8eefe8",
+          "size": 16402637
+        }
+      ],
+      "id": "k1-10",
+      "name": "high_res_anisotropic_100k_g384_radial_noise3_bf0",
+      "source_data_dir": "em_k1_case10_xhalf_tail_lowcap_accept_9d172278_20260720T164557Z/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "9d70a3c0ef4c43d7359a47f866d52585b80f6779a65dc9b2a0d83c3ab6fb6fc1",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "c46ba8d866b8d01fbebf24af875f089cba024838a542b95a7e9ef43d626c1fd9",
+          "size": 637
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "8185374c98bd71239fbd4d79218d91af551e4dec57ef0f6fe636a28eb5249236",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "357a4a05e97b1730a7a067a219f306fd4c293dfb4c61e7f4ed24991ce95b0744",
+          "size": 404975
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "4b4935b9a0089856fd585c377611d344f4117c2a115ef3ad191e8ab7d167d6f2",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "8103fc478d333c89b37f3e35c717480f90ba2eddbb5248dfd69ca585325ad102",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "960ddb900406c861b8dc4e8d52e6ba5f2f5b10fd368c893a0b9f6d36d600a780",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "4129113abea3212fa405fe6337b9afc21ceafbf9a54803fa4ba1e17729d5e85f",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "5c6018e31c95506f423f35ca2e286a87301dddef6d44e85665cc6222f2697d12",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "7851dc44401461819bbd8e69d09c789e862f581f53d501e59b9d1ba7f76635d8",
+          "size": 494328
+        }
+      ],
+      "id": "k1-11",
+      "name": "small_baseline_3k_g128_white_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/11_small_baseline_3k_g128_white_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "9d70a3c0ef4c43d7359a47f866d52585b80f6779a65dc9b2a0d83c3ab6fb6fc1",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "4a92007cd8b937f5b8d71594d35c19342f0c52f069c0c0209d29cadb218651e5",
+          "size": 638
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "c0f0b7179edb72d0ffd2bd7c9f72e1084f579444d2f95b9790148e1ea55c3ec8",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "b3f641c5bb86f8d81d06635f8021f81cfc86545aedd38f79b1c0da2f7fdd01ba",
+          "size": 404975
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "4b4935b9a0089856fd585c377611d344f4117c2a115ef3ad191e8ab7d167d6f2",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "740475a3af7f376e24695af762306dfe14b3b5ed0371cdea6acedf45020039f0",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "4086489d3231f7f216f4ccd8c8feab0bf58dc1c6c03b6a193663dbc7fc5fbea1",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "2b52aac23f5f49298173e81b6abb2c09951de3961a29695da82b23bba931d9dd",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "bb6960daf403a7c963ba2842df0e08276ae6a93bf2daebd19e4595c4bb83a70d",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "f825e7eda9a8bb497932c92fb1d67200d3a4ff85fa193f627133ee41d2193f39",
+          "size": 494336
+        }
+      ],
+      "id": "k1-12",
+      "name": "small_very_high_noise_3k_g128_white_noise10_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/12_small_very_high_noise_3k_g128_white_noise10_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "9d70a3c0ef4c43d7359a47f866d52585b80f6779a65dc9b2a0d83c3ab6fb6fc1",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "2c581b71c59261f8f49221d9a7e0387624be44f0583ff314f80165a9d7c0f5b1",
+          "size": 640
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "c82a6b81f5aa835965fa7adaffd2955f7a892dd4a28759434f2a64e99fe63a38",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "99413aad522cdff29d2ecf342a80f7e064c8e74d427457e8aa8a2522c9ce2814",
+          "size": 405967
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "08f660121b00ff1dcf9387245634e58e883d0c629ae49c9080ea17b6c9431405",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "770c8b65924ed384ab7be2935ac9701a006b267dc43b46a97ba2f1d8e72e8d78",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "c336569dd412c0476693e56a66f54854761654c4846fb1d4b9279090f745b106",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "bfc2647384032ca1480d4245a7b37cb45f27f8f42dcd791d34c99e7dd7d99cbf",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "b8ce5685a25b11d9f9f39ecb130bd0530136dca8710ea2a4553e26631b61602d",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "e00139847be81e529c2fa0c490bbcab9740845a2c454c8c46331ab1be835d2c6",
+          "size": 494337
+        }
+      ],
+      "id": "k1-13",
+      "name": "small_anisotropic_3k_g128_white_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/13_small_anisotropic_3k_g128_white_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "804bfa8caf57a81df2f5889af3cd814715c67a21cbade24aaa9472069bd94078",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "87f29c22fb48d7d5dfe6d5fbf6c1922fc33e00f2b4b33d51188eac7baece9747",
+          "size": 635
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "e3963df4f2b355ee27575e7854c263ecfb7afa3031d131332e59b449965c36fe",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "b1da04af727471546d54cb76426edc1a82798cd0f918f6fe2e5769c0ad53132c",
+          "size": 378779
+        },
+        {
+          "name": "particles_relion_identity_ctf.json",
+          "sha256": "19d7a3a7e00a60636d2d64f025086667c1902fc4971166745b0599c9ddbe0429",
+          "size": 790
+        },
+        {
+          "name": "particles_relion_identity_ctf.star",
+          "sha256": "2f992ba62037ce4363306d0453f77d2fe5d49ceb0858486a6302fe70e70be4ab",
+          "size": 384778
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "4b4935b9a0089856fd585c377611d344f4117c2a115ef3ad191e8ab7d167d6f2",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "6b8e3e8f0909f375c80d518ed743c2f91ab6710479c9402bfdeba459fef8757d",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "b4667a624ceadbc2fa1ad57cfcd953adf913ff1b551751e290ba287d30fb055d",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "5e25a73b4752ec3184f09a5f768649938fd2cd01266c1491fce9ccbdbf70226d",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "d82e2d6014f6e7098c4adae83cf1024eeb35bc9f647d18fac201c6b5facddf3f",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "6202eebc42e94725be00c3c702816cc60b0dcbf3bacabd1106b7e8b10ae02ed0",
+          "size": 494321
+        }
+      ],
+      "id": "k1-14",
+      "name": "small_noctf_3k_g128_white_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/14_small_noctf_3k_g128_white_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "9d70a3c0ef4c43d7359a47f866d52585b80f6779a65dc9b2a0d83c3ab6fb6fc1",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "4ad246d3d05d9fcdd74ab03e0774473b56b2bb2cafdc38a3859d04cbedc43581",
+          "size": 841
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "083a80f7ea577dacb5eb0501fff61438495d6a31ece611905f5f67d13ee36e40",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "1cc19b3d2b0876e7bb342dfb51019cd5f9bc2e7653288d6a54752e03679b59b3",
+          "size": 404975
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "4b4935b9a0089856fd585c377611d344f4117c2a115ef3ad191e8ab7d167d6f2",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "f2fbfc301b49ed890de54a7a14e096724467475937005fb13c6ce5388b7683ad",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "771fd06bbd66c9feba73386a29a3ed45da83673d8e8c43269aca5bdae1982bf8",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "b71fafdf67693da06292fcb636e9612592b15c46a33a3d3d0a8c3a08e0a34c9d",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "c6ccab03fb5c15a04496ba6ddbe7e086bd5cc017902d5446c85999ac9f58e8de",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "218f20de471e3be9c0f7ff8d0c7c542b4d59e7961066e3ceec537e5bdde11519",
+          "size": 494744
+        }
+      ],
+      "id": "k1-15",
+      "name": "small_outliers_3k_g128_pct20_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/15_small_outliers_3k_g128_pct20_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "9d70a3c0ef4c43d7359a47f866d52585b80f6779a65dc9b2a0d83c3ab6fb6fc1",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "c38b2e194e31a40bdd62845aee42053da49362148c5438cf3d5f1472a57215d6",
+          "size": 857
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "3e4c3c801eb5fd9a939d0557ec443aeb409360fe4283c3f9ec157930b9d1d64c",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "4e5b534fe418ede6c998fc09ee9b95a737159b23cd8367ea9eaea935bbd860c0",
+          "size": 405967
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "08f660121b00ff1dcf9387245634e58e883d0c629ae49c9080ea17b6c9431405",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "6632956a0862bc70e4af024f914c7938513d05a7be7edc396340e9d3500cdcf2",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "8a5b2f2ba2c3f2aed26c87362a10cf70aac60466c3379a9f1594056565066e5f",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "0c7b6268f958fd0961f2b2613dffa5203b42112340f3f65a5ea44af53127c6ba",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "cbf142b4ab0b6f5ee5d6882b5c9e710d19914c35efb341cdc2ff82070d77abea",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "6031fd1b025da083a1dcb98c1daef5d70377df1df7d3f838019b1a3aa7a4d54e",
+          "size": 494786
+        }
+      ],
+      "id": "k1-16",
+      "name": "small_anisotropic_outliers_3k_g128_pct25_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/16_small_anisotropic_outliers_3k_g128_pct25_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "9d70a3c0ef4c43d7359a47f866d52585b80f6779a65dc9b2a0d83c3ab6fb6fc1",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "1d1d03ce858c0b71107c9d8c9c8ce1c76c203cac0b0bc1001dab1473f81ee67c",
+          "size": 636
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "8c853bc9681b51c6886f9ae1aac1b986fcafabf6df551b89bde8a9daa82f4d0b",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "fa3cc17e128c3e737d7bbd2039961bf52498c6febb5496760eb1087618798e4f",
+          "size": 404975
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "4b4935b9a0089856fd585c377611d344f4117c2a115ef3ad191e8ab7d167d6f2",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "abdc6afdbdb5cdee97b46d49d5720e42801c8b4923832394e2fbe97d5492512d",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "c5e99f759fb20c8917b14472fa733f1b5003f82851fe5357340e2e2f0a9bc025",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "e1a7dc2611138bea47195238c8a9e04b75a310322d702a7744a1a37720e2957e",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "c1934b224696604cb37245172c846fb6a2fc708b535d835c1054cddde55aee56",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "ea20cfbf497b6844f1f2aa97a5c18e326dd2d9a6dabf3ab8fd77c60c8f0a5b8d",
+          "size": 494329
+        }
+      ],
+      "id": "k1-17",
+      "name": "small_extra_particles_3k_g128_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/17_small_extra_particles_3k_g128_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "9d70a3c0ef4c43d7359a47f866d52585b80f6779a65dc9b2a0d83c3ab6fb6fc1",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "ed4d14b7cb12c981878d127d7a58efacadccb596857d9f9421b641a635946301",
+          "size": 637
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "10e1ab55bcb530eabf195285b60f55ba916a5167b6cde0c1fbe69810797ac042",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "5e317d4397f63ca68b02048633f60891fd8470485117be3fcdf80603b393d465",
+          "size": 404975
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "4b4935b9a0089856fd585c377611d344f4117c2a115ef3ad191e8ab7d167d6f2",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "4b44aaf3c96adc64d6316b20d9e36145aa392d8bcc3b0517fded5999cc1529f0",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "85f2b562a7ffab2c7acb34abb768002bba332b69b12d42e073d10d4f8252ae68",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "e2f8c704cdab4485e8c73d6d42b74c856f9468f78fc30e1a55bd141f4e91bca2",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "dbb50f4fddf89dadbcddcbc6edfc497b56765f8270c20158b1ee57ec731499bc",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "99de15aac1c8a9df35ba3ecd03c7fd11ded791a5617639dd77569483fd112c2f",
+          "size": 494334
+        }
+      ],
+      "id": "k1-18",
+      "name": "small_contrast_noise_scale_3k_g128_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/18_small_contrast_noise_scale_3k_g128_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "9d70a3c0ef4c43d7359a47f866d52585b80f6779a65dc9b2a0d83c3ab6fb6fc1",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "7dcb7a1d5395538ff444f5d7b998d5139266d6af8df27730fabe4f49cc09e459",
+          "size": 637
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "2a6bfa9eea77a521bc40b157de100ddac4f1069dba1ca491b008cd29ee0d21f4",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "b1605e6c62eae7b53be4e9797407c81ad8048f2e348d5d749affbfafcd9e8c72",
+          "size": 404975
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "4b4935b9a0089856fd585c377611d344f4117c2a115ef3ad191e8ab7d167d6f2",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "fe81eb101f6210b90dc00a7b349ed14823e60bd7b2fd804b3f643df0f602c2bf",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "58a2909596a2500fe80cd59fb218275404abccda444b59a04d38e764bd2504d5",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "1c47bdf27285e673fc00fab5169c4247f1a8104e9dca5870196f13430cead614",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "1d1d99e105e58e7c5a31316bbd82a9c90a1b1ba53e6d6b473f00ac144a4b079a",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "373d70c89f49689fe2edef4645368ad52c78eded1958258a4d35f1ccdf37adfe",
+          "size": 494326
+        }
+      ],
+      "id": "k1-19",
+      "name": "small_image_offset_3k_g128_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/19_small_image_offset_3k_g128_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "62a452fc3465f25b897baeee3cf6871cc700bc5f1d614b5b6b5e345cd5c3dae6",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "a70a26f8a8c22cc5b3455c3e4977fede5da38c35ee0aee22d91f8f0e2c377469",
+          "size": 639
+        },
+        {
+          "name": "particles.256.mrcs",
+          "sha256": "9fc647fe369a1a09232ae6b80ed20790919c055b1722859a054a35fea637b218",
+          "size": 786433024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "4bf0e3fbbae22b98663d052efae92d0cb073376b66375d95df32ef8b0aad71af",
+          "size": 404975
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "4b4935b9a0089856fd585c377611d344f4117c2a115ef3ad191e8ab7d167d6f2",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "9578227ad656d853d7e44c8e01d7253c5be1b467d1caf5c63ed0537c76d7eb40",
+          "size": 67109888
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "fcb3c181e6ba36eaaf68c6598474cc8013a37965b8e68aa5e9b03504a4f8336f",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "38d9eb094225b691e4d696da2c464040e9802e7493437e00f204df843cedba90",
+          "size": 67109888
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "160705c74235de900c21becd4648b020ff2d638ad7159d23a30aa75798fb9ddc",
+          "size": 67109888
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "2547c89e9dc65808a2920290b3f1ab7750e62a5b5e8c878632085d35b13653dc",
+          "size": 494591
+        }
+      ],
+      "id": "k1-20",
+      "name": "small_high_res_radial_3k_g256_noise3_bf0",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/20_small_high_res_radial_3k_g256_noise3_bf0/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "ba9cc72da4a68a3e802c2783568462bb83b907c19f70bd8d1f13d340a1ff6a26",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "6d2b6b40e252762eb4e8e36cb386ae38c8ce690ab7173e1f256d8a1ab46be364",
+          "size": 634
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "962f39650a7c310213aaa172a46160b3ea3999415f4dd1b84a77aa3fb22ac635",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "52476bf48af5897af087d1eaee11bc165a9d68137c142ccee3fa680232cf5f1e",
+          "size": 402349
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "71c91b24a5f75f1dd67c030ef78e515c0a91ae9d117a442d9b46937e9e31a5d6",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "f201d4ff29227794da203c83beb13c113c8d6f1e968f59e81b42470ac485b764",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "ed19b777690bbe97bd8daa9c2129ed013f1b9bc8c8e36a7c83a81d347222fd52",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "4cc89a1cca73d7da8e60eb64cbd7be18c89bd2e1f4edff10b2938f0ad6188884",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "d91cef82fe73380bf5b4443460742d5bb708412f792a6bead20170ecfdadc060",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "58ca139ddd24af85623d363ed4b76b3f28ea4a8ee8689315ede22124e1419c2c",
+          "size": 494325
+        }
+      ],
+      "id": "k1-21",
+      "name": "small_kent_angles_3k_g128_white_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/21_small_kent_angles_3k_g128_white_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "9d70a3c0ef4c43d7359a47f866d52585b80f6779a65dc9b2a0d83c3ab6fb6fc1",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "a1b0d02cb931e35695d4be35643d16c4d41073f8a2dd453adf03d92bb2daf5c7",
+          "size": 854
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "804af933bd315f41f0159f62e93867cf852d70cb29f2f27a525fb2fc3eb68ad9",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "9e73ee7de74f1ab550bbc55b4dcf2b8b2101f5df1228788e84a6def91b846fb6",
+          "size": 405967
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "08f660121b00ff1dcf9387245634e58e883d0c629ae49c9080ea17b6c9431405",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "c6461b67b995ab204cd4086fd7806bed3a5d42bad4facd05d0cddacbd7f6a19c",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "60fb352309c67b7d1585bf44f50afa376000641589e4f9f95744b45eb42ffd6f",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "8874e9f296e93bfc22c7edc22ae6c2a8c9ac904f84cc7e4ceb735e1f5da83df6",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "3a351b6fdaa631213713628952604aafe2f2b393ff6d30f121ef9fbf139e90b9",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "54ddbc70ca81145f7ca78c37078fcf10d8277d83c181d669d9739a7f1e25d9b0",
+          "size": 495037
+        }
+      ],
+      "id": "k1-22",
+      "name": "small_severe_outliers_3k_g128_radial_noise5_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "804bfa8caf57a81df2f5889af3cd814715c67a21cbade24aaa9472069bd94078",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "eb9123d66923022f2243b1eba6880cd709efce131260337d2a845d04dbc08ad3",
+          "size": 637
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "a5bbe6b11bc63e2821e46d7397b929ba0b3e8a964bfb61ea6aab1b423b3eaff4",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "06da4b43342fecfcc4b83ff9adeeb1e4cb22efd613dd264d5f6cb42c506fac12",
+          "size": 378779
+        },
+        {
+          "name": "particles_relion_identity_ctf.json",
+          "sha256": "043065744442ea32cefded94da699ebbf01d43231319460cb105dd2bcb0ee198",
+          "size": 792
+        },
+        {
+          "name": "particles_relion_identity_ctf.star",
+          "sha256": "485b1724da0c86e417a4bcb8d3ae47f16c79a95284111b038ad7edd5d8274c41",
+          "size": 384778
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "4b4935b9a0089856fd585c377611d344f4117c2a115ef3ad191e8ab7d167d6f2",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "c70d00baac623709d0696ed876482f70a8bb4c4119d4f45b9f8b4240fdf6c345",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "e0da6f7f5c0172d045c2c53e9b19ad78a68354220c4044abe01b78441edd37ca",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "b19a9f1a69894a8d9e7f7a550ab9d1cbcda983de5e762e7b8643291e9c5533e2",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "809574bc5ddb39aceea993e1b7ab30cfe857aa1c257df8bb90b3c8d8fec4b9b4",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "4c57ca29173667c7a309f25d29008193d6c50775fef530c6b26e4b23be0b68e2",
+          "size": 494585
+        }
+      ],
+      "id": "k1-23",
+      "name": "small_noctf_radial_3k_g128_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/23_small_noctf_radial_3k_g128_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "ba9cc72da4a68a3e802c2783568462bb83b907c19f70bd8d1f13d340a1ff6a26",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "71c16aa402877c334d8fa043f39b8d0a32bd5bfe1497f0eebb382c21f2138c2a",
+          "size": 843
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "3baccd363730a7314ce6556200e571ee389e0ed5e3c74b76a41069b98b332377",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "971c5f227ade1d5fae9ecfbd3bb6b3ff64b6eaedb9b0b7b1292941682bbe890e",
+          "size": 402349
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "71c91b24a5f75f1dd67c030ef78e515c0a91ae9d117a442d9b46937e9e31a5d6",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "92ca05c7d0832f4f31cec8e742fab5532e096b9b55b3a336f91ade1771cb396f",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "4eeec000517a23918766c975bf4757c4edb6a48ddcb32034afe02cc54f7a7193",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "dffd7253e2326fed10b5e69cfd058167f01b74bc36440ae095241a475df24920",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "f249540880b41c1a7bf76a523e39529946a5cd364ed6f58e240835ede44c5a54",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "2aca81fa05a871310ecadf3edf0ab8c21164aa542f33ade6041ed98882191e20",
+          "size": 494753
+        }
+      ],
+      "id": "k1-24",
+      "name": "small_kent_outliers_3k_g128_pct20_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/24_small_kent_outliers_3k_g128_pct20_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "152ede075add29e969a82d2a8d0acf08627fa53ba7e30f67ed8980ad6e37b849",
+          "size": 36154
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "7d001ad7d03ef52c00b0ca7c470e35cb2b8a9fff830a6942ecba99070d0172b8",
+          "size": 637
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "4a5da5fcb5f09be637d099b839016149eca362b70f1edb33c0c40bfdaadccbac",
+          "size": 65537024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "5e45e9329487a08051e3f52444c3c48677a8d3eedc56fd53666982b5fd9d65b9",
+          "size": 133117
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "03f0157002bfe790ee9ba13b5ef54c3d6c3ddd9cc97f4059116645c37f768696",
+          "size": 44194
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "f7ac4f362b4355336e94b0b719fd9c6a04fdce7eac5384cf884831cae6b377b5",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "99456fdf07cd6e38977aef023a16b26f6e0d42bdc55e838c5997a792dac9aeef",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "499719b22415f2e1175ea1c2d7dd8f7cc0101a87ed2b9ba4414cdb6ee8e1515b",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "48280229707708d2c9bb30a8a0406beee9002e61c4bedb64f3fd7fa791ac2d64",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "cefafba7c54a1a6cf81a126f84ed79afa148a0c58cb4bf0096ae5cd14c982314",
+          "size": 166300
+        }
+      ],
+      "id": "k1-25",
+      "name": "tiny_baseline_1k_g128_white_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/25_tiny_baseline_1k_g128_white_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "152ede075add29e969a82d2a8d0acf08627fa53ba7e30f67ed8980ad6e37b849",
+          "size": 36154
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "22f92e21200681120fabbbc1b2b6a61f1e7b7c7b35e103501749780966924b48",
+          "size": 861
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "4cd77e4ddeb731f719adb0cfd661e4f00221e07d08e15e1a5dc229737d9c848c",
+          "size": 65537024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "34016f7f367587125956de8f00895c27b14225511c8ef0f517179b890685e139",
+          "size": 133494
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "fc2b0c5950dda28c5beadb5f1d649e29be247422a006f9818c65d4efe693f088",
+          "size": 44194
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "b8b0fbda6987d226ff5c2b5fb721d993861fb4e5c755578a4f4aad7651ee3a1f",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "a0b593b165c0f861d33f84046c434bf02c275b68349b3afb1ecb41b994ceb0e0",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "135a47189708bf2ec1f2385ddf3ba10e92cb69476ceea8be0fd8133cf0b0ec0c",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "7aafc4f04e482f7410ff37686ba46db14578334ca77909f04bff30dbba2789d1",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "950e7739a8223729d6dc252b17380ee930f09aa80eb3d6cc82b394d7c5e0f97d",
+          "size": 167031
+        }
+      ],
+      "id": "k1-26",
+      "name": "tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/26_tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "9d70a3c0ef4c43d7359a47f866d52585b80f6779a65dc9b2a0d83c3ab6fb6fc1",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "07dc1ebf6b839c15660dbe1e58764620e801ad84e4d2637e623961505ce86084",
+          "size": 849
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "e8254a0c8cb8db44d656e345df15dcf41160760be49d150d6af5bd9010bd979f",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "64a2cfb5a0d6827944716b0de7e4a8ea13faccead2206ad0a4b422f98dd44897",
+          "size": 404975
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "4b4935b9a0089856fd585c377611d344f4117c2a115ef3ad191e8ab7d167d6f2",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "12d26a6b28e8a448b2f86e42b951aee43d645d3688ca2026627e395e0eb0ec48",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "e6d3a37bf675e0518186d0f0944839df4c841227d7c79f7e2ef91fa972d269f9",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "ec21e6badc675d05e5547b74714749188807ffe6d4465f2585d377a0999f0307",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "44083a35e8494c53edc84cd1f95ef90e17846be7964229343e9a29891d40eecb",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "747253f0d42835e748467681c9a6af2c25dede54524cee54127f8f6ae9c745da",
+          "size": 494768
+        }
+      ],
+      "id": "k1-27",
+      "name": "small_extreme_outliers_3k_g128_pct70_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/27_small_extreme_outliers_3k_g128_pct70_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "ba9cc72da4a68a3e802c2783568462bb83b907c19f70bd8d1f13d340a1ff6a26",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "4d1430d45d915e3f5c584c13209e9f882a1e28c608668362dbbd1f33ae39e1de",
+          "size": 633
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "3455cb30f666fb7b132d278fa0b652148c0011ad9a333676d3346caaa704bb86",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "0a41883b71223140d18a46c02bcf613d0cf79106dd21ec6410269fa30430e5c9",
+          "size": 402349
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "71c91b24a5f75f1dd67c030ef78e515c0a91ae9d117a442d9b46937e9e31a5d6",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "02eab256d275bf8bf31551c321e10f327c85472e4e592406f362fc0ad6475f16",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "3008843638938cef771eb2ac6a996da47b584fdbcdb079df7d96460b993ed331",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "937f0533cece45a3fd90fcb14981a9f64d27788bb323d73c081f5b610f2bd5e1",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "09f203e1fdffa1b99040ce2225df4097544304ba4c35808f257cb9a9941bd243",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "6f0ac1f20d96a060c69856065e933a4bab898616983b52fd4dbd8b6c56833a57",
+          "size": 494325
+        }
+      ],
+      "id": "k1-28",
+      "name": "small_kent_extra_offset_3k_g128_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/28_small_kent_extra_offset_3k_g128_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "9d70a3c0ef4c43d7359a47f866d52585b80f6779a65dc9b2a0d83c3ab6fb6fc1",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "5e9afa6817caced736c24fe2aa9b13b4e95582443270c6049811fdef60eba189",
+          "size": 637
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "97d49ef2d249f0765275a886219a6f59de7139d2454ff76b4deefcc151b684c7",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "369b59e4ad6275e37bc07e70b4b3558aa96372d4bd74bb05b107f1d0c57d894c",
+          "size": 404975
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "4b4935b9a0089856fd585c377611d344f4117c2a115ef3ad191e8ab7d167d6f2",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "12b27e3752a91ab545b02b5680ec76ff7385d3fb7ee0878e886d0008e95e9699",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "a9387253cb8c28a2d61d2bc61570a696030b797d8832b8cbac4cbdef36765fa4",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "649dcf6fdba353da02738e598a091eceed9133f6ee90204704069929888ad0fc",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "8ddf8e3a2c605efb61d81b70db37759808a791d27137fc2faca33072c682009a",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "2adb91c2d98efc5acc733e73622f87b9d8f0e5c991411a818d16aed0d51c47f5",
+          "size": 494331
+        }
+      ],
+      "id": "k1-29",
+      "name": "small_low_noise_3k_g128_white_noise0p2_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/29_small_low_noise_3k_g128_white_noise0p2_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "ba9cc72da4a68a3e802c2783568462bb83b907c19f70bd8d1f13d340a1ff6a26",
+          "size": 108163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "9fb910bdd602b7b4536e8f067d6cbd600e105c3e00468b7cacbc7e340acd246d",
+          "size": 634
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "01a9f8a18c6957f8e7cc9cfd7016d09e008a3094aadd62a7ba6f7364d4805e10",
+          "size": 196609024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "c15319d30240410cb61cf9c520063ad32986569163149dfcc98675dd8f466ed9",
+          "size": 402349
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "71c91b24a5f75f1dd67c030ef78e515c0a91ae9d117a442d9b46937e9e31a5d6",
+          "size": 132203
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "6301b7e33078c0971580eb108f3b644567aa12993e8d1ea1f1a58b4190a03d9d",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "dd5a6ec65ef73e71c1fecf3ef021a2996ec539c841e8ff5739b0297c14369339",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "450cf624fb851c13ea3b2185f4bdc36d513e4a3787c5d8762dbc136f0c34015c",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "27dfbc057ef2f9ff37079864b1634f7961429047369542dd6ebcb845ed42008c",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "71c5bf842db75300eeeab83dfa1b2f893210547a93732b7db024d555684b91da",
+          "size": 494330
+        }
+      ],
+      "id": "k1-30",
+      "name": "small_low_noise_kent_3k_g128_white_noise0p2_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/30_small_low_noise_kent_3k_g128_white_noise0p2_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "e171f8cdae716bbe2a6e81e1b8c7a96db12db4ec6edf0e50d31b45fd4b430bdb",
+          "size": 360163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "87b47955984e00290e0846032de6bb01f2250ef9608909f855cf11305841a4ca",
+          "size": 637
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "e2d7488edded2c610122f6b57bd10fdc7f504bb2ce016513364d979047527b2d",
+          "size": 655361024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "8a38aae875b873a1ae6a4c2df6a81a411d791eed3ac423d72224f023e9ddee18",
+          "size": 1356307
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "ab47c6e6a4ea99e4783eabd51e6c458ae2a062e4051836f9dc6fb2aa8168199a",
+          "size": 440212
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "5ef9cd9721d03153b8731285f42eebbb411d3169d1699cfe308020421e9a42fb",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "e2067bfb01165e1c889e9bc32714585475b89385ea13f98b269aa7382cec967a",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "829f5e265cbb3c2e6dff820418b65cc393afd6f5e04754c934e85d381f0529a3",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "46b85cdf498551f6f69055a6dc60e8140701c2e8304d8c85b999b5cf9f5ef158",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "70b3b10c95581752ad1cb5ee58eb9807b5bff5cf29f60fee0d8206d0bf5afc37",
+          "size": 1642345
+        }
+      ],
+      "id": "k1-31",
+      "name": "mid_10k_g128_white_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/31_mid_10k_g128_white_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "fed2d424c28e95777a6c40fcdc87968d4822ce982e6eb9e1f5ad06a4da89ae32",
+          "size": 360163
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "86f8788c8db646cbecb9b0e0454d79efbe51933636f7bff7fee97f71904aa108",
+          "size": 636
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "32d35b5ee04e37bfec898160740377b07a170c084a305786c0927aa6d0e91cc3",
+          "size": 655361024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "90a27175ca06482f4c8dff69d5e11d9884d78dcd62f925c42f05cd58b97521e2",
+          "size": 1347202
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "378dfbd13f43c27cb5d0e0337b95a5141e423b28714ebf7497e2f6baf78edd9e",
+          "size": 440212
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "c5a6227bcdc40d94458fce45690e0424306fcccd7aa34b62caaa3db08baddc76",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "76801aed9a93c11664034aed9aed055a08616efc0a16e69f402449f634dc324b",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "8bb8acd038d93c1f40cb5c85813e911b00728b49cfc70f5748620f985f74df1d",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "ce1a6a21a1f0dec312294c6efd28ee01963b3b053e911dc5d36701163a7a9b24",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "efb26c0a3387dc945813437edf5cc29269da9ab6c0f14243b339b660615612fe",
+          "size": 1642608
+        }
+      ],
+      "id": "k1-32",
+      "name": "mid_10k_kent_g128_radial_noise3_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/32_mid_10k_kent_g128_radial_noise3_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "39424f60e2b0495d9f1b36444f6d7c76866e35dd7e119b84d4e8d16cff92de4d",
+          "size": 14400165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "15e5e816de2234923d709fff23251990e16f813232db5006e4b44a65fdfbba45",
+          "size": 636
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "d3ba6fb7192b91134b99b23d6660e4e02f8ba0aa7d0987b5bc064a23c177a5f3",
+          "size": 26214401024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "121a9508222eef5675449189cd5b4ca529f4ac9f92d03ba14dace65850fc3dc0",
+          "size": 56436065
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "6e1b5972e537eec65f0b825fbdafcbee2bd1a0182bbf6c8dded1e22b6292339f",
+          "size": 17600216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "36066a456e0d3afb5e689ea8ed786a9849a1100cbf5fd93f0f8bcb20ffb1b283",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "5ff68b2bbe6f6b0b7fee29a768595b5cc6bde414319d4cc4f8b6fb717dd5522c",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "f581fb3daef59743bd3659b833c27fafe2f5e8c08d49d5a972019ca74535abbd",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "37bebf769ce252958ed0cda0107d065d746702c655cdbd3d91e26d97b6b6cc62",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "bec2387814d8fbde524a2cbd353055e61155d6334903e49f884a2dd73117bf2b",
+          "size": 65602367
+        }
+      ],
+      "id": "k1-33",
+      "name": "max_images_400k_g128_white_noise1_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/33_max_images_400k_g128_white_noise1_bf80/data"
+    },
+    {
+      "files": [
+        {
+          "name": "ctf.pkl",
+          "sha256": "39424f60e2b0495d9f1b36444f6d7c76866e35dd7e119b84d4e8d16cff92de4d",
+          "size": 14400165
+        },
+        {
+          "name": "generation_config.json",
+          "sha256": "0abc75871663315d7fa287d8e4d7724e8d634f4034bb234bce0a91059fa3d7b6",
+          "size": 641
+        },
+        {
+          "name": "particles.128.mrcs",
+          "sha256": "f802a4c787ae48d37b6a88e1459ac1bca8bc550287fa1305d4f3fe0a50e5217d",
+          "size": 26214401024
+        },
+        {
+          "name": "particles.star",
+          "sha256": "748ed14e72aa6688eb27ba6371e65e025126d1c572cc3097343c5c6015b1a3d6",
+          "size": 56563132
+        },
+        {
+          "name": "poses.pkl",
+          "sha256": "81f57b33315edb06b6cd2a50ce2223ed4c1216e68f0859fe60e7ac456b4b9d18",
+          "size": 17600216
+        },
+        {
+          "name": "reference_gt.mrc",
+          "sha256": "e085d828cee3e11466d4676e9385b04c1f1d48b74e0fd64f408ddb1ab198f73f",
+          "size": 8389632
+        },
+        {
+          "name": "reference_gt_relion.mrc",
+          "sha256": "0c4b9d0592e4f328267e524bcec2bb17be3da201170cd314742c497808197db4",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init.mrc",
+          "sha256": "f68fbce7479329001dc32b42acddb2e5d12a484d165b212072a9254bdb5ca440",
+          "size": 8389632
+        },
+        {
+          "name": "reference_init_relion.mrc",
+          "sha256": "06d9713ea96e8ca4d221db156da49fc4ca172e2cdfdcae253005d426df38be31",
+          "size": 8389632
+        },
+        {
+          "name": "simulation_info.pkl",
+          "sha256": "2c26cc2e2ebef86974afdafd9e3b0d071569d2b227cc94ce1b915f83910b0f0a",
+          "size": 65602648
+        }
+      ],
+      "id": "k1-34",
+      "name": "max_images_400k_g128_radial_noise3_nonuniform_bf80",
+      "source_data_dir": "em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/cases/34_max_images_400k_g128_radial_noise3_nonuniform_bf80/data"
+    }
+  ],
+  "fixture_root_policy": "Runtime root supplied separately; source_data_dir is root-relative.",
+  "frozen_case_definitions_sha256": "9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1",
+  "frozen_denominator": 34,
+  "generated_utc": "2026-07-22T15:46:22.735193+00:00",
+  "schema": "recovar.em_k1_fixture_manifest.v1",
+  "source_scorecard": "docs/math/em_relion_parity_scorecard_v1.json",
+  "source_scorecard_sha256": "37f7c0e4a3adbc52aa117aad9408a4aa1d246013a376cf0f4ed1046c88e4059e",
+  "suite_id": "k1-gui-grid0-local-highshell-full34-artifact-pinned-v2",
+  "suite_version": 2
+}

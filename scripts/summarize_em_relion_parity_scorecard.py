@@ -11,16 +11,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCORECARD = REPO_ROOT / "docs" / "math" / "em_relion_parity_scorecard_v1.json"
+DEFAULT_FIXTURE_MANIFEST = REPO_ROOT / "docs" / "math" / "em_relion_parity_fixture_manifest_v2.json"
 V1_SUITE_ID = "k1-gui-grid0-local-highshell-full34"
+V2_FIXTURE_SUITE_ID = f"{V1_SUITE_ID}-artifact-pinned-v2"
 V1_FROZEN_DENOMINATOR = 34
-V1_FROZEN_CASE_DEFINITIONS_SHA256 = (
-    "9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1"
-)
+V1_FROZEN_CASE_DEFINITIONS_SHA256 = "9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1"
 VALID_RESULTS = {"pass", "fail", "not_run"}
 REQUIRED_DEFINITION_FIELDS = {
     "contrast_std",
@@ -37,6 +38,26 @@ REQUIRED_DEFINITION_FIELDS = {
     "seed",
     "volume_radius",
 }
+REQUIRED_FIXTURE_FILES = {
+    "ctf.pkl",
+    "generation_config.json",
+    "particles.star",
+    "poses.pkl",
+    "reference_gt.mrc",
+    "reference_gt_relion.mrc",
+    "reference_init.mrc",
+    "reference_init_relion.mrc",
+    "simulation_info.pkl",
+}
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def frozen_case_definitions_sha256(cases: list[dict]) -> str:
@@ -131,10 +152,90 @@ def load_and_validate(path: Path) -> dict:
         raise ValueError("last history row must be the current snapshot")
     if history[-1]["counts"] != recorded:
         raise ValueError("last history counts must match current snapshot")
+
+    case_ids = set(actual_ids)
+    replicates = scorecard.get("replicate_diagnostics", [])
+    if not isinstance(replicates, list):
+        raise ValueError("replicate_diagnostics must be a list")
+    for replicate in replicates:
+        case_id = replicate.get("case_id")
+        if case_id not in case_ids:
+            raise ValueError(f"unknown replicate case ID: {case_id!r}")
+        if replicate.get("scoring") is not False:
+            raise ValueError(f"{case_id}: regenerated replicate must be explicitly non-scoring")
+        if replicate.get("trajectory_result") not in {"pass", "fail"}:
+            raise ValueError(f"{case_id}: invalid replicate trajectory result")
+        if replicate.get("intermediate_result") not in {"pass", "fail"}:
+            raise ValueError(f"{case_id}: invalid replicate intermediate result")
+        for field in ("particle_stack_sha256", "fixed_fixture_particle_stack_sha256"):
+            value = replicate.get(field)
+            if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+                raise ValueError(f"{case_id}: invalid replicate {field}")
+        if replicate["particle_stack_sha256"] == replicate["fixed_fixture_particle_stack_sha256"]:
+            raise ValueError(f"{case_id}: replicate unexpectedly matches the fixed fixture bytes")
+        jobs = replicate.get("jobs")
+        if not isinstance(jobs, dict) or set(jobs) != {"science", "audit"}:
+            raise ValueError(f"{case_id}: replicate jobs must identify science and audit")
     return scorecard
 
 
-def render_markdown(scorecard: dict) -> str:
+def load_and_validate_fixture_manifest(path: Path, scorecard: dict) -> dict:
+    manifest = json.loads(path.read_text())
+    if manifest.get("schema") != "recovar.em_k1_fixture_manifest.v1":
+        raise ValueError("unsupported fixture manifest schema")
+    if manifest.get("suite_id") != V2_FIXTURE_SUITE_ID or manifest.get("suite_version") != 2:
+        raise ValueError("fixture manifest must identify the artifact-pinned v2 suite")
+    if manifest.get("frozen_denominator") != scorecard["frozen_denominator"]:
+        raise ValueError("fixture manifest denominator differs from the scorecard")
+    if manifest.get("frozen_case_definitions_sha256") != scorecard["frozen_case_definitions_sha256"]:
+        raise ValueError("fixture manifest case-definition digest differs from the scorecard")
+
+    cases = manifest.get("cases")
+    if not isinstance(cases, list) or len(cases) != scorecard["frozen_denominator"]:
+        raise ValueError("fixture manifest must contain the frozen number of cases")
+    expected_identity = [(case["id"], case["name"]) for case in scorecard["cases"]]
+    actual_identity = [(case.get("id"), case.get("name")) for case in cases]
+    if actual_identity != expected_identity:
+        raise ValueError("fixture manifest case IDs/names differ from the scorecard")
+
+    source_dirs = []
+    for case in cases:
+        case_id = case["id"]
+        source_data_dir = case.get("source_data_dir")
+        if not isinstance(source_data_dir, str) or not source_data_dir:
+            raise ValueError(f"{case_id}: missing source_data_dir")
+        source_path = Path(source_data_dir)
+        if source_path.is_absolute() or ".." in source_path.parts:
+            raise ValueError(f"{case_id}: source_data_dir must be root-relative and contained")
+        source_dirs.append(source_data_dir)
+
+        files = case.get("files")
+        if not isinstance(files, list) or not files:
+            raise ValueError(f"{case_id}: fixture file list is empty")
+        names = [row.get("name") for row in files]
+        if len(names) != len(set(names)):
+            raise ValueError(f"{case_id}: duplicate fixture filenames")
+        if not REQUIRED_FIXTURE_FILES.issubset(names):
+            raise ValueError(f"{case_id}: required fixture files are missing")
+        stacks = [
+            name for name in names if isinstance(name, str) and name.startswith("particles.") and name.endswith(".mrcs")
+        ]
+        if len(stacks) != 1:
+            raise ValueError(f"{case_id}: expected exactly one particle stack")
+        for row in files:
+            name = row.get("name")
+            if not isinstance(name, str) or not name or Path(name).name != name:
+                raise ValueError(f"{case_id}: fixture filename must be a basename")
+            if not isinstance(row.get("size"), int) or row["size"] <= 0:
+                raise ValueError(f"{case_id}/{name}: invalid fixture size")
+            if not isinstance(row.get("sha256"), str) or SHA256_RE.fullmatch(row["sha256"]) is None:
+                raise ValueError(f"{case_id}/{name}: invalid SHA-256")
+    if len(source_dirs) != len(set(source_dirs)):
+        raise ValueError("fixture manifest source_data_dir values must be unique")
+    return manifest
+
+
+def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sha256: str) -> str:
     cases = scorecard["cases"]
     counts = scorecard["current_snapshot"]["counts"]
     passed = counts["pass"]
@@ -142,6 +243,7 @@ def render_markdown(scorecard: dict) -> str:
     evaluated = passed + counts["fail"]
     intermediate_passed = sum(case["intermediate_result"] == "pass" for case in cases)
     source = scorecard["current_snapshot"]["source_ledger"]
+    fixture_bytes = sum(row["size"] for case in fixture_manifest["cases"] for row in case["files"])
 
     lines = [
         "# RECOVAR / RELION EM Parity Scorecard",
@@ -155,6 +257,11 @@ def render_markdown(scorecard: dict) -> str:
         "A checked box means the complete autonomous FSC/FSC-AUC trajectory contract passed. "
         "Unchecked cases remain in the denominator. New diagnostics do not enter this suite; changing "
         "the case set or scientific definitions requires a new suite version.",
+        "",
+        "The artifact-pinned fixture manifest is checked into the repository and binds all "
+        f"{len(fixture_manifest['cases'])} cases ({fixture_bytes:,} bytes) to exact file sizes and SHA-256 "
+        f"digests. Manifest SHA-256: `{fixture_manifest_sha256}`. Regenerated inputs are non-scoring "
+        "replicates.",
         "",
         "Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization "
         "semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like "
@@ -193,6 +300,26 @@ def render_markdown(scorecard: dict) -> str:
             f"| `{snapshot['id']}` | {snapshot['recorded_utc']} | {heads} | "
             f"{snapshot_counts['pass']} | {snapshot_counts['fail']} | {snapshot_counts['not_run']} |"
         )
+    replicates = scorecard.get("replicate_diagnostics", [])
+    if replicates:
+        lines += [
+            "",
+            "## Non-scoring regenerated-data diagnostics",
+            "",
+            "These runs exercise the same parameter definitions with newly generated particle bytes. "
+            "They are useful robustness evidence but never change the fixed-suite score.",
+            "",
+            "| Case | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |",
+            "|---|---|---|---:|---:|---|",
+        ]
+        for replicate in replicates:
+            jobs = replicate["jobs"]
+            lines.append(
+                f"| `{replicate['case_id']}` | {replicate['trajectory_result']} | "
+                f"{replicate['intermediate_result']} | {replicate['final_cross_engine_fsc_auc']:.9f} | "
+                f"{replicate['final_gt_fsc_auc_delta']:+.9f} | "
+                f"science {jobs['science']}; audit {jobs['audit']} |"
+            )
     lines += [
         "",
         "Generate this PR-ready table with:",
@@ -208,10 +335,13 @@ def render_markdown(scorecard: dict) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scorecard", type=Path, default=DEFAULT_SCORECARD)
+    parser.add_argument("--fixture-manifest", type=Path, default=DEFAULT_FIXTURE_MANIFEST)
     parser.add_argument("--check", type=Path, help="fail if this generated Markdown file is stale")
     args = parser.parse_args()
 
-    rendered = render_markdown(load_and_validate(args.scorecard))
+    scorecard = load_and_validate(args.scorecard)
+    fixture_manifest = load_and_validate_fixture_manifest(args.fixture_manifest, scorecard)
+    rendered = render_markdown(scorecard, fixture_manifest, sha256_file(args.fixture_manifest))
     if args.check is not None:
         if args.check.read_text() != rendered:
             raise SystemExit(f"stale generated scorecard: {args.check}")

@@ -1,17 +1,17 @@
 # RECOVAR / RELION EM Parity Scorecard
 
-**K=1 fixed-suite score: 21 / 34 passing (34 / 34 evaluated; 27 / 34 intermediate-topology passes).**
+**K=1 fixed-suite score: 22 / 34 passing (34 / 34 evaluated; 28 / 34 intermediate-topology passes).**
 
 Suite: `k1-gui-grid0-local-highshell-full34` (version 1; denominator frozen at 34).
 Frozen case-definition SHA-256: `9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1`.
 
 A checked box means the complete autonomous FSC/FSC-AUC trajectory contract passed. Unchecked cases remain in the denominator. New diagnostics do not enter this suite; changing the case set or scientific definitions requires a new suite version.
 
-Version 1 freezes the scientific case parameters, but the synthetic generator is not bit-reproducible: identical generation configurations can produce different particle-stack bytes. Consequently, a newly generated dataset is a replicate diagnostic and cannot replace a fixed-suite result. Candidate replacements must verify and reuse the exact recorded fixture artifacts through a reviewed `recovar.em_k1_fixture_manifest.v1` manifest. The artifact-pinned version-2 manifest is being assembled without changing this 34-case denominator.
+The artifact-pinned fixture manifest is checked into the repository and binds all 34 cases (470,170,958,467 bytes) to exact file sizes and SHA-256 digests. Manifest SHA-256: `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`. Regenerated inputs are non-scoring replicates.
 
 Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like finalization. Correlation is not computed or gated.
 
-Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v3`, generated `2026-07-21T10:35:40.626248+00:00`, JSON SHA-256 `5393ee8f1549ccce6dbf7befec7c14f66d58d16b6196ccb52eef8a70e8ddf26f`.
+Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v4`, generated `2026-07-22T15:57:09.593124+00:00`, JSON SHA-256 `096109c1dad06b9ba779715bd7c18d8705f9fb3678e80285428983df3555e639`.
 
 | Done | Case | Fixture | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
@@ -34,7 +34,7 @@ Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v3
 | [x] | `k1-17` | `small_extra_particles_3k_g128_noise1_bf80` | pass | pass | 0.998794039 | +0.016078006 | science 11385535; trajectory 11385565; intermediate 11385566 |
 | [x] | `k1-18` | `small_contrast_noise_scale_3k_g128_noise1_bf80` | pass | pass | 0.998712222 | +0.014739591 | science 11385536; trajectory 11385567; intermediate 11385568 |
 | [x] | `k1-19` | `small_image_offset_3k_g128_noise1_bf80` | pass | pass | 0.998259358 | +0.020106905 | science 11385537; trajectory 11385569; intermediate 11385570 |
-| [ ] | `k1-20` | `small_high_res_radial_3k_g256_noise3_bf0` | fail | fail | 0.986023998 | +0.001263798 | science 11385538; trajectory 11385571; intermediate 11385572 |
+| [x] | `k1-20` | `small_high_res_radial_3k_g256_noise3_bf0` | pass | pass | 0.998129368 | +0.001149427 | science 11498687; trajectory 11498738; intermediate 11498738 |
 | [x] | `k1-21` | `small_kent_angles_3k_g128_white_noise3_bf80` | pass | pass | 0.998345537 | +0.010110173 | science 11385539; trajectory 11385573; intermediate 11385574 |
 | [ ] | `k1-22` | `small_severe_outliers_3k_g128_radial_noise5_bf80` | fail | fail | 0.825938890 | -0.000351848 | science 11385540; trajectory 11385575; intermediate 11385576 |
 | [ ] | `k1-23` | `small_noctf_radial_3k_g128_noise3_bf80` | fail | fail | 0.889523938 | +0.016476333 | science 11385541; trajectory 11385577; intermediate 11385578 |
@@ -56,8 +56,17 @@ Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v3
 |---|---|---|---:|---:|---:|
 | `strict-k1-v1-old-head-20260721` | 2026-07-21T04:33:00.281935+00:00 | `ac5177d2b0cd` | 20 | 12 | 2 |
 | `strict-k1-v3-20260721` | 2026-07-21T10:35:40.626248+00:00 | `ac5177d2b0cd`, `9d1722781e1d` | 21 | 13 | 0 |
+| `strict-k1-v4-20260722` | 2026-07-22T15:57:09.593124+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db` | 22 | 12 | 0 |
 
-Recent regenerated-data replicates are tracked separately and do not appear in this progress table. In particular, regenerated case 20 passed all numbered-iteration FSC gates but its final cross-engine FSC-AUC was `0.994327836`, below the fixed `0.995` threshold; its particle-stack SHA-256 (`49facbe8...075d0`) differs from the fixed fixture (`9fc647fe...b218`).
+## Non-scoring regenerated-data diagnostics
+
+These runs exercise the same parameter definitions with newly generated particle bytes. They are useful robustness evidence but never change the fixed-suite score.
+
+| Case | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
+|---|---|---|---:|---:|---|
+| `k1-20` | fail | pass | 0.994327835 | +0.001101584 | science 11497499; audit 11498100 |
+| `k1-23` | pass | pass | 0.997483478 | +0.012306248 | science 11497556; audit 11497576 |
+| `k1-24` | fail | pass | 0.989305857 | +0.008729054 | science 11497557; audit 11497577 |
 
 Generate this PR-ready table with:
 

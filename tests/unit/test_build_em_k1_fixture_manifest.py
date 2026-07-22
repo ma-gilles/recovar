@@ -25,6 +25,7 @@ def _scorecard(path: Path) -> Path:
         "suite_id": "fixed-suite",
         "suite_version": 1,
         "frozen_denominator": 1,
+        "frozen_case_definitions_sha256": "a" * 64,
         "cases": [{"id": "k1-01", "name": "case_one"}],
     }
     path.write_text(json.dumps(scorecard))
@@ -47,6 +48,7 @@ def test_build_manifest_hashes_every_fixture_file(tmp_path):
 
     assert output.exists()
     case = manifest["cases"][0]
+    assert manifest["frozen_case_definitions_sha256"] == "a" * 64
     assert case["source_data_dir"] == "run/cases/1_case_one/data"
     assert case["files"] == [
         {"name": "particles.128.mrcs", "size": 9, "sha256": _sha256(particle)},
