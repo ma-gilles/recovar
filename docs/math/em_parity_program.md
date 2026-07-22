@@ -8818,3 +8818,33 @@ the restart capture bundle is an independent audit operand and is not a
 RECOVAR initialization input. The current science job remains untouched, and
 no production edit is authorized before an accepted capture and its dependent
 geometry/scalar audits.
+
+### Full-start iteration-10 capture is formally rejected; restart gate is active
+
+The authoritative passive full-start iteration-10 boundary sealed at
+2026-07-22 06:20:46 EDT. Its capture and control dispatch slices are exact:
+100,000 rows, follower ownership 50,140/49,860, row SHA-256
+`00059e382a1a4888275fe43d801e463529f0ae07bd046cc748f06400e855fb76`,
+source-order SHA-256
+`759d64f245c4c8ffcce4c527e990c115391d6607271d4e7f75da5550c9324534`,
+and sampling perturbation `0.096421` in both arms. Despite those controls,
+classwise capture/control FSC-AUC is
+`0.998247194648/0.997600525037/0.997363409604/0.998221443830`, so every
+class is decisively below the predeclared `0.999999` threshold. Relative L2
+is `0.0046840/0.00508357/0.00520915/0.00375230`. The native artifact check
+also reports `ValueError: missing MPI rank identity`. The sealed rejection
+JSON SHA-256 is
+`3d5134197e3071ce5074d75bc45f5fdfcada794eacbe4bfc227e5552e14ae789`;
+correlation is not computed.
+
+Only after this rejection, the no-submit guard was removed from the prepared
+restart contingency. Science job `11492718` began on one A100 at 2026-07-22
+06:24:07 EDT; primary and scalar audits are dependency-held as `11492719` and
+`11492720`. The unset-control and capture-enabled RELION arms both restart
+from the immutable clean iteration-9 optimiser and replay the exact clean
+iteration-10 dispatch and particle order. RECOVAR is allowed to run on the
+same allocation only after capture inertness and closure to the original clean
+iteration-10 trajectory both pass. The original full-start job `11484481`
+continues untouched toward its independent end-of-run fail-closed validator.
+No production edit is authorized before the restart capture and dependent
+geometry/scalar audits qualify a mismatch.

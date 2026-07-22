@@ -5201,3 +5201,30 @@ same-device equivalence or numerical noise.
   clean run for iteration-0 state, optimiser metadata, and dispatch schedule;
   the restart capture is an independent comparison operand. Running science
   remains untouched and no production edit is authorized.
+
+# 2026-07-22: full-start iteration-10 capture rejects; restart gate submitted
+
+- The authoritative iteration-10 boundary sealed at 06:20:46 EDT. Capture and
+  control have exact 100,000-row dispatch slices, follower ownership
+  50,140/49,860, row SHA-256
+  `00059e382a1a4888275fe43d801e463529f0ae07bd046cc748f06400e855fb76`,
+  source-order SHA-256
+  `759d64f245c4c8ffcce4c527e990c115391d6607271d4e7f75da5550c9324534`,
+  and perturbation `0.096421` in both arms.
+- Classwise capture/control FSC-AUC is
+  `0.998247194648/0.997600525037/0.997363409604/0.998221443830`, all below
+  the declared `0.999999` threshold; relative L2 is
+  `0.0046840/0.00508357/0.00520915/0.00375230`. Native capture validation
+  independently rejects with `ValueError: missing MPI rank identity`.
+- The sealed rejection JSON SHA-256 is
+  `3d5134197e3071ce5074d75bc45f5fdfcada794eacbe4bfc227e5552e14ae789`.
+  Correlation was not computed.
+- The restart contingency was released only after that JSON existed. Science
+  job `11492718` began on A100 node `della-l07g2` at 06:24:07 EDT; primary and
+  scalar after-ok audits are `11492719` and `11492720`. Both RELION arms
+  restart from the immutable clean iteration-9 optimiser with exact clean
+  iteration-10 dispatch/order replay. RECOVAR remains gated on capture
+  inertness plus closure to the original clean trajectory.
+- Original full-start science `11484481` remains untouched. No production
+  edit is authorized until restart capture and dependent geometry/scalar
+  audits qualify an evidence-backed mismatch.
