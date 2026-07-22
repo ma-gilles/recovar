@@ -5156,3 +5156,20 @@ same-device equivalence or numerical noise.
   reports were sealed; science was unaffected. The formal iteration-10
   capture validator remains unchanged and authoritative. Correlation is not
   computed; no production edit is authorized.
+
+# 2026-07-22: passive K=4 iteration 3 raises an inertness warning
+
+- Dispatch owners, all 100,000 class labels, and schedule scalars remain exact;
+  one Euler tuple and four translations differ.
+- Classwise capture/control FSC-AUC is
+  `0.999998957108/0.999999983889/0.999999972165/0.999999951124`. Class 1 is
+  `4.29e-8` below the same `0.999999` numeric threshold used by the formal
+  target validator; classes 2--4 remain above it.
+- State/map JSON SHA-256 values are
+  `b865b1cd370a3b042b3e407c239083d12c61d99b91ec828f9329d16c2f564f81`
+  and
+  `3a7c02a08e3fba57f1ece0a11106fb899cdd981bebec3df236c5e4e55baebdfc`.
+- This is an early warning, not a relocated gate. Only iteration 10 contains
+  the target capture and is formally authoritative. Science continues
+  unchanged and must fail closed there if inertness rejects. Correlation is
+  not computed; no production edit is authorized.
