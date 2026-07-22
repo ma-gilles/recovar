@@ -16,6 +16,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCORECARD = REPO_ROOT / "docs" / "math" / "em_relion_parity_scorecard_v1.json"
+V1_SUITE_ID = "k1-gui-grid0-local-highshell-full34"
+V1_FROZEN_DENOMINATOR = 34
+V1_FROZEN_CASE_DEFINITIONS_SHA256 = (
+    "9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1"
+)
 VALID_RESULTS = {"pass", "fail", "not_run"}
 REQUIRED_DEFINITION_FIELDS = {
     "contrast_std",
@@ -55,11 +60,15 @@ def load_and_validate(path: Path) -> dict:
         raise ValueError("unsupported scorecard schema")
     if scorecard.get("suite_version") != 1:
         raise ValueError("v1 scorecard must have suite_version=1")
+    if scorecard.get("suite_id") != V1_SUITE_ID:
+        raise ValueError(f"v1 suite_id must remain {V1_SUITE_ID!r}")
 
     cases = scorecard.get("cases")
     if not isinstance(cases, list):
         raise ValueError("cases must be a list")
     denominator = scorecard.get("frozen_denominator")
+    if denominator != V1_FROZEN_DENOMINATOR:
+        raise ValueError(f"v1 frozen_denominator must remain {V1_FROZEN_DENOMINATOR}")
     if denominator != len(cases):
         raise ValueError(f"frozen_denominator={denominator} but found {len(cases)} cases")
 
@@ -73,10 +82,15 @@ def load_and_validate(path: Path) -> dict:
 
     calculated_definition_sha256 = frozen_case_definitions_sha256(cases)
     recorded_definition_sha256 = scorecard.get("frozen_case_definitions_sha256")
-    if recorded_definition_sha256 != calculated_definition_sha256:
+    if recorded_definition_sha256 != V1_FROZEN_CASE_DEFINITIONS_SHA256:
+        raise ValueError(
+            "v1 frozen case-definition digest changed without a suite-version change: "
+            f"expected={V1_FROZEN_CASE_DEFINITIONS_SHA256} recorded={recorded_definition_sha256!r}"
+        )
+    if calculated_definition_sha256 != V1_FROZEN_CASE_DEFINITIONS_SHA256:
         raise ValueError(
             "frozen case definitions changed without a suite-version change: "
-            f"recorded={recorded_definition_sha256!r} calculated={calculated_definition_sha256}"
+            f"expected={V1_FROZEN_CASE_DEFINITIONS_SHA256} calculated={calculated_definition_sha256}"
         )
 
     for case in cases:

@@ -64,3 +64,17 @@ def test_validation_rejects_a_silently_changed_case_definition(tmp_path):
 
     with pytest.raises(ValueError, match="frozen case definitions changed"):
         MODULE.load_and_validate(path)
+
+
+@pytest.mark.unit
+def test_validation_rejects_changed_definition_even_with_recomputed_digest(tmp_path):
+    scorecard = MODULE.load_and_validate(MODULE.DEFAULT_SCORECARD)
+    scorecard["cases"][0]["definition"]["n_images"] = "99999"
+    scorecard["frozen_case_definitions_sha256"] = MODULE.frozen_case_definitions_sha256(
+        scorecard["cases"]
+    )
+    path = tmp_path / "scorecard.json"
+    path.write_text(json.dumps(scorecard))
+
+    with pytest.raises(ValueError, match="v1 frozen case-definition digest changed"):
+        MODULE.load_and_validate(path)
