@@ -9028,13 +9028,14 @@ half 1.  Both engines report two significant samples and nearly the same Pmax
 (`0.385798991` versus `0.385362`), but select poses separated by `9.18615`
 degrees.
 
-Commit `b86fb607` adds no scoring or reconstruction change; it only forwards
+Commit `9565b8a1` adds no scoring or reconstruction change; it only forwards
 the existing pass-1 significance capture controls through the K=1 launcher.
-Focused launcher validation is 2 passed.  Same-GPU exact-fixture jobs
-`11509108`/`11509109` capture RELION and RECOVAR iteration-2 tensors for that
-particle, and job `11509172` compares pass-1, pass-2, and reconstruction
-candidate tables.  The durable capture root is
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_particle2767_capture_b86fb607_20260722T212227Z`.
+Launcher validation is 39 passed.  Setup `11509108` failed closed on queued-
+source HEAD drift before science, so its blocked jobs were canceled.  The
+immutable detached-`0da399c4` replacement uses setup/science
+`11509611`/`11509612`, and job `11509654` compares pass-1, pass-2, and
+reconstruction candidate tables.  The durable capture root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_particle2767_capture_0da399c4_20260722T213929Z`.
 
 ### Unit validation closes; mandatory outlier gate stays red
 

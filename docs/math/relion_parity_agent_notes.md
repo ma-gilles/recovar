@@ -5551,16 +5551,19 @@ same-device equivalence or numerical noise.
   candidate-score/tie boundary the earliest evidence-backed target; no
   production arithmetic change is authorized before its operands are
   compared.
-- Diagnostic-only commit `b86fb607cd147e71a2069c97403ab6d23c4482fe`
+- Diagnostic-only integration commit `9565b8a1`
   forwards the already implemented pass-1 significance dump controls through
-  the K=1 Slurm launcher and adds a focused dry-run test.  The test result is
-  2 passed, 37 deselected.  Exact-fixture same-GPU setup/science/summary jobs
-  are `11509108`/`11509109`/`11509110`; after-any RELION-versus-RECOVAR
-  operand comparison is `11509172`.
+  the K=1 Slurm launcher and adds a focused dry-run test.  The complete
+  launcher test file passes 39/39.  The first queued setup `11509108` failed
+  its source-HEAD provenance gate before science after its non-immutable
+  worktree advanced; blocked jobs `11509109`/`11509110`/`11509172` were
+  canceled at zero runtime.  Immutable detached-`0da399c4` replacement
+  setup/science/summary jobs are `11509611`/`11509612`/`11509613`; after-any
+  RELION-versus-RECOVAR operand comparison is `11509654`.
 - Immutable result root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case24_strict_a2be302c_20260722T204500Z`.
   Focused capture root:
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_particle2767_capture_b86fb607_20260722T212227Z`.
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_particle2767_capture_0da399c4_20260722T213929Z`.
   Both corresponding runtime roots and run roots contain `SAFE_TO_DELETE`.
 
 # 2026-07-22: replacement unit group is green; shared long gate remains red
