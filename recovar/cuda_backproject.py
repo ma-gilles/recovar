@@ -24,6 +24,7 @@ import functools
 import logging
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -220,13 +221,39 @@ def _candidate_lib_paths() -> list[pathlib.Path]:
     return candidates
 
 
-def _lib_is_stale(lib_path: pathlib.Path) -> bool:
-    """Return True if the lib's mtime is older than the source files.
+def _lib_missing_required_symbols(lib_path: pathlib.Path) -> str | None:
+    """Return the name of the first missing required symbol, or None if all present.
 
-    Catches the case where a user installed before a kernel/Makefile fix
-    landed (e.g. issue #131's Blackwell widening): without this check,
-    `_existing_lib_path()` would happily return the stale cached `.so`
-    forever, and the user would never pick up the new arch coverage.
+    Catches binary/source skew that mtime alone misses: e.g. ``~/.cache`` holds an
+    ``.so`` built last week from an older ``.cu`` that didn't export
+    ``BackprojectIndexed``, and today's ``cuda_backproject.py`` registers FFI
+    targets that need it. The mtime check sees ``cached .so newer than source``
+    and reuses it; ``_ensure_ffi`` then crashes deep inside ``ctypes.__getattr__``,
+    ``cuda_available()`` silently returns False, and the user runs on the slow
+    JAX fallback without warning. Dlopen + symbol lookup catches this cheaply.
+    """
+    try:
+        lib = ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_LOCAL)
+    except OSError:
+        # Can't even dlopen — treat as binary-incompatible.
+        return "<dlopen failed>"
+    for _target, symbol in _FFI_REGISTRATIONS:
+        if not hasattr(lib, symbol):
+            return symbol
+    return None
+
+
+def _lib_is_stale(lib_path: pathlib.Path) -> bool:
+    """Return True if the lib's mtime is older than the source files OR if
+    it's missing a symbol that the current ``cuda_backproject.py`` expects.
+
+    Catches:
+      - mtime skew: user installed before a kernel/Makefile fix landed (e.g.
+        issue #131's Blackwell widening).
+      - binary skew: cached ``.so`` from an older branch doesn't export a
+        symbol the current source requires (e.g. ``BackprojectIndexed``).
+        Without this check ``_ensure_ffi`` would crash inside ``ctypes`` and
+        ``cuda_available()`` would silently fall back to JAX.
     """
     try:
         lib_mtime = lib_path.stat().st_mtime
@@ -239,6 +266,14 @@ def _lib_is_stale(lib_path: pathlib.Path) -> bool:
                 return True
         except OSError:
             continue
+    missing = _lib_missing_required_symbols(lib_path)
+    if missing is not None:
+        logger.info(
+            "RECOVAR CUDA library %s is missing symbol '%s' required by the current source — will rebuild.",
+            lib_path,
+            missing,
+        )
+        return True
     return False
 
 
@@ -280,6 +315,46 @@ def _build_lock_path(lib_path: pathlib.Path) -> pathlib.Path:
     return lib_path.parent / _BUILD_LOCKFILE
 
 
+def _discover_system_nvcc() -> str | None:
+    """Find nvcc in common system install locations across Linux distros.
+
+    Last-resort cluster-agnostic fallback for users who didn't ``module load``
+    or set ``CUDA_HOME``. Returns the highest-version nvcc found, or None.
+    Covers:
+      - ``/usr/local/cuda*`` (RHEL/CentOS/Della-style symlinks + versioned dirs)
+      - ``/opt/cuda*`` (Arch, some HPC)
+      - ``/opt/nvidia/cuda*`` (some HPC)
+      - ``/usr/lib/nvidia-cuda-toolkit/bin/nvcc`` (Debian/Ubuntu apt)
+    """
+    candidates: list[pathlib.Path] = []
+    for pattern in (
+        "/usr/local/cuda*/bin/nvcc",
+        "/opt/cuda*/bin/nvcc",
+        "/opt/nvidia/cuda*/bin/nvcc",
+    ):
+        candidates.extend(pathlib.Path("/").glob(pattern.lstrip("/")))
+    candidates.append(pathlib.Path("/usr/lib/nvidia-cuda-toolkit/bin/nvcc"))
+    candidates = [p for p in candidates if p.is_file() and os.access(p, os.X_OK)]
+    if not candidates:
+        return None
+
+    def _version_key(p: pathlib.Path) -> tuple[int, int, str]:
+        # Sort by versioned dir name (e.g. cuda-13.2, cuda-12.8), highest first.
+        # Falls back to lexicographic for unversioned (cuda symlink).
+        parent = p.parent.parent.name  # ".../cuda-13.2/bin/nvcc" → "cuda-13.2"
+        suffix = parent.split("-", 1)[-1] if "-" in parent else ""
+        parts = suffix.split(".") if suffix else []
+        try:
+            major = int(parts[0]) if len(parts) >= 1 else -1
+            minor = int(parts[1]) if len(parts) >= 2 else -1
+        except ValueError:
+            major, minor = -1, -1
+        return (major, minor, str(p))
+
+    candidates.sort(key=_version_key, reverse=True)
+    return str(candidates[0])
+
+
 def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: bool = False) -> pathlib.Path:
     """Build RECOVAR's preferred custom CUDA extension and return its path."""
     import sys
@@ -301,11 +376,33 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
 
     lib_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Building %s", lib_path)
+    make_env = os.environ.copy()
+    # If the user hasn't surfaced nvcc through any of the Makefile's normal
+    # discovery channels (NVCC/CUDACXX/PATH/LOCAL_CUDA_PATH/CUDA_HOME/CUDA_PATH),
+    # do a last-resort sweep of common system install paths. This makes
+    # ``import recovar; cuda_available()`` Just Work on most clusters without
+    # requiring ``module load cudatoolkit`` first.
+    nvcc_already_visible = (
+        make_env.get("NVCC")
+        or make_env.get("CUDACXX")
+        or shutil.which("nvcc")
+        or any(
+            os.access(os.path.join(make_env.get(var, ""), "bin", "nvcc"), os.X_OK)
+            for var in ("LOCAL_CUDA_PATH", "CUDA_HOME", "CUDA_PATH")
+            if make_env.get(var)
+        )
+    )
+    if not nvcc_already_visible:
+        discovered = _discover_system_nvcc()
+        if discovered is not None:
+            logger.info("Discovered nvcc at %s (system fallback)", discovered)
+            make_env["NVCC"] = discovered
+
     make_cmd = ["make"]
     if force or stale:
         make_cmd.append("-B")
     make_cmd.extend(["-C", str(_LIB_DIR), f"PYTHON={sys.executable}", f"LIB={lib_path}"])
-    subprocess.check_call(make_cmd)
+    subprocess.check_call(make_cmd, env=make_env)
     if not lib_path.exists():
         raise RuntimeError(f"Build failed — {lib_path} not found")
     _auto_build_attempted = True
@@ -415,6 +512,34 @@ _TARGET_RELION_FUSED_X_HALF_BP = "cuda_relion_fused_x_half_bp"
 _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE = "cuda_relion_fused_x_half_bp_signature"
 _TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
 _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32 = "cuda_relion_make_scoring_rotations_f32"
+
+# Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
+# Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
+# to verify a cached .so is binary-compatible with the current source. When the kernel
+# adds/removes a symbol, update this tuple — that automatically invalidates stale caches.
+_FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
+    (_TARGET_BACKPROJECT, "Backproject"),
+    (_TARGET_BACKPROJECT_INDEXED, "BackprojectIndexed"),
+    (_TARGET_BACKPROJECT_INDEXED_SIGNATURE, "BackprojectIndexedSignature"),
+    (_TARGET_PROJECT, "Project"),
+    (_TARGET_PROJECT_INDEXED, "ProjectIndexed"),
+    (_TARGET_BATCH_BACKPROJECT, "BatchBackproject"),
+    (_TARGET_BATCH_BACKPROJECT_INDEXED, "BatchBackprojectIndexed"),
+    (_TARGET_BATCH_PROJECT, "BatchProject"),
+    (_TARGET_BATCH_BP_INTERLEAVED, "BatchBackprojectInterleaved"),
+    (_TARGET_FUSED_BP, "FusedBackproject"),
+    (_TARGET_PER_IMAGE_BP, "PerImageBackproject"),
+    (_TARGET_RELION_FUSED_X_HALF_BP, "RelionFusedXHalfBackproject"),
+    (
+        _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE,
+        "RelionFusedXHalfBackprojectSignature",
+    ),
+    (_TARGET_RELION_PREPROCESS_REAL_F32, "RelionPreprocessRealF32"),
+    (
+        _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32,
+        "RelionMakeScoringRotationsF32",
+    ),
+)
 
 
 _preflight_ok: bool | None = None  # None = not checked yet
@@ -637,55 +762,8 @@ def _ensure_ffi():
         # Preflight: check that the .so covers this GPU before FFI registration
         if _loaded_lib_path:
             _preflight_check(pathlib.Path(_loaded_lib_path))
-        jax.ffi.register_ffi_target(_TARGET_BACKPROJECT, jax.ffi.pycapsule(lib.Backproject), platform="CUDA")
-        jax.ffi.register_ffi_target(
-            _TARGET_BACKPROJECT_INDEXED,
-            jax.ffi.pycapsule(lib.BackprojectIndexed),
-            platform="CUDA",
-        )
-        jax.ffi.register_ffi_target(
-            _TARGET_BACKPROJECT_INDEXED_SIGNATURE,
-            jax.ffi.pycapsule(lib.BackprojectIndexedSignature),
-            platform="CUDA",
-        )
-        jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
-        jax.ffi.register_ffi_target(
-            _TARGET_PROJECT_INDEXED,
-            jax.ffi.pycapsule(lib.ProjectIndexed),
-            platform="CUDA",
-        )
-        jax.ffi.register_ffi_target(_TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA")
-        jax.ffi.register_ffi_target(
-            _TARGET_BATCH_BACKPROJECT_INDEXED,
-            jax.ffi.pycapsule(lib.BatchBackprojectIndexed),
-            platform="CUDA",
-        )
-        jax.ffi.register_ffi_target(_TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA")
-        jax.ffi.register_ffi_target(
-            _TARGET_BATCH_BP_INTERLEAVED, jax.ffi.pycapsule(lib.BatchBackprojectInterleaved), platform="CUDA"
-        )
-        jax.ffi.register_ffi_target(_TARGET_FUSED_BP, jax.ffi.pycapsule(lib.FusedBackproject), platform="CUDA")
-        jax.ffi.register_ffi_target(_TARGET_PER_IMAGE_BP, jax.ffi.pycapsule(lib.PerImageBackproject), platform="CUDA")
-        jax.ffi.register_ffi_target(
-            _TARGET_RELION_FUSED_X_HALF_BP,
-            jax.ffi.pycapsule(lib.RelionFusedXHalfBackproject),
-            platform="CUDA",
-        )
-        jax.ffi.register_ffi_target(
-            _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE,
-            jax.ffi.pycapsule(lib.RelionFusedXHalfBackprojectSignature),
-            platform="CUDA",
-        )
-        jax.ffi.register_ffi_target(
-            _TARGET_RELION_PREPROCESS_REAL_F32,
-            jax.ffi.pycapsule(lib.RelionPreprocessRealF32),
-            platform="CUDA",
-        )
-        jax.ffi.register_ffi_target(
-            _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32,
-            jax.ffi.pycapsule(lib.RelionMakeScoringRotationsF32),
-            platform="CUDA",
-        )
+        for target, symbol in _FFI_REGISTRATIONS:
+            jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(getattr(lib, symbol)), platform="CUDA")
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
 
@@ -806,9 +884,7 @@ def _prepare_relion_x_half_block_topology_operands(images, pixel_indices, image_
         current_height = 2 * int(round(float(max_r)))
     current_half_width = current_height // 2 + 1
     if current_height <= 0 or current_height > full_height:
-        raise ValueError(
-            f"invalid RELION block-topology current height {current_height} for image shape {image_shape}"
-        )
+        raise ValueError(f"invalid RELION block-topology current height {current_height} for image shape {image_shape}")
 
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     full_rows = pixel_indices // full_half_width
@@ -1048,30 +1124,21 @@ def relion_preprocess_real_f32(
     if jax.default_backend() != "gpu":
         raise RuntimeError("RELION CUDA preprocessing requires a JAX GPU backend")
     if not custom_cuda_requested():
-        raise RuntimeError(
-            "RELION CUDA preprocessing was explicitly requested but custom CUDA is disabled"
-        )
+        raise RuntimeError("RELION CUDA preprocessing was explicitly requested but custom CUDA is disabled")
     _ensure_ffi()
     if images.dtype != jnp.float32:
         raise TypeError(f"images must be float32, got {images.dtype}")
     if normalization_factors.dtype != jnp.float32:
-        raise TypeError(
-            f"normalization_factors must be float32, got {normalization_factors.dtype}"
-        )
+        raise TypeError(f"normalization_factors must be float32, got {normalization_factors.dtype}")
     if integer_shifts.dtype != jnp.int32:
         raise TypeError(f"integer_shifts must be int32, got {integer_shifts.dtype}")
     if images.ndim != 3 or images.shape[-2] != images.shape[-1]:
         raise ValueError(f"images must have shape (batch, D, D), got {images.shape}")
     batch_size = images.shape[0]
     if normalization_factors.shape != (batch_size,):
-        raise ValueError(
-            "normalization_factors must have shape "
-            f"({batch_size},), got {normalization_factors.shape}"
-        )
+        raise ValueError(f"normalization_factors must have shape ({batch_size},), got {normalization_factors.shape}")
     if integer_shifts.shape != (batch_size, 2):
-        raise ValueError(
-            f"integer_shifts must have shape ({batch_size}, 2), got {integer_shifts.shape}"
-        )
+        raise ValueError(f"integer_shifts must have shape ({batch_size}, 2), got {integer_shifts.shape}")
     if not np.isfinite(radius) or radius <= 0.0:
         raise ValueError(f"radius must be finite and positive, got {radius}")
     if not np.isfinite(cosine_width) or cosine_width <= 0.0:
@@ -1123,8 +1190,8 @@ def backproject_indexed(
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     if use_relion_block_topology:
         logger.info("RELION x-half diagnostic: 128-thread one-block backprojection topology enabled")
-        images, pixel_indices, current_height, current_half_width = (
-            _prepare_relion_x_half_block_topology_operands(images, pixel_indices, image_shape, max_r)
+        images, pixel_indices, current_height, current_half_width = _prepare_relion_x_half_block_topology_operands(
+            images, pixel_indices, image_shape, max_r
         )
         kw["image_h"] = np.int64(current_height)
         kw["image_w"] = np.int64(current_half_width)
@@ -1182,9 +1249,7 @@ def _backproject_indexed_signature_impl(
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
     kw["relion_fold_x"] = np.int64(1)
     kw["relion_block_topology"] = np.int64(0)
-    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(
-        rotation_matrices, jnp.float32
-    )
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
     rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
     signature_shape = (int(signature_row_indices.shape[0]), int(images.shape[1]))
     out_types = (
@@ -1242,9 +1307,7 @@ def backproject_indexed_signature(
         or np.any(row_indices >= n_rows)
         or (row_indices.size > 1 and np.any(np.diff(row_indices) <= 0))
     ):
-        raise ValueError(
-            "ordinary indexed signature rows must be nonempty, unique, strictly increasing, and in range"
-        )
+        raise ValueError("ordinary indexed signature rows must be nonempty, unique, strictly increasing, and in range")
     selected = jnp.asarray(row_indices, dtype=jnp.int32)
     pixels = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     keys = jnp.asarray(canonical_rotation_keys, dtype=jnp.int32).reshape(-1)
@@ -1259,9 +1322,7 @@ def backproject_indexed_signature(
         volume_shape,
         max_r,
     )
-    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(
-        rotation_matrices, jnp.float32
-    )
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
     rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
     expected = (images, pixels, rot6, keys, selected)
     observed = outputs[9:14]
@@ -1279,8 +1340,7 @@ def backproject_indexed_signature(
         mismatches.insert(0, "accumulator")
     if mismatches:
         raise RuntimeError(
-            "ordinary indexed signature deterministic inertness gate failed for "
-            + ", ".join(mismatches)
+            "ordinary indexed signature deterministic inertness gate failed for " + ", ".join(mismatches)
         )
     return outputs[:8]
 
@@ -1344,13 +1404,11 @@ def relion_fused_x_half_backproject_indexed(
         )
     if rotation_matrices.shape != (data_rows.shape[0], 3, 3):
         raise ValueError(
-            "RELION fused x-half rotations must have shape "
-            f"({data_rows.shape[0]}, 3, 3), got {rotation_matrices.shape}"
+            f"RELION fused x-half rotations must have shape ({data_rows.shape[0]}, 3, 3), got {rotation_matrices.shape}"
         )
     if data_volume.ndim != 1 or weight_volume.ndim != 1:
         raise ValueError(
-            "RELION fused x-half accumulators must be flat, "
-            f"got {data_volume.shape} and {weight_volume.shape}"
+            f"RELION fused x-half accumulators must be flat, got {data_volume.shape} and {weight_volume.shape}"
         )
     expected_volume_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
     if data_volume.shape != (expected_volume_size,) or weight_volume.shape != (expected_volume_size,):
@@ -1359,8 +1417,8 @@ def relion_fused_x_half_backproject_indexed(
             f"{(expected_volume_size,)}, got {data_volume.shape} and {weight_volume.shape}"
         )
 
-    dense_data_rows, dense_indices, current_height, current_half_width = (
-        _prepare_relion_x_half_block_topology_operands(data_rows, pixel_indices, image_shape, max_r)
+    dense_data_rows, dense_indices, current_height, current_half_width = _prepare_relion_x_half_block_topology_operands(
+        data_rows, pixel_indices, image_shape, max_r
     )
     dense_weight_rows, weight_dense_indices, weight_height, weight_half_width = (
         _prepare_relion_x_half_block_topology_operands(weight_rows, pixel_indices, image_shape, max_r)
@@ -1442,9 +1500,7 @@ def _relion_fused_x_half_backproject_signature_indexed_impl(
         or canonical_rotation_keys.dtype != jnp.int32
         or signature_row_indices.dtype != jnp.int32
     ):
-        raise TypeError(
-            "RELION fused x-half signature pixel, canonical rotation keys, and row indices must be int32"
-        )
+        raise TypeError("RELION fused x-half signature pixel, canonical rotation keys, and row indices must be int32")
     if data_rows.ndim != 2 or data_rows.shape != weight_rows.shape:
         raise ValueError("RELION fused x-half signature rows must have matching rank-2 shapes")
     if pixel_indices.shape != (data_rows.shape[1],):
@@ -1459,8 +1515,8 @@ def _relion_fused_x_half_backproject_signature_indexed_impl(
     if data_volume.shape != (expected_volume_size,) or weight_volume.shape != (expected_volume_size,):
         raise ValueError("RELION fused x-half signature accumulator shape mismatch")
 
-    dense_data_rows, dense_indices, current_height, current_half_width = (
-        _prepare_relion_x_half_block_topology_operands(data_rows, pixel_indices, image_shape, max_r)
+    dense_data_rows, dense_indices, current_height, current_half_width = _prepare_relion_x_half_block_topology_operands(
+        data_rows, pixel_indices, image_shape, max_r
     )
     dense_weight_rows, weight_dense_indices, weight_height, weight_half_width = (
         _prepare_relion_x_half_block_topology_operands(weight_rows, pixel_indices, image_shape, max_r)
@@ -1543,9 +1599,7 @@ def _require_signature_inertness_outputs(outputs, expected_operands) -> None:
     )
     operand_pairs = tuple(
         (name, expected, shadow)
-        for name, expected, shadow in zip(
-            operand_names, expected_operands, outputs[11:17], strict=True
-        )
+        for name, expected, shadow in zip(operand_names, expected_operands, outputs[11:17], strict=True)
     )
     mismatches = [
         name
@@ -1554,8 +1608,7 @@ def _require_signature_inertness_outputs(outputs, expected_operands) -> None:
     ]
     if mismatches:
         raise RuntimeError(
-            "RELION fused x-half signature deterministic inertness gate failed for "
-            + ", ".join(mismatches)
+            "RELION fused x-half signature deterministic inertness gate failed for " + ", ".join(mismatches)
         )
 
 
@@ -1610,9 +1663,7 @@ def relion_fused_x_half_backproject_signature_indexed(
     )
     if not _bitwise_array_equal(dense_indices, weight_dense_indices):
         raise RuntimeError("RELION fused x-half signature prepared pixel indices disagree by operand")
-    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(
-        rotation_matrices, jnp.float32
-    )
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
     rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
     _require_signature_inertness_outputs(
         outputs,
@@ -1655,11 +1706,9 @@ def batch_backproject_indexed(
     kw["relion_block_topology"] = np.int64(int(use_relion_block_topology))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     if use_relion_block_topology:
-        logger.info(
-            "RELION x-half diagnostic: batched 128-thread one-block backprojection topology enabled"
-        )
-        images, pixel_indices, current_height, current_half_width = (
-            _prepare_relion_x_half_block_topology_operands(images, pixel_indices, image_shape, max_r)
+        logger.info("RELION x-half diagnostic: batched 128-thread one-block backprojection topology enabled")
+        images, pixel_indices, current_height, current_half_width = _prepare_relion_x_half_block_topology_operands(
+            images, pixel_indices, image_shape, max_r
         )
         kw["image_h"] = np.int64(current_height)
         kw["image_w"] = np.int64(current_half_width)
