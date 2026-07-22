@@ -5019,3 +5019,29 @@ same-device equivalence or numerical noise.
   exact class-2 panel on the same allocation, then start passive capture and
   RECOVAR. Request a longer allocation. Do not edit K=4 production arithmetic
   from this negative gate alone.
+
+# 2026-07-21: dynamic K=4 panel replacement is submitted with an import gate
+
+- Static reservoir/selector SHA-256 values are
+  `ad96d6e0112f8b0f7aa000e720ab5a38345d06939daa334d5a2530525c6ba648`
+  and
+  `c7f9854abf93314f5ecf0044a5d50888ea9d70567abf281611e4b6d92dfe76a1`.
+  Two current-control dry runs deterministically produce 96 live class-2
+  targets, 16/category and 48/48 by live follower owner.
+- Jobs `11484384`/`11484385` were canceled at 1m40s/0s before selection or
+  capture. From RELION's data directory the pixi Python resolved `recovar` to
+  an unrelated editable checkout, violating the checkout-binding provenance
+  gate. Preserve that partial root only as quarantined orchestration history.
+- Fresh science/audit jobs `11484481`/`11484482` use root
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_dynamic_class2_prescatter_ac5177d2_20260722T015934Z`.
+  The 24-hour launcher binds and asserts source `77a348c5` before control
+  iteration 1 and again before live selection. Launcher SHA-256 values are
+  `4896aac254895a9bb5828fe4badbf42b7060b0d8cbd21397cd1309d172dbbd04`
+  and
+  `7e33e576c477184fc0cc9a2f051c36ad8eece29bce76134483cb68ae1992cd12`.
+- Science `11484481` is running on `della-l08g5`. Its pre-control gate resolves
+  RECOVAR under the exact `77a348c5` source and JAX under the pixi environment;
+  audit `11484482` remains dependency-gated.
+- The submitted panel is still unknown by design. Only the new clean control's
+  iteration-10 class winners and dispatch owners can resolve it; capture fails
+  closed until the resulting manifest passes. No production edit is implied.

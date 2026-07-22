@@ -8623,3 +8623,34 @@ RECOVAR. Its selection rule and candidate reservoir must be sealed before
 submission, while the resulting live panel and hashes are sealed before either
 comparison arm. A longer time limit is also required. No K=4 production edit
 is justified by this panel failure.
+
+The two-stage replacement selector is now sealed. Its static reservoir has
+23,394 canonical/robust class-2 agreement candidates and 130
+RELION-class-2/RECOVAR-disagreement candidates; selector and reservoir-manifest
+SHA-256 values are
+`c7f9854abf93314f5ecf0044a5d50888ea9d70567abf281611e4b6d92dfe76a1`
+and
+`ad96d6e0112f8b0f7aa000e720ab5a38345d06939daa334d5a2530525c6ba648`.
+Two resolutions against the current control are deterministic and satisfy all
+six 16-particle categories, 48/48 live follower ownership, and 96/96 live
+class-2 membership. This is a selector validation, not the new science panel;
+the exact submitted panel remains deferred to the new control.
+
+Initial replacement science/audit jobs `11484384`/`11484385` were canceled
+after 1m40s/0s. The selector had not run, but reproducing its eventual launch
+directory showed that the pixi Python would resolve `recovar` to an unrelated
+editable checkout rather than pinned source `77a348c5`. The partial control
+root is quarantined. Superseding 24-hour science job `11484481` and afterok
+audit `11484482` use fresh run/runtime roots at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_dynamic_class2_prescatter_ac5177d2_20260722T015934Z/`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_dynamic_class2_prescatter_ac5177d2_20260722T015934Z/`.
+The new launcher asserts `recovar.__file__` under the pinned source and
+`jax.__file__` under the pixi environment before control iteration 1, then
+returns to that source before live selection. Its SHA-256 is
+`4896aac254895a9bb5828fe4badbf42b7060b0d8cbd21397cd1309d172dbbd04`;
+the audit launcher SHA-256 is
+`7e33e576c477184fc0cc9a2f051c36ad8eece29bce76134483cb68ae1992cd12`.
+Science `11484481` started on A100 node `della-l08g5`; the pre-control import
+gate resolved the exact pinned RECOVAR and pixi JAX paths before RELION entered
+iteration 1. Audit `11484482` remains dependency-gated.
