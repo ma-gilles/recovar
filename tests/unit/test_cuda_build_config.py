@@ -186,8 +186,9 @@ def test_build_custom_cuda_writes_requested_output(monkeypatch, tmp_path):
     target = (tmp_path / "cache" / "libcuda_backproject.so").resolve()
     captured = {}
 
-    def fake_check_call(cmd):
+    def fake_check_call(cmd, *, env):
         captured["cmd"] = cmd
+        captured["env"] = env
         target.write_text("stub")
 
     monkeypatch.setattr(cb.subprocess, "check_call", fake_check_call)
@@ -196,6 +197,7 @@ def test_build_custom_cuda_writes_requested_output(monkeypatch, tmp_path):
     assert result == target
     assert target.exists()
     assert captured["cmd"][-1] == f"LIB={target}"
+    assert captured["env"]["PATH"] == os.environ["PATH"]
 
 
 def test_build_custom_cuda_force_rebuilds_even_when_output_exists(monkeypatch, tmp_path):
@@ -206,8 +208,9 @@ def test_build_custom_cuda_force_rebuilds_even_when_output_exists(monkeypatch, t
     target.write_text("old")
     captured = {}
 
-    def fake_check_call(cmd):
+    def fake_check_call(cmd, *, env):
         captured["cmd"] = cmd
+        captured["env"] = env
         target.write_text("new")
 
     monkeypatch.setattr(cb.subprocess, "check_call", fake_check_call)
@@ -217,6 +220,7 @@ def test_build_custom_cuda_force_rebuilds_even_when_output_exists(monkeypatch, t
     assert target.read_text() == "new"
     assert captured["cmd"][:3] == ["make", "-B", "-C"]
     assert captured["cmd"][-1] == f"LIB={target}"
+    assert captured["env"]["PATH"] == os.environ["PATH"]
 
 
 def test_ensure_lib_path_autobuilds_when_missing(monkeypatch, tmp_path):

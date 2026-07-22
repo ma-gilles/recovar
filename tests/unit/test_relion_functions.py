@@ -37,7 +37,10 @@ def test_gridding_correct_matches_relion_binding():
     ours, _ = rf.griddingCorrect(vol, ori_size=8, padding_factor=2, order=1)
     relion = relion_bind.gridding_correct(vol, 8, 2, 1)
 
-    np.testing.assert_array_equal(np.asarray(ours), np.asarray(relion))
+    # XLA and the RELION C++ binding use different libm implementations for
+    # sqrt/sin; require agreement to a few binary64 ulps rather than bitwise
+    # identity across those compiler boundaries.
+    np.testing.assert_allclose(np.asarray(ours), np.asarray(relion), rtol=5e-16, atol=1e-15)
 
 
 def test_upscale_tau_shape_and_values():

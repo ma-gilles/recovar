@@ -6105,6 +6105,7 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
         return_score_log_z=True,
         accumulate_noise=True,
         half_spectrum_scoring=True,
+        relion_fine_mstep_prune=True,
         fine_rotations_override=fine_rotations,
         fine_rotation_parent_override=fine_parent,
         fine_translations_override=fine_translations,

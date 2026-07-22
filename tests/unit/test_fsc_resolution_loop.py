@@ -39,6 +39,19 @@ N_IMAGES = 10  # enough for half-sets
 SEED = 42
 
 
+def _assert_relion_hard_assignments_in_range(result, n_translations):
+    """Validate pose IDs against the generated RELION grid, not the compatibility input grid."""
+    from recovar.em.sampling import rotation_grid_size
+
+    final_order = result["healpix_order_trajectory"][-1]
+    n_total_poses = rotation_grid_size(final_order) * int(n_translations)
+    for assignments in result["hard_assignments"]:
+        assert assignments is not None
+        assert assignments.shape == (N_IMAGES // 2,)
+        assert np.all(assignments >= 0)
+        assert np.all(assignments < n_total_poses)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -327,12 +340,8 @@ class TestOracleMode:
         # FSC should be computed
         assert result["fsc"] is not None
         assert len(result["fsc_history"]) == 2
-        # Hard assignments valid
-        for k in range(2):
-            ha = result["hard_assignments"][k]
-            assert ha is not None
-            assert np.all(ha >= 0)
-            assert np.all(ha < N_ROTATIONS * N_TRANSLATIONS)
+        # RELION mode regenerates the angular grid from the active HEALPix order.
+        _assert_relion_hard_assignments_in_range(result, translations.shape[0])
 
 
 # ===========================================================================
@@ -474,9 +483,4 @@ class TestOneIterationWithWindowing:
             relion_current_sizes=[32],
         )
 
-        n_total_poses = N_ROTATIONS * N_TRANSLATIONS
-        for k in range(2):
-            ha = result["hard_assignments"][k]
-            assert ha.shape == (N_IMAGES // 2,)
-            assert np.all(ha >= 0)
-            assert np.all(ha < n_total_poses)
+        _assert_relion_hard_assignments_in_range(result, translations.shape[0])
