@@ -5525,3 +5525,40 @@ same-device equivalence or numerical noise.
   errors.  The rerun uses the accepted unchanged binding and overwrites that
   XML.  No push or PR score claim is authorized until every required group
   passes.
+
+# 2026-07-22: case 24 localizes from final FSC to an iteration-2 pose decision
+
+- The immutable replacement at integration source
+  `a2be302cdc08a59f0937e61e3ad92b72e939ccd7` completed as science job
+  `11507875`; strict FSC/topology auditor `11507904` rejected the row.  The
+  fixed score therefore remains 23/34 strict and 29/34 topology.
+- All 12 numbered RECOVAR maps match the 12 RELION maps and the exact
+  convergence/finalization topology.  The worst numbered merged cross-engine
+  FSC-AUC is `0.999807820661` at iteration 12.  Only the final merged map
+  fails: `0.991502719959 < 0.995`; its RECOVAR-minus-RELION GT FSC-AUC is
+  `+0.008628902885`.  This is a scientific failure, not an infrastructure
+  failure, and the threshold was not widened.
+- A full input-identity particle audit shows that the final all-data pass does
+  not create a new pose tail.  At numbered iteration 12, 392/3000 particles
+  already differ by more than 0.5 degrees, versus 391/3000 in the final pass;
+  the per-particle angular errors correlate at `0.9987`.  The final angular
+  median is `4.56e-6` degrees and p95 is `1.15775` degrees.
+- The first greater-than-five-degree split appears at iteration 2 for original
+  index `2767`, RELION one-based stack image `2768`, half 1.  RECOVAR/RELION
+  Pmax is `0.385798991/0.385362` and both engines retain two significant
+  samples, but their selected poses differ by `9.18615` degrees.  The particle
+  is one of the simulator's injected outliers.  This makes the iteration-2
+  candidate-score/tie boundary the earliest evidence-backed target; no
+  production arithmetic change is authorized before its operands are
+  compared.
+- Diagnostic-only commit `b86fb607cd147e71a2069c97403ab6d23c4482fe`
+  forwards the already implemented pass-1 significance dump controls through
+  the K=1 Slurm launcher and adds a focused dry-run test.  The test result is
+  2 passed, 37 deselected.  Exact-fixture same-GPU setup/science/summary jobs
+  are `11509108`/`11509109`/`11509110`; after-any RELION-versus-RECOVAR
+  operand comparison is `11509172`.
+- Immutable result root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case24_strict_a2be302c_20260722T204500Z`.
+  Focused capture root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_particle2767_capture_b86fb607_20260722T212227Z`.
+  Both corresponding runtime roots and run roots contain `SAFE_TO_DELETE`.

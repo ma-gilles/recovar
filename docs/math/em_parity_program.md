@@ -9007,3 +9007,31 @@ unit rerun `11504718`; the original unit launch `11504665` is infrastructure
 invalid because the RELION binding was absent.  Local commits remain unpushed
 until the required validation graph is fully green, after which the PR must
 report the frozen-score progression and exact evidence jobs.
+
+### Case-24 final-map failure is inherited from numbered-pose divergence
+
+The clean immutable `a2be302c` replacement supersedes the stale shared-
+worktree case-24 launch.  Science `11507875` completed normally and strict
+auditor `11507904` accepted all 12 numbered FSC trajectories and the exact
+RELION topology.  It rejected only the final merged cross-engine FSC-AUC:
+`0.991502719959 < 0.995`.  Numbered merged FSC-AUC remains at least
+`0.999807820661`, and the final RECOVAR map is better against GT by
+`0.008628902885` FSC-AUC.  The frozen score remains 23/34; quality thresholds
+are unchanged.
+
+A complete 3,000-particle identity join shows that final all-data scoring is
+not the first divergent boundary.  Iteration 12 already has 392 particles
+above 0.5 degrees of cross-engine pose error, almost identical to the final
+391, with angular-error correlation `0.9987`.  The earliest greater-than-five-
+degree split is iteration 2, original index 2767 / RELION stack image 2768 /
+half 1.  Both engines report two significant samples and nearly the same Pmax
+(`0.385798991` versus `0.385362`), but select poses separated by `9.18615`
+degrees.
+
+Commit `b86fb607` adds no scoring or reconstruction change; it only forwards
+the existing pass-1 significance capture controls through the K=1 launcher.
+Focused launcher validation is 2 passed.  Same-GPU exact-fixture jobs
+`11509108`/`11509109` capture RELION and RECOVAR iteration-2 tensors for that
+particle, and job `11509172` compares pass-1, pass-2, and reconstruction
+candidate tables.  The durable capture root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_particle2767_capture_b86fb607_20260722T212227Z`.
