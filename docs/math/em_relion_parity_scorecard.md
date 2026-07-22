@@ -7,6 +7,8 @@ Frozen case-definition SHA-256: `9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab0
 
 A checked box means the complete autonomous FSC/FSC-AUC trajectory contract passed. Unchecked cases remain in the denominator. New diagnostics do not enter this suite; changing the case set or scientific definitions requires a new suite version.
 
+Version 1 freezes the scientific case parameters, but the synthetic generator is not bit-reproducible: identical generation configurations can produce different particle-stack bytes. Consequently, a newly generated dataset is a replicate diagnostic and cannot replace a fixed-suite result. Candidate replacements must verify and reuse the exact recorded fixture artifacts through a reviewed `recovar.em_k1_fixture_manifest.v1` manifest. The artifact-pinned version-2 manifest is being assembled without changing this 34-case denominator.
+
 Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like finalization. Correlation is not computed or gated.
 
 Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v3`, generated `2026-07-21T10:35:40.626248+00:00`, JSON SHA-256 `5393ee8f1549ccce6dbf7befec7c14f66d58d16b6196ccb52eef8a70e8ddf26f`.
@@ -54,6 +56,8 @@ Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v3
 |---|---|---|---:|---:|---:|
 | `strict-k1-v1-old-head-20260721` | 2026-07-21T04:33:00.281935+00:00 | `ac5177d2b0cd` | 20 | 12 | 2 |
 | `strict-k1-v3-20260721` | 2026-07-21T10:35:40.626248+00:00 | `ac5177d2b0cd`, `9d1722781e1d` | 21 | 13 | 0 |
+
+Recent regenerated-data replicates are tracked separately and do not appear in this progress table. In particular, regenerated case 20 passed all numbered-iteration FSC gates but its final cross-engine FSC-AUC was `0.994327836`, below the fixed `0.995` threshold; its particle-stack SHA-256 (`49facbe8...075d0`) differs from the fixed fixture (`9fc647fe...b218`).
 
 Generate this PR-ready table with:
 

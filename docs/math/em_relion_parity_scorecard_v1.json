@@ -5,6 +5,7 @@
   "frozen_denominator": 34,
   "frozen_case_definitions_sha256": "9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1",
   "metric_policy": "Shellwise FSC and normalized FSC-AUC only; correlation is not computed or gated.",
+  "fixture_policy": "Version 1 freezes case parameters. Newly generated datasets are replicate diagnostics and cannot replace fixed-suite results; candidate replacements must verify and reuse exact artifacts with a reviewed recovar.em_k1_fixture_manifest.v1 manifest.",
   "acceptance_contract": {
     "merged_cross_engine_fsc_auc_min": 0.995,
     "recovar_minus_relion_merged_gt_fsc_auc_min": -0.002,

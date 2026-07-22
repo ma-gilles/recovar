@@ -134,6 +134,51 @@ def test_current_size_oracle_is_explicit_and_auditable(tmp_path):
     assert f"RECOVAR_RELION_CURRENT_SIZES={schedule}" in submission
 
 
+def test_artifact_pinned_fixture_replaces_generation_and_records_manifest(tmp_path):
+    fixture_root = tmp_path / "fixtures"
+    fixture_root.mkdir()
+    fixture_manifest = tmp_path / "fixtures.json"
+    fixture_manifest.write_text('{"schema":"recovar.em_k1_fixture_manifest.v1","cases":[]}\n')
+
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="20",
+        extra_env={
+            "EM_K1_MATRIX_TRAJECTORY_MODE": "autonomous",
+            "EM_K1_MATRIX_FIXTURE_MANIFEST": str(fixture_manifest),
+            "EM_K1_MATRIX_FIXTURE_ROOT": str(fixture_root),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    script = next((scratch / "jobs").glob("em_k1_matrix_20_*.sh")).read_text()
+    submission = (scratch / "submission.env").read_text()
+    assert "scripts.materialize_em_k1_fixture" in script
+    assert f'if [[ -n "{fixture_manifest}" ]]; then' in script
+    assert f'--manifest "{fixture_manifest}"' in script
+    assert f'--fixture-root "{fixture_root}"' in script
+    assert '--case-id "k1-20"' in script
+    assert '--case-name "small_high_res_radial_3k_g256_noise3_bf0"' in script
+    assert 'PREP_MODE="artifact_pinned_fixture"' in script
+    assert f"EM_K1_MATRIX_FIXTURE_MANIFEST={fixture_manifest}" in submission
+    assert f"EM_K1_MATRIX_FIXTURE_ROOT={fixture_root}" in submission
+    assert "EM_K1_MATRIX_FIXTURE_MANIFEST_SHA256=" in submission
+
+
+def test_artifact_pinned_fixture_requires_manifest_and_root_together(tmp_path):
+    fixture_manifest = tmp_path / "fixtures.json"
+    fixture_manifest.write_text("{}\n")
+
+    proc, _ = _dry_run_launcher(
+        tmp_path,
+        case="20",
+        extra_env={"EM_K1_MATRIX_FIXTURE_MANIFEST": str(fixture_manifest)},
+    )
+
+    assert proc.returncode == 2
+    assert "must be set together" in proc.stdout
+
+
 def test_exact_local_contribution_capture_is_scoped_and_freezes_metadata(tmp_path):
     dump_dir = tmp_path / "contributions"
     proc, scratch = _dry_run_launcher(

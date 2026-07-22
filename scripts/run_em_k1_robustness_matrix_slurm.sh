@@ -40,6 +40,8 @@ EXCLUSIVE="${EM_K1_MATRIX_EXCLUSIVE:-0}"
 SINGLE_VISIBLE_GPU="${EM_K1_MATRIX_SINGLE_VISIBLE_GPU:-1}"
 RUN_RELION="${EM_K1_MATRIX_RUN_RELION:-0}"
 TRAJECTORY_MODE="${EM_K1_MATRIX_TRAJECTORY_MODE:-controlled}"
+FIXTURE_MANIFEST="${EM_K1_MATRIX_FIXTURE_MANIFEST:-}"
+FIXTURE_ROOT="${EM_K1_MATRIX_FIXTURE_ROOT:-}"
 RELION_MPI_RANKS="${RELION_MPI_RANKS:-3}"
 RELION_POOL="${EM_K1_MATRIX_RELION_POOL:-3}"
 NOCTF_RELION_USE_CTF="${EM_K1_NOCTF_RELION_USE_CTF:-1}"
@@ -150,6 +152,10 @@ Environment overrides:
                                     controlled (default; existing per-iteration RELION replay)
                                     or autonomous (exact RELION iter-0 boundary only, then
                                     RECOVAR-owned trajectory; current: ${TRAJECTORY_MODE})
+  EM_K1_MATRIX_FIXTURE_MANIFEST     Optional artifact-pinned fixture manifest. When set with
+                                    EM_K1_MATRIX_FIXTURE_ROOT, verify and reuse the exact recorded
+                                    case inputs instead of regenerating synthetic data.
+  EM_K1_MATRIX_FIXTURE_ROOT         Canonical root for manifest-relative fixture directories.
   EM_K1_MATRIX_RELION_POOL          RELION --pool for strict-parity RELION baselines (default: ${RELION_POOL})
   EM_K1_MATRIX_MAX_ITER             RECOVAR max iterations and RELION --auto_iter_max (default: ${MAX_ITER})
   EM_K1_MATRIX_TIME_LIMIT           Override Slurm time limit for selected case jobs (default: per-case matrix value)
@@ -345,6 +351,22 @@ esac
 if [[ "${TRAJECTORY_MODE}" == "autonomous" && "${RUN_RELION}" != "1" ]]; then
   echo "EM_K1_MATRIX_TRAJECTORY_MODE=autonomous requires RELION (--with-relion or EM_K1_MATRIX_RUN_RELION=1)" >&2
   exit 2
+fi
+if [[ -n "${FIXTURE_MANIFEST}" || -n "${FIXTURE_ROOT}" ]]; then
+  if [[ -z "${FIXTURE_MANIFEST}" || -z "${FIXTURE_ROOT}" ]]; then
+    echo "EM_K1_MATRIX_FIXTURE_MANIFEST and EM_K1_MATRIX_FIXTURE_ROOT must be set together" >&2
+    exit 2
+  fi
+  if [[ ! -f "${FIXTURE_MANIFEST}" ]]; then
+    echo "EM_K1_MATRIX_FIXTURE_MANIFEST does not exist: ${FIXTURE_MANIFEST}" >&2
+    exit 2
+  fi
+  if [[ ! -d "${FIXTURE_ROOT}" ]]; then
+    echo "EM_K1_MATRIX_FIXTURE_ROOT does not exist: ${FIXTURE_ROOT}" >&2
+    exit 2
+  fi
+  FIXTURE_MANIFEST="$(readlink -f "${FIXTURE_MANIFEST}")"
+  FIXTURE_ROOT="$(readlink -f "${FIXTURE_ROOT}")"
 fi
 if [[ -z "${RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE}" ]]; then
   if [[ "${TRAJECTORY_MODE}" == "controlled" ]]; then
@@ -1059,13 +1081,24 @@ if [[ -n "${NOISE_RNG_BATCH_SIZE}" ]]; then
   PREPARE_ARGS+=(--noise-rng-batch-size "${NOISE_RNG_BATCH_SIZE}")
 fi
 
-echo "=== Prepare ${name} ==="
+echo "=== Prepare or materialize ${name} ==="
 PREP_START="\$(date +%s)"
-"\${PIXI_PY}" -m scripts.prepare_pdb_k1_relion_sanity_benchmark "\${PREPARE_ARGS[@]}" 2>&1 | tee "\${CASE_ROOT}/prepare.log"
+if [[ -n "${FIXTURE_MANIFEST}" ]]; then
+  PREP_MODE="artifact_pinned_fixture"
+  "\${PIXI_PY}" -m scripts.materialize_em_k1_fixture \
+    --manifest "${FIXTURE_MANIFEST}" \
+    --fixture-root "${FIXTURE_ROOT}" \
+    --case-id "k1-${idx}" \
+    --case-name "${name}" \
+    --output-dir "\${DATA_DIR}" 2>&1 | tee "\${CASE_ROOT}/prepare.log"
+else
+  PREP_MODE="generated"
+  "\${PIXI_PY}" -m scripts.prepare_pdb_k1_relion_sanity_benchmark "\${PREPARE_ARGS[@]}" 2>&1 | tee "\${CASE_ROOT}/prepare.log"
+fi
 PREP_STATUS="\${PIPESTATUS[0]}"
 PREP_END="\$(date +%s)"
 cat > "\${CASE_ROOT}/prepare_walltime.json" <<JSON
-{"slurm_job_id":"\${SLURM_JOB_ID}","start_epoch":\${PREP_START},"end_epoch":\${PREP_END},"external_wall_s":\$((PREP_END - PREP_START)),"exit_status":\${PREP_STATUS}}
+{"slurm_job_id":"\${SLURM_JOB_ID}","mode":"\${PREP_MODE}","start_epoch":\${PREP_START},"end_epoch":\${PREP_END},"external_wall_s":\$((PREP_END - PREP_START)),"exit_status":\${PREP_STATUS}}
 JSON
 if [[ "\${PREP_STATUS}" -ne 0 ]]; then
   exit "\${PREP_STATUS}"
@@ -1613,6 +1646,11 @@ echo "Exclusive GPU jobs: ${EXCLUSIVE}"
 echo "CUDA module: ${CUDA_MODULE}"
 echo "Run RELION baselines: ${RUN_RELION}"
 echo "Trajectory mode: ${TRAJECTORY_MODE}"
+echo "Fixture manifest: ${FIXTURE_MANIFEST:-<generated inputs>}"
+echo "Fixture root: ${FIXTURE_ROOT:-<generated inputs>}"
+if [[ -n "${FIXTURE_MANIFEST}" ]]; then
+  echo "Fixture manifest SHA256: $(sha256sum "${FIXTURE_MANIFEST}" | awk '{print $1}')"
+fi
 echo "RELION binding source: ${RELION_SRC_DIR:-<unset>}"
 echo "Case time-limit override: ${TIME_LIMIT_OVERRIDE:-<none>}"
 echo
@@ -1682,6 +1720,9 @@ EM_K1_MATRIX_EXCLUSIVE=${EXCLUSIVE}
 EM_K1_MATRIX_SINGLE_VISIBLE_GPU=${SINGLE_VISIBLE_GPU}
 EM_K1_MATRIX_RUN_RELION=${RUN_RELION}
 EM_K1_MATRIX_TRAJECTORY_MODE=${TRAJECTORY_MODE}
+EM_K1_MATRIX_FIXTURE_MANIFEST=${FIXTURE_MANIFEST}
+EM_K1_MATRIX_FIXTURE_ROOT=${FIXTURE_ROOT}
+EM_K1_MATRIX_FIXTURE_MANIFEST_SHA256=$(if [[ -n "${FIXTURE_MANIFEST}" ]]; then sha256sum "${FIXTURE_MANIFEST}" | awk '{print $1}'; fi)
 EM_K1_MATRIX_MAX_ITER=${MAX_ITER}
 EM_K1_MATRIX_TIME_LIMIT=${TIME_LIMIT_OVERRIDE}
 K1_IMAGE_BATCH_SIZE=${K1_IMAGE_BATCH_SIZE}
