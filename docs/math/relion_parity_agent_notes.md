@@ -5388,3 +5388,20 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_repeatqual_owner48_class2_prescatter_ac5177d2_20260722T124500Z/provenance/FAILURE_STALE_CLEAN_ORACLE_GATE_20260722.md`.
 - Continuation provenance:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_repeatqual_owner48_class2_prescatter_ac5177d2_20260722T124500Z/provenance/RESUME_SUBMISSION_20260722.md`.
+
+# 2026-07-22: superseded full-start K=4 graph is terminal
+
+- Original full-start science `11484481` ended `FAILED 1:0` after `09:51:51`
+  on `della-l08g5`. Its RELION control and passive-capture arms completed, but
+  the wrapper stopped in the previously identified validator import path with
+  `ModuleNotFoundError: No module named 'scripts'`.
+- That graph had already failed its authoritative iteration-10 inertness gate:
+  classwise capture/control FSC-AUC was
+  `0.998247194648/0.997600525037/0.997363409604/0.998221443830`, below the
+  predeclared `0.999999` threshold for every class. RECOVAR therefore did not
+  run, and dependent audits `11484482`/`11484846` were canceled at zero
+  runtime.
+- The terminal log is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_dynamic_class2_prescatter_ac5177d2_20260722T015934Z/logs/science_11484481.out`.
+  The restart-qualified continuation `11495747` and audits
+  `11495748`/`11495749` are the only live authoritative comparison graph.

@@ -8909,3 +8909,17 @@ directories; it produced no science, and dependencies `11492920`/`11492921`
 never ran. The active replacement retains the same immutable iteration-9
 restart, exact iteration-10 dispatch/order replay, sealed panel, original-clean
 closure, and same-A100 RECOVAR gates.
+
+### Full-start K=4 graph closure
+
+Original full-start science `11484481` ended `FAILED 1:0` after 9h51m51s on
+`della-l08g5`. Both RELION arms completed, but the wrapper stopped in the
+already known validator import path with
+`ModuleNotFoundError: No module named 'scripts'`. Its formal iteration-10
+inertness gate had already rejected all four classes at FSC-AUC
+`0.998247194648/0.997600525037/0.997363409604/0.998221443830` against the
+predeclared `0.999999` threshold, so RECOVAR correctly did not run. Dependent
+audits `11484482`/`11484846` were canceled at zero runtime. The
+restart-qualified continuation `11495747` and audits `11495748`/`11495749`
+are now the sole live authoritative comparison graph; its complete submission
+history is recorded in `docs/math/relion_parity_agent_notes.md`.
