@@ -863,6 +863,8 @@ write_case_script() {
   local row="$1"
   local idx name n_images grid noise_level noise_model dataset_params_option seed pdb_bfactor noise_scale_std contrast_std volume_radius relion_bg_radius time_limit mem streaming_chunk streaming_mmap percent_outliers put_extra_particles image_offset_n_std
   IFS='|' read -r idx name n_images grid noise_level noise_model dataset_params_option seed pdb_bfactor noise_scale_std contrast_std volume_radius relion_bg_radius time_limit mem streaming_chunk streaming_mmap percent_outliers put_extra_particles image_offset_n_std <<< "${row}"
+  local fixture_case_id
+  printf -v fixture_case_id 'k1-%02d' "$((10#${idx}))"
 
   local case_root="${SCRATCH_DIR}/cases/${idx}_${name}"
   local data_dir="${case_root}/data"
@@ -1088,7 +1090,7 @@ if [[ -n "${FIXTURE_MANIFEST}" ]]; then
   "\${PIXI_PY}" -m scripts.materialize_em_k1_fixture \
     --manifest "${FIXTURE_MANIFEST}" \
     --fixture-root "${FIXTURE_ROOT}" \
-    --case-id "k1-${idx}" \
+    --case-id "${fixture_case_id}" \
     --case-name "${name}" \
     --output-dir "\${DATA_DIR}" 2>&1 | tee "\${CASE_ROOT}/prepare.log"
 else

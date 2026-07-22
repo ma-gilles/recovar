@@ -165,6 +165,28 @@ def test_artifact_pinned_fixture_replaces_generation_and_records_manifest(tmp_pa
     assert "EM_K1_MATRIX_FIXTURE_MANIFEST_SHA256=" in submission
 
 
+def test_artifact_pinned_fixture_zero_pads_single_digit_case_id(tmp_path):
+    fixture_root = tmp_path / "fixtures"
+    fixture_root.mkdir()
+    fixture_manifest = tmp_path / "fixtures.json"
+    fixture_manifest.write_text('{"schema":"recovar.em_k1_fixture_manifest.v1","cases":[]}\n')
+
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="2",
+        extra_env={
+            "EM_K1_MATRIX_TRAJECTORY_MODE": "autonomous",
+            "EM_K1_MATRIX_FIXTURE_MANIFEST": str(fixture_manifest),
+            "EM_K1_MATRIX_FIXTURE_ROOT": str(fixture_root),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    script = next((scratch / "jobs").glob("em_k1_matrix_2_*.sh")).read_text()
+    assert '--case-id "k1-02"' in script
+    assert '--case-id "k1-2"' not in script
+
+
 def test_artifact_pinned_fixture_requires_manifest_and_root_together(tmp_path):
     fixture_manifest = tmp_path / "fixtures.json"
     fixture_manifest.write_text("{}\n")
