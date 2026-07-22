@@ -8358,6 +8358,64 @@ size-64 tail remains 11. Both arms report resolution 32.00 A and unchanged
 HEALPix order 3. The direction and magnitude therefore vary by half and
 iteration rather than forming a monotone support expansion.
 
+## 2026-07-21 K=1 clean residual panel reaches terminal classification
+
+Science job `11477130` completed `0:0` in 03:05:12 and dependent fail-closed
+audit `11477132` completed `0:0` in 16 seconds. Both arms produced 24 unique,
+hash-verified iteration-11 fused-posterior captures. The audit has schema
+`case7-it11-residual-fused-posterior-v2`, status `complete`, 48 inputs, cohort
+counts 8/8/4/4 for persistent target/control and opened target/control,
+respectively, and explicitly records `diagnostic_non_gating=true` and
+`correlation_computed=false`.
+
+The global-search sparse pass-2 work split is small, changes sign, and is
+independent in the two halves:
+
+| physical iteration | resident half 1 | exact half 1 | delta | resident half 2 | exact half 2 | delta |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 120380 | 120382 | +2 | 120780 | 120781 | +1 |
+| 3 | 87241 | 87249 | +8 | 87758 | 87759 | +1 |
+| 4 | 89247 | 89219 | -28 | 89913 | 89921 | +8 |
+| 5 | 94623 | 94609 | -14 | 94887 | 94879 | -8 |
+| 6 | 95642 | 95586 | -56 | 95976 | 95876 | -100 |
+
+At iteration 6 the difference is confined to the size-16/32 bucket boundary:
+six half-1 images and seven half-2 images move from size 32 to size 16 in the
+exact arm, while the larger tails are unchanged. Both arms then take the same
+HEALPix-4 local-search schedule through iteration 11. Final average Pmax is
+`0.7226` resident versus `0.7239` exact.
+
+The persistent controls are stable: median candidate and reconstruction
+support Jaccard are both one, median posterior TV is `0.020920583`, and 7/8
+latent winners agree. All winner rotation deltas are zero; the one differing
+control winner changes translation/candidate identity only. Persistent targets
+also have median candidate-support Jaccard one and all eight arm-to-arm physical
+winners agree. The immutable RELION target remains present and in reconstruction
+support in 8/8; exact state raises its median posterior mass from
+`0.36655533` to `0.39146566` and its median target/winner ratio from
+`0.93263455` to `0.99932882`, but seven targets remain rank-2 near ties. This
+localizes the persistent tail to relative score ordering inside available
+support, not missing candidate geometry.
+
+Opened controls remain stable with support Jaccard one, all four winners
+agreeing, and median posterior TV `0.007788642`. In contrast, all four opened
+targets change physical winner by median `1.8614835` degrees. Two retain exact
+candidate support Jaccard one and become rank-2 near ties with target/winner
+ratios `0.99932888` and `0.99972535`; two have candidate-support Jaccard `0.5`,
+including one absent target and one target demoted to rank 3 with ratio
+`0.03210279`. The opened cohort therefore mixes support and relative-score
+effects. It does not justify a single support-only or score-only production
+change.
+
+The sealed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_residual_clean_fa0c93fc_20260721T082000Z/provenance/residual_panel_audit.json`
+(SHA-256
+`b3fc8255366b66e17ae9149c456d3fa82ce9c2320fbe08dc120aebfe7cc498f1`);
+the Markdown report SHA-256 is
+`2fbed88f8fe8abf9d45c638bfd0cdc0ba53bb2d698ce25fe78eb9b8f69d654e1`.
+This bounded posterior diagnostic does not replace the FSC/FSC-AUC map-quality
+gate and provides no evidence-backed production edit by itself.
+
 ## 2026-07-21 current-head case-2 strict-boundary closure
 
 Strict K=1 v3 identified historical case 2 iteration 3 as the earliest ledger
@@ -8512,3 +8570,14 @@ submitted 16-hour limit. Slurm denied an in-place extension of `11480333` to
 completion artifacts, dependent audit `11480664` must remain fail-closed.
 Run-scoped recovery policy and telemetry are in
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_class2_prescatter_panel_ac5177d2_20260721T215100Z/provenance/TIME_LIMIT_RISK.md`.
+
+Failure-only salvage audit `11481766` waits on `afternotok:11480333` and
+consumes no resources while the science job is healthy. If science ends in a
+terminal failure state after sealing the RECOVAR target boundary, it verifies
+the same frozen panel, source and comparator hashes, capture/signature
+completeness, and RELION-arm inertness, then writes a separately named partial
+diagnostic with status
+`target_boundary_complete_terminal_trajectory_incomplete`. It cannot create
+or satisfy the full `SCIENCE_COMPLETE`/audit contract, and fails closed if the
+target boundary itself is incomplete. Full audit `11480664` remains the only
+admissible terminal comparison after successful science completion.

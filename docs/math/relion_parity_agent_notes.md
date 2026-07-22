@@ -4947,3 +4947,47 @@ same-device equivalence or numerical noise.
 - Do not submit a replacement residual panel until its cohort is selected from
   a clean unfiltered full-population output. Map-quality acceptance remains
   FSC/FSC-AUC; correlation was not computed.
+
+# 2026-07-21: clean case-7 residual panel is mixed support and score evidence
+
+- Clean science/audit jobs `11477130`/`11477132` completed `0:0`. Both arms
+  sealed 24 iteration-11 captures; the v2 audit consumed all 48 and passed the
+  predeclared 8/8/4/4 persistent-target/control/opened-target/control split.
+- Physical iterations 2--6 have half-1 resident/exact sparse work
+  `120380/120382`, `87241/87249`, `89247/89219`, `94623/94609`, and
+  `95642/95586`; half 2 is `120780/120781`, `87758/87759`, `89913/89921`,
+  `94887/94879`, and `95976/95876`. The split changes sign and stays at
+  size-16/32 bucket boundaries before both arms enter the same local schedule.
+- Persistent targets have candidate-support Jaccard one and identical
+  arm-to-arm physical winners for 8/8. Exact state moves median RELION-target
+  posterior mass from `0.36655533` to `0.39146566` and median target/winner
+  ratio from `0.93263455` to `0.99932882`, but seven remain rank-2 near ties.
+  Persistent divergence is therefore relative score order within available
+  support.
+- Opened controls remain stable. All four opened targets change winner by
+  median `1.8614835` degrees. Two retain identical candidate support and become
+  rank-2 near ties; two have support Jaccard `0.5`, including one absent target
+  and one target demoted to rank 3. This cohort mixes support and scoring and
+  does not justify a single production edit.
+- Audit JSON/Markdown SHA-256 values are
+  `b3fc8255366b66e17ae9149c456d3fa82ce9c2320fbe08dc120aebfe7cc498f1`
+  and
+  `2fbed88f8fe8abf9d45c638bfd0cdc0ba53bb2d698ce25fe78eb9b8f69d654e1`.
+  Root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_residual_clean_fa0c93fc_20260721T082000Z`.
+- The audit is diagnostic/non-gating; correlation was not computed and
+  FSC/FSC-AUC remains the map-quality gate.
+
+# 2026-07-21: K=4 failure-only audit preserves a completed target boundary
+
+- Full science `11480333` and success audit `11480664` remain authoritative.
+  Capture-instrumented RELION control runtime projects beyond the science
+  job's immutable 16-hour limit, which Slurm would not extend in place.
+- Failure-only audit `11481766` waits on `afternotok:11480333`. It can seal a
+  separately named partial report only after verifying the complete RECOVAR
+  iteration-10 target boundary, all frozen identities and hashes, and inert
+  RELION inputs.
+- Its status is explicitly
+  `target_boundary_complete_terminal_trajectory_incomplete`; it cannot create
+  `SCIENCE_COMPLETE` or satisfy the full audit. Missing target-boundary input
+  fails closed. No K=4 production change is authorized by this recovery path.
