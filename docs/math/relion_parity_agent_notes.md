@@ -5310,3 +5310,22 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_pair_rankfix_absiter10_partowner48_class2_prescatter_ac5177d2_20260722T080000Z/provenance/PREFLIGHT_PART_ID_OWNER48_20260722.md`.
 - This is harness rejection, not parity evidence. Correlation was not
   computed, and no production EM source changed.
+
+# 2026-07-22: internal-part-owner K=4 graph submitted
+
+- Corrected science job `11494895` uses the v2 panel's explicit
+  `rlnImageName -> RELION internal part_id -> dispatch owner` join. Primary
+  and scalar after-ok audits are `11494896` and `11494897`.
+- The sealed panel contains 96 unique identities/internal IDs, six fixed
+  categories of 16, and exact owner counts 48/48. All 96 declared owners
+  match dispatch ownership, while 0/96 internal IDs equal the old assumed
+  stack-row identity.
+- The science launcher SHA-256 is
+  `c4876b6c0cdcafb4a42539382bd39c131c55bcfa94f79289f0e9622990054e40`;
+  the panel JSON SHA-256 is
+  `65a50e9b6428d3b4176cc7d5f69233460a38375fc8a3108c5adae242fc192d9b`.
+- Full submission provenance is at
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_pair_rankfix_absiter10_partowner48_class2_prescatter_ac5177d2_20260722T080000Z/provenance/SUBMISSION_20260722.md`.
+- The stable K=1 scorecard remains the progress baseline at 21/34 strict
+  trajectory passes and 27/34 topology passes; K=4 evidence is tracked as a
+  separate diagnostic until its suite is mature enough to freeze.
