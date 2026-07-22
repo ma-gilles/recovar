@@ -5405,3 +5405,29 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_dynamic_class2_prescatter_ac5177d2_20260722T015934Z/logs/science_11484481.out`.
   The restart-qualified continuation `11495747` and audits
   `11495748`/`11495749` are the only live authoritative comparison graph.
+
+# 2026-07-22: fixed-suite boundary cases are being requalified at PR HEAD
+
+- The checked-in v1 K=1 scorecard remains frozen at 34 cases and its latest
+  accepted measurement remains 21/34 strict trajectory passes and 27/34
+  exact intermediate-topology passes.  That snapshot is conservative: its
+  source heads are `ac5177d2` and `9d172278`, while the inclusive current-size
+  boundary correction is commit `7f5f7584` on the current PR branch.
+- Clean pushed HEAD `3dd664c8` therefore launched paired same-allocation
+  RELION/RECOVAR replacements for only the three old rows causally tied to
+  that correction: cases 2, 3, and 33.  Setup is `11497146`; science jobs are
+  `11497147`, `11497148`, and `11497149`; the matrix summary is `11497150`.
+  Each science job runs both engines sequentially on one physical H100 and
+  fails closed on a GPU-UUID change.
+- Independent after-any shellwise FSC/FSC-AUC plus exact-topology audits are
+  `11497210`, `11497211`, and `11497212`.  A successful process exit alone
+  cannot replace a scorecard row.  Grid correction and forced final all-data
+  after non-convergence are unset; correlation is not computed or gated.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_boundary_requal_3dd664c8_20260722T111900Z`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_boundary_requal_3dd664c8_20260722T111900Z`.
+  Both contain `SAFE_TO_DELETE`.  The submission environment SHA-256 is
+  `39e2b522290df7d247449ddad97ff34650c91f8d5e323b5b4682d0b69e7279c0`;
+  the audit-wrapper SHA-256 is
+  `4b36ac046ffc379d3ab093aaf8b2c57faa60744fe4317f1151e24277bb3e18a1`.

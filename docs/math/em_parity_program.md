@@ -8923,3 +8923,22 @@ audits `11484482`/`11484846` were canceled at zero runtime. The
 restart-qualified continuation `11495747` and audits `11495748`/`11495749`
 are now the sole live authoritative comparison graph; its complete submission
 history is recorded in `docs/math/relion_parity_agent_notes.md`.
+
+### Fixed-score boundary requalification
+
+The version-1 K=1 suite keeps its denominator and definitions fixed at 34.
+Its accepted baseline is 21/34 complete trajectory passes and 27/34 exact
+intermediate-topology passes.  Because that snapshot used source heads
+`ac5177d2` and `9d172278`, it does not silently claim the later inclusive
+boundary fix from `7f5f7584`.
+
+Clean pushed PR HEAD `3dd664c8` launched same-H100 RELION/RECOVAR replacement
+runs for fixed-suite cases 2, 3, and 33 only.  Setup/science/summary jobs are
+`11497146`, `11497147`/`11497148`/`11497149`, and `11497150`; fail-closed
+FSC/FSC-AUC and exact-topology audits are `11497210`/`11497211`/`11497212`.
+No scorecard checkbox changes until the corresponding audit accepts the row.
+The disposable run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_boundary_requal_3dd664c8_20260722T111900Z`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_boundary_requal_3dd664c8_20260722T111900Z`;
+both contain `SAFE_TO_DELETE`.
