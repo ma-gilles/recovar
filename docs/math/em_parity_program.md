@@ -8672,15 +8672,22 @@ Synthetic exact-scalar, pixel-varying, complex-phase, and zero-reference tests
 pass. Existing focused float32-posterior/joint-pruning tests pass 7 tests with
 152 deselected using `JAX_PLATFORMS=cpu`.
 
-The replacement control's completed iteration 2 also has an all-particle,
-identity-aligned comparison with control `11480333`. All 100,000 class labels
-agree exactly although 49,780 particles changed MPI follower ownership.
-Absolute Pmax differences have median zero, p95 `5e-6`, p99 `9e-6`, and
-maximum `1.21e-4`; only two translations differ, each by one 2.125 A pixel.
-Together with classwise map FSC-AUC above `0.99999995`, this bounds early
-same-binary cross-A100 variability but remains descriptive/non-gating. The
-JSON and helper SHA-256 values are
-`e54068fbd7148f7d78e688a3624f51585c12f94c6fd932feb9aee18acbd81cfc`
+Identity-aligned all-particle comparisons with control `11480333` use a v2
+helper that hashes only the immutable 100,000-row dispatch slice for each
+iteration. At iteration 2, all 100,000 class labels and Euler tuples agree
+although 49,780 particles changed MPI follower ownership. Pmax differences
+have median zero, p95 `5e-6`, p99 `9e-6`, and maximum `1.21e-4`; only two
+translations differ, each by one 2.125 A pixel. By iteration 3, 5,352 class
+labels, 12,383 Euler tuples, and 11,655 translations differ; classwise map
+FSC-AUC is 0.991678, 0.991111, 0.987813, and 0.971361. This same-binary
+cross-A100 bifurcation reinforces the need for exact same-allocation panel
+selection and passive capture. It remains descriptive/non-gating. The
+iteration-2/iteration-3 state JSON SHA-256 values are
+`9343094d372a994e7c950f6f162d099a761413d6cb476e36a40849f3334bd0e1`
 and
-`824655aed7011de4e43d5f8d2ba9c0000f7f3c61e22f59b4a029b770805d6608`;
-correlation is not computed.
+`00bd3a367356f5e40ad089468ca73c417d5df8537c019889d40200fa02025216`;
+the iteration-3 map JSON and v2 helper SHA-256 values are
+`5a139b5e7d42a12084bb35f7bee717b3401f32bba407083328d17f1aec9701d6`
+and
+`bf0d2708498c3c4287093bc8727cd623bbbe47b728657b49dceecb6f70738f90`.
+Correlation is not computed.

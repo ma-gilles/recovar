@@ -5060,19 +5060,27 @@ same-device equivalence or numerical noise.
   deselected under `JAX_PLATFORMS=cpu`. Do not combine the existing float32
   posterior and joint-pruning helpers unless the qualified capture supports it.
 
-# 2026-07-21: replacement K=4 control agrees exactly on iteration-2 classes
+# 2026-07-21: replacement K=4 control bifurcates after iteration 2
 
-- Identity-aligned comparison with capture-capable control `11480333` gives
-  100,000/100,000 matching class assignments and identical class counts.
+- The v2 identity audit hashes immutable per-iteration dispatch slices, not the
+  growing full log. At iteration 2, comparison with capture-capable control
+  `11480333` gives 100,000/100,000 matching class and Euler assignments.
 - MPI follower ownership differs for 49,780 particles, showing the agreement
   is not an artifact of identical follower partitions. Absolute Pmax
   difference has median zero, p95 `5e-6`, p99 `9e-6`, and maximum `1.21e-4`.
   Only two translations differ, each by one 2.125 A pixel.
-- Together with classwise map FSC-AUC above `0.99999995`, this tightly bounds
-  early same-binary cross-A100 variability. It is descriptive/non-gating and
-  does not predict iteration-10 membership or replace capture inertness.
-- Diagnostic JSON/helper SHA-256 values are
-  `e54068fbd7148f7d78e688a3624f51585c12f94c6fd932feb9aee18acbd81cfc`
+- At iteration 3, 5,352 class labels, 12,383 Euler tuples, and 11,655
+  translations differ. Classwise map FSC-AUC is 0.991678, 0.991111, 0.987813,
+  and 0.971361. The same-binary cross-A100 trajectory has therefore already
+  bifurcated despite its nearly exact iteration-2 maps.
+- Iteration-2/iteration-3 state JSON SHA-256 values are
+  `9343094d372a994e7c950f6f162d099a761413d6cb476e36a40849f3334bd0e1`
   and
-  `824655aed7011de4e43d5f8d2ba9c0000f7f3c61e22f59b4a029b770805d6608`.
-  Correlation was not computed.
+  `00bd3a367356f5e40ad089468ca73c417d5df8537c019889d40200fa02025216`;
+  iteration-3 map JSON/v2 helper SHA-256 values are
+  `5a139b5e7d42a12084bb35f7bee717b3401f32bba407083328d17f1aec9701d6`
+  and
+  `bf0d2708498c3c4287093bc8727cd623bbbe47b728657b49dceecb6f70738f90`.
+- This is descriptive/non-gating and strengthens the requirement for live
+  same-allocation panel selection and passive capture. Correlation was not
+  computed.
