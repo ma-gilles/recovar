@@ -65,6 +65,7 @@ These runs exercise the same parameter definitions with newly generated particle
 | Case | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---:|---:|---|
 | `k1-20` | fail | pass | 0.994327835 | +0.001101584 | science 11497499; audit 11498100 |
+| `k1-22` | fail | fail | 0.825960160 | -0.000306153 | science 11497555; audit 11497575 |
 | `k1-23` | pass | pass | 0.997483478 | +0.012306248 | science 11497556; audit 11497576 |
 | `k1-24` | fail | pass | 0.989305857 | +0.008729054 | science 11497557; audit 11497577 |
 

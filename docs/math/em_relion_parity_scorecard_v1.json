@@ -74,6 +74,18 @@
       "jobs": {"science": "11497499", "audit": "11498100"}
     },
     {
+      "case_id": "k1-22",
+      "scoring": false,
+      "trajectory_result": "fail",
+      "intermediate_result": "fail",
+      "final_cross_engine_fsc_auc": 0.8259601597114077,
+      "final_gt_fsc_auc_delta": -0.0003061529889900605,
+      "particle_stack_sha256": "1604ca979302c85cc0166d9dab8aba96f9c161d6eb079afaef63639fd31a6d35",
+      "fixed_fixture_particle_stack_sha256": "804af933bd315f41f0159f62e93867cf852d70cb29f2f27a525fb2fc3eb68ad9",
+      "source_head": "3dd664c813751688ee2104d3365771e70c4f6eea",
+      "jobs": {"science": "11497555", "audit": "11497575"}
+    },
+    {
       "case_id": "k1-23",
       "scoring": false,
       "trajectory_result": "pass",
