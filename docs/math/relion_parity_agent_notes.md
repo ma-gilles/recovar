@@ -5360,3 +5360,31 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_pair_rankfix_absiter10_partowner48_class2_prescatter_ac5177d2_20260722T080000Z/provenance/FAILURE_RESTART_BOUNDARY_PANEL_AND_IMPORT_20260722.md`.
 - Fresh submission provenance:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_repeatqual_owner48_class2_prescatter_ac5177d2_20260722T124500Z/provenance/SUBMISSION_20260722.md`.
+
+# 2026-07-22: accepted K=4 restart pair salvaged past a stale oracle gate
+
+- Science `11495311` completed RELION control/capture `0:0` in
+  `00:13:35/00:14:39` on the same A100 and emitted exactly 96 class-2
+  pre-scatter artifacts with follower ownership 48/48.
+- Passive capture passed. Classwise capture/control FSC-AUC is
+  `0.999999995149/0.999999994637/0.999999994225/0.999999992497`; maximum
+  absolute map difference is `1.49e-8` for every class.
+- The wrapper then rejected the accepted pair before RECOVAR because it
+  incorrectly gated restart maps and sampling against the uninterrupted
+  iteration-10 oracle. The uninterrupted perturbation is `+0.096421`; the
+  prior qualification restart and both fresh arms use `-0.12306`. Same-class
+  map FSC-AUC near `0.27` is descriptive across those different hypothesis
+  grids, not a restart-inertness gate.
+- The clean oracle remains authoritative for dispatch replay: its exact
+  100,000-record iteration-10 slice matches the restart control at SHA-256
+  `00059e382a1a4888275fe43d801e463529f0ae07bd046cc748f06400e855fb76`.
+- Canceled never-runnable audits `11495312/11495313`. Continuation science
+  `11495747`, primary audit `11495748`, and scalar audit `11495749` reuse a
+  pinned digest of the accepted maps, STARs, dispatch logs, and inertness
+  report; RELION is not recomputed. The continuation passed the corrected
+  dispatch, qualification-perturbation, 96-identity, CUDA-build, and A100
+  import gates before starting RECOVAR at commit `77a348c5`.
+- Failure provenance:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_repeatqual_owner48_class2_prescatter_ac5177d2_20260722T124500Z/provenance/FAILURE_STALE_CLEAN_ORACLE_GATE_20260722.md`.
+- Continuation provenance:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_repeatqual_owner48_class2_prescatter_ac5177d2_20260722T124500Z/provenance/RESUME_SUBMISSION_20260722.md`.
