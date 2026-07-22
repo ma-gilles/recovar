@@ -8671,3 +8671,16 @@ and
 Synthetic exact-scalar, pixel-varying, complex-phase, and zero-reference tests
 pass. Existing focused float32-posterior/joint-pruning tests pass 7 tests with
 152 deselected using `JAX_PLATFORMS=cpu`.
+
+The replacement control's completed iteration 2 also has an all-particle,
+identity-aligned comparison with control `11480333`. All 100,000 class labels
+agree exactly although 49,780 particles changed MPI follower ownership.
+Absolute Pmax differences have median zero, p95 `5e-6`, p99 `9e-6`, and
+maximum `1.21e-4`; only two translations differ, each by one 2.125 A pixel.
+Together with classwise map FSC-AUC above `0.99999995`, this bounds early
+same-binary cross-A100 variability but remains descriptive/non-gating. The
+JSON and helper SHA-256 values are
+`e54068fbd7148f7d78e688a3624f51585c12f94c6fd932feb9aee18acbd81cfc`
+and
+`824655aed7011de4e43d5f8d2ba9c0000f7f3c61e22f59b4a029b770805d6608`;
+correlation is not computed.

@@ -5059,3 +5059,20 @@ same-device equivalence or numerical noise.
 - Current focused posterior/pruning baseline passes 7 tests with 152
   deselected under `JAX_PLATFORMS=cpu`. Do not combine the existing float32
   posterior and joint-pruning helpers unless the qualified capture supports it.
+
+# 2026-07-21: replacement K=4 control agrees exactly on iteration-2 classes
+
+- Identity-aligned comparison with capture-capable control `11480333` gives
+  100,000/100,000 matching class assignments and identical class counts.
+- MPI follower ownership differs for 49,780 particles, showing the agreement
+  is not an artifact of identical follower partitions. Absolute Pmax
+  difference has median zero, p95 `5e-6`, p99 `9e-6`, and maximum `1.21e-4`.
+  Only two translations differ, each by one 2.125 A pixel.
+- Together with classwise map FSC-AUC above `0.99999995`, this tightly bounds
+  early same-binary cross-A100 variability. It is descriptive/non-gating and
+  does not predict iteration-10 membership or replace capture inertness.
+- Diagnostic JSON/helper SHA-256 values are
+  `e54068fbd7148f7d78e688a3624f51585c12f94c6fd932feb9aee18acbd81cfc`
+  and
+  `824655aed7011de4e43d5f8d2ba9c0000f7f3c61e22f59b4a029b770805d6608`.
+  Correlation was not computed.
