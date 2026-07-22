@@ -8738,3 +8738,29 @@ and are byte-identical to the immutable iteration-10 preview. The manifest
 verified before passive capture; the first capture artifact followed 27
 seconds later. Science remains active, audits `11484482`/`11484846` remain
 dependency-gated, and no production edit is authorized yet.
+
+### Passive K=4 capture is within the early repeat envelope
+
+Passive capture iteration 1 matches the clean control exactly for all 100,000
+class/Euler/translation/Pmax rows and dispatch owners; classwise map FSC-AUC is
+at least `0.999999999278`. At iteration 2, dispatch ownership and all class
+labels remain exact. Pmax absolute-difference p95 is `4e-6`; one Euler tuple
+and two translations choose alternate low-posterior grid winners. One of the
+translation identities is the same near tie that moved between the two clean
+controls. Classwise map FSC-AUC remains
+`0.999999984390/0.999999983143/0.999999981554/0.999999973606`, above the
+predeclared `0.999999` formal threshold.
+
+Iteration-1 state/map JSON SHA-256 values are
+`e37e3c81dc1b3ec9c08500e87a20da9fc6b5ff0dd52a4e7dc6951a91a2660626`
+and
+`127b659cc72069c26938041cc7beeff6279422859423a7db2993f0e4096462fe`;
+iteration-2 values are
+`adf3866ba64744090d28216bbe883d840560fa3f39328a7a2bf815a1cef4ea5d`
+and
+`a7ef6939bb0bb73e6e00176a7ebace85cce06514f3be9914c2906671fa2e85b0`.
+An operator-side exact-particle assertion exited nonzero after sealing the
+reports; the corrected descriptive classification is FSC-pass with
+repeat-scale particle near ties. Science was unaffected. Formal inertness
+remains the iteration-10 dispatch/FSC/capture validator; correlation is not
+computed.
