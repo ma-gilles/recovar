@@ -5045,3 +5045,17 @@ same-device equivalence or numerical noise.
 - The submitted panel is still unknown by design. Only the new clean control's
   iteration-10 class winners and dispatch owners can resolve it; capture fails
   closed until the resulting manifest passes. No production edit is implied.
+- Primary audit `11484482` remains the geometry/support authority. Secondary
+  scalar audit `11484846` waits on `afterok:11484482` and cannot bypass it.
+  Comparator/launcher SHA-256 values are
+  `9a6a3b650ead568c07833a00f6c102784be2cd6b687616d84e4cf56a0b9c969f`
+  and
+  `48a66034daf483096ed9012bc0ce1172ad61263636f72e81e2659ae510bb22ba`.
+- The scalar discriminator predeclares aggregate relative-L2 `1e-6`, then
+  per-rotation positive real data/weight scale residual, phase, and scale
+  consistency thresholds `1e-5`, with 95% valid/compatible fractions. A pass
+  is compatible with posterior mass but is not causal proof. Synthetic
+  exact-scalar, pixel-varying, complex-phase, and zero-reference checks pass.
+- Current focused posterior/pruning baseline passes 7 tests with 152
+  deselected under `JAX_PLATFORMS=cpu`. Do not combine the existing float32
+  posterior and joint-pruning helpers unless the qualified capture supports it.

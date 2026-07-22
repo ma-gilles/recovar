@@ -8654,3 +8654,20 @@ the audit launcher SHA-256 is
 Science `11484481` started on A100 node `della-l08g5`; the pre-control import
 gate resolved the exact pinned RECOVAR and pixi JAX paths before RELION entered
 iteration 1. Audit `11484482` remains dependency-gated.
+
+A subordinate scalar-source audit is also sealed before any live panel or
+capture. Primary comparator `11484482` remains authoritative for rotation and
+pixel-support qualification; scalar audit `11484846` waits on
+`afterok:11484482`. It fits one positive real RELION/RECOVAR scale separately
+to complex data and real weight for every aligned rotation. Aggregate source
+relative-L2 at most `1e-6` is source-close. Otherwise, posterior-mass
+compatibility requires data and weight fit residuals, complex phase fraction,
+and data/weight scale disagreement each at most `1e-5`, with at least 95%
+valid and 95% compatible fits. This label is compatibility evidence, not proof
+of posterior normalization. Comparator/launcher SHA-256 values are
+`9a6a3b650ead568c07833a00f6c102784be2cd6b687616d84e4cf56a0b9c969f`
+and
+`48a66034daf483096ed9012bc0ce1172ad61263636f72e81e2659ae510bb22ba`.
+Synthetic exact-scalar, pixel-varying, complex-phase, and zero-reference tests
+pass. Existing focused float32-posterior/joint-pruning tests pass 7 tests with
+152 deselected using `JAX_PLATFORMS=cpu`.
