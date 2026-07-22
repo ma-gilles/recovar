@@ -8581,3 +8581,45 @@ diagnostic with status
 or satisfy the full `SCIENCE_COMPLETE`/audit contract, and fails closed if the
 target boundary itself is incomplete. Full audit `11480664` remains the only
 admissible terminal comparison after successful science completion.
+
+### Live iteration-10 panel gate rejects the frozen cohort
+
+The capture-capable clean control reached numbered iteration 10 while science
+job `11480333` remained uninterrupted. The predeclared read-only class gate
+finds only 72/96 frozen targets in class 2; the complete class counts are
+7/72/14/3. Twenty-four targets are off class 2, distributed across the six
+16-particle categories as 4 Pmax-tail, 3 rotation-tail, 2 support-mismatch,
+3 translation-tail, 11 RELION/RECOVAR-disagreement, and 1 stable-control
+particle. The sealed gate JSON is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_class2_prescatter_panel_ac5177d2_20260721T215100Z/analysis/LIVE_CONTROL_IT010_PANEL_CLASS_GATE.json`
+with SHA-256
+`69f8358e26255d93131d92dce6d51220d8a2a2a2662c05b6c88cc17005296b5a`;
+the input STAR SHA-256 is
+`a044f3a98457954730a47f2fcabad3a45b87d8336d5fedf10fee501a39ab13d5`.
+The sidecar hash and exact schema/count/hash assertions pass.
+
+This invalidates the frozen panel for the current binary/trajectory. The
+existing launcher must finish its clean control and then fail closed before
+passive capture; the running job is not mutated or canceled. Consequently,
+success audit `11480664` cannot become authoritative, and failure audit
+`11481766` is expected to reject salvage because no declared RELION/RECOVAR
+target captures exist. That is a recovery-path check, not K=4 science.
+
+The live and older canonical iteration-10 maps use the same current size 74
+and resolution 19.428571 A, with average Pmax 0.915123 versus 0.915362.
+Classwise map FSC-AUC is 0.954572533, 0.949992474, 0.941647625, and
+0.944810030; relative L2 is 0.0242146172, 0.0238771880, 0.0257947039, and
+0.0214597318. The descriptive JSON is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_class2_prescatter_panel_ac5177d2_20260721T215100Z/analysis/CONTROL_IT010_VS_CANONICAL.json`
+with SHA-256
+`01bd7b83bf99fe0f4e34751912199421ec9e679142a7fea8b936d257dfa7cc6f`.
+This measures RELION binary/trajectory sensitivity, not RECOVAR parity;
+correlation is not computed.
+
+The replacement must select its exact comparison panel deterministically from
+the completed clean control on the same allocation, after verifying source
+identity and follower ownership, and only then run passive capture and
+RECOVAR. Its selection rule and candidate reservoir must be sealed before
+submission, while the resulting live panel and hashes are sealed before either
+comparison arm. A longer time limit is also required. No K=4 production edit
+is justified by this panel failure.

@@ -4991,3 +4991,31 @@ same-device equivalence or numerical noise.
   `target_boundary_complete_terminal_trajectory_incomplete`; it cannot create
   `SCIENCE_COMPLETE` or satisfy the full audit. Missing target-boundary input
   fails closed. No K=4 production change is authorized by this recovery path.
+
+# 2026-07-21: live K=4 iteration-10 gate invalidates the frozen panel
+
+- Uninterrupted science job `11480333` reached clean-control iteration 10.
+  Only 72/96 frozen targets remain in class 2; full class counts are
+  7/72/14/3 and all six 16-particle categories contain at least one off-class
+  identity. The largest loss is 11/16 in the predeclared
+  RELION-class-2/RECOVAR-disagreement category.
+- Gate JSON SHA-256 is
+  `69f8358e26255d93131d92dce6d51220d8a2a2a2662c05b6c88cc17005296b5a`;
+  its input STAR SHA-256 is
+  `a044f3a98457954730a47f2fcabad3a45b87d8336d5fedf10fee501a39ab13d5`.
+  Sidecar and exact schema/count/hash assertions pass.
+- The job remains untouched and must finish the clean control, then fail its
+  existing authoritative 96/96 gate before passive capture. Audit `11480664`
+  cannot run after success; failure-only audit `11481766` must itself fail
+  closed because the capture boundary is absent.
+- Live-control versus older-canonical iteration-10 FSC-AUC is 0.954572533,
+  0.949992474, 0.941647625, and 0.944810030 for classes 1--4. This is
+  RELION-build trajectory sensitivity, not RECOVAR evidence. Diagnostic JSON
+  SHA-256 is
+  `01bd7b83bf99fe0f4e34751912199421ec9e679142a7fea8b936d257dfa7cc6f`;
+  correlation was not computed.
+- Replace the frozen cohort with a predeclared deterministic post-control
+  selector: verify live source identities and follower ownership, seal an
+  exact class-2 panel on the same allocation, then start passive capture and
+  RECOVAR. Request a longer allocation. Do not edit K=4 production arithmetic
+  from this negative gate alone.
