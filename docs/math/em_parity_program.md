@@ -8959,3 +8959,15 @@ are
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case20_samegpu_3dd664c8_20260722T113100Z`
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_case20_samegpu_3dd664c8_20260722T113100Z`.
+
+### Small-failure fixed-suite requalification
+
+Five inexpensive failing rows from pre-`db1bf391` source are being measured
+again at clean detached `3dd664c8`: cases 22, 23, 24, 26, and 32.  Setup is
+`11497554`; paired same-H100 science jobs are `11497555`--`11497559`; summary
+is `11497560`; fail-closed FSC/FSC-AUC and topology audits are
+`11497575`--`11497579`.  No result is eligible for the fixed score until its
+audit passes.  The disposable run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_smallfail_requal_3dd664c8_20260722T114000Z`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_smallfail_requal_3dd664c8_20260722T114000Z`.

@@ -20,6 +20,9 @@ def test_frozen_v1_scorecard_is_valid_and_renders_fixed_denominator():
     rendered = MODULE.render_markdown(scorecard)
 
     assert scorecard["frozen_denominator"] == 34
+    assert scorecard["frozen_case_definitions_sha256"] == MODULE.frozen_case_definitions_sha256(
+        scorecard["cases"]
+    )
     assert scorecard["current_snapshot"]["counts"] == {"pass": 21, "fail": 13, "not_run": 0}
     assert "K=1 fixed-suite score: 21 / 34 passing" in rendered
     assert rendered.count("| [x] |") == 21
@@ -49,4 +52,15 @@ def test_validation_rejects_history_that_moves_the_fixed_denominator(tmp_path):
     path.write_text(json.dumps(scorecard))
 
     with pytest.raises(ValueError, match="history counts do not preserve frozen denominator"):
+        MODULE.load_and_validate(path)
+
+
+@pytest.mark.unit
+def test_validation_rejects_a_silently_changed_case_definition(tmp_path):
+    scorecard = MODULE.load_and_validate(MODULE.DEFAULT_SCORECARD)
+    scorecard["cases"][0]["definition"]["n_images"] = "99999"
+    path = tmp_path / "scorecard.json"
+    path.write_text(json.dumps(scorecard))
+
+    with pytest.raises(ValueError, match="frozen case definitions changed"):
         MODULE.load_and_validate(path)

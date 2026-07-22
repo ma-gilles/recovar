@@ -3,6 +3,7 @@
   "suite_id": "k1-gui-grid0-local-highshell-full34",
   "suite_version": 1,
   "frozen_denominator": 34,
+  "frozen_case_definitions_sha256": "9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1",
   "metric_policy": "Shellwise FSC and normalized FSC-AUC only; correlation is not computed or gated.",
   "acceptance_contract": {
     "merged_cross_engine_fsc_auc_min": 0.995,

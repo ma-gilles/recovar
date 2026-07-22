@@ -5459,3 +5459,20 @@ same-device equivalence or numerical noise.
   Both have `SAFE_TO_DELETE`; the submission and audit-wrapper SHA-256 values
   are `dd0d2d84342edfa0b7b4a27a5463c6038bf2d05a6024a220e7ac2214b1205403`
   and `a296476a1b4ab518e044e742e33206b949acc838c9bad08a1b5821b8524bc6a9`.
+
+# 2026-07-22: small old-head failures enter fixed-suite requalification
+
+- The adaptive-pass-1 RELION CUDA-matrix correction (`db1bf391`) postdates
+  the `ac5177d2` source used by five inexpensive failing fixed-suite rows.
+  Clean detached `3dd664c8` therefore launched paired same-H100 reruns for
+  cases 22, 23, 24, 26, and 32 without changing their definitions or gates.
+- Setup is `11497554`; science jobs are `11497555` through `11497559` in
+  case order; summary is `11497560`.  Corresponding after-any FSC/FSC-AUC and
+  exact-topology audits are `11497575` through `11497579`.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_smallfail_requal_3dd664c8_20260722T114000Z`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_smallfail_requal_3dd664c8_20260722T114000Z`.
+  Both contain `SAFE_TO_DELETE`; submission and audit-wrapper SHA-256 values
+  are `7691322c849470eac74ebf7f64b890d6068f6be4f47cd6d540855b4875b46314`
+  and `fca17ca100a2fe5df8707a8b5e440c4962fb16d7fdc7a2d45f67de23ebe03105`.

@@ -9,6 +9,7 @@ requires a new suite version rather than silently moving the current score.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -33,6 +34,21 @@ REQUIRED_DEFINITION_FIELDS = {
 }
 
 
+def frozen_case_definitions_sha256(cases: list[dict]) -> str:
+    """Hash only the immutable suite identity and fixture definitions."""
+
+    manifest = [
+        {
+            "id": case.get("id"),
+            "name": case.get("name"),
+            "definition": case.get("definition"),
+        }
+        for case in cases
+    ]
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def load_and_validate(path: Path) -> dict:
     scorecard = json.loads(path.read_text())
     if scorecard.get("schema") != "recovar.em_relion_parity_scorecard.v1":
@@ -54,6 +70,14 @@ def load_and_validate(path: Path) -> dict:
     names = [case.get("name") for case in cases]
     if len(set(names)) != len(names) or not all(isinstance(name, str) and name for name in names):
         raise ValueError("case names must be non-empty and unique")
+
+    calculated_definition_sha256 = frozen_case_definitions_sha256(cases)
+    recorded_definition_sha256 = scorecard.get("frozen_case_definitions_sha256")
+    if recorded_definition_sha256 != calculated_definition_sha256:
+        raise ValueError(
+            "frozen case definitions changed without a suite-version change: "
+            f"recorded={recorded_definition_sha256!r} calculated={calculated_definition_sha256}"
+        )
 
     for case in cases:
         result = case.get("result")
@@ -112,6 +136,7 @@ def render_markdown(scorecard: dict) -> str:
         f"({evaluated} / {total} evaluated; {intermediate_passed} / {total} intermediate-topology passes).**",
         "",
         f"Suite: `{scorecard['suite_id']}` (version {scorecard['suite_version']}; denominator frozen at {total}).",
+        f"Frozen case-definition SHA-256: `{scorecard['frozen_case_definitions_sha256']}`.",
         "",
         "A checked box means the complete autonomous FSC/FSC-AUC trajectory contract passed. "
         "Unchecked cases remain in the denominator. New diagnostics do not enter this suite; changing "
