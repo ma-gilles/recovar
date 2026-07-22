@@ -8934,8 +8934,11 @@ boundary fix from `7f5f7584`.
 
 Clean pushed PR HEAD `3dd664c8` launched same-H100 RELION/RECOVAR replacement
 runs for fixed-suite cases 2, 3, and 33 only.  Setup/science/summary jobs are
-`11497146`, `11497147`/`11497148`/`11497149`, and `11497150`; fail-closed
-FSC/FSC-AUC and exact-topology audits are `11497210`/`11497211`/`11497212`.
+`11497146` and `11497147`/`11497148`/`11497149`.  The initially queued
+summary/audits were canceled before execution when the audit-trail commit
+advanced the shared worktree HEAD.  Detached-`3dd664c8` replacements are
+summary `11497305` and fail-closed FSC/FSC-AUC plus exact-topology audits
+`11497302`/`11497303`/`11497304`.
 No scorecard checkbox changes until the corresponding audit accepts the row.
 The disposable run and runtime roots are
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_boundary_requal_3dd664c8_20260722T111900Z`

@@ -5419,8 +5419,14 @@ same-device equivalence or numerical noise.
   `11497147`, `11497148`, and `11497149`; the matrix summary is `11497150`.
   Each science job runs both engines sequentially on one physical H100 and
   fails closed on a GPU-UUID change.
-- Independent after-any shellwise FSC/FSC-AUC plus exact-topology audits are
-  `11497210`, `11497211`, and `11497212`.  A successful process exit alone
+- The first queued summary/audits (`11497150` and
+  `11497210`/`11497211`/`11497212`) were canceled before execution after the
+  audit-trail commit advanced the shared worktree HEAD.  Their replacements
+  are pinned to the detached `3dd664c8` audit checkout at
+  `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_requal_audit_3dd664c8_20260722`.
+  Replacement summary is `11497305`; independent after-any shellwise
+  FSC/FSC-AUC plus exact-topology audits are `11497302`, `11497303`, and
+  `11497304`.  A successful process exit alone
   cannot replace a scorecard row.  Grid correction and forced final all-data
   after non-convergence are unset; correlation is not computed or gated.
 - Run root:
@@ -5429,5 +5435,7 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_boundary_requal_3dd664c8_20260722T111900Z`.
   Both contain `SAFE_TO_DELETE`.  The submission environment SHA-256 is
   `39e2b522290df7d247449ddad97ff34650c91f8d5e323b5b4682d0b69e7279c0`;
-  the audit-wrapper SHA-256 is
-  `4b36ac046ffc379d3ab093aaf8b2c57faa60744fe4317f1151e24277bb3e18a1`.
+  the replacement audit-wrapper SHA-256 is
+  `51e0c3a0dacde0deb85f09c5ac3009c2b713c28d4daf535c5bd6e4e8e36ae9d7`;
+  the replacement summary-wrapper SHA-256 is
+  `2fbb72cbc9cfaf62665a23282db3bb89211e6fb51c05689b5b580b6bf68a82af`.
