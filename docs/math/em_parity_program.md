@@ -8783,3 +8783,38 @@ the target capture and is formally authoritative. Science continues
 unchanged; iteration-10 inertness must still fail closed before RECOVAR if the
 warning amplifies. No production edit is authorized, and correlation is not
 computed.
+
+### Passive K=4 capture warning amplifies through iteration 5
+
+At iteration 4, dispatch ownership remains exact, but the passive arm differs
+from its same-allocation clean control in 1 class label, 9 Euler tuples, and
+10 translations. Classwise capture/control FSC-AUC is
+`0.999987631111/0.999999768543/0.999992547236/0.999999858478`; classes 1 and
+3 are below the formal `0.999999` threshold. State/map JSON SHA-256 values are
+`6453998fc03bb3ded0627e1fa8aab7e301d64c7d1250342b3158cc2cc8879e40`
+and
+`06a000dc22ba18c8e007ad95bcd7229da0a4ffa5dc9df6d8fe75ebd7b78deb95`.
+
+At iteration 5, the immutable 100,000-row dispatch slice remains exact at
+SHA-256
+`8a5336e4ab89461ad4b5a9b9261d54c74dfdecaf342a5a5bc38c7ae736b44e96`,
+while the state difference grows to 8 class labels, 32 Euler tuples, and 43
+translations. Pmax absolute-difference p95 is `0.001055` and maximum is
+`0.522492`. Classwise map FSC-AUC is
+`0.999933587444/0.999934151441/0.999866285411/0.999992450129`, so all four
+classes are below threshold. State/map JSON SHA-256 values are
+`45afd7b63fc3ce2d6d5a5b92614dc2fb96fe21ef0cd4745193e02908dc7f3036`
+and
+`3bd501e9ccd8e373b0e0b172d640c63b15a2a0eaad742a9b36c7b6339912d374`.
+
+These diagnostics make rejection at iteration 10 likely but do not relocate
+the declared gate. A fail-only contingency is preflighted, not submitted: on
+one A100 allocation, restart an unset control and capture-enabled arm from the
+clean `run_it009_optimiser.star`, replay the clean iteration-10 dispatch and
+particle order in both arms, and capture the same sealed class-2 panel. The
+RECOVAR refinement can continue to consume the original clean full run for
+iteration-0 state, optimiser metadata, and the 15-iteration dispatch oracle;
+the restart capture bundle is an independent audit operand and is not a
+RECOVAR initialization input. The current science job remains untouched, and
+no production edit is authorized before an accepted capture and its dependent
+geometry/scalar audits.

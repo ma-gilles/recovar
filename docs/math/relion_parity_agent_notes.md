@@ -5173,3 +5173,31 @@ same-device equivalence or numerical noise.
   the target capture and is formally authoritative. Science continues
   unchanged and must fail closed there if inertness rejects. Correlation is
   not computed; no production edit is authorized.
+
+# 2026-07-22: passive K=4 warning amplifies through iteration 5
+
+- Iteration 4 retains exact dispatch ownership but differs in 1 class label,
+  9 Euler tuples, and 10 translations. Classwise capture/control FSC-AUC is
+  `0.999987631111/0.999999768543/0.999992547236/0.999999858478`; classes 1
+  and 3 are below `0.999999`.
+- Iteration 5 retains an exact 100,000-row dispatch slice at SHA-256
+  `8a5336e4ab89461ad4b5a9b9261d54c74dfdecaf342a5a5bc38c7ae736b44e96`,
+  while the state difference grows to 8 class labels, 32 Euler tuples, and 43
+  translations. Pmax absolute p95 is `0.001055` and maximum is `0.522492`.
+- Iteration-5 classwise FSC-AUC is
+  `0.999933587444/0.999934151441/0.999866285411/0.999992450129`; all four
+  classes are below threshold. Iteration-4 state/map JSON SHA-256 values are
+  `6453998fc03bb3ded0627e1fa8aab7e301d64c7d1250342b3158cc2cc8879e40`
+  and
+  `06a000dc22ba18c8e007ad95bcd7229da0a4ffa5dc9df6d8fe75ebd7b78deb95`;
+  iteration-5 values are
+  `45afd7b63fc3ce2d6d5a5b92614dc2fb96fe21ef0cd4745193e02908dc7f3036`
+  and
+  `3bd501e9ccd8e373b0e0b172d640c63b15a2a0eaad742a9b36c7b6339912d374`.
+- This makes iteration-10 rejection likely but does not replace the formal
+  target gate. The unsubmitted contingency restarts clean control and passive
+  capture from the exact clean iteration-9 optimiser, with exact clean
+  dispatch/order replay in both arms. RECOVAR can still use the original full
+  clean run for iteration-0 state, optimiser metadata, and dispatch schedule;
+  the restart capture is an independent comparison operand. Running science
+  remains untouched and no production edit is authorized.
