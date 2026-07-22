@@ -5252,3 +5252,20 @@ same-device equivalence or numerical noise.
   iteration-10 dispatch and particle-order replay, sealed panel,
   original-clean closure, and same-A100 RECOVAR gates. No RECOVAR production
   edit is authorized before its dependent geometry/scalar evidence.
+
+# 2026-07-22: restart continuation uses absolute iteration bound
+
+- Rank-corrected `11492933` sealed unset-control iteration 10 but then entered
+  expectation iteration 11. On continuation, RELION retains the optimiser's
+  stored `nr_iter=15`; `--auto_iter_max 10` alone does not override that loop
+  bound. It was canceled after 21m25s before capture/RECOVAR, and audits
+  `11492934`/`11492935` never ran.
+- `parseContinue` directly overrides `nr_iter` through `--iter`. Fresh science
+  `11493435` therefore uses `--iter 10 --auto_iter_max 10` for both arms and
+  fails closed on any iteration-11 log line or optimiser output.
+- `11493435` began on A100 node `della-l07g2` at 07:04:48 EDT after task-rank
+  probe `0,1,2` and panel/import gates passed. Primary/scalar audits are
+  `11493436`/`11493437`.
+- The fresh root reuses no partial control/capture/RECOVAR output. Original
+  full-start science `11484481` remains independent and untouched; no RECOVAR
+  production edit is authorized before the new dependent evidence.

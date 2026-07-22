@@ -8849,6 +8849,24 @@ continues untouched toward its independent end-of-run fail-closed validator.
 No production edit is authorized before the restart capture and dependent
 geometry/scalar audits qualify a mismatch.
 
+### Restart continuation is bounded by absolute `--iter 10`
+
+Rank-corrected science `11492933` sealed a complete unset-control iteration-10
+boundary, then entered expectation iteration 11. RELION continuation retains
+the optimiser's stored `nr_iter=15`; `--auto_iter_max 10` is parsed separately
+but does not override that loop bound. The job was canceled after 21m25s,
+before capture or RECOVAR; audits `11492934`/`11492935` never ran.
+
+Source inspection confirms that continuation option `--iter` directly
+overrides `nr_iter`. Fresh science `11493435` therefore starts both arms from
+the immutable clean iteration-9 optimiser with explicit
+`--iter 10 --auto_iter_max 10`, and fails closed on any iteration-11 log line
+or optimiser output. It began on A100 node `della-l07g2` at 2026-07-22
+07:04:48 EDT after rank probe `0,1,2` and panel/import gates passed. Primary
+and scalar audits are `11493436` and `11493437`. No capture or RECOVAR output
+from the canceled root is reused, and original full-start science `11484481`
+remains untouched.
+
 ### Restart capture rank provenance is corrected
 
 Read-only inspection of the formally rejected full-start capture found that
