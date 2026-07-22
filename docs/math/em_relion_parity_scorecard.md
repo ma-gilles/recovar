@@ -1,6 +1,6 @@
 # RECOVAR / RELION EM Parity Scorecard
 
-**K=1 fixed-suite score: 22 / 34 passing (34 / 34 evaluated; 28 / 34 intermediate-topology passes).**
+**K=1 fixed-suite score: 23 / 34 passing (34 / 34 evaluated; 29 / 34 intermediate-topology passes).**
 
 Suite: `k1-gui-grid0-local-highshell-full34` (version 1; denominator frozen at 34).
 Frozen case-definition SHA-256: `9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1`.
@@ -11,8 +11,8 @@ The artifact-pinned fixture manifest is checked into the repository and binds al
 
 Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like finalization. Correlation is not computed or gated.
 
-Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v4`, generated `2026-07-22T15:57:09.593124+00:00`, JSON SHA-256 `096109c1dad06b9ba779715bd7c18d8705f9fb3678e80285428983df3555e639`.
-Progress: +2 passing cases since the first frozen snapshot; +1 since the previous snapshot.
+Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v5`, generated `2026-07-22T19:00:51.329249+00:00`, JSON SHA-256 `11a82951cadd2ccd2123904345090bec45352dd5f1884e0ae25fdf35d0695311`.
+Progress: +3 passing cases since the first frozen snapshot; +1 since the previous snapshot.
 
 | Done | Case | Fixture | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
@@ -38,7 +38,7 @@ Progress: +2 passing cases since the first frozen snapshot; +1 since the previou
 | [x] | `k1-20` | `small_high_res_radial_3k_g256_noise3_bf0` | pass | pass | 0.998129368 | +0.001149427 | science 11498687; trajectory 11498738; intermediate 11498738 |
 | [x] | `k1-21` | `small_kent_angles_3k_g128_white_noise3_bf80` | pass | pass | 0.998345537 | +0.010110173 | science 11385539; trajectory 11385573; intermediate 11385574 |
 | [ ] | `k1-22` | `small_severe_outliers_3k_g128_radial_noise5_bf80` | fail | fail | 0.825938890 | -0.000351848 | science 11385540; trajectory 11385575; intermediate 11385576 |
-| [ ] | `k1-23` | `small_noctf_radial_3k_g128_noise3_bf80` | fail | fail | 0.889523938 | +0.016476333 | science 11385541; trajectory 11385577; intermediate 11385578 |
+| [x] | `k1-23` | `small_noctf_radial_3k_g128_noise3_bf80` | pass | pass | 0.998342408 | +0.012298496 | science 11501524; trajectory 11501622; intermediate 11501622 |
 | [ ] | `k1-24` | `small_kent_outliers_3k_g128_pct20_noise3_bf80` | fail | pass | 0.994805104 | +0.008173298 | science 11385542; trajectory 11385579; intermediate 11385580 |
 | [x] | `k1-25` | `tiny_baseline_1k_g128_white_noise3_bf80` | pass | pass | 0.998192576 | +0.009181804 | science 11385543; trajectory 11385581; intermediate 11385582 |
 | [ ] | `k1-26` | `tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80` | fail | pass | 0.954913646 | +0.010098947 | science 11385544; trajectory 11385583; intermediate 11385585 |
@@ -58,6 +58,7 @@ Progress: +2 passing cases since the first frozen snapshot; +1 since the previou
 | `strict-k1-v1-old-head-20260721` | 2026-07-21T04:33:00.281935+00:00 | `ac5177d2b0cd` | 20 | — | 12 | 2 |
 | `strict-k1-v3-20260721` | 2026-07-21T10:35:40.626248+00:00 | `ac5177d2b0cd`, `9d1722781e1d` | 21 | +1 | 13 | 0 |
 | `strict-k1-v4-20260722` | 2026-07-22T15:57:09.593124+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db` | 22 | +1 | 12 | 0 |
+| `strict-k1-v5-20260722` | 2026-07-22T19:00:51.329249+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038` | 23 | +1 | 11 | 0 |
 
 ## Non-scoring regenerated-data diagnostics
 
