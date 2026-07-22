@@ -6075,6 +6075,14 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
+    # Hold raw-diff2 cache admission constant across CPU-only and GPU runners.
+    # This test counts the two full-score passes caused by fine M-step pruning;
+    # cache fallback/recomputation has its own dedicated test below.
+    ample_memory = 40 * 1024**3
+    monkeypatch.setattr(bucketed_mod, "_device_memory_limit_bytes", lambda: ample_memory)
+    monkeypatch.setattr(bucketed_mod, "_device_free_memory_bytes", lambda: ample_memory)
+    monkeypatch.setattr(bucketed_mod, "_jax_allocator_free_memory_bytes", lambda: ample_memory)
+
     def fake_window_project(volume_block, rotations_block, image_shape, volume_shape, disc_type, **kwargs):
         del volume_block, image_shape, volume_shape, disc_type
         n_rot = int(rotations_block.shape[0])

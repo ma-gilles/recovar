@@ -16,6 +16,7 @@ import jax.numpy as jnp
 from recovar.em.dense_single_volume.iteration_loop import (
     refine_single_volume,
 )
+from recovar.em.dense_single_volume import iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume.helpers.resolution import fsc_to_current_size
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     quantize_current_size,
@@ -211,6 +212,23 @@ def rotations():
 @pytest.fixture
 def translations():
     return jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32)
+
+
+@pytest.fixture(autouse=True)
+def generated_relion_rotation_grid(monkeypatch):
+    """Keep loop tests independent of the optional compiled RELION binding."""
+
+    def fake_relion_rotation_grid_float32(order):
+        n_rotations = iteration_loop_module.rotation_grid_size(order)
+        rotations = np.repeat(np.eye(3, dtype=np.float32)[None], n_rotations, axis=0)
+        eulers = np.zeros((n_rotations, 3), dtype=np.float32)
+        return rotations, eulers
+
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "_relion_rotation_grid_float32",
+        fake_relion_rotation_grid_float32,
+    )
 
 
 # ===========================================================================
