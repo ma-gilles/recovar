@@ -5105,3 +5105,28 @@ same-device equivalence or numerical noise.
 - Success audit `11480664` was canceled at zero runtime after becoming
   `DependencyNeverSatisfied`. The frozen-panel recovery graph is closed; it
   does not authorize a production edit. Correlation was not computed.
+
+# 2026-07-22: authoritative dynamic K=4 class-2 panel is sealed
+
+- Corrected science `11484481` completed its clean 15-iteration RELION control
+  with status zero in 16,597 seconds on
+  `GPU-3bae32ea-7500-d97f-68d3-b73eaf826482`. It sealed all 48
+  optimiser/data/model STAR files and exactly 1,500,000 dispatch rows.
+- The official selector manifest passes `sha256sum -c`. Its panel has 96
+  unique live class-2 targets, 16/category and 48/48 by normalized follower
+  owner. Live class counts are 25,166/23,728/24,845/26,261; live candidate
+  pools are 22,215 agreement and 74 disagreement.
+- Panel JSON/manifest/identity SHA-256 values are
+  `7cf6ed42934460c9540b4f6a66238921e99b3b665117a5a88a66930836ab68f7`,
+  `bb86ac1c3f61cb1d14e9314f9bdfb60e6a4abd09becdab55149cfaf656e66262`,
+  and
+  `b1c85f635cc342aded1cbe95ffac9d99e0b9ed5afb432dd85f40f9b0e0d085be`.
+- Original/stack selected-index arrays are byte-identical to the isolated
+  iteration-10 preview and retain SHA-256 values
+  `48058423d876305cf72c23260e514a5ca982508c2791b43234e51f7a8671b489`
+  and
+  `d3900f382b275f529ec4365232e105a819138f2add51d1eb2a77b5a457e11105`.
+- The official manifest sealed at 02:39:21 EDT and the first passive-capture
+  artifact followed at 02:39:48. Science remains active; primary/scalar audits
+  `11484482`/`11484846` remain dependency-gated. This authorizes the capture,
+  not a production source edit.

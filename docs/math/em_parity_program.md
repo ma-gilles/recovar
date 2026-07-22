@@ -8711,3 +8711,30 @@ the iteration-3 map JSON and v2 helper SHA-256 values are
 and
 `bf0d2708498c3c4287093bc8727cd623bbbe47b728657b49dceecb6f70738f90`.
 Correlation is not computed.
+
+### Corrected K=4 dynamic panel is authoritative
+
+Corrected same-allocation science `11484481` completed its clean RELION
+control with status zero in 16,597 seconds on
+`GPU-3bae32ea-7500-d97f-68d3-b73eaf826482`. All iteration-0--15
+optimiser/data/model STAR boundaries and exactly 1,500,000 dispatch rows are
+sealed. The submitted selector then produced the authoritative 96-particle
+live class-2 panel: 16 targets in each of six predeclared categories, 48/48 by
+normalized follower owner, and 96 unique identities. Live class counts are
+25,166/23,728/24,845/26,261; the live agreement/disagreement reservoirs contain
+22,215 and 74 candidates.
+
+The official panel JSON/manifest SHA-256 values are
+`7cf6ed42934460c9540b4f6a66238921e99b3b665117a5a88a66930836ab68f7`
+and
+`bb86ac1c3f61cb1d14e9314f9bdfb60e6a4abd09becdab55149cfaf656e66262`;
+panel identity SHA-256 is
+`b1c85f635cc342aded1cbe95ffac9d99e0b9ed5afb432dd85f40f9b0e0d085be`.
+Original/stack selected-index arrays retain SHA-256 values
+`48058423d876305cf72c23260e514a5ca982508c2791b43234e51f7a8671b489`
+and
+`d3900f382b275f529ec4365232e105a819138f2add51d1eb2a77b5a457e11105`
+and are byte-identical to the immutable iteration-10 preview. The manifest
+verified before passive capture; the first capture artifact followed 27
+seconds later. Science remains active, audits `11484482`/`11484846` remain
+dependency-gated, and no production edit is authorized yet.
