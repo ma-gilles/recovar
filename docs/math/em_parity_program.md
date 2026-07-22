@@ -8479,6 +8479,26 @@ is real. The durable classification is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case11_siggate_cleanrepeat_fa0c93fc_20260721T174000Z/provenance/CAUSAL_CLASSIFICATION.md`.
 Correlation is not computed.
 
+The frozen-panel graph is now terminally closed. Science `11480333` ended
+`FAILED 1:0` after 5h45m38s, only after the clean RELION process returned zero
+and sealed all 48 optimiser/data/model STAR files for iterations 0--15.
+Verifier `11485567` completed `0:0` and confirms the exact 72/96 gate,
+expected exception, zero capture files, and absent science/capture-audit
+completion markers. Its JSON SHA-256 is
+`0ccb9180f5c37ebd78ac92d6c267c0db0d5a1e3e0ef7987bb189fd9f0fc926e7`.
+
+Oversized pending salvage `11481766` was canceled at zero runtime and
+right-sized with the same pinned launcher/comparator as `11487432`; the
+replacement failed `1:0` in 3 seconds at the known-absent inertness input,
+before any comparator or partial output. Salvage-rejection JSON/helper
+SHA-256 values are
+`b9db836e284423846918676259a7fa7e89e7f4310f887f07f8220cafe428e2b9`
+and
+`3f6cc93165f7b55df85547af8816ce2d04cc8a13641d87e7b5e175b9bce3b8a5`.
+Success audit `11480664` was canceled at zero runtime after becoming
+`DependencyNeverSatisfied`. This closes recovery orchestration, not K=4
+parity, and authorizes no production edit.
+
 ## 2026-07-21 uninterrupted K=4 class-2 pre-scatter diagnostic
 
 The accepted same-A100 K=4 trajectory at `ac5177d2` first fails the direct

@@ -5084,3 +5084,24 @@ same-device equivalence or numerical noise.
 - This is descriptive/non-gating and strengthens the requirement for live
   same-allocation panel selection and passive capture. Correlation was not
   computed.
+
+# 2026-07-22: frozen K=4 panel graph is terminally fail-closed
+
+- Science `11480333` ended `FAILED 1:0` after 5h45m38s. The clean RELION
+  process first returned zero and sealed all 48 iteration-0--15 STAR boundary
+  files; the enclosing job then raised the expected 24-particle class-gate
+  exception.
+- Terminal verifier `11485567` completed `0:0` in 4 seconds. It confirms the
+  exact 7/72/14/3 live counts, zero RELION/RECOVAR capture files, and absent
+  science/capture-audit completion markers. JSON SHA-256 is
+  `0ccb9180f5c37ebd78ac92d6c267c0db0d5a1e3e0ef7987bb189fd9f0fc926e7`.
+- Oversized, never-started salvage `11481766` was canceled at zero runtime.
+  Right-sized replacement `11487432` used the same pinned launcher/comparator
+  and failed `1:0` in 3 seconds at the known-absent inertness prerequisite,
+  creating no partial result. Salvage-rejection JSON/helper SHA-256 values are
+  `b9db836e284423846918676259a7fa7e89e7f4310f887f07f8220cafe428e2b9`
+  and
+  `3f6cc93165f7b55df85547af8816ce2d04cc8a13641d87e7b5e175b9bce3b8a5`.
+- Success audit `11480664` was canceled at zero runtime after becoming
+  `DependencyNeverSatisfied`. The frozen-panel recovery graph is closed; it
+  does not authorize a production edit. Correlation was not computed.
