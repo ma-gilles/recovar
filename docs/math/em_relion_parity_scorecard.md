@@ -12,6 +12,7 @@ The artifact-pinned fixture manifest is checked into the repository and binds al
 Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like finalization. Correlation is not computed or gated.
 
 Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v4`, generated `2026-07-22T15:57:09.593124+00:00`, JSON SHA-256 `096109c1dad06b9ba779715bd7c18d8705f9fb3678e80285428983df3555e639`.
+Progress: +2 passing cases since the first frozen snapshot; +1 since the previous snapshot.
 
 | Done | Case | Fixture | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
@@ -52,11 +53,11 @@ Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v4
 
 ## Progress history
 
-| Snapshot | Date (UTC) | Commit boundary | Passed | Failed | Not evaluated/error |
-|---|---|---|---:|---:|---:|
-| `strict-k1-v1-old-head-20260721` | 2026-07-21T04:33:00.281935+00:00 | `ac5177d2b0cd` | 20 | 12 | 2 |
-| `strict-k1-v3-20260721` | 2026-07-21T10:35:40.626248+00:00 | `ac5177d2b0cd`, `9d1722781e1d` | 21 | 13 | 0 |
-| `strict-k1-v4-20260722` | 2026-07-22T15:57:09.593124+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db` | 22 | 12 | 0 |
+| Snapshot | Date (UTC) | Commit boundary | Passed | Δ passed | Failed | Not evaluated/error |
+|---|---|---|---:|---:|---:|---:|
+| `strict-k1-v1-old-head-20260721` | 2026-07-21T04:33:00.281935+00:00 | `ac5177d2b0cd` | 20 | — | 12 | 2 |
+| `strict-k1-v3-20260721` | 2026-07-21T10:35:40.626248+00:00 | `ac5177d2b0cd`, `9d1722781e1d` | 21 | +1 | 13 | 0 |
+| `strict-k1-v4-20260722` | 2026-07-22T15:57:09.593124+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db` | 22 | +1 | 12 | 0 |
 
 ## Non-scoring regenerated-data diagnostics
 

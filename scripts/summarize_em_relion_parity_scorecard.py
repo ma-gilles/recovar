@@ -244,6 +244,9 @@ def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sh
     intermediate_passed = sum(case["intermediate_result"] == "pass" for case in cases)
     source = scorecard["current_snapshot"]["source_ledger"]
     fixture_bytes = sum(row["size"] for case in fixture_manifest["cases"] for row in case["files"])
+    history = scorecard["history"]
+    first_passed = history[0]["counts"]["pass"]
+    previous_passed = history[-2]["counts"]["pass"] if len(history) > 1 else passed
 
     lines = [
         "# RECOVAR / RELION EM Parity Scorecard",
@@ -269,6 +272,8 @@ def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sh
         "",
         f"Evidence snapshot: `{source['schema']}`, generated `{source['generated_utc']}`, JSON SHA-256 "
         f"`{source['sha256']}`.",
+        f"Progress: {passed - first_passed:+d} passing cases since the first frozen snapshot; "
+        f"{passed - previous_passed:+d} since the previous snapshot.",
         "",
         "| Done | Case | Fixture | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |",
         "|---|---|---|---|---|---:|---:|---|",
@@ -290,16 +295,20 @@ def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sh
         "",
         "## Progress history",
         "",
-        "| Snapshot | Date (UTC) | Commit boundary | Passed | Failed | Not evaluated/error |",
-        "|---|---|---|---:|---:|---:|",
+        "| Snapshot | Date (UTC) | Commit boundary | Passed | Δ passed | Failed | Not evaluated/error |",
+        "|---|---|---|---:|---:|---:|---:|",
     ]
-    for snapshot in scorecard["history"]:
+    prior_passed = None
+    for snapshot in history:
         snapshot_counts = snapshot["counts"]
         heads = ", ".join(f"`{head[:12]}`" for head in snapshot["source_heads"])
+        delta_text = "—" if prior_passed is None else f"{snapshot_counts['pass'] - prior_passed:+d}"
         lines.append(
             f"| `{snapshot['id']}` | {snapshot['recorded_utc']} | {heads} | "
-            f"{snapshot_counts['pass']} | {snapshot_counts['fail']} | {snapshot_counts['not_run']} |"
+            f"{snapshot_counts['pass']} | {delta_text} | {snapshot_counts['fail']} | "
+            f"{snapshot_counts['not_run']} |"
         )
+        prior_passed = snapshot_counts["pass"]
     replicates = scorecard.get("replicate_diagnostics", [])
     if replicates:
         lines += [
