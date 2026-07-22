@@ -21,7 +21,13 @@ def _relion_src_fixture(tmp_path: Path) -> Path:
     return relion_src
 
 
-def _dry_run_launcher(tmp_path, *, case: str, extra_env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess, Path]:
+def _dry_run_launcher(
+    tmp_path,
+    *,
+    case: str,
+    extra_env: dict[str, str] | None = None,
+    extra_args: list[str] | None = None,
+) -> tuple[subprocess.CompletedProcess, Path]:
     scratch = tmp_path / "scratch"
     relion_src = _relion_src_fixture(tmp_path)
     env = os.environ.copy()
@@ -44,7 +50,7 @@ def _dry_run_launcher(tmp_path, *, case: str, extra_env: dict[str, str] | None =
         env.update(extra_env)
 
     proc = subprocess.run(
-        ["bash", str(LAUNCHER), "--dry-run"],
+        ["bash", str(LAUNCHER), "--dry-run", *(extra_args or [])],
         cwd=REPO_ROOT,
         env=env,
         text=True,
@@ -185,6 +191,69 @@ def test_artifact_pinned_fixture_zero_pads_single_digit_case_id(tmp_path):
     script = next((scratch / "jobs").glob("em_k1_matrix_2_*.sh")).read_text()
     assert '--case-id "k1-02"' in script
     assert '--case-id "k1-2"' not in script
+
+
+def test_scorecard_mode_forces_complete_frozen_suite_evidence_contract(tmp_path):
+    fixture_root = tmp_path / "fixtures"
+    fixture_root.mkdir()
+    fixture_manifest = tmp_path / "fixtures.json"
+    fixture_manifest.write_text('{"schema":"recovar.em_k1_fixture_manifest.v1","cases":[]}\n')
+
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="2",
+        extra_env={
+            "EM_K1_MATRIX_FIXTURE_MANIFEST": str(fixture_manifest),
+            "EM_K1_MATRIX_FIXTURE_ROOT": str(fixture_root),
+        },
+        extra_args=["--scorecard"],
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    script = next((scratch / "jobs").glob("em_k1_matrix_2_*.sh")).read_text()
+    submission = (scratch / "submission.env").read_text()
+    assert "Frozen scorecard evidence mode: 1" in proc.stdout
+    assert "EM_K1_MATRIX_SCORECARD_MODE=1" in submission
+    assert "EM_K1_MATRIX_RUN_RELION=1" in submission
+    assert "EM_K1_MATRIX_TRAJECTORY_MODE=autonomous" in submission
+    assert "RECOVAR_SAVE_INTERMEDIATES_DIR=1" in submission
+    assert "RECOVAR_SAVE_INTERMEDIATES_SKIP_UNREGULARIZED=1" in submission
+    assert "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0" in submission
+    assert "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0" in submission
+    assert 'RECOVAR_INTERMEDIATES_DIR="${RECOVAR_DIR}/intermediates"' in script
+    assert 'RECOVAR_EXTRA_ARGS+=(--save_intermediates_dir "${RECOVAR_INTERMEDIATES_DIR}")' in script
+
+
+def test_scorecard_mode_requires_exact_fixture_pair(tmp_path):
+    proc, _ = _dry_run_launcher(
+        tmp_path,
+        case="2",
+        extra_args=["--scorecard"],
+    )
+
+    assert proc.returncode == 2
+    assert "--scorecard requires EM_K1_MATRIX_FIXTURE_MANIFEST" in proc.stdout
+
+
+def test_scorecard_mode_rejects_grid_correction(tmp_path):
+    fixture_root = tmp_path / "fixtures"
+    fixture_root.mkdir()
+    fixture_manifest = tmp_path / "fixtures.json"
+    fixture_manifest.write_text('{"schema":"recovar.em_k1_fixture_manifest.v1","cases":[]}\n')
+
+    proc, _ = _dry_run_launcher(
+        tmp_path,
+        case="2",
+        extra_env={
+            "EM_K1_MATRIX_FIXTURE_MANIFEST": str(fixture_manifest),
+            "EM_K1_MATRIX_FIXTURE_ROOT": str(fixture_root),
+            "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT": "1",
+        },
+        extra_args=["--scorecard"],
+    )
+
+    assert proc.returncode == 2
+    assert "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT unset/off" in proc.stdout
 
 
 def test_artifact_pinned_fixture_requires_manifest_and_root_together(tmp_path):

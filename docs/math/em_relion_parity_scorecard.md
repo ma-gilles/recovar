@@ -74,3 +74,15 @@ Generate this PR-ready table with:
 ```bash
 pixi run python scripts/summarize_em_relion_parity_scorecard.py
 ```
+
+Launch a scoring rerun with `--scorecard`. This fail-closed mode requires the
+checked-in fixture manifest/root pair and forces autonomous RELION pairing,
+per-iteration RECOVAR maps, grid correction off, and valid convergence-only
+finalization. For example:
+
+```bash
+EM_K1_MATRIX_FIXTURE_MANIFEST="$PWD/docs/math/em_relion_parity_fixture_manifest_v2.json" \
+EM_K1_MATRIX_FIXTURE_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex \
+EM_K1_MATRIX_CASES=2,3 \
+./scripts/run_em_k1_robustness_matrix_slurm.sh --scorecard
+```

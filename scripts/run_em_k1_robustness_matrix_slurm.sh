@@ -97,6 +97,7 @@ RECOVAR_MSTEP_DUMP_RAW="${RECOVAR_MSTEP_DUMP_RAW:-}"
 RECOVAR_SAVE_INTERMEDIATES_DIR="${RECOVAR_SAVE_INTERMEDIATES_DIR:-}"
 RECOVAR_SAVE_INTERMEDIATES_SKIP_UNREGULARIZED="${RECOVAR_SAVE_INTERMEDIATES_SKIP_UNREGULARIZED:-1}"
 RECOVAR_RELION_CURRENT_SIZES="${RECOVAR_RELION_CURRENT_SIZES:-}"
+SCORECARD_MODE="${EM_K1_MATRIX_SCORECARD_MODE:-0}"
 RELION_DUMP_DIR="${RELION_DUMP_DIR:-}"
 RELION_DUMP_STACK_INDEX="${RELION_DUMP_STACK_INDEX:-}"
 RELION_DUMP_PART_ID="${RELION_DUMP_PART_ID:-}"
@@ -133,7 +134,7 @@ fi
 
 usage() {
   cat <<USAGE
-Usage: $0 [--watch] [--dry-run] [--case CASE_OR_INDEX] [--with-relion] [--recovar-only]
+Usage: $0 [--watch] [--dry-run] [--scorecard] [--case CASE_OR_INDEX] [--with-relion] [--recovar-only]
 
 Runs a high-resolution K=1 end-to-end robustness matrix. By default all
 configured cases are submitted. Limit cases with repeated --case or with
@@ -147,6 +148,9 @@ Environment overrides:
   EM_K1_MATRIX_PIXI_PY              Existing pixi Python used as the offline base environment
                                     (default: ${BASE_PIXI_PY})
   EM_K1_MATRIX_CASES                Comma-separated case names or 1-based indices
+  EM_K1_MATRIX_SCORECARD_MODE       Set 1 (or pass --scorecard) to force the frozen-suite
+                                    evidence contract: exact fixtures, autonomous RELION pair,
+                                    per-iteration maps, grid correction off, and no forced final.
   EM_K1_MATRIX_RUN_RELION           Run RELION AutoRefine too (default: ${RUN_RELION})
   EM_K1_MATRIX_TRAJECTORY_MODE      RECOVAR state policy when RELION is enabled:
                                     controlled (default; existing per-iteration RELION replay)
@@ -321,6 +325,7 @@ while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --watch) WATCH=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --scorecard) SCORECARD_MODE=1; shift ;;
     --with-relion) RUN_RELION=1; shift ;;
     --recovar-only) RUN_RELION=0; shift ;;
     --case)
@@ -340,6 +345,20 @@ if [[ -n "${EM_K1_MATRIX_CASES:-}" ]]; then
   IFS=',' read -r -a ENV_CASES <<< "${EM_K1_MATRIX_CASES}"
   SELECTED_CASES+=("${ENV_CASES[@]}")
 fi
+
+case "${SCORECARD_MODE}" in
+  0) ;;
+  1)
+    RUN_RELION=1
+    TRAJECTORY_MODE=autonomous
+    RECOVAR_SAVE_INTERMEDIATES_DIR=1
+    RECOVAR_SAVE_INTERMEDIATES_SKIP_UNREGULARIZED=1
+    ;;
+  *)
+    echo "EM_K1_MATRIX_SCORECARD_MODE must be 0 or 1, got: ${SCORECARD_MODE}" >&2
+    exit 2
+    ;;
+esac
 
 case "${TRAJECTORY_MODE}" in
   controlled|autonomous) ;;
@@ -367,6 +386,30 @@ if [[ -n "${FIXTURE_MANIFEST}" || -n "${FIXTURE_ROOT}" ]]; then
   fi
   FIXTURE_MANIFEST="$(readlink -f "${FIXTURE_MANIFEST}")"
   FIXTURE_ROOT="$(readlink -f "${FIXTURE_ROOT}")"
+fi
+if [[ "${SCORECARD_MODE}" == "1" ]]; then
+  if [[ -z "${FIXTURE_MANIFEST}" || -z "${FIXTURE_ROOT}" ]]; then
+    echo "--scorecard requires EM_K1_MATRIX_FIXTURE_MANIFEST and EM_K1_MATRIX_FIXTURE_ROOT" >&2
+    exit 2
+  fi
+  if [[ "${MAX_ITER}" != "999" ]]; then
+    echo "--scorecard requires EM_K1_MATRIX_MAX_ITER=999, got: ${MAX_ITER}" >&2
+    exit 2
+  fi
+  if [[ "${RECOVAR_FINAL_ALL_DATA_GRID_CORRECT}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
+    echo "--scorecard requires RECOVAR_FINAL_ALL_DATA_GRID_CORRECT unset/off" >&2
+    exit 2
+  fi
+  if [[ "${RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
+    echo "--scorecard requires RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0" >&2
+    exit 2
+  fi
+  if [[ "${RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
+    echo "--scorecard requires RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0" >&2
+    exit 2
+  fi
+  RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0
+  RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0
 fi
 if [[ -z "${RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE}" ]]; then
   if [[ "${TRAJECTORY_MODE}" == "controlled" ]]; then
@@ -1647,6 +1690,7 @@ echo "Setup gres: ${SETUP_GRES:-<none>}"
 echo "Exclusive GPU jobs: ${EXCLUSIVE}"
 echo "CUDA module: ${CUDA_MODULE}"
 echo "Run RELION baselines: ${RUN_RELION}"
+echo "Frozen scorecard evidence mode: ${SCORECARD_MODE}"
 echo "Trajectory mode: ${TRAJECTORY_MODE}"
 echo "Fixture manifest: ${FIXTURE_MANIFEST:-<generated inputs>}"
 echo "Fixture root: ${FIXTURE_ROOT:-<generated inputs>}"
@@ -1722,6 +1766,7 @@ EM_K1_MATRIX_EXCLUSIVE=${EXCLUSIVE}
 EM_K1_MATRIX_SINGLE_VISIBLE_GPU=${SINGLE_VISIBLE_GPU}
 EM_K1_MATRIX_RUN_RELION=${RUN_RELION}
 EM_K1_MATRIX_TRAJECTORY_MODE=${TRAJECTORY_MODE}
+EM_K1_MATRIX_SCORECARD_MODE=${SCORECARD_MODE}
 EM_K1_MATRIX_FIXTURE_MANIFEST=${FIXTURE_MANIFEST}
 EM_K1_MATRIX_FIXTURE_ROOT=${FIXTURE_ROOT}
 EM_K1_MATRIX_FIXTURE_MANIFEST_SHA256=$(if [[ -n "${FIXTURE_MANIFEST}" ]]; then sha256sum "${FIXTURE_MANIFEST}" | awk '{print $1}'; fi)
