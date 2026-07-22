@@ -24,6 +24,10 @@ def test_frozen_v1_scorecard_is_valid_and_renders_fixed_denominator():
     assert "K=1 fixed-suite score: 21 / 34 passing" in rendered
     assert rendered.count("| [x] |") == 21
     assert rendered.count("| [ ] |") == 13
+    assert "| `strict-k1-v1-old-head-20260721`" in rendered
+    assert "| 20 | 12 | 2 |" in rendered
+    assert "| `strict-k1-v3-20260721`" in rendered
+    assert "| 21 | 13 | 0 |" in rendered
 
 
 @pytest.mark.unit
@@ -34,4 +38,15 @@ def test_validation_rejects_a_silently_changed_denominator(tmp_path):
     path.write_text(json.dumps(scorecard))
 
     with pytest.raises(ValueError, match="frozen_denominator"):
+        MODULE.load_and_validate(path)
+
+
+@pytest.mark.unit
+def test_validation_rejects_history_that_moves_the_fixed_denominator(tmp_path):
+    scorecard = MODULE.load_and_validate(MODULE.DEFAULT_SCORECARD)
+    scorecard["history"][0]["counts"]["not_run"] = 1
+    path = tmp_path / "scorecard.json"
+    path.write_text(json.dumps(scorecard))
+
+    with pytest.raises(ValueError, match="history counts do not preserve frozen denominator"):
         MODULE.load_and_validate(path)

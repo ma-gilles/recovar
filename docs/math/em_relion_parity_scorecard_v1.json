@@ -24,13 +24,26 @@
   },
   "history": [
     {
+      "id": "strict-k1-v1-old-head-20260721",
+      "recorded_utc": "2026-07-21T04:33:00.281935+00:00",
+      "source_heads": [
+        "ac5177d2b0cd639db7ed6f14225d80fe9cff7d4d"
+      ],
+      "counts": {"pass": 20, "fail": 12, "not_run": 2},
+      "evidence_schema": "em_k1_gui_grid0_local_highshell_full34_durable_ledger_v1",
+      "evidence_sha256": "b79c18e5feb368782ef3a9fd439413bc3d1f890bcf19d1f97dc23037d09d97f1",
+      "status_note": "Two trajectory rows ended in infrastructure error and remain non-passes in the fixed denominator."
+    },
+    {
       "id": "strict-k1-v3-20260721",
       "recorded_utc": "2026-07-21T10:35:40.626248+00:00",
       "source_heads": [
         "ac5177d2b0cd639db7ed6f14225d80fe9cff7d4d",
         "9d1722781e1d6c5fc5b2ad0e15ebba3a2becbab0"
       ],
-      "counts": {"pass": 21, "fail": 13, "not_run": 0}
+      "counts": {"pass": 21, "fail": 13, "not_run": 0},
+      "evidence_schema": "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v3",
+      "evidence_sha256": "5393ee8f1549ccce6dbf7befec7c14f66d58d16b6196ccb52eef8a70e8ddf26f"
     }
   ],
   "cases": [

@@ -72,6 +72,27 @@ def load_and_validate(path: Path) -> dict:
     expected_counts = {status: calculated.get(status, 0) for status in ("pass", "fail", "not_run")}
     if recorded != expected_counts:
         raise ValueError(f"recorded counts {recorded} do not match cases {expected_counts}")
+
+    history = scorecard.get("history")
+    if not isinstance(history, list) or not history:
+        raise ValueError("history must contain at least the current snapshot")
+    history_ids = [snapshot.get("id") for snapshot in history]
+    if len(set(history_ids)) != len(history_ids):
+        raise ValueError("history snapshot IDs must be unique")
+    for snapshot in history:
+        counts = snapshot.get("counts")
+        if not isinstance(counts, dict) or set(counts) != VALID_RESULTS:
+            raise ValueError(f"{snapshot.get('id')}: invalid history counts")
+        if any(not isinstance(value, int) or value < 0 for value in counts.values()):
+            raise ValueError(f"{snapshot.get('id')}: history counts must be non-negative integers")
+        if sum(counts.values()) != denominator:
+            raise ValueError(f"{snapshot.get('id')}: history counts do not preserve frozen denominator")
+        if not snapshot.get("source_heads") or not snapshot.get("evidence_sha256"):
+            raise ValueError(f"{snapshot.get('id')}: missing immutable history evidence")
+    if history[-1]["id"] != scorecard["current_snapshot"]["id"]:
+        raise ValueError("last history row must be the current snapshot")
+    if history[-1]["counts"] != recorded:
+        raise ValueError("last history counts must match current snapshot")
     return scorecard
 
 
@@ -123,7 +144,7 @@ def render_markdown(scorecard: dict) -> str:
         "",
         "## Progress history",
         "",
-        "| Snapshot | Date (UTC) | Commit boundary | Passed | Failed | Not run |",
+        "| Snapshot | Date (UTC) | Commit boundary | Passed | Failed | Not evaluated/error |",
         "|---|---|---|---:|---:|---:|",
     ]
     for snapshot in scorecard["history"]:

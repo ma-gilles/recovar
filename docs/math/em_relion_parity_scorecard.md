@@ -49,8 +49,9 @@ Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v3
 
 ## Progress history
 
-| Snapshot | Date (UTC) | Commit boundary | Passed | Failed | Not run |
+| Snapshot | Date (UTC) | Commit boundary | Passed | Failed | Not evaluated/error |
 |---|---|---|---:|---:|---:|
+| `strict-k1-v1-old-head-20260721` | 2026-07-21T04:33:00.281935+00:00 | `ac5177d2b0cd` | 20 | 12 | 2 |
 | `strict-k1-v3-20260721` | 2026-07-21T10:35:40.626248+00:00 | `ac5177d2b0cd`, `9d1722781e1d` | 21 | 13 | 0 |
 
 Generate this PR-ready table with:
