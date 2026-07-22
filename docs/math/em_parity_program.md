@@ -8971,3 +8971,39 @@ audit passes.  The disposable run/runtime roots are
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_smallfail_requal_3dd664c8_20260722T114000Z`
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_smallfail_requal_3dd664c8_20260722T114000Z`.
+
+### Fixed scorecard reaches 23/34; boundary and final-map checks continue
+
+The accepted frozen-suite snapshot is now `strict-k1-v5-20260722`: 23/34
+complete strict trajectory passes and 29/34 exact intermediate-topology
+passes, up from 20/34 and 27/34 in the first frozen snapshot.  Case 23 earned
+the newest checkbox only after paired same-GPU science `11501524` and strict
+audit `11501622` passed the exact 13-iteration schedule, shellwise FSC/FSC-AUC,
+and finalization contract.  The authoritative checked-in summary is
+`docs/math/em_relion_parity_scorecard.md`; its 34-case denominator and fixture
+identities remain frozen.
+
+The active K=1 hypothesis is that inclusive current-size boundary commit
+`7f5f7584` removes the old iteration-3 `162` versus RELION `164` split in
+cases 2 and 3.  Detached source `84143872` contains both `7f5f7584` and
+`db1bf391`; paired exact-fixture science jobs `11501888`/`11501889` and
+strict auditors `11501907`/`11501908` are running or dependency-held.  No
+checkbox changes until the auditors accept the complete contracts.  Case 24
+is the separate final-map discriminator: integration commit `6235fb03` has
+setup/science/summary/audit jobs
+`11504822`/`11504823`/`11504824`/`11504831`; the old exact result missed only
+the final merged cross-engine FSC-AUC gate, `0.994805104 < 0.995`.
+
+The K=4 active diagnostic is same-A100 job `11503805` at source `7cd1aa4b`.
+It reuses the accepted read-only RELION control/capture pair and exercises the
+scoped observational fused-pass-2 capture for the frozen iteration-10,
+half-1, class-2, 96-particle panel.  Capture is not a production repair: the
+authoritative arrays remain unchanged, and geometry/scalar acceptance remains
+fail-closed on the completed artifact bundle.
+
+The integration branch is clean at `6235fb03`.  The repository-mandated
+validation graph is `11504666`--`11504675`, with corrected optional-binding
+unit rerun `11504718`; the original unit launch `11504665` is infrastructure
+invalid because the RELION binding was absent.  Local commits remain unpushed
+until the required validation graph is fully green, after which the PR must
+report the frozen-score progression and exact evidence jobs.

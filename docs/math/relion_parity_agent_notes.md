@@ -5476,3 +5476,52 @@ same-device equivalence or numerical noise.
   Both contain `SAFE_TO_DELETE`; submission and audit-wrapper SHA-256 values
   are `7691322c849470eac74ebf7f64b890d6068f6be4f47cd6d540855b4875b46314`
   and `fca17ca100a2fe5df8707a8b5e440c4962fb16d7fdc7a2d45f67de23ebe03105`.
+
+# 2026-07-22: frozen scorecard v5 and active acceptance graph
+
+- Frozen snapshot `strict-k1-v5-20260722` accepts 23/34 strict trajectory
+  cases and 29/34 exact intermediate topologies.  The first frozen snapshot
+  was 20/34 and 27/34; the denominator did not change.  Evidence ledger
+  `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v5` has SHA-256
+  `11a82951cadd2ccd2123904345090bec45352dd5f1884e0ae25fdf35d0695311`.
+- Case 23 exact-fixture science `11501524` and audit `11501622` passed.  Final
+  merged cross-engine FSC-AUC is `0.9983424084`; RECOVAR-minus-RELION merged
+  GT FSC-AUC is `+0.0122984963`; the exact 13-iteration schedule/topology
+  passed.  Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case23_exacttrajectory_ab52b1ff_20260722T175000Z`.
+- Cases 2/3 exact-fixture science `11501888`/`11501889` uses detached commit
+  `84143872a5179b5567dc8e43fb81b985d7beb37d`, whose ancestry contains the
+  inclusive boundary-shell fix `7f5f7584` and CUDA adaptive-pass-1 fix
+  `db1bf391`.  The falsifiable gate is whether iteration 3 now selects current
+  size 164, not the old RECOVAR 162, and whether strict trajectory auditors
+  `11501907`/`11501908` then pass.  Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_cases02_03_strict_84143872_20260722T180000Z`.
+- Case 24 uses clean integration commit
+  `6235fb035380b2ecb18851a65cd9729a6d4de868`: setup `11504822`, science
+  `11504823`, summary `11504824`, and strict audit `11504831`.  The old exact
+  run passed topology but missed the final merged cross gate by
+  `0.000194896`.  Run and runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case24_strict_6235fb03_20260722T191500Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_case24_strict_6235fb03_20260722T191500Z`;
+  both contain `SAFE_TO_DELETE`.
+- K=4 same-A100 job `11503805` runs source
+  `7cd1aa4b13a543f7283e1490607ca3603b646611`.  It reuses accepted immutable
+  RELION pair SHA-256
+  `7a69dc75ec4e9375dcad915fafd7c06e70baabcad6d11389a9b9914f312aab06`
+  and targets iteration 10, half 1, class 2, and the frozen 96-particle panel.
+  The scoped fused-pass-2 capture is observational; authoritative M-step
+  arrays are unchanged.  Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_fusedcapture_7cd1aa4b_20260722T183935Z`;
+  runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_fusedcapture_7cd1aa4b_20260722T183935Z`;
+  both contain `SAFE_TO_DELETE`.
+- Integration validation at clean `6235fb03` is recorded under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_longtest_6235fb03_20260722T190500Z`.
+  Jobs are smoke/downstream/SPA/ET `11504666`--`11504669`, remaining groups
+  `11504670`--`11504674`, summary `11504675`, and corrected unit rerun
+  `11504718`.  Original unit `11504665` is infrastructure invalid: it reached
+  collection without the optional RELION binding and produced 19 import
+  errors.  The rerun uses the accepted unchanged binding and overwrites that
+  XML.  No push or PR score claim is authorized until every required group
+  passes.
