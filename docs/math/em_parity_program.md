@@ -8848,3 +8848,27 @@ iteration-10 trajectory both pass. The original full-start job `11484481`
 continues untouched toward its independent end-of-run fail-closed validator.
 No production edit is authorized before the restart capture and dependent
 geometry/scalar audits qualify a mismatch.
+
+### Restart capture rank provenance is corrected
+
+Read-only inspection of the formally rejected full-start capture found that
+every artifact encoded MPI rank as unsigned `-1`. The diagnostic RELION helper
+read only `OMPI_COMM_WORLD_RANK`, while the direct Slurm `srun` launch exposes
+`SLURM_PROCID`. Therefore the first restart graph
+`11492718`/`11492719`/`11492720` would deterministically repeat the missing-rank
+validation failure. It was canceled after 6m39s/0s/0s, before its capture or
+RECOVAR phases; original full-start science `11484481` was not touched.
+
+Diagnostic-only RELION commit
+`4ab53edf206e9cafd993484a92eccd77e828c497` adds a strict Slurm-rank fallback
+and fails closed on missing or invalid identity. It changes no reconstruction,
+selection, or arithmetic code. The isolated replacement binary has SHA-256
+`dad0ff14a1478b22b1f3ba9acc93934341aaf7b8750205a606256f8c990ce475`.
+Replacement science `11492933` started on one A100 at 2026-07-22 06:41:03 EDT
+after an independent three-task rank probe passed exactly `0,1,2`; primary and
+scalar audits are `11492934` and `11492935`. A three-second preflight-only
+attempt `11492919` had first rejected incorrectly pre-created empty child
+directories; it produced no science, and dependencies `11492920`/`11492921`
+never ran. The active replacement retains the same immutable iteration-9
+restart, exact iteration-10 dispatch/order replay, sealed panel, original-clean
+closure, and same-A100 RECOVAR gates.

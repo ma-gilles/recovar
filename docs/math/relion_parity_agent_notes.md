@@ -5228,3 +5228,27 @@ same-device equivalence or numerical noise.
 - Original full-start science `11484481` remains untouched. No production
   edit is authorized until restart capture and dependent geometry/scalar
   audits qualify an evidence-backed mismatch.
+
+# 2026-07-22: restart capture rank provenance corrected
+
+- Original capture artifacts encode MPI rank as unsigned `-1`: the diagnostic
+  helper read only `OMPI_COMM_WORLD_RANK`, but direct Slurm `srun` supplies
+  `SLURM_PROCID`. Thus restart graph `11492718`/`11492719`/`11492720` was
+  canceled after 6m39s/0s/0s before capture or RECOVAR could run. Original
+  science `11484481` was untouched.
+- Diagnostic RELION commit
+  `4ab53edf206e9cafd993484a92eccd77e828c497` adds a strict Slurm-rank fallback
+  with fail-closed validation and no reconstruction/arithmetic change. The
+  isolated replacement binary SHA-256 is
+  `dad0ff14a1478b22b1f3ba9acc93934341aaf7b8750205a606256f8c990ce475`.
+- Replacement science `11492933` began on A100 node `della-l07g7` at 06:41:03
+  EDT after an independent three-task rank probe passed exactly `0,1,2`.
+  Primary/scalar audits are `11492934`/`11492935`.
+- Preflight-only attempt `11492919` first failed in three seconds because
+  launcher-owned empty child directories had been created too early. It wrote
+  no science; `11492920`/`11492921` never ran. Removing only those empty
+  children restored the unchanged launcher contract.
+- The active graph retains the same immutable clean iteration-9 restart, exact
+  iteration-10 dispatch and particle-order replay, sealed panel,
+  original-clean closure, and same-A100 RECOVAR gates. No RECOVAR production
+  edit is authorized before its dependent geometry/scalar evidence.
