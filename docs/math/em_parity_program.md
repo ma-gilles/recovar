@@ -9047,3 +9047,31 @@ The repository-mandated gate therefore remains red and pushing remains
 disallowed even though the EM/unit regression is closed.  The durable result
 root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_longtest_6235fb03_20260722T190500Z`.
+
+### Case-26 strict failure is also an inherited pose tail
+
+Clean detached-`a2be302c` science job `11508258` completed normally in
+`00:23:35`.  The strict FSC and topology commands were also run immediately
+against the finished immutable output while scheduled CPU auditor `11508284`
+waited for priority.  All 11 numbered iterations and the exact finalization
+topology pass.  The only FSC failure is the final merged cross-engine FSC-AUC,
+`0.963324126445 < 0.995`; RECOVAR-minus-RELION merged GT FSC-AUC is positive,
+`+0.009268703399`.  Case 26 therefore remains unchecked and the frozen score
+remains 23/34 strict and 29/34 topology.
+
+The input-identity particle audit shows the same boundary shape as case 24.
+At numbered iteration 11, 835/1000 particles are within 0.5 degrees across
+engines; final all-data has 829/1000 within 0.5 degrees.  Median angular error
+stays numerical (`5.63e-6` versus `5.69e-6` degrees), while p95 changes only
+from `2.34529` to `2.38760` degrees.  Final all-data therefore exposes an
+already-present pose tail at full Nyquist rather than creating a new final-join
+tail.  This reinforces the case-24 iteration-2 candidate decision as the
+earliest active operand-level target.
+
+The strict FSC, topology, particle JSON, and particle-array SHA-256 values are
+`107a6983aa496346e50e875196c45fbb673e8a51187828b2758db6962285227e`,
+`3362fb2e785a42922b5d98414fca05c26f5ae6b04029c91e04224394e4851d2b`,
+`3de8993c743c3015838286148a7920d1b7116e796a22ebdc2a98d4e94dfd7d60`,
+and `2aa103ee09442d4a4fd00cdc38ec0aa89d0e4aaca586582189f37d43cf9258f6`.
+The durable case root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_unresolved_a2be302c_20260722T205500Z/cases/26_tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80`.

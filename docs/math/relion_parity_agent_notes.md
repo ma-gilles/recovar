@@ -5581,3 +5581,28 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_longtest_6235fb03_20260722T190500Z`.
   The completed-unit result is appended to
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_longtest_6235fb03_20260722T190500Z/provenance/SUBMISSION_11504665_11504675.md`.
+
+# 2026-07-22: case 26 passes every numbered map and fails only final Nyquist
+
+- Detached-`a2be302c` science `11508258` completed in `00:23:35`.  The strict
+  FSC audit rejects only final merged cross-engine FSC-AUC
+  `0.963324126445 < 0.995`; the 11 numbered maps pass, exact topology passes,
+  and the final RECOVAR-minus-RELION GT FSC-AUC is `+0.009268703399`.
+- The scheduled CPU auditor is `11508284`.  While it waited for priority, the
+  identical two checked-in audit modules were run against the immutable case
+  output.  Their statuses are FSC `2` (scientific threshold failure) and
+  topology `0` (pass), so this is not an infrastructure failure and does not
+  change the frozen 23/34 strict, 29/34 topology score.
+- A complete particle identity join compares numbered iteration 11 and final
+  all-data.  The fraction within 0.5 degrees changes only from 835/1000 to
+  829/1000; angular median is `5.63e-6`/`5.69e-6` degrees and p95 is
+  `2.34529`/`2.38760` degrees.  The full-Nyquist failure inherits the numbered
+  pose tail, consistent with the case-24 evidence, rather than identifying a
+  distinct final-join arithmetic defect.
+- FSC/topology/particle JSON/particle NPZ SHA-256 values are
+  `107a6983aa496346e50e875196c45fbb673e8a51187828b2758db6962285227e`,
+  `3362fb2e785a42922b5d98414fca05c26f5ae6b04029c91e04224394e4851d2b`,
+  `3de8993c743c3015838286148a7920d1b7116e796a22ebdc2a98d4e94dfd7d60`,
+  and `2aa103ee09442d4a4fd00cdc38ec0aa89d0e4aaca586582189f37d43cf9258f6`.
+- Durable case root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_unresolved_a2be302c_20260722T205500Z/cases/26_tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80`.
