@@ -8945,3 +8945,17 @@ The disposable run and runtime roots are
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_boundary_requal_3dd664c8_20260722T111900Z`;
 both contain `SAFE_TO_DELETE`.
+
+### Case-20 strict-score qualification
+
+Case 20 has current-head functional closure but not yet strict-score closure:
+an earlier replay matched all 11 RELION current sizes, kept numbered merged
+FSC-AUC at least `0.999999998577`, and reached final merged FSC-AUC
+`0.997760979983`, but used a different physical GPU from its RELION oracle.
+A clean detached-`3dd664c8` paired replacement now runs both engines on one
+H100: setup `11497498`, science `11497499`, summary `11497500`, and
+fail-closed FSC/topology audit `11497513`.  Its disposable run/runtime roots
+are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case20_samegpu_3dd664c8_20260722T113100Z`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_case20_samegpu_3dd664c8_20260722T113100Z`.

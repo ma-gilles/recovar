@@ -5439,3 +5439,23 @@ same-device equivalence or numerical noise.
   `51e0c3a0dacde0deb85f09c5ac3009c2b713c28d4daf535c5bd6e4e8e36ae9d7`;
   the replacement summary-wrapper SHA-256 is
   `2fbb72cbc9cfaf62665a23282db3bb89211e6fb51c05689b5b580b6bf68a82af`.
+
+# 2026-07-22: case 20 enters strict same-GPU requalification
+
+- A prior current-head case-20 replay already closes the implementation
+  behavior: all 11 current sizes match RELION, numbered merged FSC-AUC stays
+  at least `0.999999998577`, and final merged FSC-AUC improves from the old
+  row's `0.986023998270` to `0.997760979983`.  It remains ineligible for the
+  fixed score only because RECOVAR and the immutable RELION oracle ran on
+  different physical GPUs.
+- Detached clean source `3dd664c8` therefore launched a fresh paired run in
+  one H100 allocation.  Setup/science/summary jobs are
+  `11497498`/`11497499`/`11497500`; after-any FSC/FSC-AUC and topology audit
+  is `11497513`.  No score changes until that audit accepts both contracts.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case20_samegpu_3dd664c8_20260722T113100Z`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_case20_samegpu_3dd664c8_20260722T113100Z`.
+  Both have `SAFE_TO_DELETE`; the submission and audit-wrapper SHA-256 values
+  are `dd0d2d84342edfa0b7b4a27a5463c6038bf2d05a6024a220e7ac2214b1205403`
+  and `a296476a1b4ab518e044e742e33206b949acc838c9bad08a1b5821b8524bc6a9`.
