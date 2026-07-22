@@ -122,7 +122,13 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
         assert "pixi run" not in generated_text
         assert "git symbolic-ref --short HEAD ||" not in generated_text
     assert "export PIP_NO_INDEX=1" in setup_text
-    pixi_root = REPO_ROOT / ".pixi" / "envs" / "default"
+    base_pixi_python = Path(
+        env.get(
+            "EM_COMPLETION_PIXI_PY",
+            REPO_ROOT / ".pixi" / "envs" / "default" / "bin" / "python",
+        )
+    ).resolve()
+    pixi_root = base_pixi_python.parent.parent
     assert (
         f'export CMAKE_INCLUDE_PATH="{pixi_root}/include/fftw:'
         f'{pixi_root}/include:${{CMAKE_INCLUDE_PATH:-}}"'
