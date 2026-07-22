@@ -5562,3 +5562,19 @@ same-device equivalence or numerical noise.
   Focused capture root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_particle2767_capture_b86fb607_20260722T212227Z`.
   Both corresponding runtime roots and run roots contain `SAFE_TO_DELETE`.
+
+# 2026-07-22: replacement unit group is green; shared long gate remains red
+
+- Replacement unit job `11507920` completed on `della-l09g4` in `00:50:03`.
+  The JUnit result is 5,639 tests: 5,586 passed, 53 skipped, 0 failed, and
+  0 errors.  This closes the environment-dependent pixi-path assertion
+  exposed by `11504718` and validates commit `a2be302c`.
+- Every other integration group except the cryo-ET outlier regression is
+  green.  The outlier failure reproduces on clean `dev2`, but the repository
+  policy still makes the complete mandatory gate red.  Therefore the local
+  parity commits are not pushed and the draft PR is updated with evidence
+  instead.
+- Durable validation root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_longtest_6235fb03_20260722T190500Z`.
+  The completed-unit result is appended to
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_longtest_6235fb03_20260722T190500Z/provenance/SUBMISSION_11504665_11504675.md`.

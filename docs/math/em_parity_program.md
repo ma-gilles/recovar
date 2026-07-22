@@ -9035,3 +9035,14 @@ Focused launcher validation is 2 passed.  Same-GPU exact-fixture jobs
 particle, and job `11509172` compares pass-1, pass-2, and reconstruction
 candidate tables.  The durable capture root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_particle2767_capture_b86fb607_20260722T212227Z`.
+
+### Unit validation closes; mandatory outlier gate stays red
+
+Replacement unit job `11507920` completed in `00:50:03` with 5,586 passed,
+53 skipped, 0 failed, and 0 errors (5,639 total).  It validates the canonical
+pixi-path assertion repair at `a2be302c`.  All other integration groups pass
+except the cryo-ET outlier regression, which also reproduces on clean `dev2`.
+The repository-mandated gate therefore remains red and pushing remains
+disallowed even though the EM/unit regression is closed.  The durable result
+root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_longtest_6235fb03_20260722T190500Z`.
