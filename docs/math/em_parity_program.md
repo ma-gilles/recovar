@@ -8867,6 +8867,25 @@ and scalar audits are `11493436` and `11493437`. No capture or RECOVAR output
 from the canceled root is reused, and original full-start science `11484481`
 remains untouched.
 
+### Capture completeness cap matches sealed 48/48 ownership
+
+Absolute-bound science `11493435` completed its unset control in 787 seconds
+and stopped exactly at iteration 10. Its capture then failed after 23 valid-rank
+artifacts because `MAX_PARTICLES_PER_RANK=96` doubled the diagnostic
+worst-case file estimate relative to the panel's sealed 48/48 follower
+ownership. No temporary artifacts, OOM, RECOVAR run, or dependent audit
+occurred; jobs `11493436`/`11493437` never ran.
+
+The fresh launcher tightens the per-follower completeness cap to the exact
+sealed value 48 while retaining 96 expected particles, two followers, and the
+unchanged 64 GiB maximum. At image size 2,812 and the full 4,608-orientation
+fine grid, the resulting all-particle worst case is 49,785,899,520 bytes
+(46.37 GiB), below the cap. Fresh science `11494295` began on A100 node
+`della-l07g2` at 2026-07-22 07:29:29 EDT after rank, panel, import, and 48/48
+owner gates passed; audits are `11494296`/`11494297`. All iteration,
+dispatch/order, inertness, closure, and same-A100 RECOVAR controls remain
+unchanged.
+
 ### Restart capture rank provenance is corrected
 
 Read-only inspection of the formally rejected full-start capture found that

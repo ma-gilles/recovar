@@ -5269,3 +5269,21 @@ same-device equivalence or numerical noise.
 - The fresh root reuses no partial control/capture/RECOVAR output. Original
   full-start science `11484481` remains independent and untouched; no RECOVAR
   production edit is authorized before the new dependent evidence.
+
+# 2026-07-22: capture cap bound to sealed 48/48 ownership
+
+- Absolute-bound `11493435` completed unset control in 787 seconds and stopped
+  at iteration 10. Capture then failed after 23 valid-rank artifacts because
+  `MAX_PARTICLES_PER_RANK=96` doubled the diagnostic file-size estimate versus
+  the sealed 48/48 follower-owner panel. It produced no temporary files,
+  OOM, RECOVAR output, or dependent audit; `11493436`/`11493437` never ran.
+- The fresh launcher sets the exact per-follower completeness cap to 48 while
+  retaining 96 expected particles, two followers, and the 64 GiB ceiling.
+  Full 4,608-orientation worst-case storage for all 96 targets is
+  49,785,899,520 bytes (46.37 GiB), below that ceiling.
+- Fresh science `11494295` began on A100 node `della-l07g2` at 07:29:29 EDT
+  after rank `0,1,2`, panel, import, and 48/48 ownership gates passed.
+  Primary/scalar audits are `11494296`/`11494297`.
+- Absolute iteration 10, exact dispatch/order replay, inertness,
+  original-clean closure, and same-A100 RECOVAR gates are unchanged. No
+  production edit is authorized before the dependent evidence.
