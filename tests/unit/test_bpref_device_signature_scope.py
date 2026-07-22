@@ -671,18 +671,98 @@ def test_bucketed_source_has_no_unscoped_capture_branches():
     assert "device_signature_active=bucket_device_signature_requested" in source
 
 
-def test_active_capture_rejects_fused_kclass_route(monkeypatch):
+def test_active_capture_accepts_fused_kclass_route(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "1")
-    with pytest.raises(RuntimeError, match="single-class sparse pass-2 route"):
-        k_class._validate_bpref_device_signature_sparse_route(
-            active=True,
-            n_classes=1,
-        )
+    k_class._validate_bpref_device_signature_sparse_route(
+        active=True,
+        n_classes=4,
+    )
 
     k_class._validate_bpref_device_signature_sparse_route(
         active=False,
         n_classes=1,
     )
+
+
+def test_bpref_contribution_class_filter_uses_relion_one_based_numbers(monkeypatch):
+    monkeypatch.delenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS", raising=False)
+    assert sparse_pass2_bucketed._bpref_contribution_class_enabled(0)
+    assert sparse_pass2_bucketed._bpref_contribution_class_enabled(3)
+
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS", "2")
+    assert not sparse_pass2_bucketed._bpref_contribution_class_enabled(0)
+    assert sparse_pass2_bucketed._bpref_contribution_class_enabled(1)
+    assert not sparse_pass2_bucketed._bpref_contribution_class_enabled(2)
+
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS", "0")
+    with pytest.raises(ValueError, match="positive integer"):
+        sparse_pass2_bucketed._bpref_contribution_class_enabled(0)
+
+
+def test_fused_kclass_compact_capture_materializes_only_target_rows():
+    image_indices = np.asarray([10, 11, 12], dtype=np.int64)
+    log_priors = [np.asarray([], dtype=np.float32) for _ in range(13)]
+    log_priors[10] = np.asarray([0.1, 0.2])
+    log_priors[11] = np.asarray([0.3, 0.4, 0.5])
+    log_priors[12] = np.asarray([0.6])
+    per_image_inputs = {"log_prior": log_priors}
+    rotations = np.broadcast_to(np.eye(3, dtype=np.float32), (3, 4, 3, 3)).copy()
+    class_bucket_arrays = {
+        "bucket_size": 4,
+        "mstep_rotations": rotations,
+        "rotation_indices": np.asarray(
+            [[1, 2, -1, -1], [3, 4, 5, -1], [6, -1, -1, -1]],
+            dtype=np.int64,
+        ),
+        "actual_counts": np.asarray([2, 3, 1], dtype=np.int64),
+    }
+    compact_pair_arrays = {
+        "local_rotation_row": np.asarray(
+            [[0, 1, -1], [2, 0, 1], [0, -1, -1]],
+            dtype=np.int32,
+        ),
+        "translation_idx": np.asarray(
+            [[1, 0, -1], [0, 1, 1], [0, -1, -1]],
+            dtype=np.int32,
+        ),
+        "pair_mask": np.asarray(
+            [[True, True, False], [True, True, True], [True, False, False]],
+            dtype=bool,
+        ),
+    }
+    scores = np.asarray(
+        [[1.0, 2.0, -np.inf], [3.0, 4.0, 5.0], [6.0, -np.inf, -np.inf]],
+        dtype=np.float32,
+    )
+    probs = np.asarray(
+        [[0.1, 0.2, 0.0], [0.3, 0.4, 0.5], [0.6, 0.0, 0.0]],
+        dtype=np.float32,
+    )
+    capture = sparse_pass2_bucketed._materialize_k_class_capture_rows(
+        image_indices=image_indices,
+        target_particle_rows=np.asarray([1], dtype=np.int64),
+        per_image_inputs=per_image_inputs,
+        class_bucket_arrays=class_bucket_arrays,
+        compact_pair_arrays=compact_pair_arrays,
+        scores=scores,
+        probs=probs,
+        reconstruction_mask=None,
+        reconstruction_probs=None,
+        bucket_translation_prior=np.asarray(
+            [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6]],
+            dtype=np.float32,
+        ),
+        n_fine_trans=2,
+    )
+
+    np.testing.assert_array_equal(capture["image_indices"], np.asarray([11]))
+    assert capture["scores"].shape == (1, 4, 2)
+    assert capture["scores"][0, 2, 0] == 3.0
+    assert capture["scores"][0, 0, 1] == 4.0
+    assert capture["scores"][0, 1, 1] == 5.0
+    assert np.count_nonzero(capture["candidate_mask"]) == 3
+    np.testing.assert_allclose(capture["rotation_log_prior"][0], [0.3, 0.4, 0.5, 0.0])
+    np.testing.assert_allclose(capture["translation_log_prior"][0], [-0.3, -0.4])
 
 
 def test_later_capture_support_excludes_dense_full_support_fallback():

@@ -217,6 +217,7 @@ _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_
 _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
 _RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV = "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH"
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
+_BPREF_CONTRIBUTION_DUMP_CLASS_ENV = "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS"
 _PASS2_DUMP_DIR_ENV = "RECOVAR_PASS2_DUMP_DIR"
 _PASS2_DUMP_CONSERVATIVE_EXECUTION_ENV = "RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
@@ -391,6 +392,25 @@ def _resolve_bpref_bucket_diagnostic_modes(
             and high_precision_operand_bundle_requested
         ),
     }
+
+
+def _bpref_contribution_class_enabled(class_index: int) -> bool:
+    """Return whether a zero-based class belongs to the scoped capture.
+
+    The environment value is one-based to match RELION's class numbering and
+    the class labels used by the pre-scatter comparison scripts.
+    """
+
+    value = os.environ.get(_BPREF_CONTRIBUTION_DUMP_CLASS_ENV, "").strip()
+    if not value:
+        return True
+    try:
+        requested = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{_BPREF_CONTRIBUTION_DUMP_CLASS_ENV} must be a positive integer") from exc
+    if requested <= 0:
+        raise ValueError(f"{_BPREF_CONTRIBUTION_DUMP_CLASS_ENV} must be a positive integer")
+    return int(class_index) + 1 == requested
 
 
 def _validate_bpref_positive_rotation_rows(
@@ -7249,6 +7269,123 @@ def _maybe_dump_k_class_pass2_bucket(
     return dump_count
 
 
+def _materialize_k_class_capture_rows(
+    *,
+    image_indices,
+    target_particle_rows,
+    per_image_inputs,
+    class_bucket_arrays,
+    compact_pair_arrays,
+    scores,
+    probs,
+    reconstruction_mask,
+    reconstruction_probs,
+    bucket_translation_prior,
+    n_fine_trans: int,
+):
+    """Materialize only selected fused-K rows in rectangular diagnostic form."""
+
+    rows = np.asarray(target_particle_rows, dtype=np.int64)
+    if rows.ndim != 1 or rows.size == 0:
+        raise ValueError("fused K-class capture requires at least one target particle row")
+    image_indices_np = np.asarray(image_indices, dtype=np.int64)
+    if np.any(rows < 0) or np.any(rows >= image_indices_np.size):
+        raise ValueError("fused K-class capture target row is outside the bucket")
+
+    selected_image_indices = image_indices_np[rows]
+    n_selected = int(rows.size)
+    n_rot = int(class_bucket_arrays["bucket_size"])
+    n_trans = int(n_fine_trans)
+
+    def _selected(values):
+        return np.asarray(jnp.asarray(values)[jnp.asarray(rows, dtype=jnp.int32)])
+
+    selected_scores = _selected(scores)
+    selected_probs = _selected(probs)
+    selected_reconstruction_mask = (
+        None if reconstruction_mask is None else _selected(reconstruction_mask).astype(bool, copy=False)
+    )
+    selected_reconstruction_probs = (
+        None if reconstruction_probs is None else _selected(reconstruction_probs)
+    )
+
+    rotation_log_prior = np.zeros((n_selected, n_rot), dtype=np.float32)
+    for selected_row, image_index in enumerate(selected_image_indices.tolist()):
+        prior = np.asarray(per_image_inputs["log_prior"][int(image_index)], dtype=np.float32)
+        if prior.size > n_rot:
+            raise ValueError("fused K-class capture rotation prior exceeds its bucket")
+        rotation_log_prior[selected_row, : prior.size] = prior
+
+    if compact_pair_arrays is None:
+        candidate_mask = _selected(class_bucket_arrays["candidate_mask"]).astype(bool, copy=False)
+        dense_scores = selected_scores
+        dense_probs = selected_probs
+        dense_reconstruction_mask = selected_reconstruction_mask
+        dense_reconstruction_probs = selected_reconstruction_probs
+    else:
+        pair_rows = _selected(compact_pair_arrays["local_rotation_row"]).astype(np.int64, copy=False)
+        pair_translations = _selected(compact_pair_arrays["translation_idx"]).astype(np.int64, copy=False)
+        pair_mask = _selected(compact_pair_arrays["pair_mask"]).astype(bool, copy=False)
+        dense_scores = np.full((n_selected, n_rot, n_trans), -np.inf, dtype=selected_scores.dtype)
+        dense_probs = np.zeros((n_selected, n_rot, n_trans), dtype=selected_probs.dtype)
+        candidate_mask = np.zeros((n_selected, n_rot, n_trans), dtype=bool)
+        dense_reconstruction_mask = (
+            None
+            if selected_reconstruction_mask is None
+            else np.zeros((n_selected, n_rot, n_trans), dtype=bool)
+        )
+        dense_reconstruction_probs = (
+            None
+            if selected_reconstruction_probs is None
+            else np.zeros((n_selected, n_rot, n_trans), dtype=selected_reconstruction_probs.dtype)
+        )
+        for selected_row in range(n_selected):
+            valid = (
+                pair_mask[selected_row]
+                & (pair_rows[selected_row] >= 0)
+                & (pair_rows[selected_row] < n_rot)
+                & (pair_translations[selected_row] >= 0)
+                & (pair_translations[selected_row] < n_trans)
+            )
+            rr = pair_rows[selected_row, valid]
+            tt = pair_translations[selected_row, valid]
+            if np.unique(rr * n_trans + tt).size != rr.size:
+                raise RuntimeError("fused K-class capture encountered duplicate compact candidate pairs")
+            dense_scores[selected_row, rr, tt] = selected_scores[selected_row, valid]
+            dense_probs[selected_row, rr, tt] = selected_probs[selected_row, valid]
+            candidate_mask[selected_row, rr, tt] = True
+            if dense_reconstruction_mask is not None:
+                dense_reconstruction_mask[selected_row, rr, tt] = selected_reconstruction_mask[
+                    selected_row, valid
+                ]
+            if dense_reconstruction_probs is not None:
+                dense_reconstruction_probs[selected_row, rr, tt] = selected_reconstruction_probs[
+                    selected_row, valid
+                ]
+
+    if dense_reconstruction_probs is None:
+        mstep_probs = dense_probs
+    else:
+        mstep_probs = dense_reconstruction_probs
+    if dense_reconstruction_mask is None:
+        dense_reconstruction_mask = mstep_probs > 0
+
+    return {
+        "image_indices": selected_image_indices,
+        "batch_rows": rows,
+        "scores": dense_scores,
+        "probs": dense_probs,
+        "candidate_mask": candidate_mask,
+        "reconstruction_mask": dense_reconstruction_mask,
+        "reconstruction_probs": mstep_probs,
+        "rotation_log_prior": rotation_log_prior,
+        "translation_log_prior": _selected(bucket_translation_prior),
+        "rotations": _selected(class_bucket_arrays["mstep_rotations"]),
+        "rotation_indices": _selected(class_bucket_arrays["rotation_indices"]),
+        "actual_counts": _selected(class_bucket_arrays["actual_counts"]).astype(np.int64, copy=False),
+    }
+
+
 def _pass2_dump_requested_for_bucket(
     *,
     experiment_dataset,
@@ -10344,9 +10481,23 @@ def compute_k_class_pass2_stats_sparse_fused(
     when noise differs by class.
     """
 
-    if bpref_device_signature_active:
-        raise RuntimeError(
-            "active BPref device signature scope is incompatible with fused sparse K-class pass-2"
+    device_signature_configured = bool(
+        os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
+    )
+    device_signature_requested = bool(
+        device_signature_configured and bpref_device_signature_active
+    )
+    scoped_diagnostic_flags = _scoped_bpref_diagnostic_flags(
+        active=bpref_device_signature_active
+    )
+    if device_signature_requested:
+        if not os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR"):
+            raise RuntimeError(
+                "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR requires "
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR"
+            )
+        _require_bpref_device_soft_particle_arm(
+            use_relion_x_half_mstep=bool(relion_x_half_mstep),
         )
 
     from recovar.em.sampling import (
@@ -10369,6 +10520,13 @@ def compute_k_class_pass2_stats_sparse_fused(
 
     volumes = jnp.asarray(volumes)
     n_classes = int(volumes.shape[0])
+    if device_signature_requested and not any(
+        _bpref_contribution_class_enabled(class_index)
+        for class_index in range(n_classes)
+    ):
+        raise ValueError(
+            f"{_BPREF_CONTRIBUTION_DUMP_CLASS_ENV} selects no class in a {n_classes}-class run"
+        )
     if len(significant_sample_indices_by_class) != n_classes:
         raise ValueError("significant_sample_indices_by_class must match class count")
     if len(rotation_log_priors_by_class) != n_classes:
@@ -11572,6 +11730,69 @@ def compute_k_class_pass2_stats_sparse_fused(
                     )
                 compact_pair_arrays_by_class = reordered_compact_pairs
             image_indices = fetched_indices_np
+        target_particle_rows = (
+            _bpref_contribution_target_rows(experiment_dataset, image_indices)
+            if device_signature_requested
+            else np.empty((0,), dtype=np.int64)
+        )
+        bucket_diagnostic_modes = _resolve_bpref_bucket_diagnostic_modes(
+            device_signature_requested=device_signature_requested,
+            contribution_diagnostics_active=bool(
+                os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "").strip()
+                and bpref_device_signature_active
+            ),
+            target_particle_rows=target_particle_rows,
+            high_precision_operand_bundle_requested=scoped_diagnostic_flags[
+                "high_precision_operand_bundle"
+            ],
+        )
+        bucket_device_signature_requested = bucket_diagnostic_modes[
+            "device_signature_requested"
+        ]
+        high_precision_operand_bundle = bucket_diagnostic_modes[
+            "high_precision_operand_bundle"
+        ]
+        contribution_preprocess_operands = None
+        if high_precision_operand_bundle:
+            (
+                diagnostic_relion_cuda_preprocess,
+                diagnostic_integer_pre_shifts,
+                diagnostic_batch_corr,
+                diagnostic_batch_scale,
+                diagnostic_relion_preprocess_kwargs,
+            ) = prepare_batch_preprocess_operands(
+                experiment_dataset,
+                batch_data,
+                image_indices,
+                image_corrections=image_corrections,
+                scale_corrections=scale_corrections,
+                image_pre_shifts=image_pre_shifts,
+            )
+            if diagnostic_integer_pre_shifts is None:
+                diagnostic_integer_pre_shifts = np.zeros((batch, 2), dtype=np.int32)
+            if diagnostic_batch_corr is None:
+                diagnostic_batch_corr = np.ones(batch, dtype=np.float32)
+            if diagnostic_relion_preprocess_kwargs is None:
+                diagnostic_normalization_factors = np.ones(batch, dtype=np.float32)
+            else:
+                diagnostic_normalization_factors = np.asarray(
+                    diagnostic_relion_preprocess_kwargs["relion_normalization_factors"],
+                    dtype=np.float32,
+                )
+            diagnostic_image_mask, diagnostic_image_mask_mode = resolve_image_mask_for_half_preprocess(
+                experiment_dataset,
+                image_shape,
+                require_mask=bool(score_with_masked_images),
+            )
+            contribution_preprocess_operands = {
+                "integer_pre_shifts": diagnostic_integer_pre_shifts,
+                "batch_image_corrections": diagnostic_batch_corr,
+                "batch_scale_corrections": diagnostic_batch_scale,
+                "relion_preprocess_normalization_factors": diagnostic_normalization_factors,
+                "relion_cuda_preprocess": diagnostic_relion_cuda_preprocess,
+                "image_mask": diagnostic_image_mask,
+                "image_mask_mode": diagnostic_image_mask_mode,
+            }
         bucket_group_ids = (
             jnp.asarray(group_ids_np[image_indices], dtype=jnp.int32)
             if group_ids_np is not None
@@ -12506,6 +12727,172 @@ def compute_k_class_pass2_stats_sparse_fused(
                         relion_x_half=use_relion_x_half_mstep,
                         default_probs_sum_t=probs_sum_t_jax,
                     )
+            if (
+                bucket_device_signature_requested
+                and _bpref_contribution_class_enabled(class_index)
+            ):
+                capture = _materialize_k_class_capture_rows(
+                    image_indices=image_indices,
+                    target_particle_rows=target_particle_rows,
+                    per_image_inputs=per_image_inputs_by_class[class_index],
+                    class_bucket_arrays=arrays,
+                    compact_pair_arrays=(
+                        compact_pair_arrays_by_class[class_index]
+                        if bucket_uses_compact_pairs
+                        else None
+                    ),
+                    scores=scores_by_class[class_index],
+                    probs=(pair_probs if bucket_uses_compact_pairs else probs),
+                    reconstruction_mask=(
+                        reconstruction_mask if relion_fine_mstep_prune else None
+                    ),
+                    reconstruction_probs=(
+                        reconstruction_probs if relion_fine_mstep_prune else None
+                    ),
+                    bucket_translation_prior=bucket_translation_prior,
+                    n_fine_trans=n_fine_trans,
+                )
+                capture_rows_jax = jnp.asarray(capture["batch_rows"], dtype=jnp.int32)
+                capture_shifted_recon = shifted_recon_split[capture_rows_jax]
+                capture_ctf2_over_nv = ctf2_over_nv_recon[capture_rows_jax]
+                ordinary_capture_summed, ordinary_capture_ctf = compute_local_mstep_sums(
+                    jnp.asarray(capture["reconstruction_probs"]),
+                    capture_shifted_recon,
+                    capture_ctf2_over_nv,
+                    relion_x_half=use_relion_x_half_mstep,
+                    sequential_translation_reduction=False,
+                )
+                shadow_capture_summed, shadow_capture_ctf = compute_local_mstep_sums(
+                    jnp.asarray(capture["reconstruction_probs"]),
+                    capture_shifted_recon,
+                    capture_ctf2_over_nv,
+                    relion_x_half=use_relion_x_half_mstep,
+                    sequential_translation_reduction=True,
+                )
+                shadow_reduction_agreement = _require_bpref_reduction_shadow_agreement(
+                    ordinary_capture_summed,
+                    ordinary_capture_ctf,
+                    shadow_capture_summed,
+                    shadow_capture_ctf,
+                )
+                positive_rotation_rows = np.count_nonzero(
+                    np.sum(np.asarray(capture["reconstruction_probs"]), axis=-1) > 0,
+                    axis=1,
+                )
+                _validate_bpref_positive_rotation_rows(
+                    positive_rotation_rows,
+                    np.arange(capture["image_indices"].size, dtype=np.int64),
+                    device_signature_requested=True,
+                    winner_take_all=winner_take_all,
+                )
+                diagnostic_owners = _bpref_diagnostic_ownership_indices(
+                    capture["image_indices"],
+                    np.arange(capture["image_indices"].size, dtype=np.int64),
+                    device_signature_requested=True,
+                )
+                _validate_bpref_diagnostic_ownership(
+                    diagnostic_owners,
+                    device_signature_requested=True,
+                )
+                rotation_log_prior = np.asarray(capture["rotation_log_prior"])
+                translation_log_prior_capture = np.asarray(capture["translation_log_prior"])
+                preprior_scores = (
+                    np.asarray(capture["scores"])
+                    - rotation_log_prior[:, :, None]
+                    - translation_log_prior_capture[:, None, :]
+                )
+                selected_rows = capture["batch_rows"]
+
+                def _capture_preprocess_value(name):
+                    if not high_precision_operand_bundle:
+                        return None
+                    return np.asarray(contribution_preprocess_operands[name])[selected_rows]
+
+                _maybe_dump_bpref_contribution_rows(
+                    experiment_dataset=experiment_dataset,
+                    image_indices=capture["image_indices"],
+                    current_size=current_size,
+                    summed=shadow_capture_summed,
+                    ctf_probs=shadow_capture_ctf,
+                    rotations=capture["rotations"],
+                    actual_counts=capture["actual_counts"],
+                    rotation_indices=capture["rotation_indices"],
+                    fine_translations=fine_translations,
+                    scores=capture["scores"],
+                    preprior_scores=preprior_scores,
+                    probs=capture["probs"],
+                    rotation_log_prior=rotation_log_prior,
+                    translation_log_prior=translation_log_prior_capture,
+                    log_z=np.asarray(log_Z)[selected_rows],
+                    best_log_score=np.asarray(best_log_score_bucket)[selected_rows],
+                    reconstruction_probs=capture["reconstruction_probs"],
+                    reconstruction_mask=capture["reconstruction_mask"],
+                    reconstruction_sum_weight=np.sum(
+                        np.asarray(capture["probs"]).reshape(capture["image_indices"].size, -1),
+                        axis=1,
+                    ),
+                    reconstruction_threshold=np.zeros(capture["image_indices"].size, dtype=np.float64),
+                    candidate_mask=capture["candidate_mask"],
+                    high_precision_operand_bundle=high_precision_operand_bundle,
+                    raw_batch_data=(
+                        np.asarray(batch_data)[selected_rows]
+                        if high_precision_operand_bundle
+                        else None
+                    ),
+                    ctf_params=(
+                        np.asarray(ctf_params)[selected_rows]
+                        if high_precision_operand_bundle
+                        else None
+                    ),
+                    noise_variance_half=(
+                        noise_variance_half if high_precision_operand_bundle else None
+                    ),
+                    integer_pre_shifts=_capture_preprocess_value("integer_pre_shifts"),
+                    batch_image_corrections=_capture_preprocess_value("batch_image_corrections"),
+                    batch_scale_corrections=_capture_preprocess_value("batch_scale_corrections"),
+                    relion_preprocess_normalization_factors=_capture_preprocess_value(
+                        "relion_preprocess_normalization_factors"
+                    ),
+                    relion_cuda_preprocess=(
+                        contribution_preprocess_operands["relion_cuda_preprocess"]
+                        if high_precision_operand_bundle
+                        else False
+                    ),
+                    score_with_masked_images=score_with_masked_images,
+                    image_mask=(
+                        contribution_preprocess_operands["image_mask"]
+                        if high_precision_operand_bundle
+                        else None
+                    ),
+                    image_mask_mode=(
+                        contribution_preprocess_operands["image_mask_mode"]
+                        if high_precision_operand_bundle
+                        else "not-captured"
+                    ),
+                    voxel_size=experiment_dataset.voxel_size,
+                    ctf_mode=getattr(getattr(config.ctf, "mode", "legacy"), "name", "legacy"),
+                    ctf_dose_per_tilt=getattr(config.ctf, "dose_per_tilt", 0.0),
+                    ctf_angle_per_tilt=getattr(config.ctf, "angle_per_tilt", 0.0),
+                    disc_type=disc_type,
+                    projection_padding_factor=projection_padding_factor,
+                    reconstruction_padding_factor=reconstruction_padding_factor,
+                    use_relion_x_half_mstep=use_relion_x_half_mstep,
+                    winner_take_all=winner_take_all,
+                    max_r=float(current_size // 2) if use_window else None,
+                    window_indices=(
+                        relion_x_half_recon_indices
+                        if use_relion_x_half_mstep
+                        else recon_window_indices
+                    ),
+                    image_shape=image_shape,
+                    volume_shape=recon_volume_shape,
+                    shadow_only_mode=True,
+                    shadow_score_bitwise_equal=True,
+                    shadow_reduction_agreement=shadow_reduction_agreement,
+                    device_signature_active=True,
+                    class_index=class_index,
+                )
+
             if active_rows_precomputed:
                 pass
             elif bucket_uses_active_rows:

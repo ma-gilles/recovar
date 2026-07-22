@@ -7910,15 +7910,17 @@ def test_fused_sparse_k1_default_compact_pairs_matches_existing_sparse_path(monk
     np.testing.assert_array_equal(np.asarray(fused.class_assignments), np.zeros(n_images, dtype=np.int32))
 
 
-def test_fused_sparse_k_class_rejects_active_bpref_device_signature():
-    """Only the inactive numbered-iteration scope is valid on fused K-class pass 2."""
+def test_fused_sparse_k_class_capture_requires_companion_contribution_dump(monkeypatch):
+    """Fused K-class device capture fails closed without its operand bundle."""
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
     signature = inspect.signature(bucketed_mod.compute_k_class_pass2_stats_sparse_fused)
     assert "bpref_device_signature_active" in signature.parameters
 
-    with pytest.raises(RuntimeError, match="incompatible with fused sparse K-class pass-2"):
+    monkeypatch.setenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "/tmp/device")
+    monkeypatch.delenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", raising=False)
+    with pytest.raises(RuntimeError, match="requires RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR"):
         bucketed_mod.compute_k_class_pass2_stats_sparse_fused(
             None,
             np.zeros((2, 1), dtype=np.complex64),
@@ -7933,6 +7935,94 @@ def test_fused_sparse_k_class_rejects_active_bpref_device_signature():
             current_size=None,
             bpref_device_signature_active=True,
         )
+
+
+def test_fused_sparse_k_class_capture_is_observational(monkeypatch, tmp_path):
+    """Selected fused-K capture rows must not change authoritative accumulators."""
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.sampling import rotation_grid_size
+
+    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_ACTIVE_ROWS", "0")
+    monkeypatch.setenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", str(tmp_path / "device"))
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", str(tmp_path / "contributions"))
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES", "0")
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS", "2")
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION", "1")
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", "1")
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", "1")
+    monkeypatch.setattr(bucketed_mod, "_require_bpref_device_soft_particle_arm", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        bucketed_mod,
+        "_accumulate_adjoint_block_chunked",
+        lambda _flat_block, _flat_rotations, volume, **_kwargs: volume,
+    )
+
+    captures = []
+
+    def capture_rows(**kwargs):
+        captures.append(kwargs)
+
+    monkeypatch.setattr(bucketed_mod, "_maybe_dump_bpref_contribution_rows", capture_rows)
+
+    n_images = 2
+    n_classes = 2
+    n_coarse_rot = rotation_grid_size(0)
+    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 3, axis=0)
+    fine_parent = np.asarray([0, 1, 2], dtype=np.int64)
+    fine_translations = np.asarray([[0.0, 0.0], [0.25, 0.0]], dtype=np.float32)
+    fine_translation_parent = np.zeros(2, dtype=np.int32)
+    significant_by_class = [
+        [np.asarray([0, 1], dtype=np.int32), np.asarray([1, 2], dtype=np.int32)],
+        [np.asarray([0, 2], dtype=np.int32), np.asarray([0, 1], dtype=np.int32)],
+    ]
+    volumes = jnp.stack(
+        [
+            _hermitian_volume(VOLUME_SHAPE, seed=2027),
+            _hermitian_volume(VOLUME_SHAPE, seed=2029),
+        ]
+    )
+    common = dict(
+        experiment_dataset=MockDataset(n_images=n_images, seed=2039),
+        volumes=volumes,
+        mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0,
+        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        translations=np.asarray([[0.0, 0.0]], dtype=np.float32),
+        significant_sample_indices_by_class=significant_by_class,
+        rotation_log_priors_by_class=[None] * n_classes,
+        nside_level=0,
+        disc_type="linear_interp",
+        oversampling_order=0,
+        current_size=4,
+        half_spectrum_scoring=True,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+        fine_translations_override=fine_translations,
+        fine_translation_parent_override=fine_translation_parent,
+        relion_x_half_mstep=True,
+        relion_fine_mstep_prune_mode="joint",
+        adaptive_fraction=0.9,
+    )
+
+    plain = bucketed_mod.compute_k_class_pass2_stats_sparse_fused(
+        **common,
+        bpref_device_signature_active=False,
+    )
+    instrumented = bucketed_mod.compute_k_class_pass2_stats_sparse_fused(
+        **common,
+        bpref_device_signature_active=True,
+    )
+
+    assert captures
+    assert {capture["class_index"] for capture in captures} == {1}
+    assert all(np.array_equal(capture["image_indices"], np.asarray([0])) for capture in captures)
+    assert all(capture["shadow_only_mode"] is True for capture in captures)
+    np.testing.assert_array_equal(np.asarray(instrumented.Ft_y), np.asarray(plain.Ft_y))
+    np.testing.assert_array_equal(np.asarray(instrumented.Ft_ctf), np.asarray(plain.Ft_ctf))
 
 
 def test_sparse_kclass_fused_default_keeps_k1_on_single_class_path(monkeypatch):

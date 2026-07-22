@@ -191,13 +191,10 @@ def _validate_bpref_device_signature_sparse_route(
     active: bool,
     n_classes: int,
 ) -> None:
-    """Keep scoped BPref capture on the single-class sparse pass-2 route."""
+    """Fail closed unless scoped BPref capture uses a sparse pass-2 route."""
 
-    if bool(active) and _use_fused_sparse_k_class_pass2(n_classes):
-        raise RuntimeError(
-            "active BPref device signature scope is incompatible with "
-            "RECOVAR_SPARSE_KCLASS_FUSED; use the single-class sparse pass-2 route"
-        )
+    if bool(active) and int(n_classes) < 1:
+        raise RuntimeError("active BPref device signature scope requires at least one class")
 
 
 def _dense_pass2_rotation_fraction_threshold(n_classes: int) -> float | None:
@@ -3120,7 +3117,10 @@ def run_dense_k_class_em_adaptive(
         and sparse_pass2_requested
         and not firstiter_cc_pass2_only_best_coarse
         and not skip_significance_pruning
-        and n_classes == 1
+        and (
+            n_classes == 1
+            or _use_fused_sparse_k_class_pass2(n_classes)
+        )
         and bool(pass2_kwargs.get("mstep_relion_x_half", False))
     )
     fused_atomic_diagnostic_supported = bool(
@@ -3129,7 +3129,7 @@ def run_dense_k_class_em_adaptive(
     if fused_atomic_diagnostic_requested and not fused_atomic_diagnostic_supported:
         raise RuntimeError(
             "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS is qualified only for the sparse "
-            "first-iteration global-winner subset or explicitly scoped later K=1 "
+            "first-iteration global-winner subset or explicitly scoped later "
             "soft-posterior pass 2"
         )
     if bpref_device_signature_active:
