@@ -5329,3 +5329,34 @@ same-device equivalence or numerical noise.
 - The stable K=1 scorecard remains the progress baseline at 21/34 strict
   trajectory passes and 27/34 topology passes; K=4 evidence is tracked as a
   separate diagnostic until its suite is mature enough to freeze.
+
+# 2026-07-22: K=4 panel rebound to the actual restart boundary
+
+- Science `11494895` completed both RELION restart arms `0:0`, but the wrapper
+  exited `1:0` before RECOVAR because its standalone validator could not
+  import the pinned checkout's `scripts` package. Audits `11494896` and
+  `11494897` never ran and were canceled.
+- The run emitted 95 structurally valid class-2 artifacts at owners 48/47.
+  The missing target was class 2 in the original uninterrupted iteration-10
+  STAR but class 4 in both restart arms. Only 78/96 old-panel targets were
+  class-2 winners at the restart boundary, so the old panel was scientifically
+  aligned to the wrong boundary even though its owner join was correct.
+- Passive capture remained inert: classwise capture/control FSC-AUC is
+  `0.999999995192/0.999999994390/0.999999994139/0.999999992466`, all above
+  `0.999999`. Control/capture class, Euler, and translation winners are exact
+  for all 100,000 particles. This remains harness evidence, not parity
+  evidence; RECOVAR did not run.
+- The v3 panel requires class 2 in both completed restart arms, verifies their
+  internal part-ID order, then balances dispatch ownership 48/48. It retains
+  six categories of 16 from qualified pools of 20,385 agreements and 63
+  RELION-class-2/RECOVAR disagreements.
+- Fresh science `11495311` and after-ok audits `11495312`/`11495313` use the
+  corrected import contract and repeat-qualified panel. The science launcher
+  SHA-256 is
+  `ca8ebc48a23900b9d387cf63eeac49c52dd9edd8333ff8660fee32f514c68763`;
+  panel JSON SHA-256 is
+  `69119b4ed6ab6af53477beb6d76a4ced350bf115c09bfe088b39ba6aa20e6973`.
+- Failure classification:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_pair_rankfix_absiter10_partowner48_class2_prescatter_ac5177d2_20260722T080000Z/provenance/FAILURE_RESTART_BOUNDARY_PANEL_AND_IMPORT_20260722.md`.
+- Fresh submission provenance:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_restart_repeatqual_owner48_class2_prescatter_ac5177d2_20260722T124500Z/provenance/SUBMISSION_20260722.md`.
