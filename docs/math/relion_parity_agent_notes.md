@@ -5887,3 +5887,39 @@ same-device equivalence or numerical noise.
 - This is a localization result, not a strict pass.  Frozen snapshot
   `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
   34/34 evaluated.
+
+# 2026-07-24: case 4 particle 6322 is an exact RELION coarse-score tie
+
+- Same-H100 full-grid job `11562639` completed `0:0` in `01:24:39` on
+  `GPU-f6cfb4eb-6f8b-0df7-4ec9-8ec065affa8f`.  It ran RELION and RECOVAR
+  sequentially from fixed case-4 bytes at iteration 1/current size 56.
+- The fail-closed comparison asserts 1,069,056 candidates per engine,
+  1,069,056 common identities, Jaccard 1.0, and no duplicate or engine-only
+  keys.  Aligned score correlation is `0.9999999999954908`; centered
+  RECOVAR-minus-RELION score difference has mean `-3.1083669e-7`, p95
+  absolute `5.1409006e-7`, and maximum absolute `1.4603138e-6`.
+- RELION selects mapped key `(20057, 8)` and RECOVAR selects `(25798, 0)`.
+  Both have the exact same top RELION float32 score
+  `0.2807506024837494`; the exact RELION tie count is two.  RECOVAR scores
+  the pair `0.2807507812976837` and `0.28075096011161804`, separating them
+  by only `1.7881393432617188e-7`.
+- The earlier 150.7523-degree winner exception is therefore localized to
+  coarse float32 reduction of an exact RELION tie.  This supports the
+  existing bounded 128-lane top-two re-reduction and lower-pose-ID tie
+  resolution.  It rejects broad scoring, projector, reconstruction, tau2,
+  and posterior-threshold changes.
+- The official comparison JSON SHA-256 is
+  `2e3368c5c03db4d0eea9519c746be6c4d4b26f8b8b0f11e98420ee6d878ebcdd`.
+  Durable result:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it1_p6322_coarsegrid_7a4120c1_20260724T031102Z/provenance/RESULT_11562639.md`.
+- Frozen-fixture case-4 intervention jobs are setup `11563826`, science
+  `11563827`, summary `11563828`, and unchanged strict audit `11563842`.
+  They use clean detached source `c74beea4`, the preserved real initial
+  projector, tree-rescore margin `4e-6`, grid correction unset/off, and no
+  forced final-all-data iteration.
+- CPU targeted tests initially exposed backend contraction beyond a one-ULP
+  NumPy logical replay.  Exact H100 test `11563940` passed the CUDA one-ULP
+  contract (`1 passed in 2.68s`); the backend-aware CPU gate and related
+  tests pass `13 passed in 7.89s`.
+- The fixed score remains 25/34 strict, 31/34 exact topology, and 34/34
+  evaluated until the new science and both strict audits pass.

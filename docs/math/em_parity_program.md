@@ -9481,3 +9481,42 @@ The durable run root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it1_native_relion_bpref_8a3737af_20260724T050935Z`.
 The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
 evaluated.
+
+### Case-4 coarse-grid flip is an exact RELION float32 tie
+
+Same-H100 job `11562639` completed `0:0` in `01:24:39` on physical GPU
+`GPU-f6cfb4eb-6f8b-0df7-4ec9-8ec065affa8f`.  It captured the complete
+first-iteration/current-size-56 coarse score grid for fixed case-4 original
+particle 6322 from patched RELION and RECOVAR sequentially.  The comparison
+is topology-complete: each engine has 1,069,056 candidates, all 1,069,056
+mapped identities are common, Jaccard is 1.0, and there are no duplicate or
+engine-only keys.
+
+The score surfaces are otherwise closed.  Their aligned correlation is
+`0.9999999999954908`; centered RECOVAR-minus-RELION differences have mean
+`-3.108366945831097e-7`, p95 absolute `5.140900611877441e-7`, and maximum
+absolute `1.4603137969970703e-6`.  The discrete split is entirely at the top:
+RELION selects mapped key `(20057, 8)` while RECOVAR selects `(25798, 0)`.
+RELION scores both hypotheses at exactly `0.2807506024837494`; no candidate
+scores higher and the exact top-score tie count is two.  RECOVAR scores the
+same pair at `0.2807507812976837` and `0.28075096011161804`, respectively,
+only `1.7881393432617188e-7` apart.
+
+Thus the previously observed 150.7523-degree fine-subset routing flip is
+caused by coarse float32 reduction resolving an exact RELION tie, not missing
+candidate topology.  The evidence supports the existing bounded 128-lane
+top-two re-reduction and stable lower-pose-ID tie resolution.  It supports no
+unbounded scoring, projector, reconstruction, tau2, or posterior-threshold
+change.  The official comparison JSON SHA-256 is
+`2e3368c5c03db4d0eea9519c746be6c4d4b26f8b8b0f11e98420ee6d878ebcdd`;
+the durable result is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it1_p6322_coarsegrid_7a4120c1_20260724T031102Z/provenance/RESULT_11562639.md`.
+
+The frozen-fixture intervention is running from clean detached commit
+`c74beea4` with the preserved real initial projector and
+`RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN=4e-6`: setup `11563826`,
+science `11563827`, matrix summary `11563828`, and unchanged strict
+FSC/topology audit `11563842`.  Grid correction and forced final-all-data
+after non-convergence remain unset.  Until those audits pass, snapshot
+`strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
+34/34 evaluated.

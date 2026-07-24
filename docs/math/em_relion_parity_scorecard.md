@@ -69,7 +69,20 @@ above.  A failing intervention remains unchecked and does not change the
 
 | Done | Case | Commit/intervention | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
+| [ ] | `k1-04` | `c74beea4`; direct-real initial projector + bounded firstiter top-2 tree rescore | pending | pending | — | — | setup 11563826; science 11563827; summary 11563828; strict audit 11563842 |
 | [ ] | `k1-24` | `b826bc52`; direct-real initial projector + bounded firstiter top-2 tree rescore | fail | pass | 0.994801463 | +0.008173125 | setup 11562037; science 11562038; summary 11562039; strict audit 11562082 |
+
+The case-4 intervention is motivated by the complete same-H100
+first-iteration coarse-grid diagnostic `11562639`, which completed `0:0`.
+All 1,069,056 RELION and RECOVAR candidate identities agree.  The aligned
+score correlation is `0.9999999999954908`, and the centered score difference
+has p95 absolute `5.1409006e-7` and maximum absolute `1.4603138e-6`.
+RELION's two best hypotheses have exactly equal float32 scores
+(`0.2807506024837494`), while RECOVAR separates them by only
+`1.7881393432617188e-7` and selects the opposite 150.7523-degree winner.
+This supports the bounded RELION 128-lane re-reduction; it is not yet a
+fixed-suite pass.  Comparison JSON SHA-256:
+`2e3368c5c03db4d0eea9519c746be6c4d4b26f8b8b0f11e98420ee6d878ebcdd`.
 
 The case-24 intervention is effectively exact for the first three numbered
 maps (merged cross-engine FSC-AUC `0.999999999973`,
