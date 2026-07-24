@@ -217,6 +217,23 @@ SHA-256 is
 RECOVAR then passed checkout, CUDA-device, and RELION-binding provenance gates
 on the same allocation.  Science and both dependent auditors remain pending;
 this does not change the frozen K=1 score.
+
+Frozen case 5 has also reached its first RECOVAR boundary under the unchanged
+direct-real-reference plus bounded `4e-6` top-two intervention.  The rescore
+changed four of 100,000 winners (`3/1` by half), which cannot be exactly the
+accepted baseline exception set (`1/2` by half).  CPU FSC audit `11567287`
+shows that iteration-1 merged cross-engine FSC-AUC improves from
+`0.999999997357` to `0.999999999798`, while merged GT FSC-AUC moves from
+`0.103266845326` to `0.103266884384`, toward RELION's `0.103266904543`.
+This is positive first-boundary evidence, not a full-case pass; science
+`11564053` and strict audit `11564062` remain active or dependency-gated.
+
+The same-GPU K=4 science job `11565045` has completed iterations 1--4 with
+sizes `38,38,42,56`, resolutions `60.44,49.45,30.22,27.20` Angstrom, and
+iteration-4 Pmax `0.597798849`; iteration 5 starts at size 60.  The schedule
+matches the three prior diagnostic trajectories through this boundary.
+Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,
+so this is not yet K=4 acceptance.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

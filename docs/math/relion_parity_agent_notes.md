@@ -6076,3 +6076,52 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_case22_tree_b1d44427_20260724T142000Z`;
   both contain `SAFE_TO_DELETE`.
 - This is a pending full-case generalization arm, not a score change.
+
+# 2026-07-24: case 5 first boundary improves under the bounded intervention
+
+- Frozen-fixture science `11564053` completed RECOVAR iteration 1 with the
+  RELION schedule boundary: current size 56, 30.22 Angstrom resolution, Pmax
+  1.0, and next size 56.  The direct float64 real-reference handoff was active.
+- The bounded `4e-6` top-two tree rescore examined all 100,000 particles and
+  changed four winners: half 1 examined 50,059, found 75 ambiguous, and changed
+  three; half 2 examined 49,941, found 79 ambiguous, and changed one.  The
+  accepted baseline's three assignment exceptions have half-set distribution
+  one/two, so the intervention's three/one changes cannot be exactly that
+  previously reported exception set.
+- CPU FSC audit `11567287` completed `0:0` in 52 seconds with 2,104,548 KiB
+  maximum RSS.  At numbered iteration 1, merged RECOVAR-versus-RELION FSC-AUC
+  improves from the frozen old row's `0.9999999973565671` to
+  `0.9999999997976555`.  Half-1/half-2 values improve from
+  `0.9999999935108590`/`0.9999999983306909` to
+  `0.9999999997257697`/`0.9999999995988572`.
+- Merged GT FSC-AUC moves from `0.10326684532558558` to
+  `0.10326688438429595`, toward RELION's `0.103266904543226`.  The metric is
+  shellwise FSC/FSC-AUC only; correlation was not computed.
+- Audit stdout and launcher SHA-256 values are
+  `2e0e47f426284ed533f4b48e6b945a9bc715866ea0ec6d13efeb5c231339d890`
+  and `05b06cfba9446797f738e179734069d4c028b359b642898a979ac91b6e2f1091`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case5_iter1_analysis_20260724`.
+  Pre-audit `11567277` failed before comparison on a missing `scripts` import
+  path and produced no scientific result.
+- This is a positive first-boundary generalization result, not a full-case
+  acceptance.  Science `11564053` and strict audit `11564062` remain active or
+  dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,
+  31/34 exact topology, and 34/34 evaluated.
+
+# 2026-07-24: K=4 same-GPU trajectory reaches iteration 4
+
+- Source-bound science `11565045` runs commit
+  `9dcd709b56a28a6f361806b57f5b20aaad3ebeed` on physical A100
+  `GPU-6f45f415-9d0b-d562-9ff3-c9fb7bc53aa7` after the accepted inert RELION
+  control/capture pair.
+- RECOVAR completed iterations 1--4 with current sizes
+  `38,38,42,56`, resolutions `60.44,49.45,30.22,27.20` Angstrom, and Pmax
+  `1.0,0.069455872,0.265973233,0.597798849`; iteration 5 starts at size 60.
+  That schedule exactly matches the three prior diagnostic trajectories
+  through this boundary.  Their iteration-4 Pmax values span
+  `0.597791747`--`0.597796751`, placing the current value within
+  `7.102e-6`.
+- The science job is healthy, while vector audit `11565121` and independent
+  scalar audit `11565131` remain dependency-gated.  No K=4 acceptance or K=1
+  score change is claimed before those fail-closed auditors finish.
