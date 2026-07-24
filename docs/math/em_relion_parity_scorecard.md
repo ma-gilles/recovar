@@ -159,6 +159,16 @@ auditors (`11565048`, `11565050`) were canceled at zero runtime after preflight
 found the same invalid per-class nonempty assumption in their comparators.
 The graph reruns both RELION arms and RECOVAR sequentially on one physical
 A100 and does not promote outputs from any canceled graph or auditor.
+
+The replacement RELION control/capture pair passed its fail-closed inertness
+gate.  Dispatch logs are bitwise equal; all 96 particles were captured with
+the expected 48/48 MPI ownership split; and the four class-map normalized
+FSC-AUC values are at least `0.999999992551`.  The accepted inertness JSON
+SHA-256 is
+`9c1cf28f563d0f4a4e9e202cf6d0a3af1847012d43c45c3089d8e6fafc5c85f5`.
+RECOVAR then passed checkout, CUDA-device, and RELION-binding provenance gates
+on the same allocation.  Science and both dependent auditors remain pending;
+this does not change the frozen K=1 score.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
