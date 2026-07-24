@@ -1974,6 +1974,7 @@ def _score_kclass_firstiter_cc_pass2(
         significance_image_batch_size=firstiter_significance_image_batch_size,
         significance_rotation_block_size=firstiter_significance_rotation_block_size,
         coarse_healpix_order=int(current_healpix_order),
+        coarse_rotation_ids=coarse_rotation_ids,
         oversampling_order=int(adaptive_os_local),
         fine_mstep_rotations_override=(fine_mstep_rot if firstiter_sparse_pass2 else None),
         bpref_device_signature_active=bpref_device_signature_active,

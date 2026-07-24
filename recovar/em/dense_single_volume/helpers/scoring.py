@@ -32,6 +32,34 @@ def _relion_coarse_128lane_float32_reduce(values):
 
 
 @jax.jit
+def _relion_coarse_cc_atomic_score_from_components(numerator, norm):
+    """Apply RELION's 128 identical atomic additions to coarse CC scores.
+
+    ``cuda_kernel_diff2_CC_coarse`` deliberately has every one of its 128
+    threads atomically add the same reduced score divided by 128.  The
+    repeated float32 rounding is observable at near ties and is not equivalent
+    to multiplying one rounded contribution by 128.
+    """
+
+    numerator = jnp.asarray(numerator, dtype=jnp.float32)
+    norm = jnp.asarray(norm, dtype=jnp.float32)
+    contribution = numerator / (
+        jnp.asarray(128.0, dtype=jnp.float32)
+        * jnp.sqrt(jnp.maximum(norm, jnp.asarray(1e-30, dtype=jnp.float32)))
+    )
+
+    def add_once(_, accumulated):
+        return accumulated + contribution
+
+    return jax.lax.fori_loop(
+        0,
+        128,
+        add_once,
+        jnp.zeros_like(contribution),
+    )
+
+
+@jax.jit
 def _relion_coarse_normalized_cc_rescore(
     shifted_candidates,
     score_weight_candidates,
@@ -56,7 +84,7 @@ def _relion_coarse_normalized_cc_rescore(
     norm_pixels = score_weight * (jnp.abs(projection) ** 2) * weights
     numerator = _relion_coarse_128lane_float32_reduce(numerator_pixels)
     norm = _relion_coarse_128lane_float32_reduce(norm_pixels)
-    return numerator / jnp.sqrt(jnp.maximum(norm, jnp.asarray(1e-30, dtype=jnp.float32)))
+    return _relion_coarse_cc_atomic_score_from_components(numerator, norm)
 
 
 def _score_rotation_block(

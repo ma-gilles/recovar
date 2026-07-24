@@ -11304,6 +11304,7 @@ class TestRelionModeSmokeTest:
             "max_margin": 4e-6,
             "examined_images": dataset.n_units,
             "ambiguous_images": dataset.n_units,
+            "exact_score_ties": 0,
             "winner_changes": dataset.n_units,
         }
 

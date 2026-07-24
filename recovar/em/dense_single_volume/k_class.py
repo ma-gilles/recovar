@@ -1565,6 +1565,8 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         return_class_best=True,
         return_class_second=bool(os.environ.get("RECOVAR_GLOBAL_WINNER_SUMMARY_PATH", "").strip()),
         debug_iteration=engine_kwargs.get("debug_iteration"),
+        coarse_healpix_order=engine_kwargs.get("coarse_healpix_order"),
+        coarse_rotation_ids=engine_kwargs.get("coarse_rotation_ids"),
     )[-1]
 
     from recovar.em.global_winner_summary import maybe_dump_global_winner_summary
@@ -2797,6 +2799,7 @@ def run_dense_k_class_em_adaptive(
     coarse_current_size: int | None = None,
     fine_current_size: int | None = None,
     coarse_healpix_order: int | None = None,
+    coarse_rotation_ids=None,
     oversampling_order: int | None = None,
     coarse_translation_log_prior=None,
     coarse_rotation_log_prior=None,
@@ -2973,6 +2976,8 @@ def run_dense_k_class_em_adaptive(
             coarse_current_size if coarse_current_size is not None else fine_current_size
         )
         coarse_probe_kwargs["debug_iteration"] = debug_iteration
+        coarse_probe_kwargs["coarse_healpix_order"] = _resolved_coarse_healpix_order()
+        coarse_probe_kwargs["coarse_rotation_ids"] = coarse_rotation_ids
         with _DenseScoreDumpPhaseLabel("coarse"):
             with nvtx.annotate("kclass.adaptive.coarse_probe", color="yellow", domain=NVTX_DOMAIN_EM):
                 coarse_result = _run_dense_k_class_score_probe(

@@ -35,6 +35,19 @@ def _production_inputs():
     return shifted, score_weight, projections, half_weight
 
 
+def _relion_coarse_atomic_score(numerator, norm):
+    """Independent replay of all 128 identical coarse-kernel atomic adds."""
+
+    contribution = np.float32(
+        np.float32(numerator)
+        / (np.float32(128.0) * np.sqrt(np.float32(norm)))
+    )
+    accumulated = np.float32(0.0)
+    for _ in range(128):
+        accumulated = np.float32(accumulated + contribution)
+    return accumulated
+
+
 def test_recovar_logical_replay_matches_production_normalized_cc_score():
     pytest.importorskip("jax")
     import jax.numpy as jnp
@@ -117,6 +130,7 @@ def test_jax_relion_coarse_rescore_matches_numpy_replay():
 
     from recovar.em.dense_single_volume.helpers.scoring import (
         _relion_coarse_128lane_float32_reduce,
+        _relion_coarse_cc_atomic_score_from_components,
         _relion_coarse_normalized_cc_rescore,
     )
 
@@ -158,7 +172,7 @@ def test_jax_relion_coarse_rescore_matches_numpy_replay():
         )
         numerator = relion_128lane_float32_reduce(contributions.numerator)
         norm = relion_128lane_float32_reduce(contributions.norm)
-        expected.append(np.float32(numerator / np.sqrt(np.float32(norm))))
+        expected.append(_relion_coarse_atomic_score(numerator, norm))
     expected = np.asarray(expected, dtype=np.float32)
     score_ulp_error = np.abs(
         actual.view(np.uint32).astype(np.int64) - expected.view(np.uint32).astype(np.int64)
@@ -172,6 +186,55 @@ def test_jax_relion_coarse_rescore_matches_numpy_replay():
         # CPU XLA may contract those operations differently. The explicit
         # 128-lane reducer above remains bit-exact on every backend.
         np.testing.assert_allclose(actual, expected, rtol=3e-6, atol=3e-7)
+
+    # Frozen case-4 cross-winner components: direct division differs by up
+    # to six ULPs, while RELION's 128 atomic additions collapse both scores
+    # to the same bit pattern.
+    frozen_numerator = jnp.asarray(
+        [0.09698139131069183, 0.09905915707349777],
+        dtype=jnp.float32,
+    )
+    frozen_norm = jnp.asarray(
+        [0.12128135561943054, 0.12653392553329468],
+        dtype=jnp.float32,
+    )
+    frozen_actual = np.asarray(
+        _relion_coarse_cc_atomic_score_from_components(
+            frozen_numerator,
+            frozen_norm,
+        ),
+        dtype=np.float32,
+    )
+    np.testing.assert_array_equal(
+        frozen_actual.view(np.uint32),
+        np.asarray([1049531574, 1049531574], dtype=np.uint32),
+    )
+
+
+def test_relion_coarse_exact_tie_uses_direction_major_flat_order():
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _relion_coarse_pose_tie_break_keys,
+        _select_relion_coarse_rescore_winner_slots,
+    )
+
+    candidate_pose_ids = np.asarray([[955081, 977030]], dtype=np.int64)
+    keys = _relion_coarse_pose_tie_break_keys(
+        candidate_pose_ids,
+        n_trans=29,
+        healpix_order=3,
+    )
+    np.testing.assert_array_equal(
+        keys,
+        np.asarray([[943626, 928339]], dtype=np.int64),
+    )
+    slots, tie_count = _select_relion_coarse_rescore_winner_slots(
+        np.asarray([[0.27847832441329956, 0.27847832441329956]], dtype=np.float32),
+        candidate_pose_ids,
+        n_trans=29,
+        healpix_order=3,
+    )
+    np.testing.assert_array_equal(slots, np.asarray([1], dtype=np.int32))
+    assert tie_count == 1
 
 
 def test_reduction_order_can_flip_near_tie_while_float64_agrees():

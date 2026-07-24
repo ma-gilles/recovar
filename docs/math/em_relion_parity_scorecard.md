@@ -267,6 +267,36 @@ and
 For identical reference/Euler inputs, projector implementation is therefore
 not the case-4 limiter; the remaining first-boundary branch is Euler
 construction/handoff or fused normalized-CC arithmetic/reduction.
+
+Synchronized RELION coarse-component job `11577336` and dependent audit
+`11577341` close that remaining case-4 branch.  RELION's dumped numerator and
+norm are bitwise identical to the RECOVAR hybrid projection/image replay for
+both cross-winner hypotheses.  The CUDA source has all 128 threads atomically
+add the same reduced score divided by 128; replaying those 128 sequential
+float32 additions produces `0.27847832441329956` for both candidates,
+bitwise equal to RELION.  RELION's direction-major flat keys are `943626` and
+`928339`, so the exact tie selects RECOVAR pose ID `977030`, the observed
+RELION winner.  Across all 1,069,056 candidates, the atomic replay has zero
+maximum absolute score error; 1,069,055 are bitwise equal and the sole
+remaining bit mismatch is positive versus negative zero.
+
+The production fix reproduces that atomic accumulation and tie order only
+inside the bounded first-iteration normalized-CC top-two replay.  A frozen
+A100 replay of the captured case-4 components selects pose `977030` and is
+stored under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_atomic_fix_replay_20260724T225000Z`.
+Component-result, analyzer, frozen-replay JSON, and replay-script SHA-256
+values are
+`65b9a8a74a581eb504a012251dc1a67f046e2abc6b7ef89820104dfeb54ea874`,
+`f6a4e991deff3b3cfcd72cba565fd5ee1fa3f35b43528840d4b866888e4a49a8`,
+`f5a685c4ec943c81029372cb208fb733ff28fe8fdf0825b8c6378edce0e3f54c`,
+and
+`a82f8d6ca89b3f7693576a823ba6e8ed45d3bf3140925f92dec4abcbce4ed522`.
+This is an exact arithmetic/winner regression, not a correlation acceptance
+or a completed autonomous trajectory.  The frozen score remains 25/34 strict,
+31/34 topology, and 34/34 evaluated until a fixed-fixture rerun passes the
+unchanged FSC/FSC-AUC and topology gates.
+
 Fine-pass capture `11572658` remains queued for particles `38594` and `65070`.
 The frozen score remains 25/34 strict, 31/34 topology, and 34/34 evaluated.
 

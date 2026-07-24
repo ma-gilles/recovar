@@ -6654,6 +6654,61 @@ same-device equivalence or numerical noise.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 
+# 2026-07-24: RELION's 128 atomic additions close the case-4 coarse tie
+
+- Synchronized same-H100 RELION component job `11577336` completed `0:0` in
+  `01:04:58` with 6,416,520 KiB maximum RSS.  Dependent fail-closed audit
+  `11577341` completed `0:0` in 13 seconds with 637,100 KiB maximum RSS.
+  The captured numerator and norm are bitwise equal to RECOVAR's hybrid
+  projected-reference/image replay for both cross-winner candidates:
+  `(0.09698139131069183,0.12128135561943054)` for pose `955081` and
+  `(0.09905915707349777,0.12653392553329468)` for pose `977030`.
+- RELION source `cuda_kernel_diff2_CC_coarse` has every one of its 128
+  threads atomically add the same reduced normalized-CC contribution divided
+  by 128.  A direct ratio retains a five-ULP candidate split.  Replaying all
+  128 sequential float32 additions collapses both scores to identical bits:
+  `0.27847832441329956`, uint32 `1049531574`, exactly matching the captured
+  RELION scores.
+- RELION resolves that tie in direction-major flat order.  RECOVAR pose IDs
+  `955081,977030` map to RELION keys `943626,928339`; the smaller key selects
+  pose `977030`, which is the observed RELION winner.  Across the complete
+  1,069,056-candidate grid, atomic replay has zero maximum absolute error and
+  1,069,055 bitwise matches.  The only bit mismatch is `+0.0` versus `-0.0`.
+  The accepted classification is
+  `relion_atomic_accumulation_closes_cross_winner_tie`.
+- Production scoring now reproduces the 128 sequential additions, and exact
+  ties use RELION's direction-major coarse key.  The change is confined to
+  the existing bounded first-iteration normalized-CC top-two rescore.
+  Independent frozen-component regressions pin the two component pairs,
+  uint32 score bits, tie keys, and winner.
+- A production A100 replay using the persisted case-4 capture selects pose
+  `977030` with tied score bits.  Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_atomic_fix_replay_20260724T225000Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_atomic_cc_fix_20260724T224500Z`;
+  both contain `SAFE_TO_DELETE`.  Frozen replay JSON/script SHA-256 values are
+  `f5a685c4ec943c81029372cb208fb733ff28fe8fdf0825b8c6378edce0e3f54c`
+  and
+  `a82f8d6ca89b3f7693576a823ba6e8ed45d3bf3140925f92dec4abcbce4ed522`.
+- Component result/analyzer SHA-256 values are
+  `65b9a8a74a581eb504a012251dc1a67f046e2abc6b7ef89820104dfeb54ea874`
+  and
+  `f6a4e991deff3b3cfcd72cba565fd5ee1fa3f35b43528840d4b866888e4a49a8`.
+  RELION weight, norm, and captured-score SHA-256 values are
+  `fcaad1ed992d3721f976ac79c3de21ccd9131e7b7a936463c11adb14425cc224`,
+  `a418076d3303e80162b1a0df9b8031ff4107376fa5dd3901256d0a563e0478b7`,
+  and
+  `4340b5b7b015ab1f9a94b73b4c069b0d5d95273e0973f0e28b682be8397186e9`.
+  RELION component and runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_p5234_cc_components_sync_20260724T165500Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case04_p5234_cc_components_sync_20260724T165500Z`;
+  both contain `SAFE_TO_DELETE`.
+- Euler-operand diagnostic `11578677` was canceled before execution at zero
+  runtime because this exact component/source closure made it unnecessary.
+  The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
+  evaluated until a full fixed-fixture case-4 rerun passes unchanged gates.
+
 # 2026-07-24: frozen case 7 tests firstiter generalization
 
 - Case 7 is a strict-FSC failure with exact topology already passing.  Its

@@ -74,6 +74,95 @@ def _firstiter_cc_tree_top2_rescore_max_margin() -> float | None:
     return margin
 
 
+def _infer_relion_coarse_healpix_order(n_rotations: int) -> int | None:
+    """Infer a complete RELION coarse-grid order, or return ``None``."""
+
+    from recovar.em.sampling import rotation_grid_size
+
+    for order in range(9):
+        if int(rotation_grid_size(order)) == int(n_rotations):
+            return order
+    return None
+
+
+def _relion_coarse_pose_tie_break_keys(
+    candidate_pose_ids,
+    *,
+    n_trans: int,
+    healpix_order: int,
+    coarse_rotation_ids=None,
+):
+    """Map RECOVAR pose ids to RELION's direction-major coarse order."""
+
+    from recovar.em.sampling import rotation_grid_n_in_planes
+
+    candidate_pose_ids = np.asarray(candidate_pose_ids, dtype=np.int64)
+    if candidate_pose_ids.ndim != 2:
+        raise ValueError(
+            f"candidate_pose_ids must have shape (n_rows, n_candidates), got {candidate_pose_ids.shape}",
+        )
+    n_trans = int(n_trans)
+    if n_trans <= 0:
+        raise ValueError(f"n_trans must be positive, got {n_trans}")
+    local_rotation_ids = candidate_pose_ids // n_trans
+    if coarse_rotation_ids is None:
+        canonical_rotation_ids = local_rotation_ids
+    else:
+        coarse_rotation_ids = np.asarray(coarse_rotation_ids, dtype=np.int64).reshape(-1)
+        if np.any(local_rotation_ids < 0) or np.any(local_rotation_ids >= coarse_rotation_ids.size):
+            raise ValueError("candidate pose references a rotation outside coarse_rotation_ids")
+        canonical_rotation_ids = coarse_rotation_ids[local_rotation_ids]
+
+    healpix_order = int(healpix_order)
+    n_directions = 12 * (4**healpix_order)
+    n_psi = int(rotation_grid_n_in_planes(healpix_order))
+    n_rotations = n_directions * n_psi
+    if np.any(canonical_rotation_ids < 0) or np.any(canonical_rotation_ids >= n_rotations):
+        raise ValueError(
+            "canonical coarse rotation ids must index the complete "
+            f"RELION order-{healpix_order} grid of size {n_rotations}",
+        )
+    psi_ids = canonical_rotation_ids // n_directions
+    direction_ids = canonical_rotation_ids % n_directions
+    relion_rotation_ids = direction_ids * n_psi + psi_ids
+    return relion_rotation_ids * n_trans + candidate_pose_ids % n_trans
+
+
+def _select_relion_coarse_rescore_winner_slots(
+    scores,
+    candidate_pose_ids,
+    *,
+    n_trans: int,
+    healpix_order: int | None,
+    coarse_rotation_ids=None,
+):
+    """Select maxima, resolving exact score ties in RELION's flat order."""
+
+    scores = np.asarray(scores, dtype=np.float32)
+    candidate_pose_ids = np.asarray(candidate_pose_ids, dtype=np.int64)
+    if scores.shape != candidate_pose_ids.shape or scores.ndim != 2:
+        raise ValueError(
+            "scores and candidate_pose_ids must have the same "
+            f"(n_rows, n_candidates) shape, got {scores.shape} and {candidate_pose_ids.shape}",
+        )
+    maxima = np.max(scores, axis=1, keepdims=True)
+    tied = scores == maxima
+    exact_ties = np.count_nonzero(np.sum(tied, axis=1) > 1)
+    if healpix_order is None:
+        # Compatibility for synthetic/non-HEALPix callers. Production
+        # RELION-parity dispatch always supplies or infers the coarse order.
+        tie_break_keys = candidate_pose_ids
+    else:
+        tie_break_keys = _relion_coarse_pose_tie_break_keys(
+            candidate_pose_ids,
+            n_trans=n_trans,
+            healpix_order=healpix_order,
+            coarse_rotation_ids=coarse_rotation_ids,
+        )
+    masked_keys = np.where(tied, tie_break_keys, np.iinfo(np.int64).max)
+    return np.argmin(masked_keys, axis=1).astype(np.int32), int(exact_ties)
+
+
 def _dense_projection_scale(image_shape) -> float:
     """Match the dense E-step projection scaling used by the shared helper."""
 
@@ -1384,6 +1473,8 @@ def _compute_k_class_significance_batched(
     return_class_best: bool = False,
     return_class_second: bool = False,
     debug_iteration: int | None = None,
+    coarse_healpix_order: int | None = None,
+    coarse_rotation_ids=None,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
 
@@ -1452,6 +1543,16 @@ def _compute_k_class_significance_batched(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     n_half = int(image_shape[0] * (image_shape[1] // 2 + 1))
+    if coarse_rotation_ids is not None:
+        coarse_rotation_ids = np.asarray(coarse_rotation_ids, dtype=np.int64).reshape(-1)
+        if coarse_rotation_ids.shape != (n_rot,):
+            raise ValueError(
+                f"coarse_rotation_ids must have shape ({n_rot},), got {coarse_rotation_ids.shape}",
+            )
+    if coarse_healpix_order is None:
+        coarse_healpix_order = _infer_relion_coarse_healpix_order(n_rot)
+    elif int(coarse_healpix_order) < 0:
+        raise ValueError(f"coarse_healpix_order must be non-negative, got {coarse_healpix_order}")
 
     use_relion_projector = relion_projector_half is not None
     if use_relion_projector and relion_projector_r_max is None:
@@ -1800,6 +1901,7 @@ def _compute_k_class_significance_batched(
     tree_rescore_examined = 0
     tree_rescore_ambiguous = 0
     tree_rescore_winner_changes = 0
+    tree_rescore_exact_ties = 0
 
     start_idx = 0
     image_indices = np.arange(n_images)
@@ -2200,13 +2302,17 @@ def _compute_k_class_significance_batched(
                     half_weights_windowed if use_window else half_weights,
                     tree_rescore_fftw_order,
                 )
-                rescored_winner_slot = np.asarray(
-                    jnp.argmax(rescored_candidates, axis=1),
-                    dtype=np.int32,
+                rescored_scores_np = np.asarray(rescored_candidates, dtype=np.float32)
+                rescored_winner_slot, exact_ties = _select_relion_coarse_rescore_winner_slots(
+                    rescored_scores_np,
+                    candidate_pose_ids,
+                    n_trans=n_trans,
+                    healpix_order=coarse_healpix_order,
+                    coarse_rotation_ids=coarse_rotation_ids,
                 )
+                tree_rescore_exact_ties += exact_ties
                 row_ids = np.arange(ambiguous_rows.size, dtype=np.int32)
                 rescored_runner_slot = 1 - rescored_winner_slot
-                rescored_scores_np = np.asarray(rescored_candidates, dtype=np.float32)
                 rescored_winner_pose = candidate_pose_ids[row_ids, rescored_winner_slot]
                 rescored_runner_pose = candidate_pose_ids[row_ids, rescored_runner_slot]
                 rescored_winner_score = rescored_scores_np[row_ids, rescored_winner_slot]
@@ -2433,12 +2539,15 @@ def _compute_k_class_significance_batched(
             "max_margin": float(tree_rescore_max_margin),
             "examined_images": int(tree_rescore_examined),
             "ambiguous_images": int(tree_rescore_ambiguous),
+            "exact_score_ties": int(tree_rescore_exact_ties),
             "winner_changes": int(tree_rescore_winner_changes),
         }
         logger.warning(
-            "RELION coarse-tree top-2 rescore complete: examined=%d ambiguous=%d winner_changes=%d",
+            "RELION coarse-tree top-2 rescore complete: "
+            "examined=%d ambiguous=%d exact_ties=%d winner_changes=%d",
             tree_rescore_examined,
             tree_rescore_ambiguous,
+            tree_rescore_exact_ties,
             tree_rescore_winner_changes,
         )
     return sig_rot_any, n_sig_all, hard_assignment, class_assignment, significant_sample_indices, full_stats
