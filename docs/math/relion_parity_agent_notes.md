@@ -6561,8 +6561,10 @@ same-device equivalence or numerical noise.
   `f61d3d254d7514bb3b86e2ad5999f3ce2849e90a3ad393db81c2388aaef9de7b`
   and
   `d9a194920e9aea6c8330fd2a602aea5f81c728f58c0ac38b1e85a0f798845a88`.
-  Full terminal FSC/class-assignment audit `11578043` is running from
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_terminal_full_audit_20260724T214500Z`.
+  Full terminal FSC/class-assignment audit `11578043` subsequently completed
+  from
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_terminal_full_audit_20260724T214500Z`;
+  its complete red-gate result is recorded below.
 - Map-only early audit `11569628` completed `0:0` in 217 seconds with
   4,398,616 KiB maximum RSS.  Identity matching is selected for both
   RECOVAR-to-RELION and matched-pair-to-GT assignments.  Classwise
@@ -6653,6 +6655,31 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_scheduler_boundary_20260724`.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
+
+# 2026-07-24: complete K=4 trajectory confirms a first failure at iteration 11
+
+- Independent full-trajectory audit `11578043` evaluated all 15 numbered
+  K=4 boundaries and the non-converged final-map policy.  The expected
+  scientific-gate exit is `2:0`; runtime was `01:01:29` and maximum RSS was
+  4,767,900 KiB.
+- Iterations 1--10 pass the unchanged `0.995` cross-engine FSC-AUC gate.  The
+  earliest failures are iteration 11 classes 2 and 3 at `0.994509131` and
+  `0.994150545`.  Terminal classwise values are
+  `0.994459232,0.993069734,0.992039376,0.994497731`.
+- Identity map and particle-class assignments remain preserved.  Every GT
+  FSC-AUC delta remains inside the unchanged `-0.002` gate, so the red result
+  is cross-engine trajectory divergence rather than a GT-quality collapse.
+- Audit JSON and shellwise NPZ are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_terminal_full_audit_20260724T214500Z/analysis/k4_terminal_fsc_trajectory.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_terminal_full_audit_20260724T214500Z/analysis/k4_terminal_fsc_shellwise.npz`,
+  with SHA-256 values
+  `02615753e8bb20df95673a6aa45fe374111b28aac819115d09d44d429bec2288`
+  and
+  `c676d662c3a1204d5ff2710d710dd1fd6bd3288169c3d3e49373d2beb008db4e`.
+  Run and runtime roots contain `SAFE_TO_DELETE`.
+- K=4 remains red.  Snapshot `strict-k1-v6-20260724` remains 25/34 strict,
+  31/34 exact topology, and 34/34 evaluated.
 
 # 2026-07-24: RELION's 128 atomic additions close the case-4 coarse tie
 

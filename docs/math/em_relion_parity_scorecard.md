@@ -538,8 +538,19 @@ the fixed 96-particle class-2 panel, RELION has 56,720 prescatter rotations
 versus 111 RECOVAR contributor rotations; 13 RECOVAR particles have no
 class-2 contributor and no rotation matches within `1e-6`.  Operand/scalar
 comparison is therefore not geometry-qualified.  A full terminal
-FSC/class-assignment audit is running as `11578043`; no K=4 acceptance or
-frozen K=1 score change is claimed.
+FSC/class-assignment audit `11578043` completed the complete 15-iteration
+trajectory in `01:01:29` with 4,767,900 KiB maximum RSS.  Its expected `2:0`
+exit is a scientific gate failure, not a missing-product failure: all 15
+numbered boundaries, the non-converged final-map policy, and all 100,000
+particle assignments were evaluated.  Iterations 1--10 pass; the earliest
+failure is iteration 11 class 2 at cross-engine FSC-AUC `0.994509131`
+(class 3 is `0.994150545`).  Terminal classwise cross-engine FSC-AUC is
+`0.994459232,0.993069734,0.992039376,0.994497731`.  Identity assignment is
+preserved and every GT delta stays inside the unchanged `-0.002` gate.  The
+JSON and shellwise NPZ SHA-256 values are
+`02615753e8bb20df95673a6aa45fe374111b28aac819115d09d44d429bec2288`
+and `c676d662c3a1204d5ff2710d710dd1fd6bd3288169c3d3e49373d2beb008db4e`.
+K=4 remains red, and no frozen K=1 score change is claimed.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
