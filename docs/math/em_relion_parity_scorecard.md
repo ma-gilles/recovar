@@ -324,8 +324,16 @@ defect.  GT closeness improves at all four boundaries; at iteration 16 the
 new RECOVAR/RELION GT FSC-AUC difference is only `0.000000703`.  RELION
 cross-run FSC-AUC remains about `0.999950` throughout.  Array audit
 `11569878` and iteration-16 audit `11569901` completed `0:0`; all 16 numbered
-boundaries are now evaluated, but the terminal all-data map and dependent
-strict auditor remain authoritative.
+boundaries pass.  The terminal all-data boundary does not: strict audit
+`11564062` fails only final merged cross-engine FSC-AUC,
+`0.985721587320 < 0.995`, while half-1/half-2 are
+`0.989930339640`/`0.988255553139` and the GT delta is positive
+(`+0.000330734`).  Exact topology passes.  The frozen old final value is
+`0.985743479037`, so the intervention does not improve the terminal result.
+Accepted within-pair terminal audit `11570953` further reports RELION
+cross-run final FSC-AUC only `0.986463892284`, comparable to the failed
+within-pair value; terminal old/new deltas are not causal intervention
+measurements.  The frozen score therefore remains unchanged.
 
 Shell-profile audit `11569181` localizes `94.6%` of the iteration-6 negative
 AUC delta to shells 1--64, with the largest losses at shells 53--56 rather
@@ -364,13 +372,27 @@ new versus old cross-engine FSC-AUC is
 at iterations 7--8 and improves at iteration 9.  RELION cross-run FSC-AUC
 falls to `0.9999127`--`0.9999609`, so these late deltas remain observational.
 Audits `11569878`, `11569970`, and `11570004` completed `0:0`.  This is mixed
-numbered-boundary evidence, not a terminal pass; science `11563827` and
-strict audit `11563842` remain active or dependency-gated.
+numbered-boundary evidence.  Iterations 10--17 also improve the matched FSC
+defect by `1.28`--`1.36` fold and preserve convergence at numbered iteration
+17; GT closeness improves at six of those eight boundaries.
 
-The same-GPU K=4 science job `11565045` has completed iterations 1--8 with
-sizes `38,38,42,56,60,62,68,70`, resolutions
-`60.44,49.45,30.22,27.20,25.90,22.67,21.76,20.92` Angstrom, and iteration-8
-Pmax `0.9237`; iteration 9 starts at size 72.  This exact size/resolution
+The terminal gate still fails.  Strict audit `11563842` reports half-1,
+half-2, and merged cross-engine FSC-AUC
+`0.994737855585`, `0.993581124654`, and `0.992965911620`; only the final
+merged gate fails, the GT delta is positive (`+0.003915953`), and exact
+topology passes.  This improves the frozen old final value
+`0.991556308523`, and final particle-state diagnostics improve as well:
+mean pose error `0.2730` to `0.1967` degrees and mean translation error
+`0.02733` to `0.02197` pixels.  However, accepted within-pair terminal audit
+`11570953` measures RELION cross-run final FSC-AUC only `0.994964023912`,
+already below the gate.  The terminal improvement is therefore observational
+under substantial run/GPU butterfly amplification and cannot promote case 4.
+
+The same-GPU K=4 science job `11565045` has completed iterations 1--9 with
+sizes `38,38,42,56,60,62,68,70,72`, resolutions
+`60.44,49.45,30.22,27.20,25.90,22.67,21.76,20.92,20.15` Angstrom, and
+iteration-9 Pmax `0.9470`; iteration 10 starts at size 74.  This exact
+size/resolution
 topology matches both prior corrected `c390f8bf` diagnostic trajectories
 through this boundary.
 Independent early map audit `11569628` passes iteration 7 with identity class
