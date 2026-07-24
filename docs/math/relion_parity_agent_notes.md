@@ -6677,11 +6677,25 @@ same-device equivalence or numerical noise.
   `6ad97a96805f77d67af78418e1460239ff06f4d46336aa9cd1032ce08d371cf5`;
   analyzer SHA-256 is
   `f8312e9ab72b4008f33bb9e50f55cdaaaa5e9a946b82e12430a7c70dca0f75f8`.
-- Same-physical-H100 patched-RELION job `11572062` is running for particle
-  `5234`, the only target with a material rotation difference.  It reserves
-  all four GPUs on `della-h21g2`, selects capture UUID
-  `GPU-24350de1-cbbd-8567-62d2-db825502511b`, and will compare all coarse
-  candidates after verifying the accepted capture.  Its run/runtime roots are
+- Same-physical-H100 patched-RELION job `11572062` completed `0:0` in
+  1:05:38 for particle `5234`, the only target with a material rotation
+  difference.  It reserved all four GPUs on `della-h21g2` and selected capture
+  UUID `GPU-24350de1-cbbd-8567-62d2-db825502511b`.  Candidate sets are exactly
+  identical: 1,069,056 common candidates, no engine-only candidates, no
+  duplicates, and Jaccard `1.0`.  RELION assigns the two cross-winner keys
+  `(32933, 24)` and `(33690, 20)` the same float32 normalized-CC score,
+  `0.27847832441329956`.  RECOVAR assigns them
+  `0.27847859263420105` and `0.2784782648086548`, respectively.  The resulting
+  `3.278255e-7` split is exactly the previously captured native winner margin.
+  Full-grid centered-score absolute difference p95 is `3.688037e-7`, maximum
+  is `1.147389e-6`, and there are no active rotation or translation priors.
+  This rules out missing candidate support and localizes the case-4
+  first-boundary exception to sub-micro normalized-CC arithmetic/tie
+  preservation.  Analysis JSON SHA-256 is
+  `1a834a5f9cfdc67899f79485d6c467860f8a170f109555567fdf6169e70d2d12`;
+  exact RELION dump-manifest SHA-256 is
+  `d558418952fe8f9a1a791ca8fbca54ca6d0bc7c61e1f4d4081273025efc5b80c`.
+  Its run/runtime roots are
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_p5234_exact_relion_grid_20260724T142000Z`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case04_p5234_exact_relion_grid_20260724T142000Z`;

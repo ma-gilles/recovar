@@ -232,10 +232,22 @@ coarse runner-up, while case-5 particles `38594` and `65070` already use
 RELION's coarse parent and therefore diverge inside fine pass 2.  The mapping
 JSON SHA-256 is
 `6ad97a96805f77d67af78418e1460239ff06f4d46336aa9cd1032ce08d371cf5`.
-Same-physical-H100 patched-RELION full-grid discriminator `11572062` runs for
-particle `5234`; fine-pass capture `11572658` is queued for particles `38594`
-and `65070`.  The frozen score remains 25/34 strict, 31/34 topology, and
-34/34 evaluated.
+Same-physical-H100 patched-RELION full-grid discriminator `11572062` completed
+for particle `5234` with exact identity across all 1,069,056 candidates.
+RELION assigns the RECOVAR winner `(32933, 24)` and its own mapped winner
+`(33690, 20)` the same float32 normalized-CC score,
+`0.27847832441329956`.  RECOVAR instead assigns
+`0.27847859263420105` and `0.2784782648086548`, respectively, splitting the
+RELION tie by the previously measured `3.278255e-7` and selecting the other
+coarse parent.  Across the full centered score grid, absolute difference p95
+is `3.688037e-7` and maximum is `1.147389e-6`.  This rejects missing candidate
+support at the case-4 first boundary and localizes the exception to
+sub-micro score arithmetic/tie preservation.  Analysis JSON SHA-256 is
+`1a834a5f9cfdc67899f79485d6c467860f8a170f109555567fdf6169e70d2d12`;
+the exact RELION dump manifest SHA-256 is
+`d558418952fe8f9a1a791ca8fbca54ca6d0bc7c61e1f4d4081273025efc5b80c`.
+Fine-pass capture `11572658` remains queued for particles `38594` and `65070`.
+The frozen score remains 25/34 strict, 31/34 topology, and 34/34 evaluated.
 
 ## K=4 physical-GPU trajectory diagnostic
 
