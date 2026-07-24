@@ -531,13 +531,27 @@ cross-engine FSC-AUC values fail:
 `0.994459232,0.993069734,0.992039376,0.994497731`.  GT deltas remain small
 (`+0.000115765,-0.000113423,+0.000041339,+0.000018044`), so this is continued
 trajectory divergence rather than GT-quality collapse.
-Corrected same-UUID vector/scalar auditors `11577999`/`11578000` complete
-`0:0` and both classify
-`rotation_support_difference_precedes_operand_value_comparison`.  Across
-the fixed 96-particle class-2 panel, RELION has 56,720 prescatter rotations
-versus 111 RECOVAR contributor rotations; 13 RECOVAR particles have no
-class-2 contributor and no rotation matches within `1e-6`.  Operand/scalar
-comparison is therefore not geometry-qualified.  A full terminal
+Same-UUID vector/scalar auditors `11577999`/`11578000` complete `0:0`, but
+their 56,720-versus-111 count compared RELION's complete candidate table to
+RECOVAR's positive contributors and is superseded.  Corrected contributor
+audit `11580683` compares emitted contributors on both sides: RELION has 120
+versus RECOVAR's 111, 13 RECOVAR particles have no class-2 contributor, and
+no contributor rotation matches within `1e-6`.  Operand/scalar comparison
+therefore remains unqualified for a real support reason, not the earlier
+candidate/contributor category error.
+Exact integer candidate audit `11580995` localizes the mismatch further to
+coarse-parent selection before fine scoring.  Every particle is an exact
+eight-way fine expansion in both engines, but the fixed 96-particle panel has
+7,090 RELION coarse parents versus 6,857 RECOVAR parents with only 1,677
+shared (`23.65%` of RELION and `24.46%` of RECOVAR).  No particle has an
+exact parent set; RELION's eventual contributor is present in RECOVAR's
+candidate support for only 14/96 particles.  The accepted classification is
+`coarse_parent_support_difference_precedes_fine_scoring`.  Corrected
+contributor and candidate-parent JSON SHA-256 values are
+`c6205255a5fb7c7ce1e8f4d376d0d054b0a079975369a1316d6424b4aee873ea`
+and
+`d90f970ddb98c1c31ab9de4c18949fce20e3150581c66d7945b4d4e143bbd508`.
+A full terminal
 FSC/class-assignment audit `11578043` completed the complete 15-iteration
 trajectory in `01:01:29` with 4,767,900 KiB maximum RSS.  Its expected `2:0`
 exit is a scientific gate failure, not a missing-product failure: all 15

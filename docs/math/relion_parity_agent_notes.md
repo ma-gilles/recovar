@@ -6565,6 +6565,49 @@ same-device equivalence or numerical noise.
   from
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_terminal_full_audit_20260724T214500Z`;
   its complete red-gate result is recorded below.
+- The 56,720-versus-111 interpretation above is superseded: the RELION
+  `.bpre-v1.bin` `rotations` array is the complete candidate table, while
+  only `orientation_local` values referenced by emitted rows are positive
+  class contributors.  It was therefore invalid to compare that whole table
+  against RECOVAR's positive contributors.
+- Corrected contributor audit `11580683` completed `0:0` in 9 seconds with
+  308,704 KiB maximum RSS.  It compares the 120 RELION emitted contributors
+  against 111 RECOVAR contributors, retains all 13 explicit RECOVAR
+  zero-contributor particles, and finds zero exact per-particle rotation
+  matches at `1e-6`.  Pixel/value comparison remains deliberately
+  unqualified.  The corrected report, comparator, and launcher SHA-256
+  values are
+  `c6205255a5fb7c7ce1e8f4d376d0d054b0a079975369a1316d6424b4aee873ea`,
+  `ed4eb83131d7be96006c48add1055b06f5623e740a2670b3510e8f2d4e82a3b2`,
+  and
+  `9794560e6ca9c0384d1879770deee622c0a4565fd9b505acd7e076546537d301`.
+  Preliminary job `11580595` failed before audit work because its import
+  provenance was checked before changing into the exact source checkout;
+  preliminary `11580606` exposed and led to removal of a vacuous pixel
+  support pass when no rotations aligned.
+- Checked-in exact-index candidate auditor
+  `scripts/audit_k4_relion_recovar_candidate_support.py` then localizes the
+  support mismatch one boundary earlier.  Slurm audit `11580995` completed
+  `0:0` in 9 seconds with 378,888 KiB maximum RSS and classifies
+  `coarse_parent_support_difference_precedes_fine_scoring`.  Both engines
+  expand every selected coarse parent into all eight fine rotations for all
+  96 particles.  RELION selects 7,090 coarse parents, RECOVAR 6,857, and
+  only 1,677 overlap (`23.6530%` of RELION, `24.4568%` of RECOVAR); no
+  particle has an exact parent set.  RELION's emitted contributor remains in
+  RECOVAR's candidate support for only 14/96 particles, while RECOVAR's
+  contributor remains in RELION support for 24/96.
+- Candidate-parent report, auditor, unit-test, and launcher SHA-256 values
+  are
+  `d90f970ddb98c1c31ab9de4c18949fce20e3150581c66d7945b4d4e143bbd508`,
+  `e65ee28bad9c5239cf69b300c489176c9b6f361356da65cfc0f5c84f53bbacc0`,
+  `971cec81f630c2b904f9de9c0b59c02534ad69abcfbb362084ef89aef78bf9f5`,
+  and
+  `934059d9fc630f5299001f61dbb20555bc68de475816d524dab73464fc35b2d5`.
+  Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_candidate_parent_audit_f48bcbc0_20260724T232300Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_candidate_parent_audit_f48bcbc0_20260724T232300Z`;
+  both contain `SAFE_TO_DELETE`.
 - Map-only early audit `11569628` completed `0:0` in 217 seconds with
   4,398,616 KiB maximum RSS.  Identity matching is selected for both
   RECOVAR-to-RELION and matched-pair-to-GT assignments.  Classwise
