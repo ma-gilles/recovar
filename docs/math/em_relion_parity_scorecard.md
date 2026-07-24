@@ -121,6 +121,23 @@ one float32 raw-score ULP (`0.0001220703125`) and
 oracle-stability telemetry, not a new strict pass; the fixed denominator and
 score remain unchanged.
 
+## K=1 frozen case-22 combined-intervention rerun
+
+Case 22 is one of the two remaining exact-topology failures.  Its known
+iteration-2 numerical butterfly is driven by the incoming reference, so the
+same bounded direct-real-reference and first-iteration top-two reduction-tree
+intervention under test on cases 4/5 is now running against the immutable
+3,000-particle/grid-128 fixture.  The clean detached source is
+`b1d444270de89a4ede0868fe0e39954d012fd593`.
+
+Setup `11566711` completed, science `11566712` is running, summary
+`11566713` is dependency-gated, and the unchanged strict FSC/topology audit is
+`11566739`.  Grid correction and forced final all-data after maximum iteration
+are unset.  The durable root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case22_tree_b1d44427_20260724T142000Z`.
+This is a pending generalization arm, not a new checkbox; the frozen score
+remains 25/34.
+
 ## K=1 final-only family diagnostic
 
 Frozen case 10 already passes all 15 numbered FSC and exact-topology gates but

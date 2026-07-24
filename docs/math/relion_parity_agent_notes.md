@@ -6024,3 +6024,36 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_last_final_audit_20260724T140800Z`.
 - This diagnostic does not change snapshot `strict-k1-v6-20260724`: 25/34
   strict, 31/34 exact topology, 34/34 evaluated.
+
+# 2026-07-24: frozen case 22 tests the bounded firstiter intervention
+
+- Case 22 remains strict-fail and exact-topology-fail.  Its known iteration-2
+  numerical butterfly is reference-driven, making it the smaller independent
+  generalization target for the direct-real-reference plus bounded top-two
+  RELION reduction-tree intervention already under test on cases 4/5.
+- Clean detached source is
+  `b1d444270de89a4ede0868fe0e39954d012fd593`; the fixed fixture-manifest
+  SHA-256 is
+  `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
+  Submission worktree status and diff are clean.
+- Slurm graph is setup `11566711`, science `11566712`, summary `11566713`,
+  and unchanged strict FSC/topology audit `11566739`.  The audit is
+  `afterok:11566712`; no failed or partial science can change the score.
+- The full autonomous run sets
+  `RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE=1` and
+  `RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN=4e-6`.  It leaves
+  `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` and
+  `RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER` unset and explicitly disables
+  last-numbered-state replay for the final expectation.
+- Setup/science/audit launcher SHA-256 values are
+  `c1f50a8095bd107b733a4c3f25046a4c8e28c3d8718366e39bd2ac41c3ce9b62`,
+  `ae103ec9f899d37b39f4046541562060ef26b2a2bac350be92347f5d1558146a`,
+  and `43d4429bc73766f122578a52d9489ae1634f2614dd12fe4962bdcd2fd2a4cd58`.
+  The durable submission note SHA-256 is
+  `f6bcba2f5d1c7718e73f3b56558a06e3495b5e405df05f67ffd1f362c4088335`.
+- Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case22_tree_b1d44427_20260724T142000Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_case22_tree_b1d44427_20260724T142000Z`;
+  both contain `SAFE_TO_DELETE`.
+- This is a pending full-case generalization arm, not a score change.
