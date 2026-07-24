@@ -856,6 +856,23 @@ def test_significance_dump_envs_are_forwarded_and_scoped_per_case(tmp_path):
     )
 
 
+def test_firstiter_projector_and_tree_interventions_are_forwarded(tmp_path):
+    extra_env = {
+        "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE": "1",
+        "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN": "4e-6",
+    }
+    proc, scratch = _dry_run_launcher(tmp_path, case="24", extra_env=extra_env)
+
+    assert proc.returncode == 0, proc.stdout
+    scripts = list((scratch / "jobs").glob("em_k1_matrix_24_*.sh"))
+    assert len(scripts) == 1
+    text = scripts[0].read_text()
+    submission = (scratch / "submission.env").read_text()
+    for name, value in extra_env.items():
+        assert f"export {name}={value}" in text
+        assert f"{name}={value}" in submission
+
+
 def test_local_adaptive_pass2_defaults_to_relion_pruned_parent_in_jobs(tmp_path):
     proc, scratch = _dry_run_launcher(tmp_path, case="32")
 
