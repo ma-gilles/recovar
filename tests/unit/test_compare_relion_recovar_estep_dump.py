@@ -530,6 +530,75 @@ def test_compare_relion_recovar_estep_dump_reads_firstiter_cc_schema(tmp_path):
     assert result["common_score_pre_prior_centered_diff"]["max_abs"] == 0.0
 
 
+def test_compare_relion_recovar_estep_dump_decodes_implicit_pass0_firstiter_grid(tmp_path):
+    relion_dir = tmp_path / "relion"
+    relion_dir.mkdir()
+    # Two directions x three psi samples x two translations. RELION stores
+    # rotations pixel-major while RECOVAR stores them psi-major.
+    relion_scores = np.arange(12, dtype=np.float64).reshape(6, 2)
+    relion_scores[4, 1] = 20.0
+    _write_flat_real(
+        relion_dir / "pass0_firstiter_cc_exp_Mweight_raw_preonehot.bin",
+        -relion_scores.reshape(-1),
+    )
+    _write_flat_int(
+        relion_dir / "pass0_firstiter_cc_weight_dims.bin",
+        [1, 2, 3, 2, 1, 1, 12],
+    )
+    # A compact fine table is present too; the dense pass-0 dimensions must
+    # take precedence for a full firstiter comparison.
+    _write_flat_int(relion_dir / "pass1_firstiter_cc_raw_rot_idx.bin", [0, 1])
+    _write_flat_int(relion_dir / "pass1_firstiter_cc_raw_trans_idx.bin", [0, 1])
+    _write_flat_real(
+        relion_dir / "pass1_firstiter_cc_exp_Mweight_raw_preonehot.bin",
+        [-1.0, -2.0],
+    )
+
+    recovar_scores = np.zeros((6, 2), dtype=np.float64)
+    for relion_rotation in range(6):
+        pixel = relion_rotation // 3
+        psi = relion_rotation % 3
+        recovar_scores[psi * 2 + pixel] = relion_scores[relion_rotation]
+    weights = np.zeros_like(recovar_scores)
+    weights[3, 1] = 1.0
+    recovar_npz = tmp_path / "recovar_significance.npz"
+    np.savez_compressed(
+        recovar_npz,
+        original_index=np.int64(1901),
+        local_index=np.int64(1901),
+        current_size=np.int64(56),
+        n_classes=np.int64(1),
+        n_rot=np.int64(6),
+        n_trans=np.int64(2),
+        weights_full=weights.reshape(-1),
+        weights_per_class=weights[None, :, :],
+        scores_pre_prior_per_class=recovar_scores[None, :, :],
+        scores_with_prior_per_class=recovar_scores[None, :, :],
+        rotations=np.zeros((6, 3, 3), dtype=np.float32),
+        translations=np.zeros((2, 2), dtype=np.float32),
+        rotation_log_prior=np.zeros(6, dtype=np.float64),
+        translation_log_prior=np.zeros(2, dtype=np.float64),
+    )
+
+    result = compare_dumps(
+        relion_dir,
+        recovar_npz,
+        match_mode="relion_grid",
+        relion_n_psi=3,
+    )
+
+    assert result["relion_selected_field"] == "implicit_firstiter_cc_grid:pass0"
+    assert result["relion_generic_candidate_prefix"] == "pass0"
+    assert result["match_mode"] == "relion_grid"
+    assert result["match_details"]["relion_n_pixels"] == 2
+    assert result["relion_candidate_count"] == 12
+    assert result["common_candidate_count"] == 12
+    assert result["candidate_jaccard"] == 1.0
+    assert result["relion_top_key"] == [3, 1]
+    assert result["recovar_top_key"] == [3, 1]
+    assert result["common_score_pre_prior_centered_diff"]["max_abs"] == 0.0
+
+
 def test_compare_relion_recovar_estep_dump_uses_part_specific_acc_table(tmp_path):
     relion_dir = tmp_path / "relion"
     relion_dir.mkdir()

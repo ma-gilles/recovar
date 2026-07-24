@@ -745,6 +745,57 @@ def _discover_relion_acc_table_prefixes(payload: dict[str, np.ndarray]) -> list[
     return sorted(set(prefixes))
 
 
+def _implicit_firstiter_grid_from_relion(payload: dict[str, np.ndarray]) -> dict[str, np.ndarray | int] | None:
+    """Decode RELION's dense pass-0 firstiter grid when row ids are implicit."""
+
+    raw_cost = _get_by_suffix_from_prefix(
+        payload,
+        "firstiter_cc_exp_Mweight_raw_preonehot",
+        "pass0",
+    )
+    dimensions = _get_by_suffix_from_prefix(payload, "firstiter_cc_weight_dims", "pass0")
+    if dimensions is None:
+        return None
+    if raw_cost is None:
+        raise ValueError("RELION pass0 firstiter dump must contain both raw costs and weight dimensions")
+
+    dimensions = np.asarray(dimensions, dtype=np.int64).reshape(-1)
+    if dimensions.size != 7:
+        raise ValueError(f"RELION pass0 firstiter weight dimensions must have 7 entries, got {dimensions.tolist()}")
+    n_images, n_directions, n_psi, n_translations, n_classes, n_oversampled, n_total = (
+        int(value) for value in dimensions
+    )
+    if min(n_images, n_directions, n_psi, n_translations, n_classes, n_oversampled) <= 0:
+        raise ValueError(f"RELION pass0 firstiter weight dimensions must be positive, got {dimensions.tolist()}")
+    expected_total = n_images * n_directions * n_psi * n_translations * n_classes * n_oversampled
+    if n_total != expected_total:
+        raise ValueError(
+            "RELION pass0 firstiter weight dimensions have inconsistent total: "
+            f"declared={n_total} expected={expected_total}"
+        )
+    raw_cost = np.asarray(raw_cost, dtype=np.float64).reshape(-1)
+    if raw_cost.size != n_total:
+        raise ValueError(
+            f"RELION pass0 firstiter raw-cost size {raw_cost.size} does not match declared total {n_total}"
+        )
+    if n_images != 1 or n_classes != 1 or n_oversampled != 1:
+        raise ValueError(
+            "Implicit pass0 firstiter comparison requires one dumped image, one class, and one "
+            f"oversampling row; got images={n_images} classes={n_classes} oversampled={n_oversampled}"
+        )
+
+    n_rotations = n_directions * n_psi
+    return {
+        "rot_idx": np.repeat(np.arange(n_rotations, dtype=np.int64), n_translations),
+        "trans_idx": np.tile(np.arange(n_translations, dtype=np.int64), n_rotations),
+        "raw_cost": raw_cost,
+        "rotation_count": n_rotations,
+        "n_directions": n_directions,
+        "n_psi": n_psi,
+        "n_translations": n_translations,
+    }
+
+
 def _candidate_table_from_relion(
     path: Path,
     *,
@@ -801,8 +852,18 @@ def _candidate_table_from_relion(
         candidate_class_idx = generic_candidate_field("candidate_class_idx")
         reconstruction_mask = generic_candidate_field("candidate_in_reconstruction_set")
         firstiter_raw_preonehot = None
+        implicit_firstiter = None
         if rot_idx is None:
-            rot_idx = _get_by_suffix(payload, "firstiter_cc_raw_rot_idx", prefer_prefix="pass1")
+            implicit_firstiter = _implicit_firstiter_grid_from_relion(payload)
+            if implicit_firstiter is not None:
+                rot_idx = implicit_firstiter["rot_idx"]
+                trans_idx = implicit_firstiter["trans_idx"]
+                coarse_trans_idx = trans_idx
+                firstiter_raw_preonehot = implicit_firstiter["raw_cost"]
+                score_pre = firstiter_raw_preonehot
+                generic_candidate_prefix = "pass0"
+            else:
+                rot_idx = _get_by_suffix(payload, "firstiter_cc_raw_rot_idx", prefer_prefix="pass1")
             rot_id = rot_idx
         if compact_rot_idx is None:
             compact_rot_idx = rot_idx
@@ -817,15 +878,18 @@ def _candidate_table_from_relion(
                 prefer_prefix="pass1",
             )
             score_pre = firstiter_raw_preonehot
-        elif _get_by_suffix(payload, "firstiter_cc_exp_Mweight_raw_preonehot", prefer_prefix="pass1") is not None:
+        elif (
+            implicit_firstiter is None
+            and _get_by_suffix(payload, "firstiter_cc_exp_Mweight_raw_preonehot", prefer_prefix="pass1") is not None
+        ):
             firstiter_raw_preonehot = _get_by_suffix(
                 payload,
                 "firstiter_cc_exp_Mweight_raw_preonehot",
                 prefer_prefix="pass1",
             )
         rot_matrices = None
-        rotation_count = None
-        selected_field = "all_candidates"
+        rotation_count = int(implicit_firstiter["rotation_count"]) if implicit_firstiter is not None else None
+        selected_field = "implicit_firstiter_cc_grid:pass0" if implicit_firstiter is not None else "all_candidates"
     else:
         generic_candidate_prefix = None
         rot_idx = prefixed_table["rot_idx"]
