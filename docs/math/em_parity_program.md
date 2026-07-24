@@ -9292,3 +9292,48 @@ The corrected audit launcher SHA-256 is
 Superseded dependency audit `11558553` was canceled with zero runtime.  The
 fixed score remains 25/34 strict, 31/34 exact topology, and 34/34 evaluated;
 no correlation metric is used.
+
+### Case-4 iteration-1 residual is upstream of reconstruction
+
+Same-H100 capture science `11559949` and independent audit `11559964`
+completed `0:0` from source `8a3737af`.  RECOVAR first captured the native
+x-half M-step, public pre-join, and public post-low-resolution-join
+accumulators.  A minimally patched RELION `d476e6f` then captured the joined
+BPref plus post-reconstruct, post-initial-lowpass, and post-solvent-flatten
+maps on the same physical H100
+`GPU-8fdb5482-ff52-be6a-c41a-cda8af052492`.
+
+The passive RELION capture passes its predeclared inertness gate.  All 100,000
+particle poses, translations, Pmax values, and significant-support counts are
+exactly equal to the immutable oracle.  Captured-versus-oracle half-map
+FSC-AUC is `0.9999999999965` / `0.9999999999966`, with through-shell-28
+FSC-AUC `1.0` to displayed precision.  RECOVAR native post-x0 and public
+pre-join accumulators are bit-exact, so native-to-public conversion is not the
+residual.
+
+The first nonzero cross-engine boundary is the joined BPref.  RECOVAR versus
+RELION numerator relative L2 is `0.00187373` / `0.00300368` for halves 1/2;
+weight relative L2 is `0.000269398` / `0.000458921`.  Conversely, RELION's
+captured BPref reconstructed through RECOVAR matches RELION's
+post-reconstruct maps at FSC-AUC `0.999999999699` /
+`0.999999999634`.  The first 18 derived tau2 shells match the RELION model at
+relative L2 `2.07e-7` / `2.08e-7`, and final flattened-map FSC-AUC is at least
+`0.999999999984`.  Reconstruction, tau2 formation, and post-processing are
+therefore closed for this boundary.
+
+The iteration-1 map difference remains small after regularization
+(RECOVAR-accumulator reconstruction versus RELION post-reconstruct FSC-AUC
+`0.999987352` / `0.999960909`) but is sufficient to seed the map-leading
+iteration-2 amplification.  The next discriminator is the excess accumulator
+residual from the nine known iteration-1 winner exceptions versus
+matched-winner M-step/backprojection arithmetic.  No reconstruction, tau2,
+posterior-threshold, or unconditional map-substitution patch is supported.
+
+The accepted audit JSON SHA-256 is
+`7cf9a60c6fa824a43603d3c095462a40848c697247d1ca32c00910ff671cd13c`.
+The science-marker SHA-256 is
+`81094fc19ee61b6b329eac7ff87318a170b6d54eecce2f17289b3b721a3fa920`.
+The durable run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it1_native_relion_bpref_8a3737af_20260724T050935Z`.
+The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
+evaluated.

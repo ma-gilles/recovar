@@ -5664,3 +5664,37 @@ same-device equivalence or numerical noise.
   audit.  Do not change the `0.999` significance threshold.
 - Frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
   evaluated.
+
+# 2026-07-24: case 4 iteration-1 BPref localizes upstream of reconstruction
+
+- Same-H100 science `11559949` completed the RECOVAR native/pre-join/post-join
+  accumulator capture followed by passive RELION BPref/stage capture on
+  `GPU-8fdb5482-ff52-be6a-c41a-cda8af052492`.  Independent H100 audit
+  `11559964` completed `0:0`.
+- The patched RELION control is inert: 100,000/100,000 poses, translations,
+  Pmax values, and support counts are exactly equal.  Captured-versus-oracle
+  half-map FSC-AUC is `0.9999999999965`/`0.9999999999966`; through-shell-28
+  FSC-AUC is `1.0` to displayed precision.
+- RECOVAR native post-x0 versus public pre-join is bit-exact for numerator and
+  weight in both halves.  Native layout conversion is closed.
+- The first nonzero cross-engine boundary is the joined BPref.  Numerator
+  relative L2 is `0.00187373`/`0.00300368`; weight relative L2 is
+  `0.000269398`/`0.000458921`.
+- RECOVAR reconstruction of the captured RELION BPref matches RELION's
+  post-reconstruct maps at FSC-AUC `0.999999999699`/`0.999999999634`.
+  Derived tau2 matches the first 18 RELION model shells within relative L2
+  `2.07e-7`/`2.08e-7`.  Final flattened-map FSC-AUC is at least
+  `0.999999999984`.
+- Reconstruction, tau2, and post-processing are rejected as causes.  The
+  remaining target is accumulation: determine how much of the residual is
+  explained by the nine known first-iteration winner exceptions, then audit
+  matched-winner M-step/backprojection arithmetic if needed.
+- Accepted audit SHA-256:
+  `7cf9a60c6fa824a43603d3c095462a40848c697247d1ca32c00910ff671cd13c`.
+  Science marker SHA-256:
+  `81094fc19ee61b6b329eac7ff87318a170b6d54eecce2f17289b3b721a3fa920`.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it1_native_relion_bpref_8a3737af_20260724T050935Z`.
+- No reconstruction, tau2, significance-threshold, or unconditional map
+  substitution patch is authorized.  Frozen score remains 25/34 strict,
+  31/34 exact topology, and 34/34 evaluated.
