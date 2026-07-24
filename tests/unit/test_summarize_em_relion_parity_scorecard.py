@@ -47,6 +47,42 @@ def test_frozen_v1_scorecard_is_valid_and_renders_fixed_denominator():
 
 
 @pytest.mark.unit
+def test_check_preserves_marked_post_snapshot_diagnostics():
+    scorecard = MODULE.load_and_validate(MODULE.DEFAULT_SCORECARD)
+    fixture_manifest = MODULE.load_and_validate_fixture_manifest(MODULE.DEFAULT_FIXTURE_MANIFEST, scorecard)
+    rendered = MODULE.render_markdown(
+        scorecard,
+        fixture_manifest,
+        MODULE.sha256_file(MODULE.DEFAULT_FIXTURE_MANIFEST),
+    )
+    manual = "\n".join(
+        (
+            MODULE.MANUAL_DIAGNOSTICS_BEGIN,
+            "## Post-snapshot fixed-fixture intervention diagnostics",
+            "",
+            "Pending evidence does not mutate the frozen score.",
+            MODULE.MANUAL_DIAGNOSTICS_END,
+        )
+    )
+    checked_text = rendered.replace(
+        MODULE.MANUAL_DIAGNOSTICS_ANCHOR,
+        f"\n\n{manual}{MODULE.MANUAL_DIAGNOSTICS_ANCHOR}",
+        1,
+    )
+
+    assert MODULE.preserve_manual_diagnostics(rendered, checked_text) == checked_text
+
+
+@pytest.mark.unit
+def test_check_rejects_unpaired_manual_diagnostics_marker():
+    with pytest.raises(ValueError, match="matched pair"):
+        MODULE.preserve_manual_diagnostics(
+            "generated",
+            MODULE.MANUAL_DIAGNOSTICS_BEGIN,
+        )
+
+
+@pytest.mark.unit
 def test_validation_rejects_a_silently_changed_denominator(tmp_path):
     scorecard = MODULE.load_and_validate(MODULE.DEFAULT_SCORECARD)
     scorecard["cases"].pop()

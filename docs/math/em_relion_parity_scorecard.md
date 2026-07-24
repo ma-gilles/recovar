@@ -61,6 +61,7 @@ Progress: +5 passing cases since the first frozen snapshot; +2 since the previou
 | `strict-k1-v5-20260722` | 2026-07-22T19:00:51.329249+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038` | 23 | +1 | 11 | 0 |
 | `strict-k1-v6-20260724` | 2026-07-24T01:04:11.826284+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08` | 25 | +2 | 9 | 0 |
 
+<!-- BEGIN MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 ## Post-snapshot fixed-fixture intervention diagnostics
 
 These rows use frozen case bytes but do not rewrite the immutable snapshot
@@ -114,6 +115,7 @@ one float32 raw-score ULP (`0.0001220703125`) and
 `3.9343036e-5` posterior.  Its dormant-instrumentation arm chose 57.  This is
 oracle-stability telemetry, not a new strict pass; the fixed denominator and
 score remain unchanged.
+<!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
 
@@ -130,6 +132,14 @@ Generate this PR-ready table with:
 
 ```bash
 pixi run python scripts/summarize_em_relion_parity_scorecard.py
+```
+
+Verify that the checked scorecard, frozen snapshot, and marked live-diagnostics
+appendix are current with:
+
+```bash
+pixi run python scripts/summarize_em_relion_parity_scorecard.py \
+  --check docs/math/em_relion_parity_scorecard.md
 ```
 
 Launch a scoring rerun with `--scorecard`. This fail-closed mode requires the
