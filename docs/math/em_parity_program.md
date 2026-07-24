@@ -9161,3 +9161,24 @@ the full replay history and artifact hashes are in
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_particle2767_capture_0da399c4_20260722T213929Z/provenance/PATCHED_RELION_REPLAY_11552815_11552816.md`.
 This localization does not change the frozen score: v6 remains 25/34 strict,
 31/34 exact topology, and 34/34 evaluated.
+
+An identical-input GPU counterfactual closes the remaining ambiguity.
+Job `11557150` feeds the captured RELION PPref and all 16 bit-exact fine
+rotations through RECOVAR's immutable `0da399c4` production texture projector.
+Every complex projection row is bit-exact to RELION.  The resulting candidate
+raw-diff2 margin is `6.068725585938` versus RELION `6.068603515625`, a single
+`0.0001220703125` float32 step rather than the live `0.10411` margin gap.
+Source-map job `11557190` then rebuilds the PPref through the real RELION
+binding: the saved RELION iteration-1 half-1 map matches the captured PPref at
+relative L2 `4.65e-8`, while RECOVAR's saved iteration-1 half-1 map is
+`0.0804728` away.
+
+Thus the observed likelihood operand is different because the incoming
+iteration-1 reconstruction/reference state is already different.  Identical
+PPref, matrices, image operands, weights, texture projection, and exact
+Gaussian reduction reproduce RELION to its float32 floor.  The next causal
+target is iteration-1 half-map/BPref formation, not fine E-step scoring or a
+tie-break.  The GPU and source-map report SHA-256 values are
+`567db079ad30cbbc5956db19ee2cc9b2d37e3a867a60cca9eac0cb8e836ebe5d`
+and
+`f3535fe727b15f7e8a8e59bbb48af76ebb4b6da520a7bbdbd09ee335c8c36a4d`.
