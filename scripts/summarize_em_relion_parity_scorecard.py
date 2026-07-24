@@ -361,7 +361,8 @@ def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sh
         "",
         "After a terminal strict auditor passes, build a fail-closed candidate",
         "superseding ledger with `--proposal-output`. The command validates the",
-        "frozen fixture identity, clean source, same physical GPU, autonomous",
+        "frozen fixture identity and re-hashes every materialized byte, clean source,",
+        "same physical GPU, autonomous",
         "FSC/topology audits, convergence/finalization contract, and evidence",
         "hashes. It never mutates the checked scorecard. For example:",
         "",
@@ -520,10 +521,14 @@ def _validate_materialized_fixture(
     }
     _require(len(actual_files) == len(actual_rows), f"{case['id']}: materialization contains duplicate filenames")
     _require(actual_files == expected_files, f"{case['id']}: materialized fixture identities differ")
-    for name, (expected_size, _) in expected_files.items():
+    for name, (expected_size, expected_sha256) in expected_files.items():
         path = case_root / "data" / name
         _require(path.is_file(), f"{case['id']}: materialized fixture file is missing: {path}")
         _require(path.stat().st_size == expected_size, f"{case['id']}: fixture size changed: {path}")
+        _require(
+            sha256_file(path) == expected_sha256,
+            f"{case['id']}: fixture SHA-256 changed: {path}",
+        )
 
 
 def _read_clean_source_head(run_root: Path, science_job: str, case_id: str) -> str:

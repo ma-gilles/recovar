@@ -246,7 +246,8 @@ pixi run python scripts/summarize_em_relion_parity_scorecard.py \
 
 After a terminal strict auditor passes, build a fail-closed candidate
 superseding ledger with `--proposal-output`. The command validates the
-frozen fixture identity, clean source, same physical GPU, autonomous
+frozen fixture identity and re-hashes every materialized byte, clean source,
+same physical GPU, autonomous
 FSC/topology audits, convergence/finalization contract, and evidence
 hashes. It never mutates the checked scorecard. For example:
 

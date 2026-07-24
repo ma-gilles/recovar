@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import sys
@@ -147,6 +148,56 @@ def test_fixture_validation_rejects_a_changed_file_digest(tmp_path):
 
     with pytest.raises(ValueError, match="invalid SHA-256"):
         MODULE.load_and_validate_fixture_manifest(path, scorecard)
+
+
+@pytest.mark.unit
+def test_proposal_fixture_validation_rehashes_materialized_bytes(tmp_path):
+    case = {"id": "k1-04", "name": "high_noise_100k_g256_white_noise3_bf80"}
+    case_root = tmp_path / "cases" / "4_high_noise_100k_g256_white_noise3_bf80"
+    data_root = case_root / "data"
+    data_root.mkdir(parents=True)
+    fixture_path = data_root / "particles.test.mrcs"
+    fixture_path.write_bytes(b"original-bytes")
+    expected_sha256 = hashlib.sha256(fixture_path.read_bytes()).hexdigest()
+    fixture_manifest_sha256 = "a" * 64
+    expected_row = {
+        "name": fixture_path.name,
+        "size": fixture_path.stat().st_size,
+        "sha256": expected_sha256,
+    }
+    fixture_manifest = {
+        "cases": [
+            {
+                "id": case["id"],
+                "name": case["name"],
+                "files": [expected_row],
+            }
+        ]
+    }
+    materialization = {
+        "schema": "recovar.em_k1_fixture_materialization.v1",
+        "case_id": case["id"],
+        "case_name": case["name"],
+        "manifest_sha256": fixture_manifest_sha256,
+        "files": [expected_row],
+    }
+    (data_root / "fixture_materialization.json").write_text(json.dumps(materialization))
+
+    MODULE._validate_materialized_fixture(
+        case,
+        case_root,
+        fixture_manifest,
+        fixture_manifest_sha256,
+    )
+    fixture_path.write_bytes(b"mutated--bytes")
+
+    with pytest.raises(ValueError, match="fixture SHA-256 changed"):
+        MODULE._validate_materialized_fixture(
+            case,
+            case_root,
+            fixture_manifest,
+            fixture_manifest_sha256,
+        )
 
 
 @pytest.mark.unit
