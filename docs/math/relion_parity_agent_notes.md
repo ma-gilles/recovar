@@ -6077,7 +6077,7 @@ same-device equivalence or numerical noise.
   both contain `SAFE_TO_DELETE`.
 - This is a pending full-case generalization arm, not a score change.
 
-# 2026-07-24: case 5 first five boundaries improve; iteration 6 reverses
+# 2026-07-24: case 5 gains are non-monotonic through iteration 7
 
 - Frozen-fixture science `11564053` completed RECOVAR iteration 1 with the
   RELION schedule boundary: current size 56, 30.22 Angstrom resolution, Pmax
@@ -6187,6 +6187,21 @@ same-device equivalence or numerical noise.
   `9d42362e4bf7d6d7a4bd484cee57fd023aff1b8593a0684ae3d068efffd04c25`;
   launcher SHA-256 is
   `935b6f22394aab69b5457f9c5a689b9a907fc10461ca08d268d198f4c1a8963d`.
+- Iteration 7 completed at current size 110, 24.73 Angstrom resolution, Pmax
+  `0.459120`, and next size 108.  Audit `11569008` completed `0:0` in
+  71 seconds with 2,020,800 KiB maximum RSS.  Cross-engine FSC-AUC improves
+  again from old `0.9999852513666029` to new `0.9999867932543595`, about a
+  1.12-fold smaller defect, while GT closeness worsens: new
+  RECOVAR/RELION are `0.10801188894332099`/`0.10799429622435769`, versus old
+  `0.1079925250128447`/`0.10798164272984055`.
+- RELION new-versus-old FSC-AUC is `0.9999846643652367` at iteration 7, so
+  native physical-GPU/run drift is comparable to the within-pair
+  cross-engine defects.  The small late old/new delta is observational and
+  cannot by itself establish intervention causality.  Terminal same-GPU
+  strict acceptance remains authoritative.  Audit stdout SHA-256 is
+  `4cec2f90b40bf1d5d26bce43a0e427d2662063d6b3e1ef49e5d82a192be5789b`;
+  launcher SHA-256 is
+  `34fde3a4485f151d1b833e9df409b4a5ec9b86b5867fece44be4f1542e4dd47c`.
 - This is a positive first-boundary generalization result, not a full-case
   acceptance.  Science `11564053` and strict audit `11564062` remain active or
   dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,
@@ -6252,6 +6267,18 @@ same-device equivalence or numerical noise.
   `3e67f3de7212c9dd29438eb2aa58a4b8a9d993a04e4ba34836cdafa3dd3db9bb`.
   Runtime root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_intervention_within_pair_v3_20260724`.
+- Iteration 4 completed at current size 132, 15.54 Angstrom resolution, Pmax
+  `0.659163`, and next size 134.  Audit `11568956` completed `0:0` in
+  72 seconds with 2,034,360 KiB maximum RSS.  Merged cross-engine FSC-AUC
+  improves from old `0.9999766635093335` to new `0.9999913095253029`,
+  reducing the FSC defect by about 2.69-fold.
+- Iteration-4 GT closeness improves strongly: new RECOVAR/RELION FSC-AUC are
+  `0.27128037702419755`/`0.27128960665779256`, while old RECOVAR/RELION are
+  `0.27121078968800255`/`0.2712957537838481`.  RELION cross-run FSC-AUC is
+  `0.9999983950905497`.  Audit stdout SHA-256 is
+  `8cbccbbff28ae26c09f98793d9eb2a3b1f56e59abb051399681b1a7ecd72018c`;
+  launcher SHA-256 is
+  `0486343bf9ca4e2ef87704935caba5aac17458884d9b8137bd76f376758d5f91`.
 - This is strong first-boundary evidence, not a full-case acceptance.
   Science `11563827` and strict audit `11563842` remain active or
   dependency-gated, so the fixed score remains 25/34.

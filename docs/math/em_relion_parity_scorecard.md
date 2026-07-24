@@ -293,9 +293,12 @@ iteration 5 improves from `0.999971221351` to `0.999986014860`, about a
 two-fold smaller FSC defect.  At iteration 6, audit `11568660` records the
 first reversal: cross-engine FSC-AUC changes from `0.999989489556` old to
 `0.999988729729` new, about a 7.2% larger defect, while GT closeness improves.
-The intervention therefore does not dominate the old trajectory at every
-boundary.  These are still numbered-boundary diagnostics, not a terminal
-acceptance.
+Iteration 7 improves again, from `0.999985251367` to `0.999986793254`
+(about a 1.12-fold smaller defect), while GT closeness worsens.  RELION
+cross-run FSC-AUC is only `0.999984664365` at that boundary, so the late
+old/new delta is not isolated from physical-GPU/run drift.  The intervention
+does not dominate the old trajectory at every boundary.  These are still
+numbered-boundary diagnostics, not a terminal acceptance.
 
 Frozen case 4 has now reached its first RECOVAR boundary under the same
 intervention.  The bounded rescore changed six of 100,000 winners (`2/4` by
@@ -312,9 +315,11 @@ is not cross-GPU RELION drift.  At iteration 2, merged cross-engine FSC-AUC
 improves from `0.999999203271` to `0.999999845857` (about a five-fold smaller
 defect), although GT closeness worsens.  Audit `11568516` shows that iteration
 3 improves from `0.999993389833` to `0.999997980427`, about a 3.27-fold
-smaller defect, while GT closeness improves again.  This is strong
-numbered-boundary evidence, not a terminal pass; science `11563827` and strict
-audit `11563842` remain active or dependency-gated.
+smaller defect, while GT closeness improves again.  Iteration 4 also improves
+from `0.999976663509` to `0.999991309525`, about a 2.69-fold smaller defect,
+with a strong GT-closeness gain.  This is strong numbered-boundary evidence,
+not a terminal pass; science `11563827` and strict audit `11563842` remain
+active or dependency-gated.
 
 The same-GPU K=4 science job `11565045` has completed iterations 1--6 with
 sizes `38,38,42,56,60,62`, resolutions
