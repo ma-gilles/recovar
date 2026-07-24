@@ -153,9 +153,12 @@ checks fail-closed.  The targeted device-signature/canonical-replay suite is
 The vulnerable same-GPU graph (`11564419`, `11564442`, `11564443`) was
 canceled before the known iteration-10 failure; both auditors had zero
 runtime.  Its replacement is a fresh non-resumed one-allocation graph at
-`9dcd709b`: science `11565045`, vector audit `11565048`, scalar audit
-`11565050`.  It reruns both RELION arms and RECOVAR sequentially on one
-physical A100 and does not promote outputs from the canceled graph.
+`9dcd709b`: science `11565045`, zero-contributor-aware vector audit
+`11565121`, and independent scalar audit `11565131`.  The initially submitted
+auditors (`11565048`, `11565050`) were canceled at zero runtime after preflight
+found the same invalid per-class nonempty assumption in their comparators.
+The graph reruns both RELION arms and RECOVAR sequentially on one physical
+A100 and does not promote outputs from any canceled graph or auditor.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
