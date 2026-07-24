@@ -6108,6 +6108,15 @@ same-device equivalence or numerical noise.
   slightly overshoots RELION's GT value while remaining closer in
   cross-engine FSC-AUC; only the terminal strict trajectory can decide
   acceptance.
+- CPU FSC audit `11567932` completed `0:0` in 112 seconds with 2,197,784 KiB
+  maximum RSS and shows that the gain survives iterations 3 and 4.
+  Iteration-3 merged new-versus-RELION FSC-AUC is
+  `0.9999994286732671`, versus old `0.9999989229723912`; iteration 4 is
+  `0.9999981782699359`, versus old `0.9999973185738911`.
+- Iteration-3 GT FSC-AUC is `0.10909314872619791`, versus old
+  `0.10909390516870988` and RELION `0.10908983473527732`.  Iteration-4 GT
+  FSC-AUC is `0.10907400326716823`, versus old `0.10906393775269568` and
+  RELION `0.10908224561458033`.  New is closer to RELION at both boundaries.
 - Audit stdout and launcher SHA-256 values are
   `2e0e47f426284ed533f4b48e6b945a9bc715866ea0ec6d13efeb5c231339d890`
   and `05b06cfba9446797f738e179734069d4c028b359b642898a979ac91b6e2f1091`.
@@ -6121,6 +6130,12 @@ same-device equivalence or numerical noise.
   and `6af89219f662eae944811cdb678dd8910fb10b2d6e5c9f7c905404c0e2f608b7`.
   Runtime root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case5_iter2_analysis_20260724`.
+- Iteration-3/4 stdout, analysis script, and launcher SHA-256 values are
+  `f604d258fac128f92f2f5aca30cdeb8964a9c95b57821d22d414b1a4c4041565`,
+  `1d0919f24b3130d4a9e7e7a702201cc1854b389636fc553ac51f99b373054404`,
+  and `dc213e2fabad826e7a3e13001abe683cc5d9da3c810fe6f31674a65bcbfb8ad3`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case5_iter3_4_analysis_20260724`.
 - This is a positive first-boundary generalization result, not a full-case
   acceptance.  Science `11564053` and strict audit `11564062` remain active or
   dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,
@@ -6226,6 +6241,23 @@ same-device equivalence or numerical noise.
   and `5883f1bab7565b05c89f4047159ea5661e67002a181b8fa27bf7ec7790b8b4ae`.
   Audit stdout SHA-256 is
   `0543e42fbe870b0742cebeeaa6b67153f9c52f29e24e9e521ea250d1536604ba`.
+- CPU scheduler-boundary audit `11568050` completed `0:0` in 3 seconds with
+  53,552 KiB maximum RSS and localizes the topology split.  Iteration 8 still
+  has equal size 70/order 4 topology, but RELION remains at shell 19
+  (`28.631579` Angstrom, resolution-stall counter 2) while RECOVAR crosses to
+  shell 20 (`27.20` Angstrom, counter 0).
+- At iteration 9 the independently measured angular accuracies are
+  `2.479` degrees for RELION and `2.469` degrees for RECOVAR.  For both,
+  the 1.875-degree effective step fails the fine-enough test.  Only RELION's
+  prior resolution-stall state is ready to advance, producing size/order
+  `70/5` versus `72/4`.  This rejects a scheduler threshold/oracle patch: the
+  topology failure amplifies the upstream map/FSC-shell butterfly.
+- Scheduler audit stdout, analysis script, and launcher SHA-256 values are
+  `69d75f19f1887630ac54f09a09b374757de47090f5910f40652c2f8403916f09`,
+  `d7e8d06f2b39876672e5a9fbc9a1216ed34dcd7d458519d2e3ad1f194c3250c2`,
+  and `cca79e35937a10573e02e298d5ea5c075dbdae9466beeb9f4390f2ebed9db529`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_scheduler_boundary_20260724`.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 

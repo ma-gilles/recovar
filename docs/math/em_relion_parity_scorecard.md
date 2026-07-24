@@ -159,6 +159,15 @@ order `4` versus `5`, with the order mismatch continuing through iteration
 10.  Both unchanged auditors return status 2.  This confirms the existing
 strict/topology failure and does not change the frozen score of 25/34.
 
+CPU scheduler-boundary audit `11568050` localizes the topology split without
+supporting a scheduler override.  Iteration 8 still has equal size 70/order 4
+topology, but RELION remains at shell 19 (`28.631579` Angstrom; resolution
+stall counter 2), while RECOVAR crosses to shell 20 (`27.20` Angstrom; counter
+0).  At iteration 9, both measured angular accuracies say the 1.875-degree
+grid is not fine enough (`2.479` degrees RELION, `2.469` RECOVAR), but only
+RELION's accumulated stall state is ready to advance.  The size/order split is
+therefore a downstream amplification of the map/FSC-shell butterfly.
+
 ## K=1 frozen case-7 firstiter generalization
 
 Frozen case 7 tests the same intervention against a longer 100,000-particle
@@ -271,6 +280,13 @@ the frozen old row's `0.999999908057`; half-1/half-2 improve from
 `0.107758163608`, versus old `0.107757134405` and RELION
 `0.107757661217`.  This remains intermediate evidence; the immutable score
 does not change before terminal science and both strict auditors pass.
+
+The gain also survives the first two large-grid transitions.  CPU audit
+`11567932` reports iteration-3 merged cross-engine FSC-AUC improving from
+`0.999998922972` to `0.999999428673`, and iteration 4 from
+`0.999997318574` to `0.999998178270`.  At both boundaries, GT FSC-AUC also
+moves closer to RELION.  These are still numbered-boundary diagnostics, not a
+terminal acceptance.
 
 Frozen case 4 has now reached its first RECOVAR boundary under the same
 intervention.  The bounded rescore changed six of 100,000 winners (`2/4` by
