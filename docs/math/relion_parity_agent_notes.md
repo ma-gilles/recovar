@@ -6077,7 +6077,7 @@ same-device equivalence or numerical noise.
   both contain `SAFE_TO_DELETE`.
 - This is a pending full-case generalization arm, not a score change.
 
-# 2026-07-24: case 5 first four boundaries improve modestly within GPU pairs
+# 2026-07-24: case 5 first five boundaries improve within GPU pairs
 
 - Frozen-fixture science `11564053` completed RECOVAR iteration 1 with the
   RELION schedule boundary: current size 56, 30.22 Angstrom resolution, Pmax
@@ -6153,12 +6153,29 @@ same-device equivalence or numerical noise.
   `74c611696cd553c7526f2c170d2cf4db192af90bddb36eda035b737b0173a236`.
   Runtime root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_intervention_within_pair_v2_20260724`.
+- Iteration 5 completed at current size 110, 23.65 Angstrom resolution, Pmax
+  `0.445909`, and next size 110.  Within-pair audit `11568517` completed
+  `0:0` in 85 seconds with 2,225,104 KiB maximum RSS.  Merged cross-engine
+  FSC-AUC improves from `0.9999712213514595` to `0.9999860148597615`,
+  reducing the FSC defect by about 2.06-fold after the smaller iteration-4
+  gain.  Half-1/half-2 improve from
+  `0.9999445061818316`/`0.9999416130352303` to
+  `0.9999753442588191`/`0.9999702087213115`.
+- Iteration-5 GT FSC-AUC is `0.1090079564338494` versus matched new RELION
+  `0.10899736116509263`; the old pair is `0.10900573347159732` versus
+  `0.10900394979588701`.  GT closeness worsens despite the cross-engine gain.
+  Audit stdout SHA-256 is
+  `de0c6f4e976ca4a304cac962474785fb71bb8afd3184460106c6c211644c2301`.
+  Shared v3 analysis-script SHA-256 is
+  `3e67f3de7212c9dd29438eb2aa58a4b8a9d993a04e4ba34836cdafa3dd3db9bb`;
+  runtime root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_intervention_within_pair_v3_20260724`.
 - This is a positive first-boundary generalization result, not a full-case
   acceptance.  Science `11564053` and strict audit `11564062` remain active or
   dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,
   31/34 exact topology, and 34/34 evaluated.
 
-# 2026-07-24: case 4 first boundary improves under the bounded intervention
+# 2026-07-24: case 4 first three boundaries improve under the intervention
 
 - Frozen-fixture science `11563827` completed RECOVAR iteration 1 at current
   size 56, 30.22 Angstrom resolution, Pmax 1.0, and next size 100.  That
@@ -6204,11 +6221,25 @@ same-device equivalence or numerical noise.
   FSC-AUC is `0.9999999999982520` at iteration 1 and
   `0.9999999954796889` at iteration 2.  Stdout SHA-256 is
   `643080d82e3f888092d2df83e17a0ff31072e83a1b0204ab9cfcebd0c95c4435`.
+- Iteration 3 completed at current size 116, 16.00 Angstrom resolution, Pmax
+  `0.600891`, and next size 132.  Within-pair audit `11568516` completed
+  `0:0` in 80 seconds with 2,195,316 KiB maximum RSS.  Merged cross-engine
+  FSC-AUC improves from `0.9999933898334938` to `0.9999979804273882`,
+  reducing the FSC defect by about 3.27-fold.  GT FSC-AUC also moves closer:
+  new RECOVAR/RELION are `0.24646245364215238`/`0.24645781869245548`,
+  while old RECOVAR/RELION are
+  `0.2464467656324268`/`0.24645908446286174`.
+- Iteration-3 audit stdout SHA-256 is
+  `d930102385a38a34258685b7c0b7a3e88ceaccfd9f16261e6be3f59122a21dc3`;
+  shared v3 analysis-script SHA-256 is
+  `3e67f3de7212c9dd29438eb2aa58a4b8a9d993a04e4ba34836cdafa3dd3db9bb`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_intervention_within_pair_v3_20260724`.
 - This is strong first-boundary evidence, not a full-case acceptance.
   Science `11563827` and strict audit `11563842` remain active or
   dependency-gated, so the fixed score remains 25/34.
 
-# 2026-07-24: K=4 same-GPU trajectory reaches iteration 5
+# 2026-07-24: K=4 same-GPU trajectory reaches iteration 6
 
 - Source-bound science `11565045` runs commit
   `9dcd709b56a28a6f361806b57f5b20aaad3ebeed` on physical A100
@@ -6225,6 +6256,10 @@ same-device equivalence or numerical noise.
   `0.823400272`, and HEALPix order 1; the dynamic scheduler selected size 62
   for iteration 6.  Both prior corrected `c390f8bf` diagnostics have exactly
   the same size/resolution/order boundary and rounded Pmax `0.8224`.
+- Iteration 6 completed at current size 62, 22.67 Angstrom resolution, Pmax
+  `0.920524`, and HEALPix order 1; the scheduler selected size 68 for
+  iteration 7.  The vector and scalar auditors remain dependency-gated, so
+  this is trajectory telemetry rather than an acceptance claim.
 - The science job is healthy, while vector audit `11565121` and independent
   scalar audit `11565131` remain dependency-gated.  No K=4 acceptance or K=1
   score change is claimed before those fail-closed auditors finish.

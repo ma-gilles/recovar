@@ -288,15 +288,17 @@ before terminal science and both strict auditors pass.
 The gain also survives the first two large-grid transitions.  CPU audit
 `11567932` reports iteration-3 merged cross-engine FSC-AUC improving from
 the matched old pair's `0.999999237418` to `0.999999428673`, and iteration 4
-from `0.999998069731` to `0.999998178270`.  The cross-engine improvement
-narrows, and matched-pair GT closeness is slightly worse at both boundaries.
-These are still numbered-boundary diagnostics, not a terminal acceptance.
+from `0.999998069731` to `0.999998178270`.  Audit `11568517` reports that
+iteration 5 improves from `0.999971221351` to `0.999986014860`, about a
+two-fold smaller FSC defect.  The cross-engine improvement is non-monotonic,
+and matched-pair GT closeness is slightly worse at iterations 3--5.  These
+are still numbered-boundary diagnostics, not a terminal acceptance.
 
 Frozen case 4 has now reached its first RECOVAR boundary under the same
 intervention.  The bounded rescore changed six of 100,000 winners (`2/4` by
 half).  CPU FSC audit `11567836` reports iteration-1 merged
 new-versus-RELION FSC-AUC `0.999999999398`, versus the frozen old trajectory's
-`0.999999987721`; half-1/half-2 improve from
+`0.999999987721`; half-1/half-2 improve within their matched pairs from
 `0.999999978736`/`0.999999984761` to
 `0.999999999712`/`0.999999998283`.  New merged GT FSC-AUC is
 `0.104211187030`, much closer to RELION's `0.104211182503` than the old
@@ -305,16 +307,18 @@ trajectory's `0.104211286116`.  Iteration 1 keeps the expected size 56,
 frozen trajectory.  Within-pair audit `11568204` confirms that the improvement
 is not cross-GPU RELION drift.  At iteration 2, merged cross-engine FSC-AUC
 improves from `0.999999203271` to `0.999999845857` (about a five-fold smaller
-defect), although GT closeness worsens.  This is strong numbered-boundary
-evidence, not a terminal pass; science `11563827` and strict audit `11563842`
-remain active or dependency-gated.
+defect), although GT closeness worsens.  Audit `11568516` shows that iteration
+3 improves from `0.999993389833` to `0.999997980427`, about a 3.27-fold
+smaller defect, while GT closeness improves again.  This is strong
+numbered-boundary evidence, not a terminal pass; science `11563827` and strict
+audit `11563842` remain active or dependency-gated.
 
-The same-GPU K=4 science job `11565045` has completed iterations 1--5 with
-sizes `38,38,42,56,60`, resolutions
-`60.44,49.45,30.22,27.20,25.90` Angstrom, and iteration-5 Pmax
-`0.823400272`; iteration 6 starts at size 62.  This exact size/resolution
+The same-GPU K=4 science job `11565045` has completed iterations 1--6 with
+sizes `38,38,42,56,60,62`, resolutions
+`60.44,49.45,30.22,27.20,25.90,22.67` Angstrom, and iteration-6 Pmax
+`0.920524`; iteration 7 starts at size 68.  This exact size/resolution
 topology matches both prior corrected `c390f8bf` diagnostic trajectories
-through this boundary; their rounded iteration-5 Pmax is `0.8224`.
+through this boundary.
 Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,
 so this is not yet K=4 acceptance.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
