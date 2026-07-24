@@ -6701,6 +6701,31 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case04_p5234_exact_relion_grid_20260724T142000Z`;
   both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
   `3499d355e54270d7be3eecb12a22509280784a1eb25ac491649aecba3f6bf694`.
+- Exact FFTW-order replay of the immutable pass-0 operands closes the
+  non-reference side of that tie.  RECOVAR `ctf2_data * 256^4` matches RELION
+  `corr_img` at relative L2 `2.4156677e-7` and relative maximum
+  `6.4483828e-7`.  RELION's actual coarse-kernel factorization,
+  `Fimg_corrected * corr_img * translation_phase`, matches RECOVAR
+  `-shifted_data * 256^2` at relative L2
+  `2.8024704e-7/2.8735136e-7/2.9122280e-7` min/median/max across all 29
+  translations.  The RELION-winner translation 20 and RECOVAR-winner
+  translation 24 are `2.8206154e-7` and `2.8808909e-7`.  This eliminates image
+  preprocessing, CTF weighting, translation phases, and FFTW window order as
+  material causes; the remaining branch is projected-reference generation or
+  score operand/reduction arithmetic.  Report and analyzer SHA-256 values are
+  `f7258bfe7ac859b4499d6166ab78b597ad7c5183b333fcbdce6555eb0272530a`
+  and
+  `68dbe30dcf577026ce381f214663054cf3671ec6068b34ce2223193978f55471`.
+  Exact-UUID component job `11574764` is pending on `della-h21g2`; it enables
+  only RELION's built-in coarse normalized-CC numerator/norm dump.  Run and
+  runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_p5234_cc_components_20260724T154500Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case04_p5234_cc_components_20260724T154500Z`;
+  both contain `SAFE_TO_DELETE`.  Corrected launcher SHA-256 is
+  `8af43e740c9faf9ccc5f23f107846a76e00a3808c8316581c4c99eb138b0d4f7`.
+  Pending job `11574731` was cancelled before execution after preflight found
+  that its derived launcher had not yet isolated the runtime cache.
 - Same-physical-H100 fine-pass capture `11572658` is queued for case-5
   particles `38594` and `65070` on `della-h19g1`, targeting capture UUID
   `GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`.  Its run/runtime roots are

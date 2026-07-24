@@ -246,6 +246,15 @@ sub-micro score arithmetic/tie preservation.  Analysis JSON SHA-256 is
 `1a834a5f9cfdc67899f79485d6c467860f8a170f109555567fdf6169e70d2d12`;
 the exact RELION dump manifest SHA-256 is
 `d558418952fe8f9a1a791ca8fbca54ca6d0bc7c61e1f4d4081273025efc5b80c`.
+An exact FFTW-order operand replay further closes preprocessing: RECOVAR's
+positive score weight matches RELION `corr_img` at relative L2 `2.41567e-7`,
+and the combined image/CTF/translation operand matches at relative L2
+`2.80247e-7` to `2.91223e-7` across all 29 translations.  The two cross-winner
+translations are `2.82062e-7` and `2.88089e-7`.  This eliminates image
+preprocessing, CTF weighting, translation phase, and window ordering as the
+material source, leaving projected-reference generation or score
+operand/reduction arithmetic.  Operand-report SHA-256 is
+`f7258bfe7ac859b4499d6166ab78b597ad7c5183b333fcbdce6555eb0272530a`.
 Fine-pass capture `11572658` remains queued for particles `38594` and `65070`.
 The frozen score remains 25/34 strict, 31/34 topology, and 34/34 evaluated.
 
