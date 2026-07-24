@@ -6681,6 +6681,40 @@ same-device equivalence or numerical noise.
 - K=4 remains red.  Snapshot `strict-k1-v6-20260724` remains 25/34 strict,
   31/34 exact topology, and 34/34 evaluated.
 
+# 2026-07-24: native RELION reconstruction localizes K=4 divergence upstream
+
+- `scripts/audit_k4_native_bpref_reconstruct.py` converts the saved
+  iteration-11 odd `155^3` public accumulator into RELION's explicit
+  `155x155x78` x-half BPref layout.  An independent round trip through
+  RECOVAR's production x-half expansion is bitwise exact.  The qualified
+  frame conversions are data `*-256^2`, weight `*256^4`, and tau2 `/256^4`.
+- RELION Class3D defaults to `skip_gridding=true`.  Native binding jobs
+  `11580327` and `11580360` complete `0:0` in 15/40 seconds with maximum RSS
+  2,769,368/2,834,344 KiB.  Native-RELION reconstruction versus the saved
+  RECOVAR map has classwise FSC-AUC
+  `0.999999953,0.999999944,0.999999945,0.999999935`.
+- Substituting the native maps changes cross-engine FSC-AUC by only
+  `+4.27e-8,+6.83e-8,+3.72e-8,+7.51e-8`; the iteration-11 class-2/class-3
+  failures remain `0.994509199`/`0.994150582`.  The accepted classification
+  is `remaining_k4_gap_precedes_reconstruction`.
+- Non-default `skip_gridding=false` arm `11580236` completes `0:0` in 18
+  seconds but worsens class-2 cross-engine FSC-AUC to `0.993845903`; it is
+  rejected.  Preflight-only job `11580190` failed before reconstruction on
+  an unresolved `.pixi` symlink assertion.  Superseded pending jobs
+  `11579928`/`11580144` were canceled at zero runtime.
+- Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it11_native_reconstruct_20260724T224111Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it11_native_reconstruct_20260724T224111Z`;
+  both contain `SAFE_TO_DELETE`.  Classwise audit JSON SHA-256 values are
+  `2c8568f8f88b5c43ec36863e05fb2a034f1237254160972838f58f5a7d260254`,
+  `2885cdd8b21c8003578a835ad9a34ad812170e5215e5e98da185d209879b7f86`,
+  `96e61737cb6366026155e49e892f5715f4d415ffeb0a09d5f253e2bc4e1889f9`,
+  and
+  `599ae299cb0ed343355310ba594f4448f8a5b89d5a72d887c9c2453652e211b7`.
+  This diagnostic rejects a reconstruction/postprocessing patch and does not
+  alter the red K=4 gate or frozen K=1 score.
+
 # 2026-07-24: RELION's 128 atomic additions close the case-4 coarse tie
 
 - Synchronized same-H100 RELION component job `11577336` completed `0:0` in

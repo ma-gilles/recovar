@@ -551,6 +551,21 @@ JSON and shellwise NPZ SHA-256 values are
 `02615753e8bb20df95673a6aa45fe374111b28aac819115d09d44d429bec2288`
 and `c676d662c3a1204d5ff2710d710dd1fd6bd3288169c3d3e49373d2beb008db4e`.
 K=4 remains red, and no frozen K=1 score change is claimed.
+
+Native reconstruction substitution localizes that red boundary upstream of
+reconstruction.  Audit jobs `11580327`/`11580360` converted the saved
+iteration-11 odd `155^3` RECOVAR accumulators into RELION's explicit
+`155x155x78` BPref layout, applied the qualified `-256^2`, `256^4`, and
+`1/256^4` data/weight/tau2 frame conversions, and called RELION's compiled
+`BackProjector::reconstruct` with its Class3D default `skip_gridding=true`.
+Native-RELION versus saved-RECOVAR FSC-AUC is
+`0.999999953,0.999999944,0.999999945,0.999999935` for classes 1--4.
+Substituting those maps changes their cross-engine FSC-AUC by only
+`+4.27e-8,+6.83e-8,+3.72e-8,+7.51e-8`; the class-2/class-3 failures remain
+`0.994509199`/`0.994150582`.  The non-default iterative-preweight arm
+`11580236` is worse (`0.993845903` for class 2) and is rejected.  Therefore
+the material iteration-11 difference is already present in accumulated
+support/statistics, not RECOVAR's reconstruction or solvent postprocessing.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
