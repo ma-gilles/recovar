@@ -72,6 +72,7 @@ above.  A failing intervention remains unchecked and does not change the
 |---|---|---|---|---|---:|---:|---|
 | [ ] | `k1-03` | `84143872`; unchanged fixed-suite science with 36-hour budget after the prior 24-hour timeout | pending | pending | — | — | science 11553236; strict audit 11553237 |
 | [ ] | `k1-04` | `c74beea4`; direct-real initial projector + bounded firstiter top-2 tree rescore | fail | pass | 0.992965912 | +0.003915953 | setup 11563826; science 11563827; summary 11563828; strict audit 11563842 |
+| [ ] | `k1-04` | `161cb18f`; same intervention + exact RELION 128-add coarse CC and direction-major tie order | pending | pending | — | — | setup 11579502; science 11579503; summary 11579504; strict audit 11579539 |
 | [ ] | `k1-05` | `c74beea4`; identical case-4 intervention, frozen-fixture generalization | fail | pass | 0.985721587 | +0.000330734 | setup 11564052; science 11564053; summary 11564054; strict audit 11564062 |
 | [ ] | `k1-24` | `b826bc52`; direct-real initial projector + bounded firstiter top-2 tree rescore | fail | pass | 0.994801463 | +0.008173125 | setup 11562037; science 11562038; summary 11562039; strict audit 11562082 |
 

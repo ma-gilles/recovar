@@ -6706,8 +6706,23 @@ same-device equivalence or numerical noise.
   both contain `SAFE_TO_DELETE`.
 - Euler-operand diagnostic `11578677` was canceled before execution at zero
   runtime because this exact component/source closure made it unnecessary.
+- Clean detached commit `161cb18f8989d8e83320d539d35a12f597d32ea6`
+  now owns an autonomous frozen-fixture case-4 graph: setup `11579502`
+  completed `0:0`; science `11579503` is running; summary `11579504` and
+  independent strict FSC/topology audit `11579539` are dependency-gated.
+  The fixture-manifest SHA-256 is
+  `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`;
+  grid correction is off, forced final-after-max is unset, and the bounded
+  margin remains `4e-6`.
+- Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case04_atomic_161cb18f_20260724T231500Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_case04_atomic_161cb18f_20260724T231500Z`;
+  both contain `SAFE_TO_DELETE`.  The independent strict-audit launcher
+  SHA-256 is
+  `fb6fe4695a0aff0dede1f5cede72956ed237f912c43b4bbd47dc8251bb50aaf1`.
   The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
-  evaluated until a full fixed-fixture case-4 rerun passes unchanged gates.
+  evaluated until this rerun passes unchanged gates.
 
 # 2026-07-24: frozen case 7 tests firstiter generalization
 
