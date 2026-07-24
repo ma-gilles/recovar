@@ -6126,7 +6126,35 @@ same-device equivalence or numerical noise.
   dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,
   31/34 exact topology, and 34/34 evaluated.
 
-# 2026-07-24: K=4 same-GPU trajectory reaches iteration 4
+# 2026-07-24: case 4 first boundary improves under the bounded intervention
+
+- Frozen-fixture science `11563827` completed RECOVAR iteration 1 at current
+  size 56, 30.22 Angstrom resolution, Pmax 1.0, and next size 100.  That
+  boundary and size decision match the frozen trajectory.
+- The bounded `4e-6` top-two rescore examined all 100,000 particles and
+  changed six winners: half 1 examined 50,371, found 81 ambiguous, and
+  changed two; half 2 examined 49,629, found 87 ambiguous, and changed four.
+- CPU FSC audit `11567836` completed `0:0` in 64 seconds with 2,221,000 KiB
+  maximum RSS.  Iteration-1 merged RECOVAR-versus-RELION FSC-AUC improves
+  from the frozen old trajectory's `0.9999999877211377` to
+  `0.9999999993977797`.  Half-1/half-2 improve from
+  `0.9999999787358119`/`0.9999999847609748` to
+  `0.9999999997117701`/`0.9999999982826421`.
+- New merged GT FSC-AUC is `0.104211187030167`, versus old
+  `0.10421128611604787` and RELION `0.10421118250310028`.  Both the
+  cross-engine and GT comparisons therefore move strongly toward RELION.
+- Audit stdout, analysis script, and launcher SHA-256 values are
+  `08a5e44687d21407c3f417459856e195a8cf392f140fc1d30eedc90c71315868`,
+  `1ee32ce3e04d6cbf6eb5bd95ffc86d8a9899fb7f26818cdac99366b8f120756c`,
+  and `e52a5b43b421d4adde71db333866d8f19e5a98e704526ffea4eb5496f3108909`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case4_iter1_analysis_20260724`;
+  it contains `SAFE_TO_DELETE` and durable submission metadata.
+- This is strong first-boundary evidence, not a full-case acceptance.
+  Science `11563827` and strict audit `11563842` remain active or
+  dependency-gated, so the fixed score remains 25/34.
+
+# 2026-07-24: K=4 same-GPU trajectory reaches iteration 5
 
 - Source-bound science `11565045` runs commit
   `9dcd709b56a28a6f361806b57f5b20aaad3ebeed` on physical A100
@@ -6139,6 +6167,10 @@ same-device equivalence or numerical noise.
   through this boundary.  Their iteration-4 Pmax values span
   `0.597791747`--`0.597796751`, placing the current value within
   `7.102e-6`.
+- Iteration 5 completed at current size 60, 25.90 Angstrom resolution, Pmax
+  `0.823400272`, and HEALPix order 1; the dynamic scheduler selected size 62
+  for iteration 6.  Both prior corrected `c390f8bf` diagnostics have exactly
+  the same size/resolution/order boundary and rounded Pmax `0.8224`.
 - The science job is healthy, while vector audit `11565121` and independent
   scalar audit `11565131` remain dependency-gated.  No K=4 acceptance or K=1
   score change is claimed before those fail-closed auditors finish.

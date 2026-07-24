@@ -272,10 +272,26 @@ the frozen old row's `0.999999908057`; half-1/half-2 improve from
 `0.107757661217`.  This remains intermediate evidence; the immutable score
 does not change before terminal science and both strict auditors pass.
 
-The same-GPU K=4 science job `11565045` has completed iterations 1--4 with
-sizes `38,38,42,56`, resolutions `60.44,49.45,30.22,27.20` Angstrom, and
-iteration-4 Pmax `0.597798849`; iteration 5 starts at size 60.  The schedule
-matches the three prior diagnostic trajectories through this boundary.
+Frozen case 4 has now reached its first RECOVAR boundary under the same
+intervention.  The bounded rescore changed six of 100,000 winners (`2/4` by
+half).  CPU FSC audit `11567836` reports iteration-1 merged
+new-versus-RELION FSC-AUC `0.999999999398`, versus the frozen old trajectory's
+`0.999999987721`; half-1/half-2 improve from
+`0.999999978736`/`0.999999984761` to
+`0.999999999712`/`0.999999998283`.  New merged GT FSC-AUC is
+`0.104211187030`, much closer to RELION's `0.104211182503` than the old
+trajectory's `0.104211286116`.  Iteration 1 keeps the expected size 56,
+30.22 Angstrom boundary and chooses size 100 for iteration 2, matching the
+frozen trajectory.  This is strong first-boundary evidence, not a terminal
+pass; science `11563827` and strict audit `11563842` remain active or
+dependency-gated.
+
+The same-GPU K=4 science job `11565045` has completed iterations 1--5 with
+sizes `38,38,42,56,60`, resolutions
+`60.44,49.45,30.22,27.20,25.90` Angstrom, and iteration-5 Pmax
+`0.823400272`; iteration 6 starts at size 62.  This exact size/resolution
+topology matches both prior corrected `c390f8bf` diagnostic trajectories
+through this boundary; their rounded iteration-5 Pmax is `0.8224`.
 Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,
 so this is not yet K=4 acceptance.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
