@@ -6509,3 +6509,60 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_case07_tree_c74beea4_20260724T110500Z`;
   both contain `SAFE_TO_DELETE`.  This pending diagnostic does not change
   the fixed score.
+
+# 2026-07-24: cases 4/5 accumulate their terminal pose tails from iteration 1
+
+- Exact-image-identity particle-state audits `11571320_0` and `11571320_1`
+  completed `0:0` in 230 and 214 seconds.  They cover every numbered state
+  plus final all-data for 100,000 particles in frozen cases 4 and 5.  Both
+  pass the exact numbered-iteration mapping, schedule, convergence, and
+  convergence-valid finalization gates; the distributions are diagnostic and
+  do not replace FSC/FSC-AUC acceptance.
+- After the direct-real projector plus bounded `4e-6` tree intervention,
+  case 4 iteration 1 has only two material particle exceptions: original
+  index `5234` differs by `7.440216` degrees and `2.375820` Angstrom, while
+  index `72654` differs only by `1.062504` Angstrom.  Case 5 has three
+  translation-only exceptions: indices `38594` and `65070` differ by
+  `1.062500` Angstrom and index `93729` by `2.125000` Angstrom.  Pmax and
+  significant-support counts are exactly equal for all 100,000 particles in
+  both cases at this first boundary.
+- The greater-than-0.1-degree tail then grows continuously rather than
+  appearing at final writeback.  Case 4 has `1,10,42,149,296,450,628,1609`
+  tail particles over iterations 1--8, reaches 6,017 at iteration 17, and
+  6,398 at final.  Case 5 has `0,11,76,192,505,843,1231,1601` over
+  iterations 1--8, reaches 7,269 at iteration 16, and 7,421 at final.
+  Significant-support mismatches likewise grow from zero at iteration 1 to
+  4,456/8,493 at iteration 8 and 18,460/33,904 at the last numbered state
+  for cases 4/5.
+- Large Pmax-delta cohorts and support mismatches are enriched for the next
+  iteration's tail after the initial exact boundary, but neither captures the
+  majority of future tail particles.  This is consistent with a small
+  first-iteration winner cohort seeding a broad, low-confidence posterior
+  butterfly rather than a significance-threshold defect.
+- Last-numbered to final particle changes remain small.  Case 4 changes from
+  93.983% to 93.602% within 0.5 degrees and from 96.789% to 96.427% within
+  0.5 Angstrom.  Case 5 changes from 92.731% to 92.579% within 0.5 degrees
+  and from 95.625% to 95.404% within 0.5 Angstrom.  This independently
+  confirms the inherited full-grid final-only family and rejects a final
+  pose-writeback, grid-correction, scheduler, or threshold patch.
+- Case-4 JSON/array SHA-256 values are
+  `d68cf1f4ce2fa60664205cfb907cfbc67c3f991fcd308c02514d4c083e25c43b`
+  and
+  `fc4a164013e8a65a37f043e1db88415bdfd4221c615bd416c14f94c1724a1adc`.
+  Case-5 values are
+  `9a1875bfc1d7c98703dbc862fba37164aee840ca6dfc18d99c7fb0f31552eb5e`
+  and
+  `961f99e11f25559b7bfce75533bca69909d9830927a67099f7392ac3e8d5b472`.
+  Durable run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case45_full_particle_audit_20260724T134800Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case45_full_particle_audit_20260724T134800Z`.
+- The five remaining iteration-1 exceptions are being captured in complete
+  coarse grids by H100 array `11571746`.  Its run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case45_remaining_it1_capture_20260724T140000Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case45_remaining_it1_capture_20260724T140000Z`;
+  both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
+  `775b0e7b74b3d18288839d4008a7cde1cb1f492d6efc36609c16deebe42aceb4`.
+- Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
+  topology, and 34/34 evaluated.

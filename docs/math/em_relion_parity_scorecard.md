@@ -209,6 +209,19 @@ The durable root is
 This is localization evidence, not a new checkbox; the frozen score remains
 25/34.
 
+Complete exact-identity audits `11571320_0` and `11571320_1` extend this
+classification across every numbered state for frozen cases 4 and 5.  The
+intervention leaves only two material case-4 iteration-1 exceptions (original
+indices `5234` and `72654`) and three translation-only case-5 exceptions
+(`38594`, `65070`, and `93729`); Pmax and significant-support arrays are
+otherwise exact at that boundary.  The greater-than-0.1-degree pose tails then
+grow from `1 -> 6,017` and `0 -> 7,269` particles by the last numbered state,
+while last-numbered to final changes are small.  This confirms that final
+full-grid reconstruction amplifies an inherited first-iteration
+winner/reference/posterior butterfly.  H100 array `11571746` captures complete
+coarse grids for the five remaining exceptions.  The frozen score remains
+25/34 strict, 31/34 topology, and 34/34 evaluated.
+
 ## K=4 physical-GPU trajectory diagnostic
 
 This diagnostic is not part of the frozen K=1 denominator.  It compares two
