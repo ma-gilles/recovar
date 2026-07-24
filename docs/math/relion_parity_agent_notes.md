@@ -6202,6 +6202,29 @@ same-device equivalence or numerical noise.
   `4cec2f90b40bf1d5d26bce43a0e427d2662063d6b3e1ef49e5d82a192be5789b`;
   launcher SHA-256 is
   `34fde3a4485f151d1b833e9df409b4a5ec9b86b5867fece44be4f1542e4dd47c`.
+- Shell-profile audit `11569181` completed `0:0` in 31 seconds with
+  2,018,944 KiB maximum RSS.  At iteration 6, the full AUC delta is
+  `-7.598264734065552e-7`; shells 1--64 contribute
+  `-7.190593914567778e-7` (`94.6%`), while shells 64--126 contribute only
+  `-4.076708185163369e-8`.  The largest losses are at shells 53--56
+  (`-1.78610e-5` to `-3.51685e-5`).
+- RELION new-versus-old FSC at shells 53--56 is only
+  `0.999542386862`, `0.999101729683`, `0.998700527702`, and
+  `0.998564842746`.  Neither old nor new within-pair curve has any shell below
+  `0.995`; their minimum non-DC values are `0.999922172364` and
+  `0.999928750100`.  The observed reversal is therefore a run-sensitive
+  mid-shell butterfly rather than a high-shell collapse or evidence for a
+  new production arithmetic/scheduler patch.
+- At iteration 7, only 16 of 126 finite non-DC shells have negative
+  new-minus-old delta, and the low/high contributions to the positive AUC
+  delta are `+1.1915097656998164e-6` and
+  `+3.503779907609861e-7`.  Audit stdout, analysis-script, and launcher
+  SHA-256 values are
+  `3ad632ad35f3389dd5d83336a4fdd04898892f339685557fad94682de93bf6e7`,
+  `c888cb76bd570696b592dc067fae3279642732e032dc262d1fdb08179a776951`,
+  and `a1f8f006706e205a8c056b89c7f3f7610f2620caca831b7f9d6c53e180ed61ee`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case5_late_shell_profile_20260724`.
 - This is a positive first-boundary generalization result, not a full-case
   acceptance.  Science `11564053` and strict audit `11564062` remain active or
   dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,

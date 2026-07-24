@@ -300,6 +300,13 @@ old/new delta is not isolated from physical-GPU/run drift.  The intervention
 does not dominate the old trajectory at every boundary.  These are still
 numbered-boundary diagnostics, not a terminal acceptance.
 
+Shell-profile audit `11569181` localizes `94.6%` of the iteration-6 negative
+AUC delta to shells 1--64, with the largest losses at shells 53--56 rather
+than the high-shell tail.  RELION cross-run FSC at those four shells is only
+`0.998565`--`0.999542`, while neither within-pair curve has any shell below
+`0.995`.  This is a run-sensitive mid-shell butterfly, not evidence for a
+new arithmetic or scheduler patch.
+
 Frozen case 4 has now reached its first RECOVAR boundary under the same
 intervention.  The bounded rescore changed six of 100,000 winners (`2/4` by
 half).  CPU FSC audit `11567836` reports iteration-1 merged
