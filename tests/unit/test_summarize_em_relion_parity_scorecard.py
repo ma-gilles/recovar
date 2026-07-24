@@ -201,6 +201,49 @@ def test_proposal_fixture_validation_rehashes_materialized_bytes(tmp_path):
 
 
 @pytest.mark.unit
+def test_proposal_job_identity_is_bound_to_submission_and_case_table(tmp_path):
+    run_root = tmp_path / "run"
+    case_root = run_root / "cases" / "4_high_noise_100k_g256_white_noise3_bf80"
+    case_root.mkdir(parents=True)
+    source_head = "a" * 40
+    science_job = "11563827"
+    case = {
+        "id": "k1-04",
+        "name": "high_noise_100k_g256_white_noise3_bf80",
+    }
+    (run_root / "submission.env").write_text(f"HEAD={source_head}\nCASE_JOB_IDS='{science_job}'\n")
+    (run_root / "selected_cases.tsv").write_text(
+        f"index|name|case_root|case_job_id\n4|{case['name']}|{case_root}|{science_job}\n"
+    )
+
+    MODULE._validate_job_identity(
+        run_root,
+        case_root,
+        case,
+        science_job,
+        source_head,
+    )
+
+    with pytest.raises(ValueError, match="absent from submission.env"):
+        MODULE._validate_job_identity(
+            run_root,
+            case_root,
+            case,
+            "11563899",
+            source_head,
+        )
+    (run_root / "submission.env").write_text(f"HEAD={source_head}\nCASE_JOB_IDS='{science_job} 11563899'\n")
+    with pytest.raises(ValueError, match="selected-cases science job differs"):
+        MODULE._validate_job_identity(
+            run_root,
+            case_root,
+            case,
+            "11563899",
+            source_head,
+        )
+
+
+@pytest.mark.unit
 def test_proposal_evidence_parser_requires_absolute_fixed_suite_identity():
     parsed = MODULE.parse_proposal_evidence("k1-04|/scratch/example/cases/4_high_noise|11563827|11563842")
 

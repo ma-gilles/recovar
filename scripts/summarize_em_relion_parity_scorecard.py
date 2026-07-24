@@ -9,6 +9,7 @@ requires a new suite version rather than silently moving the current score.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import re
@@ -361,8 +362,8 @@ def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sh
         "",
         "After a terminal strict auditor passes, build a fail-closed candidate",
         "superseding ledger with `--proposal-output`. The command validates the",
-        "frozen fixture identity and re-hashes every materialized byte, clean source,",
-        "same physical GPU, autonomous",
+        "frozen fixture identity and re-hashes every materialized byte, clean source and",
+        "submitted job/case-table identity, same physical GPU, autonomous",
         "FSC/topology audits, convergence/finalization contract, and evidence",
         "hashes. It never mutates the checked scorecard. For example:",
         "",
@@ -569,12 +570,45 @@ def _validate_gpu_pair(case_root: Path, case_id: str) -> str:
     return paired_gpu_uuid
 
 
-def _validate_runtime_contract(run_root: Path, case_root: Path, case_id: str) -> None:
+def _read_submission_env(run_root: Path) -> dict[str, str]:
     submission = {}
     for line in (run_root / "submission.env").read_text().splitlines():
         if "=" in line:
             name, value = line.split("=", 1)
             submission[name] = value
+    return submission
+
+
+def _validate_job_identity(
+    run_root: Path,
+    case_root: Path,
+    case: dict,
+    science_job: str,
+    source_head: str,
+) -> None:
+    case_id = case["id"]
+    submission = _read_submission_env(run_root)
+    _require(submission.get("HEAD") == source_head, f"{case_id}: submission/source HEADs differ")
+    submitted_jobs = submission.get("CASE_JOB_IDS", "").strip("'\"").split()
+    _require(science_job in submitted_jobs, f"{case_id}: science job is absent from submission.env")
+
+    with (run_root / "selected_cases.tsv").open(newline="") as stream:
+        rows = list(csv.DictReader(stream, delimiter="|"))
+    selected = [
+        row
+        for row in rows
+        if row.get("case_root") and Path(cast(str, row["case_root"])).resolve() == case_root.resolve()
+    ]
+    _require(len(selected) == 1, f"{case_id}: expected one exact selected-cases row")
+    row = selected[0]
+    expected_index = str(int(case_id.removeprefix("k1-")))
+    _require(row.get("index") == expected_index, f"{case_id}: selected-cases index differs")
+    _require(row.get("name") == case["name"], f"{case_id}: selected-cases name differs")
+    _require(row.get("case_job_id") == science_job, f"{case_id}: selected-cases science job differs")
+
+
+def _validate_runtime_contract(run_root: Path, case_root: Path, case_id: str) -> None:
+    submission = _read_submission_env(run_root)
     _require(
         submission.get("EM_K1_MATRIX_TRAJECTORY_MODE") == "autonomous",
         f"{case_id}: submission trajectory mode was not autonomous",
@@ -616,6 +650,7 @@ def build_proposal_update(
     _validate_case_definition(case, case_config)
     _validate_materialized_fixture(case, case_root, fixture_manifest, fixture_manifest_sha256)
     source_head = _read_clean_source_head(run_root, evidence.science_job, evidence.case_id)
+    _validate_job_identity(run_root, case_root, case, evidence.science_job, source_head)
     paired_gpu_uuid = _validate_gpu_pair(case_root, evidence.case_id)
     _validate_runtime_contract(run_root, case_root, evidence.case_id)
 
