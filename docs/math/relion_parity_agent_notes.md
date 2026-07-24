@@ -5732,3 +5732,42 @@ same-device equivalence or numerical noise.
   scientific evidence.
 - No production patch is authorized from this result.  Frozen score remains
   25/34 strict, 31/34 exact topology, and 34/34 evaluated.
+
+# 2026-07-24: case 24 iteration-1 winner and maps close under combined opt-ins
+
+- Reduction-only full replay at source `9abd79fb` examined 3,000 images,
+  found four top-two margins within `4e-6`, and changed zero winners.  The
+  existing RELION 128-lane/tree rescore is therefore necessary for the
+  target pair but is not sufficient with RECOVAR's live initial projector.
+- The live initial projector differs from captured RELION `Projector::data`
+  at relative L2 `2.75962e-7`.  The discrepancy is reproduced by the
+  complex64 Fourier-to-real roundtrip used before initial projector
+  construction.  Case input `reference_init_relion.mrc` is exactly the
+  negative of `reference_init.mrc`, so this is not an input-map mismatch.
+- Commit `a521cfb6` adds the default-off
+  `RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE=1` path.  Only the initial
+  projector consumes the preserved float64 real low-pass result; resident
+  Fourier state and subsequent iterations are unchanged.  The saved
+  complex64 projector residual drops `10.82x` to `2.55164e-8`.
+- The combined local A100 run uses both
+  `RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE=1` and
+  `RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN=4e-6`, with
+  `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` unset/off.  Half 1 has 1/1
+  ambiguity/change; half 2 has 3/0.  Original index 1901 changes from
+  `(16550, 14)` to RELION `(16551, 14)`.
+- Cross-engine iteration-1 FSC-AUC improves from
+  `0.999998394276/0.999999741584/0.999999380590` to
+  `0.999999999956/0.999999999955/0.999999999972` for
+  half1/half2/merged.  These are non-DC FSC metrics over 62 finite shells;
+  correlation is not used.
+- Accepted diagnostic:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_tree_top2_58457106_20260724T033852Z/case24_combined_projector_tree_intervention_audit.json`
+  (SHA-256
+  `7343196ea7ca9643bb586ca97159564badc85687102a3f4c179269b6729f1502`).
+  Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_tree_top2_58457106_20260724T033852Z/combined_a521cfb6`.
+- Canceled pending Slurm attempts `11561699` and `11561811` had zero runtime
+  and are not evidence.  Next run the complete fixed case and apply the
+  unchanged strict FSC/topology audit.  Until it passes, frozen snapshot
+  `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
+  34/34 evaluated.

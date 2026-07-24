@@ -9253,6 +9253,51 @@ The durable replay root is
 The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
 evaluated.
 
+### Case-24 initial-projector plus reduction intervention closes iteration 1
+
+The case-24 first-iteration winner residual is a two-factor boundary.  A
+full reduction-only run at source `9abd79fb` rescored four margin-qualified
+coarse top-two pairs with the RELION 128-lane float32 tree but changed zero
+winners.  It therefore rejected reduction order alone as sufficient.  A
+separate operand capture localized the other factor to the initial-reference
+path: converting the resident complex64 Fourier reference back through real
+space before constructing `Projector::data` produced relative L2
+`2.75962e-7` against the captured RELION projector.
+
+Commit `a521cfb6` adds an opt-in direct float64 real-reference handoff for the
+zero-based iteration-0 RELION projector only.  It does not alter the resident
+Fourier state, later projectors, or default behavior.  In the combined
+one-iteration run on local A100
+`GPU-dc6576aa-e1e4-6055-4a5e-d0fa809f3983`, the saved projector residual
+fell by `10.82x` to `2.55164e-8`.  Of 3,000 images, only four top-two pairs
+qualified for exact rescore and only original index 1901 changed.  Its
+assignment moved from RECOVAR `(16550, 14)` to the exact RELION winner
+`(16551, 14)`.
+
+The corrected assignment closes the reconstructed iteration-1 map boundary:
+
+| Map | Baseline RECOVAR vs RELION FSC-AUC | Combined vs RELION FSC-AUC |
+| --- | ---: | ---: |
+| half 1 | 0.999998394276 | 0.999999999956 |
+| half 2 | 0.999999741584 | 0.999999999955 |
+| merged | 0.999999380590 | 0.999999999972 |
+
+These are normalized non-DC FSC-AUC values over 62 finite shells; correlation
+was not computed.  The accepted diagnostic is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_tree_top2_58457106_20260724T033852Z/case24_combined_projector_tree_intervention_audit.json`
+(SHA-256
+`7343196ea7ca9643bb586ca97159564badc85687102a3f4c179269b6729f1502`).
+The full run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_tree_top2_58457106_20260724T033852Z/combined_a521cfb6`.
+Slurm attempts `11561699` and `11561811` were canceled while pending with
+zero runtime and are not scientific evidence.
+
+This is an opt-in one-iteration causal result, not yet a fixed-suite pass.
+The next gate is the complete case-24 trajectory with both interventions and
+the unchanged strict FSC/topology auditor.  Snapshot
+`strict-k1-v6-20260724` therefore remains 25/34 strict, 31/34 exact topology,
+and 34/34 evaluated.
+
 ### Nine iteration-1 winners explain the case-4 accumulator residual
 
 Same-H100 capture job `11561082` completed `0:0` in `00:14:44` on
