@@ -245,6 +245,86 @@ def test_compare_relion_recovar_estep_dump_matches_candidate_keys(tmp_path):
     assert result["common_combined_log_prior_centered_diff"]["max_abs"] == 0.0
 
 
+def test_compare_relion_recovar_estep_dump_reports_both_engines_top_candidate_terms(tmp_path):
+    relion_dir = tmp_path / "relion"
+    relion_dir.mkdir()
+    _write_flat_int(relion_dir / "pass1_acc_rot_id.bin", [5, 7])
+    _write_flat_int(relion_dir / "pass1_acc_rot_idx.bin", [0, 1])
+    _write_flat_int(relion_dir / "pass1_acc_trans_idx.bin", [0, 1])
+    _write_flat_real(relion_dir / "pass1_candidate_weight_normalized.bin", [0.7, 0.3])
+    _write_flat_real(relion_dir / "pass1_exp_Mweight_raw_preprior.bin", [-12.0, -10.0])
+    _write_flat_real(relion_dir / "pass1_candidate_orientation_log_prior.bin", [-1.0, -2.0])
+    _write_flat_real(relion_dir / "pass1_candidate_offset_log_prior.bin", [-0.1, -0.2])
+
+    recovar_npz = tmp_path / "recovar_pass2.npz"
+    scores_pre = np.array([[11.5, -np.inf], [-np.inf, 10.5]], dtype=np.float64)
+    scores_with = np.array([[10.4, -np.inf], [-np.inf, 8.3]], dtype=np.float64)
+    probs = np.array([[0.2, 0.0], [0.0, 0.8]], dtype=np.float64)
+    mask = np.isfinite(scores_pre)
+    np.savez_compressed(
+        recovar_npz,
+        original_index=np.int64(123),
+        local_index=np.int64(45),
+        current_size=np.int64(56),
+        n_fine_trans=np.int64(2),
+        fine_translations=np.zeros((2, 2), dtype=np.float32),
+        rotations=np.zeros((2, 3, 3), dtype=np.float32),
+        oversampled_rot_indices=np.array([5, 7], dtype=np.int64),
+        parent_map=np.array([0, 1], dtype=np.int32),
+        candidate_mask=mask,
+        scores_with_prior=scores_with,
+        scores_pre_prior=scores_pre,
+        probs=probs,
+        rotation_log_prior=np.array([-1.0, -2.0], dtype=np.float64),
+        translation_log_prior=np.array([-0.1, -0.2], dtype=np.float64),
+    )
+
+    result = compare_dumps(relion_dir, recovar_npz)
+
+    assert result["relion_top_key"] == [5, 0]
+    assert result["recovar_top_key"] == [7, 1]
+    assert result["cross_top_candidate_details"] == [
+        {
+            "key": [5, 0],
+            "relion": {
+                "prob": 0.7,
+                "score_pre_prior": 12.0,
+                "score_with_prior": 10.9,
+                "rotation_log_prior": -1.0,
+                "translation_log_prior": -0.1,
+                "combined_log_prior": -1.1,
+            },
+            "recovar": {
+                "prob": 0.2,
+                "score_pre_prior": 11.5,
+                "score_with_prior": 10.4,
+                "rotation_log_prior": -1.0,
+                "translation_log_prior": -0.1,
+                "combined_log_prior": -1.1,
+            },
+        },
+        {
+            "key": [7, 1],
+            "relion": {
+                "prob": 0.3,
+                "score_pre_prior": 10.0,
+                "score_with_prior": 7.8,
+                "rotation_log_prior": -2.0,
+                "translation_log_prior": -0.2,
+                "combined_log_prior": -2.2,
+            },
+            "recovar": {
+                "prob": 0.8,
+                "score_pre_prior": 10.5,
+                "score_with_prior": 8.3,
+                "rotation_log_prior": -2.0,
+                "translation_log_prior": -0.2,
+                "combined_log_prior": -2.2,
+            },
+        },
+    ]
+
+
 def test_compare_relion_recovar_estep_dump_uses_reconstruction_masks(tmp_path):
     relion_dir = tmp_path / "relion"
     relion_dir.mkdir()

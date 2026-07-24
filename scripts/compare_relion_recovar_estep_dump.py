@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.parse_relion_dump_dir import parse_dump_dir
+from scripts.parse_relion_dump_dir import parse_dump_dir  # noqa: E402, I001
 
 
 _ACC_TABLE_WEIGHT_SUFFIXES = ("diff2_weights", "sorted_weights")
@@ -105,6 +105,23 @@ def _safe_stats(values: np.ndarray) -> dict[str, float | int | None]:
         "max_abs": float(np.max(np.abs(finite))),
         "p95_abs": float(np.percentile(np.abs(finite), 95)),
     }
+
+
+def _candidate_details(table: dict[str, Any], row: int) -> dict[str, float | None]:
+    """Return finite scalar terms for one candidate-table row."""
+
+    details: dict[str, float | None] = {}
+    for field in (
+        "prob",
+        "score_pre_prior",
+        "score_with_prior",
+        "rotation_log_prior",
+        "translation_log_prior",
+        "combined_log_prior",
+    ):
+        value = float(np.asarray(table[field], dtype=np.float64)[int(row)])
+        details[field] = value if np.isfinite(value) else None
+    return details
 
 
 def _read_relion_flat_real(path: Path) -> np.ndarray | None:
@@ -1353,6 +1370,8 @@ def compare_dumps(
     common_rel = np.array([rel_idx[key] for key in common_keys], dtype=np.int64)
     common_rec = np.array([rec_idx[key] for key in common_keys], dtype=np.int64)
 
+    relion_top_key = max(rel_idx, key=lambda key: relion_matched["prob"][rel_idx[key]]) if rel_idx else None
+    recovar_top_key = max(rec_idx, key=lambda key: recovar_matched["prob"][rec_idx[key]]) if rec_idx else None
     result: dict[str, Any] = {
         "relion_source": relion["source"],
         "recovar_source": recovar["source"],
@@ -1378,16 +1397,23 @@ def compare_dumps(
         "relion_raw_top_key": list(max(raw_rel_idx, key=lambda key: relion["prob"][raw_rel_idx[key]]))
         if raw_rel_idx
         else None,
-        "relion_matched_top_key": list(max(rel_idx, key=lambda key: relion_matched["prob"][rel_idx[key]]))
-        if rel_idx
-        else None,
-        "relion_top_key": list(max(rel_idx, key=lambda key: relion_matched["prob"][rel_idx[key]])) if rel_idx else None,
-        "recovar_top_key": list(max(rec_idx, key=lambda key: recovar_matched["prob"][rec_idx[key]])) if rec_idx else None,
+        "relion_matched_top_key": list(relion_top_key) if relion_top_key is not None else None,
+        "relion_top_key": list(relion_top_key) if relion_top_key is not None else None,
+        "recovar_top_key": list(recovar_top_key) if recovar_top_key is not None else None,
         "sample_relion_only_keys": [list(key) for key in rel_only[:10]],
         "sample_recovar_only_keys": [list(key) for key in rec_only[:10]],
     }
 
     if common_keys:
+        top_keys = list(dict.fromkeys(key for key in (relion_top_key, recovar_top_key) if key in rel_idx and key in rec_idx))
+        result["cross_top_candidate_details"] = [
+            {
+                "key": list(key),
+                "relion": _candidate_details(relion_matched, rel_idx[key]),
+                "recovar": _candidate_details(recovar_matched, rec_idx[key]),
+            }
+            for key in top_keys
+        ]
         rel_prob = np.asarray(relion_matched["prob"], dtype=np.float64)[common_rel]
         rec_prob = np.asarray(recovar_matched["prob"], dtype=np.float64)[common_rec]
         rel_prob_norm = rel_prob / max(float(np.sum(rel_prob)), np.finfo(np.float64).tiny)
