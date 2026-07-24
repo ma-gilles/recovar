@@ -9200,3 +9200,34 @@ tie-break.  The GPU and source-map report SHA-256 values are
 `567db079ad30cbbc5956db19ee2cc9b2d37e3a867a60cca9eac0cb8e836ebe5d`
 and
 `f3535fe727b15f7e8a8e59bbb48af76ebb4b6da520a7bbdbd09ee335c8c36a4d`.
+
+### Case-24 iteration-1 mismatch is a numerical winner flip
+
+The complete iteration-1 identity audit finds only one pose mismatch among
+3,000 particles: original index 1901.  Same-physical-GPU RELION job
+`11557396` sealed its full first-iteration score surface, and replacement
+RECOVAR job `11557748` completed on the same `della-l09g5` allocation.  Audit
+job `11557886` then compared every one of the `1,069,056` coarse candidates
+using exact RELION-pixel-major to RECOVAR-psi-major rotation indexing.
+Candidate topology is exact: 1,069,056/1,069,056 common, Jaccard `1.0`.
+
+The centered pre-prior score difference has maximum absolute value
+`1.7881393432617188e-6`; 99.5518% of candidates are within `5e-7` and all are
+within `2e-6`.  RELION's winning candidate `(16551, 14)` exceeds RECOVAR's
+winner `(16550, 14)` by only `1.4901161193847656e-7`; RECOVAR reverses the
+same two-candidate ordering by `2.086162567138672e-7`.  They are rank 1 and 2
+in both engines, use the identical translation, and their coarse rotations
+are separated by `7.38055` degrees.
+
+This is ordinary float32-scale winner instability on an effectively tied
+first-iteration surface, not evidence for a systematic scorer, prior,
+support, scheduler, or tie-threshold defect.  No production threshold is
+changed.  It also explains why the isolated iteration-1 label mismatch can
+seed the observed iteration-1 map/reference residual and later case-24 pose
+tail.  Full-grid decoder commit `b6b2b01e` passes 33 focused comparator/parser
+tests plus scoped Ruff.  The accepted audit JSON SHA-256 is
+`dbe8d3f4e3749e1491e410376c73993d84cd1929c5d4c3afa14cc3c36df4f53e`.
+The durable replay root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it1_particle1901_capture_0da399c4_20260724T030330Z`.
+The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
+evaluated.
