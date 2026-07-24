@@ -224,7 +224,7 @@ def test_legacy_native_half_dump_remains_independent_of_class_index(tmp_path, mo
         assert artifact["run_id"] == "native-control"
 
 
-def test_scoped_soft_row_gate_ignores_unrelated_zero_and_multiple_rows():
+def test_scoped_soft_row_gate_ignores_unrelated_rows_and_accepts_single_row_bucket():
     sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
         np.asarray([0, 2, 1], dtype=np.int64),
         np.asarray([1], dtype=np.int64),
@@ -232,13 +232,12 @@ def test_scoped_soft_row_gate_ignores_unrelated_zero_and_multiple_rows():
         winner_take_all=False,
     )
 
-    with pytest.raises(RuntimeError, match="multiple positive rows"):
-        sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
-            np.asarray([0, 1, 3], dtype=np.int64),
-            np.asarray([1], dtype=np.int64),
-            device_signature_requested=True,
-            winner_take_all=False,
-        )
+    sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+        np.asarray([0, 1, 3], dtype=np.int64),
+        np.asarray([1], dtype=np.int64),
+        device_signature_requested=True,
+        winner_take_all=False,
+    )
 
     with pytest.raises(RuntimeError, match="at least one positive row"):
         sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(

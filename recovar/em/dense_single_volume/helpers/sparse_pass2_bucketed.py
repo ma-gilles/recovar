@@ -420,7 +420,14 @@ def _validate_bpref_positive_rotation_rows(
     device_signature_requested: bool,
     winner_take_all: bool,
 ) -> None:
-    """Validate only owners represented by the requested diagnostic."""
+    """Validate positive-row support for owners represented by a diagnostic.
+
+    A soft posterior is allowed to leave one positive rotation row for every
+    particle after reconstruction pruning.  This check runs independently for
+    each sparse bucket, so requiring a multi-row witness here would incorrectly
+    reject a valid bucket even when other buckets contain soft multi-row
+    particles.
+    """
 
     counts = np.asarray(positive_rotation_rows, dtype=np.int64)
     if device_signature_requested:
@@ -435,10 +442,9 @@ def _validate_bpref_positive_rotation_rows(
             raise RuntimeError(
                 "RELION WTA per-particle diagnostic requires exactly one positive rotation row per particle"
             )
-    elif np.any(counts < 1) or not np.any(counts > 1):
+    elif np.any(counts < 1):
         raise RuntimeError(
-            "RECOVAR soft-particle causal arm requires at least one positive row per particle "
-            "and multiple positive rows for at least one particle"
+            "RECOVAR soft-particle causal arm requires at least one positive row per particle"
         )
 
 
