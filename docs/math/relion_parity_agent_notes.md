@@ -5698,3 +5698,37 @@ same-device equivalence or numerical noise.
 - No reconstruction, tau2, significance-threshold, or unconditional map
   substitution patch is authorized.  Frozen score remains 25/34 strict,
   31/34 exact topology, and 34/34 evaluated.
+
+# 2026-07-24: nine first-iteration winners explain the case-4 BPref gap
+
+- Same-H100 contribution capture `11561082` completed `0:0` in `00:14:44` on
+  `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`.  It captured all nine known
+  winner exceptions and produced bit-exact captured-winner controls for both
+  half-set accumulator replays.
+- A second same-GPU intervention retained the exact captured RECOVAR
+  image/CTF/scatter operands and changed only the nine WTA rotations and
+  translations to their RELION values.  Its GPU replay completed before
+  wrapper `11561160` rejected an obsolete cross-run bit-exact aggregate gate.
+  CPU recovery audit accepted the fresh aggregate envelope, whose relative
+  L2 is at most `6.37e-8`.
+- The intervention reduces numerator relative L2 from
+  `0.0018737330 -> 1.9293688e-6` in half 1 and
+  `0.0030036818 -> 3.0769983e-5` in half 2.  Weight relative L2 falls from
+  `0.00026939846 -> 8.4532979e-7` and
+  `0.00045892132 -> 7.1740414e-6`.  The worst arm removes `0.99975563` of
+  residual energy.
+- Therefore the case-4 accumulator mismatch is attributable to the nine
+  discrete iteration-1 winner choices, not general reconstruction or
+  M-step/backprojection arithmetic.  Original indices `6322` and `60368`
+  have large rotation changes (`150.7523` and `165.1183` degrees); for `6322`
+  the RELION winner is absent from RECOVAR's selected eight-rotation fine
+  subset.  The next target is their firstiter coarse/global score grid and
+  winner routing.
+- Accepted audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it1_winner9_contributions_608c509d_20260724T064102Z/analysis/case04_winner9_contribution_scale_audit.json`
+  (SHA-256
+  `6fe333a95b07495185d95103c8b1e70d0c1c9d91cca5dfdd705d14839e3ab553`).
+  Pre-science `11561065` failed only its JAX symlink path assertion; it is not
+  scientific evidence.
+- No production patch is authorized from this result.  Frozen score remains
+  25/34 strict, 31/34 exact topology, and 34/34 evaluated.

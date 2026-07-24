@@ -9253,6 +9253,53 @@ The durable replay root is
 The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
 evaluated.
 
+### Nine iteration-1 winners explain the case-4 accumulator residual
+
+Same-H100 capture job `11561082` completed `0:0` in `00:14:44` on
+`GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`.  It captured high-precision
+per-particle numerator and weight contributions for all nine known
+iteration-1 winner exceptions (original indices `5234`, `6322`, `7738`,
+`17353`, `28139`, `43838`, `51977`, `60368`, and `72654`) and replayed their
+captured RECOVAR winners through the standard GPU accumulator path.  Both
+half-set controls are bit-exact to the accepted standard replay.
+
+A second same-GPU intervention retained every captured RECOVAR image/CTF and
+scatter operand but replaced only each target's winning rotation and
+translation by the corresponding RELION winner.  The two GPU replays
+completed before wrapper job `11561160` rejected an over-strict aggregate
+cross-run bit-exact assertion.  An independent CPU recovery audit accepted
+the fresh-versus-accepted aggregate differences as a bounded floating
+envelope: relative L2 is at most `6.37e-8`, roughly five orders of magnitude
+below the RELION residual.
+
+The pose-only intervention removes essentially the entire accepted joined
+BPref gap.  Half-1 numerator relative L2 falls from `0.0018737330` to
+`1.9293688e-6` and weight from `0.00026939846` to `8.4532979e-7`, removing
+`0.99999894` and `0.99999015` of residual energy.  Half-2 numerator falls
+from `0.0030036818` to `3.0769983e-5` and weight from `0.00045892132` to
+`7.1740414e-6`, removing `0.99989506` and `0.99975563` of residual energy.
+The worst remaining residual-norm ratio is `0.0156324`.
+
+This is a causal pose intervention: the nine first-iteration winner choices,
+not a general M-step/backprojection discrepancy, account for the case-4
+accumulator boundary.  Two targets also expose coarse/global routing directly.
+For original index `6322`, the RELION winner is absent from RECOVAR's selected
+eight-rotation fine subset and differs by `150.7523` degrees; original index
+`60368` differs by `165.1183` degrees.  The next diagnostic target is therefore
+the first-iteration coarse/global score grid and winner route for these large
+rotation flips.  No reconstruction, tau2, general scatter, or posterior
+threshold patch is supported.
+
+The accepted audit JSON SHA-256 is
+`6fe333a95b07495185d95103c8b1e70d0c1c9d91cca5dfdd705d14839e3ab553`.
+The contribution-manifest SHA-256 is
+`8868715c20171df35f19f91cc18cce2b89e7c3fb67e9a8f1e79314cb6c139354`.
+The durable run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it1_winner9_contributions_608c509d_20260724T064102Z`.
+Pre-science job `11561065` failed only its JAX symlink provenance assertion in
+seven seconds and produced no scientific result.  The frozen score remains
+25/34 strict, 31/34 exact topology, and 34/34 evaluated.
+
 ### Case-4 iteration-2 map/state counterfactual is map-leading but mixed
 
 Same-H100 science job `11558427` completed two sequential 100,000-particle
