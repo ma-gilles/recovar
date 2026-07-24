@@ -9075,3 +9075,58 @@ The strict FSC, topology, particle JSON, and particle-array SHA-256 values are
 and `2aa103ee09442d4a4fd00cdc38ec0aa89d0e4aaca586582189f37d43cf9258f6`.
 The durable case root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_unresolved_a2be302c_20260722T205500Z/cases/26_tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80`.
+
+### Frozen score reaches 25/34; exact-topology final family expands
+
+Snapshot `strict-k1-v6-20260724` advances the fixed suite to 25/34 strict
+trajectory passes, 31/34 exact-topology passes, and 34/34 evaluated.  The
+denominator, case definitions, thresholds, and manifest remain unchanged.
+Exact-fixture case 2 passed with final merged cross-engine FSC-AUC
+`0.998574606387` and GT delta `+0.005625197355` (science/audit
+`11501888`/`11501907`).  Exact-fixture case 33 passed at
+`0.999734254440` and `+0.000244293524` (`11508260`/`11508286`).  Both pairs
+used a single physical GPU, converged legitimately, ran final all-data, and
+kept grid correction unset/off.  Scorecard v6 ledger SHA-256 is
+`32c6512a8507f7b17a59d0be527fa5c9609067e0d8f598a2d108bed9a3fc8a56`.
+
+Cases 4 and 5 now have complete exact-identity particle audits from Slurm
+array `11553320` (both `COMPLETED 0:0`).  Their numbered topology and
+convergence match RELION exactly.  Their last-numbered versus final fractions
+within 0.5 degrees are `93.085% -> 92.671%` for case 4 and
+`92.179% -> 91.929%` for case 5; medians remain approximately `4.8e-6`
+degrees.  Translation and Pmax distributions likewise change only slightly
+across the boundary.  Yet merged cross-engine FSC-AUC drops from
+`0.999635726831 -> 0.991973796224` and
+`0.999954527650 -> 0.984301765024`.  Cases 4/5 therefore join cases
+24/26/32 in the inherited final-boundary family: final all-data exposes and
+amplifies an existing pose/translation tail at full grid rather than creating
+a new pose-writeback mismatch.
+
+At the last case-4 transition, significant-support mismatch enriches the next
+greater-than-0.5-degree pose tail by `1.96x`; the top 5% absolute-Pmax-error
+cohort enriches it by `2.81x`.  This keeps the causal target at the earlier
+score/posterior/support boundary.  The sealed classification is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_cases04_05_particle_audit_74f89c60_20260724T022000Z/FINAL_BOUNDARY_CLASSIFICATION.md`
+(SHA-256
+`b28c58a09575d9900f8091725ef2b18ac24c5ff1e76848ba9df4b01de40ff889`).
+Map quality remains FSC/FSC-AUC only; correlation is not computed.
+
+### K=4 fused capture accepts legitimate single-row soft buckets
+
+K=4 science `11503805` completed nine numbered iterations, then aborted at
+the iteration-10 observational capture.  The per-bucket validator required
+every target-bearing sparse bucket to contain at least one particle with
+multiple positive rotation rows.  The first target compact bucket
+legitimately had one positive rotation row per selected particle after
+reconstruction pruning, even though the soft algorithm—not WTA—was active.
+This was a diagnostic invariant failure, not a science/posterior failure.
+
+Commit `74f89c60` retains the required at-least-one-positive-row invariant in
+soft mode and the exactly-one-positive-row invariant in explicit WTA mode,
+without demanding a multi-row witness from each independent bucket.  Focused
+device-signature, sparse-bucket, and validator coverage passes 83/83; scoped
+Ruff and `git diff --check` pass.  Same-A100 replacement `11553264` reruns the
+RELION control/capture and RECOVAR arms in one allocation from the immutable
+detached commit.  Frozen case-3 longer-budget science/audit
+`11553236`/`11553237` separately supersede a 24-hour timeout without changing
+the fixture or algorithm.
