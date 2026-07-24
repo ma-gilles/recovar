@@ -6239,6 +6239,27 @@ same-device equivalence or numerical noise.
   `20619a56023f0bb95ac0ec8fb4edab98a8d0fa09bb40f251eee20ff130b7f2fe`
   and
   `7586d4c40c0aed0417c37e563e4d061fb2ad08e55acc0ff981e52ecf25cf650d`.
+- Array audit `11569647` completed all four late case-5 boundaries with
+  `0:0` task exits.  Iterations 9--12 have new/old cross-engine FSC-AUC:
+  `0.9999686598862774`/`0.9999686414562661`,
+  `0.9999623868618940`/`0.9999610817486346`,
+  `0.9999565853728390`/`0.9999604022763192`, and
+  `0.9999560189390468`/`0.9999568196477043`.
+- The corresponding RELION cross-run values are
+  `0.9999649148988634`, `0.9999540334545888`,
+  `0.9999537767945256`, and `0.9999499270733202`.  Thus iterations 9--10
+  improve only negligibly, while iterations 11--12 increase the FSC defect
+  by about `8.8%` and `1.9%`; all deltas are observational within comparable
+  run drift and all cross-engine values remain far above `0.995`.
+- GT closeness improves at every one of iterations 9--12.  New
+  RECOVAR-minus-RELION absolute differences are
+  `1.21549e-5`, `2.14918e-5`, `2.80035e-5`, and `5.55775e-6`, versus old
+  `3.23313e-5`, `3.59787e-5`, `4.56079e-5`, and `4.13603e-5`.
+  Audit stdout SHA-256 values for array tasks 1--4 are
+  `33e4464d2078c87cfc8e204ea7e0840e47d15506136ce5597b44641ec9868267`,
+  `cd8bf250b9e415a315bef8a3e4cd7a7454200a8fff7d20463b76ac4530e12204`,
+  `fdb625113a27095bb6431dbc4b39060bab248546642a17410ce1640fbcf90e9a`,
+  and `4b186783f5c59866152b4004bcff5b212449e1f69a13130662768a7ad246a3a2`.
 - This is a positive first-boundary generalization result, not a full-case
   acceptance.  Science `11564053` and strict audit `11564062` remain active or
   dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,
@@ -6329,6 +6350,18 @@ same-device equivalence or numerical noise.
   `e7badba2501aad48d8357976920e5b295803e7dc1ee8e27534eec0c30eae07b1`
   and
   `f115f4e6dddd6b8b377806b31a71717863f657dcb94f91816bd96b4407028c27`.
+- Iteration 6 completed at current size 136, 15.11 Angstrom resolution, Pmax
+  `0.710076`, and next size 136.  Array task 0 under job `11569647` completed
+  `0:0` in 70 seconds with 2,024,964 KiB maximum RSS.  Merged cross-engine
+  FSC-AUC improves from old `0.9999245486508258` to new
+  `0.9999532103394377`, about a 1.61-fold smaller defect.
+- Iteration-6 GT closeness improves: new RECOVAR/RELION are
+  `0.2851142404037022`/`0.2850663249147656`, versus old
+  `0.2851382201712396`/`0.28500954818472085`.  RELION cross-run FSC-AUC is
+  `0.9999753761283718`.  Audit stdout SHA-256 is
+  `9e295a46ef1c9273da94b5f5d05377d9d4307ca1718d65d0154217edb0f5cb99`;
+  shared array launcher SHA-256 is
+  `ae530abefc4e06706b17ca9a77cb6fad794af7f9ff5bbd81cc187af29cd569c2`.
 - This is strong first-boundary evidence, not a full-case acceptance.
   Science `11563827` and strict audit `11563842` remain active or
   dependency-gated, so the fixed score remains 25/34.
@@ -6358,6 +6391,23 @@ same-device equivalence or numerical noise.
   `0.909746`, and HEALPix order 1; the scheduler selected size 70 for
   iteration 8.  This size/resolution/order boundary matches the corrected
   `c390f8bf` trajectory, whose first strict map failure was only iteration 8.
+- Map-only early audit `11569628` completed `0:0` in 217 seconds with
+  4,398,616 KiB maximum RSS.  Identity matching is selected for both
+  RECOVAR-to-RELION and matched-pair-to-GT assignments.  Classwise
+  cross-engine FSC-AUC is
+  `0.9975035093,0.9968067962,0.9969715869,0.9980573808`; GT deltas are
+  `+1.74559e-5,-7.69739e-5,+4.69329e-5,-3.82329e-5`.  All map/GT gates pass
+  at unchanged thresholds `0.995/-0.002`.
+- Pre-audit `11569464` produced no scientific report because it attempted to
+  load terminal `refinement_results.npz` before science had written it.
+  The accepted rerun deliberately reports class agreement unavailable;
+  dependent terminal auditors remain authoritative.  Accepted stdout,
+  analysis-script, and launcher SHA-256 values are
+  `6b71b4315a59893ad1cec90a3c96543e690c289d9d5cfdaa5e389204e846a944`,
+  `81d8528b63888b31d69ac1b90989de34b33887d95cc8f987830a246aa6d41fcd`,
+  and `b3df857073af97cf86cc4913abbf3b3409a37379b073e05b5a8407d3d4a80384`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_iteration7_early_fsc_20260724`.
 - The science job is healthy, while vector audit `11565121` and independent
   scalar audit `11565131` remain dependency-gated.  No K=4 acceptance or K=1
   score change is claimed before those fail-closed auditors finish.

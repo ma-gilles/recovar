@@ -306,6 +306,15 @@ improves.  RELION cross-run FSC-AUC is `0.999973486836`, again comparable to
 the within-pair defects.  This late delta is observational rather than a
 causal acceptance signal.
 
+Iterations 9--12 remain far above the numbered `0.995` gate, with new
+cross-engine FSC-AUC `0.999968659886`, `0.999962386862`,
+`0.999956585373`, and `0.999956018939`.  Relative to the matched old pair,
+iterations 9--10 improve negligibly, while 11--12 worsen by about `8.8%` and
+`1.9%` in FSC-defect terms.  RELION cross-run FSC-AUC is
+`0.9999499`--`0.9999649`, comparable to these defects, and GT closeness
+improves at all four boundaries.  Terminal same-GPU acceptance remains the
+only promotion gate.
+
 Shell-profile audit `11569181` localizes `94.6%` of the iteration-6 negative
 AUC delta to shells 1--64, with the largest losses at shells 53--56 rather
 than the high-shell tail.  RELION cross-run FSC at those four shells is only
@@ -332,9 +341,11 @@ smaller defect, while GT closeness improves again.  Iteration 4 also improves
 from `0.999976663509` to `0.999991309525`, about a 2.69-fold smaller defect,
 with a strong GT-closeness gain.  Iteration 5 improves cross-engine FSC-AUC
 from `0.999946344632` to `0.999972054601` (about a 1.92-fold smaller defect),
-but GT closeness worsens sharply.  This is mixed numbered-boundary evidence,
-not a terminal pass; science `11563827` and strict audit `11563842` remain
-active or dependency-gated.
+but GT closeness worsens sharply.  Iteration 6 improves cross-engine FSC-AUC
+from `0.999924548651` to `0.999953210339` (about a 1.61-fold smaller defect)
+and improves GT closeness.  This is mixed numbered-boundary evidence, not a
+terminal pass; science `11563827` and strict audit `11563842` remain active
+or dependency-gated.
 
 The same-GPU K=4 science job `11565045` has completed iterations 1--7 with
 sizes `38,38,42,56,60,62,68`, resolutions
@@ -342,6 +353,10 @@ sizes `38,38,42,56,60,62,68`, resolutions
 `0.909746`; iteration 8 starts at size 70.  This exact size/resolution
 topology matches both prior corrected `c390f8bf` diagnostic trajectories
 through this boundary.
+Independent early map audit `11569628` passes iteration 7 with identity class
+matching, minimum classwise cross-engine FSC-AUC `0.996806796`, and worst GT
+FSC-AUC delta `-0.000076974`, inside the unchanged `0.995/-0.002` gates.
+Class agreement remains unmeasured until the terminal result exists.
 Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,
 so this is not yet K=4 acceptance.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
