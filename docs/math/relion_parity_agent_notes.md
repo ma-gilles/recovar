@@ -6391,6 +6391,12 @@ same-device equivalence or numerical noise.
   `0.909746`, and HEALPix order 1; the scheduler selected size 70 for
   iteration 8.  This size/resolution/order boundary matches the corrected
   `c390f8bf` trajectory, whose first strict map failure was only iteration 8.
+- Iterations 8--10 completed at sizes `70,72,74`, resolutions
+  `20.92,20.15,19.43` Angstrom, and Pmax `0.9237,0.9470,0.915066`.
+  Iteration 10 remained unconverged after 2,326.8 seconds and selected size
+  76 for iteration 11.  The job was configured for 15 numbered iterations,
+  so this is a continuing trajectory rather than a terminal iteration-10
+  result.
 - Map-only early audit `11569628` completed `0:0` in 217 seconds with
   4,398,616 KiB maximum RSS.  Identity matching is selected for both
   RECOVAR-to-RELION and matched-pair-to-GT assignments.  Classwise
@@ -6557,12 +6563,44 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case45_full_particle_audit_20260724T134800Z`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case45_full_particle_audit_20260724T134800Z`.
-- The five remaining iteration-1 exceptions are being captured in complete
-  coarse grids by H100 array `11571746`.  Its run/runtime roots are
+- H100 array `11571746` completed both tasks `0:0` in 19:13 and 20:47.
+  Fail-closed CPU analysis `11571905` completed `0:0` in 73 seconds and
+  reproduces all five material exceptions against the original paired RELION
+  iteration 1.  Each target capture contains the complete 1,069,056-entry
+  coarse grid; exact image identity, Pmax, and support still pass.
+- Case-4 particles `5234` and `72654` have native float32 top-two margins
+  `3.278255e-7` and `2.384186e-7`.  Case-5 particle `93729` has margin
+  `4.619360e-7`.  All three fall inside the bounded `4e-6` rescore band, but
+  rescore leaves the native winner unchanged.  In contrast, case-5 particles
+  `38594` and `65070` have margins `9.890050e-4` and `1.838163e-3`, so their
+  translation exceptions are not threshold-edge decisions.  A global
+  threshold increase is therefore rejected.
+- Accepted summary JSON SHA-256 is
+  `7a3731aa12504c4947c778fcf74571c084a71fb87b10eaef045d20596c42ace3`.
+  Case-4 target NPZ SHA-256 values are
+  `a6f0407a53e4e473e76ca0964cd82fd38f8f6bdd6d69ee6906f12f94e9a5ac77`
+  and
+  `17433056e94e0208ebefb00e3fd5d07b8eca64c24590693afaef04e7b2e61a64`;
+  case-5 values are
+  `56ad98e5311b7858d86249132e8850022958ae04bd10141b8e3f0e0771730d8e`,
+  `1c341e4e29ff2893260d7c8f15b771d8a15a42d45567eaa4a6bcdd0954dbba16`,
+  and
+  `95f879451d2e37e5bbd2637d7edc4e33e61522e39fd8ee83a8dad6a3781fe4d9`.
+  The run/runtime roots are
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case45_remaining_it1_capture_20260724T140000Z`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case45_remaining_it1_capture_20260724T140000Z`;
   both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
   `775b0e7b74b3d18288839d4008a7cde1cb1f492d6efc36609c16deebe42aceb4`.
+- Same-physical-H100 patched-RELION job `11572062` is queued for particle
+  `5234`, the only target with a material rotation difference.  It reserves
+  all four GPUs on `della-h21g2`, selects capture UUID
+  `GPU-24350de1-cbbd-8567-62d2-db825502511b`, and will compare all coarse
+  candidates after verifying the accepted capture.  Its run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_p5234_exact_relion_grid_20260724T142000Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case04_p5234_exact_relion_grid_20260724T142000Z`;
+  both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
+  `3499d355e54270d7be3eecb12a22509280784a1eb25ac491649aecba3f6bf694`.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.

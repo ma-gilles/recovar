@@ -218,9 +218,17 @@ otherwise exact at that boundary.  The greater-than-0.1-degree pose tails then
 grow from `1 -> 6,017` and `0 -> 7,269` particles by the last numbered state,
 while last-numbered to final changes are small.  This confirms that final
 full-grid reconstruction amplifies an inherited first-iteration
-winner/reference/posterior butterfly.  H100 array `11571746` captures complete
-coarse grids for the five remaining exceptions.  The frozen score remains
-25/34 strict, 31/34 topology, and 34/34 evaluated.
+winner/reference/posterior butterfly.  H100 array `11571746` and fail-closed
+analysis `11571905` reproduce all five exceptions and capture all 1,069,056
+coarse scores for each target.  Case-4 particles `5234` and `72654` have
+native float32 top-two margins `3.27826e-7` and `2.38419e-7`; case-5 particle
+`93729` has margin `4.61936e-7`.  All three are inside the bounded `4e-6`
+rescore band, but tree rescore leaves their native winners unchanged.
+Case-5 particles `38594` and `65070` instead have margins `9.89005e-4` and
+`1.83816e-3`, far outside that band.  This rules out a global threshold
+increase.  Same-physical-H100 patched-RELION full-grid discriminator
+`11572062` is queued for particle `5234`.  The frozen score remains 25/34
+strict, 31/34 topology, and 34/34 evaluated.
 
 ## K=4 physical-GPU trajectory diagnostic
 
@@ -401,13 +409,13 @@ mean pose error `0.2730` to `0.1967` degrees and mean translation error
 already below the gate.  The terminal improvement is therefore observational
 under substantial run/GPU butterfly amplification and cannot promote case 4.
 
-The same-GPU K=4 science job `11565045` has completed iterations 1--9 with
-sizes `38,38,42,56,60,62,68,70,72`, resolutions
-`60.44,49.45,30.22,27.20,25.90,22.67,21.76,20.92,20.15` Angstrom, and
-iteration-9 Pmax `0.9470`; iteration 10 starts at size 74.  This exact
-size/resolution
-topology matches both prior corrected `c390f8bf` diagnostic trajectories
-through this boundary.
+The same-GPU K=4 science job `11565045` has completed iterations 1--10 with
+sizes `38,38,42,56,60,62,68,70,72,74`, resolutions
+`60.44,49.45,30.22,27.20,25.90,22.67,21.76,20.92,20.15,19.43` Angstrom,
+and iteration-10 Pmax `0.915066`; the unconverged trajectory continues into
+iteration 11 at size 76 under its configured 15-iteration ceiling.  This
+exact size/resolution topology matches both prior corrected `c390f8bf`
+diagnostic trajectories through this boundary.
 Independent early map audit `11569628` passes iteration 7 with identity class
 matching, minimum classwise cross-engine FSC-AUC `0.996806796`, and worst GT
 FSC-AUC delta `-0.000076974`, inside the unchanged `0.995/-0.002` gates.
