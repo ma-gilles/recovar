@@ -474,6 +474,12 @@ cross-engine FSC-AUC falls to `0.994672195` and `0.992658054`.  Both tasks
 therefore exit `2:0` at the unchanged full-grid gate.  This continued
 cross-engine divergence does not indicate a GT-quality collapse and does not
 promote K=4.
+Independent audit `11577443` extends the same gate through iteration 14.
+Identity class assignment remains exact; classwise cross-engine FSC-AUC is
+`0.994832774,0.993014076,0.992320840,0.995034148`, so the task exits `2:0`.
+All GT deltas remain inside the unchanged quality gate, with worst magnitude
+only `0.000095231`.  The strict full-grid trajectory therefore remains red
+without evidence of GT-quality loss.
 Class agreement remains unmeasured until the terminal result exists.
 Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,
 so this is not yet K=4 acceptance.
