@@ -121,6 +121,33 @@ one float32 raw-score ULP (`0.0001220703125`) and
 oracle-stability telemetry, not a new strict pass; the fixed denominator and
 score remain unchanged.
 
+## K=1 final-only family diagnostic
+
+Frozen case 10 already passes all 15 numbered FSC and exact-topology gates but
+fails only the final merged cross-engine FSC-AUC (`0.983006503534 < 0.995`).
+CPU audit `11566606` completed `0:0` and passed exact iteration-15 schedule,
+convergence, finalization, and 100,000-particle image-identity gates.  From the
+last numbered state (current size 68) to final all-data (full grid 384), the
+fraction of particles within 0.5 degrees changes only
+`91.501% -> 91.457%`; angular-error p95 changes
+`0.990475839 -> 1.001330626` degrees.  The fraction within 0.5 Angstrom
+translation changes `92.650% -> 92.531%`, with p95 fixed at
+approximately `0.708333` Angstrom.  Pmax absolute-error p95 changes only
+`0.006589644 -> 0.006748276`.
+
+Despite that nearly stationary particle-state tail, merged cross-engine
+FSC-AUC falls from `0.999967227122` at iteration 15 to `0.983006503534` at
+final all-data.  Case 10 therefore joins cases 4/5/24/26/32: the shared
+full-grid final expectation amplifies an inherited pose/reference/posterior
+tail rather than creating a new final pose-writeback or scheduling mismatch.
+The audit JSON and aligned-array NPZ SHA-256 values are
+`eb0ac4bcbecbfa4d9333ececc6340ed5fb4dfedb6c19745472b205b5b2582dbd`
+and `c44b7a4a85af54413c04f50572a6f0b805dfa5f31c63542a395926c3e8c1bab0`.
+The durable root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_last_final_audit_20260724T140800Z`.
+This is localization evidence, not a new checkbox; the frozen score remains
+25/34.
+
 ## K=4 physical-GPU trajectory diagnostic
 
 This diagnostic is not part of the frozen K=1 denominator.  It compares two

@@ -5993,3 +5993,34 @@ same-device equivalence or numerical noise.
 - This tooling does not change the scientific numerator.  Snapshot
   `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
   34/34 evaluated while cases 3/4/5 and K=4 auditors remain active.
+
+# 2026-07-24: case 10 confirms the inherited full-grid final-only family
+
+- CPU Slurm job `11566606` completed `0:0` in 43 seconds with 780256 KiB
+  maximum RSS.  It audited frozen case 10's last numbered state and final
+  all-data state by exact image identity at clean source `162ee03a`.
+- Exact schedule/convergence gates pass: RELION and RECOVAR both converge at
+  iteration 15, final all-data is present, and iteration 15 matches current
+  size 68 and HEALPix order 5.  The final all-data expectation then uses the
+  full 384 grid.
+- Last-numbered versus final fractions within 0.5 degrees are
+  `91.501% -> 91.457%`; angular p95 is
+  `0.990475839 -> 1.001330626` degrees.  Fractions within 0.5 Angstrom
+  translation are `92.650% -> 92.531%`, and Pmax absolute-error p95 is
+  `0.006589644 -> 0.006748276`.
+- The particle-state tail is therefore nearly stationary while merged
+  cross-engine FSC-AUC falls from `0.999967227122` to `0.983006503534`.
+  This confirms that the full-grid final expectation amplifies inherited
+  pose/reference/posterior state; it does not support a final writeback,
+  scheduler, grid-correction, or threshold change.
+- JSON/NPZ SHA-256 values are
+  `eb0ac4bcbecbfa4d9333ececc6340ed5fb4dfedb6c19745472b205b5b2582dbd`
+  and `c44b7a4a85af54413c04f50572a6f0b805dfa5f31c63542a395926c3e8c1bab0`.
+  Launcher SHA-256 is
+  `5e5a271f88b23570d418733fae27c19a04fb5dcba6404f2701d15e5b6271e5d0`.
+  Durable run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_last_final_audit_20260724T140800Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_last_final_audit_20260724T140800Z`.
+- This diagnostic does not change snapshot `strict-k1-v6-20260724`: 25/34
+  strict, 31/34 exact topology, 34/34 evaluated.
