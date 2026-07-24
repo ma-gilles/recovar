@@ -431,6 +431,12 @@ audit `11570025`: identity class assignments, classwise cross-engine FSC-AUC
 `0.997311835`, `0.996462452`, `0.996514489`, and `0.997541298`, and worst GT
 delta `-0.000029845`.  The accepted stdout SHA-256 is
 `9835a0e24404f29ccda4ca28c9d1991cafd03c0ace6a85b0944214e9f5fda72f`.
+Independent fail-closed audit `11573095` finds that iteration 11 has crossed
+the strict map gate: identity class assignments remain exact and all GT
+deltas are within `-0.000073031`, but class-2/class-3 cross-engine FSC-AUC is
+`0.994509131`/`0.994150545`, below `0.995`; class 1/4 remains
+`0.995505295`/`0.995592423`.  Iterations 9 and 10 are being audited to locate
+the first failing boundary.
 Class agreement remains unmeasured until the terminal result exists.
 Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,
 so this is not yet K=4 acceptance.

@@ -6397,6 +6397,27 @@ same-device equivalence or numerical noise.
   76 for iteration 11.  The job was configured for 15 numbered iterations,
   so this is a continuing trajectory rather than a terminal iteration-10
   result.
+- Iteration 11 completed at size 76, 18.76 Angstrom resolution, Pmax
+  `0.958718`, and HEALPix order 1 after 2,037.8 seconds.  It remained
+  unconverged and selected size 78 for iteration 12.
+- Independent CPU map audit `11573095` failed closed (`2:0`) in 377 seconds
+  with identity class assignment.  Classwise cross-engine FSC-AUC is
+  `0.995505295,0.994509131,0.994150545,0.995592423`; classes 2 and 3 are
+  below the unchanged `0.995` gate.  GT deltas are
+  `+6.74435e-5,-7.30310e-5,-3.62876e-5,-6.19497e-5`, all well within the
+  `-0.002` gate.  This is a trajectory-parity failure rather than a GT-quality
+  collapse.
+- Iteration-11 audit JSON, analyzer, and launcher SHA-256 values are
+  `2fd75c707c39ececc5ac54e270e010995d966c51f60e0759754e52a1209c40d4`,
+  `d74fdc8b400f16707959fdf2a45b654a9991408cc2dbf207752d2010ba2a5236`,
+  and
+  `228abf5d78b93ca34d2eae986f0c9686fe1271535c3f2ec5e0fb3603cbbb9cbc`.
+  Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_iteration11_early_fsc_20260724`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_iteration11_early_fsc_20260724`;
+  both contain `SAFE_TO_DELETE`.  Iterations 9 and 10 require independent
+  audits to locate the first failing boundary.
 - Map-only early audit `11569628` completed `0:0` in 217 seconds with
   4,398,616 KiB maximum RSS.  Identity matching is selected for both
   RECOVAR-to-RELION and matched-pair-to-GT assignments.  Classwise
