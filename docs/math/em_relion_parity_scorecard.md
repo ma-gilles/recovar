@@ -75,8 +75,14 @@ The case-24 intervention is effectively exact for the first three numbered
 maps (merged cross-engine FSC-AUC `0.999999999973`,
 `0.999999999903`, `0.999999999901`).  The first material map drift is
 iteration 4.  Particle-state audit localizes its seed to one 2.125 Angstrom
-translation decision at iteration 3; patched RELION operand replay `11562574`
-is pending.  The fixed denominator and score remain unchanged.
+translation decision at iteration 3.  Patched RELION operand replay `11562574`
+completed with exact 64/64 fine support, exact 12/12 reconstruction support,
+posterior correlation `0.999999998039`, and the same translation-59 winner as
+RECOVAR.  The original stock trajectory chose translation 57, but the replay
+gap is only `3.93436e-5` posterior (one float32 raw-diff2 unit).  Same-GPU
+stock-versus-patched-no-dump probe `11562830` is pending.  This is a
+near-tie localization, not a new strict pass; the fixed denominator and score
+remain unchanged.
 
 ## Non-scoring regenerated-data diagnostics
 

@@ -5804,16 +5804,38 @@ same-device equivalence or numerical noise.
 - The iteration-3 RECOVAR capture reproduces the split.  Its two leading fine
   rows `(1, 59)` and `(1, 57)` are both in fine and reconstruction support,
   carry posterior `0.3224018721` and `0.3223231703`, and differ by only
-  `0.000244140625` in both total and pre-prior score.  RELION's stored pose
-  takes the other x translation.  Same-node/same-physical-GPU patched RELION
-  replay `11562574` targets stack image `2333`, iteration 3, to join the live
-  row identity and likelihood/prior operands before any production change.
+  `0.000244140625` in both total and pre-prior score.  The original stock
+  RELION trajectory stores translation `57`, while RECOVAR stores translation
+  `59`.
+- Same-node/same-physical-GPU patched RELION replay `11562574` completed
+  `0:0` in `00:06:24` on `della-l07g6`, using the fixed-case GPU UUID
+  `GPU-6a3cea75-90ac-d3de-7c1a-a8158412a9f4`.  Its 64/64 fine support and
+  12/12 reconstruction support are exact against RECOVAR; posterior
+  correlation is `0.999999998039`, common-renormalized L1 is
+  `6.0464626e-5`, centered pre-prior maximum error is
+  `3.662109375e-4`, and centered total-score maximum error is
+  `4.884e-4`.  Both engines choose `(1, 59)`.
+- The replay also stores x origin `3.168496` Angstrom
+  (`0.74552849` pixel), exactly the translation-59 pose.  This rules out a
+  RECOVAR winner-to-pose mapping error: RELION's accelerated path stores the
+  rounded previous integer-pixel offset plus the selected oversampled
+  translation.  The stock trajectory's translation-57 choice is therefore a
+  score near-tie, not a serialization discrepancy.  The patched replay's
+  translation-59 versus translation-57 posterior gap is only
+  `3.93436e-5`; their raw diff2 values differ by one float32 unit
+  (`1442.527099609375` versus `1442.5272216796875`).
+- Winner-stability probe `11562830` now reruns stock RELION and the patched
+  binary with all dump variables unset, sequentially on the same node and
+  physical GPU.  This separates compiled instrumentation from active
+  dump/synchronization effects before any production change.
 - Fixed-case root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case24_combined_b826bc52_20260724T082100Z`.
   Particle-2767 capture:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_combined_b826bc52_20260724T084954Z`.
   Particle-2332 capture and replay:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it3_p2332_combined_b826bc52_20260724T085831Z`.
+  Winner-stability probe:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it3_relion_winner_probe_20260724T092606Z`.
 - This is a localization result, not a strict pass.  Frozen snapshot
   `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
   34/34 evaluated.
