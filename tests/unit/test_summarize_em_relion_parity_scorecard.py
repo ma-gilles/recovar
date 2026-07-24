@@ -151,6 +151,18 @@ def test_fixture_validation_rejects_a_changed_file_digest(tmp_path):
 
 
 @pytest.mark.unit
+def test_fixture_validation_rejects_valid_but_unpinned_manifest_bytes(tmp_path):
+    scorecard = MODULE.load_and_validate(MODULE.DEFAULT_SCORECARD)
+    manifest = json.loads(MODULE.DEFAULT_FIXTURE_MANIFEST.read_text())
+    manifest["cases"][0]["files"][0]["sha256"] = "0" * 64
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="fixture manifest bytes changed"):
+        MODULE.load_and_validate_fixture_manifest(path, scorecard)
+
+
+@pytest.mark.unit
 def test_proposal_fixture_validation_rehashes_materialized_bytes(tmp_path):
     case = {"id": "k1-04", "name": "high_noise_100k_g256_white_noise3_bf80"}
     case_root = tmp_path / "cases" / "4_high_noise_100k_g256_white_noise3_bf80"

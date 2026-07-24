@@ -5971,12 +5971,14 @@ same-device equivalence or numerical noise.
 
 - `scripts/summarize_em_relion_parity_scorecard.py --proposal-output` now
   constructs a candidate superseding ledger only after validating the frozen
-  case definition and artifact manifest, re-hashing every materialized
-  fixture byte, clean science source, exact agreement between the requested
-  science job and both `submission.env` and `selected_cases.tsv`, same
-  physical RELION/RECOVAR GPU, autonomous trajectory mode, terminal
-  FSC/FSC-AUC and exact-topology audit status, convergence-only final all-data,
-  grid correction off, and SHA-256 identities for all audit products.
+  case definition, the exact checked v2 manifest bytes
+  (`422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`),
+  every re-hashed materialized fixture byte, clean science source, exact
+  agreement between the requested science job and both `submission.env` and
+  `selected_cases.tsv`, same physical RELION/RECOVAR GPU, autonomous
+  trajectory mode, terminal FSC/FSC-AUC and exact-topology audit status,
+  convergence-only final all-data, grid correction off, and SHA-256
+  identities for all audit products.
 - The proposal binds the exact current parent-ledger SHA-256 and requires a
   monotonically newer ledger schema.  It refuses to overwrite an existing
   output and never mutates the checked scorecard.  A human-reviewed
@@ -5993,19 +5995,20 @@ same-device equivalence or numerical noise.
   `e75c27ebb0aae11453dbc5017cb2edc0778d2ef859745e6c1b873d34cbf8ffca`
   and `b13a1d3e37765291fbfa03256664a2a43238d5f4704ff38cefa97bde074676ac`;
   stderr is empty.
-- Focused validation is 14/14 passing; Ruff formatting/lint and mypy are
+- Focused validation is 15/15 passing; Ruff formatting/lint and mypy are
   clean; the generated scorecard check passes.  The new regressions mutate a
-  materialized fixture without changing its size and confirm that proposal
-  validation rejects both the changed SHA-256 and a science job not bound to
-  the exact submission/case-table row.
+  materialized fixture without changing its size, alter the manifest with a
+  structurally valid SHA-256, and confirm that proposal validation rejects
+  both identity changes and a science job not bound to the exact
+  submission/case-table row.
 - Original proposal/replay logs remain under
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_scorecard_proposal_20260724`.
   Re-hash validation is under
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_scorecard_materialized_rehash_20260724T142500Z`;
-  its latest passing `validation_job_binding_retry.log` and
-  `pytest_job_binding_retry.xml` SHA-256 values are
-  `936ab13a1db4de1edd321b134c29bd684e5103b88d49d87deccda162ba357237`
-  and `299053062040edfdc3fc1dd4c8dd07f610db95679bdeac60d13b19fbd50ee5fa`.
+  its latest passing `validation_manifest_pin.log` and
+  `pytest_manifest_pin.xml` SHA-256 values are
+  `6f88b63a26e825fb986f953a358546d6d31b10ae2c8b9297986b9f7d0118e688`
+  and `244230e24d7f092d9f61943319794e47d97e6a4c12dc3de3b6964aa0cf10d03c`.
 - This tooling does not change the scientific numerator.  Snapshot
   `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
   34/34 evaluated while cases 3/4/5 and K=4 auditors remain active.

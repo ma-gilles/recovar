@@ -26,6 +26,7 @@ V1_SUITE_ID = "k1-gui-grid0-local-highshell-full34"
 V2_FIXTURE_SUITE_ID = f"{V1_SUITE_ID}-artifact-pinned-v2"
 V1_FROZEN_DENOMINATOR = 34
 V1_FROZEN_CASE_DEFINITIONS_SHA256 = "9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1"
+V2_FIXTURE_MANIFEST_SHA256 = "422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee"
 VALID_RESULTS = {"pass", "fail", "not_run"}
 REQUIRED_DEFINITION_FIELDS = {
     "contrast_std",
@@ -247,6 +248,12 @@ def load_and_validate_fixture_manifest(path: Path, scorecard: dict) -> dict:
                 raise ValueError(f"{case_id}/{name}: invalid SHA-256")
     if len(source_dirs) != len(set(source_dirs)):
         raise ValueError("fixture manifest source_data_dir values must be unique")
+    actual_manifest_sha256 = sha256_file(path)
+    if actual_manifest_sha256 != V2_FIXTURE_MANIFEST_SHA256:
+        raise ValueError(
+            "fixture manifest bytes changed without a suite-version change: "
+            f"expected={V2_FIXTURE_MANIFEST_SHA256} actual={actual_manifest_sha256}"
+        )
     return manifest
 
 
@@ -362,7 +369,7 @@ def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sh
         "",
         "After a terminal strict auditor passes, build a fail-closed candidate",
         "superseding ledger with `--proposal-output`. The command validates the",
-        "frozen fixture identity and re-hashes every materialized byte, clean source and",
+        "the pinned fixture-manifest bytes and re-hashes every materialized byte, clean source and",
         "submitted job/case-table identity, same physical GPU, autonomous",
         "FSC/topology audits, convergence/finalization contract, and evidence",
         "hashes. It never mutates the checked scorecard. For example:",
