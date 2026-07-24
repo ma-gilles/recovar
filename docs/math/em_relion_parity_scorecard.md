@@ -290,9 +290,12 @@ The gain also survives the first two large-grid transitions.  CPU audit
 the matched old pair's `0.999999237418` to `0.999999428673`, and iteration 4
 from `0.999998069731` to `0.999998178270`.  Audit `11568517` reports that
 iteration 5 improves from `0.999971221351` to `0.999986014860`, about a
-two-fold smaller FSC defect.  The cross-engine improvement is non-monotonic,
-and matched-pair GT closeness is slightly worse at iterations 3--5.  These
-are still numbered-boundary diagnostics, not a terminal acceptance.
+two-fold smaller FSC defect.  At iteration 6, audit `11568660` records the
+first reversal: cross-engine FSC-AUC changes from `0.999989489556` old to
+`0.999988729729` new, about a 7.2% larger defect, while GT closeness improves.
+The intervention therefore does not dominate the old trajectory at every
+boundary.  These are still numbered-boundary diagnostics, not a terminal
+acceptance.
 
 Frozen case 4 has now reached its first RECOVAR boundary under the same
 intervention.  The bounded rescore changed six of 100,000 winners (`2/4` by

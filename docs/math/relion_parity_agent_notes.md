@@ -6077,7 +6077,7 @@ same-device equivalence or numerical noise.
   both contain `SAFE_TO_DELETE`.
 - This is a pending full-case generalization arm, not a score change.
 
-# 2026-07-24: case 5 first five boundaries improve within GPU pairs
+# 2026-07-24: case 5 first five boundaries improve; iteration 6 reverses
 
 - Frozen-fixture science `11564053` completed RECOVAR iteration 1 with the
   RELION schedule boundary: current size 56, 30.22 Angstrom resolution, Pmax
@@ -6170,6 +6170,23 @@ same-device equivalence or numerical noise.
   `3e67f3de7212c9dd29438eb2aa58a4b8a9d993a04e4ba34836cdafa3dd3db9bb`;
   runtime root is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_intervention_within_pair_v3_20260724`.
+- Iteration 6 completed at current size 110, 23.65 Angstrom resolution, Pmax
+  `0.455194`, and next size 110.  Within-pair audit `11568660` completed
+  `0:0` in 72 seconds with 2,019,104 KiB maximum RSS and records the first
+  cross-engine reversal: merged FSC-AUC changes from old
+  `0.9999894895556242` to new `0.9999887297291508`, increasing the FSC defect
+  by about 7.2%.  Half-1/half-2 similarly change from
+  `0.9999836453293489`/`0.9999775623781483` to
+  `0.9999825011727032`/`0.9999761687835128`.
+- GT closeness moves in the opposite direction at iteration 6: new
+  RECOVAR/RELION FSC-AUC are
+  `0.1084485613781282`/`0.1084563187806185`, versus old
+  `0.10845076403471834`/`0.1084638385936106`.  This boundary demonstrates why
+  neither an intermediate cross-engine improvement nor a GT improvement alone
+  can promote the fixed case.  Audit stdout SHA-256 is
+  `9d42362e4bf7d6d7a4bd484cee57fd023aff1b8593a0684ae3d068efffd04c25`;
+  launcher SHA-256 is
+  `935b6f22394aab69b5457f9c5a689b9a907fc10461ca08d268d198f4c1a8963d`.
 - This is a positive first-boundary generalization result, not a full-case
   acceptance.  Science `11564053` and strict audit `11564062` remain active or
   dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,
