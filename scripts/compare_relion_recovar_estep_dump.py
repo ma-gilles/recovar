@@ -71,6 +71,24 @@ def _get_by_suffix(
     return matches[0] if matches else None
 
 
+def _get_by_suffix_from_prefix(
+    payload: dict[str, np.ndarray],
+    suffix: str,
+    prefix: str,
+) -> np.ndarray | None:
+    """Return one layout field from exactly one RELION pass prefix."""
+
+    matches = [
+        (key, value)
+        for key, value in sorted(payload.items())
+        if _relion_layout_name(key) == suffix and (key == prefix or key.startswith(prefix + "_"))
+    ]
+    for _key, value in matches:
+        if np.asarray(value).size:
+            return value
+    return matches[0][1] if matches else None
+
+
 def _relion_layout_name(name: str) -> str:
     while True:
         stripped = name
@@ -746,8 +764,16 @@ def _candidate_table_from_relion(
         # A normal adaptive dump contains both coarse pass0 and fine pass1
         # arrays. Keep every generic candidate field on fine pass1 when it is
         # available instead of allowing sorted suffix lookup to mix passes.
+        generic_candidate_prefix = (
+            "pass1"
+            if _get_by_suffix_from_prefix(payload, "acc_trans_idx", "pass1") is not None
+            else None
+        )
+
         def generic_candidate_field(name: str) -> np.ndarray | None:
-            return _get_by_suffix(payload, name, prefer_prefix="pass1")
+            if generic_candidate_prefix is not None:
+                return _get_by_suffix_from_prefix(payload, name, generic_candidate_prefix)
+            return _get_by_suffix(payload, name)
 
         rot_id = generic_candidate_field("acc_rot_id")
         compact_rot_idx = generic_candidate_field("acc_rot_idx")
@@ -790,6 +816,7 @@ def _candidate_table_from_relion(
         rotation_count = None
         selected_field = "all_candidates"
     else:
+        generic_candidate_prefix = None
         rot_idx = prefixed_table["rot_idx"]
         trans_idx = prefixed_table["trans_idx"]
         prob = prefixed_table["prob"]
@@ -951,6 +978,7 @@ def _candidate_table_from_relion(
         "rot_matrices": rot_matrices,
         "rotation_count": rotation_count,
         "relion_rotation_key_mode": prefixed_table.get("rotation_key_mode") if prefixed_table is not None else None,
+        "generic_candidate_prefix": generic_candidate_prefix,
         "selected_field": selected_field,
         "prob": prob[:n][selected],
         "score_pre_prior": score_pre_trimmed[selected],
@@ -1387,6 +1415,7 @@ def compare_dumps(
         "recovar_current_size": recovar["current_size"],
         "reconstruction_only": bool(reconstruction_only),
         "relion_selected_field": relion["selected_field"],
+        "relion_generic_candidate_prefix": relion.get("generic_candidate_prefix"),
         "relion_rotation_key_mode": relion.get("relion_rotation_key_mode"),
         "recovar_selected_field": recovar["selected_field"],
         "recovar_reconstruction_n_significant": recovar["reconstruction_n_significant"],

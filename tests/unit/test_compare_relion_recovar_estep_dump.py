@@ -257,6 +257,7 @@ def test_compare_relion_recovar_estep_dump_reports_both_engines_top_candidate_te
     _write_flat_real(relion_dir / "pass0_exp_Mweight_raw_preprior.bin", [-100.0])
     _write_flat_real(relion_dir / "pass0_candidate_orientation_log_prior.bin", [-10.0])
     _write_flat_real(relion_dir / "pass0_candidate_offset_log_prior.bin", [-20.0])
+    _write_flat_real(relion_dir / "pass0_candidate_combined_log_prior.bin", [-99.0])
     _write_flat_int(relion_dir / "pass1_acc_rot_id.bin", [5, 7])
     _write_flat_int(relion_dir / "pass1_acc_rot_idx.bin", [0, 1])
     _write_flat_int(relion_dir / "pass1_acc_trans_idx.bin", [0, 1])
@@ -290,6 +291,7 @@ def test_compare_relion_recovar_estep_dump_reports_both_engines_top_candidate_te
 
     result = compare_dumps(relion_dir, recovar_npz)
 
+    assert result["relion_generic_candidate_prefix"] == "pass1"
     assert result["relion_top_key"] == [5, 0]
     assert result["recovar_top_key"] == [7, 1]
     assert result["cross_top_candidate_details"] == [
