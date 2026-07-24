@@ -5815,6 +5815,16 @@ same-device equivalence or numerical noise.
   `6.0464626e-5`, centered pre-prior maximum error is
   `3.662109375e-4`, and centered total-score maximum error is
   `4.884e-4`.  Both engines choose `(1, 59)`.
+- Binary/source audit subsequently found that replay `11562574` used patched
+  RELION `5.0.1-commit-f2c1a3` (binary SHA-256
+  `d3447c820511b3dc1bb0fd9969323800c192bb3a9c6e6a0367b22a85b3fde689`),
+  whereas the installed stock oracle is `5.0.1-commit-d476e6` (binary
+  SHA-256
+  `92cf3ba54038d5e162e238b952fe88f1414f440d4e6cba23bc4b097428087b4a`).
+  The source commits differ only by the relax-symmetry parser addition, but
+  the replay is not an instrumentation-only rebuild of the exact stock
+  source.  Its arithmetic remains useful localization evidence, not an exact
+  stock score capture.
 - The replay also stores x origin `3.168496` Angstrom
   (`0.74552849` pixel), exactly the translation-59 pose.  This rules out a
   RECOVAR winner-to-pose mapping error: RELION's accelerated path stores the
@@ -5824,10 +5834,46 @@ same-device equivalence or numerical noise.
   translation-59 versus translation-57 posterior gap is only
   `3.93436e-5`; their raw diff2 values differ by one float32 unit
   (`1442.527099609375` versus `1442.5272216796875`).
-- Winner-stability probe `11562830` now reruns stock RELION and the patched
-  binary with all dump variables unset, sequentially on the same node and
-  physical GPU.  This separates compiled instrumentation from active
-  dump/synchronization effects before any production change.
+- Winner-stability probe `11562830` completed `0:0` in `00:12:34`.  It ran
+  installed stock d476e6 and patched f2c1a3 sequentially with every dump
+  variable unset on the fixed-case node and physical GPU; both stored
+  translation `59`.  The immediately adjacent stock-d476e6 arm in job
+  `11563252`, on the same node/GPU and with the same early-iteration science
+  arguments, stored translation `57`.
+- Direct comparison of those two installed-stock runs is exact for all
+  iteration-1 pose/Pmax/support fields.  At iteration 2 the poses and support
+  remain exact while 1,538/3,000 serialized Pmax values differ by at most
+  `6.4e-5`.  At iteration 3 Euler angles and support remain exact, exactly one
+  x translation differs by `2.125` Angstrom, and 1,897/3,000 Pmax values
+  differ by at most `6.1e-5`.  Half1/half2/merged cross-run FSC-AUC is
+  `0.999999999999/0.999999999998/0.999999999999` at iteration 1,
+  `0.999999999985/0.999999999985/0.999999999993` at iteration 2, and
+  `0.999999999985/0.999999999985/0.999999999992` at iteration 3.
+- This is direct stock-repeat evidence that the one-ULP hard winner is
+  launch-sensitive.  The two probe jobs differ in job-local scratch identity
+  and preceding process history; the accepted full run also used a different
+  MPI temporary root.  The result is therefore not a claim of byte-identical
+  launch context, but it rejects a deterministic translation-57 stock target
+  and rejects forcing RECOVAR to one side of the numerical boundary.
+- Source-exact d476e6 score probe `11563252` completed `0:0` in `00:18:37`.
+  Its installed-stock and dormant-instrumentation arms both chose
+  translation `57`; the narrow active-capture arm chose translation `59`.
+  The source is exact d476e6 plus a hash-pinned four-file patch, although the
+  rebuilt executable is explicitly not byte-identical to the installed
+  binary.
+- The exact-source active capture records raw scores
+  `1442.52734375` for `(rot_idx=1, trans_idx=59)` and
+  `1442.5274658203125` for `(rot_idx=1, trans_idx=57)`.  Their difference is
+  exactly one float32 ULP (`0.0001220703125`).  Normalized posteriors are
+  `0.322370919140121` and `0.322331576104412`, a
+  `3.93430357086353e-5` gap.
+- Dormant versus active instrumented runs retain exact Euler angles and
+  support counts through iteration 3, differ in only that one x translation,
+  and have merged FSC-AUC `1.000000000000`, `0.999999999993`, and
+  `0.999999999992` at iterations 1--3.  Since installed stock independently
+  selected both translations across the adjacent jobs, this difference does
+  not establish a causal dump effect.  It captures the numerical boundary
+  and supports no production arithmetic or tie-break change.
 - Fixed-case root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case24_combined_b826bc52_20260724T082100Z`.
   Particle-2767 capture:
@@ -5836,6 +5882,8 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it3_p2332_combined_b826bc52_20260724T085831Z`.
   Winner-stability probe:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it3_relion_winner_probe_20260724T092606Z`.
+  Source-exact score probe:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it3_d476_score_probe_20260724T094334Z`.
 - This is a localization result, not a strict pass.  Frozen snapshot
   `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
   34/34 evaluated.

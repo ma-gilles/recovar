@@ -78,11 +78,21 @@ iteration 4.  Particle-state audit localizes its seed to one 2.125 Angstrom
 translation decision at iteration 3.  Patched RELION operand replay `11562574`
 completed with exact 64/64 fine support, exact 12/12 reconstruction support,
 posterior correlation `0.999999998039`, and the same translation-59 winner as
-RECOVAR.  The original stock trajectory chose translation 57, but the replay
-gap is only `3.93436e-5` posterior (one float32 raw-diff2 unit).  Same-GPU
-stock-versus-patched-no-dump probe `11562830` is pending.  This is a
-near-tie localization, not a new strict pass; the fixed denominator and score
-remain unchanged.
+RECOVAR.  That replay used RELION source `f2c1a3`, not the installed stock
+`d476e6`, so its one-float32-unit raw-score gap is mapping evidence rather than
+an exact stock score oracle.  Same-node/same-GPU no-dump job `11562830`
+completed `0:0`; both installed stock and the older patched binary chose
+translation 59.  The immediately adjacent installed-stock replicate in
+source-exact probe `11563252` chose translation 57.  The two stock runs have
+identical iteration-1 state and, through iteration 3, merged cross-run FSC-AUC
+of at least `0.999999999992`; only the iteration-3 x translation differs.
+This directly classifies the hard winner as launch-sensitive at the numerical
+boundary.  Job `11563252` completed `0:0`: its source-exact d476e6 active
+capture chose translation 59 and measured translation 59 versus 57 at exactly
+one float32 raw-score ULP (`0.0001220703125`) and
+`3.9343036e-5` posterior.  Its dormant-instrumentation arm chose 57.  This is
+oracle-stability telemetry, not a new strict pass; the fixed denominator and
+score remain unchanged.
 
 ## Non-scoring regenerated-data diagnostics
 

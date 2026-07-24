@@ -9298,6 +9298,58 @@ the unchanged strict FSC/topology auditor.  Snapshot
 `strict-k1-v6-20260724` therefore remains 25/34 strict, 31/34 exact topology,
 and 34/34 evaluated.
 
+### Case-24 residual is a launch-sensitive one-ULP RELION winner
+
+The complete artifact-pinned case-24 intervention at source `b826bc52` used
+the preserved real initial reference and bounded first-iteration top-two
+float32 tree rescore.  Setup `11562037`, science `11562038`, and summary
+`11562039` completed `0:0`.  Strict audit `11562082` retained exact
+intermediate topology but failed final merged cross-engine FSC-AUC at
+`0.994801463093 < 0.995`; final half1/half2 FSC-AUC is
+`0.999040692683/0.995870180922`, and merged RECOVAR-minus-RELION GT FSC-AUC
+delta is `+0.008173125002`.
+
+The first three numbered merged maps are effectively exact at
+`0.999999999973`, `0.999999999903`, and `0.999999999901` FSC-AUC.  Exact
+particle-state comparison localizes the first discrete split to original
+index `2332` at iteration 3: the Euler angle is exact, while x translation
+differs by one fine step (`2.125` Angstrom).  Iteration 4 is the first
+material map response.
+
+Patched replay `11562574` closed candidate topology and winner-to-pose mapping,
+but binary audit found that it used source `f2c1a3` rather than the installed
+stock source `d476e6`; it is localization evidence, not an exact stock score
+oracle.  No-dump control `11562830` then ran installed stock and the older
+patched binary serially on the fixed-case node and A100 UUID
+`GPU-6a3cea75-90ac-d3de-7c1a-a8158412a9f4`; both chose translation `59`.
+The immediately adjacent installed-stock arm in exact-source job `11563252`
+chose translation `57`.  Those two installed-stock runs have exact
+iteration-1 state, exact poses/support through iteration 2, and exactly one
+iteration-3 translation difference.  Their merged map FSC-AUC remains
+`0.999999999999`, `0.999999999993`, and `0.999999999992` through iterations
+1--3.
+
+Job `11563252` also ran a source-exact d476e6 rebuild with a hash-pinned
+four-file capture patch.  The rebuilt executable is not byte-identical to
+installed stock.  Its dormant arm chose translation `57`; its narrow active
+capture chose `59` and recorded raw scores `1442.52734375` versus
+`1442.5274658203125`.  The `0.0001220703125` gap is exactly one float32 ULP,
+and the normalized posterior gap is `3.93430357086353e-5`.  Dormant versus
+active maps retain merged FSC-AUC at least `0.999999999992` through iteration
+3.  Because installed stock itself selects both sides across adjacent
+launches, the active-capture outcome is not interpreted as a causal dump
+effect.
+
+This is a qualified launch-sensitive hard-winner boundary.  Forcing RECOVAR
+to translation `57`, changing the arithmetic, or adding a tie-break would
+overfit one unstable RELION realization.  The finding is recorded as
+oracle-stability telemetry and does not rewrite the immutable metric:
+`strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and 34/34
+evaluated.  Durable roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it3_relion_winner_probe_20260724T092606Z`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it3_d476_score_probe_20260724T094334Z`.
+
 ### Nine iteration-1 winners explain the case-4 accumulator residual
 
 Same-H100 capture job `11561082` completed `0:0` in `00:14:44` on
