@@ -115,6 +115,46 @@ one float32 raw-score ULP (`0.0001220703125`) and
 `3.9343036e-5` posterior.  Its dormant-instrumentation arm chose 57.  This is
 oracle-stability telemetry, not a new strict pass; the fixed denominator and
 score remain unchanged.
+
+## K=4 physical-GPU trajectory diagnostic
+
+This diagnostic is not part of the frozen K=1 denominator.  It compares two
+otherwise identical RECOVAR K=4 trajectories that ran on different physical
+A100 GPUs.  It uses only shellwise FSC and normalized FSC-AUC; correlation is
+not computed.  The tiny iteration-1 numerical envelope amplifies into discrete
+assignment and schedule-state differences:
+
+| Numbered iteration | Worst map FSC-AUC defect | Half-1 assignment mismatches | Half-1 coarse mismatches | Noise relative L2 | Tau2 relative L2 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0.000000063 | 0 / 100000 | 0 / 100000 | 0.000000000 | 0.000000000 |
+| 4 | 0.000009934 | 4 / 100000 | 2 / 100000 | 0.000000054 | 0.000000135 |
+| 5 | 0.000122543 | 44 / 100000 | 28 / 100000 | 0.000000407 | 0.000026835 |
+| 7 | 0.000637164 | 420 / 100000 | 220 / 100000 | 0.000001806 | 0.000082195 |
+| 9 | 0.001751329 | 908 / 100000 | 501 / 100000 | 0.000004783 | 0.000338354 |
+
+CPU audit job `11564864` completed `0:0`.  The JSON artifact SHA-256 is
+`afac855a3d7423998d14082be429f8243f247a6ab880f95b497c099c2d20ac00`;
+the shellwise NPZ SHA-256 is
+`ad1adfea9a3fc164f6c8f3671a615ac5cb90475ae5b58e8daf3e502d93b679ee`.
+This establishes why a strict K=4 acceptance comparison must bind RELION
+control, RELION capture, and RECOVAR to one physical GPU UUID.
+
+The cross-A100 recovery job `11561204` reached numbered iteration 10 but
+failed before completing the 96-particle capture.  The failure was a
+diagnostic invariant bug, not OOM: class-2 capture rejected a particle whose
+jointly normalized K-class posterior legitimately had zero reconstruction
+rows in class 2.  Commit `9dcd709b` preserves such a particle's native launch
+and ownership manifest, writes a schema-valid zero-contributor shard, and
+keeps finite/nonnegative operand, exact-zero omission, and WTA upper-bound
+checks fail-closed.  The targeted device-signature/canonical-replay suite is
+92/92 passing.
+
+The vulnerable same-GPU graph (`11564419`, `11564442`, `11564443`) was
+canceled before the known iteration-10 failure; both auditors had zero
+runtime.  Its replacement is a fresh non-resumed one-allocation graph at
+`9dcd709b`: science `11565045`, vector audit `11565048`, scalar audit
+`11565050`.  It reruns both RELION arms and RECOVAR sequentially on one
+physical A100 and does not promote outputs from the canceled graph.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
