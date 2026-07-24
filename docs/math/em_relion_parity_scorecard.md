@@ -467,6 +467,13 @@ outside the active reconstruction support: cross-engine FSC-AUC remains
 `91.2%` of each class's positive shellwise deficit lies beyond that radius.
 The unchanged full-grid gate remains failed; this diagnostic does not promote
 K=4 or authorize a threshold change.
+Independent fail-closed array audit `11575379` extends the trajectory through
+iterations 12--13.  Identity class assignments remain exact and worst GT
+deltas are only `-0.000110190`/`-0.000036050`, but minimum classwise
+cross-engine FSC-AUC falls to `0.994672195` and `0.992658054`.  Both tasks
+therefore exit `2:0` at the unchanged full-grid gate.  This continued
+cross-engine divergence does not indicate a GT-quality collapse and does not
+promote K=4.
 Class agreement remains unmeasured until the terminal result exists.
 Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,
 so this is not yet K=4 acceptance.

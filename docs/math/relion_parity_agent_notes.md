@@ -6472,6 +6472,30 @@ same-device equivalence or numerical noise.
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_iteration10_11_shellwise_localization_20260724`;
   both contain `SAFE_TO_DELETE`.
+- Independent fail-closed array audit `11575379` extends the numbered map
+  trajectory through iterations 12--13.  Iteration 12 classwise
+  cross-engine FSC-AUC is
+  `0.995634590,0.994695012,0.994672195,0.995469749`; iteration 13 is
+  `0.995436809,0.993535520,0.992658054,0.994713432`.  Identity assignments
+  remain exact at both boundaries.
+- Worst GT deltas are only `-0.000110190` and `-0.000036050`, respectively,
+  inside the unchanged `-0.002` quality gate.  Both tasks fail closed
+  (`2:0`) solely because the full-grid cross-engine gate remains below
+  `0.995`; this is continued trajectory divergence, not a GT-quality collapse.
+  The tasks ran 254/233 seconds with 4,495,748/4,514,984 KiB maximum RSS.
+- Iteration-12/13 analysis JSON SHA-256 values are
+  `441102f6bf3ba6b348a70e51be2aaac2922c57ed8d3f4454e9ebf8e266dd244b`
+  and
+  `6b48248176f485eb9eed92fa5013e243fdfccc78d25c901325e093c20375738f`.
+  Shared analyzer/launcher SHA-256 values are
+  `f97ef19fb74727aa8e076adb5321bde83ed21b2d6891ef5690b51d3ed4a49d06`
+  and
+  `89d4a21250eab4c97e7f2e594e5e0f9c0daa0c445789e55603042e591b6b10bd`.
+  Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_iteration12_13_fsc_20260724T160500Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_iteration12_13_fsc_20260724T160500Z`;
+  both contain `SAFE_TO_DELETE`.
 - Map-only early audit `11569628` completed `0:0` in 217 seconds with
   4,398,616 KiB maximum RSS.  Identity matching is selected for both
   RECOVAR-to-RELION and matched-pair-to-GT assignments.  Classwise
