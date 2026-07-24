@@ -11173,6 +11173,108 @@ class TestRelionModeSmokeTest:
             offset_free_second,
         )
 
+    def test_k1_firstiter_cc_tree_top2_rescore_replaces_near_tie_winner(
+        self,
+        half_datasets,
+        init_volume,
+        monkeypatch,
+    ):
+        """The opt-in tree replay changes only bounded near-tie K=1 winners."""
+
+        import recovar.em.dense_single_volume.helpers.projection as projection_module
+        import recovar.em.dense_single_volume.helpers.scoring as scoring_module
+
+        dataset = half_datasets[0]
+        rotations = _make_rotations(2, seed=6322)
+        translations = jnp.zeros((1, 2), dtype=jnp.float32)
+        monkeypatch.setenv(
+            "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN",
+            "4e-6",
+        )
+
+        def fake_projector(_ppref, rots, image_shape, **_kwargs):
+            n_rot = int(rots.shape[0])
+            n_half = int(image_shape[0] * (image_shape[1] // 2 + 1))
+            projection = jnp.ones((n_rot, n_half), dtype=jnp.complex64)
+            return projection, jnp.ones((n_rot, n_half), dtype=jnp.float32)
+
+        def fake_gemm_scores(
+            _shifted,
+            _batch_norm,
+            _score_weight,
+            projections,
+            _projection_abs2,
+            n_images,
+            n_trans,
+            _n_windowed,
+            _image_shape,
+            _volume_shape,
+        ):
+            assert int(projections.shape[0]) == 2
+            assert int(n_trans) == 1
+            scores = jnp.asarray([1.0, 1.0 - 2e-7], dtype=jnp.float32)
+            return jnp.broadcast_to(scores[None, :, None], (int(n_images), 2, 1))
+
+        def fake_tree_rescore(
+            shifted_candidates,
+            _score_weight_candidates,
+            _projection_candidates,
+            _half_weights,
+            _fftw_order,
+        ):
+            scores = jnp.asarray([0.5, 0.75], dtype=jnp.float32)
+            return jnp.broadcast_to(scores, shifted_candidates.shape[:2])
+
+        monkeypatch.setattr(
+            projection_module,
+            "compute_relion_projector_projections_block",
+            fake_projector,
+        )
+        monkeypatch.setattr(
+            scoring_module,
+            "_e_step_block_scores_windowed_normalized_cc",
+            fake_gemm_scores,
+        )
+        monkeypatch.setattr(
+            scoring_module,
+            "_relion_coarse_normalized_cc_rescore",
+            fake_tree_rescore,
+        )
+
+        *_, full_stats = _compute_k_class_significance_batched(
+            dataset,
+            jnp.asarray(init_volume)[None, :],
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
+            adaptive_fraction=1.0,
+            max_significants=1,
+            image_batch_size=dataset.n_units,
+            rotation_block_size=2,
+            current_size=6,
+            half_spectrum_scoring=True,
+            relion_projector_half=jnp.zeros((1, 3, 3, 2), dtype=jnp.complex64),
+            relion_projector_r_max=1,
+            relion_projector_texture_interp=True,
+            score_mode="normalized_cc",
+            collect_significance=False,
+            return_class_best=True,
+        )
+
+        np.testing.assert_array_equal(
+            np.asarray(full_stats["class_hard_assignments"]),
+            np.ones((1, dataset.n_units), dtype=np.int32),
+        )
+        assert "class_second_hard_assignments" not in full_stats
+        assert full_stats["firstiter_cc_tree_top2_rescore"] == {
+            "max_margin": 4e-6,
+            "examined_images": dataset.n_units,
+            "ambiguous_images": dataset.n_units,
+            "winner_changes": dataset.n_units,
+        }
+
     @pytest.mark.parametrize(
         "with_image_corr,with_scale_corr,with_pre_shifts",
         [
