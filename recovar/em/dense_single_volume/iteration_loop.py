@@ -1991,6 +1991,7 @@ def _relion_projector_half_maps_for_scoring(
     current_size: int | None,
     padding_factor: int,
     n_classes: int,
+    real_references=None,
     dump_label: str | None = None,
 ) -> tuple[np.ndarray, int]:
     """Build RELION ``Projector::data`` slabs from current Fourier references."""
@@ -2006,13 +2007,25 @@ def _relion_projector_half_maps_for_scoring(
             "means_k must be a flat reference or a per-class reference array; "
             f"got shape {refs_ft.shape} for n_classes={n_classes}",
         )
+    refs_real_override = None
+    if real_references is not None:
+        refs_real_override = np.asarray(real_references, dtype=np.float64)
+        expected_shape = (int(n_classes),) + tuple(int(value) for value in volume_shape)
+        if refs_real_override.shape != expected_shape:
+            raise ValueError(
+                "real_references must have one real-space volume per class; "
+                f"got {refs_real_override.shape}, expected {expected_shape}",
+            )
     resolved_current_size = int(current_size) if current_size is not None else int(volume_shape[0])
     cache_dir = os.environ.get("RECOVAR_RELION_PROJECTOR_CACHE_DIR", "").strip()
     cache_path = None
     if cache_dir:
-        refs_for_hash = np.ascontiguousarray(refs_ft)
+        refs_for_hash = np.ascontiguousarray(
+            refs_ft if refs_real_override is None else refs_real_override
+        )
         hasher = hashlib.sha256()
         hasher.update(b"recovar-relion-projector-cache-v1")
+        hasher.update(b"fourier-reference" if refs_real_override is None else b"real-reference")
         hasher.update(str(refs_for_hash.dtype).encode("utf-8"))
         hasher.update(np.asarray(refs_for_hash.shape, dtype=np.int64).tobytes())
         hasher.update(np.asarray(volume_shape, dtype=np.int64).tobytes())
@@ -2039,12 +2052,16 @@ def _relion_projector_half_maps_for_scoring(
                 return projector_half, projector_r_max
             except Exception as exc:
                 logger.warning("Ignoring unreadable RELION projector cache %s: %s", cache_path, exc)
-    refs_real = []
-    for class_index in range(int(n_classes)):
-        ref_ft = jnp.asarray(refs_ft[class_index]).reshape(volume_shape)
-        refs_real.append(np.asarray(ftu.get_idft3(ref_ft)).real)
+    if refs_real_override is None:
+        refs_real = []
+        for class_index in range(int(n_classes)):
+            ref_ft = jnp.asarray(refs_ft[class_index]).reshape(volume_shape)
+            refs_real.append(np.asarray(ftu.get_idft3(ref_ft)).real)
+        refs_real = np.asarray(refs_real, dtype=np.float64)
+    else:
+        refs_real = refs_real_override
     projector_half, projector_r_max = reference_to_relion_projector_half_maps(
-        np.asarray(refs_real, dtype=np.float64),
+        refs_real,
         current_size=resolved_current_size,
         padding_factor=int(padding_factor),
     )
@@ -4101,6 +4118,7 @@ def refine_single_volume(
     init_relion_incr_size=10,
     init_refinement_state_fields=None,
     init_relion_iteration=0,
+    init_reference_real=None,
     init_image_corrections=None,
     init_scale_corrections=None,
     init_group_ids=None,
@@ -4160,6 +4178,13 @@ def refine_single_volume(
         Half-set datasets (same format as split_E_M_v2 expects).
     init_volume : jnp.ndarray, shape (volume_size,)
         Initial volume in Fourier space.
+    init_reference_real : array-like or None
+        Optional real-space source for the first iteration's RELION
+        ``Projector::data`` construction. This bypasses a lossy
+        complex64 Fourier-to-real roundtrip without changing the resident
+        Fourier reference used elsewhere. A shared ``(N,N,N)`` reference,
+        per-class ``(K,N,N,N)`` references, or explicit two-half input is
+        accepted.
     init_noise_variance : jnp.ndarray, shape (image_size,)
         Initial per-pixel noise variance.
     init_mean_variance : jnp.ndarray, shape (volume_size,)
@@ -4337,6 +4362,7 @@ def refine_single_volume(
     return _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
         init_volume=init_volume,
+        init_reference_real=init_reference_real,
         init_noise_variance=init_noise_variance,
         init_mean_variance=init_mean_variance,
         rotations=rotations,
@@ -4433,6 +4459,7 @@ def refine_single_volume(
 def _run_relion_iteration_loop(
     experiment_datasets,
     init_volume,
+    init_reference_real,
     init_noise_variance,
     init_mean_variance,
     rotations,
@@ -4854,6 +4881,47 @@ def _run_relion_iteration_loop(
     # an explicit leading class axis; single-class callers keep the historical
     # flat per-half reference layout.
     means = _normalize_initial_means(init_volume, n_classes)
+    initial_real_references_by_half = [None, None]
+    if init_reference_real is not None:
+        expected_volume_shape = tuple(int(value) for value in volume_shape)
+
+        def _as_class_real_references(value):
+            array = np.asarray(value, dtype=np.float64)
+            if n_classes == 1 and array.shape == expected_volume_shape:
+                return array[None, ...]
+            expected_class_shape = (n_classes,) + expected_volume_shape
+            if array.shape == expected_class_shape:
+                return array
+            raise ValueError(
+                "init_reference_real must be a shared real volume, a per-class "
+                f"array, or a two-half collection; got {array.shape}, expected "
+                f"{expected_volume_shape} or {expected_class_shape}",
+            )
+
+        if isinstance(init_reference_real, (list, tuple)) and len(init_reference_real) == 2:
+            initial_real_references_by_half = [
+                _as_class_real_references(init_reference_real[0]),
+                _as_class_real_references(init_reference_real[1]),
+            ]
+        else:
+            real_array = np.asarray(init_reference_real)
+            per_half_shape = (2, n_classes) + expected_volume_shape
+            if n_classes == 1 and real_array.shape == (2,) + expected_volume_shape:
+                initial_real_references_by_half = [
+                    _as_class_real_references(real_array[0]),
+                    _as_class_real_references(real_array[1]),
+                ]
+            elif real_array.shape == per_half_shape:
+                initial_real_references_by_half = [
+                    _as_class_real_references(real_array[0]),
+                    _as_class_real_references(real_array[1]),
+                ]
+            else:
+                shared_real = _as_class_real_references(real_array)
+                initial_real_references_by_half = [shared_real, shared_real]
+        logger.info(
+            "RELION initial projector: preserving direct float64 real-reference handoff"
+        )
     noise_variance_per_half = _normalize_noise_variance_per_half(
         init_noise_variance,
         n_halves=2,
@@ -6413,6 +6481,11 @@ def _run_relion_iteration_loop(
                         current_size=cs_for_engine,
                         padding_factor=PROJECTION_PADDING_FACTOR,
                         n_classes=n_classes,
+                        real_references=(
+                            initial_real_references_by_half[_half_idx]
+                            if iteration == 0
+                            else None
+                        ),
                         dump_label=f"iter{iteration:03d}_half{_half_idx}",
                     )
                     relion_projector_half_by_half[_half_idx] = projector_half

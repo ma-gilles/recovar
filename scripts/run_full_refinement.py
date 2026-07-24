@@ -3333,7 +3333,7 @@ def main():
             ini_high_ang=float(ini_high),
             filter_edgewidth=float(_RELION_FMASK_EDGE),
         )[0]
-        return filtered.astype(np.float32, copy=False)
+        return np.asarray(filtered, dtype=np.float64)
 
     _apply_ini_lowpass = bool(getattr(args, "apply_initial_lowpass", False))
     _ini_high_for_lowpass = (
@@ -3341,6 +3341,20 @@ def main():
         if _apply_ini_lowpass and float(args.init_resolution) > 0.0
         else None
     )
+    _initial_projector_real_token = os.environ.get(
+        "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE",
+        "0",
+    ).strip().lower()
+    if _initial_projector_real_token in {"1", "true", "yes", "on"}:
+        _use_initial_projector_real = True
+    elif _initial_projector_real_token in {"0", "false", "no", "off", ""}:
+        _use_initial_projector_real = False
+    else:
+        raise SystemExit(
+            "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE must be a boolean token, "
+            f"got {_initial_projector_real_token!r}"
+        )
+    init_reference_real_for_projector = None
 
     if frozen_boundary is not None:
         if frozen_boundary.volume_shape != tuple(int(value) for value in ds.volume_shape):
@@ -3365,13 +3379,18 @@ def main():
             f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
         )
         if _ini_high_for_lowpass is not None:
-            init_vol_real = _apply_ini_high_lowpass_real(
+            filtered_real = _apply_ini_high_lowpass_real(
                 init_vol_real, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
             )
+            if _use_initial_projector_real:
+                init_reference_real_for_projector = filtered_real
+            init_vol_real = filtered_real.astype(np.float32, copy=False)
             logger.info(
                 "Applied RELION initialLowPassFilterReferences to init reference: ini_high=%.2f A, fmask_edge=%d shells",
                 _ini_high_for_lowpass, _RELION_FMASK_EDGE,
             )
+        elif _use_initial_projector_real:
+            init_reference_real_for_projector = np.asarray(init_vol_real, dtype=np.float64)
         init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
         logger.info("Initial volume loaded from %s: shape=%s", init_mrc_path, init_vol_real.shape)
     else:
@@ -3384,15 +3403,21 @@ def main():
         if len(class_paths) != args.n_classes:
             raise SystemExit(f"--init_class_volumes count {len(class_paths)} != --n_classes {args.n_classes}")
         per_class_ft = []
+        per_class_real_for_projector = []
         for k, p in enumerate(class_paths):
             vol_real = _load_mrc(p).astype(np.float32)
             assert vol_real.shape == ds.volume_shape, (
                 f"Class {k + 1} volume shape mismatch at {p}: {vol_real.shape} vs {ds.volume_shape}"
             )
             if _ini_high_for_lowpass is not None:
-                vol_real = _apply_ini_high_lowpass_real(
+                filtered_real = _apply_ini_high_lowpass_real(
                     vol_real, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
                 )
+                if _use_initial_projector_real:
+                    per_class_real_for_projector.append(filtered_real)
+                vol_real = filtered_real.astype(np.float32, copy=False)
+            elif _use_initial_projector_real:
+                per_class_real_for_projector.append(np.asarray(vol_real, dtype=np.float64))
             vol_ft = np.array(ftu.get_dft3(jnp.asarray(vol_real))).astype(np.complex64).reshape(-1)
             per_class_ft.append(vol_ft)
             logger.info("Class %d initial volume loaded from %s", k + 1, p)
@@ -3404,6 +3429,11 @@ def main():
         # Stack to (K, V); refine_single_volume._normalize_initial_means handles the
         # per-half broadcast.
         init_vol_ft = np.stack(per_class_ft, axis=0)
+        if _use_initial_projector_real:
+            init_reference_real_for_projector = np.stack(
+                per_class_real_for_projector,
+                axis=0,
+            )
         # For downstream init_PS estimation, use class-1 as the representative
         # (K-class noise/prior bootstrap currently uses a single spectrum).
         init_vol_real = _load_mrc(class_paths[0]).astype(np.float32)
@@ -4042,6 +4072,7 @@ def main():
     result = refine_single_volume(
         experiment_datasets=experiment_datasets,
         init_volume=jnp.asarray(init_vol_ft),
+        init_reference_real=init_reference_real_for_projector,
         init_noise_variance=noise_variance,
         init_mean_variance=mean_variance,
         rotations=rotations,

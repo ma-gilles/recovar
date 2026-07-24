@@ -4075,6 +4075,38 @@ def test_relion_projector_cache_reuses_cached_projector_data(monkeypatch, tmp_pa
     assert len(list(tmp_path.glob("projector_*.npz"))) == 1
 
 
+def test_relion_projector_direct_real_reference_bypasses_fourier_roundtrip(monkeypatch):
+    import recovar.em.initial_model.dense_adapter as dense_adapter
+
+    captured_real = []
+
+    def fake_projector_builder(refs_real, *, current_size, padding_factor):
+        captured_real.append(np.asarray(refs_real).copy())
+        projector_half = np.ones((refs_real.shape[0], 3, 3, 2), dtype=np.complex64)
+        return projector_half, int(current_size // 2)
+
+    monkeypatch.setattr(
+        dense_adapter,
+        "reference_to_relion_projector_half_maps",
+        fake_projector_builder,
+    )
+    mean_ft = np.zeros((4, 4, 4), dtype=np.complex64)
+    mean_ft[0, 0, 0] = 7.0 + 3.0j
+    exact_real = np.arange(64, dtype=np.float64).reshape(1, 4, 4, 4) / 17.0
+
+    iteration_loop_module._relion_projector_half_maps_for_scoring(
+        mean_ft.reshape(-1),
+        volume_shape=(4, 4, 4),
+        current_size=4,
+        padding_factor=2,
+        n_classes=1,
+        real_references=exact_real,
+    )
+
+    assert len(captured_real) == 1
+    np.testing.assert_array_equal(captured_real[0], exact_real)
+
+
 def test_half0_local_relion_accumulators_offload_to_host():
     result = iteration_loop_module.HalfScoreResult(
         ha=np.zeros(1, dtype=np.int32),
