@@ -6077,7 +6077,7 @@ same-device equivalence or numerical noise.
   both contain `SAFE_TO_DELETE`.
 - This is a pending full-case generalization arm, not a score change.
 
-# 2026-07-24: case 5 first two boundaries improve under the bounded intervention
+# 2026-07-24: case 5 first four boundaries improve modestly within GPU pairs
 
 - Frozen-fixture science `11564053` completed RECOVAR iteration 1 with the
   RELION schedule boundary: current size 56, 30.22 Angstrom resolution, Pmax
@@ -6089,34 +6089,40 @@ same-device equivalence or numerical noise.
   one/two, so the intervention's three/one changes cannot be exactly that
   previously reported exception set.
 - CPU FSC audit `11567287` completed `0:0` in 52 seconds with 2,104,548 KiB
-  maximum RSS.  At numbered iteration 1, merged RECOVAR-versus-RELION FSC-AUC
-  improves from the frozen old row's `0.9999999973565671` to
-  `0.9999999997976555`.  Half-1/half-2 values improve from
-  `0.9999999935108590`/`0.9999999983306909` to
+  maximum RSS.  It correctly measured the new same-GPU pair, but its old
+  trajectory was compared to the new run's RELION maps.  Superseding
+  within-pair audit `11568205` shows numbered iteration-1 merged
+  RECOVAR-versus-RELION FSC-AUC improving from `0.9999999996276892` to
+  `0.9999999997976555`.  Half-1/half-2 improve from
+  `0.9999999992895403`/`0.9999999994962860` to
   `0.9999999997257697`/`0.9999999995988572`.
 - Merged GT FSC-AUC moves from `0.10326684532558558` to
   `0.10326688438429595`, toward RELION's `0.103266904543226`.  The metric is
   shellwise FSC/FSC-AUC only; correlation was not computed.
 - CPU FSC audit `11567559` completed `0:0` in 68 seconds with 2,222,748 KiB
-  maximum RSS at numbered iteration 2.  The cross-engine improvement
-  persists: merged RECOVAR-versus-RELION FSC-AUC moves from old
-  `0.9999999080572247` to new `0.9999999722278509`; half-1/half-2 values
-  move from `0.9999998013988499`/`0.9999998542373368` to
+  maximum RSS at numbered iteration 2.  The within-pair cross-engine
+  improvement persists: merged FSC-AUC moves from old
+  `0.9999999515577382` to new `0.9999999722278509`; half-1/half-2 values
+  move from `0.9999999331905616`/`0.9999998867172372` to
   `0.9999999927643750`/`0.9999999049878318`.
 - Merged iteration-2 GT FSC-AUC is `0.1077581636081282`, versus old
-  `0.10775713440494669` and RELION `0.10775766121678897`.  The intervention
-  slightly overshoots RELION's GT value while remaining closer in
-  cross-engine FSC-AUC; only the terminal strict trajectory can decide
-  acceptance.
+  `0.10775713440494669`.  Their matched RELION values are
+  `0.10775766121678897` and `0.10775680699055788`, respectively, so GT
+  closeness is slightly worse even though cross-engine FSC-AUC improves.
+  Only the terminal strict trajectory can decide acceptance.
 - CPU FSC audit `11567932` completed `0:0` in 112 seconds with 2,197,784 KiB
   maximum RSS and shows that the gain survives iterations 3 and 4.
   Iteration-3 merged new-versus-RELION FSC-AUC is
-  `0.9999994286732671`, versus old `0.9999989229723912`; iteration 4 is
-  `0.9999981782699359`, versus old `0.9999973185738911`.
+  `0.9999994286732671`, versus the matched old pair's
+  `0.9999992374179649`; iteration 4 is `0.9999981782699359`, versus old
+  `0.9999980697306444`.
 - Iteration-3 GT FSC-AUC is `0.10909314872619791`, versus old
   `0.10909390516870988` and RELION `0.10908983473527732`.  Iteration-4 GT
-  FSC-AUC is `0.10907400326716823`, versus old `0.10906393775269568` and
-  RELION `0.10908224561458033`.  New is closer to RELION at both boundaries.
+  FSC-AUC is `0.10907400326716823`, versus old `0.10906393775269568`.
+  Matched RELION is `0.10908983473527732` new versus
+  `0.10909082348729723` old at iteration 3, and `0.10908224561458033` new
+  versus `0.10907050037496863` old at iteration 4.  GT closeness is therefore
+  slightly worse at both later boundaries.
 - Audit stdout and launcher SHA-256 values are
   `2e0e47f426284ed533f4b48e6b945a9bc715866ea0ec6d13efeb5c231339d890`
   and `05b06cfba9446797f738e179734069d4c028b359b642898a979ac91b6e2f1091`.
@@ -6136,6 +6142,17 @@ same-device equivalence or numerical noise.
   and `dc213e2fabad826e7a3e13001abe683cc5d9da3c810fe6f31674a65bcbfb8ad3`.
   Runtime root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case5_iter3_4_analysis_20260724`.
+- Superseding within-pair audit `11568205` completed `0:0` in 265 seconds
+  with 2,227,060 KiB maximum RSS.  It binds the new pair to physical GPU
+  `GPU-49c1a223-be61-858b-49d8-d8b0347ac252` and the old pair to
+  `GPU-ab7221db-5a74-4e07-9521-0c63530c053d`, compares each RECOVAR
+  trajectory only to its co-allocated RELION trajectory, and separately
+  measures RELION cross-run drift.  Its stdout SHA-256 is
+  `4de004bec44639b7aa627ac0f9fb999ee92135c0f1084c4a4fb54f91c01ec2b7`;
+  shared analysis-script SHA-256 is
+  `74c611696cd553c7526f2c170d2cf4db192af90bddb36eda035b737b0173a236`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_intervention_within_pair_v2_20260724`.
 - This is a positive first-boundary generalization result, not a full-case
   acceptance.  Science `11564053` and strict audit `11564062` remain active or
   dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,
@@ -6158,6 +6175,15 @@ same-device equivalence or numerical noise.
 - New merged GT FSC-AUC is `0.104211187030167`, versus old
   `0.10421128611604787` and RELION `0.10421118250310028`.  Both the
   cross-engine and GT comparisons therefore move strongly toward RELION.
+- Iteration 2 retains the RELION schedule at current size 100,
+  20.92 Angstrom resolution, and next size 116.  CPU audit `11568148`
+  completed `0:0` in 66 seconds with 2,221,636 KiB maximum RSS.  The
+  within-pair merged FSC-AUC improves from `0.9999992032709832` to
+  `0.9999998458568423`, reducing the defect by about five-fold.
+- Iteration-2 GT FSC-AUC is `0.1940580090487044` versus matched new RELION
+  `0.1940532218186498`; the old pair is `0.19405475510892947` versus
+  `0.19405276175018424`.  GT closeness worsens despite the cross-engine gain,
+  so this remains a terminal-audit question.
 - Audit stdout, analysis script, and launcher SHA-256 values are
   `08a5e44687d21407c3f417459856e195a8cf392f140fc1d30eedc90c71315868`,
   `1ee32ce3e04d6cbf6eb5bd95ffc86d8a9899fb7f26818cdac99366b8f120756c`,
@@ -6165,6 +6191,19 @@ same-device equivalence or numerical noise.
   Runtime root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case4_iter1_analysis_20260724`;
   it contains `SAFE_TO_DELETE` and durable submission metadata.
+- Iteration-2 audit stdout, analysis script, and launcher SHA-256 values are
+  `35f12a29427e0a8943d91c3eb8458aa63efe4e196e73c1d1ef4283e04558a1ea`,
+  `50b8f6bea95ceb98249c7edd89a48fa0a7a825f85348afe77d21a4f657516d65`,
+  and `14d305c4b52d9f92a68942fbfd25fbceb6c2b8fc5d0580ba1462a6316e54b46c`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case4_iter2_analysis_20260724`.
+- Superseding within-pair audit `11568204` completed `0:0` in 146 seconds
+  with 2,018,552 KiB maximum RSS.  It binds the new pair to physical GPU
+  `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a` and the old pair to
+  `GPU-529cbb83-7457-2191-767f-7b3c1a8276c3`.  RELION cross-run merged
+  FSC-AUC is `0.9999999999982520` at iteration 1 and
+  `0.9999999954796889` at iteration 2.  Stdout SHA-256 is
+  `643080d82e3f888092d2df83e17a0ff31072e83a1b0204ab9cfcebd0c95c4435`.
 - This is strong first-boundary evidence, not a full-case acceptance.
   Science `11563827` and strict audit `11563842` remain active or
   dependency-gated, so the fixed score remains 25/34.

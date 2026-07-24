@@ -266,27 +266,31 @@ Frozen case 5 has also reached its first RECOVAR boundary under the unchanged
 direct-real-reference plus bounded `4e-6` top-two intervention.  The rescore
 changed four of 100,000 winners (`3/1` by half), which cannot be exactly the
 accepted baseline exception set (`1/2` by half).  CPU FSC audit `11567287`
-shows that iteration-1 merged cross-engine FSC-AUC improves from
-`0.999999997357` to `0.999999999798`, while merged GT FSC-AUC moves from
-`0.103266845326` to `0.103266884384`, toward RELION's `0.103266904543`.
-This is positive first-boundary evidence, not a full-case pass; science
-`11564053` and strict audit `11564062` remain active or dependency-gated.
+and the superseding within-physical-GPU-pair audit `11568205` show that
+iteration-1 merged cross-engine FSC-AUC improves from `0.999999999628` to
+`0.999999999798`.  The older cross-GPU comparison (`0.999999997357`) is not
+used for the causal delta.  Merged GT FSC-AUC moves from
+`0.103266845326` toward `0.103266884384`; the matched RELION values are
+`0.103266904607` and `0.103266904543`.  This is positive first-boundary
+evidence, not a full-case pass; science `11564053` and strict audit
+`11564062` remain active or dependency-gated.
 
 Iteration 2 independently preserves the cross-engine gain.  CPU audit
 `11567559` reports merged new-versus-RELION FSC-AUC `0.999999972228`, versus
-the frozen old row's `0.999999908057`; half-1/half-2 improve from
-`0.999999801399`/`0.999999854237` to
+the matched old pair's `0.999999951558`; half-1/half-2 improve from
+`0.999999933191`/`0.999999886717` to
 `0.999999992764`/`0.999999904988`.  New merged GT FSC-AUC is
-`0.107758163608`, versus old `0.107757134405` and RELION
-`0.107757661217`.  This remains intermediate evidence; the immutable score
-does not change before terminal science and both strict auditors pass.
+`0.107758163608` versus matched RELION `0.107757661217`; the old pair is
+`0.107757134405` versus `0.107756806991`, so GT closeness does not improve.
+This remains intermediate evidence; the immutable score does not change
+before terminal science and both strict auditors pass.
 
 The gain also survives the first two large-grid transitions.  CPU audit
 `11567932` reports iteration-3 merged cross-engine FSC-AUC improving from
-`0.999998922972` to `0.999999428673`, and iteration 4 from
-`0.999997318574` to `0.999998178270`.  At both boundaries, GT FSC-AUC also
-moves closer to RELION.  These are still numbered-boundary diagnostics, not a
-terminal acceptance.
+the matched old pair's `0.999999237418` to `0.999999428673`, and iteration 4
+from `0.999998069731` to `0.999998178270`.  The cross-engine improvement
+narrows, and matched-pair GT closeness is slightly worse at both boundaries.
+These are still numbered-boundary diagnostics, not a terminal acceptance.
 
 Frozen case 4 has now reached its first RECOVAR boundary under the same
 intervention.  The bounded rescore changed six of 100,000 winners (`2/4` by
@@ -298,9 +302,12 @@ new-versus-RELION FSC-AUC `0.999999999398`, versus the frozen old trajectory's
 `0.104211187030`, much closer to RELION's `0.104211182503` than the old
 trajectory's `0.104211286116`.  Iteration 1 keeps the expected size 56,
 30.22 Angstrom boundary and chooses size 100 for iteration 2, matching the
-frozen trajectory.  This is strong first-boundary evidence, not a terminal
-pass; science `11563827` and strict audit `11563842` remain active or
-dependency-gated.
+frozen trajectory.  Within-pair audit `11568204` confirms that the improvement
+is not cross-GPU RELION drift.  At iteration 2, merged cross-engine FSC-AUC
+improves from `0.999999203271` to `0.999999845857` (about a five-fold smaller
+defect), although GT closeness worsens.  This is strong numbered-boundary
+evidence, not a terminal pass; science `11563827` and strict audit `11563842`
+remain active or dependency-gated.
 
 The same-GPU K=4 science job `11565045` has completed iterations 1--5 with
 sizes `38,38,42,56,60`, resolutions
