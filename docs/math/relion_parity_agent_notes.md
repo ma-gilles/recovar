@@ -6575,8 +6575,10 @@ same-device equivalence or numerical noise.
   against 111 RECOVAR contributors, retains all 13 explicit RECOVAR
   zero-contributor particles, and finds zero exact per-particle rotation
   matches at `1e-6`.  Pixel/value comparison remains deliberately
-  unqualified.  The corrected report, comparator, and launcher SHA-256
-  values are
+  unqualified.  This fixes the candidate-versus-contributor category error,
+  but it does not localize the parity gap because the restarted RELION capture
+  and uninterrupted RECOVAR capture used different sampling perturbations.
+  The corrected report, comparator, and launcher SHA-256 values are
   `c6205255a5fb7c7ce1e8f4d376d0d054b0a079975369a1316d6424b4aee873ea`,
   `ed4eb83131d7be96006c48add1055b06f5623e740a2670b3510e8f2d4e82a3b2`,
   and
@@ -6585,19 +6587,13 @@ same-device equivalence or numerical noise.
   provenance was checked before changing into the exact source checkout;
   preliminary `11580606` exposed and led to removal of a vacuous pixel
   support pass when no rotations aligned.
-- Checked-in exact-index candidate auditor
-  `scripts/audit_k4_relion_recovar_candidate_support.py` then localizes the
-  support mismatch one boundary earlier.  Slurm audit `11580995` completed
-  `0:0` in 9 seconds with 378,888 KiB maximum RSS and classifies
-  `coarse_parent_support_difference_precedes_fine_scoring`.  Both engines
-  expand every selected coarse parent into all eight fine rotations for all
-  96 particles.  RELION selects 7,090 coarse parents, RECOVAR 6,857, and
-  only 1,677 overlap (`23.6530%` of RELION, `24.4568%` of RECOVAR); no
-  particle has an exact parent set.  RELION's emitted contributor remains in
-  RECOVAR's candidate support for only 14/96 particles, while RECOVAR's
-  contributor remains in RELION support for 24/96.
-- Candidate-parent report, auditor, unit-test, and launcher SHA-256 values
-  are
+- Slurm audit `11580995` and its
+  `coarse_parent_support_difference_precedes_fine_scoring` classification are
+  rejected.  The v1 auditor treated RELION direction-major
+  `orientation_class_key` and RECOVAR psi-major
+  `active_global_rotation_indices` as one index convention without a matrix
+  gate.  Its report, auditor, unit-test, and launcher SHA-256 values, retained
+  only as rejected provenance, are
   `d90f970ddb98c1c31ab9de4c18949fce20e3150581c66d7945b4d4e143bbd508`,
   `e65ee28bad9c5239cf69b300c489176c9b6f361356da65cfc0f5c84f53bbacc0`,
   `971cec81f630c2b904f9de9c0b59c02534ad69abcfbb362084ef89aef78bf9f5`,
@@ -6607,6 +6603,24 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_candidate_parent_audit_f48bcbc0_20260724T232300Z`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_candidate_parent_audit_f48bcbc0_20260724T232300Z`;
+  both contain `SAFE_TO_DELETE`.
+- The v2 auditor now generates each engine's expected fine grid, validates
+  captured matrices before interpreting integers, converts RELION
+  direction-major parents into canonical psi-major identities, and refuses a
+  localization when sampling perturbations differ.  The full 96-particle CPU
+  rerun validates RELION geometry to max-abs `5.0664e-7` and RECOVAR geometry
+  to `1.7881e-7`, then reports `status=invalid_comparison` and
+  `incomparable_sampling_perturbation_precludes_cross_engine_support_claim`.
+  Restarted RELION used `-0.12306`; uninterrupted RECOVAR used `+0.096421`,
+  exactly matching the uninterrupted RELION oracle's iteration-10 sampling
+  state.  The `0.219481` perturbation delta invalidates the former
+  7,090/6,857/1,677 parent-overlap and 14/96 contributor-retention claims as
+  parity evidence.  The corrected local report SHA-256 is
+  `077a611d1a6025834316b41d3522efea1d008a3ecbbb0a0f645c3402902e5486`.
+  Its run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_candidate_support_geometrygate_6e7c50de_20260725T003000Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_candidate_support_geometrygate_6e7c50de_20260725T003000Z`;
   both contain `SAFE_TO_DELETE`.
 - Map-only early audit `11569628` completed `0:0` in 217 seconds with
   4,398,616 KiB maximum RSS.  Identity matching is selected for both
