@@ -315,6 +315,18 @@ iterations 9--10 improve negligibly, while 11--12 worsen by about `8.8%` and
 improves at all four boundaries.  Terminal same-GPU acceptance remains the
 only promotion gate.
 
+Iterations 13--15 remain in the same run-sensitive regime.  Their new
+cross-engine FSC-AUC values are `0.999954301471`, `0.999954396064`, and
+`0.999954431570`, about `5.5%`, `2.6%`, and `2.3%` worse in FSC-defect terms
+than the matched old pair.  Iteration 16 reverses that small loss:
+`0.999955965898` new versus `0.999954256087` old, about a `1.04`-fold smaller
+defect.  GT closeness improves at all four boundaries; at iteration 16 the
+new RECOVAR/RELION GT FSC-AUC difference is only `0.000000703`.  RELION
+cross-run FSC-AUC remains about `0.999950` throughout.  Array audit
+`11569878` and iteration-16 audit `11569901` completed `0:0`; all 16 numbered
+boundaries are now evaluated, but the terminal all-data map and dependent
+strict auditor remain authoritative.
+
 Shell-profile audit `11569181` localizes `94.6%` of the iteration-6 negative
 AUC delta to shells 1--64, with the largest losses at shells 53--56 rather
 than the high-shell tail.  RELION cross-run FSC at those four shells is only
@@ -343,19 +355,32 @@ with a strong GT-closeness gain.  Iteration 5 improves cross-engine FSC-AUC
 from `0.999946344632` to `0.999972054601` (about a 1.92-fold smaller defect),
 but GT closeness worsens sharply.  Iteration 6 improves cross-engine FSC-AUC
 from `0.999924548651` to `0.999953210339` (about a 1.61-fold smaller defect)
-and improves GT closeness.  This is mixed numbered-boundary evidence, not a
-terminal pass; science `11563827` and strict audit `11563842` remain active
-or dependency-gated.
+and improves GT closeness.  Iterations 7--9 continue the matched improvement:
+new versus old cross-engine FSC-AUC is
+`0.999933403200` versus `0.999904546987`,
+`0.999910731841` versus `0.999883427749`, and
+`0.999867699585` versus `0.999830531488`, respectively, or about
+`1.43`-, `1.31`-, and `1.28`-fold smaller FSC defects.  GT closeness worsens
+at iterations 7--8 and improves at iteration 9.  RELION cross-run FSC-AUC
+falls to `0.9999127`--`0.9999609`, so these late deltas remain observational.
+Audits `11569878`, `11569970`, and `11570004` completed `0:0`.  This is mixed
+numbered-boundary evidence, not a terminal pass; science `11563827` and
+strict audit `11563842` remain active or dependency-gated.
 
-The same-GPU K=4 science job `11565045` has completed iterations 1--7 with
-sizes `38,38,42,56,60,62,68`, resolutions
-`60.44,49.45,30.22,27.20,25.90,22.67,21.76` Angstrom, and iteration-7 Pmax
-`0.909746`; iteration 8 starts at size 70.  This exact size/resolution
+The same-GPU K=4 science job `11565045` has completed iterations 1--8 with
+sizes `38,38,42,56,60,62,68,70`, resolutions
+`60.44,49.45,30.22,27.20,25.90,22.67,21.76,20.92` Angstrom, and iteration-8
+Pmax `0.9237`; iteration 9 starts at size 72.  This exact size/resolution
 topology matches both prior corrected `c390f8bf` diagnostic trajectories
 through this boundary.
 Independent early map audit `11569628` passes iteration 7 with identity class
 matching, minimum classwise cross-engine FSC-AUC `0.996806796`, and worst GT
 FSC-AUC delta `-0.000076974`, inside the unchanged `0.995/-0.002` gates.
+The formerly decisive iteration-8 boundary now also passes in independent
+audit `11570025`: identity class assignments, classwise cross-engine FSC-AUC
+`0.997311835`, `0.996462452`, `0.996514489`, and `0.997541298`, and worst GT
+delta `-0.000029845`.  The accepted stdout SHA-256 is
+`9835a0e24404f29ccda4ca28c9d1991cafd03c0ace6a85b0944214e9f5fda72f`.
 Class agreement remains unmeasured until the terminal result exists.
 Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,
 so this is not yet K=4 acceptance.
