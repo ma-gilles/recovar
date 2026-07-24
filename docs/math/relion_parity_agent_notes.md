@@ -5771,3 +5771,49 @@ same-device equivalence or numerical noise.
   unchanged strict FSC/topology audit.  Until it passes, frozen snapshot
   `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
   34/34 evaluated.
+
+# 2026-07-24: case 24 is exact through iteration 3; the remaining split starts with one translation
+
+- The complete artifact-pinned case-24 rerun at commit `b826bc52` used both
+  default-off interventions, grid correction unset/off, and no forced
+  final-all-data iteration.  Setup `11562037`, science `11562038`, and summary
+  `11562039` completed `0:0`; strict audit `11562082` returned the scientific
+  failure `final merged cross-engine FSC-AUC 0.9948014630931105 < 0.995`.
+  The intermediate topology audit passed all 12 numbered iterations.
+- Numbered merged cross-engine FSC-AUC is
+  `0.999999999973`, `0.999999999903`, and `0.999999999901` at iterations
+  1--3.  It first moves materially at iteration 4 (`0.999999304336`) and
+  reaches `0.999926660877` at iteration 12.  Final half1/half2/merged values
+  are `0.999040692683`, `0.995870180922`, and `0.994801463093`; final GT
+  FSC-AUC delta is `+0.008173125002`.
+- A sealed two-iteration A100 capture shows that the former particle-2767
+  split is closed.  RECOVAR and the accepted patched RELION capture have
+  identical 64/64 fine support, identical 13/13 reconstruction support, the
+  same local winner `(6, 52)`, probability correlation
+  `0.999999992880`, and common-renormalized probability L1
+  `0.0001021239235`.  The centered total-score maximum error is
+  `3.77953e-4`, versus the old two-candidate pre-prior margin discrepancy of
+  approximately `0.10411`.
+- Exact pose comparison over all 3,000 particle identities finds zero
+  rotation differences above `0.1` degrees through iteration 4.  Translations
+  are exact through iteration 2.  At iteration 3, only original index `2332`
+  differs above `0.01` Angstrom: RECOVAR and RELION have the same rotation,
+  while the x translation differs by one fine step (`0.5` pixel =
+  `2.125` Angstrom).  The mismatch persists at iteration 4; iteration 5 is
+  the first point with two rotation differences above one degree.
+- The iteration-3 RECOVAR capture reproduces the split.  Its two leading fine
+  rows `(1, 59)` and `(1, 57)` are both in fine and reconstruction support,
+  carry posterior `0.3224018721` and `0.3223231703`, and differ by only
+  `0.000244140625` in both total and pre-prior score.  RELION's stored pose
+  takes the other x translation.  Same-node/same-physical-GPU patched RELION
+  replay `11562574` targets stack image `2333`, iteration 3, to join the live
+  row identity and likelihood/prior operands before any production change.
+- Fixed-case root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case24_combined_b826bc52_20260724T082100Z`.
+  Particle-2767 capture:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_combined_b826bc52_20260724T084954Z`.
+  Particle-2332 capture and replay:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it3_p2332_combined_b826bc52_20260724T085831Z`.
+- This is a localization result, not a strict pass.  Frozen snapshot
+  `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
+  34/34 evaluated.

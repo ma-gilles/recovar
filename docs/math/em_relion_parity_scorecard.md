@@ -61,6 +61,23 @@ Progress: +5 passing cases since the first frozen snapshot; +2 since the previou
 | `strict-k1-v5-20260722` | 2026-07-22T19:00:51.329249+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038` | 23 | +1 | 11 | 0 |
 | `strict-k1-v6-20260724` | 2026-07-24T01:04:11.826284+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08` | 25 | +2 | 9 | 0 |
 
+## Post-snapshot fixed-fixture intervention diagnostics
+
+These rows use frozen case bytes but do not rewrite the immutable snapshot
+above.  A failing intervention remains unchecked and does not change the
+25/34 score.
+
+| Done | Case | Commit/intervention | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
+|---|---|---|---|---|---:|---:|---|
+| [ ] | `k1-24` | `b826bc52`; direct-real initial projector + bounded firstiter top-2 tree rescore | fail | pass | 0.994801463 | +0.008173125 | setup 11562037; science 11562038; summary 11562039; strict audit 11562082 |
+
+The case-24 intervention is effectively exact for the first three numbered
+maps (merged cross-engine FSC-AUC `0.999999999973`,
+`0.999999999903`, `0.999999999901`).  The first material map drift is
+iteration 4.  Particle-state audit localizes its seed to one 2.125 Angstrom
+translation decision at iteration 3; patched RELION operand replay `11562574`
+is pending.  The fixed denominator and score remain unchanged.
+
 ## Non-scoring regenerated-data diagnostics
 
 These runs exercise the same parameter definitions with newly generated particle bytes. They are useful robustness evidence but never change the fixed-suite score.
