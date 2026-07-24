@@ -9130,3 +9130,34 @@ RELION control/capture and RECOVAR arms in one allocation from the immutable
 detached commit.  Frozen case-3 longer-budget science/audit
 `11553236`/`11553237` separately supersede a 24-hour timeout without changing
 the fixture or algorithm.
+
+### Case-24 earliest split localizes to pre-prior likelihood
+
+Exact-physical-GPU RELION replay `11555181` completed both iterations and the
+sealed verbose operand capture on the same A100 used by the original RECOVAR
+science.  Accepted audits `11556109` and `11556113` join the resulting
+StoreWeightedSums and generic fine-pass tables to the immutable RECOVAR
+iteration-2 capture for original image 2767.  The accepted generic comparisons
+have exact support identity: 64/64 fine candidates and 13/13 reconstruction
+candidates are common (Jaccard 1.0).  Rotation, translation, and combined log
+priors agree within `4.77e-7`, `4.77e-7`, and `9.54e-7`.
+
+The two competing candidates reveal the causal boundary.  For RECOVAR
+candidate 11 minus RELION's candidate 6, RELION's pre-prior likelihood margin
+is `-6.068603515625`, while RECOVAR's is `-5.964490234852`; their difference
+is `0.104113280773`.  The shared prior swing toward candidate 11 is
+`+6.009656250477`.  RELION therefore ends at a `-0.058948218822` total margin
+and selects candidate 6, whereas RECOVAR ends at `+0.045166015625` and selects
+candidate 11.  This is a likelihood-operand/reduction mismatch, not a support,
+prior, scheduler, or tie-break mismatch.
+
+Comparator commit `e1d96a0c` adds the required K=1 compact
+StoreWeightedSums-to-global-rotation mapping and treats an inapplicable
+coarse-psi grid as optional under automatic matching.  Comparator/parser
+coverage passes 32/32; scoped Ruff and `git diff --check` pass.  The durable
+generic prior JSON SHA-256 is
+`4ea57126e538ad5bc76803bbac790af35b1580a92a40681acff51a8fb27bc02b`;
+the full replay history and artifact hashes are in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it2_particle2767_capture_0da399c4_20260722T213929Z/provenance/PATCHED_RELION_REPLAY_11552815_11552816.md`.
+This localization does not change the frozen score: v6 remains 25/34 strict,
+31/34 exact topology, and 34/34 evaluated.
