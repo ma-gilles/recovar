@@ -6441,6 +6441,35 @@ same-device equivalence or numerical noise.
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_iteration9_10_early_fsc_20260724`;
   both contain `SAFE_TO_DELETE`.
+- CPU shellwise localization `11573825` completed `0:0` in 432 seconds with
+  4,674,968 KiB maximum RSS and preserved every full-grid FSC value from the
+  accepted iteration-10/11 audits.  At iteration 11, classwise cross-engine
+  FSC-AUC through RELION's reported shell 29 is
+  `0.999817891,0.999753711,0.999770535,0.999866473`; through the current-size
+  radius 38 it is
+  `0.998743644,0.998416953,0.998362350,0.998989750`.  The full non-DC
+  `0.995` gate still fails for classes 2/3 because the beyond-radius band is
+  `0.992837146/0.992348888`.
+- The fraction of each class's positive shellwise FSC deficit beyond the
+  current-size radius is `91.55%,91.29%,91.54%,93.08%`.  Iteration-10 to
+  iteration-11 mean FSC changes through the old radius are only
+  `-0.000198260,-0.000231292,-0.000275279,-0.000197622`, versus
+  `-0.001132232,-0.001333115,-0.001602355,-0.001333367` beyond the new
+  radius.  This localizes the strict failure to the low-energy full-grid
+  tail/post-processing boundary and does not support changing K-class
+  scoring, support, or reconstruction arithmetic from this result.
+- Shell-localization JSON, shellwise NPZ, analyzer, and launcher SHA-256 values
+  are
+  `93dae31fefe09ca8dc58f388ac1e548aa3bbdac511b29263a1f19f3277b03b64`,
+  `c9f38013d40a5d74b9c97c25687f61bb23529e63ee2f76726ee7007599eda2ef`,
+  `140d3efb9b16e9b3edf53cde5f235b506c464eb5b6f9cecf6bc3ff0b2d165d2c`,
+  and
+  `8f472bca57a05ba71ed06bc92e5c4ae302b429071cdb5d17b4c6318ee609e07c`.
+  Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_iteration10_11_shellwise_localization_20260724`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_iteration10_11_shellwise_localization_20260724`;
+  both contain `SAFE_TO_DELETE`.
 - Map-only early audit `11569628` completed `0:0` in 217 seconds with
   4,398,616 KiB maximum RSS.  Identity matching is selected for both
   RECOVAR-to-RELION and matched-pair-to-GT assignments.  Classwise

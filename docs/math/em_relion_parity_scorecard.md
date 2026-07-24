@@ -439,6 +439,13 @@ deltas are within `-0.000073031`, but class-2/class-3 cross-engine FSC-AUC is
 iterations 9 and 10 with identity assignments and respective minimum
 cross-engine FSC-AUC `0.995753485` and `0.995367310`, proving iteration 11 is
 the first failing boundary.
+Shellwise localization `11573825` shows that the iteration-11 failure is
+outside the active reconstruction support: cross-engine FSC-AUC remains
+`0.999753711`--`0.999866473` through the reported resolution and
+`0.998362350`--`0.998989750` through the current-size radius, while more than
+`91.2%` of each class's positive shellwise deficit lies beyond that radius.
+The unchanged full-grid gate remains failed; this diagnostic does not promote
+K=4 or authorize a threshold change.
 Class agreement remains unmeasured until the terminal result exists.
 Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,
 so this is not yet K=4 acceptance.
