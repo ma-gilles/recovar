@@ -145,8 +145,19 @@ Iteration-1 merged new-versus-old FSC-AUC is `0.999999999984`, and CPU audit
 also effectively unchanged (`0.215965204` versus `0.215965248`, with RELION
 at `0.216062652`).  The divergence therefore begins downstream of the
 firstiter direct-reference/top-two path.  The autonomous science and strict
-audit remain active, but this is not a new checkbox; the frozen score remains
-25/34.
+audit have now completed as a strict failure.  Science `11566712` wrote all
+artifacts and returned the launcher's expected quality-failure exit `2:0`;
+the dependency-impossible zero-runtime audit `11566739` was replaced by direct
+unchanged terminal audit `11567655`.
+
+The terminal FSC audit fails first at numbered iteration 9
+(`0.989830716627 < 0.995`), while iteration 10 is `0.997438778645` and final
+merged cross-engine FSC-AUC is `0.826260991659`.  Final merged GT delta is
+`-0.000434619684`.  Exact topology has 10 RECOVAR versus 11 RELION numbered
+iterations; iteration 9 differs at current size `72` versus `70` and HEALPix
+order `4` versus `5`, with the order mismatch continuing through iteration
+10.  Both unchanged auditors return status 2.  This confirms the existing
+strict/topology failure and does not change the frozen score of 25/34.
 
 ## K=1 frozen case-7 firstiter generalization
 

@@ -6171,6 +6171,29 @@ same-device equivalence or numerical noise.
   and `ef9ad571708fd2bceebd1fd2bd3775f90dd724c89efc311270f2f40be81f431a`.
   Runtime root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_iter2_analysis_20260724`.
+- Full science `11566712` completed all artifacts but returned the launcher's
+  expected scientific exit `2:0` because its embedded quality summary failed.
+  RECOVAR converged after 10 numbered iterations versus RELION's 11 and then
+  ran one convergence-valid final all-data iteration with grid correction
+  off.  The original `afterok` audit `11566739` was dependency-impossible and
+  was canceled at zero runtime.
+- Unchanged terminal audit `11567655` was therefore run directly against the
+  complete artifacts.  It failed closed (`1:0`) in 43 seconds with 763,960
+  KiB maximum RSS: FSC audit status 2 and exact-topology audit status 2.
+  Numbered iteration 9 is the first FSC failure
+  (`0.9898307166274213 < 0.995`); numbered iteration 10 recovers to
+  `0.9974387786446363`, but final merged cross-engine FSC-AUC is only
+  `0.8262609916592335`.
+- Exact topology fails at iteration 9 on current size
+  (`RELION=70`, `RECOVAR=72`) and HEALPix order (`5` versus `4`), retains the
+  HEALPix mismatch at iteration 10, and has numbered counts 11 versus 10.
+  Final merged GT FSC-AUC delta is `-0.00043461968374969295`.
+- Terminal FSC JSON, shellwise NPZ, and topology JSON SHA-256 values are
+  `b304bcce0ad99684a73b65d2fc4e249ce2b1931b9db72c76737c172ee48385fe`,
+  `ce0f797fb7408205941183de744acb99e76241c7966257a033dc946d8ee2f450`,
+  and `5883f1bab7565b05c89f4047159ea5661e67002a181b8fa27bf7ec7790b8b4ae`.
+  Audit stdout SHA-256 is
+  `0543e42fbe870b0742cebeeaa6b67153f9c52f29e24e9e521ea250d1536604ba`.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 
