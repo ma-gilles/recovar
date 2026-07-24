@@ -1,5 +1,5 @@
-from types import SimpleNamespace
 import inspect
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -252,6 +252,17 @@ def test_k_class_replay_adaptive_sparse_pass2_enables_fine_mstep_pruning():
     adaptive_block = source.split("if args.adaptive_2pass:", 1)[1].split("else:", 1)[0]
 
     assert 'adaptive_em_kwargs["relion_fine_mstep_prune"] = bool(args.sparse_pass2)' in adaptive_block
+
+
+def test_k_class_replay_sets_numbered_half_capture_context():
+    import scripts.run_k_class_parity as run_k_class_parity
+
+    source = inspect.getsource(run_k_class_parity.main)
+
+    assert "set_bpref_contribution_dump_context(" in source
+    assert "iteration=args.target_iter" in source
+    assert "half=1" in source
+    assert "clear_bpref_contribution_dump_context()" in source
 
 
 def test_k_class_replay_records_responsibility_class_diagnostics():

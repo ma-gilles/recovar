@@ -1254,6 +1254,17 @@ def main() -> None:
     print("  batch sizing: " + _batch_plan_note("coarse", base_batch_plan))
 
     t0 = time.time()
+    from recovar.em.dense_single_volume.helpers import (
+        sparse_pass2_bucketed as _sparse_pass2_diagnostics,
+    )
+
+    # Mirror the numbered-half context supplied by the production iteration
+    # loop so opt-in contribution/device-signature captures from this
+    # one-boundary replay retain exact target-iteration provenance.
+    _sparse_pass2_diagnostics.set_bpref_contribution_dump_context(
+        iteration=args.target_iter,
+        half=1,
+    )
     common_em_kwargs = dict(
         class_log_priors=class_log_priors,
         accumulate_noise=bool(args.accumulate_noise),
@@ -1382,6 +1393,7 @@ def main() -> None:
             current_size=current_size,
             **common_em_kwargs,
         )
+    _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
     elapsed_s = time.time() - t0
     print(f"  RECOVAR K-class E/M step completed in {elapsed_s:.1f}s")
 
