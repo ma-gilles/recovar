@@ -544,7 +544,8 @@ the uninterrupted oracle at `+0.096421`.
 Candidate-parent audit `11580995` is rejected and superseded.  It additionally
 treated RELION direction-major and RECOVAR psi-major integer indices as one
 coordinate system without validating them against the captured matrices.
-The geometry-gated v2 auditor validates both conventions independently
+Independent Slurm audit `11581784` runs the geometry-gated v2 auditor at
+commit `0b5182b5`.  It validates both conventions independently
 (RELION max-abs `5.0664e-7`, RECOVAR `1.7881e-7`) and then fails closed with
 `incomparable_sampling_perturbation_precludes_cross_engine_support_claim`;
 the perturbation delta is `0.219481`.  Therefore its former 7,090/6,857/1,677
@@ -552,7 +553,7 @@ parent counts and 14/96 contributor-retention claim are descriptive artifacts
 of an invalid comparison, not a localization of the K=4 parity gap.  The
 rejected v1 report SHA-256 is
 `d90f970ddb98c1c31ab9de4c18949fce20e3150581c66d7945b4d4e143bbd508`;
-the local corrected v2 report SHA-256 is
+the corrected v2 report SHA-256 is
 `077a611d1a6025834316b41d3522efea1d008a3ecbbb0a0f645c3402902e5486`.
 A full terminal
 FSC/class-assignment audit `11578043` completed the complete 15-iteration

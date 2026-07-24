@@ -6607,20 +6607,22 @@ same-device equivalence or numerical noise.
 - The v2 auditor now generates each engine's expected fine grid, validates
   captured matrices before interpreting integers, converts RELION
   direction-major parents into canonical psi-major identities, and refuses a
-  localization when sampling perturbations differ.  The full 96-particle CPU
-  rerun validates RELION geometry to max-abs `5.0664e-7` and RECOVAR geometry
-  to `1.7881e-7`, then reports `status=invalid_comparison` and
+  localization when sampling perturbations differ.  Independent Slurm job
+  `11581784`, pinned to commit `0b5182b5`, completed `0:0` in 13 seconds with
+  686,404 KiB maximum RSS.  The full 96-particle CPU audit validates RELION
+  geometry to max-abs `5.0664e-7` and RECOVAR geometry to `1.7881e-7`, then
+  reports `status=invalid_comparison` and
   `incomparable_sampling_perturbation_precludes_cross_engine_support_claim`.
   Restarted RELION used `-0.12306`; uninterrupted RECOVAR used `+0.096421`,
   exactly matching the uninterrupted RELION oracle's iteration-10 sampling
   state.  The `0.219481` perturbation delta invalidates the former
   7,090/6,857/1,677 parent-overlap and 14/96 contributor-retention claims as
-  parity evidence.  The corrected local report SHA-256 is
+  parity evidence.  The corrected report SHA-256 is
   `077a611d1a6025834316b41d3522efea1d008a3ecbbb0a0f645c3402902e5486`.
   Its run/runtime roots are
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_candidate_support_geometrygate_6e7c50de_20260725T003000Z`
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_candidate_support_geometrygate_slurm_0b5182b5_20260725T005000Z`
   and
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_candidate_support_geometrygate_6e7c50de_20260725T003000Z`;
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_candidate_support_geometrygate_slurm_0b5182b5_20260725T005000Z`;
   both contain `SAFE_TO_DELETE`.
 - Map-only early audit `11569628` completed `0:0` in 217 seconds with
   4,398,616 KiB maximum RSS.  Identity matching is selected for both
