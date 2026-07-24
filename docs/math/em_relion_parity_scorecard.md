@@ -255,6 +255,18 @@ preprocessing, CTF weighting, translation phase, and window ordering as the
 material source, leaving projected-reference generation or score
 operand/reduction arithmetic.  Operand-report SHA-256 is
 `f7258bfe7ac859b4499d6166ab78b597ad7c5183b333fcbdce6555eb0272530a`.
+An independent production-CUDA replay now closes the projected-reference
+branch too.  With RELION's persisted `PPref` and its eight fine Euler
+matrices, RECOVAR's texture projector is bitwise equal to all 51,968 complex
+pixels (eight orientations, 32 hypotheses, 1,624 pixels each): relative L2
+and maximum absolute error are both exactly zero.  The result JSON and
+analyzer SHA-256 values are
+`9cb5f3407b44e137e20d86bb727015d55c7c168935a1b916420f37626059c10e`
+and
+`d23ff58c162b0fceccdda22125b17e495756c341317472f6b47f36f58cf23f95`.
+For identical reference/Euler inputs, projector implementation is therefore
+not the case-4 limiter; the remaining first-boundary branch is Euler
+construction/handoff or fused normalized-CC arithmetic/reduction.
 Fine-pass capture `11572658` remains queued for particles `38594` and `65070`.
 The frozen score remains 25/34 strict, 31/34 topology, and 34/34 evaluated.
 
@@ -308,8 +320,8 @@ FSC-AUC values are at least `0.999999992551`.  The accepted inertness JSON
 SHA-256 is
 `9c1cf28f563d0f4a4e9e202cf6d0a3af1847012d43c45c3089d8e6fafc5c85f5`.
 RECOVAR then passed checkout, CUDA-device, and RELION-binding provenance gates
-on the same allocation.  Science and both dependent auditors remain pending;
-this does not change the frozen K=1 score.
+on the same allocation.  At submission, science and both dependent auditors
+were pending; this did not change the frozen K=1 score.
 
 Frozen case 5 has also reached its first RECOVAR boundary under the unchanged
 direct-real-reference plus bounded `4e-6` top-two intervention.  The rescore
@@ -437,11 +449,13 @@ mean pose error `0.2730` to `0.1967` degrees and mean translation error
 already below the gate.  The terminal improvement is therefore observational
 under substantial run/GPU butterfly amplification and cannot promote case 4.
 
-The same-GPU K=4 science job `11565045` has completed iterations 1--10 with
+The same-GPU K=4 science job `11565045` completed all 15 configured numbered
+iterations without convergence.  It therefore correctly skipped forced final
+all-data and persisted the last numbered half-average as the final maps.
+Iterations 1--10 used
 sizes `38,38,42,56,60,62,68,70,72,74`, resolutions
 `60.44,49.45,30.22,27.20,25.90,22.67,21.76,20.92,20.15,19.43` Angstrom,
-and iteration-10 Pmax `0.915066`; the unconverged trajectory continues into
-iteration 11 at size 76 under its configured 15-iteration ceiling.  This
+and iteration-10 Pmax `0.915066`.  This
 exact size/resolution topology matches both prior corrected `c390f8bf`
 diagnostic trajectories through this boundary.
 Independent early map audit `11569628` passes iteration 7 with identity class
@@ -480,9 +494,21 @@ Identity class assignment remains exact; classwise cross-engine FSC-AUC is
 All GT deltas remain inside the unchanged quality gate, with worst magnitude
 only `0.000095231`.  The strict full-grid trajectory therefore remains red
 without evidence of GT-quality loss.
-Class agreement remains unmeasured until the terminal result exists.
-Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,
-so this is not yet K=4 acceptance.
+Independent audit `11577956` extends the trajectory through terminal numbered
+iteration 15.  Identity map assignment remains exact, but all four classwise
+cross-engine FSC-AUC values fail:
+`0.994459232,0.993069734,0.992039376,0.994497731`.  GT deltas remain small
+(`+0.000115765,-0.000113423,+0.000041339,+0.000018044`), so this is continued
+trajectory divergence rather than GT-quality collapse.
+Corrected same-UUID vector/scalar auditors `11577999`/`11578000` complete
+`0:0` and both classify
+`rotation_support_difference_precedes_operand_value_comparison`.  Across
+the fixed 96-particle class-2 panel, RELION has 56,720 prescatter rotations
+versus 111 RECOVAR contributor rotations; 13 RECOVAR particles have no
+class-2 contributor and no rotation matches within `1e-6`.  Operand/scalar
+comparison is therefore not geometry-qualified.  A full terminal
+FSC/class-assignment audit is running as `11578043`; no K=4 acceptance or
+frozen K=1 score change is claimed.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

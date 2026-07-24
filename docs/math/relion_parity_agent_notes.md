@@ -6387,8 +6387,9 @@ same-device equivalence or numerical noise.
   the same size/resolution/order boundary and rounded Pmax `0.8224`.
 - Iteration 6 completed at current size 62, 22.67 Angstrom resolution, Pmax
   `0.920524`, and HEALPix order 1; the scheduler selected size 68 for
-  iteration 7.  The vector and scalar auditors remain dependency-gated, so
-  this is trajectory telemetry rather than an acceptance claim.
+  iteration 7.  At this boundary the vector and scalar auditors were still
+  dependency-gated, so this was trajectory telemetry rather than an
+  acceptance claim.
 - Iteration 7 completed at current size 68, 21.76 Angstrom resolution, Pmax
   `0.909746`, and HEALPix order 1; the scheduler selected size 70 for
   iteration 8.  This size/resolution/order boundary matches the corrected
@@ -6517,6 +6518,51 @@ same-device equivalence or numerical noise.
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_iteration14_fsc_20260724T172000Z`;
   both contain `SAFE_TO_DELETE`.
+- Science `11565045` completed all 15 configured iterations `0:0` in
+  `09:03:48` with 60,094,852 KiB maximum RSS.  It remained unconverged and
+  correctly skipped forced final all-data.  Independent iteration-15 audit
+  `11577956` fails closed (`2:0`) in 252 seconds with 4,611,312 KiB maximum
+  RSS.
+  Identity map assignment remains exact, while classwise cross-engine
+  FSC-AUC is
+  `0.994459232,0.993069734,0.992039376,0.994497731`; all four classes fail
+  the unchanged `0.995` gate.  GT deltas are
+  `+0.000115765,-0.000113423,+0.000041339,+0.000018044`, all inside the
+  unchanged `-0.002` gate.
+- Iteration-15 analysis JSON, shared analyzer, and launcher SHA-256 values are
+  `0a159a05f05f4fc641e6d76bf5796d120268ebb92bf7a3dfcf7cec3030e42e1f`,
+  `f97ef19fb74727aa8e076adb5321bde83ed21b2d6891ef5690b51d3ed4a49d06`,
+  and
+  `7f80134f31ec1a15134af28a9bf06bd04b938e22971743e1987af76d2606ce7c`.
+  Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_iteration15_fsc_20260724T213615Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_iteration15_fsc_20260724T213615Z`;
+  both contain `SAFE_TO_DELETE`.
+- The original vector audit `11565121` exposed two auditor-only assumptions:
+  it admitted the native panel NPZ into the scatter-signature set and then
+  assumed at least one exact cross-engine rotation match.  Corrected,
+  hash-pinned vector/scalar audits `11577999`/`11578000` complete `0:0` in
+  11/10 seconds.  Both classify
+  `rotation_support_difference_precedes_operand_value_comparison`: across
+  the exact 96-particle class-2 panel, RELION contains 56,720 prescatter
+  rotations versus 111 RECOVAR contributor rotations, 13 RECOVAR particles
+  have zero class-2 contributors, and no rotation matches within `1e-6`.
+  Operand/scalar metrics are deliberately unqualified.
+- Vector/scalar JSON SHA-256 values are
+  `ed96c45cdc8c142fd854bce894aacd276e26f4d3a9e8bdc4d4e14b73703d9ae9`
+  and
+  `166b7aae8066f94617576ba14d86249631ab3b606f898f420bdaf800869f3ab6`.
+  Comparator SHA-256 values are
+  `ca4335f09cfdb84a1eb514ac36f2df5b3aa291afaf4175442bc63b1b99b8567a`
+  and
+  `5e0c0199eff97b4d28ca09ca3f96f448c054a55f98db581cb931b89b8bbf10f1`;
+  launcher SHA-256 values are
+  `f61d3d254d7514bb3b86e2ad5999f3ce2849e90a3ad393db81c2388aaef9de7b`
+  and
+  `d9a194920e9aea6c8330fd2a602aea5f81c728f58c0ac38b1e85a0f798845a88`.
+  Full terminal FSC/class-assignment audit `11578043` is running from
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_terminal_full_audit_20260724T214500Z`.
 - Map-only early audit `11569628` completed `0:0` in 217 seconds with
   4,398,616 KiB maximum RSS.  Identity matching is selected for both
   RECOVAR-to-RELION and matched-pair-to-GT assignments.  Classwise
@@ -6534,9 +6580,8 @@ same-device equivalence or numerical noise.
   and `b3df857073af97cf86cc4913abbf3b3409a37379b073e05b5a8407d3d4a80384`.
   Runtime root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_iteration7_early_fsc_20260724`.
-- The science job is healthy, while vector audit `11565121` and independent
-  scalar audit `11565131` remain dependency-gated.  No K=4 acceptance or K=1
-  score change is claimed before those fail-closed auditors finish.
+- The numbered full-grid gate remains red from iteration 11 onward.  No K=4
+  acceptance or K=1 score change is claimed.
 
 # 2026-07-24: case 22 rules out the firstiter intervention
 
@@ -6773,6 +6818,18 @@ same-device equivalence or numerical noise.
   `8af43e740c9faf9ccc5f23f107846a76e00a3808c8316581c4c99eb138b0d4f7`.
   Pending job `11574731` was cancelled before execution after preflight found
   that its derived launcher had not yet isolated the runtime cache.
+- Production-CUDA projection replay with the persisted RELION `PPref` and
+  its eight fine Euler matrices is bitwise exact for all 51,968 complex
+  pixels (eight orientations, 32 hypotheses, 1,624 pixels each).  Relative
+  L2 and maximum absolute error are both exactly zero.  This rules out the
+  texture projector implementation when its reference/Euler inputs agree
+  and narrows the case-4 coarse tie to Euler construction/handoff or fused
+  normalized-CC arithmetic/reduction.  Result/analyzer SHA-256 values are
+  `9cb5f3407b44e137e20d86bb727015d55c7c168935a1b916420f37626059c10e`
+  and
+  `d23ff58c162b0fceccdda22125b17e495756c341317472f6b47f36f58cf23f95`.
+  The result is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_p5234_cc_components_20260724T154500Z/analysis/RECOVAR_RELION_FINE_PROJECTION.json`.
 - Same-physical-H100 fine-pass capture `11572658` is queued for case-5
   particles `38594` and `65070` on `della-h19g1`, targeting capture UUID
   `GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`.  Its run/runtime roots are
