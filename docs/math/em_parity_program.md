@@ -9129,6 +9129,27 @@ score/posterior/support boundary.  The sealed classification is
 `b28c58a09575d9900f8091725ef2b18ac24c5ff1e76848ba9df4b01de40ff889`).
 Map quality remains FSC/FSC-AUC only; correlation is not computed.
 
+The complete per-iteration audit sharpens that boundary.  At RECOVAR
+iteration 0 / RELION iteration 1, cases 4 and 5 have exactly equal Pmax and
+significant-support arrays for all 100,000 particles; only 9 and 3 particles,
+respectively, exceed the 0.01-Angstrom translation-error threshold.  At the
+next iteration, all 100,000 Pmax values become non-identical, Pmax absolute
+p95 reaches `5.23240e-4` / `1.13895e-4`, significant support differs for
+331 / 207 particles, and the greater pose-or-translation tail reaches 60 / 25
+particles.  The broad continuous split therefore begins at scoring iteration
+2, before the late final-map amplification.
+
+Same-GPU diagnostic `11558427` tests the case-4 map operand at precisely that
+boundary.  Both two-iteration arms use the same exact incoming RELION replay
+state; one retains the resident RECOVAR iteration-1 half maps and the other
+substitutes only the exact RELION iteration-1 half maps for scoring iteration
+2.  Identity audits compare both arms to RELION iteration 2 using Pmax,
+support, pose, and translation distributions.  Initial job `11558403` failed
+in a three-second JAX-path provenance assertion before science and is not
+evidence.  The corrected replacement passed checkout, pixi, CUDA-device, and
+clean-HEAD gates.  Run root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it2_relref_counterfactual_5cb01ec1_20260724T040135Z`.
+
 ### K=4 fused capture accepts legitimate single-row soft buckets
 
 K=4 science `11503805` completed nine numbered iterations, then aborted at

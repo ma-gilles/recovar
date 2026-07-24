@@ -5606,3 +5606,28 @@ same-device equivalence or numerical noise.
   and `2aa103ee09442d4a4fd00cdc38ec0aa89d0e4aaca586582189f37d43cf9258f6`.
 - Durable case root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_unresolved_a2be302c_20260722T205500Z/cases/26_tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80`.
+
+# 2026-07-24: cases 4/5 first broaden at scoring iteration 2
+
+- The complete exact-identity audits show that RECOVAR iteration 0 / RELION
+  iteration 1 has exactly equal Pmax and significant-support arrays for all
+  100,000 particles in both cases.  Only 9 case-4 and 3 case-5 particles
+  exceed 0.01 Angstrom translation error.
+- At the next aligned iteration, all 100,000 Pmax values are non-identical.
+  Pmax absolute p95 is `5.23240e-4` for case 4 and `1.13895e-4` for case 5;
+  significant support differs for 331 and 207 particles, and the maximum of
+  the greater-than-0.5-degree pose count and greater-than-0.01-Angstrom
+  translation count is 60 and 25 particles.  This is the earliest broad
+  continuous posterior split.
+- Same-GPU case-4 counterfactual `11558427` runs through iteration 2 with
+  exact incoming RELION replay state in both arms.  The only arm difference is
+  resident RECOVAR versus exact RELION iteration-1 half maps at scoring
+  iteration 2.  The output is identity-audited against RELION iteration 2.
+- Initial `11558403` failed in three seconds in an over-strict JAX symlink-path
+  assertion before science.  It is not evidence.  Replacement `11558427`
+  passed clean-source, checkout-bound import, pixi-JAX, and one-CUDA-device
+  gates on `della-h20g2`.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it2_relref_counterfactual_5cb01ec1_20260724T040135Z`.
+- The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
+  evaluated until a fixed case passes its accepted audit.
