@@ -248,6 +248,162 @@ def test_scoped_soft_row_gate_ignores_unrelated_rows_and_accepts_single_row_buck
         )
 
 
+def test_scoped_kclass_row_gate_accepts_empty_class_slice_but_not_invalid_wta():
+    sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+        np.asarray([0, 2], dtype=np.int64),
+        np.asarray([0], dtype=np.int64),
+        device_signature_requested=True,
+        winner_take_all=False,
+        posterior_partitioned_across_classes=True,
+    )
+    sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+        np.asarray([0, 1], dtype=np.int64),
+        np.asarray([0, 1], dtype=np.int64),
+        device_signature_requested=True,
+        winner_take_all=True,
+        posterior_partitioned_across_classes=True,
+    )
+
+    with pytest.raises(RuntimeError, match="at most one positive"):
+        sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+            np.asarray([0, 2], dtype=np.int64),
+            np.asarray([0, 1], dtype=np.int64),
+            device_signature_requested=True,
+            winner_take_all=True,
+            posterior_partitioned_across_classes=True,
+        )
+
+
+def test_empty_kclass_device_signature_payload_preserves_zero_row_topology():
+    payload = sparse_pass2_bucketed._empty_bpref_device_signature_arrays(
+        2812,
+        image_identity_dtype=np.dtype("<U120"),
+    )
+
+    assert payload["rotation_keys"].shape == (0, 2812)
+    assert payload["source_values"].shape == (0, 2812, 6)
+    assert payload["neighbor_indices"].shape == (0, 2812, 8)
+    assert payload["neighbor_coefficients"].dtype == np.float32
+    assert payload["launch_ordinals"].dtype == np.int64
+    assert payload["image_identities"].dtype == np.dtype("<U120")
+    assert payload["contributor_rotation_keys"].shape == (0,)
+
+
+def test_zero_contributor_class_capture_writes_manifest_only_signature(
+    tmp_path,
+    monkeypatch,
+):
+    contribution_dir = tmp_path / "contributions"
+    signature_dir = tmp_path / "signatures"
+    image_names_path = tmp_path / "image_names.npy"
+    np.save(
+        image_names_path,
+        np.asarray(["1@/tmp/frozen.mrcs"]),
+        allow_pickle=False,
+    )
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", str(contribution_dir))
+    monkeypatch.setenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", str(signature_dir))
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION", "10")
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF", "1")
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY", str(image_names_path))
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256", "a" * 64)
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID", "zero-class")
+    monkeypatch.setattr(
+        sparse_pass2_bucketed,
+        "_require_bpref_device_soft_particle_arm",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_fused_x_half_backproject_indexed",
+        lambda *args, **_kwargs: args[:2],
+    )
+    sparse_pass2_bucketed._bpref_device_panel_accumulators.clear()
+    sparse_pass2_bucketed._bpref_device_panel_launch_counters.clear()
+    sparse_pass2_bucketed._bpref_device_panel_metadata.clear()
+    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=10, half=1)
+    scores = np.asarray([[[-1.0, -2.0], [-3.0, -4.0]]], dtype=np.float32)
+    probs = np.exp(scores).astype(np.float32)
+    probs /= probs.sum(axis=(1, 2), keepdims=True)
+    zeros = np.zeros((1, 2, 6), dtype=np.float32)
+    try:
+        sparse_pass2_bucketed._maybe_dump_bpref_contribution_rows(
+            experiment_dataset=object(),
+            image_indices=np.asarray([0]),
+            current_size=4,
+            summed=zeros.astype(np.complex64),
+            ctf_probs=zeros,
+            rotations=np.broadcast_to(np.eye(3), (1, 2, 3, 3)),
+            actual_counts=np.asarray([2]),
+            rotation_indices=np.asarray([[10, 11]]),
+            fine_translations=np.asarray([[0.0, 0.0], [1.0, 0.0]]),
+            scores=scores,
+            preprior_scores=scores,
+            probs=probs,
+            rotation_log_prior=np.zeros((1, 2)),
+            translation_log_prior=np.zeros((1, 2)),
+            log_z=np.zeros((1,)),
+            best_log_score=np.zeros((1,)),
+            reconstruction_probs=np.zeros_like(probs),
+            reconstruction_mask=np.zeros_like(probs, dtype=bool),
+            reconstruction_sum_weight=np.zeros((1,)),
+            reconstruction_threshold=np.zeros((1,)),
+            candidate_mask=np.ones_like(probs, dtype=bool),
+            high_precision_operand_bundle=False,
+            raw_batch_data=None,
+            ctf_params=None,
+            noise_variance_half=None,
+            integer_pre_shifts=None,
+            batch_image_corrections=None,
+            batch_scale_corrections=None,
+            relion_preprocess_normalization_factors=None,
+            relion_cuda_preprocess=False,
+            score_with_masked_images=False,
+            image_mask=None,
+            image_mask_mode="not-captured",
+            voxel_size=1.0,
+            ctf_mode="not-captured",
+            ctf_dose_per_tilt=0.0,
+            ctf_angle_per_tilt=0.0,
+            disc_type="linear_interp",
+            projection_padding_factor=2,
+            reconstruction_padding_factor=2,
+            use_relion_x_half_mstep=True,
+            winner_take_all=False,
+            max_r=2,
+            window_indices=np.arange(6),
+            image_shape=(4, 4),
+            volume_shape=(4, 4, 4),
+            shadow_only_mode=True,
+            shadow_score_bitwise_equal=True,
+            shadow_reduction_agreement={
+                "data_rel_l1": 0.0,
+                "data_normalized_max": 0.0,
+                "weight_rel_l1": 0.0,
+                "weight_normalized_max": 0.0,
+                "rel_l1_bound": 1e-3,
+                "normalized_max_bound": 1e-3,
+            },
+            device_signature_active=True,
+            class_index=1,
+        )
+    finally:
+        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+        sparse_pass2_bucketed._bpref_device_panel_accumulators.clear()
+        sparse_pass2_bucketed._bpref_device_panel_launch_counters.clear()
+        sparse_pass2_bucketed._bpref_device_panel_metadata.clear()
+
+    signature_path = next(signature_dir.glob("*.device.npz"))
+    with np.load(signature_path, allow_pickle=False) as signature:
+        assert signature["class_index"].item() == 1
+        assert signature["particle_launch_ordinals"].tolist() == [0]
+        assert signature["particle_contributor_row_counts"].tolist() == [0]
+        assert signature["particle_noncontributor_row_counts"].tolist() == [2]
+        assert signature["contributor_canonical_rotation_keys"].shape == (0,)
+        assert signature["source_values"].shape == (0, 12, 6)
+        assert signature["program_axis_sizes"].tolist() == [0, 12, 8]
+
+
 def test_scoped_wta_row_gate_checks_target_and_rejects_invalid_target_row():
     sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
         np.asarray([0, 1, 3], dtype=np.int64),

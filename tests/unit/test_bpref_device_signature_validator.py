@@ -315,6 +315,70 @@ def test_valid_signature_and_panel_replay(tmp_path, capsys):
     assert '"status": "PASS"' in capsys.readouterr().out
 
 
+def test_zero_contributor_class_shard_retains_particle_manifest(tmp_path):
+    signature_path, _ = _artifacts(tmp_path)
+    with np.load(signature_path, allow_pickle=False) as archive:
+        signature = {key: archive[key] for key in archive.files}
+    contribution_path = Path(str(signature["companion_contribution_path"]))
+    with np.load(contribution_path, allow_pickle=False) as archive:
+        contribution = {key: archive[key] for key in archive.files}
+
+    contribution["active_summed"] = np.zeros((2, 4), dtype=np.complex64)
+    contribution["active_ctf_probs"] = np.zeros((2, 4), dtype=np.float32)
+    _save(contribution_path, contribution)
+
+    dense_pixels = 4
+    empty_shapes = {
+        "canonical_rotation_keys": ((0, dense_pixels), np.int32),
+        "canonical_pixel_indices": ((0, dense_pixels), np.int32),
+        "row_flags": ((0, dense_pixels), np.int32),
+        "source_values": ((0, dense_pixels, 6), np.float32),
+        "neighbor_indices": ((0, dense_pixels, 8), np.int32),
+        "neighbor_coefficients": ((0, dense_pixels, 8), np.float32),
+        "neighbor_flags": ((0, dense_pixels, 8), np.int32),
+    }
+    for key, (shape, dtype) in empty_shapes.items():
+        signature[key] = np.empty(shape, dtype=dtype)
+    for key, dtype in (
+        ("launch_ordinal", np.int64),
+        ("particle_local_row", np.int32),
+        ("program_row", np.int32),
+        ("original_indices", np.int64),
+        ("contributor_canonical_rotation_keys", np.int32),
+    ):
+        signature[key] = np.empty((0,), dtype=dtype)
+    signature["image_identity"] = np.empty(
+        (0,), dtype=signature["particle_image_identities"].dtype
+    )
+    omitted_rows = np.asarray([0, 1], dtype=np.int32)
+    omitted_keys = np.asarray([10, 11], dtype=np.int32)
+    signature["particle_contributor_row_counts"] = np.asarray([0], dtype=np.int32)
+    signature["particle_noncontributor_row_counts"] = np.asarray([2], dtype=np.int32)
+    signature["particle_noncontributor_zero_sha256"] = np.asarray(
+        [
+            validator._noncontributor_digest(
+                omitted_rows,
+                omitted_keys,
+                np.zeros((2, 4), dtype=np.complex64),
+                np.zeros((2, 4), dtype=np.float32),
+            )
+        ]
+    )
+    signature["program_axis_sizes"] = np.asarray([0, dense_pixels, 8], dtype=np.int64)
+    signature["signature_estimated_uncompressed_bytes"] = np.int64(0)
+    signature["companion_contribution_sha256"] = np.asarray(
+        validator._sha256_file(contribution_path)
+    )
+    _save(signature_path, signature)
+
+    result = validator._validate_signature(signature_path)
+
+    assert result["particle_count"] == 1
+    assert result["contributor_rows"] == 0
+    assert result["omitted_rows"] == 2
+    assert result["contribution_records"].size == 0
+
+
 def test_panel_class_identity_mismatch_fails_closed(tmp_path):
     signature, panel = _artifacts(tmp_path)
     with np.load(panel, allow_pickle=False) as archive:

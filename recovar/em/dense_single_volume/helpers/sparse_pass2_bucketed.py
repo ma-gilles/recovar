@@ -419,6 +419,7 @@ def _validate_bpref_positive_rotation_rows(
     *,
     device_signature_requested: bool,
     winner_take_all: bool,
+    posterior_partitioned_across_classes: bool = False,
 ) -> None:
     """Validate positive-row support for owners represented by a diagnostic.
 
@@ -426,7 +427,9 @@ def _validate_bpref_positive_rotation_rows(
     particle after reconstruction pruning.  This check runs independently for
     each sparse bucket, so requiring a multi-row witness here would incorrectly
     reject a valid bucket even when other buckets contain soft multi-row
-    particles.
+    particles.  A fused K-class capture is a slice of a jointly normalized
+    posterior: a particle may therefore have zero rows in the requested class
+    while retaining support in another class.
     """
 
     counts = np.asarray(positive_rotation_rows, dtype=np.int64)
@@ -437,6 +440,15 @@ def _validate_bpref_positive_rotation_rows(
         if np.any(rows < 0) or np.any(rows >= counts.size):
             raise RuntimeError("BPref device signature target row is outside the sparse bucket")
         counts = counts[rows]
+    if np.any(counts < 0):
+        raise RuntimeError("BPref positive rotation-row count cannot be negative")
+    if posterior_partitioned_across_classes:
+        if winner_take_all and np.any(counts > 1):
+            raise RuntimeError(
+                "RELION K-class WTA diagnostic permits at most one positive "
+                "rotation row per particle and class"
+            )
+        return
     if winner_take_all:
         if not np.all(counts == 1):
             raise RuntimeError(
@@ -446,6 +458,32 @@ def _validate_bpref_positive_rotation_rows(
         raise RuntimeError(
             "RECOVAR soft-particle causal arm requires at least one positive row per particle"
         )
+
+
+def _empty_bpref_device_signature_arrays(
+    dense_pixel_count: int,
+    *,
+    image_identity_dtype,
+) -> dict[str, np.ndarray]:
+    """Return a schema-valid signature payload for an all-zero class slice."""
+
+    pixels = int(dense_pixel_count)
+    if pixels <= 0:
+        raise ValueError("BPref device signature dense pixel count must be positive")
+    return {
+        "rotation_keys": np.empty((0, pixels), dtype=np.int32),
+        "pixel_indices": np.empty((0, pixels), dtype=np.int32),
+        "row_flags": np.empty((0, pixels), dtype=np.int32),
+        "source_values": np.empty((0, pixels, 6), dtype=np.float32),
+        "neighbor_indices": np.empty((0, pixels, 8), dtype=np.int32),
+        "neighbor_coefficients": np.empty((0, pixels, 8), dtype=np.float32),
+        "neighbor_flags": np.empty((0, pixels, 8), dtype=np.int32),
+        "launch_ordinals": np.empty((0,), dtype=np.int64),
+        "particle_local_rows": np.empty((0,), dtype=np.int32),
+        "image_identities": np.empty((0,), dtype=np.dtype(image_identity_dtype)),
+        "original_indices": np.empty((0,), dtype=np.int64),
+        "contributor_rotation_keys": np.empty((0,), dtype=np.int32),
+    }
 
 
 def _guard_bpref_target_rotation_chunking(
@@ -1275,8 +1313,6 @@ def _maybe_dump_bpref_contribution_rows(
             launch_ordinal += 1
         if not particle_launch_ordinals:
             raise RuntimeError("RECOVAR device signature selected no particle launches")
-        if not signature_chunks[0]:
-            raise RuntimeError("RECOVAR device signature panel has no positive contributor rows")
         _bpref_device_panel_accumulators[accumulator_key] = accumulators
         _bpref_device_panel_launch_counters[accumulator_key] = launch_ordinal
         metadata = {
@@ -1315,6 +1351,25 @@ def _maybe_dump_bpref_contribution_rows(
             signature_image_identities = np.concatenate(signature_image_identities)
             signature_original_indices = np.concatenate(signature_original_indices)
             signature_contributor_rotation_keys = np.concatenate(signature_contributor_rotation_keys)
+        else:
+            empty_signature = _empty_bpref_device_signature_arrays(
+                dense_pixel_count,
+                image_identity_dtype=np.asarray(image_identities).dtype,
+            )
+            signature_rotation_keys = empty_signature["rotation_keys"]
+            signature_pixel_indices = empty_signature["pixel_indices"]
+            signature_row_flags = empty_signature["row_flags"]
+            signature_source_values = empty_signature["source_values"]
+            signature_neighbor_indices = empty_signature["neighbor_indices"]
+            signature_neighbor_coefficients = empty_signature["neighbor_coefficients"]
+            signature_neighbor_flags = empty_signature["neighbor_flags"]
+            signature_launch_ordinals = empty_signature["launch_ordinals"]
+            signature_particle_local_rows = empty_signature["particle_local_rows"]
+            signature_image_identities = empty_signature["image_identities"]
+            signature_original_indices = empty_signature["original_indices"]
+            signature_contributor_rotation_keys = empty_signature[
+                "contributor_rotation_keys"
+            ]
         device_path = Path(device_dump_dir)
         device_path.mkdir(parents=True, exist_ok=True)
         contribution_sha256 = _sha256_file(contribution_path)
@@ -12790,6 +12845,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     np.arange(capture["image_indices"].size, dtype=np.int64),
                     device_signature_requested=True,
                     winner_take_all=winner_take_all,
+                    posterior_partitioned_across_classes=True,
                 )
                 diagnostic_owners = _bpref_diagnostic_ownership_indices(
                     capture["image_indices"],

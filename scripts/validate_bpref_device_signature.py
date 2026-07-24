@@ -844,7 +844,7 @@ def extract_contribution_records(signature: dict[str, np.ndarray]) -> Contributi
         dense_pixel=pixel_index.astype(np.int32),
         neighbor=neighbor_index.astype(np.int32),
     )
-    _validate_contribution_records(records)
+    _validate_contribution_records(records, allow_empty=True)
     return records
 
 
@@ -884,7 +884,11 @@ def concatenate_contribution_records(parts: list[ContributionRecords]) -> Contri
     return records
 
 
-def _validate_contribution_records(records: ContributionRecords) -> None:
+def _validate_contribution_records(
+    records: ContributionRecords,
+    *,
+    allow_empty: bool = False,
+) -> None:
     fields = (
         "target_indices",
         "coefficients",
@@ -899,7 +903,7 @@ def _validate_contribution_records(records: ContributionRecords) -> None:
         "dense_pixel",
         "neighbor",
     )
-    if records.size == 0:
+    if records.size == 0 and not allow_empty:
         raise ValueError("contribution records must not be empty")
     if any(np.asarray(getattr(records, key)).shape != (records.size,) for key in fields):
         raise ValueError("every contribution-record field must be a same-length vector")
