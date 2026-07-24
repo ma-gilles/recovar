@@ -8,6 +8,57 @@ import jax.numpy as jnp
 from .dtype_policy import DensePrecisionPolicy
 
 
+@jax.jit
+def _relion_coarse_128lane_float32_reduce(values):
+    """Reduce packed pixel contributions like ``diff2_CC_coarse``.
+
+    RELION assigns pixels ``lane + 128 * pass`` to each CUDA lane, accumulates
+    the passes sequentially in float32, then applies a 64, 32, ..., 1 shared
+    memory tree.  ``values`` may have arbitrary leading dimensions; its last
+    axis is the packed FFTW pixel identity.
+    """
+
+    values = jnp.asarray(values, dtype=jnp.float32)
+    n_pixels = int(values.shape[-1])
+    n_passes = (n_pixels + 127) // 128
+    padded = jnp.pad(values, [(0, 0)] * (values.ndim - 1) + [(0, n_passes * 128 - n_pixels)])
+    passes = padded.reshape(values.shape[:-1] + (n_passes, 128))
+    lanes = jnp.zeros(values.shape[:-1] + (128,), dtype=jnp.float32)
+    for pass_index in range(n_passes):
+        lanes = lanes + passes[..., pass_index, :]
+    for stride in (64, 32, 16, 8, 4, 2, 1):
+        lanes = lanes[..., :stride] + lanes[..., stride : 2 * stride]
+    return lanes[..., 0]
+
+
+@jax.jit
+def _relion_coarse_normalized_cc_rescore(
+    shifted_candidates,
+    score_weight_candidates,
+    projection_candidates,
+    half_weights,
+    fftw_order,
+):
+    """Rescore coarse candidates with RELION's float32 lane tree.
+
+    Inputs have shape ``(..., n_pixels)`` in RECOVAR compact centered-row
+    order.  ``fftw_order`` maps that last axis to RELION's packed current-size
+    FFTW order.  Operand formation intentionally remains float32/complex64 so
+    this changes only the bounded candidate reduction, not the projector or
+    preprocessing arithmetic.
+    """
+
+    shifted = jnp.asarray(shifted_candidates, dtype=jnp.complex64)[..., fftw_order]
+    score_weight = jnp.asarray(score_weight_candidates, dtype=jnp.float32)[..., fftw_order]
+    projection = jnp.asarray(projection_candidates, dtype=jnp.complex64)[..., fftw_order]
+    weights = jnp.asarray(half_weights, dtype=jnp.float32)[fftw_order]
+    numerator_pixels = jnp.real(jnp.conj(shifted) * projection) * weights
+    norm_pixels = score_weight * (jnp.abs(projection) ** 2) * weights
+    numerator = _relion_coarse_128lane_float32_reduce(numerator_pixels)
+    norm = _relion_coarse_128lane_float32_reduce(norm_pixels)
+    return numerator / jnp.sqrt(jnp.maximum(norm, jnp.asarray(1e-30, dtype=jnp.float32)))
+
+
 def _score_rotation_block(
     window_spec,
     *,

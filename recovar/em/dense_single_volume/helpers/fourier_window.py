@@ -287,6 +287,50 @@ def centered_half_indices_to_fftw_half_indices(image_shape, indices):
     return (fftw_rows * half_width + cols).astype(jnp.int32)
 
 
+def relion_fftw_order_for_square_score_window(image_shape, current_size, score_indices):
+    """Return the gather order for RELION's cropped FFTW half-image.
+
+    ``score_indices`` address RECOVAR's full-box, centered-row half spectrum.
+    RELION's coarse normalized-CC CUDA kernel instead walks a compact
+    ``current_size x (current_size // 2 + 1)`` FFTW array in row-major order:
+    ``ky=0,+1,...,+N/2,-N/2+1,...,-1`` for a cropped box (and the analogous
+    full-box order including ``ky=-N/2``).  The returned permutation reorders
+    compact values gathered at ``score_indices`` into that exact pixel order.
+
+    This function is deliberately host-side.  The permutation is static for
+    one EM iteration and is transferred once for the bounded near-tie replay.
+    """
+
+    height, width = (int(image_shape[0]), int(image_shape[1]))
+    current_size = int(current_size)
+    if height != width:
+        raise ValueError(f"RELION square score order requires a square image, got {image_shape}")
+    if current_size <= 0 or current_size > height or current_size % 2:
+        raise ValueError(
+            f"current_size must be positive, even, and <= {height}, got {current_size}",
+        )
+
+    indices = np.asarray(score_indices, dtype=np.int64).reshape(-1)
+    expected_size = current_size * (current_size // 2 + 1)
+    if indices.size != expected_size:
+        raise ValueError(
+            "score_indices do not span the full RELION square score window: "
+            f"got {indices.size}, expected {expected_size}",
+        )
+    full_half_width = width // 2 + 1
+    centered_rows = indices // full_half_width
+    centered_cols = indices % full_half_width
+    ky = centered_rows - height // 2
+    kx = np.where(centered_cols == width // 2, -width // 2, centered_cols)
+    fftw_rows = np.where(ky >= 0, ky, current_size + ky)
+    fftw_cols = np.where(kx >= 0, kx, current_size // 2)
+    packed_indices = fftw_rows * (current_size // 2 + 1) + fftw_cols
+    expected_packed = np.arange(expected_size, dtype=np.int64)
+    if not np.array_equal(np.sort(packed_indices), expected_packed):
+        raise ValueError("score_indices do not map bijectively onto the RELION FFTW score window")
+    return np.argsort(packed_indices, kind="stable").astype(np.int32, copy=False)
+
+
 def make_fourier_window_spec(
     image_shape,
     current_size,

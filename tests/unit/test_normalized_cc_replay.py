@@ -110,6 +110,62 @@ def test_relion_128lane_coarse_reduction_matches_hand_reference():
     assert actual.view(np.uint32) == lanes[0].view(np.uint32)
 
 
+def test_jax_relion_coarse_rescore_matches_numpy_replay():
+    pytest.importorskip("jax")
+    import jax.numpy as jnp
+
+    from recovar.em.dense_single_volume.helpers.scoring import (
+        _relion_coarse_128lane_float32_reduce,
+        _relion_coarse_normalized_cc_rescore,
+    )
+
+    rng = np.random.default_rng(6322)
+    n_candidates, n_pixels = 4, 56 * 29
+    shifted = (
+        rng.normal(size=(n_candidates, n_pixels))
+        + 1j * rng.normal(size=(n_candidates, n_pixels))
+    ).astype(np.complex64)
+    projections = (
+        rng.normal(size=(n_candidates, n_pixels))
+        + 1j * rng.normal(size=(n_candidates, n_pixels))
+    ).astype(np.complex64)
+    score_weight = rng.uniform(0.1, 1.5, size=(n_candidates, n_pixels)).astype(np.float32)
+    half_weights = rng.choice(np.asarray([1.0, 2.0], dtype=np.float32), size=n_pixels)
+    fftw_order = rng.permutation(n_pixels).astype(np.int32)
+
+    values = rng.normal(size=(3, n_pixels)).astype(np.float32)
+    reduced = np.asarray(_relion_coarse_128lane_float32_reduce(jnp.asarray(values)))
+    expected_reduced = np.asarray([relion_128lane_float32_reduce(row) for row in values])
+    np.testing.assert_array_equal(reduced.view(np.uint32), expected_reduced.view(np.uint32))
+
+    actual = np.asarray(
+        _relion_coarse_normalized_cc_rescore(
+            jnp.asarray(shifted),
+            jnp.asarray(score_weight),
+            jnp.asarray(projections),
+            jnp.asarray(half_weights),
+            jnp.asarray(fftw_order),
+        )
+    )
+    expected = []
+    for candidate in range(n_candidates):
+        contributions = normalized_cc_pixel_contributions(
+            projections[candidate, fftw_order],
+            shifted[candidate, fftw_order],
+            score_weight[candidate, fftw_order],
+            half_weights[fftw_order],
+        )
+        numerator = relion_128lane_float32_reduce(contributions.numerator)
+        norm = relion_128lane_float32_reduce(contributions.norm)
+        expected.append(np.float32(numerator / np.sqrt(np.float32(norm))))
+    expected = np.asarray(expected, dtype=np.float32)
+    # CPU and CUDA division/sqrt may differ by one final score ULP even when
+    # both explicit numerator and norm lane trees are bit-identical.
+    assert np.max(
+        np.abs(actual.view(np.uint32).astype(np.int64) - expected.view(np.uint32).astype(np.int64))
+    ) <= 1
+
+
 def test_reduction_order_can_flip_near_tie_while_float64_agrees():
     # A's exact sum is 1e-7, but a flat float32 fold loses it between the two
     # 1e8 terms.  RELION's lane tree combines the cancelling terms before the

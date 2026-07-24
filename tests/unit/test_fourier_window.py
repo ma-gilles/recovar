@@ -41,11 +41,12 @@ from recovar.em.dense_single_volume.helpers.scoring import (
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     ALLOWED_CURRENT_SIZES,
-    make_fourier_window_spec,
-    make_fourier_window_indices_np,
     make_frequency_coords_half_np,
     make_frequency_radius_map_half,
+    make_fourier_window_indices_np,
+    make_fourier_window_spec,
     quantize_current_size,
+    relion_fftw_order_for_square_score_window,
 )
 
 pytestmark = pytest.mark.unit
@@ -644,6 +645,57 @@ class TestFourierWindowSpec:
         np.testing.assert_array_equal(
             np.asarray(spec.score_values(cc_weights)),
             np.ones(spec.n_score, dtype=np.float32),
+        )
+
+    @pytest.mark.parametrize("full_size,current_size", [(128, 56), (128, 128)])
+    def test_firstiter_cc_score_order_maps_to_relion_fftw_crop(self, full_size, current_size):
+        shape = (full_size, full_size)
+        spec = make_fourier_window_spec(
+            shape,
+            current_size=current_size,
+            n_half=full_size * (full_size // 2 + 1),
+            score_square=True,
+            score_include_dc=True,
+            include_recon_window=False,
+        )
+        score_indices = (
+            np.arange(spec.n_score, dtype=np.int32)
+            if spec.score_indices_np is None
+            else spec.score_indices_np
+        )
+        order = relion_fftw_order_for_square_score_window(shape, current_size, score_indices)
+        full_half_width = full_size // 2 + 1
+        rows = score_indices[order] // full_half_width
+        cols = score_indices[order] % full_half_width
+        ky = rows - full_size // 2
+        kx = np.where(cols == full_size // 2, -full_size // 2, cols)
+        radius = current_size // 2
+        if current_size < full_size:
+            expected_ky = np.concatenate(
+                [
+                    np.arange(radius + 1, dtype=np.int64),
+                    np.arange(-(radius - 1), 0, dtype=np.int64),
+                ]
+            )
+        else:
+            expected_ky = np.concatenate(
+                [
+                    np.arange(radius, dtype=np.int64),
+                    np.arange(-radius, 0, dtype=np.int64),
+                ]
+            )
+        expected_kx = np.arange(current_size // 2 + 1)
+
+        np.testing.assert_array_equal(
+            ky.reshape(current_size, current_size // 2 + 1)[:, 0],
+            expected_ky,
+        )
+        np.testing.assert_array_equal(
+            np.where(kx < 0, current_size // 2, kx).reshape(
+                current_size,
+                current_size // 2 + 1,
+            )[0],
+            expected_kx,
         )
 
 

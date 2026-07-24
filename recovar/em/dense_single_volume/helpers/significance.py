@@ -5,6 +5,7 @@ pairs per image without materializing the full weight matrix.
 Called by ``refine_single_volume`` and ``_run_relion_iteration_loop`` in ``refine.py``.
 """
 
+import logging
 import os
 from functools import partial
 from typing import NamedTuple
@@ -27,7 +28,11 @@ _SIGNIFICANCE_SCORE_CACHE_MAX_GB_ENV = "RECOVAR_SIGNIFICANCE_SCORE_CACHE_MAX_GB"
 _SIGNIFICANCE_SCORE_CACHE_DEFAULT_MAX_GB = 2.0
 _SIGNIFICANCE_FUSED_PASS1_ENV = "RECOVAR_PASS1_FUSED"
 _GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP"
+_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
+    "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN"
+)
 NVTX_DOMAIN_EM = "recovar_em"
+logger = logging.getLogger(__name__)
 
 
 def _capture_offset_free_and_absolute_float32_scores(scores, log_score_offset):
@@ -52,6 +57,21 @@ def _global_pass1_relion_projector_texture_enabled() -> bool:
     if token in {"1", "true", "yes", "on"}:
         return True
     raise ValueError(f"Unsupported {_GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV}={token!r}")
+
+
+def _firstiter_cc_tree_top2_rescore_max_margin() -> float | None:
+    """Return the opt-in near-tie margin for RELION coarse-tree replay."""
+
+    token = os.environ.get(_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV, "").strip()
+    if not token:
+        return None
+    margin = float(token)
+    if not np.isfinite(margin) or margin < 0.0:
+        raise ValueError(
+            f"{_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV} must be a finite "
+            f"non-negative float, got {token!r}",
+        )
+    return margin
 
 
 def _dense_projection_scale(image_shape) -> float:
@@ -1372,7 +1392,10 @@ def _compute_k_class_significance_batched(
 
     from recovar import core
     from recovar.core.configs import ForwardModelConfig
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.dense_single_volume.helpers.fourier_window import (
+        make_fourier_window_spec,
+        relion_fftw_order_for_square_score_window,
+    )
     from recovar.em.dense_single_volume.helpers.half_spectrum import (
         make_half_image_weights,
         make_scoring_half_image_weights,
@@ -1405,6 +1428,7 @@ def _compute_k_class_significance_batched(
         _e_step_block_scores_normalized_cc,
         _e_step_block_scores_windowed,
         _e_step_block_scores_windowed_normalized_cc,
+        _relion_coarse_normalized_cc_rescore,
         _update_logsumexp,
     )
     from recovar.reconstruction import noise as noise_utils
@@ -1485,6 +1509,54 @@ def _compute_k_class_significance_batched(
         if relion_projector_texture_interp is None
         else bool(relion_projector_texture_interp)
     )
+    tree_rescore_max_margin = _firstiter_cc_tree_top2_rescore_max_margin()
+    # The environment setting spans the full process, while only iteration 1
+    # uses normalized CC.  Later Gaussian iterations must remain unaffected.
+    tree_rescore_enabled = (
+        tree_rescore_max_margin is not None and score_mode == "normalized_cc"
+    )
+    tree_rescore_fftw_order = None
+    if tree_rescore_enabled:
+        if n_classes != 1:
+            raise ValueError(
+                f"{_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV} currently "
+                "supports K=1 only",
+            )
+        if not return_class_best:
+            raise ValueError(
+                f"{_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV} requires "
+                "return_class_best=True",
+            )
+        if use_float64_scoring:
+            raise ValueError(
+                f"{_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV} requires "
+                "production float32 scoring",
+            )
+        if not use_relion_projector or not coarse_texture_interp:
+            raise ValueError(
+                f"{_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV} requires "
+                "the supplied RELION projector with texture interpolation",
+            )
+        score_size = int(image_shape[0]) if current_size is None else int(current_size)
+        score_indices_np = (
+            np.arange(n_half, dtype=np.int32)
+            if window_spec.score_indices_np is None
+            else window_spec.score_indices_np
+        )
+        tree_rescore_fftw_order = jnp.asarray(
+            relion_fftw_order_for_square_score_window(
+                image_shape,
+                score_size,
+                score_indices_np,
+            ),
+            dtype=jnp.int32,
+        )
+        logger.warning(
+            "Opt-in RELION coarse-tree top-2 rescore enabled: max_margin=%g current_size=%d",
+            tree_rescore_max_margin,
+            score_size,
+        )
+    track_class_second = return_class_second or tree_rescore_enabled
     if use_window:
         half_weights_windowed = window_spec.score_values(half_weights)
     if use_float64_scoring:
@@ -1725,6 +1797,9 @@ def _compute_k_class_significance_batched(
     class_second_hard_assignment = (
         np.empty((n_classes, n_images), dtype=np.int32) if return_class_second else None
     )
+    tree_rescore_examined = 0
+    tree_rescore_ambiguous = 0
+    tree_rescore_winner_changes = 0
 
     start_idx = 0
     image_indices = np.arange(n_images)
@@ -1882,10 +1957,10 @@ def _compute_k_class_significance_batched(
         class_best_scores = [jnp.full(batch_size, -jnp.inf) for _ in range(n_classes)] if return_class_best else None
         class_best_argmaxes = [jnp.zeros(batch_size, dtype=jnp.int32) for _ in range(n_classes)] if return_class_best else None
         class_second_best_scores = (
-            [jnp.full(batch_size, -jnp.inf) for _ in range(n_classes)] if return_class_second else None
+            [jnp.full(batch_size, -jnp.inf) for _ in range(n_classes)] if track_class_second else None
         )
         class_second_best_argmaxes = (
-            [jnp.zeros(batch_size, dtype=jnp.int32) for _ in range(n_classes)] if return_class_second else None
+            [jnp.zeros(batch_size, dtype=jnp.int32) for _ in range(n_classes)] if track_class_second else None
         )
         cache_score_blocks = collect_significance and _significance_score_cache_enabled(
             batch_size,
@@ -2019,7 +2094,7 @@ def _compute_k_class_significance_batched(
                     previous_best = class_best_scores[class_index]
                     previous_best_argmax = class_best_argmaxes[class_index]
                     class_improved = block_best > previous_best
-                    if return_class_second:
+                    if track_class_second:
                         if flat_scores.shape[1] < 2:
                             raise RuntimeError("class runner-up diagnostic requires at least two poses per block")
                         rows = jnp.arange(batch_size)
@@ -2075,6 +2150,85 @@ def _compute_k_class_significance_batched(
                 cached_class_score_blocks.append(cached_score_blocks)
             class_max_values.append(class_max)
             class_sum_values.append(class_sum)
+
+        if tree_rescore_enabled:
+            best_scores_np = np.asarray(class_best_scores[0], dtype=np.float32)
+            second_scores_np = np.asarray(class_second_best_scores[0], dtype=np.float32)
+            score_margins = best_scores_np - second_scores_np
+            ambiguous_rows = np.flatnonzero(
+                np.isfinite(score_margins) & (score_margins <= tree_rescore_max_margin)
+            ).astype(np.int32)
+            tree_rescore_examined += int(batch_size)
+            tree_rescore_ambiguous += int(ambiguous_rows.size)
+            if ambiguous_rows.size:
+                best_pose_np = np.asarray(class_best_argmaxes[0], dtype=np.int32)[ambiguous_rows]
+                second_pose_np = np.asarray(class_second_best_argmaxes[0], dtype=np.int32)[
+                    ambiguous_rows
+                ]
+                candidate_pose_ids = np.sort(
+                    np.stack([best_pose_np, second_pose_np], axis=1),
+                    axis=1,
+                )
+                candidate_rotation_ids = candidate_pose_ids // n_trans
+                candidate_translation_ids = candidate_pose_ids % n_trans
+                projected_candidates, _ = _project_block(
+                    0,
+                    means_for_proj[0],
+                    jnp.asarray(rotations[candidate_rotation_ids.reshape(-1)]),
+                )
+                if use_window:
+                    projected_candidates = projected_candidates[:, window_indices]
+                projected_candidates = projected_candidates.astype(jnp.complex64).reshape(
+                    ambiguous_rows.size,
+                    2,
+                    n_windowed if use_window else n_half,
+                )
+                shifted_candidate_rows = (
+                    ambiguous_rows[:, None] * n_trans + candidate_translation_ids
+                )
+                shifted_candidates = shifted_data[
+                    jnp.asarray(shifted_candidate_rows, dtype=jnp.int32)
+                ]
+                score_weight_candidates = jnp.broadcast_to(
+                    ctf2_data[jnp.asarray(ambiguous_rows, dtype=jnp.int32), None, :],
+                    shifted_candidates.shape,
+                )
+                rescored_candidates = _relion_coarse_normalized_cc_rescore(
+                    shifted_candidates,
+                    score_weight_candidates,
+                    projected_candidates,
+                    half_weights_windowed if use_window else half_weights,
+                    tree_rescore_fftw_order,
+                )
+                rescored_winner_slot = np.asarray(
+                    jnp.argmax(rescored_candidates, axis=1),
+                    dtype=np.int32,
+                )
+                row_ids = np.arange(ambiguous_rows.size, dtype=np.int32)
+                rescored_runner_slot = 1 - rescored_winner_slot
+                rescored_scores_np = np.asarray(rescored_candidates, dtype=np.float32)
+                rescored_winner_pose = candidate_pose_ids[row_ids, rescored_winner_slot]
+                rescored_runner_pose = candidate_pose_ids[row_ids, rescored_runner_slot]
+                rescored_winner_score = rescored_scores_np[row_ids, rescored_winner_slot]
+                rescored_runner_score = rescored_scores_np[row_ids, rescored_runner_slot]
+                tree_rescore_winner_changes += int(
+                    np.count_nonzero(rescored_winner_pose != best_pose_np)
+                )
+                rows_jax = jnp.asarray(ambiguous_rows, dtype=jnp.int32)
+                best_argmax_batch = best_argmax_batch.at[rows_jax].set(rescored_winner_pose)
+                best_score_batch = best_score_batch.at[rows_jax].set(rescored_winner_score)
+                class_best_argmaxes[0] = class_best_argmaxes[0].at[rows_jax].set(
+                    rescored_winner_pose
+                )
+                class_best_scores[0] = class_best_scores[0].at[rows_jax].set(
+                    rescored_winner_score
+                )
+                class_second_best_argmaxes[0] = class_second_best_argmaxes[0].at[rows_jax].set(
+                    rescored_runner_pose
+                )
+                class_second_best_scores[0] = class_second_best_scores[0].at[rows_jax].set(
+                    rescored_runner_score
+                )
 
         global_log_z = global_max + jnp.log(global_sum)
         class_log_z_values = [
@@ -2274,4 +2428,17 @@ def _compute_k_class_significance_batched(
         full_stats["class_second_best_log_score_per_image"] = class_second_best_log_score
         full_stats["class_second_hard_assignments"] = class_second_hard_assignment
         full_stats["class_second_best_offset_free_log_score_per_image"] = class_second_best_offset_free_log_score
+    if tree_rescore_enabled:
+        full_stats["firstiter_cc_tree_top2_rescore"] = {
+            "max_margin": float(tree_rescore_max_margin),
+            "examined_images": int(tree_rescore_examined),
+            "ambiguous_images": int(tree_rescore_ambiguous),
+            "winner_changes": int(tree_rescore_winner_changes),
+        }
+        logger.warning(
+            "RELION coarse-tree top-2 rescore complete: examined=%d ambiguous=%d winner_changes=%d",
+            tree_rescore_examined,
+            tree_rescore_ambiguous,
+            tree_rescore_winner_changes,
+        )
     return sig_rot_any, n_sig_all, hard_assignment, class_assignment, significant_sample_indices, full_stats
