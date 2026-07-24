@@ -627,6 +627,17 @@ def _read_prefixed_relion_acc_table(
                 f"RELION ACC table {weights_key} has {weights.size} values, expected "
                 f"{n_rot} * {n_trans} = {expected}",
             )
+    elif (
+        weight_mode == "sorted_weights"
+        and nr_classes == 1
+        and class_index is not None
+        and int(class_index) == iclass_min
+    ):
+        # A K=1 StoreWeightedSums table already has exactly one class-sized
+        # payload, so no array slice is necessary. Still retain the class
+        # identity: it unlocks the fine_iorientclasses/iover mapping below,
+        # which maps compact StoreWeightedSums rows back to global rotations.
+        sliced_class_index = int(class_index)
     local_rotation_rows = np.arange(n_rot, dtype=np.int64)
     global_rotation_rows = local_rotation_rows.copy()
     rotation_key_mode = "local_row"
@@ -1179,7 +1190,12 @@ def _choose_match_keys(
     try:
         relion_grid = _relion_grid_mapped_keys(relion, recovar, relion_n_psi)
     except ValueError:
-        if match_mode == "relion_grid_parent" and recovar_parent_keys is not None and relion_parent_keys is not None:
+        if match_mode not in {"relion_grid", "relion_grid_parent"}:
+            # relion_grid is only one optional candidate for automatic,
+            # global, local, or matrix matching. Compact StoreWeightedSums
+            # tables need not contain a multiple of the coarse psi count.
+            relion_grid = None
+        elif match_mode == "relion_grid_parent" and recovar_parent_keys is not None and relion_parent_keys is not None:
             relion_grid = None
         else:
             raise

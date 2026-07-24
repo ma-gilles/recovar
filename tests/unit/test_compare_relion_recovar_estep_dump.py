@@ -797,6 +797,58 @@ def test_compare_relion_recovar_estep_dump_reads_storewavg_sorted_weights(tmp_pa
     assert result["common_score_with_prior_centered_diff"]["max_abs"] == 0.0
 
 
+def test_compare_relion_k1_storewavg_maps_compact_rows_to_global_rotations(tmp_path):
+    relion_dir = tmp_path / "relion"
+    relion_dir.mkdir()
+    prefix = "img0_part1965_storeWavg"
+    _write_flat_real(relion_dir / f"{prefix}_sorted_weights.bin", [2.0, 0.0, 0.0, 4.0])
+    _write_scalar(relion_dir / f"{prefix}_orientation_num.bin", 2)
+    _write_scalar(relion_dir / f"{prefix}_translation_num.bin", 2)
+    _write_scalar(relion_dir / f"{prefix}_nr_classes.bin", 1)
+    _write_scalar(relion_dir / f"{prefix}_iclass_min.bin", 0)
+    _write_flat_int(relion_dir / "pass1_class0_fine_class_entries.bin", [2])
+    _write_flat_int(relion_dir / "pass1_class0_fine_class_idx.bin", [0])
+    _write_flat_int(relion_dir / "pass1_class0_fine_iorientclasses.bin", [3, 5])
+    _write_flat_int(relion_dir / "pass1_class0_fine_iover_rots.bin", [0, 0])
+    _write_flat_real(relion_dir / "pass1_pdf_orientation.bin", np.ones(8))
+
+    recovar_npz = tmp_path / "recovar_pass2.npz"
+    scores = np.array([[np.log(2.0), -np.inf], [-np.inf, np.log(4.0)]])
+    np.savez_compressed(
+        recovar_npz,
+        original_index=np.int64(2767),
+        local_index=np.int64(2767),
+        current_size=np.int64(56),
+        class_index=np.int64(0),
+        n_fine_trans=np.int64(2),
+        fine_translations=np.zeros((2, 2), dtype=np.float32),
+        rotations=np.zeros((2, 3, 3), dtype=np.float32),
+        oversampled_rot_indices=np.array([3, 5], dtype=np.int64),
+        candidate_mask=np.isfinite(scores),
+        scores_with_prior=scores,
+        scores_pre_prior=scores,
+        probs=np.array([[1.0 / 3.0, 0.0], [0.0, 2.0 / 3.0]]),
+        rotation_log_prior=np.zeros(2),
+        translation_log_prior=np.zeros(2),
+    )
+
+    result = compare_dumps(
+        relion_dir,
+        recovar_npz,
+        relion_acc_table_prefix="auto",
+        relion_n_psi=48,
+    )
+
+    assert result["selected_relion_acc_table_prefix"] == prefix
+    assert result["match_mode"] == "global"
+    assert result["relion_rotation_key_mode"] == (
+        "fine_iorientclasses_mod_pdf_orientation_times_iover_rots"
+    )
+    assert result["relion_top_key"] == [5, 1]
+    assert result["recovar_top_key"] == [5, 1]
+    assert result["common_candidate_count"] == 2
+
+
 def test_compare_relion_recovar_estep_dump_slices_kclass_storewavg_sorted_weights(tmp_path):
     relion_dir = tmp_path / "relion"
     relion_dir.mkdir()
