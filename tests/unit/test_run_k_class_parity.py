@@ -265,6 +265,17 @@ def test_k_class_replay_sets_numbered_half_capture_context():
     assert "clear_bpref_contribution_dump_context()" in source
 
 
+def test_k_class_replay_exposes_relion_x_half_capture_path():
+    import scripts.run_k_class_parity as run_k_class_parity
+
+    source = inspect.getsource(run_k_class_parity.main)
+
+    assert "--relion-x-half-mstep" in source
+    assert "mstep_relion_x_half=bool(args.relion_x_half_mstep)" in source
+    assert "bpref_device_signature_active=bool(" in source
+    assert 'os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR")' in source
+
+
 def test_k_class_replay_records_responsibility_class_diagnostics():
     import scripts.run_k_class_parity as run_k_class_parity
 

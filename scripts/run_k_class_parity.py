@@ -945,6 +945,14 @@ def main() -> None:
         help="Use the sparse bucketed adaptive pass-2 path instead of dense pass-2.",
     )
     parser.add_argument(
+        "--relion-x-half-mstep",
+        action="store_true",
+        help=(
+            "Use the RELION Class3D x-half BPref accumulation layout in the "
+            "replay M-step. Required for device-signature contribution audits."
+        ),
+    )
+    parser.add_argument(
         "--square-window",
         dest="square_window",
         action="store_true",
@@ -1292,6 +1300,7 @@ def main() -> None:
         relion_firstiter_score_mode=str(firstiter_cc_mode["score_mode"]),
         relion_projector_half=relion_projector_half_by_class,
         relion_projector_r_max=relion_projector_r_max,
+        mstep_relion_x_half=bool(args.relion_x_half_mstep),
     )
     if args.adaptive_2pass:
         # Build pass-2 fine grid (oversampled) using RELION-parity HEALPix children.
@@ -1379,6 +1388,9 @@ def main() -> None:
             firstiter_cc_pass2_only_best_coarse=firstiter_cc,
             significance_image_batch_size=base_batch_plan.image_batch_size,
             significance_rotation_block_size=base_batch_plan.rotation_block_size,
+            bpref_device_signature_active=bool(
+                os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR")
+            ),
             **adaptive_em_kwargs,
         )
     else:
