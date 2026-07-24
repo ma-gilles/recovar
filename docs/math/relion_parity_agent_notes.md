@@ -5966,3 +5966,30 @@ same-device equivalence or numerical noise.
   walltime UUIDs and the primary audit repeats the triplet gate.  Runtime
   preflight binds physical A100
   `GPU-6f45f415-9d0b-d562-9ff3-c9fb7bc53aa7`.
+
+# 2026-07-24: fixed-suite snapshot proposals are fail-closed and reproducible
+
+- `scripts/summarize_em_relion_parity_scorecard.py --proposal-output` now
+  constructs a candidate superseding ledger only after validating the frozen
+  case definition and artifact manifest, clean science source, same physical
+  RELION/RECOVAR GPU, autonomous trajectory mode, terminal FSC/FSC-AUC and
+  exact-topology audit status, convergence-only final all-data, grid
+  correction off, and SHA-256 identities for all audit products.
+- The proposal binds the exact current parent-ledger SHA-256 and requires a
+  monotonically newer ledger schema.  It refuses to overwrite an existing
+  output and never mutates the checked scorecard.  A human-reviewed
+  scorecard/history update therefore remains a separate explicit step.
+- A historical real-evidence replay against the pre-v6 scorecard reproduced
+  the accepted case-2 and case-33 v6 update objects exactly (2/2).  The
+  immutable v6 ledger remains
+  `32c6512a8507f7b17a59d0be527fa5c9609067e0d8f598a2d108bed9a3fc8a56`.
+- Focused validation is 12/12 passing; Ruff formatting/lint and mypy are
+  clean; the generated scorecard check passes.  Durable logs are under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_scorecard_proposal_20260724`.
+  `validation.log`, `pytest.xml`, and `real_v6_replay.log` have SHA-256
+  `1cd05d95f7c692a5d553fbb44183bea46d2b076ee9bbdcc32b96f0ebc0816bfd`,
+  `ce26d7ca9555d277bb24b0f9a68761b517e9476833920aa427e94fd280210b80`,
+  and `8ce0751e758d53bfb0010351428800684fe7daa7e99010bc6365325ff9872003`.
+- This tooling does not change the scientific numerator.  Snapshot
+  `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
+  34/34 evaluated while cases 3/4/5 and K=4 auditors remain active.

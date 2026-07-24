@@ -147,3 +147,93 @@ def test_fixture_validation_rejects_a_changed_file_digest(tmp_path):
 
     with pytest.raises(ValueError, match="invalid SHA-256"):
         MODULE.load_and_validate_fixture_manifest(path, scorecard)
+
+
+@pytest.mark.unit
+def test_proposal_evidence_parser_requires_absolute_fixed_suite_identity():
+    parsed = MODULE.parse_proposal_evidence("k1-04|/scratch/example/cases/4_high_noise|11563827|11563842")
+
+    assert parsed == MODULE.ProposalEvidence(
+        "k1-04",
+        Path("/scratch/example/cases/4_high_noise"),
+        "11563827",
+        "11563842",
+    )
+    with pytest.raises(MODULE.argparse.ArgumentTypeError, match="must be absolute"):
+        MODULE.parse_proposal_evidence("k1-04|relative/path|11563827|11563842")
+    with pytest.raises(MODULE.argparse.ArgumentTypeError, match="only digits"):
+        MODULE.parse_proposal_evidence("k1-04|/scratch/example|science|11563842")
+
+
+@pytest.mark.unit
+def test_superseding_ledger_proposal_preserves_denominator_and_topology_counts(
+    tmp_path,
+    monkeypatch,
+):
+    scorecard = MODULE.load_and_validate(MODULE.DEFAULT_SCORECARD)
+    manifest = MODULE.load_and_validate_fixture_manifest(MODULE.DEFAULT_FIXTURE_MANIFEST, scorecard)
+    previous = tmp_path / "previous.json"
+    previous_schema = "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v6"
+    previous.write_text(json.dumps({"schema": previous_schema}) + "\n")
+    scorecard["current_snapshot"]["source_ledger"] = {
+        "schema": previous_schema,
+        "generated_utc": "2026-07-24T01:04:11+00:00",
+        "sha256": MODULE.sha256_file(previous),
+    }
+    evidence = MODULE.ProposalEvidence(
+        "k1-04",
+        Path("/unused/by-mocked-builder"),
+        "11563827",
+        "11563842",
+    )
+    update = {
+        "case_id": "k1-04",
+        "case_name": "high_noise_100k_g256_white_noise3_bf80",
+        "result": "pass",
+        "intermediate_result": "pass",
+    }
+    monkeypatch.setattr(MODULE, "build_proposal_update", lambda *args: update)
+
+    ledger = MODULE.build_superseding_ledger(
+        scorecard,
+        manifest,
+        MODULE.sha256_file(MODULE.DEFAULT_FIXTURE_MANIFEST),
+        previous,
+        "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v7",
+        "2026-07-24T13:00:00+00:00",
+        [evidence],
+        "Case k1-04 passed immutable strict evidence.",
+    )
+
+    assert ledger["counts"]["strict"] == {"pass": 26, "fail": 8, "not_run": 0}
+    assert ledger["counts"]["topology"] == {"pass": 31, "fail": 3, "not_run": 0}
+    assert sum(ledger["counts"]["strict"].values()) == 34
+    assert ledger["updates"] == [update]
+    assert ledger["supersedes"]["sha256"] == MODULE.sha256_file(previous)
+
+
+@pytest.mark.unit
+def test_superseding_ledger_rejects_unpinned_previous_evidence(tmp_path):
+    scorecard = MODULE.load_and_validate(MODULE.DEFAULT_SCORECARD)
+    manifest = MODULE.load_and_validate_fixture_manifest(MODULE.DEFAULT_FIXTURE_MANIFEST, scorecard)
+    previous = tmp_path / "previous.json"
+    previous.write_text('{"schema":"wrong"}\n')
+
+    with pytest.raises(ValueError, match="SHA-256 differs"):
+        MODULE.build_superseding_ledger(
+            scorecard,
+            manifest,
+            MODULE.sha256_file(MODULE.DEFAULT_FIXTURE_MANIFEST),
+            previous,
+            "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v7",
+            "2026-07-24T13:00:00+00:00",
+            [
+                MODULE.ProposalEvidence(
+                    "k1-04",
+                    Path("/unused"),
+                    "11563827",
+                    "11563842",
+                )
+            ],
+            "This must not be emitted.",
+        )
