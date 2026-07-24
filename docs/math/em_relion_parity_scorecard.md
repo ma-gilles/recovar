@@ -1,6 +1,6 @@
 # RECOVAR / RELION EM Parity Scorecard
 
-**K=1 fixed-suite score: 23 / 34 passing (34 / 34 evaluated; 29 / 34 intermediate-topology passes).**
+**K=1 fixed-suite score: 25 / 34 passing (34 / 34 evaluated; 31 / 34 intermediate-topology passes).**
 
 Suite: `k1-gui-grid0-local-highshell-full34` (version 1; denominator frozen at 34).
 Frozen case-definition SHA-256: `9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1`.
@@ -11,13 +11,13 @@ The artifact-pinned fixture manifest is checked into the repository and binds al
 
 Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like finalization. Correlation is not computed or gated.
 
-Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v5`, generated `2026-07-22T19:00:51.329249+00:00`, JSON SHA-256 `11a82951cadd2ccd2123904345090bec45352dd5f1884e0ae25fdf35d0695311`.
-Progress: +3 passing cases since the first frozen snapshot; +1 since the previous snapshot.
+Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v6`, generated `2026-07-24T01:04:11.826284+00:00`, JSON SHA-256 `32c6512a8507f7b17a59d0be527fa5c9609067e0d8f598a2d108bed9a3fc8a56`.
+Progress: +5 passing cases since the first frozen snapshot; +2 since the previous snapshot.
 
 | Done | Case | Fixture | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
 | [x] | `k1-01` | `baseline_100k_g256_white_noise1_bf80` | pass | pass | 0.998379294 | +0.008163340 | science 11384176; trajectory 11384362; intermediate 11384363 |
-| [ ] | `k1-02` | `more_images_200k_g256_white_noise1_bf80` | fail | fail | 0.998602561 | +0.005460622 | science 11385530; trajectory 11385555; intermediate 11385556 |
+| [x] | `k1-02` | `more_images_200k_g256_white_noise1_bf80` | pass | pass | 0.998574606 | +0.005625197 | science 11501888; trajectory 11501907; intermediate 11501907 |
 | [ ] | `k1-03` | `more_images_300k_g256_white_noise1_bf80` | fail | fail | 0.998786703 | +0.005373891 | science 11384178; trajectory 11384366; intermediate 11384367 |
 | [ ] | `k1-04` | `high_noise_100k_g256_white_noise3_bf80` | fail | pass | 0.991556309 | +0.003869282 | science 11384179; trajectory 11384368; intermediate 11384369 |
 | [ ] | `k1-05` | `very_high_noise_100k_g256_white_noise10_bf80` | fail | pass | 0.985743479 | +0.000544950 | science 11384180; trajectory 11384370; intermediate 11384371 |
@@ -48,7 +48,7 @@ Progress: +3 passing cases since the first frozen snapshot; +1 since the previou
 | [x] | `k1-30` | `small_low_noise_kent_3k_g128_white_noise0p2_bf80` | pass | pass | 0.998823366 | +0.013967656 | science 11384205; trajectory 11384433; intermediate 11384434 |
 | [x] | `k1-31` | `mid_10k_g128_white_noise1_bf80` | pass | pass | 0.998725941 | +0.016924536 | science 11384206; trajectory 11384436; intermediate 11384437 |
 | [ ] | `k1-32` | `mid_10k_kent_g128_radial_noise3_bf80` | fail | pass | 0.974500501 | +0.004132488 | science 11384207; trajectory 11384438; intermediate 11384439 |
-| [ ] | `k1-33` | `max_images_400k_g128_white_noise1_bf80` | fail | fail | 0.972759067 | +0.031139902 | science 11384208; trajectory 11384440; intermediate 11384441 |
+| [x] | `k1-33` | `max_images_400k_g128_white_noise1_bf80` | pass | pass | 0.999734254 | +0.000244294 | science 11508260; trajectory 11508286; intermediate 11508286 |
 | [x] | `k1-34` | `max_images_400k_g128_radial_noise3_nonuniform_bf80` | pass | pass | 0.995757412 | +0.002869240 | science 11384210; trajectory 11384443; intermediate 11384444 |
 
 ## Progress history
@@ -59,6 +59,7 @@ Progress: +3 passing cases since the first frozen snapshot; +1 since the previou
 | `strict-k1-v3-20260721` | 2026-07-21T10:35:40.626248+00:00 | `ac5177d2b0cd`, `9d1722781e1d` | 21 | +1 | 13 | 0 |
 | `strict-k1-v4-20260722` | 2026-07-22T15:57:09.593124+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db` | 22 | +1 | 12 | 0 |
 | `strict-k1-v5-20260722` | 2026-07-22T19:00:51.329249+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038` | 23 | +1 | 11 | 0 |
+| `strict-k1-v6-20260724` | 2026-07-24T01:04:11.826284+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08` | 25 | +2 | 9 | 0 |
 
 ## Non-scoring regenerated-data diagnostics
 

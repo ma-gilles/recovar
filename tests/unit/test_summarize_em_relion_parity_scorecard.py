@@ -26,11 +26,11 @@ def test_frozen_v1_scorecard_is_valid_and_renders_fixed_denominator():
 
     assert scorecard["frozen_denominator"] == 34
     assert scorecard["frozen_case_definitions_sha256"] == MODULE.frozen_case_definitions_sha256(scorecard["cases"])
-    assert scorecard["current_snapshot"]["counts"] == {"pass": 23, "fail": 11, "not_run": 0}
-    assert "K=1 fixed-suite score: 23 / 34 passing" in rendered
-    assert "Progress: +3 passing cases since the first frozen snapshot; +1 since the previous snapshot." in rendered
-    assert rendered.count("| [x] |") == 23
-    assert rendered.count("| [ ] |") == 11
+    assert scorecard["current_snapshot"]["counts"] == {"pass": 25, "fail": 9, "not_run": 0}
+    assert "K=1 fixed-suite score: 25 / 34 passing" in rendered
+    assert "Progress: +5 passing cases since the first frozen snapshot; +2 since the previous snapshot." in rendered
+    assert rendered.count("| [x] |") == 25
+    assert rendered.count("| [ ] |") == 9
     assert "34 cases (470,170,958,467 bytes)" in rendered
     assert "| `strict-k1-v1-old-head-20260721`" in rendered
     assert "| 20 | — | 12 | 2 |" in rendered
@@ -40,6 +40,8 @@ def test_frozen_v1_scorecard_is_valid_and_renders_fixed_denominator():
     assert "| 22 | +1 | 12 | 0 |" in rendered
     assert "| `strict-k1-v5-20260722`" in rendered
     assert "| 23 | +1 | 11 | 0 |" in rendered
+    assert "| `strict-k1-v6-20260724`" in rendered
+    assert "| 25 | +2 | 9 | 0 |" in rendered
     assert "Non-scoring regenerated-data diagnostics" in rendered
     assert "| `k1-23` | pass | pass | 0.997483478 |" in rendered
 
