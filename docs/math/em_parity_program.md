@@ -9520,3 +9520,20 @@ FSC/topology audit `11563842`.  Grid correction and forced final-all-data
 after non-convergence remain unset.  Until those audits pass, snapshot
 `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
 34/34 evaluated.
+
+### Case-5 frozen-fixture generalization arm
+
+The case-4 intervention is also being tested unchanged against frozen case 5.
+The accepted baseline particle audit contains only three first-iteration
+assignment exceptions, original indices `26055`, `93729`, and `95412`; all
+three are translation-only at the reporting tolerance.  No case-5-derived
+code, margin, or tie rule was added.
+
+Clean detached commit `c74beea4` and frozen manifest SHA-256
+`422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`
+are bound by setup `11564052`, science `11564053`, matrix summary `11564054`,
+and unchanged strict FSC/topology audit `11564062`.  Science runs on physical
+H100 `GPU-49c1a223-be61-858b-49d8-d8b0347ac252`.  Grid correction and forced
+final-all-data after non-convergence remain unset.  This is a post-snapshot
+generalization arm and does not change the frozen 25/34 strict,
+31/34-topology score while pending.

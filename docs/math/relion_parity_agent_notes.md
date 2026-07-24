@@ -5733,6 +5733,22 @@ same-device equivalence or numerical noise.
 - No production patch is authorized from this result.  Frozen score remains
   25/34 strict, 31/34 exact topology, and 34/34 evaluated.
 
+# 2026-07-24: case 5 tests the case-4 intervention unchanged
+
+- The accepted case-5 baseline audit has three first-iteration assignment
+  exceptions: original indices `26055`, `93729`, and `95412`.  All are
+  translation-only at the reporting tolerance.
+- Frozen-fixture setup `11564052` completed `0:0`; science `11564053`, matrix
+  summary `11564054`, and unchanged strict FSC/topology audit `11564062` test
+  the same direct-real initial projector plus bounded `4e-6` top-two tree
+  rescore used for case 4.
+- Science is source-bound to clean detached commit `c74beea4` and physical
+  H100 `GPU-49c1a223-be61-858b-49d8-d8b0347ac252`.  Grid correction and forced
+  final-all-data after non-convergence are unset.
+- This is an independent generalization arm, not a metric update.  Frozen
+  score remains 25/34 strict, 31/34 exact topology, and 34/34 evaluated while
+  its auditors are pending.
+
 # 2026-07-24: case 24 iteration-1 winner and maps close under combined opt-ins
 
 - Reduction-only full replay at source `9abd79fb` examined 3,000 images,

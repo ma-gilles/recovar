@@ -70,6 +70,7 @@ above.  A failing intervention remains unchecked and does not change the
 | Done | Case | Commit/intervention | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
 | [ ] | `k1-04` | `c74beea4`; direct-real initial projector + bounded firstiter top-2 tree rescore | pending | pending | — | — | setup 11563826; science 11563827; summary 11563828; strict audit 11563842 |
+| [ ] | `k1-05` | `c74beea4`; identical case-4 intervention, frozen-fixture generalization | pending | pending | — | — | setup 11564052; science 11564053; summary 11564054; strict audit 11564062 |
 | [ ] | `k1-24` | `b826bc52`; direct-real initial projector + bounded firstiter top-2 tree rescore | fail | pass | 0.994801463 | +0.008173125 | setup 11562037; science 11562038; summary 11562039; strict audit 11562082 |
 
 The case-4 intervention is motivated by the complete same-H100
@@ -83,6 +84,13 @@ RELION's two best hypotheses have exactly equal float32 scores
 This supports the bounded RELION 128-lane re-reduction; it is not yet a
 fixed-suite pass.  Comparison JSON SHA-256:
 `2e3368c5c03db4d0eea9519c746be6c4d4b26f8b8b0f11e98420ee6d878ebcdd`.
+
+The case-5 arm applies exactly the same bounded intervention to an independent
+frozen fixture, without a case-5-derived code or threshold change.  Its
+accepted baseline particle audit contains three first-iteration assignment
+exceptions (original indices 26055, 93729, and 95412), all translation-only at
+the reporting tolerance.  It is a generalization check, not a new metric row;
+the frozen score remains unchanged while its strict auditors are pending.
 
 The case-24 intervention is effectively exact for the first three numbered
 maps (merged cross-engine FSC-AUC `0.999999999973`,
