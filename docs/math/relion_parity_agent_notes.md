@@ -6592,7 +6592,19 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case45_remaining_it1_capture_20260724T140000Z`;
   both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
   `775b0e7b74b3d18288839d4008a7cde1cb1f492d6efc36609c16deebe42aceb4`.
-- Same-physical-H100 patched-RELION job `11572062` is queued for particle
+- Exact identity-aligned mapping of paired RELION fine poses back to the
+  captured coarse grids identifies three runner-up-parent misses: case-4
+  particle `5234` maps from native flat index `955081` to rank-2 `977030`,
+  particle `72654` from `118097` to rank-2 `118092`, and case-5 particle
+  `93729` from `510106` to rank-2 `510101`.  Case-5 particles `38594` and
+  `65070` already select RELION's nearest coarse parents exactly
+  (`917524` and `148012`), so their one-fine-step translation exceptions are
+  downstream inside pass 2 rather than coarse-tree threshold decisions.
+  Mapping JSON SHA-256 is
+  `6ad97a96805f77d67af78418e1460239ff06f4d46336aa9cd1032ce08d371cf5`;
+  analyzer SHA-256 is
+  `f8312e9ab72b4008f33bb9e50f55cdaaaa5e9a946b82e12430a7c70dca0f75f8`.
+- Same-physical-H100 patched-RELION job `11572062` is running for particle
   `5234`, the only target with a material rotation difference.  It reserves
   all four GPUs on `della-h21g2`, selects capture UUID
   `GPU-24350de1-cbbd-8567-62d2-db825502511b`, and will compare all coarse
@@ -6602,5 +6614,15 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case04_p5234_exact_relion_grid_20260724T142000Z`;
   both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
   `3499d355e54270d7be3eecb12a22509280784a1eb25ac491649aecba3f6bf694`.
+- Same-physical-H100 fine-pass capture `11572658` is queued for case-5
+  particles `38594` and `65070` on `della-h19g1`, targeting capture UUID
+  `GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`.  Its run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_finepass_targets_20260724T143000Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case05_finepass_targets_20260724T143000Z`;
+  both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
+  `0f26924928b50971b81e4f19578503da14674911d1a5d350439c55fa9eba8a2c`;
+  corrected analyzer SHA-256 is
+  `1b9a202192b00399b733d5e150c5ad647f47b0d82fdd69ed2113ee107d3fb674`.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.

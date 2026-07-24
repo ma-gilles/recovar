@@ -226,9 +226,16 @@ native float32 top-two margins `3.27826e-7` and `2.38419e-7`; case-5 particle
 rescore band, but tree rescore leaves their native winners unchanged.
 Case-5 particles `38594` and `65070` instead have margins `9.89005e-4` and
 `1.83816e-3`, far outside that band.  This rules out a global threshold
-increase.  Same-physical-H100 patched-RELION full-grid discriminator
-`11572062` is queued for particle `5234`.  The frozen score remains 25/34
-strict, 31/34 topology, and 34/34 evaluated.
+increase.  Exact fine-pose-to-coarse-grid mapping further separates the
+boundary: both case-4 targets and case-5 particle `93729` map to RECOVAR's
+coarse runner-up, while case-5 particles `38594` and `65070` already use
+RELION's coarse parent and therefore diverge inside fine pass 2.  The mapping
+JSON SHA-256 is
+`6ad97a96805f77d67af78418e1460239ff06f4d46336aa9cd1032ce08d371cf5`.
+Same-physical-H100 patched-RELION full-grid discriminator `11572062` runs for
+particle `5234`; fine-pass capture `11572658` is queued for particles `38594`
+and `65070`.  The frozen score remains 25/34 strict, 31/34 topology, and
+34/34 evaluated.
 
 ## K=4 physical-GPU trajectory diagnostic
 
