@@ -7149,13 +7149,31 @@ surface for the ambiguous cohort; pure same-input GPU near-tie arithmetic is
 the alternative.  A deterministic 24-particle panel contains six pose-tail
 and six Pmax/support-matched pose-stable controls per half.  Resident and exact
 RELION-state/reference arms share the current-size/HEALPix schedule, source
-commit, fixture, H100 allocation, and targeted production captures.  Slurm
-job `11439493` is running the two arms sequentially on H100 `della-h20g3`.  If
-exact substitution closes the tail/control margin split while resident state
-reproduces it, the locus remains upstream accumulated state/reference; if both
-retain the same split, inspect common-input candidate arithmetic.  Selection:
+commit, fixture, H100 allocation, and targeted production captures.  Selection:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/selection/panel24.json`
 (SHA-256 `0f441257af9b1152d6bf1eb2126960479826656bfafa3da1b0fb90b514d4dd2b`).
+
+The original Slurm job `11439493` produced only a partial resident arm and
+failed; it is not accepted evidence.  Same-H100 retry `11442740` completed
+both arms `0:0` on `della-h20g3`.  A full identity audit of its frozen panel
+closes the proposed discriminator.  The resident arm reproduces a
+greater-than-0.1-degree error for 11/12 tail particles (mean `1.8442902`
+degrees), while exact RELION incoming state/reference substitution puts all
+12/12 within 0.1 degrees (mean `7.1038e-6` degrees).  All 12 matched stable
+controls remain within 0.1 degrees in both arms with exactly unchanged
+per-particle errors.  Tail translation agreement within 0.1 Angstrom improves
+from 5/12 to 12/12, exact support from 8/12 to 12/12, and mean absolute Pmax
+error from `0.0327671` to `0.000302662`.
+
+Thus case 7's shell-20 FSC/scheduler split is a downstream amplifier of
+accumulated incoming state/reference drift.  The counterfactual rejects a
+change to the FSC `0.5` threshold or `updateAngularSampling`; the next target
+remains the earlier broad low-confidence posterior/support drift.  This
+diagnostic classification does not change the frozen score.  The sealed JSON
+and Markdown SHA-256 values are
+`331fa2104424c4fe434a00a81adf763e11bac43d38b490cd40ba64ab64ba078a`
+and
+`344ab83917c91fb1ebeba789efc6f6d7da3ed7b4c475430f7d32350a72b466d2`.
 
 ## 2026-07-20 active full case-33 and g384 acceptance chains
 
