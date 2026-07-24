@@ -135,8 +135,32 @@ Setup `11566711` completed, science `11566712` is running, summary
 `11566739`.  Grid correction and forced final all-data after maximum iteration
 are unset.  The durable root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case22_tree_b1d44427_20260724T142000Z`.
-This is a pending generalization arm, not a new checkbox; the frozen score
-remains 25/34.
+
+The first two RECOVAR boundaries now rule out that intervention as the cause
+of case 22's butterfly.  The top-two rescore changed zero of 3,000 winners.
+Iteration-1 merged new-versus-old FSC-AUC is `0.999999999984`, and CPU audit
+`11567536` finds iteration-2 merged new-versus-old FSC-AUC
+`0.999999999942`.  Iteration-2 new-versus-RELION FSC-AUC is
+`0.999993352100` versus the frozen old row's `0.999993352125`; GT FSC-AUC is
+also effectively unchanged (`0.215965204` versus `0.215965248`, with RELION
+at `0.216062652`).  The divergence therefore begins downstream of the
+firstiter direct-reference/top-two path.  The autonomous science and strict
+audit remain active, but this is not a new checkbox; the frozen score remains
+25/34.
+
+## K=1 frozen case-7 firstiter generalization
+
+Frozen case 7 tests the same intervention against a longer 100,000-particle
+fixture whose known shell-20 scheduler split amplifies accumulated drift.
+Clean detached source is `c74beea47a1a91a723ab2c99f961b8a70483c34c`, and
+the immutable fixture-manifest SHA-256 is
+`422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
+Setup `11567460` completed; science `11567461`, summary `11567462`, and
+independent strict FSC/topology audit `11567496` are queued.  The audit is
+fail-closed behind successful science and independently checks source/import
+provenance.  The durable run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case07_tree_c74beea4_20260724T110500Z`.
+This is a pending diagnostic, not a score change.
 
 ## K=1 final-only family diagnostic
 
@@ -227,6 +251,15 @@ shows that iteration-1 merged cross-engine FSC-AUC improves from
 `0.103266845326` to `0.103266884384`, toward RELION's `0.103266904543`.
 This is positive first-boundary evidence, not a full-case pass; science
 `11564053` and strict audit `11564062` remain active or dependency-gated.
+
+Iteration 2 independently preserves the cross-engine gain.  CPU audit
+`11567559` reports merged new-versus-RELION FSC-AUC `0.999999972228`, versus
+the frozen old row's `0.999999908057`; half-1/half-2 improve from
+`0.999999801399`/`0.999999854237` to
+`0.999999992764`/`0.999999904988`.  New merged GT FSC-AUC is
+`0.107758163608`, versus old `0.107757134405` and RELION
+`0.107757661217`.  This remains intermediate evidence; the immutable score
+does not change before terminal science and both strict auditors pass.
 
 The same-GPU K=4 science job `11565045` has completed iterations 1--4 with
 sizes `38,38,42,56`, resolutions `60.44,49.45,30.22,27.20` Angstrom, and

@@ -6077,7 +6077,7 @@ same-device equivalence or numerical noise.
   both contain `SAFE_TO_DELETE`.
 - This is a pending full-case generalization arm, not a score change.
 
-# 2026-07-24: case 5 first boundary improves under the bounded intervention
+# 2026-07-24: case 5 first two boundaries improve under the bounded intervention
 
 - Frozen-fixture science `11564053` completed RECOVAR iteration 1 with the
   RELION schedule boundary: current size 56, 30.22 Angstrom resolution, Pmax
@@ -6097,6 +6097,17 @@ same-device equivalence or numerical noise.
 - Merged GT FSC-AUC moves from `0.10326684532558558` to
   `0.10326688438429595`, toward RELION's `0.103266904543226`.  The metric is
   shellwise FSC/FSC-AUC only; correlation was not computed.
+- CPU FSC audit `11567559` completed `0:0` in 68 seconds with 2,222,748 KiB
+  maximum RSS at numbered iteration 2.  The cross-engine improvement
+  persists: merged RECOVAR-versus-RELION FSC-AUC moves from old
+  `0.9999999080572247` to new `0.9999999722278509`; half-1/half-2 values
+  move from `0.9999998013988499`/`0.9999998542373368` to
+  `0.9999999927643750`/`0.9999999049878318`.
+- Merged iteration-2 GT FSC-AUC is `0.1077581636081282`, versus old
+  `0.10775713440494669` and RELION `0.10775766121678897`.  The intervention
+  slightly overshoots RELION's GT value while remaining closer in
+  cross-engine FSC-AUC; only the terminal strict trajectory can decide
+  acceptance.
 - Audit stdout and launcher SHA-256 values are
   `2e0e47f426284ed533f4b48e6b945a9bc715866ea0ec6d13efeb5c231339d890`
   and `05b06cfba9446797f738e179734069d4c028b359b642898a979ac91b6e2f1091`.
@@ -6104,6 +6115,12 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case5_iter1_analysis_20260724`.
   Pre-audit `11567277` failed before comparison on a missing `scripts` import
   path and produced no scientific result.
+- Iteration-2 stdout, analysis script, and launcher SHA-256 values are
+  `35be2613fbac7120b73e0f4b3e06c33df8cae8847f7f995e47e1fab8b484be3c`,
+  `e0946cd286ff10d282e6707dbc4a3dcf9fa3fc69cf04a7e171531b9aa49a4924`,
+  and `6af89219f662eae944811cdb678dd8910fb10b2d6e5c9f7c905404c0e2f608b7`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case5_iter2_analysis_20260724`.
 - This is a positive first-boundary generalization result, not a full-case
   acceptance.  Science `11564053` and strict audit `11564062` remain active or
   dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,
@@ -6125,3 +6142,61 @@ same-device equivalence or numerical noise.
 - The science job is healthy, while vector audit `11565121` and independent
   scalar audit `11565131` remain dependency-gated.  No K=4 acceptance or K=1
   score change is claimed before those fail-closed auditors finish.
+
+# 2026-07-24: case 22 rules out the firstiter intervention
+
+- Frozen case-22 science `11566712` completed the first two RECOVAR
+  boundaries.  Iteration 1 matches the RELION bootstrap schedule at current
+  size 56, 30.22 Angstrom resolution, Pmax 1.0, and next size 60.  The
+  bounded top-two rescore examined all 3,000 particles, found one ambiguous
+  particle, and changed no winners.
+- Iteration 1 is effectively unchanged: merged new-versus-old FSC-AUC is
+  `0.9999999999842022`, and merged new-versus-RELION FSC-AUC is
+  `0.9999999999730657` versus old `0.9999999999732839`.
+- CPU FSC audit `11567536` completed `0:0` in 25 seconds with 681,148 KiB
+  maximum RSS at iteration 2.  The intervention remains a byte-neighbor of
+  the frozen old trajectory (`new-versus-old` merged FSC-AUC
+  `0.9999999999416288`) and does not close the known RELION butterfly:
+  new-versus-RELION is `0.9999933521000186` versus old
+  `0.9999933521252655`.  Merged GT FSC-AUC is
+  `0.21596520383729964` versus old `0.21596524819482166` and RELION
+  `0.21606265237491196`.
+- The direct-real-reference plus bounded first-iteration top-two hypothesis
+  is therefore rejected for case 22.  Its divergence begins downstream of
+  this path; the autonomous run and strict audit remain useful terminal
+  evidence but cannot validate this intervention as the cause.
+- Iteration-2 audit stdout, analysis script, and launcher SHA-256 values are
+  `7b40aa847778dcee2604b2dd9256ab9b676538f9291f6ebe32e4c0ef4e7679dd`,
+  `557c8dde84869a462426ead58456e8c009825a935632b86a7123722f6eb9bff3`,
+  and `ef9ad571708fd2bceebd1fd2bd3775f90dd724c89efc311270f2f40be81f431a`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_iter2_analysis_20260724`.
+- Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
+  topology, and 34/34 evaluated.
+
+# 2026-07-24: frozen case 7 tests firstiter generalization
+
+- Case 7 is a strict-FSC failure with exact topology already passing.  Its
+  known shell-20 scheduler split is a downstream amplifier, so it is an
+  independent long-fixture test of the same direct-real-reference plus
+  bounded `4e-6` top-two intervention that improved case 5's first boundary.
+- Clean detached source is
+  `c74beea47a1a91a723ab2c99f961b8a70483c34c`; fixture-manifest SHA-256 is
+  `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
+  Grid correction and forced final all-data after maximum iteration are
+  unset, and the run uses autonomous RELION plus RECOVAR trajectories.
+- Slurm graph is setup `11567460` (completed `0:0`), science `11567461`,
+  summary `11567462`, and independent strict FSC/topology audit `11567496`.
+  The audit is `afterok:11567461` and independently checks clean source and
+  RECOVAR import provenance before both fail-closed auditors.
+- Strict-audit, science, setup, and summary launcher SHA-256 values are
+  `896a42f5f887ae0d9f5e4a9079bd83c944a43e551f676c60d03a5d15726b02d6`,
+  `2e220fa559acf9f0af52921d81fe44f95c63434683161236e524772100a5c2e7`,
+  `5afbde5f1067035a57a9d6ae41f0439e17cc5a4fc7f2d55bcb915f4338dfaa48`,
+  and `638a00c242dbd18e7ff4f8937c5901a3dabbf58a7711a9eae33a56f289909a94`.
+- Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case07_tree_c74beea4_20260724T110500Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_case07_tree_c74beea4_20260724T110500Z`;
+  both contain `SAFE_TO_DELETE`.  This pending diagnostic does not change
+  the fixed score.
