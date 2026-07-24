@@ -5939,3 +5939,30 @@ same-device equivalence or numerical noise.
   tests pass `13 passed in 7.89s`.
 - The fixed score remains 25/34 strict, 31/34 exact topology, and 34/34
   evaluated until the new science and both strict audits pass.
+
+# 2026-07-24: K=4 recovery auditors canceled on physical-GPU mismatch
+
+- Accepted RELION control/capture and superseded RECOVAR science used physical
+  A100 `GPU-803dc869-2e74-273c-1df4-08adbc94e1b3`.  RECOVAR-only recovery
+  `11561204` uses `GPU-6ec3d0a5-efc4-2f4c-fa73-7d76b911a412`.
+- The replacement audit launchers verified only recovery walltime UUID versus
+  recovery preflight UUID.  They omitted the required equality check against
+  the reused RELION runtime UUID, so pending jobs `11561345` and `11561350`
+  were canceled at zero runtime.
+- The two RECOVAR trajectories differ materially by numbered iteration 8:
+  half/class shellwise FSC-AUC spans
+  `0.998882600598`--`0.999075807124`; fine/coarse assignments differ
+  `705/100000` and `366/100000`; noise and tau2 relative L2 are
+  `4.18455764e-6` and `1.71844644e-4`.
+- Recovery science remains a valid cross-A100 diagnostic but cannot support
+  same-physical-GPU K=4 acceptance.  Any replacement must run all three arms
+  sequentially in one allocation and assert UUID equality before scientific
+  comparison.
+- Durable note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_fusedcapture_74f89c60_20260724T014000Z/provenance/RECOVERY_UUID_INVALIDATION_20260724.md`.
+- Correct all-in-one replacement jobs are science `11564419`, vector audit
+  `11564442`, and scalar audit `11564443`.  Science and both audit launchers
+  independently bind the fresh root; science checks the three runtime
+  walltime UUIDs and the primary audit repeats the triplet gate.  Runtime
+  preflight binds physical A100
+  `GPU-6f45f415-9d0b-d562-9ff3-c9fb7bc53aa7`.

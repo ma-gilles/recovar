@@ -9537,3 +9537,42 @@ H100 `GPU-49c1a223-be61-858b-49d8-d8b0347ac252`.  Grid correction and forced
 final-all-data after non-convergence remain unset.  This is a post-snapshot
 generalization arm and does not change the frozen 25/34 strict,
 31/34-topology score while pending.
+
+### K=4 recovery is diagnostic-only after physical-GPU mismatch
+
+Read-only provenance inspection invalidated the formal acceptance graph for
+K=4 recovery job `11561204`.  The already accepted RELION control/capture and
+superseded RECOVAR run used physical A100
+`GPU-803dc869-2e74-273c-1df4-08adbc94e1b3`; the RECOVAR-only recovery uses
+`GPU-6ec3d0a5-efc4-2f4c-fa73-7d76b911a412`.  Its audit launchers checked the
+RECOVAR runtime UUID against only its own preflight and omitted equality with
+the reused RELION UUID.  Pending primary/scalar jobs `11561345` and
+`11561350` were canceled at zero runtime before they could emit a false
+same-physical-GPU acceptance marker.
+
+The mismatch is scientifically visible before the target capture.  At
+numbered iteration 8, the eight superseded-versus-recovery half/class maps
+have shellwise FSC-AUC `0.998882600598`--`0.999075807124`.  Fine and coarse
+hard assignments differ for `705/100000` and `366/100000` particles,
+respectively; noise relative L2 is `4.18455764e-6` and tau2 relative L2 is
+`1.71844644e-4`.  Rotations, translations, and iteration metadata are exact.
+Science `11561204` remains useful as a cross-A100 diagnostic and continues
+toward the capture, but neither it nor its canceled auditors is eligible for
+formal K=4 parity acceptance.  A replacement must run RELION control, RELION
+passive capture, and RECOVAR sequentially in one allocation and assert all
+runtime UUIDs are identical before comparison.
+
+Durable invalidation note:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_fusedcapture_74f89c60_20260724T014000Z/provenance/RECOVERY_UUID_INVALIDATION_20260724.md`.
+
+The corrected all-in-one replacement uses science `11564419`, primary vector
+audit `11564442`, and independent scalar audit `11564443`.  It runs all three
+science arms sequentially on physical A100
+`GPU-6f45f415-9d0b-d562-9ff3-c9fb7bc53aa7`, uses the absolute image-identity
+array, and asserts the control/capture/RECOVAR walltime UUID triplet before
+capture acceptance.  The primary audit independently repeats that triplet
+gate.  Launcher SHA-256 values are
+`2650470674f3133ba9848e3a4515b9b054ebe7fa9cab633e8e5f10e4c7a091e6`,
+`c369f9ed4992368abc01e5a0761deae90efcace53e2870f01d3906d362d85cfe`,
+and `3d209caa65b1286129651b6b30a0eccc24ee399ac277d6f683091f1348cf5ed1`.
+Formal K=4 acceptance remains pending all three successful exits.
