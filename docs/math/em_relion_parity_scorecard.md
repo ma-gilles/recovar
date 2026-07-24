@@ -93,6 +93,10 @@ accepted baseline particle audit contains three first-iteration assignment
 exceptions (original indices 26055, 93729, and 95412), all translation-only at
 the reporting tolerance.  It is a generalization check, not a new metric row;
 the frozen score remains unchanged while its strict auditors are pending.
+On integration head `2dfafb5a`, the exact direct-real projector, bounded
+top-two replacement, and Slurm forwarding/scope tests pass 3/3.  The JUnit
+SHA-256 is
+`83356757653924ee61b1a3bda00a737c356ce2026dbe2d5c0d6d287707df610c`.
 
 The case-24 intervention is effectively exact for the first three numbered
 maps (merged cross-engine FSC-AUC `0.999999999973`,
