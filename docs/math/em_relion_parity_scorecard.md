@@ -71,8 +71,8 @@ above.  A failing intervention remains unchecked and does not change the
 | Done | Case | Commit/intervention | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
 | [ ] | `k1-03` | `84143872`; unchanged fixed-suite science with 36-hour budget after the prior 24-hour timeout | pending | pending | — | — | science 11553236; strict audit 11553237 |
-| [ ] | `k1-04` | `c74beea4`; direct-real initial projector + bounded firstiter top-2 tree rescore | pending | pending | — | — | setup 11563826; science 11563827; summary 11563828; strict audit 11563842 |
-| [ ] | `k1-05` | `c74beea4`; identical case-4 intervention, frozen-fixture generalization | pending | pending | — | — | setup 11564052; science 11564053; summary 11564054; strict audit 11564062 |
+| [ ] | `k1-04` | `c74beea4`; direct-real initial projector + bounded firstiter top-2 tree rescore | fail | pass | 0.992965912 | +0.003915953 | setup 11563826; science 11563827; summary 11563828; strict audit 11563842 |
+| [ ] | `k1-05` | `c74beea4`; identical case-4 intervention, frozen-fixture generalization | fail | pass | 0.985721587 | +0.000330734 | setup 11564052; science 11564053; summary 11564054; strict audit 11564062 |
 | [ ] | `k1-24` | `b826bc52`; direct-real initial projector + bounded firstiter top-2 tree rescore | fail | pass | 0.994801463 | +0.008173125 | setup 11562037; science 11562038; summary 11562039; strict audit 11562082 |
 
 The case-4 intervention is motivated by the complete same-H100
@@ -321,8 +321,8 @@ iteration-1 merged cross-engine FSC-AUC improves from `0.999999999628` to
 used for the causal delta.  Merged GT FSC-AUC moves from
 `0.103266845326` toward `0.103266884384`; the matched RELION values are
 `0.103266904607` and `0.103266904543`.  This is positive first-boundary
-evidence, not a full-case pass; science `11564053` and strict audit
-`11564062` remain active or dependency-gated.
+evidence, not a full-case pass.  Both jobs subsequently completed; the
+terminal strict failure is recorded below.
 
 Iteration 2 independently preserves the cross-engine gain.  CPU audit
 `11567559` reports merged new-versus-RELION FSC-AUC `0.999999972228`, versus

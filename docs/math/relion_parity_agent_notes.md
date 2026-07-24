@@ -6261,9 +6261,10 @@ same-device equivalence or numerical noise.
   `fdb625113a27095bb6431dbc4b39060bab248546642a17410ce1640fbcf90e9a`,
   and `4b186783f5c59866152b4004bcff5b212449e1f69a13130662768a7ad246a3a2`.
 - This is a positive first-boundary generalization result, not a full-case
-  acceptance.  Science `11564053` and strict audit `11564062` remain active or
-  dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,
-  31/34 exact topology, and 34/34 evaluated.
+  acceptance.  Science `11564053` and strict audit `11564062` subsequently
+  completed with a terminal strict failure and exact-topology pass, so
+  snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology,
+  and 34/34 evaluated.
 
 # 2026-07-24: case 4 first three boundaries improve under the intervention
 
@@ -6363,8 +6364,9 @@ same-device equivalence or numerical noise.
   shared array launcher SHA-256 is
   `ae530abefc4e06706b17ca9a77cb6fad794af7f9ff5bbd81cc187af29cd569c2`.
 - This is strong first-boundary evidence, not a full-case acceptance.
-  Science `11563827` and strict audit `11563842` remain active or
-  dependency-gated, so the fixed score remains 25/34.
+  Science `11563827` and strict audit `11563842` subsequently completed with a
+  terminal strict failure and exact-topology pass, so the fixed score remains
+  25/34.
 
 # 2026-07-24: K=4 same-GPU trajectory reaches iteration 7
 
