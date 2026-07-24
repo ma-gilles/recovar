@@ -5631,3 +5631,36 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it2_relref_counterfactual_5cb01ec1_20260724T040135Z`.
 - The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
   evaluated until a fixed case passes its accepted audit.
+
+# 2026-07-24: case 4 iteration-2 exact-map intervention is mixed
+
+- Same-H100 science `11558427` completed resident-map and exact-RELION-map
+  arms sequentially on
+  `GPU-49c1a223-be61-858b-49d8-d8b0347ac252`.  Both arms share exact incoming
+  RELION non-map state; only the scoring-iteration-2 half references differ.
+- Exact non-map state alone is nearly null: mean/p95 absolute-Pmax-error
+  ratios versus autonomous are `0.951815`/`0.989488`, with support mismatches
+  331 to 323.
+- Exact maps are the leading component but miss the predeclared dominance
+  gate: conditional mean/p95 ratios are `0.256586`/`0.189190`, support
+  mismatches fall 323 to 92, angular `<=0.5` degrees improves
+  `0.99958 -> 0.99992`, and translation `<=0.01` Angstrom improves
+  `0.99947 -> 0.99983`.
+- Combined exact state and maps produce ratios `0.244222`/`0.187201` and
+  support 331 to 92.  The accepted classification is `mixed`: most of the
+  broad residual is inherited through the iteration-1 half maps, while a
+  smaller identical-input scorer/candidate residual remains.
+- The GPU wrapper's two arm runs and hash-pinned reports completed, then its
+  obsolete `status == "pass"` assertion rejected the auditor's current
+  `"complete"` status.  Recovery audit `11559766` independently verified
+  both report/array manifests and completed `0:0`; superseded
+  dependency-never-satisfied job `11558553` was canceled at zero runtime.
+- Accepted classification SHA-256:
+  `0496eb4b4247a308f9ab3012ed2fc97389da2ae5a2271f0eb179bde9d0e18a3f`.
+  Corrected audit-launcher SHA-256:
+  `b712c20bb4edb6e9bcd13f141e2aa6892c5fb2d953afe9f7413b1feb24dde933`.
+- Next discriminator: matched iteration-1 native RECOVAR and passive RELION
+  BPref/reconstruction capture plus a narrow iteration-2 residual-candidate
+  audit.  Do not change the `0.999` significance threshold.
+- Frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
+  evaluated.

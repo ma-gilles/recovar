@@ -9252,3 +9252,43 @@ The durable replay root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case24_it1_particle1901_capture_0da399c4_20260724T030330Z`.
 The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
 evaluated.
+
+### Case-4 iteration-2 map/state counterfactual is map-leading but mixed
+
+Same-H100 science job `11558427` completed two sequential 100,000-particle
+arms on physical GPU
+`GPU-49c1a223-be61-858b-49d8-d8b0347ac252` from source `5cb01ec1`.  Both
+arms replay exact incoming RELION non-map state through scoring iteration 2.
+The resident arm keeps its RECOVAR-produced iteration-1 half maps; the
+`relref` arm substitutes the exact RELION iteration-1 half maps.  Neither arm
+forces final all-data, and grid correction remains unset/off.
+
+Relative to the autonomous boundary, exact incoming non-map state alone is
+nearly null: mean and p95 absolute-Pmax-error ratios are `0.951815` and
+`0.989488`, and significant-support mismatches change only from 331 to 323.
+Exact maps conditional on that state are the leading effect: the ratios
+become `0.256586` and `0.189190`, support mismatches fall from 323 to 92, the
+fraction within 0.5 degrees rises from `0.99958` to `0.99992`, and the
+fraction within 0.01 Angstrom translation rises from `0.99947` to `0.99983`.
+The combined exact-state-plus-map ratios against the original autonomous arm
+are `0.244222` and `0.187201`, with support mismatches 331 to 92.
+
+The predeclared dominance gate required both Pmax ratios at most `0.10` plus
+fewer support mismatches.  The accepted classification is therefore
+**mixed**, not map-dominant: the iteration-1 half maps explain most of the
+broad iteration-2 residual, but an identical-input scorer/candidate residual
+remains.  This supports a matched iteration-1 BPref/reconstruction capture
+and a narrow residual-candidate audit; it does not support a posterior
+threshold, state-only, or unconditional map-only production patch.
+
+The GPU wrapper exited `1:0` only after both arm markers and both hash-pinned
+identity reports were written because it asserted the obsolete report status
+`pass`; the current auditor emits `complete`.  Recovery audit `11559766`
+validated both JSON/NPZ manifests and arm provenance and completed `0:0`.
+Its accepted classification JSON SHA-256 is
+`0496eb4b4247a308f9ab3012ed2fc97389da2ae5a2271f0eb179bde9d0e18a3f`.
+The corrected audit launcher SHA-256 is
+`b712c20bb4edb6e9bcd13f141e2aa6892c5fb2d953afe9f7413b1feb24dde933`.
+Superseded dependency audit `11558553` was canceled with zero runtime.  The
+fixed score remains 25/34 strict, 31/34 exact topology, and 34/34 evaluated;
+no correlation metric is used.
