@@ -743,20 +743,26 @@ def _candidate_table_from_relion(
         # RELION's ACC names are easy to misread: rot_id is the global
         # orientation id, while rot_idx is only the index inside the compact
         # significant-orientation list. Use rot_id for RECOVAR key matching.
-        rot_id = _get_by_suffix(payload, "acc_rot_id")
-        compact_rot_idx = _get_by_suffix(payload, "acc_rot_idx")
+        # A normal adaptive dump contains both coarse pass0 and fine pass1
+        # arrays. Keep every generic candidate field on fine pass1 when it is
+        # available instead of allowing sorted suffix lookup to mix passes.
+        def generic_candidate_field(name: str) -> np.ndarray | None:
+            return _get_by_suffix(payload, name, prefer_prefix="pass1")
+
+        rot_id = generic_candidate_field("acc_rot_id")
+        compact_rot_idx = generic_candidate_field("acc_rot_idx")
         rot_idx = rot_id if rot_id is not None else compact_rot_idx
-        trans_idx = _get_by_suffix(payload, "acc_trans_idx")
-        coarse_trans_idx = _get_by_suffix(payload, "candidate_coarse_trans_idx")
-        prob = _get_by_suffix(payload, "candidate_weight_normalized")
+        trans_idx = generic_candidate_field("acc_trans_idx")
+        coarse_trans_idx = generic_candidate_field("candidate_coarse_trans_idx")
+        prob = generic_candidate_field("candidate_weight_normalized")
         if prob is None:
-            prob = _get_by_suffix(payload, "exp_Mweight_posterior")
-        score_pre = _get_by_suffix(payload, "exp_Mweight_raw_preprior")
-        rot_prior = _get_by_suffix(payload, "candidate_orientation_log_prior")
-        trans_prior = _get_by_suffix(payload, "candidate_offset_log_prior")
-        combined_prior = _get_by_suffix(payload, "candidate_combined_log_prior")
-        candidate_class_idx = _get_by_suffix(payload, "candidate_class_idx")
-        reconstruction_mask = _get_by_suffix(payload, "candidate_in_reconstruction_set")
+            prob = generic_candidate_field("exp_Mweight_posterior")
+        score_pre = generic_candidate_field("exp_Mweight_raw_preprior")
+        rot_prior = generic_candidate_field("candidate_orientation_log_prior")
+        trans_prior = generic_candidate_field("candidate_offset_log_prior")
+        combined_prior = generic_candidate_field("candidate_combined_log_prior")
+        candidate_class_idx = generic_candidate_field("candidate_class_idx")
+        reconstruction_mask = generic_candidate_field("candidate_in_reconstruction_set")
         firstiter_raw_preonehot = None
         if rot_idx is None:
             rot_idx = _get_by_suffix(payload, "firstiter_cc_raw_rot_idx", prefer_prefix="pass1")
