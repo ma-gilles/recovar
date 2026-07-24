@@ -5985,6 +5985,14 @@ same-device equivalence or numerical noise.
   the accepted case-2 and case-33 v6 update objects exactly (2/2).  The
   immutable v6 ledger remains
   `32c6512a8507f7b17a59d0be527fa5c9609067e0d8f598a2d108bed9a3fc8a56`.
+- CPU Slurm replay `11567015` completed `0:0` in 82 seconds after reading and
+  re-hashing the 78.6 GB of materialized case-2/case-33 particle stacks.  It
+  exercised the combined byte-hash and submission/case-table job binding at
+  clean source `93abcb91` and again reproduced both v6 update objects exactly.
+  Its report and launcher SHA-256 values are
+  `e75c27ebb0aae11453dbc5017cb2edc0778d2ef859745e6c1b873d34cbf8ffca`
+  and `b13a1d3e37765291fbfa03256664a2a43238d5f4704ff38cefa97bde074676ac`;
+  stderr is empty.
 - Focused validation is 14/14 passing; Ruff formatting/lint and mypy are
   clean; the generated scorecard check passes.  The new regressions mutate a
   materialized fixture without changing its size and confirm that proposal
