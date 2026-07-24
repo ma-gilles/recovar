@@ -435,7 +435,9 @@ Independent fail-closed audit `11573095` finds that iteration 11 has crossed
 the strict map gate: identity class assignments remain exact and all GT
 deltas are within `-0.000073031`, but class-2/class-3 cross-engine FSC-AUC is
 `0.994509131`/`0.994150545`, below `0.995`; class 1/4 remains
-`0.995505295`/`0.995592423`.  Iterations 9 and 10 are being audited to locate
+`0.995505295`/`0.995592423`.  Independent array audit `11573422` passes
+iterations 9 and 10 with identity assignments and respective minimum
+cross-engine FSC-AUC `0.995753485` and `0.995367310`, proving iteration 11 is
 the first failing boundary.
 Class agreement remains unmeasured until the terminal result exists.
 Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,

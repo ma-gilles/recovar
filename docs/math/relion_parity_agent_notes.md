@@ -6416,8 +6416,31 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_iteration11_early_fsc_20260724`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_iteration11_early_fsc_20260724`;
-  both contain `SAFE_TO_DELETE`.  Iterations 9 and 10 require independent
-  audits to locate the first failing boundary.
+  both contain `SAFE_TO_DELETE`.
+- Independent fail-closed array audit `11573422` brackets the first map failure
+  exactly.  Iteration 9 passes with identity assignment, classwise
+  cross-engine FSC-AUC
+  `0.996581803,0.996373177,0.995753485,0.996810831`, and worst GT delta
+  `-5.72845e-5`.  Iteration 10 passes with identity assignment, classwise
+  cross-engine FSC-AUC
+  `0.996370254,0.995522852,0.995367310,0.996596692`, and worst GT delta
+  `-6.58008e-5`.  The two tasks completed `0:0` in 300/236 seconds with
+  4,400,824/4,610,984 KiB maximum RSS.  Therefore numbered iteration 11 is
+  the first strict cross-engine map failure in this same-physical-GPU
+  trajectory.
+- Iteration-9/10 analysis JSON SHA-256 values are
+  `a6b70467b3f651b9cae1df5983ce9065ea6a654452bc00ef4a6a60b53b492daf`
+  and
+  `9e50e515a4215817e6c71163cb29f23fe1b423ea9b7d122f9a8462c466ddc1c4`.
+  Shared analyzer/launcher SHA-256 values are
+  `f97ef19fb74727aa8e076adb5321bde83ed21b2d6891ef5690b51d3ed4a49d06`
+  and
+  `34a95a5a38eab1064b3aaa73f1651569b75cc9883a8925b730da8c8d3b758858`.
+  Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_iteration9_10_early_fsc_20260724`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_iteration9_10_early_fsc_20260724`;
+  both contain `SAFE_TO_DELETE`.
 - Map-only early audit `11569628` completed `0:0` in 217 seconds with
   4,398,616 KiB maximum RSS.  Identity matching is selected for both
   RECOVAR-to-RELION and matched-pair-to-GT assignments.  Classwise
