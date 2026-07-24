@@ -6225,6 +6225,20 @@ same-device equivalence or numerical noise.
   and `a1f8f006706e205a8c056b89c7f3f7610f2620caca831b7f9d6c53e180ed61ee`.
   Runtime root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case5_late_shell_profile_20260724`.
+- Iteration 8 completed at current size 108, 24.73 Angstrom resolution, Pmax
+  `0.463344`, and next size 108.  Audit `11569355` completed `0:0` in
+  69 seconds with 2,018,832 KiB maximum RSS.  Merged cross-engine FSC-AUC
+  improves only from old `0.9999763860186208` to new
+  `0.9999770865953913`, about a 1.03-fold smaller defect.
+- Iteration-8 GT closeness improves: new RECOVAR/RELION FSC-AUC are
+  `0.10773940054308494`/`0.10772735678433272`, versus old
+  `0.1077489879376356`/`0.10772242824743296`.  RELION cross-run FSC-AUC is
+  `0.9999734868363788`, comparable to both cross-engine defects, so the small
+  old/new gain is observational rather than causal.  Audit stdout and
+  launcher SHA-256 values are
+  `20619a56023f0bb95ac0ec8fb4edab98a8d0fa09bb40f251eee20ff130b7f2fe`
+  and
+  `7586d4c40c0aed0417c37e563e4d061fb2ad08e55acc0ff981e52ecf25cf650d`.
 - This is a positive first-boundary generalization result, not a full-case
   acceptance.  Science `11564053` and strict audit `11564062` remain active or
   dependency-gated, so snapshot `strict-k1-v6-20260724` remains 25/34 strict,
@@ -6302,11 +6316,24 @@ same-device equivalence or numerical noise.
   `8cbccbbff28ae26c09f98793d9eb2a3b1f56e59abb051399681b1a7ecd72018c`;
   launcher SHA-256 is
   `0486343bf9ca4e2ef87704935caba5aac17458884d9b8137bd76f376758d5f91`.
+- Iteration 5 completed at current size 134, 15.11 Angstrom resolution, Pmax
+  `0.689431`, and next size 136.  Audit `11569324` completed `0:0` in
+  78 seconds with 2,224,940 KiB maximum RSS.  Merged cross-engine FSC-AUC
+  improves from old `0.9999463446317820` to new `0.9999720546013090`,
+  reducing the defect by about 1.92-fold.
+- GT closeness reverses strongly at iteration 5: new RECOVAR/RELION FSC-AUC
+  are `0.279917626085553`/`0.27985627767746785`, versus old
+  `0.2798082576477501`/`0.27981080861832763`.  The cross-engine gain alone
+  therefore cannot establish quality acceptance.  RELION cross-run FSC-AUC
+  is `0.9999901012568425`.  Audit stdout and launcher SHA-256 values are
+  `e7badba2501aad48d8357976920e5b295803e7dc1ee8e27534eec0c30eae07b1`
+  and
+  `f115f4e6dddd6b8b377806b31a71717863f657dcb94f91816bd96b4407028c27`.
 - This is strong first-boundary evidence, not a full-case acceptance.
   Science `11563827` and strict audit `11563842` remain active or
   dependency-gated, so the fixed score remains 25/34.
 
-# 2026-07-24: K=4 same-GPU trajectory reaches iteration 6
+# 2026-07-24: K=4 same-GPU trajectory reaches iteration 7
 
 - Source-bound science `11565045` runs commit
   `9dcd709b56a28a6f361806b57f5b20aaad3ebeed` on physical A100
@@ -6327,6 +6354,10 @@ same-device equivalence or numerical noise.
   `0.920524`, and HEALPix order 1; the scheduler selected size 68 for
   iteration 7.  The vector and scalar auditors remain dependency-gated, so
   this is trajectory telemetry rather than an acceptance claim.
+- Iteration 7 completed at current size 68, 21.76 Angstrom resolution, Pmax
+  `0.909746`, and HEALPix order 1; the scheduler selected size 70 for
+  iteration 8.  This size/resolution/order boundary matches the corrected
+  `c390f8bf` trajectory, whose first strict map failure was only iteration 8.
 - The science job is healthy, while vector audit `11565121` and independent
   scalar audit `11565131` remain dependency-gated.  No K=4 acceptance or K=1
   score change is claimed before those fail-closed auditors finish.

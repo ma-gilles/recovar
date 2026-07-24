@@ -300,6 +300,12 @@ old/new delta is not isolated from physical-GPU/run drift.  The intervention
 does not dominate the old trajectory at every boundary.  These are still
 numbered-boundary diagnostics, not a terminal acceptance.
 
+Iteration 8 improves only slightly, from `0.999976386019` to
+`0.999977086595` (about a 1.03-fold smaller defect), while GT closeness
+improves.  RELION cross-run FSC-AUC is `0.999973486836`, again comparable to
+the within-pair defects.  This late delta is observational rather than a
+causal acceptance signal.
+
 Shell-profile audit `11569181` localizes `94.6%` of the iteration-6 negative
 AUC delta to shells 1--64, with the largest losses at shells 53--56 rather
 than the high-shell tail.  RELION cross-run FSC at those four shells is only
@@ -324,14 +330,16 @@ defect), although GT closeness worsens.  Audit `11568516` shows that iteration
 3 improves from `0.999993389833` to `0.999997980427`, about a 3.27-fold
 smaller defect, while GT closeness improves again.  Iteration 4 also improves
 from `0.999976663509` to `0.999991309525`, about a 2.69-fold smaller defect,
-with a strong GT-closeness gain.  This is strong numbered-boundary evidence,
+with a strong GT-closeness gain.  Iteration 5 improves cross-engine FSC-AUC
+from `0.999946344632` to `0.999972054601` (about a 1.92-fold smaller defect),
+but GT closeness worsens sharply.  This is mixed numbered-boundary evidence,
 not a terminal pass; science `11563827` and strict audit `11563842` remain
 active or dependency-gated.
 
-The same-GPU K=4 science job `11565045` has completed iterations 1--6 with
-sizes `38,38,42,56,60,62`, resolutions
-`60.44,49.45,30.22,27.20,25.90,22.67` Angstrom, and iteration-6 Pmax
-`0.920524`; iteration 7 starts at size 68.  This exact size/resolution
+The same-GPU K=4 science job `11565045` has completed iterations 1--7 with
+sizes `38,38,42,56,60,62,68`, resolutions
+`60.44,49.45,30.22,27.20,25.90,22.67,21.76` Angstrom, and iteration-7 Pmax
+`0.909746`; iteration 8 starts at size 70.  This exact size/resolution
 topology matches both prior corrected `c390f8bf` diagnostic trajectories
 through this boundary.
 Vector audit `11565121` and scalar audit `11565131` remain dependency-gated,
