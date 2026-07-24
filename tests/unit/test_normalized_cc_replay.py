@@ -237,6 +237,35 @@ def test_relion_coarse_exact_tie_uses_direction_major_flat_order():
     assert tie_count == 1
 
 
+def test_relion_coarse_tie_order_maps_subset_rotation_ids():
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _relion_coarse_pose_tie_break_keys,
+        _select_relion_coarse_rescore_winner_slots,
+    )
+
+    canonical_rotation_ids = np.asarray([32933, 33690], dtype=np.int64)
+    local_candidate_pose_ids = np.asarray([[24, 49]], dtype=np.int64)
+    keys = _relion_coarse_pose_tie_break_keys(
+        local_candidate_pose_ids,
+        n_trans=29,
+        healpix_order=3,
+        coarse_rotation_ids=canonical_rotation_ids,
+    )
+    np.testing.assert_array_equal(
+        keys,
+        np.asarray([[943626, 928339]], dtype=np.int64),
+    )
+    slots, tie_count = _select_relion_coarse_rescore_winner_slots(
+        np.asarray([[0.27847832441329956, 0.27847832441329956]], dtype=np.float32),
+        local_candidate_pose_ids,
+        n_trans=29,
+        healpix_order=3,
+        coarse_rotation_ids=canonical_rotation_ids,
+    )
+    np.testing.assert_array_equal(slots, np.asarray([1], dtype=np.int32))
+    assert tie_count == 1
+
+
 def test_reduction_order_can_flip_near_tie_while_float64_agrees():
     # A's exact sum is 1e-7, but a flat float32 fold loses it between the two
     # 1e8 terms.  RELION's lane tree combines the cancelling terms before the
