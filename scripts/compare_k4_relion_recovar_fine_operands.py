@@ -618,6 +618,17 @@ def compare(
         exact_replay_metric["max_abs"] <= 1e-12,
         "production-exact candidate operand replay no longer closes score boundary",
     )
+    production_exact_centered_counterfactual = _component_counterfactual(
+        relion_raw_array[production_replay_exact_mask],
+        all_recovar_raw_array[production_replay_exact_mask],
+        {
+            name: np.asarray(records, dtype=np.float32)[
+                production_replay_exact_mask
+            ]
+            for name, records in substituted_raw.items()
+        },
+        center_deltas=True,
+    )
     rotation_direct = _metric(capture.candidates[0]["matrix"], recovar_rotation.reshape(-1))
     rotation_transpose = _metric(
         capture.candidates[0]["matrix"], recovar_rotation.T.reshape(-1)
@@ -627,7 +638,7 @@ def compare(
         "_dominates_centered_fine_operand_residual"
     )
     return {
-        "schema": "k4_relion_recovar_fine_operand_comparison_v5",
+        "schema": "k4_relion_recovar_fine_operand_comparison_v6",
         "status": "complete",
         "classification": classification,
         "capture_validation": validation,
@@ -713,6 +724,9 @@ def compare(
             ),
             "production_exact_candidates_recentered_replay_vs_production": (
                 exact_replay_metric
+            ),
+            "production_exact_candidates_centered_component_counterfactual": (
+                production_exact_centered_counterfactual
             ),
             "classification": (
                 "operand_replay_closes_all_production_exact_candidates; "
