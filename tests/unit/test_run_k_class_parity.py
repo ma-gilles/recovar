@@ -359,6 +359,16 @@ def test_k_class_replay_supports_stop_after_pass2_dump_diagnostic():
     assert "Pass2DumpComplete" in module_source
 
 
+def test_k_class_replay_exposes_image_fourier_backend_control():
+    import scripts.run_k_class_parity as run_k_class_parity
+
+    source = inspect.getsource(run_k_class_parity.main)
+
+    assert "--image-fourier-backend" in source
+    assert 'choices=("host_numpy", "jax_gpu", "relion_cuda")' in source
+    assert "backend.set_relion_fourier_backend(args.image_fourier_backend)" in source
+
+
 def test_k_class_replay_uses_exact_relion_projector_for_scoring():
     import scripts.run_k_class_parity as run_k_class_parity
 

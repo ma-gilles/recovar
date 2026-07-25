@@ -1071,6 +1071,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--image-fourier-backend",
+        choices=("host_numpy", "jax_gpu", "relion_cuda"),
+        default="host_numpy",
+        help=(
+            "Select the packed-half image preprocessing backend. The default "
+            "preserves the production host NumPy path; alternate modes are "
+            "intended for bounded parity diagnostics."
+        ),
+    )
+    parser.add_argument(
         "--stop-after-pass2-dump",
         action="store_true",
         help=(
@@ -1192,6 +1202,10 @@ def main() -> None:
 
         backend.image_mask = relion_soft_image_mask(grid_size, ds.voxel_size, particle_diameter, 5)
         backend.image_mask_mode = "relion_background_fill"
+    if not hasattr(backend, "set_relion_fourier_backend"):
+        raise ValueError("Dataset backend does not support image Fourier backend selection")
+    backend.set_relion_fourier_backend(args.image_fourier_backend)
+    print(f"  image Fourier backend: {args.image_fourier_backend}")
 
     n4 = grid_size**4
     noise_spectrum = np.asarray(prev_model["model_optics_group_1"]["rlnSigma2Noise"], dtype=np.float64)
