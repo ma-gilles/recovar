@@ -127,3 +127,14 @@ def test_pixel_rows_use_centered_packed_y_coordinates():
     rows = comparator._pixel_rows(capture, compact)
 
     np.testing.assert_array_equal(rows, [0, 11])
+
+
+def test_relion_rotation_matrix_converts_column_major_capture_layout():
+    rotations = np.zeros(1, dtype=validator.ROTATION_DTYPE)
+    rotations["matrix"][0] = np.arange(9, dtype=np.float32)
+    capture = SimpleNamespace(rotations=rotations)
+
+    np.testing.assert_array_equal(
+        comparator._relion_rotation_matrix(capture, 0),
+        np.arange(9, dtype=np.float32).reshape(3, 3).T,
+    )

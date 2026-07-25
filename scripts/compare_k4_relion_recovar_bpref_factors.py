@@ -247,6 +247,12 @@ def _target_terms(capture: FactorCapture, orientation: int, translation: int, pi
     return selected[pixel_rows]
 
 
+def _relion_rotation_matrix(capture: FactorCapture, orientation: int) -> np.ndarray:
+    """Convert RELION's column-major capture record to RECOVAR matrix layout."""
+
+    return capture.rotations["matrix"][orientation].reshape(3, 3).T
+
+
 def _append(operands: dict[str, list[np.ndarray]], name: str, relion: np.ndarray, recovar: np.ndarray) -> None:
     operands[f"{name}_relion"].append(np.asarray(relion).reshape(-1))
     operands[f"{name}_recovar"].append(np.asarray(recovar).reshape(-1))
@@ -328,7 +334,7 @@ def compare(
                 )
                 active = int(active_rows[0])
                 geometry = _metric(
-                    capture.rotations["matrix"][relion_orientation].reshape(3, 3),
+                    _relion_rotation_matrix(capture, relion_orientation),
                     values["active_rotations"][active],
                 )
                 _require(
