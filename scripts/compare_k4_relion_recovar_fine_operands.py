@@ -155,16 +155,22 @@ def _component_counterfactual(
     relion_raw: np.ndarray,
     all_recovar_raw: np.ndarray,
     substituted_raw: dict[str, np.ndarray],
+    *,
+    center_deltas: bool = False,
 ) -> dict[str, object]:
     target_delta = np.asarray(all_recovar_raw, dtype=np.float64) - np.asarray(
         relion_raw, dtype=np.float64
     )
+    if center_deltas:
+        target_delta = target_delta - np.mean(target_delta)
     baseline_energy = float(np.vdot(target_delta, target_delta).real)
     records = {}
     for name, values in substituted_raw.items():
         component_delta = np.asarray(values, dtype=np.float64) - np.asarray(
             relion_raw, dtype=np.float64
         )
+        if center_deltas:
+            component_delta = component_delta - np.mean(component_delta)
         residual = target_delta - component_delta
         residual_energy = float(np.vdot(residual, residual).real)
         records[name] = {
@@ -179,6 +185,7 @@ def _component_counterfactual(
         key=lambda name: records[name]["target_delta_energy_removed_fraction"],
     )
     return {
+        "deltas_centered": center_deltas,
         "single_component_substitution": records,
         "strongest_single_component": strongest,
         "strongest_target_delta_energy_removed_fraction": records[strongest][
@@ -323,10 +330,11 @@ def compare(
     n2 = np.float32(physical_image_size**2)
     n4 = np.float32(physical_image_size**4)
     captured_pixels = capture.pixels.reshape(capture.candidates.size, capture.image_size)
-    recovar_reference_full = np.zeros(capture.image_size, dtype=np.complex64)
-    recovar_reference_full[supported_full] = (
+    recovar_reference_native_full = np.zeros(capture.image_size, dtype=np.complex64)
+    recovar_reference_native_full[supported_full] = (
         projected_compact[supported_compact] / n2
     ).astype(np.complex64)
+    recovar_reference_aligned_full = -recovar_reference_native_full
     recovar_corr_full = np.zeros(capture.image_size, dtype=np.float32)
     recovar_corr_full[supported_full] = (
         recovar_corr_compact[supported_compact] * n4
@@ -353,10 +361,11 @@ def compare(
             physical_image_size,
         )
         alignment_errors.append(translation_error)
-        recovar_shifted_full = np.zeros(capture.image_size, dtype=np.complex64)
-        recovar_shifted_full[supported_full] = (
+        recovar_shifted_native_full = np.zeros(capture.image_size, dtype=np.complex64)
+        recovar_shifted_native_full[supported_full] = (
             base_shifted[supported_compact] * phases[translation_index, supported_compact] / n2
         ).astype(np.complex64)
+        recovar_shifted_aligned_full = -recovar_shifted_native_full
         relion_reference = (
             captured_pixels[target]["reference_real"]
             + 1j * captured_pixels[target]["reference_imag"]
@@ -371,20 +380,20 @@ def compare(
         )
         sum_init = np.float32(candidate["sum_init"])
         recovar_score, recovar_contribution, recovar_lanes = _tree_raw_diff2(
-            recovar_reference_full,
-            recovar_shifted_full,
+            recovar_reference_aligned_full,
+            recovar_shifted_aligned_full,
             recovar_corr_full,
             sum_init,
         )
         reference_score, _, _ = _tree_raw_diff2(
-            recovar_reference_full,
+            recovar_reference_aligned_full,
             relion_shifted,
             relion_corr,
             sum_init,
         )
         shifted_score, _, _ = _tree_raw_diff2(
             relion_reference,
-            recovar_shifted_full,
+            recovar_shifted_aligned_full,
             relion_corr,
             sum_init,
         )
@@ -403,7 +412,7 @@ def compare(
         operands["reference_recovar"].append(projected_compact[supported_compact])
         operands["shifted_image_relion"].append(relion_shifted[supported_full] * n2)
         operands["shifted_image_recovar"].append(
-            recovar_shifted_full[supported_full] * n2
+            recovar_shifted_native_full[supported_full] * n2
         )
         operands["corr_relion"].append(relion_corr[supported_full] / n4)
         operands["corr_recovar"].append(recovar_corr_compact[supported_compact])
@@ -466,7 +475,7 @@ def compare(
     dc_supported_row = int(dc_supported_rows[0])
     dc_full_row = int(supported_full[dc_supported_row])
 
-    counterfactual = _component_counterfactual(
+    raw_counterfactual = _component_counterfactual(
         relion_raw_array,
         all_recovar_raw_array,
         {
@@ -474,15 +483,25 @@ def compare(
             for name, records in substituted_raw.items()
         },
     )
+    centered_counterfactual = _component_counterfactual(
+        relion_raw_array,
+        all_recovar_raw_array,
+        {
+            name: np.asarray(records, dtype=np.float32)
+            for name, records in substituted_raw.items()
+        },
+        center_deltas=True,
+    )
     rotation_direct = _metric(capture.candidates[0]["matrix"], recovar_rotation.reshape(-1))
     rotation_transpose = _metric(
         capture.candidates[0]["matrix"], recovar_rotation.T.reshape(-1)
     )
     classification = (
-        f"{counterfactual['strongest_single_component']}_dominates_exact_fine_operand_residual"
+        f"{centered_counterfactual['strongest_single_component']}"
+        "_dominates_centered_fine_operand_residual"
     )
     return {
-        "schema": "k4_relion_recovar_fine_operand_comparison_v2",
+        "schema": "k4_relion_recovar_fine_operand_comparison_v3",
         "status": "complete",
         "classification": classification,
         "capture_validation": validation,
@@ -549,7 +568,8 @@ def compare(
                 "centered Gaussian data score is the negative of centered raw diff2"
             ),
         },
-        "raw_diff2_component_counterfactual": counterfactual,
+        "raw_diff2_component_counterfactual": raw_counterfactual,
+        "centered_raw_diff2_component_counterfactual": centered_counterfactual,
         "candidates": candidate_rows,
     }
 

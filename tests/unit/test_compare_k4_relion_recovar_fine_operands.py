@@ -51,6 +51,27 @@ def test_fine_operand_counterfactual_identifies_reference_component():
     assert report["strongest_target_delta_energy_removed_fraction"] == 1.0
 
 
+def test_fine_operand_counterfactual_can_remove_common_score_offsets():
+    relion = np.asarray([10, 20, 30], dtype=np.float32)
+    all_recovar = np.asarray([111, 118, 133], dtype=np.float32)
+    substitutions = {
+        "reference": np.asarray([110, 120, 130], dtype=np.float32),
+        "shifted_image": all_recovar.copy(),
+        "corr": relion.copy(),
+    }
+
+    report = _component_counterfactual(
+        relion,
+        all_recovar,
+        substitutions,
+        center_deltas=True,
+    )
+
+    assert report["deltas_centered"] is True
+    assert report["strongest_single_component"] == "shifted_image"
+    assert report["strongest_target_delta_energy_removed_fraction"] == 1.0
+
+
 def test_fine_operand_metric_reports_directional_delta():
     report = _metric(
         np.asarray([1 + 1j, 2 + 0j], dtype=np.complex64),
