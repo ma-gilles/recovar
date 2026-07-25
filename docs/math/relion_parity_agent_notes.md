@@ -6792,6 +6792,29 @@ same-device equivalence or numerical noise.
   final-after-max were unset. Snapshot `strict-k1-v6-20260724` remains 25/34
   strict, 31/34 exact topology, and 34/34 evaluated.
 
+# 2026-07-25: full K=4 preprocessing trajectory gate launched
+
+- Same-A100 science `11600592` runs complete 15-iteration `host_numpy` and
+  `relion_cuda` K=4 trajectories sequentially from clean detached commit
+  `4181d340997e548af36c6458cce825e133dba95a`. CPU audit `11600593` has
+  dependency `afterok:11600592`.
+- Both arms use the immutable accepted RELION 15-iteration trajectory and its
+  exact dispatch schedule. Grid correction and forced final all-data after
+  non-convergence are unset.
+- The fixed comparison reports direct FSC-AUC gates passed out of 60
+  `(iteration, class)` checks at threshold `0.995`, iterations with all four
+  classes passing out of 15, minimum class agreement, minimum GT FSC-AUC
+  delta, exact topology, and same-GPU wall time. Correlation is not used.
+- `scripts/compare_k4_backend_trajectories.py` makes this count reproducible
+  from the two standard FSC/topology audits and rejects cross-GPU inputs.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_host_relioncuda_samegpu_4181d340_20260725T051500ET`.
+  Runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_full15_host_relioncuda_samegpu_4181d340_20260725T051500ET`.
+  Both contain `SAFE_TO_DELETE`.
+- This pending K=4 metric does not alter `strict-k1-v6-20260724`: 25/34
+  strict, 31/34 exact topology, and 34/34 evaluated.
+
 # Current K=4 status (2026-07-25): fine operands close to shifted-image preprocessing
 
 This status summary precedes the detailed capture and factor audit log below.

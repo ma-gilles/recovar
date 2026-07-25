@@ -9353,6 +9353,33 @@ forced final-after-max were unset.
 No frozen K=1 case is promoted. Snapshot `strict-k1-v6-20260724` remains
 25/34 strict, 31/34 exact topology, and 34/34 evaluated.
 
+### Full K=4 backend trajectory gate
+
+The score-boundary result is now promoted to the required trajectory-level
+experiment without changing production defaults. Same-A100 science job
+`11600592` runs 15 autonomous K=4 numbered iterations first with
+`host_numpy`, then with `relion_cuda`, from clean detached commit
+`4181d340997e548af36c6458cce825e133dba95a`. Dependent CPU audit
+`11600593` checks exact dispatch/schedule/convergence/finalization topology
+and computes shellwise FSC/FSC-AUC plus class-assignment agreement against the
+immutable accepted RELION trajectory.
+
+The fixed K=4 acceptance count is the number of `(iteration, class)` direct
+cross-engine FSC-AUC checks at or above `0.995`: 60 checks over 15 iterations
+and four classes. The audit also records how many iterations pass all four
+class gates, the minimum class agreement, the minimum GT FSC-AUC delta, and
+same-physical-GPU wall time. Script
+`scripts/compare_k4_backend_trajectories.py` compares those counts
+fail-closed and rejects cross-GPU pairs. It does not use map correlation.
+
+Science and audit run from
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_host_relioncuda_samegpu_4181d340_20260725T051500ET`;
+runtime/cache state is isolated under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_full15_host_relioncuda_samegpu_4181d340_20260725T051500ET`.
+Both roots contain `SAFE_TO_DELETE`. Grid correction and forced final
+all-data after non-convergence are unset. This pending K=4 count complements
+but does not alter frozen K=1 snapshot `strict-k1-v6-20260724`.
+
 ### Current K=4 status: production fine operands close the score boundary
 
 This status summary precedes the detailed seed-exact causal log below.
