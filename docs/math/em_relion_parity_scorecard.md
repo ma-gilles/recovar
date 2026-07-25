@@ -339,12 +339,13 @@ and
 This is localization evidence, not an FSC checkbox.  A passive RELION capture
 of the two raw fine costs and their compact indices is required before a
 production tie rule is justified.  Exact-physical-H100 discriminator
-`11602654` is submitted for that purpose, with fail-closed launcher SHA-256
-`be7f24361c8beb8205030a75f62d8d3f4285efd431ebdb7a13392402f75ddd3d`.
+`11602720` is submitted for that purpose, with fail-closed launcher SHA-256
+`94db8675962d37e1ab28cb2a20a95605bec7a31682fedaa4c118aa7d43cbc4b8`.
 Before accepting the fine comparison, it requires exact identity-aligned
 stock-versus-dump-enabled RELION iteration-1 poses, translations, class, Pmax,
-and significant-support counts for all 100,000 particles.  Superseded pending
-job `11602588` was cancelled before execution.
+and significant-support counts for all 100,000 particles, then maps the
+eight-rotation fine panels by Euler matrices.  Superseded pending jobs
+`11602588` and `11602654` were cancelled before execution.
 The frozen score remains
 25/34 strict, 31/34 topology, and 34/34 evaluated.
 
