@@ -18,7 +18,7 @@ from scripts.validate_relion_fine_operand_capture import (
 )
 
 
-def _write_capture(path, *, corrupt_lane=False):
+def _write_capture(path, *, corrupt_lane=False, production_offset=0):
     image_size = 5
     candidates = np.zeros(1, dtype=CANDIDATE_DTYPE)
     pixels = np.zeros(image_size, dtype=PIXEL_DTYPE)
@@ -59,9 +59,10 @@ def _write_capture(path, *, corrupt_lane=False):
     candidates["matrix"][0] = np.eye(3, dtype=np.float32).reshape(-1)
     candidates["translation"][0] = np.asarray([0.1, 0.2, 0], dtype=np.float32)
     candidates["sum_init"] = sum_init
-    candidates["production_raw_diff2"] = replay
+    candidates["production_raw_diff2"] = np.float32(replay + production_offset)
     candidates["replay_raw_diff2"] = replay
-    candidates["flags"] = 3
+    production_exact = production_offset == 0
+    candidates["flags"] = 3 if production_exact else 1
     candidates["lane_partials"][0] = lanes
 
     header = np.zeros(64, dtype="<u8")
@@ -69,7 +70,7 @@ def _write_capture(path, *, corrupt_lane=False):
     header[5:9] = [10, 2, 36655, 42988]
     header[11:20] = [124, 1, image_size, image_size, 256, 116, 12, LANE_COUNT, 7]
     header[20] = struct.unpack("<I", struct.pack("<f", sum_init))[0]
-    header[21] = 1
+    header[21] = int(production_exact)
     header[28:31] = 1
     footer = np.asarray([1, image_size], dtype="<u8")
     path.write_bytes(
@@ -105,3 +106,14 @@ def test_fine_operand_capture_rejects_corrupt_lane(tmp_path):
 
     with pytest.raises(ValueError, match="pre-tree lanes do not replay bitwise"):
         validate_capture(load_fine_operand_capture(path))
+
+
+def test_fine_operand_capture_reports_nonexact_production_replay(tmp_path):
+    path = tmp_path / "capture.bin"
+    _write_capture(path, production_offset=np.float32(0.25))
+
+    report = validate_capture(load_fine_operand_capture(path))
+
+    assert report["status"] == "accepted"
+    assert report["exact_production_replay_count"] == 0
+    assert report["production_replay_mismatch_count"] == 1

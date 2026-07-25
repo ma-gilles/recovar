@@ -33,6 +33,7 @@ from recovar.utils import helpers
 if __package__:
     from .compare_k4_relion_recovar_bpref_factors import _compact_indices
     from .validate_relion_fine_operand_capture import (
+        _cuda_fine_contribution,
         _reduce_lanes,
         _replay_lanes,
         load_fine_operand_capture,
@@ -43,6 +44,7 @@ else:
         _compact_indices,
     )
     from validate_relion_fine_operand_capture import (  # type: ignore[no-redef]
+        _cuda_fine_contribution,
         _reduce_lanes,
         _replay_lanes,
         load_fine_operand_capture,
@@ -113,16 +115,7 @@ def _tree_raw_diff2(
     corr = np.asarray(corr, dtype=np.float32)
     diff_real = np.subtract(reference.real, shifted.real, dtype=np.float32)
     diff_imag = np.subtract(reference.imag, shifted.imag, dtype=np.float32)
-    squared = np.add(
-        np.multiply(diff_real, diff_real, dtype=np.float32),
-        np.multiply(diff_imag, diff_imag, dtype=np.float32),
-        dtype=np.float32,
-    )
-    contribution = np.multiply(
-        np.multiply(squared, np.float32(0.5), dtype=np.float32),
-        corr,
-        dtype=np.float32,
-    )
+    contribution = _cuda_fine_contribution(diff_real, diff_imag, corr)
     lanes = _replay_lanes(contribution)
     raw_diff2 = np.float32(_reduce_lanes(lanes) + np.float32(sum_init))
     return raw_diff2, contribution, lanes
