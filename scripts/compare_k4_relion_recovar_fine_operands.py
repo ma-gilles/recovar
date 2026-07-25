@@ -14,10 +14,17 @@ import numpy as np
 
 from recovar.core.ctf import _compute_spa_ctf
 from recovar.cuda_backproject import relion_preprocess_real_f32
-from recovar.data_io.image_backends import _centered_rfft2_jax
+from recovar.data_io.image_backends import (
+    _apply_relion_soft_image_mask_numpy,
+    _centered_rfft2_jax,
+    _centered_rfft2_numpy,
+)
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_scoring_half_image_weights,
     make_shell_indices_half,
+)
+from recovar.em.dense_single_volume.helpers.image_shifts import (
+    apply_relion_integer_pre_shifts,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block,
@@ -114,6 +121,75 @@ def _zero_dc_compact_score_weight(
     result = values.copy()
     result[..., dc_mask] = np.asarray(0, dtype=result.dtype)
     return result, dc_mask
+
+
+def _direct_score_image_factor(
+    *,
+    relion_cuda_preprocess: bool,
+    image_correction: np.float32,
+    scale_correction: np.float32,
+) -> np.float32:
+    scale = np.float32(scale_correction)
+    factor = np.float32(1.0) / scale
+    if not relion_cuda_preprocess:
+        factor = np.float32(
+            factor * np.float32(np.float32(image_correction) / scale)
+        )
+    return factor
+
+
+def _reconstruct_processed_score_half(
+    values: dict[str, np.ndarray],
+    *,
+    particle_diameter_angstrom: float,
+    mask_edge_pixels: float,
+) -> tuple[np.ndarray | jax.Array, str]:
+    raw = np.asarray(values["raw_real_images"], dtype=np.float32)
+    normalization = np.asarray(
+        values["relion_preprocess_normalization_factors"], dtype=np.float32
+    )
+    integer_shifts = np.asarray(values["integer_pre_shifts"], dtype=np.int32)
+    relion_cuda = bool(np.asarray(values["relion_cuda_preprocess"]).item())
+    backend = str(np.asarray(values["preprocess_backend"]).item())
+    _require(
+        relion_cuda == (backend == "relion_cuda"),
+        "RECOVAR preprocessing flag and backend disagree",
+    )
+    score_with_mask = bool(np.asarray(values["score_with_masked_images"]).item())
+    if relion_cuda:
+        radius = float(particle_diameter_angstrom) / (
+            2.0 * float(np.asarray(values["voxel_size"]).item())
+        )
+        _, processed_real = relion_preprocess_real_f32(
+            jnp.asarray(raw),
+            jnp.asarray(normalization),
+            jnp.asarray(integer_shifts),
+            radius,
+            float(mask_edge_pixels),
+            score_with_mask,
+        )
+        processed = _centered_rfft2_jax(processed_real)
+        return processed.reshape(processed.shape[0], -1).astype(jnp.complex64), backend
+
+    _require(
+        np.array_equal(normalization, np.ones_like(normalization)),
+        "dataset-native capture unexpectedly stored active RELION normalization",
+    )
+    processed_real = apply_relion_integer_pre_shifts(raw, integer_shifts)
+    if score_with_mask:
+        image_mask = np.asarray(values["image_mask"], dtype=np.float32)
+        mask_mode = str(np.asarray(values["image_mask_mode"]).item())
+        if mask_mode == "relion_background_fill":
+            processed_real = _apply_relion_soft_image_mask_numpy(
+                processed_real,
+                image_mask,
+            )
+        elif mask_mode == "multiply":
+            processed_real = processed_real * image_mask[None, :, :]
+        else:
+            raise ValueError(f"unsupported captured image mask mode {mask_mode!r}")
+    processed = _centered_rfft2_numpy(processed_real)
+    return processed.reshape(processed.shape[0], -1).astype(np.complex64), backend
 
 
 def _infer_current_size(image_size: int) -> int:
@@ -264,23 +340,11 @@ def compare(
     projected = np.asarray(jax.block_until_ready(projected), dtype=np.complex64)[0]
     projected_compact = projected[compact_indices]
 
-    raw = jnp.asarray(values["raw_real_images"], dtype=jnp.float32)
-    normalization = jnp.asarray(
-        values["relion_preprocess_normalization_factors"], dtype=jnp.float32
+    processed, preprocess_backend = _reconstruct_processed_score_half(
+        values,
+        particle_diameter_angstrom=particle_diameter_angstrom,
+        mask_edge_pixels=mask_edge_pixels,
     )
-    integer_shifts = jnp.asarray(values["integer_pre_shifts"], dtype=jnp.int32)
-    radius = float(particle_diameter_angstrom) / (
-        2.0 * float(np.asarray(values["voxel_size"]).item())
-    )
-    _, masked = relion_preprocess_real_f32(
-        raw,
-        normalization,
-        integer_shifts,
-        radius,
-        float(mask_edge_pixels),
-        True,
-    )
-    processed = _centered_rfft2_jax(masked).reshape(masked.shape[0], -1).astype(jnp.complex64)
     ctf = _compute_spa_ctf(
         jnp.asarray(values["ctf_params"], dtype=jnp.float32),
         image_shape,
@@ -293,8 +357,18 @@ def compare(
     noise_compact = jnp.asarray(values["noise_variance_half"], dtype=jnp.float32)[
         compact_device
     ]
-    scale = jnp.asarray(values["scale_corrections"], dtype=jnp.float32)
-    base_shifted = processed_compact[particle] / scale[particle]
+    scale = np.asarray(values["scale_corrections"], dtype=np.float32)
+    image_correction = np.asarray(values["image_corrections"], dtype=np.float32)
+    direct_score_factor = _direct_score_image_factor(
+        relion_cuda_preprocess=bool(
+            np.asarray(values["relion_cuda_preprocess"]).item()
+        ),
+        image_correction=np.float32(image_correction[particle]),
+        scale_correction=np.float32(scale[particle]),
+    )
+    base_shifted = processed_compact[particle] * jnp.asarray(
+        direct_score_factor, dtype=jnp.float32
+    )
     base_shifted = jnp.where(
         jnp.abs(ctf_compact[particle]) > jnp.float32(1e-8),
         base_shifted / ctf_compact[particle],
@@ -313,7 +387,7 @@ def compare(
     recovar_corr_compact = (
         ctf_compact[particle] ** 2
         / noise_compact
-        * scale[particle] ** 2
+        * jnp.asarray(scale[particle], dtype=jnp.float32) ** 2
         * half_weights
     ).astype(jnp.float32)
     base_shifted = np.asarray(jax.block_until_ready(base_shifted), dtype=np.complex64)
@@ -501,7 +575,7 @@ def compare(
         "_dominates_centered_fine_operand_residual"
     )
     return {
-        "schema": "k4_relion_recovar_fine_operand_comparison_v3",
+        "schema": "k4_relion_recovar_fine_operand_comparison_v4",
         "status": "complete",
         "classification": classification,
         "capture_validation": validation,
@@ -526,6 +600,8 @@ def compare(
             "projector_r_max": int(projector_r_max),
             "particle_diameter_angstrom": particle_diameter_angstrom,
             "mask_edge_pixels": mask_edge_pixels,
+            "recovar_preprocess_backend": preprocess_backend,
+            "recovar_direct_score_image_factor": float(direct_score_factor),
             "rotation_matrix_direct": rotation_direct,
             "rotation_matrix_transpose": rotation_transpose,
             "max_translation_alignment_abs": max(alignment_errors),

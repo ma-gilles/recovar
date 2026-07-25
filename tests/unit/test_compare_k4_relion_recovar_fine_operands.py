@@ -2,6 +2,7 @@ import numpy as np
 
 from scripts.compare_k4_relion_recovar_fine_operands import (
     _component_counterfactual,
+    _direct_score_image_factor,
     _infer_current_size,
     _metric,
     _metric_up_to_global_sign,
@@ -107,3 +108,24 @@ def test_fine_operand_score_weight_applies_production_dc_zero():
 
     np.testing.assert_array_equal(dc_mask, np.asarray([True, False, False, False]))
     np.testing.assert_array_equal(result, np.asarray([0, 2, 3, 4], dtype=np.float32))
+
+
+def test_fine_operand_direct_score_factor_tracks_preprocess_backend():
+    image_correction = np.float32(0.99644595)
+    scale_correction = np.float32(0.993949)
+
+    relion_cuda = _direct_score_image_factor(
+        relion_cuda_preprocess=True,
+        image_correction=image_correction,
+        scale_correction=scale_correction,
+    )
+    dataset_native = _direct_score_image_factor(
+        relion_cuda_preprocess=False,
+        image_correction=image_correction,
+        scale_correction=scale_correction,
+    )
+
+    assert relion_cuda == np.float32(1.0) / scale_correction
+    assert dataset_native == np.float32(
+        relion_cuda * np.float32(image_correction / scale_correction)
+    )
