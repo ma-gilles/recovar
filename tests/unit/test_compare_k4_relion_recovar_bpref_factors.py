@@ -29,7 +29,11 @@ def test_scalar_rotation_records_are_identity_bound(tmp_path):
                     {
                         "recovar_global_rotation_index": 123,
                         "relion_rotation_local_row": 7,
-                    }
+                    },
+                    {
+                        "recovar_global_rotation_index": 124,
+                        "relion_rotation_local_row": 8,
+                    },
                 ],
             },
             {
@@ -47,8 +51,8 @@ def test_scalar_rotation_records_are_identity_bound(tmp_path):
     path.write_text(json.dumps(report))
 
     assert comparator._scalar_rotation_records(path, [23, 17]) == {
-        17: (123, 7),
-        23: (456, 9),
+        17: ((123, 7), (124, 8)),
+        23: ((456, 9),),
     }
 
 
@@ -81,9 +85,7 @@ def test_pixel_rows_use_centered_packed_y_coordinates():
     compact = np.asarray(
         [
             (comparator.PHYSICAL_IMAGE_SIZE // 2) * (comparator.PHYSICAL_IMAGE_SIZE // 2 + 1),
-            (comparator.PHYSICAL_IMAGE_SIZE // 2 - 1)
-            * (comparator.PHYSICAL_IMAGE_SIZE // 2 + 1)
-            + 2,
+            (comparator.PHYSICAL_IMAGE_SIZE // 2 - 1) * (comparator.PHYSICAL_IMAGE_SIZE // 2 + 1) + 2,
         ]
     )
 

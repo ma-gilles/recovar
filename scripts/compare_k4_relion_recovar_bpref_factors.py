@@ -87,30 +87,32 @@ def _compact_indices(values: dict[str, np.ndarray]) -> np.ndarray:
     return centered
 
 
-def _scalar_rotation_records(path: Path, stacks: list[int]) -> dict[int, tuple[int, int]]:
+def _scalar_rotation_records(path: Path, stacks: list[int]) -> dict[int, tuple[tuple[int, int], ...]]:
     report = json.loads(path.read_text())
     _require(
         report.get("classification") == "pixel_varying_source_difference_not_explained_by_per_rotation_scalar",
         "prescatter scalar classification changed",
     )
-    records: dict[int, tuple[int, int]] = {}
+    records: dict[int, tuple[tuple[int, int], ...]] = {}
     for particle in report.get("particles", []):
         stack = int(particle["stack_index_one_based"])
         if stack not in stacks:
             continue
         fits = particle["rotation_scalar_fits"]
-        _require(len(fits) == 1, f"stack {stack}: factor panel requires exactly one class-2 contributor")
-        records[stack] = (
-            int(fits[0]["recovar_global_rotation_index"]),
-            int(fits[0]["relion_rotation_local_row"]),
+        _require(bool(fits), f"stack {stack}: factor panel has no matched class-2 contributor")
+        records[stack] = tuple(
+            (
+                int(fit["recovar_global_rotation_index"]),
+                int(fit["relion_rotation_local_row"]),
+            )
+            for fit in fits
         )
+        _require(len(set(records[stack])) == len(records[stack]), f"stack {stack}: duplicate contributor rotation")
     _require(set(records) == set(stacks), "factor-panel rotations are incomplete in the scalar report")
     return records
 
 
-def _contribution_locations(
-    directory: Path, stacks: list[int]
-) -> tuple[dict[int, tuple[Path, int]], dict[str, str]]:
+def _contribution_locations(directory: Path, stacks: list[int]) -> tuple[dict[int, tuple[Path, int]], dict[str, str]]:
     locations: dict[int, tuple[Path, int]] = {}
     hashes: dict[str, str] = {}
     wanted = set(stacks)
@@ -131,7 +133,10 @@ def _contribution_locations(
 
 def _production_factors(values: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     _require(jax.default_backend() == "gpu", "K4 factor comparison requires a JAX GPU")
-    _require(bool(np.asarray(values["relion_cuda_preprocess"]).item()), "RECOVAR capture did not use RELION CUDA preprocessing")
+    _require(
+        bool(np.asarray(values["relion_cuda_preprocess"]).item()),
+        "RECOVAR capture did not use RELION CUDA preprocessing",
+    )
     image_shape = tuple(int(value) for value in values["image_shape"])
     compact_np = _compact_indices(values)
     compact = jnp.asarray(compact_np, dtype=jnp.int32)
@@ -172,12 +177,12 @@ def _pixel_rows(capture: FactorCapture, compact_indices: np.ndarray) -> np.ndarr
         (int(index % half_width), int(row - PHYSICAL_IMAGE_SIZE // 2))
         for index, row in zip(compact_indices, centered_rows)
     )
-    lookup = {
-        (int(x), int(y)): row
-        for row, (x, y) in enumerate(zip(capture.pixels["x"], capture.pixels["y"]))
-    }
+    lookup = {(int(x), int(y)): row for row, (x, y) in enumerate(zip(capture.pixels["x"], capture.pixels["y"]))}
     _require(len(set(coordinates)) == len(coordinates), f"stack {capture.stack_index}: compact pixels are duplicated")
-    _require(all(coordinate in lookup for coordinate in coordinates), f"stack {capture.stack_index}: compact pixel support changed")
+    _require(
+        all(coordinate in lookup for coordinate in coordinates),
+        f"stack {capture.stack_index}: compact pixel support changed",
+    )
     return np.asarray([lookup[coordinate] for coordinate in coordinates], dtype=np.int64)
 
 
@@ -196,8 +201,7 @@ def _translation_map(capture: FactorCapture, fine_translations: np.ndarray) -> d
 
 def _target_terms(capture: FactorCapture, orientation: int, translation: int, pixel_rows: np.ndarray) -> np.ndarray:
     selected = capture.terms[
-        (capture.terms["orientation_local"] == orientation)
-        & (capture.terms["translation"] == translation)
+        (capture.terms["orientation_local"] == orientation) & (capture.terms["translation"] == translation)
     ]
     _require(selected.size == capture.pixels.size, f"stack {capture.stack_index}: accepted term panel is incomplete")
     _require(
@@ -254,42 +258,8 @@ def compare(
         for stack in selected_stacks:
             particle = locations[stack][1]
             capture = captures[stack]
-            global_rotation, relion_orientation = rotations[stack]
-            candidate_rows = np.flatnonzero(values["oversampled_rotation_indices"][particle] == global_rotation)
-            _require(candidate_rows.size == 1, f"stack {stack}: RECOVAR global rotation is not unique")
-            recovar_orientation = int(candidate_rows[0])
-            active_rows = np.flatnonzero(
-                (values["active_particle_rows"] == particle)
-                & (values["active_global_rotation_indices"] == global_rotation)
-            )
-            _require(active_rows.size == 1, f"stack {stack}: RECOVAR active contributor is not unique")
-            active = int(active_rows[0])
-            geometry = _metric(
-                capture.rotations["matrix"][relion_orientation].reshape(3, 3),
-                values["active_rotations"][active],
-            )
-            _require(geometry["max_abs"] == 0, f"stack {stack}: exact contributor geometry changed")
-
             pixel_rows = _pixel_rows(capture, production["compact_indices"])
             translation_map = _translation_map(capture, values["fine_translations"])
-            relion_hypotheses = capture.hypotheses[
-                capture.hypotheses["orientation_local"] == relion_orientation
-            ]
-            relion_accepted = relion_hypotheses[(relion_hypotheses["flags"] & 1) != 0]
-            recovar_probabilities = np.asarray(
-                values["reconstruction_probs"][particle, recovar_orientation],
-                dtype=np.float32,
-            )
-            recovar_accepted = np.flatnonzero(recovar_probabilities != 0)
-            mapped_relion = np.asarray(
-                [translation_map[int(row["translation"])] for row in relion_accepted],
-                dtype=np.int64,
-            )
-            _require(
-                np.array_equal(np.sort(mapped_relion), recovar_accepted),
-                f"stack {stack}: accepted translation support changed",
-            )
-
             processed = production["processed"][particle]
             ctf = production["ctf"][particle]
             inverse_noise = 1.0 / production["noise"]
@@ -303,85 +273,168 @@ def compare(
             _append(operands, "ctf", relion_ctf, ctf)
             _append(operands, "inverse_noise", relion_inverse_noise, inverse_noise)
 
-            relion_term_sum = np.zeros_like(processed, dtype=np.complex64)
-            recovar_term_sum = np.zeros_like(processed, dtype=np.complex64)
-            per_translation: list[dict[str, object]] = []
-            for hypothesis, recovar_translation in zip(relion_accepted, mapped_relion):
-                relion_translation = int(hypothesis["translation"])
-                probability = recovar_probabilities[recovar_translation]
-                terms = _target_terms(capture, relion_orientation, relion_translation, pixel_rows)
-                relion_phase_increment = np.asarray(
-                    [
-                        capture.translations["x"][relion_translation],
-                        capture.translations["y"][relion_translation],
-                    ],
+            contributors: list[dict[str, object]] = []
+            for global_rotation, relion_orientation in rotations[stack]:
+                candidate_rows = np.flatnonzero(values["oversampled_rotation_indices"][particle] == global_rotation)
+                _require(
+                    candidate_rows.size == 1,
+                    f"stack {stack}: RECOVAR global rotation {global_rotation} is not unique",
+                )
+                recovar_orientation = int(candidate_rows[0])
+                active_rows = np.flatnonzero(
+                    (values["active_particle_rows"] == particle)
+                    & (values["active_global_rotation_indices"] == global_rotation)
+                )
+                _require(
+                    active_rows.size == 1,
+                    f"stack {stack}: RECOVAR active contributor {global_rotation} is not unique",
+                )
+                active = int(active_rows[0])
+                geometry = _metric(
+                    capture.rotations["matrix"][relion_orientation].reshape(3, 3),
+                    values["active_rotations"][active],
+                )
+                _require(
+                    geometry["max_abs"] == 0,
+                    f"stack {stack}: exact contributor geometry {global_rotation} changed",
+                )
+
+                relion_hypotheses = capture.hypotheses[capture.hypotheses["orientation_local"] == relion_orientation]
+                relion_accepted = relion_hypotheses[(relion_hypotheses["flags"] & 1) != 0]
+                recovar_probabilities = np.asarray(
+                    values["reconstruction_probs"][particle, recovar_orientation],
                     dtype=np.float32,
                 )
-                recovar_phase_increment = (
-                    -2
-                    * np.pi
-                    * np.asarray(values["fine_translations"][recovar_translation], dtype=np.float32)
-                    / PHYSICAL_IMAGE_SIZE
+                recovar_accepted = np.flatnonzero(recovar_probabilities != 0)
+                mapped_relion = np.asarray(
+                    [translation_map[int(row["translation"])] for row in relion_accepted],
+                    dtype=np.int64,
                 )
-                relion_probability = np.float32(hypothesis["posterior_over_weight_norm"])
-                shifted = (processed * production["phases"][recovar_translation]).astype(np.complex64)
-                weighted_ctf = (probability * ctf * inverse_noise * scale).astype(np.float32)
-                term = (shifted * weighted_ctf).astype(np.complex64)
-                weight_term = (probability * ctf**2 * inverse_noise * scale**2).astype(np.float32)
-                relion_shifted = (
-                    terms["translated_re"] + 1j * terms["translated_im"]
-                ) * PHYSICAL_IMAGE_SIZE**2
-                relion_weighted_ctf = -terms["weighted_ctf"] / PHYSICAL_IMAGE_SIZE**4
-                relion_term = -(terms["term_re"] + 1j * terms["term_im"]) / PHYSICAL_IMAGE_SIZE**2
-                relion_weight_term = terms["weight_term"] / PHYSICAL_IMAGE_SIZE**4
+                _require(
+                    np.array_equal(np.sort(mapped_relion), recovar_accepted),
+                    f"stack {stack}: accepted translation support for {global_rotation} changed",
+                )
+
+                relion_term_sum = np.zeros_like(processed, dtype=np.complex64)
+                recovar_term_sum = np.zeros_like(processed, dtype=np.complex64)
+                per_translation: list[dict[str, object]] = []
+                for hypothesis, recovar_translation in zip(relion_accepted, mapped_relion):
+                    relion_translation = int(hypothesis["translation"])
+                    probability = recovar_probabilities[recovar_translation]
+                    terms = _target_terms(
+                        capture,
+                        relion_orientation,
+                        relion_translation,
+                        pixel_rows,
+                    )
+                    relion_phase_increment = np.asarray(
+                        [
+                            capture.translations["x"][relion_translation],
+                            capture.translations["y"][relion_translation],
+                        ],
+                        dtype=np.float32,
+                    )
+                    recovar_phase_increment = (
+                        -2
+                        * np.pi
+                        * np.asarray(
+                            values["fine_translations"][recovar_translation],
+                            dtype=np.float32,
+                        )
+                        / PHYSICAL_IMAGE_SIZE
+                    )
+                    relion_probability = np.float32(hypothesis["posterior_over_weight_norm"])
+                    shifted = (processed * production["phases"][recovar_translation]).astype(np.complex64)
+                    weighted_ctf = (probability * ctf * inverse_noise * scale).astype(np.float32)
+                    term = (shifted * weighted_ctf).astype(np.complex64)
+                    weight_term = (probability * ctf**2 * inverse_noise * scale**2).astype(np.float32)
+                    relion_shifted = (terms["translated_re"] + 1j * terms["translated_im"]) * PHYSICAL_IMAGE_SIZE**2
+                    relion_weighted_ctf = -terms["weighted_ctf"] / PHYSICAL_IMAGE_SIZE**4
+                    relion_term = -(terms["term_re"] + 1j * terms["term_im"]) / PHYSICAL_IMAGE_SIZE**2
+                    relion_weight_term = terms["weight_term"] / PHYSICAL_IMAGE_SIZE**4
+                    _append(
+                        operands,
+                        "translation_phase_increment",
+                        relion_phase_increment,
+                        recovar_phase_increment,
+                    )
+                    _append(
+                        operands,
+                        "posterior",
+                        np.asarray([relion_probability]),
+                        np.asarray([probability]),
+                    )
+                    _append(operands, "shifted_image", relion_shifted, shifted)
+                    _append(
+                        operands,
+                        "weighted_ctf",
+                        relion_weighted_ctf,
+                        weighted_ctf,
+                    )
+                    _append(operands, "term", relion_term, term)
+                    _append(
+                        operands,
+                        "weight_term",
+                        relion_weight_term,
+                        weight_term,
+                    )
+                    relion_term_sum += relion_term.astype(np.complex64)
+                    recovar_term_sum += term
+                    per_translation.append(
+                        {
+                            "relion_translation": relion_translation,
+                            "recovar_translation": int(recovar_translation),
+                            "posterior": _metric(
+                                np.asarray([relion_probability]),
+                                np.asarray([probability]),
+                            ),
+                            "shifted_image": _metric(relion_shifted, shifted),
+                            "weighted_ctf": _metric(
+                                relion_weighted_ctf,
+                                weighted_ctf,
+                            ),
+                            "term": _metric(relion_term, term),
+                            "weight_term": _metric(
+                                relion_weight_term,
+                                weight_term,
+                            ),
+                        }
+                    )
                 _append(
                     operands,
-                    "translation_phase_increment",
-                    relion_phase_increment,
-                    recovar_phase_increment,
+                    "source_sum",
+                    relion_term_sum,
+                    values["active_summed"][active],
                 )
-                _append(operands, "posterior", np.asarray([relion_probability]), np.asarray([probability]))
-                _append(operands, "shifted_image", relion_shifted, shifted)
-                _append(operands, "weighted_ctf", relion_weighted_ctf, weighted_ctf)
-                _append(operands, "term", relion_term, term)
-                _append(operands, "weight_term", relion_weight_term, weight_term)
-                relion_term_sum += relion_term.astype(np.complex64)
-                recovar_term_sum += term
-                per_translation.append(
+                contributors.append(
                     {
-                        "relion_translation": relion_translation,
-                        "recovar_translation": int(recovar_translation),
-                        "posterior": _metric(
-                            np.asarray([relion_probability]),
-                            np.asarray([probability]),
+                        "recovar_global_rotation_index": global_rotation,
+                        "relion_orientation_local": relion_orientation,
+                        "recovar_orientation_local": recovar_orientation,
+                        "accepted_translation_count": len(per_translation),
+                        "geometry": geometry,
+                        "source_sum_relion_terms_vs_recovar_captured": _metric(
+                            relion_term_sum,
+                            values["active_summed"][active],
                         ),
-                        "shifted_image": _metric(relion_shifted, shifted),
-                        "weighted_ctf": _metric(relion_weighted_ctf, weighted_ctf),
-                        "term": _metric(relion_term, term),
-                        "weight_term": _metric(relion_weight_term, weight_term),
+                        "source_sum_recovar_terms_vs_recovar_captured": _metric(
+                            recovar_term_sum,
+                            values["active_summed"][active],
+                        ),
+                        "translations": per_translation,
                     }
                 )
-            _append(operands, "source_sum", relion_term_sum, values["active_summed"][active])
             particles.append(
                 {
                     "stack_index_1based": stack,
-                    "recovar_global_rotation_index": global_rotation,
-                    "relion_orientation_local": relion_orientation,
-                    "recovar_orientation_local": recovar_orientation,
-                    "accepted_translation_count": len(per_translation),
-                    "geometry": geometry,
+                    "matched_contributor_count": len(contributors),
+                    "accepted_hypothesis_count": sum(
+                        int(contributor["accepted_translation_count"]) for contributor in contributors
+                    ),
                     "processed_fft": _metric(relion_processed, processed),
                     "ctf": _metric(relion_ctf, ctf),
                     "inverse_noise": _metric(relion_inverse_noise, inverse_noise),
-                    "source_sum_relion_terms_vs_recovar_captured": _metric(
-                        relion_term_sum,
-                        values["active_summed"][active],
-                    ),
-                    "source_sum_recovar_terms_vs_recovar_captured": _metric(
-                        recovar_term_sum,
-                        values["active_summed"][active],
-                    ),
-                    "translations": per_translation,
+                    "contributors": contributors,
                 }
             )
 
@@ -414,9 +467,8 @@ def compare(
         "device": str(jax.devices()[0]),
         "device_kind": str(jax.devices()[0].device_kind),
         "particle_count": len(particles),
-        "accepted_hypothesis_count": sum(
-            int(particle["accepted_translation_count"]) for particle in particles
-        ),
+        "matched_contributor_count": sum(int(particle["matched_contributor_count"]) for particle in particles),
+        "accepted_hypothesis_count": sum(int(particle["accepted_hypothesis_count"]) for particle in particles),
         "aggregate": aggregate,
         "particles": particles,
     }
