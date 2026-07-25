@@ -99,6 +99,29 @@ def _counterfactual_residuals(component_deltas: dict[str, np.ndarray]) -> dict[s
     }
 
 
+def _constant_offset_fit(delta: np.ndarray) -> dict[str, object]:
+    """Fit and remove one least-squares scalar from a candidate residual."""
+
+    values = np.asarray(delta, dtype=np.float64).reshape(-1)
+    _require(values.size > 0 and np.all(np.isfinite(values)), "constant-offset fit needs finite values")
+    offset = float(np.mean(values))
+    residual = values - offset
+    baseline_energy = float(np.vdot(values, values).real)
+    residual_energy = float(np.vdot(residual, residual).real)
+    return {
+        "candidate_count": int(values.size),
+        "least_squares_offset": offset,
+        "baseline_l2": float(np.sqrt(baseline_energy)),
+        "after_offset_l2": float(np.sqrt(residual_energy)),
+        "residual_energy_removed_fraction": (
+            float(1.0 - residual_energy / baseline_energy) if baseline_energy > 0 else 0.0
+        ),
+        "after_offset_max_abs": float(np.max(np.abs(residual), initial=0.0)),
+        "after_offset_median_abs": float(np.median(np.abs(residual))),
+        "after_offset_p95_abs": float(np.quantile(np.abs(residual), 0.95)),
+    }
+
+
 def _scalar_rotation_records(path: Path, stacks: list[int]) -> dict[int, tuple[tuple[int, int], ...]]:
     report = json.loads(path.read_text())
     _require(
@@ -200,6 +223,9 @@ def compare(
         for engine in ("relion", "recovar")
     }
     particles: list[dict[str, object]] = []
+    particle_data_delta_fits: list[dict[str, object]] = []
+    particle_data_delta_residuals: list[np.ndarray] = []
+    particle_data_deltas: list[np.ndarray] = []
     for path in sorted({location[0] for location in locations.values()}):
         selected_stacks = [stack for stack in stacks if locations[stack][0] == path]
         with np.load(path, allow_pickle=False) as archive:
@@ -379,6 +405,18 @@ def compare(
                     "translation_log_prior",
                 )
             }
+            data_delta = component_deltas["data_log_score_centered"]
+            data_delta_fit = _constant_offset_fit(data_delta)
+            particle_data_delta_fits.append(
+                {
+                    "stack_index_1based": stack,
+                    **data_delta_fit,
+                }
+            )
+            particle_data_deltas.append(data_delta)
+            particle_data_delta_residuals.append(
+                data_delta - np.float64(data_delta_fit["least_squares_offset"])
+            )
             predicted_combined_delta = sum(component_deltas.values())
             observed_combined_delta = np.concatenate(
                 particle_operands["combined_log_score_centered_recovar"]
@@ -399,6 +437,7 @@ def compare(
                         predicted_combined_delta,
                     ),
                     "component_counterfactual": _counterfactual_residuals(component_deltas),
+                    "data_delta_constant_offset_fit": data_delta_fit,
                     "contributors": contributors,
                 }
             )
@@ -432,6 +471,12 @@ def compare(
     ).astype(np.float64) - np.concatenate(
         paired["combined_log_score_centered_relion"]
     ).astype(np.float64)
+    all_data_delta = np.concatenate(particle_data_deltas)
+    all_data_delta_residual = np.concatenate(particle_data_delta_residuals)
+    all_data_delta_energy = float(np.vdot(all_data_delta, all_data_delta).real)
+    all_data_delta_residual_energy = float(
+        np.vdot(all_data_delta_residual, all_data_delta_residual).real
+    )
     return {
         "schema": "k4-relion-recovar-fine-score-decomposition-v1",
         "status": "complete",
@@ -458,6 +503,30 @@ def compare(
             predicted_combined_delta,
         ),
         "aggregate_component_counterfactual": _counterfactual_residuals(component_deltas),
+        "per_particle_data_delta_constant_offset": {
+            "classification": (
+                "candidate_varying_data_score_residual"
+                if all_data_delta_residual_energy > 0.01 * all_data_delta_energy
+                else "particle_scalar_data_score_residual"
+            ),
+            "baseline_l2": float(np.sqrt(all_data_delta_energy)),
+            "after_per_particle_offset_l2": float(np.sqrt(all_data_delta_residual_energy)),
+            "residual_energy_removed_fraction": (
+                float(1.0 - all_data_delta_residual_energy / all_data_delta_energy)
+                if all_data_delta_energy > 0
+                else 0.0
+            ),
+            "after_per_particle_offset_max_abs": float(
+                np.max(np.abs(all_data_delta_residual), initial=0.0)
+            ),
+            "after_per_particle_offset_median_abs": float(
+                np.median(np.abs(all_data_delta_residual))
+            ),
+            "after_per_particle_offset_p95_abs": float(
+                np.quantile(np.abs(all_data_delta_residual), 0.95)
+            ),
+            "particles": particle_data_delta_fits,
+        },
         "particles": particles,
     }
 
