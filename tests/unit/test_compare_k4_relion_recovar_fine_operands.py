@@ -1,6 +1,7 @@
 import numpy as np
 
 from scripts.compare_k4_relion_recovar_fine_operands import (
+    _center,
     _component_counterfactual,
     _direct_score_image_factor,
     _infer_current_size,
@@ -71,6 +72,13 @@ def test_fine_operand_counterfactual_can_remove_common_score_offsets():
     assert report["deltas_centered"] is True
     assert report["strongest_single_component"] == "shifted_image"
     assert report["strongest_target_delta_energy_removed_fraction"] == 1.0
+
+
+def test_fine_operand_center_removes_only_common_offset():
+    centered = _center(np.asarray([101, 103, 108], dtype=np.float32))
+
+    np.testing.assert_allclose(centered, np.asarray([-3, -1, 4], dtype=np.float64))
+    assert np.sum(centered) == 0.0
 
 
 def test_fine_operand_metric_reports_directional_delta():

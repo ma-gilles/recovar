@@ -270,6 +270,11 @@ def _component_counterfactual(
     }
 
 
+def _center(values: np.ndarray) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64)
+    return array - np.mean(array)
+
+
 def compare(
     capture_path: Path,
     contribution_path: Path,
@@ -526,7 +531,7 @@ def compare(
     raw_delta = all_recovar_raw_array.astype(np.float64) - relion_raw_array.astype(
         np.float64
     )
-    raw_delta_centered = raw_delta - np.mean(raw_delta)
+    raw_delta_centered = _center(raw_delta)
     for row, centered_delta in zip(candidate_rows, raw_delta_centered, strict=True):
         row["raw_diff2_delta_centered"] = float(centered_delta)
         row["implied_centered_data_score_delta_recovar_minus_relion"] = float(
@@ -566,6 +571,53 @@ def compare(
         },
         center_deltas=True,
     )
+    recovar_rotation_rows = np.flatnonzero(
+        np.asarray(values["oversampled_rotation_indices"][particle], dtype=np.int64)
+        == recovar_global_rotation
+    )
+    _require(
+        recovar_rotation_rows.size == 1,
+        "target RECOVAR candidate-score rotation is not unique",
+    )
+    recovar_rotation_local = int(recovar_rotation_rows[0])
+    recovar_translation_indices = np.asarray(
+        [row["translation_index_recovar"] for row in candidate_rows],
+        dtype=np.int64,
+    )
+    recovar_production_preprior = np.asarray(
+        values["candidate_preprior_scores"][
+            particle,
+            recovar_rotation_local,
+            recovar_translation_indices,
+        ],
+        dtype=np.float64,
+    )
+    production_centered_data_delta = _center(
+        recovar_production_preprior + relion_raw_array.astype(np.float64)
+    )
+    replay_centered_data_delta = -raw_delta_centered
+    production_replay_exact_mask = np.asarray(
+        [
+            bool(candidate_validation["production_replay_exact"])
+            for candidate_validation in validation["candidates"]
+        ],
+        dtype=bool,
+    )
+    _require(
+        production_replay_exact_mask.shape == production_centered_data_delta.shape,
+        "capture validation candidate order changed",
+    )
+    exact_production_centered = _center(
+        production_centered_data_delta[production_replay_exact_mask]
+    )
+    exact_replay_centered = _center(
+        replay_centered_data_delta[production_replay_exact_mask]
+    )
+    exact_replay_metric = _metric(exact_production_centered, exact_replay_centered)
+    _require(
+        exact_replay_metric["max_abs"] <= 1e-12,
+        "production-exact candidate operand replay no longer closes score boundary",
+    )
     rotation_direct = _metric(capture.candidates[0]["matrix"], recovar_rotation.reshape(-1))
     rotation_transpose = _metric(
         capture.candidates[0]["matrix"], recovar_rotation.T.reshape(-1)
@@ -575,7 +627,7 @@ def compare(
         "_dominates_centered_fine_operand_residual"
     )
     return {
-        "schema": "k4_relion_recovar_fine_operand_comparison_v4",
+        "schema": "k4_relion_recovar_fine_operand_comparison_v5",
         "status": "complete",
         "classification": classification,
         "capture_validation": validation,
@@ -642,6 +694,30 @@ def compare(
             ),
             "sign_relation": (
                 "centered Gaussian data score is the negative of centered raw diff2"
+            ),
+        },
+        "candidate_score_boundary_closure": {
+            "recovar_rotation_local": recovar_rotation_local,
+            "production_centered_data_score_delta_recovar_minus_relion": (
+                production_centered_data_delta.tolist()
+            ),
+            "operand_replay_centered_data_score_delta_recovar_minus_relion": (
+                replay_centered_data_delta.tolist()
+            ),
+            "all_candidates_replay_vs_production": _metric(
+                production_centered_data_delta,
+                replay_centered_data_delta,
+            ),
+            "relion_production_replay_exact_mask": (
+                production_replay_exact_mask.tolist()
+            ),
+            "production_exact_candidates_recentered_replay_vs_production": (
+                exact_replay_metric
+            ),
+            "classification": (
+                "operand_replay_closes_all_production_exact_candidates; "
+                "remaining all-candidate residual is isolated to the known "
+                "one-ULP passive replay mismatch"
             ),
         },
         "raw_diff2_component_counterfactual": raw_counterfactual,
