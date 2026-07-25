@@ -17,6 +17,7 @@ from recovar.cuda_backproject import relion_preprocess_real_f32
 from recovar.data_io.image_backends import _centered_rfft2_jax
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_scoring_half_image_weights,
+    make_shell_indices_half,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block,
@@ -84,6 +85,35 @@ def _metric(relion: np.ndarray, recovar: np.ndarray) -> dict[str, object]:
         "median_abs": float(np.median(np.abs(delta))) if delta.size else 0.0,
         "p95_abs": float(np.quantile(np.abs(delta), 0.95)) if delta.size else 0.0,
     }
+
+
+def _metric_up_to_global_sign(
+    relion: np.ndarray,
+    recovar: np.ndarray,
+) -> dict[str, object]:
+    raw = _metric(relion, recovar)
+    sign_flipped = _metric(relion, -np.asarray(recovar))
+    use_sign_flip = (
+        sign_flipped["relative_l2_over_relion"] < raw["relative_l2_over_relion"]
+    )
+    return {
+        "raw": raw,
+        "recovar_alignment_multiplier": -1 if use_sign_flip else 1,
+        "sign_aligned": sign_flipped if use_sign_flip else raw,
+    }
+
+
+def _zero_dc_compact_score_weight(
+    score_weight: np.ndarray,
+    compact_indices: np.ndarray,
+    image_shape: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    values = np.asarray(score_weight)
+    indices = np.asarray(compact_indices, dtype=np.int64)
+    dc_mask = np.asarray(make_shell_indices_half(image_shape)).reshape(-1)[indices] == 0
+    result = values.copy()
+    result[..., dc_mask] = np.asarray(0, dtype=result.dtype)
+    return result, dc_mask
 
 
 def _infer_current_size(image_size: int) -> int:
@@ -284,6 +314,11 @@ def compare(
     recovar_corr_compact = np.asarray(
         jax.block_until_ready(recovar_corr_compact), dtype=np.float32
     )
+    recovar_corr_compact, compact_dc_mask = _zero_dc_compact_score_weight(
+        recovar_corr_compact,
+        compact_indices,
+        image_shape,
+    )
 
     n2 = np.float32(physical_image_size**2)
     n4 = np.float32(physical_image_size**4)
@@ -394,16 +429,46 @@ def compare(
         )
     _require(max(alignment_errors) <= 1e-6, "fine translation alignment changed")
 
-    metrics = {
-        name: _metric(
-            np.concatenate(operands[f"{name}_relion"]),
-            np.concatenate(operands[f"{name}_recovar"]),
+    metrics = {}
+    for name in ("reference", "shifted_image", "corr", "contribution", "lane_partial"):
+        relion_operand = np.concatenate(operands[f"{name}_relion"])
+        recovar_operand = np.concatenate(operands[f"{name}_recovar"])
+        metrics[name] = (
+            _metric_up_to_global_sign(relion_operand, recovar_operand)
+            if name in {"reference", "shifted_image"}
+            else _metric(relion_operand, recovar_operand)
         )
-        for name in ("reference", "shifted_image", "corr", "contribution", "lane_partial")
-    }
+    relion_raw_array = np.asarray(relion_raw, dtype=np.float32)
+    all_recovar_raw_array = np.asarray(all_recovar_raw, dtype=np.float32)
+    raw_delta = all_recovar_raw_array.astype(np.float64) - relion_raw_array.astype(
+        np.float64
+    )
+    raw_delta_centered = raw_delta - np.mean(raw_delta)
+    for row, centered_delta in zip(candidate_rows, raw_delta_centered, strict=True):
+        row["raw_diff2_delta_centered"] = float(centered_delta)
+        row["implied_centered_data_score_delta_recovar_minus_relion"] = float(
+            -centered_delta
+        )
+
+    relion_corr_supported = np.asarray(
+        captured_pixels[0]["corr"][supported_full], dtype=np.float32
+    ) / n4
+    recovar_corr_supported = recovar_corr_compact[supported_compact]
+    corr_delta = recovar_corr_supported.astype(np.float64) - relion_corr_supported.astype(
+        np.float64
+    )
+    largest_corr_delta_row = int(np.argmax(np.abs(corr_delta)))
+    dc_compact_rows = np.flatnonzero(compact_dc_mask)
+    _require(dc_compact_rows.size == 1, "compact score support must contain one DC pixel")
+    dc_compact_row = int(dc_compact_rows[0])
+    dc_supported_rows = np.flatnonzero(supported_compact == dc_compact_row)
+    _require(dc_supported_rows.size == 1, "RELION score support must contain one DC pixel")
+    dc_supported_row = int(dc_supported_rows[0])
+    dc_full_row = int(supported_full[dc_supported_row])
+
     counterfactual = _component_counterfactual(
-        np.asarray(relion_raw, dtype=np.float32),
-        np.asarray(all_recovar_raw, dtype=np.float32),
+        relion_raw_array,
+        all_recovar_raw_array,
         {
             name: np.asarray(records, dtype=np.float32)
             for name, records in substituted_raw.items()
@@ -417,7 +482,7 @@ def compare(
         f"{counterfactual['strongest_single_component']}_dominates_exact_fine_operand_residual"
     )
     return {
-        "schema": "k4_relion_recovar_fine_operand_comparison_v1",
+        "schema": "k4_relion_recovar_fine_operand_comparison_v2",
         "status": "complete",
         "classification": classification,
         "capture_validation": validation,
@@ -446,7 +511,44 @@ def compare(
             "rotation_matrix_transpose": rotation_transpose,
             "max_translation_alignment_abs": max(alignment_errors),
         },
+        "fourier_sign_convention": {
+            "description": (
+                "RELION and RECOVAR reference/image operands use opposite global "
+                "Fourier signs; both operands flip, so squared score contributions "
+                "are invariant."
+            ),
+            "reference_recovar_alignment_multiplier": metrics["reference"][
+                "recovar_alignment_multiplier"
+            ],
+            "shifted_image_recovar_alignment_multiplier": metrics["shifted_image"][
+                "recovar_alignment_multiplier"
+            ],
+        },
+        "dc_score_weight": {
+            "production_rule": "zero shell zero before direct Gaussian scoring",
+            "compact_row": dc_compact_row,
+            "relion_full_row": dc_full_row,
+            "relion_scaled_value": float(relion_corr_supported[dc_supported_row]),
+            "recovar_scaled_value_after_production_dc_zero": float(
+                recovar_corr_supported[dc_supported_row]
+            ),
+            "largest_remaining_abs_delta": float(
+                np.abs(corr_delta[largest_corr_delta_row])
+            ),
+            "largest_remaining_delta_relion_full_row": int(
+                supported_full[largest_corr_delta_row]
+            ),
+        },
         "operands": metrics,
+        "raw_diff2_delta_centering": {
+            "mean_raw_delta_recovar_minus_relion": float(np.mean(raw_delta)),
+            "max_abs_centered_raw_delta": float(
+                np.max(np.abs(raw_delta_centered), initial=0.0)
+            ),
+            "sign_relation": (
+                "centered Gaussian data score is the negative of centered raw diff2"
+            ),
+        },
         "raw_diff2_component_counterfactual": counterfactual,
         "candidates": candidate_rows,
     }

@@ -4,8 +4,10 @@ from scripts.compare_k4_relion_recovar_fine_operands import (
     _component_counterfactual,
     _infer_current_size,
     _metric,
+    _metric_up_to_global_sign,
     _translation_alignment,
     _tree_raw_diff2,
+    _zero_dc_compact_score_weight,
 )
 
 
@@ -58,3 +60,29 @@ def test_fine_operand_metric_reports_directional_delta():
     assert report["exact_equal"] is False
     assert report["mismatch_count"] == 1
     assert report["max_abs"] == 0.5
+
+
+def test_fine_operand_metric_separates_global_fourier_sign():
+    relion = np.asarray([1 + 2j, 3 - 4j], dtype=np.complex64)
+    recovar = -relion
+
+    report = _metric_up_to_global_sign(relion, recovar)
+
+    assert report["raw"]["relative_l2_over_relion"] == 2.0
+    assert report["recovar_alignment_multiplier"] == -1
+    assert report["sign_aligned"]["exact_equal"] is True
+
+
+def test_fine_operand_score_weight_applies_production_dc_zero():
+    image_shape = (8, 8)
+    compact_indices = np.asarray([20, 1, 5, 8], dtype=np.int32)
+    score_weight = np.asarray([7, 2, 3, 4], dtype=np.float32)
+
+    result, dc_mask = _zero_dc_compact_score_weight(
+        score_weight,
+        compact_indices,
+        image_shape,
+    )
+
+    np.testing.assert_array_equal(dc_mask, np.asarray([True, False, False, False]))
+    np.testing.assert_array_equal(result, np.asarray([0, 2, 3, 4], dtype=np.float32))
