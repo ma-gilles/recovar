@@ -138,6 +138,20 @@ def _direct_score_image_factor(
     return factor
 
 
+def _relion_cuda_normalization_factors(
+    values: dict[str, np.ndarray],
+    *,
+    captured_backend_is_relion_cuda: bool,
+) -> np.ndarray:
+    if captured_backend_is_relion_cuda:
+        return np.asarray(
+            values["relion_preprocess_normalization_factors"], dtype=np.float32
+        )
+    image_correction = np.asarray(values["image_corrections"], dtype=np.float32)
+    scale_correction = np.asarray(values["scale_corrections"], dtype=np.float32)
+    return np.asarray(image_correction / scale_correction, dtype=np.float32)
+
+
 def _reconstruct_processed_score_half(
     values: dict[str, np.ndarray],
     *,
@@ -146,7 +160,7 @@ def _reconstruct_processed_score_half(
     mode_override: str | None = None,
 ) -> tuple[np.ndarray | jax.Array, str]:
     raw = np.asarray(values["raw_real_images"], dtype=np.float32)
-    normalization = np.asarray(
+    captured_normalization = np.asarray(
         values["relion_preprocess_normalization_factors"], dtype=np.float32
     )
     integer_shifts = np.asarray(values["integer_pre_shifts"], dtype=np.int32)
@@ -163,6 +177,10 @@ def _reconstruct_processed_score_half(
     )
     score_with_mask = bool(np.asarray(values["score_with_masked_images"]).item())
     if mode == "relion_cuda":
+        normalization = _relion_cuda_normalization_factors(
+            values,
+            captured_backend_is_relion_cuda=relion_cuda,
+        )
         radius = float(particle_diameter_angstrom) / (
             2.0 * float(np.asarray(values["voxel_size"]).item())
         )
@@ -178,7 +196,7 @@ def _reconstruct_processed_score_half(
         return processed.reshape(processed.shape[0], -1).astype(jnp.complex64), mode
 
     _require(
-        np.array_equal(normalization, np.ones_like(normalization)),
+        np.array_equal(captured_normalization, np.ones_like(captured_normalization)),
         "dataset-native capture unexpectedly stored active RELION normalization",
     )
     processed_real = apply_relion_integer_pre_shifts(raw, integer_shifts)
@@ -439,6 +457,11 @@ def compare(
         )
         preprocessing_counterfactuals[mode] = {
             "direct_score_image_factor": float(alternate_factor),
+            "normalization_source": (
+                "derived_image_correction_over_scale"
+                if mode == "relion_cuda" and preprocess_backend != "relion_cuda"
+                else "captured"
+            ),
             "base_shifted": np.asarray(
                 jax.block_until_ready(alternate_base), dtype=np.complex64
             ),
@@ -717,6 +740,7 @@ def compare(
             "direct_score_image_factor": counterfactual[
                 "direct_score_image_factor"
             ],
+            "normalization_source": counterfactual["normalization_source"],
             "shifted_image_operand": _metric_up_to_global_sign(
                 np.concatenate(counterfactual["shifted_image_relion"]),
                 np.concatenate(counterfactual["shifted_image_counterfactual"]),
@@ -757,7 +781,7 @@ def compare(
         "_dominates_centered_fine_operand_residual"
     )
     return {
-        "schema": "k4_relion_recovar_fine_operand_comparison_v7",
+        "schema": "k4_relion_recovar_fine_operand_comparison_v8",
         "status": "complete",
         "classification": classification,
         "capture_validation": validation,

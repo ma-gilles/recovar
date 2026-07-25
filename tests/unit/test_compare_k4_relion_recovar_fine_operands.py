@@ -7,6 +7,7 @@ from scripts.compare_k4_relion_recovar_fine_operands import (
     _infer_current_size,
     _metric,
     _metric_up_to_global_sign,
+    _relion_cuda_normalization_factors,
     _translation_alignment,
     _tree_raw_diff2,
     _zero_dc_compact_score_weight,
@@ -136,4 +137,31 @@ def test_fine_operand_direct_score_factor_tracks_preprocess_backend():
     assert relion_cuda == np.float32(1.0) / scale_correction
     assert dataset_native == np.float32(
         relion_cuda * np.float32(image_correction / scale_correction)
+    )
+
+
+def test_fine_operand_relion_cuda_counterfactual_derives_normalization():
+    values = {
+        "relion_preprocess_normalization_factors": np.asarray(
+            [7.0, 8.0], dtype=np.float32
+        ),
+        "image_corrections": np.asarray([0.9, 1.1], dtype=np.float32),
+        "scale_corrections": np.asarray([0.6, 2.2], dtype=np.float32),
+    }
+
+    captured = _relion_cuda_normalization_factors(
+        values,
+        captured_backend_is_relion_cuda=True,
+    )
+    derived = _relion_cuda_normalization_factors(
+        values,
+        captured_backend_is_relion_cuda=False,
+    )
+
+    np.testing.assert_array_equal(captured, np.asarray([7.0, 8.0], dtype=np.float32))
+    np.testing.assert_allclose(
+        derived,
+        np.asarray([1.5, 0.5], dtype=np.float32),
+        rtol=np.finfo(np.float32).eps,
+        atol=0.0,
     )
