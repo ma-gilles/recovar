@@ -6734,6 +6734,52 @@ same-device equivalence or numerical noise.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 
+## 2026-07-25 seed-exact K=4 accepted-hypothesis factor closure
+
+- RELION factor-capture build `11587833` completed from RELION commit
+  `a9ae8d2dd24704d7de52940fbc832fab1029a268`.  The diagnostic allocates
+  expensive per-pixel term rows only for live accepted hypotheses while
+  preserving the complete orientation/hypothesis metadata table.
+- Parent capture job `11587967` completed both RELION control and capture
+  science arms (`00:28:22` and `00:25:35`) and finalized all 17 mixed-rank
+  factor files.  Its wrapper exit `1:0` is non-scientific: it required
+  byte-identical repeat-scale data-STAR columns.  Formal class-map inertness
+  passes at FSC-AUC `0.999999992492`--`0.999999995085`.
+- Postflight validation binds 17 files with accepted-hypothesis counts
+  `[2,2,5,2,4,3,4,2,3,3,2,2,4,4,3,4,4]` and heterogeneous rank/orientation
+  ownership.  Validation and inertness SHA-256 values are
+  `0833e750bf9109d3cbe7881477143e6a622bd8714c9b20b448dd75612603fd7b`
+  and
+  `365e85fa249defb07b05f5676462cd4d83811aae59c6b95a585dbfa49ee29fe6`.
+- Final A100 factor comparison `11590986` completed `0:0` in 14 seconds from
+  RECOVAR commit `0f6356803166b9f9c0e7e17bf1e7af4d39fd3768`.
+  The panel has 17 particles, 25 exact contributor rotations, and 53 accepted
+  hypotheses. Geometry and accepted translation support are exact.
+- The comparator reconstructs the stored dataset-native production path,
+  including zero-filled integer pre-shifts, host packed FFT, image correction
+  in the numerator, and scale correction squared in the weight.  Its replay
+  matches captured RECOVAR `active_summed` at relative L2
+  `7.34e-8`--`8.29e-8`, so the decomposition is internally closed.
+- Aggregate RELION/RECOVAR relative L2 is: CTF `2.8273e-7`, inverse noise
+  `3.1549e-8`, translation increments `3.1649e-8`, posterior `8.2828e-5`,
+  complex term `8.4172e-5`, real weight term `8.4192e-5`, and contributor
+  source sum `4.2365e-5`.  Processed FFT and weighted CTF individually differ
+  by `0.0066233` and `0.0064766` because the engines place the per-particle
+  normalization/correction factor on opposite operands; the product mostly
+  cancels.
+- The next discriminator is a fixed-posterior counterfactual at these same 53
+  accepted hypotheses.  It should reuse RELION posteriors while preserving
+  each engine's image/CTF/noise/phase operands to test whether posterior
+  arithmetic explains the remaining `8.42e-5` term/weight residual.
+- Comparison JSON:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_seedexact_factor_capture_a9ae8d2_20260724T224000ET/analysis/K4_RELION_RECOVAR_FACTOR_COMPARISON.json`
+  (SHA-256
+  `e70f404a25c4a43fc768d12a6ee507a61ab9d39e348f527d6d1caffbbe1d590a`).
+  The run and runtime roots both contain `SAFE_TO_DELETE`.
+- This is a K=4 localization diagnostic only.  Frozen snapshot
+  `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
+  34/34 evaluated.
+
 # 2026-07-25: seed-exact K4 replay closes topology and scatter support
 
 - Seed-exact restart replay `11584817` uses the live iteration-10 sampling

@@ -9599,3 +9599,66 @@ gate.  Launcher SHA-256 values are
 `c369f9ed4992368abc01e5a0761deae90efcace53e2870f01d3906d362d85cfe`,
 and `3d209caa65b1286129651b6b30a0eccc24ee399ac277d6f683091f1348cf5ed1`.
 Formal K=4 acceptance remains pending all three successful exits.
+
+## 2026-07-25 seed-exact K=4 factor-panel localization
+
+The exact K=4 boundary is now decomposed at production factor level.  RELION
+commit `a9ae8d2dd24704d7de52940fbc832fab1029a268` restricts expensive passive
+term capture to accepted hypotheses without changing the full candidate
+metadata table. Build job `11587833` and paired control/capture job `11587967`
+completed both science arms and produced all 17 expected mixed-rank files.
+The parent wrapper failed only an over-strict whole-data-STAR byte comparison:
+identities, order, poses, origins, and class assignments are exact, while
+repeat-scale diagnostics differ within the normal rerun envelope.  The formal
+map contract accepts all four class maps at FSC-AUC
+`0.999999992492`--`0.999999995085`.
+
+A100 comparison `11590986` completed `0:0` from RECOVAR commit
+`0f6356803166b9f9c0e7e17bf1e7af4d39fd3768`.  It covers the fixed 17-particle
+panel, all 25 matched class-2 contributor rotations, and all 53 accepted
+hypotheses. RELION's column-major matrix records transpose to bitwise-exact
+RECOVAR matrices, and every accepted translation maps exactly.  The
+dataset-native RECOVAR replay closes against captured `active_summed` at
+relative L2 `7.34e-8`--`8.29e-8`, independently validating the factorization.
+
+The scale-aware aggregate residual table is:
+
+| Factor | Relative L2 over RELION | Maximum absolute difference |
+|---|---:|---:|
+| CTF | `2.8273123e-7` | `1.8626451e-6` |
+| inverse noise | `3.1549497e-8` | `7.2759576e-12` |
+| translation increment | `3.1649236e-8` | `3.7252903e-9` |
+| posterior | `8.2827810e-5` | `8.7499619e-5` |
+| shifted image | `0.0069581721` | `7.9328102` |
+| weighted CTF | `0.0064766074` | `7.4348645e-7` |
+| complex term | `8.4171546e-5` | `4.3499943e-6` |
+| real weight term | `8.4192179e-5` | `5.8716978e-9` |
+| contributor source sum | `4.2365267e-5` | `3.5632942e-6` |
+
+The approximately `0.0065` standalone image/weighted-CTF residuals are
+opposing per-particle normalization/correction placements and mostly cancel
+in the complex product.  Geometry, support, translation phase, CTF, inverse
+noise, and scatter are therefore closed below the material term residual.
+Posterior arithmetic is the leading shared residual because posterior,
+complex-term, and real-weight relative L2 all agree near `8.4e-5`.  The next
+causal discriminator is a RELION-posterior counterfactual over the same 53
+hypotheses; no production correction is justified before it.
+
+Evidence:
+
+- factor validation:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_seedexact_factor_capture_a9ae8d2_20260724T224000ET/analysis/FACTOR_CAPTURE_VALIDATION_POSTHOC.json`
+  (SHA-256
+  `0833e750bf9109d3cbe7881477143e6a622bd8714c9b20b448dd75612603fd7b`);
+- formal inertness:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_seedexact_factor_capture_a9ae8d2_20260724T224000ET/analysis/RELION_CAPTURE_INERTNESS_POSTHOC.json`
+  (SHA-256
+  `365e85fa249defb07b05f5676462cd4d83811aae59c6b95a585dbfa49ee29fe6`);
+- factor comparison:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_seedexact_factor_capture_a9ae8d2_20260724T224000ET/analysis/K4_RELION_RECOVAR_FACTOR_COMPARISON.json`
+  (SHA-256
+  `e70f404a25c4a43fc768d12a6ee507a61ab9d39e348f527d6d1caffbbe1d590a`).
+
+This K=4 result does not promote a frozen K=1 case.
+`strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and 34/34
+evaluated.

@@ -680,6 +680,28 @@ Substituting those maps changes their cross-engine FSC-AUC by only
 `11580236` is worse (`0.993845903` for class 2) and is rejected.  Therefore
 the material iteration-11 difference is already present in accumulated
 support/statistics, not RECOVAR's reconstruction or solvent postprocessing.
+
+The seed-exact K=4 factor panel now closes the next upstream boundary without
+changing the frozen K=1 score.  Passive RELION factor capture passed formal
+control/capture map inertness for all four classes at FSC-AUC
+`0.999999992492`--`0.999999995085`.  A100 comparison job `11590986` then
+matched 17 particles, 25 contributor rotations, and 53 accepted hypotheses
+with bitwise-exact contributor geometry and exact accepted-translation
+support.  RECOVAR's factor replay matches its captured production source at
+relative L2 `7.34e-8`--`8.29e-8`.
+
+Aggregate RELION/RECOVAR relative L2 is `2.83e-7` for CTF, `3.15e-8` for
+inverse noise, `3.16e-8` for translation increments, `8.28e-5` for posterior,
+`8.42e-5` for the complex term, `8.42e-5` for the real weight term, and
+`4.24e-5` after contributor source summation.  Standalone processed-image and
+weighted-CTF residuals are larger (`0.00662` and `0.00648`) but arise from
+opposing normalization/correction placement and mostly cancel in the term.
+This localizes the first material exact-support difference to posterior
+weight arithmetic, not geometry, pixel support, CTF, inverse noise,
+translation increments, or scatter.  Comparison JSON SHA-256 is
+`e70f404a25c4a43fc768d12a6ee507a61ab9d39e348f527d6d1caffbbe1d590a`;
+formal inertness JSON SHA-256 is
+`365e85fa249defb07b05f5676462cd4d83811aae59c6b95a585dbfa49ee29fe6`.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
