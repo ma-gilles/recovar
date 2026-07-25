@@ -30,6 +30,18 @@ def stack_index_from_image_name(name: str) -> int:
     return int(match.group(1)) - 1 if match else -1
 
 
+def _positive_one_based_class(value: str) -> int:
+    """Parse an explicit one-based class selector for diagnostic captures."""
+
+    try:
+        class_one_based = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("class must be a positive integer") from exc
+    if class_one_based < 1:
+        raise argparse.ArgumentTypeError("class must be a positive integer")
+    return class_one_based
+
+
 def _star_particles(star_data):
     return star_data["particles"] if isinstance(star_data, dict) and "particles" in star_data else star_data
 
@@ -1089,7 +1101,20 @@ def main() -> None:
             "running the rest of the replay M-step when only score tensors are needed."
         ),
     )
+    parser.add_argument(
+        "--pass2-dump-class",
+        type=_positive_one_based_class,
+        help=(
+            "One-based K-class selector for --stop-after-pass2-dump. This sets "
+            "RECOVAR_PASS2_DUMP_CLASS inside the replay process so the capture "
+            "does not depend on launcher environment propagation."
+        ),
+    )
     args = parser.parse_args()
+    if args.pass2_dump_class is not None:
+        if not args.stop_after_pass2_dump:
+            parser.error("--pass2-dump-class requires --stop-after-pass2-dump")
+        os.environ["RECOVAR_PASS2_DUMP_CLASS"] = str(args.pass2_dump_class)
     if args.stop_after_pass2_dump:
         if not os.environ.get("RECOVAR_PASS2_DUMP_DIR"):
             parser.error("--stop-after-pass2-dump requires RECOVAR_PASS2_DUMP_DIR")
@@ -1103,6 +1128,10 @@ def main() -> None:
             )
         os.environ["RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"] = "1"
         os.environ["RECOVAR_K_CLASS_PARITY_STOP_AFTER_PASS2_DUMP"] = "1"
+        print(
+            "  pass2 dump class filter: "
+            f"{os.environ.get('RECOVAR_PASS2_DUMP_CLASS', 'all')}"
+        )
 
     import jax
     import jax.numpy as jnp

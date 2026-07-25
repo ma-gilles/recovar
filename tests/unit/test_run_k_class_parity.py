@@ -1,3 +1,4 @@
+import argparse
 import inspect
 from types import SimpleNamespace
 
@@ -468,3 +469,13 @@ def test_runtime_scale_dump_override_uses_relion_one_based_stack_index(tmp_path)
     expected_image = image_corrections[1] * (0.7572658658 / float(scale_corrections[1]))
     np.testing.assert_allclose(out_scale, [1.0, 0.7572658658, 1.5], rtol=1e-7)
     np.testing.assert_allclose(out_image, [10.0, expected_image, 30.0], rtol=1e-6)
+
+
+def test_positive_one_based_class_parser():
+    from scripts.run_k_class_parity import _positive_one_based_class
+
+    assert _positive_one_based_class("2") == 2
+    with pytest.raises(argparse.ArgumentTypeError, match="positive integer"):
+        _positive_one_based_class("0")
+    with pytest.raises(argparse.ArgumentTypeError, match="positive integer"):
+        _positive_one_based_class("class2")
