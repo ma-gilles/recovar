@@ -9253,6 +9253,74 @@ The durable replay root is
 The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
 evaluated.
 
+### Current K=4 status: production fine operands close the score boundary
+
+This status summary precedes the detailed seed-exact causal log below.
+
+RELION source commit `96387461fdaa18e4d23d4dbc57477039e3145b77`
+adds a bounded passive capture for stack 42988, particle 36655, class 2,
+rotation-local 124, and translations 56--59. Build job `11594507` completed
+`0:0`. Paired control/capture job `11594695` completed `0:0` in 24:33 on
+physical A100 `GPU-46a58f9b-04f9-5785-979f-8d07c76fa054`; control and capture
+took 755 and 698 seconds. Dispatch and particle fields are exact, and the four
+class-map FSC-AUC values are `0.999999992455`--`0.999999995250`, above the
+fixed `0.999999` inertness threshold.
+
+The captured CUDA kernel uses 256 reduction lanes and translation chunks of
+seven. Its per-pixel arithmetic is the contracted float32 expression
+`fmaf(diff_real, diff_real, roundf(diff_imag * diff_imag))`, followed by the
+separate `0.5*corr` multiply. Passive replay is bitwise exact for translations
+56, 58, and 59. Translation 57 differs from the production result by one
+float32 ULP (`2255.6376953125` versus `2255.637451171875`), so the validator
+accepts the structurally complete capture while recording 3/4 exact production
+replays.
+
+Backend-faithful analysis from RECOVAR commit
+`2544c33a880cf8f7926247fc7f2b0ac81d399048` resolves the remaining operand
+boundary:
+
+- RELION's captured reference is bitwise equal to the RECOVAR projection after
+  the documented global Fourier-sign alignment.
+- Both production paths zero the DC score weight. The largest remaining scaled
+  `corr` difference is `8.3673513e-11` (relative L2 `3.4613115e-7`).
+- The aligned shifted-image operand differs at relative L2
+  `6.3840108e-5`; it is the leading centered counterfactual, removing 72.7% of
+  four-candidate residual energy and 75% on the three production-exact
+  candidates. Reference-only and `corr`-only substitutions remove none.
+- Replaying the captured reference, RECOVAR's captured
+  `dataset_native` background-fill preprocessing, its exact
+  `image_correction / scale^2` direct-score factor, the production DC rule,
+  CUDA FMA, and 256-lane tree reproduces RECOVAR's saved centered candidate
+  score on all three production-exact translations to maximum absolute error
+  `2.7105054e-20`. The only all-candidate nonclosure is translation 57, the
+  already identified one-ULP passive-replay exception.
+
+This closes the causal chain from the previously measured K=4 posterior
+residual through fine data score to the shifted-image preprocessing operand.
+Projection, priors, normalization/exp, posterior division, significance
+support, factor placement, DC handling, and reduction replay are no longer
+candidate primary causes. The next bounded production experiment should
+compare the native background-fill/host-FFT score image directly with
+RECOVAR's existing RELION-CUDA preprocessing path on the same saved candidate
+panel before changing default behavior.
+
+Durable evidence:
+
+- accepted science root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_fineoperand_capture_9638746_20260725T055500Z`;
+- fine-operand artifact SHA-256:
+  `a81cf6c18e9ce47864c119ae3d827e3aeb64121bf8d071e01176e4bc350e1102`;
+- final comparison:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_fineoperand_analysis_2544c33a_20260725T031500ET/analysis/FINE_OPERAND_COMPARISON.json`
+  (SHA-256
+  `5c7d3c625a659c3a23983038a4be52f5b925873805f2b34626f530b959adaa74`);
+- final validation SHA-256:
+  `676d5b2d98ed1e3990f88ac327b42c6bb69853c532502cd526e8d77561b357d6`.
+
+The fixed progress metric is deliberately unchanged:
+`strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and 34/34
+evaluated.
+
 ### Seed-exact K4 boundary closes topology and support
 
 The exact-input restart replay uses RELION's live iteration-10 perturbation

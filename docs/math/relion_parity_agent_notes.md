@@ -6734,6 +6734,65 @@ same-device equivalence or numerical noise.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 
+# Current K=4 status (2026-07-25): fine operands close to shifted-image preprocessing
+
+This status summary precedes the detailed capture and factor audit log below.
+
+- RELION diagnostic commit
+  `96387461fdaa18e4d23d4dbc57477039e3145b77` captures the complete
+  per-pixel fine-score operand and 256-lane reduction for stack 42988,
+  particle 36655, class 2, rotation-local 124, translations 56--59.
+  Build `11594507` and paired same-A100 science `11594695` completed `0:0`.
+  Capture/control class-map FSC-AUC is
+  `0.999999992455`--`0.999999995250`; dispatch and particle fields are exact.
+- Artifact
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_fineoperand_capture_9638746_20260725T055500Z/capture/factors/part36655_stack42988_class2.fine-operand-v1.bin`
+  has SHA-256
+  `a81cf6c18e9ce47864c119ae3d827e3aeb64121bf8d071e01176e4bc350e1102`.
+  Production CUDA evaluates
+  `fmaf(diff_real, diff_real, roundf(diff_imag * diff_imag))` before the
+  separate `0.5*corr` multiply. Passive replay is bitwise exact for
+  translations 56, 58, and 59; translation 57 is one float32 ULP above
+  production (`2255.6376953125` versus `2255.637451171875`).
+- Comparator commits `d300a49d`, `ce0c9554`, `fe5ad4d6`, `c9e5430b`, and
+  `2544c33a` make the audit production-faithful: apply the score-path DC mask,
+  align the global Fourier sign before single-operand substitutions, remove
+  particle-common score offsets, replay the captured `dataset_native`
+  background-fill backend, and compare directly with saved RECOVAR candidate
+  scores. Superseded posthoc jobs `11595717` and `11595857` remain preserved
+  as audit history; they exposed the DC/sign/backend reconstruction mistakes
+  rather than production defects.
+- Final local A100 replay uses
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_fineoperand_analysis_2544c33a_20260725T031500ET`
+  and runtime
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_fineoperand_analysis_2544c33a_20260725T031500ET`,
+  both marked `SAFE_TO_DELETE`. It pins physical GPU
+  `GPU-c6d48651-75fd-c644-a83f-3879c0a58186`, integration commit
+  `2544c33a880cf8f7926247fc7f2b0ac81d399048`, and comparator SHA-256
+  `3964bba854f418e9457b7f35ed30c6c4aab4991f51f7029bf152edcc8753968e`.
+- RELION reference versus sign-aligned RECOVAR projection is bitwise exact.
+  Both DC weights are zero. Remaining `corr` relative L2 is
+  `3.4613115e-7`, with maximum scaled absolute difference
+  `8.3673513e-11`. Sign-aligned shifted-image relative L2 is
+  `6.3840108e-5` and is the strongest centered component: 72.7% residual
+  energy removed over all four candidates and 75% on the three
+  production-exact candidates.
+- The complete backend-faithful replay reproduces RECOVAR's saved centered
+  data-score residual for the three production-exact candidates with maximum
+  absolute error `2.7105054e-20`. The all-four residual is isolated to the
+  known translation-57 one-ULP passive replay mismatch. Final comparison
+  SHA-256 is
+  `5c7d3c625a659c3a23983038a4be52f5b925873805f2b34626f530b959adaa74`;
+  validator SHA-256 is
+  `676d5b2d98ed1e3990f88ac327b42c6bb69853c532502cd526e8d77561b357d6`.
+- The next bounded discriminator is a saved-panel comparison of the native
+  background-fill/host-FFT score image against RECOVAR's existing
+  RELION-CUDA preprocessing path. No projection, DC, prior, exponent,
+  posterior-normalization, significance, factor-placement, or reduction patch
+  is supported.
+- The frozen metric remains `strict-k1-v6-20260724`: 25/34 strict, 31/34 exact
+  topology, and 34/34 evaluated.
+
 # 2026-07-25: fine-score capture moves K=4 to projection/residual operands
 
 - RELION commit `05398d236147eb71ce7fbbb60c635f2e8c012746`
