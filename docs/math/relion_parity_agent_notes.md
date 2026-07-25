@@ -6780,6 +6780,29 @@ same-device equivalence or numerical noise.
   `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and
   34/34 evaluated.
 
+The predeclared posterior-only counterfactual is complete. A100 job
+`11591141` ran the immutable 17-particle/25-contributor/53-hypothesis panel
+from commit `f52a8bfc` and completed `0:0` in 18 seconds. Replacing only
+RECOVAR's posterior with the captured RELION posterior reduces aggregate
+relative L2 as follows:
+
+| Operand | Production posterior | RELION-posterior counterfactual | Residual-energy removal |
+|---|---:|---:|---:|
+| complex term | `8.4171546e-5` | `3.6279787e-7` | `0.99998142` |
+| real weight term | `8.4192179e-5` | `3.4731528e-7` | `0.99998298` |
+| contributor source sum | `4.2365267e-5` | `3.6284445e-7` | `0.99992665` |
+
+This causally closes factor placement and identifies posterior construction
+as the remaining source. The next audit must reconstruct posterior weights
+from captured RELION `diff2`/normalization fields and RECOVAR candidate
+score/log-normalizer operands before proposing a production change.
+Counterfactual JSON SHA-256 is
+`e526fdb5b49f4675393b65512864f772be88580a37f1c1a25a8e08b0621d68d4`;
+completion marker SHA-256 is
+`138b8490bff01a4233379b2dbe52418fc47c8ad26c3890f18b8035a7f5bdff5d`.
+The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
+evaluated.
+
 # 2026-07-25: seed-exact K4 replay closes topology and scatter support
 
 - Seed-exact restart replay `11584817` uses the live iteration-10 sampling

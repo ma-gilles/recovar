@@ -702,6 +702,16 @@ translation increments, or scatter.  Comparison JSON SHA-256 is
 `e70f404a25c4a43fc768d12a6ee507a61ab9d39e348f527d6d1caffbbe1d590a`;
 formal inertness JSON SHA-256 is
 `365e85fa249defb07b05f5676462cd4d83811aae59c6b95a585dbfa49ee29fe6`.
+
+The predeclared RELION-posterior counterfactual `11591141` is decisive.
+Substituting only the captured RELION posterior on the exact same 53
+hypotheses reduces complex-term relative L2 from `8.4172e-5` to
+`3.6280e-7`, real-weight relative L2 from `8.4192e-5` to `3.4732e-7`, and
+source-sum relative L2 from `4.2365e-5` to `3.6284e-7`.  This removes
+`99.9981%`/`99.9983%` of term/weight residual energy and `99.9927%` after
+summation.  Posterior construction is therefore the causal remaining factor
+boundary. Counterfactual JSON SHA-256 is
+`e526fdb5b49f4675393b65512864f772be88580a37f1c1a25a8e08b0621d68d4`.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

@@ -9662,3 +9662,32 @@ Evidence:
 This K=4 result does not promote a frozen K=1 case.
 `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and 34/34
 evaluated.
+
+### Posterior-only counterfactual closes the K=4 factor residual
+
+The predeclared next discriminator completed as A100 job `11591141` from
+commit `f52a8bfc76657b42ef6ec61e219028b57774c018`.  It preserves all RECOVAR
+image, CTF, inverse-noise, translation-phase, correction, and scale operands,
+but substitutes RELION's captured posterior on the exact same 53 accepted
+hypotheses.
+
+Complex-term relative L2 falls from `8.4171546e-5` to `3.6279787e-7`, real
+weight-term relative L2 from `8.4192179e-5` to `3.4731528e-7`, and
+contributor-source relative L2 from `4.2365267e-5` to `3.6284445e-7`.
+Those changes remove `0.99998142`, `0.99998298`, and `0.99992665` of residual
+energy, respectively. The remaining `~3.5e-7` floor is consistent with the
+already measured CTF/noise/factor arithmetic envelope.
+
+This is causal localization: posterior construction, not factor placement,
+geometry, support, or scatter, explains essentially all of the remaining
+exact-boundary K=4 term residual. The next discriminator is posterior
+reconstruction from captured RELION hypothesis scores/normalizers and
+RECOVAR candidate score/log-normalizer operands.
+
+The counterfactual report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_seedexact_factor_capture_a9ae8d2_20260724T224000ET/analysis/K4_RELION_RECOVAR_POSTERIOR_COUNTERFACTUAL.json`
+(SHA-256
+`e526fdb5b49f4675393b65512864f772be88580a37f1c1a25a8e08b0621d68d4`);
+the completion marker SHA-256 is
+`138b8490bff01a4233379b2dbe52418fc47c8ad26c3890f18b8035a7f5bdff5d`.
+The frozen K=1 score remains unchanged.
