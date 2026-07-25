@@ -6805,6 +6805,10 @@ same-device equivalence or numerical noise.
   `(iteration, class)` checks at threshold `0.995`, iterations with all four
   classes passing out of 15, minimum class agreement, minimum GT FSC-AUC
   delta, exact topology, and same-GPU wall time. Correlation is not used.
+- Checked snapshot `k4-host-ac5177d2-20260719` fixes the production-host
+  baseline at 40/60 direct checks and 9/15 all-class iterations, with exact
+  topology. `docs/math/em_k4_backend_trajectory_baseline_v1.json` stores the
+  per-iteration count vector and accepted evidence hashes.
 - `scripts/compare_k4_backend_trajectories.py` makes this count reproducible
   from the two standard FSC/topology audits and rejects cross-GPU inputs.
 - Run root:

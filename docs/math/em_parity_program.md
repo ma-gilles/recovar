@@ -9372,6 +9372,14 @@ same-physical-GPU wall time. Script
 `scripts/compare_k4_backend_trajectories.py` compares those counts
 fail-closed and rejects cross-GPU pairs. It does not use map correlation.
 
+Checked snapshot `k4-host-ac5177d2-20260719` is the fixed production-host
+baseline: 40/60 direct class checks pass and 9/15 iterations pass all four
+classes, with exact topology. Its full per-iteration count vector and evidence
+hashes are stored in
+`docs/math/em_k4_backend_trajectory_baseline_v1.json`. The running pair is an
+improvement only if it increases those fixed counts without breaking exact
+topology; adding later cases cannot change this denominator.
+
 Science and audit run from
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_host_relioncuda_samegpu_4181d340_20260725T051500ET`;
 runtime/cache state is isolated under

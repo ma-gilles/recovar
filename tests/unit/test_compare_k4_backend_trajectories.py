@@ -1,6 +1,14 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from scripts.compare_k4_backend_trajectories import compare
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CHECKED_BASELINE = (
+    REPO_ROOT / "docs" / "math" / "em_k4_backend_trajectory_baseline_v1.json"
+)
 
 
 def _fsc_report(values_by_iteration):
@@ -97,3 +105,20 @@ def test_compare_k4_backend_trajectories_rejects_cross_gpu_pair():
             baseline_label="host_numpy",
             candidate_label="relion_cuda",
         )
+
+
+def test_checked_k4_backend_baseline_has_fixed_denominator_and_consistent_counts():
+    baseline = json.loads(CHECKED_BASELINE.read_text())
+
+    assert baseline["schema"] == "em_k4_backend_trajectory_baseline_v1"
+    assert baseline["snapshot_id"] == "k4-host-ac5177d2-20260719"
+    assert baseline["quality_metric_policy"] == (
+        "shellwise FSC/FSC-AUC; correlation is not used"
+    )
+    assert baseline["direct_fsc_auc_gate"] == 0.995
+    assert baseline["direct_fsc_auc_checks_total"] == 15 * 4 == 60
+    assert baseline["direct_fsc_auc_checks_passed"] == 40
+    assert sum(baseline["direct_fsc_auc_passes_by_iteration"]) == 40
+    assert len(baseline["direct_fsc_auc_passes_by_iteration"]) == 15
+    assert baseline["iterations_all_classes_passed"] == 9
+    assert baseline["exact_control_topology"] is True
