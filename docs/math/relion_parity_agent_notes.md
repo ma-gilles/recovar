@@ -7434,9 +7434,27 @@ completion marker SHA-256 is
   `d23ff58c162b0fceccdda22125b17e495756c341317472f6b47f36f58cf23f95`.
   The result is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_p5234_cc_components_20260724T154500Z/analysis/RECOVAR_RELION_FINE_PROJECTION.json`.
-- Same-physical-H100 fine-pass capture `11572658` is queued for case-5
-  particles `38594` and `65070` on `della-h19g1`, targeting capture UUID
-  `GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`.  Its run/runtime roots are
+- Same-physical-H100 fine-pass capture `11572658` completed `0:0` in 13:53
+  for case-5 particles `38594` and `65070` on `della-h19g1`, using the
+  required capture UUID
+  `GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`.  Both RELION fine candidates
+  are present in RECOVAR's support.  Particle `38594` selects RELION's
+  candidate exactly, with native top-two margin `1.4901161e-8`.  Particle
+  `65070` has an exact float32 tie between flat candidates `332` and `333`;
+  RELION selects `333`, whereas RECOVAR's first-index `argmax` selects `332`.
+  They share rotation index `2` and differ by one fine translation step,
+  `1.0624999` Angstrom.  This closes missing support and a margin threshold
+  for both targets.  Because this capture does not contain RELION's two raw
+  fine scores or compact-candidate order, the remaining discriminator is
+  fine-score arithmetic versus fine-candidate tie ordering.  A passive RELION
+  capture is required before changing production tie behavior.  Fine-summary
+  JSON SHA-256 is
+  `019d3111c6eda111080bd2e87a81832971d4128535f2a3718bb7352fd452897f`;
+  target-panel SHA-256 values are
+  `c024a27a8b2f8071a1015e845ed28a938e6d7b3ece309a8789d07b702fddbeb6`
+  and
+  `f4e57638c96361f1040374827342a97866b802276810dca61b2ba21f16bee18d`.
+  Its run/runtime roots are
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_finepass_targets_20260724T143000Z`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case05_finepass_targets_20260724T143000Z`;
@@ -7444,5 +7462,14 @@ completion marker SHA-256 is
   `0f26924928b50971b81e4f19578503da14674911d1a5d350439c55fa9eba8a2c`;
   corrected analyzer SHA-256 is
   `1b9a202192b00399b733d5e150c5ad647f47b0d82fdd69ed2113ee107d3fb674`.
+- Passive RELION discriminator `11602588` is submitted on the same required
+  H100 UUID.  It dumps RELION's pass-2 raw costs, compact rotation/translation
+  indices, and oversampled hidden IDs for particle `65070`, then compares
+  them against the accepted RECOVAR fine panel.  Its run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_p65070_exact_relion_fine_20260725T083000ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case05_p65070_exact_relion_fine_20260725T083000ET`;
+  both contain `SAFE_TO_DELETE`.  The fail-closed launcher SHA-256 is
+  `3fe819d50bac1e0646fe10768d5588685bb3cfeb17dc150c0ac0358af0cc8586`.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.

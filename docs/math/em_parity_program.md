@@ -10013,3 +10013,37 @@ with SHA-256 values
 and `df1aad317d46e15d79a8ece0413cdfb2e533a69e4426e0f14ec5360705667ef1`.
 The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
 evaluated.
+
+### Case-5 fine-pass exceptions reduce to one exact tie
+
+Same-physical-H100 capture `11572658` completed `0:0` in 13:53 on
+`GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`, the physical GPU required by
+the immutable case-5 trajectory.  Both outstanding RELION fine candidates
+are present in RECOVAR's support.  Particle `38594` selects the RELION
+candidate exactly, with native float32 top-two margin `1.4901161e-8`.
+Particle `65070` instead has an exact float32 tie between flat candidates
+`332` and `333`; RELION selects `333`, whereas RECOVAR's first-index
+`argmax` selects `332`.  Both candidates use rotation index `2` and differ
+by one fine translation step (`1.0624999` Angstrom), exactly reproducing the
+remaining reported pose exception.
+
+This rejects missing candidate support and a global score-margin threshold
+for both case-5 targets.  Since the capture contains RECOVAR scores but not
+RELION's two raw fine costs or compact-candidate order, the remaining causal
+branch is fine-score arithmetic versus fine-candidate tie ordering.  A passive
+RELION capture must separate those possibilities before any production
+change.
+Fine-summary JSON SHA-256 is
+`019d3111c6eda111080bd2e87a81832971d4128535f2a3718bb7352fd452897f`;
+the two captured panel SHA-256 values are
+`c024a27a8b2f8071a1015e845ed28a938e6d7b3ece309a8789d07b702fddbeb6`
+and
+`f4e57638c96361f1040374827342a97866b802276810dca61b2ba21f16bee18d`.
+The evidence root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_finepass_targets_20260724T143000Z`.
+Exact-physical-H100 RELION discriminator `11602588` is submitted to dump the
+two raw pass-2 costs and compact indices.  Its run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_p65070_exact_relion_fine_20260725T083000ET`;
+the fail-closed launcher SHA-256 is
+`3fe819d50bac1e0646fe10768d5588685bb3cfeb17dc150c0ac0358af0cc8586`.
+This diagnostic does not change the frozen K=1 score.

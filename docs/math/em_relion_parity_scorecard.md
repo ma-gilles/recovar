@@ -317,8 +317,32 @@ or a completed autonomous trajectory.  The frozen score remains 25/34 strict,
 31/34 topology, and 34/34 evaluated until a fixed-fixture rerun passes the
 unchanged FSC/FSC-AUC and topology gates.
 
-Fine-pass capture `11572658` remains queued for particles `38594` and `65070`.
-The frozen score remains 25/34 strict, 31/34 topology, and 34/34 evaluated.
+Same-physical-H100 fine-pass capture `11572658` completed `0:0` for particles
+`38594` and `65070` on the required physical GPU
+`GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`.  Both RELION fine candidates are
+present in RECOVAR's support.  Particle `38594` selects RELION's candidate
+exactly, with a native float32 top-two margin of `1.4901161e-8`.  Particle
+`65070` has an exact float32 tie between flat candidates `332` and `333`;
+RELION selects `333`, while RECOVAR's first-index `argmax` selects `332`.
+The candidates share the same rotation and differ by one fine translation
+step (`1.0624999` Angstrom), exactly explaining the remaining reported
+translation exception.  Because this capture did not record RELION's two raw
+fine scores or compact-candidate order, the remaining discriminator is
+fine-score arithmetic versus fine-candidate tie ordering; missing support and
+a score-margin threshold are excluded.
+Fine-summary JSON SHA-256 is
+`019d3111c6eda111080bd2e87a81832971d4128535f2a3718bb7352fd452897f`;
+the two captured fine-panel SHA-256 values are
+`c024a27a8b2f8071a1015e845ed28a938e6d7b3ece309a8789d07b702fddbeb6`
+and
+`f4e57638c96361f1040374827342a97866b802276810dca61b2ba21f16bee18d`.
+This is localization evidence, not an FSC checkbox.  A passive RELION capture
+of the two raw fine costs and their compact indices is required before a
+production tie rule is justified.  Exact-physical-H100 discriminator
+`11602588` is submitted for that purpose, with fail-closed launcher SHA-256
+`3fe819d50bac1e0646fe10768d5588685bb3cfeb17dc150c0ac0358af0cc8586`.
+The frozen score remains
+25/34 strict, 31/34 topology, and 34/34 evaluated.
 
 ## K=4 physical-GPU trajectory diagnostic
 
