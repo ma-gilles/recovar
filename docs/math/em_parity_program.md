@@ -9253,6 +9253,63 @@ The durable replay root is
 The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
 evaluated.
 
+## 2026-07-25 live K=4 preprocessing discriminator
+
+Same-A100 job `11598766` completed `0:0` in `00:30:22` from clean
+integration commit `dd6d4063774e36136bf9551ee828d3e113f46974`. It ran the
+production host-NumPy image Fourier path and the existing JAX/cuFFT path
+sequentially on physical GPU
+`GPU-6f45f415-9d0b-d562-9ff3-c9fb7bc53aa7`, then stopped each arm immediately
+after capturing the pinned iteration-10 K=4 fine-score boundary: original
+index 42987, class 2, current size 74, global rotation 2956, and translations
+56--59. The host and JAX arms took 915 and 886 seconds, respectively; the
+bounded JAX arm was 29 seconds (`3.17%`) faster.
+
+All checked topology fields are exact between the live arms: fine
+translations, oversampled rotation indices, parent map, candidate mask,
+rotation prior, and translation prior. Against the accepted passive RELION
+CUDA operand:
+
+| Scope | host residual L2 | JAX residual L2 | JAX residual-energy change |
+|---|---:|---:|---:|
+| all four candidates | `4.8828125e-4` | `2.44140625e-4` | `-75%` |
+| production-exact translations 56/58/59 | `3.9867997e-4` | `1.9933999e-4` | `-75%` |
+
+The live host centered residual is
+`[+2.44140625e-4,-2.44140625e-4,-2.44140625e-4,+2.44140625e-4]`; JAX reduces
+it to
+`[+1.220703125e-4,-1.220703125e-4,-1.220703125e-4,+1.220703125e-4]`.
+The host class-2 artifact is byte-identical across three independent live
+captures (SHA-256
+`ddc8d65de595699107b1e946f0fbe1dcb61d39d43191e67a3a364c6ac863a844`),
+so the comparison is not a host-repeat fluctuation.
+
+This live A/B confirms that image Fourier preprocessing is a causal,
+candidate-varying part of the K=4 fine-score residual. It does not yet qualify
+JAX/cuFFT as the production default: the next gate must carry the alternate
+backend through a K=4 trajectory and compare class assignments plus
+shellwise FSC/FSC-AUC, with the fully derived RELION-CUDA preprocessing path
+kept as a separate discriminator.
+
+The accepted comparison is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_live_pair_retry_f2ccc270_20260725T043000ET/analysis/LIVE_PREPROCESS_RELION_COMPARISON.json`
+(SHA-256
+`348c462c40c62f4b5a3b83de42fbaee81adf984a8318b2c59db1c7e0da685a74`).
+The run and runtime roots contain `SAFE_TO_DELETE`; grid correction and
+forced final-after-max were unset.
+
+Two earlier attempts are explicitly non-science failures. Job `11597063`
+failed before replay because an unrelated inherited BPref fused-atomics flag
+lacked its required device-signature scope. Jobs `11597459` and `11598131`
+reached the deterministic host target but stopped before the JAX arm because
+the diagnostic class selector still emitted four small class files instead of
+one. Job `11598766` pinned the loaded sparse-helper source, accepted exactly
+those four files, and analyzed only the predeclared class-2 artifact. This
+diagnostic fan-out does not affect the scientific comparison.
+
+No frozen K=1 case is promoted. Snapshot `strict-k1-v6-20260724` remains
+25/34 strict, 31/34 exact topology, and 34/34 evaluated.
+
 ### Current K=4 status: production fine operands close the score boundary
 
 This status summary precedes the detailed seed-exact causal log below.

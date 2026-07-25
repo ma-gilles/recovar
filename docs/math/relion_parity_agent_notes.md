@@ -6734,6 +6734,34 @@ same-device equivalence or numerical noise.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 
+# 2026-07-25: live JAX/cuFFT preprocessing reduces the K=4 score residual
+
+- Same-A100 job `11598766` completed `0:0` in `00:30:22` from clean commit
+  `dd6d4063774e36136bf9551ee828d3e113f46974`. Host NumPy and JAX/cuFFT ran
+  sequentially on physical GPU
+  `GPU-6f45f415-9d0b-d562-9ff3-c9fb7bc53aa7`.
+- The pinned boundary is original index 42987, class 2, current size 74,
+  global rotation 2956, translations 56--59. Fine translations, rotation
+  indices, parent map, candidate mask, and both priors are exact across arms.
+- Host centered residual L2 against the accepted passive RELION CUDA scores
+  is `4.8828125e-4`; JAX is `2.44140625e-4`. Residual energy falls exactly
+  75%. On the three production-exact RELION translations, L2 falls from
+  `3.9867997e-4` to `1.9933999e-4`, also 75% energy removal.
+- Host/JAX bounded wall times are 915/886 seconds, so this diagnostic has no
+  measured speed penalty. The host class-2 NPZ is byte-identical across three
+  independent captures.
+- Accepted report:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_live_pair_retry_f2ccc270_20260725T043000ET/analysis/LIVE_PREPROCESS_RELION_COMPARISON.json`
+  (SHA-256
+  `348c462c40c62f4b5a3b83de42fbaee81adf984a8318b2c59db1c7e0da685a74`).
+- This proves a live causal preprocessing effect but does not authorize a
+  default change. Carry JAX/cuFFT through a K=4 assignment and FSC/FSC-AUC
+  trajectory gate, and keep the fully derived RELION-CUDA backend as a
+  separate live discriminator.
+- Diagnostic-only failures `11597063`, `11597459`, and `11598131` are
+  preserved in the same run audit. None produced a paired science result or
+  changes the fixed score.
+
 # Current K=4 status (2026-07-25): fine operands close to shifted-image preprocessing
 
 This status summary precedes the detailed capture and factor audit log below.
