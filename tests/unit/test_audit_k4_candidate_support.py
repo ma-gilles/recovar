@@ -119,6 +119,26 @@ def test_sampling_perturbation_mismatch_fails_closed():
     assert not comparable
 
 
+def test_star_rounded_perturbation_is_not_live_value():
+    live = -0.12305957078933716
+    rounded_star = -0.12306
+
+    status, classification, comparable = auditor._classify_support(
+        all_complete=True,
+        any_parent_difference=False,
+        all_fine_candidate_sets_exact=True,
+        any_contributor_difference=False,
+        relion_random_perturbation=live,
+        recovar_random_perturbation=rounded_star,
+        perturbation_tolerance=auditor._parser().get_default("perturbation_tolerance"),
+    )
+
+    assert live - rounded_star == pytest.approx(4.292106628445147e-7)
+    assert status == "invalid_comparison"
+    assert classification == "incomparable_sampling_perturbation_precludes_cross_engine_support_claim"
+    assert not comparable
+
+
 def test_classification_localizes_fine_rotation_contributor_difference():
     status, classification, comparable = auditor._classify_support(
         all_complete=True,
@@ -127,7 +147,7 @@ def test_classification_localizes_fine_rotation_contributor_difference():
         any_contributor_difference=True,
         relion_random_perturbation=-0.12306,
         recovar_random_perturbation=-0.12306,
-        perturbation_tolerance=5e-7,
+        perturbation_tolerance=0.0,
     )
 
     assert status == "complete"
@@ -143,7 +163,7 @@ def test_classification_reports_exact_candidate_and_contributor_support():
         any_contributor_difference=False,
         relion_random_perturbation=-0.12306,
         recovar_random_perturbation=-0.12306,
-        perturbation_tolerance=5e-7,
+        perturbation_tolerance=0.0,
     )
 
     assert status == "complete"

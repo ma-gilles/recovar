@@ -9,6 +9,8 @@ global indices and reconstruction mask.  Integer identities are compared only
 after each engine's indices have been qualified against its captured rotation
 matrices and converted into one canonical index order.  A sampling-
 perturbation mismatch invalidates the cross-engine support classification.
+The default comparison is exact because RELION's rounded STAR value can differ
+enough from its live seed-derived value to change outer-shell support.
 """
 
 from __future__ import annotations
@@ -547,7 +549,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--oversampling-factor", required=True, type=int)
     parser.add_argument("--relion-random-perturbation", required=True, type=float)
     parser.add_argument("--recovar-random-perturbation", required=True, type=float)
-    parser.add_argument("--perturbation-tolerance", default=5e-7, type=float)
+    parser.add_argument(
+        "--perturbation-tolerance",
+        default=0.0,
+        type=float,
+        help=(
+            "Absolute tolerance for comparing live sampling perturbations "
+            "(default: exact equality; STAR-rounded values are not equivalent)"
+        ),
+    )
     parser.add_argument("--geometry-tolerance", default=1e-6, type=float)
     parser.add_argument("--iteration", required=True, type=int)
     parser.add_argument("--half", required=True, type=int)
