@@ -9310,6 +9310,49 @@ diagnostic fan-out does not affect the scientific comparison.
 No frozen K=1 case is promoted. Snapshot `strict-k1-v6-20260724` remains
 25/34 strict, 31/34 exact topology, and 34/34 evaluated.
 
+### Fully derived RELION-CUDA preprocessing reproduces the live improvement
+
+Same-A100 job `11599918` completed `0:0` in `00:26:46` from clean
+integration commit `ede6df86c2644e07de1fec8c30acc7657821e6db`. It ran the
+production host-NumPy path and RECOVAR's fully derived `relion_cuda`
+preprocessing path sequentially on physical GPU
+`GPU-2f2a8197-bcc8-ec41-fc6f-dfb2b5aaf4fa`. The arms took 878 and 722
+seconds, respectively, so `relion_cuda` was 156 seconds (`17.77%`) faster in
+this bounded stop-after-capture replay.
+
+The comparison uses the same pinned iteration-10 class-2 boundary and passive
+RELION CUDA operand as job `11598766`. Fine translations, oversampled
+rotation indices, parent map, candidate mask, rotation prior, and translation
+prior are exact. The host and `relion_cuda` residual L2 values are
+`4.8828125e-4` and `2.44140625e-4` over all four candidates, and
+`3.9867997e-4` and `1.9933999e-4` over production-exact translations
+56/58/59. Thus the fully derived backend independently removes exactly 75% of
+the accepted centered residual energy, reproducing the selected-candidate
+signature from the earlier JAX/cuFFT arm.
+
+The complete JAX/cuFFT and `relion_cuda` score panels are not bitwise
+identical: their finite-support masks agree, but 315 of 544 finite
+`scores_pre_prior` entries differ, with maximum absolute difference
+`2.44140625e-4`. Their selected four-candidate centered signatures nevertheless
+agree exactly. This supports the preprocessing family as the causal branch,
+but does not establish backend equivalence or authorize a production default
+change. The next acceptance gate remains a full K=4 assignment and shellwise
+FSC/FSC-AUC trajectory comparison.
+
+The accepted report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_relioncuda_pair_ede6df86_20260725T043500ET/analysis/LIVE_PREPROCESS_RELION_CUDA_COMPARISON.json`
+(SHA-256
+`fdaa3280131683974e4f446fd04ff0cb1cec42345859ddc5db982f07b5fbce37`).
+The host and `relion_cuda` class-2 artifact SHA-256 values are
+`ddc8d65de595699107b1e946f0fbe1dcb61d39d43191e67a3a364c6ac863a844`
+and
+`fe802d6aa1bf4d560acbe0ba5aa0a9c5531a810b39a266aa330991a8be9b22df`.
+The run and runtime roots contain `SAFE_TO_DELETE`; grid correction and
+forced final-after-max were unset.
+
+No frozen K=1 case is promoted. Snapshot `strict-k1-v6-20260724` remains
+25/34 strict, 31/34 exact topology, and 34/34 evaluated.
+
 ### Current K=4 status: production fine operands close the score boundary
 
 This status summary precedes the detailed seed-exact causal log below.

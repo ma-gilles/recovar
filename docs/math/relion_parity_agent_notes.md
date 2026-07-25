@@ -6762,6 +6762,36 @@ same-device equivalence or numerical noise.
   preserved in the same run audit. None produced a paired science result or
   changes the fixed score.
 
+# 2026-07-25: fully derived RELION-CUDA preprocessing confirms the live branch
+
+- Same-A100 job `11599918` completed `0:0` in `00:26:46` from clean commit
+  `ede6df86c2644e07de1fec8c30acc7657821e6db`. Host NumPy and `relion_cuda`
+  ran sequentially on physical GPU
+  `GPU-2f2a8197-bcc8-ec41-fc6f-dfb2b5aaf4fa`.
+- Exact topology and the pinned class-2 candidate boundary match the earlier
+  live discriminator. Host versus `relion_cuda` residual L2 is
+  `4.8828125e-4` versus `2.44140625e-4` over all four candidates and
+  `3.9867997e-4` versus `1.9933999e-4` over production-exact translations
+  56/58/59. Both scopes remove exactly 75% of residual energy.
+- Bounded wall time is 878/722 seconds, making `relion_cuda` 156 seconds
+  (`17.77%`) faster on the same A100. This is a stop-after-capture runtime,
+  not an end-to-end K=4 performance claim.
+- The selected centered signature equals the earlier JAX/cuFFT result, but the
+  full panels are not bitwise equal: 315/544 finite pre-prior scores differ,
+  with maximum absolute difference `2.44140625e-4`. A trajectory-level
+  assignment and FSC/FSC-AUC gate is still required before a default change.
+- Accepted report:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_relioncuda_pair_ede6df86_20260725T043500ET/analysis/LIVE_PREPROCESS_RELION_CUDA_COMPARISON.json`
+  (SHA-256
+  `fdaa3280131683974e4f446fd04ff0cb1cec42345859ddc5db982f07b5fbce37`).
+  Host and `relion_cuda` class-2 artifact SHA-256 values are
+  `ddc8d65de595699107b1e946f0fbe1dcb61d39d43191e67a3a364c6ac863a844`
+  and
+  `fe802d6aa1bf4d560acbe0ba5aa0a9c5531a810b39a266aa330991a8be9b22df`.
+- Run and runtime roots contain `SAFE_TO_DELETE`; grid correction and forced
+  final-after-max were unset. Snapshot `strict-k1-v6-20260724` remains 25/34
+  strict, 31/34 exact topology, and 34/34 evaluated.
+
 # Current K=4 status (2026-07-25): fine operands close to shifted-image preprocessing
 
 This status summary precedes the detailed capture and factor audit log below.
