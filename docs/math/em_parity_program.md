@@ -9253,6 +9253,29 @@ The durable replay root is
 The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
 evaluated.
 
+### Seed-exact K4 boundary closes topology and support
+
+The exact-input restart replay uses RELION's live iteration-10 perturbation
+`-0.12305957078933716` rather than the rounded sampling-STAR value.  Replay
+`11584817` and independent audit `11585023` match all 96 coarse-parent sets,
+all 96 fine-candidate sets, and all 96 positive-contributor rotation sets.
+Both independently generated matrix panels are exact, and every reached-pixel
+set matches with zero one-sided pixels.  The earlier shell-37 mismatch was
+therefore entirely due to rounding the replay perturbation.
+
+With topology and scatter support exact, audit `11586748` compares 120
+matched class-2 contributors over 257,461 reached pixels.  A positive real
+scalar fits 109/120 contributors at relative residual `1e-5`, or `90.8333%`,
+below the predeclared 95% causal threshold.  Weight residuals remain small
+(maximum `6.96009e-7`) while complex-data residuals reach `4.22837e-5`.
+The result is a pixel-varying source difference rather than a support,
+geometry, scatter, or per-rotation posterior-normalization difference.
+The next causal panel captures RELION's translated-image, CTF, inverse-noise,
+posterior, and accepted-term operands for all 11 non-scalar contributors plus
+six scalar controls.  This diagnostic does not promote a frozen case:
+`strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact topology, and 34/34
+evaluated.
+
 ### Case-24 initial-projector plus reduction intervention closes iteration 1
 
 The case-24 first-iteration winner residual is a two-factor boundary.  A

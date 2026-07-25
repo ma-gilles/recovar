@@ -6734,6 +6734,54 @@ same-device equivalence or numerical noise.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 
+# 2026-07-25: seed-exact K4 replay closes topology and scatter support
+
+- Seed-exact restart replay `11584817` uses the live iteration-10 sampling
+  perturbation `-0.12305957078933716`, not the rounded sampling-STAR value.
+  Its expected post-capture reconstruction-layout failure is sealed as
+  `capture_complete_post_capture_reconstruction_failed`; all boundary
+  artifacts required by the independent audits are complete.
+- Independent audit `11585023` completed `0:0` in 13 seconds.  All 96/96
+  coarse-parent sets, fine-candidate sets, and positive-contributor rotation
+  sets match exactly.  The 120 class-2 contributors have exact rotation
+  identities, both independent geometry gates have maximum absolute error
+  zero, and all 96 reached-pixel sets match with zero one-sided pixels.
+- Value audit `11586748` completed `0:0` in 12 seconds.  It restricts RELION
+  to the exact contributor rotations before fitting one positive real scalar
+  independently to data and weight.  All 120 fits are geometry-qualified,
+  but only 109/120 (`90.8333%`) pass the predeclared `1e-5` scalar gate,
+  below the predeclared 95% causal threshold.  Complex-data fit residual
+  median/maximum are `3.55733e-7`/`4.22837e-5`; weight residual
+  median/maximum are `3.21426e-7`/`6.96009e-7`.  The sealed classification is
+  `pixel_varying_source_difference_not_explained_by_per_rotation_scalar`.
+- This rules out exact-input topology, contributor masking, matrix
+  construction, outer-shell inclusion, scatter support, and a single
+  posterior normalization scalar.  The remaining branch is the
+  pixel-varying translated-image/CTF/noise factorization before scatter.
+- Durable run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_seedexact_restart_boundary_replay_f58a29ae_20260725T011349Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_seedexact_restart_boundary_replay_f58a29ae_20260725T011349Z`;
+  both contain `SAFE_TO_DELETE`.  Contributor-support JSON, scalar JSON, and
+  scalar NPZ SHA-256 values are
+  `c80906e9afe1e269c30c5e100e358e9a79615fef6df380809e5786e5fbed5075`,
+  `9009b415e84f1e7771c9fe7d124738d9e2d3e735c7f2877a0211952a9811214e`,
+  and
+  `83ab74e6c590087e9cf5e919fe80f0416d7350ac7addc6c33a7637f27a41b9b8`.
+- A deterministic 17-particle factor panel covers all 11 non-scalar
+  contributors plus six category controls.  Selection and launcher SHA-256
+  values are
+  `23254206a4c90ef76a3e73b2d9323f27d68be5c213104cd112486706e7c92158`
+  and
+  `39cfafafcb1f10387b8f4a5e7fe556a7684051df9235c373e24b481a697e7da7`.
+  RELION control/capture job `11586985` is active; its run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_seedexact_factor_capture_ebd0852_20260725T021500Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_seedexact_factor_capture_ebd0852_20260725T021500Z`,
+  both marked `SAFE_TO_DELETE`.
+- Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
+  topology, and 34/34 evaluated.
+
 # 2026-07-24: matched K4 restart excludes candidate and contributor support
 
 - Matched-restart replay `11582127` uses the RELION iteration-9 state and the

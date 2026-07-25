@@ -614,6 +614,43 @@ regression.  A new exact-input boundary replay is required before re-accepting
 the contributor/prescatter localization.  No frozen case is promoted: the
 score remains 25/34 strict, 31/34 topology, and 34/34 evaluated.
 
+Seed-exact boundary replay `11584817` and independent audit `11585023`
+supersede that rounded-input result.  The live perturbation is exactly
+`-0.12305957078933716`; all 96 coarse-parent sets, all 96 fine-candidate
+sets, and all 96 positive-contributor rotation sets match, covering all 120
+class-2 contributors.  Both engines' captured matrices match their
+independently reconstructed geometry with maximum absolute error `0`, and
+all 96 reached-pixel sets now match with zero one-sided pixels.  This closes
+candidate topology, contributor topology, matrix construction, and scatter
+support at the exact iteration-10 boundary.
+
+The value audit `11586748` then tests whether the remaining prescatter
+difference is one scalar posterior-mass normalization per contributor.
+Geometry is qualified for all 120/120 contributors and all 257,461 reached
+pixels.  Only 109/120 contributors pass the predeclared `1e-5` scalar gate
+(`90.8333%`, below the predeclared `95%` causal threshold).  Complex-data
+scalar-fit residuals have median `3.55733e-7` and maximum `4.22837e-5`;
+weight residuals have median `3.21426e-7` and maximum `6.96009e-7`.
+The data/weight scalar relative difference is at most `5.65098e-6`.
+The sealed classification is therefore
+`pixel_varying_source_difference_not_explained_by_per_rotation_scalar`:
+the remaining K=4 boundary mismatch is in a pixel-varying source operand,
+not support, scatter geometry, or a single per-rotation posterior scalar.
+
+The durable run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_seedexact_restart_boundary_replay_f58a29ae_20260725T011349Z`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_seedexact_restart_boundary_replay_f58a29ae_20260725T011349Z`;
+both contain `SAFE_TO_DELETE`.  The contributor-support JSON, scalar JSON,
+and scalar NPZ SHA-256 values are
+`c80906e9afe1e269c30c5e100e358e9a79615fef6df380809e5786e5fbed5075`,
+`9009b415e84f1e7771c9fe7d124738d9e2d3e735c7f2877a0211952a9811214e`,
+and
+`83ab74e6c590087e9cf5e919fe80f0416d7350ac7addc6c33a7637f27a41b9b8`.
+The checked replay audit now fails closed on any rounded perturbation.
+K=4 remains red, so the frozen score remains 25/34 strict, 31/34 topology,
+and 34/34 evaluated.
+
 A full terminal
 FSC/class-assignment audit `11578043` completed the complete 15-iteration
 trajectory in `01:01:29` with 4,767,900 KiB maximum RSS.  Its expected `2:0`

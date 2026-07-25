@@ -278,7 +278,12 @@ def _validate_arrays(path, header, rotations, translations, hypotheses, pixels, 
     _require(np.all(np.isfinite(term_values)), f"non-finite factor term: {path}")
 
 
-def validate_directory(directory: Path, selection_json: Path, *, expected_rank: int) -> dict[str, object]:
+def validate_directory(
+    directory: Path,
+    selection_json: Path,
+    *,
+    expected_rank: int | None = None,
+) -> dict[str, object]:
     selection_json = Path(selection_json)
     selection = json.loads(selection_json.read_text())
     _require(selection.get("schema") == "bpref-factor-stratification-v1", "unexpected selection schema")
@@ -296,7 +301,25 @@ def validate_directory(directory: Path, selection_json: Path, *, expected_rank: 
         set(stacks) == set(expected_stacks) and len(set(stacks)) == len(stacks),
         "factor capture stack set is incomplete or duplicated",
     )
-    _require(all(capture.header[14] == expected_rank for capture in captures), "factor capture MPI rank changed")
+    if expected_rank is None:
+        _require(
+            all("expected_mpi_rank" in record for record in selected),
+            "selection is missing expected_mpi_rank for mixed-rank validation",
+        )
+        expected_rank_by_stack = {
+            int(record["stack_index_1based"]): int(record["expected_mpi_rank"]) for record in selected
+        }
+    else:
+        expected_rank_by_stack = {stack: expected_rank for stack in expected_stacks}
+    _require(
+        all(capture.header[14] == expected_rank_by_stack[capture.stack_index] for capture in captures),
+        "factor capture MPI rank changed",
+    )
+    rank_by_stack = {capture.stack_index: int(capture.header[14]) for capture in captures}
+    rank_counts = {
+        str(rank): sum(captured_rank == rank for captured_rank in rank_by_stack.values())
+        for rank in sorted(set(rank_by_stack.values()))
+    }
     expected_set_hash = fnv1a64(canonical_stack_text)
     _require(
         all(capture.header[36] == expected_set_hash for capture in captures), "factor capture selected-set hash changed"
@@ -347,7 +370,9 @@ def validate_directory(directory: Path, selection_json: Path, *, expected_rank: 
         "selected_stack_text": canonical_stack_text,
         "selected_stack_fnv1a64": expected_set_hash,
         "particle_count": len(captures),
-        "mpi_rank": expected_rank,
+        "mpi_rank": next(iter(rank_by_stack.values())) if len(rank_counts) == 1 else None,
+        "mpi_rank_by_stack": {str(stack): rank_by_stack[stack] for stack in expected_stacks},
+        "mpi_rank_counts": rank_counts,
         "orientation_count": (
             int(captures[0].rotations.size)
             if all(capture.rotations.size == captures[0].rotations.size for capture in captures)
@@ -370,7 +395,11 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture_directory", type=Path)
     parser.add_argument("--selection-json", required=True, type=Path)
-    parser.add_argument("--expected-rank", required=True, type=int)
+    parser.add_argument(
+        "--expected-rank",
+        type=int,
+        help="Require one MPI rank for all particles; omit to use expected_mpi_rank from the selection",
+    )
     parser.add_argument("--output-json", required=True, type=Path)
     return parser
 

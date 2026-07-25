@@ -92,14 +92,16 @@ def _write_capture(
     path.write_bytes(payload)
 
 
-def _selection(path):
+def _selection(path, *, ranks=None):
+    if ranks is None:
+        ranks = (2, 2)
     path.write_text(
         json.dumps(
             {
                 "schema": "bpref-factor-stratification-v1",
                 "selected": [
-                    {"stack_index_1based": 17},
-                    {"stack_index_1based": 23},
+                    {"stack_index_1based": 17, "expected_mpi_rank": ranks[0]},
+                    {"stack_index_1based": 23, "expected_mpi_rank": ranks[1]},
                 ],
             }
         )
@@ -117,6 +119,33 @@ def test_factor_capture_directory_is_complete_and_hash_bound(tmp_path):
     assert report["capture_ready"] is True
     assert report["particle_count"] == 2
     assert report["accepted_hypotheses_per_particle"] == [1, 1]
+    assert report["mpi_rank"] == 2
+    assert report["mpi_rank_counts"] == {"2": 2}
+    assert report["mpi_rank_by_stack"] == {"17": 2, "23": 2}
+
+
+def test_factor_capture_directory_uses_per_particle_mpi_ranks(tmp_path):
+    selection = tmp_path / "selection.json"
+    _selection(selection, ranks=(1, 2))
+    _write_capture(tmp_path / "part117_stack17_img0_class1.bpre-v2.bin", stack=17, rank=1)
+    _write_capture(tmp_path / "part123_stack23_img0_class1.bpre-v2.bin", stack=23, rank=2)
+
+    report = validator.validate_directory(tmp_path, selection)
+
+    assert report["capture_ready"] is True
+    assert report["mpi_rank"] is None
+    assert report["mpi_rank_counts"] == {"1": 1, "2": 1}
+    assert report["mpi_rank_by_stack"] == {"17": 1, "23": 2}
+
+
+def test_factor_capture_directory_rejects_particle_on_wrong_mpi_rank(tmp_path):
+    selection = tmp_path / "selection.json"
+    _selection(selection, ranks=(1, 2))
+    _write_capture(tmp_path / "part117_stack17_img0_class1.bpre-v2.bin", stack=17, rank=2)
+    _write_capture(tmp_path / "part123_stack23_img0_class1.bpre-v2.bin", stack=23, rank=2)
+
+    with pytest.raises(ValueError, match="MPI rank changed"):
+        validator.validate_directory(tmp_path, selection)
 
 
 def test_factor_capture_allows_particle_local_fine_support_and_normalization(tmp_path):
