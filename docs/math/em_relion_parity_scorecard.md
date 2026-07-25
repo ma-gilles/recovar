@@ -370,8 +370,15 @@ machine-readable baseline is
 `7ad897000cdbcd0d4342bf5db36a6c56da004a31720e2de02fd8322055d1e41c`).
 
 Same-physical-A100 host-versus-RELION-CUDA science `11600592` and dependent
-audit `11600593` are the candidate trajectory for the next snapshot.  As an
-early health check, its completed host arm passes 24/24 fixed-host comparisons
+audit `11600593` are the candidate trajectory for the next snapshot.  The host
+arm completed all 15 numbered iterations in `30089` seconds without a forced
+final-all-data iteration; the `relion_cuda` arm had completed nine numbered
+iterations at the 2026-07-25 17:57 ET checkpoint.  Across those nine
+same-physical-GPU timing pairs, cumulative wall time is
+`16597.981476306915` versus `14716.971381187439` seconds, so `relion_cuda`
+is `11.332764154512143%` faster and is faster in every paired iteration.
+Quality promotion still waits for the dependent FSC audit.  As an early
+fixed-host health check, the completed host arm passes 24/24 comparisons
 through iteration 6 at the same `0.995` gate, with identity class permutation
 and minimum FSC-AUC `0.9977914887513855`.  The partial report SHA-256 is
 `11f8c708ca4ec71aa43341e3c068de0095c2c36e7c281e1da908b250e06a3d1f`.

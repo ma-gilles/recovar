@@ -6734,6 +6734,32 @@ same-device equivalence or numerical noise.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 
+# 2026-07-25: K4 candidate completes host arm and holds an 11.33% live speedup
+
+- Same-physical-A100 science `11600592` completed all 15 `host_numpy`
+  iterations in `30089` seconds without a forced final-all-data iteration.
+  Its `relion_cuda` arm had completed nine numbered iterations at
+  `2026-07-25T17:57:22-04:00`; dependent CPU audit `11600593` remains
+  `afterok:11600592`.
+- The first nine same-GPU timing pairs total
+  `16597.981476306915` seconds for `host_numpy` and
+  `14716.971381187439` seconds for `relion_cuda`, a
+  `-11.332764154512143%` change.  `relion_cuda` is faster in all nine paired
+  iterations.  This is a live performance diagnostic, not a quality
+  acceptance result.
+- The fixed-host FSC health check remains 24/24 direct comparisons through
+  iteration 6 at `0.995`, identity permutation, and minimum FSC-AUC
+  `0.9977914887513855`.  The complete candidate denominator remains 60 direct
+  class checks across 15 iterations and will be emitted by `11600593`.
+- The explicit fine-Euler matrix matcher used by exact-H100 case-5
+  discriminator `11602720` was revalidated with its focused direct,
+  transposed, class-specific, and compact-row matching tests.  Command
+  `.pixi/envs/default/bin/python -m pytest -q
+  tests/unit/test_compare_relion_recovar_estep_dump.py` passes 27/27 (one
+  pre-existing NumPy invalid-divide warning); targeted Ruff also passes.  Job
+  `11602720` remains pending for the exact physical H100 UUID with scheduler
+  estimate `2026-07-28T10:31:11`.
+
 # 2026-07-25: live JAX/cuFFT preprocessing reduces the K=4 score residual
 
 - Same-A100 job `11598766` completed `0:0` in `00:30:22` from clean commit
