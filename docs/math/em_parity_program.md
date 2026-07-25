@@ -9370,7 +9370,10 @@ and four classes. The audit also records how many iterations pass all four
 class gates, the minimum class agreement, the minimum GT FSC-AUC delta, and
 same-physical-GPU wall time. Script
 `scripts/compare_k4_backend_trajectories.py` compares those counts
-fail-closed and rejects cross-GPU pairs. It does not use map correlation.
+fail-closed and rejects cross-GPU pairs. It also maps both saved RECOVAR
+class-assignment trajectories through their independently audited
+RECOVAR-to-RELION permutations, then reports direct backend agreement and
+mismatch counts at every iteration. It does not use map correlation.
 
 Checked snapshot `k4-host-ac5177d2-20260719` is the fixed production-host
 baseline: 40/60 direct class checks pass and 9/15 iterations pass all four

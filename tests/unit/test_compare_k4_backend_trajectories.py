@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from scripts.compare_k4_backend_trajectories import compare
@@ -28,6 +29,9 @@ def _fsc_report(values_by_iteration):
                     "status": "available",
                     "agreement": 1.0 - iteration * 0.001,
                 },
+                "recovar_to_relion_assignment": list(
+                    range(1, len(values) + 1)
+                ),
             }
         )
     return {
@@ -122,3 +126,47 @@ def test_checked_k4_backend_baseline_has_fixed_denominator_and_consistent_counts
     assert len(baseline["direct_fsc_auc_passes_by_iteration"]) == 15
     assert baseline["iterations_all_classes_passed"] == 9
     assert baseline["exact_control_topology"] is True
+
+
+def test_compare_k4_backend_trajectories_aligns_direct_backend_assignments(
+    tmp_path,
+):
+    baseline_fsc = _fsc_report([[0.999, 0.998], [0.999, 0.998]])
+    candidate_fsc = _fsc_report([[0.999, 0.998], [0.999, 0.998]])
+    for row in candidate_fsc["numbered_iterations"]:
+        row["recovar_to_relion_assignment"] = [2, 1]
+    baseline_results = tmp_path / "baseline.npz"
+    candidate_results = tmp_path / "candidate.npz"
+    np.savez(
+        baseline_results,
+        relion_dispatch_particle_order_sha256=np.asarray("identity"),
+        class_assignments_by_image_iter_000=np.asarray([0, 1, 0]),
+        class_assignments_by_image_iter_001=np.asarray([1, 1, 0]),
+    )
+    np.savez(
+        candidate_results,
+        relion_dispatch_particle_order_sha256=np.asarray("identity"),
+        class_assignments_by_image_iter_000=np.asarray([1, 0, 1]),
+        class_assignments_by_image_iter_001=np.asarray([0, 0, 1]),
+    )
+
+    report = compare(
+        baseline_fsc,
+        candidate_fsc,
+        _topology_report(),
+        _topology_report(),
+        _walltime(10),
+        _walltime(10),
+        baseline_label="host_numpy",
+        candidate_label="relion_cuda",
+        baseline_results=baseline_results,
+        candidate_results=candidate_results,
+    )
+
+    direct = report["direct_backend_class_assignments"]
+    assert direct["min_agreement_after_relion_permutation"] == 1.0
+    assert direct["max_mismatch_count_after_relion_permutation"] == 0
+    assert [row["raw_label_agreement"] for row in direct["trajectory"]] == [
+        0.0,
+        0.0,
+    ]

@@ -6810,7 +6810,9 @@ same-device equivalence or numerical noise.
   topology. `docs/math/em_k4_backend_trajectory_baseline_v1.json` stores the
   per-iteration count vector and accepted evidence hashes.
 - `scripts/compare_k4_backend_trajectories.py` makes this count reproducible
-  from the two standard FSC/topology audits and rejects cross-GPU inputs.
+  from the two standard FSC/topology audits and rejects cross-GPU inputs. It
+  also directly compares saved host/`relion_cuda` assignments after applying
+  each audit's RECOVAR-to-RELION class permutation at every iteration.
 - Run root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_host_relioncuda_samegpu_4181d340_20260725T051500ET`.
   Runtime root:
