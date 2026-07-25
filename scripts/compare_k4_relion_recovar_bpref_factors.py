@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import struct
 from pathlib import Path
 
 import jax
@@ -49,6 +50,18 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(8 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _float32_from_bits(value: int) -> np.float32:
+    return np.float32(struct.unpack("<f", struct.pack("<I", value & 0xFFFFFFFF))[0])
+
+
+def _recovar_exp50_weight_normalizer(
+    values: dict[str, np.ndarray],
+    particle: int,
+) -> np.float32:
+    normalized_sum = np.float32(values["candidate_normalized_sum_exp"][particle])
+    return np.float32(normalized_sum * np.exp(np.float32(50.0), dtype=np.float32))
 
 
 def _metric(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, object]:
@@ -283,6 +296,9 @@ def compare(
             "inverse_noise",
             "translation_phase_increment",
             "posterior",
+            "raw_posterior_weight",
+            "posterior_weight_normalizer",
+            "log_posterior",
             "shifted_image",
             "weighted_ctf",
             "term",
@@ -318,6 +334,17 @@ def compare(
             _append(operands, "processed_fft", relion_processed, processed)
             _append(operands, "ctf", relion_ctf, ctf)
             _append(operands, "inverse_noise", relion_inverse_noise, inverse_noise)
+            relion_weight_normalizer = _float32_from_bits(capture.header[26])
+            recovar_weight_normalizer = _recovar_exp50_weight_normalizer(
+                values,
+                particle,
+            )
+            _append(
+                operands,
+                "posterior_weight_normalizer",
+                np.asarray([relion_weight_normalizer]),
+                np.asarray([recovar_weight_normalizer]),
+            )
 
             contributors: list[dict[str, object]] = []
             for global_rotation, relion_orientation in rotations[stack]:
@@ -394,6 +421,23 @@ def compare(
                         / PHYSICAL_IMAGE_SIZE
                     )
                     relion_probability = np.float32(hypothesis["posterior_over_weight_norm"])
+                    relion_raw_weight = np.float32(hypothesis["posterior"])
+                    recovar_raw_weight = np.float32(
+                        values["candidate_raw_exp_weights_f32"][
+                            particle,
+                            recovar_orientation,
+                            recovar_translation,
+                        ]
+                    )
+                    relion_log_probability = np.log(np.float64(relion_probability))
+                    recovar_log_probability = np.float64(
+                        values["candidate_combined_scores"][
+                            particle,
+                            recovar_orientation,
+                            recovar_translation,
+                        ]
+                        - values["candidate_log_z"][particle]
+                    )
                     shifted = (processed * production["phases"][recovar_translation]).astype(np.complex64)
                     weighted_ctf = (probability * ctf * inverse_noise * reconstruction_correction).astype(np.float32)
                     term = (shifted * weighted_ctf).astype(np.complex64)
@@ -420,6 +464,18 @@ def compare(
                         "posterior",
                         np.asarray([relion_probability]),
                         np.asarray([probability]),
+                    )
+                    _append(
+                        operands,
+                        "raw_posterior_weight",
+                        np.asarray([relion_raw_weight]),
+                        np.asarray([recovar_raw_weight]),
+                    )
+                    _append(
+                        operands,
+                        "log_posterior",
+                        np.asarray([relion_log_probability]),
+                        np.asarray([recovar_log_probability]),
                     )
                     _append(operands, "shifted_image", relion_shifted, shifted)
                     _append(
@@ -457,6 +513,14 @@ def compare(
                             "posterior": _metric(
                                 np.asarray([relion_probability]),
                                 np.asarray([probability]),
+                            ),
+                            "raw_posterior_weight": _metric(
+                                np.asarray([relion_raw_weight]),
+                                np.asarray([recovar_raw_weight]),
+                            ),
+                            "log_posterior": _metric(
+                                np.asarray([relion_log_probability]),
+                                np.asarray([recovar_log_probability]),
                             ),
                             "shifted_image": _metric(relion_shifted, shifted),
                             "weighted_ctf": _metric(
@@ -522,6 +586,10 @@ def compare(
                     "processed_fft": _metric(relion_processed, processed),
                     "ctf": _metric(relion_ctf, ctf),
                     "inverse_noise": _metric(relion_inverse_noise, inverse_noise),
+                    "posterior_weight_normalizer": _metric(
+                        np.asarray([relion_weight_normalizer]),
+                        np.asarray([recovar_weight_normalizer]),
+                    ),
                     "contributors": contributors,
                 }
             )
@@ -537,6 +605,9 @@ def compare(
             "inverse_noise",
             "translation_phase_increment",
             "posterior",
+            "raw_posterior_weight",
+            "posterior_weight_normalizer",
+            "log_posterior",
             "shifted_image",
             "weighted_ctf",
             "term",
@@ -548,7 +619,7 @@ def compare(
         )
     }
     return {
-        "schema": "k4-relion-recovar-bpref-factor-comparison-v2",
+        "schema": "k4-relion-recovar-bpref-factor-comparison-v3",
         "metric_policy": "exact and scale-aware array metrics only; no correlation",
         "counterfactual_policy": (
             "RELION posterior substituted only into RECOVAR term and weight factors on the exact accepted support"

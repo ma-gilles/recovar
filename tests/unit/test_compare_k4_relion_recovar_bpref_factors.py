@@ -19,6 +19,17 @@ def test_compact_indices_preserve_packed_columns_and_center_rows():
     np.testing.assert_array_equal(compact, [6, 8, 9, 2, 4])
 
 
+def test_recovar_exp50_weight_normalizer_uses_captured_global_logsum():
+    normalized_sum = np.asarray([1.25], dtype=np.float64)
+    values = {"candidate_normalized_sum_exp": normalized_sum}
+
+    result = comparator._recovar_exp50_weight_normalizer(values, 0)
+
+    expected = np.float32(np.float32(normalized_sum[0]) * np.exp(np.float32(50.0), dtype=np.float32))
+    assert result.dtype == np.float32
+    assert result == expected
+
+
 def test_dataset_native_processed_reconstruction_inputs_preserve_source_factors():
     raw = np.arange(16, dtype=np.float32).reshape(1, 4, 4)
     values = {
