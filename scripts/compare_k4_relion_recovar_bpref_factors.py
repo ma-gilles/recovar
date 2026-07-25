@@ -288,6 +288,9 @@ def compare(
             "term",
             "weight_term",
             "source_sum",
+            "term_with_relion_posterior",
+            "weight_term_with_relion_posterior",
+            "source_sum_with_relion_posterior",
         )
         for engine in ("relion", "recovar")
     }
@@ -360,6 +363,10 @@ def compare(
 
                 relion_term_sum = np.zeros_like(processed, dtype=np.complex64)
                 recovar_term_sum = np.zeros_like(processed, dtype=np.complex64)
+                relion_posterior_term_sum = np.zeros_like(
+                    processed,
+                    dtype=np.complex64,
+                )
                 per_translation: list[dict[str, object]] = []
                 for hypothesis, recovar_translation in zip(relion_accepted, mapped_relion):
                     relion_translation = int(hypothesis["translation"])
@@ -391,6 +398,13 @@ def compare(
                     weighted_ctf = (probability * ctf * inverse_noise * reconstruction_correction).astype(np.float32)
                     term = (shifted * weighted_ctf).astype(np.complex64)
                     weight_term = (probability * ctf**2 * inverse_noise * scale**2).astype(np.float32)
+                    relion_posterior_weighted_ctf = (
+                        relion_probability * ctf * inverse_noise * reconstruction_correction
+                    ).astype(np.float32)
+                    relion_posterior_term = (shifted * relion_posterior_weighted_ctf).astype(np.complex64)
+                    relion_posterior_weight_term = (relion_probability * ctf**2 * inverse_noise * scale**2).astype(
+                        np.float32
+                    )
                     relion_shifted = (terms["translated_re"] + 1j * terms["translated_im"]) * PHYSICAL_IMAGE_SIZE**2
                     relion_weighted_ctf = -terms["weighted_ctf"] / PHYSICAL_IMAGE_SIZE**4
                     relion_term = -(terms["term_re"] + 1j * terms["term_im"]) / PHYSICAL_IMAGE_SIZE**2
@@ -421,8 +435,21 @@ def compare(
                         relion_weight_term,
                         weight_term,
                     )
+                    _append(
+                        operands,
+                        "term_with_relion_posterior",
+                        relion_term,
+                        relion_posterior_term,
+                    )
+                    _append(
+                        operands,
+                        "weight_term_with_relion_posterior",
+                        relion_weight_term,
+                        relion_posterior_weight_term,
+                    )
                     relion_term_sum += relion_term.astype(np.complex64)
                     recovar_term_sum += term
+                    relion_posterior_term_sum += relion_posterior_term
                     per_translation.append(
                         {
                             "relion_translation": relion_translation,
@@ -441,6 +468,14 @@ def compare(
                                 relion_weight_term,
                                 weight_term,
                             ),
+                            "term_with_relion_posterior": _metric(
+                                relion_term,
+                                relion_posterior_term,
+                            ),
+                            "weight_term_with_relion_posterior": _metric(
+                                relion_weight_term,
+                                relion_posterior_weight_term,
+                            ),
                         }
                     )
                 _append(
@@ -448,6 +483,12 @@ def compare(
                     "source_sum",
                     relion_term_sum,
                     values["active_summed"][active],
+                )
+                _append(
+                    operands,
+                    "source_sum_with_relion_posterior",
+                    relion_term_sum,
+                    relion_posterior_term_sum,
                 )
                 contributors.append(
                     {
@@ -463,6 +504,10 @@ def compare(
                         "source_sum_recovar_terms_vs_recovar_captured": _metric(
                             recovar_term_sum,
                             values["active_summed"][active],
+                        ),
+                        "source_sum_with_relion_posterior": _metric(
+                            relion_term_sum,
+                            relion_posterior_term_sum,
                         ),
                         "translations": per_translation,
                     }
@@ -497,11 +542,17 @@ def compare(
             "term",
             "weight_term",
             "source_sum",
+            "term_with_relion_posterior",
+            "weight_term_with_relion_posterior",
+            "source_sum_with_relion_posterior",
         )
     }
     return {
-        "schema": "k4-relion-recovar-bpref-factor-comparison-v1",
+        "schema": "k4-relion-recovar-bpref-factor-comparison-v2",
         "metric_policy": "exact and scale-aware array metrics only; no correlation",
+        "counterfactual_policy": (
+            "RELION posterior substituted only into RECOVAR term and weight factors on the exact accepted support"
+        ),
         "status": "complete",
         "factor_validation": validation,
         "selection_sha256": _sha256(selection_json),
