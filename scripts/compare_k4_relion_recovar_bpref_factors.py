@@ -297,6 +297,7 @@ def compare(
             "translation_phase_increment",
             "posterior",
             "raw_posterior_weight",
+            "log_raw_posterior_weight",
             "posterior_weight_normalizer",
             "log_posterior",
             "shifted_image",
@@ -429,6 +430,16 @@ def compare(
                             recovar_translation,
                         ]
                     )
+                    relion_log_raw_weight = np.log(np.float64(relion_raw_weight))
+                    recovar_log_raw_weight = np.float64(
+                        values["candidate_combined_scores"][
+                            particle,
+                            recovar_orientation,
+                            recovar_translation,
+                        ]
+                        - values["candidate_best_log_score"][particle]
+                        + 50.0
+                    )
                     relion_log_probability = np.log(np.float64(relion_probability))
                     recovar_log_probability = np.float64(
                         values["candidate_combined_scores"][
@@ -470,6 +481,12 @@ def compare(
                         "raw_posterior_weight",
                         np.asarray([relion_raw_weight]),
                         np.asarray([recovar_raw_weight]),
+                    )
+                    _append(
+                        operands,
+                        "log_raw_posterior_weight",
+                        np.asarray([relion_log_raw_weight]),
+                        np.asarray([recovar_log_raw_weight]),
                     )
                     _append(
                         operands,
@@ -517,6 +534,10 @@ def compare(
                             "raw_posterior_weight": _metric(
                                 np.asarray([relion_raw_weight]),
                                 np.asarray([recovar_raw_weight]),
+                            ),
+                            "log_raw_posterior_weight": _metric(
+                                np.asarray([relion_log_raw_weight]),
+                                np.asarray([recovar_log_raw_weight]),
                             ),
                             "log_posterior": _metric(
                                 np.asarray([relion_log_probability]),
@@ -606,6 +627,7 @@ def compare(
             "translation_phase_increment",
             "posterior",
             "raw_posterior_weight",
+            "log_raw_posterior_weight",
             "posterior_weight_normalizer",
             "log_posterior",
             "shifted_image",
@@ -619,7 +641,7 @@ def compare(
         )
     }
     return {
-        "schema": "k4-relion-recovar-bpref-factor-comparison-v3",
+        "schema": "k4-relion-recovar-bpref-factor-comparison-v4",
         "metric_policy": "exact and scale-aware array metrics only; no correlation",
         "counterfactual_policy": (
             "RELION posterior substituted only into RECOVAR term and weight factors on the exact accepted support"
