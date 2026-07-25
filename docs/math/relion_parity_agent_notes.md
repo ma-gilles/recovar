@@ -7462,14 +7462,18 @@ completion marker SHA-256 is
   `0f26924928b50971b81e4f19578503da14674911d1a5d350439c55fa9eba8a2c`;
   corrected analyzer SHA-256 is
   `1b9a202192b00399b733d5e150c5ad647f47b0d82fdd69ed2113ee107d3fb674`.
-- Passive RELION discriminator `11602588` is submitted on the same required
+- Passive RELION discriminator `11602654` is submitted on the same required
   H100 UUID.  It dumps RELION's pass-2 raw costs, compact rotation/translation
   indices, and oversampled hidden IDs for particle `65070`, then compares
-  them against the accepted RECOVAR fine panel.  Its run/runtime roots are
+  them against the accepted RECOVAR fine panel.  Before comparison, it
+  requires exact identity-aligned stock-versus-dump-enabled RELION
+  iteration-1 poses, translations, class, Pmax, and significant-support
+  counts for all 100,000 particles.  Superseded pending job `11602588` was
+  cancelled at `00:00:00` before execution.  Its run/runtime roots are
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_p65070_exact_relion_fine_20260725T083000ET`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case05_p65070_exact_relion_fine_20260725T083000ET`;
   both contain `SAFE_TO_DELETE`.  The fail-closed launcher SHA-256 is
-  `3fe819d50bac1e0646fe10768d5588685bb3cfeb17dc150c0ac0358af0cc8586`.
+  `be7f24361c8beb8205030a75f62d8d3f4285efd431ebdb7a13392402f75ddd3d`.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.

@@ -10041,9 +10041,13 @@ and
 `f4e57638c96361f1040374827342a97866b802276810dca61b2ba21f16bee18d`.
 The evidence root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_finepass_targets_20260724T143000Z`.
-Exact-physical-H100 RELION discriminator `11602588` is submitted to dump the
+Exact-physical-H100 RELION discriminator `11602654` is submitted to dump the
 two raw pass-2 costs and compact indices.  Its run root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_p65070_exact_relion_fine_20260725T083000ET`;
 the fail-closed launcher SHA-256 is
-`3fe819d50bac1e0646fe10768d5588685bb3cfeb17dc150c0ac0358af0cc8586`.
+`be7f24361c8beb8205030a75f62d8d3f4285efd431ebdb7a13392402f75ddd3d`.
+It additionally requires exact identity-aligned stock-versus-dump-enabled
+RELION iteration-1 poses, translations, class, Pmax, and support counts for
+all 100,000 particles.  Superseded pending job `11602588` was cancelled
+before execution.
 This diagnostic does not change the frozen K=1 score.
