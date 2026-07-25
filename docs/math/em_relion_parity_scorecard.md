@@ -348,6 +348,35 @@ job `11602588` was cancelled before execution.
 The frozen score remains
 25/34 strict, 31/34 topology, and 34/34 evaluated.
 
+## K=4 fixed backend-trajectory baseline
+
+K=4 uses a separate fixed 15-iteration, four-class trajectory denominator; it
+does not alter the K=1 score above.  Checked snapshot
+`k4-host-ac5177d2-20260719` records:
+
+| Gate | Passing | Total |
+|---|---:|---:|
+| Direct per-class FSC-AUC at `0.995` | 40 | 60 |
+| Iterations passing all four classes | 9 | 15 |
+| Exact control topology | 1 | 1 |
+
+The per-iteration direct-pass vector is
+`[4,4,4,4,4,4,4,4,4,3,0,1,0,0,0]`; minimum cross-engine FSC-AUC is
+`0.9912957080903252`, minimum RECOVAR-minus-RELION GT FSC-AUC is
+`-0.0001556260741278903`, and minimum class agreement is `0.9932`.  The
+machine-readable baseline is
+`docs/math/em_k4_backend_trajectory_baseline_v1.json` (SHA-256
+`7ad897000cdbcd0d4342bf5db36a6c56da004a31720e2de02fd8322055d1e41c`).
+
+Same-physical-A100 host-versus-RELION-CUDA science `11600592` and dependent
+audit `11600593` are the candidate trajectory for the next snapshot.  As an
+early health check, its completed host arm passes 24/24 fixed-host comparisons
+through iteration 6 at the same `0.995` gate, with identity class permutation
+and minimum FSC-AUC `0.9977914887513855`.  The partial report SHA-256 is
+`11f8c708ca4ec71aa43341e3c068de0095c2c36e7c281e1da908b250e06a3d1f`.
+This cross-run diagnostic does not promote the candidate; promotion requires
+the complete same-GPU backend audit.
+
 ## K=4 physical-GPU trajectory diagnostic
 
 This diagnostic is not part of the frozen K=1 denominator.  It compares two
