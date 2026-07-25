@@ -770,6 +770,24 @@ def test_kclass_compact_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_p
     dump_dir = tmp_path / "pass2"
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_CLASS", "2")
+    sparse_pass2_mod._maybe_dump_k_class_pass2_bucket(
+        experiment_dataset=experiment_dataset,
+        image_indices=np.asarray([local_index], dtype=np.int64),
+        class_index=0,
+        per_image_inputs=per_image_inputs,
+        class_bucket_arrays={},
+        compact_pair_arrays=compact_pair_arrays,
+        current_size=14,
+        n_fine_trans=n_trans,
+        fine_translations=np.zeros((n_trans, 2), dtype=np.float32),
+        scores=scores,
+        probs=probs,
+        bucket_translation_prior=translation_prior,
+        compact_pairs=True,
+    )
+    assert not list(dump_dir.glob("*.npz"))
+
     sparse_pass2_mod._maybe_dump_k_class_pass2_bucket(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([local_index], dtype=np.int64),

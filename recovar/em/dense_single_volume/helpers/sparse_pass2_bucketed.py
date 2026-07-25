@@ -7090,7 +7090,6 @@ def _maybe_dump_pass2_bucket(
     if target_current_size:
         if current_size is None or int(current_size) != int(target_current_size):
             return 0
-
     local_indices = np.asarray(image_indices, dtype=np.int64)
     original_indices = _original_indices_for_local(experiment_dataset, local_indices)
 
@@ -7219,6 +7218,9 @@ def _maybe_dump_k_class_pass2_bucket(
     if target_current_size:
         if current_size is None or int(current_size) != int(target_current_size):
             return 0
+    target_class = os.environ.get("RECOVAR_PASS2_DUMP_CLASS")
+    if target_class and int(target_class) != int(class_index) + 1:
+        return 0
 
     local_indices = np.asarray(image_indices, dtype=np.int64)
     original_indices = _original_indices_for_local(experiment_dataset, local_indices)
