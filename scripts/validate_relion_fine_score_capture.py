@@ -58,6 +58,7 @@ class FineScoreCapture:
     algebra_max_abs: float
     shift_max_abs: float
     exponent_max_rel: float
+    underflow_candidate_count: int
 
     @property
     def stack_index(self) -> int:
@@ -130,7 +131,9 @@ def load_fine_score_capture(path: Path) -> FineScoreCapture:
     _require(int(match["part"]) == header[6], f"fine-score part identity mismatch: {path}")
     _require(int(match["stack"]) == header[7], f"fine-score stack identity mismatch: {path}")
     _require(int(match["class_"]) == header[5], f"fine-score class identity mismatch: {path}")
-    algebra_max_abs, shift_max_abs, exponent_max_rel = _validate_arrays(path, header, candidates)
+    algebra_max_abs, shift_max_abs, exponent_max_rel, underflow_candidate_count = _validate_arrays(
+        path, header, candidates
+    )
     return FineScoreCapture(
         path=path,
         sha256=_sha256(path),
@@ -139,10 +142,13 @@ def load_fine_score_capture(path: Path) -> FineScoreCapture:
         algebra_max_abs=algebra_max_abs,
         shift_max_abs=shift_max_abs,
         exponent_max_rel=exponent_max_rel,
+        underflow_candidate_count=underflow_candidate_count,
     )
 
 
-def _validate_arrays(path: Path, header: tuple[int, ...], candidates: np.ndarray) -> tuple[float, float, float]:
+def _validate_arrays(
+    path: Path, header: tuple[int, ...], candidates: np.ndarray
+) -> tuple[float, float, float, int]:
     _require(header[4] > 0 and header[5] > 0, f"invalid fine-score iteration/class: {path}")
     _require(
         header[10] > 0
@@ -231,7 +237,7 @@ def _validate_arrays(path: Path, header: tuple[int, ...], candidates: np.ndarray
         )
     )
     _require(np.all(np.isfinite(active_fields)), f"non-finite active fine-score value: {path}")
-    _require(np.all(active["post_exponent_weight"] > 0), f"non-positive active exponent weight: {path}")
+    _require(np.all(active["post_exponent_weight"] >= 0), f"negative active exponent weight: {path}")
     expected_combined = np.subtract(
         np.add(
             np.add(active["orientation_log_prior"], active["translation_log_prior"], dtype=np.float32),
@@ -257,8 +263,21 @@ def _validate_arrays(path: Path, header: tuple[int, ...], candidates: np.ndarray
         + float(_finite_float32_tolerance(np.asarray([weights_max]))[0]),
         f"captured class exceeds global fine-score maximum: {path}",
     )
-    expected_post = np.exp(expected_shifted.astype(np.float32), dtype=np.float32)
-    exponent_relative = np.abs(active["post_exponent_weight"] - expected_post) / np.maximum(
+    # RELION's production CUDA kernel explicitly clamps shifted XFLOAT values
+    # below -88 to zero before calling expf. These are valid sparse hypotheses,
+    # merely too small to carry posterior mass.
+    underflow = expected_shifted < np.float32(-88.0)
+    _require(
+        np.all(active["post_exponent_weight"][underflow] == 0),
+        f"fine-score production underflow predicate changed: {path}",
+    )
+    exponent_rows = ~underflow
+    _require(
+        np.all(active["post_exponent_weight"][exponent_rows] > 0),
+        f"fine-score non-underflow exponent weight is not positive: {path}",
+    )
+    expected_post = np.exp(expected_shifted[exponent_rows].astype(np.float32), dtype=np.float32)
+    exponent_relative = np.abs(active["post_exponent_weight"][exponent_rows] - expected_post) / np.maximum(
         np.abs(expected_post), np.finfo(np.float32).tiny
     )
     _require(
@@ -275,6 +294,7 @@ def _validate_arrays(path: Path, header: tuple[int, ...], candidates: np.ndarray
         float(np.max(algebra_error, initial=np.float32(0))),
         float(np.max(shift_error, initial=np.float32(0))),
         float(np.max(exponent_relative, initial=np.float32(0))),
+        int(np.count_nonzero(underflow)),
     )
 
 
@@ -352,6 +372,7 @@ def validate_directory(
         "algebra_max_abs": max(capture.algebra_max_abs for capture in captures),
         "shift_max_abs": max(capture.shift_max_abs for capture in captures),
         "exponent_max_rel": max(capture.exponent_max_rel for capture in captures),
+        "underflow_candidate_count": sum(capture.underflow_candidate_count for capture in captures),
         "files": [
             {
                 "path": str(capture.path.resolve()),
@@ -361,6 +382,7 @@ def validate_directory(
                 "mpi_rank": capture.header[8],
                 "candidate_count": int(capture.candidates.size),
                 "active_candidate_count": int(np.count_nonzero(capture.candidates["flags"] & ACTIVE)),
+                "underflow_candidate_count": capture.underflow_candidate_count,
             }
             for capture in captures
         ],

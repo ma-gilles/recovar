@@ -12,7 +12,7 @@ def _bits(value):
 
 
 def _write_capture(path, *, stack, rank=2, selected_text="17,23", corrupt_algebra=False):
-    raw_diff2 = np.asarray([10.0, 10.25, 9.0], dtype=np.float32)
+    raw_diff2 = np.asarray([10.0, 150.25, 9.0], dtype=np.float32)
     orientation_prior = np.asarray([-0.5, -0.5, -0.5], dtype=np.float32)
     translation_prior = np.asarray([-0.25, -0.75, -0.25], dtype=np.float32)
     min_diff2 = np.float32(9.5)
@@ -22,6 +22,7 @@ def _write_capture(path, *, stack, rank=2, selected_text="17,23", corrupt_algebr
     shift = np.float32(50.0) - weights_max
     shifted = combined + shift
     post = np.exp(shifted, dtype=np.float32)
+    post[shifted < np.float32(-88.0)] = 0
     post[2] = 0
     if corrupt_algebra:
         combined[0] += np.float32(0.01)
@@ -92,6 +93,7 @@ def test_fine_score_capture_directory_is_complete_and_algebra_checked(tmp_path):
     assert report["algebra_max_abs"] == 0
     assert report["shift_max_abs"] == 0
     assert report["exponent_max_rel"] == 0
+    assert report["underflow_candidate_count"] == 2
 
 
 def test_fine_score_capture_uses_per_particle_mpi_ranks(tmp_path):
