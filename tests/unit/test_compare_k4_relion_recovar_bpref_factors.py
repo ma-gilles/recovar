@@ -19,6 +19,41 @@ def test_compact_indices_preserve_packed_columns_and_center_rows():
     np.testing.assert_array_equal(compact, [6, 8, 9, 2, 4])
 
 
+def test_dataset_native_processed_reconstruction_inputs_preserve_source_factors():
+    raw = np.arange(16, dtype=np.float32).reshape(1, 4, 4)
+    values = {
+        "raw_real_images": raw,
+        "relion_preprocess_normalization_factors": np.ones(1, dtype=np.float32),
+        "integer_pre_shifts": np.asarray([[1, -1]], dtype=np.int32),
+        "relion_cuda_preprocess": np.bool_(False),
+        "preprocess_backend": np.asarray("dataset_native"),
+        "image_corrections": np.asarray([1.25], dtype=np.float32),
+        "scale_corrections": np.asarray([2.0], dtype=np.float32),
+    }
+
+    processed, reconstruction_correction = comparator._processed_reconstruction_inputs(values)
+
+    shifted = comparator.apply_relion_integer_pre_shifts(raw, values["integer_pre_shifts"])
+    expected = comparator._centered_rfft2_numpy(shifted).reshape(1, -1).astype(np.complex64)
+    np.testing.assert_array_equal(processed, expected)
+    np.testing.assert_array_equal(reconstruction_correction, values["image_corrections"])
+
+
+def test_dataset_native_processed_reconstruction_inputs_reject_active_relion_normalization():
+    values = {
+        "raw_real_images": np.zeros((1, 4, 4), dtype=np.float32),
+        "relion_preprocess_normalization_factors": np.asarray([1.25], dtype=np.float32),
+        "integer_pre_shifts": np.zeros((1, 2), dtype=np.int32),
+        "relion_cuda_preprocess": np.bool_(False),
+        "preprocess_backend": np.asarray("dataset_native"),
+        "image_corrections": np.ones(1, dtype=np.float32),
+        "scale_corrections": np.ones(1, dtype=np.float32),
+    }
+
+    with pytest.raises(ValueError, match="active RELION normalization"):
+        comparator._processed_reconstruction_inputs(values)
+
+
 def test_scalar_rotation_records_are_identity_bound(tmp_path):
     report = {
         "classification": "pixel_varying_source_difference_not_explained_by_per_rotation_scalar",

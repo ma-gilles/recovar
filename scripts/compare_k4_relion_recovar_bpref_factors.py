@@ -14,7 +14,10 @@ import numpy as np
 
 from recovar.core.ctf import _compute_spa_ctf
 from recovar.cuda_backproject import relion_preprocess_real_f32
-from recovar.data_io.image_backends import _centered_rfft2_jax
+from recovar.data_io.image_backends import _centered_rfft2_jax, _centered_rfft2_numpy
+from recovar.em.dense_single_volume.helpers.image_shifts import (
+    apply_relion_integer_pre_shifts,
+)
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _half_translation_phase_table_for_indices,
 )
@@ -131,27 +134,59 @@ def _contribution_locations(directory: Path, stacks: list[int]) -> tuple[dict[in
     return locations, hashes
 
 
+def _processed_reconstruction_inputs(
+    values: dict[str, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    raw = np.asarray(values["raw_real_images"], dtype=np.float32)
+    normalization = np.asarray(
+        values["relion_preprocess_normalization_factors"],
+        dtype=np.float32,
+    )
+    integer_shifts = np.asarray(values["integer_pre_shifts"], dtype=np.int32)
+    relion_cuda = bool(np.asarray(values["relion_cuda_preprocess"]).item())
+    backend = str(np.asarray(values["preprocess_backend"]).item())
+    _require(
+        relion_cuda == (backend == "relion_cuda"),
+        "RECOVAR preprocessing flag and backend disagree",
+    )
+    if relion_cuda:
+        _, preprocessed = relion_preprocess_real_f32(
+            jnp.asarray(raw),
+            jnp.asarray(normalization),
+            jnp.asarray(integer_shifts),
+            1.0,
+            1.0,
+            False,
+        )
+        processed = _centered_rfft2_jax(preprocessed)
+        reconstruction_correction = np.asarray(
+            values["scale_corrections"],
+            dtype=np.float32,
+        )
+    else:
+        _require(backend == "dataset_native", f"unsupported RECOVAR preprocessing backend {backend!r}")
+        _require(
+            np.array_equal(normalization, np.ones_like(normalization)),
+            "dataset-native capture unexpectedly stored active RELION normalization factors",
+        )
+        shifted = apply_relion_integer_pre_shifts(raw, integer_shifts)
+        processed = _centered_rfft2_numpy(shifted)
+        reconstruction_correction = np.asarray(
+            values["image_corrections"],
+            dtype=np.float32,
+        )
+    return (
+        np.asarray(processed.reshape(raw.shape[0], -1), dtype=np.complex64),
+        reconstruction_correction,
+    )
+
+
 def _production_factors(values: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     _require(jax.default_backend() == "gpu", "K4 factor comparison requires a JAX GPU")
-    _require(
-        bool(np.asarray(values["relion_cuda_preprocess"]).item()),
-        "RECOVAR capture did not use RELION CUDA preprocessing",
-    )
     image_shape = tuple(int(value) for value in values["image_shape"])
     compact_np = _compact_indices(values)
     compact = jnp.asarray(compact_np, dtype=jnp.int32)
-    raw = jnp.asarray(values["raw_real_images"], dtype=jnp.float32)
-    normalization = jnp.asarray(values["relion_preprocess_normalization_factors"], dtype=jnp.float32)
-    integer_shifts = jnp.asarray(values["integer_pre_shifts"], dtype=jnp.int32)
-    _, preprocessed = relion_preprocess_real_f32(
-        raw,
-        normalization,
-        integer_shifts,
-        1.0,
-        1.0,
-        False,
-    )
-    processed = _centered_rfft2_jax(preprocessed).reshape(raw.shape[0], -1).astype(jnp.complex64)
+    processed, reconstruction_correction = _processed_reconstruction_inputs(values)
     ctf = _compute_spa_ctf(
         jnp.asarray(values["ctf_params"], dtype=jnp.float32),
         image_shape,
@@ -163,10 +198,11 @@ def _production_factors(values: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     phases = _half_translation_phase_table_for_indices(translations, image_shape, compact)
     return {
         "compact_indices": compact_np,
-        "processed": np.asarray(processed[:, compact]),
+        "processed": np.asarray(processed[:, compact_np]),
         "ctf": np.asarray(ctf[:, compact]),
         "noise": np.asarray(noise[compact]),
         "phases": np.asarray(phases),
+        "reconstruction_correction": reconstruction_correction,
     }
 
 
@@ -264,6 +300,7 @@ def compare(
             ctf = production["ctf"][particle]
             inverse_noise = 1.0 / production["noise"]
             scale = np.float32(values["scale_corrections"][particle])
+            reconstruction_correction = np.float32(production["reconstruction_correction"][particle])
             relion_processed = (
                 capture.pixels["image_re"][pixel_rows] + 1j * capture.pixels["image_im"][pixel_rows]
             ) * PHYSICAL_IMAGE_SIZE**2
@@ -345,7 +382,7 @@ def compare(
                     )
                     relion_probability = np.float32(hypothesis["posterior_over_weight_norm"])
                     shifted = (processed * production["phases"][recovar_translation]).astype(np.complex64)
-                    weighted_ctf = (probability * ctf * inverse_noise * scale).astype(np.float32)
+                    weighted_ctf = (probability * ctf * inverse_noise * reconstruction_correction).astype(np.float32)
                     term = (shifted * weighted_ctf).astype(np.complex64)
                     weight_term = (probability * ctf**2 * inverse_noise * scale**2).astype(np.float32)
                     relion_shifted = (terms["translated_re"] + 1j * terms["translated_im"]) * PHYSICAL_IMAGE_SIZE**2
