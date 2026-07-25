@@ -84,6 +84,8 @@ def test_particle_report_localizes_complete_expansion_to_coarse_parents():
     assert not report["coarse_parent_sets_exact"]
     assert report["all_relion_contributors_in_recovar_candidates"]
     assert report["all_recovar_contributors_in_relion_candidates"]
+    assert report["contributor_sets_exact"]
+    assert report["contributor_overlap_count"] == 1
 
 
 def test_relion_geometry_gate_requires_transposed_capture_convention():
@@ -115,3 +117,35 @@ def test_sampling_perturbation_mismatch_fails_closed():
     assert status == "invalid_comparison"
     assert classification == "incomparable_sampling_perturbation_precludes_cross_engine_support_claim"
     assert not comparable
+
+
+def test_classification_localizes_fine_rotation_contributor_difference():
+    status, classification, comparable = auditor._classify_support(
+        all_complete=True,
+        any_parent_difference=False,
+        all_fine_candidate_sets_exact=True,
+        any_contributor_difference=True,
+        relion_random_perturbation=-0.12306,
+        recovar_random_perturbation=-0.12306,
+        perturbation_tolerance=5e-7,
+    )
+
+    assert status == "complete"
+    assert classification == "fine_rotation_contributor_support_difference_after_candidate_generation"
+    assert comparable
+
+
+def test_classification_reports_exact_candidate_and_contributor_support():
+    status, classification, comparable = auditor._classify_support(
+        all_complete=True,
+        any_parent_difference=False,
+        all_fine_candidate_sets_exact=True,
+        any_contributor_difference=False,
+        relion_random_perturbation=-0.12306,
+        recovar_random_perturbation=-0.12306,
+        perturbation_tolerance=5e-7,
+    )
+
+    assert status == "complete"
+    assert classification == "candidate_and_rotation_contributor_support_exact"
+    assert comparable

@@ -555,6 +555,38 @@ rejected v1 report SHA-256 is
 `d90f970ddb98c1c31ab9de4c18949fce20e3150581c66d7945b4d4e143bbd508`;
 the corrected v2 report SHA-256 is
 `077a611d1a6025834316b41d3522efea1d008a3ecbbb0a0f645c3402902e5486`.
+Matched-restart replay `11582127` then evaluates RECOVAR at the same
+iteration-10 sampling perturbation, `-0.12306`.  Its E/M boundary capture is
+complete for all 96 selected particles in 95 shards, but the launcher exits
+`1:0` after capture because the optional map diagnostic passes current-size
+RELION x-half accumulators to a full-layout reconstruction helper.  The
+capture is therefore sealed separately and is not represented as a complete
+map replay.  Independent CPU audit `11583809` completes `0:0` in 14 seconds.
+The geometry-gated v3 audit finds exact agreement for every particle: 7,090
+coarse parents, all 56,720 fine candidates, and all 120 positive
+fine-rotation contributors match.  Both matrix gates pass (RELION maximum
+absolute error `5.0664e-7`, RECOVAR `0`) and the perturbation delta is exactly
+zero.  This rules out coarse selection, oversampled candidate generation, and
+rotation-level significance masking at the matched boundary.
+
+The next prescatter comparison matches all 120 contributor rotations and
+localizes the first discrete difference to the outer current-size pixel
+support.  Only 5/96 particles have exact reached-pixel sets; across 257,589
+union entries there are 130 RELION-only and 128 RECOVAR-only pixels, and all
+258 one-sided pixels are on shell 37, the exact current-size radius.  On the
+common support, median per-particle relative L2 is `7.2088e-7` for complex
+data and `3.8432e-7` for real weight.  The v3 support report, prescatter JSON,
+and prescatter array SHA-256 values are
+`aeb6f14c03da5c44fead5b3e63efd94b9423133cc1af6990910302f46e1fceb0`,
+`234bc4871b17dd1cdf1c4eaa7754d56999c63e6b2944c624506e3b69633893b2`,
+and
+`54670c115c15062756e96adec94a255fcb24c0f2c706879bb7758593cfc75c4c`.
+The durable run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_matched_restart_boundary_replay_0f5f1404_20260725T012000Z`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_matched_restart_boundary_replay_0f5f1404_20260725T012000Z`;
+both contain `SAFE_TO_DELETE`.  K=4 remains red and the frozen K=1 score stays
+25/34 strict, 31/34 topology, and 34/34 evaluated.
 A full terminal
 FSC/class-assignment audit `11578043` completed the complete 15-iteration
 trajectory in `01:01:29` with 4,767,900 KiB maximum RSS.  Its expected `2:0`

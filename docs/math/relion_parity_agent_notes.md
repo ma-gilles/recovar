@@ -6715,6 +6715,57 @@ same-device equivalence or numerical noise.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 
+# 2026-07-24: matched K4 restart excludes candidate and contributor support
+
+- Matched-restart replay `11582127` uses the RELION iteration-9 state and the
+  exact iteration-10 perturbation `-0.12306` for both engines.  Grid correction
+  is unset/off.  The A100 job captures all 96 selected particles in 95 shards
+  and records 121,777,840 source values.  It exits `1:0` only after the E/M
+  capture, when an optional map diagnostic tries to interpret current-size
+  RELION x-half accumulators as a full 512-cube Fourier layout.  The capture
+  validator passes independently; its report SHA-256 is
+  `d6209de63c8933d735b80068b4c12fcd9b0cd04eb085a632736ffddac7323bf2`.
+  The run is explicitly sealed as
+  `capture_complete_post_capture_reconstruction_failed`, not as a complete
+  map replay.
+- The original dependent audit `11582290` was cancelled because the science
+  launcher's post-capture failure made its `afterok` dependency impossible.
+  Replacement CPU audit `11583809` completed `0:0` in 14 seconds with 743,696
+  KiB maximum RSS.  Both engines' rotation matrices pass the generated-grid
+  gate, and the sampling perturbation delta is zero.
+- The checked v3 identity audit reports exact support for all 96 particles:
+  7,090/7,090 coarse parents, 56,720/56,720 fine candidates, and 120/120
+  positive contributor rotations.  Every per-particle set is exact.  The
+  scientific classification is
+  `candidate_and_rotation_contributor_support_exact`; K4's later trajectory
+  gap therefore does not begin in coarse selection, fine candidate
+  generation, or rotation-level significance masking.  The report SHA-256 is
+  `aeb6f14c03da5c44fead5b3e63efd94b9423133cc1af6990910302f46e1fceb0`.
+- The matched prescatter operand comparator validates all 120 contributor
+  rotations but finds exact reached-pixel support for only 5/96 particles.
+  There are 130 RELION-only and 128 RECOVAR-only pixels across 257,589 union
+  entries.  An independent enumeration shows all 258 are on shell 37, exactly
+  the current-size radius.  On intersecting support, median per-particle
+  relative L2 is `7.2088207e-7` for data and `3.8432100e-7` for weight; p95 is
+  `2.2622767e-4` and `2.2589895e-4`.  The first discrete mismatch is therefore
+  the outer-shell backprojection inclusion boundary, before accumulation or
+  reconstruction.  The report/array/comparator SHA-256 values are
+  `234bc4871b17dd1cdf1c4eaa7754d56999c63e6b2944c624506e3b69633893b2`,
+  `54670c115c15062756e96adec94a255fcb24c0f2c706879bb7758593cfc75c4c`,
+  and
+  `ed4eb83131d7be96006c48add1055b06f5623e740a2670b3510e8f2d4e82a3b2`.
+- Durable run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_matched_restart_boundary_replay_0f5f1404_20260725T012000Z`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_matched_restart_boundary_replay_0f5f1404_20260725T012000Z`;
+  both contain `SAFE_TO_DELETE`.
+- Next discriminator: recompute the 120 contributor rows with RELION's exact
+  captured float32 fine-rotation matrices.  If the 130/128 shell-37
+  asymmetry collapses, the causal branch is fine-matrix construction/handoff;
+  otherwise compare the two engines' outer-radius inclusion predicates
+  directly.  No scorecard checkbox is promoted: the frozen score remains
+  25/34 strict, 31/34 topology, and 34/34 evaluated.
+
 # 2026-07-24: complete K=4 trajectory confirms a first failure at iteration 11
 
 - Independent full-trajectory audit `11578043` evaluated all 15 numbered

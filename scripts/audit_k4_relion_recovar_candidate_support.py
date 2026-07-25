@@ -258,6 +258,7 @@ def _particle_report(
     recovar_parents = np.unique(recovar_candidates // oversampling_factor)
     parent_overlap = np.intersect1d(relion_parents, recovar_parents)
     fine_overlap = np.intersect1d(relion_candidates, recovar_candidates)
+    contributor_overlap = np.intersect1d(relion_contributors, recovar_contributors)
     return {
         "stack_index_one_based": int(artifact.stack_index),
         "category": category,
@@ -277,6 +278,10 @@ def _particle_report(
         ),
         "relion_contributor_count": int(relion_contributors.size),
         "recovar_contributor_count": int(recovar_contributors.size),
+        "contributor_overlap_count": int(contributor_overlap.size),
+        "contributor_sets_exact": bool(
+            np.array_equal(relion_contributors, recovar_contributors)
+        ),
         "all_relion_contributors_in_recovar_candidates": bool(np.all(np.isin(relion_contributors, recovar_candidates))),
         "all_recovar_contributors_in_relion_candidates": bool(np.all(np.isin(recovar_contributors, relion_candidates))),
     }
@@ -311,6 +316,8 @@ def _summarize(rows: list[dict[str, object]]) -> dict[str, object]:
         ),
         "relion_contributor_count": sum(int(row["relion_contributor_count"]) for row in rows),
         "recovar_contributor_count": sum(int(row["recovar_contributor_count"]) for row in rows),
+        "contributor_overlap_count": sum(int(row["contributor_overlap_count"]) for row in rows),
+        "contributor_sets_exact_count": sum(bool(row["contributor_sets_exact"]) for row in rows),
         "all_relion_contributors_in_recovar_candidates_count": sum(
             bool(row["all_relion_contributors_in_recovar_candidates"]) for row in rows
         ),
@@ -327,6 +334,8 @@ def _classify_support(
     *,
     all_complete: bool,
     any_parent_difference: bool,
+    all_fine_candidate_sets_exact: bool = False,
+    any_contributor_difference: bool = False,
     relion_random_perturbation: float,
     recovar_random_perturbation: float,
     perturbation_tolerance: float,
@@ -349,6 +358,18 @@ def _classify_support(
         return (
             "complete",
             "coarse_parent_support_difference_precedes_fine_scoring",
+            True,
+        )
+    if all_fine_candidate_sets_exact and any_contributor_difference:
+        return (
+            "complete",
+            "fine_rotation_contributor_support_difference_after_candidate_generation",
+            True,
+        )
+    if all_fine_candidate_sets_exact:
+        return (
+            "complete",
+            "candidate_and_rotation_contributor_support_exact",
             True,
         )
     return (
@@ -448,15 +469,19 @@ def audit(args: argparse.Namespace) -> dict[str, object]:
         "complete_recovar_oversampled_expansion_count"
     ] == len(rows)
     any_parent_difference = summary["coarse_parent_sets_exact_count"] != len(rows)
+    all_fine_candidate_sets_exact = summary["fine_candidate_sets_exact_count"] == len(rows)
+    any_contributor_difference = summary["contributor_sets_exact_count"] != len(rows)
     status, classification, perturbations_match = _classify_support(
         all_complete=all_complete,
         any_parent_difference=any_parent_difference,
+        all_fine_candidate_sets_exact=all_fine_candidate_sets_exact,
+        any_contributor_difference=any_contributor_difference,
         relion_random_perturbation=args.relion_random_perturbation,
         recovar_random_perturbation=args.recovar_random_perturbation,
         perturbation_tolerance=args.perturbation_tolerance,
     )
     return {
-        "schema": "em_k4_relion_recovar_candidate_support_audit_v2",
+        "schema": "em_k4_relion_recovar_candidate_support_audit_v3",
         "status": status,
         "metric_policy": ("matrix-qualified canonical candidate identities; no correlation"),
         "classification": classification,
@@ -469,6 +494,8 @@ def audit(args: argparse.Namespace) -> dict[str, object]:
             "sampling_perturbations_match": perturbations_match,
             "complete_oversampled_expansion_for_every_particle": all_complete,
             "coarse_parent_sets_exact_for_every_particle": not any_parent_difference,
+            "fine_candidate_sets_exact_for_every_particle": all_fine_candidate_sets_exact,
+            "rotation_contributor_sets_exact_for_every_particle": not any_contributor_difference,
         },
         "scope": {
             "iteration": args.iteration,
