@@ -9720,3 +9720,90 @@ The posterior score-decomposition report is
 `33a6a98d17f3c84ff55c406d4ab49c8d5c337189aa24d668ed14121fccbfea61`);
 completion marker SHA-256 is
 `f706b25d226e69ccaae2c8f1831f49329eac25742473659452af706d0ba37912`.
+
+### Passive fine-score capture localizes K=4 to candidate-varying data terms
+
+RELION source commit `05398d236147eb71ce7fbbb60c635f2e8c012746`
+adds a bounded passive selected-stack capture immediately before
+exponentiation. Build `11591782` completed `0:0`; paired control/capture
+science `11591945` ran both arms sequentially on physical A100
+`GPU-ed3fe7be-abe7-7c79-06da-bc76e74d6025`, taking 1,437 and 1,087 seconds
+and sealing all 17 factor plus 17 fine-score sidecars. Its wrapper's `1:0`
+exit came only from a superseded assertion that every active hypothesis must
+have positive post-exponent weight. RELION production intentionally clamps
+shifted float32 scores below `-88` to zero.
+
+The corrected fail-closed validator accepts 46,208/46,208 active candidates,
+including exactly 43,842 production-clamp underflows. Pre-exponent and shifted
+score algebra close with zero maximum absolute error, while all non-underflow
+weights reproduce expf within `2.384185791015625e-07` relative error. Post-hoc
+job `11593544` completed `0:0`; control and capture dispatch/particle fields
+are exact and the four final class-map FSC-AUC values are
+`0.999999992596`--`0.999999995235`. The captured post-exponent fine weight is
+bitwise identical to the downstream factor weight on all 108 matched active
+hypotheses, eliminating any intervening normalizer/exponent/factor boundary.
+
+The 17-particle, 25-rotation exact panel separates the centered combined-score
+residual into data and prior terms:
+
+| Component | Relative L2 | Median abs | p95 abs | Max abs |
+|---|---:|---:|---:|---:|
+| combined score | `1.2579036e-5` | `2.4414063e-4` | `4.8828125e-4` | `4.8828125e-4` |
+| data score | `1.7222145e-5` | `1.9642711e-4` | `5.2545071e-4` | `6.0272217e-4` |
+| orientation prior | `7.9367489e-7` | `4.2915344e-6` | `4.2915344e-6` | `4.2915344e-6` |
+| translation prior | `5.5783039e-8` | `0` | `4.7683716e-7` | `4.7683716e-7` |
+
+Substituting only RELION's data component removes `0.999735251703` of
+combined-score residual energy; orientation and translation priors remove
+only `0.005022408445` and `-0.000179557013`. Follow-up job `11593681`
+completed `0:0` and rejects a per-particle normalization-only explanation:
+subtracting each particle's best scalar offset reduces data-residual L2 from
+`0.002692778263` to `0.001808401433`, removing only
+`0.548987582535` of its energy. The surviving residual is candidate-varying,
+with median/p95/maximum absolute values `0.000152826309`,
+`0.000304941088`, and `0.000335693359`.
+
+This moves the supported causal boundary to RELION-versus-RECOVAR fine
+projection/residual operands or their per-pixel reduction. Priors, shifted
+normalization, expf, posterior division, significance support, factor
+placement, and any per-particle score offset are now excluded as primary
+causes. The next bounded experiment should capture a matched candidate's
+projected reference and per-pixel diff2 terms before reduction.
+
+Evidence root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_finescore_capture_05398d2_20260725T043428Z`.
+Validation, inertness, component-decomposition, and score-shape SHA-256 values
+are `a4778489664f5d67aff151f3a6f72b3c38764d91febbedea975d67321de91a06`,
+`9f0ab46b7ffbd63061c7c41f2fde3fe3daceb15cff80ec1d78201ec7727954cf`,
+`591e5ddfa4ed0c725cc18fa7d7ecc17ea9eef79de893a4866b166b2d8304f834`,
+and `4502b45fff0b04232d37e67df0bfbe2b7646f09c027674cff8abf2df446bd9bd`.
+This diagnostic does not alter the frozen K=1 score.
+
+### Exact-128-add case-4 intervention is rejected
+
+Frozen case-4 science `11579503` completed `0:0` from clean commit
+`161cb18f8989d8e83320d539d35a12f597d32ea6` on H100 `della-h20g5`.
+Summary `11579504` completed `0:0`; strict audit `11579539` correctly
+returned `1:0`. The numbered trajectories remain close through iteration 17
+(merged cross-engine FSC-AUC `0.999664883`), but final merged cross-engine
+FSC-AUC is `0.992294244`, below the fixed `0.995` threshold. The topology
+audit independently reports iteration-15 `current_size` 154 for RELION versus
+156 for RECOVAR.
+
+The rejection does not indicate poorer recovered science. Final merged GT
+FSC-AUC is `0.352136260` for RECOVAR versus `0.348384999` for RELION, a
+`+0.003751261` RECOVAR delta. RECOVAR takes `7,969.70` seconds versus
+RELION's `16,053` seconds, or `2.0143x` faster. Compared with the prior
+bounded-tree arm's final cross-engine `0.992965912`, exact 128-add/tie
+handling changes the result by `-0.000671668`; it is rejected as a production
+parity fix. RECOVAR records convergence at iteration 17, so its final all-data
+step is convergence-valid; grid correction and forced after-max finalization
+remain unset.
+
+The FSC and topology reports are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case04_atomic_161cb18f_20260724T231500Z`
+with SHA-256 values
+`56994ba7e843b0245ca31671d64a60f6fc4ab747d150d6542bfe809ec79f733f`
+and `df1aad317d46e15d79a8ece0413cdfb2e533a69e4426e0f14ec5360705667ef1`.
+The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
+evaluated.

@@ -6734,6 +6734,68 @@ same-device equivalence or numerical noise.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 
+# 2026-07-25: fine-score capture moves K=4 to projection/residual operands
+
+- RELION commit `05398d236147eb71ce7fbbb60c635f2e8c012746`
+  passively captures selected-stack pre-exponent data/prior/combined scores,
+  shifted arguments, production expf outputs, and exact sparse identities.
+  Build `11591782` completed `0:0`.
+- Paired control/capture `11591945` ran sequentially on physical A100
+  `GPU-ed3fe7be-abe7-7c79-06da-bc76e74d6025` and sealed 17 factor plus 17
+  fine-score sidecars. Its wrapper failed only the superseded assumption that
+  all active hypotheses have positive post-exponent weight. RELION clamps
+  shifted float32 score `< -88` to zero; the corrected validator accepts all
+  46,208 candidates and exactly 43,842 such underflows.
+- Post-hoc job `11593544` completed `0:0`. Control/capture dispatch and final
+  particle fields are exact; all class maps pass inertness at FSC-AUC
+  `0.999999992596`--`0.999999995235`. Score/shift algebra has zero maximum
+  error and non-underflow expf has maximum relative error
+  `2.384185791015625e-07`.
+- On 17 particles, 25 exact contributor rotations, and 108 active
+  hypotheses, fine post-exponent weights equal downstream factor weights
+  bitwise. The combined centered score residual has relative L2
+  `1.2579036e-5`; its data component is `1.7222145e-5`, while orientation
+  and translation priors are only `7.9367489e-7` and `5.5783039e-8`.
+- A data-component substitution removes `0.999735251703` of combined-score
+  residual energy. Prior substitutions do not. Score-shape job `11593681`
+  completed `0:0`; a best per-particle scalar offset removes only
+  `0.548987582535` of data-residual energy and leaves maximum absolute
+  candidate-varying residual `0.000335693359`.
+- The next bounded K=4 discriminator is a matched-candidate capture of the
+  fine projected reference/per-pixel diff2 operands and reduction. Do not
+  patch priors, expf, posterior normalization, support, factor placement, or
+  a per-particle offset.
+- Evidence root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_finescore_capture_05398d2_20260725T043428Z`.
+  Validation, inertness, decomposition, and score-shape report SHA-256 values
+  are `a4778489664f5d67aff151f3a6f72b3c38764d91febbedea975d67321de91a06`,
+  `9f0ab46b7ffbd63061c7c41f2fde3fe3daceb15cff80ec1d78201ec7727954cf`,
+  `591e5ddfa4ed0c725cc18fa7d7ecc17ea9eef79de893a4866b166b2d8304f834`,
+  and `4502b45fff0b04232d37e67df0bfbe2b7646f09c027674cff8abf2df446bd9bd`.
+
+# 2026-07-25: exact-128-add case-4 arm fails the frozen gate
+
+- Science `11579503` (`COMPLETED 0:0`, H100 `della-h20g5`), summary
+  `11579504` (`COMPLETED 0:0`), and fail-closed strict audit `11579539`
+  (`FAILED 1:0`) complete the clean `161cb18f` intervention arm.
+- Numbered iteration 17 remains close at merged cross-engine FSC-AUC
+  `0.999664883`, but the final merged map is `0.992294244`, below the frozen
+  `0.995` requirement. The topology audit also finds iteration-15
+  `current_size` 154 versus 156.
+- RECOVAR final GT FSC-AUC is `0.352136260` versus RELION `0.348384999`,
+  delta `+0.003751261`. Wall times are `7,969.70` and `16,053` seconds,
+  making RECOVAR `2.0143x` faster. The arm is rejected specifically on parity
+  shape/topology.
+- Exact 128-add/tie handling worsens final cross-engine FSC-AUC by
+  `-0.000671668` relative to the prior bounded-tree arm, so it is not a
+  production fix. RECOVAR converged at iteration 17; final all-data is valid,
+  and grid correction/forced after-max remain unset.
+- FSC/topology report SHA-256 values are
+  `56994ba7e843b0245ca31671d64a60f6fc4ab747d150d6542bfe809ec79f733f`
+  and `df1aad317d46e15d79a8ece0413cdfb2e533a69e4426e0f14ec5360705667ef1`.
+- Frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
+  evaluated.
+
 ## 2026-07-25 seed-exact K=4 accepted-hypothesis factor closure
 
 - RELION factor-capture build `11587833` completed from RELION commit
