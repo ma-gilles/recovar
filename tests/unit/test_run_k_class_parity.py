@@ -2,6 +2,7 @@ import inspect
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 
 def test_k_class_replay_batch_plan_applies_estimator_and_kclass_caps(monkeypatch):
@@ -40,6 +41,55 @@ def test_k_class_replay_batch_plan_applies_estimator_and_kclass_caps(monkeypatch
     assert plan.rotation_block_size == 31
     assert plan.requested_image_batch_size == 250
     assert plan.requested_rotation_block_size == 5000
+
+
+def test_k_class_replay_recovers_exact_restart_perturbation():
+    from scripts.run_k_class_parity import _resolve_target_random_perturbation
+
+    value, source = _resolve_target_random_perturbation(
+        star_value=-0.12306,
+        perturbation_factor=0.5,
+        random_seed=1778628798,
+        target_iteration=10,
+        restart_state_iteration=9,
+        precision_mode="seed_exact",
+    )
+
+    assert value == -0.12305957078933716
+    assert source == "seed-exact-restart@9"
+
+
+def test_k_class_replay_rejects_missing_restart_boundary():
+    from scripts.run_k_class_parity import _resolve_target_random_perturbation
+
+    with pytest.raises(
+        ValueError,
+        match="pass --perturb-restart-state-iteration",
+    ):
+        _resolve_target_random_perturbation(
+            star_value=-0.12306,
+            perturbation_factor=0.5,
+            random_seed=1778628798,
+            target_iteration=10,
+            restart_state_iteration=None,
+            precision_mode="seed_exact",
+        )
+
+
+def test_k_class_replay_star_precision_is_explicitly_rounded():
+    from scripts.run_k_class_parity import _resolve_target_random_perturbation
+
+    value, source = _resolve_target_random_perturbation(
+        star_value=-0.12306,
+        perturbation_factor=0.5,
+        random_seed=None,
+        target_iteration=10,
+        restart_state_iteration=None,
+        precision_mode="star",
+    )
+
+    assert value == -0.12306
+    assert source == "star-rounded"
 
 
 def test_k_class_replay_firstiter_best_coarse_shortcut_is_diagnostic_only():

@@ -11,6 +11,7 @@ from recovar.em.sampling import (
     _relion_mstep_rotations_from_eulers,
     apply_relion_rotation_perturbation_to_eulers,
     get_oversampled_rotation_grid_from_samples,
+    relion_sampling_perturbation_for_iteration,
 )
 
 
@@ -93,12 +94,76 @@ _UNPERTURBED_FINE_EULERS_F64 = np.asarray(
     dtype=np.float64,
 )
 
+# Five iteration-10 K=4 weighted-sum matrices captured from RELION after a
+# continuation from run_it009. The sampling STAR rounds the live perturbation
+# to -0.12306, while the seed-exact value is -0.12305957078933716.
+_K4_RESTART_PARENT_CHILD = np.asarray(
+    [
+        [293, 4],
+        [342, 2],
+        [342, 4],
+        [342, 7],
+        [90, 3],
+    ],
+    dtype=np.int64,
+)
+_K4_RESTART_MSTEP_ROTATION_BITS = np.asarray(
+    [
+        [1052386263, 3204951217, 1061429477, 1060489267, 1060152046, 1041217251, 3206176265, 1056729477, 1059098305],
+        [1058153064, 3200386585, 1060796210, 1060846933, 1059276408, 3195481418, 3200189669, 1059825665, 1059334299],
+        [1052875775, 3205887686, 1060602466, 1064029067, 1050783034, 3194572054, 3183361835, 1061098689, 1059631691],
+        [1059608873, 3205391353, 1057100669, 1061027885, 1058542104, 3198083018, 3187955380, 1058326438, 1062055714],
+        [1061673231, 3198169958, 3205136030, 3173386773, 3210977500, 1055480547, 3206522678, 3198873872, 3207918152],
+    ],
+    dtype=np.uint32,
+).reshape(-1, 3, 3)
+
 
 def test_relion_mstep_rotation_helper_matches_captured_float32_bits():
     rotations = _relion_mstep_rotations_from_eulers(_RELION_FINE_EULERS_F64)
 
     assert rotations.dtype == np.float32
     np.testing.assert_array_equal(rotations.view(np.uint32), _RELION_MSTEP_ROTATION_BITS)
+
+
+def test_k4_restart_uses_seed_exact_perturbation_for_captured_mstep_bits():
+    exact_perturbation = relion_sampling_perturbation_for_iteration(
+        0.5,
+        1778628798,
+        10,
+        restart_state_iteration=9,
+    )
+    assert exact_perturbation == -0.12305957078933716
+
+    exact_rows = []
+    rounded_rows = []
+    for parent, child in _K4_RESTART_PARENT_CHILD:
+        exact, _ = get_oversampled_rotation_grid_from_samples(
+            np.asarray([parent]),
+            parent_nside_level=1,
+            oversampling_order=1,
+            random_perturbation=exact_perturbation,
+            rotation_index_order="recovar",
+        )
+        rounded, _ = get_oversampled_rotation_grid_from_samples(
+            np.asarray([parent]),
+            parent_nside_level=1,
+            oversampling_order=1,
+            random_perturbation=-0.12306,
+            rotation_index_order="recovar",
+        )
+        exact_rows.append(exact[child])
+        rounded_rows.append(rounded[child])
+
+    exact_rows = np.asarray(exact_rows, dtype=np.float32)
+    rounded_rows = np.asarray(rounded_rows, dtype=np.float32)
+    np.testing.assert_array_equal(
+        exact_rows.view(np.uint32),
+        _K4_RESTART_MSTEP_ROTATION_BITS,
+    )
+    assert np.any(
+        rounded_rows.view(np.uint32) != _K4_RESTART_MSTEP_ROTATION_BITS
+    )
 
 
 def test_relion_mstep_rotation_helper_preserves_matrix2d_inverse_source_order():

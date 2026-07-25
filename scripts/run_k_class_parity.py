@@ -156,6 +156,54 @@ def _relion_adaptive_fine_translation_grid(
     return fine_translations, np.asarray(trans_parent_map, dtype=np.int64)
 
 
+def _resolve_target_random_perturbation(
+    *,
+    star_value: float,
+    perturbation_factor: float,
+    random_seed: int | None,
+    target_iteration: int,
+    restart_state_iteration: int | None,
+    precision_mode: str,
+) -> tuple[float, str]:
+    """Recover the live RELION perturbation used at a replay boundary."""
+    if precision_mode == "star":
+        return float(star_value), "star-rounded"
+    if precision_mode != "seed_exact":
+        raise ValueError(f"Unsupported perturbation precision mode: {precision_mode!r}")
+    if random_seed is None:
+        raise ValueError(
+            "seed-exact perturbation replay requires _rlnRandomSeed in the "
+            "previous optimiser STAR"
+        )
+
+    from recovar.em.sampling import relion_sampling_perturbation_for_iteration
+
+    exact = relion_sampling_perturbation_for_iteration(
+        float(perturbation_factor),
+        int(random_seed),
+        int(target_iteration),
+        restart_state_iteration=restart_state_iteration,
+    )
+    if not np.isclose(exact, float(star_value), rtol=0.0, atol=5.1e-6):
+        restart_note = (
+            "none"
+            if restart_state_iteration is None
+            else str(int(restart_state_iteration))
+        )
+        raise ValueError(
+            "Seed-reconstructed SamplingPerturbation disagrees with the target "
+            "sampling STAR; if this target was produced by a RELION continuation, "
+            "pass --perturb-restart-state-iteration. "
+            f"target_iteration={int(target_iteration)} seed={int(random_seed)} "
+            f"restart_state_iteration={restart_note} exact={exact:+.12g} "
+            f"star={float(star_value):+.12g}"
+        )
+    source = "seed-exact"
+    if restart_state_iteration is not None:
+        source = f"seed-exact-restart@{int(restart_state_iteration)}"
+    return float(exact), source
+
+
 def _scalar(table_or_dict, name: str, default=None):
     if table_or_dict is None:
         if default is None:
@@ -849,6 +897,26 @@ def main() -> None:
     parser.add_argument("--data-star", required=True, type=Path)
     parser.add_argument("--prev-iter", type=int, default=0)
     parser.add_argument("--target-iter", type=int, default=1)
+    parser.add_argument(
+        "--perturb-replay-precision",
+        choices=("seed_exact", "star"),
+        default="seed_exact",
+        help=(
+            "Use the optimiser seed to recover RELION's live perturbation by "
+            "default. star is a rounded diagnostic fallback and is not suitable "
+            "for strict boundary parity."
+        ),
+    )
+    parser.add_argument(
+        "--perturb-restart-state-iteration",
+        type=int,
+        default=None,
+        help=(
+            "Saved iteration used to start a RELION continuation that produced "
+            "the target iteration. Required for seed-exact replay across an "
+            "explicit restart boundary."
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--image-batch-size", type=int, default=250)
     parser.add_argument("--rotation-block-size", type=int, default=5000)
@@ -1052,6 +1120,7 @@ def main() -> None:
         apply_relion_translation_perturbation,
         get_relion_rotation_grid_eulers,
         get_translation_grid,
+        read_relion_optimiser_metadata,
         read_relion_sampling_metadata,
         relion_angular_sampling_deg,
     )
@@ -1159,7 +1228,18 @@ def main() -> None:
 
     sampling = read_relion_sampling_metadata(str(target_prefix) + "_sampling.star")
     healpix_order = int(sampling["healpix_order"])
-    random_perturbation = float(sampling["random_perturbation"])
+    star_random_perturbation = float(sampling["random_perturbation"])
+    optimiser = read_relion_optimiser_metadata(str(prev_prefix) + "_optimiser.star")
+    random_perturbation, random_perturbation_source = (
+        _resolve_target_random_perturbation(
+            star_value=star_random_perturbation,
+            perturbation_factor=float(sampling["perturbation_factor"]),
+            random_seed=optimiser.get("random_seed"),
+            target_iteration=args.target_iter,
+            restart_state_iteration=args.perturb_restart_state_iteration,
+            precision_mode=args.perturb_replay_precision,
+        )
+    )
     offset_range_px = float(sampling["offset_range"]) / pixel_size
     offset_step_px = float(sampling["offset_step"]) / pixel_size
     rotations, _ = apply_relion_rotation_perturbation_to_eulers(
@@ -1176,7 +1256,9 @@ def main() -> None:
     print(
         "  sampling: "
         f"healpix={healpix_order}, rotations={rotations.shape[0]}, translations={translations.shape[0]}, "
-        f"rp={random_perturbation:+.5f}, offset_range_px={offset_range_px:.3f}, offset_step_px={offset_step_px:.3f}"
+        f"rp={random_perturbation:+.12g} source={random_perturbation_source}, "
+        f"star_rp={star_random_perturbation:+.12g}, "
+        f"offset_range_px={offset_range_px:.3f}, offset_step_px={offset_step_px:.3f}"
     )
     coarse_current_size = None
     coarse_engine_current_size = current_size
@@ -1763,6 +1845,9 @@ def main() -> None:
         "n_rotations": int(rotations.shape[0]),
         "n_translations": int(translations.shape[0]),
         "random_perturbation": float(random_perturbation),
+        "random_perturbation_star": float(star_random_perturbation),
+        "random_perturbation_source": random_perturbation_source,
+        "perturb_restart_state_iteration": args.perturb_restart_state_iteration,
         "elapsed_s": float(elapsed_s),
         "relion_optimiser_cli": relion_cli_flags,
         "firstiter_cc_mode": firstiter_cc_mode,

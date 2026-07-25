@@ -587,6 +587,33 @@ and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_matched_restart_boundary_replay_0f5f1404_20260725T012000Z`;
 both contain `SAFE_TO_DELETE`.  K=4 remains red and the frozen K=1 score stays
 25/34 strict, 31/34 topology, and 34/34 evaluated.
+
+The preceding “matched-restart” interpretation is superseded by a
+full-precision perturbation audit.  RELION's continuation from
+`run_it009` uses live perturbation `-0.12305957078933716`, reconstructed from
+random seed `1778628798` with restart state iteration 9; the sampling STAR
+rounds that value to `-0.12306`.  Replay `11582127` and audit `11583809` fed
+the rounded value to RECOVAR and compared the two rounded metadata values, so
+their zero perturbation delta was not an exact arithmetic match.  The
+`4.2921066e-7` perturbation error produces approximately `2e-5` degree Euler
+shifts and explains the 258 shell-37 one-sided pixels.
+
+Device substitution `11584294` had already shown that replacing only the
+RECOVAR matrices with captured RELION matrices restores all 120 rotation rows,
+all 96 particle pixel sets, and zero one-sided pixels.  Matrix-origin probe
+`11584445` completes `0:0` in 40 seconds (maximum RSS 836,700 KiB) and rejects
+three rounded-input approximations: the closest host path still has 1,009 of
+1,080 float32 entries different and maximum absolute error `5.0664e-7`.
+Repeating the host-grid generation with the seed-exact restart perturbation
+matches all 1,080 captured float32 entries bit-for-bit.  Therefore the
+outer-shell support mismatch is a rounded replay-input artifact, not a
+RECOVAR matrix-construction or scatter-predicate defect.  The checked replay
+harness now defaults to seed-exact perturbations, requires an explicit restart
+boundary for continuations, and has a five-matrix frozen bit-pattern
+regression.  A new exact-input boundary replay is required before re-accepting
+the contributor/prescatter localization.  No frozen case is promoted: the
+score remains 25/34 strict, 31/34 topology, and 34/34 evaluated.
+
 A full terminal
 FSC/class-assignment audit `11578043` completed the complete 15-iteration
 trajectory in `01:01:29` with 4,767,900 KiB maximum RSS.  Its expected `2:0`

@@ -52,6 +52,25 @@ mode seeds starting current resolution from `init_fsc` or `ini_high`.
 
 ## Recent Source Findings
 
+2026-07-25 K=4 restart-precision finding: never use the rounded
+`_rlnSamplingPerturbInstance` from a sampling STAR as the arithmetic input to
+a strict boundary replay.  For the iteration-10 continuation from
+`run_it009`, the STAR says `-0.12306`, while RELION's seed-exact live value is
+`-0.12305957078933716` for random seed `1778628798` and restart state
+iteration 9.  The `4.2921066e-7` difference is enough to move outer
+current-size support decisions.  With the rounded value, 1,009/1,080 captured
+matrix entries differ and 258 one-sided pixels appear on shell 37; with the
+seed-exact value, RECOVAR's existing host-grid path matches all 1,080
+captured float32 entries bit-for-bit.  `scripts/run_k_class_parity.py` now
+defaults to seed-exact recovery and requires
+`--perturb-restart-state-iteration` for an explicit continuation.  Use
+`--perturb-replay-precision star` only as a diagnostic.  Slurm provenance:
+matrix substitution `11584294`, matrix-origin probe `11584445`, run root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_relion_matrix_device_substitution_7eb5e1be_20260725T014500Z`,
+runtime root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it10_relion_matrix_device_substitution_7eb5e1be_20260725T014500Z`;
+both roots contain `SAFE_TO_DELETE`.
+
 2026-06-30 old-offset rounding finding: RELION's SPA accelerated path applies
 `my_old_offset.selfROUND()` before scoring and writeback, and `ROUND(x)` is
 half-away-from-zero (`(x > 0) ? int(x + 0.5) : int(x - 0.5)`). RECOVAR had
