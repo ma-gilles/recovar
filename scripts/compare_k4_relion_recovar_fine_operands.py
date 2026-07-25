@@ -143,6 +143,7 @@ def _reconstruct_processed_score_half(
     *,
     particle_diameter_angstrom: float,
     mask_edge_pixels: float,
+    mode_override: str | None = None,
 ) -> tuple[np.ndarray | jax.Array, str]:
     raw = np.asarray(values["raw_real_images"], dtype=np.float32)
     normalization = np.asarray(
@@ -155,8 +156,13 @@ def _reconstruct_processed_score_half(
         relion_cuda == (backend == "relion_cuda"),
         "RECOVAR preprocessing flag and backend disagree",
     )
+    mode = backend if mode_override is None else mode_override
+    _require(
+        mode in {"dataset_native", "dataset_native_jax_fft", "relion_cuda"},
+        f"unsupported preprocessing replay mode {mode!r}",
+    )
     score_with_mask = bool(np.asarray(values["score_with_masked_images"]).item())
-    if relion_cuda:
+    if mode == "relion_cuda":
         radius = float(particle_diameter_angstrom) / (
             2.0 * float(np.asarray(values["voxel_size"]).item())
         )
@@ -169,7 +175,7 @@ def _reconstruct_processed_score_half(
             score_with_mask,
         )
         processed = _centered_rfft2_jax(processed_real)
-        return processed.reshape(processed.shape[0], -1).astype(jnp.complex64), backend
+        return processed.reshape(processed.shape[0], -1).astype(jnp.complex64), mode
 
     _require(
         np.array_equal(normalization, np.ones_like(normalization)),
@@ -188,8 +194,11 @@ def _reconstruct_processed_score_half(
             processed_real = processed_real * image_mask[None, :, :]
         else:
             raise ValueError(f"unsupported captured image mask mode {mask_mode!r}")
+    if mode == "dataset_native_jax_fft":
+        processed = _centered_rfft2_jax(jnp.asarray(processed_real, dtype=jnp.float32))
+        return processed.reshape(processed.shape[0], -1).astype(jnp.complex64), mode
     processed = _centered_rfft2_numpy(processed_real)
-    return processed.reshape(processed.shape[0], -1).astype(np.complex64), backend
+    return processed.reshape(processed.shape[0], -1).astype(np.complex64), mode
 
 
 def _infer_current_size(image_size: int) -> int:
@@ -357,7 +366,7 @@ def compare(
         half_image=True,
     ).astype(jnp.float32)
     compact_device = jnp.asarray(compact_indices, dtype=jnp.int32)
-    processed_compact = processed[:, compact_device]
+    processed_compact = jnp.asarray(processed)[:, compact_device]
     ctf_compact = ctf[:, compact_device]
     noise_compact = jnp.asarray(values["noise_variance_half"], dtype=jnp.float32)[
         compact_device
@@ -405,6 +414,38 @@ def compare(
         compact_indices,
         image_shape,
     )
+
+    preprocessing_counterfactuals: dict[str, dict[str, object]] = {}
+    for mode in ("dataset_native_jax_fft", "relion_cuda"):
+        alternate_processed, _ = _reconstruct_processed_score_half(
+            values,
+            particle_diameter_angstrom=particle_diameter_angstrom,
+            mask_edge_pixels=mask_edge_pixels,
+            mode_override=mode,
+        )
+        alternate_factor = _direct_score_image_factor(
+            relion_cuda_preprocess=(mode == "relion_cuda"),
+            image_correction=np.float32(image_correction[particle]),
+            scale_correction=np.float32(scale[particle]),
+        )
+        alternate_base = (
+            jnp.asarray(alternate_processed)[particle, compact_device]
+            * jnp.asarray(alternate_factor, dtype=jnp.float32)
+        )
+        alternate_base = jnp.where(
+            jnp.abs(ctf_compact[particle]) > jnp.float32(1e-8),
+            alternate_base / ctf_compact[particle],
+            alternate_base,
+        )
+        preprocessing_counterfactuals[mode] = {
+            "direct_score_image_factor": float(alternate_factor),
+            "base_shifted": np.asarray(
+                jax.block_until_ready(alternate_base), dtype=np.complex64
+            ),
+            "raw_diff2": [],
+            "shifted_image_relion": [],
+            "shifted_image_counterfactual": [],
+        }
 
     n2 = np.float32(physical_image_size**2)
     n4 = np.float32(physical_image_size**4)
@@ -482,6 +523,29 @@ def compare(
             recovar_corr_full,
             sum_init,
         )
+        for counterfactual in preprocessing_counterfactuals.values():
+            alternate_shifted_native_full = np.zeros(
+                capture.image_size, dtype=np.complex64
+            )
+            alternate_shifted_native_full[supported_full] = (
+                np.asarray(counterfactual["base_shifted"])[supported_compact]
+                * phases[translation_index, supported_compact]
+                / n2
+            ).astype(np.complex64)
+            alternate_shifted_aligned_full = -alternate_shifted_native_full
+            alternate_score, _, _ = _tree_raw_diff2(
+                relion_reference,
+                alternate_shifted_aligned_full,
+                relion_corr,
+                sum_init,
+            )
+            counterfactual["raw_diff2"].append(alternate_score)
+            counterfactual["shifted_image_relion"].append(
+                relion_shifted[supported_full] * n2
+            )
+            counterfactual["shifted_image_counterfactual"].append(
+                alternate_shifted_native_full[supported_full] * n2
+            )
         relion_raw.append(np.float32(candidate["production_raw_diff2"]))
         all_recovar_raw.append(recovar_score)
         substituted_raw["reference"].append(reference_score)
@@ -629,6 +693,61 @@ def compare(
         },
         center_deltas=True,
     )
+    production_centered_energy = float(
+        np.vdot(production_centered_data_delta, production_centered_data_delta).real
+    )
+    production_exact_centered_energy = float(
+        np.vdot(exact_production_centered, exact_production_centered).real
+    )
+    preprocessing_reports = {}
+    for mode, counterfactual in preprocessing_counterfactuals.items():
+        counterfactual_raw = np.asarray(counterfactual["raw_diff2"], dtype=np.float32)
+        centered_data_delta = -_center(
+            counterfactual_raw.astype(np.float64)
+            - relion_raw_array.astype(np.float64)
+        )
+        exact_centered_data_delta = _center(
+            centered_data_delta[production_replay_exact_mask]
+        )
+        energy = float(np.vdot(centered_data_delta, centered_data_delta).real)
+        exact_energy = float(
+            np.vdot(exact_centered_data_delta, exact_centered_data_delta).real
+        )
+        preprocessing_reports[mode] = {
+            "direct_score_image_factor": counterfactual[
+                "direct_score_image_factor"
+            ],
+            "shifted_image_operand": _metric_up_to_global_sign(
+                np.concatenate(counterfactual["shifted_image_relion"]),
+                np.concatenate(counterfactual["shifted_image_counterfactual"]),
+            ),
+            "centered_data_score_delta_recovar_minus_relion": (
+                centered_data_delta.tolist()
+            ),
+            "centered_data_score_delta_l2": float(np.sqrt(energy)),
+            "centered_data_score_delta_max_abs": float(
+                np.max(np.abs(centered_data_delta), initial=0.0)
+            ),
+            "residual_energy_change_vs_captured_production": (
+                float(energy / production_centered_energy - 1.0)
+                if production_centered_energy > 0
+                else 0.0
+            ),
+            "production_exact_candidates_recentered": {
+                "centered_data_score_delta_recovar_minus_relion": (
+                    exact_centered_data_delta.tolist()
+                ),
+                "l2": float(np.sqrt(exact_energy)),
+                "max_abs": float(
+                    np.max(np.abs(exact_centered_data_delta), initial=0.0)
+                ),
+                "residual_energy_change_vs_captured_production": (
+                    float(exact_energy / production_exact_centered_energy - 1.0)
+                    if production_exact_centered_energy > 0
+                    else 0.0
+                ),
+            },
+        }
     rotation_direct = _metric(capture.candidates[0]["matrix"], recovar_rotation.reshape(-1))
     rotation_transpose = _metric(
         capture.candidates[0]["matrix"], recovar_rotation.T.reshape(-1)
@@ -638,7 +757,7 @@ def compare(
         "_dominates_centered_fine_operand_residual"
     )
     return {
-        "schema": "k4_relion_recovar_fine_operand_comparison_v6",
+        "schema": "k4_relion_recovar_fine_operand_comparison_v7",
         "status": "complete",
         "classification": classification,
         "capture_validation": validation,
@@ -734,6 +853,7 @@ def compare(
                 "one-ULP passive replay mismatch"
             ),
         },
+        "preprocessing_counterfactuals": preprocessing_reports,
         "raw_diff2_component_counterfactual": raw_counterfactual,
         "centered_raw_diff2_component_counterfactual": centered_counterfactual,
         "candidates": candidate_rows,
