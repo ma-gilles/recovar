@@ -1,6 +1,6 @@
 import numpy as np
 
-from scripts.compare_k4_preprocess_live_pair import _center, _residual_summary
+from scripts.compare_k4_preprocess_live_pair import _center, _require, _residual_summary
 
 
 def test_live_preprocess_center_removes_common_score_offset():
@@ -23,3 +23,8 @@ def test_live_preprocess_residual_summary_tracks_centered_energy():
     assert report["residual_energy"] == 6.0
     assert report["residual_l2"] == np.sqrt(6.0)
     assert report["residual_max_abs"] == 2.0
+
+
+def test_live_preprocess_require_rejects_false_condition():
+    with np.testing.assert_raises_regex(ValueError, "candidate backend"):
+        _require(False, "unsupported candidate backend")
