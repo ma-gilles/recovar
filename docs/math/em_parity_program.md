@@ -9691,3 +9691,32 @@ The counterfactual report is
 the completion marker SHA-256 is
 `138b8490bff01a4233379b2dbe52418fc47c8ad26c3890f18b8035a7f5bdff5d`.
 The frozen K=1 score remains unchanged.
+
+### Posterior numerator and normalizer both begin at the score boundary
+
+Job `11591351` decomposes the causal posterior residual in RELION's
+exp(50)-shifted frame.  Across the 53 exact accepted hypotheses, raw weight
+relative L2 is `1.0194764e-4`.  Across the 17 particles, the all-support
+weight-normalizer relative L2 is `7.3824062e-5`.  These combine into the
+measured normalized-posterior relative L2 `8.2827810e-5`; the discrepancy is
+not produced only by final division.
+
+Taking logs removes the exponential scale. RELION raw-log-weight versus
+RECOVAR captured `combined_score - best_score + 50` has median absolute
+difference `2.4406874e-4`, p95 `4.8831519e-4`, and maximum
+`4.8834586e-4`.  The residual is therefore already present in the shifted
+fine-score argument, well above the float32 exp/log round-trip floor.
+
+The next required evidence is a passive RELION capture of pre-exponent fine
+`diff2`, orientation prior, and translation prior on this exact panel.
+Comparing those fields with RECOVAR's already captured preprior and combined
+scores will separate score operands from reduction/rounding.  No
+divide-only, exponential, significance-threshold, or factor-placement patch
+is supported.
+
+The posterior score-decomposition report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_seedexact_factor_capture_a9ae8d2_20260724T224000ET/analysis/K4_RELION_RECOVAR_POSTERIOR_SCORE_DECOMPOSITION.json`
+(SHA-256
+`33a6a98d17f3c84ff55c406d4ab49c8d5c337189aa24d668ed14121fccbfea61`);
+completion marker SHA-256 is
+`f706b25d226e69ccaae2c8f1831f49329eac25742473659452af706d0ba37912`.

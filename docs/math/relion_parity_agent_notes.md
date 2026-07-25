@@ -6803,6 +6803,25 @@ completion marker SHA-256 is
 The frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
 evaluated.
 
+Posterior score/normalizer decomposition `11591351` completed `0:0` in 30
+seconds from commit `1df53190`.  On the fixed accepted support:
+
+- raw exp(50)-frame posterior weight relative L2 is `1.0194764e-4`;
+- all-support exp(50)-frame normalizer relative L2 is `7.3824062e-5`;
+- normalized posterior relative L2 is `8.2827810e-5`;
+- RELION raw-log-weight versus RECOVAR shifted-score absolute residual has
+  median `2.4406874e-4`, p95 `4.8831519e-4`, and maximum `4.8834586e-4`.
+
+Thus both the accepted weight numerator and global normalizer differ; a
+divide-only posterior patch is rejected. The next exact-boundary capture
+should record RELION's pre-exponent fine `diff2` plus orientation/translation
+prior terms for these identities, then compare them with RECOVAR's captured
+preprior and combined scores before changing exponentiation or pruning.
+Decomposition JSON SHA-256 is
+`33a6a98d17f3c84ff55c406d4ab49c8d5c337189aa24d668ed14121fccbfea61`;
+completion marker SHA-256 is
+`f706b25d226e69ccaae2c8f1831f49329eac25742473659452af706d0ba37912`.
+
 # 2026-07-25: seed-exact K4 replay closes topology and scatter support
 
 - Seed-exact restart replay `11584817` uses the live iteration-10 sampling

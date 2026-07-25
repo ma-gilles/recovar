@@ -712,6 +712,16 @@ source-sum relative L2 from `4.2365e-5` to `3.6284e-7`.  This removes
 summation.  Posterior construction is therefore the causal remaining factor
 boundary. Counterfactual JSON SHA-256 is
 `e526fdb5b49f4675393b65512864f772be88580a37f1c1a25a8e08b0621d68d4`.
+
+Posterior decomposition `11591351` moves that boundary one step upstream.
+Raw accepted exp(50)-frame weights differ at relative L2 `1.0195e-4`, while
+the 17 all-support exp(50)-frame normalizers differ at `7.3824e-5`; both feed
+the normalized `8.2828e-5` posterior residual.  RELION raw-log-weight versus
+RECOVAR shifted-score absolute differences have median `2.4407e-4`, p95
+`4.8832e-4`, and maximum `4.8835e-4`.  This rejects a divide-only
+normalization defect and identifies fine score argument/reduction arithmetic
+before exponentiation as the next boundary. Decomposition JSON SHA-256 is
+`33a6a98d17f3c84ff55c406d4ab49c8d5c337189aa24d668ed14121fccbfea61`.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
