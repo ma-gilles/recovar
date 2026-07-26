@@ -417,21 +417,45 @@ def final_output_fourier_volumes(result):
     return half1, half2, merged
 
 
+def load_initial_fourier_volume(path: str | Path, volume_shape: tuple[int, int, int]) -> np.ndarray:
+    """Load one sealed internal Fourier reference without an MRC round-trip."""
+
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise ValueError(f"initial Fourier reference does not exist: {source}")
+    with np.load(source, allow_pickle=False) as payload:
+        if "mean_vol_ft" not in payload.files:
+            raise ValueError(f"initial Fourier reference is missing mean_vol_ft: {source}")
+        volume = np.asarray(payload["mean_vol_ft"])
+    expected_size = int(np.prod(volume_shape))
+    if volume.size != expected_size:
+        raise ValueError(
+            f"initial Fourier reference {source} has {volume.size} elements, expected {expected_size}"
+        )
+    if not np.issubdtype(volume.dtype, np.complexfloating) or not np.isfinite(volume).all():
+        raise ValueError(f"initial Fourier reference {source} must be finite complex data")
+    return volume.reshape(-1)
+
+
 def validate_final_only_replay_args(
     *,
     max_iter: int,
     force_final_after_zero_iterations: bool,
     initial_half1_mrc: str | None,
     initial_half2_mrc: str | None,
+    initial_half1_ft_npz: str | None = None,
+    initial_half2_ft_npz: str | None = None,
 ) -> None:
     """Validate the diagnostic that enters finalization from saved half maps."""
 
-    if not force_final_after_zero_iterations:
-        return
-    if int(max_iter) != 0:
+    if force_final_after_zero_iterations and int(max_iter) != 0:
         raise ValueError("--force-final-after-zero-iterations requires --max_iter 0")
     if (initial_half1_mrc is None) != (initial_half2_mrc is None):
         raise ValueError("--initial-half1-mrc and --initial-half2-mrc must be provided together")
+    if (initial_half1_ft_npz is None) != (initial_half2_ft_npz is None):
+        raise ValueError("--initial-half1-ft-npz and --initial-half2-ft-npz must be provided together")
+    if initial_half1_mrc is not None and initial_half1_ft_npz is not None:
+        raise ValueError("initial MRC and Fourier-NPZ reference inputs are mutually exclusive")
 
 
 def initial_scoring_noise_pair(noise_half1, noise_half2, *, continuous_relion_noise_state: bool):
@@ -480,6 +504,24 @@ def main():
         type=str,
         default=None,
         help="Diagnostic RECOVAR-frame half-2 map replacing the starting RELION map.",
+    )
+    parser.add_argument(
+        "--initial-half1-ft-npz",
+        type=str,
+        default=None,
+        help=(
+            "Diagnostic internal Fourier half-1 reference. The NPZ must contain "
+            "mean_vol_ft; bypasses the lossy MRC import round-trip."
+        ),
+    )
+    parser.add_argument(
+        "--initial-half2-ft-npz",
+        type=str,
+        default=None,
+        help=(
+            "Diagnostic internal Fourier half-2 reference. The NPZ must contain "
+            "mean_vol_ft; bypasses the lossy MRC import round-trip."
+        ),
     )
     parser.add_argument(
         "--force-final-after-zero-iterations",
@@ -660,6 +702,8 @@ def main():
         force_final_after_zero_iterations=args.force_final_after_zero_iterations,
         initial_half1_mrc=args.initial_half1_mrc,
         initial_half2_mrc=args.initial_half2_mrc,
+        initial_half1_ft_npz=args.initial_half1_ft_npz,
+        initial_half2_ft_npz=args.initial_half2_ft_npz,
     )
 
     _print_provenance_banner_and_assert_parity_ancestors()
@@ -933,18 +977,27 @@ def main():
 
     # Volume: get_dft3(vol_real) produces the unnormalized centered DFT.
     # This matches the internal convention expected by the refinement code.
-    if args.initial_half1_mrc is not None:
+    if args.initial_half1_ft_npz is not None:
+        vol_ft_h1 = load_initial_fourier_volume(args.initial_half1_ft_npz, (N, N, N))
+        vol_ft_h2 = load_initial_fourier_volume(args.initial_half2_ft_npz, (N, N, N))
+        print(
+            "  Diagnostic initial internal Fourier references: "
+            f"half1={args.initial_half1_ft_npz}, half2={args.initial_half2_ft_npz}"
+        )
+    elif args.initial_half1_mrc is not None:
         vol_h1 = helpers.load_mrc(args.initial_half1_mrc)
         vol_h2 = helpers.load_mrc(args.initial_half2_mrc)
         print(
             "  Diagnostic initial half maps (RECOVAR frame): "
             f"half1={args.initial_half1_mrc}, half2={args.initial_half2_mrc}"
         )
+        vol_ft_h1 = np.array(ftu.get_dft3(jnp.array(vol_h1))).reshape(-1)
+        vol_ft_h2 = np.array(ftu.get_dft3(jnp.array(vol_h2))).reshape(-1)
     else:
         vol_h1 = helpers.load_relion_volume(f"{prefix}_half1_class001.mrc")
         vol_h2 = helpers.load_relion_volume(f"{prefix}_half2_class001.mrc")
-    vol_ft_h1 = np.array(ftu.get_dft3(jnp.array(vol_h1))).reshape(-1)
-    vol_ft_h2 = np.array(ftu.get_dft3(jnp.array(vol_h2))).reshape(-1)
+        vol_ft_h1 = np.array(ftu.get_dft3(jnp.array(vol_h1))).reshape(-1)
+        vol_ft_h2 = np.array(ftu.get_dft3(jnp.array(vol_h2))).reshape(-1)
 
     # ---- Dataset + half-set split ----
     ds = load_dataset(args.data_star)

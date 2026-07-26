@@ -11,6 +11,7 @@ from scripts.run_multi_iter_parity import (
     build_gt_postprocess_command,
     final_output_fourier_volumes,
     initial_scoring_noise_pair,
+    load_initial_fourier_volume,
     map_pose_arrays_to_particle_order,
     parse_relion_optimiser_cli_flags,
     relion_final_gt_series,
@@ -152,6 +153,49 @@ def test_final_only_replay_requires_paired_initial_half_maps():
             initial_half1_mrc="half1.mrc",
             initial_half2_mrc=None,
         )
+
+
+def test_final_only_replay_requires_paired_initial_fourier_references():
+    with pytest.raises(ValueError, match="must be provided together"):
+        validate_final_only_replay_args(
+            max_iter=0,
+            force_final_after_zero_iterations=True,
+            initial_half1_mrc=None,
+            initial_half2_mrc=None,
+            initial_half1_ft_npz="half1.npz",
+            initial_half2_ft_npz=None,
+        )
+
+
+def test_final_only_replay_rejects_mixed_mrc_and_fourier_references():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        validate_final_only_replay_args(
+            max_iter=0,
+            force_final_after_zero_iterations=True,
+            initial_half1_mrc="half1.mrc",
+            initial_half2_mrc="half2.mrc",
+            initial_half1_ft_npz="half1.npz",
+            initial_half2_ft_npz="half2.npz",
+        )
+
+
+def test_load_initial_fourier_volume_preserves_complex_dtype_and_values(tmp_path):
+    expected = np.arange(8, dtype=np.float64).astype(np.complex128) * (1.0 + 2.0j)
+    source = tmp_path / "half.npz"
+    np.savez(source, mean_vol_ft=expected)
+
+    actual = load_initial_fourier_volume(source, (2, 2, 2))
+
+    assert actual.dtype == np.complex128
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_load_initial_fourier_volume_rejects_wrong_size(tmp_path):
+    source = tmp_path / "half.npz"
+    np.savez(source, mean_vol_ft=np.ones(7, dtype=np.complex64))
+
+    with pytest.raises(ValueError, match="7 elements, expected 8"):
+        load_initial_fourier_volume(source, (2, 2, 2))
 
 
 def test_stack_index_from_image_name_is_zero_based():
