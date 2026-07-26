@@ -110,6 +110,43 @@ def test_k1_relion_x_half_mstep_default_disables_when_cuda_unavailable(monkeypat
     assert iteration_loop._k1_relion_x_half_mstep_enabled() is True
 
 
+def test_kclass_pass2_dump_completion_waits_for_full_target_set(tmp_path):
+    """Multi-particle diagnostics must not stop after the first matching bucket."""
+
+    kwargs = {
+        "dump_dir": tmp_path,
+        "target_original_indices": {17, 42},
+        "target_classes_one_based": range(1, 5),
+        "current_size": 74,
+    }
+    first_target_paths = [
+        tmp_path / f"pass2_orig000017_class{class_id:03d}_cs074.npz"
+        for class_id in range(1, 5)
+    ]
+    for path in first_target_paths:
+        path.touch()
+    assert sparse_pass2_mod._k_class_pass2_dump_progress(**kwargs) == (4, 8)
+
+    for class_id in range(1, 5):
+        (tmp_path / f"pass2_orig000042_class{class_id:03d}_cs074.npz").touch()
+    assert sparse_pass2_mod._k_class_pass2_dump_progress(**kwargs) == (8, 8)
+
+
+def test_kclass_pass2_dump_completion_honors_class_filter(tmp_path):
+    """A one-class diagnostic should require one file per selected particle."""
+
+    kwargs = {
+        "dump_dir": tmp_path,
+        "target_original_indices": {5, 9},
+        "target_classes_one_based": {2},
+        "current_size": None,
+    }
+    (tmp_path / "pass2_orig000005_class002_cs-01.npz").touch()
+    assert sparse_pass2_mod._k_class_pass2_dump_progress(**kwargs) == (1, 2)
+    (tmp_path / "pass2_orig000009_class002_cs-01.npz").touch()
+    assert sparse_pass2_mod._k_class_pass2_dump_progress(**kwargs) == (2, 2)
+
+
 def test_kclass_adaptive_wires_relion_x_half_without_mislabeling_dense_branch():
     source = inspect.getsource(iteration_loop._score_half_dense)
     assert "k_class_relion_x_half_mstep = _k_class_relion_x_half_mstep_enabled()" in source

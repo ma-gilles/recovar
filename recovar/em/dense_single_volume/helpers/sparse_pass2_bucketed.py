@@ -286,9 +286,34 @@ class Pass2DumpComplete(RuntimeError):
         self.dump_count = int(dump_count)
         self.current_size = None if current_size is None else int(current_size)
         super().__init__(
-            "requested RECOVAR pass-2 dump target was written "
+            "requested RECOVAR pass-2 dump target set was written "
             f"(dump_count={self.dump_count}, current_size={self.current_size})"
         )
+
+
+def _k_class_pass2_dump_progress(
+    *,
+    dump_dir: str | Path,
+    target_original_indices,
+    target_classes_one_based,
+    current_size: int | None,
+) -> tuple[int, int]:
+    """Return written and expected file counts for a K-class dump target set."""
+
+    target_indices = {int(value) for value in target_original_indices}
+    target_classes = {int(value) for value in target_classes_one_based}
+    if not target_indices:
+        raise ValueError("K-class pass-2 dump completion requires at least one target particle")
+    if not target_classes or min(target_classes) < 1:
+        raise ValueError("K-class pass-2 dump completion requires positive one-based classes")
+    size_label = -1 if current_size is None else int(current_size)
+    root = Path(dump_dir)
+    expected_paths = [
+        root / f"pass2_orig{original_index:06d}_class{class_one_based:03d}_cs{size_label:03d}.npz"
+        for original_index in sorted(target_indices)
+        for class_one_based in sorted(target_classes)
+    ]
+    return sum(path.is_file() for path in expected_paths), len(expected_paths)
 
 
 def _original_indices_for_local(experiment_dataset, local_indices) -> np.ndarray:
@@ -12555,14 +12580,38 @@ def compute_k_class_pass2_stats_sparse_fused(
                         reconstruction_probs=dump_reconstruction_probs,
                     )
             if bucket_dump_count:
+                target_original_indices = parse_env_int_set(
+                    "RECOVAR_PASS2_DUMP_ORIGINAL_INDICES"
+                )
+                if not target_original_indices:
+                    target_original_indices = parse_env_int_set(
+                        "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES"
+                    )
+                target_class = os.environ.get("RECOVAR_PASS2_DUMP_CLASS")
+                target_classes_one_based = (
+                    {int(target_class)}
+                    if target_class
+                    else range(1, len(class_bucket_arrays) + 1)
+                )
+                completed_dump_count, expected_dump_count = _k_class_pass2_dump_progress(
+                    dump_dir=os.environ[_PASS2_DUMP_DIR_ENV],
+                    target_original_indices=target_original_indices,
+                    target_classes_one_based=target_classes_one_based,
+                    current_size=current_size,
+                )
                 logger.info(
                     "Sparse fused K-class pass-2 stop-after-dump requested via %s=1; "
-                    "wrote %d target dump file(s) at current_size=%s",
+                    "target-set progress %d/%d file(s) at current_size=%s",
                     _PASS2_DUMP_STOP_AFTER_TARGET_ENV,
-                    int(bucket_dump_count),
+                    int(completed_dump_count),
+                    int(expected_dump_count),
                     "None" if current_size is None else str(int(current_size)),
                 )
-                raise Pass2DumpComplete(dump_count=bucket_dump_count, current_size=current_size)
+                if completed_dump_count == expected_dump_count:
+                    raise Pass2DumpComplete(
+                        dump_count=completed_dump_count,
+                        current_size=current_size,
+                    )
         log_score_offset = (
             np.asarray(
                 _relion_cuda_fine_log_evidence_offset(global_min_diff2),
