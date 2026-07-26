@@ -10188,6 +10188,10 @@ and
 `473d05b6e38d5d4f8685269277833876da2762ddefc4703aa9aa022add8407de`.
 Strict-audit launcher SHA-256 is
 `0f98d966de8eeb8fc66ed062d5da32939b31232007c915501ee516e804738718`.
+While setup `11633606` remained pending, its allocation was reduced from
+64G/1h to 16G/10m using Slurm pending-job updates; the matching prior setup
+completed in 26 seconds at 2.71 GiB peak RSS.  These updates affect only
+scheduling metadata, not the immutable launcher or fixture.
 
 Scorecard mode pins fixture-manifest SHA-256
 `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`,

@@ -6797,12 +6797,20 @@ same-device equivalence or numerical noise.
   `2154c7f11519dee1756b24342bb962b35501bf3202c50bf1e9eac5267dd2e515`
   and
   `eb160be9c13762aae67a92aa2b21243d339d09175d14bd503196fa02bd138bba`.
+  Pending setup allocation `11633606` was reduced from 64G/1h to 16G/10m
+  after the matching prior setup completed in 26 seconds at 2,838,076 KiB
+  peak RSS.  This is a scheduler-only update; launcher and fixture bytes are
+  unchanged.
   Frozen fixture-manifest SHA-256 is
   `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
 - Scorecard mode keeps grid correction unset, final numbered-state replay
   off, forced finalization absent, exact fixture bytes, per-iteration maps,
   and no diagnostic scoring/support overrides. No score changes at
   submission; unchanged FSC/FSC-AUC and topology audits must pass first.
+- Stale case-3 audit `11501908`, permanently held by
+  `afterok:11501889(failed)`, was cancelled at
+  `2026-07-26T12:48:16-04:00`. It could never run and is not part of a
+  current evidence chain.
 
 # 2026-07-26: canonical case 3 promotes fixed snapshot v7
 
