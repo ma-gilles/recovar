@@ -10461,3 +10461,51 @@ the v8 proposal root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scorecard_v8_case32_916ab17a_20260726T162000ET`.
 Both contain `SAFE_TO_DELETE` markers.  Exact-H100 case-5 discriminator
 `11602720` remains pending and does not affect the fixed score.
+
+## 2026-07-26 K=4 fine-score diagnostics gain a fixed repeatability floor
+
+Two complete 12-particle RELION fine-score panels now calibrate the
+iteration-10/class-2 score diagnostic against independent run-to-run
+variation.  Deferred-serialization control/capture job `11642770` produced
+all 12 geometry and 12 fine-score artifacts on one A100.  Angles,
+translations, classes, dispatch, and sampling perturbation are exact.
+Pmax differs in 12,434 of 100,000 rows with maximum absolute difference
+`1.83e-4`, and significant-sample count differs in three rows.  All four
+class-map FSC-AUC gates pass at
+`0.9999999921658561`--`0.9999999951049385`.
+
+Independent uninstrumented same-A100 control/control job `11642928` measures
+the same arithmetic floor with every capture variable unset in both arms.
+It has 12,485 Pmax mismatches, maximum absolute difference `1.74e-4`, five
+significant-sample mismatches, exact pose/translation/class fields, and four
+map FSC-AUC values from `0.9999999926135839` to
+`0.9999999949863005`.  Therefore bitwise Pmax/significant-count equality is
+not a valid capture-inertness discriminator for this RELION K=4 CUDA
+configuration.  This is a measured calibration, not a widened tolerance.
+
+Across complete panels `11641747` and `11642770`, all 12 BPref geometries,
+all candidate topology, and all 12 fine-score winners are exact.  The
+centered 24,800-candidate combined-score repeatability residual has energy
+`0.0001224850926333829`, L2 `0.011067298343922193`, and maximum absolute
+value `0.0004961985462159646`.  Commits `8d2afd15` and `8f92455c` package
+this fixed metric and a fail-closed three-way classifier.  The classifier
+binds the panel, capture-inertness, uninstrumented-control, and preprocessing
+screen schemas/scopes; requires exact pose, translation, class, dispatch,
+perturbation, geometry, topology, and winners; retains the unchanged
+`0.999999` map FSC-AUC threshold; and calls a preprocessing reduction robust
+only when both data and combined removed residual energies exceed the
+capture/capture floor.  It is hard-coded
+`scorecard_change_admissible=false`.
+
+Focused validation passes `10/10`; scoped Ruff, compile, checkout provenance,
+and `git diff --check` pass.  A committed-script replay reproduces the sealed
+24,800-candidate scope and aggregate metrics exactly.  Its output is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_finescore_panel12_deferred_29a64a3_20260726T185200ET/analysis/CAPTURE_REPEATABILITY_REPO_8d2afd15.json`
+with SHA-256
+`e0bd9a32e11a838c09ba6b83d0ac33dd0966bba7ccc924e57aeb551b7bd5445a`.
+
+Full preprocessing screen `11641724` and exact-H100 K=1 discriminator
+`11641917` remain active.  Neither diagnostic changes the immutable fixed
+metrics: K=1 remains `27/34` strict, `32/34` exact topology, and `34/34`
+evaluated; K=4 remains `41/60` direct checks and `9/15` all-class
+iterations.

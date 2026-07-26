@@ -7123,6 +7123,35 @@ This status summary precedes the detailed capture and factor audit log below.
 - Frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
   evaluated.
 
+# 2026-07-26: K=4 passive-capture variability is calibrated, not bitwise
+
+- RELION source `29a64a3f578ce999a3bc1f1ae56588be03870b9a` moves only
+  fine-score capture serialization after the existing all-class production
+  barrier. Build `11642549` completed `0:0`; binary SHA-256 is
+  `4cb3aad7b7314ad38e409028c1ceef5e04fa15e12dd16bc9e14af239736154ff`.
+- Same-A100 control/capture `11642770` completed both science arms and all 24
+  selected artifacts, then correctly failed its older bitwise all-field
+  wrapper. Pose, translation, class, dispatch, and perturbation are exact;
+  Pmax mismatch count/max are `12434 / 1.83e-4`, significant-count mismatch
+  is 3, and all class-map FSC-AUC values exceed `0.9999999921`.
+- Same-A100 uninstrumented control/control `11642928` has capture variables
+  unset in both arms but independently produces Pmax mismatch count/max
+  `12485 / 1.74e-4` and five significant-count mismatches. Pose,
+  translation, class, dispatch, and perturbation remain exact, and all map
+  FSC-AUC values exceed `0.9999999926`. Exact Pmax/significant equality is
+  therefore a native-repeat property failure, not evidence that the passive
+  capture perturbs scientific state.
+- The two complete passive panels have exact geometry, candidate topology,
+  and winners for 12/12 targets. Their centered combined residual energy,
+  L2, and maximum absolute value over 24,800 active candidates are
+  `1.224850926333829e-4`, `0.011067298343922193`, and
+  `4.961985462159646e-4`.
+- RECOVAR commits `8d2afd15` and `8f92455c` make the repeatability floor
+  reusable and bind all calibration reports fail closed. No tolerance or
+  fixed score changed. The pending host/RELION-CUDA panel must complete
+  exact 48+48 artifacts and manifest verification before the three-way
+  classification is admissible.
+
 ## 2026-07-25 seed-exact K=4 accepted-hypothesis factor closure
 
 - RELION factor-capture build `11587833` completed from RELION commit
