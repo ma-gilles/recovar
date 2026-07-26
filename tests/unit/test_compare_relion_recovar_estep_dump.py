@@ -599,6 +599,77 @@ def test_compare_relion_recovar_estep_dump_decodes_implicit_pass0_firstiter_grid
     assert result["common_score_pre_prior_centered_diff"]["max_abs"] == 0.0
 
 
+def test_compare_relion_recovar_estep_dump_can_select_explicit_firstiter_pass1(tmp_path):
+    relion_dir = tmp_path / "relion"
+    relion_dir.mkdir()
+    _write_flat_real(
+        relion_dir / "pass0_firstiter_cc_exp_Mweight_raw_preonehot.bin",
+        -np.arange(12, dtype=np.float64),
+    )
+    _write_flat_int(
+        relion_dir / "pass0_firstiter_cc_weight_dims.bin",
+        [1, 2, 3, 2, 1, 1, 12],
+    )
+
+    rotations = np.stack(
+        [
+            np.eye(3, dtype=np.float64),
+            np.diag([-1.0, -1.0, 1.0]),
+        ],
+    )
+    _write_flat_int(relion_dir / "pass1_firstiter_cc_raw_rot_id.bin", [100, 101])
+    _write_flat_int(relion_dir / "pass1_firstiter_cc_raw_rot_idx.bin", [0, 1])
+    _write_flat_int(relion_dir / "pass1_firstiter_cc_raw_trans_idx.bin", [0, 1])
+    _write_flat_real(
+        relion_dir / "pass1_firstiter_cc_exp_Mweight_raw_preonehot.bin",
+        [-1.0, -3.0],
+    )
+    _write_flat_real(
+        relion_dir / "pass1_class0_fine_eulers.bin",
+        rotations.reshape(-1),
+    )
+
+    recovar_npz = tmp_path / "recovar_pass2.npz"
+    scores = np.array([[1.0, -np.inf], [-np.inf, 3.0]], dtype=np.float64)
+    np.savez_compressed(
+        recovar_npz,
+        original_index=np.int64(3047),
+        local_index=np.int64(1560),
+        current_size=np.int64(56),
+        n_fine_trans=np.int64(2),
+        fine_translations=np.zeros((2, 2), dtype=np.float32),
+        rotations=rotations.astype(np.float32),
+        oversampled_rot_indices=np.array([100, 101], dtype=np.int64),
+        parent_map=np.array([0, 0], dtype=np.int32),
+        candidate_mask=np.isfinite(scores),
+        scores_with_prior=scores,
+        scores_pre_prior=scores,
+        probs=np.array([[0.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        rotation_log_prior=np.zeros(2, dtype=np.float64),
+        translation_log_prior=np.zeros(2, dtype=np.float64),
+        shifted_corrected=np.empty((0,), dtype=np.complex64),
+        ctf2_over_nv_score=np.ones(1, dtype=np.float64),
+        proj_half=np.empty((2, 1), dtype=np.complex64),
+        half_weights=np.ones(1, dtype=np.float64),
+        window_indices=np.array([0], dtype=np.int32),
+    )
+
+    result = compare_dumps(
+        relion_dir,
+        recovar_npz,
+        match_mode="matrix",
+        relion_firstiter_pass="pass1",
+    )
+
+    assert result["relion_selected_field"] == "explicit_firstiter_cc_grid:pass1"
+    assert result["relion_generic_candidate_prefix"] == "pass1"
+    assert result["match_mode"] == "matrix"
+    assert result["common_candidate_count"] == 2
+    assert result["relion_top_key"] == [1, 1]
+    assert result["recovar_top_key"] == [1, 1]
+    assert result["common_score_pre_prior_centered_diff"]["max_abs"] == 0.0
+
+
 def test_compare_relion_recovar_estep_dump_uses_part_specific_acc_table(tmp_path):
     relion_dir = tmp_path / "relion"
     relion_dir.mkdir()

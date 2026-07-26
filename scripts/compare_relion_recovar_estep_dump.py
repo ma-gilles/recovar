@@ -801,11 +801,16 @@ def _candidate_table_from_relion(
     *,
     reconstruction_only: bool,
     acc_table_prefix: str | None = None,
+    firstiter_pass: str | None = None,
     class_index: int | None = None,
     parent_rotation_divisor: int | None = None,
     parent_translation_divisor: int | None = None,
 ) -> dict[str, Any]:
     payload = parse_dump_dir(path)
+    if firstiter_pass not in {None, "pass0", "pass1"}:
+        raise ValueError(f"firstiter_pass must be pass0 or pass1, got {firstiter_pass!r}")
+    if firstiter_pass is not None and acc_table_prefix is not None:
+        raise ValueError("firstiter_pass and acc_table_prefix are mutually exclusive")
 
     prefixed_table = None
     prefixed_selected_mask = None
@@ -826,32 +831,56 @@ def _candidate_table_from_relion(
         # A normal adaptive dump contains both coarse pass0 and fine pass1
         # arrays. Keep every generic candidate field on fine pass1 when it is
         # available instead of allowing sorted suffix lookup to mix passes.
-        generic_candidate_prefix = (
-            "pass1"
-            if _get_by_suffix_from_prefix(payload, "acc_trans_idx", "pass1") is not None
-            else None
-        )
+        generic_candidate_prefix = None
+        if firstiter_pass is None:
+            generic_candidate_prefix = (
+                "pass1"
+                if _get_by_suffix_from_prefix(payload, "acc_trans_idx", "pass1") is not None
+                else None
+            )
 
         def generic_candidate_field(name: str) -> np.ndarray | None:
             if generic_candidate_prefix is not None:
                 return _get_by_suffix_from_prefix(payload, name, generic_candidate_prefix)
             return _get_by_suffix(payload, name)
 
-        rot_id = generic_candidate_field("acc_rot_id")
-        compact_rot_idx = generic_candidate_field("acc_rot_idx")
-        rot_idx = rot_id if rot_id is not None else compact_rot_idx
-        trans_idx = generic_candidate_field("acc_trans_idx")
-        coarse_trans_idx = generic_candidate_field("candidate_coarse_trans_idx")
-        prob = generic_candidate_field("candidate_weight_normalized")
-        if prob is None:
-            prob = generic_candidate_field("exp_Mweight_posterior")
-        score_pre = generic_candidate_field("exp_Mweight_raw_preprior")
+        if firstiter_pass == "pass1":
+            generic_candidate_prefix = "pass1"
+            rot_id = _get_by_suffix_from_prefix(payload, "firstiter_cc_raw_rot_id", "pass1")
+            compact_rot_idx = _get_by_suffix_from_prefix(
+                payload,
+                "firstiter_cc_raw_rot_idx",
+                "pass1",
+            )
+            rot_idx = rot_id if rot_id is not None else compact_rot_idx
+            trans_idx = _get_by_suffix_from_prefix(
+                payload,
+                "firstiter_cc_raw_trans_idx",
+                "pass1",
+            )
+            coarse_trans_idx = trans_idx
+            prob = None
+            score_pre = _get_by_suffix_from_prefix(
+                payload,
+                "firstiter_cc_exp_Mweight_raw_preonehot",
+                "pass1",
+            )
+        else:
+            rot_id = generic_candidate_field("acc_rot_id")
+            compact_rot_idx = generic_candidate_field("acc_rot_idx")
+            rot_idx = rot_id if rot_id is not None else compact_rot_idx
+            trans_idx = generic_candidate_field("acc_trans_idx")
+            coarse_trans_idx = generic_candidate_field("candidate_coarse_trans_idx")
+            prob = generic_candidate_field("candidate_weight_normalized")
+            if prob is None:
+                prob = generic_candidate_field("exp_Mweight_posterior")
+            score_pre = generic_candidate_field("exp_Mweight_raw_preprior")
         rot_prior = generic_candidate_field("candidate_orientation_log_prior")
         trans_prior = generic_candidate_field("candidate_offset_log_prior")
         combined_prior = generic_candidate_field("candidate_combined_log_prior")
         candidate_class_idx = generic_candidate_field("candidate_class_idx")
         reconstruction_mask = generic_candidate_field("candidate_in_reconstruction_set")
-        firstiter_raw_preonehot = None
+        firstiter_raw_preonehot = score_pre if firstiter_pass == "pass1" else None
         implicit_firstiter = None
         if rot_idx is None:
             implicit_firstiter = _implicit_firstiter_grid_from_relion(payload)
@@ -889,7 +918,10 @@ def _candidate_table_from_relion(
             )
         rot_matrices = None
         rotation_count = int(implicit_firstiter["rotation_count"]) if implicit_firstiter is not None else None
-        selected_field = "implicit_firstiter_cc_grid:pass0" if implicit_firstiter is not None else "all_candidates"
+        if firstiter_pass == "pass1":
+            selected_field = "explicit_firstiter_cc_grid:pass1"
+        else:
+            selected_field = "implicit_firstiter_cc_grid:pass0" if implicit_firstiter is not None else "all_candidates"
     else:
         generic_candidate_prefix = None
         rot_idx = prefixed_table["rot_idx"]
@@ -1428,6 +1460,7 @@ def compare_dumps(
     reconstruction_only: bool = False,
     match_mode: str = "auto",
     relion_acc_table_prefix: str | None = None,
+    relion_firstiter_pass: str | None = None,
     recovar_class_index: int | None = None,
     relion_n_psi: int | None = None,
     relion_parent_rot_divisor: int | None = None,
@@ -1462,6 +1495,7 @@ def compare_dumps(
         relion_dump_dir,
         reconstruction_only=reconstruction_only,
         acc_table_prefix=relion_acc_table_prefix,
+        firstiter_pass=relion_firstiter_pass,
         class_index=recovar.get("class_index"),
         parent_rotation_divisor=relion_parent_rot_divisor,
         parent_translation_divisor=relion_parent_trans_divisor,
@@ -1596,6 +1630,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--relion-firstiter-pass",
+        choices=("pass0", "pass1"),
+        default=None,
+        help=(
+            "Select an explicit firstiter-CC candidate pass when pass-0 and pass-1 "
+            "arrays coexist. Use pass0 for the dense coarse grid and pass1 for the "
+            "compact fine grid."
+        ),
+    )
+    parser.add_argument(
         "--recovar-class-index",
         type=int,
         default=None,
@@ -1665,6 +1709,7 @@ def main() -> None:
         reconstruction_only=args.reconstruction_only,
         match_mode=args.match_mode,
         relion_acc_table_prefix=args.relion_acc_table_prefix,
+        relion_firstiter_pass=args.relion_firstiter_pass,
         recovar_class_index=args.recovar_class_index,
         relion_n_psi=args.relion_n_psi,
         relion_parent_rot_divisor=args.relion_parent_rot_divisor,
