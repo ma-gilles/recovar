@@ -10192,6 +10192,10 @@ While setup `11633606` remained pending, its allocation was reduced from
 64G/1h to 16G/10m using Slurm pending-job updates; the matching prior setup
 completed in 26 seconds at 2.71 GiB peak RSS.  These updates affect only
 scheduling metadata, not the immutable launcher or fixture.
+The adjusted setup completed `0:0` in 32 seconds on `della-r3c2n1`.
+Dependent science `11633607` started immediately on `della-l07g6`, passed
+the clean-source gate, and recorded physical A100 UUID
+`GPU-bd720f2f-c28a-09c0-d51e-d08b1897125a`.
 
 Scorecard mode pins fixture-manifest SHA-256
 `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`,

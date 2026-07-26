@@ -6800,7 +6800,10 @@ same-device equivalence or numerical noise.
   Pending setup allocation `11633606` was reduced from 64G/1h to 16G/10m
   after the matching prior setup completed in 26 seconds at 2,838,076 KiB
   peak RSS.  This is a scheduler-only update; launcher and fixture bytes are
-  unchanged.
+  unchanged. The adjusted setup completed `0:0` in 32 seconds on
+  `della-r3c2n1`. Science `11633607` started immediately on `della-l07g6`,
+  passed the clean-source gate, and recorded physical A100 UUID
+  `GPU-bd720f2f-c28a-09c0-d51e-d08b1897125a`.
   Frozen fixture-manifest SHA-256 is
   `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
 - Scorecard mode keeps grid correction unset, final numbered-state replay
