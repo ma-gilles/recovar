@@ -1,6 +1,6 @@
 # RECOVAR / RELION EM Parity Scorecard
 
-**K=1 fixed-suite score: 25 / 34 passing (34 / 34 evaluated; 31 / 34 intermediate-topology passes).**
+**K=1 fixed-suite score: 26 / 34 passing (34 / 34 evaluated; 32 / 34 intermediate-topology passes).**
 
 Suite: `k1-gui-grid0-local-highshell-full34` (version 1; denominator frozen at 34).
 Frozen case-definition SHA-256: `9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1`.
@@ -11,14 +11,14 @@ The artifact-pinned fixture manifest is checked into the repository and binds al
 
 Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like finalization. Correlation is not computed or gated.
 
-Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v6`, generated `2026-07-24T01:04:11.826284+00:00`, JSON SHA-256 `32c6512a8507f7b17a59d0be527fa5c9609067e0d8f598a2d108bed9a3fc8a56`.
-Progress: +5 passing cases since the first frozen snapshot; +2 since the previous snapshot.
+Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v7`, generated `2026-07-26T15:48:00+00:00`, JSON SHA-256 `55fb5042a3768c5d44b89aef72412682c6ebad2d832ba3c2a1b02a6a491c7d8e`.
+Progress: +6 passing cases since the first frozen snapshot; +1 since the previous snapshot.
 
 | Done | Case | Fixture | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
 | [x] | `k1-01` | `baseline_100k_g256_white_noise1_bf80` | pass | pass | 0.998379294 | +0.008163340 | science 11384176; trajectory 11384362; intermediate 11384363 |
 | [x] | `k1-02` | `more_images_200k_g256_white_noise1_bf80` | pass | pass | 0.998574606 | +0.005625197 | science 11501888; trajectory 11501907; intermediate 11501907 |
-| [ ] | `k1-03` | `more_images_300k_g256_white_noise1_bf80` | fail | fail | 0.998786703 | +0.005373891 | science 11384178; trajectory 11384366; intermediate 11384367 |
+| [x] | `k1-03` | `more_images_300k_g256_white_noise1_bf80` | pass | pass | 0.998782733 | +0.005426332 | science 11587631; trajectory 11632847; intermediate 11632847 |
 | [ ] | `k1-04` | `high_noise_100k_g256_white_noise3_bf80` | fail | pass | 0.991556309 | +0.003869282 | science 11384179; trajectory 11384368; intermediate 11384369 |
 | [ ] | `k1-05` | `very_high_noise_100k_g256_white_noise10_bf80` | fail | pass | 0.985743479 | +0.000544950 | science 11384180; trajectory 11384370; intermediate 11384371 |
 | [x] | `k1-06` | `noctf_control_100k_g256_white_noise3_bf80` | pass | pass | 0.997522945 | +0.005563842 | science 11384181; trajectory 11384372; intermediate 11384373 |
@@ -60,6 +60,7 @@ Progress: +5 passing cases since the first frozen snapshot; +2 since the previou
 | `strict-k1-v4-20260722` | 2026-07-22T15:57:09.593124+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db` | 22 | +1 | 12 | 0 |
 | `strict-k1-v5-20260722` | 2026-07-22T19:00:51.329249+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038` | 23 | +1 | 11 | 0 |
 | `strict-k1-v6-20260724` | 2026-07-24T01:04:11.826284+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08` | 25 | +2 | 9 | 0 |
+| `strict-k1-v7-20260726` | 2026-07-26T15:48:00+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08`, `4c8b043a9b80` | 26 | +1 | 8 | 0 |
 
 <!-- BEGIN MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 ## Post-snapshot fixed-fixture intervention diagnostics
@@ -824,6 +825,28 @@ RECOVAR shifted-score absolute differences have median `2.4407e-4`, p95
 normalization defect and identifies fine score argument/reduction arithmetic
 before exponentiation as the next boundary. Decomposition JSON SHA-256 is
 `33a6a98d17f3c84ff55c406d4ab49c8d5c337189aa24d668ed14121fccbfea61`.
+
+### Canonical case 3 advances the frozen score to 26/34
+
+Canonical fixed-fixture science `11587631` and strict read-only audit
+`11632847` completed `0:0` from clean source
+`4c8b043a9b80ff12441e36f5a77c6e9f1896197b`.  All 17 numbered iterations
+pass the unchanged FSC/FSC-AUC gate; the worst numbered merged cross-engine
+FSC-AUC is `0.999961901327` at iteration 10.  Final merged cross-engine
+FSC-AUC is `0.998782732611`, and the RECOVAR-minus-RELION GT FSC-AUC delta
+is `+0.005426331835`.  Exact intermediate topology passes at every numbered
+iteration.  The run converged at iteration 17, ran final all-data only after
+convergence, and kept grid correction off.
+
+Fail-closed proposal `11633116` rejected an audit stdout name that omitted
+the literal frozen ID `k1-03`; it created no ledger.  Byte-identical hard-link
+aliases supplied the expected provenance name without changing audit bytes.
+Replacement proposal `11633309` then completed `0:0`, re-hashed the
+470,170,958,467-byte fixed fixture suite, and produced v7 ledger SHA-256
+`55fb5042a3768c5d44b89aef72412682c6ebad2d832ba3c2a1b02a6a491c7d8e`.
+Snapshot `strict-k1-v7-20260726` is therefore 26/34 strict, 32/34 exact
+topology, and 34/34 evaluated; definitions, denominator, and thresholds are
+unchanged.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

@@ -6734,6 +6734,38 @@ same-device equivalence or numerical noise.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 
+# 2026-07-26: canonical case 3 promotes fixed snapshot v7
+
+- Canonical fixed-fixture science `11587631` and read-only strict audit
+  `11632847` completed `0:0` from clean detached source
+  `4c8b043a9b80ff12441e36f5a77c6e9f1896197b`.
+- All 17 numbered rows pass FSC/FSC-AUC and exact intermediate topology.
+  Worst numbered merged cross-engine FSC-AUC is `0.9999619013267681` at
+  iteration 10.  Final merged cross-engine FSC-AUC is
+  `0.9987827326111832`; RECOVAR-minus-RELION GT FSC-AUC delta is
+  `+0.0054263318347904654`.
+- The run converged at iteration 17, ran final all-data only after
+  convergence, and kept `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` unset/off.
+- FSC, topology, and shellwise evidence SHA-256 values are
+  `0c5b3eccf9324b8c6aece1dcba3f920e49ef0da05eafa074fcc9124bf72fa2de`,
+  `7e47bb0cdb3e488fcbc72cdcba9df7673989ed7cf5bc095238e4e6eddd72dbd7`,
+  and
+  `b8358785fd84ff970b4cd4f97483cf98e93f35a6a01d6906abadc0841f59e2bc`.
+- Proposal `11633116` failed closed on an audit-log filename lacking the
+  literal frozen ID `k1-03` and emitted no ledger.  Byte-identical hard-link
+  aliases supplied the required provenance name without modifying audit
+  bytes.  Replacement `11633309` completed `0:0` and re-hashed all
+  470,170,958,467 pinned fixture bytes.
+- Accepted v7 ledger SHA-256 is
+  `55fb5042a3768c5d44b89aef72412682c6ebad2d832ba3c2a1b02a6a491c7d8e`.
+  Durable proposal root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scorecard_v7_case03_d27d397c_20260726T114800ET`.
+- Snapshot `strict-k1-v7-20260726` is 26/34 strict, 32/34 exact topology,
+  and 34/34 evaluated.  Denominator, definitions, manifest, and thresholds
+  are unchanged.
+- Exact-H100 discriminator `11602720` remains the next K=1 causal gate; it
+  cannot move the frozen score without a complete strict fixed-fixture pass.
+
 # 2026-07-25: K4 candidate completes host arm and holds an 11.33% live speedup
 
 - Same-physical-A100 science `11600592` completed all 15 `host_numpy`

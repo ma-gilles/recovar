@@ -10100,3 +10100,39 @@ science `11587631` should reproduce the already-passing older strict case-3
 audit on the newer clean commit `4c8b043a`.  Read-only strict audit
 `11632847` is the cheapest disproof and must pass both complete FSC trajectory
 and exact intermediate topology before snapshot v7 advances from 25/34.
+
+## 2026-07-26 canonical case 3 advances K=1 to 26/34
+
+Canonical fixed-fixture science `11587631` and read-only strict audit
+`11632847` completed `0:0` from clean detached source
+`4c8b043a9b80ff12441e36f5a77c6e9f1896197b`.  The unchanged auditors pass
+all 17 numbered FSC/FSC-AUC rows and exact intermediate topology.  Worst
+numbered merged cross-engine FSC-AUC is `0.9999619013267681` at iteration
+10; final merged cross-engine FSC-AUC is `0.9987827326111832`, and the final
+RECOVAR-minus-RELION GT FSC-AUC delta is `+0.0054263318347904654`.
+The run converged at iteration 17, ran final all-data only after convergence,
+and kept grid correction off.
+
+The canonical audit report SHA-256 values are
+`0c5b3eccf9324b8c6aece1dcba3f920e49ef0da05eafa074fcc9124bf72fa2de`
+for FSC,
+`7e47bb0cdb3e488fcbc72cdcba9df7673989ed7cf5bc095238e4e6eddd72dbd7`
+for topology, and
+`b8358785fd84ff970b4cd4f97483cf98e93f35a6a01d6906abadc0841f59e2bc`
+for shellwise evidence.
+
+Fail-closed proposal job `11633116` rejected the launcher stdout name because
+it lacked the literal frozen ID `k1-03`; it created no ledger.  Byte-identical
+hard-link aliases supplied the validator-required name while preserving the
+original stdout/stderr inodes and hashes.  Replacement proposal `11633309`
+completed `0:0` after re-hashing the full 470,170,958,467-byte fixture suite.
+The accepted v7 ledger is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scorecard_v7_case03_d27d397c_20260726T114800ET/proposal/em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v7.json`
+with SHA-256
+`55fb5042a3768c5d44b89aef72412682c6ebad2d832ba3c2a1b02a6a491c7d8e`.
+
+Snapshot `strict-k1-v7-20260726` now records 26/34 strict FSC/FSC-AUC passes,
+32/34 exact-topology passes, and 34/34 evaluated.  The denominator, case
+definitions, fixture manifest, and acceptance thresholds remain unchanged.
+The next causal K=1 discriminator remains exact-H100 job `11602720`; it does
+not alter the score until a complete fixed-fixture trajectory passes.

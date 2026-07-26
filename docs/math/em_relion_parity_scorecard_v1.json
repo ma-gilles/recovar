@@ -16,12 +16,12 @@
     "forced_final_all_data_after_nonconvergence": false
   },
   "current_snapshot": {
-    "id": "strict-k1-v6-20260724",
-    "counts": {"pass": 25, "fail": 9, "not_run": 0},
+    "id": "strict-k1-v7-20260726",
+    "counts": {"pass": 26, "fail": 8, "not_run": 0},
     "source_ledger": {
-      "schema": "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v6",
-      "generated_utc": "2026-07-24T01:04:11.826284+00:00",
-      "sha256": "32c6512a8507f7b17a59d0be527fa5c9609067e0d8f598a2d108bed9a3fc8a56"
+      "schema": "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v7",
+      "generated_utc": "2026-07-26T15:48:00+00:00",
+      "sha256": "55fb5042a3768c5d44b89aef72412682c6ebad2d832ba3c2a1b02a6a491c7d8e"
     }
   },
   "history": [
@@ -86,6 +86,22 @@
       "counts": {"pass": 25, "fail": 9, "not_run": 0},
       "evidence_schema": "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v6",
       "evidence_sha256": "32c6512a8507f7b17a59d0be527fa5c9609067e0d8f598a2d108bed9a3fc8a56"
+    },
+    {
+      "id": "strict-k1-v7-20260726",
+      "recorded_utc": "2026-07-26T15:48:00+00:00",
+      "source_heads": [
+        "ac5177d2b0cd639db7ed6f14225d80fe9cff7d4d",
+        "9d1722781e1d6c5fc5b2ad0e15ebba3a2becbab0",
+        "6ddd094011dbf38f4c29f6c14bb8d2bab7b5f603",
+        "ab52b1ff40385b6eb91c25d5e991ca7b17f24c68",
+        "84143872a5179b5567dc8e43fb81b985d7beb37d",
+        "a2be302cdc08a59f0937e61e3ad92b72e939ccd7",
+        "4c8b043a9b80ff12441e36f5a77c6e9f1896197b"
+      ],
+      "counts": {"pass": 26, "fail": 8, "not_run": 0},
+      "evidence_schema": "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v7",
+      "evidence_sha256": "55fb5042a3768c5d44b89aef72412682c6ebad2d832ba3c2a1b02a6a491c7d8e"
     }
   ],
   "replicate_diagnostics": [
@@ -141,7 +157,7 @@
   "cases": [
     {"id":"k1-01","name":"baseline_100k_g256_white_noise1_bf80","definition":{"contrast_std":"0.0","dataset_params_option":"uniform","grid":"256","image_offset_n_std":"0.0","n_images":"100000","noise_level":"1.0","noise_model":"white","noise_scale_std":"0.0","pdb_bfactor":"80.0","percent_outliers":"0.0","put_extra_particles":"0","seed":"1701","volume_radius":"0.7"},"result":"pass","intermediate_result":"pass","final_cross_engine_fsc_auc":0.9983792940737061,"final_gt_fsc_auc_delta":0.008163340373875005,"source_head":"ac5177d2b0cd639db7ed6f14225d80fe9cff7d4d","jobs":{"intermediate":"11384363","science":"11384176","trajectory":"11384362"}},
     {"id":"k1-02","name":"more_images_200k_g256_white_noise1_bf80","definition":{"contrast_std":"0.0","dataset_params_option":"uniform","grid":"256","image_offset_n_std":"0.0","n_images":"200000","noise_level":"1.0","noise_model":"white","noise_scale_std":"0.0","pdb_bfactor":"80.0","percent_outliers":"0.0","put_extra_particles":"0","seed":"1702","volume_radius":"0.7"},"result":"pass","intermediate_result":"pass","final_cross_engine_fsc_auc":0.9985746063865033,"final_gt_fsc_auc_delta":0.005625197355017653,"source_head":"84143872a5179b5567dc8e43fb81b985d7beb37d","jobs":{"intermediate":"11501907","science":"11501888","trajectory":"11501907"}},
-    {"id":"k1-03","name":"more_images_300k_g256_white_noise1_bf80","definition":{"contrast_std":"0.0","dataset_params_option":"uniform","grid":"256","image_offset_n_std":"0.0","n_images":"300000","noise_level":"1.0","noise_model":"white","noise_scale_std":"0.0","pdb_bfactor":"80.0","percent_outliers":"0.0","put_extra_particles":"0","seed":"1703","volume_radius":"0.7"},"result":"fail","intermediate_result":"fail","final_cross_engine_fsc_auc":0.9987867026151506,"final_gt_fsc_auc_delta":0.0053738906606551895,"source_head":"ac5177d2b0cd639db7ed6f14225d80fe9cff7d4d","jobs":{"intermediate":"11384367","science":"11384178","trajectory":"11384366"}},
+    {"id":"k1-03","name":"more_images_300k_g256_white_noise1_bf80","definition":{"contrast_std":"0.0","dataset_params_option":"uniform","grid":"256","image_offset_n_std":"0.0","n_images":"300000","noise_level":"1.0","noise_model":"white","noise_scale_std":"0.0","pdb_bfactor":"80.0","percent_outliers":"0.0","put_extra_particles":"0","seed":"1703","volume_radius":"0.7"},"result":"pass","intermediate_result":"pass","final_cross_engine_fsc_auc":0.9987827326111832,"final_gt_fsc_auc_delta":0.0054263318347904654,"source_head":"4c8b043a9b80ff12441e36f5a77c6e9f1896197b","jobs":{"intermediate":"11632847","science":"11587631","trajectory":"11632847"}},
     {"id":"k1-04","name":"high_noise_100k_g256_white_noise3_bf80","definition":{"contrast_std":"0.0","dataset_params_option":"uniform","grid":"256","image_offset_n_std":"0.0","n_images":"100000","noise_level":"3.0","noise_model":"white","noise_scale_std":"0.0","pdb_bfactor":"80.0","percent_outliers":"0.0","put_extra_particles":"0","seed":"1704","volume_radius":"0.7"},"result":"fail","intermediate_result":"pass","final_cross_engine_fsc_auc":0.9915563085225809,"final_gt_fsc_auc_delta":0.0038692824298070527,"source_head":"ac5177d2b0cd639db7ed6f14225d80fe9cff7d4d","jobs":{"intermediate":"11384369","science":"11384179","trajectory":"11384368"}},
     {"id":"k1-05","name":"very_high_noise_100k_g256_white_noise10_bf80","definition":{"contrast_std":"0.0","dataset_params_option":"uniform","grid":"256","image_offset_n_std":"0.0","n_images":"100000","noise_level":"10.0","noise_model":"white","noise_scale_std":"0.0","pdb_bfactor":"80.0","percent_outliers":"0.0","put_extra_particles":"0","seed":"1705","volume_radius":"0.7"},"result":"fail","intermediate_result":"pass","final_cross_engine_fsc_auc":0.9857434790367474,"final_gt_fsc_auc_delta":0.0005449501618362135,"source_head":"ac5177d2b0cd639db7ed6f14225d80fe9cff7d4d","jobs":{"intermediate":"11384371","science":"11384180","trajectory":"11384370"}},
     {"id":"k1-06","name":"noctf_control_100k_g256_white_noise3_bf80","definition":{"contrast_std":"0.0","dataset_params_option":"noctf","grid":"256","image_offset_n_std":"0.0","n_images":"100000","noise_level":"3.0","noise_model":"white","noise_scale_std":"0.0","pdb_bfactor":"80.0","percent_outliers":"0.0","put_extra_particles":"0","seed":"1706","volume_radius":"0.7"},"result":"pass","intermediate_result":"pass","final_cross_engine_fsc_auc":0.9975229452018111,"final_gt_fsc_auc_delta":0.005563841874383135,"source_head":"ac5177d2b0cd639db7ed6f14225d80fe9cff7d4d","jobs":{"intermediate":"11384373","science":"11384181","trajectory":"11384372"}},
