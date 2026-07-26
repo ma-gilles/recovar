@@ -92,7 +92,12 @@ def _calibration_inputs():
     exact_fields["rlnMaxValueProbDistribution"] = False
     exact_fields["rlnNrOfSignificantSamples"] = False
     inertness = {
+        "schema": threeway.CAPTURE_INERTNESS_SCHEMA,
+        "status": "rejected",
         "threshold": 0.999999,
+        "dispatch_exact": True,
+        "control_perturbation": -0.12306,
+        "capture_perturbation": -0.12306,
         "exact_particle_fields": exact_fields,
         "particle_fields": {
             "rlnMaxValueProbDistribution": {"mismatch_count": 12_434, "max_abs": 0.000183},
@@ -107,6 +112,8 @@ def _calibration_inputs():
         "status": "complete",
         "scope": {
             "target_count": 12,
+            "physical_iteration": 10,
+            "class_one_based": 2,
             "geometry_exact_all": True,
             "winners_exact_all": True,
         },
@@ -121,6 +128,7 @@ def _calibration_inputs():
     }
     control_repeatability = {
         "schema": threeway.CONTROL_REPEATABILITY_SCHEMA,
+        "status": "rejected",
         "threshold": 0.999999,
         "dispatch_exact": True,
         "perturbation_a": -0.12306,
@@ -136,6 +144,12 @@ def _calibration_inputs():
         "schema": threeway.SCREEN_SCHEMA,
         "status": "complete",
         "topology_exact_all": True,
+        "scope": {
+            "physical_iteration": 10,
+            "current_size": 74,
+            "target_count": 12,
+            "classes": 4,
+        },
     }
     return inertness, screen, capture_repeatability, control_repeatability
 
@@ -175,6 +189,32 @@ def test_threeway_rejects_incomplete_preprocess_screen():
     screen["status"] = "running"
 
     with pytest.raises(ValueError, match="screen is incomplete"):
+        threeway._validate_calibration_inputs(
+            inertness=inertness,
+            screen=screen,
+            capture_repeatability=capture_repeatability,
+            control_repeatability=control_repeatability,
+        )
+
+
+def test_threeway_rejects_capture_dispatch_drift():
+    inertness, screen, capture_repeatability, control_repeatability = _calibration_inputs()
+    inertness["dispatch_exact"] = False
+
+    with pytest.raises(ValueError, match="dispatch or perturbation"):
+        threeway._validate_calibration_inputs(
+            inertness=inertness,
+            screen=screen,
+            capture_repeatability=capture_repeatability,
+            control_repeatability=control_repeatability,
+        )
+
+
+def test_threeway_rejects_changed_fixed_fsc_threshold():
+    inertness, screen, capture_repeatability, control_repeatability = _calibration_inputs()
+    inertness["threshold"] = 0.99
+
+    with pytest.raises(ValueError, match="threshold changed"):
         threeway._validate_calibration_inputs(
             inertness=inertness,
             screen=screen,

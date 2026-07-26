@@ -17,10 +17,12 @@ import numpy as np
 PHYSICAL_IMAGE_SIZE = 256
 ACTIVE = np.uint32(8)
 PANEL_SCHEMA = "recovar.k4_iter10_class2_residual_target_panel.v1"
+CAPTURE_INERTNESS_SCHEMA = "relion_k4_fine_score_panel_capture_inertness_v2"
 CAPTURE_REPEATABILITY_SCHEMA = "relion.k4_iter10_panel12_capture_repeatability.v1"
 CONTROL_REPEATABILITY_SCHEMA = "relion_k4_uninstrumented_control_repeatability_v1"
 SCREEN_SCHEMA = "recovar.k4_iter10_panel12_preprocess_screen.v1"
 REPORT_SCHEMA = "recovar.k4_iter10_panel12_threeway_fine_score.v2"
+MAP_FSC_AUC_THRESHOLD = 0.999999
 SCIENCE_PARTICLE_FIELDS = (
     "rlnAngleRot",
     "rlnAngleTilt",
@@ -126,13 +128,27 @@ def _validate_calibration_inputs(
     capture_repeatability: dict[str, object],
     control_repeatability: dict[str, object],
 ) -> dict[str, object]:
+    _require(
+        inertness.get("schema") == CAPTURE_INERTNESS_SCHEMA,
+        "RELION control/capture inertness schema changed",
+    )
+    _require(
+        inertness.get("dispatch_exact") is True
+        and inertness.get("control_perturbation") == inertness.get("capture_perturbation"),
+        "RELION control/capture dispatch or perturbation changed",
+    )
+    _require(
+        inertness.get("threshold") == MAP_FSC_AUC_THRESHOLD,
+        "RELION control/capture FSC-AUC threshold changed",
+    )
     exact_capture_fields = inertness.get("exact_particle_fields")
     _require(
         isinstance(exact_capture_fields, dict) and set(exact_capture_fields) == set(ALL_PARTICLE_FIELDS),
         "RELION control/capture particle-field schema changed",
     )
     _require(
-        all(
+        len(inertness["class_map_comparison"]) == 4
+        and all(
             row["capture_vs_control_fsc_auc"] >= inertness["threshold"]
             for row in inertness["class_map_comparison"]
         ),
@@ -150,6 +166,8 @@ def _validate_calibration_inputs(
     capture_scope = capture_repeatability["scope"]
     _require(
         capture_scope["target_count"] == 12
+        and capture_scope["physical_iteration"] == 10
+        and capture_scope["class_one_based"] == 2
         and capture_scope["geometry_exact_all"]
         and capture_scope["winners_exact_all"],
         "capture geometry or winners are not repeatable",
@@ -168,6 +186,10 @@ def _validate_calibration_inputs(
         "control repeatability schema changed",
     )
     _require(
+        control_repeatability.get("threshold") == MAP_FSC_AUC_THRESHOLD,
+        "control repeatability FSC-AUC threshold changed",
+    )
+    _require(
         control_repeatability["dispatch_exact"]
         and control_repeatability["perturbation_a"] == control_repeatability["perturbation_b"],
         "uninstrumented control dispatch or perturbation changed",
@@ -182,17 +204,27 @@ def _validate_calibration_inputs(
         "uninstrumented controls changed pose, translation, or class fields",
     )
     _require(
-        all(
+        len(control_repeatability["class_map_comparison"]) == 4
+        and all(
             row["repeat_fsc_auc"] >= control_repeatability["threshold"]
             for row in control_repeatability["class_map_comparison"]
         ),
         "uninstrumented control map repeatability changed",
     )
+    screen_scope = screen.get("scope")
     _require(
         screen.get("schema") == SCREEN_SCHEMA
         and screen.get("status") == "complete"
         and screen.get("topology_exact_all") is True,
         "host/RELION-CUDA preprocessing screen is incomplete",
+    )
+    _require(
+        isinstance(screen_scope, dict)
+        and screen_scope.get("physical_iteration") == 10
+        and screen_scope.get("current_size") == 74
+        and screen_scope.get("target_count") == 12
+        and screen_scope.get("classes") == 4,
+        "host/RELION-CUDA preprocessing screen scope changed",
     )
 
     capture_pmax = inertness["particle_fields"]["rlnMaxValueProbDistribution"]
@@ -200,6 +232,16 @@ def _validate_calibration_inputs(
     capture_significant = inertness["particle_fields"]["rlnNrOfSignificantSamples"]
     control_significant = control_repeatability["particle_fields"]["rlnNrOfSignificantSamples"]
     all_exact = all(exact_capture_fields.values())
+    expected_capture_status = "pass" if all_exact else "rejected"
+    _require(
+        inertness.get("status") == expected_capture_status,
+        "RELION control/capture status is inconsistent with particle fields",
+    )
+    expected_control_status = "pass" if all(exact_control_fields.values()) else "rejected"
+    _require(
+        control_repeatability.get("status") == expected_control_status,
+        "control repeatability status is inconsistent with particle fields",
+    )
     return {
         "classification": (
             "strict_control_capture_inertness" if all_exact else "repeatability_calibrated_non_scorecard_diagnostic"
