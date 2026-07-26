@@ -21,6 +21,7 @@ def _write_capture(
     orientation_count=2,
     significant_weight=0.999,
     weight_norm=1.0,
+    accepted=True,
 ):
     rotations = np.zeros(orientation_count, dtype=ROTATION_DTYPE)
     rotations["orientation_class_key"] = np.arange(10, 10 + orientation_count)
@@ -35,9 +36,11 @@ def _write_capture(
     hypotheses["orientation_local"] = np.repeat(np.arange(orientation_count), 2)
     hypotheses["translation"] = np.tile([0, 1], orientation_count)
     hypotheses["posterior"] = 0.1
-    hypotheses["posterior"][1] = 1.0
+    if accepted:
+        hypotheses["posterior"][1] = 1.0
     hypotheses["posterior_over_weight_norm"] = hypotheses["posterior"] / weight_norm
-    hypotheses["flags"][1] = 1
+    if accepted:
+        hypotheses["flags"][1] = 1
     pixels = np.zeros(12, dtype=validator.PIXEL_DTYPE)
     pixels["pixel"] = np.arange(12)
     pixels["x"] = np.tile(np.arange(3), 4)
@@ -45,25 +48,26 @@ def _write_capture(
     pixels["image_re"] = np.arange(1, 13)
     pixels["ctf"] = 1
     pixels["minvsigma2"] = 1
-    summaries = np.zeros(2, dtype=ROW_DTYPE)
-    summaries["state"] = 1
-    summaries["orientation_local"] = 0
-    summaries["pixel"] = [0, 1]
-    summaries["flags"] = 3
-    summaries["x"] = [0, 1]
-    summaries["source_re"] = [1, 2]
-    summaries["source_weight"] = 1
-    terms = np.zeros(12, dtype=validator.TERM_DTYPE)
-    terms["state"] = 1
-    terms["orientation_local"] = 0
-    terms["translation"] = 1
-    terms["pixel"] = np.arange(12)
-    terms["flags"] = 1
-    terms["translated_re"] = np.arange(1, 13)
-    terms["posterior_over_weight_norm"] = 1
-    terms["weighted_ctf"] = 1
-    terms["term_re"] = np.arange(1, 13)
-    terms["weight_term"] = 1
+    summaries = np.zeros(2 if accepted else 0, dtype=ROW_DTYPE)
+    terms = np.zeros(12 if accepted else 0, dtype=validator.TERM_DTYPE)
+    if accepted:
+        summaries["state"] = 1
+        summaries["orientation_local"] = 0
+        summaries["pixel"] = [0, 1]
+        summaries["flags"] = 3
+        summaries["x"] = [0, 1]
+        summaries["source_re"] = [1, 2]
+        summaries["source_weight"] = 1
+        terms["state"] = 1
+        terms["orientation_local"] = 0
+        terms["translation"] = 1
+        terms["pixel"] = np.arange(12)
+        terms["flags"] = 1
+        terms["translated_re"] = np.arange(1, 13)
+        terms["posterior_over_weight_norm"] = 1
+        terms["weighted_ctf"] = 1
+        terms["term_re"] = np.arange(1, 13)
+        terms["weight_term"] = 1
 
     header = [0] * 64
     header[:9] = [2, 528, 64, 24, 24, 40, 40, 56, 64]
@@ -81,10 +85,27 @@ def _write_capture(
         validator.fnv1a64(selected_text),
     ]
     header[37:43] = [5, 9, 9, (-4) & 0xFFFFFFFFFFFFFFFF, (-4) & 0xFFFFFFFFFFFFFFFF, 1]
-    header[43:53] = [3, 1, 1, orientation_count, 2, orientation_count * 2, 12, 2, 12, 1]
+    header[43:53] = [
+        3 if accepted else 0,
+        1 if accepted else 0,
+        1 if accepted else 0,
+        orientation_count,
+        2,
+        orientation_count * 2,
+        12,
+        summaries.size,
+        terms.size,
+        1,
+    ]
     magic = validator.HEADER_MAGIC
     footer = validator.FOOTER_STRUCT.pack(
-        validator.FOOTER_MAGIC, orientation_count, 2, orientation_count * 2, 12, 2, 12
+        validator.FOOTER_MAGIC,
+        orientation_count,
+        2,
+        orientation_count * 2,
+        12,
+        summaries.size,
+        terms.size,
     )
     payload = validator.HEADER_STRUCT.pack(magic, *header)
     payload += rotations.tobytes() + translations.tobytes() + hypotheses.tobytes()
@@ -136,6 +157,31 @@ def test_factor_capture_directory_uses_per_particle_mpi_ranks(tmp_path):
     assert report["mpi_rank"] is None
     assert report["mpi_rank_counts"] == {"1": 1, "2": 1}
     assert report["mpi_rank_by_stack"] == {"17": 1, "23": 2}
+
+
+def test_factor_capture_accepts_explicit_zero_accepted_hypotheses(tmp_path):
+    """Geometry remains valid when one selected class has no accepted pose."""
+
+    selection = tmp_path / "selection.json"
+    _selection(selection)
+    _write_capture(
+        tmp_path / "part117_stack17_img0_class1.bpre-v2.bin",
+        stack=17,
+        accepted=False,
+    )
+    _write_capture(tmp_path / "part123_stack23_img0_class1.bpre-v2.bin", stack=23)
+
+    report = validator.validate_directory(tmp_path, selection, expected_rank=2)
+
+    assert report["capture_ready"] is True
+    assert report["accepted_hypotheses_per_particle"] == [0, 1]
+    capture = validator.load_factor_capture(
+        tmp_path / "part117_stack17_img0_class1.bpre-v2.bin"
+    )
+    assert capture.rotations.size == 2
+    assert capture.translations.size == 2
+    assert capture.summaries.size == 0
+    assert capture.terms.size == 0
 
 
 def test_factor_capture_directory_rejects_particle_on_wrong_mpi_rank(tmp_path):
