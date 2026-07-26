@@ -10244,3 +10244,42 @@ root
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/scorecard_check_5573b82b_20260726T131100ET`
 contains `SAFE_TO_DELETE`.  No push is permitted while the independently
 reproduced clean-`dev2` cryo-ET gate remains red.
+
+## 2026-07-26 K=4 backend particle-state classification
+
+The generic identity-aligned particle-state auditor was applied read-only to
+both accepted 15-iteration K=4 arms from same-A100 science job `11600592`.
+Both audits completed all 15 physical iterations and their JSON/NPZ
+SHA-256 manifests verify.  This adds Pmax, significant-support, pose,
+translation, and Hungarian-matched class evidence to the existing FSC-only
+backend comparison.
+
+`relion_cuda` improves Pmax absolute p95 in 14/15 iterations with one tie,
+the within-0.5-degree fraction in 15/15, and the within-0.5-Angstrom fraction
+in 14/15 with one tie.  Exact support-count agreement improves in 13/15
+iterations, ties once, and worsens once; class agreement improves in 10,
+ties in 2, and worsens in 3.
+
+At the first direct FSC failure, iteration 10 / class 2, Pmax absolute p95
+improves from `0.046972850489` to `0.045644822556`, exact support agreement
+from `0.58654` to `0.59872`, and the within-0.5-degree/Angstrom fractions
+from `0.98718/0.97792` to `0.98751/0.97872`; class agreement remains
+`0.99520`.  Within the exact 23,607-particle RELION-class-2 cohort, support
+agreement improves from `0.494683780235` to `0.511924429195` and class-2
+mismatches fall from 177 to 172.
+
+This confirms particle-state movement toward RELION rather than a map-only
+perturbation, but the unchanged FSC gate remains red: class-2 FSC-AUC is
+`0.994889093624`, the fixed direct count is `41/60`, and only `9/15`
+iterations pass all four classes.  Classification is
+`particle_state_improves_but_fixed_fsc_gate_remains_red`; the next bounded
+K=4 discriminator is the residual iteration-10 class-2 cohort after
+RELION-CUDA preprocessing.
+
+The sealed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_host_relioncuda_samegpu_4181d340_20260725T051500ET/analysis/particle_state/HOST_VS_RELION_CUDA_PARTICLE_STATE_CLASSIFICATION.md`
+with SHA-256
+`14a35fe7a35539c6b86fadee411537e90523f31b131dae93bb1c3420daf3efcd`.
+The six-entry manifest beside it verifies.  Runtime root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_full15_particle_state_audit_4181d340_20260726T132000ET`
+contains `SAFE_TO_DELETE`.

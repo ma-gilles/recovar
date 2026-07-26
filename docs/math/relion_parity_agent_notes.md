@@ -7684,3 +7684,26 @@ completion marker SHA-256 is
 - Case-32 science `11633607` remained healthy and running on A100
   `della-l07g6`; summary `11633608`, strict FSC/topology audit `11633676`,
   and particle-state audit `11633818` remained dependency-gated.
+
+## 2026-07-26 13:27 ET — K=4 particle-state backend audit
+
+- Read-only audits of all 15 × 100,000-particle states complete for the
+  accepted host NumPy and `relion_cuda` arms from same-A100 job `11600592`.
+  Both JSON/NPZ manifests verify.
+- `relion_cuda` improves versus RELION in 14/15 Pmax-p95 rows, 15/15
+  within-0.5-degree rows, and 14/15 within-0.5-Angstrom rows.  Exact support
+  improves in 13 rows; class agreement improves in 10.
+- At first FSC failure iteration 10 / class 2, Pmax absolute p95 improves
+  `0.046972850489 -> 0.045644822556`, exact support agreement
+  `0.58654 -> 0.59872`, and the 0.5-degree/Angstrom fractions
+  `0.98718/0.97792 -> 0.98751/0.97872`.  Class agreement stays `0.99520`.
+- In the exact 23,607-particle RELION-class-2 cohort, exact support agreement
+  improves `0.494683780235 -> 0.511924429195` and class mismatches fall
+  `177 -> 172`.
+- Classification is
+  `particle_state_improves_but_fixed_fsc_gate_remains_red`; checked K=4
+  metrics remain `41/60` direct and `9/15` all-class iterations.
+- Sealed report SHA-256:
+  `14a35fe7a35539c6b86fadee411537e90523f31b131dae93bb1c3420daf3efcd`.
+  Full absolute paths and the six-entry verifying manifest are recorded in
+  `docs/math/em_parity_program.md`.
