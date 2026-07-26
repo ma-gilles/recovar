@@ -10279,7 +10279,13 @@ RELION-CUDA preprocessing.
 The sealed report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_host_relioncuda_samegpu_4181d340_20260725T051500ET/analysis/particle_state/HOST_VS_RELION_CUDA_PARTICLE_STATE_CLASSIFICATION.md`
 with SHA-256
-`14a35fe7a35539c6b86fadee411537e90523f31b131dae93bb1c3420daf3efcd`.
-The six-entry manifest beside it verifies.  Runtime root
+`b73ee37312c6ba2da9fe5b8a0139362a99a7582c0388ea2da1486218516cb620`.
+The seven-entry manifest beside it verifies.  It also seals a balanced
+iteration-10/class-2 target panel: four persistent class mismatches, four
+corrected by `relion_cuda`, and four introduced by it, selected
+deterministically by candidate absolute Pmax error and exact `rlnImageName`.
+Panel SHA-256 is
+`5cd036e6a1b834cb59c310b073ef5404efd63701454b49a5a2b55d297c14e8dd`.
+Runtime root
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_full15_particle_state_audit_4181d340_20260726T132000ET`
 contains `SAFE_TO_DELETE`.

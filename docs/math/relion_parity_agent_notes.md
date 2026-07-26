@@ -7704,6 +7704,9 @@ completion marker SHA-256 is
   `particle_state_improves_but_fixed_fsc_gate_remains_red`; checked K=4
   metrics remain `41/60` direct and `9/15` all-class iterations.
 - Sealed report SHA-256:
-  `14a35fe7a35539c6b86fadee411537e90523f31b131dae93bb1c3420daf3efcd`.
-  Full absolute paths and the six-entry verifying manifest are recorded in
+  `b73ee37312c6ba2da9fe5b8a0139362a99a7582c0388ea2da1486218516cb620`.
+  A balanced 12-particle persistent/corrected/introduced target panel has
+  SHA-256
+  `5cd036e6a1b834cb59c310b073ef5404efd63701454b49a5a2b55d297c14e8dd`.
+  Full absolute paths and the seven-entry verifying manifest are recorded in
   `docs/math/em_parity_program.md`.
