@@ -6804,6 +6804,13 @@ same-device equivalence or numerical noise.
   `della-r3c2n1`. Science `11633607` started immediately on `della-l07g6`,
   passed the clean-source gate, and recorded physical A100 UUID
   `GPU-bd720f2f-c28a-09c0-d51e-d08b1897125a`.
+  Read-only exact-identity particle-state audit `11633818` is queued
+  `afterok:11633607` to report every numbered and final Pmax, support, pose,
+  translation, class, and convergence distribution. It cannot change the
+  scorecard. Launcher/auditor SHA-256 values are
+  `59b0654de139681209d70add155b2abce5c516c074a6cef04b3a59ffcb681488`
+  and
+  `ae6e67c0c20385aa3740facd673b1c222f343c99ba2074ede1a04a32a11750cb`.
   Frozen fixture-manifest SHA-256 is
   `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
 - Scorecard mode keeps grid correction unset, final numbered-state replay
