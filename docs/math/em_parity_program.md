@@ -10175,7 +10175,9 @@ old final merged cross-engine FSC-AUC `0.97450050098333`.
 Clean detached source
 `a03c9fd1359c47e69f16904935e6cb755d078b18` submitted exact-fixture setup
 `11633606`, same-physical-A100 autonomous science `11633607`, and summary
-`11633608`.  The run root is
+`11633608`.  Unchanged strict FSC/topology audit `11633676` is queued with
+`afterok:11633607`; it uses the same accepted auditor hashes as canonical
+case 3 and writes a completion seal only when both pass.  The run root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case32_current_a03c9fd1_20260726T124000ET`;
 the corresponding runtime root is under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/`, and both contain
@@ -10184,6 +10186,8 @@ the corresponding runtime root is under
 `02ffc2b7b2c58fe51e38f34d073785247b72a2df69ed4b9cf6c73237880ce74c`,
 and
 `473d05b6e38d5d4f8685269277833876da2762ddefc4703aa9aa022add8407de`.
+Strict-audit launcher SHA-256 is
+`0f98d966de8eeb8fc66ed062d5da32939b31232007c915501ee516e804738718`.
 
 Scorecard mode pins fixture-manifest SHA-256
 `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`,

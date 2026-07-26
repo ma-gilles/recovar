@@ -6778,8 +6778,9 @@ same-device equivalence or numerical noise.
 - Clean detached source
   `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_case32_current_a03c9fd1_20260726`
   at `a03c9fd1359c47e69f16904935e6cb755d078b18` submitted setup
-  `11633606`, same-A100 autonomous science `11633607`, and summary
-  `11633608`.
+  `11633606`, same-A100 autonomous science `11633607`, summary `11633608`,
+  and unchanged strict FSC/topology audit `11633676`
+  (`afterok:11633607`).
 - The run/runtime roots are
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case32_current_a03c9fd1_20260726T124000ET`
   and
@@ -6790,6 +6791,12 @@ same-device equivalence or numerical noise.
   `02ffc2b7b2c58fe51e38f34d073785247b72a2df69ed4b9cf6c73237880ce74c`,
   and
   `473d05b6e38d5d4f8685269277833876da2762ddefc4703aa9aa022add8407de`.
+  Strict-audit launcher SHA-256 is
+  `0f98d966de8eeb8fc66ed062d5da32939b31232007c915501ee516e804738718`;
+  accepted FSC/intermediate auditor SHA-256 values remain
+  `2154c7f11519dee1756b24342bb962b35501bf3202c50bf1e9eac5267dd2e515`
+  and
+  `eb160be9c13762aae67a92aa2b21243d339d09175d14bd503196fa02bd138bba`.
   Frozen fixture-manifest SHA-256 is
   `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
 - Scorecard mode keeps grid correction unset, final numbered-state replay
