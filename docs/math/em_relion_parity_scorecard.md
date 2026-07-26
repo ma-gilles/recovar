@@ -1,6 +1,6 @@
 # RECOVAR / RELION EM Parity Scorecard
 
-**K=1 fixed-suite score: 26 / 34 passing (34 / 34 evaluated; 32 / 34 intermediate-topology passes).**
+**K=1 fixed-suite score: 27 / 34 passing (34 / 34 evaluated; 32 / 34 intermediate-topology passes).**
 
 Suite: `k1-gui-grid0-local-highshell-full34` (version 1; denominator frozen at 34).
 Frozen case-definition SHA-256: `9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1`.
@@ -11,8 +11,8 @@ The artifact-pinned fixture manifest is checked into the repository and binds al
 
 Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like finalization. Correlation is not computed or gated.
 
-Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v7`, generated `2026-07-26T15:48:00+00:00`, JSON SHA-256 `55fb5042a3768c5d44b89aef72412682c6ebad2d832ba3c2a1b02a6a491c7d8e`.
-Progress: +6 passing cases since the first frozen snapshot; +1 since the previous snapshot.
+Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v8`, generated `2026-07-26T20:50:08+00:00`, JSON SHA-256 `13c7cf50de11d6819dda2cf0320915973183f09865e4b96cc8fcb04e6f005412`.
+Progress: +7 passing cases since the first frozen snapshot; +1 since the previous snapshot.
 
 | Done | Case | Fixture | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
@@ -47,7 +47,7 @@ Progress: +6 passing cases since the first frozen snapshot; +1 since the previou
 | [x] | `k1-29` | `small_low_noise_3k_g128_white_noise0p2_bf80` | pass | pass | 0.998867525 | +0.014987020 | science 11384204; trajectory 11384429; intermediate 11384430 |
 | [x] | `k1-30` | `small_low_noise_kent_3k_g128_white_noise0p2_bf80` | pass | pass | 0.998823366 | +0.013967656 | science 11384205; trajectory 11384433; intermediate 11384434 |
 | [x] | `k1-31` | `mid_10k_g128_white_noise1_bf80` | pass | pass | 0.998725941 | +0.016924536 | science 11384206; trajectory 11384436; intermediate 11384437 |
-| [ ] | `k1-32` | `mid_10k_kent_g128_radial_noise3_bf80` | fail | pass | 0.974500501 | +0.004132488 | science 11384207; trajectory 11384438; intermediate 11384439 |
+| [x] | `k1-32` | `mid_10k_kent_g128_radial_noise3_bf80` | pass | pass | 0.998274347 | +0.003849433 | science 11635967; trajectory 11638090; intermediate 11638090 |
 | [x] | `k1-33` | `max_images_400k_g128_white_noise1_bf80` | pass | pass | 0.999734254 | +0.000244294 | science 11508260; trajectory 11508286; intermediate 11508286 |
 | [x] | `k1-34` | `max_images_400k_g128_radial_noise3_nonuniform_bf80` | pass | pass | 0.995757412 | +0.002869240 | science 11384210; trajectory 11384443; intermediate 11384444 |
 
@@ -61,6 +61,7 @@ Progress: +6 passing cases since the first frozen snapshot; +1 since the previou
 | `strict-k1-v5-20260722` | 2026-07-22T19:00:51.329249+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038` | 23 | +1 | 11 | 0 |
 | `strict-k1-v6-20260724` | 2026-07-24T01:04:11.826284+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08` | 25 | +2 | 9 | 0 |
 | `strict-k1-v7-20260726` | 2026-07-26T15:48:00+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08`, `4c8b043a9b80` | 26 | +1 | 8 | 0 |
+| `strict-k1-v8-20260726` | 2026-07-26T20:50:08+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08`, `4c8b043a9b80`, `916ab17a4c80` | 27 | +1 | 7 | 0 |
 
 <!-- BEGIN MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 ## Post-snapshot fixed-fixture intervention diagnostics
@@ -847,6 +848,33 @@ Replacement proposal `11633309` then completed `0:0`, re-hashed the
 Snapshot `strict-k1-v7-20260726` is therefore 26/34 strict, 32/34 exact
 topology, and 34/34 evaluated; definitions, denominator, and thresholds are
 unchanged.
+
+### Canonical case 32 advances the frozen score to 27/34
+
+Canonical fixed-fixture science `11635967` completed `0:0` on physical A100
+UUID `GPU-3b10bc7d-5485-6b3a-5607-da203ef39bd3` from clean source
+`916ab17a4c8040786bea6517b12c8746ae399d65`.  The bounded RELION firstiter
+intervention examined four ambiguous particles, made one exact tie, and
+changed exactly two winners.  All 11 numbered merged cross-engine FSC-AUC
+values pass; the worst is `0.999999971978` at iteration 8.  Final merged
+cross-engine FSC-AUC is `0.998274346604`, and the RECOVAR-minus-RELION GT
+FSC-AUC delta is `+0.003849433195`.
+
+Strict read-only audit `11638090` completed `0:0`, with no FSC, topology, or
+numeric-artifact failures.  The run converged after numbered iteration 11,
+ran final all-data only after convergence, and kept grid correction off.
+FSC JSON, topology JSON, and shellwise NPZ SHA-256 values are
+`4a23da9f4ea335f27be1f24b518bf7a909480f867bc115542cbf67bf81964966`,
+`9ad2459ea736d44de87ef228ceca213eea6af1d8bb9d143e1db610cbfbc571c1`,
+and
+`2c3ee1b733e64b7f16a0edd69ef1411cfa34f00b4b5f1c29284d3ab33e198c6b`.
+
+Fail-closed proposal job `11639159` completed `0:0`, superseded v7, and
+produced v8 ledger SHA-256
+`13c7cf50de11d6819dda2cf0320915973183f09865e4b96cc8fcb04e6f005412`.
+Snapshot `strict-k1-v8-20260726` is therefore 27/34 strict, 32/34 exact
+topology, and 34/34 evaluated.  The denominator, fixture bytes, definitions,
+and thresholds remain unchanged.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
@@ -876,7 +904,7 @@ pixi run python scripts/summarize_em_relion_parity_scorecard.py \
 
 After a terminal strict auditor passes, build a fail-closed candidate
 superseding ledger with `--proposal-output`. The command validates the
-the pinned fixture-manifest bytes and re-hashes every materialized byte, clean source and
+pinned fixture-manifest bytes and re-hashes every materialized byte, clean source and
 submitted job/case-table identity, same physical GPU, autonomous
 FSC/topology audits, convergence/finalization contract, and evidence
 hashes. It never mutates the checked scorecard. For example:
@@ -884,8 +912,8 @@ hashes. It never mutates the checked scorecard. For example:
 ```bash
 pixi run python scripts/summarize_em_relion_parity_scorecard.py \
   --proposal-previous-ledger /absolute/path/to/current-ledger.json \
-  --proposal-ledger-schema em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v7 \
-  --proposal-generated-utc 2026-07-24T13:00:00+00:00 \
+  --proposal-ledger-schema em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v9 \
+  --proposal-generated-utc 2026-07-26T21:00:00+00:00 \
   --proposal-status-note "Case k1-NN passed immutable strict evidence." \
   --proposal-evidence 'k1-NN|/absolute/path/to/case-root|SCIENCE_JOB|AUDIT_JOB' \
   --proposal-output /absolute/path/to/proposed-ledger.json

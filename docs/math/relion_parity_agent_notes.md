@@ -7782,3 +7782,46 @@ completion marker SHA-256 is
   `11635967` remains the unchanged map-quality gate; K=1 stays `26/34`
   strict, `32/34` topology, `34/34` evaluated, and K=4 stays `41/60`
   direct, `9/15` all-class.
+
+## 2026-07-26 16:51 ET — case-32 promotion and K=1 score 27/34
+
+- Canonical case-32 science `11635967` completed `0:0` in 56:45 on A100
+  UUID `GPU-3b10bc7d-5485-6b3a-5607-da203ef39bd3`, matching the paired
+  RELION UUID exactly.  Source was clean
+  `916ab17a4c8040786bea6517b12c8746ae399d65`; grid correction and forced
+  after-max finalization were unset.
+- The bounded firstiter intervention examined four ambiguous half-2
+  particles, made one exact tie, and changed exactly two winners.  The run
+  then stayed effectively exact through all 11 numbered iterations.
+- Worst numbered merged cross-engine FSC-AUC is `0.9999999719776043`;
+  worst numbered GT delta is `-0.000002075771598608611`.  Final merged
+  cross-engine FSC-AUC is `0.9982743466036096`, with RECOVAR/RELION GT
+  values `0.2722232856252235/0.2683738524304857` and delta
+  `+0.0038494331947377947`.
+- Convergence occurred after numbered iteration 11, enabling a valid final
+  all-data pass.  Final grid correction is `False`.
+- Strict FSC/topology audit `11638090` completed `0:0`; all 11 numbered
+  pairs and complete final products pass with no topology or numeric-artifact
+  failures.  FSC/topology/shellwise SHA-256 values are
+  `4a23da9f4ea335f27be1f24b518bf7a909480f867bc115542cbf67bf81964966`,
+  `9ad2459ea736d44de87ef228ceca213eea6af1d8bb9d143e1db610cbfbc571c1`,
+  and
+  `2c3ee1b733e64b7f16a0edd69ef1411cfa34f00b4b5f1c29284d3ab33e198c6b`.
+- Proposal `11639159` completed `0:0` and produced fail-closed v8 ledger
+  SHA-256
+  `13c7cf50de11d6819dda2cf0320915973183f09865e4b96cc8fcb04e6f005412`.
+  Fixed K=1 metrics are now `27/34` strict, `32/34` exact topology, and
+  `34/34` evaluated.  K=4 remains `41/60` direct and `9/15` all-class.
+- Integration commits `bc4bde14`, `ce466fea`, and `59430e5a` promote the
+  explicit comparator pass selector, documentation, and K=1-only
+  `firstiter_cc` RELION defaults.  Explicit environment overrides win; K>1
+  and non-firstiter behavior are unchanged.
+- Integrated focused validation passes `56/56`; the EM fast guard, scoped
+  Ruff, and `git diff --check` pass.  A first pytest invocation used the
+  wrong class-qualified node ID, collected zero tests, and was corrected
+  before any push.
+- Full run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case32_projector_tree_916ab17a_20260726T150318ET`.
+  Proposal root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scorecard_v8_case32_916ab17a_20260726T162000ET`.
+  Both are marked `SAFE_TO_DELETE`.

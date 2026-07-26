@@ -10408,3 +10408,56 @@ evidence-manifest SHA-256 is
 This closes the causal iteration-1 boundary but does not yet promote case 32:
 the frozen autonomous full-trajectory FSC/FSC-AUC arm `11635967` remains the
 required map gate.  Fixed K=1 and K=4 scores therefore remain unchanged.
+
+## 2026-07-26 case 32 passes autonomously and advances K=1 to 27/34
+
+Canonical fixed-fixture science `11635967` completed `0:0` in 56:45 on the
+same physical A100 used by its RELION reference:
+`GPU-3b10bc7d-5485-6b3a-5607-da203ef39bd3`.  It used clean source
+`916ab17a4c8040786bea6517b12c8746ae399d65`, direct real-reference handoff,
+the bounded `4e-6` RELION firstiter coarse-tree replay, autonomous stopping,
+per-iteration map capture, no forced finalization, and grid correction
+unset/off.  Four half-2 particles entered the bounded replay, one became an
+exact tie, and exactly two winners changed.
+
+All 11 numbered pairs pass the immutable trajectory gates.  The worst
+numbered merged cross-engine FSC-AUC is `0.9999999719776043` at iteration 8;
+the worst RECOVAR-minus-RELION numbered GT delta is
+`-0.000002075771598608611`.  The run converged after numbered iteration 11
+and therefore ran a valid final all-data Nyquist iteration.  Final merged
+cross-engine FSC-AUC is `0.9982743466036096`, RECOVAR GT FSC-AUC is
+`0.2722232856252235`, RELION GT FSC-AUC is `0.2683738524304857`, and the
+delta is `+0.0038494331947377947`.
+
+Independent strict audit `11638090` completed `0:0`.  It reports no FSC,
+topology, or numeric-artifact failures across all 11 numbered pairs and the
+complete final products.  Evidence SHA-256 values are
+`4a23da9f4ea335f27be1f24b518bf7a909480f867bc115542cbf67bf81964966`
+for FSC JSON,
+`9ad2459ea736d44de87ef228ceca213eea6af1d8bb9d143e1db610cbfbc571c1`
+for intermediate topology JSON, and
+`2c3ee1b733e64b7f16a0edd69ef1411cfa34f00b4b5f1c29284d3ab33e198c6b`
+for shellwise NPZ.
+
+Fail-closed proposal job `11639159` completed `0:0` from immutable detached
+source `916ab17a`, revalidated the exact fixture bytes, source/job identity,
+same-GPU pair, convergence/finalization semantics, audit status, and evidence
+hashes.  Its v8 superseding ledger SHA-256 is
+`13c7cf50de11d6819dda2cf0320915973183f09865e4b96cc8fcb04e6f005412`.
+The fixed snapshot is now K=1 `27/34` strict FSC/FSC-AUC, `32/34` exact
+topology, and `34/34` evaluated.  K=4 remains separately `41/60` direct
+checks and `9/15` all-class iterations.
+
+Commits `bc4bde14` and `ce466fea` promote explicit pass selection in the
+comparator and record the coarse-winner closure.  Commit `59430e5a` makes the
+validated direct-reference/tree controls the default only for K=1
+`firstiter_cc`; explicit environment settings win, and K>1 plus non-firstiter
+modes remain unchanged.  Integrated focused tests pass `56/56`, the EM fast
+guard passes, scoped Ruff passes, and `git diff --check` is clean.
+
+The complete run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case32_projector_tree_916ab17a_20260726T150318ET`;
+the v8 proposal root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scorecard_v8_case32_916ab17a_20260726T162000ET`.
+Both contain `SAFE_TO_DELETE` markers.  Exact-H100 case-5 discriminator
+`11602720` remains pending and does not affect the fixed score.

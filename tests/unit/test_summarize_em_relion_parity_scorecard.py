@@ -27,11 +27,11 @@ def test_frozen_v1_scorecard_is_valid_and_renders_fixed_denominator():
 
     assert scorecard["frozen_denominator"] == 34
     assert scorecard["frozen_case_definitions_sha256"] == MODULE.frozen_case_definitions_sha256(scorecard["cases"])
-    assert scorecard["current_snapshot"]["counts"] == {"pass": 26, "fail": 8, "not_run": 0}
-    assert "K=1 fixed-suite score: 26 / 34 passing" in rendered
-    assert "Progress: +6 passing cases since the first frozen snapshot; +1 since the previous snapshot." in rendered
-    assert rendered.count("| [x] |") == 26
-    assert rendered.count("| [ ] |") == 8
+    assert scorecard["current_snapshot"]["counts"] == {"pass": 27, "fail": 7, "not_run": 0}
+    assert "K=1 fixed-suite score: 27 / 34 passing" in rendered
+    assert "Progress: +7 passing cases since the first frozen snapshot; +1 since the previous snapshot." in rendered
+    assert rendered.count("| [x] |") == 27
+    assert rendered.count("| [ ] |") == 7
     assert "34 cases (470,170,958,467 bytes)" in rendered
     assert "| `strict-k1-v1-old-head-20260721`" in rendered
     assert "| 20 | — | 12 | 2 |" in rendered
@@ -45,6 +45,8 @@ def test_frozen_v1_scorecard_is_valid_and_renders_fixed_denominator():
     assert "| 25 | +2 | 9 | 0 |" in rendered
     assert "| `strict-k1-v7-20260726`" in rendered
     assert "| 26 | +1 | 8 | 0 |" in rendered
+    assert "| `strict-k1-v8-20260726`" in rendered
+    assert "| 27 | +1 | 7 | 0 |" in rendered
     assert "Non-scoring regenerated-data diagnostics" in rendered
     assert "| `k1-23` | pass | pass | 0.997483478 |" in rendered
 
@@ -281,11 +283,11 @@ def test_superseding_ledger_proposal_preserves_denominator_and_topology_counts(
     scorecard = MODULE.load_and_validate(MODULE.DEFAULT_SCORECARD)
     manifest = MODULE.load_and_validate_fixture_manifest(MODULE.DEFAULT_FIXTURE_MANIFEST, scorecard)
     previous = tmp_path / "previous.json"
-    previous_schema = "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v7"
+    previous_schema = "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v8"
     previous.write_text(json.dumps({"schema": previous_schema}) + "\n")
     scorecard["current_snapshot"]["source_ledger"] = {
         "schema": previous_schema,
-        "generated_utc": "2026-07-26T15:48:00+00:00",
+        "generated_utc": "2026-07-26T20:50:08+00:00",
         "sha256": MODULE.sha256_file(previous),
     }
     evidence = MODULE.ProposalEvidence(
@@ -307,13 +309,13 @@ def test_superseding_ledger_proposal_preserves_denominator_and_topology_counts(
         manifest,
         MODULE.sha256_file(MODULE.DEFAULT_FIXTURE_MANIFEST),
         previous,
-        "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v8",
-        "2026-07-26T16:30:00+00:00",
+        "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v9",
+        "2026-07-26T21:30:00+00:00",
         [evidence],
         "Case k1-04 passed immutable strict evidence.",
     )
 
-    assert ledger["counts"]["strict"] == {"pass": 27, "fail": 7, "not_run": 0}
+    assert ledger["counts"]["strict"] == {"pass": 28, "fail": 6, "not_run": 0}
     assert ledger["counts"]["topology"] == {"pass": 32, "fail": 2, "not_run": 0}
     assert sum(ledger["counts"]["strict"].values()) == 34
     assert ledger["updates"] == [update]
@@ -333,8 +335,8 @@ def test_superseding_ledger_rejects_unpinned_previous_evidence(tmp_path):
             manifest,
             MODULE.sha256_file(MODULE.DEFAULT_FIXTURE_MANIFEST),
             previous,
-            "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v8",
-            "2026-07-26T16:30:00+00:00",
+            "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v9",
+            "2026-07-26T21:30:00+00:00",
             [
                 MODULE.ProposalEvidence(
                     "k1-04",
