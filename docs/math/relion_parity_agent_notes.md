@@ -6734,6 +6734,38 @@ same-device equivalence or numerical noise.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
 
+# 2026-07-26: exact case-5 result classification is pinned and queued
+
+- Integration commit
+  `6c483fba9f779533d169a65d67b867b90a443235` adds
+  `scripts/classify_relion_recovar_fine_top_discrepancy.py`.  The classifier
+  requires exact Euler-matrix matching for original particle `65070`,
+  current-size `56`, and the eight exact iteration-1 particle-state fields
+  for all `100000` stock-versus-dump-enabled RELION rows.
+- The causal rule is exact and predeclared: if both engines assign exactly
+  equal raw pre-prior scores to the two cross-winner candidates, the
+  discrepancy is `compact_candidate_tie_order`; if either engine
+  distinguishes them, it is `fine_score_arithmetic`.  The report explicitly
+  sets `scorecard_change_admissible=false`; it is not an FSC checkbox.
+- Classifier/test SHA-256 values are
+  `9ca93a25c2b795bc10384bd664d4c3ca30a366e66b752c7734c687969971e976`
+  and
+  `e1582846e8078b29d292ecc7777ffdd00b51ccfc1ba4b1105b3ddbb7744a5442`.
+  Targeted classifier plus comparator validation passes 31/31 tests, and
+  scoped Ruff passes.
+- Clean detached audit source is
+  `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_fine_classifier_6c483fba_20260726`
+  at the pinned commit above.  Dependent CPU audit `11633508` is queued as
+  `afterok:11602720`; launcher SHA-256 is
+  `22b5f65320d797bf42d461411a0649adce06427ae1c97c3b22f2ab1827b1fd19`.
+  Its run root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_p65070_exact_relion_fine_20260725T083000ET`,
+  and its runtime root will be
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case05_p65070_fine_classification_11633508`;
+  both are marked or required `SAFE_TO_DELETE`.
+- The checked metric remains `strict-k1-v7-20260726`: 26/34 strict
+  FSC/FSC-AUC passes, 32/34 exact-topology passes, and 34/34 evaluated.
+
 # 2026-07-26: canonical case 3 promotes fixed snapshot v7
 
 - Canonical fixed-fixture science `11587631` and read-only strict audit

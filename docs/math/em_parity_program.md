@@ -10136,3 +10136,28 @@ Snapshot `strict-k1-v7-20260726` now records 26/34 strict FSC/FSC-AUC passes,
 definitions, fixture manifest, and acceptance thresholds remain unchanged.
 The next causal K=1 discriminator remains exact-H100 job `11602720`; it does
 not alter the score until a complete fixed-fixture trajectory passes.
+
+## 2026-07-26 exact case-5 discrepancy classifier queued
+
+Commit `6c483fba9f779533d169a65d67b867b90a443235` adds a fail-closed
+classifier for the two possible outcomes of exact-H100 case-5 discriminator
+`11602720`.  It accepts only Euler-matrix-matched particle `65070` at current
+size `56`, plus an exact eight-field stock-versus-dump-enabled RELION
+inertness report for all `100000` particles.  It compares the two engines'
+raw pre-prior values with exact equality: two exact ties localize the
+different winner to compact-candidate enumeration/tie order; any non-tie
+localizes it to fine-score arithmetic.  No tolerance, correlation, FSC
+surrogate, or scorecard acceptance is part of this classification.
+
+The classifier and its unit test have SHA-256 values
+`9ca93a25c2b795bc10384bd664d4c3ca30a366e66b752c7734c687969971e976`
+and
+`e1582846e8078b29d292ecc7777ffdd00b51ccfc1ba4b1105b3ddbb7744a5442`.
+All 31 classifier/comparator targeted tests pass, and scoped Ruff passes.
+Dependent CPU audit `11633508` is queued with
+`afterok:11602720`; its launcher SHA-256 is
+`22b5f65320d797bf42d461411a0649adce06427ae1c97c3b22f2ab1827b1fd19`.
+It re-verifies both science SHA-256 manifests before writing the causal
+classification.  This diagnostic does not change frozen K=1 snapshot
+`strict-k1-v7-20260726` (`26/34` strict, `32/34` exact topology,
+`34/34` evaluated).
