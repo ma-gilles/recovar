@@ -6766,6 +6766,37 @@ same-device equivalence or numerical noise.
 - The checked metric remains `strict-k1-v7-20260726`: 26/34 strict
   FSC/FSC-AUC passes, 32/34 exact-topology passes, and 34/34 evaluated.
 
+# 2026-07-26: immutable current-head case-32 chain submitted
+
+- The eight remaining strict failures were ranked for a cheap independent
+  current-head check. Case 24 is only `0.000195` below the FSC gate, but its
+  exact stock RELION winner is already proved launch-sensitive at a one-ULP
+  boundary; it is not an admissible tie-force target. Case 32 has exact old
+  topology, only 10,000 particles at grid 128, and no current-head fixed-input
+  rerun. Its checked final merged cross-engine FSC-AUC is
+  `0.97450050098333`.
+- Clean detached source
+  `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_case32_current_a03c9fd1_20260726`
+  at `a03c9fd1359c47e69f16904935e6cb755d078b18` submitted setup
+  `11633606`, same-A100 autonomous science `11633607`, and summary
+  `11633608`.
+- The run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case32_current_a03c9fd1_20260726T124000ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_case32_current_a03c9fd1_20260726T124000ET`;
+  both contain `SAFE_TO_DELETE`.
+- Setup/science/summary launcher SHA-256 values are
+  `ea333ecbb1f672a528a9b6222b93381cc8ac4a12404c217b027718934bee003c`,
+  `02ffc2b7b2c58fe51e38f34d073785247b72a2df69ed4b9cf6c73237880ce74c`,
+  and
+  `473d05b6e38d5d4f8685269277833876da2762ddefc4703aa9aa022add8407de`.
+  Frozen fixture-manifest SHA-256 is
+  `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
+- Scorecard mode keeps grid correction unset, final numbered-state replay
+  off, forced finalization absent, exact fixture bytes, per-iteration maps,
+  and no diagnostic scoring/support overrides. No score changes at
+  submission; unchanged FSC/FSC-AUC and topology audits must pass first.
+
 # 2026-07-26: canonical case 3 promotes fixed snapshot v7
 
 - Canonical fixed-fixture science `11587631` and read-only strict audit

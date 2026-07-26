@@ -10161,3 +10161,34 @@ It re-verifies both science SHA-256 manifests before writing the causal
 classification.  This diagnostic does not change frozen K=1 snapshot
 `strict-k1-v7-20260726` (`26/34` strict, `32/34` exact topology,
 `34/34` evaluated).
+
+## 2026-07-26 current-head fixed case 32 submitted
+
+The remaining strict failures were ranked against the immutable scorecard.
+Case 24 is numerically closest but its already-audited iteration-3 RELION
+winner flips across adjacent installed-stock launches by one float32 ULP, so
+forcing that outcome would overfit an unstable oracle.  Fixed case 32 is the
+cheapest independent current-head check that has not been rerun after the
+accumulated parity fixes: 10,000 particles, grid 128, exact old topology, and
+old final merged cross-engine FSC-AUC `0.97450050098333`.
+
+Clean detached source
+`a03c9fd1359c47e69f16904935e6cb755d078b18` submitted exact-fixture setup
+`11633606`, same-physical-A100 autonomous science `11633607`, and summary
+`11633608`.  The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case32_current_a03c9fd1_20260726T124000ET`;
+the corresponding runtime root is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/`, and both contain
+`SAFE_TO_DELETE`.  Setup/science/summary launcher SHA-256 values are
+`ea333ecbb1f672a528a9b6222b93381cc8ac4a12404c217b027718934bee003c`,
+`02ffc2b7b2c58fe51e38f34d073785247b72a2df69ed4b9cf6c73237880ce74c`,
+and
+`473d05b6e38d5d4f8685269277833876da2762ddefc4703aa9aa022add8407de`.
+
+Scorecard mode pins fixture-manifest SHA-256
+`422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`,
+autonomous pairing, per-iteration maps, same physical GPU, grid correction
+off, no replayed final numbered state, and no forced finalization or
+diagnostic scoring/support overrides.  This launch does not change the
+checked 26/34 score; only a complete unchanged FSC/FSC-AUC plus exact-topology
+audit can promote it.
