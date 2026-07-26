@@ -98,6 +98,10 @@ class FactorCapture:
     def stack_index(self) -> int:
         return self.header[12]
 
+    @property
+    def geometry_only(self) -> bool:
+        return bool(self.header[53])
+
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
@@ -174,17 +178,29 @@ def load_factor_capture(path: Path) -> FactorCapture:
 
 
 def _validate_arrays(path, header, rotations, translations, hypotheses, pixels, summaries, terms) -> None:
+    _require(header[53] in (0, 1), f"invalid geometry-only capture flag: {path}")
+    geometry_only = bool(header[53])
     _require(header[9] > 0 and header[10] > 0, f"invalid iteration/class: {path}")
     _require(header[16] > 0 and header[17] > 0 and header[18] == 1, f"invalid 2D image shape: {path}")
     _require(header[19] == header[16] * header[17], f"factor image size mismatch: {path}")
     _require(header[20] == rotations.size and header[21] == translations.size, f"factor panel counts changed: {path}")
-    _require(hypotheses.size == rotations.size * translations.size, f"hypothesis panel is not dense: {path}")
-    _require(pixels.size == header[19], f"pixel panel is incomplete: {path}")
+    if geometry_only:
+        _require(
+            hypotheses.size == pixels.size == summaries.size == terms.size == 0,
+            f"geometry-only capture contains factor-value arrays: {path}",
+        )
+    else:
+        _require(hypotheses.size == rotations.size * translations.size, f"hypothesis panel is not dense: {path}")
+        _require(pixels.size == header[19], f"pixel panel is incomplete: {path}")
     _require(header[27] == 0 and header[28] == 0, f"factor v2 requires ordinary 2D non-premultiplied CTF: {path}")
     _require(header[29] > 0 and header[29] <= header[30] * header[31], f"invalid factor capture caps: {path}")
     _require(header[33] <= header[32], f"factor capture byte cap exceeded: {path}")
     _require(header[34] and header[35] and header[36], f"factor capture identity hash is zero: {path}")
-    _require(header[42] == 1 and header[52] == 1, f"factor capture is not passive/dense canonical: {path}")
+    _require(header[42] == 1, f"factor capture is not passive: {path}")
+    _require(
+        header[52] == (0 if geometry_only else 1),
+        f"factor capture density/geometry flags disagree: {path}",
+    )
 
     expected_rotations = np.arange(rotations.size, dtype=np.uint32)
     _require(np.array_equal(rotations["orientation_local"], expected_rotations), f"rotation order changed: {path}")
@@ -204,6 +220,13 @@ def _validate_arrays(path, header, rotations, translations, hypotheses, pixels, 
         np.all(np.isfinite(np.stack((translations["x"], translations["y"], translations["z"])))),
         f"non-finite translation: {path}",
     )
+    if geometry_only:
+        _require(header[43] == 0 and header[44] == 0, f"geometry-only summary accounting changed: {path}")
+        _require(
+            header[45] <= rotations.size * translations.size,
+            f"geometry-only accepted-hypothesis count is impossible: {path}",
+        )
+        return
 
     expected_hypothesis = np.arange(hypotheses.size)
     _require(
@@ -355,6 +378,7 @@ def validate_directory(
         41,
         42,
         52,
+        53,
     )
     reference = tuple(captures[0].header[index] for index in reference_fields)
     _require(

@@ -22,6 +22,7 @@ def _write_capture(
     significant_weight=0.999,
     weight_norm=1.0,
     accepted=True,
+    geometry_only=False,
 ):
     rotations = np.zeros(orientation_count, dtype=ROTATION_DTYPE)
     rotations["orientation_class_key"] = np.arange(10, 10 + orientation_count)
@@ -68,6 +69,11 @@ def _write_capture(
         terms["weighted_ctf"] = 1
         terms["term_re"] = np.arange(1, 13)
         terms["weight_term"] = 1
+    if geometry_only:
+        hypotheses = hypotheses[:0]
+        pixels = pixels[:0]
+        summaries = summaries[:0]
+        terms = terms[:0]
 
     header = [0] * 64
     header[:9] = [2, 528, 64, 24, 24, 40, 40, 56, 64]
@@ -86,24 +92,25 @@ def _write_capture(
     ]
     header[37:43] = [5, 9, 9, (-4) & 0xFFFFFFFFFFFFFFFF, (-4) & 0xFFFFFFFFFFFFFFFF, 1]
     header[43:53] = [
-        3 if accepted else 0,
-        1 if accepted else 0,
+        0 if geometry_only else 3 if accepted else 0,
+        0 if geometry_only else 1 if accepted else 0,
         1 if accepted else 0,
         orientation_count,
         2,
-        orientation_count * 2,
-        12,
+        0 if geometry_only else orientation_count * 2,
+        0 if geometry_only else 12,
         summaries.size,
         terms.size,
-        1,
+        0 if geometry_only else 1,
     ]
+    header[53] = int(geometry_only)
     magic = validator.HEADER_MAGIC
     footer = validator.FOOTER_STRUCT.pack(
         validator.FOOTER_MAGIC,
         orientation_count,
         2,
-        orientation_count * 2,
-        12,
+        hypotheses.size,
+        pixels.size,
         summaries.size,
         terms.size,
     )
@@ -180,6 +187,37 @@ def test_factor_capture_accepts_explicit_zero_accepted_hypotheses(tmp_path):
     )
     assert capture.rotations.size == 2
     assert capture.translations.size == 2
+    assert capture.summaries.size == 0
+    assert capture.terms.size == 0
+
+
+def test_factor_capture_accepts_explicit_geometry_only_panel(tmp_path):
+    selection = tmp_path / "selection.json"
+    _selection(selection)
+    _write_capture(
+        tmp_path / "part117_stack17_img0_class1.bpre-v2.bin",
+        stack=17,
+        geometry_only=True,
+    )
+    _write_capture(
+        tmp_path / "part123_stack23_img0_class1.bpre-v2.bin",
+        stack=23,
+        accepted=False,
+        geometry_only=True,
+    )
+
+    report = validator.validate_directory(tmp_path, selection, expected_rank=2)
+
+    assert report["capture_ready"] is True
+    assert report["accepted_hypotheses_per_particle"] == [1, 0]
+    capture = validator.load_factor_capture(
+        tmp_path / "part117_stack17_img0_class1.bpre-v2.bin"
+    )
+    assert capture.geometry_only is True
+    assert capture.rotations.size == 2
+    assert capture.translations.size == 2
+    assert capture.hypotheses.size == 0
+    assert capture.pixels.size == 0
     assert capture.summaries.size == 0
     assert capture.terms.size == 0
 
