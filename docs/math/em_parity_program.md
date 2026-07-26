@@ -10211,3 +10211,36 @@ off, no replayed final numbered state, and no forced finalization or
 diagnostic scoring/support overrides.  This launch does not change the
 checked 26/34 score; only a complete unchanged FSC/FSC-AUC plus exact-topology
 audit can promote it.
+
+## 2026-07-26 fixed-metric and current-head verification checkpoint
+
+Draft PR `ma-gilles/recovar#158` was updated in place at
+`2026-07-26T17:10:05Z` without changing its remote head.  Its frozen
+fixed-denominator table now reports K=1 `26/34` strict, `32/34` exact
+topology, and `34/34` evaluated.  The same top-level checkpoint records the
+separate checked K=4 snapshot as `41/60` direct per-class FSC-AUC checks and
+`9/15` iterations passing all four classes; K=4 remains non-scoring for K=1.
+The complete 62,757-character historical body was fetched and three unique
+source strings were replaced fail closed; the verified replacement body is
+63,027 characters.
+
+On clean local head `5573b82b`, the checkout-bound pixi Python passed the
+RECOVAR/JAX provenance gate.  The following corrected checks then passed:
+
+```text
+python scripts/summarize_em_relion_parity_scorecard.py \
+  --check docs/math/em_relion_parity_scorecard.md
+python -m pytest tests/unit/test_summarize_em_relion_parity_scorecard.py
+pixi run ruff check scripts/summarize_em_relion_parity_scorecard.py \
+  tests/unit/test_summarize_em_relion_parity_scorecard.py
+git diff --check
+```
+
+The report was current, all `15/15` scorecard tests passed, and Ruff plus
+diff checks were clean.  An initial `--check` invocation without its required
+Markdown argument exited `2` before performing a check; it was corrected
+immediately and is not a scientific or test failure.  Disposable runtime
+root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/scorecard_check_5573b82b_20260726T131100ET`
+contains `SAFE_TO_DELETE`.  No push is permitted while the independently
+reproduced clean-`dev2` cryo-ET gate remains red.

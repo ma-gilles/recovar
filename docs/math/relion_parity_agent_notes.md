@@ -7660,3 +7660,27 @@ completion marker SHA-256 is
   `94db8675962d37e1ab28cb2a20a95605bec7a31682fedaa4c118aa7d43cbc4b8`.
 - Snapshot `strict-k1-v6-20260724` remains 25/34 strict, 31/34 exact
   topology, and 34/34 evaluated.
+
+## 2026-07-26 13:11 ET — fixed-metric/PR checkpoint
+
+- Draft PR `ma-gilles/recovar#158` top-level metrics were updated in place to
+  K=1 `26/34` strict, `32/34` exact topology, `34/34` evaluated, plus the
+  separate K=4 `41/60` direct checks and `9/15` all-class iterations.  The
+  remote branch head remains `6ddd0940`; no push occurred.
+- The GitHub connector fetched the full body, required exactly one match for
+  each of three stale strings, replaced only those strings, and verified the
+  returned body.  Body length changed from 62,757 to 63,027 characters;
+  GitHub recorded update time `2026-07-26T17:10:05Z`.
+- Clean local head `5573b82b` passed checkout provenance, scorecard Markdown
+  freshness, all `15/15` scorecard unit tests, scoped Ruff, and
+  `git diff --check`.
+- Exact commands are recorded in `docs/math/em_parity_program.md`.  Runtime
+  root
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/scorecard_check_5573b82b_20260726T131100ET`
+  is marked `SAFE_TO_DELETE`.
+- The first freshness attempt omitted the required argument to `--check` and
+  exited `2` before checking; the corrected invocation passed.  This was a
+  command-shape error only.
+- Case-32 science `11633607` remained healthy and running on A100
+  `della-l07g6`; summary `11633608`, strict FSC/topology audit `11633676`,
+  and particle-state audit `11633818` remained dependency-gated.
