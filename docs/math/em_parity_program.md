@@ -10358,3 +10358,53 @@ the separate K=4 snapshot remains `41/60` direct checks and `9/15`
 all-class iterations.  The next bounded K=1 discriminator is the exact
 first-iteration score/tie path for case-32 particles `3047` and `6122`,
 informed by pending passive exact-H100 case-5 job `11602720`.
+
+## 2026-07-26 case 32 firstiter coarse boundary closes causally
+
+Passive same-A100 patched-RELION captures localize both iteration-1 pose
+exceptions to the dense firstiter-CC coarse reduction.  For particle `3047`,
+all `1,069,056` candidates match and RECOVAR evaluates RELION's winning
+`(23132, 26)` candidate at the exact RELION score
+`0.24016226828098297`.  RECOVAR's generic reduction instead raises competing
+`(1938, 20)` by about `1e-7` and selects it.  The passive run is exactly
+inert across eight particle fields for all 10,000 particles.  Its sealed
+classification SHA-256 is
+`1a2cc42e09f533bcca6c35a38a1bc38f4f476aa7400123d3e7eb653e07c5c395`;
+accepted-manifest SHA-256 is
+`c437e0dd456091328d41c48e5e0e095719ecd5f60e497b4043082cbd0650908e`.
+
+Continuation job `11636715` completed `0:0` in 19:05 on A100 and sealed
+particle `6122`.  Candidate topology again matches exactly.  RELION's native
+float32 tree evaluates translations 12 and 18 at the bitwise-identical score
+`0.38579079508781433` and selects 12 by native ordering.  RECOVAR's generic
+reduction favors 18 by `2.980232238769531e-07`.  All eight audited RELION
+particle fields are exactly inert for all 10,000 particles, and the 109-file
+dump manifest verifies.  Classification SHA-256 is
+`a31ffc747071d9e4a5390e73f76b43c8cba56bac0fab5ad1d0e93b47c21e7958`;
+evidence-manifest SHA-256 is
+`ed84106366e3c2a121b5390007c12dec9a7fa698b79d140ce1041e4873e14dc8`.
+
+Diagnostic commit `ee6bd7a5` adds explicit pass-0/pass-1 selection to the
+E-step dump comparator.  This prevents a fine comparison from silently
+reselecting the dense pass-0 table when both arrays coexist.  The focused
+comparator suite passes `28/28`; scoped Ruff and `git diff --check` pass.
+Explicit fine comparisons confirm that the fine supports diverge only after
+the coarse-parent choice.
+
+One-iteration intervention job `11637193` then enabled the already narrow,
+default-off direct real-reference handoff and exact RELION coarse-tree
+top-two replay at margin `4e-6`.  It completed `0:0` in 1:53 on A100.  Half
+1 had zero ambiguous particles; half 2 had four, including one exact tie,
+and exactly two winners changed.  The all-particle audit has exact Pmax and
+support, zero pose or translation errors above `0.5`, maximum angular
+residual `1.6570707941057317e-05` degrees, and maximum translation residual
+`5.735478014345186e-06` Angstrom.  Thus the intervention eliminates exactly
+the two material case-32 exceptions without creating a new material tail.
+Classification SHA-256 is
+`50785e48e7e289ff5f4db93c146e3a30fe711de0d9a23b8c9ec6c62a9940bb4b`;
+evidence-manifest SHA-256 is
+`433152142f9ab4d1b6c03001c589f0e213d52c30da8240a9840a170e789e9c2f`.
+
+This closes the causal iteration-1 boundary but does not yet promote case 32:
+the frozen autonomous full-trajectory FSC/FSC-AUC arm `11635967` remains the
+required map gate.  Fixed K=1 and K=4 scores therefore remain unchanged.

@@ -7756,3 +7756,29 @@ completion marker SHA-256 is
   case-32 identities `3048@particles.128.mrcs` and
   `6123@particles.128.mrcs`.  Do not change tie ordering speculatively while
   passive exact-H100 case-5 job `11602720` remains pending.
+
+## 2026-07-26 15:42 ET — case-32 iteration-1 winner path causally closed
+
+- Passive target-3047 science from `11635535` is inert for all eight audited
+  fields over all 10,000 particles.  Its complete coarse grid matches
+  RECOVAR, but float32 reduction order reverses a roughly `1e-7` competition.
+  Classification SHA-256:
+  `1a2cc42e09f533bcca6c35a38a1bc38f4f476aa7400123d3e7eb653e07c5c395`.
+- Passive target-6122 continuation `11636715` completed `0:0` on A100.
+  RELION makes the two competing translations bitwise tied and selects the
+  native earlier entry; RECOVAR's generic reduction favors the other by
+  `2.980232238769531e-07`.  All 109 dump artifacts and all-particle
+  inertness verify.  Classification SHA-256:
+  `a31ffc747071d9e4a5390e73f76b43c8cba56bac0fab5ad1d0e93b47c21e7958`.
+- Diagnostic commit `ee6bd7a5` makes pass-0/pass-1 selection explicit.
+  Focused tests pass `28/28`; Ruff and `git diff --check` pass.
+- Causal intervention `11637193` completed `0:0` in 1:53 on A100.  Exact
+  RELION tree replay examines four half-2 near ties, makes one exact tie, and
+  changes exactly two winners.  The resulting all-particle audit has exact
+  Pmax/support and zero rotation or translation errors above `0.5`.
+  Classification SHA-256:
+  `50785e48e7e289ff5f4db93c146e3a30fe711de0d9a23b8c9ec6c62a9940bb4b`.
+- Do not promote the fixed score yet.  Full autonomous FSC/FSC-AUC job
+  `11635967` remains the unchanged map-quality gate; K=1 stays `26/34`
+  strict, `32/34` topology, `34/34` evaluated, and K=4 stays `41/60`
+  direct, `9/15` all-class.
