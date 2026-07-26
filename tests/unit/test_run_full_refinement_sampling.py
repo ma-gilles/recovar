@@ -12,6 +12,7 @@ from recovar.em.sampling import (
 )
 from scripts.run_full_refinement import (
     _add_significant_count_artifacts,
+    _configure_relion_firstiter_controls,
     _effective_perturb_seed,
     _explicit_relion_optimiser_for_seed,
     _jsonable_profile_rows,
@@ -23,6 +24,88 @@ from scripts.run_full_refinement import (
 )
 
 RUN_FULL_REFINEMENT = Path(__file__).resolve().parents[2] / "scripts" / "run_full_refinement.py"
+
+
+def test_k1_firstiter_cc_defaults_to_relion_reference_and_tree_controls():
+    environment = {}
+
+    use_real_reference, tree_margin_defaulted = _configure_relion_firstiter_controls(
+        firstiter_cc=True,
+        n_classes=1,
+        environ=environment,
+    )
+
+    assert use_real_reference is True
+    assert tree_margin_defaulted is True
+    assert environment == {
+        "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN": "4e-6",
+    }
+
+
+@pytest.mark.parametrize(
+    "firstiter_cc,n_classes",
+    [
+        (False, 1),
+        (True, 4),
+        (False, 4),
+    ],
+)
+def test_relion_firstiter_controls_do_not_change_other_modes(firstiter_cc, n_classes):
+    environment = {}
+
+    use_real_reference, tree_margin_defaulted = _configure_relion_firstiter_controls(
+        firstiter_cc=firstiter_cc,
+        n_classes=n_classes,
+        environ=environment,
+    )
+
+    assert use_real_reference is False
+    assert tree_margin_defaulted is False
+    assert environment == {}
+
+
+def test_k1_firstiter_cc_explicit_opt_outs_override_defaults(monkeypatch):
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _firstiter_cc_tree_top2_rescore_max_margin,
+    )
+
+    environment = {
+        "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE": "0",
+        "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN": "off",
+    }
+    use_real_reference, tree_margin_defaulted = _configure_relion_firstiter_controls(
+        firstiter_cc=True,
+        n_classes=1,
+        environ=environment,
+    )
+
+    assert use_real_reference is False
+    assert tree_margin_defaulted is False
+    monkeypatch.setenv("RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN", "off")
+    assert _firstiter_cc_tree_top2_rescore_max_margin() is None
+
+
+def test_explicit_projector_override_still_applies_outside_default_scope():
+    environment = {"RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE": "1"}
+
+    use_real_reference, tree_margin_defaulted = _configure_relion_firstiter_controls(
+        firstiter_cc=False,
+        n_classes=4,
+        environ=environment,
+    )
+
+    assert use_real_reference is True
+    assert tree_margin_defaulted is False
+    assert environment == {"RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE": "1"}
+
+
+def test_initial_projector_override_rejects_invalid_boolean():
+    with pytest.raises(SystemExit, match="must be a boolean token"):
+        _configure_relion_firstiter_controls(
+            firstiter_cc=True,
+            n_classes=1,
+            environ={"RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE": "sometimes"},
+        )
 
 
 def test_relion_healpix_order_is_coarse_pass1_order():

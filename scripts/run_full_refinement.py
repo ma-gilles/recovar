@@ -27,6 +27,7 @@ import platform
 import re
 import sys
 import time
+from collections.abc import MutableMapping
 from pathlib import Path
 from typing import NamedTuple
 
@@ -85,6 +86,51 @@ _CONCRETE_RECOVAR_PROVENANCE_MODULES = (
     "recovar.em.dense_single_volume.k_class",
     "recovar.em.dense_single_volume.helpers.significance",
 )
+_INITIAL_PROJECTOR_USE_REAL_REFERENCE_ENV = "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE"
+_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
+    "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN"
+)
+_FIRSTITER_CC_TREE_TOP2_RESCORE_DEFAULT_MAX_MARGIN = "4e-6"
+
+
+def _configure_relion_firstiter_controls(
+    *,
+    firstiter_cc: bool,
+    n_classes: int,
+    environ: MutableMapping[str, str] | None = None,
+) -> tuple[bool, bool]:
+    """Resolve the narrow K=1 firstiter-CC parity defaults.
+
+    RELION Class3D also uses first-iteration CC, but the exact coarse-tree
+    replay currently supports only K=1.  Keep K>1 and non-firstiter callers
+    unchanged.  Explicit environment values always win; ``off`` disables the
+    tree replay after its K=1 default is enabled.
+    """
+
+    environment = os.environ if environ is None else environ
+    use_k1_defaults = bool(firstiter_cc) and int(n_classes) == 1
+    initial_projector_default = "1" if use_k1_defaults else "0"
+    initial_projector_token = environment.get(
+        _INITIAL_PROJECTOR_USE_REAL_REFERENCE_ENV,
+        initial_projector_default,
+    ).strip().lower()
+    if initial_projector_token in {"1", "true", "yes", "on"}:
+        use_initial_projector_real = True
+    elif initial_projector_token in {"0", "false", "no", "off", ""}:
+        use_initial_projector_real = False
+    else:
+        raise SystemExit(
+            f"{_INITIAL_PROJECTOR_USE_REAL_REFERENCE_ENV} must be a boolean token, "
+            f"got {initial_projector_token!r}"
+        )
+
+    tree_margin_defaulted = False
+    if use_k1_defaults and _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV not in environment:
+        environment[_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV] = (
+            _FIRSTITER_CC_TREE_TOP2_RESCORE_DEFAULT_MAX_MARGIN
+        )
+        tree_margin_defaulted = True
+    return use_initial_projector_real, tree_margin_defaulted
 
 
 def _assert_expected_repo_imports() -> None:
@@ -3341,18 +3387,20 @@ def main():
         if _apply_ini_lowpass and float(args.init_resolution) > 0.0
         else None
     )
-    _initial_projector_real_token = os.environ.get(
-        "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE",
-        "0",
-    ).strip().lower()
-    if _initial_projector_real_token in {"1", "true", "yes", "on"}:
-        _use_initial_projector_real = True
-    elif _initial_projector_real_token in {"0", "false", "no", "off", ""}:
-        _use_initial_projector_real = False
-    else:
-        raise SystemExit(
-            "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE must be a boolean token, "
-            f"got {_initial_projector_real_token!r}"
+    _use_initial_projector_real, _tree_margin_defaulted = _configure_relion_firstiter_controls(
+        firstiter_cc=bool(args.firstiter_cc),
+        n_classes=int(args.n_classes),
+    )
+    if _tree_margin_defaulted:
+        logger.info(
+            "RELION K=1 firstiter_cc: defaulting %s=%s",
+            _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV,
+            _FIRSTITER_CC_TREE_TOP2_RESCORE_DEFAULT_MAX_MARGIN,
+        )
+    if _use_initial_projector_real:
+        logger.info(
+            "RELION initial projector: direct real-reference handoff enabled "
+            "(K=1 firstiter_cc default or explicit environment override)",
         )
     init_reference_real_for_projector = None
 

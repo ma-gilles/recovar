@@ -60,10 +60,12 @@ def _global_pass1_relion_projector_texture_enabled() -> bool:
 
 
 def _firstiter_cc_tree_top2_rescore_max_margin() -> float | None:
-    """Return the opt-in near-tie margin for RELION coarse-tree replay."""
+    """Return the near-tie margin for RELION coarse-tree replay."""
 
     token = os.environ.get(_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV, "").strip()
     if not token:
+        return None
+    if token.lower() in {"off", "none", "disable", "disabled"}:
         return None
     margin = float(token)
     if not np.isfinite(margin) or margin < 0.0:
