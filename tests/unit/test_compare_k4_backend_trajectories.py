@@ -10,6 +10,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CHECKED_BASELINE = (
     REPO_ROOT / "docs" / "math" / "em_k4_backend_trajectory_baseline_v1.json"
 )
+CHECKED_ACCEPTED_SNAPSHOT = (
+    REPO_ROOT / "docs" / "math" / "em_k4_backend_trajectory_snapshot_v2.json"
+)
 
 
 def _fsc_report(values_by_iteration):
@@ -92,9 +95,22 @@ def test_compare_k4_backend_trajectories_records_exact_topology_status():
     assert report["backends"]["host_numpy"]["exact_control_topology"] is True
     assert report["backends"]["relion_cuda"]["exact_control_topology"] is False
     assert (
-        report["classification"]
-        == "candidate_preserves_fixed_direct_fsc_auc_gate_count"
+        report["classification"] == "candidate_regresses_control_topology"
     )
+
+
+def test_compare_k4_backend_trajectories_rejects_invalid_baseline_topology():
+    with pytest.raises(ValueError, match="baseline backend"):
+        compare(
+            _fsc_report([[0.999, 0.998]]),
+            _fsc_report([[0.999, 0.998]]),
+            _topology_report("fail"),
+            _topology_report(),
+            _walltime(10),
+            _walltime(10),
+            baseline_label="host_numpy",
+            candidate_label="relion_cuda",
+        )
 
 
 def test_compare_k4_backend_trajectories_rejects_cross_gpu_pair():
@@ -126,6 +142,37 @@ def test_checked_k4_backend_baseline_has_fixed_denominator_and_consistent_counts
     assert len(baseline["direct_fsc_auc_passes_by_iteration"]) == 15
     assert baseline["iterations_all_classes_passed"] == 9
     assert baseline["exact_control_topology"] is True
+
+
+def test_checked_k4_accepted_snapshot_improves_the_frozen_baseline():
+    baseline = json.loads(CHECKED_BASELINE.read_text())
+    snapshot = json.loads(CHECKED_ACCEPTED_SNAPSHOT.read_text())
+
+    assert snapshot["schema"] == "em_k4_backend_trajectory_snapshot_v2"
+    assert snapshot["supersedes_snapshot_id"] == baseline["snapshot_id"]
+    assert snapshot["backend"] == "relion_cuda"
+    assert snapshot["quality_metric_policy"] == baseline["quality_metric_policy"]
+    assert snapshot["direct_fsc_auc_gate"] == baseline["direct_fsc_auc_gate"]
+    assert (
+        snapshot["direct_fsc_auc_checks_total"]
+        == baseline["direct_fsc_auc_checks_total"]
+    )
+    assert snapshot["direct_fsc_auc_checks_passed"] == 41
+    assert (
+        snapshot["direct_fsc_auc_checks_passed"]
+        > baseline["direct_fsc_auc_checks_passed"]
+    )
+    assert sum(snapshot["direct_fsc_auc_passes_by_iteration"]) == 41
+    assert len(snapshot["direct_fsc_auc_passes_by_iteration"]) == 15
+    assert (
+        snapshot["iterations_all_classes_passed"]
+        == baseline["iterations_all_classes_passed"]
+    )
+    assert snapshot["exact_control_topology"] is True
+    assert snapshot["same_physical_gpu_comparison"] is True
+    assert snapshot["wall_s"] < snapshot["baseline_wall_s"]
+    assert snapshot["wall_speedup_percent"] == pytest.approx(10.528764664827678)
+    assert snapshot["direct_backend_min_class_agreement"] == pytest.approx(0.99413)
 
 
 def test_compare_k4_backend_trajectories_aligns_direct_backend_assignments(

@@ -369,21 +369,39 @@ machine-readable baseline is
 `docs/math/em_k4_backend_trajectory_baseline_v1.json` (SHA-256
 `7ad897000cdbcd0d4342bf5db36a6c56da004a31720e2de02fd8322055d1e41c`).
 
-Same-physical-A100 host-versus-RELION-CUDA science `11600592` and dependent
-audit `11600593` are the candidate trajectory for the next snapshot.  The host
-arm completed all 15 numbered iterations in `30089` seconds without a forced
-final-all-data iteration; the `relion_cuda` arm had completed nine numbered
-iterations at the 2026-07-25 17:57 ET checkpoint.  Across those nine
-same-physical-GPU timing pairs, cumulative wall time is
-`16597.981476306915` versus `14716.971381187439` seconds, so `relion_cuda`
-is `11.332764154512143%` faster and is faster in every paired iteration.
-Quality promotion still waits for the dependent FSC audit.  As an early
-fixed-host health check, the completed host arm passes 24/24 comparisons
-through iteration 6 at the same `0.995` gate, with identity class permutation
-and minimum FSC-AUC `0.9977914887513855`.  The partial report SHA-256 is
-`11f8c708ca4ec71aa43341e3c068de0095c2c36e7c281e1da908b250e06a3d1f`.
-This cross-run diagnostic does not promote the candidate; promotion requires
-the complete same-GPU backend audit.
+Same-physical-A100 science `11600592` completed both 15-iteration arms from
+clean detached commit `4181d340997e548af36c6458cce825e133dba95a`.
+The complete fail-closed comparison promotes `relion_cuda` to checked snapshot
+`k4-relion-cuda-4181d340-20260725`:
+
+| Gate | Host baseline | `relion_cuda` | Change |
+|---|---:|---:|---:|
+| Direct per-class FSC-AUC at `0.995` | 40 / 60 | 41 / 60 | +1 |
+| Iterations passing all four classes | 9 / 15 | 9 / 15 | 0 |
+| Exact control topology | 1 / 1 | 1 / 1 | 0 |
+| Minimum cross-engine FSC-AUC | 0.989158632 | 0.990091128 | +0.000932496 |
+| Minimum GT FSC-AUC delta | -0.000409355 | -0.000352907 | +0.000056448 |
+| Minimum RELION class agreement | 0.99175 | 0.99245 | +0.00070 |
+| Wall time on one physical A100 | 30,089 s | 26,921 s | -3,168 s (-10.53%) |
+
+The candidate per-iteration direct-pass vector is
+`[4,4,4,4,4,4,4,4,4,3,0,2,0,0,0]`.  Direct host-versus-candidate class
+agreement after each arm's independently audited RELION permutation is at
+least `0.99413`; the largest mismatch count is 587/100,000 at iteration 15.
+Correlation is not used.
+
+Audit job `11600593` completed all scientific FSC and topology reports, then
+failed only because its checksum manifest included its own temporary pathname
+before renaming it.  The repair regenerated the manifest from a temporary
+file outside `analysis`, excluded both manifest names, pinned all decisive
+artifacts, and passed `sha256sum -c` for all 24 entries.  The repaired
+manifest SHA-256 is
+`b5c45ccad205f271a91c0d1fe2a7f068e5674f2833bf26686a55f3dea815099b`.
+The comparison JSON SHA-256 is
+`bca250d659c2ccbf5dc752cb876ecf35efe34447d03bd12850f92be86fc1cedd`.
+The checked snapshot is
+`docs/math/em_k4_backend_trajectory_snapshot_v2.json` (SHA-256
+`bc10d0555488b22f0bc8d54afe5afc5288064ddb4708bd1c75f3b55dd4c0060a`).
 
 ## K=4 physical-GPU trajectory diagnostic
 

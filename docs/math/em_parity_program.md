@@ -10052,3 +10052,51 @@ all 100,000 particles, then maps the eight-rotation fine panels by Euler
 matrices.  Superseded pending jobs `11602588` and `11602654` were cancelled
 before execution.
 This diagnostic does not change the frozen K=1 score.
+
+## 2026-07-26 full K=4 backend trajectory accepts `relion_cuda`
+
+Same-physical-A100 science job `11600592` completed both 15-iteration,
+100,000-particle, grid-256 K=4 arms from clean detached commit
+`4181d340997e548af36c6458cce825e133dba95a`.  Both arms preserve the exact
+RELION dispatch, schedule, convergence, and finalization topology.  Grid
+correction and forced final all-data after non-convergence remained unset.
+
+At the fixed direct per-class FSC-AUC gate of `0.995`, `host_numpy` passes
+40/60 checks and `relion_cuda` passes 41/60.  Both pass all four classes in
+9/15 iterations.  The fixed vectors are
+`[4,4,4,4,4,4,4,4,4,3,0,1,0,0,0]` and
+`[4,4,4,4,4,4,4,4,4,3,0,2,0,0,0]`, respectively.  The candidate improves
+minimum cross-engine FSC-AUC from `0.989158631903` to `0.990091127730`,
+minimum GT FSC-AUC delta from `-0.000409355343` to `-0.000352907281`, and
+minimum RELION class agreement from `0.99175` to `0.99245`.  Direct
+host-versus-candidate class agreement remains at least `0.99413`.
+Correlation was not computed or used.
+
+Same-GPU wall time falls from 30,089 to 26,921 seconds, a 3,168-second or
+10.5288% reduction.  This accepts `relion_cuda` as the improved checked K=4
+backend snapshot; it does not silently change the global K=1/K=4 default,
+because the completed experiment is K=4-specific and the shared default also
+governs K=1 and non-CUDA audit paths.
+
+Audit job `11600593` finished every scientific report but returned `1:0`
+after its checksum manifest recorded its own temporary pathname.  The
+scientific reports were not rerun.  A pinned repair generated the temporary
+manifest outside the analysis tree, excluded both manifest names, and
+verified all 24 entries.  The repaired manifest SHA-256 is
+`b5c45ccad205f271a91c0d1fe2a7f068e5674f2833bf26686a55f3dea815099b`;
+repair provenance SHA-256 is
+`859e36235bff8c8df3b5688a47165242c5f96dfbc7c560e8913edebff0e5a9f3`.
+
+The accepted comparison is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_host_relioncuda_samegpu_4181d340_20260725T051500ET/analysis/HOST_VS_RELION_CUDA_FIXED_SCORE_COMPARISON.json`
+(SHA-256
+`bca250d659c2ccbf5dc752cb876ecf35efe34447d03bd12850f92be86fc1cedd`).
+Checked snapshot `docs/math/em_k4_backend_trajectory_snapshot_v2.json`
+preserves the old 40/60 baseline separately and fixes the new 41/60
+denominator for future work.
+
+The active K=1 hypothesis is now limited to fixed case 3: completed canonical
+science `11587631` should reproduce the already-passing older strict case-3
+audit on the newer clean commit `4c8b043a`.  Read-only strict audit
+`11632847` is the cheapest disproof and must pass both complete FSC trajectory
+and exact intermediate topology before snapshot v7 advances from 25/34.

@@ -6847,6 +6847,41 @@ same-device equivalence or numerical noise.
 - This pending K=4 metric does not alter `strict-k1-v6-20260724`: 25/34
   strict, 31/34 exact topology, and 34/34 evaluated.
 
+# 2026-07-26: full K=4 backend trajectory accepts `relion_cuda`
+
+- Same-physical-A100 science `11600592` completed both 15-iteration,
+  100,000-particle, grid-256 K=4 arms from clean detached commit
+  `4181d340997e548af36c6458cce825e133dba95a`.
+- Exact control topology passes for `host_numpy` and `relion_cuda`.  Neither
+  arm forced final all-data after non-convergence; grid correction was unset.
+- At the fixed `0.995` direct per-class FSC-AUC gate, host passes 40/60 and
+  `relion_cuda` passes 41/60.  Both retain 9/15 all-four-class iterations.
+  Their per-iteration pass vectors are
+  `[4,4,4,4,4,4,4,4,4,3,0,1,0,0,0]` and
+  `[4,4,4,4,4,4,4,4,4,3,0,2,0,0,0]`.
+- Candidate minimum cross-engine FSC-AUC, GT delta, and RELION class
+  agreement are `0.990091127730`, `-0.000352907281`, and `0.99245`, versus
+  host `0.989158631903`, `-0.000409355343`, and `0.99175`.
+  Direct host-versus-candidate class agreement after independently audited
+  RELION permutations is at least `0.99413`.
+- Wall time is 30,089/26,921 seconds.  `relion_cuda` is 3,168 seconds or
+  10.5288% faster on the same physical A100.
+- Comparison JSON SHA-256 is
+  `bca250d659c2ccbf5dc752cb876ecf35efe34447d03bd12850f92be86fc1cedd`.
+  Checked snapshot `docs/math/em_k4_backend_trajectory_snapshot_v2.json`
+  preserves the immutable old baseline and records the new 41/60 score.
+- Audit `11600593` completed all scientific reports but failed during sealing
+  because `AUDIT_SHA256SUMS.partial` included itself before being renamed.
+  The repair used a temporary file outside `analysis`, excluded both manifest
+  names, pinned the decisive artifact hashes, and verified all 24 entries.
+  Repaired-manifest and repair-provenance SHA-256 values are
+  `b5c45ccad205f271a91c0d1fe2a7f068e5674f2833bf26686a55f3dea815099b`
+  and
+  `859e36235bff8c8df3b5688a47165242c5f96dfbc7c560e8913edebff0e5a9f3`.
+- This K=4 result supports the accepted backend snapshot but not a silent
+  global default change: the shared default also controls K=1 and non-CUDA
+  audit paths that this paired experiment did not cover.
+
 # Current K=4 status (2026-07-25): fine operands close to shifted-image preprocessing
 
 This status summary precedes the detailed capture and factor audit log below.

@@ -326,7 +326,13 @@ def compare(
         candidate["direct_fsc_auc_checks_passed"]
         - baseline["direct_fsc_auc_checks_passed"]
     )
-    if gate_delta > 0:
+    _require(
+        baseline["exact_control_topology"],
+        "baseline backend does not have exact control topology",
+    )
+    if not candidate["exact_control_topology"]:
+        classification = "candidate_regresses_control_topology"
+    elif gate_delta > 0:
         classification = "candidate_improves_fixed_direct_fsc_auc_gate_count"
     elif gate_delta < 0:
         classification = "candidate_regresses_fixed_direct_fsc_auc_gate_count"
