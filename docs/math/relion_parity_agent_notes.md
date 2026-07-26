@@ -7710,3 +7710,49 @@ completion marker SHA-256 is
   `5cd036e6a1b834cb59c310b073ef5404efd63701454b49a5a2b55d297c14e8dd`.
   Full absolute paths and the seven-entry verifying manifest are recorded in
   `docs/math/em_parity_program.md`.
+
+## 2026-07-26 15:00 ET — case-32 final-boundary causal closure
+
+- Authoritative current-head science `11633607` completed `0:0`; strict audit
+  `11633676` passed exact 11-vs-11 topology and all numbered FSC rows but
+  intentionally failed the final merged gate:
+  `0.9741320103734208 < 0.995`.
+- Final GT FSC-AUC remains favorable:
+  RECOVAR `0.2725652720757713`, RELION `0.2684149206256512`, delta
+  `+0.0041503514501201`.  The frozen score therefore remains `26/34`, not
+  because map quality regressed but because autonomous cross-engine parity is
+  still below its fixed gate.
+- Particle audit `11633818` identifies the first material pose split at
+  numbered iteration 1 even though all Pmax and support counts match exactly.
+  Original particle `3047` differs in rotation and translation; particle
+  `6122` differs by one 2.125-Angstrom translation step.  The rare tail grows
+  through iterations 2--5 and broadens when local search begins at iteration
+  6.
+- Diagnostic commit `ce03b5ad` adds paired, finite, exact-complex Fourier
+  initial-reference inputs to `scripts/run_multi_iter_parity.py`.  It is
+  opt-in only; default behavior is unchanged.  Targeted tests pass `33/33`
+  and scoped Ruff passes.
+- Exact-Fourier final-only jobs `11634911` and `11635037` both completed
+  `0:0`.  Merged-reference scoring fails at `0.955455` and is rejected as a
+  changed-semantics confounder.  Exact half-specific autonomous references
+  plus exact RELION boundary state pass at `0.996194`.  Classification
+  SHA-256 is
+  `ba6f0c3755aba47fd462e500f3617d75d5b9f8b4bc14cf7fad1e13e70e08d79f`.
+- Autonomous four-arm array `11634985` reran all 11 numbered iterations and
+  substituted state only at the valid converged final boundary.  Final merged
+  FSC-AUC is `0.995948034` for poses, `0.978981647` for references,
+  `0.998080700` for poses+references, and `0.998072198` for all state.
+  Poses are the minimal sufficient group; references have a secondary
+  interaction; remaining scalar/correction/sampling state is immaterial at
+  the current precision.
+- All four source/output manifests verify.  The sealed factorial report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case32_final_boundary_factorial_ce03b5ad_20260726T142000ET/FACTORIAL_CLASSIFICATION.md`,
+  SHA-256
+  `51825cb4e9ee4de8cf31315df835a00563c388348c43bf831d5cb0b9095e3a68`.
+- Fixed metrics remain K=1 `26/34` strict, `32/34` exact topology,
+  `34/34` evaluated and K=4 `41/60` direct, `9/15` all-class iterations.
+  Diagnostic replay does not check a case.
+- Next: capture/compare the first-iteration winner-score path for exact
+  case-32 identities `3048@particles.128.mrcs` and
+  `6123@particles.128.mrcs`.  Do not change tie ordering speculatively while
+  passive exact-H100 case-5 job `11602720` remains pending.

@@ -10289,3 +10289,72 @@ Panel SHA-256 is
 Runtime root
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_full15_particle_state_audit_4181d340_20260726T132000ET`
 contains `SAFE_TO_DELETE`.
+
+## 2026-07-26 case 32 completes and localizes the final miss to pose state
+
+Current-head fixed-fixture science `11633607` completed `0:0` in 49:02 on
+A100 UUID `GPU-bd720f2f-c28a-09c0-d51e-d08b1897125a`.  The unchanged
+strict audit `11633676` preserved exact 11-vs-11 numbered topology and passed
+every numbered merged FSC-AUC row; the worst numbered value is
+`0.99975436` at iteration 11.  It failed only the final merged cross-engine
+FSC-AUC, `0.9741320103734208 < 0.995`.  RECOVAR remains better against GT:
+`0.2725652720757713` versus RELION `0.2684149206256512`, a
+`+0.0041503514501201` delta.  Particle-state audit `11633818` completed
+`0:0`; its JSON and aligned-array SHA-256 values are
+`e2f78cfe515091af747e0e58efb7cdac823fbe33ed444c7e2e1294cbf44f6679`
+and
+`b3fca4bc73c6540a1f4ba4b03a3a42eb61a182539906c6cd92642d6724f216c0`.
+
+The particle audit finds exact iteration-1 Pmax and significant-support
+counts for all 10,000 particles but two material winner exceptions.  Original
+particle `3047` has a 165-degree rotation and 7.66-Angstrom translation
+exception; particle `6122` has a 2.125-Angstrom translation exception.
+Rare pose exceptions then accumulate before local search: the fraction above
+0.5 degrees grows from `0.0001` at iteration 1 to `0.0336` at iteration 5,
+then `0.0661` when local search starts at iteration 6.  By iteration 11,
+angular p95 is `1.305` degrees and translation p95 is `1.5` Angstrom.  This
+trajectory is inherited before finalization rather than created by final
+pose writeback.
+
+Commit `ce03b5ad9b4789a6f80b67c58110591b8777f671` adds a diagnostic-only
+exact-Fourier reference input to `scripts/run_multi_iter_parity.py`, avoiding
+an MRC round trip while leaving the default path unchanged.  All 33 targeted
+runner tests and scoped Ruff passed.  Exact-Fourier final-only jobs
+`11634911` and `11635037` completed `0:0`.  The merged-reference arm is a
+semantic confounder and fails at `0.955455`; the RELION-style half-specific
+arm passes at `0.996194`, with RECOVAR-versus-GT `0.272502` versus RELION
+`0.268415`.  This proves that the autonomous iteration-11 half references
+and current final E/M-step are adequate when supplied exact RELION
+iteration-11 particle/scalar state.  The sealed classification is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case32_final_only_exact_ft_halfspecific_ce03b5ad_20260726T142500ET/CASE32_EXACT_FOURIER_CLASSIFICATION.md`
+with SHA-256
+`ba6f0c3755aba47fd462e500f3617d75d5b9f8b4bc14cf7fad1e13e70e08d79f`.
+
+Four-arm autonomous final-boundary array `11634985` then reran the full
+trajectory and substituted only named RELION iteration-11 state groups after
+normal convergence.  Grid correction and forced-after-max finalization were
+unset/off:
+
+| Final replay group | Half 1 FSC-AUC | Half 2 FSC-AUC | Merged FSC-AUC | Gate |
+| --- | ---: | ---: | ---: | --- |
+| poses | 0.998095937 | 0.997152627 | 0.995948034 | PASS |
+| references | 0.985903853 | 0.981583139 | 0.978981647 | FAIL |
+| poses + references | 0.999851115 | 0.999801324 | 0.998080700 | PASS |
+| all supported state | 0.999853914 | 0.999807507 | 0.998072198 | PASS |
+
+Poses are the minimal sufficient replay group.  References add a secondary
+`+0.002132666` interaction once poses are exact; all remaining
+scalar/correction/sampling fields change the poses-plus-references result by
+only `-0.000008502`.  The primary remaining autonomous defect is therefore
+pose-winner accumulation, not final reconstruction arithmetic.  Every source
+and output manifest verifies.  The sealed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case32_final_boundary_factorial_ce03b5ad_20260726T142000ET/FACTORIAL_CLASSIFICATION.md`
+with SHA-256
+`51825cb4e9ee4de8cf31315df835a00563c388348c43bf831d5cb0b9095e3a68`.
+
+These diagnostics do not promote an autonomous score.  The fixed metrics
+remain K=1 `26/34` strict, `32/34` exact topology, and `34/34` evaluated;
+the separate K=4 snapshot remains `41/60` direct checks and `9/15`
+all-class iterations.  The next bounded K=1 discriminator is the exact
+first-iteration score/tie path for case-32 particles `3047` and `6122`,
+informed by pending passive exact-H100 case-5 job `11602720`.
