@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import struct
 import subprocess
 import sys
@@ -73,7 +74,7 @@ def _residual(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float |
     rhs = np.asarray(candidate, dtype=np.float64)
     _require(lhs.shape == rhs.shape, "score residual shape changed")
     delta = rhs - lhs
-    energy = float(np.vdot(delta, delta).real)
+    energy = math.fsum(float(value) * float(value) for value in delta.reshape(-1))
     return {
         "candidate_count": int(delta.size),
         "empty": not bool(delta.size),

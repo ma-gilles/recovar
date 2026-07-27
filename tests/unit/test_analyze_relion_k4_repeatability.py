@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import pytest
 
@@ -20,6 +22,20 @@ def test_capture_repeatability_centers_common_score_offsets():
 def test_capture_repeatability_rejects_shape_drift():
     with pytest.raises(ValueError, match="shape changed"):
         repeatability._residual(np.zeros(2), np.zeros(3))
+
+
+def test_threeway_residual_energy_uses_order_stable_sum(monkeypatch):
+    delta = np.asarray([1e8, 1.0, -1e8, 1e-8], dtype=np.float64)
+    monkeypatch.setattr(
+        np,
+        "vdot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("BLAS reduction used")),
+    )
+
+    report = threeway._residual(np.zeros_like(delta), delta)
+
+    assert report["residual_energy"] == math.fsum(float(value) ** 2 for value in delta)
+    assert report["residual_l2"] == math.sqrt(report["residual_energy"])
 
 
 def _aggregate(*, host_data, candidate_data, host_combined, candidate_combined):
