@@ -10644,3 +10644,15 @@ SHA-256
 No scorecard row changes: K=1 remains `27/34` strict, `32/34` exact topology,
 and `34/34` evaluated; K=4 remains `41/60` direct checks and `9/15`
 all-class iterations.
+
+The subsequent sealed-data posterior decomposition at commit `e3008148`
+confirms that the K=4 response is heterogeneous after normalization as well
+as before exponentiation.  RELION-CUDA reduces corrected-cohort posterior
+residual energy only by `0.34267176467456306x` the independent repeatability
+floor, while persistent and introduced cohorts both worsen.  Exact
+numerator/normalizer counterfactuals localize the corrected cohort primarily
+to the score numerator, the persistent cohort to both numerator and
+normalizer, and the introduced cohort to counteracting components.  The
+one-thread and four-thread reports are byte-identical at SHA-256
+`3ecd85fc80b44e9f9c452eb13510f5dc474b2952a1140d029a2919896d388003`.
+No preprocessing, normalization, or scorecard default changes.

@@ -7945,3 +7945,41 @@ completion marker SHA-256 is
   `b7463ab0562f20863c650b70a18c495d235e44127256b0543693a3e7ecbccb4f`.
 - Fixed metrics remain K=1 `27/34` strict, `32/34` topology, `34/34`
   evaluated and K=4 `41/60` direct, `9/15` all-class.
+
+## 2026-07-27 K=4 posterior arithmetic remains cohort-dependent
+
+Commit `e3008148` adds a fail-closed analyzer for the same immutable 12-target
+iteration-10/class-2 panel.  It reconstructs RELION's normalized class-2
+posterior directly from the captured fine-score `expf(50)` weights and the
+float32 all-class weight normalizer retained in geometry-only BPref header
+field 26.  For each RECOVAR preprocessing arm, it reconstructs the same frame
+from the dumped all-class global Pmax, verifies the full probability mass and
+candidate mapping, then evaluates two exact counterfactuals: replace only the
+numerator with RELION's captured numerator, or replace only the normalizer
+with RELION's captured normalizer.
+
+The 24,800-candidate result is
+`heterogeneous_posterior_arithmetic_response`.  The corrected cohort reduces
+posterior residual energy from `1.4081601055419687e-9` to
+`1.3970069295873553e-9`, but the removed energy is only
+`0.34267176467456306x` its independent capture-repeatability floor.  Replacing
+the numerator removes `73.59%`/`74.61%` of host/RELION-CUDA residual energy,
+whereas replacing only the normalizer removes `9.30%`/`8.55%`.
+
+The persistent cohort worsens slightly from `3.496417328756203e-14` to
+`3.5273299236380804e-14`.  RELION-CUDA halves the cohort normalizer-relative
+L2 from `2.2724876984742913e-6` to `1.1417529957183727e-6`, but the numerator
+branch remains and accounts for about `56%` of removable energy.  The
+introduced cohort also worsens, from `6.7663420684124795e-9` to
+`6.786395560910647e-9`; its numerator and normalizer components counteract,
+so replacing only the normalizer increases rather than decreases the
+residual.
+
+One-thread and four-thread replays are byte-identical at SHA-256
+`3ecd85fc80b44e9f9c452eb13510f5dc474b2952a1140d029a2919896d388003`.
+The report remains `scorecard_change_admissible=false`, computes no
+correlation, and supports neither a preprocessing nor a posterior-normalizer
+default change.  Continue at upstream numerator score arithmetic for the
+persistent and introduced identities while retaining the normalizer as a
+separate persistent-cohort branch.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_panel12_retry6h_300c6e90_20260726T200000ET/analysis/PANEL12_POSTERIOR_DECOMPOSITION_e3008148_T1.json`.
