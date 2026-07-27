@@ -10954,3 +10954,46 @@ The exact attempt-1 monitor, old launcher, and release record are preserved by
 archive-manifest SHA-256
 `17e577783cd16e7764a2688a1c2eee563264c5e526f5d4ccbf38c8a1dc470496`.
 No K=4 science or fixed-score claim comes from the rejected attempt.
+
+### K=4 release attempt 2 rejected by UUID gate; two-device retry 3 held
+
+Retry-2 monitor `11683346` completed `0:0` after observing its declared
+index-2-as-lowest-free window.  Science did not allocate until 17 seconds
+later, after index 0 had become free.  Slurm therefore assigned one-GPU
+science `11683286` UUID
+`GPU-f3e94635-d095-bea9-dbe3-26e91dd3ea27`, not required UUID
+`GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.  The launcher's pre-import
+physical-UUID gate correctly exited `42:0` in two seconds.  No import,
+staging, or science occurred; never-started audit `11683290` was canceled at
+zero elapsed.
+
+The rejected allocation JSON and stderr SHA-256 values are
+`3608a75fec581d78947c2b5515a2212f127af6833f82ccd3198529b84ad57bf1`
+and
+`e0ffb4da992248bb221da8c0b48ae9580b20de418a19145aff69509d70293000`.
+The exact attempt-2 monitor, launcher, release record, allocation record,
+stdout, and stderr are preserved by archive-manifest SHA-256
+`6f4d2f10d0bc1bf651719fc83e469e37d348fd4652db922f5c592a001181cf97`.
+Empty output directories created before UUID rejection were removed with
+`rmdir`; no science data was deleted.
+
+Retry 3 requests two A100s, requires exactly two allocation records including
+the target UUID, and then sets `CUDA_VISIBLE_DEVICES` to only that target so
+JAX still sees one A100.  The launcher retains the clean-source, immutable
+input, predecessor-manifest, CUDA-library, physical-UUID, and one-device JAX
+gates.  Durable pre-GPU checks and synthetic allocation-parser accept/reject
+tests pass; launcher SHA-256 is
+`0c506e4b72287d3e144bb94984995c9a1fe0927189a92ffaa3ac420785a4706f`.
+
+Science `11683600` remains held and audit `11683608` depends on it.  Monitor
+`11683614`, SHA-256
+`ac2389b469deee570b10589a59d7b182906335a1a6e3ce8ca7e5ea39f5337c84`,
+releases only when target index 2 and at least one companion index are free
+while index 1 remains occupied.  At the 19:17 EDT audit, indices 2 and 3 were
+both scheduled to free at 20:03 EDT while indices 0 and 1 remained allocated
+beyond that boundary.  The launcher's UUID gate remains final authority.
+
+These rejected infrastructure attempts are not scientific evidence and do
+not change the fixed scorecard.  K=4 remains `41/60` direct checks and `9/15`
+all-class iterations until exact-device science and its FSC/FSC-AUC audit
+finish; correlation is not computed.
