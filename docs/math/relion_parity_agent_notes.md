@@ -8048,3 +8048,40 @@ and `9/15` all-class.
   Launch the fixed K=4 trajectory and affected K=1 fixed cases. Until those
   finish, K=1 remains `27/34` strict, `32/34` topology, `34/34` evaluated,
   and K=4 remains `41/60` direct, `9/15` all-class.
+
+## 2026-07-27 fixed case 24 passes and advances K=1 to 28/34
+
+- Canonical science `11655858` completed `0:0` in 17m07s on H100 UUID
+  `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, exactly matching RELION.
+  Source was clean detached
+  `31c4a0ca203b70211f4d8586d044c94fca9fc037`.
+- The fixed fixture manifest remained byte-identical at SHA-256
+  `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`;
+  grid correction was unset/default-off and forced final all-data after
+  nonconvergence was unset.
+- Both engines have 12 numbered iterations with exact current-size trajectory
+  `[56,56,56,56,56,56,56,58,58,60,60,60]`, converge at iteration 12,
+  and enter final all-data only after convergence.
+- Independent FSC/topology audit `11655936` completed `0:0`.  Final merged
+  cross-engine FSC-AUC is `0.998090087202717` (frozen prior:
+  `0.9948051037935267`), RECOVAR-minus-RELION merged GT FSC-AUC is
+  `+0.00828011468926404`, and the worst numbered cross-engine FSC-AUC is
+  `0.9999978940386508`.  The accepting audit computes no correlation.
+- The audit manifest is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case24_phaseffi_31c4a0ca_20260727T025000ET/cases/24_small_kent_outliers_3k_g128_pct20_noise3_bf80/trajectory_analysis/AUDIT_SHA256SUMS`,
+  SHA-256
+  `144bbdde8ce8a5aae01785d77b2f3fa837b9c604a4fe787bdc578ee76b66bc61`.
+- The promoter initially failed closed because the sealed standard-output
+  basename omitted literal `k1-24`.  A byte-identical hard-link alias was
+  added and recorded at
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case24_phaseffi_31c4a0ca_20260727T025000ET/provenance/AUDIT_LOG_ALIAS_REPAIR.md`
+  (SHA-256
+  `5207329cb1ab9c743b3571c08aae21b0cab3aff27a2e4bb97b255e8a865f1c33`);
+  no audit bytes changed.
+- The validated v9 ledger is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case24_phaseffi_31c4a0ca_20260727T025000ET/provenance/em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v9.json`,
+  SHA-256
+  `9cedb043dded9e5a2020cf53c413c4e1da366f4a6a2c54127347f8572a9ed7b3`.
+- Fixed metrics are now K=1 `28/34` strict FSC/FSC-AUC, `32/34` exact
+  topology, and `34/34` evaluated.  K=4 remains `41/60` direct and `9/15`
+  all-class pending jobs `11655922` and `11655923`.

@@ -1,6 +1,6 @@
 # RECOVAR / RELION EM Parity Scorecard
 
-**K=1 fixed-suite score: 27 / 34 passing (34 / 34 evaluated; 32 / 34 intermediate-topology passes).**
+**K=1 fixed-suite score: 28 / 34 passing (34 / 34 evaluated; 32 / 34 intermediate-topology passes).**
 
 Suite: `k1-gui-grid0-local-highshell-full34` (version 1; denominator frozen at 34).
 Frozen case-definition SHA-256: `9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1`.
@@ -11,8 +11,8 @@ The artifact-pinned fixture manifest is checked into the repository and binds al
 
 Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like finalization. Correlation is not computed or gated.
 
-Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v8`, generated `2026-07-26T20:50:08+00:00`, JSON SHA-256 `13c7cf50de11d6819dda2cf0320915973183f09865e4b96cc8fcb04e6f005412`.
-Progress: +7 passing cases since the first frozen snapshot; +1 since the previous snapshot.
+Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v9`, generated `2026-07-27T07:29:46+00:00`, JSON SHA-256 `9cedb043dded9e5a2020cf53c413c4e1da366f4a6a2c54127347f8572a9ed7b3`.
+Progress: +8 passing cases since the first frozen snapshot; +1 since the previous snapshot.
 
 | Done | Case | Fixture | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
@@ -39,7 +39,7 @@ Progress: +7 passing cases since the first frozen snapshot; +1 since the previou
 | [x] | `k1-21` | `small_kent_angles_3k_g128_white_noise3_bf80` | pass | pass | 0.998345537 | +0.010110173 | science 11385539; trajectory 11385573; intermediate 11385574 |
 | [ ] | `k1-22` | `small_severe_outliers_3k_g128_radial_noise5_bf80` | fail | fail | 0.825938890 | -0.000351848 | science 11385540; trajectory 11385575; intermediate 11385576 |
 | [x] | `k1-23` | `small_noctf_radial_3k_g128_noise3_bf80` | pass | pass | 0.998342408 | +0.012298496 | science 11501524; trajectory 11501622; intermediate 11501622 |
-| [ ] | `k1-24` | `small_kent_outliers_3k_g128_pct20_noise3_bf80` | fail | pass | 0.994805104 | +0.008173298 | science 11385542; trajectory 11385579; intermediate 11385580 |
+| [x] | `k1-24` | `small_kent_outliers_3k_g128_pct20_noise3_bf80` | pass | pass | 0.998090087 | +0.008280115 | science 11655858; trajectory 11655936; intermediate 11655936 |
 | [x] | `k1-25` | `tiny_baseline_1k_g128_white_noise3_bf80` | pass | pass | 0.998192576 | +0.009181804 | science 11385543; trajectory 11385581; intermediate 11385582 |
 | [ ] | `k1-26` | `tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80` | fail | pass | 0.954913646 | +0.010098947 | science 11385544; trajectory 11385583; intermediate 11385585 |
 | [x] | `k1-27` | `small_extreme_outliers_3k_g128_pct70_noise1_bf80` | pass | pass | 0.998332271 | +0.010086417 | science 11385545; trajectory 11385587; intermediate 11385588 |
@@ -62,13 +62,14 @@ Progress: +7 passing cases since the first frozen snapshot; +1 since the previou
 | `strict-k1-v6-20260724` | 2026-07-24T01:04:11.826284+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08` | 25 | +2 | 9 | 0 |
 | `strict-k1-v7-20260726` | 2026-07-26T15:48:00+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08`, `4c8b043a9b80` | 26 | +1 | 8 | 0 |
 | `strict-k1-v8-20260726` | 2026-07-26T20:50:08+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08`, `4c8b043a9b80`, `916ab17a4c80` | 27 | +1 | 7 | 0 |
+| `strict-k1-v9-20260727` | 2026-07-27T07:29:46+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08`, `4c8b043a9b80`, `916ab17a4c80`, `31c4a0ca203b` | 28 | +1 | 6 | 0 |
 
 <!-- BEGIN MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 ## Post-snapshot fixed-fixture intervention diagnostics
 
 These rows use frozen case bytes but do not rewrite the immutable snapshot
 above.  A failing intervention remains unchecked and does not change the
-25/34 score.
+28/34 score.
 
 | Done | Case | Commit/intervention | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
@@ -875,6 +876,36 @@ produced v8 ledger SHA-256
 Snapshot `strict-k1-v8-20260726` is therefore 27/34 strict, 32/34 exact
 topology, and 34/34 evaluated.  The denominator, fixture bytes, definitions,
 and thresholds remain unchanged.
+
+### Exact CUDA translation scoring advances case 24 and the frozen score to 28/34
+
+Canonical fixed-fixture science `11655858` completed `0:0` in 17:07 on
+physical H100 UUID `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, exactly
+matching its paired RELION allocation.  It used clean source
+`31c4a0ca203b70211f4d8586d044c94fca9fc037` and the frozen fixture manifest
+SHA-256
+`422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
+The run converged after numbered iteration 12 and entered final all-data only
+after convergence; the 12 numbered current-size and sampling boundaries match
+RELION exactly.  Grid correction remained unset/default-off and forced
+after-max finalization was unset.
+
+Independent shellwise FSC/FSC-AUC and topology audit `11655936` completed
+`0:0`.  Final merged cross-engine FSC-AUC improved from the frozen
+`0.994805103794` failure to `0.998090087203`; RECOVAR-minus-RELION merged GT
+FSC-AUC is `+0.008280114689`.  The worst numbered merged cross-engine FSC-AUC
+is `0.999997894039` at iteration 12.  No correlation metric is computed by
+the accepting audit.  The sealed audit manifest and promotion ledger have
+SHA-256 values
+`144bbdde8ce8a5aae01785d77b2f3fa837b9c604a4fe787bdc578ee76b66bc61`
+and
+`9cedb043dded9e5a2020cf53c413c4e1da366f4a6a2c54127347f8572a9ed7b3`.
+
+The fail-closed v9 promoter revalidated the frozen bytes, clean source,
+same-GPU pair, autonomous topology, finalization semantics, and all evidence
+hashes.  Snapshot `strict-k1-v9-20260727` is therefore 28/34 strict,
+32/34 exact topology, and 34/34 evaluated.  The denominator, fixture
+definitions, manifest, and thresholds remain unchanged.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

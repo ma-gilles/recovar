@@ -10765,3 +10765,46 @@ it does not itself change the checked metrics. Until those FSC/FSC-AUC gates
 finish, K=1 remains `27/34` strict, `32/34` exact topology, `34/34`
 evaluated, and K=4 remains `41/60` direct checks and `9/15` all-class
 iterations.
+
+## 2026-07-27 exact translation scoring advances fixed K=1 to 28/34
+
+The first autonomous fixed-suite qualification of the production
+`RelionTranslateScoreF32` path passes.  Case 24 science `11655858` completed
+`0:0` in 17m07s on H100 UUID
+`GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, matching its RELION reference
+allocation exactly.  The run used clean detached source
+`31c4a0ca203b70211f4d8586d044c94fca9fc037`, the pinned fixture manifest
+SHA-256
+`422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`,
+grid correction unset/default-off, and no forced after-max finalization.
+
+RECOVAR and RELION both have 12 numbered iterations.  The current-size
+trajectory is exactly
+`[56,56,56,56,56,56,56,58,58,60,60,60]`; both converge at numbered
+iteration 12 and then run the valid final all-data path.  Independent audit
+`11655936` completed `0:0` and reports:
+
+- final merged cross-engine FSC-AUC `0.998090087202717`, above the `0.995`
+  gate and improved from the frozen `0.9948051037935267` failure;
+- RECOVAR-minus-RELION merged GT FSC-AUC `+0.00828011468926404`, above the
+  `-0.002` gate;
+- worst numbered merged cross-engine FSC-AUC `0.9999978940386508` at
+  iteration 12;
+- exact intermediate topology with no FSC, topology, or numeric-artifact
+  failures.
+
+The audit computes no correlation.  Its seal is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case24_phaseffi_31c4a0ca_20260727T025000ET/cases/24_small_kent_outliers_3k_g128_pct20_noise3_bf80/trajectory_analysis/AUDIT_SHA256SUMS`,
+SHA-256
+`144bbdde8ce8a5aae01785d77b2f3fa837b9c604a4fe787bdc578ee76b66bc61`.
+The fail-closed v9 promoter revalidated fixture bytes, clean source, exact
+same-GPU pairing, autonomous topology, convergence/finalization, and evidence
+hashes.  Its ledger is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case24_phaseffi_31c4a0ca_20260727T025000ET/provenance/em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v9.json`,
+SHA-256
+`9cedb043dded9e5a2020cf53c413c4e1da366f4a6a2c54127347f8572a9ed7b3`.
+
+The fixed score is now K=1 `28/34` strict FSC/FSC-AUC (82.4%),
+`32/34` exact topology (94.1%), and `34/34` evaluated.  K=4 remains
+`41/60` direct checks and `9/15` all-class iterations pending full-15 job
+`11655922` and audit `11655923`.
