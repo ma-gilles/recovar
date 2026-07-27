@@ -14,12 +14,17 @@ import hashlib
 import json
 import math
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from scripts.parse_relion_dump_dir import parse_dump_dir
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.parse_relion_dump_dir import parse_dump_dir  # noqa: E402
 
 INERTNESS_SCHEMA = "em_relion_iteration1_particle_state_inertness_v3"
 REPORT_SCHEMA = "em_relion_capture_target_tie_classification_v1"
