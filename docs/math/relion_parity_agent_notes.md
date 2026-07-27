@@ -8022,3 +8022,29 @@ introduced stack identity 42824.  The diagnostic is
 `scorecard_change_admissible=false`; fixed K=1 remains `27/34` strict,
 `32/34` topology, `34/34` evaluated, and fixed K=4 remains `41/60` direct
 and `9/15` all-class.
+
+## 2026-07-27 production CUDA translation-score boundary closes exactly
+
+- Native operand replay identifies RELION CUDA `sincosf(x*tx + y*ty)` plus
+  explicit real/imaginary products as a required direct-score primitive.
+  The implementation routes only exact-Gaussian score input through the new
+  `RelionTranslateScoreF32` FFI; reconstruction/M-step phases remain JAX.
+- Same-A100 job `11655670` completed `0:0` in 1m29s. The FFI symbol built and
+  38/38 focused CUDA/build/reduction/routing tests passed.
+- Production sealed replay is exact for old stack 42988 (4/4 raw scores),
+  current stack 64843 (10/10 replay-exact candidates, improved from 9/10),
+  and current stack 42824 (2/2, unchanged).
+- Gate:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_phase_ffi_gpu_13840a20_20260727T022224ET/analysis/PRODUCTION_FFI_SEALED_REPLAY_GATE.json`,
+  SHA-256
+  `fd0239f788916c9be3e1f025a9982c93de025315616d0d1a6a433f3ea93993fb`.
+  Exact-candidate report SHA-256:
+  `0c1dda8d8765f466ad87c30e8f3ecc384c2647227a60c6f820491835beff420f`.
+- Repository-owned sealed eight-pixel A100 fixture job `11655745` passes
+  bitwise. CPU-focused tests pass 19/19 and the EM fast guard passes 16/16.
+- Grid correction and forced after-max finalization were unset. Map
+  acceptance remains FSC/FSC-AUC only; no correlation is computed.
+- This closes the exact score boundary but is not yet a scorecard promotion.
+  Launch the fixed K=4 trajectory and affected K=1 fixed cases. Until those
+  finish, K=1 remains `27/34` strict, `32/34` topology, `34/34` evaluated,
+  and K=4 remains `41/60` direct, `9/15` all-class.

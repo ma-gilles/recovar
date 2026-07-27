@@ -512,6 +512,7 @@ _TARGET_RELION_FUSED_X_HALF_BP = "cuda_relion_fused_x_half_bp"
 _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE = "cuda_relion_fused_x_half_bp_signature"
 _TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
 _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32 = "cuda_relion_make_scoring_rotations_f32"
+_TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
 
 # Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
 # Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
@@ -539,6 +540,7 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32,
         "RelionMakeScoringRotationsF32",
     ),
+    (_TARGET_RELION_TRANSLATE_SCORE_F32, "RelionTranslateScoreF32"),
 )
 
 
@@ -1100,6 +1102,78 @@ def relion_make_scoring_rotations_f32(
         eulers_deg,
         right_matrix,
         do_right=np.int64(int(do_right)),
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(3,))
+def relion_translate_score_f32(
+    images: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    image_shape: Tuple[int, int],
+) -> jax.Array:
+    """Translate score images with RELION's accelerated float32 arithmetic.
+
+    ``translation_angles`` contains RELION's per-translation ``(tx, ty)``
+    radians. ``pixel_indices`` use RECOVAR's centered half-spectrum layout.
+    The CUDA primitive evaluates ``sincosf(x*tx + y*ty)`` and the explicit
+    real/imaginary products used by RELION's fine Gaussian scorer. The output
+    is flattened in image-major, translation-major order to match
+    :func:`apply_half_translation_phases`.
+
+    This is a strict CUDA primitive. Callers that support a non-CUDA fallback
+    must select it before invoking this function.
+    """
+
+    if images.dtype != jnp.complex64:
+        raise TypeError(f"images must be complex64, got {images.dtype}")
+    if translation_angles.dtype != jnp.float32:
+        raise TypeError(
+            f"translation_angles must be float32, got {translation_angles.dtype}"
+        )
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError(f"pixel_indices must be int32, got {pixel_indices.dtype}")
+    if images.ndim != 2:
+        raise ValueError(f"images must have shape (batch, pixels), got {images.shape}")
+    if translation_angles.ndim != 2 or translation_angles.shape[1:] != (2,):
+        raise ValueError(
+            "translation_angles must have shape (translations, 2), got "
+            f"{translation_angles.shape}"
+        )
+    if pixel_indices.shape != (images.shape[1],):
+        raise ValueError(
+            f"pixel_indices must have shape ({images.shape[1]},), got "
+            f"{pixel_indices.shape}"
+        )
+    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
+        raise ValueError(f"image_shape must contain two positive sizes, got {image_shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION score translation requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION score translation was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    image_h, image_w = (int(size) for size in image_shape)
+    half_width = image_w // 2 + 1
+    out_type = jax.ShapeDtypeStruct(
+        (
+            images.shape[0] * translation_angles.shape[0],
+            images.shape[1],
+        ),
+        jnp.complex64,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_TRANSLATE_SCORE_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        images,
+        translation_angles,
+        pixel_indices,
+        image_h=np.int64(image_h),
+        image_half_width=np.int64(half_width),
     )
 
 

@@ -1782,6 +1782,51 @@ def _translation_phase_table_for_indices(
     return translation_phases_half[:, pixel_indices]
 
 
+def _relion_translation_angles_f32(translations, image_shape):
+    """Return RELION fine-score ``(tx, ty)`` radians with host rounding."""
+
+    image_size = int(image_shape[0])
+    if image_size <= 0:
+        raise ValueError(f"image_shape must be positive, got {image_shape}")
+    translations_f64 = np.asarray(translations, dtype=np.float64)
+    if translations_f64.ndim != 2 or translations_f64.shape[1] != 2:
+        raise ValueError(
+            "RELION score translations must have shape (T, 2), got "
+            f"{translations_f64.shape}"
+        )
+    return np.asarray(
+        -2.0 * np.pi * translations_f64 / float(image_size),
+        dtype=np.float32,
+    )
+
+
+def _relion_cuda_score_translation_angles_if_available(
+    translations,
+    image_shape,
+    *,
+    enabled,
+):
+    """Prepare exact score-translation angles or retain the JAX fallback."""
+
+    if not enabled or jax.default_backend() != "gpu":
+        return None
+    from recovar import cuda_backproject
+
+    if not cuda_backproject.cuda_available():
+        logger.warning(
+            "Exact RELION fine Gaussian scoring is retaining JAX translation "
+            "phase arithmetic because custom CUDA is unavailable"
+        )
+        return None
+    logger.info(
+        "Exact RELION fine Gaussian scoring: using CUDA sincosf score translation"
+    )
+    return jnp.asarray(
+        _relion_translation_angles_f32(translations, image_shape),
+        dtype=jnp.float32,
+    )
+
+
 def _prepare_per_image_compact_candidate_pairs(per_image_inputs, *, image_mask=None):
     """Flatten per-image sparse pass-2 masks into valid candidate pairs.
 
@@ -7523,6 +7568,7 @@ def _prepare_bucket_io(
     translation_phases_half=None,
     score_translation_phases=None,
     recon_translation_phases=None,
+    relion_score_translation_angles=None,
     return_windowed_shifted=False,
     return_shifted_score=True,
 ):
@@ -7729,24 +7775,45 @@ def _prepare_bucket_io(
     if return_direct_scoring_io:
         if return_windowed_shifted:
             score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
-            score_phase = (
-                score_translation_phases
-                if score_translation_phases is not None
-                else _translation_phase_table_for_indices(
-                    fine_translations,
+            direct_score_input = sparse_score_input_half[:, score_indices]
+            direct_score_pixel_indices = score_indices
+        else:
+            direct_score_input = sparse_score_input_half
+            direct_score_pixel_indices = jnp.arange(
+                sparse_score_input_half.shape[1],
+                dtype=jnp.int32,
+            )
+        if relion_score_translation_angles is not None:
+            from recovar import cuda_backproject
+
+            shifted_corrected_score_half = (
+                cuda_backproject.relion_translate_score_f32(
+                    jnp.asarray(direct_score_input, dtype=jnp.complex64),
+                    jnp.asarray(
+                        relion_score_translation_angles,
+                        dtype=jnp.float32,
+                    ),
+                    direct_score_pixel_indices,
                     image_shape,
-                    score_indices,
-                    translation_phases_half,
                 )
             )
-            shifted_corrected_score_half = apply_half_translation_phases(
-                sparse_score_input_half[:, score_indices],
-                score_phase,
-            )
         else:
+            if return_windowed_shifted:
+                score_phase = (
+                    score_translation_phases
+                    if score_translation_phases is not None
+                    else _translation_phase_table_for_indices(
+                        fine_translations,
+                        image_shape,
+                        direct_score_pixel_indices,
+                        translation_phases_half,
+                    )
+                )
+            else:
+                score_phase = translation_phases_half
             shifted_corrected_score_half = apply_half_translation_phases(
-                sparse_score_input_half,
-                translation_phases_half,
+                direct_score_input,
+                score_phase,
             )
 
     if half_spectrum_scoring and not use_normalized_cc:
@@ -8551,6 +8618,13 @@ def compute_pass2_stats_sparse_bucketed(
                 max_projection_cache_bytes / float(1024**3),
             )
     overall_t0 = time.time()
+    relion_score_translation_angles = (
+        _relion_cuda_score_translation_angles_if_available(
+            fine_translations,
+            image_shape,
+            enabled=use_exact_relion_gaussian,
+        )
+    )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
     score_translation_phases = None
     recon_translation_phases = None
@@ -8875,6 +8949,7 @@ def compute_pass2_stats_sparse_bucketed(
             window_indices=window_indices,
             recon_window_indices=recon_window_indices,
             translation_phases_half=translation_phases_half,
+            relion_score_translation_angles=relion_score_translation_angles,
             return_windowed_shifted=windowed_prepare,
         )
         relion_highres_xi2_half = None
@@ -11534,6 +11609,13 @@ def compute_k_class_pass2_stats_sparse_fused(
             for bucket in buckets
         ]
     _validate_k_class_execution_bucket_partition(execution_buckets, n_images=n_images)
+    relion_score_translation_angles = (
+        _relion_cuda_score_translation_angles_if_available(
+            fine_translations,
+            image_shape,
+            enabled=use_exact_relion_gaussian,
+        )
+    )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
     score_translation_phases = None
     recon_translation_phases = None
@@ -11943,6 +12025,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             translation_phases_half=translation_phases_half,
             score_translation_phases=score_translation_phases,
             recon_translation_phases=recon_translation_phases,
+            relion_score_translation_angles=relion_score_translation_angles,
             return_windowed_shifted=windowed_prepare,
             return_shifted_score=not half_spectrum_scoring,
         )

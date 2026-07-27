@@ -3515,6 +3515,7 @@ namespace {
 constexpr int kRelionPreprocessBlockSize = 128;
 constexpr int kRelionSoftMaskBlocks = 128;
 constexpr int kRelionEulerBlockSize = 128;
+constexpr int kRelionTranslateScoreBlockSize = 256;
 
 template <bool DoRight>
 __global__ void relion_make_scoring_rotations_f32_kernel(
@@ -3578,6 +3579,71 @@ cudaError_t launch_relion_make_scoring_rotations_f32(
     relion_make_scoring_rotations_f32_kernel<DoRight>
         <<<blocks, kRelionEulerBlockSize, 0, stream>>>(
             eulers_deg, right_matrix, scorer_rotations, orientation_count);
+    return cudaGetLastError();
+}
+
+__global__ void relion_translate_score_f32_kernel(
+    const float2* images,
+    const float* translation_angles,
+    const int32_t* pixel_indices,
+    float2* shifted,
+    int64_t batch_size,
+    int64_t translation_count,
+    int64_t pixel_count,
+    int image_h,
+    int image_half_width)
+{
+    int64_t flat = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int64_t total = batch_size * translation_count * pixel_count;
+    if (flat >= total) return;
+
+    int64_t pixel_row = flat % pixel_count;
+    int64_t batch_translation = flat / pixel_count;
+    int64_t translation = batch_translation % translation_count;
+    int64_t image = batch_translation / translation_count;
+    int pixel_index = pixel_indices[pixel_row];
+    int x = pixel_index % image_half_width;
+    int y = pixel_index / image_half_width - image_h / 2;
+    float tx = translation_angles[2 * translation];
+    float ty = translation_angles[2 * translation + 1];
+    float sine;
+    float cosine;
+    sincosf(x * tx + y * ty, &sine, &cosine);
+
+    float2 value = images[image * pixel_count + pixel_row];
+    shifted[flat] = make_float2(
+        cosine * value.x - sine * value.y,
+        cosine * value.y + sine * value.x);
+}
+
+cudaError_t launch_relion_translate_score_f32(
+    cudaStream_t stream,
+    const float2* images,
+    const float* translation_angles,
+    const int32_t* pixel_indices,
+    float2* shifted,
+    int64_t batch_size,
+    int64_t translation_count,
+    int64_t pixel_count,
+    int image_h,
+    int image_half_width)
+{
+    int64_t total = batch_size * translation_count * pixel_count;
+    if (total == 0) return cudaSuccess;
+    int blocks = static_cast<int>(
+        (total + kRelionTranslateScoreBlockSize - 1) /
+        kRelionTranslateScoreBlockSize);
+    relion_translate_score_f32_kernel<<<
+        blocks, kRelionTranslateScoreBlockSize, 0, stream>>>(
+            images,
+            translation_angles,
+            pixel_indices,
+            shifted,
+            batch_size,
+            translation_count,
+            pixel_count,
+            image_h,
+            image_half_width);
     return cudaGetLastError();
 }
 
@@ -3849,6 +3915,77 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Attr<int64_t>("do_right")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionTranslateScoreF32Impl(
+    cudaStream_t stream,
+    int64_t image_h,
+    int64_t image_half_width,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer pixel_indices,
+    ffi::Result<ffi::AnyBuffer> shifted)
+{
+    if (images.element_type() != ffi::DataType::C64 ||
+        shifted->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateScoreF32: images/output must be C64");
+    if (translation_angles.element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateScoreF32: translation angles must be F32");
+    if (pixel_indices.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateScoreF32: pixel indices must be S32");
+    if (image_h <= 0 || image_half_width <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateScoreF32: image dimensions must be positive");
+
+    auto image_dims = images.dimensions();
+    auto translation_dims = translation_angles.dimensions();
+    auto pixel_dims = pixel_indices.dimensions();
+    auto output_dims = shifted->dimensions();
+    if (image_dims.size() != 2)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateScoreF32: images must have shape (B,P)");
+    if (translation_dims.size() != 2 || translation_dims[1] != 2)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateScoreF32: translation angles must have shape (T,2)");
+    if (pixel_dims.size() != 1 || pixel_dims[0] != image_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateScoreF32: pixel indices must have shape (P,)");
+    if (output_dims.size() != 2 ||
+        output_dims[0] != image_dims[0] * translation_dims[0] ||
+        output_dims[1] != image_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateScoreF32: output must have shape (B*T,P)");
+
+    cudaError_t err = launch_relion_translate_score_f32(
+        stream,
+        reinterpret_cast<const float2*>(images.untyped_data()),
+        static_cast<const float*>(translation_angles.untyped_data()),
+        static_cast<const int32_t*>(pixel_indices.untyped_data()),
+        reinterpret_cast<float2*>(shifted->untyped_data()),
+        image_dims[0],
+        translation_dims[0],
+        image_dims[1],
+        static_cast<int>(image_h),
+        static_cast<int>(image_half_width));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionTranslateScoreF32, RelionTranslateScoreF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_half_width")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()

@@ -146,6 +146,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_pass2_reconstruction_joint_masks,
     _relion_pass2_reconstruction_pair_probs,
     _relion_pass2_reconstruction_probs,
+    _relion_translation_angles_f32,
     _weighted_image_power_shells_and_per_image,
     _prepare_bucket_io,
     _score_pass2_bucket_normalized_cc,
@@ -5452,6 +5453,97 @@ def test_prepare_bucket_io_windowed_shifted_matches_full_half_slice(monkeypatch)
     )
     for actual, expected in zip(precomputed, windowed, strict=True):
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-6, atol=1e-6)
+
+
+def test_prepare_bucket_io_routes_direct_score_translation_through_relion_cuda(
+    monkeypatch,
+):
+    from recovar import cuda_backproject
+
+    ds = MockDataset(n_images=3, seed=20260727)
+    batch_indices = np.asarray([0, 2], dtype=np.int64)
+    batch = jnp.asarray(ds._images[batch_indices])
+    config = ForwardModelConfig.from_dataset(
+        ds,
+        disc_type="linear_interp",
+        process_fn=ds.process_images,
+    )
+    n_half = IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1)
+    window_spec = make_fourier_window_spec(
+        IMAGE_SHAPE,
+        current_size=6,
+        n_half=n_half,
+        include_recon_window=True,
+    )
+    fine_translations = np.asarray(
+        [[-0.75, 0.25], [0.25, -0.75]],
+        dtype=np.float32,
+    )
+    translation_angles = jnp.asarray(
+        _relion_translation_angles_f32(fine_translations, IMAGE_SHAPE),
+        dtype=jnp.float32,
+    )
+    calls = []
+
+    def fake_translate(images, angles, pixel_indices, image_shape):
+        calls.append(
+            {
+                "images": np.asarray(images),
+                "angles": np.asarray(angles),
+                "pixel_indices": np.asarray(pixel_indices),
+                "image_shape": image_shape,
+            }
+        )
+        return jnp.full(
+            (images.shape[0] * angles.shape[0], images.shape[1]),
+            jnp.complex64(7.0 + 3.0j),
+        )
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_score_f32",
+        fake_translate,
+    )
+    result = _prepare_bucket_io(
+        experiment_dataset=ds,
+        batch=batch,
+        ctf_params=jnp.asarray(ds.CTF_params[batch_indices]),
+        image_indices=batch_indices,
+        noise_variance_half=jnp.ones(n_half, dtype=jnp.float32),
+        fine_translations=fine_translations,
+        config=config,
+        n_trans=fine_translations.shape[0],
+        score_with_masked_images=True,
+        half_spectrum_scoring=True,
+        image_corrections=np.ones(ds.n_units, dtype=np.float32),
+        scale_corrections=np.ones(ds.n_units, dtype=np.float32),
+        image_pre_shifts=None,
+        use_float64_scoring=False,
+        return_direct_scoring_io=True,
+        score_mode="gaussian",
+        window_indices=window_spec.score_indices,
+        recon_window_indices=window_spec.recon_indices,
+        relion_score_translation_angles=translation_angles,
+        return_windowed_shifted=True,
+    )
+
+    assert len(calls) == 1
+    np.testing.assert_array_equal(
+        calls[0]["pixel_indices"],
+        np.asarray(window_spec.score_indices, dtype=np.int32),
+    )
+    np.testing.assert_array_equal(calls[0]["angles"], np.asarray(translation_angles))
+    assert calls[0]["image_shape"] == IMAGE_SHAPE
+    np.testing.assert_array_equal(
+        np.asarray(result[7]),
+        np.full(
+            (
+                batch_indices.size * fine_translations.shape[0],
+                window_spec.score_indices.shape[0],
+            ),
+            np.complex64(7.0 + 3.0j),
+        ),
+    )
 
 
 def test_prepare_bucket_io_routes_relion_cuda_operands_to_score_and_reconstruction():

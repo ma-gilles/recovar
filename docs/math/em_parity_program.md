@@ -10714,3 +10714,54 @@ has a `SAFE_TO_DELETE` marker.  Grid correction and forced after-max
 finalization were unset.  The report computes no correlation and is
 hard-coded `scorecard_change_admissible=false`; fixed K=1 and K=4 metrics do
 not change.
+
+## 2026-07-27 production RELION translation-score FFI closes sealed targets
+
+The native data-score audit isolated a required float32 boundary that JAX
+phase construction cannot reproduce on every target: RELION evaluates
+`sincosf(x*tx + y*ty)` and then applies explicit real/imaginary products.
+The new `RelionTranslateScoreF32` CUDA FFI is limited to direct exact-Gaussian
+score input. Reconstruction and M-step translation phases retain their
+existing JAX path.
+
+The implementation builds translation angles using RELION's host-double
+formula followed by float32 storage. Both the single-class and fused K-class
+pass-2 paths select the FFI only for exact RELION Gaussian scoring on a GPU
+with custom CUDA available; CPU and disabled/unavailable-CUDA paths retain the
+existing fallback.
+
+Same-A100 job `11655670` completed `0:0` in 1m29s. The built library exports
+`RelionTranslateScoreF32`; 38 focused CUDA/build/reduction/routing tests
+passed. The production FFI then passed the exact sealed replay gate:
+
+- stack 42988: 4/4 production raw diff2 values exact;
+- stack 64843: 10/10 replay-exact candidates exact, improving from 9/10;
+- stack 42824: 2/2 replay-exact candidates exact, unchanged.
+
+The sealed gate is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_phase_ffi_gpu_13840a20_20260727T022224ET/analysis/PRODUCTION_FFI_SEALED_REPLAY_GATE.json`
+(SHA-256
+`fd0239f788916c9be3e1f025a9982c93de025315616d0d1a6a433f3ea93993fb`).
+The exact-candidate report SHA-256 is
+`0c1dda8d8765f466ad87c30e8f3ecc384c2647227a60c6f820491835beff420f`;
+the A100-only CUDA library SHA-256 is
+`dd34d00f2c1906697f7c42999ee63a1ebe56c10611014a38481cc0fe6ca8e358`.
+Job `11655745` separately passed the repository-owned eight-pixel sealed
+RELION bit fixture.
+
+Initial job `11655645` had already passed all 38 focused tests before a
+scratch-only validator compared the two active `(tx,ty)` values with RELION's
+three-element `(tx,ty,tz)` record. It failed closed after 1m32s; correcting
+that audit assertion did not change production code. Diagnostic jobs
+`11655733` and `11655740` respectively failed before pytest on an unset
+module-shell `PS1` and skipped after a missing runtime library path; corrected
+job `11655745` exercised the GPU and passed.
+
+CPU-focused tests pass 19/19, the EM fast guard passes 16/16, scoped Ruff and
+`git diff --check` pass. Grid correction and forced after-max finalization
+were unset, and no correlation metric was computed. This exact-score closure
+authorizes a fixed K=4 trajectory rerun and affected K=1 fixed-case reruns;
+it does not itself change the checked metrics. Until those FSC/FSC-AUC gates
+finish, K=1 remains `27/34` strict, `32/34` exact topology, `34/34`
+evaluated, and K=4 remains `41/60` direct checks and `9/15` all-class
+iterations.
