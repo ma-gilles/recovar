@@ -10513,6 +10513,26 @@ not admissible for a host/JAX comparison.  Dependency-gated job `11645269`
 then started a fresh full pair on A100 node `della-l07g2` with a six-hour
 limit and new run/runtime roots; it reuses no partial output.
 
+The retry host arm completed all 48 files in 6,193 seconds.  Commit
+`d9369301` adds a fail-closed exact-repeatability analyzer and eight focused
+tests.  Against the independent completed host arm from `11641724`, all
+non-probability score/topology fields are exact and all 12 class predictions
+are exact.  Forty-four of 48 NPZs are byte- and array-exact.  Only the four
+files for original target 91,172 differ, exclusively in `probs` and
+`reconstruction_probs`: the maximum absolute delta is
+`7.771561172376096e-16`, L2 is `7.900650490391253e-16`, and residual energy
+is `6.242027817131954e-31`.  The formal classification is
+`exact_score_topology_posterior_roundoff_only`, with
+`scorecard_change_admissible=false`.
+
+The analyzer report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_panel12_retry6h_300c6e90_20260726T200000ET/analysis/HOST_PREPROCESS_REPEATABILITY.json`
+with SHA-256
+`cac77dc1fd6847193f9bae8c5d4a1b2d50b632c795328ef8e151d403d276dbdc`.
+The fresh in-job JAX arm and dependency-gated calibrated three-way job
+`11646634` remain the admissible host/JAX comparison; the independent host
+repeat only establishes the exact score/topology floor.
+
 Exact-H100 K=1 discriminator `11641917` remained active at this checkpoint.
 Neither diagnostic changes the immutable fixed metrics: K=1 remains `27/34`
 strict, `32/34` exact topology, and `34/34` evaluated; K=4 remains `41/60`

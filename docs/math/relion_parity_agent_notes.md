@@ -7159,6 +7159,17 @@ This status summary precedes the detailed capture and factor audit log below.
   non-admissible. Fresh full-pair retry `11645269` started from the same
   clean `300c6e90` payload on `della-l07g2` with a six-hour limit and new
   `SAFE_TO_DELETE` run/runtime roots.
+- The retry host arm completed `48/48` files in 6,193 seconds.  Fail-closed
+  analyzer commit `d9369301` compares it with the independent completed host
+  arm: every score/topology field and all 12 predicted classes are exact;
+  `44/48` NPZs are byte/array exact.  The remaining posterior-only residual
+  has maximum absolute delta `7.771561172376096e-16`, L2
+  `7.900650490391253e-16`, and energy `6.242027817131954e-31`.
+  Classification is `exact_score_topology_posterior_roundoff_only`, remains
+  non-admissible for scorecard changes, and is sealed at report SHA-256
+  `cac77dc1fd6847193f9bae8c5d4a1b2d50b632c795328ef8e151d403d276dbdc`.
+- The fresh in-job JAX arm and dependency-gated calibrated three-way job
+  `11646634` remain the only admissible host/JAX result.
 
 ## 2026-07-25 seed-exact K=4 accepted-hypothesis factor closure
 
