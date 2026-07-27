@@ -1552,6 +1552,7 @@ def _prepare_local_exact_bucket(
     config,
     norm_half_weights,
     score_with_masked_images: bool,
+    relion_score_translation_angles=None,
     image_pre_shifts=None,
     processed_half_cache: _LocalProcessedHalfCache | None = None,
     timer: dict[str, float] | None = None,
@@ -1637,7 +1638,17 @@ def _prepare_local_exact_bucket(
         score_real_dtype=score_real_dtype,
     )
     score_weighted_half = shift_processed_score_half * shift_ctf_half / shift_noise_half
-    shifted_score_half = _apply_half_translation_phases(score_weighted_half, shift_phases_half)
+    if relion_score_translation_angles is not None:
+        from recovar import cuda_backproject
+
+        shifted_score_half = cuda_backproject.relion_translate_score_f32(
+            jnp.asarray(score_weighted_half, dtype=jnp.complex64),
+            jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+            jnp.arange(score_weighted_half.shape[1], dtype=jnp.int32),
+            config.image_shape,
+        )
+    else:
+        shifted_score_half = _apply_half_translation_phases(score_weighted_half, shift_phases_half)
     if synchronize_profile:
         _block_until_ready(shifted_score_half)
     if timer is not None:
@@ -1694,7 +1705,15 @@ def _prepare_local_exact_bucket(
         if timer is not None:
             timer["tile_shift_recon_s"] += time.time() - shift_recon_t0
     else:
-        shifted_recon_half = shifted_score_half
+        if relion_score_translation_angles is None:
+            shifted_recon_half = shifted_score_half
+        else:
+            # Exact RELION arithmetic applies only to score translation.
+            # Reconstruction retains the ordinary JAX phase table.
+            shifted_recon_half = _apply_half_translation_phases(
+                score_weighted_half,
+                shift_phases_half,
+            )
     return (
         shifted_score_half,
         shifted_recon_half,
@@ -1775,6 +1794,7 @@ def run_local_em_exact(
     reconstruction_padding_factor: int = 1,
     score_with_masked_images: bool = True,
     half_spectrum_scoring: bool = False,
+    relion_exact_score_translation: bool = False,
     use_float64_scoring: bool = False,
     use_float64_normalization: bool = True,
     use_float64_projections: bool = False,
@@ -1819,6 +1839,11 @@ def run_local_em_exact(
 
     score_only = bool(score_only)
     include_unweighted_norm_high_shell = bool(include_unweighted_norm_high_shell)
+    relion_exact_score_translation = bool(relion_exact_score_translation)
+    if relion_exact_score_translation and not half_spectrum_scoring:
+        raise ValueError("exact RELION score translation requires half_spectrum_scoring=True")
+    if relion_exact_score_translation and use_float64_scoring:
+        raise ValueError("exact RELION score translation is a float32 scoring path")
     if score_only:
         if not (disable_adjoint_y and disable_adjoint_ctf):
             raise ValueError("score_only exact-local EM requires both adjoints disabled")
@@ -2399,6 +2424,13 @@ def run_local_em_exact(
         local_layout.translation_grid,
         image_shape,
     )
+    relion_score_translation_angles = (
+        _sparse_pass2_diagnostics._relion_cuda_score_translation_angles_if_available(
+            local_layout.translation_grid,
+            image_shape,
+            enabled=relion_exact_score_translation,
+        )
+    )
     if return_profile:
         _block_until_ready(translation_phases_half)
     translation_phase_time = time.time() - phase_t0
@@ -2926,6 +2958,7 @@ def run_local_em_exact(
                 translation_sqdist_arg,
                 noise_variance_half,
                 translation_phases_half,
+                relion_score_translation_angles,
                 half_weights,
                 norm_half_weights,
                 big_jit_window_indices_arg,
@@ -3671,6 +3704,7 @@ def run_local_em_exact(
             config,
             norm_half_weights,
             score_with_masked_images,
+            relion_score_translation_angles=relion_score_translation_angles,
             image_pre_shifts=image_pre_shifts,
             processed_half_cache=processed_half_cache,
             timer=preprocess_profile if return_profile else None,

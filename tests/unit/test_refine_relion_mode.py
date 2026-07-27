@@ -4344,6 +4344,9 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         captured["max_significants"] = kwargs.get("max_significants")
         captured["use_float64_scoring"] = kwargs.get("use_float64_scoring")
         captured["use_float64_normalization"] = kwargs.get("use_float64_normalization")
+        captured["relion_exact_score_translation"] = kwargs.get(
+            "relion_exact_score_translation"
+        )
         output = (
             jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
             jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
@@ -4394,6 +4397,7 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         rotation_block_size=4,
         current_size=4,
         accumulate_noise=True,
+        relion_exact_score_translation=True,
         translation_prior_reference_translations=reference_translations,
         return_significant_counts=True,
     )
@@ -4407,6 +4411,7 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
     assert captured["max_significants"] == -1
     assert captured["use_float64_scoring"] is False
     assert captured["use_float64_normalization"] is True
+    assert captured["relion_exact_score_translation"] is True
     np.testing.assert_allclose(
         captured["translation_prior_reference_translations"],
         reference_translations,
@@ -4429,8 +4434,10 @@ def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, r
         pass
 
     def capture_dispatch(*args, **kwargs):
-        _ = kwargs
         captured["layout"] = args[4]
+        captured["relion_exact_score_translation"] = kwargs.get(
+            "relion_exact_score_translation"
+        )
         raise DispatchCaptured
 
     if k_class_enabled:
@@ -4458,6 +4465,7 @@ def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, r
             image_batch_size=1,
             rotation_block_size=16,
             current_size=4,
+            relion_exact_score_translation=True,
             rotation_grid_mstep_rotations=mstep_grid,
             generate_relion_mstep_rotations=True,
             class_log_priors=np.zeros(2, dtype=np.float32) if k_class_enabled else None,
@@ -4466,6 +4474,7 @@ def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, r
     layout = captured["layout"]
     np.testing.assert_array_equal(layout.rotations_flat, score_grid[layout.rotation_ids_flat])
     np.testing.assert_array_equal(layout.mstep_rotations_flat, mstep_grid[layout.rotation_ids_flat])
+    assert captured["relion_exact_score_translation"] is True
 
     backward_compatible = build_local_hypothesis_layout(
         np.zeros((1, 3), dtype=np.float32),
@@ -6923,7 +6932,8 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
         reconstruct_significant_only=True,
         return_profile=True,
         score_with_masked_images=False,
-        half_spectrum_scoring=False,
+        half_spectrum_scoring=True,
+        relion_exact_score_translation=True,
         image_pre_shifts=np.array([[0.25, -0.5], [-0.75, 0.5], [0.0, 0.0]], dtype=np.float32),
         max_significants=-1,
         return_reconstruction_sample_indices=True,
@@ -7557,6 +7567,62 @@ def test_local_big_jit_windowed_translation_slices_before_tiling():
     assert "translation_phases_half[:, pixel_indices]" in src
     assert "shifted_half[:, window_indices]" not in src
     assert "shifted_recon_half[:, recon_window_indices]" not in src
+
+
+def test_local_big_jit_relion_translation_is_scoped_to_score_operand():
+    from recovar.em.dense_single_volume import local_big_jit
+
+    src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
+    translate_block = src[
+        src.index("def _translate_score_weighted_half") :
+        src.index("def _translate_weighted_half_window")
+    ]
+    assert "cuda_backproject.relion_translate_score_f32" in translate_block
+    shift_block = src[src.index("if use_window:") : src.index("batch_norm = jnp.sum(")]
+    assert "shifted_score = _translate_score_weighted_half" in shift_block
+    assert "shifted_half = _translate_score_weighted_half" in shift_block
+    assert "shifted_recon = _translate_weighted_half_window" in shift_block
+    assert "shifted_recon_half = (" in shift_block
+
+
+def test_local_exact_relion_translation_requires_half_spectrum_scoring():
+    with pytest.raises(
+        ValueError,
+        match="requires half_spectrum_scoring=True",
+    ):
+        run_local_em_exact(
+            None,
+            None,
+            None,
+            None,
+            None,
+            "linear_interp",
+            image_batch_size=1,
+            rotation_block_size=1,
+            current_size=None,
+            relion_exact_score_translation=True,
+        )
+
+
+def test_local_exact_relion_translation_rejects_float64_scoring():
+    with pytest.raises(
+        ValueError,
+        match="float32 scoring path",
+    ):
+        run_local_em_exact(
+            None,
+            None,
+            None,
+            None,
+            None,
+            "linear_interp",
+            image_batch_size=1,
+            rotation_block_size=1,
+            current_size=None,
+            half_spectrum_scoring=True,
+            relion_exact_score_translation=True,
+            use_float64_scoring=True,
+        )
 
 
 def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monkeypatch, rng):

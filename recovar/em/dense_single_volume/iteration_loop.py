@@ -3033,6 +3033,10 @@ def _score_half_local(
             do_gridding_correction=True,
             square_window=RELION_FOURIER_WINDOW_SQUARE,
             half_spectrum_scoring=True,
+            relion_exact_score_translation=bool(
+                _DENSE_EM_STATIC_KWARGS["relion_exact_fine_gaussian"]
+                and not parent_use_float64_scoring
+            ),
             image_corrections=image_corrections_k,
             scale_corrections=scale_corrections_k,
             group_ids=group_ids_k,
@@ -3238,6 +3242,10 @@ def _score_half_local(
                 do_gridding_correction=True,
                 square_window=RELION_FOURIER_WINDOW_SQUARE,
                 half_spectrum_scoring=True,
+                relion_exact_score_translation=bool(
+                    _DENSE_EM_STATIC_KWARGS["relion_exact_fine_gaussian"]
+                    and not fine_use_float64_scoring
+                ),
                 image_corrections=image_corrections_k,
                 scale_corrections=scale_corrections_k,
                 group_ids=group_ids_k,
@@ -3323,6 +3331,10 @@ def _score_half_local(
         do_gridding_correction=True,
         square_window=RELION_FOURIER_WINDOW_SQUARE,
         half_spectrum_scoring=True,
+        relion_exact_score_translation=bool(
+            _DENSE_EM_STATIC_KWARGS["relion_exact_fine_gaussian"]
+            and not fine_use_float64_scoring
+        ),
         image_corrections=image_corrections_k,
         scale_corrections=scale_corrections_k,
         group_ids=group_ids_k,

@@ -10808,3 +10808,50 @@ The fixed score is now K=1 `28/34` strict FSC/FSC-AUC (82.4%),
 `32/34` exact topology (94.1%), and `34/34` evaluated.  K=4 remains
 `41/60` direct checks and `9/15` all-class iterations pending full-15 job
 `11655922` and audit `11655923`.
+
+## 2026-07-27 exact translation scoring extended through local search
+
+A clean same-H100 source-only A/B for case 4 established the first
+reproducible effect of `RelionTranslateScoreF32`: at numbered iteration 2,
+the new source changes exactly three half-2 fine assignments, and all three
+new values match an independent earlier execution of the same source.
+Current-versus-parent merged FSC-AUC is still
+`0.9999999998178778` at that boundary, so this discrete closure does not by
+itself establish a final-map quality improvement.  Full paired science job
+`11664757`, shellwise audit `11669721`, and causal classifier `11672671`
+remain the authoritative final source-effect gate.
+
+The same audit exposed an implementation coverage gap.  The original
+translation FFI activated for both halves of global numbered iterations 2
+through 7, but local numbered iterations 8 through 17 and the legitimate
+converged final all-data local pass continued to use JAX translation phase
+tables.  This change adds an explicit RELION-only local score-translation
+flag and routes both the production big-JIT engine and its forced-split
+fallback through the existing CUDA `sincosf` primitive.  The flag defaults
+off for other local-EM callers and is rejected for non-half-spectrum or
+float64 scoring.  Reconstruction, noise, and M-step translation phases remain
+on the pre-existing JAX path.
+
+Validation used the checkout-bound pixi environment and a CUDA 12.8 rebuild:
+
+- EM fast guard: `16/16` passed;
+- focused local-search/K-class selection: `21/21` passed;
+- dense iteration-loop merge guards: `25/25` passed;
+- exact translation primitive suite on A100: `5/5` passed;
+- exact-translation-enabled big-JIT versus forced-split GPU equivalence:
+  passed;
+- Python compilation and `git diff --check`: passed.
+
+The first fast-guard run found one compatibility regression in a direct
+private-helper call.  Moving the new argument behind the existing positional
+interface fixed that failure; the exact failed test and full guard both pass
+afterward.  A file-wide Ruff invocation still reports inherited import-order,
+late-import, and unused-import findings in the large pre-existing modules; no
+unrelated auto-formatting was applied.
+
+This change computes no correlation and does not alter the immutable
+scorecard.  K=1 remains `28/34` strict, `32/34` exact topology, and `34/34`
+evaluated; K=4 remains `41/60` direct checks and `9/15` all-class iterations.
+The full A/B provenance is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_frozen_oracle_phase_ab_20260727T100500ET/provenance/README.md`;
+its evolving SHA-256 is recorded alongside each live audit checkpoint.

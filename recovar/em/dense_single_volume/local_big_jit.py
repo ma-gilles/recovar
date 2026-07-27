@@ -645,6 +645,7 @@ def run_local_bucket_big_jit(
     translation_sqdist_ang,
     noise_variance_half,
     translation_phases_half,
+    relion_score_translation_angles,
     half_weights,
     norm_half_weights,
     window_indices,
@@ -756,6 +757,8 @@ def run_local_bucket_big_jit(
     ctf_half = config.compute_ctf_half(ctf_params).astype(precision_policy.score_real_dtype)
     noise_variance_half = noise_variance_half.astype(precision_policy.score_real_dtype)
     translation_phases_half = translation_phases_half.astype(precision_policy.score_complex_dtype)
+    if relion_score_translation_angles is not None:
+        relion_score_translation_angles = relion_score_translation_angles.astype(jnp.float32)
     ctf2_over_nv_half = ctf_half**2 / noise_variance_half
 
     processed_score_half = _preprocess_half(
@@ -782,6 +785,22 @@ def run_local_bucket_big_jit(
     n_trans = translation_phases_half.shape[0]
     materialize_shifted_noise = not (return_deferred_mstep_inputs and not return_deferred_noise_inputs)
 
+    def _translate_score_weighted_half(weighted_half, pixel_indices):
+        if relion_score_translation_angles is not None:
+            from recovar import cuda_backproject
+
+            return cuda_backproject.relion_translate_score_f32(
+                jnp.asarray(weighted_half, dtype=jnp.complex64),
+                relion_score_translation_angles,
+                jnp.asarray(pixel_indices, dtype=jnp.int32),
+                image_shape,
+            )
+        translation_phases = translation_phases_half[:, pixel_indices]
+        return (weighted_half[:, None, :] * translation_phases[None, :, :]).reshape(
+            batch_size * n_trans,
+            pixel_indices.shape[0],
+        )
+
     def _translate_weighted_half_window(processed_half, pixel_indices):
         weighted_half = (
             processed_half[:, pixel_indices]
@@ -795,7 +814,12 @@ def run_local_bucket_big_jit(
         )
 
     if use_window:
-        shifted_score = _translate_weighted_half_window(processed_score_half, window_indices)
+        score_weighted_half = (
+            processed_score_half[:, window_indices]
+            * ctf_half[:, window_indices]
+            / noise_variance_half[window_indices]
+        )
+        shifted_score = _translate_score_weighted_half(score_weighted_half, window_indices)
         ctf2_over_nv_score = ctf2_over_nv_half[:, window_indices]
         score_half_weights = half_weights[window_indices]
         if not score_only:
@@ -807,9 +831,9 @@ def run_local_bucket_big_jit(
             ctf2_over_nv_recon = ctf2_over_nv_half[:, recon_window_indices]
     else:
         score_weighted_half = processed_score_half * ctf_half / noise_variance_half
-        shifted_half = (score_weighted_half[:, None, :] * translation_phases_half[None, :, :]).reshape(
-            batch_size * n_trans,
-            processed_score_half.shape[1],
+        shifted_half = _translate_score_weighted_half(
+            score_weighted_half,
+            jnp.arange(processed_score_half.shape[1], dtype=jnp.int32),
         )
         if not score_only:
             recon_weighted_half = processed_recon_half * ctf_half / noise_variance_half
