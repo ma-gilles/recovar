@@ -10928,3 +10928,29 @@ gate remains final authority.  The monitor script SHA-256 is
 `bd721f8c9e03eb2eb010d0973e6a30b9379fb5f85469e0eb7aede0f95476410e`.
 Until exact-device science and audit finish, fixed K=4 remains `41/60` direct
 checks and `9/15` all-class iterations.
+
+### K=4 release attempt 1 rejected before science
+
+Monitor `11683129` found the declared index-2-as-lowest-free window and
+completed `0:0`.  Released science `11657380` then failed `1:0` in two
+seconds before GPU inspection, import, staging, or output creation.  Its only
+error was replay of predecessor manifest path
+`/var/spool/slurmd/job11655922/slurm_script`, which Slurm deletes after the
+predecessor allocation.  The durable original science launcher exactly
+matches that expired entry's recorded SHA-256, and all five stable manifest
+entries replay.
+
+The retry launcher now binds the complete predecessor-manifest hash, verifies
+the durable launcher substitution, and replays the stable entries.  Its
+SHA-256 is
+`7823e0cffe0cb31d1693969aed319ec66b495b213dc74925cf40c13db60f3296`.
+Failed-job stdout is empty, no allocation-attempt record exists, and the
+science output remains empty.  Never-started audit `11675835` was canceled.
+
+Replacement science `11683286` is held, replacement audit `11683290` depends
+on it, and retry monitor `11683346` is active with SHA-256
+`41f854fdb7631dba0051beb7f37290916a3f648eba85b60749fd7f5322a6b8c5`.
+The exact attempt-1 monitor, old launcher, and release record are preserved by
+archive-manifest SHA-256
+`17e577783cd16e7764a2688a1c2eee563264c5e526f5d4ccbf38c8a1dc470496`.
+No K=4 science or fixed-score claim comes from the rejected attempt.
