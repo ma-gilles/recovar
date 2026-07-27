@@ -10656,3 +10656,61 @@ normalizer, and the introduced cohort to counteracting components.  The
 one-thread and four-thread reports are byte-identical at SHA-256
 `3ecd85fc80b44e9f9c452eb13510f5dc474b2952a1140d029a2919896d388003`.
 No preprocessing, normalization, or scorecard default changes.
+
+## 2026-07-27 K=4 numerator boundary: data score, not `expf` or priors
+
+Commit `4f97ccbb8d8bf808e32a120a8d13eb294482621b` adds
+`scripts/analyze_relion_k4_panel_numerator_boundary.py` and eight isolated
+unit tests.  The analyzer consumes the sealed posterior-decomposition report,
+re-hashes every RELION and RECOVAR target artifact, requires the exact
+iteration-10/class-2 topology and 4/4/4 cohort membership, and reconstructs
+the all-class RECOVAR exponent shift from the four class-score arrays.  It
+does not mutate the earlier sealed analyzer or reports.
+
+For each backend it compares:
+
+1. the production numerator inferred from posterior probability and global
+   Pmax against RELION's captured production `expf(50)` numerator;
+2. the same RECOVAR score replayed with float32 maximum, shift, underflow,
+   and exponentiation against RELION's production numerator;
+3. RELION's captured shifted log weight replayed through the same host
+   float32 exponentiation against RELION's production numerator; and
+4. the centered combined-score residual after separately substituting the
+   data score, orientation prior, or translation prior.
+
+The clean-commit replay gives the same classification for persistent,
+corrected, and introduced cohorts and for host and RELION-CUDA preprocessing:
+`numerator_residual_localized_upstream_of_exponentiation_to_data_score`.
+
+| Cohort | Backend | RELION-score substitution energy removed | Posterior-vs-f32-score replay / production energy | Strongest component | Component energy removed |
+|---|---|---:|---:|---|---:|
+| corrected | host | 0.9999999999774037 | 4.345346844906358e-08 | data score | 0.8256586564981220 |
+| corrected | RELION-CUDA | 0.9999999999774101 | 4.343682198117852e-08 | data score | 0.7908083535518164 |
+| introduced | host | 0.9999999996598447 | 2.9070109446915322e-08 | data score | 0.8185401224392642 |
+| introduced | RELION-CUDA | 0.9999999996600180 | 2.905210056316014e-08 | data score | 0.8294637210136074 |
+| persistent | host | 0.9999994332053838 | 3.065659800113664e-07 | data score | 0.8875275451523703 |
+| persistent | RELION-CUDA | 0.9999994332497220 | 3.0653338944315185e-07 | data score | 0.8879393494510351 |
+
+Thus the nonlinear numerator mismatch is already present before
+exponentiation.  Host `expf` replay, posterior-to-numerator reconstruction,
+and both priors are secondary at this boundary.  The next bounded
+discriminator is the native pre-prior data-score calculation for persistent
+stack identity 64843 and introduced stack identity 42824, not an
+exponentiation, posterior-normalization, or prior-handling production change.
+
+The one-thread and four-thread reports are byte-identical at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_panel12_retry6h_300c6e90_20260726T200000ET/analysis/PANEL12_NUMERATOR_BOUNDARY_4f97ccbb_T1.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_panel12_retry6h_300c6e90_20260726T200000ET/analysis/PANEL12_NUMERATOR_BOUNDARY_4f97ccbb_T4.json`,
+both SHA-256
+`1d5ee73794a6ff7498002634153d085d8faa11eb1f643c2694a2d0312c685a9e`.
+The verifying manifest is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_panel12_retry6h_300c6e90_20260726T200000ET/provenance/numerator_boundary_4f97ccbb.sha256`,
+SHA-256
+`6348ea9a14afce9f7d923155ccde70ea756b91f885ee46cdd6cf8d81f526ac67`.
+The CPU-only runtime root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_parity_numerator_boundary_4f97ccbb_20260727T003000ET`
+has a `SAFE_TO_DELETE` marker.  Grid correction and forced after-max
+finalization were unset.  The report computes no correlation and is
+hard-coded `scorecard_change_admissible=false`; fixed K=1 and K=4 metrics do
+not change.

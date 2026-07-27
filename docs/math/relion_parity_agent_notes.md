@@ -7983,3 +7983,42 @@ default change.  Continue at upstream numerator score arithmetic for the
 persistent and introduced identities while retaining the normalizer as a
 separate persistent-cohort branch.  The report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_panel12_retry6h_300c6e90_20260726T200000ET/analysis/PANEL12_POSTERIOR_DECOMPOSITION_e3008148_T1.json`.
+
+## 2026-07-27 K=4 numerator localizes before exponentiation
+
+Commit `4f97ccbb` adds a second fail-closed analyzer for the same immutable
+12-target, 24,800-candidate panel.  It binds the posterior-decomposition
+report and every target artifact, maps the exact RELION candidate topology,
+then compares the production numerator with two float32 score replays:
+RECOVAR scores through RELION's shift/underflow/`expf` frame and RELION's own
+captured shifted scores through the same replay.  It separately decomposes
+the centered pre-exponent score into data score, orientation prior, and
+translation prior.
+
+All three cohorts and both preprocessing backends classify as
+`numerator_residual_localized_upstream_of_exponentiation_to_data_score`.
+Replacing the score with RELION's captured score removes
+`0.9999994332053838`--`0.9999999999774101` of raw-numerator residual energy.
+RECOVAR's posterior-derived numerator differs from its float32 score replay
+by only `2.905210056316014e-8`--`3.065659800113664e-7` of production
+residual energy.  Data-score substitution is strongest in all six
+cohort/backend cells and removes `0.7908083535518164`--
+`0.8879393494510351` of centered combined-score residual energy.
+Orientation/translation-prior substitutions are negligible.
+
+One-thread and four-thread reports are byte-identical at SHA-256
+`1d5ee73794a6ff7498002634153d085d8faa11eb1f643c2694a2d0312c685a9e`.
+The nine-entry manifest independently passes and has SHA-256
+`6348ea9a14afce9f7d923155ccde70ea756b91f885ee46cdd6cf8d81f526ac67`.
+The canonical report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_panel12_retry6h_300c6e90_20260726T200000ET/analysis/PANEL12_NUMERATOR_BOUNDARY_4f97ccbb_T1.json`;
+the provenance note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_panel12_retry6h_300c6e90_20260726T200000ET/provenance/NUMERATOR_BOUNDARY_4f97ccbb.md`.
+
+This rejects exponentiation, posterior normalization, and prior handling as
+the leading numerator cause.  Continue before prior addition in the native
+data-score path, beginning with persistent stack identity 64843 and
+introduced stack identity 42824.  The diagnostic is
+`scorecard_change_admissible=false`; fixed K=1 remains `27/34` strict,
+`32/34` topology, `34/34` evaluated, and fixed K=4 remains `41/60` direct
+and `9/15` all-class.
