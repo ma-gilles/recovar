@@ -7862,3 +7862,35 @@ completion marker SHA-256 is
   Proposal root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scorecard_v8_case32_916ab17a_20260726T162000ET`.
   Both are marked `SAFE_TO_DELETE`.
+
+## 2026-07-26 20:55 ET — case-5 exact-H100 capture rejected and audited
+
+- Job `11641917` completed both arms on H100 UUID
+  `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, then intentionally exited
+  `1:0` because strict capture inertness failed.
+- All 109 dump files and seven canonical static inputs verify; no temporary
+  dump files remain.  Both perturbations are exactly `-0.19536`.
+- Seven of eight particle fields are exact over all 100,000 particles.
+  Exactly one OriginY value differs, and it is the requested dump target
+  `65071@particles.256.mrcs`: `0.116118 -> -0.946380` Angstrom, one
+  `1.062498`-Angstrom fine step.
+- Both half-map FSC-AUC values remain effectively exact at
+  `0.9999999998941168` and `0.9999999999549709`, above the unchanged
+  `0.999999` gate.
+- The scratch v1 report's `68561@...` target label was a positional-row
+  bookkeeping error; the full comparison and rejection were identity-aligned
+  and correct.
+- New identity-safe v3 analyzer requires the exact image identity, verifies
+  its stack-prefix/original-index relation and expected particle count,
+  reports bounded identity-specific mismatches, binds input hashes, and exits
+  nonzero on rejection.  Focused validation passes `7/7`; Ruff, compile,
+  checkout provenance, and
+  `git diff --check` pass.
+- Identity-safe report SHA-256:
+  `4e36627a0c82b867c8428982d040e6de7c711afa1f51456c12b15738c173425c`.
+  Failed-run audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_p65070_relion_inertness_h100_20260726T183000ET/provenance/FAILED_11641917.md`.
+- Exploratory RECOVAR/capture score replay remains non-admissible despite
+  exact 32/32 support and the same `[2, 100]` winner, because capture
+  inertness failed.  Fixed metrics remain K=1 `27/34` strict, `32/34`
+  topology, `34/34` evaluated and K=4 `41/60` direct, `9/15` all-class.

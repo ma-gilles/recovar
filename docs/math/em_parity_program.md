@@ -10513,7 +10513,46 @@ not admissible for a host/JAX comparison.  Dependency-gated job `11645269`
 then started a fresh full pair on A100 node `della-l07g2` with a six-hour
 limit and new run/runtime roots; it reuses no partial output.
 
-Exact-H100 K=1 discriminator `11641917` remains active.  Neither diagnostic
-changes the immutable fixed metrics: K=1 remains `27/34` strict, `32/34`
-exact topology, and `34/34` evaluated; K=4 remains `41/60` direct checks and
-`9/15` all-class iterations.
+Exact-H100 K=1 discriminator `11641917` remained active at this checkpoint.
+Neither diagnostic changes the immutable fixed metrics: K=1 remains `27/34`
+strict, `32/34` exact topology, and `34/34` evaluated; K=4 remains `41/60`
+direct checks and `9/15` all-class iterations.
+
+## 2026-07-26 exact-H100 K=1 capture rejects on its target translation
+
+Job `11641917` completed both iteration-1 arms on H100 UUID
+`GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, then exited `1:0` at the
+intentional strict inertness gate.  All 109 dump files and all seven canonical
+static inputs verify; there are no temporary capture files.  Sampling
+perturbation is exactly `-0.19536` in both arms.  Angles, OriginX, class,
+Pmax, and significant-support fields are exact over all 100,000 particles,
+and both half-map FSC-AUC values pass the unchanged `0.999999` gate at
+`0.9999999998941168` and `0.9999999999549709`.
+
+The single rejected value is the capture target itself,
+`65071@particles.256.mrcs` (RECOVAR original index 65,070): OriginY changes
+from `0.116118` to `-0.946380` Angstrom, one `1.062498`-Angstrom fine step.
+The inline v1 report mislabeled the target as `68561@...` because it applied
+the RECOVAR original index positionally to RELION's shuffled output row order.
+The all-particle identity-aligned gate and its rejection were still correct.
+
+New `scripts/analyze_relion_control_capture_inertness.py` eliminates that
+bookkeeping ambiguity.  It requires an exact `rlnImageName`, verifies that its
+one-based stack prefix equals the zero-based original index plus one, binds an
+explicit expected particle count, aligns both full particle tables by
+identity, records bounded mismatch examples with both raw row positions,
+binds every STAR/map input hash, and fails nonzero on rejection.  Seven
+focused tests pass; scoped Ruff, compile, checkout provenance, and
+`git diff --check` pass.  The final v3 identity-safe real-run report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_p65070_relion_inertness_h100_20260726T183000ET/analysis/RELION_CONTROL_CAPTURE_INERTNESS_IDENTITY_AUDIT_V3.json`,
+SHA-256
+`4e36627a0c82b867c8428982d040e6de7c711afa1f51456c12b15738c173425c`.
+The full failed-run audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_p65070_relion_inertness_h100_20260726T183000ET/provenance/FAILED_11641917.md`.
+
+An exploratory score replay still finds exact 32/32 support, exact rotation
+mapping, and the same `[2, 100]` top key in RECOVAR and captured RELION, with
+centered pre-prior residual maximum `4.470348358154297e-08`.  It is not
+admissible because the passive-capture gate failed.  No scorecard row changes:
+K=1 remains `27/34` strict, `32/34` exact topology, and `34/34` evaluated;
+K=4 remains `41/60` direct checks and `9/15` all-class iterations.
