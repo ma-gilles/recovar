@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -33,7 +34,34 @@ class SolvarFitResult:
     U: jax.Array
     S: jax.Array
     W: jax.Array
-    iteration_data: list[dict[str, float]]
+    iteration_data: list[dict]
+
+
+class WHalfParametrization(NamedTuple):
+    """
+    Parameterizes the half-Fourier loading matrix ``W`` for gradient-based optimization by:
+    ``W = U * exp(log_sqrt_eigenvalues)``.
+    """
+
+    U: jax.Array
+    log_sqrt_eigenvalues: jax.Array
+
+
+def loadings_from_state(state: WHalfParametrization) -> jax.Array:
+    """Reconstruct the half-Fourier loading matrix ``W = U * exp(log_sqrt_eigenvalues)``.
+    """
+    scale = jnp.exp(state.log_sqrt_eigenvalues)
+    return state.U * scale[None, :]
+
+
+def _state_from_loadings(W_half, volume_shape) -> WHalfParametrization:
+    """Rebase ``W_half`` onto its exact SVD basis: orthonormal ``U`` + log singular values.
+    """
+    U_real, eigenvalues, _ = ppca._orthonormalize_W_to_basis(W_half, volume_shape)
+    rank = U_real.shape[0]
+    U_half = ftu.get_dft3_real(jnp.asarray(U_real)).reshape(rank, -1).T.astype(W_half.dtype)
+    log_sqrt_eigenvalues = 0.5 * jnp.log(jnp.asarray(eigenvalues, dtype=U_half.real.dtype))
+    return WHalfParametrization(U=U_half, log_sqrt_eigenvalues=log_sqrt_eigenvalues)
 
 
 def _validate_objective(objective: str) -> str:
@@ -274,6 +302,15 @@ def _adam_step(W, grad, m, v, t, *, learning_rate, beta1, beta2, eps):
     return W, m, v
 
 
+def _clip_grad_norm(grad, clip_norm):
+    """Clip ``grad`` to ``clip_norm`` by L2 norm. Returns ``(grad, norm_used)``."""
+    grad_norm = float(jnp.linalg.norm(grad))
+    if clip_norm and clip_norm > 0.0 and grad_norm > clip_norm:
+        grad = grad * (float(clip_norm) / (grad_norm + 1e-12))
+        grad_norm = float(clip_norm)
+    return grad, grad_norm
+
+
 def fit(
     experiment_dataset,
     mean_estimate,
@@ -288,6 +325,7 @@ def fit(
     beta2: float = 0.999,
     adam_eps: float = 1e-8,
     gradient_clip_norm: float = 0.0,
+    log_eigenvalue_lr_factor: float = 100.0,
     volume_mask=None,
     project_mask: bool = True,
     disc_type_mean: str = "cubic",
@@ -327,19 +365,28 @@ def fit(
     )
     mean_for_slicing = jnp.asarray(mean_for_slicing)
 
-    m = jnp.zeros_like(W)
-    v = jnp.zeros(W.shape, dtype=W.real.dtype)
+    state = _state_from_loadings(W, volume_shape)
+
+    def _zero_moments(state):
+        m_U = jnp.zeros_like(state.U)
+        v_U = jnp.zeros(state.U.shape, dtype=state.U.real.dtype)
+        m_s = jnp.zeros_like(state.log_sqrt_eigenvalues)
+        v_s = jnp.zeros_like(state.log_sqrt_eigenvalues)
+        return m_U, v_U, m_s, v_s
+
+    m_U, v_U, m_s, v_s = _zero_moments(state)
     n_total = int(experiment_dataset.n_images)
-    iteration_data: list[dict[str, float]] = []
+    iteration_data: list[dict] = []
     step = 0
 
     logger.info(
-        "SOLVAR fit: objective=%s epochs=%d rank=%d batch_size=%d learning_rate=%.3e",
+        "SOLVAR fit: objective=%s epochs=%d rank=%d batch_size=%d learning_rate=%.3e log_eigenvalue_lr_factor=%.1f",
         objective,
         int(n_epochs),
-        int(W.shape[1]),
+        int(state.U.shape[1]),
         int(batch_size),
         float(learning_rate),
+        float(log_eigenvalue_lr_factor),
     )
 
     for epoch in range(int(n_epochs)):
@@ -354,9 +401,9 @@ def fit(
                 data_scale = float(n_total) / float(batch_n)
                 noise_variance_half = ds.noise.get_half(batch_image_ind)
 
-                def loss_for_W(W_candidate):
+                def loss_for_state(state_candidate):
                     return _batch_total_loss(
-                        W_candidate,
+                        loadings_from_state(state_candidate),
                         W_prior_half,
                         batch_half,
                         mean_for_slicing,
@@ -374,36 +421,50 @@ def fit(
                         data_scale,
                     )
 
-                loss, grad = jax.value_and_grad(loss_for_W)(W)
-                grad_norm = float(jnp.linalg.norm(grad))
-                if gradient_clip_norm and gradient_clip_norm > 0.0 and grad_norm > gradient_clip_norm:
-                    grad = grad * (float(gradient_clip_norm) / (grad_norm + 1e-12))
-                    grad_norm = float(gradient_clip_norm)
+                loss, grad = jax.value_and_grad(loss_for_state)(state)
+                grad_U, grad_norm_U = _clip_grad_norm(grad.U, gradient_clip_norm)
+                grad_s, grad_norm_s = _clip_grad_norm(grad.log_sqrt_eigenvalues, gradient_clip_norm)
+                grad_norm = float(jnp.sqrt(grad_norm_U**2 + grad_norm_s**2))
+
                 step += 1
-                W, m, v = _adam_step(
-                    W,
-                    grad,
-                    m,
-                    v,
+                new_U, m_U, v_U = _adam_step(
+                    state.U,
+                    grad_U,
+                    m_U,
+                    v_U,
                     step,
                     learning_rate=float(learning_rate),
                     beta1=float(beta1),
                     beta2=float(beta2),
                     eps=float(adam_eps),
                 )
+                new_log_sqrt_eigenvalues, m_s, v_s = _adam_step(
+                    state.log_sqrt_eigenvalues,
+                    grad_s,
+                    m_s,
+                    v_s,
+                    step,
+                    learning_rate=float(learning_rate) * float(log_eigenvalue_lr_factor),
+                    beta1=float(beta1),
+                    beta2=float(beta2),
+                    eps=float(adam_eps),
+                )
                 if project_mask:
-                    W = project_loading_to_mask(W, volume_shape, volume_mask)
+                    new_U = project_loading_to_mask(new_U, volume_shape, volume_mask)
+                state = WHalfParametrization(new_U, new_log_sqrt_eigenvalues)
+
                 epoch_loss += float(loss)
                 epoch_grad_norm += grad_norm
                 epoch_batches += 1
 
-        prior_loss = float(w_prior_quadratic(W, W_prior_half))
+        W_current = loadings_from_state(state)
+        prior_loss = float(w_prior_quadratic(W_current, W_prior_half))
         row = {
             "epoch": float(epoch),
             "loss_mean_batch_estimate": epoch_loss / max(epoch_batches, 1),
             "prior_loss": prior_loss,
             "grad_norm_mean": epoch_grad_norm / max(epoch_batches, 1),
-            "W_norm": float(jnp.linalg.norm(W)),
+            "W_norm": float(jnp.linalg.norm(W_current)),
         }
         iteration_data.append(row)
         logger.info(
@@ -415,6 +476,7 @@ def fit(
             row["grad_norm_mean"],
         )
 
+    W = loadings_from_state(state)
     U_real, eigenvalues, _ = ppca._orthonormalize_W_to_basis(W, volume_shape)
     rank = U_real.shape[0]
     U_half = ftu.get_dft3_real(jnp.asarray(U_real)).reshape(rank, -1).T
