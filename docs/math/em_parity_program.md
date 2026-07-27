@@ -10564,6 +10564,18 @@ hash-identical retained launcher, analyzer, and report and passes
 `df7b7c28879ae9b834a624a8f57d77e9a913ced6b211b683a5695459c0f80550`.
 No scientific artifact or metric was changed by this provenance-only repair.
 
+Integrated replay then exposed process-level variation at approximately
+`1e-18` in 76 residual-energy/L2 fields because the analyzer used
+BLAS-backed `numpy.vdot`.  Commit `547b2e3d` changes only this diagnostic
+reduction to order-stable `math.fsum` and adds a regression that forbids the
+BLAS path.  Real 24,800-candidate replays with BLAS thread counts one and four
+are byte-identical at SHA-256
+`53b746a1cae413398bc9f3ce5c9cec1d9985a715652427dc8a1883b280f1083e`.
+They preserve the same classification, all 12 winners, exact gates, and
+non-admissible scorecard status.  The deterministic raw-data and combined
+removed-energy/floor ratios are `0.6625974811785016` and
+`0.5675890510853164`.
+
 Exact-H100 K=1 discriminator `11641917` remained active at this checkpoint.
 Neither diagnostic changes the immutable fixed metrics: K=1 remains `27/34`
 strict, `32/34` exact topology, and `34/34` evaluated; K=4 remains `41/60`

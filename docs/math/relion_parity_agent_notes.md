@@ -7187,6 +7187,13 @@ This status summary precedes the detailed capture and factor audit log below.
   report and passes independently.  Its SHA-256 is
   `df7b7c28879ae9b834a624a8f57d77e9a913ced6b211b683a5695459c0f80550`.
   This is a provenance-only repair.
+- Integrated replay found approximately `1e-18` process/thread variation in
+  BLAS-backed residual-energy reductions.  Commit `547b2e3d` uses
+  order-stable `math.fsum` for this diagnostic only and adds a regression
+  forbidding `numpy.vdot`.  Real one-thread and four-thread replays are
+  byte-identical at SHA-256
+  `53b746a1cae413398bc9f3ce5c9cec1d9985a715652427dc8a1883b280f1083e`,
+  with unchanged within-floor classification and 12/12 winners.
 
 ## 2026-07-25 seed-exact K=4 accepted-hypothesis factor closure
 
