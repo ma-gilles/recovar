@@ -10997,3 +10997,38 @@ These rejected infrastructure attempts are not scientific evidence and do
 not change the fixed scorecard.  K=4 remains `41/60` direct checks and `9/15`
 all-class iterations until exact-device science and its FSC/FSC-AUC audit
 finish; correlation is not computed.
+
+### K=4 retry-3 audit hardened before science release
+
+Pre-release audit review confirmed that each of the 15 boundary auditors
+already hash-binds its current, prior, RELION, and GT map inputs.  It also
+found a provenance gap: the topology NPZ and 120 current/prior fine/coarse
+assignment inputs were not independently sealed, and the standard trajectory
+and per-boundary FSC auditors did not fail closed if their values or pass
+counts disagreed.
+
+Pending audit `11683608` was canceled at zero elapsed.  Replacement audit
+`11683764` still depends on `afterok:11683600` and adds:
+
+- a three-entry topology-input manifest covering refinement results, particle
+  identities, and the manifest-bound dispatch schedule;
+- a 120-entry manifest covering all current/prior fine and coarse assignment
+  arrays across 15 iterations, two halves, and two assignment stages;
+- exact replay of both manifests before classification;
+- direct FSC-AUC, GT-delta FSC-AUC, and per-iteration pass-count consistency
+  checks between the independent trajectory and boundary auditors.
+
+The replacement launcher SHA-256 is
+`96c1e8e8cb1f1228f0e0224738297440a133dfda76bc1366760de619fd763084`.
+Shell syntax and embedded-Python syntax pass.  The new cross-auditor
+assertions replay all 15 completed predecessor boundaries.
+
+Monitor `11683614` was pinned to the superseded audit ID, so it was canceled
+before release.  Its exact Slurm-spooled script and cancellation logs are
+preserved by archive manifest SHA-256
+`72bc82d93f75db608bf320cebfa145eb7dab4e352e96dab021edb75d88a8cd29`.
+Replacement monitor `11683768` binds audit `11683764`, is polling with empty
+stderr, and has SHA-256
+`783ba6cbe94d2072e5856c42c8d51e17af3e4723a2ad3547b95c82b744e898ee`.
+Science `11683600`, its exact-GPU launcher, and its held state are unchanged.
+No scientific or scorecard claim comes from this audit-only hardening.
