@@ -943,7 +943,7 @@ hashes. It never mutates the checked scorecard. For example:
 ```bash
 pixi run python scripts/summarize_em_relion_parity_scorecard.py \
   --proposal-previous-ledger /absolute/path/to/current-ledger.json \
-  --proposal-ledger-schema em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v9 \
+  --proposal-ledger-schema em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v10 \
   --proposal-generated-utc 2026-07-26T21:00:00+00:00 \
   --proposal-status-note "Case k1-NN passed immutable strict evidence." \
   --proposal-evidence 'k1-NN|/absolute/path/to/case-root|SCIENCE_JOB|AUDIT_JOB' \

@@ -265,6 +265,16 @@ def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sh
     evaluated = passed + counts["fail"]
     intermediate_passed = sum(case["intermediate_result"] == "pass" for case in cases)
     source = scorecard["current_snapshot"]["source_ledger"]
+    source_schema_match = re.fullmatch(
+        r"em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v(\d+)",
+        source["schema"],
+    )
+    if source_schema_match is None:
+        raise ValueError("current snapshot is not a superseding ledger")
+    next_ledger_schema = (
+        "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v"
+        f"{int(source_schema_match.group(1)) + 1}"
+    )
     fixture_bytes = sum(row["size"] for case in fixture_manifest["cases"] for row in case["files"])
     history = scorecard["history"]
     first_passed = history[0]["counts"]["pass"]
@@ -377,7 +387,7 @@ def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sh
         "```bash",
         "pixi run python scripts/summarize_em_relion_parity_scorecard.py \\",
         "  --proposal-previous-ledger /absolute/path/to/current-ledger.json \\",
-        "  --proposal-ledger-schema em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v9 \\",
+        f"  --proposal-ledger-schema {next_ledger_schema} \\",
         "  --proposal-generated-utc 2026-07-26T21:00:00+00:00 \\",
         '  --proposal-status-note "Case k1-NN passed immutable strict evidence." \\',
         "  --proposal-evidence 'k1-NN|/absolute/path/to/case-root|SCIENCE_JOB|AUDIT_JOB' \\",

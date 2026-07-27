@@ -49,6 +49,10 @@ def test_frozen_v1_scorecard_is_valid_and_renders_fixed_denominator():
     assert "| 27 | +1 | 7 | 0 |" in rendered
     assert "| `strict-k1-v9-20260727`" in rendered
     assert "| 28 | +1 | 6 | 0 |" in rendered
+    assert (
+        "--proposal-ledger-schema "
+        "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v10"
+    ) in rendered
     assert "Non-scoring regenerated-data diagnostics" in rendered
     assert "| `k1-23` | pass | pass | 0.997483478 |" in rendered
 
