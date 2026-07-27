@@ -15,6 +15,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core
@@ -45,6 +46,10 @@ class WHalfParametrization(NamedTuple):
 
     U: jax.Array
     log_sqrt_eigenvalues: jax.Array
+
+    def apply_masking(self, volume_shape, volume_mask) -> "WHalfParametrization":
+        """Apply a real-space volume mask."""
+        return self._replace(U=project_loading_to_mask(self.U, volume_shape, volume_mask))
 
 
 def loadings_from_state(state: WHalfParametrization) -> jax.Array:
@@ -289,26 +294,10 @@ def _as_half_volume_prior(W_prior, W_shape, volume_shape):
     return ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
 
 
-def _adam_step(W, grad, m, v, t, *, learning_rate, beta1, beta2, eps):
-    # JAX returns conjugated Wirtinger gradients for real-valued functions of
-    # complex inputs. Conjugate once here so ``W -= step`` is steepest descent
-    # in the real/imaginary coordinates.
-    descent_grad = jnp.conj(grad)
-    m = beta1 * m + (1.0 - beta1) * descent_grad
-    v = beta2 * v + (1.0 - beta2) * (jnp.abs(descent_grad) ** 2)
-    m_hat = m / (1.0 - beta1**t)
-    v_hat = v / (1.0 - beta2**t)
-    W = W - learning_rate * m_hat / (jnp.sqrt(v_hat) + eps)
-    return W, m, v
-
-
-def _clip_grad_norm(grad, clip_norm):
-    """Clip ``grad`` to ``clip_norm`` by L2 norm. Returns ``(grad, norm_used)``."""
-    grad_norm = float(jnp.linalg.norm(grad))
-    if clip_norm and clip_norm > 0.0 and grad_norm > clip_norm:
-        grad = grad * (float(clip_norm) / (grad_norm + 1e-12))
-        grad_norm = float(clip_norm)
-    return grad, grad_norm
+def _branch_optimizer(branch_learning_rate, gradient_clip_norm: float = 0.0):
+    if gradient_clip_norm and gradient_clip_norm > 0.0:
+        return optax.chain(optax.clip_by_global_norm(gradient_clip_norm), optax.adam(branch_learning_rate))
+    return optax.adam(branch_learning_rate)
 
 
 def fit(
@@ -321,9 +310,6 @@ def fit(
     n_epochs: int = 40,
     batch_size: int = 200,
     learning_rate: float = 1e-6,
-    beta1: float = 0.9,
-    beta2: float = 0.999,
-    adam_eps: float = 1e-8,
     gradient_clip_norm: float = 0.0,
     log_eigenvalue_lr_factor: float = 100.0,
     volume_mask=None,
@@ -365,25 +351,25 @@ def fit(
     )
     mean_for_slicing = jnp.asarray(mean_for_slicing)
 
-    state = _state_from_loadings(W, volume_shape)
+    params = _state_from_loadings(W, volume_shape)
 
-    def _zero_moments(state):
-        m_U = jnp.zeros_like(state.U)
-        v_U = jnp.zeros(state.U.shape, dtype=state.U.real.dtype)
-        m_s = jnp.zeros_like(state.log_sqrt_eigenvalues)
-        v_s = jnp.zeros_like(state.log_sqrt_eigenvalues)
-        return m_U, v_U, m_s, v_s
-
-    m_U, v_U, m_s, v_s = _zero_moments(state)
     n_total = int(experiment_dataset.n_images)
     iteration_data: list[dict] = []
-    step = 0
+
+    optimizer = optax.multi_transform(
+        {
+            "U": _branch_optimizer(learning_rate, gradient_clip_norm),
+            "log_sqrt_eigenvalues": _branch_optimizer(learning_rate * log_eigenvalue_lr_factor, gradient_clip_norm),
+        },
+        param_labels=WHalfParametrization("U", "log_sqrt_eigenvalues"),
+    )
+    optimizer_state = optimizer.init(params)
 
     logger.info(
         "SOLVAR fit: objective=%s epochs=%d rank=%d batch_size=%d learning_rate=%.3e log_eigenvalue_lr_factor=%.1f",
         objective,
         int(n_epochs),
-        int(state.U.shape[1]),
+        int(params.U.shape[1]),
         int(batch_size),
         float(learning_rate),
         float(log_eigenvalue_lr_factor),
@@ -401,9 +387,9 @@ def fit(
                 data_scale = float(n_total) / float(batch_n)
                 noise_variance_half = ds.noise.get_half(batch_image_ind)
 
-                def loss_for_state(state_candidate):
+                def loss_for_state(params_candidate):
                     return _batch_total_loss(
-                        loadings_from_state(state_candidate),
+                        loadings_from_state(params_candidate),
                         W_prior_half,
                         batch_half,
                         mean_for_slicing,
@@ -421,43 +407,20 @@ def fit(
                         data_scale,
                     )
 
-                loss, grad = jax.value_and_grad(loss_for_state)(state)
-                grad_U, grad_norm_U = _clip_grad_norm(grad.U, gradient_clip_norm)
-                grad_s, grad_norm_s = _clip_grad_norm(grad.log_sqrt_eigenvalues, gradient_clip_norm)
-                grad_norm = float(jnp.sqrt(grad_norm_U**2 + grad_norm_s**2))
+                loss, grad = jax.value_and_grad(loss_for_state)(params)
+                # Apply conjugate on Wirtinger derivative to get steepest descent in real/imag coordinates.
+                grad = jax.tree.map(jnp.conj, grad)
+                updates, optimizer_state = optimizer.update(grad, optimizer_state, params)
+                params = optax.apply_updates(params, updates)
 
-                step += 1
-                new_U, m_U, v_U = _adam_step(
-                    state.U,
-                    grad_U,
-                    m_U,
-                    v_U,
-                    step,
-                    learning_rate=float(learning_rate),
-                    beta1=float(beta1),
-                    beta2=float(beta2),
-                    eps=float(adam_eps),
-                )
-                new_log_sqrt_eigenvalues, m_s, v_s = _adam_step(
-                    state.log_sqrt_eigenvalues,
-                    grad_s,
-                    m_s,
-                    v_s,
-                    step,
-                    learning_rate=float(learning_rate) * float(log_eigenvalue_lr_factor),
-                    beta1=float(beta1),
-                    beta2=float(beta2),
-                    eps=float(adam_eps),
-                )
                 if project_mask:
-                    new_U = project_loading_to_mask(new_U, volume_shape, volume_mask)
-                state = WHalfParametrization(new_U, new_log_sqrt_eigenvalues)
+                    params = params.apply_masking(volume_shape, volume_mask)
 
                 epoch_loss += float(loss)
-                epoch_grad_norm += grad_norm
+                epoch_grad_norm += float(jnp.sqrt(sum(jnp.sum(jnp.abs(g) ** 2) for g in jax.tree.leaves(grad))))
                 epoch_batches += 1
 
-        W_current = loadings_from_state(state)
+        W_current = loadings_from_state(params)
         prior_loss = float(w_prior_quadratic(W_current, W_prior_half))
         row = {
             "epoch": float(epoch),
@@ -476,7 +439,7 @@ def fit(
             row["grad_norm_mean"],
         )
 
-    W = loadings_from_state(state)
+    W = loadings_from_state(params)
     U_real, eigenvalues, _ = ppca._orthonormalize_W_to_basis(W, volume_shape)
     rank = U_real.shape[0]
     U_half = ftu.get_dft3_real(jnp.asarray(U_real)).reshape(rank, -1).T
