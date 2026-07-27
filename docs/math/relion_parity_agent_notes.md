@@ -7890,7 +7890,16 @@ completion marker SHA-256 is
   `4e36627a0c82b867c8428982d040e6de7c711afa1f51456c12b15738c173425c`.
   Failed-run audit:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_p65070_relion_inertness_h100_20260726T183000ET/provenance/FAILED_11641917.md`.
-- Exploratory RECOVAR/capture score replay remains non-admissible despite
-  exact 32/32 support and the same `[2, 100]` winner, because capture
-  inertness failed.  Fixed metrics remain K=1 `27/34` strict, `32/34`
-  topology, `34/34` evaluated and K=4 `41/60` direct, `9/15` all-class.
+- Formal tie classification maps control to `[2, 101]` and capture to
+  adjacent `[2, 100]`.  Captured RELION scores both exactly
+  `0x1.95f52e0000000p-3`; RECOVAR scores both exactly
+  `0x1.95f52c0000000p-3`.
+- Classification is `observer_sensitive_exact_tie_winner_flip`: support and
+  geometry are present, but the passive observer changes which exact-tie
+  translation RELION serializes.  The rejected capture cannot qualify a
+  scorecard row.
+- Classifier tests pass `6/6`; direct CLI, Ruff, compile, checkout provenance,
+  and `git diff --check` pass.  Classification SHA-256:
+  `b7463ab0562f20863c650b70a18c495d235e44127256b0543693a3e7ecbccb4f`.
+- Fixed metrics remain K=1 `27/34` strict, `32/34` topology, `34/34`
+  evaluated and K=4 `41/60` direct, `9/15` all-class.

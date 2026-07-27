@@ -10550,9 +10550,21 @@ SHA-256
 The full failed-run audit is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_p65070_relion_inertness_h100_20260726T183000ET/provenance/FAILED_11641917.md`.
 
-An exploratory score replay still finds exact 32/32 support, exact rotation
-mapping, and the same `[2, 100]` top key in RECOVAR and captured RELION, with
-centered pre-prior residual maximum `4.470348358154297e-08`.  It is not
-admissible because the passive-capture gate failed.  No scorecard row changes:
-K=1 remains `27/34` strict, `32/34` exact topology, and `34/34` evaluated;
-K=4 remains `41/60` direct checks and `9/15` all-class iterations.
+The committed fail-closed tie classifier maps the control state to fine key
+`[2, 101]` and the capture state to adjacent key `[2, 100]`.  Both candidates
+are supported.  Captured RELION scores them exactly equally at
+`0x1.95f52e0000000p-3`; RECOVAR independently scores them exactly equally at
+`0x1.95f52c0000000p-3`.  The resulting classification is
+`observer_sensitive_exact_tie_winner_flip`: the passive observer changed
+which exact-tie translation RELION serialized, not candidate geometry or
+support.  The report re-verifies the 109-file dump manifest and remains
+`scorecard_change_admissible=false` because the capture itself was not inert.
+
+Six focused classifier tests, direct-CLI smoke, scoped Ruff, compile, checkout
+provenance, and `git diff --check` pass.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_p65070_relion_inertness_h100_20260726T183000ET/analysis/TARGET65070_CAPTURE_TIE_CLASSIFICATION.json`,
+SHA-256
+`b7463ab0562f20863c650b70a18c495d235e44127256b0543693a3e7ecbccb4f`.
+No scorecard row changes: K=1 remains `27/34` strict, `32/34` exact topology,
+and `34/34` evaluated; K=4 remains `41/60` direct checks and `9/15`
+all-class iterations.
