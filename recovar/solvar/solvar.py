@@ -50,12 +50,12 @@ def _half_image_weights(image_shape, dtype):
 
 def _weighted_gram(projected_basis, weights):
     weighted_conj = jnp.conj(projected_basis) * weights[None, None, :]
-    return jnp.einsum("bkp,bjp->bkj", weighted_conj, projected_basis).real
+    return jnp.einsum("bkp,bjp->bkj", weighted_conj, projected_basis)
 
 
 def _weighted_basis_image_inner(projected_basis, centered_images, weights):
     weighted_conj = jnp.conj(projected_basis) * weights[None, None, :]
-    return jnp.einsum("bkp,bp->bk", weighted_conj, centered_images).real
+    return jnp.einsum("bkp,bp->bk", weighted_conj, centered_images)
 
 
 def _weighted_norm_sq(images, weights):
@@ -100,16 +100,16 @@ def solvar_image_losses(centered_images, projected_basis, image_shape, *, object
     image_norm_sq = _weighted_norm_sq(centered_images, weights)
 
     if objective == "ls":
-        gram_sq = jnp.sum(gram * gram, axis=(1, 2))
-        image_basis_sq = jnp.sum(basis_image * basis_image, axis=1)
-        trace_gram = jnp.trace(gram, axis1=1, axis2=2)
+        gram_sq = jnp.sum(gram * jnp.conj(gram), axis=(1, 2)).real
+        image_basis_sq = jnp.sum(basis_image * jnp.conj(basis_image), axis=1).real
+        trace_gram = jnp.trace(gram, axis1=1, axis2=2).real
         return image_norm_sq**2 - 2.0 * (image_basis_sq + image_norm_sq) + gram_sq + 2.0 * trace_gram
 
     rank = projected_basis.shape[1]
     eye = jnp.eye(rank, dtype=gram.dtype)
     M = gram + eye[None, :, :]
     solved = jnp.linalg.solve(M, basis_image[..., None])[..., 0]
-    quad = jnp.sum(basis_image * solved, axis=1)
+    quad = jnp.sum(jnp.conj(basis_image) * solved, axis=1).real
     sign, logabsdet = jnp.linalg.slogdet(M)
     return image_norm_sq - quad + logabsdet
 
