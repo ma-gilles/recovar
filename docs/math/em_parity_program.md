@@ -10576,6 +10576,19 @@ non-admissible scorecard status.  The deterministic raw-data and combined
 removed-energy/floor ratios are `0.6625974811785016` and
 `0.5675890510853164`.
 
+Commit `839b40b6` then stratifies the exact fixed panel by its predeclared
+four persistent, four corrected, and four introduced identities.  The
+corrected-by-RELION-CUDA cohort improves in both score families, but its
+removed-energy/floor ratios are only `0.9339045559130716` for raw data and
+`0.8297557723531616` for combined score.  The persistent cohort worsens at
+`-0.014488106665003336` and `-0.06117013822612773`; the introduced cohort
+worsens at `-0.28591474988941723` and `-0.3567578197552126`.  The formal
+classification is `heterogeneous_cohort_effect_without_robust_reduction`.
+No cohort clears its own floor, so the preprocessing default must remain
+unchanged.  The bounded next branch is upstream score arithmetic on the
+persistent and introduced identities.  The identity-bound report SHA-256 is
+`468a313879f7436b1c960c2f37edd7d48f77328ac124744a5b8c53c501f74bdd`.
+
 Exact-H100 K=1 discriminator `11641917` remained active at this checkpoint.
 Neither diagnostic changes the immutable fixed metrics: K=1 remains `27/34`
 strict, `32/34` exact topology, and `34/34` evaluated; K=4 remains `41/60`

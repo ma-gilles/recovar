@@ -7194,6 +7194,13 @@ This status summary precedes the detailed capture and factor audit log below.
   byte-identical at SHA-256
   `53b746a1cae413398bc9f3ce5c9cec1d9985a715652427dc8a1883b280f1083e`,
   with unchanged within-floor classification and 12/12 winners.
+- Identity-bound cohort analyzer commit `839b40b6` classifies the predeclared
+  4/4/4 panel as `heterogeneous_cohort_effect_without_robust_reduction`.
+  Corrected targets improve only to `0.9339x/0.8298x` their data/combined
+  floors; persistent targets worsen by `-0.0145x/-0.0612x`, and introduced
+  targets by `-0.2859x/-0.3568x`.  No cohort clears its own floor.  Report
+  SHA-256 is
+  `468a313879f7436b1c960c2f37edd7d48f77328ac124744a5b8c53c501f74bdd`.
 
 ## 2026-07-25 seed-exact K=4 accepted-hypothesis factor closure
 
