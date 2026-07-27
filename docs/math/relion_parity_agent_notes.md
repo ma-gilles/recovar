@@ -7170,6 +7170,23 @@ This status summary precedes the detailed capture and factor audit log below.
   `cac77dc1fd6847193f9bae8c5d4a1b2d50b632c795328ef8e151d403d276dbdc`.
 - The fresh in-job JAX arm and dependency-gated calibrated three-way job
   `11646634` remain the only admissible host/JAX result.
+- Pair job `11645269` completed `0:0` in `03:22:48`, with all `48+48`
+  outputs and a passing full manifest.  Dependency analyzer `11646634`
+  completed `0:0` in six seconds.  Both preprocessing paths match all 12
+  RELION CUDA winners.  RELION-CUDA removes `10.0487%` of raw-data residual
+  energy and `9.9113%` of combined residual energy, but the removed energies
+  are only `0.6626x` and `0.5676x` the fixed repeatability floor.
+- The formal classification is
+  `relion_cuda_preprocessing_reduction_is_within_capture_repeatability_floor`;
+  report SHA-256 is
+  `96767afe79dbd33300ca683cf76a5b6d3b948b6a84756c14ce4517bf43f4c24b`.
+  It does not justify a default change or scorecard promotion.
+- Post-job manifest replay found that the in-job manifest retained an
+  ephemeral Slurm spool-script pathname.  The original is preserved; a
+  persistent manifest binds the hash-identical saved launcher, analyzer, and
+  report and passes independently.  Its SHA-256 is
+  `df7b7c28879ae9b834a624a8f57d77e9a913ced6b211b683a5695459c0f80550`.
+  This is a provenance-only repair.
 
 ## 2026-07-25 seed-exact K=4 accepted-hypothesis factor closure
 

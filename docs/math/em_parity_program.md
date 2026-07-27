@@ -10533,6 +10533,37 @@ The fresh in-job JAX arm and dependency-gated calibrated three-way job
 `11646634` remain the admissible host/JAX comparison; the independent host
 repeat only establishes the exact score/topology floor.
 
+The full pair job `11645269` subsequently completed `0:0` in `03:22:48`
+with all `48 host_numpy + 48 relion_cuda` files.  Its 96-file output manifest
+passes, `PAIR_COMPLETE.json` binds integration head `300c6e90` and A100 UUID
+`GPU-3b10bc7d-5485-6b3a-5607-da203ef39bd3`, and the screen reports exact
+candidate topology for all 12 targets.  Dependency job `11646634` completed
+`0:0` in six seconds and produced the committed-analyzer three-way report.
+
+Both preprocessing paths match all 12 RELION CUDA winners.  Relative to host
+preprocessing, RELION-CUDA preprocessing removes `10.0486879347%` of raw
+data-score residual energy and `9.9112831543%` of combined-score residual
+energy.  The absolute removed energies, `8.1158313861e-5` and
+`6.9521197500e-5`, are only `0.6625974812x` and `0.5675890511x` the fixed
+capture/capture repeatability energy.  The fail-closed classification is
+therefore
+`relion_cuda_preprocessing_reduction_is_within_capture_repeatability_floor`,
+not a robust causal reduction.  The report remains
+`scorecard_change_admissible=false`; K=4 stays `41/60` direct checks and
+`9/15` all-class iterations.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_preprocess_panel12_retry6h_300c6e90_20260726T200000ET/analysis/PANEL12_THREEWAY_FINE_SCORE_CALIBRATED.json`
+with SHA-256
+`96767afe79dbd33300ca683cf76a5b6d3b948b6a84756c14ce4517bf43f4c24b`.
+Independent manifest replay found that the in-job three-entry manifest
+recorded Slurm's ephemeral `/var/spool/.../slurm_script` path.  The original
+manifest is retained unchanged.  A persistent replacement binds the
+hash-identical retained launcher, analyzer, and report and passes
+`sha256sum -c`; its SHA-256 is
+`df7b7c28879ae9b834a624a8f57d77e9a913ced6b211b683a5695459c0f80550`.
+No scientific artifact or metric was changed by this provenance-only repair.
+
 Exact-H100 K=1 discriminator `11641917` remained active at this checkpoint.
 Neither diagnostic changes the immutable fixed metrics: K=1 remains `27/34`
 strict, `32/34` exact topology, and `34/34` evaluated; K=4 remains `41/60`
