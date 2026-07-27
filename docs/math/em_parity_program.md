@@ -10855,3 +10855,76 @@ evaluated; K=4 remains `41/60` direct checks and `9/15` all-class iterations.
 The full A/B provenance is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_frozen_oracle_phase_ab_20260727T100500ET/provenance/README.md`;
 its evolving SHA-256 is recorded alongside each live audit checkpoint.
+
+## 2026-07-27 case-4 source effect sealed; local qualification queued
+
+Paired science `11664757` completed `0:0` in `04:39:56`, running current
+`31c4a0ca203b70211f4d8586d044c94fca9fc037` and immediate parent
+`13840a2010652f3f5fb17176efd11e2cdf47664a` sequentially on H100 UUID
+`GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`.  Both arms replayed the same
+57-entry frozen input/oracle manifest before and after science, converged at
+numbered iteration 17, ran one valid non-forced final all-data pass, and kept
+grid correction unset.
+
+The original dependent audit/classifier jobs were canceled without allocation
+after their integration-HEAD guard became stale.  Replacement audit
+`11676395` and repeatability-normalized classifier `11676465` used a clean
+detached `f5729c1b` analysis checkout and completed `0:0`.  Both standard FSC
+auditors returned their expected scientific status 2 for the final strict
+failure; both intermediate/topology auditors returned 0.  Every sealed
+manifest entry replays exactly.
+
+| metric | current `31c4a0ca` | parent `13840a20` | current - parent |
+|---|---:|---:|---:|
+| final merged RECOVAR-to-RELION FSC-AUC | 0.9931306452009600 | 0.9926977188176535 | +0.0004329263833065 |
+| final merged GT FSC-AUC | 0.3521327707383262 | 0.3521335770008252 | -0.0000008062624989 |
+| minimum numbered merged cross-engine FSC-AUC | 0.9997100843502087 | 0.9996863531325639 | - |
+| final current-to-parent FSC-AUC | - | - | 0.9958010923570171 |
+
+Both sources have exact 17/17 numbered topology and positive final
+RECOVAR-minus-RELION GT deltas.  Both nevertheless fail only the unchanged
+final merged direct gate of 0.995.  The source change is therefore
+reproducible and directionally helpful, but it does not promote case 4.
+
+The classifier reports
+`source_effect_exceeds_at_least_one_single_repeat_floor`.  The final direct
+effect is `1.3833960344229685x` the observed same-source direct-effect floor,
+the final map defect is `1.065782763564855x` its same-source defect, and the
+GT effect is only `0.039954965117864095x` its repeat floor.  Its 43,290
+reproducible source-effect entries span all numbered fine/coarse and
+half-specific arrays; identical local fine/coarse arrays are counted twice by
+the declared classifier, so this is not a unique-particle count.  The report
+is hard-coded `scorecard_change_admissible=false`.
+
+The main A/B JSON and manifest SHA-256 values are
+`bd2dce588abde83364ab48157ef841f97515894fc51d12e50a6880d36655c8d9`
+and
+`9ebedc8a76f8baeb4cf059015caa78e8dffcc1e390715059a9bc035fef3a5faf`.
+The classifier JSON and manifest SHA-256 values are
+`2a79ab070779b30a467d274c7cc184ffe4f432676e5c6d9a1a3b3bd4dd4d1ae6`
+and
+`2b52314d3e9f2b17e3cca8c2ac344cce34786758e5cbad19c0fdf40ce862c090`.
+No correlation was computed.  Fixed K=1 therefore remains `28/34` strict,
+`32/34` exact topology, and `34/34` evaluated.
+
+The full local-score coverage patch remains at immutable detached source
+`f5729c1b59a7e658fd4bbbd00696191fa7fbb9e9`.  Setup `11675300`
+completed `0:0`; science `11675461` is dependency-pending on
+`afterany:11677607`, the current owner of required H100 index 0.  Because
+index 0 is the lowest device, it becomes the scheduler's first free-index
+choice when that exact occupant exits; the launcher's pre-import physical-UUID
+gate remains authoritative.  Audit `11675472` remains dependency-pending.
+This qualification must finish before any local-score quality or scorecard
+claim.
+
+K=4 exact-A100 science `11657380` remains user-held because its required
+device is index 2.  Its prior target-slot occupant ended early, and Slurm
+immediately reassigned index 2 before a manual release, independently
+validating the scheduling guard.  CPU monitor `11683129` now releases science
+only after two consecutive detailed snapshots show indices 0 and 1 allocated
+and target index 2 free.  It revalidates the clean source, launcher hash,
+science state, and dependent audit `11675835` before release; the science UUID
+gate remains final authority.  The monitor script SHA-256 is
+`bd721f8c9e03eb2eb010d0973e6a30b9379fb5f85469e0eb7aede0f95476410e`.
+Until exact-device science and audit finish, fixed K=4 remains `41/60` direct
+checks and `9/15` all-class iterations.
