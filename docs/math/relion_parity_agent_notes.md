@@ -7151,6 +7151,14 @@ This status summary precedes the detailed capture and factor audit log below.
   fixed score changed. The pending host/RELION-CUDA panel must complete
   exact 48+48 artifacts and manifest verification before the three-way
   classification is admissible.
+- Initial preprocessing pair `11641724` completed the 48-file host arm in
+  6,082 seconds. Its first two JAX buckets were only 9--10% faster, below the
+  23% speedup required to fit the original three-hour allocation. An
+  attempted scheduling-only extension was denied; the job was deliberately
+  canceled after `01:47:52`, with partial evidence preserved but
+  non-admissible. Fresh full-pair retry `11645269` started from the same
+  clean `300c6e90` payload on `della-l07g2` with a six-hour limit and new
+  `SAFE_TO_DELETE` run/runtime roots.
 
 ## 2026-07-25 seed-exact K=4 accepted-hypothesis factor closure
 

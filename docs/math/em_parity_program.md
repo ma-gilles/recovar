@@ -10504,8 +10504,16 @@ and `git diff --check` pass.  A committed-script replay reproduces the sealed
 with SHA-256
 `e0bd9a32e11a838c09ba6b83d0ac33dd0966bba7ccc924e57aeb551b7bd5445a`.
 
-Full preprocessing screen `11641724` and exact-H100 K=1 discriminator
-`11641917` remain active.  Neither diagnostic changes the immutable fixed
-metrics: K=1 remains `27/34` strict, `32/34` exact topology, and `34/34`
-evaluated; K=4 remains `41/60` direct checks and `9/15` all-class
-iterations.
+Preprocessing pair `11641724` completed its 48-file host arm in 6,082
+seconds, but its first two JAX groups were only 9--10% faster while the
+remaining allocation required at least 23%.  A scheduling-only extension was
+denied, so the provably under-budget pair was canceled after `01:47:52`
+rather than allowed to time out.  Its partial outputs remain sealed and are
+not admissible for a host/JAX comparison.  Dependency-gated job `11645269`
+then started a fresh full pair on A100 node `della-l07g2` with a six-hour
+limit and new run/runtime roots; it reuses no partial output.
+
+Exact-H100 K=1 discriminator `11641917` remains active.  Neither diagnostic
+changes the immutable fixed metrics: K=1 remains `27/34` strict, `32/34`
+exact topology, and `34/34` evaluated; K=4 remains `41/60` direct checks and
+`9/15` all-class iterations.
