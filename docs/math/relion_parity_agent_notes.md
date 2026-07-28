@@ -8322,6 +8322,18 @@ and `9/15` all-class.
   `-0.00010904820468227161`; both manifests replay exactly.  Summary
   SHA-256 is
   `ed56b552709fbb3725a668a5499d393c8926b3087753547064a8dc94422a0ca8`.
+- Incremental non-scoring audit `11692389` completed `0:0` in `00:09:09`
+  and extends the sealed checkpoint through iteration 11.  Combined direct
+  passes are `39/44`, with per-boundary counts
+  `[4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 0]`; nine of eleven boundaries pass all
+  four classes.  Minimum cross-engine FSC-AUC is `0.9937084319428828`, and
+  minimum GT delta remains `-0.00010904820468227161`.  The prior candidate
+  has the same `3/4` and `0/4` pass pattern at iterations 10 and 11, while
+  current-to-prior FSC-AUC at iteration 11 is at least
+  `0.9959507809432725`; this does not identify a phase-FFI-specific
+  late-iteration regression.  Both manifests replay exactly; summary
+  SHA-256 is
+  `2c16d5fb1533307b5c8fc17d53bfbb53c98ceff47d3d4abf06b2ece688f77ada`.
   Full audit `11683764` remains dependency-held.
 - Fixed metrics remain K=1 `28/34` strict, `32/34` topology, `34/34`
   evaluated, and K=4 `41/60` direct, `9/15` all-class.
