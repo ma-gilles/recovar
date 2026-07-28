@@ -11321,6 +11321,7 @@ complete as follows:
 | 10 | 74 | 19.43 | 0.915517102 | 0.2522 / 0.2361 / 0.2483 / 0.2633 |
 | 11 | 76 | 18.76 | 0.958589825 | 0.2536 / 0.2380 / 0.2454 / 0.2630 |
 | 12 | 78 | 17.55 | 0.914282132 | 0.2498 / 0.2407 / 0.2433 / 0.2662 |
+| 13 | 82 | 17.00 | 0.932549437 | 0.2512 / 0.2425 / 0.2423 / 0.2640 |
 
 Iteration 9 completed in `1624.7 s`; fraction changed is `0.9944`,
 rotation delta `14.313` degrees, translation delta `1.372 A`, class delta
@@ -11342,7 +11343,12 @@ rotation delta `14.275` degrees, translation delta `1.703 A`, class delta
 zero, and convergence false.  Timing artifact
 `relion_cuda/timing/iter_012.npz` has SHA-256
 `c0393ed66d338981db1e9af2ab7757fb631128f79e840373a3aabe7706ea8bbe`.
-Iteration 13 is active at current size 82.
+Iteration 13 completed in `1990.6 s`; fraction changed is `0.9170`,
+rotation delta `13.803` degrees, translation delta `1.074 A`, class delta
+zero, and convergence false.  Timing artifact
+`relion_cuda/timing/iter_013.npz` has SHA-256
+`27bc27d69d921c7ffe5cc81a5749aeb52524a42d60726f5193834e74e4f14b96`.
+Iteration 14 is active at current size 84.
 
 Non-scoring six-boundary audit `11689329` completed `0:0` in `00:22:17`.
 All `24/24` direct class/iteration FSC-AUC checks pass; its minimum
@@ -11380,6 +11386,16 @@ The prior candidate also passes `2/4`; current-to-prior FSC-AUC is at least
 than prior `-0.000185617138`.  Both manifests replay exactly.  Summary JSON
 SHA-256 is
 `ed5dabe7e1c7612e9b96a9ca8e41ac4db4d91763519c209fadf2368251ee3713`.
+Iteration-13 audit `11693828` completed `0:0` in `00:09:02` and extends the
+sealed non-scoring checkpoint to `41/52` direct checks, with per-boundary
+counts `[4,4,4,4,4,4,4,4,4,3,0,2,0]`; nine of thirteen boundaries pass all
+four classes.  Iteration-13 current-to-RELION FSC-AUC is
+`[0.994935696247, 0.993232184859, 0.993238960707, 0.994116711636]`, so it
+passes `0/4`.  Current-to-prior FSC-AUC is at least `0.995082984803`, and
+the iteration's minimum GT delta is `-0.000052124212`; the combined minimum
+GT delta remains `-0.000161770278`.  Both manifests replay exactly and
+independent assertions reproduce the pass arithmetic.  Summary JSON SHA-256
+is `61d33c63914144a205a0f859280da8032d9ab8a4d5450f9cc50a5c49c8b3b7de`.
 Hardened full audit `11683764` remains dependency-held.  Neither partial
 checkpoint can change fixed K=4 `41/60` direct checks or `9/15` all-class
 iterations.
@@ -11388,13 +11404,44 @@ iterations.
 
 Clean detached source `25ab6e68` now qualifies the later exact local
 score-translation path on frozen topology-failure case 22.  Setup `11691762`
-completed `0:0`; scorecard-mode science `11691763` runs stock RELION and
-RECOVAR sequentially on one H100 at `della-h19g3`.  Summary `11691764` and
-strict independent FSC/topology audit `11691796` are dependency-held.
+completed `0:0`; scorecard-mode science `11691763` ran stock RELION and
+RECOVAR sequentially on one H100 at `della-h19g3`.  Both reconstructions
+completed, but the fail-closed science wrapper exited `2:0` after `00:52:56`
+because the unchanged quality gate failed.  Summary `11691764` and strict
+independent FSC/topology audit `11691796` also failed closed as intended.
 Fixture-manifest SHA-256 is
 `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
 Grid correction and forced after-max finalization are unset/off; there is no
 scheduler override.  No external first-iteration override is supplied: the
 checked-in K=1 `firstiter_cc` production defaults are active, namely direct
 real-reference projector handoff and coarse-tree top-two rescore margin
-`4e-6`.  No score claim is admissible before the run and strict audit finish.
+`4e-6`.
+
+RECOVAR merged-vs-GT FSC-AUC is `0.325628942674`; RELION is
+`0.326048370042`, a `-0.000419427367` delta outside the fixed `0.0001`
+qualification tolerance.  Final merged RECOVAR-vs-RELION FSC-AUC is
+`0.826067895374`.  The strict trajectory matches current size and HEALPix
+order through iteration 8.  At iteration 9, RELION advances to order 5 at
+size 70 while RECOVAR remains at order 4 and size 72; merged direct FSC-AUC
+falls to `0.989828446`.  RECOVAR then converges after 10 numbered iterations
+versus RELION's 11.  This reproduces the previously classified upstream
+half-map FSC/resolution boundary split, so it is not evidence for forcing the
+scheduler or adding an iteration.  Summary, FSC-trajectory, and intermediate
+JSON SHA-256 values are respectively
+`07df0b9b43d06d8c47269d2059392cf0fef1f8fda6865b1a9a7d5d321e74a105`,
+`eb0d187cb10e2008ce380332bbe116feb7f43df9cb024b8424644a7a063de170`,
+and `7acab11acc004fbf42f1e5239839931c53f5af10b47c50e093ca2df3567ea2d1`.
+This failed qualification is not score-admissible.  Fixed K=1 remains
+`28/34` strict, `32/34` topology, and `34/34` evaluated.
+
+Do not use the older same-label `fc70abc3` eight-case run as a source
+bisection baseline for this frozen row.  Direct SHA-256 comparison proves
+that its generated particle stack
+(`adc8404ccbc12f53ccfb9cd09ffdf9cdf49a006369b223983f9a11b6fde57e1a`)
+differs from the frozen scorecard stack
+(`804af933bd315f41f0159f62e93867cf852d70cb29f2f27a525fb2fc3eb68ad9`);
+the initial and GT reference bytes, STAR metadata, simulation info, and
+generation-config bytes also differ.  Only the CTF and pose pickle hashes
+match.  The older passing trajectory therefore represents a regenerated
+replicate, not evidence of a code regression on the immutable case-22
+fixture.
