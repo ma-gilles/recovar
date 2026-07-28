@@ -11322,6 +11322,7 @@ complete as follows:
 | 11 | 76 | 18.76 | 0.958589825 | 0.2536 / 0.2380 / 0.2454 / 0.2630 |
 | 12 | 78 | 17.55 | 0.914282132 | 0.2498 / 0.2407 / 0.2433 / 0.2662 |
 | 13 | 82 | 17.00 | 0.932549437 | 0.2512 / 0.2425 / 0.2423 / 0.2640 |
+| 14 | 84 | 16.48 | 0.945461285 | 0.2510 / 0.2435 / 0.2393 / 0.2662 |
 
 Iteration 9 completed in `1624.7 s`; fraction changed is `0.9944`,
 rotation delta `14.313` degrees, translation delta `1.372 A`, class delta
@@ -11348,7 +11349,12 @@ rotation delta `13.803` degrees, translation delta `1.074 A`, class delta
 zero, and convergence false.  Timing artifact
 `relion_cuda/timing/iter_013.npz` has SHA-256
 `27bc27d69d921c7ffe5cc81a5749aeb52524a42d60726f5193834e74e4f14b96`.
-Iteration 14 is active at current size 84.
+Iteration 14 completed in `1993.85 s`; fraction changed is `0.9841`,
+rotation delta `14.342` degrees, translation delta `1.280 A`, class delta
+zero, and convergence false.  Timing artifact
+`relion_cuda/timing/iter_014.npz` has SHA-256
+`cdd16b1c0f1ab33419629dc5d29d82f0164b4b4ebc0f2f688b507aaf21d35c6a`.
+Iteration 15 is active at current size 86.
 
 Non-scoring six-boundary audit `11689329` completed `0:0` in `00:22:17`.
 All `24/24` direct class/iteration FSC-AUC checks pass; its minimum
@@ -11396,6 +11402,19 @@ the iteration's minimum GT delta is `-0.000052124212`; the combined minimum
 GT delta remains `-0.000161770278`.  Both manifests replay exactly and
 independent assertions reproduce the pass arithmetic.  Summary JSON SHA-256
 is `61d33c63914144a205a0f859280da8032d9ab8a4d5450f9cc50a5c49c8b3b7de`.
+Iteration-14 audit `11694587` completed `0:0` in `00:07:08` and extends the
+sealed non-scoring checkpoint to `41/56` direct checks, with per-boundary
+counts `[4,4,4,4,4,4,4,4,4,3,0,2,0,0]`; nine of fourteen boundaries pass
+all four classes.  Iteration-14 current-to-RELION FSC-AUC is
+`[0.993698869720, 0.992272292001, 0.992156740849, 0.994615471123]`, so it
+passes `0/4`.  Current-to-prior FSC-AUC is
+`[0.994798488062, 0.994343994904, 0.994058684129, 0.995839429300]`.
+The iteration minimum GT delta is `-0.000124827448`; the combined minimum
+remains `-0.000161770278`.  Both manifests replay exactly and independent
+assertions pass.  Input/output/summary SHA-256 values are
+`cd6a1b3457799e7306b9588850edcd9367a4b2a621860eb1ea68f46213c42ef7`,
+`a1d770931efbe95d088400d32d1c4615471066ffc2a8bb972ec139f0e0bffa35`,
+and `2664e241e3466edadcb50dcc77bc2b1a55707a53fc7b3a72cce8488556cb34f4`.
 Hardened full audit `11683764` remains dependency-held.  Neither partial
 checkpoint can change fixed K=4 `41/60` direct checks or `9/15` all-class
 iterations.
@@ -11483,4 +11502,45 @@ output-manifest SHA-256 values are respectively
 `5b898012527f2c4fb8c9a2bf57d0b2c3e5d79693057e0b9b03e09ec7176b8589`,
 and `8b8731865d484e49f943b12b9b8dd4a812f3e980ea684a3548aa9fab21c94233`.
 This is a non-scoring diagnostic; fixed K=1 remains `28/34` strict,
+`32/34` topology, and `34/34` evaluated.
+
+## 2026-07-28 native RELION C++ FSC rules out scheduler emulation
+
+A new binding-only diagnostic routes already accumulated compact-half
+BackProjectors through RELION's native
+`getDownsampledAverage` and
+`calculateDownSampledFourierShellCorrelation` methods.  It changes no EM
+production path.  A synthetic same-operand comparison passes, and the full
+focused binding file passes `16/16` in `26.04 s`; the four focused
+production-helper tests also pass in `10.26 s`.
+
+On the frozen case-22 RECOVAR index-7 / physical RELION iteration-8
+accumulators, current size is 70, `r_max=35`, and the accumulator shape is
+`143^3`.  Native RELION C++ computes shell-20 FSC
+`0.501799971753`.  RECOVAR's NumPy emulation and both stored curves are
+`0.501800000668`, only `2.891466166e-8` away.  Both are above the scheduler
+threshold `0.5`; stock RELION's model STAR is `0.499048`, below it.  Native
+C++ therefore confirms the `+0.002751971753` accumulated-half-map residual
+and rules out FSC emulation arithmetic as the branch cause.
+
+The accepted classification is
+`native_relion_fsc_loop_confirms_recovar_accumulator_shell_split`.  The next
+causal locus is upstream accumulated half-map content, not scheduler
+thresholding, an extra iteration, or the Python/NumPy FSC implementation.
+The corrected CPU audit completed `0:0` in `00:03.35`, maximum RSS
+`730828 KiB`.  A first attempt failed before scientific comparison because
+the saved accumulators are flattened; the accepted loader infers and asserts
+the exact odd cube.
+
+Run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_fsc_cpp_equivalence_e32cb3c9_20260728T032500ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_fsc_cpp_equivalence_e32cb3c9_20260728T032500ET`;
+both contain `SAFE_TO_DELETE`.  Report, curves, input-manifest, and
+output-manifest SHA-256 values are respectively
+`0d10c9566aeba5e466588d044069d1faaee1e34fc00876566822ce6643a02f66`,
+`b3bf67b4ab2c7f7648aca41a990a063b27179521424005adf104ede24fc08034`,
+`ae2ac2ffa59f28886847bb871c81f456d72d0a1d5890e68f3dfbc98246abea9b`,
+and `5bdf89ae286af51a7e7dd7289c8ee162c3648908e50f78f1c2a9b1c2d48ebc70`.
+The diagnostic is non-scoring; fixed K=1 remains `28/34` strict,
 `32/34` topology, and `34/34` evaluated.

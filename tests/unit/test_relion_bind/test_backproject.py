@@ -17,6 +17,7 @@ import pytest
 from recovar.relion_bind._relion_bind_core import (
     TRILINEAR,
     backproject_and_reconstruct,
+    compute_fsc_from_bpref,
     compute_fsc_from_halfsets,
     euler_angles_to_matrix,
     get_backprojector_data,
@@ -25,6 +26,8 @@ from recovar.relion_bind._relion_bind_core import (
     project_volume,
     reconstruct_from_bpref,
 )
+
+from recovar.reconstruction import regularization
 
 
 def _make_test_volume(N, rng):
@@ -158,6 +161,58 @@ class TestBackprojectorDeterminism:
         assert recon1.shape == (N, N, N)
         assert np.all(np.isfinite(recon1))
         assert np.max(np.abs(recon1 - recon2)) == 0.0, "Injected BPref reconstruction not bit-exact"
+
+
+def test_compute_fsc_from_bpref_matches_scheduler_emulation():
+    ori_size = 8
+    padding_factor = 2
+    current_size = 6
+    r_max = current_size // 2
+    pad_size = _relion_current_pad_size(current_size, padding_factor)
+    rng = np.random.default_rng(20260728)
+
+    data_h1_full = (
+        rng.normal(size=(pad_size,) * 3)
+        + 1j * rng.normal(size=(pad_size,) * 3)
+    ).astype(np.complex64)
+    data_h2_full = (
+        rng.normal(size=(pad_size,) * 3)
+        + 1j * rng.normal(size=(pad_size,) * 3)
+    ).astype(np.complex64)
+    weight_h1_full = (0.25 + rng.random(size=(pad_size,) * 3)).astype(np.float32)
+    weight_h2_full = (0.25 + rng.random(size=(pad_size,) * 3)).astype(np.float32)
+
+    center = pad_size // 2
+
+    def to_relion_compact(array):
+        return np.ascontiguousarray(np.transpose(array, (1, 2, 0))[:, :, center:])
+
+    relion_fsc = np.asarray(
+        compute_fsc_from_bpref(
+            to_relion_compact(data_h1_full),
+            to_relion_compact(data_h2_full),
+            to_relion_compact(weight_h1_full),
+            to_relion_compact(weight_h2_full),
+            ori_size=ori_size,
+            padding_factor=padding_factor,
+            current_size=current_size,
+            r_max=r_max,
+        )
+    )
+    emulated_fsc = np.asarray(
+        regularization.compute_relion_fsc_from_backprojector(
+            data_h1_full.reshape(-1),
+            data_h2_full.reshape(-1),
+            weight_h1_full.reshape(-1),
+            weight_h2_full.reshape(-1),
+            (ori_size,) * 3,
+            padding_factor=padding_factor,
+            r_max=r_max,
+            accumulator_volume_shape=(pad_size,) * 3,
+        )
+    )
+
+    np.testing.assert_allclose(emulated_fsc, relion_fsc, atol=1e-7, rtol=1e-7)
 
 
 class TestBackprojectorDataShape:

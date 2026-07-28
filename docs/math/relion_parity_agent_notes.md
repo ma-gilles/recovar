@@ -8321,7 +8321,13 @@ and `9/15` all-class.
   delta `13.803` degrees, translation delta `1.074 A`, class delta zero, and
   convergence remains false.  Timing artifact SHA-256 is
   `27bc27d69d921c7ffe5cc81a5749aeb52524a42d60726f5193834e74e4f14b96`.
-  Iteration 14 is active at current size 84.
+- Iteration 14 completed in `1993.85` seconds at current size 84,
+  resolution `16.48 A`, Pmax `0.945461285`, and occupancies
+  `0.2510/0.2435/0.2393/0.2662`.  Fraction changed is `0.9841`, rotation
+  delta `14.342` degrees, translation delta `1.280 A`, class delta zero, and
+  convergence remains false.  Timing artifact SHA-256 is
+  `cdd16b1c0f1ab33419629dc5d29d82f0164b4b4ebc0f2f688b507aaf21d35c6a`.
+  Iteration 15 is active at current size 86.
 - Non-scoring partial audit `11689329` completed `0:0`: `24/24` direct
   class/iteration FSC-AUC checks pass through iteration 6.  Minimum
   cross-engine FSC-AUC is `0.9967517990550623`; minimum GT delta is
@@ -8368,6 +8374,19 @@ and `9/15` all-class.
   independent assertions pass.  Summary JSON SHA-256 is
   `61d33c63914144a205a0f859280da8032d9ab8a4d5450f9cc50a5c49c8b3b7de`.
   Full audit `11683764` remains dependency-held.
+- Iteration-14 audit `11694587` completed `0:0` in `00:07:08`.  The sealed
+  checkpoint is now `41/56` direct checks with per-boundary counts
+  `[4,4,4,4,4,4,4,4,4,3,0,2,0,0]`; `9/14` boundaries pass all four
+  classes.  Iteration-14 current-to-RELION FSC-AUC is
+  `[0.993698869720, 0.992272292001, 0.992156740849, 0.994615471123]`, or
+  `0/4`.  Current-to-prior FSC-AUC is
+  `[0.994798488062, 0.994343994904, 0.994058684129, 0.995839429300]`.
+  Iteration minimum GT delta is `-0.000124827448`; the combined minimum
+  remains `-0.000161770278`.  Both manifests replay exactly and independent
+  assertions pass.  Input/output/summary SHA-256 values are
+  `cd6a1b3457799e7306b9588850edcd9367a4b2a621860eb1ea68f46213c42ef7`,
+  `a1d770931efbe95d088400d32d1c4615471066ffc2a8bb972ec139f0e0bffa35`,
+  and `2664e241e3466edadcb50dcc77bc2b1a55707a53fc7b3a72cce8488556cb34f4`.
 - Fixed metrics remain K=1 `28/34` strict, `32/34` topology, `34/34`
   evaluated, and K=4 `41/60` direct, `9/15` all-class.
 
@@ -8452,3 +8471,37 @@ and `9/15` all-class.
   and `8b8731865d484e49f943b12b9b8dd4a812f3e980ea684a3548aa9fab21c94233`.
 - Fixed K=1 stays `28/34` strict, `32/34` topology, and `34/34`
   evaluated.
+
+## 2026-07-28 native RELION C++ FSC equivalence
+
+- A binding-only `compute_fsc_from_bpref` diagnostic routes already
+  accumulated compact-half data/weight arrays through RELION's native
+  `getDownsampledAverage` and shell-FSC methods. It changes no production EM
+  path.
+- Synthetic same-operand equivalence passes; the final full focused binding
+  file passes `16/16` in `26.04 s`. The four focused production-helper tests
+  also pass in `10.26 s`.
+- On frozen case-22 RECOVAR index 7 / physical RELION iteration 8, native
+  C++ computes shell-20 FSC `0.501799971753`. The NumPy scheduler helper and
+  both stored RECOVAR curves are `0.501800000668`, only
+  `2.891466166e-8` away.
+- Native C++ and NumPy are both above `0.5`; stock RELION is `0.499048`.
+  The accepted classification is
+  `native_relion_fsc_loop_confirms_recovar_accumulator_shell_split`.
+  FSC-emulation arithmetic is not causal; the remaining locus is upstream
+  accumulated half-map content.
+- The corrected CPU audit completed `0:0` in `00:03.35`, maximum RSS
+  `730828 KiB`. The first attempt failed before science because flattened
+  accumulator arrays had not been reshaped; its output is rejected.
+- Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_fsc_cpp_equivalence_e32cb3c9_20260728T032500ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_fsc_cpp_equivalence_e32cb3c9_20260728T032500ET`;
+  both contain `SAFE_TO_DELETE`.
+- Report/curves/input-manifest/output-manifest SHA-256 values are
+  `0d10c9566aeba5e466588d044069d1faaee1e34fc00876566822ce6643a02f66`,
+  `b3bf67b4ab2c7f7648aca41a990a063b27179521424005adf104ede24fc08034`,
+  `ae2ac2ffa59f28886847bb871c81f456d72d0a1d5890e68f3dfbc98246abea9b`,
+  and `5bdf89ae286af51a7e7dd7289c8ee162c3648908e50f78f1c2a9b1c2d48ebc70`.
+- This is non-scoring. Fixed K=1 remains `28/34` strict, `32/34`
+  topology, and `34/34` evaluated.
