@@ -11753,3 +11753,52 @@ and
 Both contain `SAFE_TO_DELETE`. This is diagnostic/non-scoring. Fixed metrics
 remain K=1 `28/34` strict, `32/34` topology, `34/34` evaluated and K=4
 `41/60` direct, `9/15` all-class.
+
+## 2026-07-28 same-A100 FSC establishes the physical-iteration-2 boundary
+
+The checked-in FSC trajectory auditor now evaluates the sealed exact-A100
+science `11696749` through all 8 numbered iterations. A direct invocation
+first failed closed on the diagnostic's intentionally incomplete final-map
+set; the accepted run uses a read-only numbered-map view, preserves the
+failure record, and passes topology plus the declared FSC-AUC gates. No
+correlation is computed.
+
+Physical iteration 1 remains effectively exact: merged cross-engine FSC-AUC
+is `0.9999999999734349`, and RECOVAR-minus-RELION merged GT FSC-AUC is
+`+1.0720109161477254e-08`. The earliest non-negligible map residual is
+physical iteration 2, at `0.9999933517250045` cross-engine and
+`-9.736476152685802e-05` GT delta. By iteration 3 those values are
+`0.9997433171093425` and `-0.0003074829002873425`. This same-hardware
+evidence supersedes the particle-state-only choice of iteration 3 as the
+earliest map boundary; iteration 3 remains useful for downstream
+amplification.
+
+The JSON, Markdown, and shellwise-NPZ SHA-256 values are
+`551b63534bd7b5ca4ee74060cec29dbfe57c66122a9df221fec35b8ae51d32df`,
+`baebad3464069d07d75901fe1a712409bb264d2bf2ad78bc64ce3f205ce7a5d1`,
+and
+`84fa1d225527ff3e1f63106f7e9c2cc84ead5a70bc83371c17259d3372f37c0e`;
+the output manifest replays exactly. The sealed run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it1_it8_samea100_fsc_20260728T081952ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it1_it8_samea100_fsc_20260728T081952ET`,
+both with `SAFE_TO_DELETE`.
+
+The next bounded discriminator therefore captures physical iteration 2,
+half 1, class 1, current size 60. Hash-pinned same-allocation A100 science
+`11702643` is running with after-success audit `11702647`; control RELION,
+captured RELION, and RECOVAR run sequentially on one physical A100.
+Iteration-3 science/audit `11702248`/`11702340` continue independently to
+measure the downstream boundary. The iteration-2 run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_prescatter_operands_a100_20260728T082538ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it2_prescatter_operands_a100_20260728T082538ET`,
+both with `SAFE_TO_DELETE`. Science launcher, target auditor, and current
+membership-analyzer SHA-256 values are
+`acedc3f794c5f45842de62f7b055adbb7c0920b4d86a4a423444d412502590a4`,
+`63a9270be0c1855a6ef9a326ae799cc1e49a52bc7252e1ae27ffe3c075f88a5d`,
+and
+`839585d3e4f38a480e9caca64298bbf0dd765b9f11d7a61d2805bd69e5b00fd2`.
+These experiments are diagnostic/non-scoring. Fixed metrics remain K=1
+`28/34` strict, `32/34` topology, `34/34` evaluated and K=4 `41/60`
+direct, `9/15` all-class.

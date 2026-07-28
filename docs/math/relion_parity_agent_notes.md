@@ -8750,3 +8750,44 @@ and `9/15` all-class.
 - These diagnostics are non-scoring. Fixed K=1 remains `28/34` strict,
   `32/34` exact topology, and `34/34` evaluated; K=4 remains `41/60`
   direct and `9/15` all-class.
+
+## 2026-07-28 same-A100 FSC moves the earliest map boundary to iteration 2
+
+- The checked-in FSC-only trajectory auditor was run against the sealed
+  physical A100 products from science `11696749`. The direct first attempt
+  failed closed because the diagnostic has only one RECOVAR final product;
+  the accepted invocation uses a read-only numbered-map view and evaluates
+  all 8/8 numbered iterations with complete topology.
+- Physical iteration 1 remains effectively exact: merged cross-engine
+  FSC-AUC `0.9999999999734349` and RECOVAR-minus-RELION merged GT FSC-AUC
+  `+1.0720109161477254e-08`.
+- Physical iteration 2 is the earliest non-negligible map boundary: merged
+  cross-engine FSC-AUC `0.9999933517250045` and merged GT delta
+  `-9.736476152685802e-05`. Iteration 3 is already downstream, at
+  `0.9997433171093425` and `-0.0003074829002873425`.
+- The same-A100 JSON/Markdown/shellwise-NPZ SHA-256 values are
+  `551b63534bd7b5ca4ee74060cec29dbfe57c66122a9df221fec35b8ae51d32df`,
+  `baebad3464069d07d75901fe1a712409bb264d2bf2ad78bc64ce3f205ce7a5d1`,
+  and
+  `84fa1d225527ff3e1f63106f7e9c2cc84ead5a70bc83371c17259d3372f37c0e`.
+  The output manifest replays exactly.
+- The sealed audit root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it1_it8_samea100_fsc_20260728T081952ET`;
+  its runtime root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it1_it8_samea100_fsc_20260728T081952ET`.
+  Both contain `SAFE_TO_DELETE`.
+- The earlier physical-iteration-3 capture remains useful for measuring
+  downstream amplification as science/audit `11702248`/`11702340`.
+  The earliest bounded pre-scatter discriminator is now physical iteration 2,
+  half 1, class 1, current size 60. Hash-pinned same-allocation A100
+  science/audit `11702643`/`11702647` are running from
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_prescatter_operands_a100_20260728T082538ET`.
+  Science launcher, target auditor, and current membership-analyzer SHA-256
+  values are
+  `acedc3f794c5f45842de62f7b055adbb7c0920b4d86a4a423444d412502590a4`,
+  `63a9270be0c1855a6ef9a326ae799cc1e49a52bc7252e1ae27ffe3c075f88a5d`,
+  and
+  `839585d3e4f38a480e9caca64298bbf0dd765b9f11d7a61d2805bd69e5b00fd2`.
+- These diagnostics remain non-scoring. Fixed K=1 is `28/34` strict,
+  `32/34` topology, and `34/34` evaluated; fixed K=4 is `41/60` direct and
+  `9/15` all-class.
