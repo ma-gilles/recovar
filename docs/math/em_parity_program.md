@@ -11118,10 +11118,14 @@ direct gate is the only strict failure, so the qualification correctly sets
 `32/34` topology, and `34/34` evaluated.  The outer audit-manifest SHA-256
 is `c43f218e1cffaba77279f3739a32608dd4ea609c29a871357839ec399b3b77eb`.
 
-Exact-A100 K=4 science `11683600` has completed iteration 4 at
-`current_size=56`, resolution `27.20` A, Pmax `0.598960618`, and occupancies
-`0.2753/0.1774/0.2765/0.2708`.  Iteration 5 is active at
-`current_size=60`; hardened audit `11683764` remains dependency-pending.
+Exact-A100 K=4 science `11683600` has completed iteration 6 at
+`current_size=62`, resolution `22.67` A, Pmax `0.920704949`, and occupancies
+`0.2594/0.2109/0.2716/0.2582`.  Iteration 7 is active at
+`current_size=68`; hardened audit `11683764` remains dependency-pending.
+Non-scoring partial audit `11689329` independently applies the same fixed
+FSC-AUC gate to the 24 completed class/iteration checks.  It hash-binds the
+current, prior, RELION, and GT maps and cannot change the authoritative
+`41/60` score.
 
 The reused-fixture memory-fraction control `11686796` changes only
 `XLA_PYTHON_CLIENT_MEM_FRACTION=.90` relative to integration control
@@ -11141,9 +11145,36 @@ diagnostic must reuse the exact particle SHA-256
 `3aa1a5e41277b0d77ef84c910e0a9092fc7ae3bcf8bac8dd246fa24e182b2510`
 and compare against job `11686796`.  Clean diagnostic commit
 `47adbdda56e36a8f7e3364d089da845bf2635c10` passes the focused CPU FSC
-checks (`2 passed`, one GPU-only skip), and exact Slurm control `11688427`
-is running.  No production change is authorized unless its fixed 12-metric
-result improves.
+checks (`2 passed`, one GPU-only skip).  Exact Slurm control `11688427`
+completed `0:0` in `00:18:39` and passed the fixed cryo-ET regression:
+all 12 quality metrics are green on the identical fixture bytes and `.90`
+memory plan.  The four direct-comparator round-2 failures improve from
+`0.471651603/0.310858381/0.249563700/0.142572283` to
+`0.510272443/0.345897669/0.280392157/0.163055872` for image F1,
+image precision, particle F1, and particle precision.  Each is above its
+unchanged committed baseline.
+
+The evidence-backed correction is committed at integration source
+`39a8bf1ec8a2f61e49ce2bddb8150a162513f7da`.  Generic multi-shell FSC now
+extends shell 1 through DC; explicit RELION FSC helpers retain `FSC[0]=1`.
+The first complete unit-file run caught a one-shell synthetic-grid edge case
+(`1 failed, 29 passed, 3 skipped`).  A shape guard and dedicated test fix it;
+the rerun passes `31 passed, 3 skipped`.
+
+Exact committed-source Slurm qualification `11688855` then rejected the
+integration commit (`1:0`) after both rounds.  Four of 12 metrics fail:
+round-2 image F1/precision are `0.464914930/0.304496901`, and particle
+F1/precision are `0.243197279/0.138431752`.  Their unchanged baselines are
+`0.5049/0.3407/0.2755/0.1598`.  No push is permitted.
+
+The passing isolated commit and failing integration commit share base
+`34872f38`; their only tracked runtime difference is the one-shell guard,
+and their round-1 half-set pickles are byte-identical.  Their custom CUDA
+libraries differ in bytes despite identical tracked CUDA source.  Diagnostic
+commit `ee8892af6816ef06b55de5cf0a78c1b81a3b3400` therefore holds the
+passing worktree, environment, CUDA library, fixture, and `.90` memory plan
+fixed while adding only the guard.  Exact regression job `11689434` is
+running.  This is a causal discriminator, not acceptance evidence.
 
 ## 2026-07-27 sealed case-4 final particle-state transition
 

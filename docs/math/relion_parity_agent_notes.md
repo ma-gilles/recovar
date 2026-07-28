@@ -8099,9 +8099,13 @@ and `9/15` all-class.
 - Exact-A100 K=4 science `11683600` passed the two-device allocation gate and
   selected required UUID
   `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30` as JAX's sole device.
-  Iterations 1--3 complete at resolutions `60.44`, `49.45`, and `30.22` A.
-  Iteration-3 occupancies are
-  `0.2728/0.1838/0.2392/0.3041`; hardened audit `11683764` remains pending.
+  Iterations 1--6 complete at resolutions `60.44`, `49.45`, `30.22`,
+  `27.20`, `25.90`, and `22.67` A.  Iteration-6 Pmax is `0.920704949` and
+  occupancies are `0.2594/0.2109/0.2716/0.2582`; iteration 7 is active at
+  current size 68 and hardened audit `11683764` remains pending.
+- Non-scoring CPU job `11689329` applies the unchanged direct FSC-AUC gate to
+  the 24 completed K=4 class/iteration checks with hash-bound inputs.  It is
+  an early progress checkpoint only and cannot replace the 60-check audit.
 - K=1 run root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_local_phaseffi_f5729c1b_20260727T143000ET`.
   K=4 run root:
@@ -8178,12 +8182,32 @@ and `9/15` all-class.
   Clean diagnostic commit is
   `47adbdda56e36a8f7e3364d089da845bf2635c10`; focused CPU FSC checks pass
   `2/2` with one GPU-only skip.
-- Exact reused-fixture Slurm control `11688427` is running with the same
-  `.90` memory fraction, particle SHA-256
-  `3aa1a5e41277b0d77ef84c910e0a9092fc7ae3bcf8bac8dd246fa24e182b2510`,
-  and fixed 12-metric gate as `11686796`.  Its run root is
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_fsc0_shell0_47adbdda_20260727T223000ET`.
-  No production integration is authorized until the result improves.
+- Exact reused-fixture Slurm control `11688427` completed `0:0` in
+  `00:18:39` with the same `.90` memory fraction and particle SHA-256
+  `3aa1a5e41277b0d77ef84c910e0a9092fc7ae3bcf8bac8dd246fa24e182b2510`.
+  All 12 fixed quality metrics pass.  The previously red round-2 image F1,
+  image precision, particle F1, and particle precision improve to
+  `0.510272443`, `0.345897669`, `0.280392157`, and `0.163055872`,
+  all above their unchanged baselines.
+- Integration commit
+  `39a8bf1ec8a2f61e49ce2bddb8150a162513f7da` restores shell-1 extension
+  only for generic multi-shell FSC.  Explicit RELION FSC helpers retain
+  `FSC[0]=1`.  A one-shell shape guard was added after the first full
+  regularization test run failed at the new boundary; the complete rerun
+  passes `31/31` CPU tests with three GPU-only skips.
+- Exact committed-source Slurm qualification `11688855` failed `1:0` after
+  completing both rounds.  Four of 12 fixed metrics fail: round-2 image
+  F1/precision are `0.464914930/0.304496901`, and particle F1/precision are
+  `0.243197279/0.138431752`.  Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_fsc0_integration_39a8bf1e_20260727T224500ET`.
+  Publication and push remain closed.
+- The passing isolated and failing integration sources share runtime base
+  `34872f38`; the one-shell guard is their only tracked runtime difference,
+  and round-1 half-set artifacts are byte-identical.  The custom CUDA
+  libraries differ in bytes.  Diagnostic `ee8892af6816ef06b55de5cf0a78c1b81a3b3400`
+  adds only the guard to the passing checkout while holding its environment,
+  CUDA library, fixture, and memory plan fixed.  Exact job `11689434` is
+  running.
 
 ## 2026-07-27 sealed K=1 numbered-to-final particle-state audit
 
