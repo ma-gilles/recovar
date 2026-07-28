@@ -11262,7 +11262,7 @@ variants reduce counts but do not repair identity.  The sealed sweep is
 SHA-256
 `743841ad938663254da185f40242eb299647327d3445090cd9206c2bfdfd2fda`.
 
-An isolated, unpushed diagnostic at
+An isolated diagnostic at
 `77c2578da1a6c9e18bddf29da32cfcc926334810` therefore runs junk
 detection only in round 1 by default while retaining anomaly and contrast
 detection in later rounds.  `--junk-detection-every-round` restores the
@@ -11285,14 +11285,29 @@ The sealed qualification JSON is
 SHA-256
 `051f137ae2885f5d929832bc0fe726b58fa7ad0a310e875af1e0e368484812e6`.
 
-Fresh-fixture SPA pair `11691615` now controls generalization.  It generates
-one default 10,000-image/grid-128/seed-42 fixture, seals its SHA-256 manifest,
-and forces repeat B to reuse the identical fixture.  Both repetitions must
-pass the unchanged committed SPA baseline and `0.05` tolerance.  The
-candidate remains unintegrated and unpushed until this gate seals green; no
-baseline, tolerance, or scorecard change is admissible from the cryo-ET pair.
+Fresh-fixture SPA pair `11691615` completed `0:0` in `00:27:33`.  It
+generated one default 10,000-image/grid-128/seed-42 fixture, sealed its
+SHA-256 manifest, and forced repeat B to reuse the identical fixture.  Both
+unchanged long SPA regressions pass in `845.743` and `796.761` seconds at the
+existing `0.05` tolerance; the fixture manifest replays exactly.  Both
+schedule audits prove round 1 requested junk detection, round 2 did not
+request it, and round 2 emitted no junk output.  Round-2 outlier recall is
+`0.989333/0.992000`, and cross-repeat image-inlier Jaccard is `0.987130`
+after round 1 and `0.961610` after round 2.  The sealed qualification JSON
+SHA-256 is
+`0cef0a901c8a5b23d755d778f2c4b6b3be038c657e892d29899ad5de60f2a043`;
+the outer output-manifest SHA-256 is
+`820172a5c92e96627c222367a761cf6e6f2d24c584f683d452d9a60848c9f495`.
 
-## 2026-07-28 exact-A100 K=4 live checkpoint through iteration 10
+Combined cryo-ET, fresh-SPA, and focused-unit evidence admits local
+integration.  Commit `78eafa9a` cherry-picks the candidate onto the parity
+integration branch.  Checkout-bound focused units pass `36/36` in
+`11.89` seconds.  The change remains unpushed: the integration branch is 68
+commits behind current `github/dev`, and repository policy requires rebase
+plus a green parallel long-test before publication.  No baseline, tolerance,
+or scorecard changes.
+
+## 2026-07-28 exact-A100 K=4 live checkpoint through iteration 11
 
 Science `11683600` remains healthy on required physical A100 UUID
 `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.  Numbered iterations 7--9
@@ -11304,6 +11319,7 @@ complete as follows:
 | 8 | 70 | 20.92 | 0.923462127 | 0.2542 / 0.2288 / 0.2560 / 0.2610 |
 | 9 | 72 | 20.15 | 0.946993273 | 0.2542 / 0.2345 / 0.2533 / 0.2580 |
 | 10 | 74 | 19.43 | 0.915517102 | 0.2522 / 0.2361 / 0.2483 / 0.2633 |
+| 11 | 76 | 18.76 | 0.958589825 | 0.2536 / 0.2380 / 0.2454 / 0.2630 |
 
 Iteration 9 completed in `1624.7 s`; fraction changed is `0.9944`,
 rotation delta `14.313` degrees, translation delta `1.372 A`, class delta
@@ -11315,7 +11331,12 @@ rotation delta `14.238` degrees, translation delta `1.381 A`, class delta
 zero, and convergence false.  Timing artifact
 `relion_cuda/timing/iter_010.npz` has SHA-256
 `4b37301cc66b9fa46fbaebd03835b45962fa8b2392cf61173bacb2847d94b076`.
-Iteration 11 is active at current size 76.
+Iteration 11 completed in `1737.4 s`; fraction changed is `0.7029`,
+rotation delta `14.538` degrees, translation delta `1.471 A`, class delta
+zero, and convergence false.  Timing artifact
+`relion_cuda/timing/iter_011.npz` has SHA-256
+`bba6c9dda14d185bd1ebe3a89aa4ba66df3521c13d300cb881d3d6dffbdd87`.
+Iteration 12 is active at current size 78.
 
 Non-scoring six-boundary audit `11689329` completed `0:0` in `00:22:17`.
 All `24/24` direct class/iteration FSC-AUC checks pass; its minimum
@@ -11323,7 +11344,26 @@ cross-engine FSC-AUC is `0.9967517990550623` and minimum GT FSC-AUC delta is
 `-0.00010904820468227161`.  Both input and output manifests replay exactly;
 the summary JSON SHA-256 is
 `f80154d314285030bf48b40c72830fb9b673b018c83219e3ccde1b3773675491`.
-Dependency-released incremental audit `11691438` extends this non-scoring
-checkpoint through iterations 7--9.  Hardened full audit `11683764` remains
-dependency-held.  Neither partial checkpoint can change fixed K=4
-`41/60` direct checks or `9/15` all-class iterations.
+Incremental audit `11691438` completed `0:0` in `00:23:12`.  All `36/36`
+direct class/iteration FSC-AUC checks pass through iteration 9, and all nine
+boundaries pass all four classes.  Minimum cross-engine FSC-AUC is
+`0.9951820759211527`; minimum GT FSC-AUC delta remains
+`-0.00010904820468227161`.  Both input and output manifests replay exactly;
+summary JSON SHA-256 is
+`ed56b552709fbb3725a668a5499d393c8926b3087753547064a8dc94422a0ca8`.
+Hardened full audit `11683764` remains dependency-held.  Neither partial
+checkpoint can change fixed K=4 `41/60` direct checks or `9/15` all-class
+iterations.
+
+## 2026-07-28 current-head fixed case-22 qualification
+
+Clean detached source `25ab6e68` now qualifies the later exact local
+score-translation path on frozen topology-failure case 22.  Setup `11691762`
+completed `0:0`; scorecard-mode science `11691763` runs stock RELION and
+RECOVAR sequentially on one H100 at `della-h19g3`.  Summary `11691764` and
+strict independent FSC/topology audit `11691796` are dependency-held.
+Fixture-manifest SHA-256 is
+`422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
+Grid correction and forced after-max finalization are unset/off; there is no
+scheduler, initial-projector, or diagnostic tree-rescore override.  No score
+claim is admissible before the run and strict audit finish.

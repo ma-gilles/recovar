@@ -8255,8 +8255,7 @@ and `9/15` all-class.
   false positives.
 - Isolated commit `77c2578d` runs junk detection in round 1 only by default,
   retains later anomaly/contrast detection, and provides
-  `--junk-detection-every-round` for legacy behavior.  Focused tests pass
-  `31/31`.
+  `--junk-detection-every-round` for legacy behavior.
 - First qualification `11691123` failed before science on the CUDA
   source-age gate.  Retry `11691182` used a byte-identical runtime copy of
   pinned library SHA-256
@@ -8268,12 +8267,27 @@ and `9/15` all-class.
   particle false positives are `101/117` with zero new true positives.
 - Qualification JSON SHA-256 is
   `051f137ae2885f5d929832bc0fe726b58fa7ad0a310e875af1e0e368484812e6`.
-  Fresh-fixture SPA pair `11691615` now runs the unchanged default long SPA
-  baseline twice on one manifest-sealed fixture.
-- The candidate remains unpushed and non-admissible until SPA/generalization
-  passes.  No tolerance, baseline, or scorecard changed.
+  Fresh-fixture SPA pair `11691615` completed `0:0` in `00:27:33`; both
+  unchanged long SPA regressions pass in `845.743/796.761` seconds on one
+  manifest-sealed fixture.  The fixture manifest replays exactly.
+- Both SPA schedule audits prove round 1 requested junk detection, round 2
+  did not request it, and round 2 emitted no junk output.  Round-2 recall is
+  `0.989333/0.992000`; cross-repeat image-inlier Jaccard is `0.987130` after
+  round 1 and `0.961610` after round 2.
+- SPA qualification JSON SHA-256 is
+  `0cef0a901c8a5b23d755d778f2c4b6b3be038c657e892d29899ad5de60f2a043`;
+  sealed output-manifest SHA-256 is
+  `820172a5c92e96627c222367a761cf6e6f2d24c584f683d452d9a60848c9f495`.
+- The combined cryo-ET, fresh-SPA, and focused-unit evidence admits local
+  integration.  Cherry-pick `78eafa9a` applies the candidate to the
+  integration branch; checkout-bound focused units pass `36/36` in
+  `11.89` seconds and the worktree is clean.
+- The change remains unpushed.  Current integration is 68 commits behind
+  `github/dev`; repository policy requires rebase and a green parallel
+  long-test before publication.  No tolerance, baseline, or scorecard
+  changed.
 
-## 2026-07-28 K=4 live checkpoint through iteration 10
+## 2026-07-28 K=4 live checkpoint through iteration 11
 
 - Exact-A100 science `11683600` remains healthy on required UUID
   `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.
@@ -8288,13 +8302,46 @@ and `9/15` all-class.
   `0.915517102`, and occupancies
   `0.2522/0.2361/0.2483/0.2633`.  Fraction changed is `0.8970`, rotation
   delta `14.238` degrees, translation delta `1.381 A`, class delta zero, and
-  convergence remains false.  Iteration 11 is active at current size 76.
+  convergence remains false.
+- Iteration 11 completed in `1737.4` seconds at current size 76, resolution
+  `18.76 A`, Pmax `0.958589825`, and occupancies
+  `0.2536/0.2380/0.2454/0.2630`.  Fraction changed is `0.7029`, rotation
+  delta `14.538` degrees, translation delta `1.471 A`, class delta zero, and
+  convergence remains false.  Timing artifact SHA-256 is
+  `bba6c9dda14d185bd1ebe3a89aa4ba66df3521c13d300cb881d3d6dffbdd87`.
+  Iteration 12 is active at current size 78.
 - Non-scoring partial audit `11689329` completed `0:0`: `24/24` direct
   class/iteration FSC-AUC checks pass through iteration 6.  Minimum
   cross-engine FSC-AUC is `0.9967517990550623`; minimum GT delta is
   `-0.00010904820468227161`; both manifests replay exactly.  Summary SHA-256:
   `f80154d314285030bf48b40c72830fb9b673b018c83219e3ccde1b3773675491`.
-- Incremental non-scoring audit `11691438` extends through iterations 7--9.
+- Incremental non-scoring audit `11691438` completed `0:0` in `00:23:12`.
+  All `36/36` direct checks pass through iteration 9 and all nine boundaries
+  pass all four classes.  Minimum cross-engine FSC-AUC is
+  `0.9951820759211527`; minimum GT delta remains
+  `-0.00010904820468227161`; both manifests replay exactly.  Summary
+  SHA-256 is
+  `ed56b552709fbb3725a668a5499d393c8926b3087753547064a8dc94422a0ca8`.
   Full audit `11683764` remains dependency-held.
 - Fixed metrics remain K=1 `28/34` strict, `32/34` topology, `34/34`
   evaluated, and K=4 `41/60` direct, `9/15` all-class.
+
+## 2026-07-28 current-head fixed case-22 qualification
+
+- Current local integration source `25ab6e68` contains the later exact local
+  score-translation path but had not been qualified on frozen topology
+  failure case 22.  A clean detached source with the unchanged fixed fixture
+  therefore runs stock RELION and RECOVAR sequentially on one H100.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_currenthead_25ab6e68_20260728T011020ET`.
+  Both run and runtime roots contain `SAFE_TO_DELETE`.
+- Setup `11691762` completed `0:0`; science `11691763` is active on
+  `della-h19g3`; summary `11691764` and strict independent FSC/topology
+  audit `11691796` are dependency-held.
+- Fixture-manifest SHA-256 is
+  `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
+  Grid correction and forced after-max finalization are unset/off.  The run
+  is autonomous, scorecard-mode, and makes no scheduler or initial-projector
+  diagnostic override.
+- No score claim is made before both science and strict audit finish.  Fixed
+  K=1 remains `28/34` strict, `32/34` topology, and `34/34` evaluated.
