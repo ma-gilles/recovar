@@ -500,7 +500,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--solvar-init",
         dest="solvar_init",
         choices=["covariance", "random"],
-        default="covariance",
+        default="random",
         help="SOLVAR loading initialization. 'covariance' warm-starts from RECOVAR covariance PCA; 'random' uses random real-space loadings.",
     )
     adv.add_argument(
@@ -517,7 +517,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--solvar-batch-size",
         dest="solvar_batch_size",
         type=int,
-        default=200,
+        default=1024,
         help="Image batch size for SOLVAR optimization.",
     )
     adv.add_argument(
