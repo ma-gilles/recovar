@@ -11100,3 +11100,47 @@ changed.  The red scientific gate and the unresolved mandatory rebase onto
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_fix_9a034097_20260727T210000ET/provenance/SUBMISSION_11685811.md`;
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_prefixed_f7148598_20260727T212000ET/provenance/SUBMISSION_11686265.md`;
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_reuse_dev_9a034097_20260727T213000ET/provenance/SUBMISSION_11686278.md`.
+
+## 2026-07-27 exact-device audit and shared shell-0 diagnostic
+
+Exact-H100 K=1 science `11675461` completed `0:0` after 17 numbered
+iterations, autonomous convergence, and one valid non-forced final all-data
+pass.  Independent audit `11675472` completed `0:0`; both the inner and
+outer SHA-256 manifests replay exactly.  The independently recomputed final merged
+RECOVAR-to-RELION FSC-AUC is `0.9925486313265427`, above the frozen case-4
+score `0.9915563085225809` but below the unchanged `0.995` gate.  RECOVAR's
+merged GT FSC-AUC is `0.35217657068255603` versus RELION's
+`0.34833496994794966`, a passing delta of `+0.0038416007346063763`.
+All 17 numbered topology comparisons pass; the worst numbered merged
+cross-engine FSC-AUC is `0.9996855218427677` at iteration 17.  The final
+direct gate is the only strict failure, so the qualification correctly sets
+`scorecard_change_admissible=false`.  Fixed K=1 remains `28/34` strict,
+`32/34` topology, and `34/34` evaluated.  The outer audit-manifest SHA-256
+is `c43f218e1cffaba77279f3739a32608dd4ea609c29a871357839ec399b3b77eb`.
+
+Exact-A100 K=4 science `11683600` has completed iteration 4 at
+`current_size=56`, resolution `27.20` A, Pmax `0.598960618`, and occupancies
+`0.2753/0.1774/0.2765/0.2708`.  Iteration 5 is active at
+`current_size=60`; hardened audit `11683764` remains dependency-pending.
+
+The reused-fixture memory-fraction control `11686796` changes only
+`XLA_PYTHON_CLIENT_MEM_FRACTION=.90` relative to integration control
+`11686278`.  It reproduces the authoritative `dev` memory plan but worsens
+the fixed quality result from `11/12` to `8/12` passing metrics.  Its four
+round-2 failures are image F1 `0.4717`, image precision `0.3109`, particle
+F1 `0.2496`, and particle precision `0.1426`; all round-1 metrics and both
+recalls pass.  Restoring `.90` is therefore rejected.
+
+The next single-variable diagnostic is isolated from the integration branch:
+restore only legacy shell-0 handling in generic
+`regularization.get_fsc_gpu` while retaining the explicit RELION shell-0
+conventions in EM-specific FSC helpers.  The hypothesis is that commit
+`07130398` leaked a RELION-only `FSC[0]=1` convention into the standard
+pipeline and contributes to the reused-fixture outlier avalanche.  The
+diagnostic must reuse the exact particle SHA-256
+`3aa1a5e41277b0d77ef84c910e0a9092fc7ae3bcf8bac8dd246fa24e182b2510`
+and compare against job `11686796`.  Clean diagnostic commit
+`47adbdda56e36a8f7e3364d089da845bf2635c10` passes the focused CPU FSC
+checks (`2 passed`, one GPU-only skip), and exact Slurm control `11688427`
+is running.  No production change is authorized unless its fixed 12-metric
+result improves.

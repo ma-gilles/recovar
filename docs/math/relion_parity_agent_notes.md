@@ -8121,3 +8121,66 @@ and `9/15` all-class.
 - This checkpoint is live evidence only.  Fixed metrics remain K=1 `28/34`
   strict FSC/FSC-AUC, `32/34` topology, `34/34` evaluated, and K=4 `41/60`
   direct, `9/15` all-class.
+
+## 2026-07-27 exact-H100 local-score qualification is sealed but remains red
+
+- K=1 science `11675461` completed `0:0` in `02:22:28` on exact H100 UUID
+  `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, from clean detached source
+  `f5729c1b59a7e658fd4bbbd00696191fa7fbb9e9`.  It converged autonomously
+  after numbered iteration 17 and then ran one valid non-forced final
+  all-data pass.  Grid correction remained unset/off.
+- Independent CPU audit `11675472` completed `0:0` in `00:24:47`.  It emitted
+  non-fatal warnings while rejecting incompatible shared CPU AOT cache
+  entries, then completed fresh computation.  Both its inner and outer
+  SHA-256 manifests replay exactly.
+- All 17 numbered topology comparisons pass.  The worst numbered merged
+  RECOVAR-to-RELION FSC-AUC is `0.9996855218427677` at iteration 17; the
+  intermediate/topology audit status is `pass`.
+- Final merged RECOVAR-to-RELION FSC-AUC is
+  `0.9925486313265427`, an improvement of
+  `+0.0009923228039618` over frozen case-4 score
+  `0.9915563085225809`, but it remains below the immutable `0.995` gate.
+  Final half-1 and half-2 cross-engine FSC-AUC values are
+  `0.9944517322023848` and `0.9929489817788204`.
+- RECOVAR final merged GT FSC-AUC is `0.35217657068255603`; RELION is
+  `0.34833496994794966`; delta `+0.0038416007346063763` passes the
+  `-0.002` gate.
+- The fail-closed qualification is `status=complete`,
+  `strict_gate_pass=false`, and `scorecard_change_admissible=false`.
+  Trajectory JSON SHA-256 is
+  `15e53e5c8b41698b6fc903b908de5717d242c17275a14dbb934f4bee2b52bd54`;
+  intermediate JSON is
+  `d61babc8d334670ee8e253ffbab64325ba01a3c1039c9161e43ca83282dc6c45`;
+  qualification JSON is
+  `232f4a19572a8e6c5eff6776c4ff92f1b1ab323c345be58fc456562b7b2151ea`;
+  outer audit manifest is
+  `c43f218e1cffaba77279f3739a32608dd4ea609c29a871357839ec399b3b77eb`.
+- The complete evidence root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_local_phaseffi_f5729c1b_20260727T143000ET`.
+  No correlation was computed.  K=1 remains `28/34` strict,
+  `32/34` topology, and `34/34` evaluated.
+
+## 2026-07-27 reused-fixture memory control rejects `.90`; shell-0 control runs
+
+- Integration reused-fixture job `11686796` retained the exact passing-dev
+  particle stack but set `XLA_PYTHON_CLIENT_MEM_FRACTION=.90`.  It restored
+  the authoritative-dev memory plan while worsening integration from
+  `11/12` to `8/12` fixed metrics.
+- Round-2 failures are image F1 `0.4717` versus `0.5049`, image precision
+  `0.3109` versus `0.3407`, particle F1 `0.2496` versus `0.2755`, and
+  particle precision `0.1426` versus `0.1598`.  All round-1 metrics and both
+  round-2 recalls pass.  The round-2 combined inlier set shrinks from
+  `4615/727` junk-or-anomaly detections on clean dev to `5184/823` on this
+  integration control.  Restoring `.90` is rejected.
+- The next isolated hypothesis changes only generic
+  `regularization.get_fsc_gpu` shell 0 from the RELION convention `1.0` back
+  to historical `fsc[1]`.  EM-specific RELION FSC helpers remain unchanged.
+  Clean diagnostic commit is
+  `47adbdda56e36a8f7e3364d089da845bf2635c10`; focused CPU FSC checks pass
+  `2/2` with one GPU-only skip.
+- Exact reused-fixture Slurm control `11688427` is running with the same
+  `.90` memory fraction, particle SHA-256
+  `3aa1a5e41277b0d77ef84c910e0a9092fc7ae3bcf8bac8dd246fa24e182b2510`,
+  and fixed 12-metric gate as `11686796`.  Its run root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_fsc0_shell0_47adbdda_20260727T223000ET`.
+  No production integration is authorized until the result improves.
