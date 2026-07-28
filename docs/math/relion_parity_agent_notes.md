@@ -8811,14 +8811,18 @@ and `9/15` all-class.
   `82e79e3e07079e553280e2089d2fc5c4887fb43a27c032ee6df3228eb789bd21`;
   the fresh CUDA-12.6 `sm_80` binary SHA-256 is
   `53a59a64aad8011de26a820ca9b9ae76ea7bc3e8ffb9319f518391951d82dd66`.
-  Production backprojection is untouched.
+  Production backprojection is untouched. The exact diff is now checked in
+  as
+  `docs/patches/relion_bpref_prescatter_part_id_filter_bc319d0.patch`;
+  a fresh detached `bc319d0` apply check reproduces the pinned diff hash.
 - Subset science `11703645` is live with after-success audit `11703646`.
   Run/runtime roots are
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_subset_prescatter_operands_a100_20260728T085159ET`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it2_subset_prescatter_operands_a100_20260728T085159ET`;
   both contain `SAFE_TO_DELETE`.
-- The fixed targeted suite passes 62/62 tests; Ruff and `git diff --check`
+- The fixed targeted suite passes 63/63 tests, including the exact
+  diagnostic-patch byte/guard check; Ruff and `git diff --check`
   pass. Live diagnostics are non-scoring. Fixed K=1 remains `28/34` strict,
   `32/34` topology, `34/34` evaluated; fixed K=4 remains `41/60` direct and
   `9/15` all-class.

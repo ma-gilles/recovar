@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import struct
 from pathlib import Path
@@ -12,6 +13,13 @@ SPEC = importlib.util.spec_from_file_location("select_k1_bpref_support_cohort", 
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+RELION_PATCH = (
+    Path(__file__).parents[2]
+    / "docs"
+    / "patches"
+    / "relion_bpref_prescatter_part_id_filter_bc319d0.patch"
+)
+RELION_PATCH_SHA256 = "82e79e3e07079e553280e2089d2fc5c4887fb43a27c032ee6df3228eb789bd21"
 
 
 def _write_header(path: Path, *, part_id: int, stack_index: int, mpi_rank: int) -> None:
@@ -48,6 +56,18 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
             mpi_rank=1 if original_index != 9 else 2,
         )
     return trajectory_path, image_names_path, capture_dir
+
+
+def test_relion_part_id_filter_patch_is_exact_and_preallocation() -> None:
+    patch_bytes = RELION_PATCH.read_bytes()
+    assert hashlib.sha256(patch_bytes).hexdigest() == RELION_PATCH_SHA256
+    patch = patch_bytes.decode()
+    selection_guard = patch.index("if (!relion_bpre_part_id_selected")
+    first_capture_allocation_guard = patch.index("if (data_is_3d)")
+    assert selection_guard < first_capture_allocation_guard
+    assert "expected_particles != result.part_ids.size()" in patch
+    assert "Duplicate particle identity" in patch
+    assert "Trailing comma" in patch
 
 
 def test_select_cohort_preserves_deepest_and_fills_controls(tmp_path: Path) -> None:

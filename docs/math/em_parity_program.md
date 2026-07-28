@@ -11837,6 +11837,13 @@ source diff hash is
 the fresh CUDA-12.6 `sm_80` binary hash is
 `53a59a64aad8011de26a820ca9b9ae76ea7bc3e8ffb9319f518391951d82dd66`.
 Production backprojection is unchanged.
+The exact diff is checked in as
+`docs/patches/relion_bpref_prescatter_part_id_filter_bc319d0.patch`.
+It applies cleanly to a fresh detached RELION
+`bc319d0b3ca063de4a9c8b66da6e5b4d9f618630` worktree and reproduces the
+same diff hash. The apply-check root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_bpref_partid_patch_applycheck_20260728T091500ET`
+and contains `SAFE_TO_DELETE`.
 
 Hash-pinned subset science/audit `11703645`/`11703646` are live from
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_subset_prescatter_operands_a100_20260728T085159ET`;
@@ -11844,6 +11851,7 @@ the runtime root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it2_subset_prescatter_operands_a100_20260728T085159ET`.
 Both contain `SAFE_TO_DELETE`. Control/capture map inertness is FSC/FSC-AUC
 gated and correlation is not computed. The fixed targeted suite now passes
-62/62 tests, including four cohort-selector tests. These live diagnostics
+63/63 tests, including the four cohort-selector tests and exact patch-byte
+guard. These live diagnostics
 remain non-scoring, so fixed K=1 stays `28/34` strict, `32/34` topology,
 `34/34` evaluated and fixed K=4 stays `41/60` direct, `9/15` all-class.

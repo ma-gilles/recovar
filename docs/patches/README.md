@@ -1,5 +1,27 @@
 # RELION instrumentation patches
 
+## relion_bpref_prescatter_part_id_filter_bc319d0.patch
+
+Adds an optional, fail-closed `RELION_BPRE_CAPTURE_PART_IDS` CSV filter to
+the passive BPref pre-scatter capture instrumentation based on RELION commit
+`bc319d0b3ca063de4a9c8b66da6e5b4d9f618630`. Unset preserves the existing
+all-particle diagnostic behavior. When set, the explicit ID count must equal
+`RELION_BPRE_CAPTURE_EXPECTED_PARTICLES`, malformed or duplicate identities
+fail closed, and unselected particles return before passive capture
+allocation. Production backprojection is unchanged.
+
+The patch SHA-256 is
+`82e79e3e07079e553280e2089d2fc5c4887fb43a27c032ee6df3228eb789bd21`.
+It is used by the frozen case-22 physical-iteration-2 bounded cohort.
+
+Apply it only to the matching instrumented RELION tree:
+
+```bash
+git -C /absolute/path/to/relion rev-parse HEAD
+git -C /absolute/path/to/relion apply \
+  /absolute/path/to/recovar/docs/patches/relion_bpref_prescatter_part_id_filter_bc319d0.patch
+```
+
 ## relion_ml_optimiser_debug_dump.patch
 
 Adds `RECOVAR_DEBUG_DUMP_DIR`-gated dumps to
