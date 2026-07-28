@@ -361,8 +361,11 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean=False, frequency_
     bot = jnp.sqrt(bot1 * bot2)
     fsc = top_avg / bot
     fsc = jnp.where(~jnp.isfinite(fsc), 0, fsc)
-    # RELION sets fsc(0) = 1.0 in calculateDownSampledFourierShellCorrelation
-    fsc = fsc.at[0].set(1.0)
+    # The generic RECOVAR estimator extends the first measured shell through
+    # DC. RELION-specific estimators set FSC[0] = 1 explicitly in their own
+    # helpers.
+    if fsc.shape[0] > 1:
+        fsc = fsc.at[0].set(fsc[1])
     return fsc
 
 

@@ -34,13 +34,22 @@ def test_jax_scipy_nd_image_mean_complex_path_returns_complex64():
 
 
 def test_get_fsc_gpu_returns_finite_values():
-    shape = (4, 4, 4)
+    shape = (8, 8, 8)
     rng = np.random.default_rng(0)
     v1 = (rng.normal(size=np.prod(shape)) + 1j * rng.normal(size=np.prod(shape))).astype(np.complex64)
     v2 = (rng.normal(size=np.prod(shape)) + 1j * rng.normal(size=np.prod(shape))).astype(np.complex64)
     fsc = regularization.get_fsc_gpu(v1, v2, shape, substract_shell_mean=False, frequency_shift=0)
     fsc = np.asarray(fsc)
     assert fsc.ndim == 1
+    assert np.all(np.isfinite(fsc))
+    assert fsc[0] == fsc[1]
+
+
+def test_get_fsc_gpu_single_shell_is_finite():
+    shape = (4, 4, 4)
+    volume = np.ones(np.prod(shape), dtype=np.complex64)
+    fsc = np.asarray(regularization.get_fsc_gpu(volume, volume, shape))
+    assert fsc.shape == (1,)
     assert np.all(np.isfinite(fsc))
 
 
