@@ -406,6 +406,32 @@ The checked snapshot is
 `docs/math/em_k4_backend_trajectory_snapshot_v2.json` (SHA-256
 `bc10d0555488b22f0bc8d54afe5afc5288064ddb4708bd1c75f3b55dd4c0060a`).
 
+### Current-source exact-A100 requalification
+
+Current source `31c4a0ca203b70211f4d8586d044c94fca9fc037` was replayed for all
+15 numbered iterations on the exact snapshot A100 UUID
+`GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.  Science `11683600` and
+authoritative audit `11695141` completed `0:0`.
+
+| Gate | Checked snapshot | Current source | Status |
+|---|---:|---:|---|
+| Direct per-class FSC-AUC at `0.995` | 41 / 60 | 41 / 60 | checked, unchanged |
+| Iterations passing all four classes | 9 / 15 | 9 / 15 | checked, unchanged |
+| Exact control topology | 1 / 1 | 1 / 1 | checked |
+| Grid correction unset | yes | yes | checked |
+| Forced final all-data after nonconvergence | no | no | checked |
+
+The current per-iteration pass vector is
+`[4,4,4,4,4,4,4,4,4,3,0,2,0,0,0]`; minimum cross-engine FSC-AUC is
+`0.9908413238810354`, and minimum GT FSC-AUC delta is
+`-0.00021150154889848505`.  Classification is `fixed_score_unchanged`;
+the fixed K=4 denominator remains `41/60` direct and `9/15` all-class.
+Fixed-score JSON SHA-256 is
+`1767cca23378fc1ba36353564b47e4200dcfef896bea07e18270991fe0da09dd`;
+source-effect JSON SHA-256 is
+`0ff52feb98f4e2e7104c7414a7bdce68f36ccb9baba6ae96ac57609c90407cf8`.
+All persistent science and audit manifests replay exactly.
+
 ## K=4 physical-GPU trajectory diagnostic
 
 This diagnostic is not part of the frozen K=1 denominator.  It compares two

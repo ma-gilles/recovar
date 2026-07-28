@@ -11628,6 +11628,45 @@ and
 both contain `SAFE_TO_DELETE`.  This live experiment is non-scoring; fixed
 K=1 remains `28/34` strict, `32/34` topology, and `34/34` evaluated.
 
+## 2026-07-28 authoritative exact-A100 K=4 audit is unchanged
+
+Science `11683600` completed all 15 numbered iterations on exact A100 UUID
+`GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.  Authoritative audit
+`11695141` completed `0:0` in `01:33:24` on `della-h16n3`, with maximum RSS
+`4675620K`.
+
+The audit is qualification-admissible and exact control topology passes.
+Classification is `fixed_score_unchanged`: direct per-class FSC-AUC remains
+`41/60`, with per-iteration passes
+`[4,4,4,4,4,4,4,4,4,3,0,2,0,0,0]`; `9/15` iterations pass all four
+classes.  Minimum cross-engine FSC-AUC is `0.9908413238810354`, and minimum
+GT FSC-AUC delta is `-0.00021150154889848505`.  Grid correction was unset;
+the run remained nonconverged and correctly skipped final all-data.
+
+The exact-hardware source-effect comparison reports minimum
+current-to-prior FSC-AUC `0.9931728696060352`, maximum defect
+`0.006827130393964764`, and fine/coarse assignment mismatch totals
+`16387/7756`.  It does not admit a scorecard change.
+
+All persistent science outputs, topology inputs, source-effect inputs, audit
+inputs, and audit outputs replay exactly.  The documented first science
+manifest entry names an expired Slurm spool launcher, so persistent replay
+correctly begins at entry two; the durable launcher hash is independently
+pinned.  Fixed-score JSON, source-effect JSON, audit-output-manifest, and
+audit-input-manifest SHA-256 values are
+`1767cca23378fc1ba36353564b47e4200dcfef896bea07e18270991fe0da09dd`,
+`0ff52feb98f4e2e7104c7414a7bdce68f36ccb9baba6ae96ac57609c90407cf8`,
+`740df77aec7dc442edea0fdf730fd1a9efa0abca083003f4c6aaa2b32b800e58`,
+and
+`fc54120e547fab451eb700d26ecd0c937324e0978d44c11a9b099657d1421960`.
+
+The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_phaseffi_exactgpu_retry1_31c4a0ca_20260727T040500ET`;
+its runtime root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_full15_phaseffi_exactgpu_retry1_31c4a0ca_20260727T040500ET`.
+Both contain `SAFE_TO_DELETE`.  Fixed K=4 remains `41/60` direct and `9/15`
+all-class.
+
 ## 2026-07-28 exact-device native repeat accepts the BPref residual
 
 The second dump-on RELION arm completed on the exact original H100 UUID

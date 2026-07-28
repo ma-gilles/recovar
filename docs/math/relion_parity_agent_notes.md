@@ -8621,3 +8621,40 @@ and `9/15` all-class.
   `85dedfea4cc2f1b81c63cb84e55ed03b32bee6ce6100caa3f5079b4c53f8eb2a`.
   This live run is non-scoring; fixed K=1 remains `28/34` strict,
   `32/34` topology, and `34/34` evaluated.
+
+## 2026-07-28 exact-A100 K=4 full audit is terminal
+
+- Authoritative audit `11695141` completed `0:0` on `della-h16n3` in
+  `01:33:24`, with maximum RSS `4675620K`.  Its science input is terminal
+  job `11683600` on exact A100 UUID
+  `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.
+- Classification is `fixed_score_unchanged`. Exact topology and hardware
+  gates pass, but no scorecard change is admissible.
+- Terminal K=4 is `41/60` direct class checks and `9/15` all-class
+  iterations. Per-iteration direct passes are
+  `[4,4,4,4,4,4,4,4,4,3,0,2,0,0,0]`; minimum cross-engine FSC-AUC is
+  `0.9908413238810354`, and minimum GT FSC-AUC delta is
+  `-0.00021150154889848505`.
+- Grid correction was unset. The run remained nonconverged and did not force
+  final all-data.
+- The hardware-matched source-effect report gives minimum current-to-prior
+  FSC-AUC `0.9931728696060352`, maximum defect
+  `0.006827130393964764`, and fine/coarse assignment mismatch totals
+  `16387/7756`.
+- All persistent science outputs and all topology/source-effect/audit input
+  and output manifests replay exactly.  The already-documented expired Slurm
+  spool launcher is the only non-persistent first science-manifest entry;
+  replay begins at entry two and the durable launcher is independently
+  pinned.
+- Fixed-score JSON, source-effect JSON, audit-output-manifest, and
+  audit-input-manifest SHA-256 values are
+  `1767cca23378fc1ba36353564b47e4200dcfef896bea07e18270991fe0da09dd`,
+  `0ff52feb98f4e2e7104c7414a7bdce68f36ccb9baba6ae96ac57609c90407cf8`,
+  `740df77aec7dc442edea0fdf730fd1a9efa0abca083003f4c6aaa2b32b800e58`,
+  and
+  `fc54120e547fab451eb700d26ecd0c937324e0978d44c11a9b099657d1421960`.
+- Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_phaseffi_exactgpu_retry1_31c4a0ca_20260727T040500ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_full15_phaseffi_exactgpu_retry1_31c4a0ca_20260727T040500ET`;
+  both contain `SAFE_TO_DELETE`.
