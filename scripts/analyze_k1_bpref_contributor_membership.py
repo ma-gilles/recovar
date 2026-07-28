@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import struct
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,10 @@ def _require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+def _float32_from_bits(value: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", int(value) & 0xFFFFFFFF))[0]
+
+
 def _quantiles(values: list[float] | np.ndarray) -> dict[str, float | None]:
     array = np.asarray(values, dtype=np.float64)
     array = array[np.isfinite(array)]
@@ -33,6 +38,21 @@ def _quantiles(values: list[float] | np.ndarray) -> dict[str, float | None]:
         "p99": float(np.quantile(array, 0.99)),
         "max": float(array.max()),
     }
+
+
+def classify_threshold_substitution(
+    *,
+    significance_gap: bool,
+    relion_positive_recovar_nonpositive: int,
+    recovar_positive_relion_nonpositive: int,
+) -> str:
+    """Classify whether RELION's scalar threshold closes common support."""
+
+    if not significance_gap:
+        return "not_applicable_no_common_candidate_significance_gap"
+    if relion_positive_recovar_nonpositive or recovar_positive_relion_nonpositive:
+        return "common_candidate_significance_gap_persists_under_relion_threshold"
+    return "relion_threshold_closes_common_candidate_significance_gap"
 
 
 def same_identity_set(lhs: np.ndarray, rhs: np.ndarray) -> bool:
@@ -125,6 +145,7 @@ def compare_particle_membership(
     recovar_reconstruction_mass: np.ndarray,
     recovar_max_sample_posterior: np.ndarray,
     recovar_reconstruction_threshold: float,
+    relion_normalized_reconstruction_threshold: float,
     tolerance: float = ROTATION_TOLERANCE,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     """Compare candidate and positive-contributor membership for one particle."""
@@ -187,6 +208,23 @@ def compare_particle_membership(
 
     threshold = float(recovar_reconstruction_threshold)
     _require(np.isfinite(threshold) and threshold >= 0.0, "invalid threshold")
+    relion_threshold = float(relion_normalized_reconstruction_threshold)
+    _require(
+        np.isfinite(relion_threshold) and relion_threshold >= 0.0,
+        "invalid normalized RELION threshold",
+    )
+    recovar_positive_at_relion_threshold = (
+        recovar_max_sample_posterior > 0.0
+    ) & (recovar_max_sample_posterior >= relion_threshold)
+    recovar_matched_positive_at_relion_threshold = (
+        recovar_positive_at_relion_threshold[recovar_matched]
+    )
+    relion_positive_recovar_at_relion_threshold_nonpositive = (
+        relion_matched_positive & ~recovar_matched_positive_at_relion_threshold
+    )
+    recovar_at_relion_threshold_positive_relion_nonpositive = (
+        ~relion_matched_positive & recovar_matched_positive_at_relion_threshold
+    )
 
     def threshold_ratio(rows: np.ndarray) -> np.ndarray:
         if threshold == 0.0:
@@ -196,6 +234,10 @@ def compare_particle_membership(
     report = {
         "recovar_reconstruction_threshold": threshold,
         "recovar_reconstruction_threshold_positive": threshold > 0.0,
+        "relion_normalized_reconstruction_threshold": relion_threshold,
+        "relion_normalized_reconstruction_threshold_positive": (
+            relion_threshold > 0.0
+        ),
         "relion_candidate_count": relion_count,
         "recovar_candidate_count": recovar_count,
         "candidate_unique_match_count": int(matches.pairs.shape[0]),
@@ -211,6 +253,16 @@ def compare_particle_membership(
         ),
         "recovar_positive_relion_nonpositive_matched_count": int(
             np.count_nonzero(recovar_positive_relion_nonpositive)
+        ),
+        "relion_positive_recovar_at_relion_threshold_nonpositive_matched_count": int(
+            np.count_nonzero(
+                relion_positive_recovar_at_relion_threshold_nonpositive
+            )
+        ),
+        "recovar_at_relion_threshold_positive_relion_nonpositive_matched_count": int(
+            np.count_nonzero(
+                recovar_at_relion_threshold_positive_relion_nonpositive
+            )
         ),
         "relion_positive_unmatched_candidate_count": int(
             relion_positive_unmatched.size
@@ -228,12 +280,32 @@ def compare_particle_membership(
             == np.count_nonzero(recovar_positive)
             and matches.relion_ambiguous == matches.recovar_ambiguous == 0
         ),
+        "matched_positive_sets_exact_using_relion_threshold_on_recovar_posterior": bool(
+            not np.any(
+                relion_positive_recovar_at_relion_threshold_nonpositive
+            )
+            and not np.any(
+                recovar_at_relion_threshold_positive_relion_nonpositive
+            )
+            and matches.relion_ambiguous == matches.recovar_ambiguous == 0
+        ),
     }
     arrays = {
         "matched_rotation_max_abs": matches.matched_max_abs,
         "relion_candidate_nearest_recovar_max_abs": matches.relion_nearest_max_abs,
         "recovar_candidate_nearest_relion_max_abs": matches.recovar_nearest_max_abs,
         "recovar_reconstruction_threshold": np.asarray([threshold], dtype=np.float64),
+        "relion_normalized_reconstruction_threshold": np.asarray(
+            [relion_threshold], dtype=np.float64
+        ),
+        "recovar_over_relion_reconstruction_threshold": np.asarray(
+            [
+                threshold / relion_threshold
+                if relion_threshold > 0.0
+                else np.nan
+            ],
+            dtype=np.float64,
+        ),
         "recovar_preprune_mass_relion_positive_recovar_nonpositive": (
             recovar_posterior_mass[recovar_rows_relion_positive_only]
         ),
@@ -368,6 +440,19 @@ def analyze(args: argparse.Namespace) -> dict[str, Any]:
                 artifact = load_artifact(artifact_path)
                 _require(artifact.mpi_rank == args.mpi_rank, f"wrong MPI rank: {stack}")
                 processed_relion_stacks.append(int(artifact.stack_index))
+                relion_significant_weight = _float32_from_bits(
+                    artifact.header[21]
+                )
+                relion_weight_norm = _float32_from_bits(artifact.header[22])
+                _require(
+                    np.isfinite(relion_significant_weight)
+                    and relion_significant_weight >= 0.0,
+                    f"invalid RELION significant weight: {stack}",
+                )
+                _require(
+                    np.isfinite(relion_weight_norm) and relion_weight_norm > 0.0,
+                    f"invalid RELION weight norm: {stack}",
+                )
                 relion_positive_rows = np.unique(
                     artifact.rows["orientation_local"]
                 ).astype(np.int64)
@@ -387,6 +472,9 @@ def analyze(args: argparse.Namespace) -> dict[str, Any]:
                     recovar_reconstruction_mass=recovar_reconstruction_mass,
                     recovar_max_sample_posterior=recovar_max_sample,
                     recovar_reconstruction_threshold=float(threshold[particle]),
+                    relion_normalized_reconstruction_threshold=(
+                        relion_significant_weight / relion_weight_norm
+                    ),
                     tolerance=args.rotation_tolerance,
                 )
                 row["stack_index_1based"] = stack
@@ -423,6 +511,8 @@ def analyze(args: argparse.Namespace) -> dict[str, Any]:
         "both_positive_matched_count",
         "relion_positive_recovar_nonpositive_matched_count",
         "recovar_positive_relion_nonpositive_matched_count",
+        "relion_positive_recovar_at_relion_threshold_nonpositive_matched_count",
+        "recovar_at_relion_threshold_positive_relion_nonpositive_matched_count",
         "relion_positive_unmatched_candidate_count",
         "recovar_positive_unmatched_candidate_count",
     )
@@ -440,6 +530,15 @@ def analyze(args: argparse.Namespace) -> dict[str, Any]:
     significance_gap = bool(
         totals["relion_positive_recovar_nonpositive_matched_count"]
         or totals["recovar_positive_relion_nonpositive_matched_count"]
+    )
+    threshold_substitution_classification = classify_threshold_substitution(
+        significance_gap=significance_gap,
+        relion_positive_recovar_nonpositive=totals[
+            "relion_positive_recovar_at_relion_threshold_nonpositive_matched_count"
+        ],
+        recovar_positive_relion_nonpositive=totals[
+            "recovar_at_relion_threshold_positive_relion_nonpositive_matched_count"
+        ],
     )
     if candidate_gap and significance_gap:
         classification = "candidate_grid_and_significance_membership_differences"
@@ -496,9 +595,12 @@ def analyze(args: argparse.Namespace) -> dict[str, Any]:
         or not row["positive_contributor_sets_exact_at_tolerance"]
     ]
     report = {
-        "schema": "k1_bpref_contributor_membership_diagnostic_v1",
+        "schema": "k1_bpref_contributor_membership_diagnostic_v2",
         "status": "complete",
         "classification": classification,
+        "threshold_substitution_classification": (
+            threshold_substitution_classification
+        ),
         "metric_policy": (
             "rotation matrices and posterior/support membership only; "
             "FSC/FSC-AUC is inherited solely from the sealed capture-inertness gate; "
@@ -543,6 +645,12 @@ def analyze(args: argparse.Namespace) -> dict[str, Any]:
         "distributions": {
             "recovar_reconstruction_threshold": _quantiles(
                 joined_arrays["recovar_reconstruction_threshold"]
+            ),
+            "relion_normalized_reconstruction_threshold": _quantiles(
+                joined_arrays["relion_normalized_reconstruction_threshold"]
+            ),
+            "recovar_over_relion_reconstruction_threshold": _quantiles(
+                joined_arrays["recovar_over_relion_reconstruction_threshold"]
             ),
             "matched_candidate_rotation_max_abs": _quantiles(
                 joined_arrays["matched_rotation_max_abs"]
@@ -594,8 +702,12 @@ def analyze(args: argparse.Namespace) -> dict[str, Any]:
             "matrix match localizes an earlier candidate-grid difference. Positive "
             "membership is read from the captured reconstruction mass; max-over-threshold "
             "ratios are undefined and reported as null when the saved per-particle "
-            "threshold is zero. This diagnostic "
-            "does not establish the upstream pose/prior field responsible for either."
+            "threshold is zero. The normalized RELION threshold is its captured "
+            "float32 significant_weight divided by its captured float32 weight_norm. "
+            "Applying it to RECOVAR's saved pre-pruning posterior isolates threshold "
+            "selection from posterior/candidate arithmetic on common rotation matrices. "
+            "A residual after substitution does not by itself distinguish score, "
+            "normalization, or candidate-grid causes."
         ),
     }
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
@@ -623,6 +735,9 @@ def main() -> None:
         json.dumps(
             {
                 "classification": report["classification"],
+                "threshold_substitution_classification": report[
+                    "threshold_substitution_classification"
+                ],
                 "counts": report["counts"],
             },
             sort_keys=True,

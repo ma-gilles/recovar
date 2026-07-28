@@ -11855,3 +11855,53 @@ gated and correlation is not computed. The fixed targeted suite now passes
 guard. These live diagnostics
 remain non-scoring, so fixed K=1 stays `28/34` strict, `32/34` topology,
 `34/34` evaluated and fixed K=4 stays `41/60` direct, `9/15` all-class.
+
+## 2026-07-28 RELION threshold substitution does not close case-22 membership
+
+The checked-in contributor analyzer now decodes RELION's captured float32
+`significant_weight` and `weight_norm` fields and tests the normalized
+RELION threshold directly against RECOVAR's saved pre-pruning maximum
+posterior on matched rotation matrices. This is a threshold-isolation
+diagnostic; it neither changes reconstruction nor authorizes a scorecard
+update.
+
+On the sealed physical-iteration-8 half-1 capture, the native common-candidate
+positive-membership mismatches are `1385` RELION-only and `1002`
+RECOVAR-only. Applying RELION's normalized threshold to RECOVAR's posterior
+leaves `1426` RELION-only and `940` RECOVAR-only mismatches. The schema-v2
+classification is therefore
+`common_candidate_significance_gap_persists_under_relion_threshold`: a scalar
+threshold substitution is not the sole explanation. Candidate topology also
+remains different (`79872` RELION versus `79424` RECOVAR candidates, with
+`75440` unique matrix matches). RECOVAR's stored reconstruction-threshold
+field is zero for all 1490 particles in this capture, so its ratio to the
+RELION field is not used as causal evidence.
+
+The sealed read-only replay root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it8_relion_threshold_substitution_v2_20260728T093500ET`;
+its runtime root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it8_relion_threshold_substitution_v2_20260728T093500ET`.
+Both contain `SAFE_TO_DELETE`. JSON and NPZ SHA-256 values are
+`7f76cdde7df92eb04f36f1b38c21df02bdf5c6dbd9d2ccbc1dc9fbca6427989a`
+and
+`e419dd42c50d557003cff688d1d81dd1bc012d86e2deae2bab9367f5144f44d5`;
+input/output manifest-file SHA-256 values are
+`b48f0ea745c808981b4dd542ab93f0a00e14c4e1b46b3d67c7ff6a77a354ce5f`
+and
+`da14b57c1a6cf8731400137f097e01deaa2d4cc238d7e64239cdbfcca20adc59`.
+
+The first 64-particle iteration-2 subset attempt is terminal. Science
+`11703645` completed the capture-off control and entered physical iteration 2
+in the captured arm, then failed before writing any capture artifact with
+CUDA `invalid argument` at the passive kernel launch
+`acc_ml_optimiser_impl.h:226`; the subsequent heap abort produced exit
+`134:0`. RECOVAR never ran and no FSC result exists. Dependency-impossible
+audit `11703646` was canceled. This is a diagnostic-harness failure, not a
+science regression. A bounded dimension-probe retry will record the first
+selected particle's exact launch dimensions before any capture redesign.
+
+The fixed targeted suite passes 64/64 tests after the schema-v2 addition;
+Ruff, `git diff --check`, and the exact diagnostic-patch hash guard pass.
+These diagnostics remain non-scoring, so fixed K=1 stays `28/34` strict,
+`32/34` topology, `34/34` evaluated and fixed K=4 stays `41/60` direct,
+`9/15` all-class.

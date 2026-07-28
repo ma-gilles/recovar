@@ -1,6 +1,7 @@
 import numpy as np
 
 from scripts.analyze_k1_bpref_contributor_membership import (
+    classify_threshold_substitution,
     compare_particle_membership,
     match_rotations,
     same_identity_set,
@@ -19,6 +20,33 @@ def test_same_identity_set_is_order_independent_and_duplicate_strict():
     assert same_identity_set(np.array([3, 1, 2]), np.array([2, 3, 1]))
     assert not same_identity_set(np.array([1, 1, 2]), np.array([1, 2, 3]))
     assert not same_identity_set(np.array([1, 2]), np.array([1, 3]))
+
+
+def test_threshold_substitution_classification_is_explicit():
+    assert (
+        classify_threshold_substitution(
+            significance_gap=False,
+            relion_positive_recovar_nonpositive=0,
+            recovar_positive_relion_nonpositive=0,
+        )
+        == "not_applicable_no_common_candidate_significance_gap"
+    )
+    assert (
+        classify_threshold_substitution(
+            significance_gap=True,
+            relion_positive_recovar_nonpositive=1,
+            recovar_positive_relion_nonpositive=0,
+        )
+        == "common_candidate_significance_gap_persists_under_relion_threshold"
+    )
+    assert (
+        classify_threshold_substitution(
+            significance_gap=True,
+            relion_positive_recovar_nonpositive=0,
+            recovar_positive_relion_nonpositive=0,
+        )
+        == "relion_threshold_closes_common_candidate_significance_gap"
+    )
 
 
 def test_match_rotations_uses_unique_geometry_with_declared_tolerance():
@@ -43,6 +71,7 @@ def test_compare_particle_separates_candidate_and_significance_membership():
         recovar_reconstruction_mass=np.array([0.7, 0.0, 0.29]),
         recovar_max_sample_posterior=np.array([0.5, 0.004, 0.2]),
         recovar_reconstruction_threshold=0.005,
+        relion_normalized_reconstruction_threshold=0.003,
     )
     assert report["candidate_unique_match_count"] == 2
     assert report["relion_candidate_unmatched_count"] == 1
@@ -56,6 +85,22 @@ def test_compare_particle_separates_candidate_and_significance_membership():
     assert not report["positive_contributor_sets_exact_at_tolerance"]
     assert report["recovar_reconstruction_threshold"] == 0.005
     assert report["recovar_reconstruction_threshold_positive"]
+    assert report["relion_normalized_reconstruction_threshold"] == 0.003
+    assert report[
+        "matched_positive_sets_exact_using_relion_threshold_on_recovar_posterior"
+    ]
+    assert (
+        report[
+            "relion_positive_recovar_at_relion_threshold_nonpositive_matched_count"
+        ]
+        == 0
+    )
+    assert (
+        report[
+            "recovar_at_relion_threshold_positive_relion_nonpositive_matched_count"
+        ]
+        == 0
+    )
     np.testing.assert_array_equal(
         arrays["recovar_preprune_mass_relion_positive_recovar_nonpositive"],
         np.array([0.01]),
@@ -76,6 +121,7 @@ def test_zero_reconstruction_threshold_is_explicit_and_ratio_is_undefined():
         recovar_reconstruction_mass=np.array([0.0]),
         recovar_max_sample_posterior=np.array([0.1]),
         recovar_reconstruction_threshold=0.0,
+        relion_normalized_reconstruction_threshold=0.0,
     )
     assert report["recovar_reconstruction_threshold"] == 0.0
     assert not report["recovar_reconstruction_threshold_positive"]

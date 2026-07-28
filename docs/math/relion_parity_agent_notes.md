@@ -8826,3 +8826,35 @@ and `9/15` all-class.
   pass. Live diagnostics are non-scoring. Fixed K=1 remains `28/34` strict,
   `32/34` topology, `34/34` evaluated; fixed K=4 remains `41/60` direct and
   `9/15` all-class.
+
+## 2026-07-28 threshold substitution remains residual and iteration-2 probe fails closed
+
+- `scripts/analyze_k1_bpref_contributor_membership.py` now decodes captured
+  RELION `significant_weight`/`weight_norm` float32 fields and applies their
+  normalized ratio to RECOVAR's saved pre-pruning maximum posterior on common
+  rotation matrices.
+- Sealed iteration-8 native common-candidate mismatches are `1385/1002`
+  RELION-only/RECOVAR-only. Under the RELION threshold they are `1426/940`,
+  so schema v2 classifies
+  `common_candidate_significance_gap_persists_under_relion_threshold`.
+  Candidate counts remain `79872/79424` with `75440` common matrices. This
+  rules out a scalar threshold substitution as the sole cause without
+  selecting a production patch.
+- The read-only replay root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it8_relion_threshold_substitution_v2_20260728T093500ET`;
+  runtime is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it8_relion_threshold_substitution_v2_20260728T093500ET`.
+  Both contain `SAFE_TO_DELETE`. JSON/NPZ SHA-256 values are
+  `7f76cdde7df92eb04f36f1b38c21df02bdf5c6dbd9d2ccbc1dc9fbca6427989a`
+  and
+  `e419dd42c50d557003cff688d1d81dd1bc012d86e2deae2bab9367f5144f44d5`.
+- Iteration-2 subset science `11703645` completed control RELION but failed
+  before its first capture artifact with CUDA `invalid argument` at the
+  passive launch line 226 and exit `134:0`. RECOVAR did not run and no FSC
+  result exists. The stranded audit `11703646` was canceled. This is a
+  diagnostic-harness failure; the next retry is a bounded launch-dimension
+  probe.
+- The fixed targeted suite passes 64/64 tests; Ruff, `git diff --check`, and
+  the exact patch-byte hash guard pass. All evidence here is non-scoring.
+  Fixed K=1 remains `28/34` strict, `32/34` topology, `34/34` evaluated;
+  fixed K=4 remains `41/60` direct, `9/15` all-class.
