@@ -11144,3 +11144,44 @@ and compare against job `11686796`.  Clean diagnostic commit
 checks (`2 passed`, one GPU-only skip), and exact Slurm control `11688427`
 is running.  No production change is authorized unless its fixed 12-metric
 result improves.
+
+## 2026-07-27 sealed case-4 final particle-state transition
+
+The standard exact-identity particle-state auditor was run against the sealed
+local-score qualification at RECOVAR iteration 16 / physical RELION iteration
+17 and the converged final all-data states.  It aligned all 100,000 particles
+by exact `rlnImageName`, verified matching convergence at iteration 17 and
+valid finalization in both engines, and wrote a replayable JSON/NPZ manifest.
+Translation errors are correctly converted to Angstrom by the auditor; the
+earlier ad hoc comparison with mixed translation units is not evidence.
+
+At numbered iteration 17, 93.738% of particle rotations agree within 0.1
+degrees and 94.561% of translations agree within 0.1 Angstrom.  At final
+all-data those fractions are 93.207% and 94.499%, respectively.  The final
+rotation tail is mostly a changing low-margin cohort rather than a fixed set:
+4,963 particles newly exceed 0.1 degrees, 4,432 return within 0.1 degrees,
+and only 1,830 remain in the tail at both states.  The corresponding
+translation counts are 2,708 new, 2,646 resolved, and 2,793 persistent.
+Mean absolute Pmax error grows from `0.0193198831` to `0.0203614786`.
+
+This small net final degradation is directionally consistent with the
+high-shell map loss, but it does not identify a final-writeback defect or
+justify a source change: the cohort turnover is large, prior full-trajectory
+evidence shows the tail accumulates from the first boundary, and the
+local-score qualification is worse than its same-source current control.
+The result therefore remains diagnostic and leaves the fixed score unchanged.
+
+Artifacts:
+
+- JSON:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_local_phaseffi_f5729c1b_20260727T143000ET/analysis/particle_state_transition/it017_and_final_cd9978e3.json`,
+  SHA-256
+  `eb0095699a224d4f10f156476df35915dc2fae54052f1d9739849f68c1802bfa`;
+- compact arrays:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_local_phaseffi_f5729c1b_20260727T143000ET/analysis/particle_state_transition/it017_and_final_cd9978e3_arrays.npz`,
+  SHA-256
+  `92c4116eb0b287e225572fef51beaf15183e48bc0662f13fb93a52ffc21def83`;
+- replay manifest:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_local_phaseffi_f5729c1b_20260727T143000ET/analysis/particle_state_transition/it017_and_final_cd9978e3.sha256`,
+  SHA-256
+  `cf38b25e58586f7292d39d079e06d53b2f38cd5cc3d8ee908ed215683fbefc7d`.

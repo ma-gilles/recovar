@@ -8184,3 +8184,32 @@ and `9/15` all-class.
   and fixed 12-metric gate as `11686796`.  Its run root is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_fsc0_shell0_47adbdda_20260727T223000ET`.
   No production integration is authorized until the result improves.
+
+## 2026-07-27 sealed K=1 numbered-to-final particle-state audit
+
+- The repository's standard exact-identity auditor compared RECOVAR local
+  iteration 16 with physical RELION iteration 17 and also compared the valid
+  converged final all-data states.  All 100,000 `rlnImageName` identities,
+  iteration mapping, convergence at 17, and finalization topology pass.
+- At iteration 17, rotation/translation within 0.1 degrees/Angstrom are
+  `93.738%` / `94.561%`; final values are `93.207%` / `94.499%`.
+  The 0.1-degree tail has 4,963 new, 4,432 resolved, and only 1,830
+  persistent identities.  The translation tail has 2,708 new, 2,646
+  resolved, and 2,793 persistent identities.
+- Mean absolute Pmax error increases from `0.0193198831` to
+  `0.0203614786`.  This supports a small final particle-decision degradation
+  but not a final-writeback patch: the tail largely turns over, earlier
+  full-trajectory evidence localizes its origin to iteration 1, and the new
+  local-score source is worse than its same-source current control.
+- JSON/NPZ SHA-256 values are
+  `eb0095699a224d4f10f156476df35915dc2fae54052f1d9739849f68c1802bfa`
+  and
+  `92c4116eb0b287e225572fef51beaf15183e48bc0662f13fb93a52ffc21def83`.
+  The replay manifest SHA-256 is
+  `cf38b25e58586f7292d39d079e06d53b2f38cd5cc3d8ee908ed215683fbefc7d`.
+  Artifacts are under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_local_phaseffi_f5729c1b_20260727T143000ET/analysis/particle_state_transition`.
+- The standard auditor performs no correlation and correctly converts
+  RECOVAR translations into RELION's Angstrom units.  The earlier ad hoc
+  mixed-unit translation comparison must not be cited.  This diagnostic
+  leaves K=1 at `28/34` strict, `32/34` topology, and `34/34` evaluated.
