@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import logging
 from typing import NamedTuple
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -67,6 +68,84 @@ def _state_from_loadings(W_half, volume_shape) -> WHalfParametrization:
     U_half = ftu.get_dft3_real(jnp.asarray(U_real)).reshape(rank, -1).T.astype(W_half.dtype)
     log_sqrt_eigenvalues = 0.5 * jnp.log(jnp.asarray(eigenvalues, dtype=U_half.real.dtype))
     return WHalfParametrization(U=U_half, log_sqrt_eigenvalues=log_sqrt_eigenvalues)
+
+
+class TrainConfig(eqx.Module):
+    """Structural configuration for one :func:`fit` run — fixed for its whole duration.
+
+    All fields are static (compile-time constants): changing any of them
+    triggers a JIT recompilation.
+    """
+
+    image_shape: tuple = eqx.field(static=True)
+    volume_shape: tuple = eqx.field(static=True)
+    ctf_evaluator: core.CTFEvaluator = eqx.field(static=True)
+    disc_type_mean: str = eqx.field(static=True)
+    disc_type: str = eqx.field(static=True)
+    objective: str = eqx.field(static=True)
+    project_mask: bool = eqx.field(static=True)
+    optimizer: optax.GradientTransformation = eqx.field(static=True)
+
+
+class TrainArrs(NamedTuple):
+    """Arrays fixed for the whole ``fit()`` run but too large to bake in as JIT constants."""
+
+    W_prior_half: jax.Array
+    mean_for_slicing: jax.Array
+    volume_mask: jax.Array | None
+
+
+class BatchStruct(NamedTuple):
+    """One mini-batch of images and per-image pose/CTF/noise data."""
+
+    images_half: jax.Array
+    ctf_params: jax.Array
+    rotation_matrices: jax.Array
+    translations: jax.Array
+    noise_variance_half: jax.Array
+    voxel_size: jax.Array
+    data_scale: jax.Array
+
+
+
+@jax.jit
+def _train_step(params: WHalfParametrization, opt_state: optax.OptState, batch: BatchStruct, tensor_data: TrainArrs, config: TrainConfig):
+    """
+    Batched SOLVAR SGD step.
+    """
+
+    def loss_for_params(params):
+        return _batch_total_loss(
+            loadings_from_state(params),
+            tensor_data.W_prior_half,
+            batch.images_half,
+            tensor_data.mean_for_slicing,
+            batch.ctf_params,
+            batch.rotation_matrices,
+            batch.translations,
+            batch.noise_variance_half,
+            config.image_shape,
+            config.volume_shape,
+            batch.voxel_size,
+            config.ctf_evaluator,
+            config.disc_type_mean,
+            config.disc_type,
+            config.objective,
+            batch.data_scale,
+        )
+
+    loss, grad = jax.value_and_grad(loss_for_params)(params)
+    # JAX's grad of a real-valued function w.r.t. a complex input is the
+    # non-conjugated Wirtinger derivative, not the descent direction — conjugate
+    # once here so `params + updates` is steepest descent (no-op on the real
+    # log_sqrt_eigenvalues leaf).
+    grad = jax.tree.map(jnp.conj, grad)
+    updates, opt_state = config.optimizer.update(grad, opt_state, params)
+    params = optax.apply_updates(params, updates)
+    if config.project_mask:
+        params = params.apply_masking(config.volume_shape, tensor_data.volume_mask)
+    grad_norm = jnp.sqrt(sum(jnp.sum(jnp.abs(g) ** 2) for g in jax.tree.leaves(grad)))
+    return params, opt_state, loss, grad_norm
 
 
 def _validate_objective(objective: str) -> str:
@@ -351,11 +430,6 @@ def fit(
     )
     mean_for_slicing = jnp.asarray(mean_for_slicing)
 
-    params = _state_from_loadings(W, volume_shape)
-
-    n_total = int(experiment_dataset.n_images)
-    iteration_data: list[dict] = []
-
     optimizer = optax.multi_transform(
         {
             "U": _branch_optimizer(learning_rate, gradient_clip_norm),
@@ -363,7 +437,24 @@ def fit(
         },
         param_labels=WHalfParametrization("U", "log_sqrt_eigenvalues"),
     )
-    optimizer_state = optimizer.init(params)
+    params = _state_from_loadings(W, volume_shape)
+    opt_state = optimizer.init(params)
+    tensor_data = TrainArrs(W_prior_half=W_prior_half, mean_for_slicing=mean_for_slicing, volume_mask=volume_mask)
+    # image_shape/volume_shape/ctf_evaluator are assumed identical across halfsets (only the
+    # image subset differs), so one config covers every batch of both.
+    config = TrainConfig(
+        image_shape=halfset_datasets[0].image_shape,
+        volume_shape=halfset_datasets[0].volume_shape,
+        ctf_evaluator=halfset_datasets[0].ctf_evaluator,
+        disc_type_mean=disc_type_mean,
+        disc_type=disc_type,
+        objective=objective,
+        project_mask=project_mask,
+        optimizer=optimizer,
+    )
+
+    n_total = int(experiment_dataset.n_images)
+    iteration_data: list[dict] = []
 
     logger.info(
         "SOLVAR fit: objective=%s epochs=%d rank=%d batch_size=%d learning_rate=%.3e log_eigenvalue_lr_factor=%.1f",
@@ -384,40 +475,20 @@ def fit(
                 ds, int(batch_size)
             ):
                 batch_n = int(batch_half.shape[0])
-                data_scale = float(n_total) / float(batch_n)
-                noise_variance_half = ds.noise.get_half(batch_image_ind)
+                batch = BatchStruct(
+                    images_half=batch_half,
+                    ctf_params=ctf_params,
+                    rotation_matrices=rotation_matrices,
+                    translations=translations,
+                    noise_variance_half=ds.noise.get_half(batch_image_ind),
+                    voxel_size=ds.voxel_size,
+                    data_scale=float(n_total) / float(batch_n),
+                )
 
-                def loss_for_state(params_candidate):
-                    return _batch_total_loss(
-                        loadings_from_state(params_candidate),
-                        W_prior_half,
-                        batch_half,
-                        mean_for_slicing,
-                        ctf_params,
-                        rotation_matrices,
-                        translations,
-                        noise_variance_half,
-                        ds.image_shape,
-                        ds.volume_shape,
-                        ds.voxel_size,
-                        ds.ctf_evaluator,
-                        disc_type_mean,
-                        disc_type,
-                        objective,
-                        data_scale,
-                    )
-
-                loss, grad = jax.value_and_grad(loss_for_state)(params)
-                # Apply conjugate on Wirtinger derivative to get steepest descent in real/imag coordinates.
-                grad = jax.tree.map(jnp.conj, grad)
-                updates, optimizer_state = optimizer.update(grad, optimizer_state, params)
-                params = optax.apply_updates(params, updates)
-
-                if project_mask:
-                    params = params.apply_masking(volume_shape, volume_mask)
+                params, opt_state, loss, grad_norm = _train_step(params, opt_state, batch, tensor_data, config)
 
                 epoch_loss += float(loss)
-                epoch_grad_norm += float(jnp.sqrt(sum(jnp.sum(jnp.abs(g) ** 2) for g in jax.tree.leaves(grad))))
+                epoch_grad_norm += float(grad_norm)
                 epoch_batches += 1
 
         W_current = loadings_from_state(params)
