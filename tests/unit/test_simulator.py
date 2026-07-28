@@ -59,6 +59,40 @@ def test_noise_rng_stream_is_independent_of_processing_batch_size():
     np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
 
+def test_fixed_noise_transform_stream_is_exact_across_processing_batches():
+    key = simulator.jax.random.PRNGKey(29)
+    subkeys = []
+    for _ in range(2):
+        key, subkey = simulator.jax.random.split(key)
+        subkeys.append(subkey)
+
+    noise_image = np.ones((4, 4), dtype=np.float32)
+
+    def generate_batches(batch_ranges):
+        return np.concatenate(
+            [
+                np.asarray(
+                    simulator.make_noise_batch_from_rng_stream(
+                        subkeys,
+                        noise_rng_batch_size=5,
+                        batch_st=batch_st,
+                        batch_end=batch_end,
+                        n_images=8,
+                        noise_image=noise_image,
+                        images_batch_shape=(batch_end - batch_st, 4, 4),
+                        noise_transform_batch_size=2,
+                    )
+                )
+                for batch_st, batch_end in batch_ranges
+            ],
+            axis=0,
+        )
+
+    expected = generate_batches([(0, 8)])
+    actual = generate_batches([(0, 3), (3, 6), (6, 8)])
+    np.testing.assert_array_equal(actual, expected)
+
+
 def test_set_constant_ctf_sets_expected_columns():
     params = np.arange(2 * 11, dtype=np.float32).reshape(2, 11)
     out = simulator.set_constant_ctf(params.copy())

@@ -1078,13 +1078,18 @@ def generate_simulated_dataset(
     # cubic interpolation uses ~4x more GPU memory per image than linear
     mult = 0.5 if "cubic" in disc_type else 5
     batch_size = int(mult * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total()))
+    use_fixed_noise_rng_stream = noise_rng_batch_size is not None
     if noise_rng_batch_size is None:
         noise_rng_batch_size = batch_size
     noise_rng_batch_size = utils.safe_batch_size(noise_rng_batch_size)
+    noise_transform_batch_size = (
+        min(noise_rng_batch_size, FIXED_NOISE_TRANSFORM_BATCH_SIZE) if use_fixed_noise_rng_stream else None
+    )
     logger.info(
-        "Simulation batch sizes: processing=%d, noise_rng=%d",
+        "Simulation batch sizes: processing=%d, noise_rng=%d, noise_transform=%s",
         batch_size,
         noise_rng_batch_size,
+        noise_transform_batch_size,
     )
 
     main_image_stack = simulate_data(
@@ -1100,6 +1105,7 @@ def generate_simulated_dataset(
         mrc_file=mrc_file,
         premultiplied_ctf=premultiplied_ctf,
         noise_rng_batch_size=noise_rng_batch_size,
+        noise_transform_batch_size=noise_transform_batch_size,
     )
 
     image_means = np.mean(main_image_stack, axis=(-1, -2))
@@ -1141,6 +1147,7 @@ def generate_simulated_dataset(
             pad_before_translate=True,
             premultiplied_ctf=premultiplied_ctf,
             noise_rng_batch_size=noise_rng_batch_size,
+            noise_transform_batch_size=noise_transform_batch_size,
         )
 
         main_image_stack += extra_particles_image_stack
@@ -1180,6 +1187,7 @@ def generate_simulated_dataset(
             mrc_file=None,
             premultiplied_ctf=premultiplied_ctf,
             noise_rng_batch_size=noise_rng_batch_size,
+            noise_transform_batch_size=noise_transform_batch_size,
         )
 
         ind_outliers = np.random.choice(n_images, n_outlier_images, replace=False)
@@ -1233,6 +1241,7 @@ def generate_simulated_dataset(
             mrc_file=None,
             premultiplied_ctf=premultiplied_ctf,
             noise_rng_batch_size=noise_rng_batch_size,
+            noise_transform_batch_size=noise_transform_batch_size,
         )
         main_image_stack[image_indices_tilt_series_outliers] = tilt_outlier_image_stack
 
@@ -1261,6 +1270,7 @@ def generate_simulated_dataset(
         "n_tilts": n_tilts if n_tilts > 0 else None,
         "simulation_batch_size": batch_size,
         "simulation_noise_rng_batch_size": noise_rng_batch_size,
+        "simulation_noise_transform_batch_size": noise_transform_batch_size,
     }
 
     return main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups
@@ -1278,6 +1288,7 @@ def save_ctf_params(outdir, D: int, ctf_params, voxel_size):
 
 
 roll_batch = jax.vmap(lambda x, y, z: jax.numpy.roll(x, y, axis=z), in_axes=(0, 0, None))
+FIXED_NOISE_TRANSFORM_BATCH_SIZE = 256
 
 
 def simulate_data(
@@ -1295,6 +1306,7 @@ def simulate_data(
     Bfactor=100,
     premultiplied_ctf=False,
     noise_rng_batch_size=None,
+    noise_transform_batch_size=None,
 ):
 
     if disc_type == "pdb":
@@ -1475,6 +1487,7 @@ def simulate_data(
                     n_images,
                     noise_image,
                     images_batch.shape,
+                    noise_transform_batch_size=noise_transform_batch_size,
                 )
                 noise_batch *= per_image_noise_scale[indices][..., None, None]
                 images_batch *= per_image_contrast[indices][..., None, None]
@@ -1519,6 +1532,7 @@ def simulate_data(
                     n_images,
                     noise_image,
                     images_batch.shape,
+                    noise_transform_batch_size=noise_transform_batch_size,
                 )
                 noise_batch *= per_image_noise_scale[indices][..., None, None]
                 images_batch *= per_image_contrast[indices][..., None, None]
@@ -1589,6 +1603,7 @@ def make_noise_batch_from_rng_stream(
     n_images,
     noise_image,
     images_batch_shape,
+    noise_transform_batch_size=None,
 ):
     """Return noise for a processing batch from a fixed reference RNG stream."""
     if batch_end <= batch_st:
@@ -1597,9 +1612,10 @@ def make_noise_batch_from_rng_stream(
     first_rng_batch = batch_st // noise_rng_batch_size
     last_rng_batch = (batch_end - 1) // noise_rng_batch_size
     image_shape = tuple(images_batch_shape[-2:])
-    processing_batch_size = batch_end - batch_st
     normal_dtype = jnp.float64 if jax.config.x64_enabled else jnp.float32
     target_device = jax.devices()[0]
+    if noise_transform_batch_size is not None:
+        noise_transform_batch_size = utils.safe_batch_size(noise_transform_batch_size)
     pieces = []
 
     for rng_batch_idx in range(first_rng_batch, last_rng_batch + 1):
@@ -1609,15 +1625,23 @@ def make_noise_batch_from_rng_stream(
 
         slice_st = max(batch_st, rng_st) - rng_st
         slice_end = min(batch_end, rng_end) - rng_st
-        if rng_shape[0] > processing_batch_size:
-            # JAX's random stream depends on the full reference shape. Preserve
-            # those exact bits on smaller-memory devices, but materialize only
-            # raw integer bits on CPU and transform/filter the requested slice
-            # on the accelerator. This avoids full-reference GPU FFT buffers.
+        if noise_transform_batch_size is not None:
+            # Preserve the full reference RNG shape on CPU, then transform and
+            # filter fixed, reference-anchored chunks on the accelerator. Both
+            # RNG and FFT shapes are therefore independent of the processing
+            # batch while GPU intermediates remain bounded.
             host_bits = _make_host_random_bits(noise_subkeys[rng_batch_idx], rng_shape, normal_dtype)
-            selected_bits = jax.device_put(host_bits[slice_st:slice_end], target_device)
-            white_noise = _normal_from_random_bits(selected_bits, normal_dtype)
-            pieces.append(_color_white_noise_batch(white_noise, noise_image))
+            first_transform_batch = slice_st // noise_transform_batch_size
+            last_transform_batch = (slice_end - 1) // noise_transform_batch_size
+            for transform_batch_idx in range(first_transform_batch, last_transform_batch + 1):
+                transform_st = transform_batch_idx * noise_transform_batch_size
+                transform_end = min(transform_st + noise_transform_batch_size, rng_shape[0])
+                transform_bits = jax.device_put(host_bits[transform_st:transform_end], target_device)
+                white_noise = _normal_from_random_bits(transform_bits, normal_dtype)
+                transformed_noise = _color_white_noise_batch(white_noise, noise_image)
+                overlap_st = max(slice_st, transform_st) - transform_st
+                overlap_end = min(slice_end, transform_end) - transform_st
+                pieces.append(transformed_noise[overlap_st:overlap_end])
         else:
             rng_noise = make_noise_batch(noise_subkeys[rng_batch_idx], noise_image, rng_shape)
             pieces.append(rng_noise[slice_st:slice_end])
