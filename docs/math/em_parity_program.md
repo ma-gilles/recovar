@@ -11544,3 +11544,130 @@ output-manifest SHA-256 values are respectively
 and `5bdf89ae286af51a7e7dd7289c8ee162c3648908e50f78f1c2a9b1c2d48ebc70`.
 The diagnostic is non-scoring; fixed K=1 remains `28/34` strict,
 `32/34` topology, and `34/34` evaluated.
+
+## 2026-07-28 joined BackProjector localizes case 22 descriptively
+
+Passive instrumentation in an isolated RELION source captures the joined
+current-size BackProjector immediately before SSNR reconstruction at physical
+iteration 8.  Capture-off and capture-on arms use the same binary, frozen
+case-22 fixture, and physical H100 UUID
+`GPU-1fdb3b99-e7ff-fe6d-4f59-9d2cc85fa319`.  Science `11695312` completed
+`0:0` in `00:18:28` on `della-h19g3`; corrected audit `11695904` completed
+`0:0` in `00:00:24`.
+
+The minimum control/capture and capture/frozen-oracle half-map FSC-AUC values
+are `0.9999999526633185` and `0.9999999999441119`.  Map, particle-state,
+optimiser-state, support-count, Pmax, sampling, and numeric-state envelopes
+pass.  At current size 70, the joined RELION-versus-RECOVAR accumulator
+relative L2 values are `0.1490804186/0.1509590837` for half-1/half-2 complex
+data and `0.0634602585/0.0851252945` for weights.
+
+This evidence narrows the remaining locus to accumulated BackProjector
+content, but it does not yet make the accumulator comparison causal.  The
+accepted classification is
+`capture_and_oracle_within_fixed_repeat_envelopes_accumulator_comparison_descriptive`;
+the report sets causal attribution false because there is only one dump-on
+RELION accumulator and therefore no exact-device native accumulator
+repeatability envelope.  The next fail-closed discriminator is a second
+dump-on physical-iteration-8 RELION accumulator on the identical H100.  Only
+if every cross-engine residual exceeds twice that native repeat should the
+program proceed to matched RELION/RECOVAR pre-scatter operands.
+
+The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it8_joined_bpref_d476_capture_20260728T035235ET`;
+the runtime root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it8_joined_bpref_d476_capture_20260728T035235ET`.
+Both contain `SAFE_TO_DELETE`.  All input/output manifests replay exactly.
+Audit JSON/Markdown SHA-256 values are
+`ea740197a3dc3407d6e813b967c42edcf5cb23746d44df9c4b788bc6b35fc4d4`
+and
+`296adc344ec7f9a91dbb8bceb41e7fccc762759f63e2a7e9673e6af73f00e2d4`;
+science-input, science-output, and audit-output manifest SHA-256 values are
+`677c030d80d678cda714bbf03ed98ac20d2c1ca0e88229fe847534004d3df8af`,
+`246d4eb5d6fff4a911e660f60e3a9b9b1dfb702cf19ca70693d444372dec7f76`,
+and
+`754c9396d576abf7edf2836fc929fffb81ecfca5dc2693afc0d43fe6e0de7b50`.
+This is non-scoring; fixed K=1 remains `28/34` strict, `32/34` topology,
+and `34/34` evaluated.
+
+## 2026-07-28 case-22 pre-scatter discriminator submitted
+
+The next same-allocation A100 experiment is submitted as science
+`11696749` with after-success audit `11696750`.  It runs capture-off RELION,
+capture-on RELION, and RECOVAR sequentially on one physical A100 for the
+frozen case-22 fixture through physical iteration 8.  The target boundary is
+half 1, class 1, current size 70.  Grid correction and forced after-max
+finalization remain unset.
+
+The audit is fail-closed for capture inertness, all 3,000 RELION artifacts,
+rank-1 stack coverage, and variable exact-local contributor membership.
+Contributors are matched one-to-one by rotation matrix at maximum absolute
+tolerance `1e-6`; native data and weight operands are compared only on the
+strict RELION-emitted radius-supported rows.  The predeclared operand
+separation threshold is relative L2 `1e-3`, more than 29 times the largest
+native joined-BackProjector repeat residual.  Contributor membership,
+rotation identity, one-sided source-support coverage, and operand values are
+reported separately.  RECOVAR-only diagnostic-window pixels are not treated
+as RELION support mismatches, and the experiment makes no device-neighbor
+geometry claim.
+
+Before submission, the auditor replayed the sealed case-20 multicontributor
+boundary exactly: 9,169 common rotations and 9,716,168 strict emitted rows,
+with data/weight relative L2
+`0.023864238968028115/0.022133396289162388`.  Science launcher, audit
+launcher, and auditor SHA-256 values are
+`e15a8a178d194a85150b7ecdfe3a9d985d8d138da96bb4ac96c30adc62b9b79d`,
+`26e1177478a213232bc3fcc4ce066fca0166d9fdc35a59325bc9e75a7e5f601d`,
+and
+`85dedfea4cc2f1b81c63cb84e55ed03b32bee6ce6100caa3f5079b4c53f8eb2a`.
+
+Run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it8_prescatter_operands_a100_20260728T045805ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it8_prescatter_operands_a100_20260728T045805ET`;
+both contain `SAFE_TO_DELETE`.  This live experiment is non-scoring; fixed
+K=1 remains `28/34` strict, `32/34` topology, and `34/34` evaluated.
+
+## 2026-07-28 exact-device native repeat accepts the BPref residual
+
+The second dump-on RELION arm completed on the exact original H100 UUID
+`GPU-1fdb3b99-e7ff-fe6d-4f59-9d2cc85fa319`.  Science `11696239`
+completed `0:0` in `00:09:05` on `della-h19g3`; audit `11696241`
+completed `0:0` in `00:00:12`.  Identity/topology and map-repeat envelopes
+all pass, with minimum capture/repeat half-map FSC-AUC
+`0.9999999993731247`.
+
+Native-repeat relative L2 is `2.1839458038e-5/3.4281907171e-5` for
+half-1/half-2 complex data and
+`1.2488977869e-5/9.8865142204e-6` for weights.  Cross-engine values are
+`0.1490804186/0.1509590837` and
+`0.0634602585/0.0851252945`, respectively.  Every cross-engine residual
+exceeds the predeclared two-times-native threshold; observed ratios span
+`4403.4622` to `8610.2435`.
+
+The accepted classification is
+`cross_engine_accumulator_residual_exceeds_two_x_native_repeat`.
+Consequently the iteration-8 mismatch is causally outside native RELION
+repeat variation and lies in upstream accumulated content.  The current
+evidence cannot distinguish state/posterior history from the arithmetic that
+backprojects common operands.  The next experiment must capture all
+case-22 iteration-8 half-1 pre-scatter contributors from RELION and RECOVAR
+on one physical A100, qualify capture inertness, and compare only
+identity-matched common operands before drawing a production conclusion.
+
+Run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it8_bpref_repeat_exactuuid_20260728T042700ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it8_bpref_repeat_exactuuid_20260728T042700ET`;
+both contain `SAFE_TO_DELETE`.  All manifests replay exactly.  Audit
+JSON/Markdown SHA-256 values are
+`6c0e0c371337e365093978036ca32bc182ba52c0eefe1544b4ac879d24ec4e7a`
+and
+`d11eb78bec5f0a9c9e0a025b957cf3369c12b0a575ca2955782647b87514fa24`;
+science-input, science-output, and audit-output manifest SHA-256 values are
+`5d3e09f8a5d03d3b822720b886d8d3e9f497be290d6952e00ef3feecb698b28e`,
+`a48ae2cd942960dc533835de5f3f4a95f7a445dfe6446f23cbee381e73022463`,
+and
+`5bd4e12f21da9d30c3366898a8d328af75bc81fa9cd4c078be7693b8e278e0ed`.
+This is non-scoring; fixed K=1 remains `28/34` strict, `32/34` topology,
+and `34/34` evaluated.
