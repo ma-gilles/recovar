@@ -8658,3 +8658,95 @@ and `9/15` all-class.
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_full15_phaseffi_exactgpu_retry1_31c4a0ca_20260727T040500ET`;
   both contain `SAFE_TO_DELETE`.
+
+## 2026-07-28 case-22 iteration-8 membership is state-driven
+
+- Science `11696749` completed `0:0` on exact A100 UUID
+  `GPU-eb1c5b04-20c1-b6c9-16e6-b3dc87905bd7` in `01:29:33`; its
+  fail-closed audit `11696750` completed `0:0` in `00:03:31`. Capture
+  inertness passes with minimum FSC-AUC `0.9999999881069878`. Grid
+  correction was unset, the run remained nonconverged, and final all-data
+  was not forced.
+- The original operand report localizes before scatter:
+  `52310` RECOVAR positive contributors versus `52909` RELION-emitted
+  contributors, `49678` exact common rotation matrices, and matched-operand
+  relative L2 `0.19790170746442434 / 0.14848135432332882` for data/weight.
+  Every RELION-emitted source row has positive RECOVAR weight.
+- Corrected CPU job `11701525` completed `0:0` in `00:00:45`, maximum RSS
+  `492040K`. Its classification is
+  `candidate_grid_and_significance_membership_differences`.
+- Across 1490 half-1 particles, RELION/RECOVAR expose `79872/79424`
+  candidate matrices. `75440` match exactly with zero matrix error;
+  `4432/3984` are engine-only. Candidate sets are exact for `945/1490`
+  particles.
+- Positive contributors contain `49678` both-positive exact matches.
+  Matched candidates add `1385` RELION-only and `1002` RECOVAR-only
+  positives; unmatched candidates add `1846/1630` positives. Positive sets
+  are exact for `547/1490` particles. RECOVAR-only unmatched positives have
+  reconstruction-mass median `0.0005053590`, p95 `0.0522131718`, and
+  maximum `0.9668054618`.
+- Exact sorted stack-identity sets supersede the original order-sensitive
+  array report. The original comparison of RELION oversampled-child
+  identities with `RECOVAR_global_index % 8` is invalid because RECOVAR
+  addresses the global fine grid; captured rotation matrices are the
+  authoritative identity gate.
+- Membership JSON/NPZ SHA-256 values are
+  `c3065418f4bed2c3f7e9ca7edace2604d5135ffa60d860dc1e7d74bd65f67ef0`
+  and
+  `2f414fedc9c5c053ae1fd2862250b6a7214cf318092a01f47971b6354b82d488`.
+  Input/output manifest SHA-256 values are
+  `9188d41b0a98d12d9ab4b527c3fca03ede8025857de6e95c86f7c1725ad6e39f`
+  and
+  `0f25a35153a67a8ad2f302dbb0486c5488e6cdcd97e31b40ed998397bdf1787d`.
+  All manifests replay exactly.
+- The complete run/audit roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it8_prescatter_operands_a100_20260728T045805ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it8_membership_audit_20260728T074000ET`.
+  Their runtime roots and run roots contain `SAFE_TO_DELETE`.
+
+## 2026-07-28 case-22 trajectory moves the next capture to iteration 3
+
+- The standard exact-image-identity particle-state auditor now covers all
+  physical iterations 1 through 8 from the same pre-scatter run. It is
+  diagnostic/non-gating and computes no correlation.
+- Physical iteration 1 is arithmetic-level: rotation p95
+  `9.241452606e-6` degrees, Pmax p95 zero, and exact support counts for all
+  3000 particles.
+- Physical iteration 2 retains arithmetic-level poses/Pmax but support counts
+  differ for `1101/3000` particles. Those count differences do not enrich
+  iteration-3 pose tails (`1.043955256x`).
+- Physical iteration 3 is the first meaningful posterior/state boundary:
+  Pmax p95 is `0.0361012003` and 61 particles exceed `0.1` degree. Its top
+  5% Pmax deltas enrich physical-iteration-4 pose tails by
+  `3.034722222x`.
+- Physical iteration 4 is the first systematic pose boundary: rotation p95
+  `1.846612276` degrees and `167/3000` particles above `0.1` degree. The
+  tail grows to `440/3000` and p95 `2.415704723` degrees by iteration 8.
+- JSON/NPZ SHA-256 values are
+  `40d5dc418de55508471ae190ed98613d23879e7ed40e0d78e0c6e64fad8f158e`
+  and
+  `6ae16cc60b602281db31f2237428b29461d321a9fe0ca7afa446e00e4d031d1d`.
+  Input/output manifest SHA-256 values are
+  `6573f1b74e3ab3cc12c0743baa53ffc326e4a8c72422b99da26dc161415b8cb4`
+  and
+  `c6d38e6f7ad32bfa4eb15844e16504b91bb9c091e6f34a3256ee6206f95c642e`.
+  All manifests replay exactly. The evidence root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it1_it8_particle_state_trajectory_20260728T075200ET`.
+- Same-allocation A100 science `11702248` now targets physical iteration 3,
+  half 1, class 1, current size 80; after-success audit `11702340` is
+  dependency-held. Control RELION, captured RELION, and RECOVAR run
+  sequentially on one A100. Launcher/auditor/membership-analyzer SHA-256
+  values are
+  `006e89bc582cb7cd70c409d73769bd1e41f1d3616cd89d6f9d8439655dc26a3b`,
+  `5624b8a272edfe7db17603150204207d4264f0751bf39241ffa829fe0e89fcc6`,
+  and
+  `b548aeb34632834260550bf794ed858b7699314337a0e4d90bb791a37d2edda6`.
+  Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_prescatter_operands_a100_20260728T080200ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it3_prescatter_operands_a100_20260728T080200ET`;
+  both contain `SAFE_TO_DELETE`.
+- These diagnostics are non-scoring. Fixed K=1 remains `28/34` strict,
+  `32/34` exact topology, and `34/34` evaluated; K=4 remains `41/60`
+  direct and `9/15` all-class.

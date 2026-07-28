@@ -11710,3 +11710,46 @@ and
 `5bd4e12f21da9d30c3366898a8d328af75bc81fa9cd4c078be7693b8e278e0ed`.
 This is non-scoring; fixed K=1 remains `28/34` strict, `32/34` topology,
 and `34/34` evaluated.
+
+## 2026-07-28 case-22 pre-scatter and full-trajectory closure
+
+Exact-A100 science/audit `11696749`/`11696750` completed successfully.
+Capture inertness passes at minimum FSC-AUC `0.9999999881069878`; the run
+remained nonconverged, grid correction was unset, and final all-data was not
+forced. The physical-iteration-8 half-1/class-1 boundary has
+`52310/52909` RECOVAR/RELION positive contributors, `49678` common exact
+rotation matrices, and matched data/weight relative L2
+`0.19790170746442434/0.14848135432332882`.
+
+Corrected membership audit `11701525` completed `0:0` in `00:00:45`.
+Classification is
+`candidate_grid_and_significance_membership_differences`: RELION/RECOVAR
+candidate totals are `79872/79424`, with `75440` exact matrix matches and
+`4432/3984` unmatched candidates. On matched candidates, positive membership
+still differs by `1385/1002` RELION-only/RECOVAR-only rows. Candidate sets
+are exact for `945/1490` particles and positive sets for `547/1490`.
+Captured matrices—not RELION-child versus RECOVAR-global-index modulo
+arithmetic—are the valid rotation identity gate. Report SHA-256 is
+`c3065418f4bed2c3f7e9ca7edace2604d5135ffa60d860dc1e7d74bd65f67ef0`;
+all input/output manifests replay exactly.
+
+An exact-image-identity audit over physical iterations 1 through 8 moves the
+causal target earlier. Iteration 1 is arithmetic-level. Iteration 2 has
+support-count differences for `1101/3000` particles but essentially exact
+poses and Pmax. Iteration 3 is the first meaningful posterior/state boundary:
+Pmax p95 `0.0361012003`, 61 particles above `0.1` degree, and the top 5%
+Pmax deltas enrich iteration-4 pose tails `3.034722222x`. Iteration 4 is the
+first systematic pose boundary at p95 `1.846612276` degrees. Trajectory
+report SHA-256 is
+`40d5dc418de55508471ae190ed98613d23879e7ed40e0d78e0c6e64fad8f158e`.
+
+The next bounded discriminator is therefore physical iteration 3 rather than
+another iteration-8 arithmetic patch. Same-allocation A100 science
+`11702248` is running with after-success audit `11702340`; target is half 1,
+class 1, current size 80. Run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_prescatter_operands_a100_20260728T080200ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it3_prescatter_operands_a100_20260728T080200ET`.
+Both contain `SAFE_TO_DELETE`. This is diagnostic/non-scoring. Fixed metrics
+remain K=1 `28/34` strict, `32/34` topology, `34/34` evaluated and K=4
+`41/60` direct, `9/15` all-class.
