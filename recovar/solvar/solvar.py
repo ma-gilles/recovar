@@ -23,6 +23,8 @@ from recovar import core
 from recovar.core import linalg
 from recovar.ppca import ppca
 from recovar.ppca.w_regularization import w_prior_quadratic
+from recovar.simulation.synthetic_dataset import HeterogeneousVolumeDistribution
+from recovar.solvar import gt_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -397,6 +399,7 @@ def fit(
     disc_type_mean: str = "cubic",
     disc_type: str = "linear_interp",
     seed: int | None = None,
+    gt_data: HeterogeneousVolumeDistribution | None = None,
     return_iteration_data: bool = False,
 ):
     """Fit SOLVAR fixed-pose loadings with the LS or MLE objective.
@@ -501,6 +504,8 @@ def fit(
             "grad_norm_mean": epoch_grad_norm / max(epoch_batches, 1),
             "W_norm": float(jnp.linalg.norm(W_current)),
         }
+        if gt_data is not None:
+            row.update(gt_metrics.compute_eigenvector_metrics(W_current, gt_data, volume_shape))
         iteration_data.append(row)
         logger.info(
             "SOLVAR epoch %d/%d loss=%.6e prior=%.6e grad_norm=%.6e",
@@ -510,6 +515,15 @@ def fit(
             row["prior_loss"],
             row["grad_norm_mean"],
         )
+        if gt_data is not None:
+            logger.info(
+                "SOLVAR epoch %d/%d gt_relative_variance=%.4f gt_cosine_similarity=%.4f gt_fro_relative_error=%.4f",
+                epoch + 1,
+                int(n_epochs),
+                row["gt_relative_variance"],
+                row["gt_cosine_similarity"],
+                row["gt_fro_relative_error"],
+            )
 
     params = params.apply_masking(config.volume_shape, tensor_data.volume_mask) if config.project_mask else params
     W = loadings_from_state(params)
