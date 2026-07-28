@@ -11445,3 +11445,42 @@ generation-config bytes also differ.  Only the CTF and pose pickle hashes
 match.  The older passing trajectory therefore represents a regenerated
 replicate, not evidence of a code regression on the immutable case-22
 fixture.
+
+## 2026-07-28 frozen case-22 current-versus-b1d source audit
+
+A source-effect audit now compares `b1d44427` and current source `25ab6e68`
+on the exact same immutable case-22 fixture, rather than on the invalid
+same-label regenerated replicate.  Both materializations bind the same ten
+fixture files and fixture-manifest SHA-256
+`422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
+All 51 audit inputs replay exactly.
+
+All ten numbered pose and translation arrays are exact between sources.
+Significant-support counts differ by one for five particles at iteration 2
+and one particle at iteration 6; maximum numbered Pmax absolute delta is
+`0.001735568047`.  Minimum current-versus-old merged map FSC-AUC over the
+numbered trajectory is `0.999999999776`, and maximum internal half-map FSC
+absolute delta is `3.943219781e-6`.  At the causal iteration-8 shell-20
+boundary, old/current internal FSC values are `0.501799643040` and
+`0.501800000668`.  The `+3.576278687e-7` source change cannot move RECOVAR
+below RELION's `0.499048` value or repair the scheduler split.
+
+Final all-data differs at exactly one pose/translation row, original
+zero-based input index 15 (`16@particles.128.mrcs`).  Its translation x
+moves by one `0.352941155`-pixel fine step and its rotation geodesic error
+is `1.851751704` degrees.  Final current-versus-old merged FSC-AUC remains
+`0.999999971570`.  The sealed classification is
+`current_vs_b1d_numbered_pose_translation_exact_with_support_mass_changes`:
+changes after `b1d44427` do not explain or repair the frozen upstream
+shell/topology failure.
+
+The local CPU audit completed `0:0` in `00:22.88` with maximum RSS
+`767104 KiB`.  Its run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_current_vs_b1d_fixedfixture_audit_20260728T030000ET`;
+run and runtime roots contain `SAFE_TO_DELETE`.  Report, input-manifest, and
+output-manifest SHA-256 values are respectively
+`9a2d226e9d758134d7716b1f7d3a2d4698f8c7f14a0e43ce9422f54132560d49`,
+`5b898012527f2c4fb8c9a2bf57d0b2c3e5d79693057e0b9b03e09ec7176b8589`,
+and `8b8731865d484e49f943b12b9b8dd4a812f3e980ea684a3548aa9fab21c94233`.
+This is a non-scoring diagnostic; fixed K=1 remains `28/34` strict,
+`32/34` topology, and `34/34` evaluated.
