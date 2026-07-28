@@ -946,12 +946,22 @@ L2 values are `0.08984580198575254/0.06786875013555252`.
 
 The diagnostic writer now joins chunked operands in global rotation order;
 focused tests require bitwise-identical production returns with capture
-disabled across both posterior modes and passive-shadow telemetry.  RELION
-probe `11706338` and structural audit `11706638` independently validate a
-512 MiB, 19-chunk passive capture with 182,140,981 emitted rows.  This entry
-is non-scoring until the complete 1,490-particle recapture and FSC/FSC-AUC
-audit finish.  K=1 therefore remains 28/34 strict, 32/34 topology, and 34/34
-evaluated; K=4 remains 41/60 direct and 9/15 all-class.
+disabled across both posterior modes and passive-shadow telemetry.  Complete
+recapture `11707749` and corrected audit `11709617` cover exactly all 1,490
+particle identities, including seven 4,096-rotation and two 8,192-rotation
+shards.  Capture inertness remains qualified at minimum FSC-AUC
+`0.9999999999673241`.
+
+The complete panel has `147608/146456` RELION/RECOVAR candidates, `144808`
+exact matrix matches, and `50538/50069` positive contributors, of which
+`49479` are exact both-positive rotations.  Candidate and positive sets are
+exact for `1157/1490` and `977/1490` particles.  Thus the earlier 15
+apparent RELION-only particles were solely a capture gap, while the accepted
+scientific classification remains
+`candidate_grid_and_significance_membership_differences`.  This diagnostic
+is explicitly non-scoring.  K=1 therefore remains 28/34 strict (82.4%),
+32/34 topology, and 34/34 evaluated; K=4 remains 41/60 direct and 9/15
+all-class.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

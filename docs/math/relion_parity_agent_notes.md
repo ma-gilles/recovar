@@ -8903,3 +8903,57 @@ and `9/15` all-class.
   the sealed RELION iteration-3 artifacts.
 - This remains non-scoring.  Fixed K=1 is `28/34` strict, `32/34` topology,
   `34/34` evaluated; fixed K=4 is `41/60` direct and `9/15` all-class.
+
+## 2026-07-28 complete case-22 iteration-3 contributor audit
+
+- Science `11707749` completed `0:0` in `01:06:35` on A100 UUID
+  `GPU-77778a79-1ab4-832d-c0af-8c521897325f`, using clean RECOVAR commit
+  `7c55b2a5b25afd80ce88a9778bf03424a3b27f1e`.
+- The capture has 35 artifacts and exactly 1,490 unique particle identities,
+  including all seven 4,096-rotation shards and both 8,192-rotation shards.
+  Maximum actual rotation count is 5,864.  Coverage JSON SHA-256 is
+  `6dfbb71af4464e70b07aa62b9d4b0a6f7c9838989836e2ea08ddf151dd0da075`.
+- First audit `11707938` failed closed before analysis on a stale pre-import
+  CUDA checksum after the science provenance gate rebuilt the library under
+  CUDA 12.8.  The failure record SHA-256 is
+  `3cf7197e2255f407fe72a524922febc6b587d298c46b9c5266d7a1ca4e106983`.
+  Corrected audit `11709617` used the runtime-rebuilt input manifest and
+  completed `0:0` in `00:03:34`.
+- Runtime-input, science-output, and audit-output manifests have SHA-256
+  `6b9ad474875bdcb7e1f2d96f6d161c9abcd4c37104f973ffa60b0525ef7bcc28`,
+  `75d95f07f38df8864a52e614a450f82ae9e66d184a464792f1bfaa4a1489208a`,
+  and
+  `5fe9a2d63f89f0fbad5d74c66e05c8cf52492f1c0ac07af974e020d980790d87`;
+  all replay exactly.
+- Capture inertness passes at minimum FSC-AUC `0.9999999999673241`; no
+  correlation is computed.  Exact RELION/RECOVAR particle sets are
+  `1490/1490`, with zero whole-particle omissions.
+- Candidate totals are `147608/146456`, exact matrix matches `144808`, and
+  engine-only candidates `2800/1648`.  Candidate sets are exact for
+  `1157/1490` particles.
+- Positive totals are `50538/50069`, exact both-positive rotations `49479`,
+  engine-only matched positives `652/479`, and engine-only unmatched
+  positives `407/111`.  Positive sets are exact for `977/1490` particles.
+  All 1,490 RECOVAR reconstruction thresholds are positive.
+- Matched-contributor data/weight pre-scatter relative L2 values are
+  `0.08982922016327309/0.067862978074296`.  The complete classification is
+  `candidate_grid_and_significance_membership_differences`, not a missing
+  chunked-execution or scatter-only gap.
+- Membership JSON/NPZ SHA-256 values are
+  `292323c5098f13324cd4fbc25c82bbaff6ae0fdb3343e9be7680cf9bb996bfd1`
+  and
+  `d45548bd939510995e57b6b5d7a67a324b554ff0c5cce48e733d635bc239a3a6`;
+  pre-scatter JSON/NPZ values are
+  `99a6b9436ded451243120d230e9f5c4099c4f6f82a94b5ca3918b7a46e039b4f`
+  and
+  `7b2fe7f99efe963a64012bd6845b3d8e7b808b9ce8b6dd392ad00bd59a6fa3aa`.
+- Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_recovar_chunked_capture_7c55b2a5_20260728T110100ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it3_recovar_chunked_capture_7c55b2a5_20260728T110100ET`;
+  both contain `SAFE_TO_DELETE`.  Terminal record SHA-256 is
+  `108ccacf4cc23b7dc5244550cd175db6074a5006a81f7570d41542e8e300ee1c`.
+- This is non-scoring.  Fixed K=1 remains `28/34` strict (`82.4%`),
+  `32/34` topology, and `34/34` evaluated; fixed K=4 remains `41/60` direct
+  and `9/15` all-class.  Next inspect physical-iteration-2/3 candidate-grid
+  construction and significance support before selecting a production fix.
