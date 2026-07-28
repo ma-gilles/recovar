@@ -8258,15 +8258,22 @@ and `9/15` all-class.
   `--junk-detection-every-round` for legacy behavior.  Focused tests pass
   `31/31`.
 - First qualification `11691123` failed before science on the CUDA
-  source-age gate.  Retry `11691182` uses a byte-identical runtime copy of
+  source-age gate.  Retry `11691182` used a byte-identical runtime copy of
   pinned library SHA-256
-  `414cfd5412d9b2aa9039dd845e608b24aab0f7c68690baee47a90854d02da56b`;
-  exact source/import/one-GPU/library preflight passes and repeat A is
-  running.
-- The candidate remains unpushed and non-admissible until both repeats and
-  SPA/generalization pass.  No tolerance, baseline, or scorecard changed.
+  `414cfd5412d9b2aa9039dd845e608b24aab0f7c68690baee47a90854d02da56b`
+  and completed `0:0` in `00:29:43`.
+- Both fixed-fixture cryo-ET repeats pass the unchanged regression in
+  `885.516/889.116` seconds.  Round 1 requests junk; round 2 neither requests
+  nor emits it.  Particle recall is `1.0` throughout, and round-2 incremental
+  particle false positives are `101/117` with zero new true positives.
+- Qualification JSON SHA-256 is
+  `051f137ae2885f5d929832bc0fe726b58fa7ad0a310e875af1e0e368484812e6`.
+  Fresh-fixture SPA pair `11691615` now runs the unchanged default long SPA
+  baseline twice on one manifest-sealed fixture.
+- The candidate remains unpushed and non-admissible until SPA/generalization
+  passes.  No tolerance, baseline, or scorecard changed.
 
-## 2026-07-28 K=4 live checkpoint through iteration 9
+## 2026-07-28 K=4 live checkpoint through iteration 10
 
 - Exact-A100 science `11683600` remains healthy on required UUID
   `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.
@@ -8277,7 +8284,17 @@ and `9/15` all-class.
   `0.2542/0.2345/0.2533/0.2580`; fraction changed is `0.9944`,
   rotation delta `14.313` degrees, translation delta `1.372 A`, and
   convergence remains false.
-- Iteration 10 is active at current size 74.  Full audit `11683764` remains
-  dependency-held and non-scoring partial audit `11689329` scheduler-pending.
+- Iteration 10 completed at current size 74, resolution `19.43 A`, Pmax
+  `0.915517102`, and occupancies
+  `0.2522/0.2361/0.2483/0.2633`.  Fraction changed is `0.8970`, rotation
+  delta `14.238` degrees, translation delta `1.381 A`, class delta zero, and
+  convergence remains false.  Iteration 11 is active at current size 76.
+- Non-scoring partial audit `11689329` completed `0:0`: `24/24` direct
+  class/iteration FSC-AUC checks pass through iteration 6.  Minimum
+  cross-engine FSC-AUC is `0.9967517990550623`; minimum GT delta is
+  `-0.00010904820468227161`; both manifests replay exactly.  Summary SHA-256:
+  `f80154d314285030bf48b40c72830fb9b673b018c83219e3ccde1b3773675491`.
+- Incremental non-scoring audit `11691438` extends through iterations 7--9.
+  Full audit `11683764` remains dependency-held.
 - Fixed metrics remain K=1 `28/34` strict, `32/34` topology, `34/34`
   evaluated, and K=4 `41/60` direct, `9/15` all-class.

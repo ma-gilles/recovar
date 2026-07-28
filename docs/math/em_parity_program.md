@@ -11272,11 +11272,27 @@ library's mtime preceded the fresh worktree's byte-identical CUDA sources.
 A byte-identical runtime copy preserves library SHA-256
 `414cfd5412d9b2aa9039dd845e608b24aab0f7c68690baee47a90854d02da56b`
 and passes the source-age gate.  Retry `11691182` passed exact
-source/import/device/library preflight and is running two fresh repeats.
-Even two passes will require SPA/generalization before integration.  No
-baseline, tolerance, or scorecard change is admissible from this diagnostic.
+source/import/device/library preflight and completed `0:0` in `00:29:43`.
+Both fixed-fixture cryo-ET repeats pass the unchanged regression in
+`885.516` and `889.116` seconds.  Their schedule audits prove that round 1
+requested junk detection while round 2 neither requested nor emitted it.
+Particle recall remains `1.0` in both rounds and repeats; round 2 adds no
+true-positive particles and only 101/117 false-positive particles, versus
+730/772 for repeated adaptive junk.  Round-1 image/particle inlier Jaccards
+are `0.983906/0.984714`, and round-2 values are `0.927563/0.928816`.
+The sealed qualification JSON is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_junk_first_round_pair_77c2578d_20260728T003000ET/analysis/CANDIDATE_PAIRED_QUALIFICATION.json`,
+SHA-256
+`051f137ae2885f5d929832bc0fe726b58fa7ad0a310e875af1e0e368484812e6`.
 
-## 2026-07-28 exact-A100 K=4 live checkpoint through iteration 9
+Fresh-fixture SPA pair `11691615` now controls generalization.  It generates
+one default 10,000-image/grid-128/seed-42 fixture, seals its SHA-256 manifest,
+and forces repeat B to reuse the identical fixture.  Both repetitions must
+pass the unchanged committed SPA baseline and `0.05` tolerance.  The
+candidate remains unintegrated and unpushed until this gate seals green; no
+baseline, tolerance, or scorecard change is admissible from the cryo-ET pair.
+
+## 2026-07-28 exact-A100 K=4 live checkpoint through iteration 10
 
 Science `11683600` remains healthy on required physical A100 UUID
 `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.  Numbered iterations 7--9
@@ -11287,13 +11303,27 @@ complete as follows:
 | 7 | 68 | 21.76 | 0.909274072 | 0.2545 / 0.2216 / 0.2662 / 0.2577 |
 | 8 | 70 | 20.92 | 0.923462127 | 0.2542 / 0.2288 / 0.2560 / 0.2610 |
 | 9 | 72 | 20.15 | 0.946993273 | 0.2542 / 0.2345 / 0.2533 / 0.2580 |
+| 10 | 74 | 19.43 | 0.915517102 | 0.2522 / 0.2361 / 0.2483 / 0.2633 |
 
 Iteration 9 completed in `1624.7 s`; fraction changed is `0.9944`,
 rotation delta `14.313` degrees, translation delta `1.372 A`, class delta
 zero, and convergence false.  Timing artifact
 `relion_cuda/timing/iter_009.npz` has SHA-256
 `b89f07fb83f2cdb56a7bae59b5fe2a983fa275ad8bbbe4338dfa4030d2c66298`.
-Iteration 10 is active at current size 74.  Hardened full audit `11683764`
-remains dependency-held, and non-scoring six-boundary audit `11689329`
-remains scheduler-pending.  Neither live state changes fixed K=4
+Iteration 10 completed in `1873.2 s`; fraction changed is `0.8970`,
+rotation delta `14.238` degrees, translation delta `1.381 A`, class delta
+zero, and convergence false.  Timing artifact
+`relion_cuda/timing/iter_010.npz` has SHA-256
+`4b37301cc66b9fa46fbaebd03835b45962fa8b2392cf61173bacb2847d94b076`.
+Iteration 11 is active at current size 76.
+
+Non-scoring six-boundary audit `11689329` completed `0:0` in `00:22:17`.
+All `24/24` direct class/iteration FSC-AUC checks pass; its minimum
+cross-engine FSC-AUC is `0.9967517990550623` and minimum GT FSC-AUC delta is
+`-0.00010904820468227161`.  Both input and output manifests replay exactly;
+the summary JSON SHA-256 is
+`f80154d314285030bf48b40c72830fb9b673b018c83219e3ccde1b3773675491`.
+Dependency-released incremental audit `11691438` extends this non-scoring
+checkpoint through iterations 7--9.  Hardened full audit `11683764` remains
+dependency-held.  Neither partial checkpoint can change fixed K=4
 `41/60` direct checks or `9/15` all-class iterations.
