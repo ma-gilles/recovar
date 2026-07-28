@@ -856,6 +856,32 @@ def test_significance_dump_envs_are_forwarded_and_scoped_per_case(tmp_path):
     )
 
 
+def test_relion_acc_candidate_dump_envs_are_forwarded(tmp_path):
+    dump_root = tmp_path / "relion"
+    extra_env = {
+        "RELION_DUMP_DIR": str(dump_root),
+        "RELION_DUMP_STACK_INDEX": "270",
+        "RELION_DUMP_PART_ID": "1890",
+        "RELION_DUMP_ITER": "3",
+        "RELION_ACC_DUMP_VERBOSE": "1",
+        "RELION_ACC_DUMP_PASS1_DIFF2": "1",
+    }
+    proc, scratch = _dry_run_launcher(tmp_path, case="22", extra_env=extra_env)
+
+    assert proc.returncode == 0, proc.stdout
+    scripts = list((scratch / "jobs").glob("em_k1_matrix_22_*.sh"))
+    assert len(scripts) == 1
+    text = scripts[0].read_text()
+    submission = (scratch / "submission.env").read_text()
+    for name, value in extra_env.items():
+        assert f"export {name}={value}" in text
+        assert f"{name}={value}" in submission
+    assert (
+        'export RELION_DUMP_DIR="${RELION_DUMP_DIR%/}/22_small_severe_outliers_3k_g128_radial_noise5_bf80"'
+        in text
+    )
+
+
 def test_firstiter_projector_and_tree_interventions_are_forwarded(tmp_path):
     extra_env = {
         "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE": "1",

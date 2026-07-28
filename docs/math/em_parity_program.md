@@ -12024,3 +12024,34 @@ Fixed K=1 remains `28/34` strict (`82.4%`), `32/34` exact topology, and
 `34/34` evaluated; fixed K=4 remains `41/60` direct and `9/15` all-class.
 The next bounded discriminator is physical-iteration-2/3 candidate-grid
 construction and significance support, not scatter arithmetic.
+
+## 2026-07-28 iteration-3 one-particle candidate/significance discriminator
+
+Validation scope is causal diagnostic only.  The active hypothesis is that,
+for case 22 half 1 stack index 270 (RECOVAR original index 269, RELION
+`part_id=1890`) at physical iteration 3, the eight RELION-only fine
+candidates are the oversampled children of exactly one coarse pass-1
+hypothesis retained by RELION and pruned by RECOVAR.  The four matched
+candidates positive only in RECOVAR are expected to localize separately to
+posterior/significance arithmetic on common coarse support.  This hypothesis
+is disproved if the coarse retained-parent sets are exact, if the missing
+eight-child block does not map to one RELION-only coarse parent, or if the
+common-support significance decisions become exact when replayed from the
+same raw score/prior operands.
+
+The cheapest falsifying experiment is a paired capture-off/capture-on rerun
+of frozen fixture `k1-22` through physical iteration 3 on A100 GPUs, with
+RELION and RECOVAR on the same physical GPU within each arm.  Both arms use
+the shared patched RELION binary, identical inputs and seed, grid correction
+unset/off, and no forced final all-data path.  The captured arm targets
+`RELION_DUMP_STACK_INDEX=270`, `RELION_DUMP_PART_ID=1890`,
+`RELION_DUMP_ITER=3`, `RELION_ACC_DUMP_VERBOSE=1`,
+`RELION_ACC_DUMP_PASS1_DIFF2=1`, and RECOVAR significance original index
+`269`, iteration `3`, current size `80`.  Capture inertness is accepted only
+from shellwise FSC/FSC-AUC, never correlation.  Exact coarse rotation
+matrices, raw scores, priors, normalized weights, threshold membership, and
+fine-parent mapping will then classify the first decision boundary.
+
+This diagnostic is non-scoring.  Fixed K=1 remains `28/34` strict (`82.4%`),
+`32/34` exact topology, and `34/34` evaluated; fixed K=4 remains `41/60`
+direct and `9/15` all-class.
