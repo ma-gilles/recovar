@@ -8309,7 +8309,13 @@ and `9/15` all-class.
   delta `14.538` degrees, translation delta `1.471 A`, class delta zero, and
   convergence remains false.  Timing artifact SHA-256 is
   `bba6c9dda14d185bd1ebe3a89aa4ba66df3521c13d300cb881d3d6dffbdd87`.
-  Iteration 12 is active at current size 78.
+- Iteration 12 completed in `2169.9` seconds at current size 78, resolution
+  `17.55 A`, Pmax `0.914282132`, and occupancies
+  `0.2498/0.2407/0.2433/0.2662`.  Fraction changed is `0.9677`, rotation
+  delta `14.275` degrees, translation delta `1.703 A`, class delta zero, and
+  convergence remains false.  Timing artifact SHA-256 is
+  `c0393ed66d338981db1e9af2ab7757fb631128f79e840373a3aabe7706ea8bbe`.
+  Iteration 13 is active at current size 82.
 - Non-scoring partial audit `11689329` completed `0:0`: `24/24` direct
   class/iteration FSC-AUC checks pass through iteration 6.  Minimum
   cross-engine FSC-AUC is `0.9967517990550623`; minimum GT delta is
@@ -8334,6 +8340,17 @@ and `9/15` all-class.
   late-iteration regression.  Both manifests replay exactly; summary
   SHA-256 is
   `2c16d5fb1533307b5c8fc17d53bfbb53c98ceff47d3d4abf06b2ece688f77ada`.
+- One-boundary audit `11693520` completed `0:0` in `00:15:26` and extends
+  the sealed non-scoring checkpoint through iteration 12.  Combined direct
+  passes are `41/48`, with per-boundary counts
+  `[4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 0, 2]`; nine of twelve boundaries pass
+  all four classes.  Iteration 12 current-to-RELION FSC-AUC is
+  `[0.995542481877, 0.994333504958, 0.994270495619, 0.995039176358]`.
+  The prior candidate also passes `2/4`; current-to-prior FSC-AUC is at
+  least `0.995963684284`, and current minimum GT delta
+  `-0.000161770278` is better than prior `-0.000185617138`.  Both manifests
+  replay exactly; summary SHA-256 is
+  `ed5dabe7e1c7612e9b96a9ca8e41ac4db4d91763519c209fadf2368251ee3713`.
   Full audit `11683764` remains dependency-held.
 - Fixed metrics remain K=1 `28/34` strict, `32/34` topology, `34/34`
   evaluated, and K=4 `41/60` direct, `9/15` all-class.

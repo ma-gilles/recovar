@@ -11320,6 +11320,7 @@ complete as follows:
 | 9 | 72 | 20.15 | 0.946993273 | 0.2542 / 0.2345 / 0.2533 / 0.2580 |
 | 10 | 74 | 19.43 | 0.915517102 | 0.2522 / 0.2361 / 0.2483 / 0.2633 |
 | 11 | 76 | 18.76 | 0.958589825 | 0.2536 / 0.2380 / 0.2454 / 0.2630 |
+| 12 | 78 | 17.55 | 0.914282132 | 0.2498 / 0.2407 / 0.2433 / 0.2662 |
 
 Iteration 9 completed in `1624.7 s`; fraction changed is `0.9944`,
 rotation delta `14.313` degrees, translation delta `1.372 A`, class delta
@@ -11336,7 +11337,12 @@ rotation delta `14.538` degrees, translation delta `1.471 A`, class delta
 zero, and convergence false.  Timing artifact
 `relion_cuda/timing/iter_011.npz` has SHA-256
 `bba6c9dda14d185bd1ebe3a89aa4ba66df3521c13d300cb881d3d6dffbdd87`.
-Iteration 12 is active at current size 78.
+Iteration 12 completed in `2169.9 s`; fraction changed is `0.9677`,
+rotation delta `14.275` degrees, translation delta `1.703 A`, class delta
+zero, and convergence false.  Timing artifact
+`relion_cuda/timing/iter_012.npz` has SHA-256
+`c0393ed66d338981db1e9af2ab7757fb631128f79e840373a3aabe7706ea8bbe`.
+Iteration 13 is active at current size 82.
 
 Non-scoring six-boundary audit `11689329` completed `0:0` in `00:22:17`.
 All `24/24` direct class/iteration FSC-AUC checks pass; its minimum
@@ -11363,6 +11369,17 @@ while current-to-prior FSC-AUC at iteration 11 is at least
 phase-FFI-specific late-iteration regression.  Input and output manifests
 replay exactly.  Summary JSON SHA-256 is
 `2c16d5fb1533307b5c8fc17d53bfbb53c98ceff47d3d4abf06b2ece688f77ada`.
+One-boundary audit `11693520` completed `0:0` in `00:15:26` and extends the
+sealed non-scoring checkpoint through iteration 12.  Combined direct passes
+are `41/48`, with per-boundary counts
+`[4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 0, 2]`; nine of twelve boundaries pass all
+four classes.  Iteration 12 current-to-RELION FSC-AUC is
+`[0.995542481877, 0.994333504958, 0.994270495619, 0.995039176358]`.
+The prior candidate also passes `2/4`; current-to-prior FSC-AUC is at least
+`0.995963684284`, and current minimum GT delta `-0.000161770278` is better
+than prior `-0.000185617138`.  Both manifests replay exactly.  Summary JSON
+SHA-256 is
+`ed5dabe7e1c7612e9b96a9ca8e41ac4db4d91763519c209fadf2368251ee3713`.
 Hardened full audit `11683764` remains dependency-held.  Neither partial
 checkpoint can change fixed K=4 `41/60` direct checks or `9/15` all-class
 iterations.
