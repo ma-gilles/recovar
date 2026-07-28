@@ -11032,3 +11032,71 @@ stderr, and has SHA-256
 `783ba6cbe94d2072e5856c42c8d51e17af3e4723a2ad3547b95c82b744e898ee`.
 Science `11683600`, its exact-GPU launcher, and its held state are unchanged.
 No scientific or scorecard claim comes from this audit-only hardening.
+
+## 2026-07-27 exact-device trajectories pass their first affected boundaries
+
+Exact-H100 K=1 qualification `11675461` passed its physical-UUID and
+checkout provenance gates and is running on
+`GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`.  The first seven numbered
+iterations reproduce the pre-local-patch control prefix.  The new local
+translation-score path is explicitly active for both halves from numbered
+iteration 8 onward (`Exact RELION fine Gaussian scoring: using CUDA sincosf
+score translation`).  The live resolution trajectory through numbered
+iteration 11 is:
+
+`[30.22, 20.92, 16.00, 15.54, 15.11, 15.11, 15.11, 13.95, 13.60, 13.27, 12.65]` A.
+
+Iterations 8--11 use local search at HEALPix order 4 and complete in
+`171.9`, `196.6`, `195.5`, and `208.3` seconds.  The run is not yet
+converged, so dependent FSC/FSC-AUC audit `11675472` remains pending and no
+case-4 or scorecard claim is admissible.  The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_local_phaseffi_f5729c1b_20260727T143000ET`.
+
+Exact-A100 K=4 science `11683600` also passed its two-device allocation gate,
+selected required target UUID
+`GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`, and exposed only that device to
+JAX.  Its first three numbered iterations are complete:
+
+| Iteration | Current size | Resolution (A) | Ave Pmax | Class occupancies |
+|---:|---:|---:|---:|---|
+| 1 | 38 | 60.44 | 1.0000 | 0.3443 / 0.1749 / 0.2077 / 0.2731 |
+| 2 | 38 | 49.45 | 0.0695 | 0.3344 / 0.1549 / 0.2055 / 0.3052 |
+| 3 | 42 | 30.22 | 0.2661 | 0.2728 / 0.1838 / 0.2392 / 0.3041 |
+
+Iteration 3 completed in `1694.1` seconds without an OOM or numeric-artifact
+failure.  The run is continuing toward all 15 fixed boundaries; hardened
+dependent audit `11683764` remains pending.  The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_phaseffi_exactgpu_retry1_31c4a0ca_20260727T040500ET`.
+
+These are live trajectory checkpoints, not accepting FSC evidence.  Fixed
+metrics therefore remain K=1 `28/34` strict FSC/FSC-AUC, `32/34` exact
+topology, and `34/34` evaluated; K=4 remains `41/60` direct checks and
+`9/15` all-class iterations.
+
+## 2026-07-27 shared outlier gate isolated from fixed-noise generation
+
+The first integration-head cryo-ET outlier regression, job `11685811` at
+`9a034097`, completed the fixture and both rounds but failed four of 12
+checked quality metrics.  A pre-fix source control at `f7148598`, job
+`11686265`, failed seven of 12 metrics.  This proves that commits
+`8fa5b02e..9a034097` did not introduce the integration-branch regression;
+the fixed fixture improves the same branch from `5/12` to `8/12` passing
+metrics.
+
+A second control, job `11686278`, reused the exact whole-file particle stack
+that passed `12/12` on authoritative GitHub `dev` job `11684503`
+(SHA-256
+`3aa1a5e41277b0d77ef84c910e0a9092fc7ae3bcf8bac8dd246fa24e182b2510`).
+Under integration commit `9a034097`, `11/12` metrics pass; only
+`particle_precision_round_2` fails at `0.1507` versus baseline `0.1598`
+(`-5.7%` against the unchanged `-5%` gate).  Identical fixture bytes
+therefore leave a downstream branch or execution-environment sensitivity.
+
+The exact targeted fixed-stream and command tests pass `27/27` in the
+checkout-bound pixi environment.  No tolerance or committed baseline was
+changed.  The red scientific gate and the unresolved mandatory rebase onto
+`github/dev` keep publication and push closed.  Full run provenance is:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_fix_9a034097_20260727T210000ET/provenance/SUBMISSION_11685811.md`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_prefixed_f7148598_20260727T212000ET/provenance/SUBMISSION_11686265.md`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_reuse_dev_9a034097_20260727T213000ET/provenance/SUBMISSION_11686278.md`.

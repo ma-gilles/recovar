@@ -8085,3 +8085,39 @@ and `9/15` all-class.
 - Fixed metrics are now K=1 `28/34` strict FSC/FSC-AUC, `32/34` exact
   topology, and `34/34` evaluated.  K=4 remains `41/60` direct and `9/15`
   all-class pending jobs `11655922` and `11655923`.
+
+## 2026-07-27 exact-device K=1/K=4 live checkpoint and publication gate
+
+- Exact-H100 K=1 science `11675461` passed the target UUID and checkout
+  provenance gates.  Numbered iterations 1--7 preserve the prior control
+  prefix; the new CUDA `sincosf` local translation-score path is active for
+  both halves from iteration 8.  The resolution trajectory through completed
+  iteration 11 is
+  `[30.22,20.92,16.00,15.54,15.11,15.11,15.11,13.95,13.60,13.27,12.65]`
+  A.  The run remains nonconverged and dependent FSC/FSC-AUC audit
+  `11675472` remains pending.
+- Exact-A100 K=4 science `11683600` passed the two-device allocation gate and
+  selected required UUID
+  `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30` as JAX's sole device.
+  Iterations 1--3 complete at resolutions `60.44`, `49.45`, and `30.22` A.
+  Iteration-3 occupancies are
+  `0.2728/0.1838/0.2392/0.3041`; hardened audit `11683764` remains pending.
+- K=1 run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_local_phaseffi_f5729c1b_20260727T143000ET`.
+  K=4 run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_phaseffi_exactgpu_retry1_31c4a0ca_20260727T040500ET`.
+- Shared cryo-ET outlier control `11686265` at pre-fixed-fixture source
+  `f7148598` fails seven of 12 metrics, proving that the integration-branch
+  failure predates `8fa5b02e..9a034097`.  The fixed integration fixture at
+  `9a034097` improves this to eight of 12.
+- Control `11686278` reuses the exact particle stack that passes 12/12 on
+  GitHub `dev`.  Integration source passes 11/12 on those identical bytes;
+  only round-2 particle precision is red (`0.1507` versus `0.1598`, `-5.7%`
+  against the unchanged `-5%` gate).  The remaining sensitivity is
+  downstream of fixture generation.  No tolerance or baseline was changed.
+- Checkout-bound fixed-stream/CLI tests pass `27/27`.  Because the shared
+  scientific gate is still red and rebasing this 1,467-commit integration
+  history onto `github/dev` conflicts immediately, no push is permitted.
+- This checkpoint is live evidence only.  Fixed metrics remain K=1 `28/34`
+  strict FSC/FSC-AUC, `32/34` topology, `34/34` evaluated, and K=4 `41/60`
+  direct, `9/15` all-class.
