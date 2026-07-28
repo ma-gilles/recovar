@@ -50,7 +50,7 @@ class WHalfParametrization(NamedTuple):
 
     def apply_masking(self, volume_shape, volume_mask) -> "WHalfParametrization":
         """Apply a real-space volume mask."""
-        return self._replace(U=project_loading_to_mask(self.U, volume_shape, volume_mask))
+        return WHalfParametrization(U=project_loading_to_mask(self.U, volume_shape, volume_mask), log_sqrt_eigenvalues=self.log_sqrt_eigenvalues)
 
 
 def loadings_from_state(state: WHalfParametrization) -> jax.Array:
@@ -115,6 +115,7 @@ def _train_step(params: WHalfParametrization, opt_state: optax.OptState, batch: 
     """
 
     def loss_for_params(params):
+        masked_params = params.apply_masking(config.volume_shape, tensor_data.volume_mask) if config.project_mask else params
         return _batch_total_loss(
             loadings_from_state(params),
             tensor_data.W_prior_half,
@@ -510,6 +511,7 @@ def fit(
             row["grad_norm_mean"],
         )
 
+    params = params.apply_masking(config.volume_shape, tensor_data.volume_mask) if config.project_mask else params
     W = loadings_from_state(params)
     U_real, eigenvalues, _ = ppca._orthonormalize_W_to_basis(W, volume_shape)
     rank = U_real.shape[0]
