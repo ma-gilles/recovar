@@ -11802,3 +11802,48 @@ and
 These experiments are diagnostic/non-scoring. Fixed metrics remain K=1
 `28/34` strict, `32/34` topology, `34/34` evaluated and K=4 `41/60`
 direct, `9/15` all-class.
+
+## 2026-07-28 bounded iteration-2 cohort replaces infeasible full capture
+
+The previously recorded live jobs are terminal and superseded. Physical
+iteration-3 science `11702248` failed closed before RECOVAR because the
+passive capture's inherited 1 TB all-particle envelope was too small; audit
+`11702340` was canceled by dependency. Physical iteration-2 science
+`11702643` was intentionally canceled during its capture-off control arm,
+before captured RELION or RECOVAR output, because the same full-particle
+strategy was deterministically impractical; audit `11702647` was canceled.
+Neither attempt is score-admissible or a science regression.
+
+Iteration-3 retry science/audit `11702824`/`11702825` use the unchanged
+capture kernel with a justified 5 TB passive envelope and are live. Their
+run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_prescatter_operands_a100_retry1_20260728T083648ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it3_prescatter_operands_a100_retry1_20260728T083648ET`;
+both contain `SAFE_TO_DELETE`.
+
+For the earlier physical-iteration-2 boundary, the new checked-in
+`scripts/select_k1_bpref_support_cohort.py` freezes 64 MPI-rank-1 particles:
+all 2 available support deltas at or below `-3`, deterministic samples of 16
+at `-2` and 24 at `-1`, and 22 exact-support controls. The cohort row hash is
+`07901c4f17e9e13d878f9341fe6293a9f2968673c77784ae176d45c017b90c18`.
+The selector proves RECOVAR row `i` maps to stack `i+1` and resolves RELION
+`part_id`/rank from sealed capture headers.
+
+A separate RELION diagnostic source adds a fail-closed
+`RELION_BPRE_CAPTURE_PART_IDS` filter before passive allocation. The exact
+source diff hash is
+`82e79e3e07079e553280e2089d2fc5c4887fb43a27c032ee6df3228eb789bd21`;
+the fresh CUDA-12.6 `sm_80` binary hash is
+`53a59a64aad8011de26a820ca9b9ae76ea7bc3e8ffb9319f518391951d82dd66`.
+Production backprojection is unchanged.
+
+Hash-pinned subset science/audit `11703645`/`11703646` are live from
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_subset_prescatter_operands_a100_20260728T085159ET`;
+the runtime root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it2_subset_prescatter_operands_a100_20260728T085159ET`.
+Both contain `SAFE_TO_DELETE`. Control/capture map inertness is FSC/FSC-AUC
+gated and correlation is not computed. The fixed targeted suite now passes
+62/62 tests, including four cohort-selector tests. These live diagnostics
+remain non-scoring, so fixed K=1 stays `28/34` strict, `32/34` topology,
+`34/34` evaluated and fixed K=4 stays `41/60` direct, `9/15` all-class.

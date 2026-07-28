@@ -8791,3 +8791,34 @@ and `9/15` all-class.
 - These diagnostics remain non-scoring. Fixed K=1 is `28/34` strict,
   `32/34` topology, and `34/34` evaluated; fixed K=4 is `41/60` direct and
   `9/15` all-class.
+
+## 2026-07-28 iteration-2 capture is bounded to a frozen support cohort
+
+- Original iteration-3 science `11702248` failed closed at the passive 1 TB
+  envelope before RECOVAR; dependency audit `11702340` was canceled.
+  Retry science/audit `11702824`/`11702825` retain the exact capture semantics
+  and use a predeclared 5 TB all-particle envelope.
+- Original iteration-2 science `11702643` and audit `11702647` were retired
+  before capture/RECOVAR evidence because full-particle passive panels were
+  deterministically impractical. This is not a science failure.
+- New `scripts/select_k1_bpref_support_cohort.py` binds the sealed trajectory,
+  canonical stack order, and sealed RELION `part_id`/MPI-rank headers. Its
+  rank-1 cohort has 64 particles: 2 deepest (`<=-3`), 16 `-2`, 24 `-1`, and
+  22 exact-support controls. Canonical row SHA-256 is
+  `07901c4f17e9e13d878f9341fe6293a9f2968673c77784ae176d45c017b90c18`.
+- A separate diagnostic RELION tree filters explicit `part_id` values before
+  passive allocation. Diff SHA-256 is
+  `82e79e3e07079e553280e2089d2fc5c4887fb43a27c032ee6df3228eb789bd21`;
+  the fresh CUDA-12.6 `sm_80` binary SHA-256 is
+  `53a59a64aad8011de26a820ca9b9ae76ea7bc3e8ffb9319f518391951d82dd66`.
+  Production backprojection is untouched.
+- Subset science `11703645` is live with after-success audit `11703646`.
+  Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_subset_prescatter_operands_a100_20260728T085159ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it2_subset_prescatter_operands_a100_20260728T085159ET`;
+  both contain `SAFE_TO_DELETE`.
+- The fixed targeted suite passes 62/62 tests; Ruff and `git diff --check`
+  pass. Live diagnostics are non-scoring. Fixed K=1 remains `28/34` strict,
+  `32/34` topology, `34/34` evaluated; fixed K=4 remains `41/60` direct and
+  `9/15` all-class.
