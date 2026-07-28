@@ -8237,3 +8237,47 @@ and `9/15` all-class.
   RECOVAR translations into RELION's Angstrom units.  The earlier ad hoc
   mixed-unit translation comparison must not be cited.  This diagnostic
   leaves K=1 at `28/34` strict, `32/34` topology, and `34/34` evaluated.
+
+## 2026-07-28 outlier repeatability and first-round-only junk candidate
+
+- One-A100 paired job `11690043` held source `70faf942`, fixture, node,
+  CUDA library, `.90` memory plan, and visible-device count fixed.  Repeat A
+  passed the unchanged cryo-ET baseline; repeat B failed four round-2
+  precision/F1 gates.
+- Round-1 image-inlier Jaccard is `0.991140`; round-2 image and particle
+  inlier Jaccards collapse to `0.333093/0.333333`.
+- Custom CUDA and forced JAX backprojection probes are both non-bitwise at
+  the same approximately `2.6e-7` maximum relative-L2 scale.  The quality
+  variability is not custom-CUDA-specific.
+- Sweep `11691075` shows all 143 true particle outliers were already removed
+  before round 2 in both repeats.  Round-2 anomaly and all tested junk
+  variants add zero true positives.  Current junk detection adds 730/772
+  false positives.
+- Isolated commit `77c2578d` runs junk detection in round 1 only by default,
+  retains later anomaly/contrast detection, and provides
+  `--junk-detection-every-round` for legacy behavior.  Focused tests pass
+  `31/31`.
+- First qualification `11691123` failed before science on the CUDA
+  source-age gate.  Retry `11691182` uses a byte-identical runtime copy of
+  pinned library SHA-256
+  `414cfd5412d9b2aa9039dd845e608b24aab0f7c68690baee47a90854d02da56b`;
+  exact source/import/one-GPU/library preflight passes and repeat A is
+  running.
+- The candidate remains unpushed and non-admissible until both repeats and
+  SPA/generalization pass.  No tolerance, baseline, or scorecard changed.
+
+## 2026-07-28 K=4 live checkpoint through iteration 9
+
+- Exact-A100 science `11683600` remains healthy on required UUID
+  `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.
+- Iterations 7/8/9 complete at current sizes `68/70/72`, resolutions
+  `21.76/20.92/20.15` A, and Pmax
+  `0.909274072/0.923462127/0.946993273`.
+- Iteration-9 occupancies are
+  `0.2542/0.2345/0.2533/0.2580`; fraction changed is `0.9944`,
+  rotation delta `14.313` degrees, translation delta `1.372 A`, and
+  convergence remains false.
+- Iteration 10 is active at current size 74.  Full audit `11683764` remains
+  dependency-held and non-scoring partial audit `11689329` scheduler-pending.
+- Fixed metrics remain K=1 `28/34` strict, `32/34` topology, `34/34`
+  evaluated, and K=4 `41/60` direct, `9/15` all-class.

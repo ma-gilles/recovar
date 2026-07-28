@@ -11216,3 +11216,84 @@ Artifacts:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_local_phaseffi_f5729c1b_20260727T143000ET/analysis/particle_state_transition/it017_and_final_cd9978e3.sha256`,
   SHA-256
   `cf38b25e58586f7292d39d079e06d53b2f38cd5cc3d8ee908ed215683fbefc7d`.
+
+## 2026-07-28 one-GPU outlier repeatability and round-2 junk locus
+
+Exact sequential repeats on one allocated A100 now reject the earlier
+single-pass interpretation of the shared cryo-ET gate.  Slurm job `11690043`
+held source `70faf942e48e191fd42bab111ff016c4129ff1f8`, the fixed particle
+stack, node `della-l08g2`, CUDA library, `.90` memory plan, and one visible
+JAX GPU fixed.  Repeat A passed the unchanged 12-metric baseline, while
+repeat B failed four round-2 precision/F1 metrics:
+
+| Repeat | Image F1 | Image precision | Particle F1 | Particle precision |
+|---|---:|---:|---:|---:|
+| A | 0.492933619 | 0.329327611 | 0.264325323 | 0.152289670 |
+| B | 0.469988790 | 0.308991022 | 0.246977547 | 0.140886700 |
+
+Round-1 half-map relative-L2 is only `0.0015396/0.0015175`, and the
+image-inlier Jaccard is `0.991140`.  By round 2 the corresponding values are
+`0.033340/0.026204` and `0.333093`; particle-inlier Jaccard is
+`0.333333`.  This is a genuine bootstrap instability, not evidence for
+widening the fixed tolerance.  The sealed repeat report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_fsc0_single_gpu_repeats_70faf942_20260727T234000ET/analysis/SINGLE_GPU_REPEATS.json`,
+SHA-256
+`a43d25d1e0740d9d433aebf7fb4fc54e6905109b3b46908328b6cad8b4275e24`.
+
+A matched 20-repeat backprojection probe is non-bitwise on both backends:
+custom CUDA and forced JAX fallback each produce zero exact matches among 19
+repeat comparisons, with maximum relative-L2
+`2.6297199e-7` and `2.5548525e-7`, respectively.  The variability is
+therefore not specific to RECOVAR's custom CUDA library.  The forced-JAX
+artifact is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/jax_backproject_repeat_70faf942_20260728T001000ET/analysis/JAX_REPEAT.json`,
+SHA-256
+`1ba8f45c4b5287229e786175a1554f7c0a895927da427d9561861572a2e74b52`.
+The backend comparison SHA-256 is
+`f464a8e4634d28aa68c730a2f53a1f4e3c776ef630a46249e6255685c05bc812`.
+
+The decisive algorithmic observation comes from Slurm sweep `11691075`.
+All 143 true particle outliers were already removed before round 2 in both
+repeats.  Round-2 anomaly detection and every tested junk variant add zero
+true positives.  Current adaptive junk detection adds 730 and 772 false
+positive particles; percentile, capped, consensus, and standard-deviation
+variants reduce counts but do not repair identity.  The sealed sweep is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/outlier_junk_stability_sweep_70faf942_20260728T002000ET/analysis/JUNK_STABILITY_SWEEP.json`,
+SHA-256
+`743841ad938663254da185f40242eb299647327d3445090cd9206c2bfdfd2fda`.
+
+An isolated, unpushed diagnostic at
+`77c2578da1a6c9e18bddf29da32cfcc926334810` therefore runs junk
+detection only in round 1 by default while retaining anomaly and contrast
+detection in later rounds.  `--junk-detection-every-round` restores the
+legacy schedule.  Focused validation passes 31 tests.  The first paired
+qualification attempt, `11691123`, failed before science because the pinned
+library's mtime preceded the fresh worktree's byte-identical CUDA sources.
+A byte-identical runtime copy preserves library SHA-256
+`414cfd5412d9b2aa9039dd845e608b24aab0f7c68690baee47a90854d02da56b`
+and passes the source-age gate.  Retry `11691182` passed exact
+source/import/device/library preflight and is running two fresh repeats.
+Even two passes will require SPA/generalization before integration.  No
+baseline, tolerance, or scorecard change is admissible from this diagnostic.
+
+## 2026-07-28 exact-A100 K=4 live checkpoint through iteration 9
+
+Science `11683600` remains healthy on required physical A100 UUID
+`GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.  Numbered iterations 7--9
+complete as follows:
+
+| Iteration | Current size | Resolution (A) | Ave Pmax | Class occupancies |
+|---:|---:|---:|---:|---|
+| 7 | 68 | 21.76 | 0.909274072 | 0.2545 / 0.2216 / 0.2662 / 0.2577 |
+| 8 | 70 | 20.92 | 0.923462127 | 0.2542 / 0.2288 / 0.2560 / 0.2610 |
+| 9 | 72 | 20.15 | 0.946993273 | 0.2542 / 0.2345 / 0.2533 / 0.2580 |
+
+Iteration 9 completed in `1624.7 s`; fraction changed is `0.9944`,
+rotation delta `14.313` degrees, translation delta `1.372 A`, class delta
+zero, and convergence false.  Timing artifact
+`relion_cuda/timing/iter_009.npz` has SHA-256
+`b89f07fb83f2cdb56a7bae59b5fe2a983fa275ad8bbbe4338dfa4030d2c66298`.
+Iteration 10 is active at current size 74.  Hardened full audit `11683764`
+remains dependency-held, and non-scoring six-boundary audit `11689329`
+remains scheduler-pending.  Neither live state changes fixed K=4
+`41/60` direct checks or `9/15` all-class iterations.
