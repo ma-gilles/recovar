@@ -8858,3 +8858,48 @@ and `9/15` all-class.
   the exact patch-byte hash guard pass. All evidence here is non-scoring.
   Fixed K=1 remains `28/34` strict, `32/34` topology, `34/34` evaluated;
   fixed K=4 remains `41/60` direct, `9/15` all-class.
+
+## 2026-07-28 iteration-3 recovery localizes a diagnostic coverage gap
+
+- Recovery audit `11706550` completed `0:0` in `00:02:06` with maximum RSS
+  `10286288K`.  The original science `11702824` completed all control,
+  capture, and three-iteration RECOVAR science before its wrapper rejected
+  1,475 contribution identities against an expected 1,490.  Capture
+  inertness passes at minimum FSC-AUC `0.9999999999673241`; all 3,000
+  RELION artifacts validate and no correlation metric is used.
+- The common 1,475-particle panel contains 116,488/115,880
+  RELION/RECOVAR candidates and 114,368 exact matrix matches.  Matched
+  positive-membership differences are 507/411, unmatched positive
+  differences are 339/108, and data/weight pre-scatter relative L2 values
+  are `0.08984580198575254/0.06786875013555252`.
+- RECOVAR's authoritative iteration log accounts for all 1,490 half-1
+  images.  The contribution artifacts account for exactly the first four
+  bucket groups, 1,233+143+70+29 = 1,475 images.  The omitted 15 are exactly
+  the rotation-chunked 4,096-rotation group (13) and 8,192-rotation group
+  (2).  This supersedes the initial `RELION-only particle` interpretation:
+  it is diagnostic coverage, not missing science execution.
+- `sparse_pass2_bucketed.py` now captures rotation-chunked contribution
+  operands in authoritative global rotation order and calls the existing
+  writer once per bucket.  The targeted inertness test covers ordinary and
+  passive-shadow modes under both default and opt-in float32 fine posterior,
+  and requires the complete returned production tree to be array-exact with
+  capture disabled.
+- The earlier iteration-2 CUDA `invalid argument` is independently localized
+  to a 10,131,532,800-byte monolithic passive allocation for 145,568
+  orientations.  Bounded science `11706338` completed `0:0` in `00:09:34`
+  with a 512 MiB cap and 19 ordered chunks; CPU structural audit `11706638`
+  completed `0:0` in `00:00:32`, validating 182,140,981 emitted rows.
+- The exact tested RELION diff is checked in at
+  `docs/patches/relion_bpref_prescatter_chunked_capture_bc319d0.patch`.
+  Its SHA-256 is
+  `1a9680d93ae6ab0577a7901999dca464c7929ed10b36c36744fc87672889668f`,
+  and it leaves production backprojection untouched.
+- Recovery and chunk-probe run roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_prescatter_operands_a100_retry1_20260728T083648ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_subset_chunked_probe_a100_20260728T101500ET`;
+  both run/runtime pairs contain `SAFE_TO_DELETE`.  The next gate is a
+  hash-pinned complete 1,490-particle RECOVAR recapture and replay against
+  the sealed RELION iteration-3 artifacts.
+- This remains non-scoring.  Fixed K=1 is `28/34` strict, `32/34` topology,
+  `34/34` evaluated; fixed K=4 is `41/60` direct and `9/15` all-class.

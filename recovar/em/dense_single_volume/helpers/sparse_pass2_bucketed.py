@@ -9326,15 +9326,34 @@ def compute_pass2_stats_sparse_bucketed(
                 not score_only
                 and compact_capture_requested(int(_bpref_contribution_context["iteration"]))
             )
+            contribution_chunked_bucket = bool(
+                not score_only and bucket_contribution_diagnostics_active
+            )
             if capture_chunked_bucket:
                 require_chunked_capture_capacity(batch, bucket_size, n_fine_trans)
             capture_score_chunks = [] if capture_chunked_bucket else None
             capture_prob_chunks = [] if capture_chunked_bucket else None
             capture_reconstruction_mask_chunks = [] if capture_chunked_bucket else None
+            contribution_score_chunks = [] if contribution_chunked_bucket else None
+            contribution_preprior_score_chunks = [] if contribution_chunked_bucket else None
+            contribution_prob_chunks = [] if contribution_chunked_bucket else None
+            contribution_reconstruction_prob_chunks = [] if contribution_chunked_bucket else None
+            contribution_reconstruction_mask_chunks = [] if contribution_chunked_bucket else None
+            contribution_summed_chunks = [] if contribution_chunked_bucket else None
+            contribution_ctf_prob_chunks = [] if contribution_chunked_bucket else None
+            contribution_authoritative_summed_chunks = (
+                [] if contribution_chunked_bucket and bucket_shadow_only_mode else None
+            )
+            contribution_authoritative_ctf_prob_chunks = (
+                [] if contribution_chunked_bucket and bucket_shadow_only_mode else None
+            )
+            chunk_shadow_score_bitwise_equal = False
 
             ctf_probs = None
             reconstruction_mask_chunks = None
             reconstruction_prob_chunks = None
+            chunk_reconstruction_sum_weight = None
+            chunk_reconstruction_threshold = None
             if use_relion_fine_mstep_prune and not score_only:
                 score_chunks = [
                     _score_rotation_chunk(
@@ -9354,8 +9373,8 @@ def compute_pass2_stats_sparse_bucketed(
                         reconstruction_probs_flat,
                         reconstruction_mask_flat,
                         _reconstruction_n_significant,
-                        _sum_weight,
-                        _threshold,
+                        chunk_reconstruction_sum_weight,
+                        chunk_reconstruction_threshold,
                     ) = _relion_f32_fine_reconstruction_probs(
                         all_scores_flat,
                         adaptive_fraction=float(adaptive_fraction),
@@ -9373,10 +9392,28 @@ def compute_pass2_stats_sparse_bucketed(
                         ) = _normalize_pass2_bucket_with_log_z(scores_chunk, normalize_log_z)
                         mask_flat_chunks.append(probs_chunk.reshape(batch, -1))
                     all_probs_flat = jnp.concatenate(mask_flat_chunks, axis=1)
+                    chunk_reconstruction_sum_weight = jnp.sum(
+                        all_probs_flat,
+                        axis=1,
+                        dtype=jnp.float64,
+                    )
                     reconstruction_mask_flat, _reconstruction_n_significant = _find_significant_mask_full_sort(
                         all_probs_flat,
                         float(adaptive_fraction),
                         -1,
+                    )
+                    chunk_reconstruction_threshold = jnp.min(
+                        jnp.where(
+                            reconstruction_mask_flat,
+                            all_probs_flat,
+                            jnp.inf,
+                        ),
+                        axis=1,
+                    )
+                    chunk_reconstruction_threshold = jnp.where(
+                        jnp.isfinite(chunk_reconstruction_threshold),
+                        chunk_reconstruction_threshold,
+                        0.0,
                     )
                     reconstruction_probs_flat = None
                 reconstruction_mask_chunks = []
@@ -9436,6 +9473,48 @@ def compute_pass2_stats_sparse_bucketed(
                         jnp.asarray(start, dtype=jnp.int32),
                         global_best_log_score.astype(scores_chunk.real.dtype),
                     )
+                if contribution_chunked_bucket:
+                    contribution_score_chunks.append(scores_chunk)
+                    if relion_firstiter_score_mode == "normalized_cc":
+                        contribution_preprior_score_chunks.append(scores_chunk)
+                    elif use_exact_relion_gaussian:
+                        contribution_raw_diff2 = _score_pass2_bucket_relion_gpu_diff2_raw(
+                            shifted_corrected_score_split,
+                            ctf2_over_nv_score,
+                            proj_half_chunk,
+                            direct_half_weights,
+                            relion_score_full_to_compact,
+                            relion_highres_xi2_half,
+                        )
+                        contribution_preprior_score_chunks.append(
+                            _relion_cuda_fine_diff2_to_scores(
+                                contribution_raw_diff2,
+                                jnp.zeros_like(jnp.asarray(log_prior[:, start:stop]))[
+                                    :,
+                                    :,
+                                    None,
+                                ],
+                                jnp.zeros_like(bucket_translation_prior)[:, None, :],
+                                jnp.asarray(candidate_mask[:, start:stop, :]),
+                                min_diff2=global_min_diff2,
+                            )
+                        )
+                    else:
+                        _, contribution_preprior_scores = (
+                            _score_pass2_bucket_gaussian_algebraic_components(
+                                shifted_corrected_score_split,
+                                ctf2_over_nv_score,
+                                proj_half_chunk,
+                                direct_half_weights,
+                                jnp.asarray(log_prior[:, start:stop]),
+                                bucket_translation_prior,
+                                jnp.asarray(candidate_mask[:, start:stop, :]),
+                            )
+                        )
+                        contribution_preprior_score_chunks.append(
+                            contribution_preprior_scores
+                        )
+                    contribution_prob_chunks.append(probs)
                 if capture_chunked_bucket:
                     capture_score_chunks.append(scores_chunk)
                     capture_prob_chunks.append(probs)
@@ -9469,6 +9548,54 @@ def compute_pass2_stats_sparse_bucketed(
                         relion_x_half=use_relion_x_half_mstep,
                         sequential_translation_reduction=use_sequential_translation_reduction,
                     )
+                    if contribution_chunked_bucket:
+                        dump_summed = summed
+                        dump_ctf_probs = ctf_probs
+                        if bucket_shadow_only_mode:
+                            shadow_scores = _score_rotation_chunk(
+                                start,
+                                stop,
+                                need_recon=False,
+                                min_diff2=global_min_diff2,
+                            )[0]
+                            _require_bpref_shadow_exact(
+                                "chunked score",
+                                scores_chunk,
+                                shadow_scores,
+                            )
+                            chunk_shadow_score_bitwise_equal = True
+                            shadow_summed, shadow_ctf_probs = (
+                                compute_local_mstep_sums(
+                                    mstep_probs,
+                                    shifted_recon_split,
+                                    ctf2_over_nv_recon,
+                                    relion_x_half=use_relion_x_half_mstep,
+                                    sequential_translation_reduction=(
+                                        diagnostic_sequential_translation_reduction
+                                    ),
+                                )
+                            )
+                            contribution_authoritative_summed_chunks.append(
+                                summed
+                            )
+                            contribution_authoritative_ctf_prob_chunks.append(
+                                ctf_probs
+                            )
+                            dump_summed = shadow_summed
+                            dump_ctf_probs = shadow_ctf_probs
+                        contribution_reconstruction_prob_chunks.append(mstep_probs)
+                        if winner_take_all:
+                            contribution_reconstruction_mask_chunks.append(probs > 0)
+                        elif use_relion_fine_mstep_prune:
+                            contribution_reconstruction_mask_chunks.append(
+                                reconstruction_mask_chunks[chunk_idx]
+                            )
+                        else:
+                            contribution_reconstruction_mask_chunks.append(
+                                mstep_probs > 0
+                            )
+                        contribution_summed_chunks.append(dump_summed)
+                        contribution_ctf_prob_chunks.append(dump_ctf_probs)
                     flat_chunk_rotations = flatten_bucket_rotations(jnp.asarray(mstep_rotations[:, start:stop]))
                     if use_window:
                         Ft_y_total = _accumulate_adjoint_block_chunked(
@@ -9570,6 +9697,159 @@ def compute_pass2_stats_sparse_bucketed(
                             continue
                         coarse_rot_indices = unique_rot_image[parent_rows[valid_parent_rows]]
                         np.add.at(rotation_posterior_sums, coarse_rot_indices, probs_sum_t[row, :cnt][valid_parent_rows])
+
+            if contribution_chunked_bucket:
+                contribution_scores = jnp.concatenate(
+                    contribution_score_chunks,
+                    axis=1,
+                )
+                contribution_preprior_scores = jnp.concatenate(
+                    contribution_preprior_score_chunks,
+                    axis=1,
+                )
+                contribution_probs = jnp.concatenate(
+                    contribution_prob_chunks,
+                    axis=1,
+                )
+                contribution_reconstruction_probs = jnp.concatenate(
+                    contribution_reconstruction_prob_chunks,
+                    axis=1,
+                )
+                contribution_reconstruction_mask = jnp.concatenate(
+                    contribution_reconstruction_mask_chunks,
+                    axis=1,
+                )
+                contribution_summed = jnp.concatenate(
+                    contribution_summed_chunks,
+                    axis=1,
+                )
+                contribution_ctf_probs = jnp.concatenate(
+                    contribution_ctf_prob_chunks,
+                    axis=1,
+                )
+                chunk_shadow_reduction_agreement = None
+                if bucket_shadow_only_mode:
+                    contribution_authoritative_summed = jnp.concatenate(
+                        contribution_authoritative_summed_chunks,
+                        axis=1,
+                    )
+                    contribution_authoritative_ctf_probs = jnp.concatenate(
+                        contribution_authoritative_ctf_prob_chunks,
+                        axis=1,
+                    )
+                    chunk_shadow_reduction_agreement = (
+                        _require_bpref_reduction_shadow_agreement(
+                            contribution_authoritative_summed,
+                            contribution_authoritative_ctf_probs,
+                            contribution_summed,
+                            contribution_ctf_probs,
+                        )
+                    )
+                if chunk_reconstruction_sum_weight is None:
+                    chunk_reconstruction_sum_weight = jnp.sum(
+                        contribution_probs.reshape(batch, -1),
+                        axis=1,
+                        dtype=jnp.float64,
+                    )
+                if chunk_reconstruction_threshold is None:
+                    chunk_reconstruction_threshold = jnp.zeros(
+                        (batch,),
+                        dtype=jnp.float64,
+                    )
+                _maybe_dump_bpref_contribution_rows(
+                    experiment_dataset=experiment_dataset,
+                    image_indices=image_indices,
+                    current_size=current_size,
+                    summed=contribution_summed,
+                    ctf_probs=contribution_ctf_probs,
+                    rotations=mstep_rotations,
+                    actual_counts=actual_counts,
+                    rotation_indices=rotation_indices,
+                    fine_translations=fine_translations,
+                    scores=contribution_scores,
+                    preprior_scores=contribution_preprior_scores,
+                    probs=contribution_probs,
+                    rotation_log_prior=log_prior,
+                    translation_log_prior=bucket_translation_prior,
+                    log_z=bucket_log_z,
+                    best_log_score=global_best_log_score,
+                    reconstruction_probs=contribution_reconstruction_probs,
+                    reconstruction_mask=contribution_reconstruction_mask,
+                    reconstruction_sum_weight=chunk_reconstruction_sum_weight,
+                    reconstruction_threshold=chunk_reconstruction_threshold,
+                    candidate_mask=candidate_mask,
+                    high_precision_operand_bundle=high_precision_operand_bundle,
+                    raw_batch_data=(
+                        batch_data if high_precision_operand_bundle else None
+                    ),
+                    ctf_params=(
+                        ctf_params if high_precision_operand_bundle else None
+                    ),
+                    noise_variance_half=(
+                        noise_variance_half if high_precision_operand_bundle else None
+                    ),
+                    integer_pre_shifts=(
+                        contribution_preprocess_operands["integer_pre_shifts"]
+                        if high_precision_operand_bundle else None
+                    ),
+                    batch_image_corrections=(
+                        contribution_preprocess_operands["batch_image_corrections"]
+                        if high_precision_operand_bundle else None
+                    ),
+                    batch_scale_corrections=(
+                        contribution_preprocess_operands["batch_scale_corrections"]
+                        if high_precision_operand_bundle else None
+                    ),
+                    relion_preprocess_normalization_factors=(
+                        contribution_preprocess_operands[
+                            "relion_preprocess_normalization_factors"
+                        ]
+                        if high_precision_operand_bundle else None
+                    ),
+                    relion_cuda_preprocess=(
+                        contribution_preprocess_operands["relion_cuda_preprocess"]
+                        if high_precision_operand_bundle else False
+                    ),
+                    score_with_masked_images=score_with_masked_images,
+                    image_mask=(
+                        contribution_preprocess_operands["image_mask"]
+                        if high_precision_operand_bundle else None
+                    ),
+                    image_mask_mode=(
+                        contribution_preprocess_operands["image_mask_mode"]
+                        if high_precision_operand_bundle else "not-captured"
+                    ),
+                    voxel_size=experiment_dataset.voxel_size,
+                    ctf_mode=getattr(
+                        getattr(config.ctf, "mode", "legacy"),
+                        "name",
+                        "legacy",
+                    ),
+                    ctf_dose_per_tilt=getattr(config.ctf, "dose_per_tilt", 0.0),
+                    ctf_angle_per_tilt=getattr(config.ctf, "angle_per_tilt", 0.0),
+                    disc_type=disc_type,
+                    projection_padding_factor=projection_padding_factor,
+                    reconstruction_padding_factor=reconstruction_padding_factor,
+                    use_relion_x_half_mstep=use_relion_x_half_mstep,
+                    winner_take_all=winner_take_all,
+                    max_r=float(current_size // 2) if use_window else None,
+                    window_indices=(
+                        relion_x_half_recon_indices
+                        if use_relion_x_half_mstep
+                        else recon_window_indices
+                    ),
+                    image_shape=image_shape,
+                    volume_shape=recon_volume_shape,
+                    shadow_only_mode=bucket_shadow_only_mode,
+                    shadow_score_bitwise_equal=(
+                        chunk_shadow_score_bitwise_equal
+                    ),
+                    shadow_reduction_agreement=(
+                        chunk_shadow_reduction_agreement
+                    ),
+                    device_signature_active=bucket_device_signature_requested,
+                    class_index=int(bpref_class_index),
+                )
 
             if capture_chunked_bucket:
                 maybe_capture_k1_production_bucket_chunked(

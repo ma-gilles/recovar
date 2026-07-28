@@ -6976,7 +6976,14 @@ def test_exact_raw_diff2_cache_matches_fallback_bitwise_and_removes_recompute(mo
         np.testing.assert_array_equal(np.asarray(disabled_leaf), np.asarray(fallback_leaf))
 
 
-def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonmatching_dump(monkeypatch, tmp_path):
+@pytest.mark.parametrize("f32_fine_posterior", [False, True])
+@pytest.mark.parametrize("shadow_only", [False, True])
+def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonmatching_dump(
+    monkeypatch,
+    tmp_path,
+    f32_fine_posterior,
+    shadow_only,
+):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -6984,8 +6991,44 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "0")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_CURRENT_SIZE", "999")
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", "512")
+    if f32_fine_posterior:
+        monkeypatch.setenv("RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR", "1")
+    else:
+        monkeypatch.delenv(
+            "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR",
+            raising=False,
+        )
+    monkeypatch.setenv(
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR",
+        str(tmp_path / "contributions"),
+    )
     monkeypatch.setattr(bucketed_mod, "_projection_cache_fits_budget", lambda *_args, **_kwargs: False)
     adjoint_window_indices = []
+    contribution_calls = []
+
+    def capture_contribution(**kwargs):
+        contribution_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        bucketed_mod,
+        "_maybe_dump_bpref_contribution_rows",
+        capture_contribution,
+    )
+    if shadow_only:
+        def resolve_shadow_modes(**kwargs):
+            active = bool(kwargs["contribution_diagnostics_active"])
+            return {
+                "device_signature_requested": active,
+                "contribution_diagnostics_active": active,
+                "shadow_only": active,
+                "high_precision_operand_bundle": False,
+            }
+
+        monkeypatch.setattr(
+            bucketed_mod,
+            "_resolve_bpref_bucket_diagnostic_modes",
+            resolve_shadow_modes,
+        )
 
     def fake_accumulate_adjoint(_flat_block, _flat_rotations, volume, **kwargs):
         assert kwargs["relion_x_half"] is True
@@ -7031,7 +7074,7 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
         for image_idx in range(n_images)
     ]
 
-    compute_pass2_stats_sparse(
+    common = dict(
         experiment_dataset=MockDataset(n_images=n_images, seed=701),
         volume=_hermitian_volume(VOLUME_SHAPE, seed=703),
         mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0,
@@ -7054,10 +7097,11 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
         relion_fine_mstep_prune=True,
         adaptive_fraction=0.5,
     )
+    captured_result = compute_pass2_stats_sparse(**common)
+    monkeypatch.delenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR")
+    baseline_result = compute_pass2_stats_sparse(**common)
 
-    full_bucket_rows = int(n_images * fine_rotations.shape[0])
     assert projection_call_rows
-    assert max(projection_call_rows) < full_bucket_rows
     expected_recon_indices = make_fourier_window_spec(
         IMAGE_SHAPE,
         4,
@@ -7071,6 +7115,54 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
     assert adjoint_window_indices
     for actual_indices in adjoint_window_indices:
         np.testing.assert_array_equal(actual_indices, np.asarray(expected_xhalf_indices, dtype=np.int32))
+    assert len(contribution_calls) == 1
+    contribution = contribution_calls[0]
+    captured_rotation_count = np.asarray(contribution["rotations"]).shape[1]
+    full_bucket_rows = int(n_images * captured_rotation_count)
+    assert max(projection_call_rows) < full_bucket_rows
+    expected_candidate_shape = (
+        n_images,
+        captured_rotation_count,
+        fine_translations.shape[0],
+    )
+    assert np.asarray(contribution["scores"]).shape == expected_candidate_shape
+    assert np.asarray(contribution["preprior_scores"]).shape == expected_candidate_shape
+    assert np.asarray(contribution["probs"]).shape == expected_candidate_shape
+    assert np.asarray(contribution["reconstruction_probs"]).shape == expected_candidate_shape
+    assert np.asarray(contribution["reconstruction_mask"]).shape == expected_candidate_shape
+    assert np.asarray(contribution["summed"]).shape[:2] == expected_candidate_shape[:2]
+    assert np.asarray(contribution["ctf_probs"]).shape == np.asarray(
+        contribution["summed"]
+    ).shape
+    assert np.asarray(contribution["rotations"]).shape == (
+        n_images,
+        captured_rotation_count,
+        3,
+        3,
+    )
+    assert np.asarray(contribution["reconstruction_sum_weight"]).shape == (n_images,)
+    assert np.asarray(contribution["reconstruction_threshold"]).shape == (n_images,)
+    assert contribution["shadow_only_mode"] is shadow_only
+    assert contribution["shadow_score_bitwise_equal"] is shadow_only
+    if shadow_only:
+        assert contribution["shadow_reduction_agreement"] is not None
+    else:
+        assert contribution["shadow_reduction_agreement"] is None
+    reconstruction_probs = np.asarray(contribution["reconstruction_probs"])
+    reconstruction_mask = np.asarray(contribution["reconstruction_mask"])
+    assert np.all(reconstruction_probs[~reconstruction_mask] == 0)
+    captured_leaves = jax.tree_util.tree_leaves(captured_result)
+    baseline_leaves = jax.tree_util.tree_leaves(baseline_result)
+    assert len(captured_leaves) == len(baseline_leaves)
+    for captured_leaf, baseline_leaf in zip(
+        captured_leaves,
+        baseline_leaves,
+        strict=True,
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(captured_leaf),
+            np.asarray(baseline_leaf),
+        )
 
 
 def test_sparse_pass2_chunked_fine_mstep_prune_is_uncapped(monkeypatch):

@@ -11905,3 +11905,58 @@ Ruff, `git diff --check`, and the exact diagnostic-patch hash guard pass.
 These diagnostics remain non-scoring, so fixed K=1 stays `28/34` strict,
 `32/34` topology, `34/34` evaluated and fixed K=4 stays `41/60` direct,
 `9/15` all-class.
+
+## 2026-07-28 bounded pre-scatter capture and iteration-3 coverage audit
+
+The iteration-3 retry completed its full scientific trajectory before its
+wrapper failed closed on an expected-identity count.  Science `11702824`
+produced capture-off RELION, captured RELION, and three numbered RECOVAR
+iterations on one A100; the run remained nonconverged, grid correction was
+unset, and final all-data was not forced.  Corrected hash-pinned recovery
+audit `11706550` completed `0:0` in `00:02:06` after preserving the first
+audit's identity-gate failure as terminal provenance.  Capture inertness
+passes at minimum FSC-AUC `0.9999999999673241`, with no correlation metric,
+and all 3,000 RELION artifacts validate.
+
+The accepted audit initially found 1,490 RELION identities but only 1,475
+RECOVAR contribution identities.  On those 1,475 common particles it matches
+114,368 candidate matrices exactly, with 2,120/1,512 unmatched
+RELION/RECOVAR candidates.  Positive membership has 507/411 engine-only
+matched candidates and 339/108 engine-only unmatched candidates.  Exact
+candidate and positive sets occur for 1,156/1,475 and 977/1,475 particles.
+The captured pre-scatter data/weight relative L2 values are
+`0.08984580198575254` and `0.06786875013555252`.
+
+The 15 apparent RELION-only particles are exactly the 13+2 particles in
+RECOVAR's rotation-chunked 4,096- and 8,192-rotation buckets.  The
+authoritative RECOVAR log proves all 1,490 half-1 images ran through the
+science path; only the diagnostic writer stopped after the first four
+unchunked groups.  Therefore the missing identities are a diagnostic
+coverage gap, not an EM omission.  The checked-in fix assembles chunked
+scores, posterior/reconstruction support, and pre-backprojection operands in
+global rotation order and invokes the existing fail-closed writer once per
+bucket.  Its focused test requires exact production-return equality with
+capture disabled in both default and float32 RELION-posterior modes, and also
+qualifies passive shadow score/reduction telemetry.
+
+Separately, the iteration-2 RELION dimension probe showed that the failed
+subset diagnostic requested one 10,131,532,800-byte temporary allocation for
+145,568 orientations, not an invalid scientific grid.  A diagnostic-only
+RELION patch now requires an explicit device-byte cap and walks orientations
+in ordered chunks while preserving global orientation identity.  A 512 MiB
+probe on science `11706338` completed `0:0` in `00:09:34`, emitted
+182,140,981 valid rows in 19 chunks, and structural audit `11706638`
+completed `0:0` in `00:00:32`.  Its exact source diff is checked in as
+`docs/patches/relion_bpref_prescatter_chunked_capture_bc319d0.patch`, with
+SHA-256
+`1a9680d93ae6ab0577a7901999dca464c7929ed10b36c36744fc87672889668f`;
+RELION production backprojection remains untouched.
+
+The sealed run roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_prescatter_operands_a100_retry1_20260728T083648ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_subset_chunked_probe_a100_20260728T101500ET`.
+Their runtime roots and run roots contain `SAFE_TO_DELETE`.  These
+diagnostics are non-scoring pending a complete 1,490-particle RECOVAR
+recapture, so fixed K=1 remains `28/34` strict, `32/34` topology, `34/34`
+evaluated and fixed K=4 remains `41/60` direct, `9/15` all-class.

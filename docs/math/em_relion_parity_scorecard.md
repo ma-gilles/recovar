@@ -932,6 +932,26 @@ same-GPU pair, autonomous topology, finalization semantics, and all evidence
 hashes.  Snapshot `strict-k1-v9-20260727` is therefore 28/34 strict,
 32/34 exact topology, and 34/34 evaluated.  The denominator, fixture
 definitions, manifest, and thresholds remain unchanged.
+
+### Case-22 iteration-3 diagnostic capture coverage
+
+Recovery audit `11706550` proves capture inertness at minimum FSC-AUC
+`0.9999999999673241` and validates all 3,000 RELION artifacts.  Its apparent
+1,490-versus-1,475 particle-identity difference is not a science omission:
+the RECOVAR log accounts for all 1,490 half-1 images, while the contribution
+writer omitted exactly the 13+2 images handled by its rotation-chunked
+4,096- and 8,192-rotation groups.  On the 1,475 captured common particles,
+114,368 candidate matrices match exactly and data/weight pre-scatter relative
+L2 values are `0.08984580198575254/0.06786875013555252`.
+
+The diagnostic writer now joins chunked operands in global rotation order;
+focused tests require bitwise-identical production returns with capture
+disabled across both posterior modes and passive-shadow telemetry.  RELION
+probe `11706338` and structural audit `11706638` independently validate a
+512 MiB, 19-chunk passive capture with 182,140,981 emitted rows.  This entry
+is non-scoring until the complete 1,490-particle recapture and FSC/FSC-AUC
+audit finish.  K=1 therefore remains 28/34 strict, 32/34 topology, and 34/34
+evaluated; K=4 remains 41/60 direct and 9/15 all-class.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

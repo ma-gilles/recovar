@@ -1,5 +1,29 @@
 # RELION instrumentation patches
 
+## relion_bpref_prescatter_chunked_capture_bc319d0.patch
+
+Combines the explicit `RELION_BPRE_CAPTURE_PART_IDS` filter with a required
+`RELION_BPRE_CAPTURE_DEVICE_BYTES` cap for passive BPref pre-scatter capture.
+The diagnostic walks orientation rows in ordered chunks, preserves each row's
+global `orientation_local` identity, and leaves production backprojection
+unchanged. It is based on RELION commit
+`bc319d0b3ca063de4a9c8b66da6e5b4d9f618630`.
+
+The patch SHA-256 is
+`1a9680d93ae6ab0577a7901999dca464c7929ed10b36c36744fc87672889668f`.
+The case-22 physical-iteration-2 one-particle probe used a 512 MiB requested
+device cap. Its 145,568 orientations were captured as 19 ordered chunks
+instead of one 10,131,532,800-byte temporary allocation.
+
+Apply this combined patch directly to a clean matching RELION tree. Do not
+apply the part-ID-only patch first:
+
+```bash
+git -C /absolute/path/to/relion rev-parse HEAD
+git -C /absolute/path/to/relion apply \
+  /absolute/path/to/recovar/docs/patches/relion_bpref_prescatter_chunked_capture_bc319d0.patch
+```
+
 ## relion_bpref_prescatter_part_id_filter_bc319d0.patch
 
 Adds an optional, fail-closed `RELION_BPRE_CAPTURE_PART_IDS` CSV filter to

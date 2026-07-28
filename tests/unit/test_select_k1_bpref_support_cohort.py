@@ -20,6 +20,15 @@ RELION_PATCH = (
     / "relion_bpref_prescatter_part_id_filter_bc319d0.patch"
 )
 RELION_PATCH_SHA256 = "82e79e3e07079e553280e2089d2fc5c4887fb43a27c032ee6df3228eb789bd21"
+RELION_CHUNKED_PATCH = (
+    Path(__file__).parents[2]
+    / "docs"
+    / "patches"
+    / "relion_bpref_prescatter_chunked_capture_bc319d0.patch"
+)
+RELION_CHUNKED_PATCH_SHA256 = (
+    "1a9680d93ae6ab0577a7901999dca464c7929ed10b36c36744fc87672889668f"
+)
 
 
 def _write_header(path: Path, *, part_id: int, stack_index: int, mpi_rank: int) -> None:
@@ -68,6 +77,28 @@ def test_relion_part_id_filter_patch_is_exact_and_preallocation() -> None:
     assert "expected_particles != result.part_ids.size()" in patch
     assert "Duplicate particle identity" in patch
     assert "Trailing comma" in patch
+
+
+def test_relion_chunked_capture_patch_preserves_global_orientation_order() -> None:
+    patch_bytes = RELION_CHUNKED_PATCH.read_bytes()
+    assert hashlib.sha256(patch_bytes).hexdigest() == RELION_CHUNKED_PATCH_SHA256
+    patch = patch_bytes.decode()
+    added_lines = "\n".join(
+        line[1:]
+        for line in patch.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    selection_guard = patch.index("if (!relion_bpre_part_id_selected")
+    device_allocation = patch.index("cudaMalloc(&device_rows, chunk_device_bytes)")
+    assert selection_guard < device_allocation
+    assert 'relion_bpre_required_u64("RELION_BPRE_CAPTURE_DEVICE_BYTES")' in patch
+    assert "config.device_buffer_bytes < bytes_per_orientation" in patch
+    assert "chunk_device_bytes > free_device_bytes" in patch
+    assert "orientation_offset += orientations_per_chunk" in patch
+    assert patch.count("orientation_offset, device_rows);") == 2
+    assert "orientation_in_chunk * img_xyz + pixel" in patch
+    assert "static_cast<std::uint32_t>(orientation)" in patch
+    assert "cudaMalloc(&device_rows, candidate_count" not in added_lines
 
 
 def test_select_cohort_preserves_deepest_and_fills_controls(tmp_path: Path) -> None:
