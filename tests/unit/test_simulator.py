@@ -11,6 +11,18 @@ from recovar import core
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("dtype", [simulator.jnp.float32, simulator.jnp.float64])
+def test_normal_from_host_random_bits_matches_jax(dtype):
+    key = simulator.jax.random.PRNGKey(17)
+    shape = (7, 4, 4)
+    bits = simulator._make_host_random_bits(key, shape, dtype)
+
+    actual = np.asarray(simulator._normal_from_random_bits(simulator.jnp.asarray(bits), dtype))
+    expected = np.asarray(simulator.jax.random.normal(key, shape, dtype=dtype))
+
+    np.testing.assert_array_equal(actual, expected)
+
+
 def test_noise_rng_stream_is_independent_of_processing_batch_size():
     key = simulator.jax.random.PRNGKey(0)
     subkeys = []

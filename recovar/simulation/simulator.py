@@ -1538,14 +1538,47 @@ def simulate_data(
     return output_array
 
 
-def make_noise_batch(subkey, noise_image, images_batch_shape):
+def _normal_from_random_bits(bits, dtype):
+    """Reproduce JAX's real normal transform from pre-generated RNG bits."""
+    np_dtype = np.dtype(dtype)
+    uint_dtype = jnp.uint64 if np_dtype.itemsize == 8 else jnp.uint32
+    nbits = np_dtype.itemsize * 8
+    nmant = np.finfo(np_dtype).nmant
+    float_bits = jax.lax.shift_right_logical(bits, jnp.array(nbits - nmant, uint_dtype))
+    one_bits = np.array(1.0, dtype=np_dtype).view(np.uint64 if nbits == 64 else np.uint32)
+    float_bits = jax.lax.bitwise_or(float_bits, jnp.asarray(one_bits, dtype=uint_dtype))
+    floats = jax.lax.bitcast_convert_type(float_bits, dtype) - jnp.array(1.0, dtype)
+    lo = np.nextafter(np.array(-1.0, dtype=np_dtype), np.array(0.0, dtype=np_dtype), dtype=np_dtype)
+    hi = np.array(1.0, dtype=np_dtype)
+    minval = jnp.asarray(lo, dtype=dtype)
+    maxval = jnp.asarray(hi, dtype=dtype)
+    uniform = jax.lax.max(minval, floats * (maxval - minval) + minval)
+    return jnp.array(np.sqrt(2.0), dtype) * jax.lax.erf_inv(uniform)
+
+
+def _make_host_random_bits(subkey, shape, dtype):
+    """Generate shape-dependent JAX RNG bits on CPU without GPU intermediates."""
+    uint_dtype = jnp.uint64 if np.dtype(dtype).itemsize == 8 else jnp.uint32
+    cpu_device = jax.devices("cpu")[0]
+    with jax.default_device(cpu_device):
+        bits = jax.random.bits(subkey, shape=shape, dtype=uint_dtype)
+    return np.asarray(bits)
+
+
+def _color_white_noise_batch(noise_batch, noise_image):
+    images_batch_shape = noise_batch.shape
     image_size = images_batch_shape[-1] * images_batch_shape[-2]
-    noise_batch = jax.random.normal(subkey, images_batch_shape) / jnp.sqrt(image_size)
+    noise_batch = noise_batch / jnp.sqrt(image_size)
 
     noise_batch_ft = fourier_transform_utils.get_dft2(noise_batch.reshape(images_batch_shape))
     noise_batch_ft *= jnp.sqrt(noise_image)
     noise_batch = fourier_transform_utils.get_idft2(noise_batch_ft.reshape(images_batch_shape)).real
     return noise_batch
+
+
+def make_noise_batch(subkey, noise_image, images_batch_shape):
+    noise_batch = jax.random.normal(subkey, images_batch_shape)
+    return _color_white_noise_batch(noise_batch, noise_image)
 
 
 def make_noise_batch_from_rng_stream(
@@ -1564,17 +1597,30 @@ def make_noise_batch_from_rng_stream(
     first_rng_batch = batch_st // noise_rng_batch_size
     last_rng_batch = (batch_end - 1) // noise_rng_batch_size
     image_shape = tuple(images_batch_shape[-2:])
+    processing_batch_size = batch_end - batch_st
+    normal_dtype = jnp.float64 if jax.config.x64_enabled else jnp.float32
+    target_device = jax.devices()[0]
     pieces = []
 
     for rng_batch_idx in range(first_rng_batch, last_rng_batch + 1):
         rng_st = rng_batch_idx * noise_rng_batch_size
         rng_end = min((rng_batch_idx + 1) * noise_rng_batch_size, n_images)
         rng_shape = (rng_end - rng_st, *image_shape)
-        rng_noise = make_noise_batch(noise_subkeys[rng_batch_idx], noise_image, rng_shape)
 
         slice_st = max(batch_st, rng_st) - rng_st
         slice_end = min(batch_end, rng_end) - rng_st
-        pieces.append(rng_noise[slice_st:slice_end])
+        if rng_shape[0] > processing_batch_size:
+            # JAX's random stream depends on the full reference shape. Preserve
+            # those exact bits on smaller-memory devices, but materialize only
+            # raw integer bits on CPU and transform/filter the requested slice
+            # on the accelerator. This avoids full-reference GPU FFT buffers.
+            host_bits = _make_host_random_bits(noise_subkeys[rng_batch_idx], rng_shape, normal_dtype)
+            selected_bits = jax.device_put(host_bits[slice_st:slice_end], target_device)
+            white_noise = _normal_from_random_bits(selected_bits, normal_dtype)
+            pieces.append(_color_white_noise_batch(white_noise, noise_image))
+        else:
+            rng_noise = make_noise_batch(noise_subkeys[rng_batch_idx], noise_image, rng_shape)
+            pieces.append(rng_noise[slice_st:slice_end])
 
     if len(pieces) == 1:
         return pieces[0]
