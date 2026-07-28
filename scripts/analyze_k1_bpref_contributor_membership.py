@@ -190,10 +190,12 @@ def compare_particle_membership(
 
     def threshold_ratio(rows: np.ndarray) -> np.ndarray:
         if threshold == 0.0:
-            return np.full(rows.size, np.inf, dtype=np.float64)
+            return np.full(rows.size, np.nan, dtype=np.float64)
         return recovar_max_sample_posterior[rows] / threshold
 
     report = {
+        "recovar_reconstruction_threshold": threshold,
+        "recovar_reconstruction_threshold_positive": threshold > 0.0,
         "relion_candidate_count": relion_count,
         "recovar_candidate_count": recovar_count,
         "candidate_unique_match_count": int(matches.pairs.shape[0]),
@@ -231,6 +233,7 @@ def compare_particle_membership(
         "matched_rotation_max_abs": matches.matched_max_abs,
         "relion_candidate_nearest_recovar_max_abs": matches.relion_nearest_max_abs,
         "recovar_candidate_nearest_relion_max_abs": matches.recovar_nearest_max_abs,
+        "recovar_reconstruction_threshold": np.asarray([threshold], dtype=np.float64),
         "recovar_preprune_mass_relion_positive_recovar_nonpositive": (
             recovar_posterior_mass[recovar_rows_relion_positive_only]
         ),
@@ -424,6 +427,12 @@ def analyze(args: argparse.Namespace) -> dict[str, Any]:
         "recovar_positive_unmatched_candidate_count",
     )
     totals = _summed_counts(particle_rows, count_names)
+    positive_threshold_particle_count = int(
+        sum(
+            bool(row["recovar_reconstruction_threshold_positive"])
+            for row in particle_rows
+        )
+    )
     candidate_gap = bool(
         totals["relion_candidate_unmatched_count"]
         or totals["recovar_candidate_unmatched_count"]
@@ -512,6 +521,12 @@ def analyze(args: argparse.Namespace) -> dict[str, Any]:
             "particle_count": len(particle_rows),
             "rotation_tolerance": args.rotation_tolerance,
             "recovar_shard_count": len(contribution_paths),
+            "positive_reconstruction_threshold_particle_count": (
+                positive_threshold_particle_count
+            ),
+            "zero_reconstruction_threshold_particle_count": (
+                len(particle_rows) - positive_threshold_particle_count
+            ),
         },
         "counts": {
             **totals,
@@ -526,6 +541,9 @@ def analyze(args: argparse.Namespace) -> dict[str, Any]:
             ),
         },
         "distributions": {
+            "recovar_reconstruction_threshold": _quantiles(
+                joined_arrays["recovar_reconstruction_threshold"]
+            ),
             "matched_candidate_rotation_max_abs": _quantiles(
                 joined_arrays["matched_rotation_max_abs"]
             ),
@@ -573,7 +591,10 @@ def analyze(args: argparse.Namespace) -> dict[str, Any]:
             "contributor membership are therefore aligned only by captured rotation "
             "matrices. A matched candidate that is positive in only one engine localizes "
             "a significance-membership difference; a positive rotation with no candidate "
-            "matrix match localizes an earlier candidate-grid difference. This diagnostic "
+            "matrix match localizes an earlier candidate-grid difference. Positive "
+            "membership is read from the captured reconstruction mass; max-over-threshold "
+            "ratios are undefined and reported as null when the saved per-particle "
+            "threshold is zero. This diagnostic "
             "does not establish the upstream pose/prior field responsible for either."
         ),
     }

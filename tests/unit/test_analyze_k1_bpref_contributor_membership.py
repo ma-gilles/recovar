@@ -54,6 +54,8 @@ def test_compare_particle_separates_candidate_and_significance_membership():
     assert report["recovar_positive_unmatched_candidate_count"] == 1
     assert not report["candidate_sets_exact_at_tolerance"]
     assert not report["positive_contributor_sets_exact_at_tolerance"]
+    assert report["recovar_reconstruction_threshold"] == 0.005
+    assert report["recovar_reconstruction_threshold_positive"]
     np.testing.assert_array_equal(
         arrays["recovar_preprune_mass_relion_positive_recovar_nonpositive"],
         np.array([0.01]),
@@ -62,3 +64,21 @@ def test_compare_particle_separates_candidate_and_significance_membership():
         arrays["recovar_preprune_mass_recovar_positive_unmatched"],
         np.array([0.29]),
     )
+
+
+def test_zero_reconstruction_threshold_is_explicit_and_ratio_is_undefined():
+    report, arrays = compare_particle_membership(
+        relion_rotations=_matrices([1.0]),
+        relion_positive=np.array([True]),
+        recovar_rotations=_matrices([1.0]),
+        recovar_positive=np.array([False]),
+        recovar_posterior_mass=np.array([0.1]),
+        recovar_reconstruction_mass=np.array([0.0]),
+        recovar_max_sample_posterior=np.array([0.1]),
+        recovar_reconstruction_threshold=0.0,
+    )
+    assert report["recovar_reconstruction_threshold"] == 0.0
+    assert not report["recovar_reconstruction_threshold_positive"]
+    assert np.isnan(
+        arrays["recovar_max_over_threshold_relion_positive_recovar_nonpositive"]
+    ).all()
