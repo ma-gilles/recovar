@@ -8341,7 +8341,9 @@ and `9/15` all-class.
 - Fixture-manifest SHA-256 is
   `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
   Grid correction and forced after-max finalization are unset/off.  The run
-  is autonomous, scorecard-mode, and makes no scheduler or initial-projector
-  diagnostic override.
+  is autonomous, scorecard-mode, and makes no scheduler override.  No
+  external first-iteration override is supplied: the checked-in K=1
+  `firstiter_cc` production defaults provide direct real-reference projector
+  handoff and coarse-tree top-two rescore margin `4e-6`.
 - No score claim is made before both science and strict audit finish.  Fixed
   K=1 remains `28/34` strict, `32/34` topology, and `34/34` evaluated.

@@ -11365,5 +11365,7 @@ strict independent FSC/topology audit `11691796` are dependency-held.
 Fixture-manifest SHA-256 is
 `422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
 Grid correction and forced after-max finalization are unset/off; there is no
-scheduler, initial-projector, or diagnostic tree-rescore override.  No score
-claim is admissible before the run and strict audit finish.
+scheduler override.  No external first-iteration override is supplied: the
+checked-in K=1 `firstiter_cc` production defaults are active, namely direct
+real-reference projector handoff and coarse-tree top-two rescore margin
+`4e-6`.  No score claim is admissible before the run and strict audit finish.
