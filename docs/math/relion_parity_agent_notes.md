@@ -8987,3 +8987,84 @@ and `9/15` all-class.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_maps_stateswap_190195e2_20260728T162431ET`
   and contains `SAFE_TO_DELETE`.  Grid correction and forced final all-data
   were unset.
+
+## 2026-07-29 K=4 target audit corrected to the metadata frame
+
+- Exact-A100 capture `11746808` completed `0:0` in `00:36:01` at source
+  `31c4a0ca`, target UUID
+  `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`, physical iteration 2,
+  current size 38.  The 109,184-candidate artifact SHA-256 is
+  `3c4c566b6f2fce613f4d5869d2d3ccf53a2bcd1b3c26e5a32138588464049485`.
+- Audit `11746841` used a v1 analyzer that directly compared relative
+  pass-2 shifts with absolute metadata offsets.  Preserve its output as
+  superseded provenance; do not use its `third_winner` classification.
+- Commit `72f21482` converts candidates using RELION's written-metadata rule:
+  `round_away_from_zero(previous_absolute) + relative`.  Compile, Ruff,
+  `git diff --check`, and 2/2 focused unit tests pass.
+- Corrected audit `11757252` completed `0:0` in `00:03:02`.  Incoming
+  `[-3.6088611765, -0.6088611765]` pixels gives search base `[-4, -1]`.
+  Relative phase/RELION candidates `[2.041065693, 0.041065693]` and
+  `[3.041065693, 0.041065693]` therefore map to absolute
+  `[-1.958934307, -0.958934307]` and
+  `[-0.958934307, -0.958934307]`.
+- Those two candidates have bitwise-equal raw score, prior, total score, and
+  probability.  The first-index tie break selects phase-away index 80 over
+  RELION/pre-phase index 82.  Corrected classification is
+  `fixed_relion_state_phaseffi_reproduces_away_winner__phase_score_path_is_causal`.
+  Corrected JSON SHA-256 is
+  `0be2a5608cc0dc27b3ecd7bb683438f14d70fb4ce3e81706042a9f0b3cc6aa8d`.
+- Same-device pre-phase control `11757378` is submitted against parent
+  `4181d340`.  Its run root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_orig53722_prephase_control_4181d340_20260729T094500ET`;
+  runtime is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it2_orig53722_prephase_control_4181d340_20260729T094500ET`;
+  both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
+  `8028dd3b61c995134878b6587fccd36bf1572f2bf050a9329d31981381b59505`.
+- This is non-scoring; fixed K=4 remains `41/60` direct and `9/15`
+  all-class.  No correlation was computed, grid correction was unset, and
+  forced final all-data was unset.
+
+## 2026-07-29 case-22 shellwise map-amplitude factorial closes causality
+
+- Same-A100 science `11748501` ran both arms at source `dd1eb519` on UUID
+  `GPU-83a2fe0e-5ca2-bfe7-65cd-fdf081753bf8`.  Both arms and both
+  analyzers completed; each arm recorded exit status zero.  Slurm reports
+  `FAILED 1:0` after `03:17:37` only because the launcher subsequently hit
+  the already documented malformed telemetry regex.  Arm wall times are
+  5,938 and 5,723 seconds, and both capture manifests validate.
+- Shell-scaling RECOVAR maps toward RELION restores exact coarse support:
+  8/8, Jaccard 1.0.  Half-map scale ranges are
+  `[0.986042384, 0.996838563]` and
+  `[0.986044505, 0.997335876]`; relative L2 falls from
+  `0.0116260905/0.0116277740` to `0.00272557521/0.00271663428`.
+  Report SHA-256 is
+  `590785315d330bc6c8ff30a88f17ee3d0d07f97bcc386eabbb2e9bfd1a8badd2`.
+- The reciprocal RELION-to-RECOVAR shell scaling produces 7/8 support,
+  Jaccard 0.875, with the single RELION parent 10538 absent.  Its scale
+  ranges are `[1.00316035, 1.01415136]` and
+  `[1.00286905, 1.0141491]`.  Cross-prior replay does not restore the
+  parent.  Report SHA-256 is
+  `6004b3856fb4f0408d7c19cec7b61e53594ac7041ed0ce00d7d143e2c6602927`.
+- Accepted target classification is
+  `shellwise_map_amplitude_is_sufficient_to_transfer_target_support`.
+  This is a one-target causal result, not authorization for a generic
+  production correction.
+- Recovery `11750619` failed closed after the diagnostic checkout advanced
+  from `dd1eb519` to `72f21482`.  Local recovery passed against clean
+  detached checkout
+  `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_case22_map_factorial_recovery_dd1eb519_20260729`
+  at the immutable science commit.  All seven completion-manifest entries
+  replay exactly.  Summary and manifest SHA-256 values are
+  `6a83f2b1d3c8e0ba459b81636d822fe5e673dfa10327bb1eff0e974c01a4811a`
+  and
+  `06f7cd4859186af5efcb7d00c67ba31e1c5187fc6aec4e697612b0008b1dbc2a`.
+  Duplicate recovery `11757584` was canceled pending after local success.
+- Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_map_amplitude_shell_factorial_dd1eb519_20260729T062927ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it3_map_amplitude_shell_factorial_dd1eb519_20260729T062927ET`;
+  both contain `SAFE_TO_DELETE`.  Grid correction and forced final all-data
+  were unset; no correlation was computed.
+- This remains non-scoring.  Fixed K=1 is `28/34` strict, `32/34`
+  topology, and `34/34` evaluated; K=4 is `41/60` direct and `9/15`
+  all-class.

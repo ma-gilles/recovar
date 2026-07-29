@@ -12105,3 +12105,103 @@ arithmetic change.
 
 Fixed metrics remain K=1 `28/34` strict (`82.4%`), `32/34` exact topology,
 `34/34` evaluated and K=4 `41/60` direct, `9/15` all-class.
+
+## 2026-07-29 corrected K=4 fixed-state target isolates a phase-path tie
+
+Exact-A100 capture science `11746808` completed `0:0` in `00:36:01` on
+target UUID `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.  It captured
+109,184 valid class-1 pass-2 candidates for original index 53722 at physical
+iteration 2/current size 38.  The capture SHA-256 is
+`3c4c566b6f2fce613f4d5869d2d3ccf53a2bcd1b3c26e5a32138588464049485`.
+
+The first dependent audit `11746841` completed `0:0`, but its v1 analyzer
+compared relative pass-2 translations directly with absolute metadata
+offsets.  That classification is retained as superseded provenance and is
+not scientific evidence.  Commit `72f21482` corrects the conversion to
+`round_away_from_zero(previous_absolute) + relative` and adds a focused
+regression test.  Python compile, Ruff, `git diff --check`, and 2/2 focused
+unit tests pass.
+
+Corrected fail-closed audit `11757252` completed `0:0` in `00:03:02`.
+The incoming RELION offset is `[-3.6088611765, -0.6088611765]` pixels and
+therefore has integer search base `[-4, -1]`.  The phase-away candidate's
+relative shift `[2.041065693, 0.041065693]` maps to absolute metadata offset
+`[-1.958934307, -0.958934307]`; the RELION/pre-phase candidate's relative
+shift `[3.041065693, 0.041065693]` maps to
+`[-0.958934307, -0.958934307]`.
+
+At this fixed incoming state the two candidates have bitwise-equal raw
+score, prior, total score, and probability.  The first-index tie break
+selects translation index 80, exactly reproducing the autonomous phase-away
+winner rather than the RELION/pre-phase index 82.  The corrected
+classification is
+`fixed_relion_state_phaseffi_reproduces_away_winner__phase_score_path_is_causal`.
+The corrected JSON SHA-256 is
+`0be2a5608cc0dc27b3ecd7bb683438f14d70fb4ce3e81706042a9f0b3cc6aa8d`.
+
+Exact-device pre-phase control `11757378` is submitted against parent
+`4181d340` on the same pinned A100/node.  It tests whether the older JAX
+translation path breaks the unique two-candidate tie toward RELION.  Its
+run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_orig53722_prephase_control_4181d340_20260729T094500ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it2_orig53722_prephase_control_4181d340_20260729T094500ET`;
+both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
+`8028dd3b61c995134878b6587fccd36bf1572f2bf050a9329d31981381b59505`.
+
+This is a target diagnostic, not a map-quality promotion.  Fixed K=4 remains
+41/60 direct class checks and 9/15 all-class iterations.  Grid correction
+and forced final all-data were unset; correlation was not computed.
+
+## 2026-07-29 case-22 shellwise map amplitude transfers coarse support
+
+Same-A100 science `11748501` ran both reciprocal state-swap arms at commit
+`dd1eb519` on UUID `GPU-83a2fe0e-5ca2-bfe7-65cd-fdf081753bf8`.
+Both science arms and both coarse-support analyzers completed successfully.
+The allocation ended `FAILED 1:0` after `03:17:37` only because the launcher
+reached its documented malformed final telemetry regular expression
+(`re.error: unbalanced parenthesis`).  Arm exit statuses are both zero and
+their wall times are 5,938 and 5,723 seconds.  Capture manifests for both
+arms replay exactly.
+
+Scaling the incoming RECOVAR half maps toward RELION with one positive
+least-squares factor per rounded Fourier shell restores exact target support:
+8/8 parents, Jaccard 1.0.  The half-map shell-factor ranges are
+`[0.986042384, 0.996838563]` and
+`[0.986044505, 0.997335876]`; relative map L2 falls from
+`0.0116260905/0.0116277740` to `0.00272557521/0.00271663428`.
+The report SHA-256 is
+`590785315d330bc6c8ff30a88f17ee3d0d07f97bcc386eabbb2e9bfd1a8badd2`.
+
+The reciprocal arm scales RELION maps toward RECOVAR with ranges
+`[1.00316035, 1.01415136]` and `[1.00286905, 1.0141491]`.  It transfers
+the support loss: 7/8 parents, Jaccard 0.875, with exactly RELION parent
+10538 absent.  Cross-prior replays do not restore that parent, so the
+remaining support difference is on the raw score surface.  Its report
+SHA-256 is
+`6004b3856fb4f0408d7c19cec7b61e53594ac7041ed0ce00d7d143e2c6602927`.
+The accepted bounded classification is
+`shellwise_map_amplitude_is_sufficient_to_transfer_target_support`.
+
+Recovery `11750619` failed closed because the live diagnostic checkout had
+advanced from `dd1eb519` to `72f21482` while science was running.  The same
+fail-closed recovery then passed locally against clean detached checkout
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_case22_map_factorial_recovery_dd1eb519_20260729`
+at the immutable science commit.  All seven completion entries replay
+exactly.  The recovered summary and completion-manifest SHA-256 values are
+`6a83f2b1d3c8e0ba459b81636d822fe5e673dfa10327bb1eff0e974c01a4811a`
+and
+`06f7cd4859186af5efcb7d00c67ba31e1c5187fc6aec4e697612b0008b1dbc2a`.
+Pending duplicate recovery `11757584` was canceled without running after
+local certification succeeded.
+
+Run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_map_amplitude_shell_factorial_dd1eb519_20260729T062927ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it3_map_amplitude_shell_factorial_dd1eb519_20260729T062927ET`;
+both contain `SAFE_TO_DELETE`.  This target diagnostic does not itself
+authorize a generic production amplitude correction or a scorecard
+promotion.  Fixed K=1 remains 28/34 strict, 32/34 topology, and 34/34
+evaluated; fixed K=4 remains 41/60 direct and 9/15 all-class.  Grid
+correction and forced final all-data were unset; correlation was not
+computed.
