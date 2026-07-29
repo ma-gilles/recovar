@@ -9191,3 +9191,49 @@ and `9/15` all-class.
 - This is non-scoring.  Fixed K=1 remains `28/34` strict, `32/34`
   topology, and `34/34` evaluated; fixed K=4 remains `41/60` direct and
   `9/15` all-class.  Grid correction and forced final all-data were unset.
+
+## 2026-07-29 case-22 reference-2 tau2 substitution is rejected
+
+- The existing intermediate-state auditor passes over the complete sealed
+  trajectory and shows that reference-2 RECOVAR tau2 differs from RELION
+  half-1 tau2 by relative L2 `0.0250963025`, while gold-standard FSC differs
+  by only `4.6824490e-5`.  That made tau2 a plausible explanation for the
+  reference-2 map-amplitude bias, but not a causal result.
+- `scripts/analyze_em_k1_tau2_substitution.py` holds each saved RECOVAR
+  numerator/weight accumulator fixed and replays the numbered Wiener solve
+  with either the stored RECOVAR tau2 or the corresponding RELION half tau2.
+  FSC/FSC-AUC is primary; normalized L2 and shell-amplitude fits are
+  secondary; correlation is absent.  A stored-tau replay must pass
+  FSC-AUC `>=0.99999` and relative L2 `<=0.001` against the saved RECOVAR
+  map before substitution is interpreted.
+- Hash-pinned Slurm job `11763790` completed `0:0` in `00:00:20` on A100
+  UUID `GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a` at source `53bf0ac0`.
+  Stored-tau replay FSC-AUC is `0.999995624/0.999994780` for halves 1/2,
+  so both integrity gates pass.
+- RELION tau2 raises cross-engine FSC-AUC from
+  `0.999985231` to `0.999992977` in half 1 and from
+  `0.999991860` to `0.999993414` in half 2, but it leaves the amplitude
+  residual essentially intact.  Relative L2 changes only
+  `0.011884866 -> 0.011884164` and
+  `0.011985030 -> 0.011891107`, explaining
+  `0.005899%` and `0.783669%`, respectively, versus the predeclared 50%
+  causal gate.
+- The accepted classification is
+  `relion_tau2_rejected_as_map_residual_cause`.  Together with the
+  reference-2 support-count differences on `1101/3000` particles, this
+  moves the next discriminator upstream to the saved BPref numerator/weight
+  source and its contributor membership, not a per-half tau2 default or a
+  generic map rescale.
+- Output and launcher SHA-256 values are
+  `8c190d438deed4b7f68ab3b4db5b55d19512670d34696f662ace40f9ad51467f`
+  and
+  `346d35587dfefccb6b28897f9ea8b848636b5687c777369dd9bc01f0bfea25df`.
+  Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_tau2_substitution_53bf0ac0_20260729T130000ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_tau2_substitution_53bf0ac0_20260729T130000ET`;
+  both contain `SAFE_TO_DELETE`.  Grid correction and forced final all-data
+  were unset.
+- This is non-scoring.  Fixed K=1 remains `28/34` strict, `32/34`
+  topology, and `34/34` evaluated; fixed K=4 remains `41/60` direct and
+  `9/15` all-class.

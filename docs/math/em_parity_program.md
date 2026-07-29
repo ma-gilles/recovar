@@ -12357,3 +12357,44 @@ the corrected hash-pinned launcher.
 This audit is non-scoring: fixed K=1 remains 28/34 strict, 32/34 topology,
 and 34/34 evaluated; fixed K=4 remains 41/60 direct and 9/15 all-class.
 Grid correction and forced final all-data were unset.
+
+## 2026-07-29 reference-2 tau2 substitution moves case 22 upstream
+
+The complete intermediate-state audit passes and measures a reference-2
+tau2 relative L2 of `0.0250963025` against RELION half 1, making tau2 a
+reasonable candidate for the case-22 amplitude bias.  The new checked
+substitution analyzer resolves that ambiguity without changing the
+accumulated data: it holds each saved RECOVAR numerator and weight fixed and
+reconstructs once with stored RECOVAR tau2 and once with the matching RELION
+half tau2.  Correlation is not computed; FSC/FSC-AUC is primary.
+
+Slurm job `11763790` completed `0:0` in 20 seconds on A100 UUID
+`GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a` at source `53bf0ac0`.
+Stored-tau replay integrity passes at FSC-AUC
+`0.999995624/0.999994780`.  RELION tau2 improves cross-engine FSC-AUC to
+`0.999992977/0.999993414`, but explains only `0.005899%/0.783669%` of
+the normalized L2 residual; the predeclared causal gate is 50%.
+Cross-engine L2 remains `0.011884164/0.011891107`, retaining the
+approximately 1.1% amplitude mismatch.
+
+The accepted classification is
+`relion_tau2_rejected_as_map_residual_cause`.  The next bounded comparison
+must therefore hold the reconstruction fixed while comparing the physical
+iteration-2 BPref numerator/weight source and contributor membership.  This
+result rejects both a per-half tau2 default change and a generic map rescale
+as the case-22 fix.
+
+Output and launcher SHA-256 values are
+`8c190d438deed4b7f68ab3b4db5b55d19512670d34696f662ace40f9ad51467f`
+and
+`346d35587dfefccb6b28897f9ea8b848636b5687c777369dd9bc01f0bfea25df`.
+Run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_tau2_substitution_53bf0ac0_20260729T130000ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_tau2_substitution_53bf0ac0_20260729T130000ET`;
+both contain `SAFE_TO_DELETE`.  Grid correction and forced final all-data
+were unset.
+
+This diagnostic is non-scoring: fixed K=1 remains 28/34 strict, 32/34
+topology, and 34/34 evaluated; fixed K=4 remains 41/60 direct and 9/15
+all-class.
