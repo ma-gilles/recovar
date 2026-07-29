@@ -12106,7 +12106,7 @@ arithmetic change.
 Fixed metrics remain K=1 `28/34` strict (`82.4%`), `32/34` exact topology,
 `34/34` evaluated and K=4 `41/60` direct, `9/15` all-class.
 
-## 2026-07-29 corrected K=4 fixed-state target isolates a phase-path tie
+## 2026-07-29 corrected K=4 fixed-state target exposes a score tie
 
 Exact-A100 capture science `11746808` completed `0:0` in `00:36:01` on
 target UUID `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.  It captured
@@ -12133,21 +12133,56 @@ shift `[3.041065693, 0.041065693]` maps to
 At this fixed incoming state the two candidates have bitwise-equal raw
 score, prior, total score, and probability.  The first-index tie break
 selects translation index 80, exactly reproducing the autonomous phase-away
-winner rather than the RELION/pre-phase index 82.  The corrected
-classification is
-`fixed_relion_state_phaseffi_reproduces_away_winner__phase_score_path_is_causal`.
-The corrected JSON SHA-256 is
+winner rather than the native RELION index 82.  The audit initially assigned
+the provisional classification
+`fixed_relion_state_phaseffi_reproduces_away_winner__phase_score_path_is_causal`;
+the pre-phase ablation below rejects that causal label.  Preserve its JSON
+only as superseded provenance.  Its SHA-256 is
 `0be2a5608cc0dc27b3ecd7bb683438f14d70fb4ce3e81706042a9f0b3cc6aa8d`.
 
-Exact-device pre-phase control `11757378` is submitted against parent
-`4181d340` on the same pinned A100/node.  It tests whether the older JAX
-translation path breaks the unique two-candidate tie toward RELION.  Its
-run/runtime roots are
+Exact-device pre-phase control `11757378` completed `0:0` in `00:35:28`
+against parent `4181d340` on the same pinned A100/node.  The ablation is
+active: `20,875/109,184` pre-prior and total scores change, with maximum
+absolute difference `0.0001220703125`, while all candidate topology,
+rotations, priors, and translation mappings remain exact.  Nevertheless,
+translations 80 and 82 remain bitwise tied in both implementations and both
+select index 80.  Therefore phase FFI is neither sufficient nor necessary
+for this target tie.  The superseding classification is
+`phaseffi_changes_background_scores_but_not_target_tie__prior_phase_causal_label_rejected`.
+The ablation JSON, pre-phase validation, capture, and completion SHA-256
+values are
+`b4dafc3fa9d8b970122a706dec62c1e353545faa395a5e492a2f818e7ab62a63`,
+`16b281455854c17bb8b5009eddd7a5866f2e15a224f3cf9c74bea942473c03e1`,
+`459b9ebaa709768c194a2a1d50a0ebd21f3c59c2e6488aec535f4f8ee1165f34`,
+and
+`a4520e9e78f9df32e6ebab4048c854f2ae80c8ab6466030eafb83c11a355b923`.
+Its run/runtime roots are
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_orig53722_prephase_control_4181d340_20260729T094500ET`
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it2_orig53722_prephase_control_4181d340_20260729T094500ET`;
 both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
 `8028dd3b61c995134878b6587fccd36bf1572f2bf050a9329d31981381b59505`.
+
+Native same-A100 diagnostic `11759665` subsequently failed `1:0` after
+`00:02:22`, but only after atomically sealing the requested native fine-score
+and bounded fine-operand artifacts.  Both bounded operand candidates replay
+RELION production bit-for-bit.  At rotation-local 2626,
+`raw_diff2(82) - raw_diff2(80) = 0.30828857421875`, directly proving that
+native RELION does not have RECOVAR's target score tie.  Fine-score and
+fine-operand SHA-256 values are
+`20ddb722cc747477babf580128ffaabd5ed9a5c1d38b8b967c9feba34b19b6f3`
+and
+`0b3e3d78c85af6431e26e5c9ee379f4eb10b1891d31890c961e37d31f97d18c5`.
+The later failure came from an unrelated dense BPref-factor dump exceeding
+its explicit 1 GB cap; it does not invalidate the already sealed bounded
+artifacts.  Recovery seal SHA-256 is
+`d2fe55d40cee8758941fa265c79bac8f60678fe7e31a998efa5d90145ec1ae4b`.
+Jobs `11759666` and `11759668` were canceled without allocation because the
+former retained the same unneeded dense-factor cap and the latter's
+`afterok` dependency became impossible.  Hash-bound RECOVAR high-precision
+operand comparison `11760373` replaces them without an external dependency.
+The remaining boundary is native fine-score operand arithmetic, not phase
+implementation or tie-breaking.
 
 This is a target diagnostic, not a map-quality promotion.  Fixed K=4 remains
 41/60 direct class checks and 9/15 all-class iterations.  Grid correction

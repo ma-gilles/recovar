@@ -9009,17 +9009,42 @@ and `9/15` all-class.
   `[-0.958934307, -0.958934307]`.
 - Those two candidates have bitwise-equal raw score, prior, total score, and
   probability.  The first-index tie break selects phase-away index 80 over
-  RELION/pre-phase index 82.  Corrected classification is
-  `fixed_relion_state_phaseffi_reproduces_away_winner__phase_score_path_is_causal`.
-  Corrected JSON SHA-256 is
+  native RELION index 82.  The audit initially labeled the phase path causal,
+  but the pre-phase control below rejects that label.  Preserve
+  `fixed_relion_state_phaseffi_reproduces_away_winner__phase_score_path_is_causal`
+  only as superseded provenance.  Its JSON SHA-256 is
   `0be2a5608cc0dc27b3ecd7bb683438f14d70fb4ce3e81706042a9f0b3cc6aa8d`.
-- Same-device pre-phase control `11757378` is submitted against parent
-  `4181d340`.  Its run root is
+- Same-device pre-phase control `11757378` completed `0:0` in `00:35:28`
+  against parent `4181d340`.  It changes 20,875 of 109,184 background
+  scores, with maximum absolute difference `0.0001220703125`, but leaves
+  the target 80/82 pair bitwise tied and selects index 80 in both
+  implementations.  The superseding classification is
+  `phaseffi_changes_background_scores_but_not_target_tie__prior_phase_causal_label_rejected`.
+  Classification, validation, capture, and completion SHA-256 values are
+  `b4dafc3fa9d8b970122a706dec62c1e353545faa395a5e492a2f818e7ab62a63`,
+  `16b281455854c17bb8b5009eddd7a5866f2e15a224f3cf9c74bea942473c03e1`,
+  `459b9ebaa709768c194a2a1d50a0ebd21f3c59c2e6488aec535f4f8ee1165f34`,
+  and
+  `a4520e9e78f9df32e6ebab4048c854f2ae80c8ab6466030eafb83c11a355b923`.
+  Its run root is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_orig53722_prephase_control_4181d340_20260729T094500ET`;
   runtime is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_it2_orig53722_prephase_control_4181d340_20260729T094500ET`;
   both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
   `8028dd3b61c995134878b6587fccd36bf1572f2bf050a9329d31981381b59505`.
+- Native same-A100 job `11759665` failed `1:0` only after atomically sealing
+  the bounded score and operand artifacts.  Both operand rows replay native
+  production exactly; at rotation-local 2626,
+  `raw_diff2(82) - raw_diff2(80) = 0.30828857421875`.  This rules out a
+  native tie and localizes the open boundary to native fine-score operands.
+  Fine-score, fine-operand, and recovery-seal SHA-256 values are
+  `20ddb722cc747477babf580128ffaabd5ed9a5c1d38b8b967c9feba34b19b6f3`,
+  `0b3e3d78c85af6431e26e5c9ee379f4eb10b1891d31890c961e37d31f97d18c5`,
+  and
+  `d2fe55d40cee8758941fa265c79bac8f60678fe7e31a998efa5d90145ec1ae4b`.
+  Its later failure was an unrelated dense BPref-factor cap.  Jobs
+  `11759666` and `11759668` were canceled without allocation; replacement
+  RECOVAR operand comparison `11760373` is queued without a dependency.
 - This is non-scoring; fixed K=4 remains `41/60` direct and `9/15`
   all-class.  No correlation was computed, grid correction was unset, and
   forced final all-data was unset.
