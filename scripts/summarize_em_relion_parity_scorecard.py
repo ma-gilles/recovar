@@ -22,11 +22,13 @@ from typing import NamedTuple, cast
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCORECARD = REPO_ROOT / "docs" / "math" / "em_relion_parity_scorecard_v1.json"
 DEFAULT_FIXTURE_MANIFEST = REPO_ROOT / "docs" / "math" / "em_relion_parity_fixture_manifest_v2.json"
+DEFAULT_K4_SNAPSHOT = REPO_ROOT / "docs" / "math" / "em_k4_backend_trajectory_snapshot_v2.json"
 V1_SUITE_ID = "k1-gui-grid0-local-highshell-full34"
 V2_FIXTURE_SUITE_ID = f"{V1_SUITE_ID}-artifact-pinned-v2"
 V1_FROZEN_DENOMINATOR = 34
 V1_FROZEN_CASE_DEFINITIONS_SHA256 = "9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1"
 V2_FIXTURE_MANIFEST_SHA256 = "422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee"
+K4_SNAPSHOT_V2_SHA256 = "bc10d0555488b22f0bc8d54afe5afc5288064ddb4708bd1c75f3b55dd4c0060a"
 VALID_RESULTS = {"pass", "fail", "not_run"}
 REQUIRED_DEFINITION_FIELDS = {
     "contrast_std",
@@ -257,7 +259,52 @@ def load_and_validate_fixture_manifest(path: Path, scorecard: dict) -> dict:
     return manifest
 
 
-def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sha256: str) -> str:
+def load_and_validate_k4_snapshot(path: Path) -> dict:
+    snapshot = json.loads(path.read_text())
+    if snapshot.get("schema") != "em_k4_backend_trajectory_snapshot_v2":
+        raise ValueError("unsupported K=4 snapshot schema")
+    if sha256_file(path) != K4_SNAPSHOT_V2_SHA256:
+        raise ValueError("K=4 snapshot bytes changed without a new pinned snapshot version")
+    if snapshot.get("quality_metric_policy") != "shellwise FSC/FSC-AUC; correlation is not used":
+        raise ValueError("K=4 snapshot must retain the FSC/FSC-AUC metric policy")
+    iterations = snapshot.get("numbered_iterations")
+    classes = snapshot.get("classes")
+    pass_counts = snapshot.get("direct_fsc_auc_passes_by_iteration")
+    if iterations != 15 or classes != 4:
+        raise ValueError("K=4 v2 snapshot must retain 15 iterations and 4 classes")
+    if (
+        not isinstance(pass_counts, list)
+        or len(pass_counts) != iterations
+        or any(not isinstance(value, int) or not 0 <= value <= classes for value in pass_counts)
+    ):
+        raise ValueError("K=4 snapshot has invalid per-iteration pass counts")
+    total = iterations * classes
+    if snapshot.get("direct_fsc_auc_checks_total") != total:
+        raise ValueError("K=4 snapshot direct-check denominator changed")
+    if snapshot.get("direct_fsc_auc_checks_passed") != sum(pass_counts):
+        raise ValueError("K=4 snapshot direct-check count does not match its iteration vector")
+    if snapshot.get("iterations_all_classes_passed") != sum(value == classes for value in pass_counts):
+        raise ValueError("K=4 snapshot all-class count does not match its iteration vector")
+    if snapshot.get("direct_fsc_auc_gate") != 0.995:
+        raise ValueError("K=4 snapshot direct FSC-AUC gate changed")
+    if snapshot.get("exact_control_topology") is not True:
+        raise ValueError("K=4 snapshot lacks exact control topology")
+    if snapshot.get("same_physical_gpu_comparison") is not True:
+        raise ValueError("K=4 snapshot is not a same-physical-GPU comparison")
+    if snapshot.get("grid_correction") != "unset":
+        raise ValueError("K=4 snapshot must keep grid correction unset")
+    if snapshot.get("forced_final_all_data_after_nonconvergence") is not False:
+        raise ValueError("K=4 snapshot forced invalid final all-data")
+    return snapshot
+
+
+def render_markdown(
+    scorecard: dict,
+    fixture_manifest: dict,
+    fixture_manifest_sha256: str,
+    k4_snapshot: dict,
+    k4_snapshot_sha256: str,
+) -> str:
     cases = scorecard["cases"]
     counts = scorecard["current_snapshot"]["counts"]
     passed = counts["pass"]
@@ -286,6 +333,11 @@ def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sh
         f"**K=1 fixed-suite score: {passed} / {total} passing "
         f"({evaluated} / {total} evaluated; {intermediate_passed} / {total} intermediate-topology passes).**",
         "",
+        f"**K=4 fixed-trajectory score: {k4_snapshot['direct_fsc_auc_checks_passed']} / "
+        f"{k4_snapshot['direct_fsc_auc_checks_total']} direct class checks passing "
+        f"({k4_snapshot['iterations_all_classes_passed']} / {k4_snapshot['numbered_iterations']} "
+        "iterations pass all classes).**",
+        "",
         f"Suite: `{scorecard['suite_id']}` (version {scorecard['suite_version']}; denominator frozen at {total}).",
         f"Frozen case-definition SHA-256: `{scorecard['frozen_case_definitions_sha256']}`.",
         "",
@@ -304,8 +356,12 @@ def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sh
         "",
         f"Evidence snapshot: `{source['schema']}`, generated `{source['generated_utc']}`, JSON SHA-256 "
         f"`{source['sha256']}`.",
+        f"K=4 evidence snapshot: `{k4_snapshot['snapshot_id']}`, JSON SHA-256 "
+        f"`{k4_snapshot_sha256}`.",
         f"Progress: {passed - first_passed:+d} passing cases since the first frozen snapshot; "
         f"{passed - previous_passed:+d} since the previous snapshot.",
+        "",
+        "## K=1 fixed cases",
         "",
         "| Done | Case | Fixture | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |",
         "|---|---|---|---|---|---:|---:|---|",
@@ -321,6 +377,26 @@ def render_markdown(scorecard: dict, fixture_manifest: dict, fixture_manifest_sh
         lines.append(
             f"| {checked} | `{case['id']}` | `{case['name']}` | {case['result']} | "
             f"{case['intermediate_result']} | {cross_text} | {delta_text} | {job_text} |"
+        )
+
+    lines += [
+        "",
+        "## K=4 fixed trajectory",
+        "",
+        f"Each row contains four class-level FSC-AUC checks at the frozen "
+        f"`{k4_snapshot['direct_fsc_auc_gate']:.3f}` gate. A checked row passes all four classes; "
+        "unchecked rows and failed class checks remain in their frozen denominators.",
+        "",
+        "| Done | Iteration | Class checks passed |",
+        "|---|---:|---:|",
+    ]
+    for iteration, iteration_passes in enumerate(
+        k4_snapshot["direct_fsc_auc_passes_by_iteration"],
+        start=1,
+    ):
+        checked = "[x]" if iteration_passes == k4_snapshot["classes"] else "[ ]"
+        lines.append(
+            f"| {checked} | {iteration} | {iteration_passes} / {k4_snapshot['classes']} |"
         )
 
     lines += [
@@ -892,6 +968,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scorecard", type=Path, default=DEFAULT_SCORECARD)
     parser.add_argument("--fixture-manifest", type=Path, default=DEFAULT_FIXTURE_MANIFEST)
+    parser.add_argument("--k4-snapshot", type=Path, default=DEFAULT_K4_SNAPSHOT)
     parser.add_argument("--check", type=Path, help="fail if this generated Markdown file is stale")
     parser.add_argument(
         "--proposal-evidence",
@@ -910,6 +987,7 @@ def main() -> int:
 
     scorecard = load_and_validate(args.scorecard)
     fixture_manifest = load_and_validate_fixture_manifest(args.fixture_manifest, scorecard)
+    k4_snapshot = load_and_validate_k4_snapshot(args.k4_snapshot)
     if args.proposal_output is not None:
         required = {
             "--proposal-previous-ledger": args.proposal_previous_ledger,
@@ -938,7 +1016,13 @@ def main() -> int:
         print(f"wrote validated superseding-ledger proposal: {args.proposal_output}")
         print(f"proposal SHA-256: {sha256_file(args.proposal_output)}")
         return 0
-    rendered = render_markdown(scorecard, fixture_manifest, sha256_file(args.fixture_manifest))
+    rendered = render_markdown(
+        scorecard,
+        fixture_manifest,
+        sha256_file(args.fixture_manifest),
+        k4_snapshot,
+        sha256_file(args.k4_snapshot),
+    )
     if args.check is not None:
         checked_text = args.check.read_text()
         rendered = preserve_manual_diagnostics(rendered, checked_text)

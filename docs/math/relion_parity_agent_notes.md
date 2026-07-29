@@ -9127,3 +9127,22 @@ and `9/15` all-class.
 - This remains non-scoring.  Fixed K=1 is `28/34` strict, `32/34`
   topology, and `34/34` evaluated; K=4 is `41/60` direct and `9/15`
   all-class.
+
+## 2026-07-29 unified fixed scorecard checkpoint
+
+- `scripts/summarize_em_relion_parity_scorecard.py` now pins, validates, and
+  renders the accepted K=4 trajectory snapshot alongside the existing K=1
+  fixed suite.  K=4 is displayed as 15 checked iteration rows with
+  per-row class-pass counts.
+- Denominators, thresholds, and evidence are unchanged: K=1 is `28/34`
+  strict, `32/34` topology, `34/34` evaluated; K=4 is `41/60` direct and
+  `9/15` all-class.  Snapshot SHA-256 is
+  `bc10d0555488b22f0bc8d54afe5afc5288064ddb4708bd1c75f3b55dd4c0060a`.
+- Freshness, compile, checkout/JAX provenance, scoped Ruff,
+  `git diff --check`, and 23/23 focused scorecard/K=4 tests pass.  Runtime
+  root
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_scorecard_unification_3d39a434_20260729T122500ET`
+  contains `SAFE_TO_DELETE`.
+- Exact-UUID native confirmation `11762553` remains resource-pending on
+  `della-l07g2`, with predicted start `2026-07-30T11:21:32`.  No score or
+  production behavior changed.

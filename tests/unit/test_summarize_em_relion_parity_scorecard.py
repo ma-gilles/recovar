@@ -23,15 +23,19 @@ def test_frozen_v1_scorecard_is_valid_and_renders_fixed_denominator():
         scorecard,
         fixture_manifest,
         MODULE.sha256_file(MODULE.DEFAULT_FIXTURE_MANIFEST),
+        MODULE.load_and_validate_k4_snapshot(MODULE.DEFAULT_K4_SNAPSHOT),
+        MODULE.sha256_file(MODULE.DEFAULT_K4_SNAPSHOT),
     )
 
     assert scorecard["frozen_denominator"] == 34
     assert scorecard["frozen_case_definitions_sha256"] == MODULE.frozen_case_definitions_sha256(scorecard["cases"])
     assert scorecard["current_snapshot"]["counts"] == {"pass": 28, "fail": 6, "not_run": 0}
     assert "K=1 fixed-suite score: 28 / 34 passing" in rendered
+    assert "K=4 fixed-trajectory score: 41 / 60 direct class checks passing" in rendered
+    assert "(9 / 15 iterations pass all classes)" in rendered
+    assert rendered.count("| [x] |") == 28 + 9
+    assert rendered.count("| [ ] |") == 6 + 6
     assert "Progress: +8 passing cases since the first frozen snapshot; +1 since the previous snapshot." in rendered
-    assert rendered.count("| [x] |") == 28
-    assert rendered.count("| [ ] |") == 6
     assert "34 cases (470,170,958,467 bytes)" in rendered
     assert "| `strict-k1-v1-old-head-20260721`" in rendered
     assert "| 20 | — | 12 | 2 |" in rendered
@@ -65,6 +69,8 @@ def test_check_preserves_marked_post_snapshot_diagnostics():
         scorecard,
         fixture_manifest,
         MODULE.sha256_file(MODULE.DEFAULT_FIXTURE_MANIFEST),
+        MODULE.load_and_validate_k4_snapshot(MODULE.DEFAULT_K4_SNAPSHOT),
+        MODULE.sha256_file(MODULE.DEFAULT_K4_SNAPSHOT),
     )
     manual = "\n".join(
         (
@@ -102,6 +108,18 @@ def test_validation_rejects_a_silently_changed_denominator(tmp_path):
 
     with pytest.raises(ValueError, match="frozen_denominator"):
         MODULE.load_and_validate(path)
+
+
+@pytest.mark.unit
+def test_k4_snapshot_validation_rejects_a_silently_changed_denominator(tmp_path, monkeypatch):
+    snapshot = json.loads(MODULE.DEFAULT_K4_SNAPSHOT.read_text())
+    snapshot["direct_fsc_auc_checks_total"] = 59
+    path = tmp_path / "k4.json"
+    path.write_text(json.dumps(snapshot))
+    monkeypatch.setattr(MODULE, "K4_SNAPSHOT_V2_SHA256", MODULE.sha256_file(path))
+
+    with pytest.raises(ValueError, match="direct-check denominator changed"):
+        MODULE.load_and_validate_k4_snapshot(path)
 
 
 @pytest.mark.unit

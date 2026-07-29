@@ -2,6 +2,8 @@
 
 **K=1 fixed-suite score: 28 / 34 passing (34 / 34 evaluated; 32 / 34 intermediate-topology passes).**
 
+**K=4 fixed-trajectory score: 41 / 60 direct class checks passing (9 / 15 iterations pass all classes).**
+
 Suite: `k1-gui-grid0-local-highshell-full34` (version 1; denominator frozen at 34).
 Frozen case-definition SHA-256: `9e3f2cb7192eb2cbf8a50181cf47de8562adfb98734bab05a736fb7d4d404fc1`.
 
@@ -12,7 +14,10 @@ The artifact-pinned fixture manifest is checked into the repository and binds al
 Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like finalization. Correlation is not computed or gated.
 
 Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v9`, generated `2026-07-27T07:29:46+00:00`, JSON SHA-256 `9cedb043dded9e5a2020cf53c413c4e1da366f4a6a2c54127347f8572a9ed7b3`.
+K=4 evidence snapshot: `k4-relion-cuda-4181d340-20260725`, JSON SHA-256 `bc10d0555488b22f0bc8d54afe5afc5288064ddb4708bd1c75f3b55dd4c0060a`.
 Progress: +8 passing cases since the first frozen snapshot; +1 since the previous snapshot.
+
+## K=1 fixed cases
 
 | Done | Case | Fixture | Trajectory | Topology | Final cross-engine FSC-AUC | Final GT delta | Jobs |
 |---|---|---|---|---|---:|---:|---|
@@ -50,6 +55,28 @@ Progress: +8 passing cases since the first frozen snapshot; +1 since the previou
 | [x] | `k1-32` | `mid_10k_kent_g128_radial_noise3_bf80` | pass | pass | 0.998274347 | +0.003849433 | science 11635967; trajectory 11638090; intermediate 11638090 |
 | [x] | `k1-33` | `max_images_400k_g128_white_noise1_bf80` | pass | pass | 0.999734254 | +0.000244294 | science 11508260; trajectory 11508286; intermediate 11508286 |
 | [x] | `k1-34` | `max_images_400k_g128_radial_noise3_nonuniform_bf80` | pass | pass | 0.995757412 | +0.002869240 | science 11384210; trajectory 11384443; intermediate 11384444 |
+
+## K=4 fixed trajectory
+
+Each row contains four class-level FSC-AUC checks at the frozen `0.995` gate. A checked row passes all four classes; unchecked rows and failed class checks remain in their frozen denominators.
+
+| Done | Iteration | Class checks passed |
+|---|---:|---:|
+| [x] | 1 | 4 / 4 |
+| [x] | 2 | 4 / 4 |
+| [x] | 3 | 4 / 4 |
+| [x] | 4 | 4 / 4 |
+| [x] | 5 | 4 / 4 |
+| [x] | 6 | 4 / 4 |
+| [x] | 7 | 4 / 4 |
+| [x] | 8 | 4 / 4 |
+| [x] | 9 | 4 / 4 |
+| [ ] | 10 | 3 / 4 |
+| [ ] | 11 | 0 / 4 |
+| [ ] | 12 | 2 / 4 |
+| [ ] | 13 | 0 / 4 |
+| [ ] | 14 | 0 / 4 |
+| [ ] | 15 | 0 / 4 |
 
 ## Progress history
 

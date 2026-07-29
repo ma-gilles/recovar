@@ -12290,3 +12290,29 @@ promotion.  Fixed K=1 remains 28/34 strict, 32/34 topology, and 34/34
 evaluated; fixed K=4 remains 41/60 direct and 9/15 all-class.  Grid
 correction and forced final all-data were unset; correlation was not
 computed.
+
+## 2026-07-29 unified fixed K=1/K=4 scorecard
+
+The one-command checked scorecard now validates and renders both immutable
+parity metrics.  K=1 remains 28/34 strict, 32/34 exact topology, and 34/34
+evaluated.  K=4 remains 41/60 direct class checks and 9/15 all-class
+iterations.  The K=4 section is generated from the pinned
+`em_k4_backend_trajectory_snapshot_v2` bytes (SHA-256
+`bc10d0555488b22f0bc8d54afe5afc5288064ddb4708bd1c75f3b55dd4c0060a`)
+and displays all 15 fixed iterations with checked all-class status and the
+per-iteration class-pass count.  Validation fails closed on snapshot byte,
+schema, denominator, count-vector, threshold, topology, same-GPU,
+grid-correction, and finalization drift.
+
+The exact command
+`pixi run python scripts/summarize_em_relion_parity_scorecard.py --check docs/math/em_relion_parity_scorecard.md`
+passes.  Targeted scorecard/K=4 tests pass 23/23; Python compile, scoped
+Ruff, checkout/JAX provenance, and `git diff --check` pass.  Runtime root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_scorecard_unification_3d39a434_20260729T122500ET`
+contains `SAFE_TO_DELETE`.
+
+Exact-UUID native confirmation `11762553` remains pending for resources on
+`della-l07g2`; Slurm currently predicts start
+`2026-07-30T11:21:32`.  This reporting change is non-scoring and does not
+change the iteration-2 target conclusion or authorize a production
+algorithm change.
