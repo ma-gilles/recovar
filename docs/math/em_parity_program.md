@@ -12316,3 +12316,44 @@ Exact-UUID native confirmation `11762553` remains pending for resources on
 `2026-07-30T11:21:32`.  This reporting change is non-scoring and does not
 change the iteration-2 target conclusion or authorize a production
 algorithm change.
+
+## 2026-07-29 K=1 map-amplitude trajectory localization
+
+The checked-in analyzer
+`scripts/analyze_em_k1_map_amplitude_trajectory.py` makes the saved-map
+version of the case-22 state-swap boundary reproducible.  It pairs RECOVAR
+`it(N-1)` with RELION `run_itN`, applies the same positive least-squares
+factor per rounded unshifted Fourier shell, hashes every map, and reports
+normalized L2.  Correlation is intentionally absent.
+
+Slurm job `11763032` completed `0:0` in 48 seconds on A100 UUID
+`GPU-de47e784-b81f-4a55-bb6f-099142193ae3`.  Across reference maps 1--3,
+case 22 alone has a substantial reference-2 amplitude component: global
+RECOVAR-to-RELION scales are `0.988980770/0.988963664`, and shell scaling
+explains `77.6534%/77.7651%` of the two half-map residuals.  Failing case 04
+has reference-2 global scales `0.999984324/0.999984622` and only
+`0.9139%/1.1405%` explained.  Passing case 24 remains at approximately
+`1e-6` relative L2 with scale one.  By case-22 reference 3, shell scaling
+explains only `1.9971%/2.0950%`, after the difference has acquired a
+non-amplitude component.
+
+The resulting classification is
+`case22_reference2_amplitude_bias_is_case_specific__generic_map_rescaling_rejected`.
+The next production-relevant question is therefore which case-22
+reference-2 reconstruction state creates the amplitude bias; this evidence
+does not authorize a generic scale correction.  Output and launcher SHA-256
+values are
+`5de29b7b315c91402d87b9f7f67789627c78324344e34976574f615210f68c9c`
+and
+`aa76fa0e5b688fad2072f552b9579431fbe6198add812f507a07e95009dae306`.
+Run/runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_map_amplitude_trajectory_78ffa37d_20260729T124500ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_map_amplitude_trajectory_78ffa37d_20260729T124500ET`;
+both contain `SAFE_TO_DELETE`.  Job `11763030` was canceled without
+allocation because its expanded commit gate was incorrect; `11763032` used
+the corrected hash-pinned launcher.
+
+This audit is non-scoring: fixed K=1 remains 28/34 strict, 32/34 topology,
+and 34/34 evaluated; fixed K=4 remains 41/60 direct and 9/15 all-class.
+Grid correction and forced final all-data were unset.

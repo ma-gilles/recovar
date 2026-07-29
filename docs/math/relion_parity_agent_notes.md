@@ -9146,3 +9146,48 @@ and `9/15` all-class.
 - Exact-UUID native confirmation `11762553` remains resource-pending on
   `della-l07g2`, with predicted start `2026-07-30T11:21:32`.  No score or
   production behavior changed.
+
+## 2026-07-29 K=1 map-amplitude trajectory rejects a generic correction
+
+- `scripts/analyze_em_k1_map_amplitude_trajectory.py` now reproduces the
+  state-swap amplitude boundary from saved maps: RECOVAR
+  `it(N-1)_halfH_reg.mrc` is paired with RELION
+  `run_itN_halfH_class001.mrc`, using the same positive least-squares factors
+  on rounded unshifted Fourier shells.  It records input hashes, normalized
+  L2 before/after scaling, and shell factors without using correlation.
+- Slurm audit `11763032` completed `0:0` in `00:00:48` on A100 UUID
+  `GPU-de47e784-b81f-4a55-bb6f-099142193ae3` at source `78ffa37d`.
+  It compared references 1--3 for current failing case 04, current failing
+  case 22, and passing case 24.
+- Case 22 alone develops a material reference-2 amplitude difference.
+  Its half-map global RECOVAR-to-RELION factors are
+  `0.988980770/0.988963664`; shell medians are
+  `0.992036998/0.991904587`.  Shell scaling reduces relative L2 from
+  `0.011916629/0.011924214` to `0.002662961/0.002651342`, explaining
+  `77.6534%/77.7651%`.
+- Failing case 04 is not an amplitude analogue: reference-2 global factors
+  are `0.999984324/0.999984622`, and shell scaling explains only
+  `0.9139%/1.1405%` of already-small `0.000130738/0.000117392` residuals.
+  Passing case 24 remains near its MRC round-trip floor through reference 3
+  (`0.78e-6` to `1.45e-6` relative L2, global factors within
+  `5.96e-7` of one).
+- At case-22 reference 3, shell scaling explains only `1.9971%/2.0950%`,
+  so the later difference is no longer predominantly amplitude-only.  The
+  bounded classification is
+  `case22_reference2_amplitude_bias_is_case_specific__generic_map_rescaling_rejected`.
+  This supports localizing the case-22 reference-2 reconstruction state,
+  not applying an unconditional production rescale.
+- Output JSON SHA-256 is
+  `5de29b7b315c91402d87b9f7f67789627c78324344e34976574f615210f68c9c`;
+  launcher SHA-256 is
+  `aa76fa0e5b688fad2072f552b9579431fbe6198add812f507a07e95009dae306`.
+  Run and runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_map_amplitude_trajectory_78ffa37d_20260729T124500ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_map_amplitude_trajectory_78ffa37d_20260729T124500ET`;
+  both contain `SAFE_TO_DELETE`.  Submission `11763030` was canceled
+  without allocation after its expanded commit gate was found incorrect;
+  the corrected launcher was rehashed before `11763032`.
+- This is non-scoring.  Fixed K=1 remains `28/34` strict, `32/34`
+  topology, and `34/34` evaluated; fixed K=4 remains `41/60` direct and
+  `9/15` all-class.  Grid correction and forced final all-data were unset.
