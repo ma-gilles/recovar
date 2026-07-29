@@ -19,6 +19,7 @@ from recovar.em.dense_single_volume.helpers.state_swap_probe import (
 from recovar.em.dense_single_volume.iteration_loop import (
     _STATE_SWAP_VARIANT_COMPONENTS,
     _apply_state_swap_probe,
+    _scale_state_swap_reference_maps,
     _snapshot_state_swap_inputs,
 )
 
@@ -328,6 +329,7 @@ def test_sigma_offset_state_swap_preserves_asymmetric_half_values():
         recovar_snapshot=snapshot,
         state=state,
         cs=52,
+        volume_shape=(1, 1, 1),
         means=[np.array([10.0]), np.array([20.0])],
         mean_variance=np.array([50.0]),
         noise_variance_per_half=[np.array([60.0]), np.array([70.0])],
@@ -350,3 +352,57 @@ def test_sigma_offset_state_swap_preserves_asymmetric_half_values():
     assert restored_sigma_per_half == pytest.approx([2.0, 4.0])
     restored_sigma_per_half[0] = 99.0
     assert snapshot["current_sigma_offset_angstrom_per_half"] == pytest.approx([2.0, 4.0])
+
+
+def test_state_swap_global_map_scaling_recovers_scalar_target():
+    source = [
+        np.arange(1, 9, dtype=np.float64).astype(np.complex128),
+        (np.arange(1, 9, dtype=np.float64) * (1.0 + 2.0j)).astype(np.complex128),
+    ]
+    target = [1.25 * source[0], 0.75 * source[1]]
+
+    scaled, summaries = _scale_state_swap_reference_maps(
+        source,
+        target,
+        mode="global",
+        volume_shape=(2, 2, 2),
+    )
+
+    np.testing.assert_allclose(scaled[0], target[0], rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(scaled[1], target[1], rtol=1e-12, atol=1e-12)
+    assert [summary["scale_min"] for summary in summaries] == pytest.approx(
+        [1.25, 0.75]
+    )
+    assert [summary["relative_l2_after"] for summary in summaries] == pytest.approx(
+        [0.0, 0.0],
+        abs=1e-15,
+    )
+
+
+def test_state_swap_shell_map_scaling_recovers_shell_amplitudes_and_preserves_phase():
+    volume_shape = (4, 4, 4)
+    frequencies = np.fft.fftfreq(4) * 4
+    grids = np.meshgrid(frequencies, frequencies, frequencies, indexing="ij")
+    shell_labels = np.rint(np.sqrt(sum(grid * grid for grid in grids))).astype(
+        np.int32
+    ).reshape(-1)
+    source = np.exp(1j * np.linspace(0.1, 2.5, shell_labels.size))
+    shell_scales = 0.8 + 0.15 * shell_labels
+    target = source * shell_scales
+
+    scaled, summaries = _scale_state_swap_reference_maps(
+        [source],
+        [target],
+        mode="shell",
+        volume_shape=volume_shape,
+    )
+
+    np.testing.assert_allclose(scaled[0], target, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(
+        np.angle(scaled[0]),
+        np.angle(source),
+        rtol=0.0,
+        atol=1e-12,
+    )
+    assert summaries[0]["scale_min"] == pytest.approx(float(np.min(shell_scales)))
+    assert summaries[0]["scale_max"] == pytest.approx(float(np.max(shell_scales)))

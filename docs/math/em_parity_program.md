@@ -12055,3 +12055,53 @@ fine-parent mapping will then classify the first decision boundary.
 This diagnostic is non-scoring.  Fixed K=1 remains `28/34` strict (`82.4%`),
 `32/34` exact topology, and `34/34` evaluated; fixed K=4 remains `41/60`
 direct and `9/15` all-class.
+
+## 2026-07-29 iteration-3 state swap makes incoming maps causal
+
+Exact-A100 state-swap science `11719941` completed `0:0` in `03:10:00`.
+The target is frozen case 22, physical iteration 3, half 1, original
+RECOVAR particle index 269, current size 80.  Every target non-map state
+field is replayed from RELION.  Grid correction and forced final all-data
+remain unset.
+
+With all RELION state, the target has exact `8/8` coarse-parent support and
+Jaccard `1.0`; centered raw-score residual has maximum absolute value
+`0.003311` and RMS `0.000573`.  Restoring only the incoming RECOVAR maps
+changes support to `7/8`, Jaccard `0.875`, with one RELION-only parent;
+centered raw-score residual rises to maximum absolute value `9.83622` and
+RMS `2.16229`.  The accepted causal classification is
+`incoming_recovar_reference_maps_are_sufficient_for_target_support_divergence`.
+The summary JSON SHA-256 is
+`b3f0d7b9fcf9b005ecda3d121ff1d0eec5534af984d69aa31510a8351a5ecb37`.
+All-RELION and RECOVAR-map report SHA-256 values are
+`bbca2f3c32672bee042a442785d187ad6e62c4bd9d1e0cf64bf02eb43083f7e4`
+and
+`fe648c5802ff3712d92cac89f74608e9032f34f05caa5b8a6c5cc77998a362a9`.
+The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_maps_stateswap_190195e2_20260728T162431ET`
+and contains `SAFE_TO_DELETE`.
+
+Exact target fine projections under the two incoming-map states provide the
+next bounded hypothesis.  Across 24 shared fine rotations, the RECOVAR-map
+to RELION-map projection RMS-amplitude ratio is
+`1.013936581207998`; a single least-squares scale of
+`0.9862520178964655` reduces relative L2 from
+`0.014153213970763244` to `0.002449800018841169`.  Empirically scaling the
+already-computed raw-score surface over `0.98..1.03` does not restore the
+missing parent, but that is not a valid map-level falsifier because the
+diff2 score is nonlinear in the projection.
+
+The active hypothesis is therefore that the approximately `1.4%` incoming
+map-amplitude difference is sufficient for the target `8 -> 7` support
+loss, without requiring the remaining phase/spatial residual.  The cheapest
+falsifier is a diagnostic-only state-swap factorial under the same exact
+RELION non-map state: scale RECOVAR maps globally or shellwise to RELION
+amplitude, and scale RELION maps globally or shellwise to RECOVAR amplitude.
+If RECOVAR-to-RELION amplitude restores `8/8` and the reciprocal arm induces
+the loss, amplitude is causal.  If the shellwise arms do not transfer the
+support decision, the remaining phase/spatial residual is required.  This
+factorial is non-scoring and cannot by itself authorize a production
+arithmetic change.
+
+Fixed metrics remain K=1 `28/34` strict (`82.4%`), `32/34` exact topology,
+`34/34` evaluated and K=4 `41/60` direct, `9/15` all-class.

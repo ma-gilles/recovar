@@ -8957,3 +8957,33 @@ and `9/15` all-class.
   `32/34` topology, and `34/34` evaluated; fixed K=4 remains `41/60` direct
   and `9/15` all-class.  Next inspect physical-iteration-2/3 candidate-grid
   construction and significance support before selecting a production fix.
+
+## 2026-07-29 case-22 incoming-map state is causally sufficient
+
+- Exact-A100 state-swap science `11719941` completed `0:0` in `03:10:00`.
+  The physical-iteration-3 target uses exact RELION non-map state in every
+  arm; only the incoming half maps differ.
+- All RELION state reproduces `8/8` coarse parents with Jaccard `1.0`.
+  Restoring only RECOVAR incoming maps produces `7/8`, Jaccard `0.875`, and
+  the same single missing RELION parent.
+- Centered raw-score residual is max/RMS `0.003311/0.000573` for all RELION
+  and `9.83622/2.16229` with RECOVAR maps.  The accepted classification is
+  `incoming_recovar_reference_maps_are_sufficient_for_target_support_divergence`.
+- Summary, all-RELION, and RECOVAR-map SHA-256 values are
+  `b3f0d7b9fcf9b005ecda3d121ff1d0eec5534af984d69aa31510a8351a5ecb37`,
+  `bbca2f3c32672bee042a442785d187ad6e62c4bd9d1e0cf64bf02eb43083f7e4`,
+  and
+  `fe648c5802ff3712d92cac89f74608e9032f34f05caa5b8a6c5cc77998a362a9`.
+- Across the 24 shared target fine rotations, RECOVAR-map projections have
+  RMS-amplitude ratio `1.013936581207998` relative to RELION.  One global
+  least-squares scale reduces relative L2 from `0.014153213970763244` to
+  `0.002449800018841169`.
+- The active non-scoring hypothesis is that this amplitude difference alone
+  transfers the `8 -> 7` support decision.  The bounded falsifier is a
+  reciprocal global/shellwise map-amplitude state-swap factorial under the
+  same exact non-map state.  No production patch or scorecard promotion is
+  admissible from this diagnostic alone.
+- The sealed run root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_maps_stateswap_190195e2_20260728T162431ET`
+  and contains `SAFE_TO_DELETE`.  Grid correction and forced final all-data
+  were unset.
