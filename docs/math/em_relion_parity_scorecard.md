@@ -989,6 +989,47 @@ scientific classification remains
 is explicitly non-scoring.  K=1 therefore remains 28/34 strict (82.4%),
 32/34 topology, and 34/34 evaluated; K=4 remains 41/60 direct and 9/15
 all-class.
+
+### Case-22 physical-iteration-2 BPref substitution closes the map residual
+
+Same-A100 job `11764048` ran RELION and RECOVAR sequentially through physical
+iteration 2 on UUID `GPU-a20700a1-ed8d-42b4-3a83-38d3a8d7e57b`.
+RELION's passive diagnostic captured post-join raw BPref numerator/weight;
+RECOVAR captured versioned pre- and post-join accumulators.  The wrapper
+reported `FAILED 1:0` only after both science arms completed because it
+expected optional numbered-map filenames that a non-converged two-iteration
+run does not write without `save_intermediates_dir`.  Hash-pinned recovery
+uses the identical final numbered half maps; final all-data did not run.
+
+The diagnostic RELION repeat passes against the qualified trajectory at
+half-map FSC-AUC `0.999999864886/0.999999850083`.  At the post-join boundary,
+RECOVAR-versus-RELION complex-average FSC-AUC is
+`0.999996177454/0.999996201977`, but normalized L2 is
+`0.0128196536/0.0128120259`.  Positive global RECOVAR-to-RELION scales
+`0.9886418590/0.9886450238` explain `55.6266%/55.6834%` of that accumulator
+residual; support Jaccard is `1.0`.
+
+The causal replay holds RELION tau2 fixed in both arms.  RECOVAR accumulators
+retain map normalized L2 `0.0115961094/0.0115976386` and FSC-AUC
+`0.999992984357/0.999993351730`.  Substituting only RELION's raw
+numerator/weight reduces L2 to `6.548196e-7/1.912524e-6` and raises FSC-AUC
+to `0.999999999993/0.999999999990`, explaining
+`99.994353%/99.983509%` of the residual.  Raw-to-text self-replay is
+`9.33e-17` relative L2 for complex averages and exactly zero for weights.
+The accepted classification is
+`relion_bpref_accumulator_explains_majority_of_map_residual`.
+
+This localizes the case-22 reference-2 amplitude bias to post-join
+numerator/weight content and rejects reconstruction/tau2 as the remaining
+cause.  It does not yet separate candidate membership, posterior mass, or
+scatter arithmetic and is non-scoring.  Boundary/substitution/recovery JSON
+SHA-256 values are
+`dbbee34d5409338f1fc05a6b30e55f7355cbfd3f7699da46b3d6de9169a4a48f`,
+`d02c15b54db82fe05ab552f628a98380ee11d077434665b1dc38c07829535675`,
+and
+`390bef7c3041d7af2af6971e1dc9573f83b3b1e7af7548beac0ff14a6837bc7d`.
+Fixed K=1 remains 28/34 strict (82.4%), 32/34 topology, and 34/34
+evaluated; fixed K=4 remains 41/60 direct and 9/15 all-class.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

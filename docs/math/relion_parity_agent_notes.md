@@ -9237,3 +9237,70 @@ and `9/15` all-class.
 - This is non-scoring.  Fixed K=1 remains `28/34` strict, `32/34`
   topology, and `34/34` evaluated; fixed K=4 remains `41/60` direct and
   `9/15` all-class.
+
+## 2026-07-29 case-22 physical-iteration-2 BPref accumulator is causal
+
+- `scripts/analyze_em_k1_bpref_boundary.py` compares RECOVAR's versioned
+  post-join accumulator against RELION's passive downsampled average/FSC
+  dumps, with an independent RELION-repeat map gate.  FSC/FSC-AUC is primary;
+  complex normalized L2, positive amplitude fits, weight, and support are
+  secondary.  Correlation is absent.
+- Same-A100 job `11764048` completed both RELION and RECOVAR two-iteration
+  science arms on `della-l08g5`, UUID
+  `GPU-a20700a1-ed8d-42b4-3a83-38d3a8d7e57b`.  Slurm reports
+  `FAILED 1:0` after `01:07:10`, maximum RSS `25670888K`, only because the
+  wrapper expected `run_it001_half{1,2}_class001.mrc` after a run without
+  `save_intermediates_dir`.  RECOVAR had already saved the corresponding
+  non-converged numbered maps as `final_half{1,2}.mrc`, both versioned BPref
+  dumps, results, and timing.  Final all-data did not run; grid correction
+  and forced after-max finalization were unset.
+- The diagnostic RELION repeat qualifies against the prior exact trajectory:
+  half-map FSC-AUC is `0.9999998648859472/0.9999998500826959`.
+  RECOVAR-versus-repeat maps are already biased at reference 2, with
+  FSC-AUC `0.9999931029101212/0.9999934355897221` and normalized L2
+  `0.011627993100749703/0.011629974090418277`.
+- Post-join RECOVAR-versus-RELION complex-average FSC-AUC is
+  `0.9999961774540641/0.9999962019771084`; normalized L2 is
+  `0.01281965364812333/0.012812025855309038`.  Positive global scales
+  `0.9886418590267985/0.9886450238112716` explain
+  `55.6266381%/55.6834080%`; weight relative L2 is
+  `0.001932232251382977/0.001953730974117599`, and support Jaccard is
+  exactly `1.0`.
+- `scripts/analyze_em_k1_bpref_substitution.py` decodes RELION's raw
+  `[k,i,j>=0]` double-precision BPref storage, converts it to RECOVAR's
+  centered `[j,i,k]` cube with the pinned `N^2/N^4` unit conversion, and
+  completes the negative half by Hermitian symmetry.  The independently
+  dumped RELION average self-replays at
+  `9.3259147436e-17/9.3361588114e-17` relative L2, with exactly zero weight
+  error.  The discrete real-map frame requires an explicit reported `-1`
+  sign; no amplitude is fitted for replay integrity.
+- The causal factorial uses identical RELION tau2 in both reconstruction
+  arms.  RECOVAR accumulators retain FSC-AUC
+  `0.9999929843572196/0.9999933517302643` and L2
+  `0.0115961094347795/0.011597638611648597`.  RELION accumulator
+  substitution reaches FSC-AUC
+  `0.9999999999934455/0.9999999999904421` and L2
+  `6.548196000620455e-7/1.912523539572997e-6`, explaining
+  `99.9943531%/99.9835094%` of the map residual.
+- The accepted classification is
+  `relion_bpref_accumulator_explains_majority_of_map_residual`.  Together
+  with the rejected tau2 substitution, this establishes that the
+  reference-2 amplitude bias is carried by numerator/weight content.  It
+  does not yet separate candidate membership, posterior mass, or scatter
+  arithmetic; the physical-iteration-2 support-count differences on
+  `1101/3000` particles remain the next bounded upstream discriminator.
+- Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_boundary_8004e667_20260729T125500ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it2_bpref_boundary_8004e667_20260729T125500ET`;
+  both contain `SAFE_TO_DELETE`.  Boundary, substitution, recovery-output
+  manifest, and recovery-record SHA-256 values are
+  `dbbee34d5409338f1fc05a6b30e55f7355cbfd3f7699da46b3d6de9169a4a48f`,
+  `d02c15b54db82fe05ab552f628a98380ee11d077434665b1dc38c07829535675`,
+  `3ad13d220b6730634fb195bbca93c5fcc3f43ed6620f65e8fb87696b621b5b7f`,
+  and
+  `390bef7c3041d7af2af6971e1dc9573f83b3b1e7af7548beac0ff14a6837bc7d`.
+- This is non-scoring.  Fixed K=1 remains `28/34` strict (`82.4%`),
+  `32/34` topology, and `34/34` evaluated; fixed K=4 remains `41/60`
+  direct and `9/15` all-class.  Exact-UUID K=4 confirmation `11762553`
+  remains resource-pending.
