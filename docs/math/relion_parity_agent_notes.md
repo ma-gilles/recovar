@@ -9049,8 +9049,36 @@ and `9/15` all-class.
 - Jobs `11759666` and `11759668` were canceled without allocation.
   Replacement `11760373` passed preflight but was canceled after
   `00:13:40`, before target capture, once the state mismatch was proven.
-  Authoritative operand classification remains open pending a native replay
-  with the uninterrupted iteration-2 perturbation explicitly pinned.
+  Its native-operand conclusion is rejected.
+- Default-off, fail-closed RELION perturbation override commits `57c0082`
+  and `6982c77` require exact iteration/value input and print the applied
+  value at full precision.  Build `11761492` completed `0:0`; binary SHA-256
+  is
+  `c761b5660cfd84e4960f95f62b01fb23bccbbb9caba8fe388b80e383acd00a74`.
+- Same-model A100 control `11761710` replayed exact uninterrupted
+  perturbation `+0.27053284645080566`.  Its RELION command completed and
+  sealed all captures; the wrapper later exited `2:0` only because it used
+  an obsolete fine-score-validator CLI.  Hash-pinned recovery passes, and
+  the native translation grid matches within
+  `3.725290298461914e-09` pixels.
+- Transposed native matrices form a bitwise-exact bijection over all 2,968
+  RECOVAR rotations.  Native row 1210 maps to target RECOVAR row 2626;
+  the previously compared native row 2626 maps to RECOVAR row 210.  After
+  mapping, support is exact at 109,184/109,184 (Jaccard 1.0), winner
+  `(2626, 80)` is exact, maximum-tie key sets match, and translations 80/82
+  are bitwise tied in native raw-diff2 with bitwise-exact cross-engine target
+  scores.  Background combined-score maximum absolute difference is
+  `0.0001220703125`.
+- Superseding same-model classification is
+  `authoritative_state_native_and_recovar_target_match_after_exact_rotation_permutation__prior_native_operand_boundary_rejected`.
+  Comparison and recovery-seal SHA-256 values are
+  `9b7f7020160fd38ec25f6be7d06e08b3ed06f061fed7c8417ae9e6dc2b28e39f`
+  and
+  `a163ab2f9abd6ba1e83d97506065d9f54692c65b67d0cd927d8fcea3f43c7f08`.
+  Root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_same_model_control53722_6982c77_20260729T114500ET`.
+  Exact-UUID confirmation replacement `11762553` remains pending, so this
+  control is non-scoring and not exact-device authoritative evidence.
 - This is non-scoring; fixed K=4 remains `41/60` direct and `9/15`
   all-class.  No correlation was computed, grid correction was unset, and
   forced final all-data was unset.

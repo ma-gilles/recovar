@@ -12188,9 +12188,51 @@ before its target capture, as soon as the perturbation mismatch was proven.
 The native provenance rejection is
 `fresh_relion_continuation_used_restart_perturbation__native_capture_is_not_authoritative_iteration2`.
 An authoritative native recapture must explicitly pin the uninterrupted
-iteration-2 perturbation before score-operand classification.  The phase
-ablation still rejects phase causality, but the native operand boundary
-remains open.
+iteration-2 perturbation before score-operand classification.
+
+RELION diagnostic commits `57c0082` and `6982c77` add a default-off,
+fail-closed perturbation override.  It requires both an exact live iteration
+and value, rejects malformed, non-finite, or out-of-range values, and prints
+the requested and applied values at full round-trip precision.  Build job
+`11761492` completed `0:0` in `00:01:46`; the binary SHA-256 is
+`c761b5660cfd84e4960f95f62b01fb23bccbbb9caba8fe388b80e383acd00a74`.
+
+Same-model A100 control `11761710` then replayed iteration 2 with exact
+perturbation `+0.27053284645080566`.  The RELION science command completed
+zero and atomically sealed the geometry, full fine-score, and bounded
+fine-operand artifacts.  Slurm reports `FAILED 2:0` after `00:10:02` only
+because the wrapper subsequently called the current fine-score validator
+with an obsolete single-file CLI; recovery with the hash-pinned current API
+passes.  The recovered native translation grid matches the uninterrupted
+RECOVAR grid within `3.725290298461914e-09` pixels.
+
+The geometry artifact exposes a second error in the prior interpretation:
+native and RECOVAR rotation-local row numbers are permutations, not shared
+identities.  Transposed native matrices form a bitwise-exact bijection over
+all 2,968 RECOVAR matrices.  Native row 1210 maps to target RECOVAR row
+2626, whereas the previously compared native row 2626 maps to RECOVAR row
+210.  After exact matrix mapping, support is exactly 109,184/109,184
+(Jaccard 1.0), the winner is exactly `(2626, 80)`, the two maximum-score tie
+sets match, and target translations 80/82 have bitwise-equal native
+raw-diff2 and bitwise-exact cross-engine combined scores.  Background
+combined-score differences remain bounded at `0.0001220703125`
+(`25,862/109,184` bit mismatches; relative L2
+`1.1925326484896516e-06`) without changing the target or winner.
+
+The superseding same-model classification is
+`authoritative_state_native_and_recovar_target_match_after_exact_rotation_permutation__prior_native_operand_boundary_rejected`.
+Comparison and recovery-seal SHA-256 values are
+`9b7f7020160fd38ec25f6be7d06e08b3ed06f061fed7c8417ae9e6dc2b28e39f`
+and
+`a163ab2f9abd6ba1e83d97506065d9f54692c65b67d0cd927d8fcea3f43c7f08`.
+The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_same_model_control53722_6982c77_20260729T114500ET`
+and contains `SAFE_TO_DELETE`.  Exact-UUID confirmation was resubmitted as
+`11762553` after fixing the validator invocation.  Until it completes, the
+same-model result is non-scoring and explicitly not exact-device
+authoritative evidence.  The phase ablation still rejects phase causality,
+and no native operand-arithmetic boundary remains supported by current
+evidence.
 
 This is a target diagnostic, not a map-quality promotion.  Fixed K=4 remains
 41/60 direct class checks and 9/15 all-class iterations.  Grid correction
