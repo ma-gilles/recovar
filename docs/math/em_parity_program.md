@@ -12164,25 +12164,33 @@ both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
 `8028dd3b61c995134878b6587fccd36bf1572f2bf050a9329d31981381b59505`.
 
 Native same-A100 diagnostic `11759665` subsequently failed `1:0` after
-`00:02:22`, but only after atomically sealing the requested native fine-score
-and bounded fine-operand artifacts.  Both bounded operand candidates replay
-RELION production bit-for-bit.  At rotation-local 2626,
-`raw_diff2(82) - raw_diff2(80) = 0.30828857421875`, directly proving that
-native RELION does not have RECOVAR's target score tie.  Fine-score and
-fine-operand SHA-256 values are
+`00:02:22`, but only after atomically sealing a fine-score panel and bounded
+fine-operand artifact.  Both bounded operand candidates replay that RELION
+process bit-for-bit.  Fine-score and fine-operand SHA-256 values are
 `20ddb722cc747477babf580128ffaabd5ed9a5c1d38b8b967c9feba34b19b6f3`
 and
 `0b3e3d78c85af6431e26e5c9ee379f4eb10b1891d31890c961e37d31f97d18c5`.
 The later failure came from an unrelated dense BPref-factor dump exceeding
-its explicit 1 GB cap; it does not invalidate the already sealed bounded
-artifacts.  Recovery seal SHA-256 is
-`d2fe55d40cee8758941fa265c79bac8f60678fe7e31a998efa5d90145ec1ae4b`.
-Jobs `11759666` and `11759668` were canceled without allocation because the
-former retained the same unneeded dense-factor cap and the latter's
-`afterok` dependency became impossible.  Hash-bound RECOVAR high-precision
-operand comparison `11760373` replaces them without an external dependency.
-The remaining boundary is native fine-score operand arithmetic, not phase
-implementation or tie-breaking.
+its explicit 1 GB cap, but a stricter provenance audit rejects the bounded
+artifacts for authoritative comparison.  A fresh `--continue run_it001`
+process restores the perturbation factor but not the live perturbation, so it
+used exact restart value `-0.2149905264377594`; the authoritative
+uninterrupted iteration-2 state used `+0.27053284645080566`.  Their
+difference times the 2-pixel offset step is `-0.9710467457771301` pixels,
+exactly explaining the constant captured-native versus authoritative
+RECOVAR translation-grid displacement.  Thus
+`raw_diff2(82) - raw_diff2(80) = 0.30828857421875` belongs only to the
+restarted control state and cannot localize the authoritative boundary.
+
+Jobs `11759666` and `11759668` were canceled without allocation.  Replacement
+comparison `11760373` passed preflight but was canceled after `00:13:40`,
+before its target capture, as soon as the perturbation mismatch was proven.
+The native provenance rejection is
+`fresh_relion_continuation_used_restart_perturbation__native_capture_is_not_authoritative_iteration2`.
+An authoritative native recapture must explicitly pin the uninterrupted
+iteration-2 perturbation before score-operand classification.  The phase
+ablation still rejects phase causality, but the native operand boundary
+remains open.
 
 This is a target diagnostic, not a map-quality promotion.  Fixed K=4 remains
 41/60 direct class checks and 9/15 all-class iterations.  Grid correction

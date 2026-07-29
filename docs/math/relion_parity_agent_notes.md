@@ -9033,18 +9033,24 @@ and `9/15` all-class.
   both contain `SAFE_TO_DELETE`.  Launcher SHA-256 is
   `8028dd3b61c995134878b6587fccd36bf1572f2bf050a9329d31981381b59505`.
 - Native same-A100 job `11759665` failed `1:0` only after atomically sealing
-  the bounded score and operand artifacts.  Both operand rows replay native
-  production exactly; at rotation-local 2626,
-  `raw_diff2(82) - raw_diff2(80) = 0.30828857421875`.  This rules out a
-  native tie and localizes the open boundary to native fine-score operands.
-  Fine-score, fine-operand, and recovery-seal SHA-256 values are
+  bounded score and operand artifacts.  Both operand rows replay that
+  process exactly.  Fine-score and fine-operand SHA-256 values are
   `20ddb722cc747477babf580128ffaabd5ed9a5c1d38b8b967c9feba34b19b6f3`,
-  `0b3e3d78c85af6431e26e5c9ee379f4eb10b1891d31890c961e37d31f97d18c5`,
   and
-  `d2fe55d40cee8758941fa265c79bac8f60678fe7e31a998efa5d90145ec1ae4b`.
-  Its later failure was an unrelated dense BPref-factor cap.  Jobs
-  `11759666` and `11759668` were canceled without allocation; replacement
-  RECOVAR operand comparison `11760373` is queued without a dependency.
+  `0b3e3d78c85af6431e26e5c9ee379f4eb10b1891d31890c961e37d31f97d18c5`.
+  Its later failure was an unrelated dense BPref-factor cap.
+- Superseding provenance audit rejects these artifacts for authoritative
+  iteration-2 comparison.  Fresh `--continue run_it001` used restart
+  perturbation `-0.2149905264377594`, not the uninterrupted authoritative
+  value `+0.27053284645080566`.  The resulting
+  `-0.9710467457771301`-pixel grid displacement exactly matches the native
+  capture.  The native `0.30828857421875` target raw-diff2 separation
+  therefore describes only the restarted control state.
+- Jobs `11759666` and `11759668` were canceled without allocation.
+  Replacement `11760373` passed preflight but was canceled after
+  `00:13:40`, before target capture, once the state mismatch was proven.
+  Authoritative operand classification remains open pending a native replay
+  with the uninterrupted iteration-2 perturbation explicitly pinned.
 - This is non-scoring; fixed K=4 remains `41/60` direct and `9/15`
   all-class.  No correlation was computed, grid correction was unset, and
   forced final all-data was unset.
