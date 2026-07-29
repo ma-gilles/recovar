@@ -13,6 +13,7 @@ import numpy as np
 
 from scripts.analyze_k1_bpref_contributor_membership import match_rotations
 from scripts.validate_relion_bpref_membership import (
+    INVALID_WEIGHT_SENTINEL,
     MembershipArtifact,
     validate_directory,
 )
@@ -100,12 +101,20 @@ def compare_particle(
         "non-finite posterior mass",
     )
     _require(
-        np.all(relion_weights >= 0.0)
+        np.all(
+            (relion_weights >= 0.0)
+            | (relion_weights == float(INVALID_WEIGHT_SENTINEL))
+        )
         and np.all(recovar_posterior >= 0.0)
         and np.all(recovar_reconstruction >= 0.0),
         "negative posterior mass",
     )
 
+    relion_candidate_samples = relion_weights != float(INVALID_WEIGHT_SENTINEL)
+    relion_candidate_rotations = np.any(relion_candidate_samples, axis=1)
+    relion_rotations = relion_rotations[relion_candidate_rotations]
+    relion_weights = relion_weights[relion_candidate_rotations]
+    relion_candidate_samples = relion_candidate_samples[relion_candidate_rotations]
     matches = match_rotations(
         relion_rotations, recovar_rotations, tolerance=rotation_tolerance
     )
@@ -119,7 +128,8 @@ def compare_particle(
     matched_recovar_positive = recovar_positive_rotations[recovar_rows]
     both_positive = matched_relion_positive & matched_recovar_positive
 
-    relion_posterior_mass = np.sum(relion_weights, axis=1) / relion_weight_norm
+    relion_valid_weights = np.where(relion_candidate_samples, relion_weights, 0.0)
+    relion_posterior_mass = np.sum(relion_valid_weights, axis=1) / relion_weight_norm
     relion_reconstruction_mass = np.sum(
         np.where(relion_positive_samples, relion_weights, 0.0), axis=1
     ) / relion_weight_norm

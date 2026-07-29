@@ -115,14 +115,30 @@ def test_rejects_truncated_artifact(tmp_path: Path) -> None:
         validator.load_artifact(path)
 
 
-def test_rejects_negative_weight(tmp_path: Path) -> None:
+def test_accepts_exact_invalid_weight_sentinel(tmp_path: Path) -> None:
+    path = _write_artifact(
+        tmp_path,
+        part=4,
+        stack=101,
+        weights=np.asarray(
+            [[0.7, validator.INVALID_WEIGHT_SENTINEL, 0.1], [0.4, 0.3, 0.0]],
+            dtype=np.float32,
+        ),
+    )
+    artifact = validator.load_artifact(path)
+    assert np.count_nonzero(
+        artifact.weights == validator.INVALID_WEIGHT_SENTINEL
+    ) == 1
+
+
+def test_rejects_unexpected_negative_weight(tmp_path: Path) -> None:
     path = _write_artifact(
         tmp_path,
         part=4,
         stack=101,
         weights=np.asarray([[0.7, -0.2, 0.1], [0.4, 0.3, 0.0]], dtype=np.float32),
     )
-    with pytest.raises(ValueError, match="negative posterior"):
+    with pytest.raises(ValueError, match="unexpected negative posterior"):
         validator.load_artifact(path)
 
 

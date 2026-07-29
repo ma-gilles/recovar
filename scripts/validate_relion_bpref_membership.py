@@ -32,6 +32,7 @@ ROTATION_DTYPE = np.dtype(
     }
 )
 WEIGHT_DTYPE = np.dtype("<f4")
+INVALID_WEIGHT_SENTINEL = np.float32(-np.finfo(np.float32).max)
 FILE_NAME = re.compile(
     r"part(?P<part>\d+)_stack(?P<stack>\d+)_img(?P<img>\d+)"
     r"_class(?P<class_>\d+)\.bpm-v1\.bin"
@@ -181,7 +182,10 @@ def load_artifact(path: Path) -> MembershipArtifact:
         f"duplicate rotation identity: {path}",
     )
     _require(np.all(np.isfinite(weights)), f"non-finite posterior weight: {path}")
-    _require(np.all(weights >= 0.0), f"negative posterior weight: {path}")
+    _require(
+        np.all((weights >= 0.0) | (weights == INVALID_WEIGHT_SENTINEL)),
+        f"unexpected negative posterior weight: {path}",
+    )
     significant_weight = _float32_from_bits(header[15])
     weight_norm = _float32_from_bits(header[16])
     _require(
@@ -277,6 +281,10 @@ def validate_directory(
         int(np.count_nonzero(artifact.weights >= artifact.significant_weight))
         for artifact in artifacts
     ]
+    invalid_samples = [
+        int(np.count_nonzero(artifact.weights == INVALID_WEIGHT_SENTINEL))
+        for artifact in artifacts
+    ]
     summary: dict[str, object] = {
         "schema": "relion-bpref-membership-v1",
         "capture_directory": str(directory.resolve()),
@@ -294,6 +302,7 @@ def validate_directory(
         ),
         "total_weight_count": int(sum(artifact.weights.size for artifact in artifacts)),
         "total_significant_sample_count": int(sum(positive_samples)),
+        "total_invalid_sentinel_count": int(sum(invalid_samples)),
         "artifact_sha256": {
             artifact.path.name: artifact.sha256 for artifact in artifacts
         },
