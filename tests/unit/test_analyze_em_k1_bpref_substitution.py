@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 from scripts.analyze_em_k1_bpref_substitution import (
+    align_discrete_map_sign,
+    classify_accumulator_substitution,
     load_relion_raw,
     relion_raw_to_recovar_full,
 )
@@ -65,3 +67,25 @@ def test_relion_raw_to_recovar_full_maps_axes_units_and_hermitian_partner():
     # Hermitian partner coordinates are (-j, -i, -k).
     assert data[1, 0, 3] == pytest.approx((3.0 - 4.0j) / 4.0)
     assert weight[1, 0, 3] == pytest.approx(7.0 / 16.0)
+
+
+def test_align_discrete_map_sign_reports_exact_frame_flip():
+    target = np.asarray([1.0, -2.0, 3.0])
+
+    aligned, sign = align_discrete_map_sign(-target, target)
+
+    assert sign == -1
+    np.testing.assert_array_equal(aligned, target)
+
+
+def test_classify_accumulator_substitution_uses_accumulator_label():
+    result = classify_accumulator_substitution(
+        0.01,
+        1.0e-6,
+        explanation_fraction_gate=0.5,
+    )
+
+    assert result["classification"] == (
+        "relion_bpref_accumulator_explains_majority_of_map_residual"
+    )
+    assert result["relative_l2_explained_fraction"] == pytest.approx(0.9999)

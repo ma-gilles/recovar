@@ -27,7 +27,6 @@ if __package__:
         _model,
         _reconstruct_and_flatten,
         _relion_tau2,
-        classify_substitution,
         map_metrics,
     )
     from scripts.compare_iter1_bpref_accum import (
@@ -41,7 +40,6 @@ else:
         _model,
         _reconstruct_and_flatten,
         _relion_tau2,
-        classify_substitution,
         map_metrics,
     )
     from compare_iter1_bpref_accum import (
@@ -208,6 +206,48 @@ def verify_downsampled_replay(
         "weight_max_absolute_error": float(
             np.max(np.abs(replay_weight - target_weight))
         ),
+    }
+
+
+def align_discrete_map_sign(
+    value: np.ndarray,
+    target: np.ndarray,
+) -> tuple[np.ndarray, int]:
+    """Choose the exact ±1 Fourier-frame sign nearest the target map."""
+
+    value = np.asarray(value)
+    target = np.asarray(target)
+    _require(value.shape == target.shape, "map-sign alignment shapes differ")
+    positive_error = float(np.linalg.norm(value - target))
+    negative_error = float(np.linalg.norm(-value - target))
+    sign = -1 if negative_error < positive_error else 1
+    return sign * value, sign
+
+
+def classify_accumulator_substitution(
+    baseline_relative_l2: float,
+    substituted_relative_l2: float,
+    *,
+    explanation_fraction_gate: float,
+) -> dict[str, Any]:
+    _require(baseline_relative_l2 > 0.0, "baseline relative L2 must be positive")
+    _require(
+        substituted_relative_l2 >= 0.0,
+        "substituted relative L2 must be nonnegative",
+    )
+    explained_fraction = float(
+        (baseline_relative_l2 - substituted_relative_l2)
+        / baseline_relative_l2
+    )
+    classification = (
+        "relion_bpref_accumulator_explains_majority_of_map_residual"
+        if explained_fraction >= explanation_fraction_gate
+        else "relion_bpref_accumulator_does_not_explain_map_residual"
+    )
+    return {
+        "classification": classification,
+        "relative_l2_explained_fraction": explained_fraction,
+        "explanation_fraction_gate": float(explanation_fraction_gate),
     }
 
 
@@ -393,6 +433,10 @@ def analyze(
             voxel_size=voxel_size,
             particle_diameter_angstrom=particle_diameter_angstrom,
         )
+        substituted_map, relion_raw_map_sign = align_discrete_map_sign(
+            substituted_map,
+            target_map,
+        )
         baseline = map_metrics(baseline_map, target_map)
         substituted = map_metrics(substituted_map, target_map)
         _require(
@@ -403,7 +447,7 @@ def analyze(
             substituted["relative_l2"] <= map_replay_relative_l2_gate,
             f"RELION raw map replay relative L2 failed for half {half}",
         )
-        classification = classify_substitution(
+        classification = classify_accumulator_substitution(
             baseline["relative_l2"],
             substituted["relative_l2"],
             explanation_fraction_gate=explanation_fraction_gate,
@@ -411,6 +455,7 @@ def analyze(
         half_rows.append(
             {
                 "half": half,
+                "relion_raw_map_sign_applied": relion_raw_map_sign,
                 "raw_downsampled_replay": raw_replay,
                 "recovar_accumulator_relion_tau_vs_relion": baseline,
                 "relion_accumulator_relion_tau_vs_relion": substituted,
@@ -428,7 +473,8 @@ def analyze(
         )
 
     all_explain = all(
-        row["classification"] == "relion_tau2_explains_majority_of_map_residual"
+        row["classification"]
+        == "relion_bpref_accumulator_explains_majority_of_map_residual"
         for row in half_rows
     )
     return {
