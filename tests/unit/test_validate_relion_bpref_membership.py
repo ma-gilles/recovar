@@ -9,6 +9,14 @@ import pytest
 
 from scripts import validate_relion_bpref_membership as validator
 
+PATCH = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "patches"
+    / "relion_bpref_membership_chunked_bc319d0.patch"
+)
+PATCH_SHA256 = "30c2d2f7d7bdd34312ed792b86cdc1aaf3976b4ffe8cd64828def0add1f79a76"
+
 
 def _bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
@@ -123,3 +131,16 @@ def test_rejects_incomplete_temporary_file(tmp_path: Path) -> None:
     (tmp_path / "orphan.tmp.1").write_bytes(b"x")
     with pytest.raises(ValueError, match="incomplete"):
         validator.validate_directory(tmp_path)
+
+
+def test_membership_patch_bytes_and_passive_guards_are_frozen() -> None:
+    payload = PATCH.read_bytes()
+    assert hashlib.sha256(payload).hexdigest() == PATCH_SHA256
+    text = payload.decode()
+    assert 'std::getenv("RELION_BPM_CAPTURE_DIR")' in text
+    assert "cudaMemcpyDeviceToHost" in text
+    assert "relion_capture_bpref_membership_v1(" in text
+    assert not any(
+        line.startswith("+") and "runBackProjectKernel(" in line
+        for line in text.splitlines()
+    )

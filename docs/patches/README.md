@@ -1,5 +1,29 @@
 # RELION instrumentation patches
 
+## relion_bpref_membership_chunked_bc319d0.patch
+
+Adds a compact, passive `RELION_BPM_CAPTURE_*` diagnostic that copies the
+exact float32 fine-posterior table and rotation identities for an explicit
+particle-ID cohort after the untouched production backprojection launch.
+Unlike the pre-scatter row capture below, its storage is proportional to
+orientation/translation hypotheses rather than hypothesis/pixel products.
+The same patch retains the checked explicit part-ID filter and bounded
+pre-scatter capture.
+
+Apply only to detached RELION commit
+`bc319d0b3ca063de4a9c8b66da6e5b4d9f618630`:
+
+```bash
+git apply --check \
+  /absolute/path/to/recovar/docs/patches/relion_bpref_membership_chunked_bc319d0.patch
+git apply \
+  /absolute/path/to/recovar/docs/patches/relion_bpref_membership_chunked_bc319d0.patch
+```
+
+The exact patch SHA-256 is
+`30c2d2f7d7bdd34312ed792b86cdc1aaf3976b4ffe8cd64828def0add1f79a76`.
+It is diagnostic-only and must not be treated as a production RELION change.
+
 ## relion_bpref_prescatter_chunked_capture_bc319d0.patch
 
 Combines the explicit `RELION_BPRE_CAPTURE_PART_IDS` filter with a required
