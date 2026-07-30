@@ -10,13 +10,13 @@ authors = [
 ]
 description = "RECOVAR cryo-EM heterogeneity analysis"
 readme = "README.md"
-license = { text = "Princeton University Academic/Non-Commercial License (see LICENSE file)" }
+license = { text = "MIT" }
 requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS :: MacOS X",
     "Operating System :: POSIX :: Linux"
 ]
