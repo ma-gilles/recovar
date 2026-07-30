@@ -4,6 +4,7 @@ import numpy as np
 
 from scripts.analyze_em_k1_captured_score_components import (
     decompose_captured_residual,
+    fit_per_rotation_cross_scale,
 )
 
 
@@ -16,6 +17,12 @@ def test_reference_norm_counterfactual_dominates() -> None:
     report = decompose_captured_residual(total, norm, cross)
     assert report["reference_norm_dominated"]
     assert not report["cross_dominated"]
+    assert (
+        report["additive_structure"]["reference_norm"]["energy_fraction"][
+            "rotation_only"
+        ]
+        > 0.99
+    )
     assert report["closure"]["max_abs"] < 1e-12
     assert (
         report["counterfactual_energy_removal_fraction"]["reference_norm"]
@@ -32,6 +39,10 @@ def test_cross_counterfactual_dominates() -> None:
     report = decompose_captured_residual(total, norm, cross)
     assert report["cross_dominated"]
     assert not report["reference_norm_dominated"]
+    assert (
+        report["additive_structure"]["cross"]["energy_fraction"]["translation_only"]
+        > 0.99
+    )
     assert report["closure"]["max_abs"] < 1e-12
 
 
@@ -47,3 +58,16 @@ def test_closure_reports_unexplained_component() -> None:
         cross,
     )
     assert report["closure"]["max_abs"] > 0.0
+
+
+def test_per_rotation_cross_scale_closes_multiplicative_difference() -> None:
+    source = np.arange(1, 13, dtype=np.float64).reshape(4, 3)
+    expected_scales = np.asarray([0.9, 1.1, 1.2, 0.8])
+    report = fit_per_rotation_cross_scale(
+        source,
+        expected_scales[:, None] * source,
+    )
+    assert report["scale_dominated"]
+    assert report["counterfactual_energy_removal_fraction"] > 0.999999
+    assert np.isclose(report["scale_range"][0], 0.8)
+    assert np.isclose(report["scale_range"][1], 1.2)

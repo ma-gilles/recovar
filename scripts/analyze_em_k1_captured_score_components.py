@@ -15,6 +15,9 @@ from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _map_relion_table,
     _translation_permutation,
 )
+from scripts.analyze_em_k1_coarse_score_components import (
+    decompose_additive_score_residual,
+)
 from scripts.validate_relion_coarse_pass1_components import (
     RELION_INVALID_DIFF2,
     validate_directory,
@@ -45,6 +48,38 @@ def _center(values: np.ndarray) -> np.ndarray:
     return values - np.mean(values)
 
 
+def fit_per_rotation_cross_scale(
+    recovar_cross: np.ndarray,
+    relion_cross_in_recovar_sign: np.ndarray,
+) -> dict[str, Any]:
+    """Test whether one positive reference scale per rotation closes cross scores."""
+
+    source = np.asarray(recovar_cross, dtype=np.float64)
+    target = np.asarray(relion_cross_in_recovar_sign, dtype=np.float64)
+    _require(source.shape == target.shape, "cross-component shapes differ")
+    _require(source.ndim == 2 and min(source.shape) > 1, "cross panel is too small")
+    _require(np.all(np.isfinite(source)), "RECOVAR cross component is not finite")
+    _require(np.all(np.isfinite(target)), "RELION cross component is not finite")
+    denominators = np.sum(source**2, axis=1)
+    _require(np.all(denominators > 0.0), "cross scale has a zero source row")
+    scales = np.sum(source * target, axis=1) / denominators
+    _require(np.all(scales > 0.0), "cross scale must be positive")
+    baseline = _center(target - source)
+    scaled = _center(target - scales[:, None] * source)
+    baseline_energy = float(np.sum(baseline**2))
+    _require(baseline_energy > 0.0, "cross residual has zero centered energy")
+    scaled_energy = float(np.sum(scaled**2))
+    removal = 1.0 - scaled_energy / baseline_energy
+    return {
+        "scale_range": [float(np.min(scales)), float(np.max(scales))],
+        "scale_median": float(np.median(scales)),
+        "centered_baseline_energy": baseline_energy,
+        "centered_scaled_energy": scaled_energy,
+        "counterfactual_energy_removal_fraction": float(removal),
+        "scale_dominated": bool(removal > COMPONENT_DOMINANCE_FRACTION),
+    }
+
+
 def decompose_captured_residual(
     total_residual: np.ndarray,
     reference_norm_residual: np.ndarray,
@@ -72,6 +107,10 @@ def decompose_captured_residual(
     norm_removal = 1.0 - without_norm_energy / total_energy
     cross_removal = 1.0 - without_cross_energy / total_energy
     absolute_closure = np.abs(closure)
+    additive_structure = {
+        "reference_norm": decompose_additive_score_residual(norm),
+        "cross": decompose_additive_score_residual(cross),
+    }
     return {
         "total_centered_energy": total_energy,
         "reference_norm_centered_energy": float(np.sum(norm_centered**2)),
@@ -84,6 +123,7 @@ def decompose_captured_residual(
             "p95_abs": float(np.percentile(absolute_closure, 95)),
             "max_abs": float(np.max(absolute_closure)),
         },
+        "additive_structure": additive_structure,
         "reference_norm_dominated": bool(
             norm_removal > COMPONENT_DOMINANCE_FRACTION
             and norm_removal > cross_removal
@@ -216,6 +256,10 @@ def build_report(
             norm_residual,
             cross_residual,
         )
+        decomposition["per_rotation_cross_scale"] = fit_per_rotation_cross_scale(
+            recovar_cross,
+            -mapped_cross[selected_ids],
+        )
         decomposition["closure_passed"] = bool(
             decomposition["closure"]["p95_abs"] <= CROSS_ENGINE_CLOSURE_P95_GATE
             and decomposition["closure"]["max_abs"] <= CROSS_ENGINE_CLOSURE_MAX_GATE
@@ -260,6 +304,17 @@ def build_report(
         "cross_dominated": sum(
             row["decomposition"]["cross_dominated"] for row in particles
         ),
+        "cross_rotation_dominated": sum(
+            row["decomposition"]["additive_structure"]["cross"]["energy_fraction"][
+                "rotation_only"
+            ]
+            > COMPONENT_DOMINANCE_FRACTION
+            for row in particles
+        ),
+        "cross_per_rotation_scale_dominated": sum(
+            row["decomposition"]["per_rotation_cross_scale"]["scale_dominated"]
+            for row in particles
+        ),
     }
     captures_qualified = bool(
         relion_validation["status"] == "pass"
@@ -270,12 +325,21 @@ def build_report(
         classification = "component_capture_not_qualified"
     elif fixed_metric["reference_norm_dominated"] == 14:
         classification = "raw_coarse_residual_is_reference_norm_dominated"
+    elif (
+        fixed_metric["cross_dominated"] == 14
+        and fixed_metric["cross_rotation_dominated"] == 14
+        and fixed_metric["cross_per_rotation_scale_dominated"] < 14
+    ):
+        classification = (
+            "raw_coarse_residual_is_rotation_dominated_cross_term_not_consistently_"
+            "explained_by_per_rotation_scale"
+        )
     elif fixed_metric["cross_dominated"] == 14:
         classification = "raw_coarse_residual_is_image_reference_cross_dominated"
     else:
         classification = "raw_coarse_residual_has_mixed_component_dominance"
     return {
-        "schema": "recovar-k1-case22-captured-score-components-v1",
+        "schema": "recovar-k1-case22-captured-score-components-v2",
         "status": "complete",
         "classification": classification,
         "captures_qualified": captures_qualified,
@@ -283,6 +347,9 @@ def build_report(
             "fixed 14 particles and 13 requested canonical rotations; "
             "counterfactual centered residual-energy removal; component dominance "
             "requires >0.5 removal and strictly exceeds the other component; "
+            "cross-term rotation dominance requires >0.5 orthogonal row-effect "
+            "energy; per-rotation positive cross scaling is dominant only when it "
+            "removes >0.5 centered cross-residual energy; "
             "no correlation"
         ),
         "fixed_gates": {
