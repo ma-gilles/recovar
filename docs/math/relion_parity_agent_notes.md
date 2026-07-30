@@ -9829,3 +9829,33 @@ and `9/15` all-class.
   `git diff --check`, and Wheels run `30548434124` are recorded separately.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, and `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
+## 2026-07-30 case-10 final full-grid FSC-deficit localization
+
+- `scripts/analyze_em_k1_final_grid_fsc_deficit.py` replays the trajectory
+  auditor's signed, normalized non-DC FSC-AUC exactly and partitions its
+  defect by trapezoid segments at the last numbered reconstruction radius.
+  It fits no scale/sign and computes no correlation.
+- Case 10's last numbered iteration has current size `68`, hence radius `34`;
+  the final expectation spans shells through `190`.  Final half-1, half-2,
+  and merged FSC-AUC values replay exactly as `0.985843446538`,
+  `0.985323765470`, and `0.983006503534`.
+- The fraction of final FSC-AUC defect beyond radius `34` is
+  `95.1891%`, `95.1018%`, and `95.8232%` for half 1, half 2, and merged.
+  Relative to numbered iteration 15, the total defect is amplified
+  `278.796x`, `270.634x`, and `518.523x`.  All products pass the frozen
+  gates of strictly more than `95%` outside-radius defect and more than
+  `250x` amplification.
+- Classification:
+  `final_full_grid_fsc_deficit_is_over_95pct_outside_last_numbered_radius`.
+  This quantitatively localizes the failed final boundary to frequencies
+  introduced beyond the converged numbered radius; it does not support a
+  final pose-writeback, scheduler, or grid-correction change.
+- The short CPU analysis root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_final_grid_deficit_d5a947f8_20260730T0955ET`;
+  it contains `SAFE_TO_DELETE`.  Report SHA-256 is
+  `431bd99a4ecdd4952fb3e5f6bbc0baa677bb4e10c6e44c2d44a512f199358618`.
+  Focused validation passes `14/14`; scoped Ruff and `git diff --check`
+  pass.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, and `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
