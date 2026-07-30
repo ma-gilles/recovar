@@ -91,7 +91,11 @@ def classify_raw_target_pair(
     )
 
 
-def _validate_raw_report(report: dict[str, Any]) -> dict[str, bool]:
+def _validate_raw_report(
+    report: dict[str, Any],
+    *,
+    expected_recovar_job_id: int,
+) -> dict[str, bool]:
     _require(report.get("schema") == RAW_SCHEMA, "K4 raw-score schema changed")
     _require(
         report.get("status") == "complete"
@@ -102,7 +106,7 @@ def _validate_raw_report(report: dict[str, Any]) -> dict[str, bool]:
     _require(
         int(fixed.get("native_slurm_job_id")) == EXPECTED_NATIVE_JOB_ID
         and int(fixed.get("recovar_slurm_job_id"))
-        == EXPECTED_RECOVAR_JOB_ID
+        == expected_recovar_job_id
         and fixed.get("target_gpu_uuid") == TARGET_GPU_UUID
         and int(fixed.get("expected_support")) == EXPECTED_SUPPORT
         and int(fixed.get("target_recovar_rotation"))
@@ -164,7 +168,11 @@ def _validate_raw_report(report: dict[str, Any]) -> dict[str, bool]:
     }
 
 
-def _validate_operand_report(report: dict[str, Any]) -> bool:
+def _validate_operand_report(
+    report: dict[str, Any],
+    *,
+    expected_operand_job_id: int,
+) -> bool:
     _require(
         report.get("schema") == OPERAND_SCHEMA,
         "K4 native target-operand schema changed",
@@ -178,7 +186,7 @@ def _validate_operand_report(report: dict[str, Any]) -> bool:
     _require(
         int(fixed.get("native_slurm_job_id")) == EXPECTED_NATIVE_JOB_ID
         and int(fixed.get("operand_slurm_job_id"))
-        == EXPECTED_OPERAND_JOB_ID
+        == expected_operand_job_id
         and fixed.get("target_gpu_uuid") == TARGET_GPU_UUID
         and int(fixed.get("target_recovar_rotation"))
         == TARGET_RECOVAR_ROTATION
@@ -226,11 +234,19 @@ def build_report(
     *,
     raw_report_path: Path,
     operand_report_path: Path,
+    expected_recovar_job_id: int = EXPECTED_RECOVAR_JOB_ID,
+    expected_operand_job_id: int = EXPECTED_OPERAND_JOB_ID,
 ) -> dict[str, Any]:
     raw_report = json.loads(raw_report_path.read_text())
     operand_report = json.loads(operand_report_path.read_text())
-    raw_gates = _validate_raw_report(raw_report)
-    native_operand_accepted = _validate_operand_report(operand_report)
+    raw_gates = _validate_raw_report(
+        raw_report,
+        expected_recovar_job_id=expected_recovar_job_id,
+    )
+    native_operand_accepted = _validate_operand_report(
+        operand_report,
+        expected_operand_job_id=expected_operand_job_id,
+    )
     _validate_shared_inputs(raw_report, operand_report)
     classification, next_boundary = classify_raw_target_pair(
         native_operand_accepted=native_operand_accepted,
@@ -261,6 +277,15 @@ def build_report(
             "passed_boundaries": sum(int(value) for value in gates.values()),
             "gates": gates,
         },
+        "fixed_contract": {
+            "native_slurm_job_id": EXPECTED_NATIVE_JOB_ID,
+            "recovar_raw_diff2_slurm_job_id": expected_recovar_job_id,
+            "native_target_operand_slurm_job_id": expected_operand_job_id,
+            "target_gpu_uuid": TARGET_GPU_UUID,
+            "expected_support": EXPECTED_SUPPORT,
+            "target_recovar_rotation": TARGET_RECOVAR_ROTATION,
+            "target_translations": list(TARGET_TRANSLATIONS),
+        },
         "inputs": {
             "raw_report": {
                 "path": str(raw_report_path.resolve()),
@@ -281,12 +306,24 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-report", type=Path, required=True)
     parser.add_argument("--operand-report", type=Path, required=True)
+    parser.add_argument(
+        "--expected-recovar-job-id",
+        type=int,
+        default=EXPECTED_RECOVAR_JOB_ID,
+    )
+    parser.add_argument(
+        "--expected-operand-job-id",
+        type=int,
+        default=EXPECTED_OPERAND_JOB_ID,
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     _require(not args.output.exists(), f"refusing to overwrite {args.output}")
     report = build_report(
         raw_report_path=args.raw_report,
         operand_report_path=args.operand_report,
+        expected_recovar_job_id=args.expected_recovar_job_id,
+        expected_operand_job_id=args.expected_operand_job_id,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

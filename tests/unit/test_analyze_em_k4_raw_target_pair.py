@@ -106,7 +106,12 @@ def _input(path, label: str) -> dict[str, str]:
     }
 
 
-def _reports(tmp_path):
+def _reports(
+    tmp_path,
+    *,
+    recovar_job_id: int = analyzer.EXPECTED_RECOVAR_JOB_ID,
+    operand_job_id: int = analyzer.EXPECTED_OPERAND_JOB_ID,
+):
     shared = {
         name: _input(tmp_path, name) for name in analyzer.SHARED_INPUTS
     }
@@ -122,7 +127,7 @@ def _reports(tmp_path):
         },
         "fixed_contract": {
             "native_slurm_job_id": analyzer.EXPECTED_NATIVE_JOB_ID,
-            "recovar_slurm_job_id": analyzer.EXPECTED_RECOVAR_JOB_ID,
+            "recovar_slurm_job_id": recovar_job_id,
             "target_gpu_uuid": analyzer.TARGET_GPU_UUID,
             "expected_support": analyzer.EXPECTED_SUPPORT,
             "target_recovar_rotation": analyzer.TARGET_RECOVAR_ROTATION,
@@ -150,7 +155,7 @@ def _reports(tmp_path):
         "accepted": True,
         "fixed_contract": {
             "native_slurm_job_id": analyzer.EXPECTED_NATIVE_JOB_ID,
-            "operand_slurm_job_id": analyzer.EXPECTED_OPERAND_JOB_ID,
+            "operand_slurm_job_id": operand_job_id,
             "target_gpu_uuid": analyzer.TARGET_GPU_UUID,
             "target_recovar_rotation": analyzer.TARGET_RECOVAR_ROTATION,
             "target_translations": list(analyzer.TARGET_TRANSLATIONS),
@@ -190,6 +195,45 @@ def test_build_report_preserves_fixed_four_boundary_denominator(
         },
     }
     assert report["scorecard_change_admissible"] is False
+
+
+def test_build_report_explicitly_binds_alternate_owner_jobs(tmp_path) -> None:
+    raw_path, operand_path = _reports(
+        tmp_path,
+        recovar_job_id=11793813,
+        operand_job_id=11793814,
+    )
+
+    report = analyzer.build_report(
+        raw_report_path=raw_path,
+        operand_report_path=operand_path,
+        expected_recovar_job_id=11793813,
+        expected_operand_job_id=11793814,
+    )
+
+    assert report["fixed_contract"] == {
+        "native_slurm_job_id": analyzer.EXPECTED_NATIVE_JOB_ID,
+        "recovar_raw_diff2_slurm_job_id": 11793813,
+        "native_target_operand_slurm_job_id": 11793814,
+        "target_gpu_uuid": analyzer.TARGET_GPU_UUID,
+        "expected_support": analyzer.EXPECTED_SUPPORT,
+        "target_recovar_rotation": analyzer.TARGET_RECOVAR_ROTATION,
+        "target_translations": list(analyzer.TARGET_TRANSLATIONS),
+    }
+
+
+def test_build_report_rejects_unbound_alternate_owner_jobs(tmp_path) -> None:
+    raw_path, operand_path = _reports(
+        tmp_path,
+        recovar_job_id=11793813,
+        operand_job_id=11793814,
+    )
+
+    with pytest.raises(ValueError, match="raw-score fixed contract"):
+        analyzer.build_report(
+            raw_report_path=raw_path,
+            operand_report_path=operand_path,
+        )
 
 
 def test_rejects_shared_input_hash_mismatch(tmp_path) -> None:
