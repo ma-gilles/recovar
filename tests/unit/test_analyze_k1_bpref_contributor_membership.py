@@ -61,6 +61,38 @@ def test_match_rotations_uses_unique_geometry_with_declared_tolerance():
     assert matches.recovar_ambiguous == 0
 
 
+def test_match_rotations_rejects_ambiguous_geometry():
+    relion = _matrices([1.0, 1.0 + 2.0e-7, 3.0])
+    recovar = _matrices([1.0 + 1.0e-7, 3.0])
+    matches = match_rotations(relion, recovar, tolerance=1.0e-6)
+    assert matches.pairs.tolist() == [[2, 1]]
+    assert matches.relion_unmatched.tolist() == [0, 1]
+    assert matches.recovar_unmatched.tolist() == [0]
+    assert matches.relion_ambiguous == 0
+    assert matches.recovar_ambiguous == 1
+
+
+def test_match_rotations_zero_tolerance_includes_exact_geometry():
+    rotations = _matrices([1.0, 2.0])
+    matches = match_rotations(rotations, rotations[::-1], tolerance=0.0)
+    assert matches.pairs.tolist() == [[0, 1], [1, 0]]
+    assert matches.relion_unmatched.size == 0
+    assert matches.recovar_unmatched.size == 0
+
+
+def test_match_rotations_scales_to_large_one_to_one_tables():
+    values = np.arange(20_000, dtype=np.float32)
+    relion = _matrices(values)
+    permutation = np.random.default_rng(5).permutation(values.size)
+    recovar = relion[permutation]
+    matches = match_rotations(relion, recovar, tolerance=1.0e-6)
+    assert matches.pairs.shape == (values.size, 2)
+    assert matches.relion_unmatched.size == 0
+    assert matches.recovar_unmatched.size == 0
+    assert matches.relion_ambiguous == 0
+    assert matches.recovar_ambiguous == 0
+
+
 def test_compare_particle_separates_candidate_and_significance_membership():
     report, arrays = compare_particle_membership(
         relion_rotations=_matrices([1.0, 2.0, 3.0]),

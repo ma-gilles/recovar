@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 ROTATION_TOLERANCE = 1.0e-6
 
@@ -85,10 +86,12 @@ def match_rotations(
     *,
     tolerance: float = ROTATION_TOLERANCE,
 ) -> RotationMatches:
-    """Uniquely match two per-particle rotation tables by matrix geometry."""
+    """Uniquely match rotation tables without a quadratic distance matrix."""
 
     relion = np.asarray(relion_rotations, dtype=np.float32).reshape(-1, 3, 3)
     recovar = np.asarray(recovar_rotations, dtype=np.float32).reshape(-1, 3, 3)
+    if not np.isfinite(tolerance) or tolerance < 0.0:
+        raise ValueError("rotation tolerance must be finite and nonnegative")
     if not relion.size or not recovar.size:
         return RotationMatches(
             pairs=np.empty((0, 2), dtype=np.int64),
@@ -100,38 +103,80 @@ def match_rotations(
             relion_nearest_max_abs=np.full(relion.shape[0], np.inf),
             recovar_nearest_max_abs=np.full(recovar.shape[0], np.inf),
         )
-    distance = np.max(
-        np.abs(relion[:, None].astype(np.float64) - recovar[None].astype(np.float64)),
-        axis=(2, 3),
+    relion_flat = relion.astype(np.float64).reshape(relion.shape[0], -1)
+    recovar_flat = recovar.astype(np.float64).reshape(recovar.shape[0], -1)
+    relion_tree = cKDTree(relion_flat)
+    recovar_tree = cKDTree(recovar_flat)
+    inclusive_upper_bound = np.nextafter(tolerance, np.inf)
+
+    def bounded_two_nearest(
+        source: np.ndarray,
+        target_tree: cKDTree,
+        target_count: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        query_k = min(2, target_count)
+        bounded_distance, bounded_index = target_tree.query(
+            source,
+            k=query_k,
+            p=np.inf,
+            distance_upper_bound=inclusive_upper_bound,
+            workers=-1,
+        )
+        bounded_distance = np.asarray(bounded_distance, dtype=np.float64).reshape(
+            source.shape[0], query_k
+        )
+        bounded_index = np.asarray(bounded_index, dtype=np.int64).reshape(
+            source.shape[0], query_k
+        )
+        within_count = np.sum(np.isfinite(bounded_distance), axis=1)
+        nearest_distance = np.asarray(
+            target_tree.query(source, k=1, p=np.inf, workers=-1)[0],
+            dtype=np.float64,
+        )
+        return (
+            bounded_distance[:, 0],
+            bounded_index[:, 0],
+            within_count,
+            nearest_distance,
+        )
+
+    (
+        relion_bounded_distance,
+        relion_bounded_index,
+        relion_degree,
+        relion_nearest,
+    ) = bounded_two_nearest(relion_flat, recovar_tree, recovar.shape[0])
+    (
+        _,
+        recovar_bounded_index,
+        recovar_degree,
+        recovar_nearest,
+    ) = bounded_two_nearest(recovar_flat, relion_tree, relion.shape[0])
+    relion_unique = np.flatnonzero(relion_degree == 1)
+    candidate_recovar = relion_bounded_index[relion_unique]
+    reciprocal_unique = (
+        (recovar_degree[candidate_recovar] == 1)
+        & (recovar_bounded_index[candidate_recovar] == relion_unique)
     )
-    within = distance <= tolerance
-    relion_degree = np.sum(within, axis=1)
-    recovar_degree = np.sum(within, axis=0)
-    pairs = []
-    for relion_row in np.flatnonzero(relion_degree == 1):
-        recovar_row = int(np.flatnonzero(within[relion_row])[0])
-        if recovar_degree[recovar_row] == 1:
-            pairs.append((int(relion_row), recovar_row))
-    pair_array = np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
-    matched_relion = set(pair_array[:, 0].tolist())
-    matched_recovar = set(pair_array[:, 1].tolist())
+    matched_relion = relion_unique[reciprocal_unique]
+    matched_recovar = candidate_recovar[reciprocal_unique]
+    pair_array = np.stack((matched_relion, matched_recovar), axis=1).astype(
+        np.int64,
+        copy=False,
+    )
+    relion_matched_mask = np.zeros(relion.shape[0], dtype=bool)
+    recovar_matched_mask = np.zeros(recovar.shape[0], dtype=bool)
+    relion_matched_mask[matched_relion] = True
+    recovar_matched_mask[matched_recovar] = True
     return RotationMatches(
         pairs=pair_array,
-        relion_unmatched=np.asarray(
-            [row for row in range(relion.shape[0]) if row not in matched_relion],
-            dtype=np.int64,
-        ),
-        recovar_unmatched=np.asarray(
-            [row for row in range(recovar.shape[0]) if row not in matched_recovar],
-            dtype=np.int64,
-        ),
+        relion_unmatched=np.flatnonzero(~relion_matched_mask),
+        recovar_unmatched=np.flatnonzero(~recovar_matched_mask),
         relion_ambiguous=int(np.count_nonzero(relion_degree > 1)),
         recovar_ambiguous=int(np.count_nonzero(recovar_degree > 1)),
-        matched_max_abs=np.asarray(
-            [distance[left, right] for left, right in pair_array], dtype=np.float64
-        ),
-        relion_nearest_max_abs=np.min(distance, axis=1),
-        recovar_nearest_max_abs=np.min(distance, axis=0),
+        matched_max_abs=relion_bounded_distance[matched_relion],
+        relion_nearest_max_abs=relion_nearest,
+        recovar_nearest_max_abs=recovar_nearest,
     )
 
 

@@ -401,6 +401,10 @@ def analyze(
             "class_one_based": 1,
             "mpi_rank": mpi_rank,
             "rotation_tolerance": rotation_tolerance,
+            "rotation_matcher": (
+                "bidirectional cKDTree Chebyshev-distance matching with "
+                "k=2 uniqueness at the declared tolerance"
+            ),
             "cohort_rows_sha256": EXPECTED_COHORT_SHA256,
         },
         "gates": {
