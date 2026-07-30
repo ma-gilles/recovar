@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from scripts.analyze_em_k1_live_reference_counterfactual import (
+    classify_live_reference,
     recovar_score_components,
     reference_swap_counterfactual,
     relion_reference_on_recovar_window,
@@ -29,7 +30,10 @@ def test_maps_relion_fftw_rows_to_recovar_centered_window() -> None:
         current_size=current_size,
     )
     expected_indices = np.asarray([4 * current_half + 1, 2, 3 * current_half])
-    assert np.array_equal(selected[0], reference[0, expected_indices])
+    assert np.array_equal(
+        selected[0],
+        -(full_size**2) * reference[0, expected_indices],
+    )
 
 
 def test_recomputes_recovar_norm_and_cross_components() -> None:
@@ -60,3 +64,22 @@ def test_reference_swap_reports_causal_energy_removal() -> None:
     report = reference_swap_counterfactual(baseline, swapped)
     assert report["live_reference_dominated"]
     assert report["counterfactual_energy_removal_fraction"] > 0.99
+
+
+def test_classifies_fixed_cohort_live_reference_outcomes() -> None:
+    assert (
+        classify_live_reference(capture_qualified=False, dominated=14, expected=14)
+        == "operand_capture_not_qualified"
+    )
+    assert (
+        classify_live_reference(capture_qualified=True, dominated=14, expected=14)
+        == "raw_coarse_residual_is_live_projected_reference_dominated"
+    )
+    assert (
+        classify_live_reference(capture_qualified=True, dominated=0, expected=14)
+        == "live_projected_reference_rejected_as_raw_coarse_residual_cause"
+    )
+    assert (
+        classify_live_reference(capture_qualified=True, dominated=3, expected=14)
+        == "raw_coarse_residual_has_mixed_live_projected_reference_effect"
+    )

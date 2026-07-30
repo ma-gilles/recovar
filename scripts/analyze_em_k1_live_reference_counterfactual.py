@@ -59,7 +59,7 @@ def relion_reference_on_recovar_window(
     full_image_size: int,
     current_size: int,
 ) -> np.ndarray:
-    """Select RECOVAR centered-window pixels from RELION FFTW-row references."""
+    """Convert RELION FFTW-row references to RECOVAR centered-DFT units."""
 
     reference = np.asarray(reference)
     window_indices = np.asarray(window_indices, dtype=np.int64)
@@ -78,7 +78,7 @@ def relion_reference_on_recovar_window(
     _require(np.all(columns < current_half), "window column is outside current size")
     relion_rows = np.where(ky >= 0, ky, current_size + ky)
     relion_indices = relion_rows * current_half + columns
-    return reference[:, relion_indices]
+    return -(full_image_size**2) * reference[:, relion_indices]
 
 
 def recovar_score_components(
@@ -139,6 +139,18 @@ def reference_swap_counterfactual(
         "swapped_centered_p95_abs": float(np.percentile(np.abs(swapped), 95)),
         "swapped_centered_max_abs": float(np.max(np.abs(swapped))),
     }
+
+
+def classify_live_reference(*, capture_qualified: bool, dominated: int, expected: int) -> str:
+    """Classify the fixed-cohort counterfactual without changing its gate."""
+
+    if not capture_qualified:
+        return "operand_capture_not_qualified"
+    if dominated == expected:
+        return "raw_coarse_residual_is_live_projected_reference_dominated"
+    if dominated == 0:
+        return "live_projected_reference_rejected_as_raw_coarse_residual_cause"
+    return "raw_coarse_residual_has_mixed_live_projected_reference_effect"
 
 
 def _load_recovar(path: Path) -> dict[str, Any]:
@@ -337,8 +349,10 @@ def build_report(
         "recovar_replay_passed": sum(row["recovar_replay_passed"] for row in particles),
         "live_reference_dominated": sum(row["counterfactual"]["live_reference_dominated"] for row in particles),
     }
-    classification = (
-        "live_projected_reference_counterfactual_evaluated" if qualified else "operand_capture_not_qualified"
+    classification = classify_live_reference(
+        capture_qualified=qualified,
+        dominated=fixed_metric["live_reference_dominated"],
+        expected=fixed_metric["expected_particles"],
     )
     return {
         "schema": "em-k1-live-reference-counterfactual-v1",
@@ -351,11 +365,17 @@ def build_report(
             "recovar_replay_p95_abs_max": RECOVAR_REPLAY_P95_GATE,
             "recovar_replay_max_abs_max": RECOVAR_REPLAY_MAX_GATE,
         },
+        "fixed_conventions": {
+            "relion_reference_to_recovar_scale": -(full_image_size**2),
+            "relion_rows": "FFTW packed",
+            "recovar_rows": "centered rFFT",
+        },
         "operand_validation": operand_validation,
         "particles": particles,
         "notes": [
             "No correlation is computed.",
             "Only the projected-reference operand is replaced in the counterfactual.",
+            "The RELION reference uses the fixed RECOVAR sign and 2D DFT normalization.",
             "This diagnostic does not update the immutable parity scorecard.",
         ],
     }
