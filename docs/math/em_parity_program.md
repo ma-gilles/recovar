@@ -13133,6 +13133,35 @@ The official audit must reproduce the control arm before these are promoted
 from preliminary evidence.  No proposal ledger was emitted, and the fixed
 K=1 and K=4 scorecards remain unchanged.
 
+The scheduler-bound control audit `11786618` subsequently completed with
+exit `2:0` after `00:01:07`.  This is the predeclared scientific FSC failure:
+its intermediate/topology audit passes with exact `11/11` numbered topology.
+Its FSC JSON, shellwise NPZ, intermediate/topology JSON, and status SHA-256
+values are
+`fb252456ea135881b7cd8034b9b5c7db227ef9f50c783c4670e70ca85e7f82cc`,
+`041c866f6133bf192794333aa948d5150d1fcd01b602e6117f068a7a33a56de6`,
+`8a1349b089105797c1ccfcb95cc1d17a29263dbc1bdd43bc0ec444165d986c1d`,
+and
+`3b82f1ad1e85964bec96d45da75c8f2d5a6750a556c4a6d4d14977fcdeb70dc0`.
+All four reproduce the preliminary read-only replay exactly.
+
+The predeclared factorial was therefore rerun against the official control
+artifact.  It retains `0/11` control versus `3/11` double numbered failures,
+double-minus-control final cross-engine FSC-AUC
+`-0.08127068481741007`, double-minus-control final signed GT FSC-AUC
+`-0.0011820042429319388`, and control-versus-double final merged FSC-AUC
+`0.886226371092408`.  The accepted classification is
+`double_xhalf_mstep_introduces_numbered_failures_and_worsens_case26_final_parity_on_matched_head`.
+Terminal factorial JSON and shellwise NPZ SHA-256 values are
+`cb2dbb37f93d7e687554fe835e0a836651602b5ed04c785881e45e985eb8b16f`
+and
+`0e65f3a3c11ce7a5b7318f45802a28076ba20553b4bedd1d61e8acdd1d139cf3`.
+No correlation was computed.  This promotes the comparison from preliminary
+to official evidence and rejects double cross-half accumulation as a
+production fix.  No proposal ledger was emitted; fixed K=1 remains `28/34`
+strict, `32/34` topology, and `34/34` evaluated, while fixed K=4 remains
+`41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 K=4 exact-device dependency retry
 
 The required K=4 A100
