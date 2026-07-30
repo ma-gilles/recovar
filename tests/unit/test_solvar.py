@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 
 from recovar.commands import pipeline
@@ -11,7 +12,6 @@ import recovar.core.fourier_transform_utils as ftu
 from recovar.core import linalg
 from recovar.ppca.w_regularization import w_prior_precision, w_prior_quadratic
 from recovar.solvar.solvar import (
-    _adam_step,
     _state_from_loadings,
     loadings_from_state,
     make_loading_from_basis,
@@ -35,7 +35,7 @@ def test_solvar_ls_loss_matches_direct_low_rank_covariance_terms():
     y = rng.normal(size=(3, image_shape[0] * (image_shape[1] // 2 + 1))).astype(np.float32)
     Z = rng.normal(size=(3, 2, y.shape[1])).astype(np.float32)
 
-    got = np.asarray(solvar_image_losses(jnp.asarray(y), jnp.asarray(Z), image_shape, objective="ls"))
+    got = np.asarray(solvar_image_losses(jnp.asarray(y), jnp.asarray(Z), image_shape, objective="ls", apply_mean_terms=True))
     w_sqrt = np.sqrt(_weights(image_shape)).astype(np.float32)
     expected = []
     for i in range(y.shape[0]):
@@ -53,7 +53,7 @@ def test_solvar_mle_loss_matches_direct_woodbury_covariance():
     y = rng.normal(size=(2, image_shape[0] * (image_shape[1] // 2 + 1))).astype(np.float32)
     Z = rng.normal(size=(2, 3, y.shape[1])).astype(np.float32)
 
-    got = np.asarray(solvar_image_losses(jnp.asarray(y), jnp.asarray(Z), image_shape, objective="mle"))
+    got = np.asarray(solvar_image_losses(jnp.asarray(y), jnp.asarray(Z), image_shape, objective="mle", apply_mean_terms=True))
     w_sqrt = np.sqrt(_weights(image_shape)).astype(np.float32)
     expected = []
     for i in range(y.shape[0]):
@@ -80,18 +80,12 @@ def test_complex_adam_step_descends_real_quadratic():
     W = jnp.array([1.0 + 2.0j], dtype=jnp.complex64)
     objective = lambda z: jnp.sum(jnp.real(jnp.conj(z) * z))
     grad = jax.grad(objective)(W)
+    grad = jax.tree.map(jnp.conj, grad)
 
-    next_W, _, _ = _adam_step(
-        W,
-        grad,
-        jnp.zeros_like(W),
-        jnp.zeros(W.shape, dtype=W.real.dtype),
-        1,
-        learning_rate=0.1,
-        beta1=0.0,
-        beta2=0.0,
-        eps=1e-8,
-    )
+    optimizer = optax.adam(learning_rate=1e-4)
+    opt_state = optimizer.init(W)
+    updates, _ = optimizer.update(grad, opt_state, W)
+    next_W = optax.apply_updates(W, updates)
 
     assert objective(next_W) < objective(W)
 

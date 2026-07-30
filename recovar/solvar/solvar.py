@@ -177,7 +177,7 @@ def _weighted_norm_sq(images, weights):
     return jnp.sum(weights[None, :] * jnp.real(jnp.conj(images) * images), axis=-1)
 
 
-def solvar_image_losses(centered_images, projected_basis, image_shape, *, objective: str):
+def solvar_image_losses(centered_images, projected_basis, image_shape, *, objective: str, apply_mean_terms: bool = False):
     """Evaluate per-image SOLVAR LS or MLE losses in whitened image space.
 
     Parameters
@@ -194,6 +194,8 @@ def solvar_image_losses(centered_images, projected_basis, image_shape, *, object
     objective
         ``"ls"`` for the low-rank least-squares covariance objective or
         ``"mle"`` for the Woodbury maximum-likelihood objective.
+    apply_mean_terms
+        Whether to apply mean terms to the objective function.
     """
 
     objective = _validate_objective(objective)
@@ -218,7 +220,10 @@ def solvar_image_losses(centered_images, projected_basis, image_shape, *, object
         gram_sq = jnp.sum(gram * jnp.conj(gram), axis=(1, 2)).real
         image_basis_sq = jnp.sum(basis_image * jnp.conj(basis_image), axis=1).real
         trace_gram = jnp.trace(gram, axis1=1, axis2=2).real
-        return image_norm_sq**2 - 2.0 * (image_basis_sq + image_norm_sq) + gram_sq + 2.0 * trace_gram
+        loss = - 2.0 * image_basis_sq + gram_sq + 2.0 * trace_gram
+        if apply_mean_terms:
+            loss += image_norm_sq**2 - 2.0 * image_norm_sq
+        return loss
 
     rank = projected_basis.shape[1]
     eye = jnp.eye(rank, dtype=gram.dtype)
@@ -226,7 +231,10 @@ def solvar_image_losses(centered_images, projected_basis, image_shape, *, object
     solved = jnp.linalg.solve(M, basis_image[..., None])[..., 0]
     quad = jnp.sum(jnp.conj(basis_image) * solved, axis=1).real
     sign, logabsdet = jnp.linalg.slogdet(M)
-    return image_norm_sq - quad + logabsdet
+    loss = - quad + logabsdet
+    if apply_mean_terms:
+        loss += image_norm_sq
+    return loss
 
 
 def _prepare_batch(
