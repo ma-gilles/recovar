@@ -10051,3 +10051,35 @@ and `9/15` all-class.
   posterior or FSC/FSC-AUC claim.  Fixed metrics remain K=1 `28/34` strict,
   `32/34` topology, and `34/34` evaluated; K=4 `41/60` direct and `9/15`
   all-class.
+
+## 2026-07-30 active K=4 Slurm validity audit
+
+- `scontrol write batch_script` reproduces exact submitted launcher SHA-256
+  values for raw jobs `11790517`, `11793813`, and `11796622` and operand jobs
+  `11790787`, `11793814`, and `11796623`.  The current launcher files retain
+  those hashes, and the pinned RELION binary retains SHA-256
+  `c761b5660cfd84e4960f95f62b01fb23bccbbb9caba8fe388b80e383acd00a74`.
+- Filtering the immutable submission environments shows all three raw jobs
+  carry their required `EXPECTED_LAUNCHER_SHA256`.  Operand job `11790787`
+  carries both its exact launcher hash and the required binary hash, so it is
+  potentially admissible after its exact-GPU and empty-output-owner gates.
+- Operand jobs `11793814` and `11796623` carry only their launcher hashes.
+  Both submitted scripts use `set -euo pipefail` and require
+  `EXPECTED_BINARY_SHA256` at line 18.  They must therefore fail closed before
+  source, binary, GPU, import, or science operations and cannot produce
+  admissible evidence.
+- The only potentially admissible dependent pair audits are `11795302`
+  (`11790517 + 11790787`), `11795304`
+  (`11793813 + 11790787`), and `11799807`
+  (`11796622 + 11790787`).  Audits `11795303`, `11795305`, `11796769`, and
+  `11799808` depend on an operand job that cannot complete successfully.
+- All science jobs still had zero elapsed time and every intended output root
+  was empty at `2026-07-30T16:19:49-04:00`.  Three valid raw routes and one
+  valid operand owner already cover the fixed target, so no additional
+  science job was submitted.
+- The read-only audit is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_active_job_validity_b8303926_20260730T1620ET/provenance/ACTIVE_K4_JOB_VALIDITY.md`,
+  SHA-256
+  `3e36504a797a226404259443bede9f671e04907ba0977af72fad39baf8acf7da`.
+  No process or job was killed, signalled, suspended, cancelled,
+  reprioritized, or otherwise altered.

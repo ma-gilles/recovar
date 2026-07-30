@@ -13261,3 +13261,16 @@ audits.  Translation `83` remains a predeclared follow-up only after an
 official `80,82` pair qualifies.  The score-mass partition is one captured
 class, not a complete K=4 posterior, FSC/FSC-AUC gate, or production-fix
 authorization.
+
+The immutable Slurm submission environments further restrict admissible K=4
+evidence.  Raw jobs `11790517`, `11793813`, and `11796622` contain their exact
+launcher hashes.  Operand job `11790787` contains both its exact launcher and
+RELION-binary hashes.  Operand duplicates `11793814` and `11796623` omit the
+required `EXPECTED_BINARY_SHA256`; their `set -euo pipefail` launchers must
+fail at line 18 before source, binary, GPU, import, or science operations.
+Consequently only pair audits `11795302`, `11795304`, and `11799807` can
+potentially qualify.  No replacement submission is justified while the valid
+operand owner remains pending.  The read-only validity snapshot is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_active_job_validity_b8303926_20260730T1620ET/provenance/ACTIVE_K4_JOB_VALIDITY.md`,
+SHA-256
+`3e36504a797a226404259443bede9f671e04907ba0977af72fad39baf8acf7da`.
