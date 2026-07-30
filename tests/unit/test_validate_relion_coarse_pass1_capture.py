@@ -30,6 +30,7 @@ def _write_artifact(
     mpi_rank: int = 1,
     weights: np.ndarray | None = None,
     mask: np.ndarray | None = None,
+    significant_weight: float = 0.3,
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     raw_diff2 = np.arange(12, dtype=np.float32).reshape(4, 3)
@@ -59,7 +60,7 @@ def _write_artifact(
     header[13] = weights.size
     header[14] = int(np.count_nonzero(mask))
     header[15] = int(np.argmax(weights))
-    header[16] = _bits(0.3)
+    header[16] = _bits(significant_weight)
     header[17] = _bits(float(np.sum(weights)))
     header[18] = _bits(float(np.max(weights)))
     header[19] = _bits(float(np.min(raw_diff2)))
@@ -105,7 +106,25 @@ def test_load_coarse_pass1_artifact(tmp_path: Path) -> None:
     assert artifact.weights.shape == (4, 3)
     assert artifact.significant_mask.sum() == 3
     assert artifact.translations.shape == (3, 2)
+    assert artifact.inferred_significant_weight == pytest.approx(0.3)
+    assert artifact.significant_weight_semantics == "recorded_threshold_reproduces_mask"
     assert artifact.sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_accepts_source_proven_cuda_coarse_zero_sentinel(tmp_path: Path) -> None:
+    path = _write_artifact(
+        tmp_path,
+        part=4,
+        stack=101,
+        significant_weight=0.0,
+    )
+    artifact = validator.load_artifact(path)
+    assert artifact.significant_weight == 0.0
+    assert artifact.inferred_significant_weight == pytest.approx(0.3)
+    assert (
+        artifact.significant_weight_semantics
+        == "relion_cuda_coarse_op_sentinel_zero__threshold_inferred_from_exact_production_mask"
+    )
 
 
 def test_validate_directory_reports_fixed_counts(tmp_path: Path) -> None:
@@ -150,7 +169,23 @@ def test_rejects_threshold_mask_mismatch(tmp_path: Path) -> None:
             [[1, 0, 0], [0, 0, 0], [0, 0, 0], [1, 0, 0]], dtype=np.uint8
         ),
     )
-    with pytest.raises(ValueError, match="threshold/mask"):
+    with pytest.raises(ValueError, match="recorded threshold/mask"):
+        validator.load_artifact(path)
+
+
+def test_zero_sentinel_still_rejects_nonmonotone_production_mask(
+    tmp_path: Path,
+) -> None:
+    path = _write_artifact(
+        tmp_path,
+        part=4,
+        stack=101,
+        mask=np.asarray(
+            [[1, 0, 0], [1, 0, 0], [0, 0, 0], [0, 0, 0]], dtype=np.uint8
+        ),
+        significant_weight=0.0,
+    )
+    with pytest.raises(ValueError, match="weight rank/mask"):
         validator.load_artifact(path)
 
 

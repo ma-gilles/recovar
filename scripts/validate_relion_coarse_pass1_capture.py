@@ -48,6 +48,8 @@ class CoarsePass1Artifact:
     weights: np.ndarray
     significant_mask: np.ndarray
     translations: np.ndarray
+    inferred_significant_weight: float
+    significant_weight_semantics: str
 
     @property
     def part_id(self) -> int:
@@ -206,10 +208,25 @@ def load_artifact(path: Path) -> CoarsePass1Artifact:
         f"invalid maximum weight: {path}",
     )
     _require(np.isfinite(min_diff2), f"invalid minimum diff2: {path}")
+    _require(np.any(significant_mask), f"empty production significance mask: {path}")
+    inferred_significant_weight = float(np.min(weights[significant_mask]))
+    inferred_mask = weights >= np.float32(inferred_significant_weight)
     _require(
-        np.array_equal(significant_mask, weights >= significant_weight),
-        f"production threshold/mask mismatch: {path}",
+        np.array_equal(significant_mask, inferred_mask),
+        f"production weight rank/mask mismatch: {path}",
     )
+    recorded_mask = weights >= significant_weight
+    if np.array_equal(significant_mask, recorded_mask):
+        significant_weight_semantics = "recorded_threshold_reproduces_mask"
+    else:
+        _require(
+            significant_weight == 0.0,
+            f"recorded threshold/mask mismatch without zero sentinel: {path}",
+        )
+        significant_weight_semantics = (
+            "relion_cuda_coarse_op_sentinel_zero__"
+            "threshold_inferred_from_exact_production_mask"
+        )
     _require(
         weights[header[15]] == max_weight and np.max(weights) == max_weight,
         f"winner/maximum weight mismatch: {path}",
@@ -224,6 +241,8 @@ def load_artifact(path: Path) -> CoarsePass1Artifact:
         weights=weights.reshape(n_dir * n_psi, n_trans),
         significant_mask=significant_mask.reshape(n_dir * n_psi, n_trans),
         translations=translations,
+        inferred_significant_weight=inferred_significant_weight,
+        significant_weight_semantics=significant_weight_semantics,
     )
 
 
@@ -311,6 +330,23 @@ def validate_directory(
         "total_significant_count": int(
             sum(np.count_nonzero(artifact.significant_mask) for artifact in artifacts)
         ),
+        "significant_weight_semantics_counts": {
+            semantics: sum(
+                artifact.significant_weight_semantics == semantics
+                for artifact in artifacts
+            )
+            for semantics in sorted(
+                {artifact.significant_weight_semantics for artifact in artifacts}
+            )
+        },
+        "inferred_significant_weight_range": {
+            "min": float(
+                min(artifact.inferred_significant_weight for artifact in artifacts)
+            ),
+            "max": float(
+                max(artifact.inferred_significant_weight for artifact in artifacts)
+            ),
+        },
         "artifact_sha256": {
             artifact.path.name: artifact.sha256 for artifact in artifacts
         },
