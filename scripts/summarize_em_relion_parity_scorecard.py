@@ -707,8 +707,12 @@ def _validate_runtime_contract(run_root: Path, case_root: Path, case_id: str) ->
         f"{case_id}: submission trajectory mode was not autonomous",
     )
     _require(submission.get("EM_K1_MATRIX_RUN_RELION") == "1", f"{case_id}: RELION was not enabled")
+    grid_correction = submission.get(
+        "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT",
+        "",
+    ).strip().lower()
     _require(
-        submission.get("RECOVAR_FINAL_ALL_DATA_GRID_CORRECT") == "",
+        grid_correction in {"", "0", "false", "no", "off"},
         f"{case_id}: final all-data grid correction was enabled",
     )
     job_scripts = sorted((run_root / "jobs").glob(f"em_k1_matrix_*{case_root.name}*.sh"))
