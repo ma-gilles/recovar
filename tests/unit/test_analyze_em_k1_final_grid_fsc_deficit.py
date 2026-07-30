@@ -25,6 +25,9 @@ def test_partition_fsc_deficit_closes_normalized_auc() -> None:
         report["fsc_auc_deficit"]
     )
     assert report["outside_radius_fraction"] > report["inside_or_at_radius_fraction"]
+    assert report["active_radius_normalized_fsc_auc"] == pytest.approx(
+        normalized_non_dc_fsc_auc(curve[:3])
+    )
 
 
 def _inputs(tmp_path: Path, *, outside_dominated: bool = True) -> tuple[Path, Path]:
@@ -81,6 +84,8 @@ def test_build_report_accepts_outside_radius_amplification(tmp_path: Path) -> No
     assert report["classification"] == CLASSIFICATION
     assert report["products"]["merged"]["final"]["outside_radius_fraction"] > 0.95
     assert report["products"]["merged"]["final_over_numbered_deficit_amplification"] > 250.0
+    assert report["products"]["merged"]["active_radius_fsc_auc_gate_passed"]
+    assert report["products"]["merged"]["outside_radius_fsc_auc_gate_failed"]
 
 
 def test_build_report_fails_closed_for_inside_radius_deficit(tmp_path: Path) -> None:

@@ -9846,6 +9846,11 @@ and `9/15` all-class.
   `278.796x`, `270.634x`, and `518.523x`.  All products pass the frozen
   gates of strictly more than `95%` outside-radius defect and more than
   `250x` amplification.
+- Restricted final FSC-AUC through radius `34` is
+  `0.996099410176`, `0.995882846490`, and `0.995934905111`, so both halves
+  and merged pass the unchanged `0.995` parity gate inside the numbered
+  radius.  The complementary radius-34-to-190 values are
+  `0.983673915769`, `0.983090113715`, and `0.980271649354`, and all fail.
 - Classification:
   `final_full_grid_fsc_deficit_is_over_95pct_outside_last_numbered_radius`.
   This quantitatively localizes the failed final boundary to frequencies
@@ -9853,8 +9858,8 @@ and `9/15` all-class.
   final pose-writeback, scheduler, or grid-correction change.
 - The short CPU analysis root is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_final_grid_deficit_d5a947f8_20260730T0955ET`;
-  it contains `SAFE_TO_DELETE`.  Report SHA-256 is
-  `431bd99a4ecdd4952fb3e5f6bbc0baa677bb4e10c6e44c2d44a512f199358618`.
+  it contains `SAFE_TO_DELETE`.  The v2 report SHA-256 is
+  `7fc2ad34d2e7e7f865b53a3e645a85a44548110ab5d5e7c05fb3e5d4ca96d0ff`.
   Focused validation passes `14/14`; scoped Ruff and `git diff --check`
   pass.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, and `34/34`

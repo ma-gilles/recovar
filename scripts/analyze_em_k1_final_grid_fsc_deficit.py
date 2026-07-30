@@ -18,10 +18,12 @@ from typing import Any
 
 import numpy as np
 
-SCHEMA = "em-k1-final-grid-fsc-deficit-v1"
+SCHEMA = "em-k1-final-grid-fsc-deficit-v2"
 TRAJECTORY_SCHEMA = "em_k1_fsc_trajectory_audit_v2"
 OUTSIDE_DEFICIT_FRACTION_GATE = 0.95
 DEFICIT_AMPLIFICATION_GATE = 250.0
+ACTIVE_RADIUS_FSC_AUC_MIN = 0.995
+OUTSIDE_RADIUS_FSC_AUC_MAX = 0.995
 CLASSIFICATION = (
     "final_full_grid_fsc_deficit_is_over_95pct_outside_last_numbered_radius"
 )
@@ -73,6 +75,11 @@ def partition_fsc_deficit(
     inside = float(np.sum(segment_deficit[: last_numbered_radius - 1]))
     outside = float(np.sum(segment_deficit[last_numbered_radius - 1 :]))
     total = float(np.sum(segment_deficit))
+    active_values = non_dc[:last_numbered_radius]
+    outside_values = non_dc[last_numbered_radius - 1 :]
+    integrate = getattr(np, "trapezoid", np.trapz)
+    active_radius_auc = float(integrate(active_values) / (active_values.size - 1))
+    outside_radius_auc = float(integrate(outside_values) / (outside_values.size - 1))
     _require(total > 0.0, "FSC-AUC defect must be positive")
     _require(np.isclose(total, 1.0 - auc, rtol=0.0, atol=2.0e-15), "deficit partition does not close")
     return {
@@ -82,6 +89,8 @@ def partition_fsc_deficit(
         "outside_radius_deficit": outside,
         "inside_or_at_radius_fraction": inside / total,
         "outside_radius_fraction": outside / total,
+        "active_radius_normalized_fsc_auc": active_radius_auc,
+        "outside_radius_normalized_fsc_auc": outside_radius_auc,
         "last_numbered_radius": int(last_numbered_radius),
         "maximum_shell": int(maximum_shell),
     }
@@ -163,6 +172,14 @@ def build_report(
                 "amplification_gate_passed": bool(
                     amplification > DEFICIT_AMPLIFICATION_GATE
                 ),
+                "active_radius_fsc_auc_gate_passed": bool(
+                    float(final_partition["active_radius_normalized_fsc_auc"])
+                    >= ACTIVE_RADIUS_FSC_AUC_MIN
+                ),
+                "outside_radius_fsc_auc_gate_failed": bool(
+                    float(final_partition["outside_radius_normalized_fsc_auc"])
+                    < OUTSIDE_RADIUS_FSC_AUC_MAX
+                ),
             }
 
     _require(
@@ -172,6 +189,14 @@ def build_report(
     _require(
         all(row["amplification_gate_passed"] for row in products.values()),
         "one or more final products fail the deficit-amplification gate",
+    )
+    _require(
+        all(row["active_radius_fsc_auc_gate_passed"] for row in products.values()),
+        "one or more final products fail FSC-AUC inside the numbered radius",
+    )
+    _require(
+        all(row["outside_radius_fsc_auc_gate_failed"] for row in products.values()),
+        "one or more final products do not fail FSC-AUC outside the numbered radius",
     )
     return {
         "schema": SCHEMA,
@@ -189,6 +214,8 @@ def build_report(
         "fixed_gates": {
             "final_outside_radius_deficit_fraction_strictly_greater_than": OUTSIDE_DEFICIT_FRACTION_GATE,
             "final_over_numbered_deficit_amplification_strictly_greater_than": DEFICIT_AMPLIFICATION_GATE,
+            "active_radius_fsc_auc_min": ACTIVE_RADIUS_FSC_AUC_MIN,
+            "outside_radius_fsc_auc_strictly_below": OUTSIDE_RADIUS_FSC_AUC_MAX,
             "required_products": ["half1", "half2", "merged"],
         },
         "products": products,
