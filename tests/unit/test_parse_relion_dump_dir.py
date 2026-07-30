@@ -77,6 +77,12 @@ def test_parse_relion_dump_dir_reads_known_file_types(tmp_path):
     _write_flat_int(tmp_path / "candidate_in_denominator_set.bin", [1, 1, 1])
     _write_flat_int(tmp_path / "candidate_class_idx.bin", [0, 2, 1])
     _write_flat_int(tmp_path / "candidate_coarse_trans_idx.bin", [0, 0, 1])
+    _write_scalar(tmp_path / "candidate_denominator_count.bin", 3)
+    _write_scalar(tmp_path / "candidate_threshold_count.bin", 2)
+    _write_scalar(tmp_path / "candidate_threshold_idx.bin", 1)
+    _write_scalar(tmp_path / "coarse_candidate_denominator_count.bin", 12)
+    _write_scalar(tmp_path / "coarse_candidate_threshold_count.bin", 7)
+    _write_scalar(tmp_path / "coarse_candidate_threshold_idx.bin", 6)
     _write_scalar(tmp_path / "Pmax.bin", 0.6)
 
     parsed = parse_dump_dir(tmp_path)
@@ -97,6 +103,12 @@ def test_parse_relion_dump_dir_reads_known_file_types(tmp_path):
     np.testing.assert_array_equal(parsed["candidate_in_denominator_set"], np.array([1, 1, 1], dtype=np.int32))
     np.testing.assert_array_equal(parsed["candidate_class_idx"], np.array([0, 2, 1], dtype=np.int32))
     np.testing.assert_array_equal(parsed["candidate_coarse_trans_idx"], np.array([0, 0, 1], dtype=np.int32))
+    assert int(parsed["candidate_denominator_count"]) == 3
+    assert int(parsed["candidate_threshold_count"]) == 2
+    assert int(parsed["candidate_threshold_idx"]) == 1
+    assert int(parsed["coarse_candidate_denominator_count"]) == 12
+    assert int(parsed["coarse_candidate_threshold_count"]) == 7
+    assert int(parsed["coarse_candidate_threshold_idx"]) == 6
     assert float(parsed["Pmax"]) == pytest.approx(0.6)
 
 
