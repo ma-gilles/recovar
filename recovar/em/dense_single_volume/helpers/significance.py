@@ -882,6 +882,8 @@ def _compute_significance_batched(
     )
     from recovar.em.dense_single_volume.helpers.preprocessing import (
         prepare_batch_preprocess_operands,
+    )
+    from recovar.em.dense_single_volume.helpers.preprocessing import (
         preprocess_batch as _preprocess_batch,
     )
     from recovar.em.dense_single_volume.helpers.projection import (
@@ -1527,6 +1529,8 @@ def _compute_k_class_significance_batched(
     )
     from recovar.em.dense_single_volume.helpers.preprocessing import (
         prepare_batch_preprocess_operands,
+    )
+    from recovar.em.dense_single_volume.helpers.preprocessing import (
         preprocess_batch as _preprocess_batch,
     )
     from recovar.em.dense_single_volume.helpers.preprocessing import (
