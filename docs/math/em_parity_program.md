@@ -13160,3 +13160,12 @@ and
 The analyzer/three capture-validator gate passes 29/29 tests; scoped Ruff,
 format, Python compilation, and `git diff --check` pass.  No correlation or
 map-quality surrogate is introduced.
+
+CPU audit job `11787139` is scheduler-bound to `afterok:11787017`.  It runs
+from clean detached audit source `725bb6ef`, re-hashes the launcher, analyzer,
+fixed pass-2 artifact, exact-GPU allocation table, science completion, and
+translation-grid validation, then refuses to overwrite an existing report.
+Its launcher SHA-256 is
+`969f807bcff2a4ccb830f6e7ed218a5aba970db8c37d4d39d7cebf8b2704df0b`;
+the audit-submission record SHA-256 is
+`369f51ba4ec9a5947aeec048697632a107cfd4ea8507fff12e4ac48ff564c3dc`.
