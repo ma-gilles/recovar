@@ -12398,3 +12398,79 @@ were unset.
 This diagnostic is non-scoring: fixed K=1 remains 28/34 strict, 32/34
 topology, and 34/34 evaluated; fixed K=4 remains 41/60 direct and 9/15
 all-class.
+
+## 2026-07-29 case-22 coarse membership boundary is raw-score sensitive
+
+The fixed physical-iteration-2 membership cohort now provides two stable
+denominators.  Across 64 particles, candidate sets are exact for 54,
+positive-rotation sets for 30, significant sample counts for 5, and the
+reconstruction-mass gate for all 64.  Across the 10 candidate-mismatch
+particles, all 13 differing orientation parents are complete adaptive
+oversampling groups: 11 RELION-only parents contribute 88 fine rotations,
+while two RECOVAR-only parents contribute 16.  Membership, inertness, and
+parent-group report SHA-256 values are
+`09b4cb69e585d2d0907541e407e386b3fe695d69206331d4714a3e79a46bbdc1`,
+`d5fea1c8e795ff5739efaf5db03b502d4d75cc857895471f98daf6609ba93e1`,
+and
+`95080a4596dc1cc9bdf4a92f4aad398dd46ab9b8b06953eeea748a761d400460`.
+This rejects isolated fine-child loss: the membership decisions move by
+whole coarse parents.
+
+A passive, bounded RELION diagnostic captured the production coarse pass-1
+boundary immediately after membership construction.  It records raw
+float32 diff2 before prior conversion, production with-prior weights, the
+exact production-significance mask, and translation coordinates without
+writing production state.  All 14/14 artifacts validate, totaling
+14,966,784 candidates and 463,933 significant samples at exact
+`768 x 48 x 29` topology.  RELION CUDA reports zero in the persisted
+`op.significant_weight` field for this branch, so the validator accepts that
+sentinel only when the saved mask is the exact monotone top-weight set
+inferred from its minimum selected weight.
+
+Original job `11775061` completed RELION and all 14 captures but failed
+before RECOVAR because the first validator treated the zero field as the
+literal cutoff.  Hash-pinned recovery `11775556` reused those immutable
+captures and completed `0:0` in `00:50:46` on exact UUID
+`GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a`.  It ran RECOVAR for exactly two
+numbered iterations, validated 14/14 RECOVAR dumps, remained non-converged,
+and skipped final all-data.  Six capture/control map comparisons pass the
+fixed shellwise FSC-AUC gate; the minimum is `0.9999999998255802` against
+`0.999999`.  Inertness, RELION validation, science completion, and output
+manifest SHA-256 values are
+`8589d908efea92cf2166a19750e7d49758541b11c3291080f568c046177201e5`,
+`b79c80d1aa1de880688fee0cbfa1ad44a6fcb50c48877bc10e7876eb69081a83`,
+`32ef903d336ab4b917bdc232532d746b3b98e9f0a71bbf6f596b4d40ef1556a1`,
+and
+`92a07769a416f808a020218b46520d6d73773ea2a09b3a15ec43e26895a759f8`.
+
+The fixed analyzer uses positive scale/offset translation registration and
+converts RELION direction-major orientation keys to RECOVAR's psi-major
+canonical rows.  On the immutable 10-mismatch/4-control/13-parent panel, it
+reproduces 13/13 expected parent sides, has exact prior support for 13/13,
+passes raw target-parent arithmetic for 12/13, passes with-prior arithmetic
+for 11/13, passes posterior total variation for 10/10 mismatch particles,
+and retains exact parent sets for 4/4 controls.  One raw target parent,
+stack 2330 / RELION key 17615, exceeds the fixed centered-score p95 gate
+(`0.0001213074 > 0.0001`); its maximum is `0.0001609325`, below the fixed
+`0.001` maximum gate.  Thus the bounded classification is
+`candidate_parent_difference_originates_in_raw_coarse_scores`, while the
+remaining 12 parent flips are below-gate score differences amplified at the
+significance boundary.  The output and analyzer SHA-256 values are
+`ecd032e6768f8788238439abb3e61e12bbef90e3f55fca397bac57e6c1d85ed6`
+and
+`08a3417495f7c0959b092b34e8276cc31706723e5153dd0c7c5cb368710ecfd3`.
+No correlation is computed.
+
+Run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_coarse_pass1_0506806c_20260729T212000ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it2_coarse_pass1_recovery_473cfca6_20260729T211000ET`;
+both contain `SAFE_TO_DELETE`.
+
+Exact-device K=4 replacement `11774193` failed closed in eight seconds with
+exit `42:0`: its allocated two A100s did not include required UUID
+`GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`, and no science ran.  The target
+device remains occupied, so an unchanged retry is deferred until allocation
+state changes.  This evidence is non-scoring.  Fixed K=1 remains 28/34
+strict, 32/34 topology, and 34/34 evaluated; fixed K=4 remains 41/60 direct
+and 9/15 all-class.

@@ -1030,6 +1030,54 @@ and
 `390bef7c3041d7af2af6971e1dc9573f83b3b1e7af7548beac0ff14a6837bc7d`.
 Fixed K=1 remains 28/34 strict (82.4%), 32/34 topology, and 34/34
 evaluated; fixed K=4 remains 41/60 direct and 9/15 all-class.
+
+### Case-22 fixed-cohort membership and coarse-score boundary
+
+The checked physical-iteration-2 cohort fixes 64 particles for the membership
+denominator.  Candidate sets are exact for 54/64, positive-rotation sets for
+30/64, and significant sample counts for 5/64; the reconstruction-mass gate
+passes 64/64.  On the 10 candidate-mismatch particles, all 13 differing
+orientation parents are complete adaptive-oversampling parent groups:
+11 RELION-only groups (88 fine rotations) and 2 RECOVAR-only groups
+(16 fine rotations).  The membership and parent-group reports have SHA-256
+values
+`09b4cb69e585d2d0907541e407e386b3fe695d69206331d4714a3e79a46bbdc1`
+and
+`95080a4596dc1cc9bdf4a92f4aad398dd46ab9b8b06953eeea748a761d400460`.
+
+Passive RELION coarse pass-1 capture then sealed 14/14 fixed-cohort
+artifacts: 14,966,784 candidates and 463,933 production-significant samples,
+with exact `768 x 48 x 29` topology.  Recovery job `11775556` completed
+`0:0` in `00:50:46` on the exact original A100 UUID
+`GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a`.  It validated all 14 RECOVAR
+captures, remained non-converged after iteration 2, and correctly skipped
+final all-data.  Capture inertness passes all 6/6 fixed shellwise FSC-AUC
+comparisons; the minimum is `0.9999999998255802` versus the fixed
+`0.999999` gate.  The inertness and RELION-validation report SHA-256 values
+are
+`8589d908efea92cf2166a19750e7d49758541b11c3291080f568c046177201e5`
+and
+`b79c80d1aa1de880688fee0cbfa1ad44a6fcb50c48877bc10e7876eb69081a83`.
+
+The corrected fixed analyzer reproduces all 13/13 expected parent sides,
+has exact prior support for 13/13, passes raw target-parent arithmetic for
+12/13, passes with-prior target-parent arithmetic for 11/13, passes the
+posterior-TV gate for 10/10 mismatch particles, and retains exact parent sets
+for 4/4 controls.  The accepted bounded classification is
+`candidate_parent_difference_originates_in_raw_coarse_scores`: one target
+parent exceeds the predeclared raw centered-score p95 gate
+(`0.0001213074 > 0.0001`), while the other 12 membership flips occur within
+that raw arithmetic envelope and remain boundary amplification.  Output
+SHA-256 is
+`ecd032e6768f8788238439abb3e61e12bbef90e3f55fca397bac57e6c1d85ed6`.
+No correlation is used.
+
+Exact-device K=4 replacement `11774193` failed closed with exit `42:0` in
+eight seconds because its two-GPU allocation did not contain required UUID
+`GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`; it ran no science.  A retry is
+deferred until that occupied device becomes allocatable.  These diagnostics
+are non-scoring: K=1 remains 28/34 strict, 32/34 topology, and 34/34
+evaluated; K=4 remains 41/60 direct and 9/15 all-class.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

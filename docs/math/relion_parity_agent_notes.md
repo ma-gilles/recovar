@@ -9304,3 +9304,61 @@ and `9/15` all-class.
   `32/34` topology, and `34/34` evaluated; fixed K=4 remains `41/60`
   direct and `9/15` all-class.  Exact-UUID K=4 confirmation `11762553`
   remains resource-pending.
+
+## 2026-07-29 case-22 membership and raw coarse-score classification
+
+- Fixed membership denominator: candidate sets `54/64`, positive-rotation
+  sets `30/64`, significant-sample counts `5/64`, reconstruction-mass gate
+  `64/64`.  Strict compact particle pass is `4/64`.
+- The 10 candidate-mismatch particles contain 13 complete adaptive-parent
+  differences: 11 RELION-only groups / 88 fine rotations and 2
+  RECOVAR-only groups / 16 fine rotations.  Membership and parent reports
+  have SHA-256 values
+  `09b4cb69e585d2d0907541e407e386b3fe695d69206331d4714a3e79a46bbdc1`
+  and
+  `95080a4596dc1cc9bdf4a92f4aad398dd46ab9b8b06953eeea748a761d400460`.
+- Passive RELION coarse pass-1 capture validates 14/14 artifacts,
+  14,966,784 candidates, 463,933 significant samples, and exact
+  `768 x 48 x 29` topology.  The zero CUDA `op.significant_weight` is a
+  sentinel; validation additionally proves the saved mask is the exact
+  monotone top-weight set inferred from its minimum selected weight.
+- Original `11775061` completed RELION and the 14 artifacts, then failed
+  only on the obsolete literal-cutoff validator.  Exact-UUID recovery
+  `11775556` completed `0:0` in `00:50:46` on
+  `GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a`, validated RECOVAR `14/14`,
+  remained non-converged after iteration 2, and skipped final all-data.
+- Capture inertness passes all `6/6` fixed FSC-AUC comparisons.  Minimum
+  FSC-AUC is `0.9999999998255802` versus the fixed `0.999999` threshold.
+  Inertness, RELION-validation, completion, and output-manifest SHA-256
+  values are
+  `8589d908efea92cf2166a19750e7d49758541b11c3291080f568c046177201e5`,
+  `b79c80d1aa1de880688fee0cbfa1ad44a6fcb50c48877bc10e7876eb69081a83`,
+  `32ef903d336ab4b917bdc232532d746b3b98e9f0a71bbf6f596b4d40ef1556a1`,
+  and
+  `92a07769a416f808a020218b46520d6d73773ea2a09b3a15ec43e26895a759f8`.
+- Commit `489827a4` fixes the analysis-only parent identity conversion:
+  cohort IDs are RELION direction-major keys, whereas compared surfaces
+  are already RECOVAR psi-major.  Output retains both the RELION key and
+  canonical row.  Focused validator/analyzer tests pass `14/14`.
+- Fixed boundary metric: expected side `13/13`, exact prior support
+  `13/13`, raw target-parent arithmetic `12/13`, with-prior arithmetic
+  `11/13`, mismatch posterior-TV `10/10`, control exact parent sets `4/4`.
+  One target raw parent exceeds centered-score p95 `1e-4`; the other 12
+  membership flips remain below that raw gate.  Classification:
+  `candidate_parent_difference_originates_in_raw_coarse_scores`.
+- Boundary JSON SHA-256 is
+  `ecd032e6768f8788238439abb3e61e12bbef90e3f55fca397bac57e6c1d85ed6`;
+  analyzer SHA-256 is
+  `08a3417495f7c0959b092b34e8276cc31706723e5153dd0c7c5cb368710ecfd3`.
+  No correlation is used.
+- Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_coarse_pass1_0506806c_20260729T212000ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_it2_coarse_pass1_recovery_473cfca6_20260729T211000ET`;
+  both contain `SAFE_TO_DELETE`.
+- Exact-device K=4 replacement `11774193` failed closed `42:0` in eight
+  seconds because its two allocated A100s omitted required UUID
+  `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`; no science ran.  Retry only
+  after allocation state changes.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
