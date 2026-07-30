@@ -13133,3 +13133,30 @@ The run and runtime roots contain `SAFE_TO_DELETE`.  No running job or
 process was modified, cancelled, signalled, or suspended.  This is a
 non-scoring operand diagnostic; fixed K=4 remains 41/60 direct checks and
 9/15 all-class iterations pending authoritative science and audit.
+
+The exact-device result is governed by a checked-in analyzer whose gates were
+fixed while job `11787017` was dependency-pending:
+
+| Fixed K=4 target metric | Required result |
+|---|---|
+| allocation | exactly two GPUs including required UUID |
+| rotation topology | bitwise-exact bijection over 2,968 matrices |
+| candidate support | exact 109,184/109,184 |
+| winner | exact mapped RECOVAR key |
+| maximum-score tie-key sets | exact |
+| native target raw diff2 at translations 80/82 | bitwise tied |
+| RECOVAR target scores at translations 80/82 | bitwise tied |
+| native versus RECOVAR target combined scores | bitwise exact |
+
+Input, allocation, completion, state-validation, and capture hashes are
+serialized.  Provenance/topology failures fail closed, while a scientific
+target mismatch is written as a complete negative classification rather than
+discarded.  The pre-existing same-model A100 control passes the exact
+comparison core, but remains non-authoritative until the required physical
+GPU result is available.  Analyzer/test SHA-256 values are
+`fb155fdd47738d2856bda6eae3ac538a4d6877264c15d48b5364916b505425a2`
+and
+`9adcd978feb8dd9e9b4c1f35a003849657b44ec308f3f937997a8c1a36e72b46`.
+The analyzer/three capture-validator gate passes 29/29 tests; scoped Ruff,
+format, Python compilation, and `git diff --check` pass.  No correlation or
+map-quality surrogate is introduced.
