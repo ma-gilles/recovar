@@ -109,6 +109,85 @@ def test_target_score_offset_attribution_rejects_prior_mismatch() -> None:
     assert report["target_priors_bitwise_exact"] is False
 
 
+def _global_attribution(decision_topology_exact: bool = True) -> dict:
+    count = 2
+    min_diff2 = np.float32(500.6817321777344)
+    native_raw = np.full(
+        count,
+        np.float32(501.4734191894531),
+        dtype=np.float32,
+    )
+    native_orientation = np.full(
+        count,
+        np.float32(-4.860062599182129),
+        dtype=np.float32,
+    )
+    native_translation = np.full(
+        count,
+        np.float32(-0.05005118250846863),
+        dtype=np.float32,
+    )
+    native_combined = np.subtract(
+        np.add(
+            np.add(
+                native_orientation,
+                native_translation,
+                dtype=np.float32,
+            ),
+            min_diff2,
+            dtype=np.float32,
+        ),
+        native_raw,
+        dtype=np.float32,
+    )
+    recovar_pre = np.full(
+        count,
+        np.float64(-0.7916684448719025),
+        dtype=np.float64,
+    )
+    recovar_combined = np.add(
+        np.add(
+            recovar_pre.astype(np.float32),
+            native_orientation,
+            dtype=np.float32,
+        ),
+        native_translation,
+        dtype=np.float32,
+    )
+    return analyzer.global_score_offset_attribution(
+        min_diff2=min_diff2,
+        native_raw_diff2=native_raw,
+        native_orientation_prior=native_orientation,
+        native_translation_prior=native_translation,
+        native_combined=native_combined,
+        recovar_pre_prior_residual=recovar_pre,
+        recovar_orientation_prior=native_orientation,
+        recovar_translation_prior=native_translation,
+        recovar_combined=recovar_combined,
+        decision_topology_exact=decision_topology_exact,
+    )
+
+
+def test_global_score_offset_attribution_closes_and_is_data_dominated() -> None:
+    report = _global_attribution()
+
+    assert report["classification"] == analyzer.GLOBAL_OFFSET_CLASSIFICATION
+    assert report["attributed"] is True
+    assert report["native_production_replay_bitwise_exact_count"] == 2
+    assert report["recovar_dump_replay_bitwise_exact_count"] == 2
+    assert report["telescoping_closure"]["exact"] is True
+    assert report["telescoping_closure"]["max_abs"] == 0.0
+    assert report["pre_prior_data_path_strict_majority"] is True
+    assert report["component_l1_fractions"]["pre_prior_data_path"] > 0.5
+
+
+def test_global_score_offset_attribution_requires_decision_topology() -> None:
+    report = _global_attribution(decision_topology_exact=False)
+
+    assert report["attributed"] is False
+    assert report["decision_topology_exact"] is False
+
+
 def test_rotation_permutation_accepts_exact_bijection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

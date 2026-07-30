@@ -22,10 +22,13 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v2"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v3"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
+)
+GLOBAL_OFFSET_CLASSIFICATION = (
+    "global_absolute_score_residual_is_preprior_data_path_dominated_with_exact_telescoping_closure"
 )
 TARGET_GPU_UUID = "GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30"
 RECOVAR_PASS2_SHA256 = "3c4c566b6f2fce613f4d5869d2d3ccf53a2bcd1b3c26e5a32138588464049485"
@@ -198,6 +201,215 @@ def target_score_offset_attribution(
             "sum": float(data_path_contribution + native_order_contribution),
             "residual": float(decomposition_residual),
         },
+    }
+
+
+def _delta_summary(delta: np.ndarray) -> dict[str, Any]:
+    delta = np.asarray(delta, dtype=np.float64)
+    return {
+        "count": int(delta.size),
+        "nonzero_count": int(np.count_nonzero(delta)),
+        "max_abs": float(np.max(np.abs(delta), initial=0.0)),
+        "mean_abs": float(np.mean(np.abs(delta))),
+        "rms": float(np.sqrt(np.mean(np.square(delta)))),
+        "l1": float(np.sum(np.abs(delta))),
+    }
+
+
+def global_score_offset_attribution(
+    *,
+    min_diff2: np.float32,
+    native_raw_diff2: np.ndarray,
+    native_orientation_prior: np.ndarray,
+    native_translation_prior: np.ndarray,
+    native_combined: np.ndarray,
+    recovar_pre_prior_residual: np.ndarray,
+    recovar_orientation_prior: np.ndarray,
+    recovar_translation_prior: np.ndarray,
+    recovar_combined: np.ndarray,
+    decision_topology_exact: bool,
+) -> dict[str, Any]:
+    """Telescope the full active-table score delta through fixed operands."""
+
+    native_raw_diff2 = np.asarray(native_raw_diff2, dtype=np.float32)
+    native_orientation_prior = np.asarray(
+        native_orientation_prior,
+        dtype=np.float32,
+    )
+    native_translation_prior = np.asarray(
+        native_translation_prior,
+        dtype=np.float32,
+    )
+    native_combined = np.asarray(native_combined, dtype=np.float32)
+    recovar_pre_prior = np.asarray(
+        recovar_pre_prior_residual,
+        dtype=np.float64,
+    ).astype(np.float32)
+    recovar_orientation_prior = np.asarray(
+        recovar_orientation_prior,
+        dtype=np.float32,
+    )
+    recovar_translation_prior = np.asarray(
+        recovar_translation_prior,
+        dtype=np.float32,
+    )
+    recovar_combined = np.asarray(recovar_combined, dtype=np.float32)
+    shapes = {
+        values.shape
+        for values in (
+            native_raw_diff2,
+            native_orientation_prior,
+            native_translation_prior,
+            native_combined,
+            recovar_pre_prior,
+            recovar_orientation_prior,
+            recovar_translation_prior,
+            recovar_combined,
+        )
+    }
+    _require(len(shapes) == 1, "global attribution array shapes differ")
+    _require(native_combined.size > 0, "global attribution arrays are empty")
+
+    min_diff2 = np.float32(min_diff2)
+    native_pre_prior = np.subtract(
+        min_diff2,
+        native_raw_diff2,
+        dtype=np.float32,
+    )
+    native_production_replay = np.subtract(
+        np.add(
+            np.add(
+                native_orientation_prior,
+                native_translation_prior,
+                dtype=np.float32,
+            ),
+            min_diff2,
+            dtype=np.float32,
+        ),
+        native_raw_diff2,
+        dtype=np.float32,
+    )
+    native_data_then_prior = np.add(
+        np.add(
+            native_pre_prior,
+            native_orientation_prior,
+            dtype=np.float32,
+        ),
+        native_translation_prior,
+        dtype=np.float32,
+    )
+    recovar_data_native_priors = np.add(
+        np.add(
+            recovar_pre_prior,
+            native_orientation_prior,
+            dtype=np.float32,
+        ),
+        native_translation_prior,
+        dtype=np.float32,
+    )
+    recovar_data_recovar_orientation = np.add(
+        np.add(
+            recovar_pre_prior,
+            recovar_orientation_prior,
+            dtype=np.float32,
+        ),
+        native_translation_prior,
+        dtype=np.float32,
+    )
+    recovar_data_then_prior = np.add(
+        np.add(
+            recovar_pre_prior,
+            recovar_orientation_prior,
+            dtype=np.float32,
+        ),
+        recovar_translation_prior,
+        dtype=np.float32,
+    )
+
+    components = {
+        "native_float32_operation_order": (
+            native_data_then_prior.astype(np.float64)
+            - native_production_replay.astype(np.float64)
+        ),
+        "pre_prior_data_path": (
+            recovar_data_native_priors.astype(np.float64)
+            - native_data_then_prior.astype(np.float64)
+        ),
+        "orientation_prior_operand": (
+            recovar_data_recovar_orientation.astype(np.float64)
+            - recovar_data_native_priors.astype(np.float64)
+        ),
+        "translation_prior_operand": (
+            recovar_data_then_prior.astype(np.float64)
+            - recovar_data_recovar_orientation.astype(np.float64)
+        ),
+        "recovar_dump_replay_residual": (
+            recovar_combined.astype(np.float64)
+            - recovar_data_then_prior.astype(np.float64)
+        ),
+    }
+    total_delta = (
+        recovar_combined.astype(np.float64)
+        - native_combined.astype(np.float64)
+    )
+    component_sum = np.sum(np.stack(tuple(components.values())), axis=0)
+    closure = component_sum - total_delta
+    summaries = {
+        name: _delta_summary(delta)
+        for name, delta in components.items()
+    }
+    total_component_l1 = sum(summary["l1"] for summary in summaries.values())
+    _require(total_component_l1 > 0.0, "global attribution component L1 is zero")
+    component_l1_fractions = {
+        name: float(summary["l1"] / total_component_l1)
+        for name, summary in summaries.items()
+    }
+    native_replay_exact_count = int(
+        np.count_nonzero(
+            native_production_replay.view(np.uint32)
+            == native_combined.view(np.uint32)
+        )
+    )
+    recovar_replay_exact_count = int(
+        np.count_nonzero(
+            recovar_data_then_prior.view(np.uint32)
+            == recovar_combined.view(np.uint32)
+        )
+    )
+    closure_exact = bool(np.all(closure == 0.0))
+    data_path_strict_majority = bool(
+        component_l1_fractions["pre_prior_data_path"] > 0.5
+    )
+    attributed = bool(
+        decision_topology_exact
+        and native_replay_exact_count == native_combined.size
+        and closure_exact
+        and data_path_strict_majority
+        and np.count_nonzero(total_delta) > 0
+    )
+    return {
+        "classification": (
+            GLOBAL_OFFSET_CLASSIFICATION
+            if attributed
+            else "global_absolute_score_residual_not_fully_attributed"
+        ),
+        "attributed": attributed,
+        "decision_topology_exact": decision_topology_exact,
+        "candidate_count": int(native_combined.size),
+        "native_production_replay_bitwise_exact_count": (
+            native_replay_exact_count
+        ),
+        "recovar_dump_replay_bitwise_exact_count": (
+            recovar_replay_exact_count
+        ),
+        "telescoping_closure": {
+            "exact": closure_exact,
+            **_delta_summary(closure),
+        },
+        "total_delta_recovar_minus_native": _delta_summary(total_delta),
+        "components": summaries,
+        "component_l1_fractions": component_l1_fractions,
+        "pre_prior_data_path_strict_majority": data_path_strict_majority,
     }
 
 
@@ -408,6 +620,13 @@ def _comparison(
         recovar["translation_log_prior"][native_translation[active]],
         dtype=np.float32,
     )
+    min_diff2 = np.asarray(
+        np.frombuffer(
+            np.asarray(score.header[18], dtype="<u4").tobytes(),
+            dtype="<f4",
+        )[0],
+        dtype=np.float32,
+    )
 
     native_winner_candidate = int(active_indices[np.argmax(native_combined)])
     native_winner_mapped = (
@@ -431,6 +650,32 @@ def _comparison(
         tuple(int(value) for value in row) for row in np.argwhere(candidate_mask & (recovar_scores == recovar_max))
     }
     max_tie_key_sets_exact = native_max_keys == recovar_max_keys
+    decision_topology_exact = bool(
+        support_exact
+        and winner_exact
+        and max_tie_key_sets_exact
+    )
+    global_attribution = global_score_offset_attribution(
+        min_diff2=min_diff2,
+        native_raw_diff2=np.asarray(
+            candidates["raw_diff2"][active],
+            dtype=np.float32,
+        ),
+        native_orientation_prior=native_orientation_prior,
+        native_translation_prior=native_translation_prior,
+        native_combined=native_combined,
+        recovar_pre_prior_residual=np.asarray(
+            recovar["scores_pre_prior"][
+                mapped_rotation[active],
+                native_translation[active],
+            ],
+            dtype=np.float64,
+        ),
+        recovar_orientation_prior=recovar_orientation_prior,
+        recovar_translation_prior=recovar_translation_prior,
+        recovar_combined=recovar_combined,
+        decision_topology_exact=decision_topology_exact,
+    )
 
     inverse_target = np.flatnonzero(native_to_recovar == TARGET_RECOVAR_ROTATION)
     _require(
@@ -438,18 +683,6 @@ def _comparison(
         "target RECOVAR rotation does not have one native match",
     )
     target_native_rotation = int(inverse_target[0])
-    min_diff2 = np.asarray(
-        np.frombuffer(
-            np.asarray(score.header[18], dtype="<u4").tobytes(),
-            dtype="<f4",
-        )[0],
-        dtype=np.float32,
-    )
-    decision_topology_exact = bool(
-        support_exact
-        and winner_exact
-        and max_tie_key_sets_exact
-    )
     target_records = []
     target_attributions = []
     for translation in TARGET_TRANSLATIONS:
@@ -588,6 +821,7 @@ def _comparison(
                 native_translation_prior,
                 recovar_translation_prior,
             ),
+            "global_offset_attribution": global_attribution,
         },
         "winner": {
             "native_rotation_local": int(candidates[native_winner_candidate]["rotation_local"]),
