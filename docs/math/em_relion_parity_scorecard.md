@@ -1155,9 +1155,27 @@ validator; centered direct-diff2 p95/max then pass 14/14 below the unchanged
 Patch 0005 now copies Euler values from device memory; its corrected binary
 SHA-256 is
 `ce07fc71246d382e4630a3e36dc41004f2e29cc07dd834155efa4ecfc5da9374`.
-A clean recapture is pending.  These diagnostics are non-scoring: K=1
-remains 28/34 strict, 32/34 topology, and 34/34 evaluated; K=4 remains
-41/60 direct and 9/15 all-class.
+Clean exact-device job `11781751` completed `0:0` on the required UUID.
+Operand reference, cross, and centered direct-diff2 gates all pass 14/14;
+map inertness passes 3/3 with minimum FSC-AUC above `0.99999999996`.
+The formally qualified live-reference counterfactual then passes its fixed
+14-particle denominator but finds 0/14 reference-dominated particles:
+centered residual-energy removal ranges from `-7.0922%` to `+2.6216%`,
+with median `-2.4833%`.  Classification is
+`live_projected_reference_rejected_as_raw_coarse_residual_cause`.  Report
+SHA-256 is
+`1e6d9524cca750b7d2dd25ed2566dc5b0eeff0ac3ba8498fba49c093edd1c408`.
+The fixed live-operand factorial then localizes the residual to the base
+corrected image: shifted-image and base-image interventions are each
+strict-majority dominant for 14/14 particles, while reference, correction,
+and translation-phase interventions are each 0/14.  Median centered-energy
+removal is `85.2109%` for the shifted image and `85.2128%` for the base
+image, versus `-0.0804%` for translation phase.  Classification is
+`raw_coarse_residual_is_live_base_corrected_image_dominated_not_reference_correction_or_translation_phase`;
+factorial report SHA-256 is
+`d33970bdec969c0eba9d26c705c61ef4308b6b4f3eb65cb89f184dc849a71a32`.
+These diagnostics are non-scoring: K=1 remains 28/34 strict, 32/34
+topology, and 34/34 evaluated; K=4 remains 41/60 direct and 9/15 all-class.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

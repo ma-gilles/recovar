@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from scripts.analyze_em_k1_live_reference_counterfactual import (
+    classify_live_operands,
     classify_live_reference,
     recovar_score_components,
     reference_swap_counterfactual,
@@ -82,4 +83,35 @@ def test_classifies_fixed_cohort_live_reference_outcomes() -> None:
     assert (
         classify_live_reference(capture_qualified=True, dominated=3, expected=14)
         == "raw_coarse_residual_has_mixed_live_projected_reference_effect"
+    )
+
+
+def test_classifies_live_base_image_factorial() -> None:
+    dominated = {
+        "reference": 0,
+        "shifted_image": 14,
+        "correction": 0,
+        "reference_and_shifted_image": 14,
+        "reference_and_correction": 0,
+        "shifted_image_and_correction": 14,
+        "all_live": 14,
+        "base_corrected_image": 14,
+        "translation_phase": 0,
+    }
+    assert (
+        classify_live_operands(
+            capture_qualified=True,
+            dominated=dominated,
+            expected=14,
+        )
+        == "raw_coarse_residual_is_live_base_corrected_image_dominated_"
+        "not_reference_correction_or_translation_phase"
+    )
+    assert (
+        classify_live_operands(
+            capture_qualified=False,
+            dominated=dominated,
+            expected=14,
+        )
+        == "operand_capture_not_qualified"
     )

@@ -9446,8 +9446,50 @@ and `9/15` all-class.
   Patch and corrected binary SHA-256 values are
   `c7a27cb9467103b4cea840ce7a36c9bfd11ad1a46263f824d2baa5d04d8f5e0c`
   and `ce07fc71246d382e4630a3e36dc41004f2e29cc07dd834155efa4ecfc5da9374`.
-  Seven schema tests pass; a clean recapture is required and remains
-  non-scoring.
+  Seven schema tests pass.
+- Clean exact-device job `11781751` completed `0:0` in `00:14:28`, peak RSS
+  `2973352K`, on required UUID
+  `GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a`.  It seals all 14/14
+  component and operand artifacts with no temporaries.  Operand reference,
+  cross p95/max, and centered direct-diff2 p95/max gates pass 14/14.  The
+  largest production replay p95/max error is `3.0517578125e-5`.
+- Half-1, half-2, and merged capture inertness passes 3/3 at FSC-AUC
+  `0.9999999999799831`, `0.9999999999798452`, and
+  `0.9999999999613778`.  The direct operand capture is qualified; the
+  independent algebraic component parent remains rejected 12/14 and is not
+  used to qualify it.
+- The first live-reference counterfactual output is superseded because it
+  omitted the fixed RELION-to-RECOVAR projection conversion.  Direct closure
+  identifies `-(128**2) = -16384`; after conversion the captured references
+  match RECOVAR references to relative L2 `3.9095116e-6`.
+- The corrected projected-reference-only intervention removes
+  `-7.0922%` to `+2.6216%` of centered residual energy, median `-2.4833%`.
+  Zero of 14 particles exceed the unchanged strict-majority threshold.
+  Classification is
+  `live_projected_reference_rejected_as_raw_coarse_residual_cause`.
+  Report/analyzer SHA-256 values are
+  `1e6d9524cca750b7d2dd25ed2566dc5b0eeff0ac3ba8498fba49c093edd1c408`
+  and `28a857030ed6a0130e670b8ce7ec3ea3ecf7847eb7a22faf49b76b585cb18a95`.
+  No correlation is computed; this remains non-scoring.
+- The fixed 2^3 live-operand factorial identifies the shifted image as
+  strict-majority dominant for 14/14 particles (median centered-energy
+  removal `85.2109%`); correction alone is 0/14, and every pairwise arm
+  containing the shifted image plus the all-live arm is 14/14.  Decomposing
+  the shifted input identifies the base corrected image as 14/14 (median
+  `85.2128%`) and translation phase as 0/14 (median `-0.0804%`).
+  RELION/RECOVAR base-image relative L2 is `3.5885e-7` to `2.5990e-6`,
+  while recovered-base variation across translations is only `1.2846e-7`
+  to `1.5597e-7`.  Classification is
+  `raw_coarse_residual_is_live_base_corrected_image_dominated_not_reference_correction_or_translation_phase`.
+  Factorial report/analyzer SHA-256 values are
+  `d33970bdec969c0eba9d26c705c61ef4308b6b4f3eb65cb89f184dc849a71a32`
+  and `7aea14db989088281109f954e8a992b549e03e799c41270be48dad2c98fc66be`.
+  The frozen focused parity gate passes 94/94 tests; scoped Ruff, scorecard
+  freshness, import provenance, and `git diff --check` pass.  The first
+  freshness invocation used the nonexistent `--check-freshness` spelling;
+  the repository-supported `--check docs/math/em_relion_parity_scorecard.md`
+  invocation passes.  This is a non-scoring causal boundary, not yet a
+  production fix.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 

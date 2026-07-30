@@ -12606,13 +12606,58 @@ because the Euler payload is invalid.  Patch 0005 copies the nine live Euler
 values directly from device memory; patch and corrected binary SHA-256 values
 are `c7a27cb9467103b4cea840ce7a36c9bfd11ad1a46263f824d2baa5d04d8f5e0c`
 and `ce07fc71246d382e4630a3e36dc41004f2e29cc07dd834155efa4ecfc5da9374`.
-Seven schema tests pass.  A clean recapture is required and remains
-non-scoring.
+Seven schema tests pass.
+
+Clean exact-device job `11781751` completed `0:0` in `00:14:28`, with peak
+RSS `2973352K`, on required UUID
+`GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a`.  It seals 14/14 paired
+artifacts with no temporaries.  Reference, cross p95/max, and centered direct
+production-diff2 p95/max all pass 14/14; the largest direct-diff2 p95 and
+maximum errors are both `3.0517578125e-5`.  Half-1, half-2, and merged
+capture inertness passes 3/3 at FSC-AUC `0.9999999999799831`,
+`0.9999999999798452`, and `0.9999999999613778`.  The operand capture is
+formally qualified even though the independent algebraically expanded
+component report retains its expected 12/14 p95 rejection.
+
+The predeclared live-reference-only counterfactual maps RELION FFTW rows into
+RECOVAR's centered rFFT window and applies the fixed RELION-to-RECOVAR
+projection conversion `-(128**2) = -16384`.  The converted references close
+the RECOVAR references to relative L2 `3.9095116e-6`.  Replacing only the
+projected-reference operand removes from `-7.0922%` to `+2.6216%` of centered
+score-residual energy, with median `-2.4833%`; 0/14 particles exceed the
+fixed strict-majority threshold.  Classification is
+`live_projected_reference_rejected_as_raw_coarse_residual_cause`.  Report
+and analyzer SHA-256 values are
+`1e6d9524cca750b7d2dd25ed2566dc5b0eeff0ac3ba8498fba49c093edd1c408`
+and `28a857030ed6a0130e670b8ce7ec3ea3ecf7847eb7a22faf49b76b585cb18a95`.
+The unscaled first report is explicitly superseded.  No correlation is
+computed, and this remains non-scoring.
+
+The fixed 2^3 live-operand factorial localizes that residual further.
+Replacing the shifted image is strict-majority dominant for 14/14 particles
+(median centered-energy removal `85.2109%`), while replacing the correction
+is dominant for 0/14.  Pairwise arms containing the shifted image and the
+all-live arm are also 14/14.  Splitting the shifted image into its base
+corrected image and translation phase makes the causal boundary explicit:
+the base image is dominant for 14/14 (median `85.2128%`), whereas the phase
+is dominant for 0/14 (median `-0.0804%`).  Across the fixed cohort, the
+RELION/RECOVAR base-image relative-L2 gap is `3.5885e-7` to `2.5990e-6`;
+translation-dependent recovered-base variation is only `1.2846e-7` to
+`1.5597e-7`.  Classification is
+`raw_coarse_residual_is_live_base_corrected_image_dominated_not_reference_correction_or_translation_phase`.
+Factorial report and analyzer SHA-256 values are
+`d33970bdec969c0eba9d26c705c61ef4308b6b4f3eb65cb89f184dc849a71a32`
+and `7aea14db989088281109f954e8a992b549e03e799c41270be48dad2c98fc66be`.
+The frozen focused parity gate passes 94/94 tests; scoped Ruff, scorecard
+freshness, import provenance, and `git diff --check` pass.  This is a
+non-scoring causal diagnostic, not yet a production fix.
 
 Run roots are
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_diff2_components_fd4ca909_20260729T223000ET`,
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_recovar_score_components_bd17533f_20260729T225000ET`,
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_diff2_components_fp64_1487550f_20260729T231000ET`,
 and
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_production_diff2_operands_e4b5e14e_20260730T003000ET`;
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_production_diff2_operands_e4b5e14e_20260730T003000ET`,
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_production_diff2_operands_eulerfix_6de88fe3_20260730T011530ET`;
 all contain `SAFE_TO_DELETE`.  These diagnostics remain non-scoring.
