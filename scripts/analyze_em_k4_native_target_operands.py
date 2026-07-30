@@ -13,6 +13,7 @@ import numpy as np
 
 from scripts.analyze_em_k4_authoritative_native_scores import (
     EXPECTED_CLASS,
+    EXPECTED_CURRENT_SIZE,
     EXPECTED_ITERATION,
     EXPECTED_PARTICLE_ID,
     EXPECTED_ROTATIONS,
@@ -127,7 +128,22 @@ def _comparison(
     operand = load_fine_operand_capture(fine_operand_path)
     with np.load(recovar_pass2_path, allow_pickle=False) as archive:
         recovar = {key: np.asarray(archive[key]) for key in archive.files}
-    _require("rotations" in recovar, "RECOVAR pass-2 rotations are absent")
+    required_recovar = {
+        "original_index",
+        "class_index",
+        "current_size",
+        "rotations",
+    }
+    _require(
+        required_recovar.issubset(recovar),
+        "RECOVAR pass-2 identity/rotation fields are absent",
+    )
+    _require(
+        int(recovar["original_index"]) == 53_722
+        and int(recovar["class_index"]) == 0
+        and int(recovar["current_size"]) == EXPECTED_CURRENT_SIZE,
+        "RECOVAR pass-2 particle/class/current-size identity changed",
+    )
     operand_validation = validate_capture(
         operand,
         expected_stack=EXPECTED_STACK,
