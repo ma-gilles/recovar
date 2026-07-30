@@ -509,6 +509,49 @@ def test_normalized_mass_components_telescope_exactly() -> None:
     ] == 0.0
 
 
+def test_component_delta_strata_replay_and_rank() -> None:
+    report = analyzer._component_delta_strata(
+        stratum_ids=np.asarray([10, 10, 20]),
+        stratum_name="recovar_rotation_row",
+        component_delta=np.asarray([0.5, -0.25, -0.25]),
+        native_candidate_index=np.asarray([7, 8, 9]),
+        expected_component_l1=1.0,
+        expected_component_signed=0.0,
+        selected_stratum_ids=(10, 30),
+        selected_stratum_sets={
+            "fixed_target_rotation": (10,),
+        },
+        paired_ids=np.asarray([1, 1, 2]),
+        paired_name="native_rotation_local",
+    )
+
+    assert report["group_count"] == 2
+    assert report["candidate_count"] == 3
+    assert report["flattened_partition_signed_replay"] == 0.0
+    assert report["flattened_partition_l1_replay"] == 1.0
+    assert report["rounded_group_signed_replay_residual"] == 0.0
+    assert report["rounded_group_l1_replay_residual"] == 0.0
+    assert report["marginal_path_total_variation"] == 0.25
+    assert report["within_stratum_cancellation_fraction"] == 0.5
+    assert [
+        row["recovar_rotation_row"] for row in report["top_10"]
+    ] == [10, 20]
+    assert report["top_10"][0]["native_rotation_local"] == 1
+    assert report["top_10"][0]["component_l1"] == 0.75
+    assert report["top_10"][0]["component_l1_rank_1based"] == 1
+    assert report["l1_concentration"]["top_1"][
+        "share_of_component_l1"
+    ] == 0.75
+    assert [
+        row["recovar_rotation_row"]
+        for row in report["selected_strata"]
+    ] == [10]
+    assert report["missing_selected_stratum_ids"] == [30]
+    assert report["selected_stratum_set_coverage"][
+        "fixed_target_rotation"
+    ]["share_of_component_l1"] == 0.75
+
+
 def test_target_score_offset_attribution_closes_exact_decomposition() -> None:
     report = analyzer.target_score_offset_attribution(
         min_diff2=np.float32(500.6817321777344),

@@ -23,7 +23,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v15"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v16"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -641,6 +641,309 @@ def _normalized_mass_strata(
             for stratum_id in selected_ids
             if stratum_id not in record_by_id
         ],
+    }
+
+
+def _component_delta_strata(
+    *,
+    stratum_ids: np.ndarray,
+    stratum_name: str,
+    component_delta: np.ndarray,
+    native_candidate_index: np.ndarray,
+    expected_component_l1: float,
+    expected_component_signed: float,
+    selected_stratum_ids: tuple[int, ...] = (),
+    selected_stratum_sets: dict[str, tuple[int, ...]] | None = None,
+    paired_ids: np.ndarray | None = None,
+    paired_name: str | None = None,
+) -> dict[str, Any]:
+    """Partition one normalized-mass component by fixed identities."""
+
+    stratum_ids = np.asarray(stratum_ids, dtype=np.int64)
+    component_delta = np.asarray(component_delta, dtype=np.float64)
+    native_candidate_index = np.asarray(
+        native_candidate_index,
+        dtype=np.int64,
+    )
+    arrays = (
+        stratum_ids,
+        component_delta,
+        native_candidate_index,
+    )
+    _require(
+        len({array.shape for array in arrays}) == 1,
+        f"{stratum_name} component stratum array shapes differ",
+    )
+    _require(stratum_ids.size > 0, f"{stratum_name} component strata are empty")
+    _require(
+        np.all(stratum_ids >= 0),
+        f"{stratum_name} component identities must be nonnegative",
+    )
+    if paired_ids is not None:
+        paired_ids = np.asarray(paired_ids, dtype=np.int64)
+        _require(
+            paired_ids.shape == stratum_ids.shape,
+            f"{stratum_name} component paired identity shape differs",
+        )
+        _require(
+            paired_name is not None and np.all(paired_ids >= 0),
+            f"{stratum_name} component paired identity contract is invalid",
+        )
+    else:
+        _require(
+            paired_name is None,
+            f"{stratum_name} component paired identity name lacks values",
+        )
+
+    unique_strata = np.unique(stratum_ids)
+    rows_by_stratum = {
+        int(stratum_id): np.flatnonzero(stratum_ids == stratum_id)
+        for stratum_id in unique_strata
+    }
+    flattened_signed = math.fsum(
+        float(component_delta[row])
+        for stratum_id in unique_strata
+        for row in rows_by_stratum[int(stratum_id)]
+    )
+    flattened_l1 = math.fsum(
+        abs(float(component_delta[row]))
+        for stratum_id in unique_strata
+        for row in rows_by_stratum[int(stratum_id)]
+    )
+    _require(
+        flattened_signed == expected_component_signed,
+        f"{stratum_name} flattened component signed sum does not replay V15",
+    )
+    _require(
+        flattened_l1 == expected_component_l1,
+        f"{stratum_name} flattened component L1 does not replay V15",
+    )
+
+    records = []
+    for stratum_id in unique_strata:
+        stratum_id = int(stratum_id)
+        rows = rows_by_stratum[stratum_id]
+        values = component_delta[rows]
+        absolute_values = np.abs(values)
+        l1 = math.fsum(float(value) for value in absolute_values)
+        signed = math.fsum(float(value) for value in values)
+        maximum_abs = float(np.max(absolute_values))
+        representative_rows = rows[absolute_values == maximum_abs]
+        representative_row = int(
+            representative_rows[
+                np.argmin(native_candidate_index[representative_rows])
+            ]
+        )
+        record = {
+            stratum_name: stratum_id,
+            "candidate_count": int(rows.size),
+            "signed_component_delta": float(signed),
+            "component_l1": float(l1),
+            "component_path_total_variation": float(0.5 * l1),
+            "share_of_component_l1": float(
+                0.0
+                if expected_component_l1 == 0.0
+                else l1 / expected_component_l1
+            ),
+            "within_stratum_cancellation_fraction": float(
+                0.0 if l1 == 0.0 else 1.0 - abs(signed) / l1
+            ),
+            "max_absolute_candidate_component": maximum_abs,
+            "max_absolute_representative": {
+                "selection_rule": (
+                    "maximum_absolute_component_delta_then_"
+                    "lowest_native_candidate_index"
+                ),
+                "aligned_table_index": representative_row,
+                "native_candidate_index": int(
+                    native_candidate_index[representative_row]
+                ),
+                "component_delta": float(
+                    component_delta[representative_row]
+                ),
+            },
+        }
+        if paired_ids is not None:
+            paired_values = np.unique(paired_ids[rows])
+            _require(
+                paired_values.size == 1,
+                f"{stratum_name} component does not map to exactly one "
+                f"{paired_name}",
+            )
+            record[paired_name] = int(paired_values[0])
+        records.append(record)
+
+    ranked_records = sorted(
+        records,
+        key=lambda record: (
+            -record["component_l1"],
+            record[stratum_name],
+        ),
+    )
+    for rank, record in enumerate(ranked_records, start=1):
+        record["component_l1_rank_1based"] = rank
+    marginal_ranked_records = sorted(
+        records,
+        key=lambda record: (
+            -0.5 * abs(record["signed_component_delta"]),
+            record[stratum_name],
+        ),
+    )
+    marginal_path_l1 = math.fsum(
+        abs(float(record["signed_component_delta"]))
+        for record in records
+    )
+    marginal_path_total_variation = 0.5 * marginal_path_l1
+    for rank, record in enumerate(marginal_ranked_records, start=1):
+        marginal_contribution = 0.5 * abs(
+            record["signed_component_delta"]
+        )
+        record["marginal_path_tv_contribution"] = float(
+            marginal_contribution
+        )
+        record["share_of_marginal_path_tv"] = float(
+            0.0
+            if marginal_path_total_variation == 0.0
+            else marginal_contribution / marginal_path_total_variation
+        )
+        record["marginal_path_tv_rank_1based"] = rank
+
+    record_by_id = {
+        record[stratum_name]: record
+        for record in ranked_records
+    }
+    selected_ids = tuple(
+        sorted(set(int(value) for value in selected_stratum_ids))
+    )
+    selected_records = [
+        record_by_id[stratum_id]
+        for stratum_id in selected_ids
+        if stratum_id in record_by_id
+    ]
+    rounded_group_l1_sum = math.fsum(
+        float(record["component_l1"]) for record in records
+    )
+    rounded_group_signed_sum = math.fsum(
+        float(record["signed_component_delta"]) for record in records
+    )
+
+    def concentration(top_n: int) -> dict[str, Any]:
+        contribution = math.fsum(
+            float(record["component_l1"])
+            for record in ranked_records[:top_n]
+        )
+        return {
+            "requested_top_n": top_n,
+            "available_strata_used": min(top_n, len(ranked_records)),
+            "component_l1": float(contribution),
+            "share_of_component_l1": float(
+                0.0
+                if expected_component_l1 == 0.0
+                else contribution / expected_component_l1
+            ),
+        }
+
+    def selected_set_coverage(
+        stratum_ids_for_set: tuple[int, ...],
+    ) -> dict[str, Any]:
+        set_ids = tuple(
+            sorted(set(int(value) for value in stratum_ids_for_set))
+        )
+        set_records = [
+            record_by_id[stratum_id]
+            for stratum_id in set_ids
+            if stratum_id in record_by_id
+        ]
+        set_l1 = math.fsum(
+            float(record["component_l1"]) for record in set_records
+        )
+        set_marginal_tv = math.fsum(
+            float(record["marginal_path_tv_contribution"])
+            for record in set_records
+        )
+        return {
+            "stratum_ids": list(set_ids),
+            "present_stratum_ids": [
+                record[stratum_name] for record in set_records
+            ],
+            "missing_stratum_ids": [
+                stratum_id
+                for stratum_id in set_ids
+                if stratum_id not in record_by_id
+            ],
+            "component_l1": float(set_l1),
+            "share_of_component_l1": float(
+                0.0
+                if expected_component_l1 == 0.0
+                else set_l1 / expected_component_l1
+            ),
+            "marginal_path_tv_contribution": float(set_marginal_tv),
+            "share_of_marginal_path_tv": float(
+                0.0
+                if marginal_path_total_variation == 0.0
+                else set_marginal_tv / marginal_path_total_variation
+            ),
+        }
+
+    return {
+        "stratum_identity": stratum_name,
+        "group_count": len(records),
+        "candidate_count": int(stratum_ids.size),
+        "flattened_partition_signed_replay": float(flattened_signed),
+        "flattened_partition_l1_replay": float(flattened_l1),
+        "expected_component_signed": float(expected_component_signed),
+        "expected_component_l1": float(expected_component_l1),
+        "rounded_group_signed_sum": float(rounded_group_signed_sum),
+        "rounded_group_signed_replay_residual": float(
+            rounded_group_signed_sum - expected_component_signed
+        ),
+        "rounded_group_l1_sum": float(rounded_group_l1_sum),
+        "rounded_group_l1_replay_residual": float(
+            rounded_group_l1_sum - expected_component_l1
+        ),
+        "candidate_path_total_variation": float(
+            0.5 * expected_component_l1
+        ),
+        "marginal_path_l1": float(marginal_path_l1),
+        "marginal_path_total_variation": float(
+            marginal_path_total_variation
+        ),
+        "marginal_path_tv_fraction_of_candidate_path_tv": float(
+            0.0
+            if expected_component_l1 == 0.0
+            else marginal_path_l1 / expected_component_l1
+        ),
+        "within_stratum_cancellation_fraction": float(
+            0.0
+            if expected_component_l1 == 0.0
+            else 1.0 - marginal_path_l1 / expected_component_l1
+        ),
+        "ranking_rule": (
+            "descending_component_l1_then_"
+            f"ascending_{stratum_name}"
+        ),
+        "top_10": ranked_records[:10],
+        "l1_concentration": {
+            "top_1": concentration(1),
+            "top_3": concentration(3),
+            "top_10": concentration(10),
+        },
+        "marginal_ranking_rule": (
+            "descending_marginal_path_tv_then_"
+            f"ascending_{stratum_name}"
+        ),
+        "marginal_top_10": marginal_ranked_records[:10],
+        "selected_stratum_ids": list(selected_ids),
+        "selected_strata": selected_records,
+        "missing_selected_stratum_ids": [
+            stratum_id
+            for stratum_id in selected_ids
+            if stratum_id not in record_by_id
+        ],
+        "selected_stratum_set_coverage": {
+            name: selected_set_coverage(selected_stratum_sets[name])
+            for name in sorted(selected_stratum_sets or {})
+        },
     }
 
 
@@ -1828,6 +2131,47 @@ def _normalized_mass_component_telescope(
         component_summaries[component]["signed_mass_contribution"]
         for component in component_order
     )
+    component_owner_concentration = {}
+    for component in component_order:
+        component_l1 = component_summaries[component][
+            "l1_mass_contribution"
+        ]
+        component_signed = component_summaries[component][
+            "signed_mass_contribution"
+        ]
+        component_owner_concentration[component] = {
+            "rotation": _component_delta_strata(
+                stratum_ids=recovar_rotation_row,
+                stratum_name="recovar_rotation_row",
+                component_delta=component_values[component],
+                native_candidate_index=native_candidate_index,
+                expected_component_l1=component_l1,
+                expected_component_signed=component_signed,
+                selected_stratum_ids=(selected_rotation,),
+                selected_stratum_sets={
+                    "fixed_target_rotation": (selected_rotation,),
+                },
+                paired_ids=native_rotation_local,
+                paired_name="native_rotation_local",
+            ),
+            "translation": _component_delta_strata(
+                stratum_ids=translation_id,
+                stratum_name="translation_id",
+                component_delta=component_values[component],
+                native_candidate_index=native_candidate_index,
+                expected_component_l1=component_l1,
+                expected_component_signed=component_signed,
+                selected_stratum_ids=selected_translation_ids,
+                selected_stratum_sets={
+                    "fixed_target_translations": (
+                        selected_translation_ids
+                    ),
+                    "queued_target_translations": (
+                        queued_translation_ids
+                    ),
+                },
+            ),
+        }
 
     selected_candidate_records = []
     for translation in selected_translation_ids:
@@ -1912,6 +2256,9 @@ def _normalized_mass_component_telescope(
         ),
         "components": component_summaries,
         "ranked_components": ranked_components,
+        "component_owner_concentration": (
+            component_owner_concentration
+        ),
         "selected_recovar_rotation_row": int(selected_rotation),
         "selected_native_rotation_local": selected_native_rotation,
         "missing_selected_rotation_rows": (

@@ -10156,6 +10156,55 @@ and `9/15` all-class.
 - Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and `34/34`
   evaluated; K=4 `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 K=4 normalized-component owner predeclaration
+
+- V16 partitions each of V15's five normalized-mass component paths by all
+  `2,968` mapped rotations and all `104` translations.
+- Every partition flattened in ascending identity and aligned-candidate order
+  must replay candidate-level L1 and signed sum exactly; separately summed
+  rounded group summaries report their deterministic residual.  Ranking is
+  descending group L1 then ascending identity, with separate marginal path-TV
+  ranking and top-1/top-3/top-10 concentration.
+- Fixed selections are target rotation `2626`, translations
+  `78,83,76,80,82`, and queued pair `80,82`.
+- The question is whether the already queued exact-device targets are leading
+  owners of V15's normalized pre-prior and operation-order paths.
+- Thread-count-1 and thread-count-8 reports must be byte-identical; removing
+  only V16 must reproduce V15 exactly.
+- This threshold-free one-class diagnostic cannot identify a raw operand,
+  authorize a fix or new science job, change a scorecard, establish a full
+  K=4 posterior, or establish FSC/FSC-AUC parity.
+- Predeclaration:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_normalized_component_owners_v16_2a3ea6eb_20260730T192200ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+## 2026-07-30 K=4 normalized-component owner result
+
+- V16 reproduces all ten component/identity L1 totals exactly; flattened
+  signed/L1 replay is exact and the maximum rounded group-summary signed
+  residual is `9.430725965891257e-23`.
+- Target rotation `2626` / native `1210` ranks first for normalized pre-prior
+  L1 (`15.914497159294227%`) and operation-order L1
+  (`21.359635465703442%`).  It is also rank 1 for translation prior, rank 2
+  for orientation prior, and rank 3 for dump replay.
+- Across complete translation strata, translation `82` ranks first for
+  pre-prior (`9.276317250945769%`) and operation order
+  (`11.83464100928627%`).  Translation `80` ranks fourth
+  (`7.620610932989319%`) and second (`9.837478302874318%`).
+- Queued `80,82` jointly cover `16.89692818393509%` of pre-prior L1 and
+  `21.67211931216059%` of operation-order L1 across all rotations.
+- Rotation marginals retain `33.63192464592954%` of pre-prior path TV and
+  `53.69220327612797%` of operation-order path TV; translation marginals
+  retain `29.95038619965972%` and `16.11634049688868%`.
+- The rankings support the existing exact-device target but do not enlarge
+  its captured intersection: V15's target rotation plus queued translations
+  still cover only `1.4207897957134247%` of whole-class pre-prior L1 and
+  `5.961174442750557%` of operation-order L1.
+- Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+  `f36653a8febc4c40094fb2df35cebeff1fde5a1ec51a021ccf2d99ca5ce48d18`.
+  Removing only V16 reproduces V15 exactly.
+- Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and `34/34`
+  evaluated; K=4 `41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 K=4 whole-class normalized-mass predeclaration
 
 - V15 independently normalizes all six frozen V14 score stages across the

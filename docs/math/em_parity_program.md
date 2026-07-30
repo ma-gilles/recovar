@@ -13660,3 +13660,61 @@ Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
 Removing only the V15 schema and normalized-mass telescope reproduces V14
 exactly.  Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and
 `34/34` evaluated; K=4 `41/60` direct and `9/15` all-class.
+
+### Predeclared K=4 normalized-component owners
+
+V16 will partition each of V15's five complete normalized-mass component
+paths by all `2,968` mapped rotations and all `104` translations.  Every
+partition flattened in ascending identity and aligned-candidate order must
+replay the component's candidate-level L1 and signed sum exactly; separately
+summed rounded group summaries report their deterministic residual.  Groups
+are ranked by descending L1 then ascending identity, with separate marginal
+path-TV ranking and top-1/top-3/top-10 concentration.
+
+The report fixes target rotation `2626`, translations `78,83,76,80,82`, and
+queued pair `80,82` before evaluation.  It asks whether those existing
+exact-device targets are leading owners of V15's normalized pre-prior and
+operation-order paths.  Thread-count-1 and thread-count-8 reports must be
+byte-identical; stripping only V16 must reproduce V15 exactly.
+
+This threshold-free one-class diagnostic cannot identify a raw operand,
+authorize a production change or another science job, change the scorecards,
+establish a full K=4 posterior, or establish FSC/FSC-AUC parity.  The
+predeclaration is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_normalized_component_owners_v16_2a3ea6eb_20260730T192200ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+The sealed V16 partitions reproduce all ten component/identity L1 totals
+exactly.  Rounded group-summary signed residuals are at most
+`9.430725965891257e-23`; flattened signed/L1 replays are exact.
+
+Target rotation `2626` / native `1210` ranks first for both dominant paths:
+it carries `15.914497159294227%` of normalized pre-prior L1 and
+`21.359635465703442%` of operation-order L1.  It also ranks first for
+translation-prior L1, second for orientation-prior L1, and third for dump
+replay, so it is top-three across all five fixed components.
+
+Across complete translation strata, translation `82` ranks first for both
+pre-prior (`9.276317250945769%`) and operation order
+(`11.83464100928627%`).  Translation `80` ranks fourth
+(`7.620610932989319%`) and second (`9.837478302874318%`), respectively.
+Together queued `80,82` cover `16.89692818393509%` of pre-prior L1 and
+`21.67211931216059%` of operation-order L1.
+
+Rotation marginals retain `33.63192464592954%` of pre-prior path TV and
+`53.69220327612797%` of operation-order path TV; translation marginals retain
+`29.95038619965972%` and `16.11634049688868%`.  The queued translation set
+therefore has high absolute component ownership but substantial
+within-translation signed cancellation, especially for operation order.
+
+These complete-stratum rankings independently support the already queued
+target rotation/translations.  They do not enlarge the raw capture: V15's
+exact target-rotation/intersection candidates still cover only
+`1.4207897957134247%` of whole-class pre-prior L1 and
+`5.961174442750557%` of operation-order L1.  A qualified raw/operand pair
+remains necessary before any fix or new job.
+
+Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+`f36653a8febc4c40094fb2df35cebeff1fde5a1ec51a021ccf2d99ca5ce48d18`.
+Removing only V16 reproduces V15 exactly.  Fixed metrics remain K=1 `28/34`
+strict, `32/34` topology, and `34/34` evaluated; K=4 `41/60` direct and
+`9/15` all-class.
