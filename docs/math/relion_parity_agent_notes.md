@@ -10115,3 +10115,42 @@ and `9/15` all-class.
   reproduces V7 exactly.
 - This remains non-scoring: K=1 is `28/34` strict, `32/34` topology, and
   `34/34` evaluated; K=4 is `41/60` direct and `9/15` all-class.
+
+## 2026-07-30 K=4 marginal-TV concentration predeclaration
+
+- V9 will rank every V8 rotation and translation marginal by
+  `0.5 * abs(marginal_mass_delta_recovar_minus_native)`, breaking exact ties
+  by ascending integer identity.
+- It will report deterministic top-1/top-3/top-10 concentration, exact replay
+  of complete marginal TV, and combined marginal-TV coverage for the
+  pre-existing selected strata, including queued translations `80,82`.
+- The result is threshold-free and scoped to one captured class.  It cannot
+  change the frozen scorecard, establish a full K-class posterior or
+  FSC/FSC-AUC result, authorize a production fix, or authorize another
+  science job before an existing official `80,82` pair qualifies.
+- Predeclaration:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_marginal_tv_concentration_v9_9d33f058_20260730T164706ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+## 2026-07-30 K=4 marginal-TV concentration result
+
+- V9 replays the V8 rotation and translation marginal TV exactly with zero
+  residual.  Rotation top-1/top-3/top-10 concentration is
+  `19.242801636833587%` / `38.42723815170505%` /
+  `56.42859023722319%`; translation is `13.523267080529192%` /
+  `31.97759071909936%` / `68.60886905129614%`.
+- Rotation row `951` (native `1655`) ranks first; fixed target row `2626`
+  (native `1210`) ranks second and covers `13.588772932494678%` of rotation
+  marginal TV.
+- Translation `78` ranks first, `83` second, and `76` third.  Queued target
+  `80` ranks fourth at `7.997860283137037%`; queued target `82`, despite
+  ranking first by candidate-level TV in V7, ranks twenty-first after
+  cancellation at `0.9554539981169818%`.
+- The immutable queued `80,82` pair covers only `8.953314281254018%` of
+  translation marginal TV.  This shows why candidate-level target priority
+  is not equivalent to marginal decision relevance, but does not supersede
+  the already queued causal operand audit or authorize a new job.
+- Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+  `b04fb7b598a5699f7323d396d564a4660466473f9780e3984aba513215c2002c`.
+  Removing only the V9 schema and declared fields reproduces V8 exactly.
+- This remains non-scoring: K=1 is `28/34` strict, `32/34` topology, and
+  `34/34` evaluated; K=4 is `41/60` direct and `9/15` all-class.

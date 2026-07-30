@@ -124,6 +124,25 @@ def test_normalized_mass_strata_partition_and_rank_deterministically() -> None:
         ]
         == 0.5000000000000002
     )
+    assert report["summed_marginal_tv_contributions"] == (
+        0.049999999999999996
+    )
+    assert report["marginal_tv_replay_residual"] == 0.0
+    assert [
+        row["rotation"] for row in report["marginal_top_10"]
+    ] == [2, 1]
+    assert report["marginal_top_10"][0][
+        "marginal_tv_rank_1based"
+    ] == 1
+    assert report["marginal_tv_concentration"]["top_1"][
+        "available_strata_used"
+    ] == 1
+    assert report["marginal_tv_concentration"]["top_3"][
+        "available_strata_used"
+    ] == 2
+    assert report["marginal_tv_concentration"]["top_10"][
+        "share_of_marginal_distribution_tv"
+    ] == 1.0
     assert [row["rotation"] for row in report["top_10"]] == [1, 2]
     assert report["top_10"][0]["candidate_level_tv_rank_1based"] == 1
     assert report["top_10"][0]["native_rotation"] == 9
@@ -137,7 +156,68 @@ def test_normalized_mass_strata_partition_and_rank_deterministically() -> None:
         "native_candidate_index"
     ] == 10
     assert [row["rotation"] for row in report["selected_strata"]] == [2]
+    assert report["selected_strata_marginal_tv_contribution"] == (
+        0.025
+    )
+    assert report[
+        "selected_strata_share_of_marginal_distribution_tv"
+    ] == 0.5000000000000001
     assert report["missing_selected_stratum_ids"] == [3]
+
+
+def test_normalized_mass_strata_ranks_marginal_tv_with_exact_ties() -> None:
+    report = analyzer._normalized_mass_strata(
+        stratum_ids=np.asarray([1, 1, 2, 2, 3, 3]),
+        stratum_name="translation",
+        native_score_mass=np.asarray(
+            [0.25, 0.125, 0.25, 0.125, 0.125, 0.125]
+        ),
+        recovar_score_mass=np.asarray(
+            [0.3125, 0.1875, 0.1875, 0.125, 0.0625, 0.125]
+        ),
+        native_candidate_index=np.arange(6),
+        selected_stratum_ids=(2, 3, 4),
+        selected_stratum_sets={
+            "queued": (2, 3),
+            "with_missing": (4,),
+        },
+    )
+
+    assert report["marginal_distribution_total_variation"] == 0.125
+    assert report["summed_marginal_tv_contributions"] == 0.125
+    assert report["marginal_tv_replay_residual"] == 0.0
+    assert [
+        row["translation"] for row in report["marginal_top_10"]
+    ] == [1, 2, 3]
+    assert [
+        row["marginal_tv_rank_1based"]
+        for row in report["marginal_top_10"]
+    ] == [1, 2, 3]
+    assert report["marginal_tv_concentration"]["top_1"][
+        "share_of_marginal_distribution_tv"
+    ] == 0.5
+    assert report["marginal_tv_concentration"]["top_3"][
+        "share_of_marginal_distribution_tv"
+    ] == 1.0
+    assert report["selected_strata_marginal_tv_contribution"] == 0.0625
+    assert report[
+        "selected_strata_share_of_marginal_distribution_tv"
+    ] == 0.5
+    assert report["selected_stratum_set_coverage"]["queued"] == {
+        "stratum_ids": [2, 3],
+        "present_stratum_ids": [2, 3],
+        "missing_stratum_ids": [],
+        "marginal_tv_contribution": 0.0625,
+        "share_of_marginal_distribution_tv": 0.5,
+    }
+    assert report["selected_stratum_set_coverage"]["with_missing"] == {
+        "stratum_ids": [4],
+        "present_stratum_ids": [],
+        "missing_stratum_ids": [4],
+        "marginal_tv_contribution": 0.0,
+        "share_of_marginal_distribution_tv": 0.0,
+    }
+    assert report["missing_selected_stratum_ids"] == [4]
 
 
 def test_target_score_offset_attribution_closes_exact_decomposition() -> None:

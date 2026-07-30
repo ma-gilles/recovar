@@ -13303,3 +13303,46 @@ The sealed V8 result retains the unchanged candidate-level TV
 the rotation marginal TV.  Therefore most candidate-level mass movement
 cancels under either marginal, and the modest translation excess does not
 supersede the already queued `80,82` raw/operand comparison.
+
+### Predeclared K=4 marginal-TV concentration diagnostic
+
+The next fixed question ranks each rotation and translation stratum by its
+contribution to the V8 surviving marginal TV,
+`0.5 * abs(marginal_mass_delta_recovar_minus_native)`, with exact ties broken
+by ascending integer identity.  It reports the top-1/top-3/top-10
+concentration and the complete combined coverage of the pre-existing selected
+strata, specifically including the immutable queued translation targets
+`80,82`.  Deterministic `math.fsum` contributions must replay the V8 marginal
+TV exactly.
+
+This remains one captured class and cannot change a fixed score, establish a
+full K-class posterior or FSC/FSC-AUC result, authorize a production fix, or
+authorize another science job before an existing official `80,82` pair
+qualifies.  The predeclaration is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_marginal_tv_concentration_v9_9d33f058_20260730T164706ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+The sealed V9 result exactly replays rotation marginal TV
+`1.8554921714932912e-6` and translation marginal TV
+`2.056175817468767e-6`.  Rotation row `951` (native `1655`) ranks first at
+`19.242801636833587%`; the fixed target rotation `2626` (native `1210`) ranks
+second at `13.588772932494678%`.  Rotation top-3/top-10 concentration is
+`38.42723815170505%` / `56.42859023722319%`.
+
+Translation `78` ranks first at `13.523267080529192%`, translation `83`
+ranks second at `10.206819161160902%`, and translation `76` ranks third at
+`8.247504477409265%`.  The queued translation `80` ranks fourth at
+`7.997860283137037%`, while queued translation `82` ranks twenty-first at
+`0.9554539981169818%`.  Together the immutable queued `80,82` set covers
+`8.953314281254018%` of translation marginal TV.  Translation
+top-3/top-10 concentration is `31.97759071909936%` /
+`68.60886905129614%`.
+
+Thus V7's candidate-level top target `82` mostly cancels during translation
+marginalization, and the queued pair does not cover most surviving
+translation-marginal movement.  It still remains the correct next causal
+operand gate because those immutable jobs already exist; V9 does not
+authorize another job or a production change.  Thread-count-1 and
+thread-count-8 reports are byte-identical, SHA-256
+`b04fb7b598a5699f7323d396d564a4660466473f9780e3984aba513215c2002c`.
+Removing only the V9 schema and declared marginal-ranking/coverage fields
+reproduces V8 exactly.

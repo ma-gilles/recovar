@@ -23,7 +23,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v8"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v9"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -99,6 +99,7 @@ def _normalized_mass_strata(
     recovar_score_mass: np.ndarray,
     native_candidate_index: np.ndarray,
     selected_stratum_ids: tuple[int, ...] = (),
+    selected_stratum_sets: dict[str, tuple[int, ...]] | None = None,
     paired_ids: np.ndarray | None = None,
     paired_name: str | None = None,
 ) -> dict[str, Any]:
@@ -245,6 +246,111 @@ def _normalized_mass_strata(
     within_stratum_cancellation = (
         total_variation - marginal_total_variation
     )
+    marginal_ranked_records = sorted(
+        records,
+        key=lambda record: (
+            -0.5
+            * abs(
+                record[
+                    "marginal_mass_delta_recovar_minus_native"
+                ]
+            ),
+            record[stratum_name],
+        ),
+    )
+    for rank, record in enumerate(marginal_ranked_records, start=1):
+        marginal_tv_contribution = 0.5 * abs(
+            record["marginal_mass_delta_recovar_minus_native"]
+        )
+        record["marginal_tv_contribution"] = float(
+            marginal_tv_contribution
+        )
+        record["share_of_marginal_distribution_tv"] = float(
+            0.0
+            if marginal_total_variation == 0.0
+            else marginal_tv_contribution / marginal_total_variation
+        )
+        record["marginal_tv_rank_1based"] = rank
+    marginal_tv_replay = math.fsum(
+        float(record["marginal_tv_contribution"])
+        for record in marginal_ranked_records
+    )
+    selected_records = [
+        record_by_id[stratum_id]
+        for stratum_id in selected_ids
+        if stratum_id in record_by_id
+    ]
+    selected_marginal_tv = math.fsum(
+        float(record["marginal_tv_contribution"])
+        for record in selected_records
+    )
+
+    def selected_set_coverage(
+        stratum_ids_for_set: tuple[int, ...],
+    ) -> dict[str, Any]:
+        set_ids = tuple(
+            sorted(
+                set(
+                    int(value)
+                    for value in stratum_ids_for_set
+                )
+            )
+        )
+        set_records = [
+            record_by_id[stratum_id]
+            for stratum_id in set_ids
+            if stratum_id in record_by_id
+        ]
+        set_contribution = math.fsum(
+            float(record["marginal_tv_contribution"])
+            for record in set_records
+        )
+        return {
+            "stratum_ids": list(set_ids),
+            "present_stratum_ids": [
+                record[stratum_name] for record in set_records
+            ],
+            "missing_stratum_ids": [
+                stratum_id
+                for stratum_id in set_ids
+                if stratum_id not in record_by_id
+            ],
+            "marginal_tv_contribution": float(
+                set_contribution
+            ),
+            "share_of_marginal_distribution_tv": float(
+                0.0
+                if marginal_total_variation == 0.0
+                else set_contribution / marginal_total_variation
+            ),
+        }
+
+    selected_set_coverage_by_name = {
+        name: selected_set_coverage(
+            selected_stratum_sets[name]
+        )
+        for name in sorted(selected_stratum_sets or {})
+    }
+
+    def concentration(top_n: int) -> dict[str, Any]:
+        contribution = math.fsum(
+            float(record["marginal_tv_contribution"])
+            for record in marginal_ranked_records[:top_n]
+        )
+        return {
+            "requested_top_n": top_n,
+            "available_strata_used": min(
+                top_n,
+                len(marginal_ranked_records),
+            ),
+            "marginal_tv_contribution": float(contribution),
+            "share_of_marginal_distribution_tv": float(
+                0.0
+                if marginal_total_variation == 0.0
+                else contribution / marginal_total_variation
+            ),
+        }
+
     return {
         "stratum_identity": stratum_name,
         "partition_metric": (
@@ -277,17 +383,40 @@ def _normalized_mass_strata(
                 else within_stratum_cancellation / total_variation
             )
         ),
+        "summed_marginal_tv_contributions": float(
+            marginal_tv_replay
+        ),
+        "marginal_tv_replay_residual": float(
+            marginal_tv_replay - marginal_total_variation
+        ),
+        "marginal_ranking_rule": (
+            "descending_marginal_tv_contribution_then_"
+            f"ascending_{stratum_name}"
+        ),
+        "marginal_top_10": marginal_ranked_records[:10],
+        "marginal_tv_concentration": {
+            "top_1": concentration(1),
+            "top_3": concentration(3),
+            "top_10": concentration(10),
+        },
         "ranking_rule": (
             "descending_candidate_level_tv_contribution_then_"
             f"ascending_{stratum_name}"
         ),
         "top_10": ranked_records[:10],
         "selected_stratum_ids": list(selected_ids),
-        "selected_strata": [
-            record_by_id[stratum_id]
-            for stratum_id in selected_ids
-            if stratum_id in record_by_id
-        ],
+        "selected_strata": selected_records,
+        "selected_strata_marginal_tv_contribution": float(
+            selected_marginal_tv
+        ),
+        "selected_strata_share_of_marginal_distribution_tv": float(
+            0.0
+            if marginal_total_variation == 0.0
+            else selected_marginal_tv / marginal_total_variation
+        ),
+        "selected_stratum_set_coverage": (
+            selected_set_coverage_by_name
+        ),
         "missing_selected_stratum_ids": [
             stratum_id
             for stratum_id in selected_ids
@@ -819,6 +948,18 @@ def global_score_offset_attribution(
                     ]
                 ),
             ),
+            selected_stratum_sets={
+                "fixed_target_rotation": (
+                    TARGET_RECOVAR_ROTATION,
+                ),
+                "max_candidate_mass_delta_rotation": (
+                    int(
+                        recovar_rotation_row[
+                            score_mass_representative_row
+                        ]
+                    ),
+                ),
+            },
             paired_ids=native_rotation_local,
             paired_name="native_rotation_local",
         ),
@@ -832,6 +973,16 @@ def global_score_offset_attribution(
                 *TARGET_TRANSLATIONS,
                 int(translation_id[score_mass_representative_row]),
             ),
+            selected_stratum_sets={
+                "max_candidate_mass_delta_translation": (
+                    int(
+                        translation_id[
+                            score_mass_representative_row
+                        ]
+                    ),
+                ),
+                "queued_target_translations": TARGET_TRANSLATIONS,
+            },
         ),
     }
     attributed = bool(
