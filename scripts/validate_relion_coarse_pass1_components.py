@@ -20,6 +20,7 @@ FOOTER_STRUCT = struct.Struct("<16sQQ")
 FLOAT_DTYPE = np.dtype("<f4")
 MASK_DTYPE = np.dtype("u1")
 FILE_NAME = re.compile(r"part(?P<part>\d+)_stack(?P<stack>\d+)\.p1-v2\.bin")
+RELION_INVALID_DIFF2 = np.float32(-np.finfo(np.float32).max)
 DEFAULT_REPLAY_P95_MAX_ABS = 5.0e-5
 DEFAULT_REPLAY_MAX_ABS = 5.0e-4
 DEFAULT_REFERENCE_TRANSLATION_SPREAD = 1.0e-6
@@ -156,11 +157,20 @@ def load_artifact(path: Path) -> CoarsePass1Components:
     for name, values in (
         ("raw diff2", raw_diff2),
         ("production weights", weights),
-        ("reference norms", reference_norms),
-        ("cross terms", cross_terms),
         ("translations", translations),
     ):
         _require(np.all(np.isfinite(values)), f"non-finite {name}: {path}")
+    active = raw_diff2 != RELION_INVALID_DIFF2
+    _require(np.any(active), f"empty active coarse support: {path}")
+    for name, values in (
+        ("reference norms", reference_norms),
+        ("cross terms", cross_terms),
+    ):
+        _require(np.all(np.isfinite(values[active])), f"non-finite active {name}: {path}")
+        _require(
+            np.all(np.isnan(values[~active])),
+            f"inactive {name} must retain the capture NaN sentinel: {path}",
+        )
     _require(np.all(weights >= 0), f"negative production weight: {path}")
     _require(
         np.all((significant_mask_u8 == 0) | (significant_mask_u8 == 1)),
@@ -203,15 +213,22 @@ def load_artifact(path: Path) -> CoarsePass1Components:
 
 
 def _component_metrics(artifact: CoarsePass1Components) -> dict[str, float]:
+    active = artifact.raw_diff2 != RELION_INVALID_DIFF2
     difference = (
-        artifact.raw_diff2 - artifact.reference_norms - artifact.cross_terms
+        artifact.raw_diff2[active]
+        - artifact.reference_norms[active]
+        - artifact.cross_terms[active]
     ).astype(np.float64)
     constant = float(np.median(difference))
     centered = difference - constant
+    complete_rows = np.all(active, axis=1)
+    _require(np.any(complete_rows), "capture has no complete active rotation row")
     translation_spread = np.ptp(
-        artifact.reference_norms.astype(np.float64), axis=1
+        artifact.reference_norms[complete_rows].astype(np.float64), axis=1
     )
     return {
+        "active_candidate_count": int(np.count_nonzero(active)),
+        "complete_active_rotation_count": int(np.count_nonzero(complete_rows)),
         "image_constant_median": constant,
         "centered_replay_p95_abs": float(np.percentile(np.abs(centered), 95)),
         "centered_replay_max_abs": float(np.max(np.abs(centered))),
