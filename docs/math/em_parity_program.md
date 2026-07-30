@@ -13100,8 +13100,38 @@ The analyzer fails closed unless source HEAD, case configuration, materialized
 fixture hashes, autonomous scorecard mode, grid-off finalization, topology,
 thresholds, and all declared environment fields match.  It accepts only the
 single precision-switch difference.  It uses no fitted tolerance and computes
-no correlation.  Results remain pending; this predeclaration does not change
-the fixed K=1 or K=4 scorecards.
+no correlation.
+
+Control science `11786601` completed `0:0` in 23m32s on H100
+`GPU-aafe72bb-2a51-7aa0-076f-51a017cacc7d`; summary `11786602` completed
+`0:0`.  RECOVAR wrote exactly 11 numbered states, converged only after
+iteration 11, and ran one valid grid-off final all-data pass.  The independent
+strict audit `11786618` is released from its dependency but remains
+CPU-priority-pending.
+
+While that official audit waited, the same pinned FSC and topology scripts
+were run read-only, with outputs isolated under a new disposable factorial
+root.  The preliminary FSC audit returns its expected scientific-failure
+status 2, topology passes, and the predeclared factorial analyzer produces a
+complete classification:
+
+| Fixed matched-head metric | control (float32) | double | double minus control |
+|---|---:|---:|---:|
+| numbered failures / 11 | 0 | 3 | +3 |
+| final merged cross-engine FSC-AUC | 0.963274341240 | 0.882003656423 | -0.081270684817 |
+| final signed RECOVAR-minus-RELION GT FSC-AUC | +0.009299593710 | +0.008117589467 | -0.001182004243 |
+
+The control-versus-double final merged map FSC-AUC is `0.886226371092`.
+Therefore double cross-half M-step accumulation introduces numbered failures
+and substantially worsens final parity on the matched head; it is rejected as
+a production fix.  Preliminary factorial JSON and shellwise NPZ SHA-256
+values are
+`e0ec3d3e58e3b20302f1301e4d6a11ee9da8d5061ad61af698ee66db45fbc370`
+and
+`0e65f3a3c11ce7a5b7318f45802a28076ba20553b4bedd1d61e8acdd1d139cf3`.
+The official audit must reproduce the control arm before these are promoted
+from preliminary evidence.  No proposal ledger was emitted, and the fixed
+K=1 and K=4 scorecards remain unchanged.
 
 ## 2026-07-30 K=4 exact-device dependency retry
 
