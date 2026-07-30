@@ -22,8 +22,11 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v1"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v2"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
+TARGET_OFFSET_CLASSIFICATION = (
+    "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
+)
 TARGET_GPU_UUID = "GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30"
 RECOVAR_PASS2_SHA256 = "3c4c566b6f2fce613f4d5869d2d3ccf53a2bcd1b3c26e5a32138588464049485"
 EXPECTED_SUPPORT = 109_184
@@ -67,6 +70,134 @@ def float32_metric(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
         "bitwise_mismatch_count": int(np.count_nonzero(lhs.view(np.uint32) != rhs.view(np.uint32))),
         "max_abs": float(np.max(np.abs(delta), initial=0.0)),
         "relative_l2_over_rhs": float(np.linalg.norm(delta) / denominator),
+    }
+
+
+def target_score_offset_attribution(
+    *,
+    min_diff2: np.float32,
+    native_raw_diff2: np.float32,
+    native_orientation_prior: np.float32,
+    native_translation_prior: np.float32,
+    native_combined: np.float32,
+    recovar_pre_prior_residual: np.float64,
+    recovar_orientation_prior: np.float32,
+    recovar_translation_prior: np.float32,
+    recovar_combined: np.float32,
+    decision_topology_exact: bool,
+) -> dict[str, Any]:
+    """Decompose one target score offset using each engine's float32 order."""
+
+    min_diff2 = np.float32(min_diff2)
+    native_raw_diff2 = np.float32(native_raw_diff2)
+    native_orientation_prior = np.float32(native_orientation_prior)
+    native_translation_prior = np.float32(native_translation_prior)
+    native_combined = np.float32(native_combined)
+    recovar_pre_prior = np.float32(recovar_pre_prior_residual)
+    recovar_orientation_prior = np.float32(recovar_orientation_prior)
+    recovar_translation_prior = np.float32(recovar_translation_prior)
+    recovar_combined = np.float32(recovar_combined)
+
+    native_pre_prior = np.subtract(
+        min_diff2,
+        native_raw_diff2,
+        dtype=np.float32,
+    )
+    native_production_replay = np.subtract(
+        np.add(
+            np.add(
+                native_orientation_prior,
+                native_translation_prior,
+                dtype=np.float32,
+            ),
+            min_diff2,
+            dtype=np.float32,
+        ),
+        native_raw_diff2,
+        dtype=np.float32,
+    )
+    native_data_then_prior = np.add(
+        np.add(native_pre_prior, native_orientation_prior, dtype=np.float32),
+        native_translation_prior,
+        dtype=np.float32,
+    )
+    recovar_data_then_prior = np.add(
+        np.add(recovar_pre_prior, recovar_orientation_prior, dtype=np.float32),
+        recovar_translation_prior,
+        dtype=np.float32,
+    )
+
+    native_replay_exact = bool(
+        native_production_replay.view(np.uint32) == native_combined.view(np.uint32)
+    )
+    recovar_replay_exact = bool(
+        recovar_data_then_prior.view(np.uint32) == recovar_combined.view(np.uint32)
+    )
+    priors_bitwise_exact = bool(
+        native_orientation_prior.view(np.uint32)
+        == recovar_orientation_prior.view(np.uint32)
+        and native_translation_prior.view(np.uint32)
+        == recovar_translation_prior.view(np.uint32)
+    )
+    combined_bitwise_exact = bool(
+        native_combined.view(np.uint32) == recovar_combined.view(np.uint32)
+    )
+    pre_prior_bitwise_exact = bool(
+        native_pre_prior.view(np.uint32) == recovar_pre_prior.view(np.uint32)
+    )
+
+    data_path_contribution = np.float64(recovar_data_then_prior) - np.float64(
+        native_data_then_prior
+    )
+    native_order_contribution = np.float64(native_data_then_prior) - np.float64(
+        native_production_replay
+    )
+    combined_delta = np.float64(recovar_combined) - np.float64(native_combined)
+    decomposition_residual = combined_delta - (
+        data_path_contribution + native_order_contribution
+    )
+    attributed = bool(
+        decision_topology_exact
+        and priors_bitwise_exact
+        and native_replay_exact
+        and recovar_replay_exact
+        and not combined_bitwise_exact
+        and not pre_prior_bitwise_exact
+        and decomposition_residual == 0.0
+    )
+
+    return {
+        "classification": (
+            TARGET_OFFSET_CLASSIFICATION
+            if attributed
+            else "exact_device_target_absolute_score_offset_not_fully_attributed"
+        ),
+        "attributed": attributed,
+        "decision_topology_exact": decision_topology_exact,
+        "target_priors_bitwise_exact": priors_bitwise_exact,
+        "native_production_formula_replay_bitwise_exact": native_replay_exact,
+        "recovar_data_then_prior_replay_bitwise_exact": recovar_replay_exact,
+        "combined_scores_bitwise_exact": combined_bitwise_exact,
+        "pre_prior_scores_bitwise_exact": pre_prior_bitwise_exact,
+        "values": {
+            "native_pre_prior_min_diff2_minus_raw": float(native_pre_prior),
+            "recovar_pre_prior_residual_float32": float(recovar_pre_prior),
+            "native_data_then_prior_counterfactual": float(native_data_then_prior),
+            "native_production_combined": float(native_combined),
+            "recovar_data_then_prior_combined": float(recovar_combined),
+        },
+        "deltas_recovar_minus_native": {
+            "pre_prior": float(
+                np.float64(recovar_pre_prior) - np.float64(native_pre_prior)
+            ),
+            "combined": float(combined_delta),
+        },
+        "combined_delta_decomposition": {
+            "shared_data_then_prior_path": float(data_path_contribution),
+            "native_float32_operation_order": float(native_order_contribution),
+            "sum": float(data_path_contribution + native_order_contribution),
+            "residual": float(decomposition_residual),
+        },
     }
 
 
@@ -307,7 +438,20 @@ def _comparison(
         "target RECOVAR rotation does not have one native match",
     )
     target_native_rotation = int(inverse_target[0])
+    min_diff2 = np.asarray(
+        np.frombuffer(
+            np.asarray(score.header[18], dtype="<u4").tobytes(),
+            dtype="<f4",
+        )[0],
+        dtype=np.float32,
+    )
+    decision_topology_exact = bool(
+        support_exact
+        and winner_exact
+        and max_tie_key_sets_exact
+    )
     target_records = []
+    target_attributions = []
     for translation in TARGET_TRANSLATIONS:
         matches = np.flatnonzero(
             active & (native_rotation == target_native_rotation) & (native_translation == translation)
@@ -323,6 +467,39 @@ def _comparison(
             recovar_scores[TARGET_RECOVAR_ROTATION, translation],
             dtype=np.float32,
         )
+        native_rotation_prior = np.asarray(
+            row["orientation_log_prior"],
+            dtype=np.float32,
+        )
+        native_translation_prior_target = np.asarray(
+            row["translation_log_prior"],
+            dtype=np.float32,
+        )
+        recovar_rotation_prior_target = np.asarray(
+            recovar["rotation_log_prior"][TARGET_RECOVAR_ROTATION],
+            dtype=np.float32,
+        )
+        recovar_translation_prior_target = np.asarray(
+            recovar["translation_log_prior"][translation],
+            dtype=np.float32,
+        )
+        recovar_pre_prior_residual = np.asarray(
+            recovar["scores_pre_prior"][TARGET_RECOVAR_ROTATION, translation],
+            dtype=np.float64,
+        )
+        attribution = target_score_offset_attribution(
+            min_diff2=min_diff2,
+            native_raw_diff2=native_raw,
+            native_orientation_prior=native_rotation_prior,
+            native_translation_prior=native_translation_prior_target,
+            native_combined=native_total,
+            recovar_pre_prior_residual=recovar_pre_prior_residual,
+            recovar_orientation_prior=recovar_rotation_prior_target,
+            recovar_translation_prior=recovar_translation_prior_target,
+            recovar_combined=recovar_total,
+            decision_topology_exact=decision_topology_exact,
+        )
+        target_attributions.append(attribution)
         target_records.append(
             {
                 "translation_id": translation,
@@ -333,6 +510,34 @@ def _comparison(
                 "native_raw_diff2_bits": int(native_raw.view(np.uint32)),
                 "native_combined_preexponent": float(native_total),
                 "native_combined_preexponent_bits": int(native_total.view(np.uint32)),
+                "native_orientation_log_prior": float(native_rotation_prior),
+                "native_orientation_log_prior_bits": int(
+                    native_rotation_prior.view(np.uint32)
+                ),
+                "native_translation_log_prior": float(
+                    native_translation_prior_target
+                ),
+                "native_translation_log_prior_bits": int(
+                    native_translation_prior_target.view(np.uint32)
+                ),
+                "recovar_pre_prior_residual_float64": float(
+                    recovar_pre_prior_residual
+                ),
+                "recovar_pre_prior_residual_float32": float(
+                    np.float32(recovar_pre_prior_residual)
+                ),
+                "recovar_orientation_log_prior": float(
+                    recovar_rotation_prior_target
+                ),
+                "recovar_orientation_log_prior_bits": int(
+                    recovar_rotation_prior_target.view(np.uint32)
+                ),
+                "recovar_translation_log_prior": float(
+                    recovar_translation_prior_target
+                ),
+                "recovar_translation_log_prior_bits": int(
+                    recovar_translation_prior_target.view(np.uint32)
+                ),
                 "recovar_score_with_prior": float(recovar_total),
                 "recovar_score_with_prior_bits": int(recovar_total.view(np.uint32)),
             }
@@ -398,6 +603,17 @@ def _comparison(
             "native_raw_diff2_tied": native_raw_tied,
             "recovar_scores_tied": recovar_tied,
             "cross_engine_combined_scores_bitwise_exact": target_cross_exact,
+            "offset_attribution": {
+                "classification": (
+                    TARGET_OFFSET_CLASSIFICATION
+                    if all(record["attributed"] for record in target_attributions)
+                    else "exact_device_target_absolute_score_offset_not_fully_attributed"
+                ),
+                "all_target_rows_attributed": all(
+                    record["attributed"] for record in target_attributions
+                ),
+                "records": target_attributions,
+            },
         },
     }
 

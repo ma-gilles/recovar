@@ -62,6 +62,53 @@ def test_float32_metric_is_bit_sensitive() -> None:
     assert metric["max_abs"] > 0.0
 
 
+def test_target_score_offset_attribution_closes_exact_decomposition() -> None:
+    report = analyzer.target_score_offset_attribution(
+        min_diff2=np.float32(500.6817321777344),
+        native_raw_diff2=np.float32(501.4734191894531),
+        native_orientation_prior=np.float32(-4.860062599182129),
+        native_translation_prior=np.float32(-0.05005118250846863),
+        native_combined=np.float32(-5.701812744140625),
+        recovar_pre_prior_residual=np.float64(-0.7916684448719025),
+        recovar_orientation_prior=np.float32(-4.860062599182129),
+        recovar_translation_prior=np.float32(-0.05005118250846863),
+        recovar_combined=np.float32(-5.7017822265625),
+        decision_topology_exact=True,
+    )
+
+    assert report["classification"] == analyzer.TARGET_OFFSET_CLASSIFICATION
+    assert report["attributed"] is True
+    assert report["target_priors_bitwise_exact"] is True
+    assert report["native_production_formula_replay_bitwise_exact"] is True
+    assert report["recovar_data_then_prior_replay_bitwise_exact"] is True
+    assert report["combined_delta_decomposition"]["residual"] == 0.0
+    assert (
+        report["combined_delta_decomposition"]["sum"]
+        == report["deltas_recovar_minus_native"]["combined"]
+    )
+
+
+def test_target_score_offset_attribution_rejects_prior_mismatch() -> None:
+    report = analyzer.target_score_offset_attribution(
+        min_diff2=np.float32(500.6817321777344),
+        native_raw_diff2=np.float32(501.4734191894531),
+        native_orientation_prior=np.float32(-4.860062599182129),
+        native_translation_prior=np.float32(-0.05005118250846863),
+        native_combined=np.float32(-5.701812744140625),
+        recovar_pre_prior_residual=np.float64(-0.7916684448719025),
+        recovar_orientation_prior=np.nextafter(
+            np.float32(-4.860062599182129),
+            np.float32(0.0),
+        ),
+        recovar_translation_prior=np.float32(-0.05005118250846863),
+        recovar_combined=np.float32(-5.7017822265625),
+        decision_topology_exact=True,
+    )
+
+    assert report["attributed"] is False
+    assert report["target_priors_bitwise_exact"] is False
+
+
 def test_rotation_permutation_accepts_exact_bijection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
