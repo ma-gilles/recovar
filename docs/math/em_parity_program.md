@@ -12474,3 +12474,24 @@ device remains occupied, so an unchanged retry is deferred until allocation
 state changes.  This evidence is non-scoring.  Fixed K=1 remains 28/34
 strict, 32/34 topology, and 34/34 evaluated; fixed K=4 remains 41/60 direct
 and 9/15 all-class.
+
+The next fixed analyzer decomposes the common-support raw-score residual into
+orthogonal rotation-only, translation-only, and interaction energies after
+exact score-grid registration.  Rotation-only energy dominates all 14/14
+particles, including 10/10 mismatches and 4/4 controls.  Its range is
+`0.6942753`--`0.8778485`, versus `0.0031624`--`0.0472093` for the
+translation-only term and `0.1189891`--`0.2585154` for the interaction.
+With a fixed strict-majority dominance boundary, classification is
+`raw_coarse_score_residual_is_translation_independent_rotation_dominated`.
+
+This moves the next capture away from a translation-grid or particle-offset
+explanation and toward the translation-independent rotation operand.  The
+result is consistent with a projected-reference norm difference, but is not
+yet causal because a rotation-dependent cross-term contribution can also
+enter the row effect.  A component capture must split RELION and RECOVAR
+coarse diff2 into projection norm and image/reference cross term before any
+production change.  Output and analyzer SHA-256 values are
+`a829fcdae2945534a901aff08024e3d650b98fc83e20a5f2995ecddee7e3e025`
+and
+`cdda611ee61714fe4493b7a103475a4fb1ee78ba2a85be833567258e3fd9a40c`.
+No correlation is computed.

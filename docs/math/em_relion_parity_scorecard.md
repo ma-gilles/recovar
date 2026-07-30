@@ -1078,6 +1078,21 @@ eight seconds because its two-GPU allocation did not contain required UUID
 deferred until that occupied device becomes allocatable.  These diagnostics
 are non-scoring: K=1 remains 28/34 strict, 32/34 topology, and 34/34
 evaluated; K=4 remains 41/60 direct and 9/15 all-class.
+
+The fixed additive score decomposition further localizes the raw boundary.
+After exact rotation/translation registration, it decomposes each particle's
+centered common-support residual into orthogonal rotation-only,
+translation-only, and interaction components.  Rotation-only energy dominates
+14/14 particles, including 10/10 mismatches and 4/4 controls, at
+`69.4275%`--`87.7848%`.  Translation-only energy is
+`0.3162%`--`4.7209%`; interaction energy is
+`11.8989%`--`25.8515%`.  Classification:
+`raw_coarse_score_residual_is_translation_independent_rotation_dominated`.
+This is consistent with a projection-norm or other
+translation-independent rotation term, but does not distinguish those
+operands without a component capture.  Output SHA-256 is
+`a829fcdae2945534a901aff08024e3d650b98fc83e20a5f2995ecddee7e3e025`;
+no correlation is used.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

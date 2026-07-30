@@ -9362,3 +9362,28 @@ and `9/15` all-class.
   after allocation state changes.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
+## 2026-07-29 case-22 raw-score component decomposition
+
+- Commit `206fadf3` adds a fixed two-way additive energy decomposition over
+  exact common finite-prior translation rows.  Rotation dominance is defined
+  as a rotation-only centered-energy fraction strictly above `0.5`; no
+  correlation is used.
+- Rotation-only residual energy dominates `14/14` particles, `10/10`
+  mismatches, and `4/4` controls.  Its range is
+  `0.6942752958`--`0.8778484909`.
+- Translation-only energy is `0.0031623918`--`0.0472093274`; interaction
+  energy is `0.1189891173`--`0.2585153768`.
+- Classification:
+  `raw_coarse_score_residual_is_translation_independent_rotation_dominated`.
+  This rejects translation-only offset/grid effects as the majority residual
+  but does not yet distinguish projection norm from a rotation-dependent
+  cross term.
+- Output JSON SHA-256 is
+  `a829fcdae2945534a901aff08024e3d650b98fc83e20a5f2995ecddee7e3e025`;
+  analyzer SHA-256 is
+  `cdda611ee61714fe4493b7a103475a4fb1ee78ba2a85be833567258e3fd9a40c`.
+- Next bounded capture: split coarse raw diff2 into projection-norm and
+  image/reference cross-term components on the same 14-particle cohort.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
