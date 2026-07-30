@@ -10011,3 +10011,43 @@ and `9/15` all-class.
   and `git diff --check` pass.
 - Non-scoring: K=1 remains `28/34` strict (`82.4%`), `32/34` topology, and
   `34/34` evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
+## 2026-07-30 K=4 normalized-score-mass strata
+
+- V7 partitions the V6 within-captured-class candidate-level total variation
+  by exact mapped RECOVAR rotation and translation identity.  Each stratum
+  uses `math.fsum` over the aligned candidate order, retains absolute
+  candidate deltas without within-stratum cancellation, and ranks by
+  descending TV contribution then ascending integer identity.  No threshold,
+  fit, correlation, or scorecard gate is introduced.
+- The rotation partition closes the full
+  `6.808398793631863e-6` total variation with exactly zero replay residual
+  across `2,968` groups.  Mapped RECOVAR rotation `2626` (native rotation
+  `1210`) is rank 1: its 80 candidates contribute
+  `1.1236180279902226e-6`, or `16.50341089069551%`, and its marginal
+  normalized mass shifts by `+5.042772359288761e-7`.
+- The translation partition also closes with zero replay residual across 104
+  groups.  Translation `82` ranks first at
+  `6.813629772775691e-7` (`10.007683126829646%`), translation `83` ranks
+  second at `5.840084557443876e-7` (`8.577765102282661%`), and translation
+  `80` ranks third at `5.798000211833489e-7`
+  (`8.515952704263687%`).  Their marginal normalized-mass shifts are
+  `-3.929162811263973e-8`, `+4.197402946491178e-7`, and
+  `-3.289001381136056e-7`, respectively.
+- The selected rotation is the fixed K=4 target rotation; translations
+  `80,82` are already covered by the queued immutable raw/operand capture.
+  Translation `83` contains the largest individual mass delta but remains a
+  predeclared follow-up only after the official `80,82` pair qualifies.
+  No additional science job was submitted.
+- Thread-count-1 and thread-count-8 reports are byte-identical at
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_score_mass_strata_v7_9fefefec_20260730T1610ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V7_THREADS1.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_score_mass_strata_v7_9fefefec_20260730T1610ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V7_THREADS8.json`,
+  SHA-256
+  `b58e1848842f97178f8dd535ee8dd484eeef4d959d4a7d3794fa12d08f5e7373`.
+  Removing only the V7 schema and strata field makes the report exactly equal
+  to V6.
+- This remains a descriptive one-class diagnostic, not a complete K=4
+  posterior or FSC/FSC-AUC claim.  Fixed metrics remain K=1 `28/34` strict,
+  `32/34` topology, and `34/34` evaluated; K=4 `41/60` direct and `9/15`
+  all-class.

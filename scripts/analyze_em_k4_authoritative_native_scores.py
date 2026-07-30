@@ -23,7 +23,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v6"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v7"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -89,6 +89,184 @@ def _stable_softmax(values: np.ndarray) -> np.ndarray:
         "score-table normalization is not finite and positive",
     )
     return weights / denominator
+
+
+def _normalized_mass_strata(
+    *,
+    stratum_ids: np.ndarray,
+    stratum_name: str,
+    native_score_mass: np.ndarray,
+    recovar_score_mass: np.ndarray,
+    native_candidate_index: np.ndarray,
+    selected_stratum_ids: tuple[int, ...] = (),
+    paired_ids: np.ndarray | None = None,
+    paired_name: str | None = None,
+) -> dict[str, Any]:
+    """Partition candidate-level score-mass TV into fixed identity strata."""
+
+    stratum_ids = np.asarray(stratum_ids, dtype=np.int64)
+    native_score_mass = np.asarray(native_score_mass, dtype=np.float64)
+    recovar_score_mass = np.asarray(recovar_score_mass, dtype=np.float64)
+    native_candidate_index = np.asarray(
+        native_candidate_index,
+        dtype=np.int64,
+    )
+    arrays = (
+        stratum_ids,
+        native_score_mass,
+        recovar_score_mass,
+        native_candidate_index,
+    )
+    _require(
+        len({array.shape for array in arrays}) == 1,
+        f"{stratum_name} score-mass stratum array shapes differ",
+    )
+    _require(stratum_ids.size > 0, f"{stratum_name} strata are empty")
+    _require(
+        np.all(stratum_ids >= 0),
+        f"{stratum_name} stratum identities must be nonnegative",
+    )
+    if paired_ids is not None:
+        paired_ids = np.asarray(paired_ids, dtype=np.int64)
+        _require(
+            paired_ids.shape == stratum_ids.shape,
+            f"{stratum_name} paired identity shape differs",
+        )
+        _require(
+            paired_name is not None and np.all(paired_ids >= 0),
+            f"{stratum_name} paired identity contract is invalid",
+        )
+    else:
+        _require(
+            paired_name is None,
+            f"{stratum_name} paired identity name lacks values",
+        )
+
+    score_mass_delta = recovar_score_mass - native_score_mass
+    score_mass_abs_delta = np.abs(score_mass_delta)
+    total_variation = 0.5 * math.fsum(
+        float(value) for value in score_mass_abs_delta
+    )
+    records = []
+    for stratum_id in np.unique(stratum_ids):
+        rows = np.flatnonzero(stratum_ids == stratum_id)
+        row_abs_delta = score_mass_abs_delta[rows]
+        maximum_abs_delta = float(np.max(row_abs_delta))
+        representative_rows = rows[
+            row_abs_delta == maximum_abs_delta
+        ]
+        representative_row = int(
+            representative_rows[
+                np.argmin(native_candidate_index[representative_rows])
+            ]
+        )
+        candidate_l1 = math.fsum(
+            float(value) for value in row_abs_delta
+        )
+        record = {
+            stratum_name: int(stratum_id),
+            "candidate_count": int(rows.size),
+            "native_normalized_mass": float(
+                math.fsum(
+                    float(native_score_mass[row])
+                    for row in rows
+                )
+            ),
+            "recovar_normalized_mass": float(
+                math.fsum(
+                    float(recovar_score_mass[row])
+                    for row in rows
+                )
+            ),
+            "marginal_mass_delta_recovar_minus_native": float(
+                math.fsum(
+                    float(score_mass_delta[row])
+                    for row in rows
+                )
+            ),
+            "candidate_level_l1": float(candidate_l1),
+            "candidate_level_tv_contribution": float(
+                0.5 * candidate_l1
+            ),
+            "share_of_total_candidate_level_tv": float(
+                0.0
+                if total_variation == 0.0
+                else 0.5 * candidate_l1 / total_variation
+            ),
+            "max_absolute_candidate_mass_delta": maximum_abs_delta,
+            "max_absolute_delta_representative": {
+                "selection_rule": (
+                    "maximum_absolute_normalized_score_mass_delta_then_"
+                    "lowest_native_candidate_index"
+                ),
+                "aligned_table_index": representative_row,
+                "native_candidate_index": int(
+                    native_candidate_index[representative_row]
+                ),
+                "delta_recovar_minus_native": float(
+                    score_mass_delta[representative_row]
+                ),
+            },
+        }
+        if paired_ids is not None:
+            paired_values = np.unique(paired_ids[rows])
+            _require(
+                paired_values.size == 1,
+                f"{stratum_name} does not map to exactly one {paired_name}",
+            )
+            record[paired_name] = int(paired_values[0])
+        records.append(record)
+
+    ranked_records = sorted(
+        records,
+        key=lambda record: (
+            -record["candidate_level_tv_contribution"],
+            record[stratum_name],
+        ),
+    )
+    for rank, record in enumerate(ranked_records, start=1):
+        record["candidate_level_tv_rank_1based"] = rank
+    record_by_id = {
+        record[stratum_name]: record
+        for record in ranked_records
+    }
+    selected_ids = tuple(
+        sorted(set(int(value) for value in selected_stratum_ids))
+    )
+    stratum_tv_sum = math.fsum(
+        float(record["candidate_level_tv_contribution"])
+        for record in records
+    )
+    return {
+        "stratum_identity": stratum_name,
+        "partition_metric": (
+            "candidate_level_total_variation_without_within_stratum_"
+            "cancellation"
+        ),
+        "group_count": len(records),
+        "candidate_count": int(stratum_ids.size),
+        "candidate_level_total_variation": float(total_variation),
+        "summed_stratum_tv_contributions": float(stratum_tv_sum),
+        "partition_replay_residual": float(
+            stratum_tv_sum - total_variation
+        ),
+        "ranking_rule": (
+            "descending_candidate_level_tv_contribution_then_"
+            f"ascending_{stratum_name}"
+        ),
+        "top_10": ranked_records[:10],
+        "selected_stratum_ids": list(selected_ids),
+        "selected_strata": [
+            record_by_id[stratum_id]
+            for stratum_id in selected_ids
+            if stratum_id in record_by_id
+        ],
+        "missing_selected_stratum_ids": [
+            stratum_id
+            for stratum_id in selected_ids
+            if stratum_id not in record_by_id
+        ],
+    }
 
 
 def float32_metric(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
@@ -594,6 +772,40 @@ def global_score_offset_attribution(
                 score_mass_delta[score_mass_representative_row]
             ),
         },
+    }
+    normalized_score_mass_effect["strata"] = {
+        "scope": (
+            "descriptive_partition_of_within_captured_class_candidate_"
+            "level_total_variation_not_full_kclass_posterior"
+        ),
+        "rotation": _normalized_mass_strata(
+            stratum_ids=recovar_rotation_row,
+            stratum_name="recovar_rotation_row",
+            native_score_mass=native_score_mass,
+            recovar_score_mass=recovar_score_mass,
+            native_candidate_index=native_candidate_index,
+            selected_stratum_ids=(
+                TARGET_RECOVAR_ROTATION,
+                int(
+                    recovar_rotation_row[
+                        score_mass_representative_row
+                    ]
+                ),
+            ),
+            paired_ids=native_rotation_local,
+            paired_name="native_rotation_local",
+        ),
+        "translation": _normalized_mass_strata(
+            stratum_ids=translation_id,
+            stratum_name="translation_id",
+            native_score_mass=native_score_mass,
+            recovar_score_mass=recovar_score_mass,
+            native_candidate_index=native_candidate_index,
+            selected_stratum_ids=(
+                *TARGET_TRANSLATIONS,
+                int(translation_id[score_mass_representative_row]),
+            ),
+        ),
     }
     attributed = bool(
         decision_topology_exact

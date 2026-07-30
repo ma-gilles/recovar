@@ -13228,3 +13228,36 @@ Its launcher SHA-256 is
 `969f807bcff2a4ccb830f6e7ed218a5aba970db8c37d4d39d7cebf8b2704df0b`;
 the audit-submission record SHA-256 is
 `369f51ba4ec9a5947aeec048697632a107cfd4ea8507fff12e4ac48ff564c3dc`.
+
+## 2026-07-30 active K=1/K=4 causal gates
+
+The fixed scorecards are K=1 `28/34` strict, `32/34` topology, and `34/34`
+evaluated; K=4 is `41/60` direct and `9/15` all-class.  No score changes are
+admissible from the current operand diagnostics.
+
+For K=1 case 22, the live-versus-serialized noise boundary is closed
+descriptively: RECOVAR follows the fixed-decimal model-STAR noise tokens while
+live RELION retains pre-serialization shells 1--4.  The active causal test is
+the already submitted exact-device serialized restart: science jobs
+`11785428` and `11785547`, followed by fail-closed score/FSC-AUC pair audits
+`11791339`--`11791341` and `11791711`--`11791712`.  Job `11785170` has a
+stale launcher hash and is expected to fail closed before science.  Do not
+infer a production noise-state fix until one of the valid restart routes and
+its complete map audit qualify.
+
+For K=4, the authoritative job-`11787017` class-1 score table has
+candidate-level normalized-score-mass total variation
+`6.808398793631863e-6`.  A deterministic, no-cancellation partition identifies
+mapped RECOVAR rotation `2626` as rank 1, contributing
+`1.1236180279902226e-6` (`16.50341089069551%`) of that total.  Translation
+strata `82`, `83`, and `80` rank first through third, contributing
+`6.813629772775691e-7`, `5.840084557443876e-7`, and
+`5.798000211833489e-7`.
+
+This strengthens, but does not replace, the already queued exact-device
+raw/operand owner pair for target translations `80,82`: science jobs
+`11790517`, `11790787`, `11793813`, `11796622`, and their dependency-bound
+audits.  Translation `83` remains a predeclared follow-up only after an
+official `80,82` pair qualifies.  The score-mass partition is one captured
+class, not a complete K=4 posterior, FSC/FSC-AUC gate, or production-fix
+authorization.

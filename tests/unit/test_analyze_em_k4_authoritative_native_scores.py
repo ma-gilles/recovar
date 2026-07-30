@@ -91,6 +91,39 @@ def test_stable_softmax_uses_fixed_scalar_reductions() -> None:
     )
 
 
+def test_normalized_mass_strata_partition_and_rank_deterministically() -> None:
+    report = analyzer._normalized_mass_strata(
+        stratum_ids=np.asarray([1, 1, 2, 2]),
+        stratum_name="rotation",
+        native_score_mass=np.asarray([0.4, 0.3, 0.2, 0.1]),
+        recovar_score_mass=np.asarray([0.3, 0.4, 0.25, 0.05]),
+        native_candidate_index=np.asarray([30, 10, 40, 20]),
+        selected_stratum_ids=(2, 3),
+        paired_ids=np.asarray([9, 9, 7, 7]),
+        paired_name="native_rotation",
+    )
+
+    assert report["group_count"] == 2
+    assert report["candidate_count"] == 4
+    assert report["candidate_level_total_variation"] == 0.15000000000000002
+    assert report["summed_stratum_tv_contributions"] == 0.15000000000000002
+    assert report["partition_replay_residual"] == 0.0
+    assert [row["rotation"] for row in report["top_10"]] == [1, 2]
+    assert report["top_10"][0]["candidate_level_tv_rank_1based"] == 1
+    assert report["top_10"][0]["native_rotation"] == 9
+    assert report["top_10"][0]["candidate_level_tv_contribution"] == (
+        0.10000000000000003
+    )
+    assert report["top_10"][0]["share_of_total_candidate_level_tv"] == (
+        0.6666666666666667
+    )
+    assert report["top_10"][0]["max_absolute_delta_representative"][
+        "native_candidate_index"
+    ] == 10
+    assert [row["rotation"] for row in report["selected_strata"]] == [2]
+    assert report["missing_selected_stratum_ids"] == [3]
+
+
 def test_target_score_offset_attribution_closes_exact_decomposition() -> None:
     report = analyzer.target_score_offset_attribution(
         min_diff2=np.float32(500.6817321777344),
@@ -249,7 +282,12 @@ def test_global_score_offset_attribution_closes_and_is_data_dominated() -> None:
             "normalized_score_mass_delta_recovar_minus_native": 0.0,
         },
     }
-    assert report["normalized_score_mass_effect"] == {
+    score_mass_effect = report["normalized_score_mass_effect"]
+    assert {
+        key: value
+        for key, value in score_mass_effect.items()
+        if key != "strata"
+    } == {
         "scope": (
             "within_captured_class_normalized_score_mass_only_"
             "not_full_kclass_posterior"
@@ -278,6 +316,32 @@ def test_global_score_offset_attribution_closes_and_is_data_dominated() -> None:
             "delta_recovar_minus_native": 0.0,
         },
     }
+    strata = score_mass_effect["strata"]
+    assert strata["scope"] == (
+        "descriptive_partition_of_within_captured_class_candidate_"
+        "level_total_variation_not_full_kclass_posterior"
+    )
+    assert strata["rotation"]["group_count"] == 2
+    assert strata["rotation"]["candidate_level_total_variation"] == 0.0
+    assert [
+        row["recovar_rotation_row"]
+        for row in strata["rotation"]["top_10"]
+    ] == [2, 4]
+    assert [
+        row["recovar_rotation_row"]
+        for row in strata["rotation"]["selected_strata"]
+    ] == [4]
+    assert strata["rotation"]["missing_selected_stratum_ids"] == [2626]
+    assert strata["translation"]["group_count"] == 2
+    assert [
+        row["translation_id"]
+        for row in strata["translation"]["top_10"]
+    ] == [8, 9]
+    assert [
+        row["translation_id"]
+        for row in strata["translation"]["selected_strata"]
+    ] == [9]
+    assert strata["translation"]["missing_selected_stratum_ids"] == [80, 82]
 
 
 def test_global_score_offset_attribution_requires_decision_topology() -> None:
