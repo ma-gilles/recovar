@@ -13066,3 +13066,39 @@ The fail-closed v10 proposal job `11786399` is
 ledger was emitted and no checked scorecard file was modified.  Fixed K=1
 therefore remains 28/34 strict, 32/34 topology, and 34/34 evaluated; fixed
 K=4 remains 41/60 direct and 9/15 all-class.
+
+## 2026-07-30 predeclared matched-head case-26 precision factorial
+
+The comparison above is not causal because its frozen baseline and diagnostic
+used different source heads.  A default-off control therefore replays the
+same exact case-26 fixture at clean source head
+`34770d8241f13c27922baff22138624fa9119e3f`.  Its science contract matches
+the completed diagnostic except for the predeclared switch
+`RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=0` versus `1`.
+
+Setup job `11786600`, paired same-allocation H100 science job `11786601`,
+summary job `11786602`, and strict post-science audit job `11786618` were
+submitted.  The run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_xhalf_control_34770d82_20260730T0635ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_xhalf_control_34770d82_20260730T0635ET`;
+both contain `SAFE_TO_DELETE`.  The audit launcher SHA-256 is
+`ca48bd521ecf46173927b2e068c6535ad72c0794eaeba113eeceb4c424f1b5c2`.
+No existing process or job was cancelled, signalled, or modified.
+
+Before the control result was available, the matched-factorial analyzer fixed
+these metrics and decisions:
+
+| Fixed metric | Rule |
+|---|---|
+| numbered failures | count among exactly 11 rows where merged cross-engine FSC-AUC `<0.995` or signed RECOVAR-minus-RELION GT FSC-AUC `<-0.002` |
+| final parity effect | strict double-minus-control final merged cross-engine FSC-AUC |
+| final GT effect | double-minus-control signed RECOVAR-minus-RELION GT FSC-AUC |
+| map identity | signed shellwise FSC/FSC-AUC for half 1, half 2, and merged maps at all 11 numbered iterations and final |
+
+The analyzer fails closed unless source HEAD, case configuration, materialized
+fixture hashes, autonomous scorecard mode, grid-off finalization, topology,
+thresholds, and all declared environment fields match.  It accepts only the
+single precision-switch difference.  It uses no fitted tolerance and computes
+no correlation.  Results remain pending; this predeclaration does not change
+the fixed K=1 or K=4 scorecards.
