@@ -1233,6 +1233,18 @@ Report SHA-256 is
 `a64967d5a860e929ba37c65773d513f49ef59bedce9f92457ee14a9ccee7c7f4`.
 The expanded focused gate passes 112 tests with 10 GPU-only tests skipped.
 This further narrows case 22 without changing either fixed denominator.
+
+The nested `corr_img` factorial binds exact iteration-1 STAR group scales and
+separates inverse noise from CTF-times-scale squared.  Actual RELION and
+RECOVAR-CTF-scale-only remain dominant 14/14, with median energy removal
+`85.2128%` and `85.1697%`.  RECOVAR-inverse-noise-only and both-factor arms
+are dominant 0/14, with medians `+0.0490%` and `-0.1187%`.
+Classification is
+`raw_coarse_residual_is_inverse_noise_weight_dominated_not_ctf_scale_squared`.
+Report SHA-256 is
+`f4d2ccff415e9187d0cf79f7a9afff041175335d006b8a3228b3ad5c9014ae31`.
+The expanded focused gate passes 118 tests with 10 GPU-only tests skipped.
+This is non-scoring and leaves the fixed K=1 and K=4 totals unchanged.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

@@ -8964,6 +8964,53 @@ and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_fixedsuite_boundary_requal_3dd664c8_20260722T111900Z`;
 both contain `SAFE_TO_DELETE`.
 
+## 2026-07-30 case-22 corr_img inverse-noise factorial
+
+The qualified `corr_img` boundary is split into effective CTF-times-scale
+squared and inverse-noise (`Minvsigma2`) factors.  The analyzer binds the
+exact iteration-1 half-1 model/data STAR pair, resolves each one-based stack
+identity through its model group, requires half-1 membership, and verifies
+every parent artifact hash.  All 14 cohort scale corrections are exactly
+`1.0`.
+
+| Arm | Dominant | Median centered-energy removal | Median base relative L2 |
+|---|---:|---:|---:|
+| actual RELION | 14/14 | `85.2128%` | `1.2231e-6` |
+| RECOVAR inverse noise only | 0/14 | `+0.0490%` | `5.2978e-7` |
+| RECOVAR CTF-times-scale squared only | 14/14 | `85.1697%` | `1.3017e-6` |
+| both RECOVAR factors | 0/14 | `-0.1187%` | `4.8813e-7` |
+
+The captured effective CTF-times-scale field already agrees closely:
+relative-L2 min/median/max is
+`1.1315e-7` / `2.0487e-7` / `4.1429e-7`.  The inverse-noise field differs
+more:
+`1.3689e-6` / `1.8371e-6` / `5.7002e-5`.  The maximum imaginary component
+in the captured post-optics/pixel-corrected ratio is `1.0057e-5`, below the
+fixed `2e-5` qualification gate.
+
+Classification is
+`raw_coarse_residual_is_inverse_noise_weight_dominated_not_ctf_scale_squared`.
+This localizes the next bounded comparison to RELION `local_Minvsigma2`
+versus RECOVAR's noise-shell expansion and precision/order.  No production
+change is proposed; no scale/sign is fitted and no correlation is computed.
+
+Report/completion SHA-256 values are
+`f4d2ccff415e9187d0cf79f7a9afff041175335d006b8a3228b3ad5c9014ae31`
+and
+`2d22cc68790985f73eac470399575d1913b06f6ba46b57bb197b004ebaf43e29`.
+Analyzer/test SHA-256 values are
+`e709937ad3882a0a50469234023219db2ab5eb668eea9b85c72c616b34e1b2c5`
+and
+`01d7f7f89b17a8eb40f3a570d3dc05537123e67a6129e776a3da4dcc1db6e955`.
+The expanded focused CPU gate passes 118 tests with 10 GPU-only tests
+skipped.  Scoped Ruff, scorecard freshness, and `git diff --check` pass.
+Run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_corr_img_factorial_3c75802d_20260730T041547ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_corr_img_factorial_3c75802d_20260730T041547ET`;
+both contain `SAFE_TO_DELETE`.  This was a short CPU analysis with no new
+Slurm job ID.
+
 ### Case-20 strict-score qualification
 
 Case 20 has current-head functional closure but not yet strict-score closure:

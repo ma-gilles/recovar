@@ -9363,6 +9363,41 @@ and `9/15` all-class.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 case-22 corr_img inverse-noise localization
+
+- Exact iteration-1 half-1 model/data STAR files are hash-bound.  Stack,
+  model-group, scale, half-set, and all parent artifact identities fail
+  closed.  Cohort scale corrections are exactly 1.0 for 14/14.
+- Actual RELION is dominant 14/14 (median energy removal `85.2128%`).
+  RECOVAR CTF-times-scale squared only remains dominant 14/14
+  (`85.1697%`).
+- RECOVAR inverse noise only is dominant 0/14 (median `+0.0490%`); both
+  RECOVAR factors are dominant 0/14 (median `-0.1187%`).
+- Effective CTF-times-scale relative-L2 min/median/max is
+  `1.1315e-7` / `2.0487e-7` / `4.1429e-7`; inverse-noise relative L2 is
+  `1.3689e-6` / `1.8371e-6` / `5.7002e-5`.
+- Classification:
+  `raw_coarse_residual_is_inverse_noise_weight_dominated_not_ctf_scale_squared`.
+  Next compare RELION `local_Minvsigma2` against RECOVAR noise-shell
+  expansion and float precision/order.
+- Report/completion SHA-256 values are
+  `f4d2ccff415e9187d0cf79f7a9afff041175335d006b8a3228b3ad5c9014ae31`
+  and
+  `2d22cc68790985f73eac470399575d1913b06f6ba46b57bb197b004ebaf43e29`;
+  analyzer/test SHA-256 values are
+  `e709937ad3882a0a50469234023219db2ab5eb668eea9b85c72c616b34e1b2c5`
+  and
+  `01d7f7f89b17a8eb40f3a570d3dc05537123e67a6129e776a3da4dcc1db6e955`.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_corr_img_factorial_3c75802d_20260730T041547ET`;
+  runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_corr_img_factorial_3c75802d_20260730T041547ET`.
+  Both contain `SAFE_TO_DELETE`; short CPU analysis, no Slurm job.
+- Expanded focused CPU gate: 118 passed, 10 GPU-only skipped.  Scoped Ruff,
+  scorecard freshness, and `git diff --check` pass.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 case-22 score-transfer 2x2 factorial
 
 - The predeclared arms are actual RELION, RECOVAR pixel correction only,
