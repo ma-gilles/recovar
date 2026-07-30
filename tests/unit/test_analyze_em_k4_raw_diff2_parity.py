@@ -21,6 +21,19 @@ def _classification(**overrides: bool) -> str:
     return analyzer.classify_raw_diff2_parity(**gates)
 
 
+def _score_classification(**overrides: bool) -> str:
+    gates = {
+        "support_exact": True,
+        "rotation_prior_bitwise_exact": True,
+        "translation_prior_bitwise_exact": True,
+        "saved_score_replay_bitwise_exact": True,
+        "combined_score_bitwise_exact": True,
+        "maximum_tie_sets_exact": True,
+    }
+    gates.update(overrides)
+    return analyzer.classify_score_path_parity(**gates)
+
+
 def test_classifies_exact_raw_diff2_parity() -> None:
     assert _classification() == analyzer.PASS_CLASSIFICATION
 
@@ -38,6 +51,57 @@ def test_classifies_exact_raw_diff2_parity() -> None:
 )
 def test_classifies_each_raw_diff2_failure(field: str, suffix: str) -> None:
     assert _classification(**{field: False}).endswith(suffix)
+
+
+def test_classifies_exact_raw_score_path_parity() -> None:
+    assert _score_classification() == analyzer.PASS_SCORE_CLASSIFICATION
+
+
+@pytest.mark.parametrize(
+    ("field", "suffix"),
+    [
+        ("support_exact", "support"),
+        ("rotation_prior_bitwise_exact", "rotation_prior"),
+        ("translation_prior_bitwise_exact", "translation_prior"),
+        ("saved_score_replay_bitwise_exact", "saved_score_replay"),
+        ("combined_score_bitwise_exact", "combined_score"),
+        ("maximum_tie_sets_exact", "maximum_tie_sets"),
+    ],
+)
+def test_classifies_each_raw_score_path_failure(
+    field: str,
+    suffix: str,
+) -> None:
+    assert _score_classification(**{field: False}).endswith(suffix)
+
+
+def test_relion_score_replay_preserves_float32_operation_order() -> None:
+    raw = np.asarray([501.4734191894531], dtype=np.float32)
+    rotation = np.asarray([-4.860062599182129], dtype=np.float32)
+    translation = np.asarray([-0.05005118250846863], dtype=np.float32)
+    minimum = np.float32(500.6817321777344)
+
+    observed = analyzer._relion_score_replay(
+        raw,
+        rotation,
+        translation,
+        minimum,
+    )
+    expected = np.subtract(
+        np.add(
+            np.add(rotation, translation, dtype=np.float32),
+            minimum,
+            dtype=np.float32,
+        ),
+        raw,
+        dtype=np.float32,
+    )
+
+    np.testing.assert_array_equal(
+        observed.view(np.uint32),
+        expected.view(np.uint32),
+    )
+    assert observed[0] == np.float32(-5.701812744140625)
 
 
 def test_float32_from_bits_round_trips() -> None:

@@ -33,8 +33,11 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-raw-diff2-parity-v1"
+SCHEMA = "relion-k4-it2-raw-diff2-parity-v2"
 PASS_CLASSIFICATION = "exact_device_k4_raw_diff2_and_common_min_bitwise_match"
+PASS_SCORE_CLASSIFICATION = (
+    "exact_device_k4_raw_priors_and_combined_scores_bitwise_match"
+)
 RECOVAR_CAPTURE_HEAD = "ec68f651a4408ed14ed7ebce0ddf3d54a74e0d41"
 RECOVAR_CAPTURE_SCHEMA = "recovar-k4-it2-selected-raw-diff2-job-v1"
 NATIVE_SCIENCE_JOB_ID = 11_787_017
@@ -78,6 +81,52 @@ def classify_raw_diff2_parity(
     if not failures:
         return PASS_CLASSIFICATION
     return "exact_device_k4_raw_diff2_mismatch__" + "__".join(failures)
+
+
+def classify_score_path_parity(
+    *,
+    support_exact: bool,
+    rotation_prior_bitwise_exact: bool,
+    translation_prior_bitwise_exact: bool,
+    saved_score_replay_bitwise_exact: bool,
+    combined_score_bitwise_exact: bool,
+    maximum_tie_sets_exact: bool,
+) -> str:
+    gates = {
+        "support": support_exact,
+        "rotation_prior": rotation_prior_bitwise_exact,
+        "translation_prior": translation_prior_bitwise_exact,
+        "saved_score_replay": saved_score_replay_bitwise_exact,
+        "combined_score": combined_score_bitwise_exact,
+        "maximum_tie_sets": maximum_tie_sets_exact,
+    }
+    failures = [name for name, passed in gates.items() if not passed]
+    if not failures:
+        return PASS_SCORE_CLASSIFICATION
+    return "exact_device_k4_score_path_mismatch__" + "__".join(failures)
+
+
+def _relion_score_replay(
+    raw_diff2: np.ndarray,
+    rotation_prior: np.ndarray,
+    translation_prior: np.ndarray,
+    min_diff2: np.float32,
+) -> np.ndarray:
+    """Replay RELION's float32 prior/min/raw operation order."""
+
+    return np.subtract(
+        np.add(
+            np.add(
+                np.asarray(rotation_prior, dtype=np.float32),
+                np.asarray(translation_prior, dtype=np.float32),
+                dtype=np.float32,
+            ),
+            np.float32(min_diff2),
+            dtype=np.float32,
+        ),
+        np.asarray(raw_diff2, dtype=np.float32),
+        dtype=np.float32,
+    )
 
 
 def _validate_recovar_completion(
@@ -145,6 +194,9 @@ def _comparison(
         "candidate_mask",
         "relion_raw_diff2",
         "relion_min_diff2",
+        "rotation_log_prior",
+        "translation_log_prior",
+        "scores_with_prior",
     }
     _require(required.issubset(recovar), "RECOVAR raw-diff2 artifact schema is incomplete")
     _require(int(recovar["original_index"]) == 53_722, "RECOVAR particle changed")
@@ -171,13 +223,30 @@ def _comparison(
     mapped_rotation = native_to_recovar[native_rotation]
     candidate_mask = np.asarray(recovar["candidate_mask"], dtype=bool)
     recovar_raw_table = np.asarray(recovar["relion_raw_diff2"], dtype=np.float32)
-    _require(
-        recovar_raw_table.shape == candidate_mask.shape,
-        "RECOVAR raw diff2 and candidate-mask shapes differ",
+    recovar_score_table = np.asarray(recovar["scores_with_prior"], dtype=np.float32)
+    recovar_rotation_prior = np.asarray(
+        recovar["rotation_log_prior"],
+        dtype=np.float32,
+    )
+    recovar_translation_prior = np.asarray(
+        recovar["translation_log_prior"],
+        dtype=np.float32,
     )
     _require(
-        np.all(np.isfinite(recovar_raw_table[candidate_mask])),
-        "RECOVAR active raw diff2 contains non-finite values",
+        recovar_raw_table.shape
+        == recovar_score_table.shape
+        == candidate_mask.shape,
+        "RECOVAR raw/score/candidate-mask shapes differ",
+    )
+    _require(
+        recovar_rotation_prior.shape == (candidate_mask.shape[0],)
+        and recovar_translation_prior.shape == (candidate_mask.shape[1],),
+        "RECOVAR prior-table shapes differ from the candidate table",
+    )
+    _require(
+        np.all(np.isfinite(recovar_raw_table[candidate_mask]))
+        and np.all(np.isfinite(recovar_score_table[candidate_mask])),
+        "RECOVAR active raw diff2 or score contains non-finite values",
     )
 
     native_support = np.zeros(candidate_mask.shape, dtype=bool)
@@ -210,6 +279,75 @@ def _comparison(
     raw_metric = float32_metric(native_raw, recovar_raw)
     centered_metric = float32_metric(native_centered, recovar_centered)
 
+    native_rotation_prior = np.asarray(
+        candidates["orientation_log_prior"][active],
+        dtype=np.float32,
+    )
+    native_translation_prior = np.asarray(
+        candidates["translation_log_prior"][active],
+        dtype=np.float32,
+    )
+    native_combined = np.asarray(
+        candidates["combined_preexponent"][active],
+        dtype=np.float32,
+    )
+    recovar_rotation_prior_active = recovar_rotation_prior[
+        mapped_rotation[active]
+    ]
+    recovar_translation_prior_active = recovar_translation_prior[
+        native_translation[active]
+    ]
+    recovar_saved_score = recovar_score_table[
+        mapped_rotation[active],
+        native_translation[active],
+    ]
+    recovar_replay_score = _relion_score_replay(
+        recovar_raw,
+        recovar_rotation_prior_active,
+        recovar_translation_prior_active,
+        recovar_min,
+    )
+    rotation_prior_metric = float32_metric(
+        native_rotation_prior,
+        recovar_rotation_prior_active,
+    )
+    translation_prior_metric = float32_metric(
+        native_translation_prior,
+        recovar_translation_prior_active,
+    )
+    saved_score_replay_metric = float32_metric(
+        recovar_saved_score,
+        recovar_replay_score,
+    )
+    combined_score_metric = float32_metric(
+        native_combined,
+        recovar_replay_score,
+    )
+    native_maximum = np.max(native_combined)
+    recovar_maximum = np.max(recovar_replay_score)
+    native_maximum_ties = native_combined.view(np.uint32) == native_maximum.view(
+        np.uint32
+    )
+    recovar_maximum_ties = (
+        recovar_replay_score.view(np.uint32)
+        == recovar_maximum.view(np.uint32)
+    )
+    maximum_tie_sets_exact = bool(
+        np.array_equal(native_maximum_ties, recovar_maximum_ties)
+    )
+    score_path_classification = classify_score_path_parity(
+        support_exact=support_exact,
+        rotation_prior_bitwise_exact=rotation_prior_metric["bitwise_exact"],
+        translation_prior_bitwise_exact=translation_prior_metric[
+            "bitwise_exact"
+        ],
+        saved_score_replay_bitwise_exact=saved_score_replay_metric[
+            "bitwise_exact"
+        ],
+        combined_score_bitwise_exact=combined_score_metric["bitwise_exact"],
+        maximum_tie_sets_exact=maximum_tie_sets_exact,
+    )
+
     inverse_target = np.flatnonzero(
         native_to_recovar == TARGET_RECOVAR_ROTATION
     )
@@ -218,20 +356,28 @@ def _comparison(
         "target RECOVAR rotation does not have one native match",
     )
     target_native_rotation = int(inverse_target[0])
+    active_candidate_indices = np.flatnonzero(active)
     target_records = []
     for translation in TARGET_TRANSLATIONS:
         matches = np.flatnonzero(
-            active
-            & (native_rotation == target_native_rotation)
-            & (native_translation == translation)
+            (native_rotation[active] == target_native_rotation)
+            & (native_translation[active] == translation)
         )
         _require(
             matches.size == 1,
             f"target translation {translation} does not have one native row",
         )
-        native_value = np.float32(candidates[int(matches[0])]["raw_diff2"])
+        active_position = int(matches[0])
+        candidate_index = int(active_candidate_indices[active_position])
+        native_value = np.float32(candidates[candidate_index]["raw_diff2"])
+        native_combined_value = np.float32(
+            candidates[candidate_index]["combined_preexponent"]
+        )
         recovar_value = np.float32(
             recovar_raw_table[TARGET_RECOVAR_ROTATION, translation]
+        )
+        recovar_combined_value = np.float32(
+            recovar_replay_score[active_position]
         )
         target_records.append(
             {
@@ -242,6 +388,16 @@ def _comparison(
                 "recovar_raw_diff2_bits": int(recovar_value.view(np.uint32)),
                 "delta_recovar_minus_native": float(
                     np.float64(recovar_value) - np.float64(native_value)
+                ),
+                "native_combined_score": float(native_combined_value),
+                "native_combined_score_bits": int(
+                    native_combined_value.view(np.uint32)
+                ),
+                "recovar_replayed_combined_score": float(
+                    recovar_combined_value
+                ),
+                "recovar_replayed_combined_score_bits": int(
+                    recovar_combined_value.view(np.uint32)
                 ),
             }
         )
@@ -284,6 +440,25 @@ def _comparison(
         },
         "raw_diff2": raw_metric,
         "centered_pre_prior": centered_metric,
+        "score_path": {
+            "classification": score_path_classification,
+            "accepted": (
+                score_path_classification == PASS_SCORE_CLASSIFICATION
+            ),
+            "rotation_prior": rotation_prior_metric,
+            "translation_prior": translation_prior_metric,
+            "saved_score_replay": saved_score_replay_metric,
+            "native_vs_recovar_replayed_combined_score": (
+                combined_score_metric
+            ),
+            "maximum_tie_sets_exact": maximum_tie_sets_exact,
+            "native_maximum": float(native_maximum),
+            "native_maximum_bits": int(native_maximum.view(np.uint32)),
+            "recovar_replayed_maximum": float(recovar_maximum),
+            "recovar_replayed_maximum_bits": int(
+                recovar_maximum.view(np.uint32)
+            ),
+        },
         "target": {
             "records": target_records,
             "native_raw_diff2_tied": native_target_tied,
@@ -333,7 +508,8 @@ def build_report(
         "scorecard_change_admissible": False,
         "metric_policy": (
             "fixed exact-device K4 iteration-2 raw-cost diagnostic; "
-            "bitwise rotation/support/common-min/raw/centered-score gates; "
+            "bitwise rotation/support/common-min/raw/centered-score and "
+            "direct raw-prior-min combined-score replay gates; "
             "no fitted scale, sign, or correlation; no map acceptance claim"
         ),
         "fixed_contract": {
