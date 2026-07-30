@@ -62,6 +62,24 @@ def test_float32_metric_is_bit_sensitive() -> None:
     assert metric["max_abs"] > 0.0
 
 
+def test_float32_metric_uses_order_fixed_l2_reduction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_blas_norm(*args: object, **kwargs: object) -> None:
+        raise AssertionError("float32 metric must not use np.linalg.norm")
+
+    monkeypatch.setattr(np.linalg, "norm", reject_blas_norm)
+    metric = analyzer.float32_metric(
+        np.asarray([0.0, 0.0], dtype=np.float32),
+        np.asarray([3.0, 4.0], dtype=np.float32),
+    )
+
+    assert metric["relative_l2_over_rhs"] == 1.0
+    assert metric["l2_reduction"] == (
+        "math.fsum_of_float64_squares_in_c_order"
+    )
+
+
 def test_target_score_offset_attribution_closes_exact_decomposition() -> None:
     report = analyzer.target_score_offset_attribution(
         min_diff2=np.float32(500.6817321777344),

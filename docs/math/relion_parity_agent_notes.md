@@ -9918,7 +9918,7 @@ and `9/15` all-class.
 
 ## 2026-07-30 K=4 authoritative pre-prior representative
 
-- The v4 exact-device analyzer adds a deterministic identity for the maximum
+- The v5 exact-device analyzer adds a deterministic identity for the maximum
   absolute pre-prior/data-path component: select the maximum absolute
   float32 component, then the lowest native candidate index on an exact tie.
   Candidate index, native rotation, mapped RECOVAR rotation, and translation
@@ -9928,18 +9928,24 @@ and `9/15` all-class.
   `103`.  Its RECOVAR-minus-native pre-prior component is
   `+1.64031982421875e-4`, from native `-19.790740966796875` to RECOVAR
   `-19.790576934814453`.
-- The v4 report preserves exact support at `109,184/109,184`, the exact
+- The v5 report preserves exact support at `109,184/109,184`, the exact
   winner and maximum-tie topology, the zero-residual telescoping
   classification, `100,852/109,184` combined-score mismatches, and maximum
-  combined-score absolute difference `1.52587890625e-4`.  Apart from the
-  new representative and schema, comparison with v3 is exact except for two
-  CPU reduction-order changes below `1e-19` in reported relative-L2 values.
-- The non-scoring report is
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_representative_v4_160a4e3f_20260730T1504ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V4.json`,
+  combined-score absolute difference `1.52587890625e-4`.
+- V3/V4 replay exposed CPU reduction-order drift below `3e-22` in
+  `np.linalg.norm` relative-L2 fields.  V5 replaces only those diagnostic
+  reductions with `math.fsum` over float64 squares in fixed C order.
+  Complete replays with BLAS/OpenMP thread counts `1` and `8` are
+  byte-identical.  All non-reduction report fields match v4 exactly; the
+  three relative-L2 changes are below `3e-22`.
+- The two byte-identical non-scoring reports are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_representative_v5_bedc7761_20260730T1518ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V5_THREADS1.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_representative_v5_bedc7761_20260730T1518ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V5_THREADS8.json`,
   SHA-256
-  `cb7fc0476562469020edc25e144c1e387ef28bbf173663ac300eda67a80b6210`.
+  `2a8c1ebd2798a3e567528f221888f0f8b5be691775cf4b0a205fb502ea55db24`.
   The run and runtime roots contain `SAFE_TO_DELETE`.  Focused validation
-  passes `59/59`; scoped Ruff, Python compilation, scorecard freshness, and
+  passes `60/60`; scoped Ruff, Python compilation, scorecard freshness, and
   `git diff --check` pass.
 - This localizes the next raw-operand comparison without choosing a
   production fix or changing a fixed denominator.  K=1 remains `28/34`

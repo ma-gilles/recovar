@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v4"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v5"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -56,6 +57,17 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _stable_l2(values: np.ndarray) -> float:
+    """Return an order-fixed float64 L2 norm without a threaded BLAS reduction."""
+
+    flat_values = np.asarray(values, dtype=np.float64).ravel(order="C")
+    squared_sum = math.fsum(
+        float(value) * float(value)
+        for value in flat_values
+    )
+    return math.sqrt(squared_sum)
+
+
 def float32_metric(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
     """Return fixed scale-sensitive float32 comparison metrics."""
 
@@ -64,7 +76,7 @@ def float32_metric(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
     _require(lhs.shape == rhs.shape, "float32 metric shapes differ")
     delta = lhs.astype(np.float64) - rhs.astype(np.float64)
     denominator = max(
-        float(np.linalg.norm(rhs.astype(np.float64))),
+        _stable_l2(rhs),
         float(np.finfo(np.float64).tiny),
     )
     return {
@@ -72,7 +84,8 @@ def float32_metric(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
         "bitwise_exact": bool(np.array_equal(lhs.view(np.uint32), rhs.view(np.uint32))),
         "bitwise_mismatch_count": int(np.count_nonzero(lhs.view(np.uint32) != rhs.view(np.uint32))),
         "max_abs": float(np.max(np.abs(delta), initial=0.0)),
-        "relative_l2_over_rhs": float(np.linalg.norm(delta) / denominator),
+        "relative_l2_over_rhs": _stable_l2(delta) / denominator,
+        "l2_reduction": "math.fsum_of_float64_squares_in_c_order",
     }
 
 
