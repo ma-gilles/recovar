@@ -12754,3 +12754,49 @@ and
 runtime roots with the same run IDs live under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/`.  All four roots
 contain `SAFE_TO_DELETE`.
+
+## 2026-07-30 case-22 post-optics score-transfer boundary
+
+The qualified preprocessing result and prior live-operand capture can be
+joined without another RELION patch.  The fixed analyzer uses the same 14
+particles, the captured RELION post-optics image, production
+`Fimg_`/`corr_img`, RECOVAR CTF/noise weights, and exact captured translation
+phase.  It compares scale-sensitive bases and measures centered
+residual-energy removal; no scale, sign, or correlation is fitted.
+
+The actual RELION live weighted base remains strict-majority dominant for
+14/14 particles.  Its centered residual-energy removal ranges from
+`63.6834%` to `92.9979%`, with median `85.2128%`.  Holding the captured
+RELION post-optics image fixed while applying RECOVAR's captured CTF/noise
+score transfer changes dominance to 0/14; energy removal ranges from
+`-0.4150%` to `+1.6616%`, with median `-0.0384%`.
+
+The hybrid base is within the predeclared `1e-6` relative-L2 material gate
+for 14/14 particles.  Its min/median/max relative L2 against the recovered
+RECOVAR base is `2.2121e-7` / `3.1160e-7` / `5.6403e-7`, versus
+`3.5885e-7` / `1.2231e-6` / `2.5990e-6` for the actual RELION live base.
+Classification is
+`raw_coarse_residual_is_postoptics_score_weight_transfer_dominated_not_preprocessing`.
+This localizes the next bounded factorial to the paired pixel-correction and
+`buildCorrImage` score-weight transfer; it does not propose a production
+change.
+
+The immutable report and completion SHA-256 values are
+`2fb1f36603f9d52a8d47db010dc5492c56051c1debc5e48799373142b86fdd80`
+and
+`fec8a8438be0f494fec7b94ac6962e658fbf5eabff314ff368e012b73f7cd0bc`.
+Analyzer/test SHA-256 values are
+`29977484d0c516933d0311ec6a28e427fadd22c8e121c65fc266fa092ef8191d`
+and
+`558c8eac5b7361251c9de7ae350fabf4ceb4aa013113b8ed88f042df9c7ddf0c`.
+The focused CPU gate passes 107 tests with 10 GPU-only tests skipped.  The
+analysis was a short local CPU replay over sealed exact-device artifacts, so
+it has no new Slurm job ID.
+
+The run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_postoptics_score_transfer_e33642f1_20260730T035421ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_postoptics_score_transfer_e33642f1_20260730T035421ET`;
+both contain `SAFE_TO_DELETE`.  The frozen scorecard remains unchanged:
+K=1 is 28/34 strict, 32/34 topology, and 34/34 evaluated; K=4 is 41/60
+direct and 9/15 all-class.

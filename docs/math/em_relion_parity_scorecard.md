@@ -1208,6 +1208,20 @@ case-22 cause and moves the bounded search to score-input pixel correction,
 `buildCorrImage`, or live-factorial conversion/interaction.  The frozen
 closing gate passes 83/83 tests and the exact RELION binding gate passes
 9/9.  This remains non-scoring and proposes no production change.
+
+The next fixed 14-particle intervention holds RELION's captured post-optics
+image fixed and replaces only the downstream score-weight transfer with
+RECOVAR's captured CTF/noise transfer.  The actual RELION live base is
+strict-majority residual-dominant for 14/14 particles, with median centered
+residual-energy removal `85.2128%`; the hybrid is dominant for 0/14, with
+median `-0.0384%`.  All 14 hybrid bases pass the predeclared `1e-6`
+scale-sensitive relative-L2 gate.  Classification is
+`raw_coarse_residual_is_postoptics_score_weight_transfer_dominated_not_preprocessing`.
+Report SHA-256 is
+`2fb1f36603f9d52a8d47db010dc5492c56051c1debc5e48799373142b86fdd80`.
+The focused gate passes 107 tests with 10 GPU-only tests skipped.  This
+diagnostic is non-scoring: K=1 remains 28/34 strict, 32/34 topology, and
+34/34 evaluated; K=4 remains 41/60 direct and 9/15 all-class.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

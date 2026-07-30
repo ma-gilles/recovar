@@ -9363,6 +9363,47 @@ and `9/15` all-class.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 case-22 post-optics score-transfer localization
+
+- Joined the qualified preprocessing capture, qualified production-operand
+  capture, and RECOVAR score-component capture on the frozen 14-particle
+  cohort.  No new RELION patch or science rerun was required.
+- The fixed analyzer uses scale-sensitive relative L2 and centered
+  residual-energy removal only.  It fits no scale/sign and computes no
+  correlation.
+- The actual RELION live weighted base is strict-majority dominant 14/14;
+  energy removal is `63.6834%`--`92.9979%`, median `85.2128%`.
+- Applying RECOVAR's CTF/noise score transfer to the same captured RELION
+  post-optics image is dominant 0/14; energy removal is
+  `-0.4150%`--`+1.6616%`, median `-0.0384%`.
+- The hybrid base passes the fixed `1e-6` material gate 14/14.  Hybrid
+  min/median/max relative L2 is
+  `2.2121e-7` / `3.1160e-7` / `5.6403e-7`; actual RELION live-base
+  min/median/max is
+  `3.5885e-7` / `1.2231e-6` / `2.5990e-6`.
+- Classification:
+  `raw_coarse_residual_is_postoptics_score_weight_transfer_dominated_not_preprocessing`.
+  The next bounded factorial is inside the paired pixel-correction /
+  `buildCorrImage` transfer.
+- Authoritative run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_postoptics_score_transfer_e33642f1_20260730T035421ET`;
+  runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_postoptics_score_transfer_e33642f1_20260730T035421ET`.
+  Both contain `SAFE_TO_DELETE`.  The analysis was a short local CPU replay
+  over sealed exact-device artifacts, so there is no new Slurm job ID.
+- Report/completion SHA-256 values are
+  `2fb1f36603f9d52a8d47db010dc5492c56051c1debc5e48799373142b86fdd80`
+  and
+  `fec8a8438be0f494fec7b94ac6962e658fbf5eabff314ff368e012b73f7cd0bc`;
+  analyzer/test SHA-256 values are
+  `29977484d0c516933d0311ec6a28e427fadd22c8e121c65fc266fa092ef8191d`
+  and
+  `558c8eac5b7361251c9de7ae350fabf4ceb4aa013113b8ed88f042df9c7ddf0c`.
+- Focused CPU gate: 107 passed, 10 GPU-only skipped.  Scoped Ruff,
+  scorecard freshness, import provenance, and `git diff --check` pass.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 case-22 preprocessing-boundary qualification
 
 - The live-operand factorial makes the base corrected image the next causal
