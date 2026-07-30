@@ -9864,3 +9864,41 @@ and `9/15` all-class.
   pass.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, and `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
+## 2026-07-30 K=4 exact-device target-score attribution
+
+- Authoritative native science job `11787017` completed `0:0` in
+  `00:10:50` on `della-l07g2`.  The allocation contains the required A100
+  UUID `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`; the completion seal
+  SHA-256 is
+  `d2685dd64f9f04a1748735952a8f8e8900c5fa1ba6dab6a8934a2178e66beab2`.
+  Grid correction and forced after-max finalization were unset.
+- Bitwise rotation permutation is bijective over all `2,968` rows.  Native
+  and RECOVAR support is exact at `109,184/109,184`, Jaccard `1.0`; the
+  winning key, two-way maximum tie set, and target translation tie at IDs
+  `80` and `82` are exact.  This closes the decision topology.
+- The target orientation and translation prior operands are bitwise exact in
+  both engines.  The remaining target combined-score offset is
+  `3.0517578125e-5` RECOVAR minus RELION.  The v2 analyzer decomposes it
+  exactly, with zero residual: `1.8596649169921875e-5` is the shared
+  data-then-prior path contribution from the unequal pre-prior values and
+  `1.1920928955078125e-5` is RELION's production float32 operation-order
+  contribution.
+- Both captured RELION totals replay bitwise from
+  `((orientation_prior + translation_prior) + min_diff2) - raw_diff2`.
+  Both RECOVAR totals replay bitwise after converting the dumped pre-prior
+  residual to float32 and adding the two priors.  Classification:
+  `exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert`.
+- The deterministic v2 report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_audit_preview_08122744_20260730T1008ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V2.json`,
+  SHA-256
+  `55e1ca2b2146998bce0921a6c8c9fa5df3f1b4eaf692f76af7279d0a259e24ca`.
+  Commit `d766e693` adds the attribution gate; focused tests pass `17/17`,
+  and scoped Ruff, Python compilation, scorecard freshness, and
+  `git diff --check` pass.
+- The global bitwise score table is still not exact (`100,852/109,184`
+  combined-score mismatches, maximum absolute difference
+  `1.52587890625e-4`), so this is a non-scoring target-boundary closure, not
+  a parity-score promotion or a production-kernel change.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, and `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
