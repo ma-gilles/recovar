@@ -1245,6 +1245,18 @@ Report SHA-256 is
 `f4d2ccff415e9187d0cf79f7a9afff041175335d006b8a3228b3ad5c9014ae31`.
 The expanded focused gate passes 118 tests with 10 GPU-only tests skipped.
 This is non-scoring and leaves the fixed K=1 and K=4 totals unchanged.
+
+The fixed conditioning audit repeats that factorial only where both
+effective-CTF magnitudes exceed each of `0`, `0.001`, `0.003`, and `0.01`,
+retaining actual RELION correction elsewhere.  At all four thresholds,
+actual RELION and RECOVAR-CTF-scale-only remain dominant 14/14, while
+RECOVAR-inverse-noise-only and both-factor arms remain 0/14.  At `0.01`,
+the valid pixel fraction has minimum `0.9911019849` and median
+`0.9958932238`.  Classification is
+`inverse_noise_attribution_is_stable_above_fixed_effective_ctf_thresholds`;
+report SHA-256 is
+`00336d64aabf166082860c6d62721128a6eddbd782dd99da742161e2d1234e12`.
+This is non-scoring and leaves the fixed K=1 and K=4 totals unchanged.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

@@ -12889,3 +12889,33 @@ roots are
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_score_transfer_factorial_f896a838_20260730T040552ET`;
 both contain `SAFE_TO_DELETE`.
+
+## 2026-07-30 case-22 corr_img conditioning audit
+
+The nested `corr_img` attribution divides correction values by effective
+CTF squared, so a fixed follow-on audit checks that its inverse-noise result
+is not created by poorly conditioned pixels near CTF zeros.  At effective-CTF
+thresholds `0`, `0.001`, `0.003`, and `0.01`, each intervention is applied
+only where both implementations exceed the threshold; excluded pixels retain
+the actual RELION correction.
+
+At every threshold, actual RELION and the RECOVAR-CTF-scale-only arm remain
+dominant for 14/14 particles, while the RECOVAR-inverse-noise-only and
+both-factor arms remain dominant for 0/14.  At threshold `0.01`, the valid
+pixel fraction is `0.9911019849`--`1.0`, with median `0.9958932238`.
+Classification is
+`inverse_noise_attribution_is_stable_above_fixed_effective_ctf_thresholds`.
+No scale, sign, correlation, threshold fitting, or discarded-pixel zeroing
+is used.
+
+Report/completion SHA-256 values are
+`00336d64aabf166082860c6d62721128a6eddbd782dd99da742161e2d1234e12`
+and
+`4ca7fd037b49569e1a2ea87d19595ab922145643352191d31d89975780b8259e`.
+The short CPU analysis has no Slurm job ID.  Run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_corr_img_conditioning_final_d096e436_20260730T0435ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_corr_img_conditioning_final_d096e436_20260730T0435ET`;
+both contain `SAFE_TO_DELETE`.  This is a non-scoring causal diagnostic:
+K=1 remains 28/34 strict, 32/34 topology, and 34/34 evaluated; K=4 remains
+41/60 direct and 9/15 all-class.

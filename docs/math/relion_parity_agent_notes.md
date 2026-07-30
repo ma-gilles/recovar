@@ -9363,6 +9363,32 @@ and `9/15` all-class.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 case-22 corr_img conditioning audit
+
+- Commit parent `d096e436` localizes the fixed 14-particle `corr_img`
+  factorial to inverse noise, but that inference divides by effective CTF
+  squared.  The conditioning audit freezes thresholds `0`, `0.001`, `0.003`,
+  and `0.01` and substitutes factors only where both implementations exceed
+  the threshold.  It keeps actual RELION correction in excluded pixels.
+- At every threshold, actual RELION and RECOVAR-CTF-scale-only are dominant
+  `14/14`; RECOVAR-inverse-noise-only and both-factor arms are `0/14`.
+  At threshold `0.01`, valid pixel fraction is
+  `0.9911019849`--`1.0`, median `0.9958932238`.
+- Classification is
+  `inverse_noise_attribution_is_stable_above_fixed_effective_ctf_thresholds`.
+  No scale, sign, correlation, or fitted threshold is used.  Report and
+  completion SHA-256 values are
+  `00336d64aabf166082860c6d62721128a6eddbd782dd99da742161e2d1234e12`
+  and
+  `4ca7fd037b49569e1a2ea87d19595ab922145643352191d31d89975780b8259e`.
+- Run/runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_corr_img_conditioning_final_d096e436_20260730T0435ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_corr_img_conditioning_final_d096e436_20260730T0435ET`;
+  both contain `SAFE_TO_DELETE`.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 case-22 corr_img inverse-noise localization
 
 - Exact iteration-1 half-1 model/data STAR files are hash-bound.  Stack,
