@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import struct
 from pathlib import Path
 
@@ -7,6 +8,14 @@ import numpy as np
 import pytest
 
 from scripts import validate_relion_coarse_pass1_components as validator
+
+PATCH = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "patches"
+    / "0001-RELION-coarse-diff2-components-combined-capture.patch"
+)
+PATCH_SHA256 = "84a41aa04d8eae11512fe7728b482eb539844c06ac5be62e39218ee863e17631"
 
 
 def _bits(value: float) -> int:
@@ -108,3 +117,17 @@ def test_rejects_truncated_artifact(tmp_path: Path) -> None:
     path.write_bytes(path.read_bytes()[:-1])
     with pytest.raises(ValueError, match="byte count"):
         validator.load_artifact(path)
+
+
+def test_combined_relion_patch_is_frozen_and_keeps_production_diff2() -> None:
+    payload = PATCH.read_bytes()
+    assert hashlib.sha256(payload).hexdigest() == PATCH_SHA256
+    text = payload.decode()
+    assert "RELION_P1_CAPTURE_SCHEMA must be exactly 1 or 2" in text
+    assert 'has_components ? "RLNP1V2HEADER" : "RLNP1V1HEADER"' in text
+    assert "Coarse diff2 component capture requires both output arrays" in text
+    assert (
+        "diff2s[j] += (diff_real * diff_real + diff_imag * diff_imag) * "
+        "s_corr[i + init_pixel % block_sz];"
+    ) in text
+    assert "+\t\t\t\tdiff2s[j] +=" not in text
