@@ -7273,6 +7273,8 @@ def _maybe_dump_k_class_pass2_bucket(
     fine_translation_parent=None,
     reconstruction_mask=None,
     reconstruction_probs=None,
+    raw_diff2_by_batch_row=None,
+    relion_min_diff2=None,
 ):
     """Env-gated K-class sparse pass-2 dump for RELION parity debugging."""
 
@@ -7309,6 +7311,19 @@ def _maybe_dump_k_class_pass2_bucket(
     )
     recon_mask_np = None if reconstruction_mask is None else np.asarray(reconstruction_mask, dtype=bool)
     recon_probs_np = None if reconstruction_probs is None else np.asarray(reconstruction_probs, dtype=np.float64)
+    min_diff2_np = (
+        None
+        if relion_min_diff2 is None
+        else np.asarray(relion_min_diff2, dtype=np.float32)
+    )
+    if raw_diff2_by_batch_row is not None:
+        if min_diff2_np is None:
+            raise ValueError("raw diff2 pass-2 dump requires the common RELION minimum")
+        if min_diff2_np.shape != local_indices.shape:
+            raise ValueError(
+                "RELION minimum shape differs from the pass-2 dump batch: "
+                f"{min_diff2_np.shape} != {local_indices.shape}"
+            )
 
     dump_count = 0
     for row in wanted_rows:
@@ -7338,6 +7353,7 @@ def _maybe_dump_k_class_pass2_bucket(
             candidate_mask = np.zeros((n_rot, int(n_fine_trans)), dtype=bool)
             reconstruction_mask_dense = None
             reconstruction_probs_dense = None
+            raw_diff2_dense = None
             if np.any(valid):
                 rr = pair_rot_rows[valid]
                 tt = pair_trans[valid]
@@ -7350,6 +7366,26 @@ def _maybe_dump_k_class_pass2_bucket(
                 if recon_probs_np is not None:
                     reconstruction_probs_dense = np.zeros((n_rot, int(n_fine_trans)), dtype=np.float64)
                     reconstruction_probs_dense[rr, tt] = recon_probs_np[row][valid]
+                if raw_diff2_by_batch_row is not None:
+                    if row not in raw_diff2_by_batch_row:
+                        raise ValueError(
+                            f"raw diff2 pass-2 dump is missing batch row {row}"
+                        )
+                    raw_diff2_pair = np.asarray(
+                        raw_diff2_by_batch_row[row],
+                        dtype=np.float32,
+                    )
+                    if raw_diff2_pair.shape != pair_scores.shape:
+                        raise ValueError(
+                            "compact raw diff2 shape differs from scores: "
+                            f"{raw_diff2_pair.shape} != {pair_scores.shape}"
+                        )
+                    raw_diff2_dense = np.full(
+                        (n_rot, int(n_fine_trans)),
+                        np.nan,
+                        dtype=np.float32,
+                    )
+                    raw_diff2_dense[rr, tt] = raw_diff2_pair[valid]
         else:
             scores_with = scores_np[row, :n_rot, :]
             prob_dense = probs_np[row, :n_rot, :]
@@ -7360,6 +7396,21 @@ def _maybe_dump_k_class_pass2_bucket(
             reconstruction_probs_dense = (
                 None if recon_probs_np is None else np.asarray(recon_probs_np[row, :n_rot, :], dtype=np.float64)
             )
+            raw_diff2_dense = None
+            if raw_diff2_by_batch_row is not None:
+                if row not in raw_diff2_by_batch_row:
+                    raise ValueError(
+                        f"raw diff2 pass-2 dump is missing batch row {row}"
+                    )
+                raw_diff2_dense = np.asarray(
+                    raw_diff2_by_batch_row[row],
+                    dtype=np.float32,
+                )
+                if raw_diff2_dense.shape != scores_with.shape:
+                    raise ValueError(
+                        "dense raw diff2 shape differs from scores: "
+                        f"{raw_diff2_dense.shape} != {scores_with.shape}"
+                    )
 
         scores_pre = (
             scores_with
@@ -7372,6 +7423,12 @@ def _maybe_dump_k_class_pass2_bucket(
             reconstruction_fields["reconstruction_n_significant"] = np.int64(np.count_nonzero(reconstruction_mask_dense))
         if reconstruction_probs_dense is not None:
             reconstruction_fields["reconstruction_probs"] = reconstruction_probs_dense
+        raw_diff2_fields = {}
+        if raw_diff2_dense is not None:
+            raw_diff2_fields = {
+                "relion_raw_diff2": raw_diff2_dense,
+                "relion_min_diff2": np.float32(min_diff2_np[row]),
+            }
         out_path = os.path.join(
             dump_dir,
             f"pass2_orig{original_idx:06d}_class{int(class_index) + 1:03d}_cs"
@@ -7397,6 +7454,7 @@ def _maybe_dump_k_class_pass2_bucket(
             translation_log_prior=trans_prior_np[row],
             compact_pair_dump=np.bool_(compact_pairs),
             **reconstruction_fields,
+            **raw_diff2_fields,
         )
         dump_count += 1
     return dump_count
@@ -7519,6 +7577,37 @@ def _materialize_k_class_capture_rows(
     }
 
 
+def _pass2_dump_target_rows(
+    *,
+    experiment_dataset,
+    image_indices,
+    current_size,
+) -> np.ndarray:
+    """Return batch rows selected by the explicit pass-2 dump contract."""
+
+    dump_dir = os.environ.get("RECOVAR_PASS2_DUMP_DIR")
+    if not dump_dir:
+        return np.empty((0,), dtype=np.int64)
+    target_original_indices = parse_env_int_set("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES")
+    if not target_original_indices:
+        target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
+    if not target_original_indices:
+        return np.empty((0,), dtype=np.int64)
+    target_current_size = os.environ.get("RECOVAR_PASS2_DUMP_CURRENT_SIZE")
+    if target_current_size:
+        if current_size is None or int(current_size) != int(target_current_size):
+            return np.empty((0,), dtype=np.int64)
+
+    local_indices = np.asarray(image_indices, dtype=np.int64)
+    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    return np.flatnonzero(
+        np.isin(
+            original_indices,
+            np.fromiter(target_original_indices, dtype=np.int64),
+        )
+    ).astype(np.int64, copy=False)
+
+
 def _pass2_dump_requested_for_bucket(
     *,
     experiment_dataset,
@@ -7527,22 +7616,13 @@ def _pass2_dump_requested_for_bucket(
 ) -> bool:
     """Return whether this bucket must stay materialized for a pass-2 dump."""
 
-    dump_dir = os.environ.get("RECOVAR_PASS2_DUMP_DIR")
-    if not dump_dir:
-        return False
-    target_original_indices = parse_env_int_set("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES")
-    if not target_original_indices:
-        target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
-    if not target_original_indices:
-        return False
-    target_current_size = os.environ.get("RECOVAR_PASS2_DUMP_CURRENT_SIZE")
-    if target_current_size:
-        if current_size is None or int(current_size) != int(target_current_size):
-            return False
-
-    local_indices = np.asarray(image_indices, dtype=np.int64)
-    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
-    return any(int(original_idx) in target_original_indices for original_idx in original_indices)
+    return bool(
+        _pass2_dump_target_rows(
+            experiment_dataset=experiment_dataset,
+            image_indices=image_indices,
+            current_size=current_size,
+        ).size
+    )
 
 
 def _prepare_bucket_io(
@@ -12180,6 +12260,15 @@ def compute_k_class_pass2_stats_sparse_fused(
                     )
                 compact_pair_arrays_by_class = reordered_compact_pairs
             image_indices = fetched_indices_np
+        pass2_dump_rows = (
+            _pass2_dump_target_rows(
+                experiment_dataset=experiment_dataset,
+                image_indices=image_indices,
+                current_size=current_size,
+            )
+            if dump_pass2_operands
+            else np.empty((0,), dtype=np.int64)
+        )
         target_particle_rows = (
             _bpref_contribution_target_rows(experiment_dataset, image_indices)
             if device_signature_requested
@@ -12353,6 +12442,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         raw_diff2_masks_by_class = []
         raw_diff2_rotation_priors_by_class = []
         raw_diff2_translation_priors_by_class = []
+        raw_diff2_dump_by_class = [None] * n_classes
         score_projection_for_compact_check_by_class = []
         flat_backproject_rotations_by_class = []
         proj_for_noise_by_class = []
@@ -12700,6 +12790,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             proj_abs2_by_class.append(proj_abs2_for_noise)
 
         global_min_diff2 = None
+        relion_min_diff2_dump = None
         if use_exact_relion_gaussian:
             if len(raw_diff2_by_class) != n_classes:
                 raise RuntimeError(
@@ -12712,6 +12803,21 @@ def compute_k_class_pass2_stats_sparse_fused(
             scores_by_class = []
             class_score_log_z_bucket = []
             for class_index, raw_diff2 in enumerate(raw_diff2_by_class):
+                target_dump_class = os.environ.get(
+                    "RECOVAR_PASS2_DUMP_CLASS"
+                )
+                if (
+                    pass2_dump_rows.size
+                    and (
+                        not target_dump_class
+                        or int(target_dump_class) == class_index + 1
+                    )
+                ):
+                    raw_diff2_np = np.asarray(raw_diff2, dtype=np.float32)
+                    raw_diff2_dump_by_class[class_index] = {
+                        int(row): np.array(raw_diff2_np[int(row)], copy=True)
+                        for row in pass2_dump_rows
+                    }
                 score = _relion_cuda_fine_diff2_to_scores(
                     jnp.asarray(raw_diff2, dtype=jnp.float32),
                     raw_diff2_rotation_priors_by_class[class_index],
@@ -12790,6 +12896,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                         np.count_nonzero(dense_finite != compact_finite)
                     )
                     compact_pair_check_rows += int(dense_log_z_np.size)
+            if any(rows is not None for rows in raw_diff2_dump_by_class):
+                relion_min_diff2_dump = np.asarray(
+                    global_min_diff2,
+                    dtype=np.float32,
+                )
             del raw_diff2_by_class
             if bucket_raw_host_staging_bytes != 0:
                 raise RuntimeError(
@@ -12900,6 +13011,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                         compact_pairs=True,
                         reconstruction_mask=dump_reconstruction_mask,
                         reconstruction_probs=dump_reconstruction_probs,
+                        raw_diff2_by_batch_row=raw_diff2_dump_by_class[
+                            class_index
+                        ],
+                        relion_min_diff2=relion_min_diff2_dump,
                     )
                 else:
                     _log_Z, probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
@@ -12941,6 +13056,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                         compact_pairs=False,
                         reconstruction_mask=dump_reconstruction_mask,
                         reconstruction_probs=dump_reconstruction_probs,
+                        raw_diff2_by_batch_row=raw_diff2_dump_by_class[
+                            class_index
+                        ],
+                        relion_min_diff2=relion_min_diff2_dump,
                     )
             if bucket_dump_count:
                 target_original_indices = parse_env_int_set(
@@ -13058,6 +13177,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                     compact_pairs=True,
                     reconstruction_mask=reconstruction_mask if relion_fine_mstep_prune else None,
                     reconstruction_probs=reconstruction_probs,
+                    raw_diff2_by_batch_row=raw_diff2_dump_by_class[
+                        class_index
+                    ],
+                    relion_min_diff2=relion_min_diff2_dump,
                 )
                 if accumulate_noise and reuse_compact_noise_sums and not compact_noise_sums_match_mstep:
                     compact_pair_noise_image_sum_precomputes += 1
@@ -13141,6 +13264,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                     compact_pairs=False,
                     reconstruction_mask=reconstruction_mask if relion_fine_mstep_prune else None,
                     reconstruction_probs=reconstruction_probs,
+                    raw_diff2_by_batch_row=raw_diff2_dump_by_class[
+                        class_index
+                    ],
+                    relion_min_diff2=relion_min_diff2_dump,
                 )
                 probs_sum_t_jax = jnp.sum(mstep_probs, axis=-1)
                 translation_posterior_jax = jnp.sum(mstep_probs, axis=1)

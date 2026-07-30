@@ -843,6 +843,8 @@ def test_kclass_compact_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_p
     translation_prior = np.asarray([[0.25, -0.5, 0.75]], dtype=np.float32)
     scores = np.asarray([[3.5, 5.5, -np.inf]], dtype=np.float64)
     probs = np.asarray([[0.2, 0.8, 0.0]], dtype=np.float64)
+    raw_diff2 = np.asarray([101.0, 102.0, 999.0], dtype=np.float32)
+    min_diff2 = np.asarray([100.0], dtype=np.float32)
 
     dump_dir = tmp_path / "pass2"
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
@@ -879,6 +881,8 @@ def test_kclass_compact_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_p
         probs=probs,
         bucket_translation_prior=translation_prior,
         compact_pairs=True,
+        raw_diff2_by_batch_row={0: raw_diff2},
+        relion_min_diff2=min_diff2,
     )
 
     payload = np.load(dump_dir / "pass2_orig000042_class002_cs014.npz")
@@ -891,6 +895,84 @@ def test_kclass_compact_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_p
     assert payload["probs"][1, 2] == pytest.approx(0.8)
     assert payload["scores_pre_prior"][0, 1] == pytest.approx(3.5 - 0.1 - (-0.5))
     assert payload["scores_pre_prior"][1, 2] == pytest.approx(5.5 - (-0.2) - 0.75)
+    assert payload["relion_raw_diff2"].dtype == np.float32
+    assert payload["relion_raw_diff2"][0, 1] == np.float32(101.0)
+    assert payload["relion_raw_diff2"][1, 2] == np.float32(102.0)
+    assert np.isnan(payload["relion_raw_diff2"][0, 0])
+    assert payload["relion_min_diff2"] == np.float32(100.0)
+
+
+def test_kclass_dense_pass2_dump_preserves_selected_raw_diff2(monkeypatch, tmp_path):
+    n_rot = 2
+    n_trans = 3
+    experiment_dataset = SimpleNamespace(
+        dataset_indices=np.asarray([42], dtype=np.int64),
+    )
+    rotations = np.tile(np.eye(3, dtype=np.float32), (n_rot, 1, 1))
+    per_image_inputs = {
+        "oversampled_rots": [rotations],
+        "oversampled_rot_indices": [np.asarray([10, 11], dtype=np.int64)],
+        "parent_map": [np.asarray([0, 1], dtype=np.int32)],
+        "log_prior": [np.asarray([0.1, -0.2], dtype=np.float32)],
+    }
+    candidate_mask = np.asarray(
+        [[[True, False, True], [False, True, False]]],
+        dtype=bool,
+    )
+    scores = np.arange(
+        n_rot * n_trans,
+        dtype=np.float32,
+    ).reshape(1, n_rot, n_trans)
+    raw_diff2 = (
+        np.arange(n_rot * n_trans, dtype=np.float32)
+        .reshape(n_rot, n_trans)
+        + np.float32(500.0)
+    )
+
+    dump_dir = tmp_path / "pass2"
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    sparse_pass2_mod._maybe_dump_k_class_pass2_bucket(
+        experiment_dataset=experiment_dataset,
+        image_indices=np.asarray([0], dtype=np.int64),
+        class_index=0,
+        per_image_inputs=per_image_inputs,
+        class_bucket_arrays={"candidate_mask": candidate_mask},
+        compact_pair_arrays=None,
+        current_size=14,
+        n_fine_trans=n_trans,
+        fine_translations=np.zeros((n_trans, 2), dtype=np.float32),
+        scores=scores,
+        probs=np.full_like(scores, 1.0 / scores.size),
+        bucket_translation_prior=np.zeros((1, n_trans), dtype=np.float32),
+        compact_pairs=False,
+        raw_diff2_by_batch_row={0: raw_diff2},
+        relion_min_diff2=np.asarray([499.0], dtype=np.float32),
+    )
+
+    payload = np.load(dump_dir / "pass2_orig000042_class001_cs014.npz")
+    np.testing.assert_array_equal(payload["relion_raw_diff2"], raw_diff2)
+    assert payload["relion_min_diff2"] == np.float32(499.0)
+
+
+def test_pass2_dump_target_rows_use_original_index_mapping(monkeypatch, tmp_path):
+    experiment_dataset = SimpleNamespace(
+        original_image_indices_from_local=lambda indices: np.asarray(
+            [100, 42, 300],
+            dtype=np.int64,
+        )
+    )
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42,300")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_CURRENT_SIZE", "14")
+
+    rows = sparse_pass2_mod._pass2_dump_target_rows(
+        experiment_dataset=experiment_dataset,
+        image_indices=np.asarray([7, 8, 9], dtype=np.int64),
+        current_size=14,
+    )
+
+    np.testing.assert_array_equal(rows, np.asarray([1, 2], dtype=np.int64))
 
 
 # ----------------------------------------------------------------------
