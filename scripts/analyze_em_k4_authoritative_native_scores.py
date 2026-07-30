@@ -22,7 +22,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v3"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v4"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -227,6 +227,10 @@ def global_score_offset_attribution(
     recovar_orientation_prior: np.ndarray,
     recovar_translation_prior: np.ndarray,
     recovar_combined: np.ndarray,
+    native_candidate_index: np.ndarray,
+    native_rotation_local: np.ndarray,
+    recovar_rotation_row: np.ndarray,
+    translation_id: np.ndarray,
     decision_topology_exact: bool,
 ) -> dict[str, Any]:
     """Telescope the full active-table score delta through fixed operands."""
@@ -254,6 +258,19 @@ def global_score_offset_attribution(
         dtype=np.float32,
     )
     recovar_combined = np.asarray(recovar_combined, dtype=np.float32)
+    native_candidate_index = np.asarray(
+        native_candidate_index,
+        dtype=np.int64,
+    )
+    native_rotation_local = np.asarray(
+        native_rotation_local,
+        dtype=np.int64,
+    )
+    recovar_rotation_row = np.asarray(
+        recovar_rotation_row,
+        dtype=np.int64,
+    )
+    translation_id = np.asarray(translation_id, dtype=np.int64)
     shapes = {
         values.shape
         for values in (
@@ -265,10 +282,25 @@ def global_score_offset_attribution(
             recovar_orientation_prior,
             recovar_translation_prior,
             recovar_combined,
+            native_candidate_index,
+            native_rotation_local,
+            recovar_rotation_row,
+            translation_id,
         )
     }
     _require(len(shapes) == 1, "global attribution array shapes differ")
     _require(native_combined.size > 0, "global attribution arrays are empty")
+    _require(
+        np.all(native_candidate_index >= 0)
+        and np.all(native_rotation_local >= 0)
+        and np.all(recovar_rotation_row >= 0)
+        and np.all(translation_id >= 0),
+        "global attribution candidate identities must be nonnegative",
+    )
+    _require(
+        np.unique(native_candidate_index).size == native_candidate_index.size,
+        "global attribution native candidate indices must be unique",
+    )
 
     min_diff2 = np.float32(min_diff2)
     native_pre_prior = np.subtract(
@@ -380,6 +412,41 @@ def global_score_offset_attribution(
     data_path_strict_majority = bool(
         component_l1_fractions["pre_prior_data_path"] > 0.5
     )
+    pre_prior_component = components["pre_prior_data_path"]
+    maximum_abs_pre_prior = np.max(np.abs(pre_prior_component))
+    tied_rows = np.flatnonzero(
+        np.abs(pre_prior_component) == maximum_abs_pre_prior
+    )
+    representative_row = int(
+        tied_rows[
+            np.argmin(native_candidate_index[tied_rows])
+        ]
+    )
+    pre_prior_representative = {
+        "selection_rule": (
+            "maximum_absolute_pre_prior_data_path_component_then_"
+            "lowest_native_candidate_index"
+        ),
+        "aligned_table_index": representative_row,
+        "native_candidate_index": int(
+            native_candidate_index[representative_row]
+        ),
+        "native_rotation_local": int(
+            native_rotation_local[representative_row]
+        ),
+        "recovar_rotation_row": int(
+            recovar_rotation_row[representative_row]
+        ),
+        "translation_id": int(translation_id[representative_row]),
+        "native_pre_prior": float(native_pre_prior[representative_row]),
+        "recovar_pre_prior": float(recovar_pre_prior[representative_row]),
+        "component_delta_recovar_minus_native": float(
+            pre_prior_component[representative_row]
+        ),
+        "component_absolute_delta": float(
+            abs(pre_prior_component[representative_row])
+        ),
+    }
     attributed = bool(
         decision_topology_exact
         and native_replay_exact_count == native_combined.size
@@ -410,6 +477,9 @@ def global_score_offset_attribution(
         "components": summaries,
         "component_l1_fractions": component_l1_fractions,
         "pre_prior_data_path_strict_majority": data_path_strict_majority,
+        "pre_prior_data_path_representative": (
+            pre_prior_representative
+        ),
     }
 
 
@@ -674,6 +744,10 @@ def _comparison(
         recovar_orientation_prior=recovar_orientation_prior,
         recovar_translation_prior=recovar_translation_prior,
         recovar_combined=recovar_combined,
+        native_candidate_index=active_indices,
+        native_rotation_local=native_rotation[active],
+        recovar_rotation_row=mapped_rotation[active],
+        translation_id=native_translation[active],
         decision_topology_exact=decision_topology_exact,
     )
 

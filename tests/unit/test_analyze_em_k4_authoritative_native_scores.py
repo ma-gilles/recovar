@@ -164,6 +164,10 @@ def _global_attribution(decision_topology_exact: bool = True) -> dict:
         recovar_orientation_prior=native_orientation,
         recovar_translation_prior=native_translation,
         recovar_combined=recovar_combined,
+        native_candidate_index=np.asarray([11, 7]),
+        native_rotation_local=np.asarray([5, 3]),
+        recovar_rotation_row=np.asarray([2, 4]),
+        translation_id=np.asarray([8, 9]),
         decision_topology_exact=decision_topology_exact,
     )
 
@@ -179,6 +183,25 @@ def test_global_score_offset_attribution_closes_and_is_data_dominated() -> None:
     assert report["telescoping_closure"]["max_abs"] == 0.0
     assert report["pre_prior_data_path_strict_majority"] is True
     assert report["component_l1_fractions"]["pre_prior_data_path"] > 0.5
+    assert report["pre_prior_data_path_representative"] == {
+        "selection_rule": (
+            "maximum_absolute_pre_prior_data_path_component_then_"
+            "lowest_native_candidate_index"
+        ),
+        "aligned_table_index": 1,
+        "native_candidate_index": 7,
+        "native_rotation_local": 3,
+        "recovar_rotation_row": 4,
+        "translation_id": 9,
+        "native_pre_prior": pytest.approx(-0.79168701171875),
+        "recovar_pre_prior": pytest.approx(-0.7916684150695801),
+        "component_delta_recovar_minus_native": pytest.approx(
+            1.8596649169921875e-05
+        ),
+        "component_absolute_delta": pytest.approx(
+            1.8596649169921875e-05
+        ),
+    }
 
 
 def test_global_score_offset_attribution_requires_decision_topology() -> None:

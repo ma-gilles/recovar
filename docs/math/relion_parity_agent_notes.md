@@ -9916,6 +9916,36 @@ and `9/15` all-class.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, and `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 K=4 authoritative pre-prior representative
+
+- The v4 exact-device analyzer adds a deterministic identity for the maximum
+  absolute pre-prior/data-path component: select the maximum absolute
+  float32 component, then the lowest native candidate index on an exact tie.
+  Candidate index, native rotation, mapped RECOVAR rotation, and translation
+  are validated as aligned arrays; candidate indices must be unique.
+- Replaying the sealed job-`11787017` inputs selects native candidate `587`,
+  native rotation `24`, mapped RECOVAR rotation `1072`, and translation
+  `103`.  Its RECOVAR-minus-native pre-prior component is
+  `+1.64031982421875e-4`, from native `-19.790740966796875` to RECOVAR
+  `-19.790576934814453`.
+- The v4 report preserves exact support at `109,184/109,184`, the exact
+  winner and maximum-tie topology, the zero-residual telescoping
+  classification, `100,852/109,184` combined-score mismatches, and maximum
+  combined-score absolute difference `1.52587890625e-4`.  Apart from the
+  new representative and schema, comparison with v3 is exact except for two
+  CPU reduction-order changes below `1e-19` in reported relative-L2 values.
+- The non-scoring report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_representative_v4_160a4e3f_20260730T1504ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V4.json`,
+  SHA-256
+  `cb7fc0476562469020edc25e144c1e387ef28bbf173663ac300eda67a80b6210`.
+  The run and runtime roots contain `SAFE_TO_DELETE`.  Focused validation
+  passes `59/59`; scoped Ruff, Python compilation, scorecard freshness, and
+  `git diff --check` pass.
+- This localizes the next raw-operand comparison without choosing a
+  production fix or changing a fixed denominator.  K=1 remains `28/34`
+  strict (`82.4%`), `32/34` topology, and `34/34` evaluated; K=4 remains
+  `41/60` direct (`68.3%`) and `9/15` all-class.
+
 ## 2026-07-30 case-22 live-versus-serialized noise-state boundary
 
 - The qualified shell-partition parent already establishes that physical
