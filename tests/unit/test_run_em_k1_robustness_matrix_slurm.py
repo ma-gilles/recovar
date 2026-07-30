@@ -785,6 +785,23 @@ def test_k1_relion_x_half_mstep_diagnostic_env_is_forwarded(tmp_path):
     assert "RECOVAR_K1_RELION_X_HALF_MSTEP=0" in (scratch / "submission.env").read_text()
 
 
+def test_relion_x_half_mstep_double_diagnostic_env_is_forwarded(tmp_path):
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="26",
+        extra_env={"RECOVAR_RELION_X_HALF_MSTEP_DOUBLE": "1"},
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    scripts = list((scratch / "jobs").glob("em_k1_matrix_26_*.sh"))
+    assert len(scripts) == 1
+    text = scripts[0].read_text()
+    assert "export RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1" in text
+    assert "RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1" in (
+        scratch / "submission.env"
+    ).read_text()
+
+
 def test_exact_local_packed_noise_chunk_target_env_is_forwarded(tmp_path):
     proc, scratch = _dry_run_launcher(
         tmp_path,
