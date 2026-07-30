@@ -13102,3 +13102,34 @@ thresholds, and all declared environment fields match.  It accepts only the
 single precision-switch difference.  It uses no fitted tolerance and computes
 no correlation.  Results remain pending; this predeclaration does not change
 the fixed K=1 or K=4 scorecards.
+
+## 2026-07-30 K=4 exact-device dependency retry
+
+The required K=4 A100
+`GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30` is GPU index 2 on
+`della-l07g2`.  At submission, unrelated job `11773705` owned index 2,
+unrelated jobs owned indices 0 and 1, and index 3 was free.  Job `11787017`
+is therefore scheduler-bound to `afterany:11773705` and requests two A100s
+on the exact node.  The expected first eligible allocation is indices 2 and
+3; the unchanged in-launcher UUID gate remains authoritative and exits 42
+before imports or science if the required physical GPU is absent.
+
+The launcher and pinned RELION binary SHA-256 values are
+`52732d32ad15832b0c2ea60388f7657a3f24ca279bed2d498e599d6dd1a40e56`
+and
+`c761b5660cfd84e4960f95f62b01fb23bccbbb9caba8fe388b80e383acd00a74`.
+RELION source remains clean at
+`6982c77a81f86b09503361c1836f45531e78feee`; the detached RECOVAR
+validation source remains clean at
+`7a7ea9ba41d85a325694c049678dd2a4b3eee1d9`.  Launcher shell syntax and all
+static hash gates passed, and output/factor directories were empty before
+submission.
+
+The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_authoritative_perturb53722_6982c77_20260729T113000ET`;
+its dependency-submission record has SHA-256
+`ef012b461d4790b7e5bb04e8131e6ab318844a668e31c3436f594a1f68afd880`.
+The run and runtime roots contain `SAFE_TO_DELETE`.  No running job or
+process was modified, cancelled, signalled, or suspended.  This is a
+non-scoring operand diagnostic; fixed K=4 remains 41/60 direct checks and
+9/15 all-class iterations pending authoritative science and audit.
