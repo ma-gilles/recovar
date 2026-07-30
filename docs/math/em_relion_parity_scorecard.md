@@ -1176,6 +1176,22 @@ factorial report SHA-256 is
 `d33970bdec969c0eba9d26c705c61ef4308b6b4f3eb65cb89f184dc849a71a32`.
 These diagnostics are non-scoring: K=1 remains 28/34 strict, 32/34
 topology, and 34/34 evaluated; K=4 remains 41/60 direct and 9/15 all-class.
+
+The next bounded diagnostic is additive RELION preprocessing capture patch
+0006.  It records the fixed cohort at raw input,
+normalized/rounded-shifted real, masked real, and unmasked/masked Fourier
+boundaries before and after optics correction.  Capture requires an explicit
+particle list, iteration, rank/follower cap, and byte cap; it supports only
+ordinary 2D single-body zero-mask runs, refuses overwrite, and reads no
+score, weight, reference, model, or map buffer.  Patch/source/binary SHA-256
+values are
+`a655a40e561167d1b39f1157d3ac3754751ac87e06448b3b5133bbca799517b4`,
+`6513f8a0dab566544b44ff117e0017dfbb5df2a466a4280df022a1d60ed92d7d`,
+and
+`982c15cfcdce94823c471228edef47839fa7d239ccac166c4ba66c829cd1f6ba`.
+The CUDA build and 76/76 focused tests pass.  Exact-device artifacts and the
+unchanged 3/3 FSC-AUC inertness gate are pending, so this preflight is
+non-scoring and proposes no production change.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

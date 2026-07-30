@@ -9363,6 +9363,41 @@ and `9/15` all-class.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 case-22 preprocessing-boundary preflight
+
+- The live-operand factorial makes the base corrected image the next causal
+  boundary: 14/14 particles are strict-majority dominated by that operand,
+  while translation phase is 0/14.  Existing captures start after
+  preprocessing, so a production change is not yet justified.
+- Frozen additive patch 0006 captures seven passive boundaries for the same
+  explicit cohort: raw input; normalized/rounded-shifted real; unmasked
+  Fourier before/after optics; masked real; and masked Fourier before/after
+  optics.  It reads no score, weight, reference, model, or map buffer.
+- The environment contract requires a non-empty explicit particle-ID list,
+  physical iteration, maximum particles per rank, expected followers, and
+  total byte cap.  Unsupported 3D, tomo, multibody, helical, random-mask, or
+  separate-reconstruction-image modes fail closed.  Existing artifacts are
+  never overwritten.
+- Patch SHA-256 is
+  `a655a40e561167d1b39f1157d3ac3754751ac87e06448b3b5133bbca799517b4`.
+  Forward and reverse application checks pass.  The CUDA 12.6/OpenMPI 4.1.6
+  incremental build passes; patched source/binary SHA-256 values are
+  `6513f8a0dab566544b44ff117e0017dfbb5df2a466a4280df022a1d60ed92d7d`
+  and
+  `982c15cfcdce94823c471228edef47839fa7d239ccac166c4ba66c829cd1f6ba`.
+- The fail-closed Python schema validator and static passive-patch guards pass
+  within a 76/76 focused capture/parity gate.  Scoped Ruff, import provenance,
+  and `git diff --check` pass.
+- Runtime gate root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_relion_preprocess_capture_gate_20260730T030000ET`;
+  it contains `SAFE_TO_DELETE`.  The external build root remains
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k1_case22_operand_capture_build_ac12ca86_20260729T234000ET`.
+- Exact-device 14-particle capture and unchanged 3/3 non-DC FSC-AUC inertness
+  remain pending.  Do not interpret build/schema qualification as scientific
+  boundary qualification.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
 ## 2026-07-29 case-22 captured norm/cross qualification
 
 - RELION job `11777114` completed the full exact-device science and sealed

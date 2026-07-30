@@ -12661,3 +12661,42 @@ and
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_production_diff2_operands_eulerfix_6de88fe3_20260730T011530ET`;
 all contain `SAFE_TO_DELETE`.  These diagnostics remain non-scoring.
+
+## 2026-07-30 case-22 preprocessing-boundary capture preflight
+
+The qualified live-operand factorial localizes the raw coarse-score residual
+to the base corrected image for 14/14 particles, but the existing operand
+artifact begins after preprocessing and therefore cannot distinguish stack
+loading, normalization/rounded shifting, soft masking, FFT, or optics
+correction.  Additive patch 0006 introduces a default-off, CUDA-only,
+schema-v1 capture at those boundaries.  It records raw input,
+normalized/rounded-shifted real image, unmasked Fourier data before and after
+optics correction, masked real image, and masked Fourier data before and
+after optics correction.  It reads no score, weight, projected reference,
+model, or map buffer.
+
+The capture fails closed unless the caller supplies a non-empty explicit
+particle-ID list, exact iteration, particle/follower caps, an existing output
+directory, and a total byte cap.  It is restricted to ordinary 2D,
+single-body, deterministic zero-mask runs; it refuses overwrite and seals
+each artifact by temporary-file rename.  The repository validator checks the
+complete byte layout, all seven stages, rounded offsets, mask geometry,
+identity hashes, fixed 128-thread soft-mask topology, cohort completeness,
+and absence of temporary artifacts.
+
+Patch SHA-256 is
+`a655a40e561167d1b39f1157d3ac3754751ac87e06448b3b5133bbca799517b4`.
+It applies forward to the patch-0005 index and reverse to the live external
+RELION diagnostic checkout.  An incremental CUDA 12.6/OpenMPI 4.1.6
+`refine_mpi` build passes; source and binary SHA-256 values are
+`6513f8a0dab566544b44ff117e0017dfbb5df2a466a4280df022a1d60ed92d7d`
+and
+`982c15cfcdce94823c471228edef47839fa7d239ccac166c4ba66c829cd1f6ba`.
+The focused capture/parity gate passes 76/76 tests, and scoped Ruff,
+provenance, and `git diff --check` pass.
+
+The exact-device 14-particle run and its unchanged three-map
+FSC-AUC-inertness gate are pending.  No preprocessing artifact is qualified
+and no production change is proposed at this preflight checkpoint.  This is
+non-scoring: fixed K=1 remains 28/34 strict, 32/34 topology, and 34/34
+evaluated; fixed K=4 remains 41/60 direct and 9/15 all-class.
