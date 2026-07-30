@@ -143,7 +143,7 @@ def _train_step(params: WHalfParametrization, opt_state: optax.OptState, batch: 
     # once here so `params + updates` is steepest descent (no-op on the real
     # log_sqrt_eigenvalues leaf).
     grad = jax.tree.map(jnp.conj, grad)
-    updates, opt_state = config.optimizer.update(grad, opt_state, params)
+    updates, opt_state = config.optimizer.update(grad, opt_state, params, value=loss)
     params = optax.apply_updates(params, updates)
     if config.project_mask:
         params = params.apply_masking(config.volume_shape, tensor_data.volume_mask)
@@ -376,10 +376,24 @@ def _as_half_volume_prior(W_prior, W_shape, volume_shape):
     return ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
 
 
-def _branch_optimizer(branch_learning_rate, gradient_clip_norm: float = 0.0):
+def _branch_optimizer(branch_learning_rate, gradient_clip_norm: float = 0.0, scheduler_patience: int = 1, scheduler_factor: float = 0.1):
+    transformations = [
+        optax.adam(branch_learning_rate),
+        optax.contrib.reduce_on_plateau(
+            factor=scheduler_factor,
+            patience = scheduler_patience,
+            rtol = 1e-4,
+            cooldown = 3,
+            #TODO: Scheduler should be fed the per epoch loss
+            # which requires seperating it from the optimizer update step.
+            # For now a large accumulation size approximates the per epoch loss.
+            accumulation_size=100,
+        )
+    ]
     if gradient_clip_norm and gradient_clip_norm > 0.0:
-        return optax.chain(optax.clip_by_global_norm(gradient_clip_norm), optax.adam(branch_learning_rate))
-    return optax.adam(branch_learning_rate)
+        transformations.insert(0, optax.clip_by_global_norm(gradient_clip_norm))
+
+    return optax.chain(*transformations)
 
 
 def fit(
@@ -503,17 +517,19 @@ def fit(
             "prior_loss": prior_loss,
             "grad_norm_mean": epoch_grad_norm / max(epoch_batches, 1),
             "W_norm": float(jnp.linalg.norm(W_current)),
+            "step_scaling": float(opt_state[-1]['U'].inner_state[-1].scale.real),
         }
         if gt_data is not None:
             row.update(gt_metrics.compute_eigenvector_metrics(W_current, gt_data, volume_shape))
         iteration_data.append(row)
         logger.info(
-            "SOLVAR epoch %d/%d loss=%.6e prior=%.6e grad_norm=%.6e",
+            "SOLVAR epoch %d/%d loss=%.6e prior=%.6e grad_norm=%.6e step scaling=%.2e",
             epoch + 1,
             int(n_epochs),
             row["loss_mean_batch_estimate"],
             row["prior_loss"],
             row["grad_norm_mean"],
+            row["step_scaling"],
         )
         if gt_data is not None:
             logger.info(
@@ -524,6 +540,11 @@ def fit(
                 row["gt_cosine_similarity"],
                 row["gt_fro_relative_error"],
             )
+
+
+        if row["step_scaling"] < 1e-4:
+            logger.info("SOLVAR epoch %d/%d step scaling below threshold, stopping early", epoch + 1, int(n_epochs))
+            break
 
     params = params.apply_masking(config.volume_shape, tensor_data.volume_mask) if config.project_mask else params
     W = loadings_from_state(params)
