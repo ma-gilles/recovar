@@ -12919,3 +12919,49 @@ and
 both contain `SAFE_TO_DELETE`.  This is a non-scoring causal diagnostic:
 K=1 remains 28/34 strict, 32/34 topology, and 34/34 evaluated; K=4 remains
 41/60 direct and 9/15 all-class.
+
+## 2026-07-30 case-22 inverse-noise shell partition
+
+The conditioning analyzer now includes a fixed shell-partition metric at
+effective-CTF threshold `0.01`.  It uses C++ `ROUND` shell labels and retains
+the actual RELION correction outside the valid mask.  Every non-actual arm
+uses RECOVAR CTF-times-scale squared; only the source of inverse noise is
+partitioned.  No scale, sign, threshold, shell boundary, or correlation is
+fitted.
+
+| Arm | Dominant | Median centered-energy removal |
+|---|---:|---:|
+| actual RELION | 14/14 | `85.2128%` |
+| RECOVAR all | 0/14 | `-0.1184%` |
+| RELION inverse noise, all shells | 14/14 | `85.1714%` |
+| RELION inverse noise, shells 1--4 | 14/14 | `85.1685%` |
+| RELION inverse noise, shells 5+ | 0/14 | `-0.1286%` |
+
+The bound iteration-1 model STAR writes scored shells 1--4 as `0.005805`,
+`0.003661`, `0.002303`, and `0.001193`; shell 5 is
+`7.535662e-04`.  This matches RELION's `0.001` metadata serialization
+boundary.  Classification is
+`inverse_noise_residual_is_confined_to_star_fixed_decimal_shells_1_through_4`.
+
+Report/completion SHA-256 values are
+`9d6b8cf39c9abe21c71d5c3d0dc0ef73b381566b439328748d92c32efa473073`
+and
+`ee851c8c1f19cc625f0de6b4869da9337fd75d117bc51aeebaecfa13d0f113ed`.
+Analyzer/test SHA-256 values are
+`e8b5df868ebbb3f255a09f2b7a53eefdafa994c88478b8baa9d122459a98c423`
+and
+`f47a088b7bdbbcf8b8138772a3154173874f00347082bbd346cf19d5b6c8c288`.
+The focused CPU gate passes 62/62 tests.  Run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_inverse_noise_shell_partition_v2_e9ce2357_20260730T0520ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_inverse_noise_shell_partition_v2_e9ce2357_20260730T0520ET`;
+both contain `SAFE_TO_DELETE`.
+
+Exact-device Slurm job `11785170` restarts RELION from the serialized
+iteration-0 optimiser/model/data/sampling STAR state and captures physical
+iteration-2 preprocessing plus coarse operands.  This directly tests the
+fresh-process versus serialized-restart precision boundary.  The job was
+pending for resources at submission.  No existing process or job was
+modified.  This evidence remains non-scoring, so K=1 remains 28/34 strict,
+32/34 topology, and 34/34 evaluated; K=4 remains 41/60 direct and 9/15
+all-class.

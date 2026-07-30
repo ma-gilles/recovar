@@ -9363,6 +9363,35 @@ and `9/15` all-class.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 case-22 inverse-noise shell partition
+
+- The fixed threshold-`0.01` shell intervention has dominance vector
+  `14,0,14,14,0` for actual RELION, RECOVAR-all, RELION inverse noise on all
+  shells, RELION inverse noise on shells 1--4, and RELION inverse noise on
+  shells 5+.
+- Median centered-energy removal is `85.2128%`, `-0.1184%`, `85.1714%`,
+  `85.1685%`, and `-0.1286%`, respectively.  Valid-pixel fraction is
+  `0.9911019849`--`1.0`, median `0.9958932238`.
+- The bound model STAR serializes scored shells 1--4 with six fixed decimal
+  places and crosses to scientific notation at shell 5.  RELION source
+  computes `1 / sigma2_noise[ires_remapped]`, copies it into the float
+  `corr_img`, then applies CTF-squared and scale-squared.
+- Classification:
+  `inverse_noise_residual_is_confined_to_star_fixed_decimal_shells_1_through_4`.
+  Report/completion SHA-256 values are
+  `9d6b8cf39c9abe21c71d5c3d0dc0ef73b381566b439328748d92c32efa473073`
+  and
+  `ee851c8c1f19cc625f0de6b4869da9337fd75d117bc51aeebaecfa13d0f113ed`.
+  The focused CPU gate passes 62/62 tests.
+- Exact-device Slurm job `11785170` restarts from the serialized
+  `run_it000_optimiser.star`, captures iteration-2 preprocessing and coarse
+  operands, and writes under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_serialized_it000_restart_e9ce2357_20260730T0500ET`.
+  It was pending for resources at submission.  No existing process or job
+  was modified.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 case-22 corr_img conditioning audit
 
 - Commit parent `d096e436` localizes the fixed 14-particle `corr_img`

@@ -10,6 +10,9 @@ from typing import Any
 
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.half_spectrum import (
+    make_shell_indices_half,
+)
 from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _map_relion_table,
     _translation_permutation,
@@ -59,6 +62,19 @@ ARM_LABELS = (
     "recovar_inverse_noise_only",
     "recovar_ctf_scale_squared_only",
     "recovar_inverse_noise_and_ctf_scale_squared",
+)
+SHELL_PARTITION_CLASSIFICATION = (
+    "inverse_noise_residual_is_confined_to_star_fixed_decimal_"
+    "shells_1_through_4"
+)
+SHELL_PARTITION_EFFECTIVE_CTF_THRESHOLD = 1.0e-2
+STAR_FIXED_DECIMAL_SHELLS = (1, 2, 3, 4)
+SHELL_PARTITION_ARM_LABELS = (
+    "actual_relion",
+    "recovar_all",
+    "relion_inverse_noise_all",
+    "relion_inverse_noise_shells_1_through_4",
+    "relion_inverse_noise_shells_5_plus",
 )
 
 
@@ -152,6 +168,171 @@ def conditioned_corr_img_factorial_values(
     return values, valid
 
 
+def inverse_noise_shell_partition_values(
+    *,
+    relion_corr_img: np.ndarray,
+    relion_effective_ctf: np.ndarray,
+    recovar_corr_img: np.ndarray,
+    recovar_effective_ctf: np.ndarray,
+    shell_indices: np.ndarray,
+    effective_ctf_threshold: float,
+) -> tuple[dict[str, np.ndarray], np.ndarray]:
+    """Partition the inverse-noise intervention across fixed shell cohorts."""
+
+    relion_corr = np.asarray(relion_corr_img, dtype=np.float64)
+    relion_ctf = np.asarray(relion_effective_ctf, dtype=np.float64)
+    recovar_corr = np.asarray(recovar_corr_img, dtype=np.float64)
+    recovar_ctf = np.asarray(recovar_effective_ctf, dtype=np.float64)
+    shells = np.asarray(shell_indices, dtype=np.int64)
+    _require(
+        relion_corr.shape
+        == relion_ctf.shape
+        == recovar_corr.shape
+        == recovar_ctf.shape
+        == shells.shape,
+        "inverse-noise shell-partition operand shapes differ",
+    )
+    _require(
+        np.all(shells >= 1),
+        "score shell partition unexpectedly contains the excluded origin",
+    )
+    threshold = float(effective_ctf_threshold)
+    _require(
+        np.isfinite(threshold) and threshold >= 0.0,
+        "effective CTF threshold must be finite and nonnegative",
+    )
+    _require(
+        np.all(np.isfinite(relion_corr))
+        and np.all(np.isfinite(relion_ctf))
+        and np.all(np.isfinite(recovar_corr))
+        and np.all(np.isfinite(recovar_ctf)),
+        "inverse-noise shell-partition operands must be finite",
+    )
+    valid = (np.abs(relion_ctf) > threshold) & (
+        np.abs(recovar_ctf) > threshold
+    )
+    _require(np.any(valid), "effective CTF threshold excludes every pixel")
+
+    relion_inverse_noise = relion_corr[valid] / relion_ctf[valid] ** 2
+    recovar_inverse_noise = recovar_corr[valid] / recovar_ctf[valid] ** 2
+    _require(
+        np.all(np.isfinite(relion_inverse_noise))
+        and np.all(np.isfinite(recovar_inverse_noise)),
+        "partitioned inverse-noise weight is non-finite",
+    )
+    valid_shells = shells[valid]
+    low_shell = np.isin(valid_shells, STAR_FIXED_DECIMAL_SHELLS)
+    high_shell = valid_shells >= 5
+    _require(
+        np.all(low_shell | high_shell),
+        "fixed shell cohorts do not cover every valid score pixel",
+    )
+
+    values = {
+        label: relion_corr.copy() for label in SHELL_PARTITION_ARM_LABELS
+    }
+    recovar_ctf_squared = recovar_ctf[valid] ** 2
+    values["recovar_all"][valid] = recovar_corr[valid]
+    values["relion_inverse_noise_all"][valid] = (
+        relion_inverse_noise * recovar_ctf_squared
+    )
+    values["relion_inverse_noise_shells_1_through_4"][valid] = (
+        np.where(low_shell, relion_inverse_noise, recovar_inverse_noise)
+        * recovar_ctf_squared
+    )
+    values["relion_inverse_noise_shells_5_plus"][valid] = (
+        np.where(high_shell, relion_inverse_noise, recovar_inverse_noise)
+        * recovar_ctf_squared
+    )
+    return values, valid
+
+
+def classify_shell_partition(
+    *,
+    qualified: bool,
+    dominated: dict[str, int],
+    expected_particles: int,
+) -> str:
+    """Classify the predeclared shell intervention without fitted parameters."""
+
+    if not qualified:
+        return "inverse_noise_shell_partition_inputs_not_qualified"
+    expected = {
+        "actual_relion": expected_particles,
+        "recovar_all": 0,
+        "relion_inverse_noise_all": expected_particles,
+        "relion_inverse_noise_shells_1_through_4": expected_particles,
+        "relion_inverse_noise_shells_5_plus": 0,
+    }
+    if dominated == expected:
+        return SHELL_PARTITION_CLASSIFICATION
+    return "inverse_noise_residual_is_not_confined_to_fixed_decimal_shells"
+
+
+def _sigma2_noise_tokens(model_star: Path) -> dict[int, str]:
+    """Read the raw sigma2-noise tokens from the first optics-group block."""
+
+    lines = Path(model_star).read_text().splitlines()
+    in_block = False
+    found_column = False
+    result: dict[int, str] = {}
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "data_model_optics_group_1":
+            in_block = True
+            continue
+        if not in_block:
+            continue
+        if stripped.startswith("data_") and result:
+            break
+        if stripped.startswith("_rlnSigma2Noise"):
+            found_column = True
+            continue
+        if not found_column or not stripped:
+            continue
+        fields = stripped.split()
+        if len(fields) != 3:
+            if result:
+                break
+            continue
+        try:
+            shell = int(fields[0])
+            float(fields[2])
+        except ValueError:
+            if result:
+                break
+            continue
+        result[shell] = fields[2]
+    _require(result, "RELION sigma2-noise STAR block is missing")
+    return result
+
+
+def _validate_star_precision_partition(model_star: Path) -> dict[str, Any]:
+    """Bind shells 1--4 to RELION's fixed-decimal serialization boundary."""
+
+    tokens = _sigma2_noise_tokens(model_star)
+    for shell in STAR_FIXED_DECIMAL_SHELLS:
+        _require(shell in tokens, f"RELION sigma2-noise shell {shell} missing")
+        _require(
+            "e" not in tokens[shell].lower()
+            and float(tokens[shell]) >= 1.0e-3,
+            f"RELION shell {shell} is not fixed-decimal at the 0.001 boundary",
+        )
+    _require(5 in tokens, "RELION sigma2-noise shell 5 missing")
+    _require(
+        "e" in tokens[5].lower() and 0.0 < float(tokens[5]) < 1.0e-3,
+        "RELION shell 5 does not cross to scientific serialization",
+    )
+    return {
+        "fixed_decimal_shells": list(STAR_FIXED_DECIMAL_SHELLS),
+        "first_scientific_shell": 5,
+        "serialization_boundary": 1.0e-3,
+        "raw_sigma2_noise_tokens": {
+            str(shell): tokens[shell] for shell in range(0, 6)
+        },
+    }
+
+
 def classify_conditioning_audit(
     *,
     qualified: bool,
@@ -206,6 +387,9 @@ def build_report(
             _sha256(binding_path) == binding.get("sha256"),
             f"{binding_name} hash changed",
         )
+    star_precision_partition = _validate_star_precision_partition(
+        Path(parent["relion_model_star"]["path"])
+    )
 
     ctf_path = Path(parent["ctf_pickle"]["path"])
     ctf_half, voxel_size = _load_ctf_half(
@@ -297,6 +481,10 @@ def build_report(
             * recovar["half_weights"]
             * recovar["ctf2_data"]
         )
+        shell_indices = np.asarray(
+            make_shell_indices_half((full_image_size, full_image_size)),
+            dtype=np.int64,
+        )[window_indices]
 
         translation_permutation, translation_mapping = _translation_permutation(
             component.translations,
@@ -372,6 +560,7 @@ def build_report(
                     effective_ctf_imaginary_max_abs
                 ),
                 "thresholds": thresholds,
+                "shell_partition": {},
                 "translation_mapping": translation_mapping,
                 "artifact_paths": {
                     key: str(path.resolve()) for key, path in paths.items()
@@ -379,6 +568,54 @@ def build_report(
                 "artifact_sha256": parent_row["artifact_sha256"],
             }
         )
+        shell_values, shell_valid = inverse_noise_shell_partition_values(
+            relion_corr_img=relion_corr,
+            relion_effective_ctf=relion_effective_ctf,
+            recovar_corr_img=recovar_corr,
+            recovar_effective_ctf=recovar_effective_ctf,
+            shell_indices=shell_indices,
+            effective_ctf_threshold=(
+                SHELL_PARTITION_EFFECTIVE_CTF_THRESHOLD
+            ),
+        )
+        shell_bases = {
+            label: (
+                -relion_pixel_native
+                * correction
+                / (
+                    float(full_image_size**2)
+                    * recovar["half_weights"]
+                )
+            )
+            for label, correction in shell_values.items()
+        }
+        _require(
+            _relative_l2(shell_bases["actual_relion"], live_base)
+            <= ACTUAL_ARM_REPLAY_RELATIVE_L2,
+            "shell-partition actual arm does not replay the live base",
+        )
+        shell_counterfactuals = {}
+        for label, base in shell_bases.items():
+            shifted = base[np.newaxis, :] * recovar_phase
+            swapped_norm, swapped_cross = recovar_score_components(
+                recovar["references"],
+                shifted,
+                recovar["ctf2_data"],
+                recovar["half_weights"],
+            )
+            shell_counterfactuals[label] = reference_swap_counterfactual(
+                baseline_residual,
+                swapped_norm + swapped_cross + selected_raw,
+            )
+        particles[-1]["shell_partition"] = {
+            "effective_ctf_threshold": (
+                SHELL_PARTITION_EFFECTIVE_CTF_THRESHOLD
+            ),
+            "valid_pixel_count": int(np.count_nonzero(shell_valid)),
+            "total_pixel_count": int(shell_valid.size),
+            "valid_pixel_fraction": float(np.mean(shell_valid)),
+            "counterfactuals": shell_counterfactuals,
+        }
 
     dominated_by_threshold = {}
     valid_fraction_by_threshold = {}
@@ -409,8 +646,22 @@ def build_report(
         len(particles) == EXPECTED_PARTICLES,
         "conditioning audit particle count changed",
     )
+    shell_partition_dominated = {
+        arm: sum(
+            row["shell_partition"]["counterfactuals"][arm][
+                "live_reference_dominated"
+            ]
+            for row in particles
+        )
+        for arm in SHELL_PARTITION_ARM_LABELS
+    }
+    shell_partition_classification = classify_shell_partition(
+        qualified=True,
+        dominated=shell_partition_dominated,
+        expected_particles=EXPECTED_PARTICLES,
+    )
     return {
-        "schema": "em-k1-corr-img-conditioning-v1",
+        "schema": "em-k1-corr-img-conditioning-v2",
         "status": "complete",
         "classification_ready": True,
         "classification": classification,
@@ -442,6 +693,31 @@ def build_report(
                 valid_fraction_by_threshold
             ),
         },
+        "shell_partition_metric": {
+            "classification": shell_partition_classification,
+            "effective_ctf_threshold": (
+                SHELL_PARTITION_EFFECTIVE_CTF_THRESHOLD
+            ),
+            "fixed_decimal_shells": list(STAR_FIXED_DECIMAL_SHELLS),
+            "evaluated_particles": len(particles),
+            "expected_particles": EXPECTED_PARTICLES,
+            "live_reference_dominated": shell_partition_dominated,
+            "valid_pixel_fraction": _summarize(
+                [
+                    row["shell_partition"]["valid_pixel_fraction"]
+                    for row in particles
+                ]
+            ),
+            "star_precision_partition": star_precision_partition,
+            "metric_policy": (
+                "fixed effective-CTF threshold 0.01; C++ ROUND radial "
+                "shells; swap RELION inverse noise on shells 1-4 versus "
+                "shells 5+ while using RECOVAR CTF-scale squared; retain "
+                "actual RELION correction outside the valid mask; centered "
+                "residual-energy removal; no fitted scale/sign; no "
+                "correlation"
+            ),
+        },
         "full_image_size": full_image_size,
         "voxel_size": voxel_size,
         "parent_analysis": {
@@ -462,6 +738,11 @@ def build_report(
                 "The fixed 0.01 threshold excludes the most poorly "
                 "conditioned divisions while retaining more than 99% of the "
                 "captured score window in the authoritative fixture."
+            ),
+            (
+                "Shells 1-4 are the scored shells serialized with six fixed "
+                "decimal places in the bound RELION model STAR; shell 5 is "
+                "the first shell serialized in scientific notation."
             ),
         ],
     }

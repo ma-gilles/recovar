@@ -1257,6 +1257,22 @@ the valid pixel fraction has minimum `0.9911019849` and median
 report SHA-256 is
 `00336d64aabf166082860c6d62721128a6eddbd782dd99da742161e2d1234e12`.
 This is non-scoring and leaves the fixed K=1 and K=4 totals unchanged.
+
+The predeclared shell-partition extension applies the fixed `0.01`
+effective-CTF gate and uses C++ `ROUND` radial shells.  Its dominance vector
+is `14/14, 0/14, 14/14, 14/14, 0/14` for actual RELION, RECOVAR-all,
+RELION-inverse-noise-all, RELION inverse noise on shells 1--4 only, and
+RELION inverse noise on shells 5+ only.  Shells 1--4 are exactly the scored
+sigma2-noise values serialized with six fixed decimal places in the bound
+RELION model STAR; shell 5 is the first scientific-notation value.
+Classification is
+`inverse_noise_residual_is_confined_to_star_fixed_decimal_shells_1_through_4`.
+Report SHA-256 is
+`9d6b8cf39c9abe21c71d5c3d0dc0ef73b381566b439328748d92c32efa473073`.
+The focused gate passes 62/62 tests.  Serialized-it000 restart job `11785170`
+was submitted on the required exact-device node to test whether reloading
+the rounded STAR state closes the residual.  This remains non-scoring; the
+fixed K=1 and K=4 totals do not change.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
