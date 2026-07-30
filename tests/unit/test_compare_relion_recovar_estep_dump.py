@@ -245,6 +245,61 @@ def test_compare_relion_recovar_estep_dump_matches_candidate_keys(tmp_path):
     assert result["common_combined_log_prior_centered_diff"]["max_abs"] == 0.0
 
 
+def test_compare_explicit_adaptive_pass0_coarse_grid(tmp_path):
+    relion_dir = tmp_path / "relion"
+    relion_dir.mkdir()
+    _write_flat_int(relion_dir / "pass0_coarse_candidate_rot_idx.bin", [0, 0, 1, 1])
+    _write_flat_int(relion_dir / "pass0_coarse_candidate_trans_idx.bin", [0, 1, 0, 1])
+    _write_flat_int(relion_dir / "pass0_coarse_candidate_class_idx.bin", [0, 0, 0, 0])
+    _write_flat_int(relion_dir / "pass0_coarse_candidate_in_threshold_set.bin", [0, 0, 1, 1])
+    _write_flat_real(
+        relion_dir / "pass0_coarse_candidate_weight_normalized.bin",
+        [0.1, 0.2, 0.3, 0.4],
+    )
+    _write_flat_real(relion_dir / "pass0_coarse_raw_diff2.bin", [12.0, 11.0, 10.0, 9.0])
+    _write_flat_real(relion_dir / "pass0_coarse_log_weight_preexp.bin", [-4.0, -3.0, -2.0, -1.0])
+    # Explicit pass selection must not mix the incompatible fine table.
+    _write_flat_int(relion_dir / "pass1_acc_rot_id.bin", [99])
+    _write_flat_int(relion_dir / "pass1_acc_rot_idx.bin", [0])
+    _write_flat_int(relion_dir / "pass1_acc_trans_idx.bin", [0])
+    _write_flat_real(relion_dir / "pass1_candidate_weight_normalized.bin", [1.0])
+    _write_flat_real(relion_dir / "pass1_exp_Mweight_raw_preprior.bin", [-100.0])
+
+    recovar_npz = tmp_path / "recovar_significance.npz"
+    scores_pre = np.array([[-12.0, -11.0], [-10.0, -9.0]], dtype=np.float64)
+    scores_with = np.array([[-4.0, -3.0], [-2.0, -1.0]], dtype=np.float64)
+    np.savez_compressed(
+        recovar_npz,
+        original_index=np.int64(206),
+        local_index=np.int64(96),
+        current_size=np.int64(66),
+        class_assignment=np.int64(0),
+        scores_pre_prior_per_class=scores_pre[None],
+        scores_with_prior_per_class=scores_with[None],
+        weights_per_class=np.array([[[0.1, 0.2], [0.3, 0.4]]], dtype=np.float64),
+        rotations=np.broadcast_to(np.eye(3), (2, 3, 3)).copy(),
+        rotation_log_prior=np.zeros((1, 2), dtype=np.float64),
+        translation_log_prior=np.zeros(2, dtype=np.float64),
+    )
+
+    result = compare_dumps(
+        relion_dir,
+        recovar_npz,
+        relion_firstiter_pass="pass0",
+        recovar_class_index=0,
+        match_mode="global",
+    )
+
+    assert result["relion_selected_field"] == "explicit_adaptive_grid:pass0_coarse:class0"
+    assert result["relion_generic_candidate_prefix"] == "pass0_coarse"
+    assert result["common_candidate_count"] == 4
+    assert result["candidate_jaccard"] == 1.0
+    assert result["relion_top_key"] == [1, 1]
+    assert result["recovar_top_key"] == [1, 1]
+    assert result["common_score_pre_prior_centered_diff"]["max_abs"] == 0.0
+    assert result["common_score_with_prior_centered_diff"]["max_abs"] == 0.0
+
+
 def test_compare_relion_recovar_estep_dump_reports_both_engines_top_candidate_terms(tmp_path):
     relion_dir = tmp_path / "relion"
     relion_dir.mkdir()

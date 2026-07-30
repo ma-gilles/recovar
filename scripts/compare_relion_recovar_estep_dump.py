@@ -832,6 +832,8 @@ def _candidate_table_from_relion(
         # arrays. Keep every generic candidate field on fine pass1 when it is
         # available instead of allowing sorted suffix lookup to mix passes.
         generic_candidate_prefix = None
+        adaptive_pass0 = False
+        score_with_override = None
         if firstiter_pass is None:
             generic_candidate_prefix = (
                 "pass1"
@@ -844,7 +846,26 @@ def _candidate_table_from_relion(
                 return _get_by_suffix_from_prefix(payload, name, generic_candidate_prefix)
             return _get_by_suffix(payload, name)
 
-        if firstiter_pass == "pass1":
+        if firstiter_pass == "pass0" and all(
+            name in payload
+            for name in (
+                "pass0_coarse_candidate_rot_idx",
+                "pass0_coarse_candidate_trans_idx",
+                "pass0_coarse_candidate_weight_normalized",
+                "pass0_coarse_raw_diff2",
+            )
+        ):
+            adaptive_pass0 = True
+            generic_candidate_prefix = "pass0_coarse"
+            rot_id = payload["pass0_coarse_candidate_rot_idx"]
+            compact_rot_idx = rot_id
+            rot_idx = rot_id
+            trans_idx = payload["pass0_coarse_candidate_trans_idx"]
+            coarse_trans_idx = trans_idx
+            prob = payload["pass0_coarse_candidate_weight_normalized"]
+            score_pre = payload["pass0_coarse_raw_diff2"]
+            score_with_override = payload.get("pass0_coarse_log_weight_preexp")
+        elif firstiter_pass == "pass1":
             generic_candidate_prefix = "pass1"
             rot_id = _get_by_suffix_from_prefix(payload, "firstiter_cc_raw_rot_id", "pass1")
             compact_rot_idx = _get_by_suffix_from_prefix(
@@ -878,8 +899,12 @@ def _candidate_table_from_relion(
         rot_prior = generic_candidate_field("candidate_orientation_log_prior")
         trans_prior = generic_candidate_field("candidate_offset_log_prior")
         combined_prior = generic_candidate_field("candidate_combined_log_prior")
-        candidate_class_idx = generic_candidate_field("candidate_class_idx")
-        reconstruction_mask = generic_candidate_field("candidate_in_reconstruction_set")
+        if adaptive_pass0:
+            candidate_class_idx = payload.get("pass0_coarse_candidate_class_idx")
+            reconstruction_mask = payload.get("pass0_coarse_candidate_in_threshold_set")
+        else:
+            candidate_class_idx = generic_candidate_field("candidate_class_idx")
+            reconstruction_mask = generic_candidate_field("candidate_in_reconstruction_set")
         firstiter_raw_preonehot = score_pre if firstiter_pass == "pass1" else None
         implicit_firstiter = None
         if rot_idx is None:
@@ -917,8 +942,15 @@ def _candidate_table_from_relion(
                 prefer_prefix="pass1",
             )
         rot_matrices = None
-        rotation_count = int(implicit_firstiter["rotation_count"]) if implicit_firstiter is not None else None
-        if firstiter_pass == "pass1":
+        if implicit_firstiter is not None:
+            rotation_count = int(implicit_firstiter["rotation_count"])
+        elif adaptive_pass0:
+            rotation_count = int(np.max(np.asarray(rot_idx, dtype=np.int64))) + 1
+        else:
+            rotation_count = None
+        if adaptive_pass0:
+            selected_field = "explicit_adaptive_grid:pass0_coarse"
+        elif firstiter_pass == "pass1":
             selected_field = "explicit_firstiter_cc_grid:pass1"
         else:
             selected_field = "implicit_firstiter_cc_grid:pass0" if implicit_firstiter is not None else "all_candidates"
@@ -1033,6 +1065,8 @@ def _candidate_table_from_relion(
         score_with = score_pre_trimmed + combined_prior_trimmed
     else:
         score_with = score_pre_trimmed.copy()
+    if prefixed_table is None and score_with_override is not None:
+        score_with = trim_or_nan(score_with_override)
     if not np.any(np.isfinite(score_with)):
         score_with = trim_or_nan(_get_by_suffix(payload, "coarse_log_weight_preexp"))
     if reconstruction_only and reconstruction_mask is not None:
