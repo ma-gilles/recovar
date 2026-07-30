@@ -594,6 +594,8 @@ def _maybe_dump_k_class_significance_batch(
     target_scores_with_prior_per_class=None,
     projected_reference_rotation_ids=None,
     projected_reference_per_class=None,
+    projected_reference_norm_score_per_class=None,
+    projected_cross_score_per_class=None,
     shifted_data=None,
     ctf2_data=None,
     window_indices=None,
@@ -772,6 +774,29 @@ def _maybe_dump_k_class_significance_batch(
                 )
             save_kwargs["projected_reference_rotation_ids"] = projection_ids
             save_kwargs["projected_reference_per_class"] = projection_values.astype(np.complex128)
+            norm_scores = np.asarray(projected_reference_norm_score_per_class)
+            cross_scores = np.asarray(projected_cross_score_per_class)
+            expected_component_shape = (
+                n_classes,
+                local_indices.shape[0],
+                projection_ids.size,
+                n_trans,
+            )
+            if (
+                norm_scores.shape != expected_component_shape
+                or cross_scores.shape != expected_component_shape
+            ):
+                raise ValueError(
+                    "projected score components must both have shape "
+                    f"{expected_component_shape}, got "
+                    f"{norm_scores.shape} and {cross_scores.shape}",
+                )
+            save_kwargs["projected_reference_norm_score_per_class"] = norm_scores[
+                :, local_pos
+            ].astype(np.float64)
+            save_kwargs["projected_cross_score_per_class"] = cross_scores[
+                :, local_pos
+            ].astype(np.float64)
         np.savez_compressed(out_path, **save_kwargs)
 
 
@@ -2448,6 +2473,8 @@ def _compute_k_class_significance_batched(
                 target_local_positions_for_dump = dump_target_local_positions
             projected_reference_rotation_ids = None
             projected_reference_per_class = None
+            projected_reference_norm_score_per_class = None
+            projected_cross_score_per_class = None
             requested_projection_rotations = sorted(
                 parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_PROJECTION_ROTATIONS") or (),
             )
@@ -2462,14 +2489,61 @@ def _compute_k_class_significance_batched(
                     )
                 projection_rotations = jnp.asarray(rotations[projected_reference_rotation_ids])
                 projection_values = []
+                projection_norm_scores = []
+                projection_cross_scores = []
                 for class_index, mean_for_proj in enumerate(means_for_proj):
-                    projected_half, _ = _project_block(class_index, mean_for_proj, projection_rotations)
+                    projected_half, projected_abs2 = _project_block(
+                        class_index,
+                        mean_for_proj,
+                        projection_rotations,
+                    )
                     if use_window:
                         projected_half = projected_half[:, window_indices]
+                        projected_abs2 = projected_abs2[:, window_indices]
                     if not use_float64_scoring:
                         projected_half = projected_half.astype(jnp.complex64)
+                        projected_abs2 = projected_abs2.astype(jnp.float32)
+                    score_weights = half_weights_windowed if use_window else half_weights
+                    weighted_projected = projected_half * score_weights
+                    weighted_projected_abs2 = projected_abs2 * score_weights
+                    component_cross = (
+                        -2.0
+                        * jnp.matmul(
+                            jnp.conj(shifted_data),
+                            weighted_projected.T,
+                            precision=jax.lax.Precision.HIGHEST,
+                        ).real
+                    )
+                    component_cross = component_cross.reshape(
+                        batch_size,
+                        n_trans,
+                        projected_reference_rotation_ids.size,
+                    ).swapaxes(1, 2)
+                    component_norm = jnp.matmul(
+                        ctf2_data,
+                        weighted_projected_abs2.T,
+                        precision=jax.lax.Precision.HIGHEST,
+                    )
+                    component_norm = jnp.broadcast_to(
+                        component_norm[..., None],
+                        component_cross.shape,
+                    )
                     projection_values.append(np.asarray(projected_half, dtype=np.complex128))
+                    projection_norm_scores.append(
+                        np.asarray(-0.5 * component_norm, dtype=np.float64)
+                    )
+                    projection_cross_scores.append(
+                        np.asarray(-0.5 * component_cross, dtype=np.float64)
+                    )
                 projected_reference_per_class = np.stack(projection_values, axis=0)
+                projected_reference_norm_score_per_class = np.stack(
+                    projection_norm_scores,
+                    axis=0,
+                )
+                projected_cross_score_per_class = np.stack(
+                    projection_cross_scores,
+                    axis=0,
+                )
             _maybe_dump_k_class_significance_batch(
                 experiment_dataset=experiment_dataset,
                 indices=indices,
@@ -2496,6 +2570,10 @@ def _compute_k_class_significance_batched(
                 target_scores_with_prior_per_class=target_scores_with_prior_per_class,
                 projected_reference_rotation_ids=projected_reference_rotation_ids,
                 projected_reference_per_class=projected_reference_per_class,
+                projected_reference_norm_score_per_class=(
+                    projected_reference_norm_score_per_class
+                ),
+                projected_cross_score_per_class=projected_cross_score_per_class,
                 shifted_data=shifted_data,
                 ctf2_data=ctf2_data,
                 window_indices=window_indices,
