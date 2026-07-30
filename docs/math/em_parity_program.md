@@ -13005,3 +13005,64 @@ import provenance pass, and the analyzer is committed at `5a4bb452`.
 The unchanged frozen scorecard remains K=1 28/34 strict, 32/34 topology, and
 34/34 evaluated; K=4 remains 41/60 direct and 9/15 all-class until the
 authoritative jobs complete and unchanged suite auditors pass.
+
+Post-science CPU audits are scheduler-bound to both authoritative arms.
+Job `11786265` is `afterok:11785428` for the serialized-iteration-0 route,
+and job `11786266` is `afterok:11785547` for the direct
+serialized-iteration-1 route.  Their launcher SHA-256 values are
+`539e0c3c8776e9e14de46c25c822e412c54a91f811d5bc287bbc95f7080630f9`
+and
+`7a36d1a53d4ea27934fa9f1a598b76ceeb2b62c04ab8bbf66dfeff38f6e4b424`.
+Each refuses existing outputs, re-hashes all fixed parent maps and GT, binds
+the exact science job and GPU UUID, and exits nonzero unless the full
+`14/14 + 14/14 + 3/3 + 3/3` score/map contract passes.
+
+## 2026-07-30 case-26 double cross-half M-step diagnostic
+
+Frozen case 26 passes the numbered topology gate but fails final map parity.
+A bounded diagnostic therefore enabled only the existing default-off
+`RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1` path, which accumulates the cross-half
+M-step in double precision.  Default behavior was unchanged.  The exact
+fixed fixture, autonomous trajectory, paired same-allocation RELION run,
+grid-off finalization, and frozen FSC thresholds were retained.
+
+Science job `11786017` completed `0:0` in 25m41s on
+`della-h21g4`; setup `11786016` and summary `11786018` also completed
+`0:0`.  RECOVAR converged at numbered iteration 11 and ran exactly one valid
+final all-data pass at size 128.  Strict audit job `11786163` then failed
+closed with FSC status 2 and intermediate/topology status 0.
+
+| Gate | Frozen case-26 baseline | Double-M-step diagnostic | Result |
+|---|---:|---:|---|
+| final merged cross-engine FSC-AUC | `0.954913646364` | `0.882003656423` | worsened by `-0.072909989941` |
+| final RECOVAR-minus-RELION GT FSC-AUC | `+0.010098946817` | `+0.008117589467` | positive but lower |
+| numbered size/HEALPix topology | pass | 11/11 exact | unchanged |
+| earliest numbered failure | final only | iteration 9 GT delta `-0.002415216748` | regressed earlier |
+
+The numbered cross-engine FSC-AUC remains above threshold through iteration
+9 (`0.995273271807`), but its GT delta is already below the fixed `-0.002`
+limit.  Iteration 10 fails both cross-engine FSC-AUC
+(`0.994951159773`) and GT delta (`-0.002800277475`); iteration 11 also
+fails both (`0.994687546452`, `-0.002071402480`).  The final cross-engine
+FSC-AUC of `0.882003656423` is far below the fixed `0.995` gate.  This is
+not a repair: double cross-half accumulation amplifies late-trajectory and
+final-map divergence despite exact scheduling.
+
+The FSC JSON, shellwise NPZ, topology JSON, and audit-status SHA-256 values
+are
+`b1211781255bb6bacb3f22e0a133a13a2f73c49b6d0a4e98a6647262c36fc56a`,
+`b1f0f829d4a79719cd0b6ef27f775ca00c1bd0467c2b9285a3283b8aa9bbf7fb`,
+`3a5fa670c8313423c2c0eda810a02cad64f348580964dcdd7028cc4fc5614f47`,
+and
+`3b82f1ad1e85964bec96d45da75c8f2d5a6750a556c4a6d4d14977fcdeb70dc0`.
+The evidence root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_xhalf_double_34770d82_20260730T054700ET`,
+with `SAFE_TO_DELETE`; its runtime root under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/` also has
+`SAFE_TO_DELETE`.
+
+The fail-closed v10 proposal job `11786399` is
+`DependencyNeverSatisfied` because audit `11786163` failed.  No proposal
+ledger was emitted and no checked scorecard file was modified.  Fixed K=1
+therefore remains 28/34 strict, 32/34 topology, and 34/34 evaluated; fixed
+K=4 remains 41/60 direct and 9/15 all-class.
