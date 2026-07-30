@@ -12965,3 +12965,43 @@ pending for resources at submission.  No existing process or job was
 modified.  This evidence remains non-scoring, so K=1 remains 28/34 strict,
 32/34 topology, and 34/34 evaluated; K=4 remains 41/60 direct and 9/15
 all-class.
+
+## 2026-07-30 case-22 serialized-restart score and map gates
+
+The serialized-restart result is governed by two checked-in, predeclared
+analyzers.  The score analyzer first requires the same fixed 14-particle
+cohort to pass 14/14 strict-majority residual removal and 14/14 absolute
+centered-score gates (`p95 <= 1e-4`, `max < 1e-3`).  The map analyzer refuses
+unqualified score input, then evaluates exactly three signed FSC-AUC
+comparisons: half 1, half 2, and their merged average.  A complete positive
+classification requires:
+
+| Fixed map metric | Passing | Evaluated | Rule |
+|---|---:|---:|---|
+| RECOVAR-to-restart parity improves over fresh RELION | pending | 3 | restart-minus-fresh FSC-AUC `> 0` |
+| restart RELION does not regress against GT | pending | 3 | restart-minus-fresh GT FSC-AUC `>= 0` |
+
+All shellwise FSC curves and input SHA-256 values are written to the JSON
+report.  RELION maps are converted with
+`recovar.utils.helpers.load_relion_volume`; RECOVAR and GT maps use their
+native frame.  No tolerance, scale, sign, or shell boundary is fitted, and
+correlation is not computed.
+
+The two authoritative exact-device arms are job `11785428`, which restarts
+from serialized iteration 0, and job `11785547`, which restarts directly from
+serialized iteration 1 and therefore avoids an intervening iteration-1
+recomputation.  Both require A100 UUID
+`GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a`.  The earlier job `11785170` is
+bound to a stale launcher hash and will fail closed before science; it was not
+cancelled or signalled.
+
+The map analyzer and its unit test have SHA-256 values
+`0ea3f6995fe5eada23f1475568c313b8558a5e4df79e9a7b3a6d1c9950d6d5aa`
+and
+`fdb37e9bdfed69b78fadd7f17f60d669a6c287831b4137e6caba68dce1177dcf`.
+The focused map/boundary/trajectory gate passes 25/25 tests, scoped Ruff and
+import provenance pass, and the analyzer is committed at `5a4bb452`.
+
+The unchanged frozen scorecard remains K=1 28/34 strict, 32/34 topology, and
+34/34 evaluated; K=4 remains 41/60 direct and 9/15 all-class until the
+authoritative jobs complete and unchanged suite auditors pass.
