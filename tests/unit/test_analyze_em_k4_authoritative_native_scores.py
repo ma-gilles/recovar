@@ -443,6 +443,72 @@ def test_target_family_weight_components_telescope_exactly() -> None:
     ] == "pre_prior_data_path"
 
 
+def test_normalized_mass_components_telescope_exactly() -> None:
+    log_two = np.log(2.0)
+    log_four = np.log(4.0)
+    stage_scores = {
+        "native_production_score": np.asarray([0.0, 0.0, 0.0]),
+        "native_data_then_prior_score": np.asarray(
+            [log_two, 0.0, 0.0]
+        ),
+        "recovar_pre_prior_with_native_priors_score": np.asarray(
+            [log_four, 0.0, 0.0]
+        ),
+        "recovar_orientation_prior_score": np.asarray(
+            [log_four, 0.0, 0.0]
+        ),
+        "recovar_translation_prior_score": np.asarray(
+            [log_four, 0.0, 0.0]
+        ),
+        "recovar_dumped_combined_score": np.asarray(
+            [log_four, 0.0, 0.0]
+        ),
+    }
+    native_mass = analyzer._stable_softmax(
+        stage_scores["native_production_score"]
+    )
+    recovar_mass = analyzer._stable_softmax(
+        stage_scores["recovar_dumped_combined_score"]
+    )
+    expected_l1 = float(
+        np.sum(np.abs(recovar_mass - native_mass))
+    )
+    report = analyzer._normalized_mass_component_telescope(
+        stage_scores=stage_scores,
+        recovar_rotation_row=np.asarray([10, 10, 20]),
+        native_rotation_local=np.asarray([1, 1, 2]),
+        native_candidate_index=np.asarray([7, 8, 9]),
+        translation_id=np.asarray([1, 2, 1]),
+        selected_rotation=10,
+        selected_translations=(1, 3),
+        queued_translations=(1, 2),
+        expected_final_l1=expected_l1,
+        expected_final_total_variation=0.5 * expected_l1,
+    )
+
+    assert report["candidate_count"] == 3
+    assert report["target_rotation_candidate_count"] == 2
+    assert report["missing_selected_rotation_rows"] == []
+    assert report["final_l1_mass_delta"] == expected_l1
+    assert report["final_total_variation"] == 0.5 * expected_l1
+    assert report["candidate_telescoping_closure"]["max_abs"] == 0.0
+    assert report["component_signed_replay_residual"] == 0.0
+    assert report["cross_component_cancellation_fraction"] == 0.0
+    assert set(report["ranked_components"][:2]) == {
+        "native_float32_operation_order",
+        "pre_prior_data_path",
+    }
+    assert report["components"]["orientation_prior_operand"][
+        "l1_mass_contribution"
+    ] == 0.0
+    assert report["missing_selected_translation_ids"] == [3]
+    assert report["missing_queued_translation_ids"] == []
+    assert report["selected_candidates"][0]["translation_id"] == 1
+    assert report["selected_candidates"][0][
+        "telescoping_closure_residual"
+    ] == 0.0
+
+
 def test_target_score_offset_attribution_closes_exact_decomposition() -> None:
     report = analyzer.target_score_offset_attribution(
         min_diff2=np.float32(500.6817321777344),
@@ -602,10 +668,20 @@ def test_global_score_offset_attribution_closes_and_is_data_dominated() -> None:
         },
     }
     score_mass_effect = report["normalized_score_mass_effect"]
+    null_component_telescope = score_mass_effect["component_telescope"]
+    assert null_component_telescope["final_l1_mass_delta"] == 0.0
+    assert null_component_telescope["total_component_l1"] == 0.0
+    assert (
+        null_component_telescope["cross_component_cancellation_fraction"]
+        == 0.0
+    )
+    assert null_component_telescope["missing_selected_rotation_rows"] == [
+        2626
+    ]
     assert {
         key: value
         for key, value in score_mass_effect.items()
-        if key != "strata"
+        if key not in {"component_telescope", "strata"}
     } == {
         "scope": (
             "within_captured_class_normalized_score_mass_only_"

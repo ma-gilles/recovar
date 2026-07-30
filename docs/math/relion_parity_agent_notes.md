@@ -10156,6 +10156,54 @@ and `9/15` all-class.
 - Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and `34/34`
   evaluated; K=4 `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 K=4 whole-class normalized-mass predeclaration
+
+- V15 independently normalizes all six frozen V14 score stages across the
+  complete aligned `109,184`-candidate captured-class table.
+- Consecutive normalized-mass differences telescope native operation order,
+  pre-prior data path, orientation prior, translation prior, and dump replay
+  into the final RECOVAR-minus-native mass delta.
+- Candidate closure, exact replay of V6 L1/TV, component signed/L1/TV,
+  component-L1 share, cross-component cancellation, and deterministic rank
+  are fixed before evaluation.
+- Target rotation `2626`, translations `78,83,76,80,82`, and queued pair
+  `80,82` receive explicit component coverage.
+- Thread-count-1 and thread-count-8 reports must be byte-identical; removing
+  only V15 must reproduce V14 exactly.
+- This threshold-free one-class diagnostic cannot identify a raw operand,
+  authorize a fix or new science job, change a scorecard, establish a full
+  K=4 posterior, or establish FSC/FSC-AUC parity.
+- Predeclaration:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_normalized_mass_components_v15_cd5fb93f_20260730T185600ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+## 2026-07-30 K=4 whole-class normalized-mass result
+
+- V15 closes all `109,184` candidate telescopes exactly and exactly replays
+  V6 normalized-mass L1 `1.3616797587263726e-5` and TV
+  `6.808398793631863e-6`; component signed-sum residual is zero.
+- Pre-prior remains rank 1 at `64.19279653823473%` of component L1 and
+  native operation order ranks second at `34.95575434713458%`.
+  Translation prior, orientation prior, and dump replay contribute
+  `0.5773417612457405%`, `0.23042706980106985%`, and
+  `0.0436802835838883%`.
+- Total component L1 is `2.4180473788687152e-5`; cross-component
+  cancellation before final normalized-mass L1 is
+  `43.68680404585641%`.
+- Target rotation `2626` covers `15.914497159294227%` of whole-class
+  pre-prior L1 and `21.359635465703442%` of operation-order L1.  Fixed
+  translations `78,83,76,80,82` cover `10.139516134320438%` and
+  `11.843135526808614%`, respectively.
+- Queued `80,82` cover `1.4207897957134247%` of whole-class pre-prior L1
+  and `5.961174442750557%` of operation-order L1.  Both are
+  operation-order dominated after independent whole-class normalization,
+  reflecting global-normalizer cancellation rather than a raw-operand
+  classification.
+- Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+  `c9cb273b903b4f972807f0075a216e7984ccb9138c4eef4ecdd64bc92f1cbc48`.
+  Removing only V15 reproduces V14 exactly.
+- Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and `34/34`
+  evaluated; K=4 `41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 K=4 target-rotation component predeclaration
 
 - V11 selects rotation row `2626` / native `1210` at translations

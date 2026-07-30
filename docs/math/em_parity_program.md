@@ -13609,3 +13609,54 @@ are byte-identical, SHA-256
 `446c321d17d81a7e3cf48bf29a37a520aa5bc514616f7b5c9a8300a183ceb226`.
 Removing only the V14 schema and target-family weight telescope reproduces
 V13 exactly.
+
+### Predeclared K=4 whole-class normalized-mass components
+
+V15 will independently normalize the six frozen V14 score stages across the
+complete aligned `109,184`-candidate captured-class table, then telescope the
+five consecutive normalized-mass changes: native float32 operation order,
+pre-prior data path, orientation-prior operand, translation-prior operand,
+and RECOVAR dump replay.
+
+The threshold-free report fixes candidate-level closure, exact replay of V6
+normalized-mass L1/TV, component signed/L1/TV contribution, total-component
+L1 share, cross-component cancellation, and deterministic rank.  It also
+fixes component coverage for target rotation `2626`, translations
+`78,83,76,80,82`, and queued pair `80,82`.  Thread-count-1 and thread-count-8
+reports must be byte-identical, and stripping only V15 must reproduce V14
+exactly.
+
+This tests whether pre-prior dominance survives whole-class normalization.  It
+cannot identify a raw operand, authorize a production change or new science
+job, change the frozen scorecards, establish a full K=4 posterior, or
+establish FSC/FSC-AUC parity.  The queued exact-device raw/operand comparison
+remains causal.  The predeclaration is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_normalized_mass_components_v15_cd5fb93f_20260730T185600ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+The sealed V15 report closes every one of the `109,184` candidate telescopes
+exactly and reproduces V6 normalized-mass L1
+`1.3616797587263726e-5` and TV `6.808398793631863e-6` exactly.  Component
+signed-sum replay residual is zero.
+
+Pre-prior data path remains rank 1 after whole-class normalization, carrying
+`64.19279653823473%` of component L1.  Native float32 operation order ranks
+second at `34.95575434713458%`; translation prior, orientation prior, and
+dump replay carry `0.5773417612457405%`, `0.23042706980106985%`, and
+`0.0436802835838883%`, respectively.  Total component L1 is
+`2.4180473788687152e-5`, so `43.68680404585641%` cancels across stages
+before the final mass L1.
+
+Target rotation `2626` contains `15.914497159294227%` of pre-prior component
+L1 and `21.359635465703442%` of operation-order L1.  The fixed five
+translations cover `10.139516134320438%` and `11.843135526808614%`,
+respectively.  Queued pair `80,82` covers only `1.4207897957134247%` of the
+whole-class pre-prior path but `5.961174442750557%` of operation order; both
+selected candidates are operation-order dominated after independent
+whole-class normalization.  This is consistent with global-normalizer
+cancellation and does not supersede their queued raw-operand audit.
+
+Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+`c9cb273b903b4f972807f0075a216e7984ccb9138c4eef4ecdd64bc92f1cbc48`.
+Removing only the V15 schema and normalized-mass telescope reproduces V14
+exactly.  Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and
+`34/34` evaluated; K=4 `41/60` direct and `9/15` all-class.
