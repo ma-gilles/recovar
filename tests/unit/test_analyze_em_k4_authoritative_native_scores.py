@@ -383,6 +383,66 @@ def test_partition_rotation_families_replay_and_rank() -> None:
     ] == 2.0 / 3.0
 
 
+def test_target_family_weight_components_telescope_exactly() -> None:
+    log_two = np.log(2.0)
+    log_four = np.log(4.0)
+    report = analyzer._target_family_weight_component_telescope(
+        stage_scores={
+            "native_production_score": np.asarray([0.0, 0.0, 0.0]),
+            "native_data_then_prior_score": np.asarray(
+                [log_two, 0.0, 0.0]
+            ),
+            "recovar_pre_prior_with_native_priors_score": np.asarray(
+                [log_four, 0.0, 0.0]
+            ),
+            "recovar_orientation_prior_score": np.asarray(
+                [log_four, 0.0, 0.0]
+            ),
+            "recovar_translation_prior_score": np.asarray(
+                [log_four, 0.0, 0.0]
+            ),
+            "recovar_dumped_combined_score": np.asarray(
+                [log_four, 0.0, 0.0]
+            ),
+        },
+        shared_reference=log_four,
+        recovar_rotation_row=np.asarray([10, 10, 20]),
+        native_rotation_local=np.asarray([1, 1, 2]),
+        native_candidate_index=np.asarray([7, 8, 9]),
+        translation_id=np.asarray([1, 2, 1]),
+        selected_rotation=10,
+        selected_translations=(1, 3),
+        queued_translations=(1, 2),
+        expected_family_signed_contribution=0.75,
+        expected_family_absolute_contribution=0.75,
+    )
+
+    assert report["target_family_candidate_count"] == 2
+    assert report["target_family_signed_weight_delta"] == 0.75
+    assert report["target_family_absolute_weight_delta"] == 0.75
+    assert report["candidate_telescoping_closure"]["max_abs"] == 0.0
+    assert report["component_signed_contribution_sum"] == 0.75
+    assert report["component_signed_replay_residual"] == 0.0
+    assert report["total_component_l1"] == 0.75
+    assert report["cross_component_cancellation_fraction"] == 0.0
+    assert report["ranked_components"][:2] == [
+        "pre_prior_data_path",
+        "native_float32_operation_order",
+    ]
+    assert report["components"]["pre_prior_data_path"][
+        "absolute_weight_contribution"
+    ] == 0.5
+    assert report["components"]["native_float32_operation_order"][
+        "absolute_weight_contribution"
+    ] == 0.25
+    assert report["missing_selected_translation_ids"] == [3]
+    assert report["missing_queued_translation_ids"] == []
+    assert report["selected_candidates"][0]["translation_id"] == 1
+    assert report["selected_candidates"][0][
+        "dominant_absolute_component"
+    ] == "pre_prior_data_path"
+
+
 def test_target_score_offset_attribution_closes_exact_decomposition() -> None:
     report = analyzer.target_score_offset_attribution(
         min_diff2=np.float32(500.6817321777344),

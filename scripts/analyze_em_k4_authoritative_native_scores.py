@@ -23,7 +23,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v13"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v14"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -1230,6 +1230,355 @@ def _partition_rotation_family_attribution(
     }
 
 
+def _target_family_weight_component_telescope(
+    *,
+    stage_scores: dict[str, np.ndarray],
+    shared_reference: float,
+    recovar_rotation_row: np.ndarray,
+    native_rotation_local: np.ndarray,
+    native_candidate_index: np.ndarray,
+    translation_id: np.ndarray,
+    selected_rotation: int,
+    selected_translations: tuple[int, ...],
+    queued_translations: tuple[int, ...],
+    expected_family_signed_contribution: float | None,
+    expected_family_absolute_contribution: float | None,
+) -> dict[str, Any]:
+    """Telescope score stages into target-family exponential-weight changes."""
+
+    stage_order = (
+        "native_production_score",
+        "native_data_then_prior_score",
+        "recovar_pre_prior_with_native_priors_score",
+        "recovar_orientation_prior_score",
+        "recovar_translation_prior_score",
+        "recovar_dumped_combined_score",
+    )
+    component_order = (
+        "native_float32_operation_order",
+        "pre_prior_data_path",
+        "orientation_prior_operand",
+        "translation_prior_operand",
+        "recovar_dump_replay_residual",
+    )
+    _require(
+        tuple(stage_scores) == stage_order,
+        "target-family weight stage order differs from the frozen telescope",
+    )
+    score_arrays = {
+        name: np.asarray(values, dtype=np.float64)
+        for name, values in stage_scores.items()
+    }
+    recovar_rotation_row = np.asarray(
+        recovar_rotation_row,
+        dtype=np.int64,
+    )
+    native_rotation_local = np.asarray(
+        native_rotation_local,
+        dtype=np.int64,
+    )
+    native_candidate_index = np.asarray(
+        native_candidate_index,
+        dtype=np.int64,
+    )
+    translation_id = np.asarray(translation_id, dtype=np.int64)
+    arrays = (
+        *score_arrays.values(),
+        recovar_rotation_row,
+        native_rotation_local,
+        native_candidate_index,
+        translation_id,
+    )
+    _require(
+        len({array.shape for array in arrays}) == 1,
+        "target-family weight telescope array shapes differ",
+    )
+    _require(
+        math.isfinite(shared_reference),
+        "target-family shared reference is not finite",
+    )
+    _require(
+        all(np.all(np.isfinite(array)) for array in score_arrays.values()),
+        "target-family stage score is not finite",
+    )
+    target_rows = np.flatnonzero(
+        recovar_rotation_row == selected_rotation
+    )
+    if target_rows.size == 0:
+        return {
+            "scope": (
+                "fixed_target_rotation_exponential_weight_component_"
+                "telescope_within_one_captured_class"
+            ),
+            "selected_recovar_rotation_row": int(selected_rotation),
+            "missing_selected_rotation_rows": [int(selected_rotation)],
+            "selected_translation_ids": list(
+                dict.fromkeys(int(value) for value in selected_translations)
+            ),
+            "queued_translation_ids": list(
+                dict.fromkeys(int(value) for value in queued_translations)
+            ),
+            "components": {},
+            "selected_candidates": [],
+        }
+    native_rotations = np.unique(native_rotation_local[target_rows])
+    _require(
+        native_rotations.size == 1,
+        "target rotation has multiple native rotation owners",
+    )
+    target_translations = translation_id[target_rows]
+    _require(
+        np.unique(target_translations).size == target_translations.size,
+        "target rotation contains duplicate translation identities",
+    )
+
+    stage_weights = {}
+    for name in stage_order:
+        values = score_arrays[name][target_rows]
+        stage_weights[name] = np.fromiter(
+            (
+                math.exp(float(value) - shared_reference)
+                for value in values
+            ),
+            dtype=np.float64,
+            count=values.size,
+        )
+    component_values = {
+        component: (
+            stage_weights[stage_order[index + 1]]
+            - stage_weights[stage_order[index]]
+        )
+        for index, component in enumerate(component_order)
+    }
+    total_weight_delta = (
+        stage_weights[stage_order[-1]] - stage_weights[stage_order[0]]
+    )
+    candidate_component_sum = np.fromiter(
+        (
+            math.fsum(
+                float(component_values[component][row])
+                for component in component_order
+            )
+            for row in range(target_rows.size)
+        ),
+        dtype=np.float64,
+        count=target_rows.size,
+    )
+    candidate_closure = candidate_component_sum - total_weight_delta
+    family_signed = math.fsum(
+        float(value) for value in total_weight_delta
+    )
+    family_absolute = math.fsum(
+        abs(float(value)) for value in total_weight_delta
+    )
+    if expected_family_signed_contribution is not None:
+        _require(
+            family_signed == expected_family_signed_contribution,
+            "target-family signed weight delta does not replay V13",
+        )
+    if expected_family_absolute_contribution is not None:
+        _require(
+            family_absolute == expected_family_absolute_contribution,
+            "target-family absolute weight delta does not replay V13",
+        )
+
+    selected_translation_ids = tuple(
+        dict.fromkeys(int(value) for value in selected_translations)
+    )
+    queued_translation_ids = tuple(
+        dict.fromkeys(int(value) for value in queued_translations)
+    )
+    local_row_by_translation = {
+        int(translation): int(row)
+        for row, translation in enumerate(target_translations)
+    }
+    missing_selected_translations = [
+        translation
+        for translation in selected_translation_ids
+        if translation not in local_row_by_translation
+    ]
+    missing_queued_translations = [
+        translation
+        for translation in queued_translation_ids
+        if translation not in local_row_by_translation
+    ]
+    selected_local_rows = [
+        local_row_by_translation[translation]
+        for translation in selected_translation_ids
+        if translation in local_row_by_translation
+    ]
+    queued_local_rows = [
+        local_row_by_translation[translation]
+        for translation in queued_translation_ids
+        if translation in local_row_by_translation
+    ]
+
+    component_summaries = {}
+    total_component_l1 = math.fsum(
+        abs(float(value))
+        for component in component_order
+        for value in component_values[component]
+    )
+    _require(
+        total_component_l1 > 0.0,
+        "target-family weight component L1 is zero",
+    )
+    for component in component_order:
+        values = component_values[component]
+        signed = math.fsum(float(value) for value in values)
+        absolute = math.fsum(abs(float(value)) for value in values)
+        selected_signed = math.fsum(
+            float(values[row]) for row in selected_local_rows
+        )
+        selected_absolute = math.fsum(
+            abs(float(values[row])) for row in selected_local_rows
+        )
+        queued_signed = math.fsum(
+            float(values[row]) for row in queued_local_rows
+        )
+        queued_absolute = math.fsum(
+            abs(float(values[row])) for row in queued_local_rows
+        )
+        component_summaries[component] = {
+            "signed_weight_contribution": float(signed),
+            "absolute_weight_contribution": float(absolute),
+            "nonzero_candidate_count": int(np.count_nonzero(values)),
+            "within_component_cancellation_fraction": float(
+                0.0 if absolute == 0.0 else 1.0 - abs(signed) / absolute
+            ),
+            "share_of_target_family_component_l1": float(
+                absolute / total_component_l1
+            ),
+            "selected_signed_weight_contribution": float(
+                selected_signed
+            ),
+            "selected_absolute_weight_contribution": float(
+                selected_absolute
+            ),
+            "selected_share_of_component_absolute_contribution": float(
+                0.0 if absolute == 0.0 else selected_absolute / absolute
+            ),
+            "queued_signed_weight_contribution": float(queued_signed),
+            "queued_absolute_weight_contribution": float(queued_absolute),
+            "queued_share_of_component_absolute_contribution": float(
+                0.0 if absolute == 0.0 else queued_absolute / absolute
+            ),
+        }
+    ranked_components = sorted(
+        component_order,
+        key=lambda component: (
+            -component_summaries[component][
+                "absolute_weight_contribution"
+            ],
+            component,
+        ),
+    )
+    for rank, component in enumerate(ranked_components, start=1):
+        component_summaries[component][
+            "absolute_weight_component_rank_1based"
+        ] = rank
+    component_signed_sum = math.fsum(
+        component_summaries[component]["signed_weight_contribution"]
+        for component in component_order
+    )
+
+    selected_candidate_records = []
+    for translation in selected_translation_ids:
+        if translation not in local_row_by_translation:
+            continue
+        row = local_row_by_translation[translation]
+        values = {
+            component: float(component_values[component][row])
+            for component in component_order
+        }
+        component_l1 = math.fsum(abs(value) for value in values.values())
+        ranked_candidate_components = sorted(
+            component_order,
+            key=lambda component: (
+                -abs(values[component]),
+                component,
+            ),
+        )
+        selected_candidate_records.append(
+            {
+                "aligned_table_index": int(target_rows[row]),
+                "native_candidate_index": int(
+                    native_candidate_index[target_rows[row]]
+                ),
+                "native_rotation_local": int(
+                    native_rotation_local[target_rows[row]]
+                ),
+                "recovar_rotation_row": int(
+                    recovar_rotation_row[target_rows[row]]
+                ),
+                "translation_id": translation,
+                "stage_weights": {
+                    name: float(stage_weights[name][row])
+                    for name in stage_order
+                },
+                "components": values,
+                "component_l1": float(component_l1),
+                "dominant_absolute_component": (
+                    ranked_candidate_components[0]
+                ),
+                "total_weight_delta_recovar_minus_native": float(
+                    total_weight_delta[row]
+                ),
+                "telescoping_closure_residual": float(
+                    candidate_closure[row]
+                ),
+            }
+        )
+
+    return {
+        "scope": (
+            "fixed_target_rotation_exponential_weight_component_"
+            "telescope_within_one_captured_class"
+        ),
+        "shared_reference_score": float(shared_reference),
+        "stage_order": list(stage_order),
+        "component_order": list(component_order),
+        "component_ranking_rule": (
+            "descending_absolute_weight_contribution_then_"
+            "ascending_component_name"
+        ),
+        "selected_recovar_rotation_row": int(selected_rotation),
+        "selected_native_rotation_local": int(native_rotations[0]),
+        "missing_selected_rotation_rows": [],
+        "target_family_candidate_count": int(target_rows.size),
+        "target_family_signed_weight_delta": float(family_signed),
+        "target_family_absolute_weight_delta": float(family_absolute),
+        "expected_v13_signed_weight_delta": (
+            expected_family_signed_contribution
+        ),
+        "expected_v13_absolute_weight_delta": (
+            expected_family_absolute_contribution
+        ),
+        "candidate_telescoping_closure": _delta_summary(
+            candidate_closure
+        ),
+        "component_signed_contribution_sum": float(
+            component_signed_sum
+        ),
+        "component_signed_replay_residual": float(
+            component_signed_sum - family_signed
+        ),
+        "total_component_l1": float(total_component_l1),
+        "cross_component_cancellation_fraction": float(
+            1.0 - abs(family_signed) / total_component_l1
+        ),
+        "components": component_summaries,
+        "ranked_components": ranked_components,
+        "selected_translation_ids": list(selected_translation_ids),
+        "missing_selected_translation_ids": (
+            missing_selected_translations
+        ),
+        "queued_translation_ids": list(queued_translation_ids),
+        "missing_queued_translation_ids": missing_queued_translations,
+        "selected_candidates": selected_candidate_records,
+    }
+
+
 def _softmax_partition_contribution_attribution(
     *,
     native_combined: np.ndarray,
@@ -1940,6 +2289,54 @@ def global_score_offset_attribution(
             selected_translations=MARGINAL_OWNER_TRANSLATIONS,
         )
     )
+    selected_partition_family = softmax_partition_contributions[
+        "rotation_family_attribution"
+    ]["selected_rotation_family"]
+    target_rotation_weight_component_telescope = (
+        _target_family_weight_component_telescope(
+            stage_scores={
+                "native_production_score": native_production_replay,
+                "native_data_then_prior_score": native_data_then_prior,
+                "recovar_pre_prior_with_native_priors_score": (
+                    recovar_data_native_priors
+                ),
+                "recovar_orientation_prior_score": (
+                    recovar_data_recovar_orientation
+                ),
+                "recovar_translation_prior_score": (
+                    recovar_data_then_prior
+                ),
+                "recovar_dumped_combined_score": recovar_combined,
+            },
+            shared_reference=softmax_partition_contributions[
+                "shared_reference_score"
+            ],
+            recovar_rotation_row=recovar_rotation_row,
+            native_rotation_local=native_rotation_local,
+            native_candidate_index=native_candidate_index,
+            translation_id=translation_id,
+            selected_rotation=TARGET_RECOVAR_ROTATION,
+            selected_translations=MARGINAL_OWNER_TRANSLATIONS,
+            queued_translations=TARGET_TRANSLATIONS,
+            expected_family_signed_contribution=(
+                None
+                if selected_partition_family is None
+                else selected_partition_family[
+                    "signed_partition_contribution"
+                ]
+            ),
+            expected_family_absolute_contribution=(
+                None
+                if selected_partition_family is None
+                else selected_partition_family[
+                    "absolute_partition_contribution"
+                ]
+            ),
+        )
+    )
+    softmax_partition_contributions[
+        "target_rotation_weight_component_telescope"
+    ] = target_rotation_weight_component_telescope
     normalized_score_mass_effect["strata"] = {
         "scope": (
             "descriptive_partition_of_within_captured_class_candidate_"

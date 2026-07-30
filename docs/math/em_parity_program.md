@@ -13548,3 +13548,64 @@ Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
 `ceb413ca73e1322eb4a1c2f5dd386e71fc608537b59e7b74d65e966d49c37c8e`.
 Removing only the V13 schema and rotation-family report reproduces V12
 exactly.
+
+### Predeclared K=4 target-family weight components
+
+V14 evaluates the existing six score stages for every candidate in mapped
+rotation `2626` / native `1210` under the unchanged V12 shared exponential
+reference.  Consecutive stage-weight differences telescope the five existing
+components—native float32 operation order, pre-prior data path, orientation
+prior, translation prior, and RECOVAR dump replay—directly into the V13
+target-family partition contribution.
+
+The report fixes complete family signed/absolute replay, per-candidate
+closure, component signed/absolute contribution, cancellation, nonzero count,
+component-L1 share, and deterministic rank before evaluation.  Fixed
+translations `78,83,76,80,82` and queued `80,82` receive explicit
+component-level coverage.
+
+This threshold-free diagnostic asks whether nonlinear exponential weighting
+preserves V11's pre-prior dominance across the complete leading rotation
+family.  It cannot identify a raw pre-prior operand, authorize a production
+change or new job, change the scorecard, or establish full K=4
+posterior/FSC-AUC parity.  The predeclaration is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_target_family_weight_components_v14_043570b8_20260730T180418ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+The sealed V14 telescope reproduces V13's target-family signed weight delta
+`+0.00021664740697420007` and absolute delta
+`0.0002172067577153348`.  Every one of the 80 candidate telescopes closes
+exactly; the component signed-sum residual is
+`-2.710505431213761e-20`.
+
+The pre-prior data path remains rank 1 after nonlinear weighting, carrying
+`68.76001917139446%` of target-family component L1.  Its absolute
+contribution is `0.00018345801368107415`, signed contribution is
+`+0.00014445558412118684`, and within-component cancellation is
+`21.259594376558366%`.  Native float32 operation order ranks second at
+`31.20013120567811%` of component L1, with absolute
+`0.00008324480078044925`, signed `+0.00007229814528800239`, and
+`13.149956982079503%` cancellation.
+
+Translation-prior contribution ranks third but is only
+`0.03984962292742545%` of component L1: six candidates contribute an
+aggregate `-1.0632243498917863e-7`.  Orientation-prior and RECOVAR
+dump-replay components are exactly zero.  Total component L1 is
+`0.0002668091368965126`, with `18.800604246836106%` cross-component
+cancellation before the family net.
+
+The fixed five translations cover `42.410355764206203%` of pre-prior
+absolute movement and `56.57078288375883%` of operation-order movement.
+The queued `80,82` pair covers `20.273277661972602%` and
+`28.63995373494699%`, respectively, and is positive in both components.
+Translations `78,76` retain exact equal-and-opposite pre-prior versus
+operation-order weight contributions; `83,80,82` remain pre-prior dominated.
+
+Thus exponential weighting preserves the pre-prior-first ordering across the
+complete leading rotation family and confines all meaningful secondary
+movement to native float32 operation order.  It still does not identify the
+raw pre-prior operand or authorize a fix/new job; the queued exact-device
+operand audit remains required.  Thread-count-1 and thread-count-8 reports
+are byte-identical, SHA-256
+`446c321d17d81a7e3cf48bf29a37a520aa5bc514616f7b5c9a8300a183ceb226`.
+Removing only the V14 schema and target-family weight telescope reproduces
+V13 exactly.

@@ -10298,6 +10298,61 @@ and `9/15` all-class.
 - Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and `34/34`
   evaluated; K=4 `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 K=4 target-family weight-component predeclaration
+
+- V14 exponentiates all six existing score stages for every candidate in
+  target rotation `2626` / native `1210` under the unchanged V12 shared
+  reference.
+- Consecutive weight differences telescope native operation order, pre-prior
+  data path, orientation prior, translation prior, and dump replay directly
+  into the V13 target-family partition movement.
+- Complete family replay, candidate closure, component signed/absolute
+  contribution, cancellation, nonzero count, component-L1 share, and rank
+  are fixed before evaluation.
+- Fixed translations `78,83,76,80,82` and queued pair `80,82` receive
+  explicit component coverage.
+- The threshold-free question is whether nonlinear weighting preserves the
+  selected-candidate pre-prior dominance across all 80 target-family
+  candidates.
+- This cannot identify a raw operand, authorize a fix or new job, change the
+  scorecard, or establish full K=4 posterior/FSC-AUC parity.
+- Predeclaration:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_target_family_weight_components_v14_043570b8_20260730T180418ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+## 2026-07-30 K=4 target-family weight-component result
+
+- V14 reproduces V13 target-family signed weight
+  `+0.00021664740697420007` and absolute weight
+  `0.0002172067577153348`.  All 80 candidate telescopes close exactly;
+  component signed-sum residual is `-2.710505431213761e-20`.
+- Pre-prior data path ranks first at `68.76001917139446%` of family component
+  L1.  Its absolute contribution is `0.00018345801368107415`, signed
+  contribution `+0.00014445558412118684`, and cancellation
+  `21.259594376558366%`.
+- Native float32 operation order ranks second at
+  `31.20013120567811%`, with absolute `0.00008324480078044925`, signed
+  `+0.00007229814528800239`, and cancellation
+  `13.149956982079503%`.
+- Translation prior contributes only `0.03984962292742545%`: six candidates
+  sum to `-1.0632243498917863e-7`.  Orientation prior and dump replay are
+  exactly zero.
+- Total component L1 is `0.0002668091368965126`; cross-component
+  cancellation is `18.800604246836106%`.
+- Fixed translations cover `42.410355764206203%` of pre-prior absolute
+  movement and `56.57078288375883%` of operation-order movement.  Queued
+  `80,82` cover `20.273277661972602%` and `28.63995373494699%`,
+  respectively, and are positive in both.
+- Translations `78,76` retain exact component cancellation; `83,80,82`
+  remain pre-prior dominated.
+- Nonlinear weighting therefore preserves pre-prior-first ordering across
+  the complete leading family, but does not identify its raw operand or
+  authorize a fix/new job.
+- Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+  `446c321d17d81a7e3cf48bf29a37a520aa5bc514616f7b5c9a8300a183ceb226`.
+  Removing only the V14 schema and telescope reproduces V13 exactly.
+- Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and `34/34`
+  evaluated; K=4 `41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 K=4 marginal-TV concentration predeclaration
 
 - V9 will rank every V8 rotation and translation marginal by
