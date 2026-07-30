@@ -500,7 +500,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--solvar-init",
         dest="solvar_init",
         choices=["covariance", "random"],
-        default="covariance",
+        default="random",
         help="SOLVAR loading initialization. 'covariance' warm-starts from RECOVAR covariance PCA; 'random' uses random real-space loadings.",
     )
     adv.add_argument(
@@ -517,7 +517,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--solvar-batch-size",
         dest="solvar_batch_size",
         type=int,
-        default=200,
+        default=1024,
         help="Image batch size for SOLVAR optimization.",
     )
     adv.add_argument(
@@ -541,6 +541,13 @@ def add_args(parser: argparse.ArgumentParser):
         default=True,
         help="Disable real-space mask projection after each SOLVAR update.",
     )
+    adv.add_argument(
+        "--solvar-gt-data",
+        dest="solvar_gt_data",
+        type=os.path.abspath,
+        default=None,
+        help="Path to pickle file containing simulation info for SOLVAR evaluation (synthetic dataset only).",
+    )    
     adv.add_argument(
         "--test-covar-options",
         dest="test_covar_options",
@@ -1276,6 +1283,7 @@ def _run_solvar_refinement(
     W_initial=None,
     init_mode="random",
     warm_start_n_pcs=None,
+    gt_data_info=None,
 ):
     """Run fixed-pose no-contrast SOLVAR and return pipeline-compatible arrays."""
     basis_size = int(np.max(options.zs_dim_to_test))
@@ -1310,6 +1318,11 @@ def _run_solvar_refinement(
     solvar_batch_size = int(getattr(args, "solvar_batch_size", 200))
     if solvar_batch_size <= 0:
         solvar_batch_size = int(batch_size)
+
+    if gt_data_info is not None:
+        from recovar.simulation.synthetic_dataset import load_heterogeneous_reconstruction
+        gt_data = load_heterogeneous_reconstruction(gt_data_info)
+    
     result = solvar_module.fit(
         dataset,
         means.combined,
@@ -1324,6 +1337,7 @@ def _run_solvar_refinement(
         project_mask=bool(getattr(args, "solvar_mask_projection", True)),
         disc_type_mean="cubic",
         disc_type="linear_interp",
+        gt_data=gt_data if gt_data_info is not None else None,
         return_iteration_data=True,
     )
 
@@ -1933,6 +1947,7 @@ def standard_recovar_pipeline(args):
                 W_initial=solvar_W_initial,
                 init_mode=solvar_init_mode,
                 warm_start_n_pcs=warm_start_n_pcs,
+                gt_data_info=args.solvar_gt_data
             )
             u = {"rescaled": solvar_result["u_rescaled"], "real": None}
             s = {"rescaled": solvar_result["s_rescaled"], "real": None}

@@ -4,13 +4,20 @@ from types import SimpleNamespace
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 
 from recovar.commands import pipeline
 import recovar.core.fourier_transform_utils as ftu
 from recovar.core import linalg
 from recovar.ppca.w_regularization import w_prior_precision, w_prior_quadratic
-from recovar.solvar.solvar import _adam_step, make_loading_from_basis, solvar_image_losses
+from recovar.solvar.solvar import (
+    _state_from_loadings,
+    loadings_from_state,
+    make_loading_from_basis,
+    make_random_loading,
+    solvar_image_losses,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -28,7 +35,7 @@ def test_solvar_ls_loss_matches_direct_low_rank_covariance_terms():
     y = rng.normal(size=(3, image_shape[0] * (image_shape[1] // 2 + 1))).astype(np.float32)
     Z = rng.normal(size=(3, 2, y.shape[1])).astype(np.float32)
 
-    got = np.asarray(solvar_image_losses(jnp.asarray(y), jnp.asarray(Z), image_shape, objective="ls"))
+    got = np.asarray(solvar_image_losses(jnp.asarray(y), jnp.asarray(Z), image_shape, objective="ls", apply_mean_terms=True))
     w_sqrt = np.sqrt(_weights(image_shape)).astype(np.float32)
     expected = []
     for i in range(y.shape[0]):
@@ -46,7 +53,7 @@ def test_solvar_mle_loss_matches_direct_woodbury_covariance():
     y = rng.normal(size=(2, image_shape[0] * (image_shape[1] // 2 + 1))).astype(np.float32)
     Z = rng.normal(size=(2, 3, y.shape[1])).astype(np.float32)
 
-    got = np.asarray(solvar_image_losses(jnp.asarray(y), jnp.asarray(Z), image_shape, objective="mle"))
+    got = np.asarray(solvar_image_losses(jnp.asarray(y), jnp.asarray(Z), image_shape, objective="mle", apply_mean_terms=True))
     w_sqrt = np.sqrt(_weights(image_shape)).astype(np.float32)
     expected = []
     for i in range(y.shape[0]):
@@ -73,18 +80,12 @@ def test_complex_adam_step_descends_real_quadratic():
     W = jnp.array([1.0 + 2.0j], dtype=jnp.complex64)
     objective = lambda z: jnp.sum(jnp.real(jnp.conj(z) * z))
     grad = jax.grad(objective)(W)
+    grad = jax.tree.map(jnp.conj, grad)
 
-    next_W, _, _ = _adam_step(
-        W,
-        grad,
-        jnp.zeros_like(W),
-        jnp.zeros(W.shape, dtype=W.real.dtype),
-        1,
-        learning_rate=0.1,
-        beta1=0.0,
-        beta2=0.0,
-        eps=1e-8,
-    )
+    optimizer = optax.adam(learning_rate=1e-4)
+    opt_state = optimizer.init(W)
+    updates, _ = optimizer.update(grad, opt_state, W)
+    next_W = optax.apply_updates(W, updates)
 
     assert objective(next_W) < objective(W)
 
@@ -134,6 +135,8 @@ def test_pipeline_solvar_cli_plumbing():
             "4",
             "--solvar-iters",
             "2",
+            "--solvar-init",
+            "covariance",
         ]
     )
     assert args.use_solvar is True
@@ -148,3 +151,31 @@ def test_pipeline_solvar_cli_plumbing():
     assert pipeline._resolve_solvar_warm_start_n_pcs(SimpleNamespace(solvar_warm_start_n_pcs=64), 20) == 64
     with pytest.raises(ValueError):
         pipeline._resolve_solvar_warm_start_n_pcs(SimpleNamespace(solvar_warm_start_n_pcs=8), 20)
+
+
+def test_state_from_loadings_reconstructs_same_covariance():
+    volume_shape = (6, 6, 6)
+    rank = 2
+    W_half = jnp.asarray(make_random_loading(volume_shape, rank, seed=3, init_scale=1.0))
+
+    state = _state_from_loadings(W_half, volume_shape)
+    W_recon = loadings_from_state(state)
+
+    cov_orig = np.asarray(W_half) @ np.asarray(W_half).conj().T
+    cov_recon = np.asarray(W_recon) @ np.asarray(W_recon).conj().T
+    np.testing.assert_allclose(cov_recon, cov_orig, rtol=1e-4, atol=1e-3)
+
+
+def test_state_from_loadings_u_is_orthonormal_in_real_space():
+    volume_shape = (6, 6, 6)
+    rank = 3
+    W_half = jnp.asarray(make_random_loading(volume_shape, rank, seed=4, init_scale=1.0))
+    vol_size = int(np.prod(volume_shape))
+    half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+
+    state = _state_from_loadings(W_half, volume_shape)
+    U_real = np.asarray(ftu.get_idft3_real(np.asarray(state.U).T.reshape(rank, *half_shape), volume_shape))
+    gram = U_real.reshape(rank, -1) @ U_real.reshape(rank, -1).T
+    np.testing.assert_allclose(gram, np.eye(rank) / vol_size, rtol=1e-4, atol=1e-6)
+
+
