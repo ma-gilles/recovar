@@ -9889,13 +9889,26 @@ and `9/15` all-class.
   Both RECOVAR totals replay bitwise after converting the dumped pre-prior
   residual to float32 and adding the two priors.  Classification:
   `exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert`.
-- The deterministic v2 report is
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_audit_preview_08122744_20260730T1008ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V2.json`,
+- The first dependent CPU audit, job `11787139`, failed `1:0` before
+  analysis because its launcher invoked the analyzer by file path and could
+  not import the `scripts` package.  It produced no report.  The repaired
+  hash-pinned module-form audit, job `11790393`, completed `0:0` in
+  `00:00:04` on `della-h12n17`.
+- The official v3 report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_authoritative_perturb53722_6982c77_20260729T113000ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V3.json`,
   SHA-256
-  `55e1ca2b2146998bce0921a6c8c9fa5df3f1b4eaf692f76af7279d0a259e24ca`.
-  Commit `d766e693` adds the attribution gate; focused tests pass `17/17`,
-  and scoped Ruff, Python compilation, scorecard freshness, and
+  `d7eea0c74e16ecc5139ab57ff12658b746b18ef89a8efb3704ca2cdd5bd0a75c`.
+  Commit `d766e693` adds the target attribution gate; commit `f24c45fd`
+  adds the full-table decomposition.  Focused tests pass `19/19`, and
+  scoped Ruff, Python compilation, scorecard freshness, and
   `git diff --check` pass.
+- Across all `109,184` active candidates, the telescoping decomposition
+  closes with exactly zero residual.  Pre-prior/data-path differences account
+  for `79.6643880%` of component L1, RELION float32 operation order for
+  `19.6706644%`, RECOVAR dump replay residual for `0.4727976%`, orientation
+  prior for `0.1447619%`, and translation prior for `0.0473881%`.
+  Classification:
+  `global_absolute_score_residual_is_preprior_data_path_dominated_with_exact_telescoping_closure`.
 - The global bitwise score table is still not exact (`100,852/109,184`
   combined-score mismatches, maximum absolute difference
   `1.52587890625e-4`), so this is a non-scoring target-boundary closure, not
