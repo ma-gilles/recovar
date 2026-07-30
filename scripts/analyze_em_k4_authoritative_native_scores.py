@@ -23,7 +23,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v5"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v6"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -66,6 +66,29 @@ def _stable_l2(values: np.ndarray) -> float:
         for value in flat_values
     )
     return math.sqrt(squared_sum)
+
+
+def _stable_softmax(values: np.ndarray) -> np.ndarray:
+    """Normalize one captured score table with fixed-order scalar reductions."""
+
+    flat_values = np.asarray(values, dtype=np.float64).ravel(order="C")
+    _require(flat_values.size > 0, "cannot normalize an empty score table")
+    maximum = float(np.max(flat_values))
+    _require(math.isfinite(maximum), "score-table maximum is not finite")
+    weights = np.fromiter(
+        (
+            math.exp(float(value) - maximum)
+            for value in flat_values
+        ),
+        dtype=np.float64,
+        count=flat_values.size,
+    )
+    denominator = math.fsum(float(weight) for weight in weights)
+    _require(
+        denominator > 0.0 and math.isfinite(denominator),
+        "score-table normalization is not finite and positive",
+    )
+    return weights / denominator
 
 
 def float32_metric(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
@@ -460,6 +483,118 @@ def global_score_offset_attribution(
             abs(pre_prior_component[representative_row])
         ),
     }
+    native_score_mass = _stable_softmax(native_combined)
+    recovar_score_mass = _stable_softmax(recovar_combined)
+    score_mass_delta = recovar_score_mass - native_score_mass
+    score_mass_abs_delta = np.abs(score_mass_delta)
+    maximum_abs_score_mass_delta = float(np.max(score_mass_abs_delta))
+    score_mass_tied_rows = np.flatnonzero(
+        score_mass_abs_delta == maximum_abs_score_mass_delta
+    )
+    score_mass_representative_row = int(
+        score_mass_tied_rows[
+            np.argmin(native_candidate_index[score_mass_tied_rows])
+        ]
+    )
+    pre_prior_representative["decision_context"] = {
+        "scope": (
+            "within_captured_class_normalized_score_mass_only_"
+            "not_full_kclass_posterior"
+        ),
+        "native_combined_score": float(
+            native_combined[representative_row]
+        ),
+        "recovar_combined_score": float(
+            recovar_combined[representative_row]
+        ),
+        "combined_score_delta_recovar_minus_native": float(
+            total_delta[representative_row]
+        ),
+        "native_gap_below_class_max": float(
+            np.float64(np.max(native_combined))
+            - np.float64(native_combined[representative_row])
+        ),
+        "recovar_gap_below_class_max": float(
+            np.float64(np.max(recovar_combined))
+            - np.float64(recovar_combined[representative_row])
+        ),
+        "native_strict_rank_1based": int(
+            np.count_nonzero(
+                native_combined > native_combined[representative_row]
+            )
+            + 1
+        ),
+        "recovar_strict_rank_1based": int(
+            np.count_nonzero(
+                recovar_combined > recovar_combined[representative_row]
+            )
+            + 1
+        ),
+        "native_normalized_score_mass": float(
+            native_score_mass[representative_row]
+        ),
+        "recovar_normalized_score_mass": float(
+            recovar_score_mass[representative_row]
+        ),
+        "normalized_score_mass_delta_recovar_minus_native": float(
+            score_mass_delta[representative_row]
+        ),
+    }
+    normalized_score_mass_effect = {
+        "scope": (
+            "within_captured_class_normalized_score_mass_only_"
+            "not_full_kclass_posterior"
+        ),
+        "normalization": (
+            "math_exp_after_class_max_then_math_fsum_in_"
+            "aligned_candidate_order"
+        ),
+        "native_sum": float(
+            math.fsum(float(value) for value in native_score_mass)
+        ),
+        "recovar_sum": float(
+            math.fsum(float(value) for value in recovar_score_mass)
+        ),
+        "l1": float(
+            math.fsum(float(value) for value in score_mass_abs_delta)
+        ),
+        "total_variation": float(
+            0.5
+            * math.fsum(
+                float(value)
+                for value in score_mass_abs_delta
+            )
+        ),
+        "max_absolute_delta": maximum_abs_score_mass_delta,
+        "max_absolute_delta_representative": {
+            "selection_rule": (
+                "maximum_absolute_normalized_score_mass_delta_then_"
+                "lowest_native_candidate_index"
+            ),
+            "aligned_table_index": score_mass_representative_row,
+            "native_candidate_index": int(
+                native_candidate_index[score_mass_representative_row]
+            ),
+            "native_rotation_local": int(
+                native_rotation_local[score_mass_representative_row]
+            ),
+            "recovar_rotation_row": int(
+                recovar_rotation_row[score_mass_representative_row]
+            ),
+            "translation_id": int(
+                translation_id[score_mass_representative_row]
+            ),
+            "native_normalized_score_mass": float(
+                native_score_mass[score_mass_representative_row]
+            ),
+            "recovar_normalized_score_mass": float(
+                recovar_score_mass[score_mass_representative_row]
+            ),
+            "delta_recovar_minus_native": float(
+                score_mass_delta[score_mass_representative_row]
+            ),
+        },
+    }
     attributed = bool(
         decision_topology_exact
         and native_replay_exact_count == native_combined.size
@@ -493,6 +628,7 @@ def global_score_offset_attribution(
         "pre_prior_data_path_representative": (
             pre_prior_representative
         ),
+        "normalized_score_mass_effect": normalized_score_mass_effect,
     }
 
 

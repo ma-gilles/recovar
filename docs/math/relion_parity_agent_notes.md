@@ -9947,6 +9947,26 @@ and `9/15` all-class.
   The run and runtime roots contain `SAFE_TO_DELETE`.  Focused validation
   passes `60/60`; scoped Ruff, Python compilation, scorecard freshness, and
   `git diff --check` pass.
+- V6 adds a threshold-free decision-context summary without changing any
+  score or classification.  The maximum pre-prior component candidate `587`
+  is ranked `94,016/109,184` in both engines, lies `19.7204285` native and
+  `19.7203064` RECOVAR log-score units below the captured-class maximum,
+  and carries normalized within-class score mass
+  `6.2955431e-11` and `6.2963506e-11`, respectively.
+- Across the complete aligned captured-class table, float64 normalization of
+  the captured float32 combined scores gives total variation
+  `6.808398793631863e-6` and maximum absolute mass delta
+  `3.956962159670785e-7`.  That maximum occurs at native candidate `46,671`,
+  native rotation `1210`, mapped RECOVAR rotation `2626`, and translation
+  `83`.  The scope is explicitly one captured class, not a complete K=4
+  posterior, map-quality gate, or scorecard metric.
+- V6 thread-count replays are byte-identical at
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_score_mass_v6_efef644a_20260730T1530ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V6_THREADS1.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_score_mass_v6_efef644a_20260730T1530ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V6_THREADS8.json`,
+  SHA-256
+  `50d1f1f76a323e0e7f88cbabeadb6d6265d3cbe0bf6749b1d45803f92cfcea78`.
+  The broader K=4/native-operand/frozen-scorecard gate passes `99/99`.
 - This localizes the next raw-operand comparison without choosing a
   production fix or changing a fixed denominator.  K=1 remains `28/34`
   strict (`82.4%`), `32/34` topology, and `34/34` evaluated; K=4 remains

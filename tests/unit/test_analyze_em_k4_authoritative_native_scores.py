@@ -80,6 +80,17 @@ def test_float32_metric_uses_order_fixed_l2_reduction(
     )
 
 
+def test_stable_softmax_uses_fixed_scalar_reductions() -> None:
+    normalized = analyzer._stable_softmax(
+        np.asarray([0.0, 0.0], dtype=np.float32)
+    )
+
+    np.testing.assert_array_equal(
+        normalized,
+        np.asarray([0.5, 0.5], dtype=np.float64),
+    )
+
+
 def test_target_score_offset_attribution_closes_exact_decomposition() -> None:
     report = analyzer.target_score_offset_attribution(
         min_diff2=np.float32(500.6817321777344),
@@ -219,6 +230,53 @@ def test_global_score_offset_attribution_closes_and_is_data_dominated() -> None:
         "component_absolute_delta": pytest.approx(
             1.8596649169921875e-05
         ),
+        "decision_context": {
+            "scope": (
+                "within_captured_class_normalized_score_mass_only_"
+                "not_full_kclass_posterior"
+            ),
+            "native_combined_score": pytest.approx(-5.701812744140625),
+            "recovar_combined_score": pytest.approx(-5.7017822265625),
+            "combined_score_delta_recovar_minus_native": pytest.approx(
+                3.0517578125e-05
+            ),
+            "native_gap_below_class_max": 0.0,
+            "recovar_gap_below_class_max": 0.0,
+            "native_strict_rank_1based": 1,
+            "recovar_strict_rank_1based": 1,
+            "native_normalized_score_mass": 0.5,
+            "recovar_normalized_score_mass": 0.5,
+            "normalized_score_mass_delta_recovar_minus_native": 0.0,
+        },
+    }
+    assert report["normalized_score_mass_effect"] == {
+        "scope": (
+            "within_captured_class_normalized_score_mass_only_"
+            "not_full_kclass_posterior"
+        ),
+        "normalization": (
+            "math_exp_after_class_max_then_math_fsum_in_"
+            "aligned_candidate_order"
+        ),
+        "native_sum": 1.0,
+        "recovar_sum": 1.0,
+        "l1": 0.0,
+        "total_variation": 0.0,
+        "max_absolute_delta": 0.0,
+        "max_absolute_delta_representative": {
+            "selection_rule": (
+                "maximum_absolute_normalized_score_mass_delta_then_"
+                "lowest_native_candidate_index"
+            ),
+            "aligned_table_index": 1,
+            "native_candidate_index": 7,
+            "native_rotation_local": 3,
+            "recovar_rotation_row": 4,
+            "translation_id": 9,
+            "native_normalized_score_mass": 0.5,
+            "recovar_normalized_score_mass": 0.5,
+            "delta_recovar_minus_native": 0.0,
+        },
     }
 
 
