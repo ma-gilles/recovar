@@ -12662,7 +12662,7 @@ and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_production_diff2_operands_eulerfix_6de88fe3_20260730T011530ET`;
 all contain `SAFE_TO_DELETE`.  These diagnostics remain non-scoring.
 
-## 2026-07-30 case-22 preprocessing-boundary capture preflight
+## 2026-07-30 case-22 preprocessing-boundary qualification
 
 The qualified live-operand factorial localizes the raw coarse-score residual
 to the base corrected image for 14/14 particles, but the existing operand
@@ -12695,8 +12695,62 @@ and
 The focused capture/parity gate passes 76/76 tests, and scoped Ruff,
 provenance, and `git diff --check` pass.
 
-The exact-device 14-particle run and its unchanged three-map
-FSC-AUC-inertness gate are pending.  No preprocessing artifact is qualified
-and no production change is proposed at this preflight checkpoint.  This is
-non-scoring: fixed K=1 remains 28/34 strict, 32/34 topology, and 34/34
-evaluated; fixed K=4 remains 41/60 direct and 9/15 all-class.
+Exact-device RELION job `11783432` completed `0:0` in `00:14:15` on
+`della-l07g3`, using the required A100 UUID
+`GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a`.  The schema validator passes
+14/14 complete seven-stage artifacts, with real shape `1x128x128`, Fourier
+shape `1x60x31`, exact physical iteration 2, and no temporary artifacts.
+The three-map inertness gate passes 3/3: half-1, half-2, and merged non-DC
+FSC-AUC values are `0.9999999999801346`, `0.9999999999797552`, and
+`0.9999999999616417`, and minimum non-DC FSC is above
+`0.99999999960`.  The completion, validator, and inertness SHA-256 values
+are
+`ede90fa9953ed2b1e9c82395371ec04736d08c41f58232b88f24d6f6177a709e`,
+`a77a08eb8da9289f4694d18941286d2a8500c7611a53c993926a027138eda0c1`,
+and
+`2fd093ccc2aa4b0ef3a4f94b094e92aca720dd46108b1acce12cadd3bd31400d`.
+
+Dependent analysis job `11783563` completed `0:0` in seven seconds on the
+same node and physical GPU.  Its fixed metric evaluates all 14 particles:
+raw disk bytes are bitwise equal 14/14, and normalization, unmasked FFT,
+masking, masked FFT, and post-optics material-gap counts are each 0/14 under
+the fixed scale-sensitive relative-L2 threshold `5e-7`.  Normalized real
+and unmasked Fourier arrays are bitwise equal 14/14.  Masked-real
+relative-L2 ranges from `5.9075e-10` to `1.5918e-8`; masked Fourier
+relative-L2 ranges from `2.2456e-8` to `1.1845e-7`.  Optics correction is
+bitwise inert 14/14 on both branches.  Three strict replays keep normalized
+real bitwise exact 14/14; masked-real replay maxima remain between
+`1.3361e-8` and `1.5444e-8`, below the material threshold.  No fitted
+scale, sign, or correlation is used.  Classification is
+`all_preprocessing_boundaries_within_fixed_material_threshold`.
+
+The analysis report and completion SHA-256 values are
+`e04fb43bdea0790d049284970ac9b50d9608e9e8ea1dfa659552cd09c00cdea2`
+and
+`5787d13d706959404aea2c01fba12319f5d6a84b88eefbfa43c7d1da2e1a2b80`.
+The analyzer and its tests have SHA-256 values
+`4a45b7546887e803dfeb7c315b66493f50ac9520f6985377db48aa99e41c7333`
+and
+`e8d4f64fb43fea898cb33e6a6f06b445bdd653afe270d0b58ab4e3b9b38e059e`.
+Its current-size Fourier mapping is independently bitwise equal to RELION's
+`windowFourierTransform` for 14 synthetic 128-to-60 spectra.  The frozen
+closing capture/parity gate passes 83/83 tests, and the exact RELION binding
+gate passes 9/9.
+
+This exact same-device result rules out stack loading, normalization,
+rounded shifts, the zero soft mask, unmasked and masked current-size FFT
+layout/units, and optics correction as material causes of the case-22 raw
+coarse residual.  The next bounded boundary is downstream of captured
+post-optics `op.Fimg`: current-size score input/pixel correction,
+`buildCorrImage`, or the live-factorial conversion/interaction.  No
+production change is proposed.  This remains non-scoring: fixed K=1 is
+28/34 strict, 32/34 topology, and 34/34 evaluated; fixed K=4 is 41/60
+direct and 9/15 all-class.
+
+Run roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_preprocess_boundary_9521fbac_20260730T033000ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_preprocess_analysis_9521fbac_20260730T025500ET`;
+runtime roots with the same run IDs live under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/`.  All four roots
+contain `SAFE_TO_DELETE`.

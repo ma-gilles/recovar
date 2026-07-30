@@ -9363,7 +9363,7 @@ and `9/15` all-class.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 
-## 2026-07-30 case-22 preprocessing-boundary preflight
+## 2026-07-30 case-22 preprocessing-boundary qualification
 
 - The live-operand factorial makes the base corrected image the next causal
   boundary: 14/14 particles are strict-majority dominated by that operand,
@@ -9386,15 +9386,68 @@ and `9/15` all-class.
   and
   `982c15cfcdce94823c471228edef47839fa7d239ccac166c4ba66c829cd1f6ba`.
 - The fail-closed Python schema validator and static passive-patch guards pass
-  within a 76/76 focused capture/parity gate.  Scoped Ruff, import provenance,
-  and `git diff --check` pass.
+  within a 76/76 focused capture/parity preflight gate.  Scoped Ruff, import
+  provenance, and `git diff --check` pass.
 - Runtime gate root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_relion_preprocess_capture_gate_20260730T030000ET`;
   it contains `SAFE_TO_DELETE`.  The external build root remains
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k1_case22_operand_capture_build_ac12ca86_20260729T234000ET`.
-- Exact-device 14-particle capture and unchanged 3/3 non-DC FSC-AUC inertness
-  remain pending.  Do not interpret build/schema qualification as scientific
-  boundary qualification.
+- Exact-device science job `11783432` completed `0:0` in `00:14:15` on
+  `della-l07g3`, using required UUID
+  `GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a`.  The validator passes 14/14
+  complete seven-stage captures, exact physical iteration 2, real shape
+  `1x128x128`, Fourier shape `1x60x31`, and zero temporary artifacts.
+  Completion and validator SHA-256 values are
+  `ede90fa9953ed2b1e9c82395371ec04736d08c41f58232b88f24d6f6177a709e`
+  and
+  `a77a08eb8da9289f4694d18941286d2a8500c7611a53c993926a027138eda0c1`.
+- The unchanged-map gate passes 3/3: half-1, half-2, and merged non-DC
+  FSC-AUC are `0.9999999999801346`, `0.9999999999797552`, and
+  `0.9999999999616417`; minimum non-DC FSC is above `0.99999999960`.
+  Inertness report SHA-256 is
+  `2fd093ccc2aa4b0ef3a4f94b094e92aca720dd46108b1acce12cadd3bd31400d`.
+- Dependent analyzer job `11783563` completed `0:0` in seven seconds on the
+  same node and physical GPU.  The fixed 14/14 denominator has zero material
+  gaps at normalization, unmasked FFT, masking, masked FFT, and post-optics
+  under scale-sensitive relative-L2 threshold `5e-7`.  Raw disk,
+  normalized real, and unmasked Fourier data are bitwise equal 14/14.
+  Masked-real relative-L2 is `5.9075e-10`--`1.5918e-8`; masked-Fourier
+  relative-L2 is `2.2456e-8`--`1.1845e-7`.  Optics correction is bitwise
+  inert 14/14.
+- Three strict replays keep normalized real bitwise exact 14/14.
+  Masked-real replay maxima are `1.3361e-8`, `1.5444e-8`, and
+  `1.3361e-8`; the non-bitwise atomic-reduction floor remains below the
+  fixed material threshold.  No fitted scale, sign, or correlation is used.
+- Classification is
+  `all_preprocessing_boundaries_within_fixed_material_threshold`.  Analysis
+  report/completion SHA-256 values are
+  `e04fb43bdea0790d049284970ac9b50d9608e9e8ea1dfa659552cd09c00cdea2`
+  and
+  `5787d13d706959404aea2c01fba12319f5d6a84b88eefbfa43c7d1da2e1a2b80`.
+  Analyzer/test SHA-256 values are
+  `4a45b7546887e803dfeb7c315b66493f50ac9520f6985377db48aa99e41c7333`
+  and
+  `e8d4f64fb43fea898cb33e6a6f06b445bdd653afe270d0b58ab4e3b9b38e059e`.
+- Analyzer current-size Fourier mapping is bitwise equal to RELION's
+  `windowFourierTransform` for 14 synthetic 128-to-60 spectra; the exact
+  binding test passes 9/9 and the frozen closing capture/parity gate passes
+  83/83.  The external binding and build-log SHA-256 values are
+  `b1ff4e99217665b56f96a59ade957a4cbf87b978ddefe7237ad08200858e995d`
+  and
+  `8a06d4c92717a94527470fae8bb843e7eb7fd044894d15a9779b30896eda88f2`.
+- Science/analysis roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_preprocess_boundary_9521fbac_20260730T033000ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_preprocess_analysis_9521fbac_20260730T025500ET`;
+  runtime roots with the same run IDs live under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/`.  All four roots
+  contain `SAFE_TO_DELETE`.
+- Exact same-device evidence rules out stack loading, normalization, rounded
+  shifts, zero-mask application, unmasked/masked current-size FFT
+  layout/units, and optics correction as a material source of the case-22
+  raw coarse residual.  Continue downstream of post-optics `op.Fimg` at
+  current-size score-input/pixel correction, `buildCorrImage`, or the
+  live-factorial conversion/interaction.  No production change is proposed.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 

@@ -1177,21 +1177,37 @@ factorial report SHA-256 is
 These diagnostics are non-scoring: K=1 remains 28/34 strict, 32/34
 topology, and 34/34 evaluated; K=4 remains 41/60 direct and 9/15 all-class.
 
-The next bounded diagnostic is additive RELION preprocessing capture patch
-0006.  It records the fixed cohort at raw input,
-normalized/rounded-shifted real, masked real, and unmasked/masked Fourier
-boundaries before and after optics correction.  Capture requires an explicit
-particle list, iteration, rank/follower cap, and byte cap; it supports only
-ordinary 2D single-body zero-mask runs, refuses overwrite, and reads no
-score, weight, reference, model, or map buffer.  Patch/source/binary SHA-256
-values are
+Additive RELION preprocessing capture patch 0006 records the fixed cohort at
+raw input, normalized/rounded-shifted real, masked real, and unmasked/masked
+Fourier boundaries before and after optics correction.  Capture requires an
+explicit particle list, iteration, rank/follower cap, and byte cap; it
+supports only ordinary 2D single-body zero-mask runs, refuses overwrite, and
+reads no score, weight, reference, model, or map buffer.  Patch/source/binary
+SHA-256 values are
 `a655a40e561167d1b39f1157d3ac3754751ac87e06448b3b5133bbca799517b4`,
 `6513f8a0dab566544b44ff117e0017dfbb5df2a466a4280df022a1d60ed92d7d`,
 and
 `982c15cfcdce94823c471228edef47839fa7d239ccac166c4ba66c829cd1f6ba`.
-The CUDA build and 76/76 focused tests pass.  Exact-device artifacts and the
-unchanged 3/3 FSC-AUC inertness gate are pending, so this preflight is
-non-scoring and proposes no production change.
+The CUDA build and 76/76 preflight tests pass.  Exact-device job `11783432`
+then completed 14/14 seven-stage captures and passed unchanged-map inertness
+3/3, with half-1, half-2, and merged non-DC FSC-AUC
+`0.9999999999801346`, `0.9999999999797552`, and
+`0.9999999999616417`.
+
+Dependent analyzer job `11783563` evaluates 14/14 particles with fixed
+scale-sensitive relative-L2 threshold `5e-7` and no fitted scale, sign, or
+correlation.  Raw disk, normalized real, and unmasked Fourier values are
+bitwise equal 14/14.  All five material-gap counts are 0/14; masked-real
+maximum relative-L2 is `1.5918e-8` and masked-Fourier maximum is
+`1.1845e-7`.  Optics correction is bitwise inert 14/14.  Classification is
+`all_preprocessing_boundaries_within_fixed_material_threshold`; analysis
+report SHA-256 is
+`e04fb43bdea0790d049284970ac9b50d9608e9e8ea1dfa659552cd09c00cdea2`.
+This rules out preprocessing through post-optics `op.Fimg` as a material
+case-22 cause and moves the bounded search to score-input pixel correction,
+`buildCorrImage`, or live-factorial conversion/interaction.  The frozen
+closing gate passes 83/83 tests and the exact RELION binding gate passes
+9/9.  This remains non-scoring and proposes no production change.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
