@@ -3,3 +3,4 @@ docs/patches/relion_bpref_prescatter_part_id_filter_bc319d0.patch whitespace=-tr
 docs/patches/relion_bpref_prescatter_chunked_capture_bc319d0.patch whitespace=-trailing-space,-space-before-tab
 docs/patches/0003-RELION-coarse-live-operand-capture.patch whitespace=-trailing-space,-space-before-tab
 docs/patches/0004-RELION-coarse-shifted-image-capture.patch whitespace=-trailing-space,-space-before-tab
+docs/patches/0005-RELION-coarse-Euler-device-copy.patch whitespace=-trailing-space,-space-before-tab

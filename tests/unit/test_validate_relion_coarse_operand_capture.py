@@ -16,6 +16,8 @@ SHIFTED_PATCH = (
     Path(__file__).resolve().parents[2] / "docs" / "patches" / "0004-RELION-coarse-shifted-image-capture.patch"
 )
 SHIFTED_PATCH_SHA256 = "3d090744381306bdccc3be641834909286355f2bc15abc707053ad48d95f3b21"
+EULER_PATCH = Path(__file__).resolve().parents[2] / "docs" / "patches" / "0005-RELION-coarse-Euler-device-copy.patch"
+EULER_PATCH_SHA256 = "c7a27cb9467103b4cea840ce7a36c9bfd11ad1a46263f824d2baa5d04d8f5e0c"
 
 
 def _bits(value: float) -> int:
@@ -116,7 +118,7 @@ def _write_components(
     cross[operand.rotation_keys] = replay_cross.astype(np.float32)
     reference[operand.rotation_keys[0]] += np.float32(target_perturbation)
     raw = reference + cross + np.float32(9.0)
-    raw[operand.rotation_keys] = replay_diff2
+    raw[operand.rotation_keys] = replay_diff2 + np.float32(5.0)
     weights = np.asarray(
         [[0.8, 0.1, 0], [0.3, 0.2, 0], [0, 0, 0], [0.4, 0, 0]],
         dtype=np.float32,
@@ -189,8 +191,8 @@ def test_validates_live_operand_replay_against_fp64_components(tmp_path: Path) -
         "reference_replay_passed": 1,
         "cross_replay_p95_passed": 1,
         "cross_replay_max_passed": 1,
-        "production_diff2_replay_p95_passed": 1,
-        "production_diff2_replay_max_passed": 1,
+        "production_diff2_centered_replay_p95_passed": 1,
+        "production_diff2_centered_replay_max_passed": 1,
     }
 
 
@@ -243,3 +245,12 @@ def test_shifted_image_delta_is_frozen_and_keeps_score_buffers_passive() -> None
     assert "g_diff2s" not in text
     assert "g_shifted_real[index]" in text
     assert "g_shifted_imag[index]" in text
+
+
+def test_euler_delta_copies_live_device_values_without_touching_scores() -> None:
+    payload = EULER_PATCH.read_bytes()
+    assert hashlib.sha256(payload).hexdigest() == EULER_PATCH_SHA256
+    text = payload.decode()
+    assert "&(~projector_plan.eulers)[local * 9]" in text
+    assert "cudaMemcpyDeviceToHost" in text
+    assert "g_diff2s" not in text

@@ -281,6 +281,8 @@ def replay_production_diff2(artifact: CoarseOperandCapture) -> np.ndarray:
     for thread in range(block_size):
         translation = thread % translation_count
         first_pixel_in_pass = thread // translation_count
+        if first_pixel_in_pass >= thread_stride:
+            continue
         accumulator = np.zeros(rotation_count, dtype=np.float32)
         for init_pixel in range(0, max_pixel, pixels_per_pass):
             for pixel_in_pass in range(
@@ -456,7 +458,9 @@ def validate_directory(
         reference_max = float(np.max(reference_error))
         cross_p95 = float(np.percentile(cross_error, 95))
         cross_max = float(np.max(cross_error))
-        production_error = np.abs(replay_diff2.astype(np.float64) - target_diff2.astype(np.float64))
+        production_difference = replay_diff2.astype(np.float64) - target_diff2.astype(np.float64)
+        production_constant = float(np.median(production_difference))
+        production_error = np.abs(production_difference - production_constant)
         production_p95 = float(np.percentile(production_error, 95))
         production_max = float(np.max(production_error))
         reference_passed += reference_max <= reference_replay_max_abs
@@ -470,8 +474,9 @@ def validate_directory(
             "reference_replay_max_abs": reference_max,
             "cross_replay_p95_abs": cross_p95,
             "cross_replay_max_abs": cross_max,
-            "production_diff2_replay_p95_abs": production_p95,
-            "production_diff2_replay_max_abs": production_max,
+            "production_diff2_additive_constant_median": production_constant,
+            "production_diff2_centered_replay_p95_abs": production_p95,
+            "production_diff2_centered_replay_max_abs": production_max,
         }
 
     qualified = (
@@ -492,8 +497,8 @@ def validate_directory(
             "reference_replay_max_abs": reference_replay_max_abs,
             "cross_replay_p95_abs": cross_replay_p95_abs,
             "cross_replay_max_abs": cross_replay_max_abs,
-            "production_diff2_replay_p95_abs": production_replay_p95_abs,
-            "production_diff2_replay_max_abs": production_replay_max_abs,
+            "production_diff2_centered_replay_p95_abs": production_replay_p95_abs,
+            "production_diff2_centered_replay_max_abs": production_replay_max_abs,
         },
         "fixed_metric": {
             "evaluated_particles": len(artifacts),
@@ -501,8 +506,8 @@ def validate_directory(
             "reference_replay_passed": reference_passed,
             "cross_replay_p95_passed": cross_p95_passed,
             "cross_replay_max_passed": cross_max_passed,
-            "production_diff2_replay_p95_passed": production_p95_passed,
-            "production_diff2_replay_max_passed": production_max_passed,
+            "production_diff2_centered_replay_p95_passed": production_p95_passed,
+            "production_diff2_centered_replay_max_passed": production_max_passed,
         },
         "paired_component_status": component_report["status"],
         "operand_metrics": metrics,

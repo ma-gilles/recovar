@@ -9429,7 +9429,25 @@ and `9/15` all-class.
   `5e-5`/`5e-4`.  Patch and rebuilt binary SHA-256 values are
   `3d090744381306bdccc3be641834909286355f2bc15abc707053ad48d95f3b21`
   and `2e415f5c982773bdf4e33bf4d44933cc6307fd8f096b5a7e58b73e97318d54f8`.
-  Six schema tests pass; exact-device science is pending and non-scoring.
+  Exact-device job `11780231` sealed all 14/14 component and 14/14 operand
+  artifacts plus the complete iteration-2 RELION output, then failed the
+  operand validator.  Its passive projected-reference kernel used the correct
+  device Euler array, but its metadata loop serialized an unsynchronised
+  host-side buffer containing finite garbage up to `2.8283851e38`.
+- Recovered half-1, half-2, and merged map inertness for job `11780231`
+  passes 3/3 at FSC-AUC `0.9999999999798187`, `0.9999999999793953`, and
+  `0.9999999999599425`.  An unaffected-operand audit also found the validator
+  must preserve RELION's CUDA guard
+  `tid / translation_num < block_size / translation_num`.  With that exact
+  guard, centered production-diff2 replay passes p95 and maximum 14/14 at
+  no more than `3.0517578125e-5`, below the unchanged gates.  This remains
+  diagnostic because the Euler payload is invalid.
+- Patch 0005 copies each nine-value Euler matrix directly from device memory.
+  Patch and corrected binary SHA-256 values are
+  `c7a27cb9467103b4cea840ce7a36c9bfd11ad1a46263f824d2baa5d04d8f5e0c`
+  and `ce07fc71246d382e4630a3e36dc41004f2e29cc07dd834155efa4ecfc5da9374`.
+  Seven schema tests pass; a clean recapture is required and remains
+  non-scoring.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 

@@ -1,0 +1,20 @@
+diff --git a/src/acc/acc_ml_optimiser_impl.h b/src/acc/acc_ml_optimiser_impl.h
+index d85eb85..4fcef15 100644
+--- a/src/acc/acc_ml_optimiser_impl.h
++++ b/src/acc/acc_ml_optimiser_impl.h
+@@ -777,9 +777,12 @@ void relion_capture_coarse_operands_v1(
+ 	for (std::size_t target = 0; target < rotation_count; target++)
+ 	{
+ 		const std::uint64_t local = local_rotation_indices[target];
+-		for (std::size_t element = 0; element < 9; element++)
+-			matrices[target * 9 + element] =
+-				static_cast<float>(projector_plan.eulers[local * 9 + element]);
++		DEBUG_HANDLE_ERROR(cudaMemcpyAsync(
++			&matrices[target * 9],
++			&(~projector_plan.eulers)[local * 9],
++			9 * sizeof(XFLOAT),
++			cudaMemcpyDeviceToHost,
++			stream));
+ 		AccUtilities::capture_diff2_coarse_reference<D2C_BLOCK_SIZE_REF3D>(
+ 			~projector_plan.eulers,
+ 			projector,

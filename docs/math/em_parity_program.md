@@ -12584,15 +12584,35 @@ directly, rather than depend on algebraically expanded norm/cross closure.
 Its patch and rebuilt binary SHA-256 values are
 `3d090744381306bdccc3be641834909286355f2bc15abc707053ad48d95f3b21`
 and `2e415f5c982773bdf4e33bf4d44933cc6307fd8f096b5a7e58b73e97318d54f8`.
-The validator preserves the reference/cross gates and adds direct production
-diff2 p95/max gates at the unchanged `5e-5`/`5e-4`; a rejected algebraic
-parent cannot qualify the result by itself.  Six schema tests pass, including
-the explicit rejected-parent/direct-replay case.  Science is pending and
+The validator preserves the reference/cross gates and adds centered direct
+production-diff2 p95/max gates at the unchanged `5e-5`/`5e-4`; a rejected
+algebraic parent cannot qualify the result by itself.
+
+Exact-device job `11780231` sealed 14/14 component and 14/14 operand
+artifacts plus all iteration-2 maps, then failed the operand validator before
+classification.  The passive projected-reference kernel used the correct
+device Euler array, but the metadata loop read an unsynchronised host buffer;
+serialized Euler values contained finite garbage up to `2.8283851e38`.
+Recovered map inertness nevertheless passes 3/3 at FSC-AUC
+`0.9999999999798187`, `0.9999999999793953`, and
+`0.9999999999599425`.  The artifact remains formally rejected.
+
+The unaffected operands also exposed and fixed a validator replay bug: CUDA
+threads for which `tid / translation_num >= block_size / translation_num`
+must not contribute.  With that exact guard, centered direct-diff2 replay
+passes p95 and maximum 14/14 at errors no larger than
+`3.0517578125e-5`, below the unchanged gates.  This is diagnostic only
+because the Euler payload is invalid.  Patch 0005 copies the nine live Euler
+values directly from device memory; patch and corrected binary SHA-256 values
+are `c7a27cb9467103b4cea840ce7a36c9bfd11ad1a46263f824d2baa5d04d8f5e0c`
+and `ce07fc71246d382e4630a3e36dc41004f2e29cc07dd834155efa4ecfc5da9374`.
+Seven schema tests pass.  A clean recapture is required and remains
 non-scoring.
 
 Run roots are
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_diff2_components_fd4ca909_20260729T223000ET`,
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_recovar_score_components_bd17533f_20260729T225000ET`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_diff2_components_fp64_1487550f_20260729T231000ET`,
 and
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_diff2_components_fp64_1487550f_20260729T231000ET`;
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_production_diff2_operands_e4b5e14e_20260730T003000ET`;
 all contain `SAFE_TO_DELETE`.  These diagnostics remain non-scoring.

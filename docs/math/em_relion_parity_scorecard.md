@@ -1145,9 +1145,19 @@ original production squared-difference path directly at unchanged
 `3d090744381306bdccc3be641834909286355f2bc15abc707053ad48d95f3b21`;
 rebuilt binary SHA-256 is
 `2e415f5c982773bdf4e33bf4d44933cc6307fd8f096b5a7e58b73e97318d54f8`.
-Science is pending.  These diagnostics are non-scoring: K=1 remains 28/34
-strict, 32/34 topology, and 34/34 evaluated; K=4 remains 41/60 direct and
-9/15 all-class.
+Exact-device job `11780231` sealed all 14/14 paired artifacts and maps, but
+is rejected because serialized Euler metadata came from an unsynchronised
+host buffer and contained finite garbage up to `2.8283851e38`.  Recovered
+map inertness passes 3/3 with minimum FSC-AUC above `0.99999999995`.
+Unaffected-operand inspection also corrected the CUDA thread guard in the
+validator; centered direct-diff2 p95/max then pass 14/14 below the unchanged
+`5e-5`/`5e-4` gates.  No result is promoted from the invalid artifact.
+Patch 0005 now copies Euler values from device memory; its corrected binary
+SHA-256 is
+`ce07fc71246d382e4630a3e36dc41004f2e29cc07dd834155efa4ecfc5da9374`.
+A clean recapture is pending.  These diagnostics are non-scoring: K=1
+remains 28/34 strict, 32/34 topology, and 34/34 evaluated; K=4 remains
+41/60 direct and 9/15 all-class.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
