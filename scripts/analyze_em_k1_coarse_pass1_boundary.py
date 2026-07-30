@@ -73,6 +73,23 @@ def _map_relion_rotations_to_recovar(
     return shaped.transpose(axes).reshape(values.shape)
 
 
+def _relion_parent_to_recovar(
+    relion_orientation_class_key: int,
+    *,
+    n_directions: int,
+    n_psi: int,
+) -> int:
+    """Convert one RELION direction-major parent key to RECOVAR psi-major."""
+
+    n_parents = n_directions * n_psi
+    _require(
+        0 <= relion_orientation_class_key < n_parents,
+        "RELION orientation-class key is out of range",
+    )
+    direction_id, psi_id = divmod(relion_orientation_class_key, n_psi)
+    return psi_id * n_directions + direction_id
+
+
 def _translation_permutation(
     relion_translations: np.ndarray,
     recovar_translations: np.ndarray,
@@ -184,7 +201,8 @@ def _recovar_by_original_index(directory: Path) -> dict[int, dict[str, Any]]:
 
 def _parent_row(
     *,
-    parent_id: int,
+    relion_orientation_class_key: int,
+    canonical_parent_id: int,
     expected_side: str,
     relion_data_scores: np.ndarray,
     recovar_data_scores: np.ndarray,
@@ -197,6 +215,7 @@ def _parent_row(
     common_prior_support: np.ndarray,
     prior_support_exact: np.ndarray,
 ) -> dict[str, Any]:
+    parent_id = canonical_parent_id
     _require(0 <= parent_id < relion_mask.shape[0], "target parent is out of range")
     _require(
         np.count_nonzero(common_prior_support[parent_id]) > 0,
@@ -221,7 +240,8 @@ def _parent_row(
         else recovar_present and not relion_present
     )
     return {
-        "parent_id": int(parent_id),
+        "relion_orientation_class_key": int(relion_orientation_class_key),
+        "canonical_parent_id": int(canonical_parent_id),
         "expected_side": expected_side,
         "relion_significant": relion_present,
         "recovar_significant": recovar_present,
@@ -320,10 +340,16 @@ def _compare_particle(
     )
 
     target_parents = []
-    for parent_id in row["relion_only_parent_ids"]:
+    for relion_orientation_class_key in row["relion_only_parent_ids"]:
+        canonical_parent_id = _relion_parent_to_recovar(
+            relion_orientation_class_key,
+            n_directions=n_directions,
+            n_psi=n_psi,
+        )
         target_parents.append(
             _parent_row(
-                parent_id=parent_id,
+                relion_orientation_class_key=relion_orientation_class_key,
+                canonical_parent_id=canonical_parent_id,
                 expected_side="relion_only",
                 relion_data_scores=relion_data_scores,
                 recovar_data_scores=recovar_data_scores,
@@ -337,10 +363,16 @@ def _compare_particle(
                 prior_support_exact=prior_support_exact,
             )
         )
-    for parent_id in row["recovar_only_parent_ids"]:
+    for relion_orientation_class_key in row["recovar_only_parent_ids"]:
+        canonical_parent_id = _relion_parent_to_recovar(
+            relion_orientation_class_key,
+            n_directions=n_directions,
+            n_psi=n_psi,
+        )
         target_parents.append(
             _parent_row(
-                parent_id=parent_id,
+                relion_orientation_class_key=relion_orientation_class_key,
+                canonical_parent_id=canonical_parent_id,
                 expected_side="recovar_only",
                 relion_data_scores=relion_data_scores,
                 recovar_data_scores=recovar_data_scores,

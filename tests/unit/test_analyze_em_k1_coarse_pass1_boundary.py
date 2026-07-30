@@ -5,6 +5,7 @@ import numpy as np
 from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _map_relion_rotations_to_recovar,
     _map_relion_table,
+    _relion_parent_to_recovar,
     _relion_prior_support,
     _score_gate,
     _stats,
@@ -32,6 +33,19 @@ def test_direction_major_relion_grid_maps_to_psi_major_recovar_grid() -> None:
         mapped,
         relion[[0, 2, 4, 1, 3, 5]],
     )
+
+
+def test_relion_parent_key_maps_to_recovar_rotation_row() -> None:
+    assert _relion_parent_to_recovar(
+        23252,
+        n_directions=768,
+        n_psi=48,
+    ) == 15844
+    assert _relion_parent_to_recovar(
+        48,
+        n_directions=768,
+        n_psi=48,
+    ) == 1
 
 
 def test_translation_mapping_recovers_offset_scale_and_permutation() -> None:
