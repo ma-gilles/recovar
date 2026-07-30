@@ -23,7 +23,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v12"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v13"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -970,6 +970,266 @@ def _selected_candidate_component_attribution(
     }
 
 
+def _partition_rotation_family_attribution(
+    *,
+    weight_delta: np.ndarray,
+    recovar_rotation_row: np.ndarray,
+    native_rotation_local: np.ndarray,
+    translation_id: np.ndarray,
+    global_signed_contribution: float,
+    global_absolute_contribution: float,
+    selected_rotation: int,
+    selected_translations: tuple[int, ...],
+) -> dict[str, Any]:
+    """Aggregate shared-reference partition contributions by rotation."""
+
+    weight_delta = np.asarray(weight_delta, dtype=np.float64)
+    recovar_rotation_row = np.asarray(
+        recovar_rotation_row,
+        dtype=np.int64,
+    )
+    native_rotation_local = np.asarray(
+        native_rotation_local,
+        dtype=np.int64,
+    )
+    translation_id = np.asarray(translation_id, dtype=np.int64)
+    arrays = (
+        weight_delta,
+        recovar_rotation_row,
+        native_rotation_local,
+        translation_id,
+    )
+    _require(
+        len({array.shape for array in arrays}) == 1,
+        "partition rotation-family array shapes differ",
+    )
+    _require(weight_delta.size > 0, "partition rotation-family table is empty")
+    direct_signed = math.fsum(float(value) for value in weight_delta)
+    direct_absolute = math.fsum(
+        abs(float(value)) for value in weight_delta
+    )
+    _require(
+        direct_signed == global_signed_contribution,
+        "partition family signed input does not replay V12",
+    )
+    _require(
+        direct_absolute == global_absolute_contribution,
+        "partition family absolute input does not replay V12",
+    )
+    _require(
+        direct_absolute > 0.0,
+        "partition rotation-family absolute contribution is zero",
+    )
+
+    families = []
+    family_rows: dict[int, np.ndarray] = {}
+    for rotation in sorted(
+        int(value) for value in np.unique(recovar_rotation_row)
+    ):
+        rows = np.flatnonzero(recovar_rotation_row == rotation)
+        native_rotations = np.unique(native_rotation_local[rows])
+        _require(
+            native_rotations.size == 1,
+            "mapped rotation has multiple native rotation owners",
+        )
+        signed = math.fsum(float(weight_delta[row]) for row in rows)
+        absolute = math.fsum(
+            abs(float(weight_delta[row])) for row in rows
+        )
+        families.append(
+            {
+                "recovar_rotation_row": rotation,
+                "native_rotation_local": int(native_rotations[0]),
+                "candidate_count": int(rows.size),
+                "signed_partition_contribution": float(signed),
+                "absolute_partition_contribution": float(absolute),
+                "within_family_cancellation_fraction": float(
+                    0.0 if absolute == 0.0 else 1.0 - abs(signed) / absolute
+                ),
+                "share_of_global_absolute_partition_contributions": float(
+                    absolute / direct_absolute
+                ),
+            }
+        )
+        family_rows[rotation] = rows
+    ranked_families = sorted(
+        families,
+        key=lambda record: (
+            -record["absolute_partition_contribution"],
+            record["recovar_rotation_row"],
+        ),
+    )
+    for rank, record in enumerate(ranked_families, start=1):
+        record["absolute_partition_family_rank_1based"] = rank
+
+    family_concentration = {}
+    for count in (1, 3, 10):
+        family_concentration[f"top_{count}"] = float(
+            math.fsum(
+                record["absolute_partition_contribution"]
+                for record in ranked_families[:count]
+            )
+            / direct_absolute
+        )
+    family_signed_sum = math.fsum(
+        record["signed_partition_contribution"] for record in families
+    )
+    family_absolute_sum = math.fsum(
+        record["absolute_partition_contribution"] for record in families
+    )
+
+    selected_family = next(
+        (
+            record
+            for record in ranked_families
+            if record["recovar_rotation_row"] == selected_rotation
+        ),
+        None,
+    )
+    missing_selected_rotations = (
+        [] if selected_family is not None else [int(selected_rotation)]
+    )
+    selected_family_detail = None
+    if selected_family is not None:
+        rows = family_rows[int(selected_rotation)]
+        translations = []
+        for translation in sorted(
+            int(value) for value in np.unique(translation_id[rows])
+        ):
+            translation_rows = rows[translation_id[rows] == translation]
+            signed = math.fsum(
+                float(weight_delta[row]) for row in translation_rows
+            )
+            absolute = math.fsum(
+                abs(float(weight_delta[row])) for row in translation_rows
+            )
+            translations.append(
+                {
+                    "translation_id": translation,
+                    "candidate_count": int(translation_rows.size),
+                    "signed_partition_contribution": float(signed),
+                    "absolute_partition_contribution": float(absolute),
+                    "within_translation_cancellation_fraction": float(
+                        0.0
+                        if absolute == 0.0
+                        else 1.0 - abs(signed) / absolute
+                    ),
+                    "share_of_target_family_absolute_contributions": float(
+                        0.0
+                        if selected_family[
+                            "absolute_partition_contribution"
+                        ]
+                        == 0.0
+                        else absolute
+                        / selected_family[
+                            "absolute_partition_contribution"
+                        ]
+                    ),
+                }
+            )
+        ranked_translations = sorted(
+            translations,
+            key=lambda record: (
+                -record["absolute_partition_contribution"],
+                record["translation_id"],
+            ),
+        )
+        for rank, record in enumerate(ranked_translations, start=1):
+            record["absolute_translation_rank_1based"] = rank
+        translation_by_id = {
+            record["translation_id"]: record
+            for record in ranked_translations
+        }
+        selected_translation_ids = tuple(
+            dict.fromkeys(int(value) for value in selected_translations)
+        )
+        selected_translation_records = [
+            translation_by_id[translation]
+            for translation in selected_translation_ids
+            if translation in translation_by_id
+        ]
+        missing_selected_translations = [
+            translation
+            for translation in selected_translation_ids
+            if translation not in translation_by_id
+        ]
+        target_absolute = selected_family[
+            "absolute_partition_contribution"
+        ]
+        translation_concentration = {}
+        for count in (1, 3, 10):
+            translation_concentration[f"top_{count}"] = float(
+                0.0
+                if target_absolute == 0.0
+                else math.fsum(
+                    record["absolute_partition_contribution"]
+                    for record in ranked_translations[:count]
+                )
+                / target_absolute
+            )
+        selected_absolute = math.fsum(
+            record["absolute_partition_contribution"]
+            for record in selected_translation_records
+        )
+        selected_signed = math.fsum(
+            record["signed_partition_contribution"]
+            for record in selected_translation_records
+        )
+        selected_family_detail = {
+            **selected_family,
+            "translation_group_count": len(ranked_translations),
+            "translation_ranking_rule": (
+                "descending_absolute_partition_contribution_then_"
+                "ascending_translation_id"
+            ),
+            "translation_concentration": translation_concentration,
+            "top_10_translations": ranked_translations[:10],
+            "selected_translation_ids": list(selected_translation_ids),
+            "missing_selected_translation_ids": (
+                missing_selected_translations
+            ),
+            "selected_translations": selected_translation_records,
+            "selected_signed_partition_contribution": float(
+                selected_signed
+            ),
+            "selected_absolute_partition_contribution": float(
+                selected_absolute
+            ),
+            "selected_share_of_target_family_absolute_contributions": float(
+                0.0
+                if target_absolute == 0.0
+                else selected_absolute / target_absolute
+            ),
+        }
+
+    return {
+        "scope": (
+            "complete_rotation_family_partition_of_shared_reference_"
+            "candidate_weight_deltas"
+        ),
+        "rotation_family_ranking_rule": (
+            "descending_absolute_partition_contribution_then_"
+            "ascending_recovar_rotation_row"
+        ),
+        "rotation_family_count": len(ranked_families),
+        "candidate_order_signed_replay": float(direct_signed),
+        "candidate_order_absolute_replay": float(direct_absolute),
+        "family_signed_contribution_sum": float(family_signed_sum),
+        "family_signed_replay_residual": float(
+            family_signed_sum - direct_signed
+        ),
+        "family_absolute_contribution_sum": float(family_absolute_sum),
+        "family_absolute_replay_residual": float(
+            family_absolute_sum - direct_absolute
+        ),
+        "rotation_family_concentration": family_concentration,
+        "top_10_rotation_families": ranked_families[:10],
+        "selected_recovar_rotation_row": int(selected_rotation),
+        "missing_selected_rotation_rows": missing_selected_rotations,
+        "selected_rotation_family": selected_family_detail,
+    }
+
+
 def _softmax_partition_contribution_attribution(
     *,
     native_combined: np.ndarray,
@@ -1144,6 +1404,18 @@ def _softmax_partition_contribution_attribution(
     log_partition_ratio = math.log(recovar_partition) - math.log(
         native_partition
     )
+    rotation_family_attribution = (
+        _partition_rotation_family_attribution(
+            weight_delta=weight_delta,
+            recovar_rotation_row=recovar_rotation_row,
+            native_rotation_local=native_rotation_local,
+            translation_id=translation_id,
+            global_signed_contribution=contribution_sum,
+            global_absolute_contribution=absolute_contribution_sum,
+            selected_rotation=selected_rotation,
+            selected_translations=selected_translations,
+        )
+    )
     return {
         "scope": (
             "shared_reference_softmax_partition_contributions_"
@@ -1197,6 +1469,7 @@ def _softmax_partition_contribution_attribution(
         "selected_share_of_absolute_partition_contributions": float(
             selected_absolute_sum / absolute_contribution_sum
         ),
+        "rotation_family_attribution": rotation_family_attribution,
     }
 
 

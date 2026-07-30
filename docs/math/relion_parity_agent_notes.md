@@ -10247,6 +10247,57 @@ and `9/15` all-class.
 - This remains descriptive: no production change or new job is authorized,
   and fixed K=1/K=4 scorecards are unchanged.
 
+## 2026-07-30 K=4 partition rotation-family predeclaration
+
+- V13 groups all V12 shared-reference candidate weight deltas by mapped
+  RECOVAR rotation and one-to-one native rotation.
+- Each family reports signed and absolute contribution, cancellation, global
+  share, and deterministic rank.  Top-1/top-3/top-10 concentration and
+  signed/absolute replay are fixed before evaluation.
+- Target rotation `2626` / native `1210` is explicit and is further grouped
+  by translation, including fixed translations `78,83,76,80,82`.
+- The threshold-free question is whether the complete target family
+  dominates aggregate partition movement and how much the fixed translations
+  cover, given that V12 found seven target-family candidates in its top ten
+  but only `7.888371397363057%` global coverage for the fixed five.
+- This cannot identify a raw operand, authorize a fix or new job, change the
+  scorecard, or establish full K=4 posterior/FSC-AUC parity.
+- Predeclaration:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_partition_rotation_families_v13_75cf45b6_20260730T174915ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+## 2026-07-30 K=4 partition rotation-family result
+
+- All `2968` rotation families replay the V12 signed and absolute candidate
+  totals exactly, with zero residual.
+- Target rotation `2626` / native `1210` ranks first at
+  `19.13906864978897%` of global absolute partition movement.  Rotation
+  `947` ranks second at `10.906452683930534%`.
+- Family top-1/top-3/top-10 concentration is
+  `19.13906864978897%` / `34.95688802532688%` /
+  `55.30006470453038%`.  The target is the largest family but not a majority;
+  the aggregate shift remains multi-family.
+- Target-family signed contribution is `+0.00021664740697420007` against
+  absolute `0.0002172067577153348`, only
+  `0.25751995334684086%` cancellation.
+- Within the target family, queued translations `80` and `82` rank first and
+  second at `14.049798813571693%` each; translation `83` ranks third at
+  `13.116469579188697%`.
+- Fixed translations `78,83,76,80,82` cover
+  `41.216067206332085%` of target-family absolute movement because `78,76`
+  contribute zero.  The queued pair alone covers `28.099597627143386%`.
+- Translation top-1/top-3/top-10 concentration within the family is
+  `14.049798813571693%` / `41.216067206332085%` /
+  `77.26998635364659%`.
+- The queued pair therefore probes the two strongest contributors inside the
+  globally leading family, but cannot alone explain the complete target
+  family or multi-family normalization shift.  No new job or production
+  change is authorized.
+- Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+  `ceb413ca73e1322eb4a1c2f5dd386e71fc608537b59e7b74d65e966d49c37c8e`.
+  Removing only the V13 schema and family report reproduces V12 exactly.
+- Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and `34/34`
+  evaluated; K=4 `41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 K=4 marginal-TV concentration predeclaration
 
 - V9 will rank every V8 rotation and translation marginal by

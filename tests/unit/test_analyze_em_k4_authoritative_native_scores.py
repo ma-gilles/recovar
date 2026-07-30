@@ -319,7 +319,7 @@ def test_softmax_partition_contributions_replay_and_rank() -> None:
         native_combined=np.asarray([0.0, 0.0]),
         recovar_combined=np.asarray([0.0, np.log(2.0)]),
         native_candidate_index=np.asarray([7, 8]),
-        native_rotation_local=np.asarray([11, 12]),
+        native_rotation_local=np.asarray([11, 11]),
         recovar_rotation_row=np.asarray([21, 21]),
         translation_id=np.asarray([31, 32]),
         selected_rotation=21,
@@ -344,6 +344,43 @@ def test_softmax_partition_contributions_replay_and_rank() -> None:
     assert selected[0]["combined_score_delta_recovar_minus_native"] == 0.0
     assert selected[0]["partition_contribution_recovar_minus_native"] == 0.0
     assert selected[1]["partition_contribution_recovar_minus_native"] == 0.5
+
+
+def test_partition_rotation_families_replay_and_rank() -> None:
+    report = analyzer._partition_rotation_family_attribution(
+        weight_delta=np.asarray([0.5, -0.25, 0.125]),
+        recovar_rotation_row=np.asarray([10, 10, 20]),
+        native_rotation_local=np.asarray([1, 1, 2]),
+        translation_id=np.asarray([1, 2, 1]),
+        global_signed_contribution=0.375,
+        global_absolute_contribution=0.875,
+        selected_rotation=10,
+        selected_translations=(1, 3),
+    )
+
+    assert report["rotation_family_count"] == 2
+    assert report["candidate_order_signed_replay"] == 0.375
+    assert report["candidate_order_absolute_replay"] == 0.875
+    assert report["family_signed_replay_residual"] == 0.0
+    assert report["family_absolute_replay_residual"] == 0.0
+    assert report["rotation_family_concentration"]["top_1"] == 6.0 / 7.0
+    assert [
+        family["recovar_rotation_row"]
+        for family in report["top_10_rotation_families"]
+    ] == [10, 20]
+    target = report["selected_rotation_family"]
+    assert target["native_rotation_local"] == 1
+    assert target["absolute_partition_family_rank_1based"] == 1
+    assert target["signed_partition_contribution"] == 0.25
+    assert target["absolute_partition_contribution"] == 0.75
+    assert target["within_family_cancellation_fraction"] == (
+        0.6666666666666667
+    )
+    assert target["missing_selected_translation_ids"] == [3]
+    assert target["selected_translations"][0]["translation_id"] == 1
+    assert target[
+        "selected_share_of_target_family_absolute_contributions"
+    ] == 2.0 / 3.0
 
 
 def test_target_score_offset_attribution_closes_exact_decomposition() -> None:

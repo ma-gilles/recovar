@@ -13495,3 +13495,56 @@ This remains descriptive and does not authorize a production change or job.
 Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
 `fbb54f53f4da3a4a6428fd988752b6716214a752ef356461cda2af3f703737ca`.
 Removing only the V12 schema and partition report reproduces V11 exactly.
+
+### Predeclared K=4 partition rotation families
+
+V13 groups every V12 shared-reference candidate weight delta by its mapped
+RECOVAR rotation and one-to-one native rotation.  It ranks families by their
+complete absolute candidate contribution, reports signed contribution and
+within-family cancellation, and replays the V12 signed and absolute totals.
+Top-1/top-3/top-10 family concentration is fixed before evaluation.
+
+Mapped target rotation `2626` / native `1210` is explicit.  Within that
+family, V13 similarly ranks translations by absolute contribution and reports
+fixed translations `78,83,76,80,82`.  This asks whether the family as a whole
+dominates the diffuse V12 normalizer shift, and how much of that family is
+covered by the already selected translations.
+
+This is a threshold-free one-class diagnostic.  It cannot establish a
+complete K=4 posterior or FSC/FSC-AUC result, identify a raw operand,
+authorize a production fix or new job, or change the fixed scorecard.  The
+predeclaration is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_partition_rotation_families_v13_75cf45b6_20260730T174915ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+The sealed V13 family sums replay both V12 signed and absolute candidate
+contributions exactly, with zero residual across `2968` rotation families.
+Target rotation `2626` / native `1210` ranks first and carries
+`19.13906864978897%` of global absolute partition movement.  It is the
+largest individual family but not a majority: rank-2 rotation `947` carries
+`10.906452683930534%`, and family top-1/top-3/top-10 concentration is
+`19.13906864978897%` / `34.95688802532688%` /
+`55.30006470453038%`.
+
+The target family's signed contribution is `+0.00021664740697420007`
+against absolute contribution `0.0002172067577153348`, only
+`0.25751995334684086%` cancellation.  Its movement is therefore strongly
+coherent rather than a large absolute total hidden by sign cancellation.
+
+Within target rotation `2626`, queued translations `80` and `82` rank first
+and second at `14.049798813571693%` each of family absolute contribution.
+Translation `83` ranks third at `13.116469579188697%`.  The fixed five
+translations cover `41.216067206332085%` of the target family because
+`78,76` contribute zero; the queued pair alone covers
+`28.099597627143386%`.  Translation top-1/top-3/top-10 concentration is
+`14.049798813571693%` / `41.216067206332085%` /
+`77.26998635364659%`.
+
+Thus the already queued `80,82` pair covers the two strongest contributors
+inside the globally leading rotation family, while the unqueued `83` is the
+third.  The pair is a well-localized causal gate, but it cannot alone explain
+the complete target family or multi-family normalizer shift.  No new job or
+production change is authorized before the existing pair qualifies.
+Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+`ceb413ca73e1322eb4a1c2f5dd386e71fc608537b59e7b74d65e966d49c37c8e`.
+Removing only the V13 schema and rotation-family report reproduces V12
+exactly.
