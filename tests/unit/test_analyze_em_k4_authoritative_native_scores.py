@@ -96,7 +96,7 @@ def test_normalized_mass_strata_partition_and_rank_deterministically() -> None:
         stratum_ids=np.asarray([1, 1, 2, 2]),
         stratum_name="rotation",
         native_score_mass=np.asarray([0.4, 0.3, 0.2, 0.1]),
-        recovar_score_mass=np.asarray([0.3, 0.4, 0.25, 0.05]),
+        recovar_score_mass=np.asarray([0.35, 0.4, 0.2, 0.05]),
         native_candidate_index=np.asarray([30, 10, 40, 20]),
         selected_stratum_ids=(2, 3),
         paired_ids=np.asarray([9, 9, 7, 7]),
@@ -105,17 +105,33 @@ def test_normalized_mass_strata_partition_and_rank_deterministically() -> None:
 
     assert report["group_count"] == 2
     assert report["candidate_count"] == 4
-    assert report["candidate_level_total_variation"] == 0.15000000000000002
-    assert report["summed_stratum_tv_contributions"] == 0.15000000000000002
+    assert report["candidate_level_total_variation"] == 0.10000000000000003
+    assert report["summed_stratum_tv_contributions"] == 0.10000000000000003
     assert report["partition_replay_residual"] == 0.0
+    assert report["marginal_distribution_l1"] == 0.09999999999999999
+    assert report["marginal_distribution_total_variation"] == (
+        0.049999999999999996
+    )
+    assert report["marginal_tv_fraction_of_candidate_level_tv"] == (
+        0.4999999999999998
+    )
+    assert report["within_stratum_cancellation_total_variation"] == (
+        0.05000000000000004
+    )
+    assert (
+        report[
+            "within_stratum_cancellation_fraction_of_candidate_level_tv"
+        ]
+        == 0.5000000000000002
+    )
     assert [row["rotation"] for row in report["top_10"]] == [1, 2]
     assert report["top_10"][0]["candidate_level_tv_rank_1based"] == 1
     assert report["top_10"][0]["native_rotation"] == 9
     assert report["top_10"][0]["candidate_level_tv_contribution"] == (
-        0.10000000000000003
+        0.07500000000000004
     )
     assert report["top_10"][0]["share_of_total_candidate_level_tv"] == (
-        0.6666666666666667
+        0.7500000000000001
     )
     assert report["top_10"][0]["max_absolute_delta_representative"][
         "native_candidate_index"

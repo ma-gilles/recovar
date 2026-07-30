@@ -10083,3 +10083,35 @@ and `9/15` all-class.
   `3e36504a797a226404259443bede9f671e04907ba0977af72fad39baf8acf7da`.
   No process or job was killed, signalled, suspended, cancelled,
   reprioritized, or otherwise altered.
+
+## 2026-07-30 K=4 marginal score-mass survival
+
+- V8 answers the predeclared decision-relevance question using the complete
+  V7 mapped-rotation and translation partitions.  Within each stratum it sums
+  signed RECOVAR-minus-native normalized-mass deltas with `math.fsum`; it then
+  computes one-half the fixed-order sum of absolute stratum deltas.  No
+  threshold, fit, correlation, or pass/fail classification is introduced.
+- The unchanged candidate-level total variation is
+  `6.808398793631863e-6`.  Across all 2,968 rotation groups, marginal TV is
+  `1.8554921714932912e-6`: `27.25298895870787%` survives and
+  `72.74701104129214%` cancels within rotations.
+- Across all 104 translation groups, marginal TV is
+  `2.056175817468767e-6`: `30.20057842957115%` survives and
+  `69.79942157042885%` cancels within translations.  Translation marginal TV
+  exceeds rotation by `2.0068364597547566e-7`, or only
+  `10.815655762857054%` relative to the rotation marginal.
+- Most candidate-level mass movement therefore cancels under either
+  marginal.  The modest translation excess supports completing the already
+  queued target-translation operand comparison but does not identify a
+  production cause, justify another science job, or replace a full K=4
+  posterior/FSC-AUC gate.
+- Thread-count-1 and thread-count-8 reports are byte-identical at
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_marginal_score_mass_v8_ff7dff79_20260730T1635ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V8_THREADS1.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_marginal_score_mass_v8_ff7dff79_20260730T1635ET/analysis/EXACT_DEVICE_NATIVE_SCORE_AUDIT_V8_THREADS8.json`,
+  SHA-256
+  `e9f7178a9280f9e7010dc7f7d92d883b8000ce1dc0e5e22f8dd49b89a73fda39`.
+  Removing only the V8 schema and ten new marginal/cancellation fields
+  reproduces V7 exactly.
+- This remains non-scoring: K=1 is `28/34` strict, `32/34` topology, and
+  `34/34` evaluated; K=4 is `41/60` direct and `9/15` all-class.

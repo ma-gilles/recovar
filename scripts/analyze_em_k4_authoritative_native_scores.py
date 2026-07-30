@@ -23,7 +23,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v7"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v8"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -237,6 +237,14 @@ def _normalized_mass_strata(
         float(record["candidate_level_tv_contribution"])
         for record in records
     )
+    marginal_l1 = math.fsum(
+        abs(float(record["marginal_mass_delta_recovar_minus_native"]))
+        for record in records
+    )
+    marginal_total_variation = 0.5 * marginal_l1
+    within_stratum_cancellation = (
+        total_variation - marginal_total_variation
+    )
     return {
         "stratum_identity": stratum_name,
         "partition_metric": (
@@ -249,6 +257,25 @@ def _normalized_mass_strata(
         "summed_stratum_tv_contributions": float(stratum_tv_sum),
         "partition_replay_residual": float(
             stratum_tv_sum - total_variation
+        ),
+        "marginal_distribution_l1": float(marginal_l1),
+        "marginal_distribution_total_variation": float(
+            marginal_total_variation
+        ),
+        "marginal_tv_fraction_of_candidate_level_tv": float(
+            0.0
+            if total_variation == 0.0
+            else marginal_total_variation / total_variation
+        ),
+        "within_stratum_cancellation_total_variation": float(
+            within_stratum_cancellation
+        ),
+        "within_stratum_cancellation_fraction_of_candidate_level_tv": (
+            float(
+                0.0
+                if total_variation == 0.0
+                else within_stratum_cancellation / total_variation
+            )
         ),
         "ranking_rule": (
             "descending_candidate_level_tv_contribution_then_"

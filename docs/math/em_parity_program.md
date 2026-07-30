@@ -13274,3 +13274,32 @@ operand owner remains pending.  The read-only validity snapshot is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_active_job_validity_b8303926_20260730T1620ET/provenance/ACTIVE_K4_JOB_VALIDITY.md`,
 SHA-256
 `3e36504a797a226404259443bede9f671e04907ba0977af72fad39baf8acf7da`.
+
+### Predeclared K=4 marginal score-mass diagnostic
+
+While the exact-device raw/operand jobs remain pending, the next fixed
+question is whether V7's candidate-level total variation survives into the
+mapped-rotation or translation marginal distributions, or cancels within
+those strata.  For each complete identity partition, sum signed normalized
+mass deltas within each stratum in ascending aligned-candidate order, then
+compute one-half the `math.fsum` of absolute stratum deltas.  Report:
+
+- marginal-distribution total variation;
+- its fraction of the unchanged candidate-level total variation;
+- candidate-level variation removed by within-stratum cancellation.
+
+The rotation and translation partitions remain the exact 2,968 and 104 groups
+from V7.  No threshold, fit, correlation, pass/fail classification, map claim,
+or scorecard change is permitted.  The result may prioritize the already
+queued operand analysis but cannot authorize another science job or a
+production change.
+
+The sealed V8 result retains the unchanged candidate-level TV
+`6.808398793631863e-6`.  Rotation marginal TV is
+`1.8554921714932912e-6` (`27.25298895870787%` retained,
+`72.74701104129214%` cancelled).  Translation marginal TV is
+`2.056175817468767e-6` (`30.20057842957115%` retained,
+`69.79942157042885%` cancelled).  Translation retains only `1.1081565576x`
+the rotation marginal TV.  Therefore most candidate-level mass movement
+cancels under either marginal, and the modest translation excess does not
+supersede the already queued `80,82` raw/operand comparison.
