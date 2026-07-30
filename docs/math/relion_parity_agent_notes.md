@@ -10156,6 +10156,50 @@ and `9/15` all-class.
 - Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and `34/34`
   evaluated; K=4 `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 K=4 target-rotation component predeclaration
+
+- V11 selects rotation row `2626` / native `1210` at translations
+  `78,83,76,80,82` and serializes all five existing telescoping score
+  components, exact closure, component-L1 shares, scores, score masses, and
+  prior bitwise equality.
+- Components are ranked by descending absolute value then ascending name;
+  missing candidates are explicit.
+- The diagnostic cannot establish raw-operand cause, authorize a production
+  fix or new job, change the scorecard, or establish full K=4 posterior or
+  FSC/FSC-AUC parity.  The queued `80,82` operand audit remains causal.
+- Predeclaration:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_target_rotation_component_v11_cd654d16_20260730T172015ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+## 2026-07-30 K=4 target-rotation component result
+
+- All five selected candidates are present.  Each telescoping closure residual
+  and RECOVAR dump-replay residual is exactly zero.
+- Orientation priors are bitwise identical for every candidate.  Translation
+  priors differ bitwise for `78,76`, but their translation-prior component is
+  zero after float32 addition, as it is for `83,80,82`; those raw differences
+  are decision-inert at the serialized combined-score stage.
+- Leader `83` has combined-score delta `+6.103515625e-5`: pre-prior data path
+  `+4.9114227294921875e-5` (`80.46875%` of component L1) plus native
+  operation order `+1.1920928955078125e-5` (`19.53125%`).
+- Queued `80` and `82` each have combined-score delta
+  `+3.0517578125e-5`: pre-prior data path
+  `+1.8596649169921875e-5` (`60.9375%`) plus operation order
+  `+1.1920928955078125e-5` (`39.0625%`).
+- Leaders `78` and `76` each have zero local combined-score delta because
+  pre-prior `-1.430511474609375e-5` exactly cancels operation order
+  `+1.430511474609375e-5`.  Their negative normalized mass deltas therefore
+  come from the global softmax normalization shift, not a local score
+  mismatch at those candidates.
+- V11 localizes the nonzero target-rotation mismatch for `83,80,82` to the
+  pre-prior path with reinforcing native operation order.  It supports the
+  queued raw-operand audit's scope but cannot identify a raw operand,
+  authorize a fix or new job, or establish posterior/FSC-AUC parity.
+- Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+  `e3a8237af66333b06e2da2430d0b5cb4ac8f8822ecd93c9a3c40247310eb8993`.
+  Removing only the V11 schema and component report reproduces V10 exactly.
+- Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and `34/34`
+  evaluated; K=4 `41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 K=4 marginal-TV concentration predeclaration
 
 - V9 will rank every V8 rotation and translation marginal by

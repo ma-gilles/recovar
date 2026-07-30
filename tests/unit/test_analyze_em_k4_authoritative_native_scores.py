@@ -270,6 +270,50 @@ def test_selected_translation_owner_concentration_closes_exactly() -> None:
     assert translation["missing_selected_owner_ids"] == [4]
 
 
+def test_selected_candidate_components_close_and_rank() -> None:
+    report = analyzer._selected_candidate_component_attribution(
+        components={
+            "alpha": np.asarray([0.125, 0.0]),
+            "beta": np.asarray([-0.0625, 0.0]),
+            "zero": np.asarray([0.0, 0.0]),
+        },
+        total_delta=np.asarray([0.0625, 0.0]),
+        native_pre_prior=np.asarray([1.0, 2.0], dtype=np.float32),
+        recovar_pre_prior=np.asarray([1.125, 2.0], dtype=np.float32),
+        native_combined=np.asarray([3.0, 4.0], dtype=np.float32),
+        recovar_combined=np.asarray([3.0625, 4.0], dtype=np.float32),
+        native_score_mass=np.asarray([0.25, 0.75]),
+        recovar_score_mass=np.asarray([0.375, 0.625]),
+        native_orientation_prior=np.asarray([0.5, 0.5], dtype=np.float32),
+        recovar_orientation_prior=np.asarray([0.5, 0.5], dtype=np.float32),
+        native_translation_prior=np.asarray([0.25, 0.25], dtype=np.float32),
+        recovar_translation_prior=np.asarray([0.25, 0.5], dtype=np.float32),
+        native_candidate_index=np.asarray([7, 8]),
+        native_rotation_local=np.asarray([11, 12]),
+        recovar_rotation_row=np.asarray([21, 22]),
+        translation_id=np.asarray([31, 32]),
+        selected_rotation=21,
+        selected_translations=(31, 33),
+    )
+
+    assert report["missing_selected_translation_ids"] == [33]
+    candidate = report["candidates"][0]
+    assert candidate["translation_id"] == 31
+    assert candidate["dominant_absolute_component"] == "alpha"
+    assert candidate["component_l1"] == 0.1875
+    assert candidate["component_sum"] == 0.0625
+    assert candidate["combined_score_delta_recovar_minus_native"] == 0.0625
+    assert candidate["telescoping_closure_residual"] == 0.0
+    assert candidate["orientation_priors_bitwise_exact"] is True
+    assert candidate["translation_priors_bitwise_exact"] is True
+    assert [
+        row["component"] for row in candidate["ranked_components"]
+    ] == ["alpha", "beta", "zero"]
+    assert candidate["ranked_components"][0][
+        "share_of_candidate_component_l1"
+    ] == 2.0 / 3.0
+
+
 def test_target_score_offset_attribution_closes_exact_decomposition() -> None:
     report = analyzer.target_score_offset_attribution(
         min_diff2=np.float32(500.6817321777344),

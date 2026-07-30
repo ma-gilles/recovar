@@ -23,7 +23,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v10"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v11"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -805,6 +805,171 @@ def _delta_summary(delta: np.ndarray) -> dict[str, Any]:
     }
 
 
+def _selected_candidate_component_attribution(
+    *,
+    components: dict[str, np.ndarray],
+    total_delta: np.ndarray,
+    native_pre_prior: np.ndarray,
+    recovar_pre_prior: np.ndarray,
+    native_combined: np.ndarray,
+    recovar_combined: np.ndarray,
+    native_score_mass: np.ndarray,
+    recovar_score_mass: np.ndarray,
+    native_orientation_prior: np.ndarray,
+    recovar_orientation_prior: np.ndarray,
+    native_translation_prior: np.ndarray,
+    recovar_translation_prior: np.ndarray,
+    native_candidate_index: np.ndarray,
+    native_rotation_local: np.ndarray,
+    recovar_rotation_row: np.ndarray,
+    translation_id: np.ndarray,
+    selected_rotation: int,
+    selected_translations: tuple[int, ...],
+) -> dict[str, Any]:
+    """Serialize exact component closure for fixed candidate identities."""
+
+    arrays = (
+        total_delta,
+        native_pre_prior,
+        recovar_pre_prior,
+        native_combined,
+        recovar_combined,
+        native_score_mass,
+        recovar_score_mass,
+        native_orientation_prior,
+        recovar_orientation_prior,
+        native_translation_prior,
+        recovar_translation_prior,
+        native_candidate_index,
+        native_rotation_local,
+        recovar_rotation_row,
+        translation_id,
+        *components.values(),
+    )
+    _require(
+        len({np.asarray(array).shape for array in arrays}) == 1,
+        "selected candidate component array shapes differ",
+    )
+    selected_translation_ids = tuple(
+        dict.fromkeys(int(value) for value in selected_translations)
+    )
+    candidates = []
+    missing_translations = []
+    for selected_translation in selected_translation_ids:
+        rows = np.flatnonzero(
+            (recovar_rotation_row == selected_rotation)
+            & (translation_id == selected_translation)
+        )
+        if rows.size == 0:
+            missing_translations.append(selected_translation)
+            continue
+        _require(
+            rows.size == 1,
+            "selected rotation/translation candidate is not unique",
+        )
+        row = int(rows[0])
+        component_values = {
+            name: float(np.asarray(values)[row])
+            for name, values in components.items()
+        }
+        component_l1 = math.fsum(
+            abs(value) for value in component_values.values()
+        )
+        ranked_components = sorted(
+            (
+                {
+                    "component": name,
+                    "signed_delta": value,
+                    "absolute_delta": abs(value),
+                }
+                for name, value in component_values.items()
+            ),
+            key=lambda record: (
+                -record["absolute_delta"],
+                record["component"],
+            ),
+        )
+        for rank, record in enumerate(ranked_components, start=1):
+            record["absolute_component_rank_1based"] = rank
+            record["share_of_candidate_component_l1"] = float(
+                0.0
+                if component_l1 == 0.0
+                else record["absolute_delta"] / component_l1
+            )
+        component_sum = math.fsum(
+            component_values[name] for name in sorted(component_values)
+        )
+        combined_delta = float(total_delta[row])
+        orientation_priors_exact = bool(
+            native_orientation_prior[row].view(np.uint32)
+            == recovar_orientation_prior[row].view(np.uint32)
+        )
+        translation_priors_exact = bool(
+            native_translation_prior[row].view(np.uint32)
+            == recovar_translation_prior[row].view(np.uint32)
+        )
+        candidates.append(
+            {
+                "aligned_table_index": row,
+                "native_candidate_index": int(
+                    native_candidate_index[row]
+                ),
+                "native_rotation_local": int(
+                    native_rotation_local[row]
+                ),
+                "recovar_rotation_row": int(
+                    recovar_rotation_row[row]
+                ),
+                "translation_id": int(translation_id[row]),
+                "native_pre_prior": float(native_pre_prior[row]),
+                "recovar_pre_prior": float(recovar_pre_prior[row]),
+                "native_combined_score": float(native_combined[row]),
+                "recovar_combined_score": float(recovar_combined[row]),
+                "native_normalized_score_mass": float(
+                    native_score_mass[row]
+                ),
+                "recovar_normalized_score_mass": float(
+                    recovar_score_mass[row]
+                ),
+                "normalized_score_mass_delta_recovar_minus_native": (
+                    float(recovar_score_mass[row] - native_score_mass[row])
+                ),
+                "orientation_priors_bitwise_exact": (
+                    orientation_priors_exact
+                ),
+                "translation_priors_bitwise_exact": (
+                    translation_priors_exact
+                ),
+                "components": component_values,
+                "component_l1": float(component_l1),
+                "ranked_components": ranked_components,
+                "dominant_absolute_component": (
+                    ranked_components[0]["component"]
+                ),
+                "component_sum": float(component_sum),
+                "combined_score_delta_recovar_minus_native": (
+                    combined_delta
+                ),
+                "telescoping_closure_residual": float(
+                    component_sum - combined_delta
+                ),
+            }
+        )
+    return {
+        "scope": (
+            "fixed_target_rotation_candidate_score_components_"
+            "within_one_captured_class"
+        ),
+        "selected_recovar_rotation_row": int(selected_rotation),
+        "selected_translation_ids": list(selected_translation_ids),
+        "missing_selected_translation_ids": missing_translations,
+        "component_ranking_rule": (
+            "descending_absolute_component_then_ascending_component_name"
+        ),
+        "candidates": candidates,
+    }
+
+
 def global_score_offset_attribution(
     *,
     min_diff2: np.float32,
@@ -1238,6 +1403,28 @@ def global_score_offset_attribution(
             owner_report["owner_delta_replay_residual"] == 0.0,
             "translation owner signed sum does not replay directly",
         )
+    target_rotation_candidate_components = (
+        _selected_candidate_component_attribution(
+            components=components,
+            total_delta=total_delta,
+            native_pre_prior=native_pre_prior,
+            recovar_pre_prior=recovar_pre_prior,
+            native_combined=native_combined,
+            recovar_combined=recovar_combined,
+            native_score_mass=native_score_mass,
+            recovar_score_mass=recovar_score_mass,
+            native_orientation_prior=native_orientation_prior,
+            recovar_orientation_prior=recovar_orientation_prior,
+            native_translation_prior=native_translation_prior,
+            recovar_translation_prior=recovar_translation_prior,
+            native_candidate_index=native_candidate_index,
+            native_rotation_local=native_rotation_local,
+            recovar_rotation_row=recovar_rotation_row,
+            translation_id=translation_id,
+            selected_rotation=TARGET_RECOVAR_ROTATION,
+            selected_translations=MARGINAL_OWNER_TRANSLATIONS,
+        )
+    )
     normalized_score_mass_effect["strata"] = {
         "scope": (
             "descriptive_partition_of_within_captured_class_candidate_"
@@ -1281,6 +1468,9 @@ def global_score_offset_attribution(
         "pre_prior_data_path_strict_majority": data_path_strict_majority,
         "pre_prior_data_path_representative": (
             pre_prior_representative
+        ),
+        "target_rotation_candidate_components": (
+            target_rotation_candidate_components
         ),
         "normalized_score_mass_effect": normalized_score_mass_effect,
     }

@@ -13390,3 +13390,55 @@ job is authorized.  Thread-count-1 and thread-count-8 reports are
 byte-identical, SHA-256
 `89519c9121107a284da09b1bc95a46f422c74068d07c0b25b5fe7181afba7aed`.
 Removing only the V10 schema and owner report reproduces V9 exactly.
+
+### Predeclared K=4 target-rotation score components
+
+At fixed mapped rotation `2626` (native `1210`), V11 selects exactly one
+candidate at each V10 translation `78,83,76,80,82`.  It serializes the
+already captured native float32-order, pre-prior data-path, orientation-prior,
+translation-prior, and RECOVAR dump-replay components; deterministically
+ranks their absolute contributions; and requires exact telescoping closure.
+Native/RECOVAR pre-prior and combined scores, normalized score masses, and
+prior bitwise equality are also reported.
+
+This threshold-free diagnostic asks whether one captured arithmetic component
+consistently owns both the leading and queued target-rotation differences.  It
+cannot establish raw-operand cause, authorize a fix or new job, change a
+scorecard, or establish full-posterior/FSC-AUC parity.  The queued `80,82`
+operand audit remains the causal gate.  The predeclaration is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_target_rotation_component_v11_cd654d16_20260730T172015ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+The sealed V11 report contains all five selected candidates with exact
+telescoping closure and zero RECOVAR dump-replay residual.  Orientation
+priors are bitwise identical for every candidate.  Translation priors are
+bitwise identical for `83,80,82` and differ for `78,76`, but the serialized
+translation-prior contribution is exactly zero for all five candidates:
+float32 addition masks the raw prior-bit differences at this combined-score
+stage.
+
+For leader `83`, the combined-score delta is `+6.103515625e-5`: the
+pre-prior data path contributes `+4.9114227294921875e-5`
+(`80.46875%` of component L1), reinforced by
+`+1.1920928955078125e-5` (`19.53125%`) from native float32 operation
+order.  Queued candidates `80` and `82` each have combined-score delta
+`+3.0517578125e-5`; their pre-prior component is
+`+1.8596649169921875e-5` (`60.9375%`) and operation order contributes
+`+1.1920928955078125e-5` (`39.0625%`).
+
+Leaders `78` and `76` instead have bitwise-identical combined scores:
+`-1.430511474609375e-5` from the pre-prior path cancels
+`+1.430511474609375e-5` from native operation order exactly.  Their
+normalized mass deltas remain negative, so those local mass movements arise
+from the global softmax normalization shift rather than a local combined-score
+mismatch at either candidate.
+
+Thus V11 localizes the nonzero target-rotation score mismatch for leader `83`
+and queued `80,82` to the pre-prior path, with native operation order
+reinforcing it.  It also shows that `78,76` cannot be explained from their
+local combined scores alone.  The result supports the scope of the already
+queued operand audit but does not identify a raw operand, authorize a
+production change or new job, or establish posterior/FSC-AUC parity.
+Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+`e3a8237af66333b06e2da2430d0b5cb4ac8f8822ecd93c9a3c40247310eb8993`.
+Removing the V11 schema and target-rotation component report reproduces V10
+exactly.
