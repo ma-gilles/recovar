@@ -23,7 +23,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v9"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v10"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -42,6 +42,7 @@ EXPECTED_ITERATION = 2
 EXPECTED_CURRENT_SIZE = 38
 TARGET_RECOVAR_ROTATION = 2_626
 TARGET_TRANSLATIONS = (80, 82)
+MARGINAL_OWNER_TRANSLATIONS = (78, 83, 76, *TARGET_TRANSLATIONS)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -89,6 +90,224 @@ def _stable_softmax(values: np.ndarray) -> np.ndarray:
         "score-table normalization is not finite and positive",
     )
     return weights / denominator
+
+
+def _selected_stratum_owner_concentration(
+    *,
+    stratum_ids: np.ndarray,
+    stratum_name: str,
+    owner_ids: np.ndarray,
+    owner_name: str,
+    paired_owner_ids: np.ndarray,
+    paired_owner_name: str,
+    score_mass_delta: np.ndarray,
+    selected_stratum_ids: tuple[int, ...],
+    selected_owner_ids: tuple[int, ...] = (),
+) -> dict[str, Any]:
+    """Localize selected marginal deltas to complete owner partitions."""
+
+    stratum_ids = np.asarray(stratum_ids, dtype=np.int64)
+    owner_ids = np.asarray(owner_ids, dtype=np.int64)
+    paired_owner_ids = np.asarray(
+        paired_owner_ids,
+        dtype=np.int64,
+    )
+    score_mass_delta = np.asarray(
+        score_mass_delta,
+        dtype=np.float64,
+    )
+    arrays = (
+        stratum_ids,
+        owner_ids,
+        paired_owner_ids,
+        score_mass_delta,
+    )
+    _require(
+        len({array.shape for array in arrays}) == 1,
+        "selected owner-partition array shapes differ",
+    )
+    _require(stratum_ids.size > 0, "selected owner partition is empty")
+    _require(
+        np.all(stratum_ids >= 0)
+        and np.all(owner_ids >= 0)
+        and np.all(paired_owner_ids >= 0),
+        "selected owner-partition identities must be nonnegative",
+    )
+    selected_strata = tuple(
+        dict.fromkeys(
+            int(value) for value in selected_stratum_ids
+        )
+    )
+    selected_owners = tuple(
+        sorted(set(int(value) for value in selected_owner_ids))
+    )
+    reports = []
+    missing_selected_strata = []
+    for stratum_id in selected_strata:
+        rows = np.flatnonzero(stratum_ids == stratum_id)
+        if rows.size == 0:
+            missing_selected_strata.append(stratum_id)
+            continue
+        direct_net_delta = math.fsum(
+            float(score_mass_delta[row]) for row in rows
+        )
+        owner_records = []
+        for owner_id in np.unique(owner_ids[rows]):
+            owner_rows = rows[owner_ids[rows] == owner_id]
+            paired_values = np.unique(
+                paired_owner_ids[owner_rows]
+            )
+            _require(
+                paired_values.size == 1,
+                f"{owner_name} does not map to exactly one "
+                f"{paired_owner_name}",
+            )
+            owner_delta = math.fsum(
+                float(score_mass_delta[row])
+                for row in owner_rows
+            )
+            owner_records.append(
+                {
+                    owner_name: int(owner_id),
+                    paired_owner_name: int(paired_values[0]),
+                    "candidate_count": int(owner_rows.size),
+                    "marginal_mass_delta_recovar_minus_native": (
+                        float(owner_delta)
+                    ),
+                    "rotation_component_tv": float(
+                        0.5 * abs(owner_delta)
+                    ),
+                }
+            )
+
+        ranked_records = sorted(
+            owner_records,
+            key=lambda record: (
+                -record["rotation_component_tv"],
+                record[owner_name],
+            ),
+        )
+        rotation_component_tv = math.fsum(
+            float(record["rotation_component_tv"])
+            for record in ranked_records
+        )
+        for rank, record in enumerate(ranked_records, start=1):
+            record["rotation_component_tv_rank_1based"] = rank
+            record[
+                "share_of_within_translation_rotation_component_tv"
+            ] = float(
+                0.0
+                if rotation_component_tv == 0.0
+                else record["rotation_component_tv"]
+                / rotation_component_tv
+            )
+        owner_net_delta = math.fsum(
+            float(
+                record[
+                    "marginal_mass_delta_recovar_minus_native"
+                ]
+            )
+            for record in sorted(
+                owner_records,
+                key=lambda record: record[owner_name],
+            )
+        )
+        marginal_tv_contribution = 0.5 * abs(direct_net_delta)
+        cancellation_tv = (
+            rotation_component_tv - marginal_tv_contribution
+        )
+        record_by_owner = {
+            record[owner_name]: record
+            for record in ranked_records
+        }
+
+        def concentration(top_n: int) -> dict[str, Any]:
+            contribution = math.fsum(
+                float(record["rotation_component_tv"])
+                for record in ranked_records[:top_n]
+            )
+            return {
+                "requested_top_n": top_n,
+                "available_owners_used": min(
+                    top_n,
+                    len(ranked_records),
+                ),
+                "rotation_component_tv": float(contribution),
+                "share_of_within_translation_rotation_component_tv": (
+                    float(
+                        0.0
+                        if rotation_component_tv == 0.0
+                        else contribution / rotation_component_tv
+                    )
+                ),
+            }
+
+        reports.append(
+            {
+                stratum_name: stratum_id,
+                "candidate_count": int(rows.size),
+                "owner_count": len(owner_records),
+                "direct_marginal_mass_delta_recovar_minus_native": (
+                    float(direct_net_delta)
+                ),
+                "summed_owner_mass_delta_recovar_minus_native": (
+                    float(owner_net_delta)
+                ),
+                "owner_delta_replay_residual": float(
+                    owner_net_delta - direct_net_delta
+                ),
+                "marginal_tv_contribution": float(
+                    marginal_tv_contribution
+                ),
+                "rotation_component_tv_before_cancellation": float(
+                    rotation_component_tv
+                ),
+                "within_translation_rotation_cancellation_tv": (
+                    float(cancellation_tv)
+                ),
+                "within_translation_rotation_cancellation_fraction": (
+                    float(
+                        0.0
+                        if rotation_component_tv == 0.0
+                        else cancellation_tv / rotation_component_tv
+                    )
+                ),
+                "ranking_rule": (
+                    "descending_rotation_component_tv_then_"
+                    f"ascending_{owner_name}"
+                ),
+                "top_10_rotation_owners": ranked_records[:10],
+                "rotation_owner_concentration": {
+                    "top_1": concentration(1),
+                    "top_3": concentration(3),
+                    "top_10": concentration(10),
+                },
+                "selected_owner_ids": list(selected_owners),
+                "selected_owners": [
+                    record_by_owner[owner_id]
+                    for owner_id in selected_owners
+                    if owner_id in record_by_owner
+                ],
+                "missing_selected_owner_ids": [
+                    owner_id
+                    for owner_id in selected_owners
+                    if owner_id not in record_by_owner
+                ],
+            }
+        )
+    return {
+        "scope": (
+            "selected_translation_marginal_rotation_owner_"
+            "partition_within_one_captured_class"
+        ),
+        "stratum_identity": stratum_name,
+        "owner_identity": owner_name,
+        "paired_owner_identity": paired_owner_name,
+        "selected_stratum_ids": list(selected_strata),
+        "missing_selected_stratum_ids": missing_selected_strata,
+        "selected_owner_ids": list(selected_owners),
+        "translations": reports,
+    }
 
 
 def _normalized_mass_strata(
@@ -929,60 +1148,105 @@ def global_score_offset_attribution(
             ),
         },
     }
-    normalized_score_mass_effect["strata"] = {
-        "scope": (
-            "descriptive_partition_of_within_captured_class_candidate_"
-            "level_total_variation_not_full_kclass_posterior"
+    rotation_strata = _normalized_mass_strata(
+        stratum_ids=recovar_rotation_row,
+        stratum_name="recovar_rotation_row",
+        native_score_mass=native_score_mass,
+        recovar_score_mass=recovar_score_mass,
+        native_candidate_index=native_candidate_index,
+        selected_stratum_ids=(
+            TARGET_RECOVAR_ROTATION,
+            int(
+                recovar_rotation_row[
+                    score_mass_representative_row
+                ]
+            ),
         ),
-        "rotation": _normalized_mass_strata(
-            stratum_ids=recovar_rotation_row,
-            stratum_name="recovar_rotation_row",
-            native_score_mass=native_score_mass,
-            recovar_score_mass=recovar_score_mass,
-            native_candidate_index=native_candidate_index,
-            selected_stratum_ids=(
+        selected_stratum_sets={
+            "fixed_target_rotation": (
                 TARGET_RECOVAR_ROTATION,
+            ),
+            "max_candidate_mass_delta_rotation": (
                 int(
                     recovar_rotation_row[
                         score_mass_representative_row
                     ]
                 ),
             ),
-            selected_stratum_sets={
-                "fixed_target_rotation": (
-                    TARGET_RECOVAR_ROTATION,
-                ),
-                "max_candidate_mass_delta_rotation": (
-                    int(
-                        recovar_rotation_row[
-                            score_mass_representative_row
-                        ]
-                    ),
-                ),
-            },
-            paired_ids=native_rotation_local,
-            paired_name="native_rotation_local",
+        },
+        paired_ids=native_rotation_local,
+        paired_name="native_rotation_local",
+    )
+    translation_strata = _normalized_mass_strata(
+        stratum_ids=translation_id,
+        stratum_name="translation_id",
+        native_score_mass=native_score_mass,
+        recovar_score_mass=recovar_score_mass,
+        native_candidate_index=native_candidate_index,
+        selected_stratum_ids=(
+            *TARGET_TRANSLATIONS,
+            int(translation_id[score_mass_representative_row]),
         ),
-        "translation": _normalized_mass_strata(
+        selected_stratum_sets={
+            "max_candidate_mass_delta_translation": (
+                int(
+                    translation_id[
+                        score_mass_representative_row
+                    ]
+                ),
+            ),
+            "queued_target_translations": TARGET_TRANSLATIONS,
+        },
+    )
+    translation_rotation_owners = (
+        _selected_stratum_owner_concentration(
             stratum_ids=translation_id,
             stratum_name="translation_id",
-            native_score_mass=native_score_mass,
-            recovar_score_mass=recovar_score_mass,
-            native_candidate_index=native_candidate_index,
-            selected_stratum_ids=(
-                *TARGET_TRANSLATIONS,
-                int(translation_id[score_mass_representative_row]),
-            ),
-            selected_stratum_sets={
-                "max_candidate_mass_delta_translation": (
-                    int(
-                        translation_id[
-                            score_mass_representative_row
-                        ]
-                    ),
-                ),
-                "queued_target_translations": TARGET_TRANSLATIONS,
-            },
+            owner_ids=recovar_rotation_row,
+            owner_name="recovar_rotation_row",
+            paired_owner_ids=native_rotation_local,
+            paired_owner_name="native_rotation_local",
+            score_mass_delta=score_mass_delta,
+            selected_stratum_ids=MARGINAL_OWNER_TRANSLATIONS,
+            selected_owner_ids=(TARGET_RECOVAR_ROTATION,),
+        )
+    )
+    translation_record_by_id = {
+        record["translation_id"]: record
+        for record in translation_strata["top_10"]
+        + translation_strata["selected_strata"]
+    }
+    for owner_report in translation_rotation_owners["translations"]:
+        translation_record = translation_record_by_id[
+            owner_report["translation_id"]
+        ]
+        _require(
+            owner_report[
+                "direct_marginal_mass_delta_recovar_minus_native"
+            ]
+            == translation_record[
+                "marginal_mass_delta_recovar_minus_native"
+            ],
+            "translation owner direct marginal does not replay V9",
+        )
+        _require(
+            owner_report["marginal_tv_contribution"]
+            == translation_record["marginal_tv_contribution"],
+            "translation owner marginal TV does not replay V9",
+        )
+        _require(
+            owner_report["owner_delta_replay_residual"] == 0.0,
+            "translation owner signed sum does not replay directly",
+        )
+    normalized_score_mass_effect["strata"] = {
+        "scope": (
+            "descriptive_partition_of_within_captured_class_candidate_"
+            "level_total_variation_not_full_kclass_posterior"
+        ),
+        "rotation": rotation_strata,
+        "translation": translation_strata,
+        "translation_rotation_owners": (
+            translation_rotation_owners
         ),
     }
     attributed = bool(

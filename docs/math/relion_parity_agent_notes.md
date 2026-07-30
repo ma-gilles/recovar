@@ -10116,6 +10116,46 @@ and `9/15` all-class.
 - This remains non-scoring: K=1 is `28/34` strict, `32/34` topology, and
   `34/34` evaluated; K=4 is `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 K=4 translation-marginal owner predeclaration
+
+- V10 will partition score-mass deltas by mapped rotation within translations
+  `78,83,76,80,82`, rank complete rotation-owner components, quantify
+  top-1/top-3/top-10 concentration and cancellation, and report target
+  rotation `2626` (native `1210`) explicitly.
+- Each translation's signed owner sum and marginal-TV contribution must
+  reproduce V9 exactly; mapped/native owner identities must be one-to-one.
+- The result cannot change the frozen scorecard, establish a full K=4
+  posterior or FSC/FSC-AUC result, authorize a fix, or authorize another job.
+- Predeclaration:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_translation_rotation_owners_v10_103287c8_20260730T170538ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+## 2026-07-30 K=4 translation-marginal rotation owners
+
+- V10's rotation-owner sums reproduce V9 exactly for all five selected
+  translations, with zero residual and no missing translation or target
+  rotation.
+- Fixed rotation row `2626` (native `1210`) ranks first for V9 leaders
+  `78`, `83`, and `76`, carrying `33.259304651582394%`,
+  `33.877610167708705%`, and `44.25147352892708%` of their respective
+  within-translation rotation-component TV.  Each signed component aligns
+  with the corresponding net marginal.
+- The same rotation ranks second for queued `80` (`12.324818327390429%`) and
+  third for queued `82` (`10.487699164186956%`), but both signed components
+  oppose their negative net translation marginals.
+- Rotation cancellation is `45.719471498772635%`, `64.0638512575893%`,
+  `57.59548740051366%`, `71.63676042626443%`, and
+  `97.11668894385543%` for translations `78,83,76,80,82`, respectively.
+  This explains why target `82` is candidate-level rank 1 yet marginal rank
+  21.
+- The queued pair therefore probes the same dominant rotation family, but
+  cannot by itself establish the leading marginal cause.  No new job is
+  authorized before a current official pair qualifies.
+- Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+  `89519c9121107a284da09b1bc95a46f422c74068d07c0b25b5fe7181afba7aed`.
+  Removing only the V10 schema and owner report reproduces V9 exactly.
+- Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and `34/34`
+  evaluated; K=4 `41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 K=4 marginal-TV concentration predeclaration
 
 - V9 will rank every V8 rotation and translation marginal by

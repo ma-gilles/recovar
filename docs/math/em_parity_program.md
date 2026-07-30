@@ -13346,3 +13346,47 @@ thread-count-8 reports are byte-identical, SHA-256
 `b04fb7b598a5699f7323d396d564a4660466473f9780e3984aba513215c2002c`.
 Removing only the V9 schema and declared marginal-ranking/coverage fields
 reproduces V8 exactly.
+
+### Predeclared K=4 translation-marginal rotation owners
+
+The next fixed diagnostic partitions normalized score-mass deltas by mapped
+rotation within V9 translations `78,83,76` and queued targets `80,82`.
+For each translation it deterministically ranks rotation-owner components,
+reports top-1/top-3/top-10 concentration and cancellation before the
+translation marginal, and reports fixed target rotation `2626` (native
+`1210`) explicitly.  The signed owner sum and marginal-TV contribution must
+replay the V9 translation stratum exactly, and mapped/native rotation
+identities must remain one-to-one.
+
+This is threshold-free localization within one captured class.  It cannot
+change a scorecard, establish a complete posterior or FSC/FSC-AUC result,
+authorize a production fix, or authorize another job.  Any expanded capture
+remains deferred until an existing official `80,82` pair qualifies.  The
+predeclaration is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_translation_rotation_owners_v10_103287c8_20260730T170538ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+The sealed V10 owner sums reproduce V9 exactly with zero residual for every
+selected translation.  Fixed mapped rotation `2626` (native `1210`) is the
+rank-1 rotation component for all three V9 leaders: it carries
+`33.259304651582394%` of translation `78` rotation-component TV,
+`33.877610167708705%` of translation `83`, and
+`44.25147352892708%` of translation `76`.  Its signed contribution aligns
+with each leader's net translation marginal.
+
+The same rotation ranks second for queued translation `80` at
+`12.324818327390429%` and third for queued translation `82` at
+`10.487699164186956%`, but its positive signed component opposes both
+negative net translation marginals.  Rotation-level cancellation before the
+translation marginal is `45.719471498772635%` for `78`,
+`64.0638512575893%` for `83`, `57.59548740051366%` for `76`,
+`71.63676042626443%` for `80`, and `97.11668894385543%` for `82`.
+
+Thus the already queued `80,82` operand capture probes the same rotation
+family that owns the leading marginals, but its two translations are
+cancellation-heavy and their target-rotation components point opposite the
+net marginal.  A qualified pair can still classify target-rotation operand
+arithmetic; it cannot alone establish the leading marginal cause.  No new
+job is authorized.  Thread-count-1 and thread-count-8 reports are
+byte-identical, SHA-256
+`89519c9121107a284da09b1bc95a46f422c74068d07c0b25b5fe7181afba7aed`.
+Removing only the V10 schema and owner report reproduces V9 exactly.

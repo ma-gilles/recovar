@@ -220,6 +220,56 @@ def test_normalized_mass_strata_ranks_marginal_tv_with_exact_ties() -> None:
     assert report["missing_selected_stratum_ids"] == [4]
 
 
+def test_selected_translation_owner_concentration_closes_exactly() -> None:
+    report = analyzer._selected_stratum_owner_concentration(
+        stratum_ids=np.asarray([10, 10, 10]),
+        stratum_name="translation",
+        owner_ids=np.asarray([1, 2, 3]),
+        owner_name="rotation",
+        paired_owner_ids=np.asarray([11, 22, 33]),
+        paired_owner_name="native_rotation",
+        score_mass_delta=np.asarray([0.25, -0.125, -0.0625]),
+        selected_stratum_ids=(10,),
+        selected_owner_ids=(2, 4),
+    )
+
+    assert report["selected_stratum_ids"] == [10]
+    translation = report["translations"][0]
+    assert translation["direct_marginal_mass_delta_recovar_minus_native"] == (
+        0.0625
+    )
+    assert translation[
+        "summed_owner_mass_delta_recovar_minus_native"
+    ] == 0.0625
+    assert translation["owner_delta_replay_residual"] == 0.0
+    assert translation["marginal_tv_contribution"] == 0.03125
+    assert translation[
+        "rotation_component_tv_before_cancellation"
+    ] == 0.21875
+    assert translation[
+        "within_translation_rotation_cancellation_tv"
+    ] == 0.1875
+    assert translation[
+        "within_translation_rotation_cancellation_fraction"
+    ] == 6.0 / 7.0
+    assert [
+        row["rotation"]
+        for row in translation["top_10_rotation_owners"]
+    ] == [1, 2, 3]
+    assert translation["rotation_owner_concentration"]["top_1"][
+        "share_of_within_translation_rotation_component_tv"
+    ] == 4.0 / 7.0
+    assert translation["rotation_owner_concentration"]["top_3"][
+        "share_of_within_translation_rotation_component_tv"
+    ] == 1.0
+    assert translation["selected_owners"][0]["rotation"] == 2
+    assert translation["selected_owners"][0]["native_rotation"] == 22
+    assert translation["selected_owners"][0][
+        "rotation_component_tv_rank_1based"
+    ] == 2
+    assert translation["missing_selected_owner_ids"] == [4]
+
+
 def test_target_score_offset_attribution_closes_exact_decomposition() -> None:
     report = analyzer.target_score_offset_attribution(
         min_diff2=np.float32(500.6817321777344),
