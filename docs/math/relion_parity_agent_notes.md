@@ -9769,3 +9769,63 @@ and `9/15` all-class.
   image/reference cross-term components on the same 14-particle cohort.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
+## 2026-07-30 case-26 fine source and causal-chain closure
+
+- Exact H100 capture job `11788465` completed `0:0` in `00:29:23` on
+  `della-h21g1`, UUID
+  `GPU-aafe72bb-2a51-7aa0-076f-51a017cacc7d`.  The source commit was
+  `34770d8241f13c27922baff22138624fa9119e3f`; grid correction and forced
+  after-max finalization were unset.  Run and runtime roots are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_it3_target206_capture_34770d82_20260730T0840ET`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_it3_target206_capture_34770d82_20260730T0840ET`;
+  both contain `SAFE_TO_DELETE`.
+- The fixed target is RECOVAR original index `206`, RELION stack index `207`,
+  physical iteration `3`, current size `66`.  RELION's top key is `(36,54)`
+  and RECOVAR's is `(38,55)`.  Candidate support and rotation identities are
+  exact and the passive capture-inertness gate passes `3/3`.
+- The `2^3` projection/shifted-image/correction operand factorial closes both
+  production margins within `5e-5`.  Swapping only the projected reference
+  changes the first-minus-second margin from approximately `+0.0034` to
+  `-0.00135`; projection-norm change dominates the cross-term change.  The
+  accepted classification is
+  `fine_winner_flip_is_projected_reference_determined`.  Operand report
+  SHA-256 is
+  `060b844629caed30b80efa9172f08d3224478aed2412144bcf6919fbb9d4d7e5`.
+- Exact RELION map-to-PPref reconstruction and RECOVAR production CUDA
+  texture replay close at relative L2 below `1.2e-8`; frozen RELION PPref
+  projects bitwise exactly to the captured RELION references.  The live
+  cross-engine projection relative L2 is `0.00248934748`, more than
+  `225,000x` the replay floor.  RELION iteration-2 half 1 versus RECOVAR
+  iteration-1 half 1 map FSC-AUC is `0.999999687660`.  The accepted
+  classification is
+  `fine_projection_difference_is_iteration_start_map_state`; texture
+  coordinates/interpolation and both serialized map-to-PPref paths are
+  closed.  Source-boundary report SHA-256 is
+  `b3911e287982db224d3f9206add0b2d99832504e48bf896d82702d1c1b13d771`.
+- Commit `168a2cbe` adds a hash-pinned temporal gate over the fixed FSC
+  trajectory, particle state, operand/source reports, and x-half precision
+  factorial.  Physical iteration `1` has merged cross-engine FSC-AUC
+  `0.999999999968`, zero support mismatches, and zero hard pose outliers.
+  Iteration `2` has FSC-AUC `0.999999735312`, `87/1000` support-count
+  mismatches (each at most one candidate), Pmax maximum absolute error
+  `3.5221e-6`, and zero angular/translation outliers above
+  `0.01 degree`/`0.01 Angstrom`.  Iteration `3` has FSC-AUC
+  `0.999999155258`, `165/1000` support-count mismatches, two angular
+  outliers, and two translation outliers.  The fixed onset order is therefore
+  map `1` -> support `2` -> hard pose `3`.
+- The temporal classification is
+  `iteration_map_divergence_precedes_support_then_hard_pose_divergence__fine_path_inherits_iteration_start_map_state`.
+  This does not justify a fine-projection interpolation change.  The matched
+  x-half double-precision intervention remains rejected: it introduces
+  `3` numbered failures versus `0` for control and changes final cross-engine
+  FSC-AUC by `-0.0812706848`.
+- The causal-chain report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_it3_target206_capture_34770d82_20260730T0840ET/analysis/case26_causal_chain_v1.json`,
+  SHA-256
+  `d960b3171caaa5b493f0ac20f864f33b7801f958e9e07501a752dc4120c7bbb2`.
+  The focused gate passes `53/53`; scoped Ruff, Python compilation,
+  `git diff --check`, and Wheels run `30548434124` are recorded separately.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, and `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
