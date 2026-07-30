@@ -16,6 +16,15 @@ PATCH = (
     / "0001-RELION-coarse-diff2-components-combined-capture.patch"
 )
 PATCH_SHA256 = "84a41aa04d8eae11512fe7728b482eb539844c06ac5be62e39218ee863e17631"
+FP64_PATCH = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "patches"
+    / "0002-RELION-coarse-diff2-components-fp64-capture.patch"
+)
+FP64_PATCH_SHA256 = (
+    "5d946b88ed75a46d2ecbe6bdf037414fd4581ae61337b91e691d7ae08f3e7be0"
+)
 
 
 def _bits(value: float) -> int:
@@ -153,6 +162,20 @@ def test_combined_relion_patch_is_frozen_and_keeps_production_diff2() -> None:
     assert "RELION_P1_CAPTURE_SCHEMA must be exactly 1 or 2" in text
     assert 'has_components ? "RLNP1V2HEADER" : "RLNP1V1HEADER"' in text
     assert "Coarse diff2 component capture requires both output arrays" in text
+    assert (
+        "diff2s[j] += (diff_real * diff_real + diff_imag * diff_imag) * "
+        "s_corr[i + init_pixel % block_sz];"
+    ) in text
+    assert "+\t\t\t\tdiff2s[j] +=" not in text
+
+
+def test_fp64_component_delta_is_frozen_and_keeps_production_diff2() -> None:
+    payload = FP64_PATCH.read_bytes()
+    assert hashlib.sha256(payload).hexdigest() == FP64_PATCH_SHA256
+    text = payload.decode()
+    assert "double reference_norms[eulers_per_block] = {0.};" in text
+    assert "mapAllDoubleWeightsToMweights" in text
+    assert "atomicAdd(" in text
     assert (
         "diff2s[j] += (diff_real * diff_real + diff_imag * diff_imag) * "
         "s_corr[i + init_pixel % block_sz];"
