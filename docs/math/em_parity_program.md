@@ -12495,3 +12495,104 @@ production change.  Output and analyzer SHA-256 values are
 and
 `cdda611ee61714fe4493b7a103475a4fb1ee78ba2a85be833567258e3fd9a40c`.
 No correlation is computed.
+
+## 2026-07-29 case-22 captured norm/cross operand gate
+
+The first passive RELION schema-v2 capture completed all science under Slurm
+job `11777114`: 14/14 artifacts, 14,966,784 candidate slots, and half-1,
+half-2, and merged iteration-2 maps.  A validator bug initially rejected NaN
+components on RELION-invalid candidate rows; commit `0fb0ec44` corrected that
+schema rule and a read-only recovery then exposed the real numerical gate.
+Centered component replay p95 passes 13/14 particles, replay maximum passes
+14/14, and mathematically translation-invariant reference norms pass only
+1/14 at the fixed `1e-6` spread limit.  Float32 component spreads range from
+`9.5367e-7` to `7.6294e-6`.  Map inertness nevertheless passes 3/3 at
+FSC-AUC `0.9999999999801137`, `0.999999999980235`, and
+`0.9999999999606404`.
+
+The recovered RELION component and inertness JSON SHA-256 values are
+`e83f559ab085b4dc5ff9283c719aac956d0a5b0dd6f2fa6d7b909776268acefc`
+and
+`8acdc6b60f5b8b6c58dcad595a7ae503b2baa7fdac17e5c1b58ce970402cb5e9`.
+The capture is therefore map-safe but formally rejected; neither the p95 nor
+translation-invariance threshold was relaxed.
+
+Commit `bd17533f` adds default-off RECOVAR capture of the projected-reference
+norm and image/reference cross operands from the same production GPU GEMMs.
+Exact-device job `11777337` completed `0:0` in `00:54:10` with peak RSS
+`28234296K`.  All 14 fixed artifacts are sealed, component replay passes
+14/14 at both fixed gates, and map inertness passes 3/3.  Half-1, half-2,
+and merged FSC-AUC values are `0.9999999998350682`,
+`0.9999999998308815`, and `0.9999999998928133`.  The checked analyzer at
+`ac12ca86` also passes cross-engine closure 14/14.  Its counterfactual
+centered residual-energy test reports
+image/reference-cross dominance for 14/14 particles and projection-norm
+dominance for 0/14.  The cross residual is itself rotation-dominated for
+14/14, with rotation-only energy fractions `0.830511`--`0.961988`; an
+independent positive scale per rotation removes a majority of cross-residual
+energy for only 2/14 particles.  Thus simple per-rotation amplitude is not a
+cohort-wide explanation.  It does not use correlation.  Because the RELION
+source capture is rejected, the output intentionally remains
+`component_capture_not_qualified`; provisional v2 JSON SHA-256 is
+`694bb6d14e842e232a374a2f151f2f15fa40f95b971cd9a09125b50efe78bcf1`.
+
+The float32 capture defect was addressed in a diagnostic-only RELION delta:
+component sums and their temporary mapping use FP64, while the original
+float32 production diff2 expression and destination remain untouched.  The
+CUDA 12.6/OpenMPI 4.1.6 build succeeds with binary SHA-256
+`9ffb9eee44254f5c17664595f0247f71cfba2d95ce449745ba70af2f8ac64f9d`.
+Dependency job `11778245` failed preflight `1:0` in two seconds because its
+launcher referenced a nonexistent analysis Python; it produced zero capture
+and zero RELION artifacts.  The corrected launcher SHA-256 is
+`1dc18205525bb1e245beaba184a94f6c12537d1cf312d6567cc0939418b48c94`.
+Replacement exact-device job `11779197` completed `0:0` in `00:19:04` with
+peak RSS `3003528K` on required UUID
+`GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a`.  FP64 removes the spurious
+reference-norm translation spread: invariance passes 14/14, versus 1/14 for
+the original capture.  Replay maximum also passes 14/14, but the unchanged
+p95 gate passes only 12/14.  Particles `part1480_stack2330` and
+`part2277_stack348` each have p95 `6.103515625e-5`, above the fixed `5e-5`
+gate, so the FP64 capture remains formally rejected.  Map inertness passes
+3/3 at half-1, half-2, and merged FSC-AUC `0.9999999999800995`,
+`0.9999999999799074`, and `0.9999999999605521`.
+
+A paired arithmetic audit preserves that rejection and explains why merely
+widening the diagnostic accumulator cannot qualify the decomposition.
+Production raw diff2 is not bitwise identical for any of 14/14 independently
+run particle artifacts, although its centered inter-run p95 difference is at
+most one image-constant float32 ULP for 14/14.  The FP64 replay p95 is an
+integral number of those ULPs for 14/14.  The patch deliberately retains
+RELION's float32 squared-difference accumulation while separately expanding
+norm and cross operands in FP64; those are different finite-arithmetic
+expressions.  Classification is therefore
+`fp64_capture_rejected_expanded_component_arithmetic_does_not_replay_production_float32_diff2`,
+not an operand attribution.  The comparison script and JSON SHA-256 values
+are `221206e203acfecef2f98fabeda174394a116cbda710b41b7ae0e858464546ff`
+and `bcf4fd5fffa7ecac660128c48f90bde87668004504601004035ef95385f635f0`.
+No correlation or relaxed gate is used.
+
+The first passive live-operand diagnostic was built but intentionally not run
+against the rejected algebraic component prerequisite.  Frozen additive patch
+0003 has
+SHA-256
+`a00ad73ac496be4b2cc0513ee7aa2fd0dd8de137927db66b4d80420d0b06ad1e`;
+its CUDA 12.6/OpenMPI 4.1.6 binary has SHA-256
+`c54597d3e8ee23181f50bfcb510c83645e48ac76794e49a54b9abecd0959449a`.
+Schema-v2 patch 0004 now adds exact GPU-shifted images and the CUDA coarse
+launch topology needed to replay the production squared-difference path
+directly, rather than depend on algebraically expanded norm/cross closure.
+Its patch and rebuilt binary SHA-256 values are
+`3d090744381306bdccc3be641834909286355f2bc15abc707053ad48d95f3b21`
+and `2e415f5c982773bdf4e33bf4d44933cc6307fd8f096b5a7e58b73e97318d54f8`.
+The validator preserves the reference/cross gates and adds direct production
+diff2 p95/max gates at the unchanged `5e-5`/`5e-4`; a rejected algebraic
+parent cannot qualify the result by itself.  Six schema tests pass, including
+the explicit rejected-parent/direct-replay case.  Science is pending and
+non-scoring.
+
+Run roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_diff2_components_fd4ca909_20260729T223000ET`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_recovar_score_components_bd17533f_20260729T225000ET`,
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_diff2_components_fp64_1487550f_20260729T231000ET`;
+all contain `SAFE_TO_DELETE`.  These diagnostics remain non-scoring.

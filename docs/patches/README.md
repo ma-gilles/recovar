@@ -1,5 +1,31 @@
 # RELION instrumentation patches
 
+## Case-22 coarse component and operand series
+
+The numbered `0001`--`0004` patches form a diagnostic-only series on top of
+detached RELION commit
+`bc319d0b3ca063de4a9c8b66da6e5b4d9f618630`:
+
+1. `0001` captures raw coarse diff2, production weights, significance, and
+   separately expanded reference-norm/cross components.
+2. `0002` widens only those passive component accumulators to FP64 while
+   leaving production float32 diff2 unchanged.
+3. `0003` captures a bounded set of live projected references, corrected
+   Fourier images, correction weights, Euler matrices, and translations.
+4. `0004` adds the exact GPU `translatePixel` outputs and CUDA coarse-launch
+   topology needed to replay the original float32 squared-difference path
+   directly.
+
+Apply them in order.  Exact SHA-256 values are
+`84a41aa04d8eae11512fe7728b482eb539844c06ac5be62e39218ee863e17631`,
+`5d946b88ed75a46d2ecbe6bdf037414fd4581ae61337b91e691d7ae08f3e7be0`,
+`a00ad73ac496be4b2cc0513ee7aa2fd0dd8de137927db66b4d80420d0b06ad1e`,
+and
+`3d090744381306bdccc3be641834909286355f2bc15abc707053ad48d95f3b21`.
+All paths are default-off and bounded by the existing capture particle/byte
+caps.  They do not modify a production score, weight, projector, map, or
+model buffer.
+
 ## relion_bpref_membership_chunked_bc319d0.patch
 
 Adds a compact, passive `RELION_BPM_CAPTURE_*` diagnostic that copies the

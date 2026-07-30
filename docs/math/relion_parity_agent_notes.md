@@ -9363,6 +9363,76 @@ and `9/15` all-class.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 
+## 2026-07-29 case-22 captured norm/cross qualification
+
+- RELION job `11777114` completed the full exact-device science and sealed
+  14/14 schema-v2 artifacts, but its recovered fixed validator rejected the
+  diagnostic arrays: replay p95 `13/14`, replay maximum `14/14`, and
+  reference-norm translation invariance `1/14`.  The 3/3 half/merged
+  shellwise FSC-AUC inertness gate passes with minimum above
+  `0.99999999996`.
+- The rejected capture is map-safe but not classification-ready.  The
+  reference norm varies by `9.5367e-7`--`7.6294e-6` across translation
+  threads because the passive float32 component reduction follows different
+  pixel partitions.  No gate was relaxed.
+- RECOVAR job `11777337` completed `0:0` in `00:54:10`, with peak RSS
+  `28234296K`, and sealed all 14 fixed component dumps.  Replay passes both
+  fixed gates `14/14`; map inertness passes `3/3` with half-1, half-2, and
+  merged FSC-AUC `0.9999999998350682`, `0.9999999998308815`, and
+  `0.9999999998928133`.  Provisional analysis reports cross-engine closure
+  `14/14`, cross-term dominance `14/14`, reference-norm dominance `0/14`,
+  and cross-residual rotation dominance `14/14`.  A positive scale fitted
+  independently per rotation removes a majority of cross-residual energy
+  for only `2/14`, rejecting simple per-rotation amplitude as a cohort-wide
+  explanation.
+  The fail-closed classification remains `component_capture_not_qualified`
+  because its RELION input is rejected.  Output SHA-256 is
+  `694bb6d14e842e232a374a2f151f2f15fa40f95b971cd9a09125b50efe78bcf1`.
+- A default-off FP64 component accumulator was built while leaving production
+  float32 diff2 unchanged.  Binary SHA-256 is
+  `9ffb9eee44254f5c17664595f0247f71cfba2d95ce449745ba70af2f8ac64f9d`;
+  dependency job `11778245` failed preflight `1:0` in two seconds because the
+  launcher referenced a nonexistent Python.  It wrote zero capture and zero
+  RELION artifacts.  The failure is sealed in
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_diff2_components_fp64_1487550f_20260729T231000ET/provenance/PREFLIGHT_FAILURE_11778245.md`.
+  Corrected exact-device job `11779197` completed `0:0` in `00:19:04`, with
+  peak RSS `3003528K`, on required UUID
+  `GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a`.
+- Job `11779197` improves reference-norm translation invariance from `1/14`
+  to `14/14` and passes replay maximum `14/14`, but its unchanged replay-p95
+  gate passes only `12/14`.  `part1480_stack2330` and
+  `part2277_stack348` each measure `6.103515625e-5` against the fixed `5e-5`
+  gate.  It is formally rejected.  Its half-1, half-2, and merged map
+  inertness passes `3/3` at FSC-AUC `0.9999999999800995`,
+  `0.9999999999799074`, and `0.9999999999605521`.
+- The paired float32/FP64 audit reports zero bitwise-identical production
+  raw-score particles, but centered inter-run p95 differences at most one
+  image-constant float32 ULP for `14/14`; FP64 replay p95 values are integral
+  ULPs for `14/14`.  The FP64 diagnostic separately expands norm and cross
+  terms while production diff2 retains the original float32
+  squared-difference path, so its classification is
+  `fp64_capture_rejected_expanded_component_arithmetic_does_not_replay_production_float32_diff2`.
+  No gate is relaxed and no correlation is computed.  Script and output JSON
+  SHA-256 values are
+  `221206e203acfecef2f98fabeda174394a116cbda710b41b7ae0e858464546ff`
+  and `bcf4fd5fffa7ecac660128c48f90bde87668004504601004035ef95385f635f0`.
+- The additive live-operand patch is frozen at SHA-256
+  `a00ad73ac496be4b2cc0513ee7aa2fd0dd8de137927db66b4d80420d0b06ad1e`
+  and its tested CUDA 12.6/OpenMPI 4.1.6 binary at
+  `c54597d3e8ee23181f50bfcb510c83645e48ac76794e49a54b9abecd0959449a`.
+  Science was withheld because the component prerequisite is rejected.
+- Schema-v2 patch 0004 captures the exact GPU `translatePixel` outputs and
+  CUDA coarse topology so the validator can replay the original production
+  squared-difference arithmetic directly.  It does not depend on algebraic
+  norm/cross closure for qualification, while retaining independent
+  reference/cross replay checks.  Production p95/max gates remain
+  `5e-5`/`5e-4`.  Patch and rebuilt binary SHA-256 values are
+  `3d090744381306bdccc3be641834909286355f2bc15abc707053ad48d95f3b21`
+  and `2e415f5c982773bdf4e33bf4d44933cc6307fd8f096b5a7e58b73e97318d54f8`.
+  Six schema tests pass; exact-device science is pending and non-scoring.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
 ## 2026-07-29 case-22 raw-score component decomposition
 
 - Commit `206fadf3` adds a fixed two-way additive energy decomposition over

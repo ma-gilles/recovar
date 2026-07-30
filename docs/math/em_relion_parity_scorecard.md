@@ -1093,6 +1093,61 @@ translation-independent rotation term, but does not distinguish those
 operands without a component capture.  Output SHA-256 is
 `a829fcdae2945534a901aff08024e3d650b98fc83e20a5f2995ecddee7e3e025`;
 no correlation is used.
+
+### Case-22 captured score operands remain fail-closed
+
+RELION job `11777114` completed the exact-device iteration-2 science and
+sealed 14/14 schema-v2 component artifacts plus all three inertness maps.
+The recovered validator formally rejects the capture at its unchanged gates:
+centered replay p95 passes 13/14, replay maximum passes 14/14, and
+reference-norm translation invariance passes 1/14.  Map inertness passes 3/3
+at a minimum FSC-AUC above `0.99999999996`.  The rejection is caused by
+float32 diagnostic reduction variability of a few ULPs; thresholds were not
+relaxed.
+
+RECOVAR job `11777337` completed `0:0` and sealed all 14 requested component
+dumps.  Its fixed replay gates pass 14/14 and its half-1, half-2, and merged
+map-inertness gates pass 3/3 at FSC-AUC `0.9999999998350682`,
+`0.9999999998308815`, and `0.9999999998928133`.  The provisional
+cross-engine analysis closes 14/14; all 14/14 residuals are cross-term
+dominated and 0/14 are reference-norm dominated.  The cross residual is
+rotation-dominated for 14/14, while a positive scale fitted independently
+per rotation removes a majority of cross-residual energy for only 2/14.
+Because the RELION capture is rejected, the formal result remains
+`component_capture_not_qualified`, not a causal classification.  Its v2 JSON
+SHA-256 is
+`694bb6d14e842e232a374a2f151f2f15fa40f95b971cd9a09125b50efe78bcf1`.
+
+A diagnostic-only FP64 RELION component accumulator builds without changing
+production float32 diff2.  Job `11778245` failed before science because its
+launcher referenced a nonexistent Python and wrote no RELION or capture
+artifacts.  Corrected exact-device job `11779197` completed `0:0` in
+`00:19:04` on the required UUID.  Reference-norm translation invariance
+improves from 1/14 to 14/14 and replay maximum passes 14/14, but replay p95
+passes only 12/14 at the unchanged `5e-5` gate.  The two failures are exactly
+`6.103515625e-5`.  Map inertness passes 3/3 at FSC-AUC
+`0.9999999999800995`, `0.9999999999799074`, and
+`0.9999999999605521`.
+
+A paired no-correlation audit finds that independently run production raw
+diff2 is not bitwise identical for 14/14 particles, while its centered p95
+difference is at most one float32 ULP for 14/14.  FP64 replay p95 values are
+integral image-constant ULPs for 14/14.  Because the diagnostic expands norm
+and cross separately but production retains its float32 squared-difference
+path, the FP64 capture remains rejected rather than proving an operand
+difference.  Audit JSON SHA-256 is
+`bcf4fd5fffa7ecac660128c48f90bde87668004504601004035ef95385f635f0`.
+The first passive live-operand patch and binary were built without running
+science against the rejected prerequisite.  Schema-v2 now captures exact
+GPU-shifted images and records the CUDA coarse topology so it can replay the
+original production squared-difference path directly at unchanged
+`5e-5`/`5e-4` p95/max gates.  Patch SHA-256 is
+`3d090744381306bdccc3be641834909286355f2bc15abc707053ad48d95f3b21`;
+rebuilt binary SHA-256 is
+`2e415f5c982773bdf4e33bf4d44933cc6307fd8f096b5a7e58b73e97318d54f8`.
+Science is pending.  These diagnostics are non-scoring: K=1 remains 28/34
+strict, 32/34 topology, and 34/34 evaluated; K=4 remains 41/60 direct and
+9/15 all-class.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
