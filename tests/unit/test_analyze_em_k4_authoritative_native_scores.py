@@ -314,6 +314,38 @@ def test_selected_candidate_components_close_and_rank() -> None:
     ] == 2.0 / 3.0
 
 
+def test_softmax_partition_contributions_replay_and_rank() -> None:
+    report = analyzer._softmax_partition_contribution_attribution(
+        native_combined=np.asarray([0.0, 0.0]),
+        recovar_combined=np.asarray([0.0, np.log(2.0)]),
+        native_candidate_index=np.asarray([7, 8]),
+        native_rotation_local=np.asarray([11, 12]),
+        recovar_rotation_row=np.asarray([21, 21]),
+        translation_id=np.asarray([31, 32]),
+        selected_rotation=21,
+        selected_translations=(31, 32),
+    )
+
+    assert report["shared_reference_score"] == np.log(2.0)
+    assert report["native_partition"] == 1.0
+    assert report["recovar_partition"] == 1.5
+    assert report["partition_delta_recovar_minus_native"] == 0.5
+    assert report["candidate_contribution_sum"] == 0.5
+    assert report["partition_delta_replay_residual"] == 0.0
+    assert report["absolute_candidate_contribution_sum"] == 0.5
+    assert report["signed_cancellation_fraction"] == 0.0
+    assert report["top_candidates"][0]["native_candidate_index"] == 8
+    assert report["top_candidates"][0][
+        "absolute_partition_contribution_rank_1based"
+    ] == 1
+    assert report["selected_share_of_absolute_partition_contributions"] == 1.0
+    selected = report["selected_candidates"]
+    assert [candidate["translation_id"] for candidate in selected] == [31, 32]
+    assert selected[0]["combined_score_delta_recovar_minus_native"] == 0.0
+    assert selected[0]["partition_contribution_recovar_minus_native"] == 0.0
+    assert selected[1]["partition_contribution_recovar_minus_native"] == 0.5
+
+
 def test_target_score_offset_attribution_closes_exact_decomposition() -> None:
     report = analyzer.target_score_offset_attribution(
         min_diff2=np.float32(500.6817321777344),

@@ -10200,6 +10200,53 @@ and `9/15` all-class.
 - Fixed metrics remain K=1 `28/34` strict, `32/34` topology, and `34/34`
   evaluated; K=4 `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 K=4 softmax partition-contribution predeclaration
+
+- V12 uses one shared cross-engine maximum and scalar
+  `math.exp(score - shared_reference)` weights to partition the native versus
+  RECOVAR softmax-denominator shift by aligned candidate.
+- Fixed-order sums replay the two partitions, signed delta, candidate
+  contribution sum, absolute contribution total, and cancellation.
+- Absolute contributions are ranked by descending magnitude then native
+  candidate identity.  Top-1/top-3/top-10 concentration and fixed target
+  rotation `2626` / native `1210` at translations `78,83,76,80,82` are
+  explicit.
+- The threshold-free question is whether the global normalization movement
+  affecting zero-local-score candidates `78,76` comes primarily from the
+  same selected target-rotation set or from other captured identities.
+- This cannot identify a raw operand, authorize a fix or new job, change the
+  scorecard, or establish full K=4 posterior/FSC-AUC parity.
+- Predeclaration:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_partition_contributions_v12_d8b71453_20260730T173157ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+## 2026-07-30 K=4 softmax partition-contribution result
+
+- Candidate contributions replay partition delta
+  `+0.00105344617606562` with residual
+  `-4.5775015722338e-16`.  Absolute contribution L1 is
+  `0.0011348867684725596`, signed cancellation is
+  `7.176098503337935%`, and the log-partition ratio is
+  `+2.432914160221955e-5`.
+- Fixed target-rotation translations `80`, `82`, and `83` rank first, second,
+  and third, with absolute shares `2.689000640086723%`,
+  `2.689000640086723%`, and `2.5103701171896114%`.
+- Fixed candidates `78` and `76` contribute exactly zero.  Their complete
+  modeled log-normalized-mass ratio is therefore the global normalization
+  term `-2.432914160221955e-5`.
+- The selected five cover `7.888371397363057%` of absolute partition
+  movement.  Top-1/top-3/top-10 concentration is
+  `2.689000640086723%` / `7.888371397363057%` /
+  `16.73773931344828%`; the aggregate shift is diffuse despite the selected
+  targets owning the three strongest individual contributions.
+- Seven of the top ten contributors use mapped rotation `2626`; three use
+  rotation `947`.  The queued target family is prominent but the fixed set
+  cannot alone explain the shared normalizer.
+- Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+  `fbb54f53f4da3a4a6428fd988752b6716214a752ef356461cda2af3f703737ca`.
+  Removing only the V12 schema and partition report reproduces V11 exactly.
+- This remains descriptive: no production change or new job is authorized,
+  and fixed K=1/K=4 scorecards are unchanged.
+
 ## 2026-07-30 K=4 marginal-TV concentration predeclaration
 
 - V9 will rank every V8 rotation and translation marginal by

@@ -13442,3 +13442,56 @@ Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
 `e3a8237af66333b06e2da2430d0b5cb4ac8f8822ecd93c9a3c40247310eb8993`.
 Removing the V11 schema and target-rotation component report reproduces V10
 exactly.
+
+### Predeclared K=4 softmax partition contributions
+
+V12 uses the shared maximum over the aligned native and RECOVAR combined-score
+tables as one cross-engine reference.  It computes each candidate's scalar
+`math.exp(score - shared_reference)` weight difference, replays both partition
+sums and their signed difference with fixed-order `math.fsum`, and ranks
+absolute candidate contributions by native candidate identity.
+
+The report will serialize top-1/top-3/top-10 concentration, signed
+cancellation, and the complete identities and ranks of target rotation
+`2626` / native `1210` at translations `78,83,76,80,82`.  This directly asks
+whether the global normalization movement affecting zero-local-score
+candidates `78,76` is driven by the same target-rotation set or by other
+captured candidates.
+
+This is a threshold-free one-class partition diagnostic.  It cannot establish
+a full K=4 posterior or FSC/FSC-AUC result, identify a raw score operand,
+authorize a production fix or new job, or change the fixed scorecard.  The
+queued `80,82` raw-operand audit remains causal.  The predeclaration is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_partition_contributions_v12_d8b71453_20260730T173157ET/provenance/PREDECLARED_DIAGNOSTIC.md`.
+
+The sealed V12 partition delta is `+0.00105344617606562`; fixed-order
+candidate contributions replay it to a residual of
+`-4.5775015722338e-16`.  Absolute contribution L1 is
+`0.0011348867684725596`, so signed cancellation is only
+`7.176098503337935%`.  The corresponding RECOVAR/native log-partition ratio
+is `+2.432914160221955e-5`.
+
+Translations `80`, `82`, and `83` at the fixed target rotation are the top
+three individual contributors.  Their absolute shares are
+`2.689000640086723%`, `2.689000640086723%`, and
+`2.5103701171896114%`, respectively.  The five fixed candidates together
+cover `7.888371397363057%` of absolute partition movement because `78` and
+`76` have exactly zero local weight contribution.
+
+The aggregate shift is nevertheless diffuse: top-1/top-3/top-10
+concentration is only `2.689000640086723%` /
+`7.888371397363057%` / `16.73773931344828%`.  Seven of the top ten
+individual contributors use target rotation `2626`, while the remaining
+three use mapped rotation `947`; many candidates outside the fixed five are
+therefore needed to produce the denominator shift.
+
+For zero-local-score candidates `78` and `76`, the entire modeled
+log-normalized-mass ratio is `-2.432914160221955e-5`, the negative
+log-partition shift.  At `80,82` it is `+6.188436522780449e-6`, and at `83`
+it is `+3.670601464778045e-5`, after subtracting the same global normalizer.
+Thus the queued targets contain the strongest individual partition
+contributions but cannot alone explain the global normalization effect.
+This remains descriptive and does not authorize a production change or job.
+Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+`fbb54f53f4da3a4a6428fd988752b6716214a752ef356461cda2af3f703737ca`.
+Removing only the V12 schema and partition report reproduces V11 exactly.

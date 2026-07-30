@@ -23,7 +23,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v11"
+SCHEMA = "relion-k4-it2-exact-device-native-score-audit-v12"
 PASS_CLASSIFICATION = "exact_device_authoritative_native_and_recovar_target_match_after_exact_rotation_permutation"
 TARGET_OFFSET_CLASSIFICATION = (
     "exact_device_target_absolute_score_offset_is_preprior_plus_float32_order_and_decision_inert"
@@ -970,6 +970,236 @@ def _selected_candidate_component_attribution(
     }
 
 
+def _softmax_partition_contribution_attribution(
+    *,
+    native_combined: np.ndarray,
+    recovar_combined: np.ndarray,
+    native_candidate_index: np.ndarray,
+    native_rotation_local: np.ndarray,
+    recovar_rotation_row: np.ndarray,
+    translation_id: np.ndarray,
+    selected_rotation: int,
+    selected_translations: tuple[int, ...],
+) -> dict[str, Any]:
+    """Rank candidate contributions to the shared-reference partition shift."""
+
+    native_combined = np.asarray(native_combined, dtype=np.float64)
+    recovar_combined = np.asarray(recovar_combined, dtype=np.float64)
+    native_candidate_index = np.asarray(
+        native_candidate_index,
+        dtype=np.int64,
+    )
+    native_rotation_local = np.asarray(
+        native_rotation_local,
+        dtype=np.int64,
+    )
+    recovar_rotation_row = np.asarray(
+        recovar_rotation_row,
+        dtype=np.int64,
+    )
+    translation_id = np.asarray(translation_id, dtype=np.int64)
+    arrays = (
+        native_combined,
+        recovar_combined,
+        native_candidate_index,
+        native_rotation_local,
+        recovar_rotation_row,
+        translation_id,
+    )
+    _require(
+        len({array.shape for array in arrays}) == 1,
+        "partition contribution array shapes differ",
+    )
+    _require(native_combined.size > 0, "partition contribution table is empty")
+    _require(
+        np.all(np.isfinite(native_combined))
+        and np.all(np.isfinite(recovar_combined)),
+        "partition contribution scores are not finite",
+    )
+    _require(
+        np.unique(native_candidate_index).size == native_candidate_index.size,
+        "native candidate indices are not unique",
+    )
+    shared_reference = max(
+        float(np.max(native_combined)),
+        float(np.max(recovar_combined)),
+    )
+    native_weights = np.fromiter(
+        (
+            math.exp(float(score) - shared_reference)
+            for score in native_combined
+        ),
+        dtype=np.float64,
+        count=native_combined.size,
+    )
+    recovar_weights = np.fromiter(
+        (
+            math.exp(float(score) - shared_reference)
+            for score in recovar_combined
+        ),
+        dtype=np.float64,
+        count=recovar_combined.size,
+    )
+    weight_delta = recovar_weights - native_weights
+    absolute_delta = np.abs(weight_delta)
+    native_partition = math.fsum(float(value) for value in native_weights)
+    recovar_partition = math.fsum(float(value) for value in recovar_weights)
+    partition_delta = recovar_partition - native_partition
+    contribution_sum = math.fsum(float(value) for value in weight_delta)
+    absolute_contribution_sum = math.fsum(
+        float(value) for value in absolute_delta
+    )
+    _require(
+        native_partition > 0.0 and recovar_partition > 0.0,
+        "partition sums are not positive",
+    )
+    _require(
+        absolute_contribution_sum > 0.0,
+        "partition contribution L1 is zero",
+    )
+    ranked_rows = sorted(
+        range(native_combined.size),
+        key=lambda row: (
+            -float(absolute_delta[row]),
+            int(native_candidate_index[row]),
+        ),
+    )
+    absolute_rank = np.empty(native_combined.size, dtype=np.int64)
+    for rank, row in enumerate(ranked_rows, start=1):
+        absolute_rank[row] = rank
+
+    def contribution_sign_vs_net(row: int) -> str:
+        contribution = float(weight_delta[row])
+        if contribution == 0.0 or partition_delta == 0.0:
+            return "zero"
+        return "aligned" if contribution * partition_delta > 0.0 else "opposed"
+
+    def candidate_record(row: int) -> dict[str, Any]:
+        score_delta = float(
+            recovar_combined[row] - native_combined[row]
+        )
+        return {
+            "aligned_table_index": int(row),
+            "native_candidate_index": int(native_candidate_index[row]),
+            "native_rotation_local": int(native_rotation_local[row]),
+            "recovar_rotation_row": int(recovar_rotation_row[row]),
+            "translation_id": int(translation_id[row]),
+            "native_combined_score": float(native_combined[row]),
+            "recovar_combined_score": float(recovar_combined[row]),
+            "combined_score_delta_recovar_minus_native": score_delta,
+            "native_shared_reference_weight": float(native_weights[row]),
+            "recovar_shared_reference_weight": float(recovar_weights[row]),
+            "partition_contribution_recovar_minus_native": float(
+                weight_delta[row]
+            ),
+            "absolute_partition_contribution": float(
+                absolute_delta[row]
+            ),
+            "absolute_partition_contribution_rank_1based": int(
+                absolute_rank[row]
+            ),
+            "share_of_absolute_partition_contributions": float(
+                absolute_delta[row] / absolute_contribution_sum
+            ),
+            "contribution_sign_vs_net_partition_delta": (
+                contribution_sign_vs_net(row)
+            ),
+        }
+
+    top_concentration = {}
+    for count in (1, 3, 10):
+        selected_count = min(count, len(ranked_rows))
+        top_concentration[f"top_{count}"] = float(
+            math.fsum(
+                float(absolute_delta[row])
+                for row in ranked_rows[:selected_count]
+            )
+            / absolute_contribution_sum
+        )
+
+    selected_translation_ids = tuple(
+        dict.fromkeys(int(value) for value in selected_translations)
+    )
+    selected_rows = []
+    missing_translations = []
+    for selected_translation in selected_translation_ids:
+        rows = np.flatnonzero(
+            (recovar_rotation_row == selected_rotation)
+            & (translation_id == selected_translation)
+        )
+        if rows.size == 0:
+            missing_translations.append(selected_translation)
+            continue
+        _require(
+            rows.size == 1,
+            "selected partition-contribution candidate is duplicate",
+        )
+        selected_rows.append(int(rows[0]))
+    selected_signed_sum = math.fsum(
+        float(weight_delta[row]) for row in selected_rows
+    )
+    selected_absolute_sum = math.fsum(
+        float(absolute_delta[row]) for row in selected_rows
+    )
+    log_partition_ratio = math.log(recovar_partition) - math.log(
+        native_partition
+    )
+    return {
+        "scope": (
+            "shared_reference_softmax_partition_contributions_"
+            "within_one_captured_class"
+        ),
+        "normalization": (
+            "math_exp_after_shared_cross_engine_max_then_math_fsum_"
+            "in_aligned_candidate_order"
+        ),
+        "shared_reference_score": shared_reference,
+        "native_partition": float(native_partition),
+        "recovar_partition": float(recovar_partition),
+        "partition_delta_recovar_minus_native": float(partition_delta),
+        "candidate_contribution_sum": float(contribution_sum),
+        "partition_delta_replay_residual": float(
+            contribution_sum - partition_delta
+        ),
+        "absolute_candidate_contribution_sum": float(
+            absolute_contribution_sum
+        ),
+        "signed_cancellation_fraction": float(
+            1.0 - abs(partition_delta) / absolute_contribution_sum
+        ),
+        "log_partition_ratio_recovar_over_native": float(
+            log_partition_ratio
+        ),
+        "candidate_ranking_rule": (
+            "descending_absolute_partition_contribution_then_"
+            "ascending_native_candidate_index"
+        ),
+        "top_absolute_contribution_concentration": top_concentration,
+        "top_candidates": [
+            candidate_record(row) for row in ranked_rows[:10]
+        ],
+        "selected_recovar_rotation_row": int(selected_rotation),
+        "selected_translation_ids": list(selected_translation_ids),
+        "missing_selected_translation_ids": missing_translations,
+        "selected_candidates": [
+            {
+                **candidate_record(row),
+                "log_normalized_mass_ratio_from_score_and_partition": float(
+                    recovar_combined[row]
+                    - native_combined[row]
+                    - log_partition_ratio
+                ),
+            }
+            for row in selected_rows
+        ],
+        "selected_signed_contribution_sum": float(selected_signed_sum),
+        "selected_absolute_contribution_sum": float(selected_absolute_sum),
+        "selected_share_of_absolute_partition_contributions": float(
+            selected_absolute_sum / absolute_contribution_sum
+        ),
+    }
+
+
 def global_score_offset_attribution(
     *,
     min_diff2: np.float32,
@@ -1425,6 +1655,18 @@ def global_score_offset_attribution(
             selected_translations=MARGINAL_OWNER_TRANSLATIONS,
         )
     )
+    softmax_partition_contributions = (
+        _softmax_partition_contribution_attribution(
+            native_combined=native_combined,
+            recovar_combined=recovar_combined,
+            native_candidate_index=native_candidate_index,
+            native_rotation_local=native_rotation_local,
+            recovar_rotation_row=recovar_rotation_row,
+            translation_id=translation_id,
+            selected_rotation=TARGET_RECOVAR_ROTATION,
+            selected_translations=MARGINAL_OWNER_TRANSLATIONS,
+        )
+    )
     normalized_score_mass_effect["strata"] = {
         "scope": (
             "descriptive_partition_of_within_captured_class_candidate_"
@@ -1471,6 +1713,9 @@ def global_score_offset_attribution(
         ),
         "target_rotation_candidate_components": (
             target_rotation_candidate_components
+        ),
+        "softmax_partition_contributions": (
+            softmax_partition_contributions
         ),
         "normalized_score_mass_effect": normalized_score_mass_effect,
     }
