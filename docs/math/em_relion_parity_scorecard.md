@@ -1222,6 +1222,17 @@ Report SHA-256 is
 The focused gate passes 107 tests with 10 GPU-only tests skipped.  This
 diagnostic is non-scoring: K=1 remains 28/34 strict, 32/34 topology, and
 34/34 evaluated; K=4 remains 41/60 direct and 9/15 all-class.
+
+The fixed downstream 2x2 factorial separates pixel correction from
+`corr_img`.  Actual RELION and RECOVAR-pixel-only arms remain dominant
+14/14, with median centered-energy removal `85.2128%` and `85.2310%`.
+RECOVAR-`corr_img`-only and both-operand arms are dominant 0/14, with medians
+`-0.1187%` and `-0.0384%`.  Classification is
+`raw_coarse_residual_is_corr_img_score_weight_dominated_not_pixel_correction`.
+Report SHA-256 is
+`a64967d5a860e929ba37c65773d513f49ef59bedce9f92457ee14a9ccee7c7f4`.
+The expanded focused gate passes 112 tests with 10 GPU-only tests skipped.
+This further narrows case 22 without changing either fixed denominator.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

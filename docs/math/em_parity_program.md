@@ -12800,3 +12800,45 @@ and
 both contain `SAFE_TO_DELETE`.  The frozen scorecard remains unchanged:
 K=1 is 28/34 strict, 32/34 topology, and 34/34 evaluated; K=4 is 41/60
 direct and 9/15 all-class.
+
+## 2026-07-30 case-22 pixel-correction / corr_img factorial
+
+A fixed 2x2 factorial splits the qualified post-optics transfer into the
+pixel-corrected image and `corr_img` operands.  The actual RELION arm and the
+RECOVAR-pixel-only arm remain strict-majority residual-dominant for 14/14
+particles.  Replacing `corr_img` alone with RECOVAR's captured equivalent
+changes dominance to 0/14; replacing both operands is also 0/14.
+
+| Arm | Dominant | Median centered-energy removal | Median base relative L2 |
+|---|---:|---:|---:|
+| actual RELION | 14/14 | `85.2128%` | `1.2231e-6` |
+| RECOVAR pixel correction only | 14/14 | `85.2310%` | `1.4537e-6` |
+| RECOVAR `corr_img` only | 0/14 | `-0.1187%` | `4.8813e-7` |
+| RECOVAR pixel correction + `corr_img` | 0/14 | `-0.0384%` | `3.1160e-7` |
+
+The fixed cohort contains zero evaluated pixels at or below the `1e-8` CTF
+zero threshold.  The RECOVAR pixel counterfactual therefore uses the fixed
+opposite-sign convention `-1/CTF` without an undefined branch.  No scale,
+sign, or correlation is fitted.
+
+Classification is
+`raw_coarse_residual_is_corr_img_score_weight_dominated_not_pixel_correction`.
+The remaining bounded search is inside the `corr_img` construction:
+RELION `Minvsigma2`, CTF-squared, and scale-squared inputs/order.  This is a
+non-scoring causal diagnostic and not a production change.
+
+Report/completion SHA-256 values are
+`a64967d5a860e929ba37c65773d513f49ef59bedce9f92457ee14a9ccee7c7f4`
+and
+`ecbf32f4c37260bb261547bffad8e8c1728b508085c48ca8b15a56c13a26a1ad`.
+Analyzer/test SHA-256 values are
+`6b978df78ff0819cb83c9c3a4981efe87b5433e19e8d40931ed940e23f2baeee`
+and
+`a30515cc377db3dc810d14a51523aee209454fd07f48df0fac38aac3e520bbea`.
+The expanded focused CPU gate passes 112 tests with 10 GPU-only tests
+skipped.  The short CPU analysis has no new Slurm job ID.  Run and runtime
+roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_score_transfer_factorial_f896a838_20260730T040552ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_score_transfer_factorial_f896a838_20260730T040552ET`;
+both contain `SAFE_TO_DELETE`.

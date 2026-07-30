@@ -9363,6 +9363,39 @@ and `9/15` all-class.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 case-22 score-transfer 2x2 factorial
+
+- The predeclared arms are actual RELION, RECOVAR pixel correction only,
+  RECOVAR `corr_img` only, and both RECOVAR operands.  The fixed denominator
+  is 14 and the strict-majority threshold remains greater than 0.5.
+- Actual RELION is dominant 14/14, median energy removal `85.2128%`.
+  RECOVAR pixel correction only remains dominant 14/14, median `85.2310%`.
+- RECOVAR `corr_img` only is dominant 0/14, median `-0.1187%`; replacing
+  both operands is dominant 0/14, median `-0.0384%`.
+- Median base relative L2 is `1.2231e-6`, `1.4537e-6`, `4.8813e-7`, and
+  `3.1160e-7` for those four arms, respectively.
+- Classification:
+  `raw_coarse_residual_is_corr_img_score_weight_dominated_not_pixel_correction`.
+  The next split is within `buildCorrImage`: `Minvsigma2`, CTF-squared, and
+  scale-squared values/order.
+- Report/completion SHA-256 values are
+  `a64967d5a860e929ba37c65773d513f49ef59bedce9f92457ee14a9ccee7c7f4`
+  and
+  `ecbf32f4c37260bb261547bffad8e8c1728b508085c48ca8b15a56c13a26a1ad`;
+  analyzer/test SHA-256 values are
+  `6b978df78ff0819cb83c9c3a4981efe87b5433e19e8d40931ed940e23f2baeee`
+  and
+  `a30515cc377db3dc810d14a51523aee209454fd07f48df0fac38aac3e520bbea`.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_score_transfer_factorial_f896a838_20260730T040552ET`;
+  runtime root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_score_transfer_factorial_f896a838_20260730T040552ET`.
+  Both contain `SAFE_TO_DELETE`; short local CPU analysis, no Slurm job.
+- Expanded focused CPU gate: 112 passed, 10 GPU-only skipped.  Scoped Ruff,
+  scorecard freshness, import provenance, and `git diff --check` pass.
+- Non-scoring: K=1 remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
 ## 2026-07-30 case-22 post-optics score-transfer localization
 
 - Joined the qualified preprocessing capture, qualified production-operand
