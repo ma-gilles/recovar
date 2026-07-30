@@ -9915,3 +9915,43 @@ and `9/15` all-class.
   a parity-score promotion or a production-kernel change.
 - Non-scoring: K=1 remains `28/34` strict, `32/34` topology, and `34/34`
   evaluated; K=4 remains `41/60` direct and `9/15` all-class.
+
+## 2026-07-30 case-22 live-versus-serialized noise-state boundary
+
+- The qualified shell-partition parent already establishes that physical
+  iteration-2 raw coarse-score residuals are inverse-noise dominated and
+  confined to shells 1--4.  Its fixed 14-particle report SHA-256 remains
+  `9d6b8cf39c9abe21c71d5c3d0dc0ef73b381566b439328748d92c32efa473073`.
+- `scripts/analyze_em_k1_noise_serialization_boundary.py` recovers the
+  effective shell noise independently from the sealed RELION live
+  `corr_img`/effective-CTF operands and RECOVAR `ctf2_data`/effective-CTF
+  operands.  It binds the exact model STAR tokens, keeps the fixed
+  effective-CTF threshold `0.01`, evaluates all 14 particles, and fits no
+  scale, sign, threshold, or correlation.
+- On fixed-decimal STAR shells 1--4, RECOVAR's maximum absolute difference
+  from the serialized token is at most `2.4296e-10`.  Live RELION's minimum
+  absolute difference is `3.5756e-7`, `6.3893e-8`, `3.0616e-7`, and
+  `4.0229e-7`, respectively.  The minimum live-versus-serialized closeness
+  advantage is `419.81x`; the other shells reach `1,303x`, `1,472x`, and
+  `16,593x`.
+- Scientific-notation shell 5 is the fixed control.  RECOVAR and live RELION
+  both close to the serialized token within `2.8211e-11` and `2.4431e-10`,
+  respectively.  Maximum within-shell variation is below `3.545e-9` across
+  every engine/shell product, ruling out a poorly conditioned pixel subset.
+- Classification:
+  `recovar_score_weight_matches_serialized_star_noise_while_live_relion_retains_pre_serialization_shells_1_to_4`.
+  This identifies a live-versus-serialized state boundary, not a RECOVAR
+  production-kernel fix.  The next causal gate remains the already queued
+  exact-device RELION restart from the same serialized model STAR:
+  primary `11785170`, iteration-0 retry `11785428`, and direct iteration-1
+  restart `11785547`, with robust/pair audits `11791339`--`11791341` and
+  `11791711`--`11791712`.
+- The deterministic report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_noise_serialization_boundary_313803ae_20260730T1430ET/analysis/NOISE_SERIALIZATION_BOUNDARY_V1.json`,
+  SHA-256
+  `07791270eec260bce623a39a6520cfb76f3a504db2ee40c4d7dc17f07fc09818`.
+  Focused validation passes `81/81` CPU tests with 10 GPU-only skips; scoped
+  Ruff, Python compilation, scorecard freshness, deterministic byte replay,
+  and `git diff --check` pass.
+- Non-scoring: K=1 remains `28/34` strict (`82.4%`), `32/34` topology, and
+  `34/34` evaluated; K=4 remains `41/60` direct and `9/15` all-class.
