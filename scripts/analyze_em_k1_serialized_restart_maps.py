@@ -22,7 +22,7 @@ from scripts.summarize_em_completion_bench import (
     shell_fsc,
 )
 
-SCHEMA = "em-k1-serialized-restart-map-fsc-v1"
+SCHEMA = "em-k1-serialized-restart-map-fsc-v2"
 CLASSIFICATION = (
     "serialized_restart_improves_all_case22_iteration2_map_fsc_auc_"
     "without_gt_regression"
@@ -70,7 +70,13 @@ def classify_map_effect(
     )
 
 
-def _validate_score_report(path: Path) -> dict[str, Any]:
+def _load_score_report(
+    path: Path,
+    *,
+    require_pass: bool,
+) -> tuple[dict[str, Any], bool]:
+    """Load the fixed score report, retaining failed diagnostic arms on request."""
+
     report = json.loads(path.read_text())
     _require(
         report.get("schema") == "em-k1-serialized-restart-boundary-v1",
@@ -81,18 +87,29 @@ def _validate_score_report(path: Path) -> dict[str, Any]:
         and report.get("classification_ready") is True,
         "serialized-restart score report is not classification-ready",
     )
-    _require(
-        report.get("classification") == SCORE_BOUNDARY_CLASSIFICATION,
-        "serialized-restart score boundary did not pass its fixed gates",
-    )
     fixed = report.get("fixed_metric", {})
     _require(
         fixed.get("evaluated_particles") == 14
-        and fixed.get("expected_particles") == 14
-        and fixed.get("serialized_restart_dominated") == 14
-        and fixed.get("absolute_score_gate_passed") == 14,
-        "serialized-restart score fixed metric did not pass 14/14",
+        and fixed.get("expected_particles") == 14,
+        "serialized-restart score report changed its 14-particle denominator",
     )
+    passed = bool(
+        report.get("classification") == SCORE_BOUNDARY_CLASSIFICATION
+        and fixed.get("serialized_restart_dominated") == 14
+        and fixed.get("absolute_score_gate_passed") == 14
+    )
+    if require_pass:
+        _require(
+            passed,
+            "serialized-restart score fixed metric did not pass 14/14",
+        )
+    return report, passed
+
+
+def _validate_score_report(path: Path) -> dict[str, Any]:
+    """Preserve the original strict score prerequisite."""
+
+    report, _passed = _load_score_report(path, require_pass=True)
     return report
 
 
@@ -193,11 +210,15 @@ def build_report(
     restart_relion_root: Path,
     gt_volume: Path,
     relion_iteration: int,
+    require_score_boundary_pass: bool = True,
 ) -> dict[str, Any]:
     """Build the predeclared map-level causal gate for the restart arm."""
 
     _require(relion_iteration >= 1, "RELION iteration must be positive")
-    score_report = _validate_score_report(score_analysis_json)
+    score_report, score_boundary_passed = _load_score_report(
+        score_analysis_json,
+        require_pass=require_score_boundary_pass,
+    )
     paths = _paths(
         recovar_root=recovar_root,
         fresh_relion_root=fresh_relion_root,
@@ -272,11 +293,16 @@ def build_report(
         "status": "complete",
         "classification_ready": True,
         "classification": classification,
+        "overall_intervention_accepted": bool(
+            score_boundary_passed and classification == CLASSIFICATION
+        ),
         "metric_policy": (
             "signed shellwise FSC and normalized non-DC FSC-AUC only; "
             "fixed half1/half2/merged denominator; parity improvement is "
             "restart-minus-fresh > 0; GT non-degradation is "
-            "restart-minus-fresh >= 0; no fitted tolerance; no correlation"
+            "restart-minus-fresh >= 0; a failed score intervention may be "
+            "retained for map diagnosis but cannot be accepted; no fitted "
+            "tolerance; no correlation"
         ),
         "relion_iteration": relion_iteration,
         "fixed_metric": {
@@ -284,12 +310,15 @@ def build_report(
             "gt_nondegraded": gt_nondegraded,
             "evaluated_maps": len(MAP_LABELS),
             "expected_maps": 3,
+            "score_boundary_passed": score_boundary_passed,
         },
         "score_boundary": {
             "path": str(score_analysis_json.resolve()),
             "sha256": _sha256(score_analysis_json),
             "classification": score_report["classification"],
             "fixed_metric": score_report["fixed_metric"],
+            "passed": score_boundary_passed,
+            "required_for_map_evaluation": require_score_boundary_pass,
         },
         "roots": {
             "recovar": str(recovar_root.resolve()),
@@ -320,6 +349,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--restart-relion-root", type=Path, required=True)
     parser.add_argument("--gt-volume", type=Path, required=True)
     parser.add_argument("--relion-iteration", type=int, default=2)
+    parser.add_argument(
+        "--allow-score-boundary-failure",
+        action="store_true",
+        help=(
+            "compute fixed FSC/FSC-AUC map effects even when the score "
+            "intervention misses 14/14; overall acceptance remains false"
+        ),
+    )
     parser.add_argument("--output-json", type=Path, required=True)
     return parser
 
@@ -337,6 +374,7 @@ def main() -> None:
         restart_relion_root=args.restart_relion_root,
         gt_volume=args.gt_volume,
         relion_iteration=args.relion_iteration,
+        require_score_boundary_pass=not args.allow_score_boundary_failure,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(

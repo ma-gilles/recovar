@@ -199,14 +199,38 @@ def test_build_report_counts_fixed_fsc_auc_gates(
     )
 
     assert report["classification"] == analyzer.CLASSIFICATION
+    assert report["overall_intervention_accepted"] is True
     assert report["fixed_metric"] == {
         "parity_strictly_improved": 3,
         "gt_nondegraded": 3,
         "evaluated_maps": 3,
         "expected_maps": 3,
+        "score_boundary_passed": True,
     }
     for label in analyzer.MAP_LABELS:
         row = report["comparisons"][label]
         assert row["restart_minus_fresh_parity_fsc_auc"] > 0.0
         assert row["restart_minus_fresh_gt_fsc_auc"] > 0.0
         assert row["fresh_vs_restart_relion"]["fsc"]
+
+    failed_score = _score_report()
+    failed_score["fixed_metric"]["absolute_score_gate_passed"] = 13
+    failed_score["classification"] = (
+        "serialized_restart_removes_majority_residual_but_not_"
+        "absolute_score_gates"
+    )
+    score_path.write_text(json.dumps(failed_score))
+    diagnostic = analyzer.build_report(
+        score_analysis_json=score_path,
+        recovar_root=recovar_root,
+        fresh_relion_root=fresh_root,
+        restart_relion_root=restart_root,
+        gt_volume=gt_path,
+        relion_iteration=2,
+        require_score_boundary_pass=False,
+    )
+
+    assert diagnostic["classification"] == analyzer.CLASSIFICATION
+    assert diagnostic["overall_intervention_accepted"] is False
+    assert diagnostic["fixed_metric"]["score_boundary_passed"] is False
+    assert diagnostic["score_boundary"]["required_for_map_evaluation"] is False
