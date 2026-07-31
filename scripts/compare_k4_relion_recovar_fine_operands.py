@@ -289,12 +289,37 @@ def _component_counterfactual(
     )
     return {
         "deltas_centered": center_deltas,
+        "target_all_recovar_delta_l2": float(np.sqrt(baseline_energy)),
+        "informative": baseline_energy > 0,
         "single_component_substitution": records,
         "strongest_single_component": strongest,
         "strongest_target_delta_energy_removed_fraction": records[strongest][
             "target_delta_energy_removed_fraction"
         ],
     }
+
+
+def _select_component_classification(
+    raw_counterfactual: dict[str, object],
+    centered_counterfactual: dict[str, object],
+    *,
+    candidate_count: int,
+) -> tuple[str, str]:
+    """Select component attribution without centering away one sample."""
+
+    if candidate_count >= 2 and centered_counterfactual["informative"]:
+        component = centered_counterfactual["strongest_single_component"]
+        return (
+            f"{component}_has_largest_centered_fine_operand_single_substitution_effect",
+            "centered_raw_diff2",
+        )
+    if raw_counterfactual["informative"]:
+        component = raw_counterfactual["strongest_single_component"]
+        return (
+            f"{component}_has_largest_raw_fine_operand_single_substitution_effect",
+            "raw_diff2",
+        )
+    return "no_nonzero_fine_operand_residual", "none"
 
 
 def _center(values: np.ndarray) -> np.ndarray:
@@ -776,14 +801,16 @@ def compare(
     rotation_transpose = _metric(
         capture.candidates[0]["matrix"], recovar_rotation.T.reshape(-1)
     )
-    classification = (
-        f"{centered_counterfactual['strongest_single_component']}"
-        "_dominates_centered_fine_operand_residual"
+    classification, classification_basis = _select_component_classification(
+        raw_counterfactual,
+        centered_counterfactual,
+        candidate_count=len(candidate_rows),
     )
     return {
         "schema": "k4_relion_recovar_fine_operand_comparison_v8",
         "status": "complete",
         "classification": classification,
+        "classification_basis": classification_basis,
         "capture_validation": validation,
         "inputs": {
             "capture": str(capture_path.resolve()),

@@ -8,6 +8,7 @@ from scripts.compare_k4_relion_recovar_fine_operands import (
     _metric,
     _metric_up_to_global_sign,
     _relion_cuda_normalization_factors,
+    _select_component_classification,
     _translation_alignment,
     _tree_raw_diff2,
     _zero_dc_compact_score_weight,
@@ -80,6 +81,93 @@ def test_fine_operand_center_removes_only_common_offset():
 
     np.testing.assert_allclose(centered, np.asarray([-3, -1, 4], dtype=np.float64))
     assert np.sum(centered) == 0.0
+
+
+def test_single_candidate_classification_uses_raw_residual():
+    relion = np.asarray([10], dtype=np.float32)
+    all_recovar = np.asarray([12], dtype=np.float32)
+    substitutions = {
+        "reference": np.asarray([10], dtype=np.float32),
+        "shifted_image": np.asarray([11], dtype=np.float32),
+        "corr": np.asarray([12], dtype=np.float32),
+    }
+    raw = _component_counterfactual(relion, all_recovar, substitutions)
+    centered = _component_counterfactual(
+        relion,
+        all_recovar,
+        substitutions,
+        center_deltas=True,
+    )
+
+    classification, basis = _select_component_classification(
+        raw,
+        centered,
+        candidate_count=1,
+    )
+
+    assert raw["informative"] is True
+    assert centered["informative"] is False
+    assert (
+        classification
+        == "corr_has_largest_raw_fine_operand_single_substitution_effect"
+    )
+    assert basis == "raw_diff2"
+
+
+def test_multi_candidate_classification_can_use_centered_residual():
+    relion = np.asarray([10, 20, 30], dtype=np.float32)
+    all_recovar = np.asarray([111, 118, 133], dtype=np.float32)
+    substitutions = {
+        "reference": np.asarray([110, 120, 130], dtype=np.float32),
+        "shifted_image": all_recovar.copy(),
+        "corr": relion.copy(),
+    }
+    raw = _component_counterfactual(relion, all_recovar, substitutions)
+    centered = _component_counterfactual(
+        relion,
+        all_recovar,
+        substitutions,
+        center_deltas=True,
+    )
+
+    classification, basis = _select_component_classification(
+        raw,
+        centered,
+        candidate_count=3,
+    )
+
+    assert (
+        classification
+        == (
+            "shifted_image_has_largest_centered_fine_operand_"
+            "single_substitution_effect"
+        )
+    )
+    assert basis == "centered_raw_diff2"
+
+
+def test_zero_residual_classification_fails_closed():
+    relion = np.asarray([10], dtype=np.float32)
+    substitutions = {
+        name: relion.copy()
+        for name in ("reference", "shifted_image", "corr")
+    }
+    raw = _component_counterfactual(relion, relion, substitutions)
+    centered = _component_counterfactual(
+        relion,
+        relion,
+        substitutions,
+        center_deltas=True,
+    )
+
+    classification, basis = _select_component_classification(
+        raw,
+        centered,
+        candidate_count=1,
+    )
+
+    assert classification == "no_nonzero_fine_operand_residual"
+    assert basis == "none"
 
 
 def test_fine_operand_metric_reports_directional_delta():

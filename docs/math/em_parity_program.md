@@ -13814,3 +13814,24 @@ V17 therefore selects that single candidate for the next exact-device
 operand capture.  It does not fit a threshold, compute correlation, change a
 scorecard, or establish FSC/FSC-AUC parity.  The paired causal metric remains
 `2/4`; fixed K=1/K=4 scorecards remain unchanged.
+
+### Single-candidate operand-attribution guard
+
+The predeclared V17 representative contains exactly one candidate.  The
+fine-operand comparator previously always classified its strongest component
+from centered raw-diff2 deltas.  Centering a single value produces a
+zero-energy vector, so that top-level label would select the first component
+by insertion order rather than evidence.  The uncentered component
+counterfactual, per-operand metrics, raw replay, and fixed four-gate boundary
+were unaffected.
+
+The comparator now records whether each counterfactual has nonzero energy.
+For two or more candidates it retains centered attribution when informative;
+for a single candidate it uses the raw-diff2 counterfactual; and for a zero
+residual it reports `no_nonzero_fine_operand_residual`.  The label says only
+which component has the largest single-substitution effect, not that it
+passes an unregistered dominance threshold.  Regression coverage fixes the
+single-candidate, multi-candidate, and zero-residual behaviors before the
+representative audit is interpreted.  This reporting correction is
+non-scoring and does not change the `2/4` causal boundary or either frozen
+FSC/FSC-AUC scorecard.
