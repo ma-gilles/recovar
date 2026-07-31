@@ -10747,7 +10747,9 @@ and `9/15` all-class.
 - An exact recapture audit rejects a causal result. Continue-through-
   contribution versus sealed has `12,029/344,288` score,
   `109,184/344,288` probability, `38,982/344,288` reconstruction-probability,
-  and `247,133/344,288` raw-diff2 mismatches. Maximum raw delta is
+  and `12,029/344,288` strict raw byte mismatches. The earlier
+  `247,133/344,288` raw count used value inequality and included 235,104
+  paired NaNs whose payload bytes are identical. Maximum raw delta is
   `0.0001220703125`. At RECOVAR rotation row 954 and translation 13,
   continue-through-contribution is `516.3260498046875` (bits `1140921566`);
   sealed and stop-after-pass2 are `516.3261108398438` (bits `1140921567`).
@@ -10769,9 +10771,18 @@ and `9/15` all-class.
   which can accept `+0.0` versus `-0.0` and distinct NaN payloads. Commit
   `72a0a396` adds `scripts/audit_em_k4_contribution_repeatability.py`, which
   compares keys, shapes, dtypes, and per-element bytes and writes structured
-  reports for exact, unequal, and missing archives. Its focused tests pass
-  6/6, including signed-zero and NaN-payload regressions; a real 100k artifact
-  self-check passes 3/3 archive gates.
+  reports for exact, unequal, and missing archives. Commit `e87565c5` reports
+  value inequality, paired NaNs, NaN-payload byte mismatches, signed-zero
+  mismatches, and strict byte mismatches separately. Its focused tests pass
+  7/7; a real 100k artifact self-check passes 3/3 archive gates.
+- The strict three-way correction gives raw byte mismatch counts of `18,397`
+  for stop-versus-sealed, `12,029` for continue-versus-sealed, and `16,531`
+  for continue-versus-stop. Each exactly matches its score byte mismatch
+  count. All three have 235,104 paired NaNs with identical payload bytes and
+  zero signed-zero byte mismatches. The prior report remains immutable and its
+  repeatability rejection remains correct; only its raw mismatch-count label
+  is superseded. Correction JSON SHA-256 is
+  `f27e3437776bbb8d30cb7f2e2e2c2a4aec7208e9af03eba6f491da98baa71d37`.
 - CPU audit `11822605` depends on `afterany:11822111`, so it records the exact
   boundary even if the producer fails. It is non-scoring and cannot authorize
   a component, tolerance, production change, FSC claim, or correlation.

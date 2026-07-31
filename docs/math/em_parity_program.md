@@ -257,7 +257,12 @@ Authoritative checkpoint on 2026-07-31 at 04:13 ET:
 - The retry launcher's value-equality checks do not literally prove the stated
   bitwise contract for signed zeros or distinct NaN payloads. Commit
   `72a0a396` adds a strict per-element byte auditor with structured incomplete
-  and mismatch reports. CPU audit `11822605` is dependency-pending through
+  and mismatch reports; `e87565c5` separates value inequality, paired NaNs,
+  NaN-payload bytes, signed-zero bytes, and strict byte mismatches. The
+  corrected historical recapture counts are `18,397`, `12,029`, and `16,531`
+  strict raw byte mismatches, not `253,501`, `247,133`, and `251,635`; each
+  larger value included 235,104 paired NaNs whose bytes are identical. CPU
+  audit `11822605` is dependency-pending through
   `afterany:11822111`; it cannot alter the producer and cannot make a scoring
   claim. A strict mismatch rejects any downstream causal interpretation even
   if the older value-equality gate passes.
