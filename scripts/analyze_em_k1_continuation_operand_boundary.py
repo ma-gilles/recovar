@@ -254,6 +254,18 @@ def classify_boundary(
         rtol=0.0,
         atol=1.0e-8,
     )
+    source_state_restored = not source_state_discarded
+    iteration2_restored = not iteration2_diverged
+    if (
+        raw_exact == expected_particles
+        and rotation_exact == expected_particles
+        and local_exact == expected_particles
+        and euler_exact == expected_particles
+        and translation_exact == expected_particles
+        and source_state_restored
+        and iteration2_restored
+    ):
+        return "serialized_sampling_perturbation_restored_with_euler_and_translation_geometry_identity"
     if (
         raw_exact == expected_particles
         and rotation_exact == expected_particles

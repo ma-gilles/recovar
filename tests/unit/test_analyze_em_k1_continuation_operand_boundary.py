@@ -76,6 +76,30 @@ def test_classifies_discarded_sampling_state_before_geometry() -> None:
 
 
 @pytest.mark.unit
+def test_classifies_restored_sampling_state_and_geometry_identity() -> None:
+    preprocess = {name: _summary(0) for name in analyzer.PREPROCESS_FIELDS}
+    preprocess["raw_input_real"] = _summary(14)
+    operands = {name: _summary(0) for name in analyzer.OPERAND_FIELDS}
+    operands["rotation_keys"] = _summary(14)
+    operands["local_rotation_indices"] = _summary(14)
+    operands["euler_matrices"] = _summary(14)
+    operands["translations"] = _summary(14)
+    sampling = {
+        "source_iteration1": -0.04799,
+        "restart_output_iteration1": -0.04799,
+        "fresh_iteration2": 0.409490,
+        "restart_iteration2": 0.409490,
+    }
+
+    assert analyzer.classify_boundary(
+        preprocess,
+        operands,
+        sampling,
+        expected_particles=14,
+    ) == ("serialized_sampling_perturbation_restored_with_euler_and_translation_geometry_identity")
+
+
+@pytest.mark.unit
 def test_classification_fails_closed_when_topology_identity_changes() -> None:
     preprocess = {name: _summary(0) for name in analyzer.PREPROCESS_FIELDS}
     preprocess["raw_input_real"] = _summary(14)
