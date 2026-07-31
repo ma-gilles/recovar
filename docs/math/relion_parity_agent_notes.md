@@ -11160,3 +11160,27 @@ and `9/15` all-class.
   FSC-AUC gain. Fixed K=1/K=4/causal metrics remain
   `28/34`, `32/34`, `34/34`, `41/60`, `9/15`, and `2/4`. Correlation was
   not computed. No existing process or Slurm job was modified or interrupted.
+
+## 2026-07-31 10:29 ET — K=1 case-22 restart owners reject wrong UUID
+
+- Read-only Slurm inspection shows exact-device owner `11785428` failed
+  `42:0` after one second and owner `11785547` failed `42:0` after two
+  seconds. Both started on `della-l07g3`; neither entered science.
+- Both stderr files contain only
+  `EXACT_GPU_REJECT target=GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a`
+  and have SHA-256
+  `8da423abfecb9225eb023bf60afc16dd06ccb5e049501714e67b5be062e29424`.
+- Their shared allocation table records A100 UUIDs
+  `GPU-a1bb1fb4-d5e3-1c72-3382-63f6032e9fc6` and
+  `GPU-eb1c5b04-20c1-b6c9-16e6-b3dc87905bd7`, neither of which is the
+  sealed target. Its SHA-256 is
+  `6cd75ee73c9728dda471e67db9564565ea6a4b87da8a5b8d4e4c4534a2f0349e`.
+- Robust auditors `11791340` and `11791341` and pair auditor `11791712`
+  remain dependency-pending and cannot qualify evidence from failed owners.
+  They were not modified.
+- This closes the submitted chain as a pre-science provenance/device
+  rejection, not a result for or against serialized low-shell noise. Fixed
+  K=1/K=4/causal metrics remain `28/34`, `32/34`, `34/34`, `41/60`,
+  `9/15`, and `2/4`; correlation was not computed. No Codex process or
+  Slurm job was killed, signalled, suspended, cancelled, reprioritized,
+  requeued, held, released, or otherwise altered.

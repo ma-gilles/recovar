@@ -314,18 +314,18 @@ Authoritative checkpoint on 2026-07-31 at 04:53 ET:
   At 06:03:49 ET its contribution-stop arm passed preflight with those exact
   dynamic pins and the same physical UUID
   `GPU-803dc869-2e74-273c-1df4-08adbc94e1b3`.
-- The active K=1 causal gate remains the live-versus-serialized low-shell
-  noise-state restart. Iteration-0 owner `11785428` and iteration-1 owner
-  `11785547` remain pending at zero elapsed on the exact A100 node; robust
-  auditors `11791340` and `11791341` and pair auditor `11791712` remain
-  dependency-pending. The evidence source remains clean at
-  `81af6687a6f0fbf2efc54dc1edf64cc2803894d6`.
-- Neither pending chain is a quality result. Ingest retry-2's strict K=4
-  repeatability report before accepting an operand classification, or ingest
-  the K=1 restarted trajectory plus FSC/FSC-AUC if that chain starts first.
-  Any K=4 production proposal still requires the frozen multistratum repeat
-  and a same-physical-GPU end-to-end Hungarian per-class FSC/FSC-AUC
-  comparison.
+- The submitted K=1 live-versus-serialized low-shell noise-state restart
+  chain is closed without science evidence. Iteration-0 owner `11785428`
+  and iteration-1 owner `11785547` each rejected an allocation whose GPU
+  UUIDs did not match the sealed target, exiting `42:0` after one and two
+  seconds. Robust auditors `11791340` and `11791341` and pair auditor
+  `11791712` remain dependency-pending and cannot produce an admissible
+  result from these failed owners. No job was modified.
+- The pending K=4 chain is not yet a quality result. Ingest retry-2's strict
+  K=4 repeatability report before accepting an operand classification. The
+  K=1 chain above produced no trajectory to ingest. Any K=4 production
+  proposal still requires the frozen multistratum repeat and a
+  same-physical-GPU end-to-end Hungarian per-class FSC/FSC-AUC comparison.
 
 The PR-ready fixed metrics can be regenerated from the versioned, checked
 scorecards with one deterministic command:
@@ -333,6 +333,37 @@ scorecards with one deterministic command:
 ```bash
 pixi run python scripts/report_em_parity_progress.py --format markdown
 ```
+
+## 2026-07-31 exact-device K=1 case-22 restart chain closes pre-science
+
+Read-only Slurm and artifact inspection closes the previously pending
+case-22 serialized-restart chain without a scientific result. Job `11785428`
+started on `della-l07g3` at `09:32:32 ET` and failed `42:0` after one second.
+Job `11785547` started on the same node at `09:32:36 ET` and failed `42:0`
+after two seconds. Both stderr files contain only:
+
+```text
+EXACT_GPU_REJECT target=GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a
+```
+
+The allocation table recorded
+`GPU-a1bb1fb4-d5e3-1c72-3382-63f6032e9fc6` and
+`GPU-eb1c5b04-20c1-b6c9-16e6-b3dc87905bd7`; neither is the sealed target.
+The two stderr files are byte-identical with SHA-256
+`8da423abfecb9225eb023bf60afc16dd06ccb5e049501714e67b5be062e29424`.
+The allocation-table SHA-256 is
+`6cd75ee73c9728dda471e67db9564565ea6a4b87da8a5b8d4e4c4534a2f0349e`.
+No restart trajectory, score report, or map report was written.
+
+Dependency-bound auditors `11791340`, `11791341`, and `11791712` therefore
+cannot qualify this chain. They remain untouched in Slurm with unsatisfied
+dependencies. This is a provenance/device rejection, not evidence for or
+against the serialized-noise hypothesis, and it cannot change a fixed
+scorecard. K=1 remains `28/34` strict, `32/34` topology, and `34/34`
+evaluated; K=4 remains `41/60` direct and `9/15` all-class; the separate
+K=4 causal boundary remains `2/4`. Correlation was not computed. No Codex
+process or Slurm job was killed, signalled, suspended, cancelled,
+reprioritized, requeued, held, released, or otherwise altered.
 
 The consolidated report also names the exact remaining K=1 strict/topology
 cases, every failed K=4 iteration/class cell, and the remaining non-scoring
