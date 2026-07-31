@@ -14608,8 +14608,57 @@ The binary SHA-256 is
 `cb98144eba1c2fee962978d38307ae6fa31d27729945dfeb3416b0728788cf7c`.
 Same-A100 job `11842188` was predeclared and submitted to run fresh, stock
 direct iteration-1 continuation, and sampling-preserving continuation
-sequentially on the unchanged 42-gate denominator. This paragraph records
-submission only; it does not claim the in-progress hypothesis passed.
+sequentially on the unchanged fixed denominators. It ran naturally for
+`00:34:25` on `della-l08g2`, physical A100 UUID
+`GPU-eb1c5b04-20c1-b6c9-16e6-b3dc87905bd7`. All three arms and all `126`
+capture files completed. The launcher then failed closed `1:0` at the
+predeclared sampling-identity assertion; this was a scientific rejection,
+not an infrastructure failure.
+
+Restoring the serialized perturbation collapses the continuation discrepancy,
+but does not make it bitwise identical:
+
+| Fixed paired panel | Stock | Treatment | Gain |
+| --- | ---: | ---: | ---: |
+| geometry identity | 3/5 | 3/5 | 0 |
+| score/map gates | 3/21 | 0/21 | -3 |
+
+Raw inputs, rotation keys, and local rotation indices remain exact in both
+arms. The treatment reduces the maximum Euler-matrix difference from
+`0.143614752218` to `1.06543302536e-6` and the maximum translation-grid
+difference from `0.0241493657231` to `1.86264514923e-7`. Its particle-score
+p95 residuals shrink to `0.0001113414` through `0.0002631220`, but all `14`
+strict score gates remain closed. Map-parity FSC-AUC deltas are only
+`-5.15544e-6`, `-6.09521e-6`, and `-3.08655e-6`, yet remain negative.
+The three GT gates regress by `-3.81127e-5`, `-5.15433e-6`, and
+`-2.17440e-5`; the fixed treatment total is therefore `0/21`.
+
+The next boundary is the STAR decimal round trip. RELION formats generic
+double metadata with five digits after the decimal point, so the fresh
+iteration-1 perturbation `-0.047990...` is not recovered as the same
+binary64 value. Private diagnostic commit
+`7d61ca4a2112c5952fc169434d6c9dc4e3e92d28` changes only
+`EMDL_SAMPLING_PERTURB` output to `%.17g`; other scalar STAR fields are
+unchanged. The separately built diagnostic binary is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k1_continuation_resolution_init_20260731T1326ET/build_cuda126_mpi416_roundtrip/bin/relion_refine_mpi`
+(SHA-256
+`c17dd98c988d5f89a01a96cc087a31fb1fb49d64d080aa1c8b3d31e7c16dc981`).
+Build provenance is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k1_continuation_resolution_init_20260731T1326ET/provenance/BUILD_ROUNDTRIP_PRECISION_PROVENANCE.md`
+(SHA-256
+`4769cb820a2f9802c5cbe0fd01100ae240ec5955080bfb32caabb9b6d944110a`).
+Same-A100 job `11843191` was predeclared and submitted from
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_roundtrip_ab_7d61ca4_20260731T1541ET`.
+Its primary fixed gate is geometry identity `3/5 -> 5/5`; the existing
+score/map gates remain observational. This records submission only and does
+not claim the running hypothesis passed.
+
+The checked paired ledger is
+`docs/math/em_k1_sampling_perturbation_scorecard_v1.json`; its generated
+checklist is `docs/math/em_k1_sampling_perturbation_scorecard.md`. The
+consolidated reporter exposes both non-scoring panels and validates their
+source hashes. An independent post-terminal replay reproduced all five
+analysis reports byte-for-byte.
 
 No production RECOVAR behavior, tolerance, baseline, or frozen quality
 score changed. No Codex process or existing Slurm job was modified or

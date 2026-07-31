@@ -11,7 +11,7 @@ from scripts.report_em_parity_progress import build_progress, render_markdown
 def test_reports_all_fixed_em_parity_panels() -> None:
     progress = build_progress()
 
-    assert progress["schema"] == "recovar.em_parity_progress.v5"
+    assert progress["schema"] == "recovar.em_parity_progress.v6"
     assert progress["scorecard_change_admissible"] is False
     assert progress["k1_strict_history"] == [20, 21, 22, 23, 25, 26, 27, 28]
     assert progress["k1_continuation_initializer_progress"] == {
@@ -19,6 +19,16 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "patched_pass": 3,
         "denominator": 21,
         "paired_gain": 0,
+    }
+    assert progress["k1_sampling_perturbation_progress"] == {
+        "geometry_stock_pass": 3,
+        "geometry_treatment_pass": 3,
+        "geometry_denominator": 5,
+        "geometry_gain": 0,
+        "score_map_stock_pass": 3,
+        "score_map_treatment_pass": 0,
+        "score_map_denominator": 21,
+        "score_map_gain": -3,
     }
     assert [
         (
@@ -36,6 +46,8 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         ("k1_evaluated", 34, 34, 34, 100.0, False),
         ("k1_restart_causal", 24, 42, 42, 57.1, False),
         ("k1_continuation_initializer", 3, 21, 21, 14.3, False),
+        ("k1_sampling_perturbation_geometry", 3, 5, 5, 60.0, False),
+        ("k1_sampling_perturbation_score_map", 0, 21, 21, 0.0, False),
         ("k4_direct", 41, 60, 60, 68.3, True),
         ("k4_all_class", 9, 15, 15, 60.0, True),
         ("k4_causal", 2, 4, 4, 50.0, False),
@@ -47,6 +59,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "k1_fixture_manifest",
         "k1_restart_scorecard",
         "k1_continuation_initializer_scorecard",
+        "k1_sampling_perturbation_scorecard",
         "k4_trajectory_snapshot",
         "k4_class_scorecard",
         "k4_causal_scorecard",
@@ -386,6 +399,8 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
     assert "| K=1 strict FSC/FSC-AUC | **28** | 34 | 34 | 82.4% | yes |" in rendered
     assert "| K=1 serialized-restart causal gates | **24** | 42 | 42 | 57.1% | no |" in rendered
     assert ("| K=1 continuation initializer patched arm | **3** | 21 | 21 | 14.3% | no |") in rendered
+    assert "| K=1 sampling-perturbation geometry identity | **3** | 5 | 5 | 60.0% | no |" in rendered
+    assert "| K=1 sampling-perturbation score/map gates | **0** | 21 | 21 | 0.0% | no |" in rendered
     assert "| K=4 direct per-class FSC-AUC | **41** | 60 | 60 | 68.3% | yes |" in rendered
     assert "| K=4 exact-device causal boundary | **2** | 4 | 4 | 50.0% | no |" in rendered
     assert "| K=4 preprocess bitwise replay | **3** | 9 | 9 | 33.3% | no |" in rendered
@@ -393,6 +408,12 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
     assert "K=1 strict progress on the unchanged denominator: **20 → 21 → 22 → 23 → 25 → 26 → 27 → 28**." in rendered
     assert (
         "K=1 continuation-initializer paired progress on the unchanged denominator: **3/21 stock → 3/21 patched (+0)**."
+    ) in rendered
+    assert (
+        "K=1 sampling-perturbation geometry on the unchanged denominator: **3/5 stock → 3/5 treatment (+0)**."
+    ) in rendered
+    assert (
+        "K=1 sampling-perturbation score/map gates on the unchanged denominator: **3/21 stock → 0/21 treatment (-3)**."
     ) in rendered
     assert "Remaining K=1 strict cases: k1-04, k1-05, k1-07, k1-10, k1-22, k1-26." in rendered
     assert "Remaining K=1 topology cases: k1-07, k1-22." in rendered
