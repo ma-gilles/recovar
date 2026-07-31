@@ -273,6 +273,18 @@ Authoritative checkpoint on 2026-07-30 at 22:23 ET:
   and a same-physical-GPU end-to-end Hungarian per-class FSC/FSC-AUC
   comparison.
 
+The PR-ready fixed metrics can be regenerated from the versioned, checked
+scorecards with one deterministic command:
+
+```bash
+pixi run python scripts/report_em_parity_progress.py --format markdown
+```
+
+The reporter validates the frozen K=1 scorecard and fixture manifest, the
+fixed K=4 trajectory snapshot, and the separate K=4 causal scorecard before
+emitting any count.  It cannot modify a scorecard or authorize a production
+change.
+
 Authoritative status on 2026-07-17:
 
 - The same-A100 real-10076 K=1 run matches all 18 forced RELION numbered

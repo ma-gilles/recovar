@@ -10689,3 +10689,18 @@ and `9/15` all-class.
   separate non-scoring causal boundary.
 - No Codex process or Slurm job was killed, signalled, suspended, cancelled,
   reprioritized, or otherwise altered during this audit.
+
+## 2026-07-30 23:29 ET — consolidated fixed-metric reporter
+
+- `scripts/report_em_parity_progress.py` provides one deterministic,
+  machine-readable and PR-ready view of all six fixed panels already used in
+  progress updates.
+- It calls the existing validators for the frozen K=1 scorecard, artifact
+  manifest, K=4 trajectory snapshot, and separate K=4 causal-boundary
+  scorecard before emitting any result.
+- The unchanged output is K=1 `28/34` strict FSC/FSC-AUC, `32/34` topology,
+  and `34/34` evaluated; K=4 `41/60` direct per-class FSC-AUC, `9/15`
+  all-class iterations, and `2/4` on the non-scoring causal boundary.
+- The reporter serializes exact source SHA-256 values and K=1 strict history
+  `20 → 21 → 22 → 23 → 25 → 26 → 27 → 28`.  It cannot change a scorecard
+  or authorize a production change.
