@@ -13718,3 +13718,84 @@ Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
 Removing only V16 reproduces V15 exactly.  Fixed metrics remain K=1 `28/34`
 strict, `32/34` topology, and `34/34` evaluated; K=4 `41/60` direct and
 `9/15` all-class.
+
+### Exact-device K=4 raw/operand owner-pair audit
+
+The iteration-2 class-1 raw capture for original particle `53722`, Slurm job
+`11790517`, completed on the pinned A100 and produced
+`pass2_orig053722_class001_cs038.npz` with SHA-256
+`ccbdc9040da463f479784e3ad270fd76bb5817006742f43c96f9b053bf9d6eef`.
+All `109,184` active candidates replay their saved RECOVAR score bits exactly.
+The corresponding native target-operand retry, Slurm job `11812925`,
+completed after restoring its missing pinned source worktree.  Its
+fine-operand capture has SHA-256
+`93322e2b98ca11e626f178007f39cf8d6137655fdffd5239907cd2321459270f`;
+translations `80,82` both replay RELION's production raw cost bitwise at
+`501.4734191894531`.
+
+Dependency-bound audit job `11812941` accepted only that immutable job pair.
+Its fixed causal-boundary metric is:
+
+| Gate | Result |
+| --- | --- |
+| native target operand replay | pass |
+| fixed target raw diff2 at translations `80,82` | pass |
+| complete active-table raw diff2 | fail |
+| complete active-table combined score | fail |
+
+Thus the new paired boundary is `2/4` passed with `4/4` evaluated.  It
+classifies the evidence as
+`global_raw_and_score_paths_differ_but_fixed_target_closes`: the previously
+selected target pair closes, but the complete class still differs.  The
+completion report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_owner_pair_raw11790517_operand11812925_9959cc8a_20260730T2042ET/provenance/ANY_OWNER_PAIR_AUDIT_COMPLETE.json`
+with SHA-256
+`963e9b6be044889757bd89fd2f7ca9cc06380186231419105264a11eea07dc1e`.
+The declared science gates reproduce exactly between local and Slurm
+evaluation.  The raw report itself is not byte-identical because three
+secondary CPU norm reductions differ only in their last printed digits;
+no whole-report byte-identity claim is made.
+
+The complete raw table has `25,877/109,184` bitwise mismatches, maximum
+absolute delta `0.0001220703125`, and common minima that differ by one
+float32 bit.  The fixed target values are exact, so the next bounded question
+is where the global raw mismatches occur.  This audit is non-scoring and does
+not authorize a production change.  Fixed metrics remain K=1 `28/34` strict,
+`32/34` topology, and `34/34` evaluated; K=4 `41/60` direct and `9/15`
+all-class.
+
+### Predeclared K=4 raw-mismatch strata (V17)
+
+Before inspecting group results, V17 fixed the raw delta as
+`float64(recovar_float32) - float64(native_float32)`, partitioned every
+bitwise mismatch by mapped rotation and translation, required exact
+`math.fsum` replay, and ranked groups by descending raw-delta L1 then
+ascending identity.  Its sole representative rule selects the leading
+rotation and, within it, the largest absolute delta with the lowest native
+candidate index.  The predeclaration is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_raw_mismatch_strata_v17_ed49174d_20260730T2055ET/provenance/PREDECLARED_DIAGNOSTIC.md`
+with SHA-256
+`7630a6919bfae22fe167f284fc5c018460c811af2da5247a4c0dc1eb84f0e51d`.
+
+The one-thread and eight-thread V17 reports are byte-identical, SHA-256
+`950c90703340a0e68e5181efe7c2fcb0985f75af22e93744f07864ff56523100`;
+their stratification subtree has canonical SHA-256
+`9399373da53b64221dc515b2fecfcff04d36207c2c1e2901dbbaf335dfdbb5e8`.
+Both rotation and translation partitions replay the global signed delta
+`+0.708465576171875` and L1 `1.282928466796875` exactly.
+
+The mismatch is diffuse.  The leading rotation family, mapped RECOVAR
+rotation `954` / native rotation `1738`, carries only
+`0.11893717738290636%` of global raw-delta L1; the top ten families carry
+`1.0609196222555246%`.  Translation `80` ranks first but carries only
+`2.8521135136420944%`; the top ten translations carry
+`24.09191465068151%`.  The predeclared representative is native candidate
+`66561`, mapped rotation `954` / native rotation `1738`, translation `13`:
+RELION raw cost `516.3260498046875`, RECOVAR
+`516.3261108398438`, a positive one-ULP delta
+`0.00006103515625`.
+
+V17 therefore selects that single candidate for the next exact-device
+operand capture.  It does not fit a threshold, compute correlation, change a
+scorecard, or establish FSC/FSC-AUC parity.  The paired causal metric remains
+`2/4`; fixed K=1/K=4 scorecards remain unchanged.

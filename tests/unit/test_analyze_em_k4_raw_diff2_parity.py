@@ -112,6 +112,115 @@ def test_float32_from_bits_round_trips() -> None:
     assert observed.view(np.uint32) == value.view(np.uint32)
 
 
+def _raw_values_with_ulp_offsets(offsets: list[int]) -> tuple[
+    np.ndarray,
+    np.ndarray,
+]:
+    native = np.full(len(offsets), np.float32(1.0), dtype=np.float32)
+    recovar_bits = (
+        native.view(np.uint32).astype(np.int64)
+        + np.asarray(offsets, dtype=np.int64)
+    ).astype(np.uint32)
+    return native, recovar_bits.view(np.float32)
+
+
+def test_raw_mismatch_strata_replay_and_select_fixed_representative() -> None:
+    native, recovar = _raw_values_with_ulp_offsets([3, 3, 2, -4, 0, 1])
+
+    report = analyzer._raw_mismatch_strata(
+        native_raw=native,
+        recovar_raw=recovar,
+        native_candidate_index=np.asarray([40, 10, 30, 20, 50, 60]),
+        native_rotation_local=np.asarray([7, 7, 8, 8, 9, 9]),
+        mapped_recovar_rotation=np.asarray([2, 2, 1, 1, 3, 3]),
+        translation_id=np.asarray([0, 1, 0, 1, 0, 1]),
+    )
+
+    assert report["mismatch_count"] == 5
+    assert report["positive_mismatch_count"] == 4
+    assert report["negative_mismatch_count"] == 1
+    assert report["zero_delta_bitwise_mismatch_count"] == 0
+    assert report["partition_replay_exact"] is True
+    for key in ("rotation_strata", "translation_strata"):
+        partition = report[key]
+        assert partition["mismatch_count"] == 5
+        assert partition["flattened_partition_signed_replay"] == report[
+            "signed_raw_delta"
+        ]
+        assert partition["flattened_partition_l1_replay"] == report[
+            "raw_delta_l1"
+        ]
+        assert partition["rounded_group_signed_replay_residual"] == 0.0
+        assert partition["rounded_group_l1_replay_residual"] == 0.0
+
+    assert report["rotation_strata"]["top_10"][0][
+        "mapped_recovar_rotation"
+    ] == 2
+    assert report["translation_strata"]["top_10"][0][
+        "translation_id"
+    ] == 1
+    assert report["selected_representative"] == {
+        "native_candidate_index": 10,
+        "native_rotation_local": 7,
+        "mapped_recovar_rotation": 2,
+        "translation_id": 1,
+        "native_raw_diff2": 1.0,
+        "native_raw_diff2_bits": int(np.float32(1.0).view(np.uint32)),
+        "recovar_raw_diff2": float(recovar[1]),
+        "recovar_raw_diff2_bits": int(recovar[1].view(np.uint32)),
+        "delta_recovar_minus_native": float(
+            np.float64(recovar[1]) - np.float64(native[1])
+        ),
+        "absolute_delta": float(
+            np.float64(recovar[1]) - np.float64(native[1])
+        ),
+        "ulp_distance": 3,
+        "selection_rule": (
+            "top_rotation_by_descending_mismatch_raw_delta_l1_then_"
+            "ascending_rotation; within_rotation_largest_absolute_raw_"
+            "delta_then_lowest_native_candidate_index"
+        ),
+    }
+
+
+def test_raw_mismatch_rotation_rank_tie_uses_ascending_identity() -> None:
+    native, recovar = _raw_values_with_ulp_offsets([1, 0, 1, 0])
+
+    report = analyzer._raw_mismatch_strata(
+        native_raw=native,
+        recovar_raw=recovar,
+        native_candidate_index=np.asarray([0, 1, 2, 3]),
+        native_rotation_local=np.asarray([10, 10, 20, 20]),
+        mapped_recovar_rotation=np.asarray([5, 5, 2, 2]),
+        translation_id=np.asarray([0, 1, 0, 1]),
+    )
+
+    assert report["rotation_strata"]["top_10"][0][
+        "mapped_recovar_rotation"
+    ] == 2
+    assert report["selected_representative"][
+        "mapped_recovar_rotation"
+    ] == 2
+
+
+def test_raw_mismatch_strata_handles_exact_raw_parity() -> None:
+    native, recovar = _raw_values_with_ulp_offsets([0, 0, 0])
+
+    report = analyzer._raw_mismatch_strata(
+        native_raw=native,
+        recovar_raw=recovar,
+        native_candidate_index=np.asarray([0, 1, 2]),
+        native_rotation_local=np.asarray([0, 1, 2]),
+        mapped_recovar_rotation=np.asarray([2, 0, 1]),
+        translation_id=np.asarray([0, 0, 0]),
+    )
+
+    assert report["mismatch_count"] == 0
+    assert report["raw_delta_l1"] == 0.0
+    assert report["selected_representative"] is None
+    assert report["partition_replay_exact"] is True
+
+
 def test_recovar_completion_requires_fixed_capture_contract(tmp_path) -> None:
     path = tmp_path / "complete.json"
     path.write_text(

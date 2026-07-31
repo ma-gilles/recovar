@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ from scripts.validate_relion_fine_score_capture import (
     load_fine_score_capture,
 )
 
-SCHEMA = "relion-k4-it2-raw-diff2-parity-v2"
+SCHEMA = "relion-k4-it2-raw-diff2-parity-v3"
 PASS_CLASSIFICATION = "exact_device_k4_raw_diff2_and_common_min_bitwise_match"
 PASS_SCORE_CLASSIFICATION = (
     "exact_device_k4_raw_priors_and_combined_scores_bitwise_match"
@@ -127,6 +128,308 @@ def _relion_score_replay(
         np.asarray(raw_diff2, dtype=np.float32),
         dtype=np.float32,
     )
+
+
+def _raw_mismatch_strata(
+    *,
+    native_raw: np.ndarray,
+    recovar_raw: np.ndarray,
+    native_candidate_index: np.ndarray,
+    native_rotation_local: np.ndarray,
+    mapped_recovar_rotation: np.ndarray,
+    translation_id: np.ndarray,
+) -> dict[str, Any]:
+    """Partition bitwise raw-cost mismatches by fixed rotation/translation."""
+
+    native_raw = np.asarray(native_raw, dtype=np.float32)
+    recovar_raw = np.asarray(recovar_raw, dtype=np.float32)
+    native_candidate_index = np.asarray(
+        native_candidate_index,
+        dtype=np.int64,
+    )
+    native_rotation_local = np.asarray(
+        native_rotation_local,
+        dtype=np.int64,
+    )
+    mapped_recovar_rotation = np.asarray(
+        mapped_recovar_rotation,
+        dtype=np.int64,
+    )
+    translation_id = np.asarray(translation_id, dtype=np.int64)
+    arrays = (
+        native_raw,
+        recovar_raw,
+        native_candidate_index,
+        native_rotation_local,
+        mapped_recovar_rotation,
+        translation_id,
+    )
+    _require(
+        len({array.shape for array in arrays}) == 1
+        and native_raw.ndim == 1
+        and native_raw.size > 0,
+        "raw-mismatch arrays must be nonempty aligned vectors",
+    )
+    _require(
+        np.unique(native_candidate_index).size == native_candidate_index.size,
+        "native candidate indices must be unique",
+    )
+    _require(
+        np.all(np.isfinite(native_raw))
+        and np.all(np.isfinite(recovar_raw))
+        and np.all(native_raw >= 0)
+        and np.all(recovar_raw >= 0),
+        "raw costs must be finite nonnegative float32 values",
+    )
+    _require(
+        np.all(native_rotation_local >= 0)
+        and np.all(mapped_recovar_rotation >= 0)
+        and np.all(translation_id >= 0),
+        "raw-mismatch identities must be nonnegative",
+    )
+
+    native_bits = native_raw.view(np.uint32)
+    recovar_bits = recovar_raw.view(np.uint32)
+    mismatch = native_bits != recovar_bits
+    delta = np.asarray(
+        recovar_raw.astype(np.float64) - native_raw.astype(np.float64),
+        dtype=np.float64,
+    )
+    mismatch_rows = np.flatnonzero(mismatch)
+    mismatch_rows = mismatch_rows[
+        np.argsort(
+            native_candidate_index[mismatch_rows],
+            kind="stable",
+        )
+    ]
+    mismatch_count = int(mismatch_rows.size)
+    signed_delta = math.fsum(float(delta[row]) for row in mismatch_rows)
+    delta_l1 = math.fsum(abs(float(delta[row])) for row in mismatch_rows)
+    maximum_abs_delta = float(
+        0.0
+        if mismatch_count == 0
+        else np.max(np.abs(delta[mismatch_rows]))
+    )
+
+    def candidate_record(row: int) -> dict[str, Any]:
+        native_value = native_raw[row]
+        recovar_value = recovar_raw[row]
+        return {
+            "native_candidate_index": int(native_candidate_index[row]),
+            "native_rotation_local": int(native_rotation_local[row]),
+            "mapped_recovar_rotation": int(mapped_recovar_rotation[row]),
+            "translation_id": int(translation_id[row]),
+            "native_raw_diff2": float(native_value),
+            "native_raw_diff2_bits": int(native_bits[row]),
+            "recovar_raw_diff2": float(recovar_value),
+            "recovar_raw_diff2_bits": int(recovar_bits[row]),
+            "delta_recovar_minus_native": float(delta[row]),
+            "absolute_delta": float(abs(delta[row])),
+            "ulp_distance": abs(
+                int(recovar_bits[row]) - int(native_bits[row])
+            ),
+        }
+
+    def partition(
+        identity: np.ndarray,
+        identity_name: str,
+        *,
+        paired_identity: np.ndarray | None = None,
+        paired_identity_name: str | None = None,
+    ) -> dict[str, Any]:
+        records = []
+        flattened_rows = []
+        for identity_value in np.unique(identity):
+            identity_value = int(identity_value)
+            active_rows = np.flatnonzero(identity == identity_value)
+            rows = active_rows[mismatch[active_rows]]
+            rows = rows[
+                np.argsort(
+                    native_candidate_index[rows],
+                    kind="stable",
+                )
+            ]
+            flattened_rows.extend(int(row) for row in rows)
+            stratum_signed = math.fsum(float(delta[row]) for row in rows)
+            stratum_l1 = math.fsum(
+                abs(float(delta[row])) for row in rows
+            )
+            if rows.size:
+                absolute = np.abs(delta[rows])
+                stratum_max = float(np.max(absolute))
+                representatives = rows[absolute == stratum_max]
+                representative_row = int(
+                    representatives[
+                        np.argmin(
+                            native_candidate_index[representatives]
+                        )
+                    ]
+                )
+                representative = candidate_record(representative_row)
+            else:
+                stratum_max = 0.0
+                representative = None
+            record = {
+                identity_name: identity_value,
+                "active_candidate_count": int(active_rows.size),
+                "mismatch_count": int(rows.size),
+                "mismatch_fraction": float(
+                    rows.size / active_rows.size
+                ),
+                "signed_raw_delta": float(stratum_signed),
+                "raw_delta_l1": float(stratum_l1),
+                "maximum_absolute_raw_delta": stratum_max,
+                "positive_mismatch_count": int(
+                    np.count_nonzero(delta[rows] > 0)
+                ),
+                "negative_mismatch_count": int(
+                    np.count_nonzero(delta[rows] < 0)
+                ),
+                "zero_delta_bitwise_mismatch_count": int(
+                    np.count_nonzero(delta[rows] == 0)
+                ),
+                "maximum_absolute_representative": representative,
+            }
+            if paired_identity is not None:
+                paired_values = np.unique(paired_identity[active_rows])
+                _require(
+                    paired_identity_name is not None
+                    and paired_values.size == 1,
+                    f"{identity_name} does not map to one "
+                    f"{paired_identity_name}",
+                )
+                record[paired_identity_name] = int(paired_values[0])
+            else:
+                _require(
+                    paired_identity_name is None,
+                    f"{identity_name} paired identity lacks values",
+                )
+            records.append(record)
+
+        flattened_signed = math.fsum(
+            float(delta[row]) for row in flattened_rows
+        )
+        flattened_l1 = math.fsum(
+            abs(float(delta[row])) for row in flattened_rows
+        )
+        _require(
+            len(flattened_rows) == mismatch_count
+            and flattened_signed == signed_delta
+            and flattened_l1 == delta_l1,
+            f"{identity_name} mismatch partition does not replay globally",
+        )
+        ranked = sorted(
+            records,
+            key=lambda record: (
+                -record["raw_delta_l1"],
+                record[identity_name],
+            ),
+        )
+        for rank, record in enumerate(ranked, start=1):
+            record["raw_delta_l1_rank_1based"] = rank
+
+        def concentration(top_n: int) -> dict[str, Any]:
+            contribution = math.fsum(
+                float(record["raw_delta_l1"])
+                for record in ranked[:top_n]
+            )
+            return {
+                "requested_top_n": top_n,
+                "available_strata_used": min(top_n, len(ranked)),
+                "raw_delta_l1": float(contribution),
+                "share_of_raw_delta_l1": float(
+                    0.0 if delta_l1 == 0.0 else contribution / delta_l1
+                ),
+            }
+
+        rounded_signed = math.fsum(
+            float(record["signed_raw_delta"]) for record in records
+        )
+        rounded_l1 = math.fsum(
+            float(record["raw_delta_l1"]) for record in records
+        )
+        return {
+            "stratum_identity": identity_name,
+            "group_count": len(records),
+            "active_candidate_count": int(identity.size),
+            "mismatch_count": mismatch_count,
+            "ranking_rule": (
+                f"descending_raw_delta_l1_then_ascending_{identity_name}"
+            ),
+            "flattened_partition_signed_replay": float(
+                flattened_signed
+            ),
+            "flattened_partition_l1_replay": float(flattened_l1),
+            "rounded_group_signed_sum": float(rounded_signed),
+            "rounded_group_signed_replay_residual": float(
+                rounded_signed - signed_delta
+            ),
+            "rounded_group_l1_sum": float(rounded_l1),
+            "rounded_group_l1_replay_residual": float(
+                rounded_l1 - delta_l1
+            ),
+            "l1_concentration": {
+                "top_1": concentration(1),
+                "top_3": concentration(3),
+                "top_10": concentration(10),
+            },
+            "top_10": ranked[:10],
+            "all_strata": records,
+        }
+
+    rotation = partition(
+        mapped_recovar_rotation,
+        "mapped_recovar_rotation",
+        paired_identity=native_rotation_local,
+        paired_identity_name="native_rotation_local",
+    )
+    translation = partition(translation_id, "translation_id")
+
+    if mismatch_count:
+        selected_rotation = int(
+            rotation["top_10"][0]["mapped_recovar_rotation"]
+        )
+        eligible = np.flatnonzero(
+            mismatch & (mapped_recovar_rotation == selected_rotation)
+        )
+        absolute = np.abs(delta[eligible])
+        largest = np.max(absolute)
+        representatives = eligible[absolute == largest]
+        selected_row = int(
+            representatives[
+                np.argmin(native_candidate_index[representatives])
+            ]
+        )
+        representative = candidate_record(selected_row)
+        representative["selection_rule"] = (
+            "top_rotation_by_descending_mismatch_raw_delta_l1_then_"
+            "ascending_rotation; within_rotation_largest_absolute_raw_"
+            "delta_then_lowest_native_candidate_index"
+        )
+    else:
+        representative = None
+
+    return {
+        "active_candidate_count": int(native_raw.size),
+        "mismatch_count": mismatch_count,
+        "mismatch_fraction": float(mismatch_count / native_raw.size),
+        "signed_raw_delta": float(signed_delta),
+        "raw_delta_l1": float(delta_l1),
+        "maximum_absolute_raw_delta": maximum_abs_delta,
+        "positive_mismatch_count": int(
+            np.count_nonzero(delta[mismatch_rows] > 0)
+        ),
+        "negative_mismatch_count": int(
+            np.count_nonzero(delta[mismatch_rows] < 0)
+        ),
+        "zero_delta_bitwise_mismatch_count": int(
+            np.count_nonzero(delta[mismatch_rows] == 0)
+        ),
+        "rotation_strata": rotation,
+        "translation_strata": translation,
+        "selected_representative": representative,
+        "partition_replay_exact": True,
+    }
 
 
 def _validate_recovar_completion(
@@ -261,6 +564,7 @@ def _comparison(
     )
     support_exact = bool(np.array_equal(native_support, candidate_mask))
 
+    active_candidate_indices = np.flatnonzero(active)
     native_raw = np.asarray(candidates["raw_diff2"][active], dtype=np.float32)
     recovar_raw = np.asarray(
         recovar_raw_table[
@@ -278,6 +582,14 @@ def _comparison(
     )
     raw_metric = float32_metric(native_raw, recovar_raw)
     centered_metric = float32_metric(native_centered, recovar_centered)
+    raw_mismatch_strata = _raw_mismatch_strata(
+        native_raw=native_raw,
+        recovar_raw=recovar_raw,
+        native_candidate_index=active_candidate_indices,
+        native_rotation_local=native_rotation[active],
+        mapped_recovar_rotation=mapped_rotation[active],
+        translation_id=native_translation[active],
+    )
 
     native_rotation_prior = np.asarray(
         candidates["orientation_log_prior"][active],
@@ -356,7 +668,6 @@ def _comparison(
         "target RECOVAR rotation does not have one native match",
     )
     target_native_rotation = int(inverse_target[0])
-    active_candidate_indices = np.flatnonzero(active)
     target_records = []
     for translation in TARGET_TRANSLATIONS:
         matches = np.flatnonzero(
@@ -439,6 +750,7 @@ def _comparison(
             "bitwise_exact": common_min_exact,
         },
         "raw_diff2": raw_metric,
+        "raw_mismatch_strata": raw_mismatch_strata,
         "centered_pre_prior": centered_metric,
         "score_path": {
             "classification": score_path_classification,
@@ -509,7 +821,8 @@ def build_report(
         "metric_policy": (
             "fixed exact-device K4 iteration-2 raw-cost diagnostic; "
             "bitwise rotation/support/common-min/raw/centered-score and "
-            "direct raw-prior-min combined-score replay gates; "
+            "direct raw-prior-min combined-score replay gates; deterministic "
+            "raw-mismatch rotation/translation partitions and representative; "
             "no fitted scale, sign, or correlation; no map acceptance claim"
         ),
         "fixed_contract": {

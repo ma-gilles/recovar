@@ -24,9 +24,9 @@ from scripts.analyze_em_k4_raw_diff2_parity import (
 from scripts.analyze_em_k4_raw_diff2_parity import (
     PASS_SCORE_CLASSIFICATION,
 )
+from scripts.analyze_em_k4_raw_diff2_parity import SCHEMA as RAW_SCHEMA
 
 SCHEMA = "relion-k4-it2-raw-target-pair-v1"
-RAW_SCHEMA = "relion-k4-it2-raw-diff2-parity-v2"
 OPERAND_SCHEMA = "relion-k4-it2-native-target-operand-audit-v1"
 EXPECTED_RECOVAR_JOB_ID = 11_790_517
 EXPECTED_OPERAND_JOB_ID = 11_790_787

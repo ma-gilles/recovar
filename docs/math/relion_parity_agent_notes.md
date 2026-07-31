@@ -10116,6 +10116,69 @@ and `9/15` all-class.
 - This remains non-scoring: K=1 is `28/34` strict, `32/34` topology, and
   `34/34` evaluated; K=4 is `41/60` direct and `9/15` all-class.
 
+## 2026-07-30 K=4 exact-device raw/operand owner-pair result
+
+- Raw job `11790517` completed on the pinned A100.  Its class-1 pass-2
+  capture SHA-256 is
+  `ccbdc9040da463f479784e3ad270fd76bb5817006742f43c96f9b053bf9d6eef`;
+  all `109,184` saved RECOVAR score rows replay bitwise.
+- Native operand retry `11812925` completed after the missing pinned
+  `7a7ea9ba` source worktree was restored.  Operand SHA-256 is
+  `93322e2b98ca11e626f178007f39cf8d6137655fdffd5239907cd2321459270f`.
+  Target translations `80,82` both reproduce native production raw cost
+  `501.4734191894531` bitwise.
+- Dependency-bound audit job `11812941` accepts only that raw/operand pair.
+  Its fixed causal-boundary metric is `2/4` passed, `4/4` evaluated:
+  native target operand replay and fixed target raw diff2 pass; global raw
+  diff2 and global combined score fail.
+- Classification:
+  `global_raw_and_score_paths_differ_but_fixed_target_closes`.  Completion:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_owner_pair_raw11790517_operand11812925_9959cc8a_20260730T2042ET/provenance/ANY_OWNER_PAIR_AUDIT_COMPLETE.json`,
+  SHA-256
+  `963e9b6be044889757bd89fd2f7ca9cc06380186231419105264a11eea07dc1e`.
+- Declared gates reproduce exactly locally and under Slurm.  Do not claim
+  whole-report byte identity: three secondary raw-report CPU norm reductions
+  differ only in their final printed digits.
+- Complete active-table raw mismatch is `25,877/109,184`, maximum absolute
+  delta `0.0001220703125`; common minima differ by one float32 bit.
+- This is non-scoring.  Fixed metrics remain K=1 `28/34` strict,
+  `32/34` topology, and `34/34` evaluated; K=4 `41/60` direct and `9/15`
+  all-class.
+
+## 2026-07-30 K=4 raw-mismatch strata V17
+
+- Predeclared raw delta:
+  `float64(recovar_float32) - float64(native_float32)`.  Partition bitwise
+  mismatches by mapped rotation and translation; require exact `math.fsum`
+  replay; rank by descending raw-delta L1 then ascending identity.
+- Predeclared representative: leading rotation, then largest absolute delta,
+  then lowest native candidate index.  This candidate is the sole next
+  operand target.
+- Predeclaration:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_raw_mismatch_strata_v17_ed49174d_20260730T2055ET/provenance/PREDECLARED_DIAGNOSTIC.md`,
+  SHA-256
+  `7630a6919bfae22fe167f284fc5c018460c811af2da5247a4c0dc1eb84f0e51d`.
+- Thread-count-1 and thread-count-8 reports are byte-identical, SHA-256
+  `950c90703340a0e68e5181efe7c2fcb0985f75af22e93744f07864ff56523100`.
+  Canonical stratification SHA-256 is
+  `9399373da53b64221dc515b2fecfcff04d36207c2c1e2901dbbaf335dfdbb5e8`.
+- Both partitions replay signed delta `+0.708465576171875` and raw-delta L1
+  `1.282928466796875` exactly.
+- Leading rotation is mapped RECOVAR `954` / native `1738`: `39/96`
+  mismatches and raw-delta L1 `0.00152587890625`, only
+  `0.11893717738290636%` of the global L1.  Rotation top-ten concentration is
+  `1.0609196222555246%`.
+- Translation `80` ranks first at `2.8521135136420944%`; translation top-ten
+  concentration is `24.09191465068151%`.
+- Predeclared representative: native candidate `66561`, RECOVAR rotation
+  `954` / native `1738`, translation `13`; RELION raw
+  `516.3260498046875`, RECOVAR raw `516.3261108398438`, positive one-ULP
+  delta `0.00006103515625`.
+- Next bounded step: capture and compare that representative's exact native
+  and RECOVAR operands.  V17 does not authorize a production fix or
+  scorecard change; paired causal metric remains `2/4`, and fixed K1/K4
+  metrics remain unchanged.
+
 ## 2026-07-30 K=4 translation-marginal owner predeclaration
 
 - V10 will partition score-mass deltas by mapped rotation within translations
