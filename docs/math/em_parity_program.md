@@ -321,6 +321,12 @@ Authoritative checkpoint on 2026-07-31 at 04:53 ET:
   seconds. Robust auditors `11791340` and `11791341` and pair auditor
   `11791712` remain dependency-pending and cannot produce an admissible
   result from these failed owners. No job was modified.
+- Independent job `11836574` removes that exact-UUID scheduling confound. It
+  runs a fresh control and both serialized restart points sequentially on one
+  scheduler-selected A100, with all three score captures and map products
+  qualified inside the same allocation. It started on `della-l07g4` at
+  10:44:22 ET from clean detached source `684bf67a`; no existing job was
+  changed.
 - The pending K=4 chain is not yet a quality result. Ingest retry-2's strict
   K=4 repeatability report before accepting an operand classification. The
   K=1 chain above produced no trajectory to ingest. Any K=4 production
@@ -364,6 +370,47 @@ evaluated; K=4 remains `41/60` direct and `9/15` all-class; the separate
 K=4 causal boundary remains `2/4`. Correlation was not computed. No Codex
 process or Slurm job was killed, signalled, suspended, cancelled,
 reprioritized, requeued, held, released, or otherwise altered.
+
+### Same-allocation K=1 case-22 replacement gate
+
+Commit `684bf67ab318d200f512636cd670ab9cc06e0e38` extends the
+serialized-restart score analyzer with an optional explicit fresh-capture
+tuple: capture directory, component-validation report, and direct-operand
+validation report must all be supplied together or the analyzer fails
+closed. The original parent-hash-bound mode remains unchanged. A real
+14-particle replay against the sealed case-22 capture reproduced the legacy
+classification, fixed metric, and all particle records exactly while
+changing only the fresh-capture provenance mode. The score/map/pair unit gate
+passes `25/25`.
+
+Independent Slurm job `11836574` started at `10:44:22 ET` on
+`della-l07g4`, A100 UUID
+`GPU-2a189b71-ee86-c95f-7bc0-93e83a0812e4`. It runs three arms
+sequentially under that one allocation:
+
+1. fresh RELION from the immutable particle STAR and initial map through
+   physical iteration 2;
+2. restart from the fresh arm's serialized iteration-0 optimiser;
+3. restart from the fresh arm's serialized iteration-1 optimiser.
+
+The two restart score gates each retain `14` fixed particles. The two map
+gates each retain half 1, half 2, and merged FSC-AUC (`3` products), with
+strictly positive parity improvement and nonnegative GT delta required for
+acceptance. The two-arm pair classifier retains all four outcomes. No
+threshold, scale, sign, shell boundary, or correlation is fit.
+
+The launcher and predeclaration SHA-256 values are
+`582017d939310f0a0f38444329b87951241e43bdb5f6019c7e22ebf102fef85f`
+and
+`113047b75820df2f433ff62712d628223f8e0cae4bc90f45962f9bf5e4c7e6b0`.
+Run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sameallocation_restart_pair_684bf67a_20260731T1039ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_sameallocation_restart_pair_684bf67a_20260731T1039ET`;
+both contain `SAFE_TO_DELETE`. This remains non-scoring until all arms and
+fixed analyzers complete. K=1 remains `28/34` strict, `32/34` topology, and
+`34/34` evaluated; K=4 remains `41/60` direct and `9/15` all-class. No
+existing process or Slurm job was modified or interrupted.
 
 The consolidated report also names the exact remaining K=1 strict/topology
 cases, every failed K=4 iteration/class cell, and the remaining non-scoring

@@ -11184,3 +11184,27 @@ and `9/15` all-class.
   `9/15`, and `2/4`; correlation was not computed. No Codex process or
   Slurm job was killed, signalled, suspended, cancelled, reprioritized,
   requeued, held, released, or otherwise altered.
+
+## 2026-07-31 10:44 ET — same-allocation case-22 restart chain starts
+
+- Commit `684bf67a` adds fail-closed explicit fresh-capture qualification to
+  the serialized-restart score analyzer. The directory and both component
+  and operand reports must be supplied together; legacy parent-bound mode is
+  unchanged.
+- A real sealed 14-particle replay reproduces the legacy classification,
+  complete fixed metric, and all particle records exactly. The focused
+  score/map/pair gate passes `25/25`; Ruff, Python compilation, checkout
+  provenance, and `git diff --check` pass.
+- Independent job `11836574` started on `della-l07g4`, UUID
+  `GPU-2a189b71-ee86-c95f-7bc0-93e83a0812e4`. It runs fresh, serialized
+  iteration-0 restart, and serialized iteration-1 restart sequentially on
+  this one A100. Each restart retains 14 score cases and three FSC-AUC map
+  products.
+- Launcher SHA-256:
+  `582017d939310f0a0f38444329b87951241e43bdb5f6019c7e22ebf102fef85f`.
+  Predeclaration SHA-256:
+  `113047b75820df2f433ff62712d628223f8e0cae4bc90f45962f9bf5e4c7e6b0`.
+- This job is independent of the rejected exact-UUID chain. It is
+  non-scoring while active. Fixed K=1/K=4/causal metrics remain `28/34`,
+  `32/34`, `34/34`, `41/60`, `9/15`, and `2/4`; correlation is forbidden.
+  No existing process or Slurm job was modified or interrupted.
