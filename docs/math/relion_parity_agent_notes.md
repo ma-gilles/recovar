@@ -10864,6 +10864,20 @@ and `9/15` all-class.
   all three private CUDA consumers remain exact SHA-256
   `9d2ae812b56f7b109d93aefcb32016beaef4d91108a2871def7f1784493f4e28`.
   The reference arm is running.
+- A pre-result static review then found that `11825092` still pins the newly
+  generated reference archives to historical hashes. The running job and its
+  files remain untouched; it is useful as a reference replication but may
+  fail closed before its stop arm.
+- Independent retry `11825133` binds the stop preflight to the SHA-256 values
+  computed from its immediately preceding same-allocation reference. It
+  started at 05:20:04 ET on `della-l07g5`, UUID
+  `GPU-803dc869-2e74-273c-1df4-08adbc94e1b3`; import and private-CUDA gates
+  passed. Its outer launcher SHA-256 is
+  `74402fb99f412dbc7f6bf2b50e093b17a1d544e08fa599c85efee4b83f6d751e`
+  and materialized-launcher manifest SHA-256 is
+  `e2764a23101109159eed00ba893266c34a84f846ea501a710c4498a39e089576`.
+- Retry root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_dynamicref_retry2_20260731T0520ET`.
 - Run root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_reference_stop_native_20260731T0515ET`.
 - This is non-scoring. Fixed K=1 remains `28/34` strict, `32/34` topology,

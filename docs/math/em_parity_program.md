@@ -292,6 +292,13 @@ Authoritative checkpoint on 2026-07-31 at 04:53 ET:
   `5bd5d6e07a6bd054bc63e9cbf4d4eba4ef76f2b33c60ff3c47b8173640b3c165`;
   run root is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_reference_stop_native_20260731T0515ET`.
+  A pre-result static review found that this first launcher still requires its
+  new reference archives to have the historical hashes, so it may reject
+  before the stop arm and is retained as an immutable reference replication.
+  Corrected retry `11825133` instead exports the immediately preceding
+  same-allocation reference hashes into the stop arm. It started independently
+  on `della-l07g5`; outer launcher SHA-256 is
+  `74402fb99f412dbc7f6bf2b50e093b17a1d544e08fa599c85efee4b83f6d751e`.
 - The active K=1 causal gate remains the live-versus-serialized low-shell
   noise-state restart. Iteration-0 owner `11785428` and iteration-1 owner
   `11785547` remain pending at zero elapsed on the exact A100 node; robust
