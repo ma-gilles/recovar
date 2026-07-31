@@ -234,8 +234,8 @@ checkpoint.
 
 Authoritative checkpoint on 2026-07-30 at 22:23 ET:
 
-- Published PR HEAD is
-  `5bd5a54c980404071833ee13035d214a663e32d7`.  Fixed metrics are K=1
+- The published PR lineage includes documentation checkpoint
+  `77e099905c2ad952dab614e2e99568505fb74cfe`.  Fixed metrics are K=1
   `28/34` strict FSC/FSC-AUC, `32/34` topology, and `34/34` evaluated;
   K=4 is `41/60` direct per-class FSC-AUC and `9/15` all-class iterations.
   The separate non-scoring K=4 exact-device causal boundary is `2/4`:
@@ -256,9 +256,16 @@ Authoritative checkpoint on 2026-07-30 at 22:23 ET:
   production change is authorized until the current chain completes and
   re-hashes.
 - The active K=1 causal gate is still the live-versus-serialized low-shell
-  noise-state restart.  Science jobs `11785170`, `11785428`, and `11785547`
-  remain pending; their auditors are dependency-gated.  The evidence source
-  remains clean at `81af6687a6f0fbf2efc54dc1edf64cc2803894d6`.
+  noise-state restart.  Read-only inspection of the immutable submitted
+  scripts leaves one potentially admissible owner per arm: iteration 0 job
+  `11785428` followed by robust auditor `11791340`, and iteration 1 job
+  `11785547` followed by robust auditor `11791341`; pair auditor `11791712`
+  binds those two reports.  Job `11785170` is pinned to superseded launcher
+  and analysis bytes and must fail closed before science; downstream jobs
+  `11791339` and `11791711` therefore cannot yield admissible evidence.  No
+  job was cancelled, signalled, reprioritized, or otherwise altered.  The
+  evidence source remains clean at
+  `81af6687a6f0fbf2efc54dc1edf64cc2803894d6`.
 - Neither pending state is a quality result.  Do not change code from the
   static audits alone.  Ingest the K=4 raw/component classification first,
   or the K=1 restarted trajectory plus FSC/FSC-AUC if that chain starts
@@ -13272,12 +13279,15 @@ admissible from the current operand diagnostics.
 For K=1 case 22, the live-versus-serialized noise boundary is closed
 descriptively: RECOVAR follows the fixed-decimal model-STAR noise tokens while
 live RELION retains pre-serialization shells 1--4.  The active causal test is
-the already submitted exact-device serialized restart: science jobs
-`11785428` and `11785547`, followed by fail-closed score/FSC-AUC pair audits
-`11791339`--`11791341` and `11791711`--`11791712`.  Job `11785170` has a
-stale launcher hash and is expected to fail closed before science.  Do not
-infer a production noise-state fix until one of the valid restart routes and
-its complete map audit qualify.
+the already submitted exact-device serialized restart.  The unique
+potentially admissible chain is iteration-0 science `11785428` plus robust
+FSC/FSC-AUC auditor `11791340`, iteration-1 science `11785547` plus robust
+auditor `11791341`, and pair auditor `11791712`.  Job `11785170` is pinned
+to superseded launcher and analysis bytes and must fail closed before
+science; its dependent robust auditor `11791339` and pair auditor `11791711`
+cannot yield admissible evidence.  No job was cancelled, signalled,
+reprioritized, or otherwise altered.  Do not infer a production noise-state
+fix until one of the valid restart routes and its complete map audit qualify.
 
 For K=4, the authoritative job-`11787017` class-1 score table has
 candidate-level normalized-score-mass total variation

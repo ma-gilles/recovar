@@ -10617,3 +10617,38 @@ and `9/15` all-class.
   `9/15` all-class; K=4 causal boundary `2/4`.
 - No Codex process or Slurm job was killed, signalled, suspended, cancelled,
   reprioritized, or otherwise altered during this audit.
+
+## 2026-07-30 22:37 ET — corrected K=1 serialized-restart owner chain
+
+- Read-only inspection of Slurm's immutable submitted scripts supersedes the
+  earlier owner/admissibility conclusion.  Job `11785170` is pinned to
+  launcher SHA-256
+  `0ba39a6e298c0f504f46d53126ae3f52df05f2c8e51299136d7870fa359780f8`
+  and analysis HEAD `e9ce23576f27946fa8b762f1c8855207cf088bce`,
+  while the referenced on-disk launcher and analysis checkout are now
+  `e8166b3cf067ffe819d6955696e185b453c574bfe3073d4779155426b21631f7`
+  and `81af6687a6f0fbf2efc54dc1edf64cc2803894d6`.  Its fail-closed
+  preflight must stop before science.  Dependent jobs `11791339` and
+  `11791711` cannot yield admissible evidence.
+- The unique potentially admissible K=1 chain is iteration-0 science
+  `11785428` followed by robust FSC/FSC-AUC auditor `11791340`,
+  iteration-1 science `11785547` followed by robust auditor `11791341`,
+  and pair auditor `11791712`.  The valid science launchers and analysis
+  bytes match their immutable submitted values.  The analysis worktree is
+  currently clean and both exclusive science output roots are empty.
+- Each robust arm has a fixed denominator: `14/14` serialized-restart score
+  dominance, `14/14` absolute score-gate passes, strict parity FSC-AUC
+  improvement for half 1, half 2, and merged (`3/3`), and nondegraded GT
+  FSC-AUC for the same maps (`3/3`).  The pair has exactly two arms and
+  classifies all four pass/fail combinations.  No tolerance is fitted and
+  no correlation metric is used.
+- This causal chain cannot change the frozen K=1 scorecard directly.  Fixed
+  metrics remain `28/34` strict (`82.4%`), `32/34` topology, and `34/34`
+  evaluated; K=4 remains `41/60` direct (`68.3%`), `9/15` all-class, and
+  `2/4` on the separate non-scoring causal boundary.
+- Full audit and checksum:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_monitor_fe0560f6_20260730T2142ET/provenance/ACTIVE_K1_RESTART_VALIDITY_V2_20260730T2237ET.md`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_monitor_fe0560f6_20260730T2142ET/provenance/ACTIVE_K1_RESTART_VALIDITY_V2_20260730T2237ET.md.sha256`.
+- No Codex process or Slurm job was killed, signalled, suspended, cancelled,
+  reprioritized, or otherwise altered during this audit.
