@@ -14083,14 +14083,26 @@ Fresh independent retry `11830484` started on `della-l07g4` at
 capture, or analyzer: source remains
 `db1ab501570b507ac29e262a9204f46fb37b28f8`.  It corrects only the validator
 width to `596`, uses explicit conditional status capture so every failure
-reaches the JSON serializer, and supplies the already validated immutable
-private CUDA library to avoid an irrelevant rebuild before the pass-2 stop.
+reaches the JSON serializer, and attempted to supply an already validated
+private CUDA library.
 The launcher and predeclaration SHA-256 values are respectively
 `4a5c813797ef582b7789624ab029f70c2a69f37732e0efe6c9bf88479f98442c`
 and
 `89bd3dbc59e3d179411e5bd588b9569f23be9caff23fbee4065aa43475bff2f2`.
-The result remains pending and non-scoring; all fixed K=1/K=4 metrics remain
-unchanged.
+
+A live audit found that RECOVAR classified that library as stale relative to
+the detached checkout and rebuilt the same path before scoring.  The
+preflight SHA-256
+`9d2ae812b56f7b109d93aefcb32016beaef4d91108a2871def7f1784493f4e28`
+changed to
+`e3aba90b50c738fca7989a6830375d1b9be16719715d47e95b27fb0ab85bca21`;
+mode `555` did not prevent replacement in a writable parent directory.
+Therefore job `11830484` is provenance-rejected and exploratory even if its
+two arms and analyzer finish.  It may expose further orchestration defects,
+but it cannot establish the authoritative repeatability classification or
+move a scorecard.  The live-audit note SHA-256 is
+`9795fe582edc589b271f5d9d637993d2ec74fe37eab8ca9cd19a4f8fd26f0a76`.
+All fixed K=1/K=4 metrics remain unchanged.
 
 A subsequent pre-result audit found a second insertion-order ambiguity:
 multiple components can have the same exact largest energy-removed fraction.

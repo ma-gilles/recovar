@@ -11019,10 +11019,19 @@ and `9/15` all-class.
   `della-l07g4`. It keeps source
   `db1ab501570b507ac29e262a9204f46fb37b28f8`, state, data, target,
   capture, analyzer, and runtime policy fixed. It changes only validation
-  width `565` to `596`, explicit failure-status serialization, and use of the
-  immutable private CUDA library SHA-256
-  `9d2ae812b56f7b109d93aefcb32016beaef4d91108a2871def7f1784493f4e28`
-  to avoid an irrelevant rebuild.
+  width `565` to `596`, explicit failure-status serialization, and an
+  attempted reuse of private CUDA library SHA-256
+  `9d2ae812b56f7b109d93aefcb32016beaef4d91108a2871def7f1784493f4e28`.
+- A live log audit found that RECOVAR classified that library as stale and
+  rebuilt the same external path before scoring. The library changed to
+  SHA-256
+  `e3aba90b50c738fca7989a6830375d1b9be16719715d47e95b27fb0ab85bca21`
+  and mode `755`; a read-only active-launcher scan found only `11830484`
+  referencing the exact path. This invalidates its static input manifest.
+  Job `11830484` is therefore exploratory/provenance-rejected even if both
+  captures and its analyzer complete. The running job was left untouched.
+  Live-audit note SHA-256:
+  `9795fe582edc589b271f5d9d637993d2ec74fe37eab8ca9cd19a4f8fd26f0a76`.
 - Retry launcher SHA-256 is
   `4a5c813797ef582b7789624ab029f70c2a69f37732e0efe6c9bf88479f98442c`;
   predeclaration SHA-256 is
