@@ -10704,3 +10704,16 @@ and `9/15` all-class.
 - The reporter serializes exact source SHA-256 values and K=1 strict history
   `20 → 21 → 22 → 23 → 25 → 26 → 27 → 28`.  It cannot change a scorecard
   or authorize a production change.
+
+## 2026-07-31 00:12 ET — exact remaining-gap reporting
+
+- The consolidated reporter now derives exact remaining-gap records from its
+  four already validated frozen inputs.
+- K=1 strict failures are `k1-04`, `k1-05`, `k1-07`, `k1-10`, `k1-22`, and
+  `k1-26`; topology failures are `k1-07` and `k1-22`.
+- K=4 has failed class checks in iterations 10--15, with failed-class counts
+  `1,4,2,4,4,4`. The separate non-scoring causal failures are
+  `global-raw-diff2` and `global-combined-score`.
+- This exposes where the fixed counts can improve in PR-ready Markdown and
+  machine-readable JSON without changing any result, tolerance, denominator,
+  FSC/FSC-AUC gate, or scorecard.

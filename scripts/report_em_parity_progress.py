@@ -28,7 +28,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v1"
+SCHEMA = "recovar.em_parity_progress.v2"
 
 
 def _panel(
@@ -60,6 +60,13 @@ def _input_record(path: Path) -> dict[str, str]:
     }
 
 
+def _case_identity(case: dict[str, object]) -> dict[str, str]:
+    return {
+        "id": str(case["id"]),
+        "name": str(case["name"]),
+    }
+
+
 def build_progress(
     *,
     scorecard_path: Path = DEFAULT_SCORECARD,
@@ -80,7 +87,29 @@ def build_progress(
     k1_topology_passed = sum(case["intermediate_result"] == "pass" for case in scorecard["cases"])
     k4_direct_denominator = k4_snapshot["direct_fsc_auc_checks_total"]
     k4_iteration_denominator = k4_snapshot["numbered_iterations"]
+    k4_classes = k4_snapshot["classes"]
     k4_causal_summary = k4_causal["summary"]
+    k1_strict_failures = [
+        _case_identity(case) | {"intermediate_result": case["intermediate_result"]}
+        for case in scorecard["cases"]
+        if case["result"] != "pass"
+    ]
+    k1_topology_failures = [
+        _case_identity(case) for case in scorecard["cases"] if case["intermediate_result"] != "pass"
+    ]
+    k4_direct_failures = [
+        {
+            "iteration": iteration,
+            "passed": passed,
+            "failed": k4_classes - passed,
+        }
+        for iteration, passed in enumerate(
+            k4_snapshot["direct_fsc_auc_passes_by_iteration"],
+            start=1,
+        )
+        if passed != k4_classes
+    ]
+    k4_causal_failures = [_case_identity(case) for case in k4_causal["cases"] if case["result"] != "pass"]
 
     panels = [
         _panel(
@@ -141,6 +170,13 @@ def build_progress(
         "scorecard_change_admissible": False,
         "panels": panels,
         "k1_strict_history": [snapshot["counts"]["pass"] for snapshot in scorecard["history"]],
+        "remaining": {
+            "k1_strict_failures": k1_strict_failures,
+            "k1_topology_failures": k1_topology_failures,
+            "k4_direct_failures_by_iteration": k4_direct_failures,
+            "k4_all_class_failure_iterations": [record["iteration"] for record in k4_direct_failures],
+            "k4_causal_failures": k4_causal_failures,
+        },
         "inputs": {
             "k1_scorecard": _input_record(scorecard_path),
             "k1_fixture_manifest": _input_record(fixture_manifest_path),
@@ -165,10 +201,26 @@ def render_markdown(progress: dict[str, object]) -> str:
             f"{panel['rate_percent']:.1f}% | {scoring} |"
         )
     history = " → ".join(str(value) for value in progress["k1_strict_history"])
+    remaining = progress["remaining"]
+    k1_strict = ", ".join(case["id"] for case in remaining["k1_strict_failures"]) or "none"
+    k1_topology = ", ".join(case["id"] for case in remaining["k1_topology_failures"]) or "none"
+    k4_direct = (
+        ", ".join(
+            f"{record['iteration']} ({record['failed']}/{record['passed'] + record['failed']} failed)"
+            for record in remaining["k4_direct_failures_by_iteration"]
+        )
+        or "none"
+    )
+    k4_causal = ", ".join(case["id"] for case in remaining["k4_causal_failures"]) or "none"
     lines.extend(
         [
             "",
             f"K=1 strict progress on the unchanged denominator: **{history}**.",
+            "",
+            f"Remaining K=1 strict cases: {k1_strict}.",
+            f"Remaining K=1 topology cases: {k1_topology}.",
+            f"Remaining K=4 direct iterations: {k4_direct}.",
+            f"Remaining K=4 causal cases: {k4_causal}.",
             "",
             str(progress["metric_policy"]),
         ]
