@@ -1273,6 +1273,19 @@ The focused gate passes 62/62 tests.  Serialized-it000 restart job `11785170`
 was submitted on the required exact-device node to test whether reloading
 the rounded STAR state closes the residual.  This remains non-scoring; the
 fixed K=1 and K=4 totals do not change.
+
+The dependency-bound K=4 iteration-2 class-1 owner-pair audit evaluates a
+separate fixed four-gate causal boundary.  Native target-operand replay and
+fixed-target raw diff2 pass; complete active-table raw diff2 and combined
+score fail.  The result is therefore 2/4 passing and 4/4 evaluated, with
+classification
+`global_raw_and_score_paths_differ_but_fixed_target_closes`.  The exact
+cases, checkmarks, owner jobs, policy, and evidence hashes are checked in as
+`docs/math/em_k4_causal_boundary_scorecard_v1.json` and rendered as
+`docs/math/em_k4_causal_boundary_scorecard.md`; validate them with
+`pixi run python scripts/summarize_em_k4_causal_boundary_scorecard.py
+--check`.  This diagnostic is non-scoring and cannot change the frozen K=1
+or K=4 FSC/FSC-AUC totals.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

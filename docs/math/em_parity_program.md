@@ -13747,7 +13747,22 @@ Thus the new paired boundary is `2/4` passed with `4/4` evaluated.  It
 classifies the evidence as
 `global_raw_and_score_paths_differ_but_fixed_target_closes`: the previously
 selected target pair closes, but the complete class still differs.  The
-completion report is
+fixed cases and their checked state are stored in
+`docs/math/em_k4_causal_boundary_scorecard_v1.json` and rendered as
+`docs/math/em_k4_causal_boundary_scorecard.md`.  The checked renderer
+`scripts/summarize_em_k4_causal_boundary_scorecard.py` fails if the
+four-case denominator, case identity/order, pass/fail checkmarks, owner jobs,
+policy, classification, or evidence-digest form drifts.  Validate the
+machine-readable ledger and generated checklist with:
+
+```bash
+pixi run python scripts/summarize_em_k4_causal_boundary_scorecard.py --check
+```
+
+This causal ledger is deliberately separate from the immutable
+FSC/FSC-AUC scorecards.
+
+The completion report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_owner_pair_raw11790517_operand11812925_9959cc8a_20260730T2042ET/provenance/ANY_OWNER_PAIR_AUDIT_COMPLETE.json`
 with SHA-256
 `963e9b6b315368ae9a8201b73624163129f92e5626fff4089ad8fe3ce6516552`.

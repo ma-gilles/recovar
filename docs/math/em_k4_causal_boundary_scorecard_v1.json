@@ -1,0 +1,80 @@
+{
+  "schema": "recovar.em_k4_causal_boundary_scorecard.v1",
+  "suite_id": "k4-it2-class1-exact-device-owner-pair",
+  "suite_version": 1,
+  "frozen_denominator": 4,
+  "recorded_utc": "2026-07-31T00:56:06+00:00",
+  "metric_policy": "Fixed bitwise exact-device causal gates only; no fitted scale, sign, threshold, map metric, or correlation.",
+  "scorecard_change_admissible": false,
+  "acceptance_contract": {
+    "same_physical_gpu": true,
+    "target_gpu_uuid": "GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30",
+    "grid_correction": "unset/default-off",
+    "forced_final_all_data_after_nonconvergence": false,
+    "raw_science_owner_job_id": 11790517,
+    "operand_science_owner_job_id": 11812925,
+    "dependency_bound_audit_job_id": 11812941
+  },
+  "evidence": {
+    "completion_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_owner_pair_raw11790517_operand11812925_9959cc8a_20260730T2042ET/provenance/ANY_OWNER_PAIR_AUDIT_COMPLETE.json",
+      "sha256": "963e9b6b315368ae9a8201b73624163129f92e5626fff4089ad8fe3ce6516552"
+    },
+    "raw_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_owner_pair_raw11790517_operand11812925_9959cc8a_20260730T2042ET/analysis/RAW_SCORE_PARITY_V2.json",
+      "sha256": "f19dbd316eb654d0c38d6a334cb052ef5181e201789c576bbece4f604849e214"
+    },
+    "operand_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_owner_pair_raw11790517_operand11812925_9959cc8a_20260730T2042ET/analysis/NATIVE_TARGET_OPERAND_AUDIT_V1.json",
+      "sha256": "151194b5412949aa450453e469edc6371ff25256e883b6d641d79ee1919476dd"
+    },
+    "pair_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_owner_pair_raw11790517_operand11812925_9959cc8a_20260730T2042ET/analysis/RAW_TARGET_PAIR_V1.json",
+      "sha256": "be047c3ad90220c88834ed0995339bceab65f4cf3d7358fabdf9bac28ebd142c"
+    },
+    "raw_capture": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_rawdiff2_orig53722_ec68f651_20260730T1030ET/capture/pass2_orig053722_class001_cs038.npz",
+      "sha256": "ccbdc9040da463f479784e3ad270fd76bb5817006742f43c96f9b053bf9d6eef"
+    },
+    "operand_capture": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_native_target_operands_rot1210_6982c77_20260730T1305ET/capture/factors/part48584_stack53723_class1.fine-operand-v1.bin",
+      "sha256": "93322e2b98ca11e626f178007f39cf8d6137655fdffd5239907cd2321459270f"
+    }
+  },
+  "summary": {
+    "pass": 2,
+    "fail": 2,
+    "evaluated": 4
+  },
+  "classification": "global_raw_and_score_paths_differ_but_fixed_target_closes",
+  "cases": [
+    {
+      "id": "native-target-operand-replay",
+      "name": "Native target operand replay",
+      "result": "pass",
+      "checked": true,
+      "observed": "Translations 80 and 82 both replay native production raw diff2 bitwise."
+    },
+    {
+      "id": "fixed-target-raw-diff2",
+      "name": "Fixed target raw diff2",
+      "result": "pass",
+      "checked": true,
+      "observed": "RECOVAR and native raw diff2 are bitwise equal at fixed translations 80 and 82."
+    },
+    {
+      "id": "global-raw-diff2",
+      "name": "Complete active-table raw diff2",
+      "result": "fail",
+      "checked": false,
+      "observed": "25877 of 109184 active raw diff2 values differ bitwise."
+    },
+    {
+      "id": "global-combined-score",
+      "name": "Complete active-table combined score",
+      "result": "fail",
+      "checked": false,
+      "observed": "The complete active-table combined-score path is not bitwise equal."
+    }
+  ]
+}
