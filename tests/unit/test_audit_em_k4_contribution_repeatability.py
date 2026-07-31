@@ -71,6 +71,8 @@ def test_signed_zero_difference_is_not_bitwise_equal(tmp_path: Path) -> None:
     assert report["accepted"] is False
     comparison = report["comparisons"]["pass2"]["arrays"]["value"]
     assert comparison["mismatch_count"] == 1
+    assert comparison["value_mismatch_count"] == 0
+    assert comparison["signed_zero_byte_mismatch_count"] == 1
     assert comparison["first_mismatch"]["index"] == [1]
     assert comparison["first_mismatch"]["observed_bytes_hex"] != comparison["first_mismatch"]["reference_bytes_hex"]
     assert comparison["max_abs_difference"] == 0.0
@@ -90,7 +92,32 @@ def test_distinct_nan_payloads_are_not_bitwise_equal(tmp_path: Path) -> None:
     assert report["accepted"] is False
     comparison = report["comparisons"]["contribution"]["arrays"]["value"]
     assert comparison["mismatch_count"] == 1
+    assert comparison["value_mismatch_count"] == 1
+    assert comparison["equal_nan_value_mismatch_count"] == 0
+    assert comparison["paired_nan_count"] == 1
+    assert comparison["paired_nan_byte_mismatch_count"] == 1
     assert comparison["max_abs_difference"] is None
+
+
+def test_identical_nan_payload_is_byte_equal_despite_value_inequality(
+    tmp_path: Path,
+) -> None:
+    values = np.asarray([0x7FC00001], dtype=np.uint32).view(np.float32)
+    report = auditor.audit_repeatability(
+        _write_archives(
+            tmp_path,
+            observed_value=values,
+            reference_value=values.copy(),
+        )
+    )
+
+    assert report["accepted"] is True
+    comparison = report["comparisons"]["pass2"]["arrays"]["value"]
+    assert comparison["mismatch_count"] == 0
+    assert comparison["value_mismatch_count"] == 1
+    assert comparison["equal_nan_value_mismatch_count"] == 0
+    assert comparison["paired_nan_count"] == 1
+    assert comparison["paired_nan_byte_mismatch_count"] == 0
 
 
 def test_shape_and_dtype_mismatches_are_recorded(tmp_path: Path) -> None:

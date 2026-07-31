@@ -97,6 +97,19 @@ def compare_array(
     mismatch_count = int(np.count_nonzero(mismatched_elements))
     report["byte_equal"] = mismatch_count == 0
     report["mismatch_count"] = mismatch_count
+    value_mismatch = np.not_equal(observed, reference).reshape(-1)
+    report["value_mismatch_count"] = int(np.count_nonzero(value_mismatch))
+    if np.issubdtype(observed.dtype, np.inexact):
+        paired_nan = (np.isnan(observed) & np.isnan(reference)).reshape(-1)
+        report["paired_nan_count"] = int(np.count_nonzero(paired_nan))
+        report["paired_nan_byte_mismatch_count"] = int(np.count_nonzero(paired_nan & mismatched_elements))
+        report["equal_nan_value_mismatch_count"] = int(np.count_nonzero(value_mismatch & ~paired_nan))
+    if np.issubdtype(observed.dtype, np.floating):
+        paired_zero = ((observed == 0) & (reference == 0)).reshape(-1)
+        sign_mismatch = (np.signbit(observed) != np.signbit(reference)).reshape(-1)
+        report["signed_zero_byte_mismatch_count"] = int(
+            np.count_nonzero(paired_zero & sign_mismatch & mismatched_elements)
+        )
     if mismatch_count:
         report["first_mismatch"] = _first_mismatch(
             observed,
