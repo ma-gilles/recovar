@@ -10883,3 +10883,39 @@ and `9/15` all-class.
 - This is non-scoring. Fixed K=1 remains `28/34` strict, `32/34` topology,
   and `34/34` evaluated; fixed K=4 remains `41/60` direct and `9/15`
   all-class. No existing job or process was modified or interrupted.
+
+## 2026-07-31 06:04 ET — dynamic-reference stop arm starts on the same A100
+
+- Job `11825092` completed with Slurm state `COMPLETED`, exit `0:0`, and
+  elapsed time `00:43:22`. Its frozen reference arm wrote pass-2,
+  contribution, and device-signature SHA-256 values
+  `027d0aae614476485434fd7132ca885496a1bc78476b24247130a8efb3ed7518`,
+  `17c2d4f97787f82578d8086ebc73f48cdd424632ea221c2d245ef78c78d4e236`,
+  and
+  `d63bcdbf2545ee99caa59a1bdbd24a5bf68327f3273e86d15a51167d00824d98`.
+  All differ from the first launcher's historical pins, so its stop arm
+  rejected before science. The strict report is outcome-safe, incomplete,
+  rejected `0/3`, and names all three missing observed archives; native and
+  comparator stages did not run.
+- A read-only cross-A100 comparison of the two frozen reference captures
+  found identical archive schemas but differences in `5/22` pass-2 fields,
+  `14/83` contribution fields, and `3/59` device-signature fields. The latter
+  includes `2,635,401` differing `source_values`. This is non-scoring evidence
+  for requiring the exact same physical GPU rather than comparing historical
+  hashes from another A100.
+- Corrected job `11825133` wrote fresh reference SHA-256 values
+  `5504a5015c4e83300282f87f7ab77466544fbb17d6be8948548a725845ff12a9`,
+  `98c8642d7b85645f6416aa834eef931d3561e3db651111cd5d22cbd6ff7e5c0b`,
+  and
+  `66effbd5a2a4bb649cfa418f9302e3349cb8d9c7276d548c54ae9009633a5803`.
+  At 06:03:49 ET its contribution-stop arm started under the same Slurm owner
+  and UUID `GPU-803dc869-2e74-273c-1df4-08adbc94e1b3`. Preflight binds those
+  exact dynamic reference hashes, clean integration head
+  `d1fb8e52d0b6165c7f9a7909ef1b2bcf73b43d25`, private CUDA SHA-256
+  `9d2ae812b56f7b109d93aefcb32016beaef4d91108a2871def7f1784493f4e28`
+  with mode `555`, grid correction unset/default-off, and forced final
+  all-data unset.
+- The authoritative strict `3/3` report remains pending while the stop arm
+  runs. Fixed K=1 remains `28/34` strict, `32/34` topology, and `34/34`
+  evaluated; fixed K=4 remains `41/60` direct and `9/15` all-class. No
+  process or existing Slurm job was modified or interrupted.

@@ -293,12 +293,27 @@ Authoritative checkpoint on 2026-07-31 at 04:53 ET:
   run root is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_reference_stop_native_20260731T0515ET`.
   A pre-result static review found that this first launcher still requires its
-  new reference archives to have the historical hashes, so it may reject
-  before the stop arm and is retained as an immutable reference replication.
+  new reference archives to have the historical hashes. Job `11825092`
+  completed outcome-safe after `43:22`: the new reference hashes were
+  `027d0aae614476485434fd7132ca885496a1bc78476b24247130a8efb3ed7518`,
+  `17c2d4f97787f82578d8086ebc73f48cdd424632ea221c2d245ef78c78d4e236`,
+  and
+  `d63bcdbf2545ee99caa59a1bdbd24a5bf68327f3273e86d15a51167d00824d98`,
+  so the historical-hash preflight rejected before the stop arm. Its strict
+  report is explicitly incomplete and rejected `0/3` because the three
+  observed archives do not exist.
   Corrected retry `11825133` instead exports the immediately preceding
   same-allocation reference hashes into the stop arm. It started independently
   on `della-l07g5`; outer launcher SHA-256 is
   `74402fb99f412dbc7f6bf2b50e093b17a1d544e08fa599c85efee4b83f6d751e`.
+  Its reference hashes are
+  `5504a5015c4e83300282f87f7ab77466544fbb17d6be8948548a725845ff12a9`,
+  `98c8642d7b85645f6416aa834eef931d3561e3db651111cd5d22cbd6ff7e5c0b`,
+  and
+  `66effbd5a2a4bb649cfa418f9302e3349cb8d9c7276d548c54ae9009633a5803`.
+  At 06:03:49 ET its contribution-stop arm passed preflight with those exact
+  dynamic pins and the same physical UUID
+  `GPU-803dc869-2e74-273c-1df4-08adbc94e1b3`.
 - The active K=1 causal gate remains the live-versus-serialized low-shell
   noise-state restart. Iteration-0 owner `11785428` and iteration-1 owner
   `11785547` remain pending at zero elapsed on the exact A100 node; robust
