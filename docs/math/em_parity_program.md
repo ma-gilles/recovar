@@ -13887,3 +13887,20 @@ auditor `scripts/reclassify_k4_fine_operand_comparison.py` validates the
 input schema, candidate denominator, component identity/order, common target
 energy, and recorded strongest component, then emits a separate hashed V2
 classification using the corrected rule.  It never rewrites the GPU report.
+
+A subsequent pre-result audit found a second insertion-order ambiguity:
+multiple components can have the same exact largest energy-removed fraction.
+The current comparator now records the complete exact-maximizer set and emits
+an unresolved tie classification instead of naming its first component.  The
+current compatibility reclassifier independently reconstructs that set,
+requires a unique maximum before setting `selected_component`, and validates
+the duplicated top-level target energy, informative flag, and strongest
+fraction against the component records.  No fitted tolerance is introduced.
+
+Already submitted classifier `11814788` remains isolated on its immutable
+clean `5bd5a54c` source and was not altered.  Its eventual output is accepted
+as a component hypothesis only after the current tie-aware checker confirms a
+unique exact maximum; any tie remains unresolved.  This guard does not
+authorize another science job, production change, scorecard change, or
+FSC/FSC-AUC claim.  The complete affected K=4 causal/scorecard unit slice
+passes `110/110`, including raw and centered exact-tie cases.

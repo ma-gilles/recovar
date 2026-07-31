@@ -14,8 +14,11 @@ def _counterfactual(
     target_l2: float,
     fractions: dict[str, float],
 ) -> dict[str, object]:
+    strongest_fraction = max(fractions.values())
     return {
         "deltas_centered": centered,
+        "target_all_recovar_delta_l2": target_l2,
+        "informative": target_l2 > 0,
         "single_component_substitution": {
             name: {
                 "target_all_recovar_delta_l2": target_l2,
@@ -25,9 +28,7 @@ def _counterfactual(
             for name in ("reference", "shifted_image", "corr")
         },
         "strongest_single_component": max(fractions, key=fractions.get),
-        "strongest_target_delta_energy_removed_fraction": max(
-            fractions.values()
-        ),
+        "strongest_target_delta_energy_removed_fraction": strongest_fraction,
     }
 
 
@@ -93,6 +94,7 @@ def test_reclassifies_one_candidate_from_raw_counterfactual(
         == "corr_has_largest_raw_fine_operand_single_substitution_effect"
     )
     assert report["classification_changed"] is True
+    assert report["component_attribution_resolved"] is True
     assert report["scorecard_change_admissible"] is False
 
 
@@ -143,3 +145,122 @@ def test_rejects_inconsistent_component_target_energy(
         match="component records disagree on target delta L2",
     ):
         reclassify(path)
+
+
+@pytest.mark.unit
+def test_rejects_inconsistent_top_level_target_energy(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "comparison.json"
+    _write_comparison(
+        path,
+        candidate_count=1,
+        raw_l2=2.0,
+        centered_l2=0.0,
+    )
+    value = json.loads(path.read_text())
+    value["raw_diff2_component_counterfactual"][
+        "target_all_recovar_delta_l2"
+    ] = 3.0
+    path.write_text(json.dumps(value))
+
+    with pytest.raises(
+        ValueError,
+        match="top-level target delta L2 disagrees",
+    ):
+        reclassify(path)
+
+
+@pytest.mark.unit
+def test_rejects_inconsistent_top_level_strongest_fraction(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "comparison.json"
+    _write_comparison(
+        path,
+        candidate_count=1,
+        raw_l2=2.0,
+        centered_l2=0.0,
+    )
+    value = json.loads(path.read_text())
+    value["raw_diff2_component_counterfactual"][
+        "strongest_target_delta_energy_removed_fraction"
+    ] = 0.75
+    path.write_text(json.dumps(value))
+
+    with pytest.raises(
+        ValueError,
+        match="top-level strongest fraction disagrees",
+    ):
+        reclassify(path)
+
+
+@pytest.mark.unit
+def test_exact_component_tie_remains_unresolved(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "comparison.json"
+    _write_comparison(
+        path,
+        candidate_count=1,
+        raw_l2=2.0,
+        centered_l2=0.0,
+    )
+    value = json.loads(path.read_text())
+    counterfactual = value["raw_diff2_component_counterfactual"]
+    counterfactual["single_component_substitution"]["reference"][
+        "target_delta_energy_removed_fraction"
+    ] = 1.0
+    counterfactual["single_component_substitution"]["corr"][
+        "target_delta_energy_removed_fraction"
+    ] = 1.0
+    counterfactual["strongest_single_component"] = "reference"
+    counterfactual["strongest_target_delta_energy_removed_fraction"] = 1.0
+    path.write_text(json.dumps(value))
+
+    report = reclassify(path)
+
+    assert (
+        report["classification"]
+        == "multiple_fine_operand_components_tie_for_largest_raw_"
+        "single_substitution_effect"
+    )
+    assert report["classification_basis"] == "raw_diff2"
+    assert report["component_attribution_resolved"] is False
+    assert report["selected_component"] is None
+    assert report["tied_components"] == ["reference", "corr"]
+    assert report["selected_target_delta_energy_removed_fraction"] is None
+
+
+@pytest.mark.unit
+def test_exact_centered_component_tie_remains_unresolved(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "comparison.json"
+    _write_comparison(
+        path,
+        candidate_count=3,
+        raw_l2=20.0,
+        centered_l2=2.0,
+    )
+    value = json.loads(path.read_text())
+    counterfactual = value["centered_raw_diff2_component_counterfactual"]
+    counterfactual["single_component_substitution"]["reference"][
+        "target_delta_energy_removed_fraction"
+    ] = 1.0
+    counterfactual["strongest_single_component"] = "reference"
+    counterfactual["strongest_target_delta_energy_removed_fraction"] = 1.0
+    path.write_text(json.dumps(value))
+
+    report = reclassify(path)
+
+    assert (
+        report["classification"]
+        == "multiple_fine_operand_components_tie_for_largest_centered_"
+        "single_substitution_effect"
+    )
+    assert report["classification_basis"] == "centered_raw_diff2"
+    assert report["component_attribution_resolved"] is False
+    assert report["selected_component"] is None
+    assert report["tied_components"] == ["reference", "shifted_image"]
+    assert report["selected_target_delta_energy_removed_fraction"] is None

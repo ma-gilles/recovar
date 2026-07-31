@@ -54,10 +54,12 @@ def _validated_counterfactual(
     _require(strongest in COMPONENTS, "strongest component is invalid")
 
     target_l2_values = []
+    removed_fractions = {}
     for name in COMPONENTS:
         record = records[name]
         _require(isinstance(record, dict), f"{name}: invalid component record")
         target_l2 = record.get("target_all_recovar_delta_l2")
+        after_l2 = record.get("after_single_component_substitution_l2")
         removed_fraction = record.get("target_delta_energy_removed_fraction")
         _require(
             isinstance(target_l2, (int, float))
@@ -66,30 +68,48 @@ def _validated_counterfactual(
             f"{name}: invalid target delta L2",
         )
         _require(
+            isinstance(after_l2, (int, float))
+            and math.isfinite(after_l2)
+            and after_l2 >= 0,
+            f"{name}: invalid post-substitution L2",
+        )
+        _require(
             isinstance(removed_fraction, (int, float))
             and math.isfinite(removed_fraction),
             f"{name}: invalid energy-removed fraction",
         )
         target_l2_values.append(float(target_l2))
+        removed_fractions[name] = float(removed_fraction)
     _require(
         len(set(target_l2_values)) == 1,
         "component records disagree on target delta L2",
     )
-    strongest_fraction = records[strongest][
-        "target_delta_energy_removed_fraction"
+    target_l2 = target_l2_values[0]
+    _require(
+        counterfactual.get("target_all_recovar_delta_l2") == target_l2,
+        "top-level target delta L2 disagrees with component records",
+    )
+    _require(
+        counterfactual.get("informative") is (target_l2 > 0),
+        "top-level informative flag disagrees with target delta L2",
+    )
+    strongest_fraction = max(removed_fractions.values())
+    strongest_components = [
+        name
+        for name in COMPONENTS
+        if removed_fractions[name] == strongest_fraction
     ]
     _require(
-        float(strongest_fraction)
-        == max(
-            float(records[name]["target_delta_energy_removed_fraction"])
-            for name in COMPONENTS
-        ),
+        strongest in strongest_components,
         "recorded strongest component is not strongest",
     )
-
-    target_l2 = target_l2_values[0]
-    counterfactual["target_all_recovar_delta_l2"] = target_l2
-    counterfactual["informative"] = target_l2 > 0
+    _require(
+        counterfactual.get("strongest_target_delta_energy_removed_fraction")
+        == strongest_fraction,
+        "top-level strongest fraction disagrees with component records",
+    )
+    counterfactual["strongest_components"] = strongest_components
+    counterfactual["strongest_is_unique"] = len(strongest_components) == 1
     return counterfactual
 
 
@@ -119,6 +139,9 @@ def reclassify(comparison_path: Path) -> dict[str, object]:
         if basis == "centered_raw_diff2"
         else raw if basis == "raw_diff2" else None
     )
+    attribution_resolved = bool(
+        selected is not None and selected["strongest_is_unique"]
+    )
     return {
         "schema": SCHEMA,
         "status": "complete",
@@ -127,12 +150,19 @@ def reclassify(comparison_path: Path) -> dict[str, object]:
         "classification_changed": comparison.get("classification") != classification,
         "source_classification": comparison.get("classification"),
         "candidate_count": len(candidates),
+        "component_attribution_resolved": attribution_resolved,
         "selected_component": (
-            selected["strongest_single_component"] if selected is not None else None
+            selected["strongest_single_component"]
+            if attribution_resolved
+            else None
+        ),
+        "tied_components": (
+            [] if selected is None or attribution_resolved
+            else selected["strongest_components"]
         ),
         "selected_target_delta_energy_removed_fraction": (
             selected["strongest_target_delta_energy_removed_fraction"]
-            if selected is not None
+            if attribution_resolved
             else None
         ),
         "counterfactuals": {
@@ -152,7 +182,8 @@ def reclassify(comparison_path: Path) -> dict[str, object]:
         "metric_policy": (
             "select the largest single-substitution effect from informative "
             "centered deltas for two or more candidates, otherwise from raw "
-            "deltas; no fitted scale, sign, threshold, map metric, or correlation"
+            "deltas; exact ties remain unresolved; no fitted scale, sign, "
+            "threshold, map metric, or correlation"
         ),
         "scorecard_change_admissible": False,
         "input": {

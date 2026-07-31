@@ -283,19 +283,25 @@ def _component_counterfactual(
                 float(1.0 - residual_energy / baseline_energy) if baseline_energy > 0 else 0.0
             ),
         }
-    strongest = max(
-        records,
-        key=lambda name: records[name]["target_delta_energy_removed_fraction"],
+    strongest_fraction = max(
+        record["target_delta_energy_removed_fraction"]
+        for record in records.values()
     )
+    strongest_components = [
+        name
+        for name, record in records.items()
+        if record["target_delta_energy_removed_fraction"] == strongest_fraction
+    ]
+    strongest = strongest_components[0]
     return {
         "deltas_centered": center_deltas,
         "target_all_recovar_delta_l2": float(np.sqrt(baseline_energy)),
         "informative": baseline_energy > 0,
         "single_component_substitution": records,
         "strongest_single_component": strongest,
-        "strongest_target_delta_energy_removed_fraction": records[strongest][
-            "target_delta_energy_removed_fraction"
-        ],
+        "strongest_components": strongest_components,
+        "strongest_is_unique": len(strongest_components) == 1,
+        "strongest_target_delta_energy_removed_fraction": strongest_fraction,
     }
 
 
@@ -308,12 +314,24 @@ def _select_component_classification(
     """Select component attribution without centering away one sample."""
 
     if candidate_count >= 2 and centered_counterfactual["informative"]:
+        if not centered_counterfactual["strongest_is_unique"]:
+            return (
+                "multiple_fine_operand_components_tie_for_largest_centered_"
+                "single_substitution_effect",
+                "centered_raw_diff2",
+            )
         component = centered_counterfactual["strongest_single_component"]
         return (
             f"{component}_has_largest_centered_fine_operand_single_substitution_effect",
             "centered_raw_diff2",
         )
     if raw_counterfactual["informative"]:
+        if not raw_counterfactual["strongest_is_unique"]:
+            return (
+                "multiple_fine_operand_components_tie_for_largest_raw_"
+                "single_substitution_effect",
+                "raw_diff2",
+            )
         component = raw_counterfactual["strongest_single_component"]
         return (
             f"{component}_has_largest_raw_fine_operand_single_substitution_effect",

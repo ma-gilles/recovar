@@ -114,6 +114,38 @@ def test_single_candidate_classification_uses_raw_residual():
     assert basis == "raw_diff2"
 
 
+def test_single_candidate_exact_component_tie_is_unresolved():
+    relion = np.asarray([10], dtype=np.float32)
+    all_recovar = np.asarray([12], dtype=np.float32)
+    substitutions = {
+        "reference": all_recovar.copy(),
+        "shifted_image": all_recovar.copy(),
+        "corr": relion.copy(),
+    }
+    raw = _component_counterfactual(relion, all_recovar, substitutions)
+    centered = _component_counterfactual(
+        relion,
+        all_recovar,
+        substitutions,
+        center_deltas=True,
+    )
+
+    classification, basis = _select_component_classification(
+        raw,
+        centered,
+        candidate_count=1,
+    )
+
+    assert raw["strongest_components"] == ["reference", "shifted_image"]
+    assert raw["strongest_is_unique"] is False
+    assert (
+        classification
+        == "multiple_fine_operand_components_tie_for_largest_raw_"
+        "single_substitution_effect"
+    )
+    assert basis == "raw_diff2"
+
+
 def test_multi_candidate_classification_can_use_centered_residual():
     relion = np.asarray([10, 20, 30], dtype=np.float32)
     all_recovar = np.asarray([111, 118, 133], dtype=np.float32)
@@ -142,6 +174,38 @@ def test_multi_candidate_classification_can_use_centered_residual():
             "shifted_image_has_largest_centered_fine_operand_"
             "single_substitution_effect"
         )
+    )
+    assert basis == "centered_raw_diff2"
+
+
+def test_multi_candidate_exact_centered_component_tie_is_unresolved():
+    relion = np.asarray([10, 20], dtype=np.float32)
+    all_recovar = np.asarray([11, 19], dtype=np.float32)
+    substitutions = {
+        "reference": all_recovar.copy(),
+        "shifted_image": all_recovar.copy(),
+        "corr": relion.copy(),
+    }
+    raw = _component_counterfactual(relion, all_recovar, substitutions)
+    centered = _component_counterfactual(
+        relion,
+        all_recovar,
+        substitutions,
+        center_deltas=True,
+    )
+
+    classification, basis = _select_component_classification(
+        raw,
+        centered,
+        candidate_count=2,
+    )
+
+    assert centered["strongest_components"] == ["reference", "shifted_image"]
+    assert centered["strongest_is_unique"] is False
+    assert (
+        classification
+        == "multiple_fine_operand_components_tie_for_largest_centered_"
+        "single_substitution_effect"
     )
     assert basis == "centered_raw_diff2"
 

@@ -10652,3 +10652,40 @@ and `9/15` all-class.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_monitor_fe0560f6_20260730T2142ET/provenance/ACTIVE_K1_RESTART_VALIDITY_V2_20260730T2237ET.md.sha256`.
 - No Codex process or Slurm job was killed, signalled, suspended, cancelled,
   reprioritized, or otherwise altered during this audit.
+
+## 2026-07-30 23:00 ET — K=4 exact component-tie fail-closed guard
+
+- A pre-result audit of the V17 representative ingestion path found that an
+  exact tie in component energy-removed fractions still selected the first
+  component by dictionary order.  This is distinct from the already fixed
+  single-value centering problem: both raw one-candidate and centered
+  multi-candidate counterfactuals can have informative nonzero energy while
+  two or more substitutions attain the same exact maximum.
+- The current comparator serializes the complete exact-maximizer set and
+  whether it is unique.  Classification names a component only for a unique
+  exact maximum; otherwise it emits
+  `multiple_fine_operand_components_tie_for_largest_raw_single_substitution_effect`
+  or the corresponding centered classification.
+- The current compatibility reclassifier reconstructs the exact-maximizer set
+  from the three fixed component records.  It leaves
+  `selected_component=null`, lists `tied_components`, and sets
+  `component_attribution_resolved=false` on a tie.  It also fails closed when
+  the duplicated top-level target L2, informative flag, or strongest fraction
+  disagrees with the component records.  No fitted tolerance, scale, sign,
+  map surrogate, or correlation is used.
+- Already submitted outcome-safe classifier `11814788` remains isolated on
+  its clean, hash-pinned `5bd5a54c` source.  It was not modified or replaced.
+  Its eventual report may carry a component hypothesis only after a
+  current-head tie-aware replay confirms a unique exact maximum.  A tie is an
+  unresolved result, not authorization for the frozen three-candidate
+  follow-up.
+- Import provenance, parity ancestry, scoped Ruff, Python compilation,
+  scorecard-render freshness, `git diff --check`, and the complete affected
+  K=4 causal/scorecard unit slice pass.  The fixed denominator is `110/110`,
+  including raw and centered exact-tie cases.
+- This is diagnostic-report hardening only.  Fixed metrics remain K=1
+  `28/34` strict (`82.4%`), `32/34` topology, and `34/34` evaluated; K=4
+  remains `41/60` direct (`68.3%`), `9/15` all-class, and `2/4` on the
+  separate non-scoring causal boundary.
+- No Codex process or Slurm job was killed, signalled, suspended, cancelled,
+  reprioritized, or otherwise altered during this audit.
