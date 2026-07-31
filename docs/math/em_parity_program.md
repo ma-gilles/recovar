@@ -14474,3 +14474,77 @@ K=4 exact-device causal panel remains `2/4`.  Correlation was not computed.
 Run root:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sameallocation_restart_pair_autoiter2_d676d9d8_20260731T1225ET`.
 No Codex process or existing Slurm job was modified or interrupted.
+
+## 2026-07-31 K=1 continuation resolution-initializer discriminator
+
+Source audit identified a real continuation call-order difference. At the end
+of every iteration, RELION calls `updateCurrentResolution()` before writing
+the model and optimiser STAR files. A continuation then reloads the serialized
+iteration number, no-resolution-gain counter, and model resolution, but stock
+MPI startup calls `updateCurrentResolution()` once more before entering the
+next iteration. For the fixed case-22 iteration-1 state, that extra call moves
+the iteration-2 entry from `30.2222 A / no-gain 1` to
+`32 A / no-gain 2`, and current size from `60` to `58`.
+
+Private diagnostic RELION commit
+`c5e1280db23c1202adc4b72c38985f52300bf93f` suppresses only that pre-loop
+update for continuations whose serialized iteration is greater than zero.
+Fresh runs and iteration-0 continuations remain unchanged. The patched binary
+SHA-256 is
+`552109b733171a6a48feee98e4eb629e2fe97122a4dbdd86bfb37afdb3ad8133`;
+the stock binary remains
+`a274dda1b0b40478ddd7f2b81d144bec20510db369225f365f1be7d27ac45309`.
+
+Same-A100 job `11840907` ran fresh stock, stock direct iteration-1
+continuation, and patched direct iteration-1 continuation sequentially on
+`della-l07g3`, physical UUID
+`GPU-eb1c5b04-20c1-b6c9-16e6-b3dc87905bd7`. All three arms, all nine arm
+validators, both fixed score reports, and both FSC-AUC map reports completed.
+The patched arm restored the intended iteration-2 entry state and wrote
+current size `60`, while stock wrote `58`.
+
+The predeclared scientific hypothesis was nevertheless rejected. The launcher
+therefore failed closed `1:0` at its final scientific assertion after
+`00:34:25`; it did not write `SCIENCE_COMPLETE.json`.
+
+| Fixed paired group | Stock | Patched | Change |
+| --- | ---: | ---: | ---: |
+| particle score boundary | 0/14 | 0/14 | 0 |
+| signed map-parity FSC-AUC | 0/3 | 0/3 | 0 |
+| GT FSC-AUC non-degradation | 3/3 | 3/3 | 0 |
+| overall acceptance | 0/1 | 0/1 | 0 |
+| total | 3/21 | 3/21 | **+0** |
+
+The patch did move all three map-parity deltas toward zero, but none crossed
+the fixed strictly-positive gate:
+
+| Map | Stock parity delta | Patched parity delta | Patched GT delta |
+| --- | ---: | ---: | ---: |
+| half 1 | -0.0279290945354 | -0.0239961787861 | +0.00658454945090 |
+| half 2 | -0.0336945558278 | -0.0304012339553 | +0.00706230051543 |
+| merged | -0.0282848964893 | -0.0252530797189 | +0.00691022964163 |
+
+The fixed classification is
+`resolution_initializer_changes_iteration2_geometry_but_is_not_sufficient_for_score_or_map_parity`.
+The remaining continuation divergence therefore contains additional
+process-resident state beyond the adaptive resolution initializer. The next
+bounded discriminator is a fresh-versus-patched comparison of the already
+captured iteration-2 coarse operands: projected reference, base/shifted image,
+pixel correction, translations, and Euler topology.
+
+The fail-closed postmortem is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_continue_resolution_init_ab_c5e1280_20260731T1341ET/provenance/FAIL_CLOSED_CAUSAL_RESULT.json`
+(SHA-256
+`9fe9e2b60a9a2d2368cf10df8a46f590f559c7e7b9b0a8db2ef570c7db7a4b9c`).
+The checked paired ledger is
+`docs/math/em_k1_continuation_initializer_scorecard_v1.json`; its generated
+checklist is `docs/math/em_k1_continuation_initializer_scorecard.md`. The
+consolidated reporter exposes `3/21 stock -> 3/21 patched (+0)` and now also
+loads the existing K=4 preprocessing ledger directly, including its `3/9`
+bitwise and `9/9` material-floor panels.
+
+This is a rejected non-scoring hypothesis, not a production fix. The
+immutable quality metrics remain K=1 strict `28/34`, topology `32/34`,
+evaluated `34/34`; K=4 direct `41/60`, all-class `9/15`; K=4 exact-device
+causal `2/4`. Correlation was not computed. No Codex process or existing
+Slurm job was modified or interrupted.

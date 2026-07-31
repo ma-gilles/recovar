@@ -12,6 +12,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from scripts.summarize_em_k1_continuation_initializer_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K1_CONTINUATION_INITIALIZER_SCORECARD,
+)
+from scripts.summarize_em_k1_continuation_initializer_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k1_continuation_initializer,
+)
 from scripts.summarize_em_k1_serialized_restart_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K1_RESTART_SCORECARD,
 )
@@ -33,6 +39,12 @@ from scripts.summarize_em_k4_class_fsc_auc_scorecard import (  # noqa: E402
 from scripts.summarize_em_k4_class_fsc_auc_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k4_classes,
 )
+from scripts.summarize_em_k4_preprocess_replay_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K4_PREPROCESS_SCORECARD,
+)
+from scripts.summarize_em_k4_preprocess_replay_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k4_preprocess,
+)
 from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     DEFAULT_FIXTURE_MANIFEST,
     DEFAULT_K4_SNAPSHOT,
@@ -43,7 +55,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v4"
+SCHEMA = "recovar.em_parity_progress.v5"
 
 
 def _panel(
@@ -89,7 +101,9 @@ def build_progress(
     k4_snapshot_path: Path = DEFAULT_K4_SNAPSHOT,
     k4_class_path: Path = DEFAULT_K4_CLASS_SCORECARD,
     k4_causal_path: Path = DEFAULT_K4_CAUSAL_SCORECARD,
+    k4_preprocess_path: Path = DEFAULT_K4_PREPROCESS_SCORECARD,
     k1_restart_path: Path = DEFAULT_K1_RESTART_SCORECARD,
+    k1_continuation_initializer_path: Path = (DEFAULT_K1_CONTINUATION_INITIALIZER_SCORECARD),
 ) -> dict[str, object]:
     """Validate every fixed source and return the consolidated progress report."""
 
@@ -98,7 +112,9 @@ def build_progress(
     k4_snapshot = load_and_validate_k4_snapshot(k4_snapshot_path)
     k4_class_scorecard = load_and_validate_k4_classes(k4_class_path)
     k4_causal = load_and_validate_k4_causal(k4_causal_path)
+    k4_preprocess = load_and_validate_k4_preprocess(k4_preprocess_path)
     k1_restart = load_and_validate_k1_restart(k1_restart_path)
+    k1_continuation_initializer = load_and_validate_k1_continuation_initializer(k1_continuation_initializer_path)
 
     k1_counts = scorecard["current_snapshot"]["counts"]
     k1_denominator = scorecard["frozen_denominator"]
@@ -108,7 +124,10 @@ def build_progress(
     k4_iteration_denominator = k4_snapshot["numbered_iterations"]
     k4_classes = k4_snapshot["classes"]
     k4_causal_summary = k4_causal["summary"]
+    k4_preprocess_summary = k4_preprocess["summary"]
     k1_restart_summary = k1_restart["summary"]
+    k1_continuation_initializer_baseline = k1_continuation_initializer["baseline_summary"]
+    k1_continuation_initializer_treatment = k1_continuation_initializer["treatment_summary"]
     if (
         k4_class_scorecard["summary"]["pass"] != k4_snapshot["direct_fsc_auc_checks_passed"]
         or k4_class_scorecard["summary"]["evaluated"] != k4_snapshot["direct_fsc_auc_checks_total"]
@@ -138,6 +157,9 @@ def build_progress(
     ]
     k4_causal_failures = [_case_identity(case) for case in k4_causal["cases"] if case["result"] != "pass"]
     k1_restart_failures = [_case_identity(case) for case in k1_restart["cases"] if case["result"] != "pass"]
+    k1_continuation_initializer_failures = [
+        _case_identity(case) for case in k1_continuation_initializer["cases"] if case["treatment_result"] != "pass"
+    ]
 
     panels = [
         _panel(
@@ -173,6 +195,14 @@ def build_progress(
             scoring=False,
         ),
         _panel(
+            "k1_continuation_initializer",
+            "K=1 continuation initializer patched arm",
+            k1_continuation_initializer_treatment["pass"],
+            k1_continuation_initializer_treatment["evaluated"],
+            k1_continuation_initializer["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
             "k4_direct",
             "K=4 direct per-class FSC-AUC",
             k4_snapshot["direct_fsc_auc_checks_passed"],
@@ -196,21 +226,45 @@ def build_progress(
             k4_causal["frozen_denominator"],
             scoring=False,
         ),
+        _panel(
+            "k4_preprocess_bitwise",
+            "K=4 preprocess bitwise replay",
+            k4_preprocess_summary["bitwise_equal"],
+            k4_preprocess_summary["evaluated"],
+            k4_preprocess["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
+            "k4_preprocess_material",
+            "K=4 preprocess within fixed material floor",
+            k4_preprocess_summary["within_material_floor"],
+            k4_preprocess_summary["evaluated"],
+            k4_preprocess["frozen_denominator"],
+            scoring=False,
+        ),
     ]
     return {
         "schema": SCHEMA,
         "metric_policy": (
             "K=1 and K=4 quality panels use shellwise FSC/FSC-AUC; "
-            "correlation is not used. The K=1 serialized-restart and K=4 "
-            "causal panels are non-scoring."
+            "correlation is not used. The K=1 serialized-restart, K=1 "
+            "continuation-initializer, K=4 causal, and K=4 preprocessing "
+            "panels are non-scoring."
         ),
         "scorecard_change_admissible": False,
         "panels": panels,
         "k1_strict_history": [snapshot["counts"]["pass"] for snapshot in scorecard["history"]],
+        "k1_continuation_initializer_progress": {
+            "stock_pass": k1_continuation_initializer_baseline["pass"],
+            "patched_pass": k1_continuation_initializer_treatment["pass"],
+            "denominator": k1_continuation_initializer["frozen_denominator"],
+            "paired_gain": k1_continuation_initializer["paired_gain"],
+        },
         "remaining": {
             "k1_strict_failures": k1_strict_failures,
             "k1_topology_failures": k1_topology_failures,
             "k1_restart_causal_failures": k1_restart_failures,
+            "k1_continuation_initializer_failures": (k1_continuation_initializer_failures),
             "k4_direct_failures_by_iteration": k4_direct_failures,
             "k4_direct_failures": k4_failed_checks(k4_class_scorecard),
             "k4_all_class_failure_iterations": [record["iteration"] for record in k4_direct_failures],
@@ -220,9 +274,11 @@ def build_progress(
             "k1_scorecard": _input_record(scorecard_path),
             "k1_fixture_manifest": _input_record(fixture_manifest_path),
             "k1_restart_scorecard": _input_record(k1_restart_path),
+            "k1_continuation_initializer_scorecard": _input_record(k1_continuation_initializer_path),
             "k4_trajectory_snapshot": _input_record(k4_snapshot_path),
             "k4_class_scorecard": _input_record(k4_class_path),
             "k4_causal_scorecard": _input_record(k4_causal_path),
+            "k4_preprocess_scorecard": _input_record(k4_preprocess_path),
         },
     }
 
@@ -242,10 +298,14 @@ def render_markdown(progress: dict[str, object]) -> str:
             f"{panel['rate_percent']:.1f}% | {scoring} |"
         )
     history = " → ".join(str(value) for value in progress["k1_strict_history"])
+    initializer = progress["k1_continuation_initializer_progress"]
     remaining = progress["remaining"]
     k1_strict = ", ".join(case["id"] for case in remaining["k1_strict_failures"]) or "none"
     k1_topology = ", ".join(case["id"] for case in remaining["k1_topology_failures"]) or "none"
     k1_restart = ", ".join(case["id"] for case in remaining["k1_restart_causal_failures"]) or "none"
+    k1_continuation_initializer = (
+        ", ".join(case["id"] for case in remaining["k1_continuation_initializer_failures"]) or "none"
+    )
     k4_direct = (
         ", ".join(
             f"{record['iteration']} ({record['failed']}/{record['passed'] + record['failed']} failed)"
@@ -260,9 +320,19 @@ def render_markdown(progress: dict[str, object]) -> str:
             "",
             f"K=1 strict progress on the unchanged denominator: **{history}**.",
             "",
+            (
+                "K=1 continuation-initializer paired progress on the unchanged "
+                f"denominator: **{initializer['stock_pass']}/"
+                f"{initializer['denominator']} stock → "
+                f"{initializer['patched_pass']}/"
+                f"{initializer['denominator']} patched "
+                f"(+{initializer['paired_gain']})**."
+            ),
+            "",
             f"Remaining K=1 strict cases: {k1_strict}.",
             f"Remaining K=1 topology cases: {k1_topology}.",
             f"Remaining K=1 serialized-restart causal cases: {k1_restart}.",
+            (f"Remaining K=1 continuation-initializer patched cases: {k1_continuation_initializer}."),
             f"Remaining K=4 direct iterations: {k4_direct}.",
             f"Remaining K=4 direct classes: {k4_direct_classes}.",
             f"Remaining K=4 causal cases: {k4_causal}.",

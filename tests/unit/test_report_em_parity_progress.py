@@ -11,9 +11,15 @@ from scripts.report_em_parity_progress import build_progress, render_markdown
 def test_reports_all_fixed_em_parity_panels() -> None:
     progress = build_progress()
 
-    assert progress["schema"] == "recovar.em_parity_progress.v4"
+    assert progress["schema"] == "recovar.em_parity_progress.v5"
     assert progress["scorecard_change_admissible"] is False
     assert progress["k1_strict_history"] == [20, 21, 22, 23, 25, 26, 27, 28]
+    assert progress["k1_continuation_initializer_progress"] == {
+        "stock_pass": 3,
+        "patched_pass": 3,
+        "denominator": 21,
+        "paired_gain": 0,
+    }
     assert [
         (
             panel["id"],
@@ -29,17 +35,22 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         ("k1_topology", 32, 34, 34, 94.1, False),
         ("k1_evaluated", 34, 34, 34, 100.0, False),
         ("k1_restart_causal", 24, 42, 42, 57.1, False),
+        ("k1_continuation_initializer", 3, 21, 21, 14.3, False),
         ("k4_direct", 41, 60, 60, 68.3, True),
         ("k4_all_class", 9, 15, 15, 60.0, True),
         ("k4_causal", 2, 4, 4, 50.0, False),
+        ("k4_preprocess_bitwise", 3, 9, 9, 33.3, False),
+        ("k4_preprocess_material", 9, 9, 9, 100.0, False),
     ]
     assert set(progress["inputs"]) == {
         "k1_scorecard",
         "k1_fixture_manifest",
         "k1_restart_scorecard",
+        "k1_continuation_initializer_scorecard",
         "k4_trajectory_snapshot",
         "k4_class_scorecard",
         "k4_causal_scorecard",
+        "k4_preprocess_scorecard",
     }
     assert all(len(record["sha256"]) == 64 for record in progress["inputs"].values())
     assert progress["remaining"] == {
@@ -157,6 +168,80 @@ def test_reports_all_fixed_em_parity_panels() -> None:
             {
                 "id": "iteration1-restart-overall",
                 "name": "iteration1-restart overall acceptance",
+            },
+        ],
+        "k1_continuation_initializer_failures": [
+            {
+                "id": "continuation-init-score-stack-0035",
+                "name": "Stack 35 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-0252",
+                "name": "Stack 252 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-0348",
+                "name": "Stack 348 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-0591",
+                "name": "Stack 591 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-0683",
+                "name": "Stack 683 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-1100",
+                "name": "Stack 1100 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-1522",
+                "name": "Stack 1522 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-1640",
+                "name": "Stack 1640 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-1767",
+                "name": "Stack 1767 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-2124",
+                "name": "Stack 2124 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-2322",
+                "name": "Stack 2322 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-2330",
+                "name": "Stack 2330 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-2846",
+                "name": "Stack 2846 score counterfactual",
+            },
+            {
+                "id": "continuation-init-score-stack-2994",
+                "name": "Stack 2994 score counterfactual",
+            },
+            {
+                "id": "continuation-init-map-parity-half1",
+                "name": "half1 RECOVAR-to-RELION FSC-AUC improvement",
+            },
+            {
+                "id": "continuation-init-map-parity-half2",
+                "name": "half2 RECOVAR-to-RELION FSC-AUC improvement",
+            },
+            {
+                "id": "continuation-init-map-parity-merged",
+                "name": "merged RECOVAR-to-RELION FSC-AUC improvement",
+            },
+            {
+                "id": "continuation-init-overall",
+                "name": "Continuation-initializer overall acceptance",
             },
         ],
         "k4_direct_failures_by_iteration": [
@@ -300,12 +385,19 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
 
     assert "| K=1 strict FSC/FSC-AUC | **28** | 34 | 34 | 82.4% | yes |" in rendered
     assert "| K=1 serialized-restart causal gates | **24** | 42 | 42 | 57.1% | no |" in rendered
+    assert ("| K=1 continuation initializer patched arm | **3** | 21 | 21 | 14.3% | no |") in rendered
     assert "| K=4 direct per-class FSC-AUC | **41** | 60 | 60 | 68.3% | yes |" in rendered
     assert "| K=4 exact-device causal boundary | **2** | 4 | 4 | 50.0% | no |" in rendered
+    assert "| K=4 preprocess bitwise replay | **3** | 9 | 9 | 33.3% | no |" in rendered
+    assert ("| K=4 preprocess within fixed material floor | **9** | 9 | 9 | 100.0% | no |") in rendered
     assert "K=1 strict progress on the unchanged denominator: **20 → 21 → 22 → 23 → 25 → 26 → 27 → 28**." in rendered
+    assert (
+        "K=1 continuation-initializer paired progress on the unchanged denominator: **3/21 stock → 3/21 patched (+0)**."
+    ) in rendered
     assert "Remaining K=1 strict cases: k1-04, k1-05, k1-07, k1-10, k1-22, k1-26." in rendered
     assert "Remaining K=1 topology cases: k1-07, k1-22." in rendered
     assert ("Remaining K=1 serialized-restart causal cases: iteration1-restart-score-stack-0035") in rendered
+    assert ("Remaining K=1 continuation-initializer patched cases: continuation-init-score-stack-0035") in rendered
     assert (
         "Remaining K=4 direct iterations: 10 (1/4 failed), 11 (4/4 failed), "
         "12 (2/4 failed), 13 (4/4 failed), 14 (4/4 failed), 15 (4/4 failed)." in rendered
@@ -333,6 +425,7 @@ def test_renders_completed_gap_lists_without_empty_punctuation() -> None:
     assert "Remaining K=1 strict cases: none." in rendered
     assert "Remaining K=1 topology cases: none." in rendered
     assert "Remaining K=1 serialized-restart causal cases: none." in rendered
+    assert "Remaining K=1 continuation-initializer patched cases: none." in rendered
     assert "Remaining K=4 direct iterations: none." in rendered
     assert "Remaining K=4 direct classes: none." in rendered
     assert "Remaining K=4 causal cases: none." in rendered
