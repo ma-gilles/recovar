@@ -10551,3 +10551,69 @@ and `9/15` all-class.
   Removing only the V9 schema and declared fields reproduces V8 exactly.
 - This remains non-scoring: K=1 is `28/34` strict, `32/34` topology, and
   `34/34` evaluated; K=4 is `41/60` direct and `9/15` all-class.
+
+## 2026-07-30 22:23 ET — fixed K=4 causal metric and representative chain
+
+- Commit `fe0560f6bafcb87f15460b07d7d7ce508e4dbec7` checks in a
+  versioned, fixed-denominator K=4 causal-boundary metric.  It is `2/4`
+  passed and `4/4` evaluated: native target operand replay and fixed target
+  raw diff2 at translations `80,82` pass; complete active-table raw diff2
+  and combined score fail.  The validator freezes case identity/order,
+  owner jobs, physical GPU, grid/finalization policy, classification,
+  summary, checkmarks, and all six evidence digests.  It cannot change the
+  K=1 or K=4 FSC/FSC-AUC scorecards.
+- Native representative job `11813655` completed `0:0` on the pinned A100.
+  Its completion SHA-256 is
+  `58ea7b485e49219668b6211296684924173a6a5f5d2220e7c2b78044f89dbec6`;
+  operand SHA-256 is
+  `e9e848ed4f37e143e9b318e80a41df754b27b39bdd05363602917f44c07887b6`.
+  Native candidate `66561`, native rotation `1738`, mapped RECOVAR rotation
+  `954`, and translation `13` replay raw `516.3260498046875` bitwise.
+  V17 records RECOVAR raw `516.3261108398438`, a positive one-ULP delta.
+- Initial contribution job `11813772` failed closed before capture because
+  the device-signature arm lacked its required per-particle-launch flag.
+  Its root remains untouched.  Corrected isolated retry `11814215` supplies
+  exactly the four required device-signature flags and is resource-pending.
+  Comparator `11814470` depends on it and outcome-safe classifier
+  `11814788` depends on the comparator.
+- Pre-result audit found that centering a single counterfactual value always
+  gives zero energy, making the previous top-level label arbitrary.
+  Commit `39327674f142115badced374aa7c073a2b8381f7` uses centered
+  attribution only for at least two informative candidates, raw attribution
+  for one informative candidate, and `no_nonzero_fine_operand_residual` for
+  a true zero residual.  Commit
+  `5bd5a54c980404071833ee13035d214a663e32d7` adds a compatibility auditor
+  that emits a separate V2 classification without rewriting immutable GPU
+  evidence.
+- Validation at `5bd5a54c` passed import provenance, Python compilation,
+  scoped Ruff, scorecard render freshness, `git diff --check`, and
+  `134/134` targeted K4/scorecard tests.  GitHub Actions Wheels run
+  `30598039332` completed successfully for that exact commit.  No tolerance,
+  baseline, fixed denominator, or map gate changed; no correlation metric
+  was used.
+- A read-only static preflight on 2026-07-30 revalidated launcher SHA-256
+  values `a80b9706680a34f8b4f3f4b6ee69fd8236e4ed720e643826559c0325fcfe3493`,
+  `16c07b5370cacae7969256efae32b38735391e6d56641a84315baac12e8e637d`,
+  and
+  `66b2d262c913265a2231fe111b605e98e730a00a0db5414d55071a005709df71`.
+  All three parse with `bash -n`.  The K=4 science checkout remains clean at
+  `ec68f651a4408ed14ed7ebce0ddf3d54a74e0d41`, and all exclusive output
+  roots remain empty.
+- Before job `11814788` produces a component label, the next possible
+  multistratum cohort is predeclared from V17 rotation-L1 ranks 1--3:
+  candidate `66561` (`+1` ULP), candidate `62317` (`+2` ULP), and
+  candidate `63564` (`-2` ULP).  The predeclaration SHA-256 is
+  `2c2dba8ef2336152b2fe81ccda3f7deca578faee56f0627bdd9f742113088fff`.
+  It requires raw majority and informative centered-cohort agreement before
+  carrying a component hypothesis forward; otherwise the result remains
+  unresolved.  No follow-up science job is authorized before the current
+  chain completes.
+- Provenance:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_rawrep_rec954_contrib_retry1_ec68f651_20260730T2138ET/provenance/STATIC_PREFLIGHT_AUDIT_20260730T2217ET.md`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_rawrep_classification_v2b_audit11814470_5bd5a54c_20260730T2205ET/provenance/MULTISTRATUM_FOLLOWUP_PREDECLARATION.md`.
+- Current fixed metrics remain K=1 `28/34` strict (`82.4%`), `32/34`
+  topology, and `34/34` evaluated; K=4 `41/60` direct (`68.3%`) and
+  `9/15` all-class; K=4 causal boundary `2/4`.
+- No Codex process or Slurm job was killed, signalled, suspended, cancelled,
+  reprioritized, or otherwise altered during this audit.

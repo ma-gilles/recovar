@@ -232,6 +232,40 @@ checkpoint.
 
 ### Next experiment
 
+Authoritative checkpoint on 2026-07-30 at 22:23 ET:
+
+- Published PR HEAD is
+  `5bd5a54c980404071833ee13035d214a663e32d7`.  Fixed metrics are K=1
+  `28/34` strict FSC/FSC-AUC, `32/34` topology, and `34/34` evaluated;
+  K=4 is `41/60` direct per-class FSC-AUC and `9/15` all-class iterations.
+  The separate non-scoring K=4 exact-device causal boundary is `2/4`:
+  native target operand replay and fixed target raw diff2 pass, while the
+  complete active-table raw-diff2 and combined-score paths remain unequal.
+- The active K=4 hypothesis is the V17 representative at native candidate
+  `66561`, mapped RECOVAR rotation `954`, native rotation `1738`, and
+  translation `13`.  Native job `11813655` replayed
+  `516.3260498046875` bitwise.  Corrected RECOVAR contribution job
+  `11814215` is resource-pending on the pinned A100 node; exact-device
+  comparator `11814470` and outcome-safe classification audit `11814788`
+  are dependency-pending.  Their submitted launchers passed a fresh static
+  fail-closed audit, and the science source/output-owner gates remain clean.
+- Before the single-candidate result, a threshold-free three-rotation
+  replication cohort was frozen from V17 ranks 1--3: candidates
+  `66561`, `62317`, and `63564`.  It spans positive one-ULP, positive
+  two-ULP, and negative two-ULP raw residuals.  No follow-up job or
+  production change is authorized until the current chain completes and
+  re-hashes.
+- The active K=1 causal gate is still the live-versus-serialized low-shell
+  noise-state restart.  Science jobs `11785170`, `11785428`, and `11785547`
+  remain pending; their auditors are dependency-gated.  The evidence source
+  remains clean at `81af6687a6f0fbf2efc54dc1edf64cc2803894d6`.
+- Neither pending state is a quality result.  Do not change code from the
+  static audits alone.  Ingest the K=4 raw/component classification first,
+  or the K=1 restarted trajectory plus FSC/FSC-AUC if that chain starts
+  first.  Any K=4 component proposal requires the frozen multistratum repeat
+  and a same-physical-GPU end-to-end Hungarian per-class FSC/FSC-AUC
+  comparison.
+
 Authoritative status on 2026-07-17:
 
 - The same-A100 real-10076 K=1 run matches all 18 forced RELION numbered
