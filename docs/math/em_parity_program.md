@@ -232,44 +232,45 @@ checkpoint.
 
 ### Next experiment
 
-Authoritative checkpoint on 2026-07-30 at 22:23 ET:
+Authoritative checkpoint on 2026-07-31 at 04:13 ET:
 
-- The published PR lineage includes documentation checkpoint
-  `77e099905c2ad952dab614e2e99568505fb74cfe`.  Fixed metrics are K=1
+- Published PR HEAD is
+  `72a0a3969a5ceca304c59403ae69a6e7b68122db`. Fixed metrics remain K=1
   `28/34` strict FSC/FSC-AUC, `32/34` topology, and `34/34` evaluated;
-  K=4 is `41/60` direct per-class FSC-AUC and `9/15` all-class iterations.
-  The separate non-scoring K=4 exact-device causal boundary is `2/4`:
-  native target operand replay and fixed target raw diff2 pass, while the
-  complete active-table raw-diff2 and combined-score paths remain unequal.
-- The active K=4 hypothesis is the V17 representative at native candidate
-  `66561`, mapped RECOVAR rotation `954`, native rotation `1738`, and
-  translation `13`.  Native job `11813655` replayed
-  `516.3260498046875` bitwise.  Corrected RECOVAR contribution job
-  `11814215` is resource-pending on the pinned A100 node; exact-device
-  comparator `11814470` and outcome-safe classification audit `11814788`
-  are dependency-pending.  Their submitted launchers passed a fresh static
-  fail-closed audit, and the science source/output-owner gates remain clean.
-- Before the single-candidate result, a threshold-free three-rotation
-  replication cohort was frozen from V17 ranks 1--3: candidates
-  `66561`, `62317`, and `63564`.  It spans positive one-ULP, positive
-  two-ULP, and negative two-ULP raw residuals.  No follow-up job or
-  production change is authorized until the current chain completes and
-  re-hashes.
-- The active K=1 causal gate is still the live-versus-serialized low-shell
-  noise-state restart.  Read-only inspection of the immutable submitted
-  scripts leaves one potentially admissible owner per arm: iteration 0 job
-  `11785428` followed by robust auditor `11791340`, and iteration 1 job
-  `11785547` followed by robust auditor `11791341`; pair auditor `11791712`
-  binds those two reports.  Job `11785170` is pinned to superseded launcher
-  and analysis bytes and must fail closed before science; downstream jobs
-  `11791339` and `11791711` therefore cannot yield admissible evidence.  No
-  job was cancelled, signalled, reprioritized, or otherwise altered.  The
-  evidence source remains clean at
+  K=4 remains `41/60` direct per-class FSC-AUC and `9/15` all-class
+  iterations. The separate non-scoring K=4 exact-device causal boundary
+  remains `2/4`.
+- K=4 job `11820573` completed the full 100,000-particle four-class sparse
+  E/M pass and wrote the targeted pass-2, contribution, and device-signature
+  artifacts, then failed after capture when its current-size `79^3`
+  accumulator reached generic final reconstruction. The recapture audit
+  rejected a science conclusion because neither independent recapture was
+  globally repeatable against the sealed source. At the V17 representative,
+  continuing through contribution reproduced the native value by one ULP,
+  while stopping after pass 2 reproduced the sealed value.
+- Commit `d1fb8e52` adds an explicit contribution-stop boundary so the
+  diagnostic exits only after the contribution and requested device signature
+  exist, without falling into final reconstruction. Same-observer retry
+  `11822111` is resource-pending at zero elapsed on the exact A100 node.
+  Existing operand comparator `11822185` remains dependency-pending through
+  `afterok:11822111`.
+- The retry launcher's value-equality checks do not literally prove the stated
+  bitwise contract for signed zeros or distinct NaN payloads. Commit
+  `72a0a396` adds a strict per-element byte auditor with structured incomplete
+  and mismatch reports. CPU audit `11822605` is dependency-pending through
+  `afterany:11822111`; it cannot alter the producer and cannot make a scoring
+  claim. A strict mismatch rejects any downstream causal interpretation even
+  if the older value-equality gate passes.
+- The active K=1 causal gate remains the live-versus-serialized low-shell
+  noise-state restart. Iteration-0 owner `11785428` and iteration-1 owner
+  `11785547` remain pending at zero elapsed on the exact A100 node; robust
+  auditors `11791340` and `11791341` and pair auditor `11791712` remain
+  dependency-pending. The evidence source remains clean at
   `81af6687a6f0fbf2efc54dc1edf64cc2803894d6`.
-- Neither pending state is a quality result.  Do not change code from the
-  static audits alone.  Ingest the K=4 raw/component classification first,
-  or the K=1 restarted trajectory plus FSC/FSC-AUC if that chain starts
-  first.  Any K=4 component proposal requires the frozen multistratum repeat
+- Neither pending chain is a quality result. Ingest the strict K=4
+  repeatability report before accepting an operand classification, or ingest
+  the K=1 restarted trajectory plus FSC/FSC-AUC if that chain starts first.
+  Any K=4 production proposal still requires the frozen multistratum repeat
   and a same-physical-GPU end-to-end Hungarian per-class FSC/FSC-AUC
   comparison.
 

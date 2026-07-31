@@ -10736,3 +10736,47 @@ and `9/15` all-class.
 - This is measurement/provenance only. It changes no numerical path,
   tolerance, denominator, baseline, grid/finalization policy, or FSC/FSC-AUC
   result; correlation is not used.
+
+## 2026-07-31 04:13 ET — K=4 contribution-stop and strict repeatability audit
+
+- Job `11820573` completed the full 100,000-particle, four-class sparse pass-2
+  E/M computation and wrote pass-2, contribution, and device-signature
+  artifacts. It then failed after capture because generic final reconstruction
+  interpreted a current-size `79^3 = 493039` accumulator against the final
+  `(512, 512, 512)` layout.
+- An exact recapture audit rejects a causal result. Continue-through-
+  contribution versus sealed has `12,029/344,288` score,
+  `109,184/344,288` probability, `38,982/344,288` reconstruction-probability,
+  and `247,133/344,288` raw-diff2 mismatches. Maximum raw delta is
+  `0.0001220703125`. At RECOVAR rotation row 954 and translation 13,
+  continue-through-contribution is `516.3260498046875` (bits `1140921566`);
+  sealed and stop-after-pass2 are `516.3261108398438` (bits `1140921567`).
+  Classification is `observer_conditioned_raw_target_not_repeatable`.
+- Commit `d1fb8e52` introduces `--stop-after-contribution-dump`. It requires
+  exact particle/class/iteration/half/current-size filters and an exact
+  original index, and exits only after the contribution and requested device
+  signature exist. Focused validation passed 31/31 K-class runner tests and
+  159/159 runnable sparse helper tests, with two GPU-only skips.
+- First contribution-stop job `11821893` failed before science when detached
+  checkout mtimes triggered an automatic rebuild of unchanged CUDA source.
+  The rebuilt bytes were quarantined, and the shared diagnostic target was
+  restored from an independent copy with SHA-256
+  `9d2ae812b56f7b109d93aefcb32016beaef4d91108a2871def7f1784493f4e28`.
+  Retry `11822111` uses a private non-writable copy with that exact hash and is
+  resource-pending on `della-l07g2`; comparator `11822185` is
+  dependency-pending.
+- The retry launcher states a bitwise contract but uses NumPy value equality,
+  which can accept `+0.0` versus `-0.0` and distinct NaN payloads. Commit
+  `72a0a396` adds `scripts/audit_em_k4_contribution_repeatability.py`, which
+  compares keys, shapes, dtypes, and per-element bytes and writes structured
+  reports for exact, unequal, and missing archives. Its focused tests pass
+  6/6, including signed-zero and NaN-payload regressions; a real 100k artifact
+  self-check passes 3/3 archive gates.
+- CPU audit `11822605` depends on `afterany:11822111`, so it records the exact
+  boundary even if the producer fails. It is non-scoring and cannot authorize
+  a component, tolerance, production change, FSC claim, or correlation.
+  Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_contribution_strict_afterany_72a0a396_20260731T0410ET`.
+- Fixed scores remain K=1 `28/34` strict, `32/34` topology, `34/34`
+  evaluated; K=4 `41/60` direct and `9/15` all-class. The non-scoring K=4
+  causal boundary remains `2/4`.
