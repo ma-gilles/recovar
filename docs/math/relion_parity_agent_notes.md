@@ -11065,3 +11065,55 @@ and `9/15` all-class.
 - Job `11830484` was not altered and continues its exploratory arm 2.
   Retry `11831421` is independent; no existing process or Slurm job was
   modified or interrupted.
+
+## 2026-07-31 09:54 ET — clean effective operands localize drift upstream
+
+- Job `11831421` completed `0:0` in `01:17:30` on `della-l07g5`, UUID
+  `GPU-acaaefb4-8c05-10ea-0c60-c9f85e7a81f8`. Arm wall times were `2,195`
+  and `2,255` seconds. Both ran in one allocation from clean
+  `db1ab501570b507ac29e262a9204f46fb37b28f8` source with private CUDA
+  SHA-256
+  `03b09e26d1af1962f649cdb6221e40e1736d2cff777e2c5c045ad268c13cc212`
+  and unchanged inode/mtime/size/mode signature.
+- Both capture manifests, the complete static-input manifest, and the
+  analyzer-output manifest pass. Analyzer stderr is empty; the only chain
+  stderr line is the expected non-fatal missing-`cuobjdump` inspection
+  warning.
+- The complete report classifies
+  `first_captured_divergence_shifted_image`. Identity, all candidate/pair
+  topology, projection (`2,441,216` elements), score weight (`596`), half
+  weight (`596`), high-shell scalar, and both same-arm raw-cost replays are
+  exact.
+- The shifted score image differs in `16,983/69,136` complex elements, over
+  `161/596` score pixels. Active raw costs differ in `11,918/109,184`
+  float32 values, maximum delta `0.0001220703125`. Replacing only the shifted
+  image removes all raw mismatches exactly.
+- Scale-sensitive shifted-image metrics are relative L2
+  `4.1471213195119664e-08`, p95 `3.5799955383190346e-05`, maximum
+  `0.00034526698300124393`; raw metrics are relative L2
+  `3.234282786377881e-08`, p95 `6.103515625e-05`, maximum
+  `0.0001220703125`. Both relative errors are below the existing fixed
+  material threshold `5e-7`; no correlation was computed.
+- Arm capture SHA-256 values:
+  `abdefb6609ecee27bf3ac7ad9945eb795e980d908e5e4dc9705202c881e4727f`
+  and
+  `92fce3a08ec622051eac208e228069e59c2f756c100538fea96b79176bbd8114`.
+  Raw/chain report SHA-256 values:
+  `8feb772f79278a09f2b9363f4c92c0c6d7189d3fabde513edb275e9506f9666f`
+  and
+  `a6f30e7b7e97c4f8cf650c436fad111842dac85e04ca71a674cc2c340f74e61b`.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_effective_operands_retry3_db1ab501_20260731T0810ET`.
+- The next bounded diagnostic replays the sealed particle-`53722` raw image,
+  normalization, and integer shift four times through
+  `relion_preprocess_real_f32`. The fixed denominator is `9`: three
+  comparisons each at normalized/shifted real, soft-masked real, and masked
+  FFT. It reports exact counts and scale-sensitive relative-L2/p95/max
+  against the existing `5e-7` floor and saves replay arrays.
+  `scripts/analyze_em_k4_preprocess_replay.py` and its five focused CPU tests
+  implement the outcome-independent classifier.
+- This result and the next replay are non-scoring. Fixed K=1 remains
+  `28/34` strict, `32/34` topology, `34/34` evaluated; fixed K=4 remains
+  `41/60` direct and `9/15` all-class; causal boundary remains `2/4`.
+- No Codex process or Slurm job was killed, signalled, suspended, cancelled,
+  reprioritized, requeued, held, released, or otherwise altered.

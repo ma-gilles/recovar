@@ -14145,3 +14145,62 @@ unique exact maximum; any tie remains unresolved.  This guard does not
 authorize another science job, production change, scorecard change, or
 FSC/FSC-AUC claim.  The complete affected K=4 causal/scorecard unit slice
 passes `110/110`, including raw and centered exact-tie cases.
+
+### Clean same-A100 effective-operand result
+
+Authoritative retry `11831421` completed `0:0` in `01:17:30` on
+`della-l07g5`, physical UUID
+`GPU-acaaefb4-8c05-10ea-0c60-c9f85e7a81f8`.  Both arms ran sequentially
+under one allocation from clean source
+`db1ab501570b507ac29e262a9204f46fb37b28f8`, with one private CUDA library
+whose SHA-256 remained
+`03b09e26d1af1962f649cdb6221e40e1736d2cff777e2c5c045ad268c13cc212`
+before and after both arms and the analyzer.  Both capture manifests, all
+static inputs, and the analyzer-output manifest pass.
+
+The report is complete and classifies
+`first_captured_divergence_shifted_image`.  Identity, candidate topology,
+packed pair mapping, projected references (`2,441,216` elements), score
+weights (`596`), half weights (`596`), high-shell scalar, and each arm's
+self-replay are bitwise exact.  Only the effective translated score image
+differs: `16,983/69,136` complex64 elements.  Active raw costs differ in
+`11,918/109,184` float32 values, maximum absolute delta
+`0.0001220703125`; substituting only the second arm's shifted image into the
+first removes all `11,918` mismatches exactly.
+
+Independent scale-sensitive measurement gives shifted-image relative L2
+`4.1471213195119664e-08`, p95 absolute delta
+`3.5799955383190346e-05`, and maximum absolute delta
+`0.00034526698300124393`.  Active raw relative L2 is
+`3.234282786377881e-08`, with p95 and maximum absolute deltas
+`6.103515625e-05` and `0.0001220703125`.  Both are below the existing fixed
+preprocessing material threshold `5e-7`; correlation is not computed.
+
+Capture SHA-256 values are
+`abdefb6609ecee27bf3ac7ad9945eb795e980d908e5e4dc9705202c881e4727f`
+and
+`92fce3a08ec622051eac208e228069e59c2f756c100538fea96b79176bbd8114`.
+The raw report and chain report SHA-256 values are
+`8feb772f79278a09f2b9363f4c92c0c6d7189d3fabde513edb275e9506f9666f`
+and
+`a6f30e7b7e97c4f8cf650c436fad111842dac85e04ca71a674cc2c340f74e61b`.
+The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_effective_operands_retry3_db1ab501_20260731T0810ET`.
+
+This confirms an upstream numerical floor, not a score-kernel reduction or
+candidate-topology defect.  The pointwise score-translation kernel contains
+no reduction; the immediately upstream RELION-compatible soft-mask
+background estimator uses multi-block float32 atomics.  A bounded replay of
+the already sealed particle-`53722` preprocessing input is therefore the next
+diagnostic.  `scripts/analyze_em_k4_preprocess_replay.py` fixes four
+executions and reports a stable `9` comparisons: three each for normalized
+and integer-shifted real images, soft-masked real images, and masked Fourier
+images.  It reports bitwise equality plus relative-L2/p95/max against the
+pre-existing `5e-7` material threshold, saves all replay arrays, computes no
+correlation, and cannot change a scorecard.
+
+The fixed metrics remain unchanged: K=1 strict `28/34`, topology `32/34`,
+evaluated `34/34`; K=4 direct per-class FSC-AUC `41/60`, all-class iterations
+`9/15`; exact-device causal boundary `2/4`.  No Codex process or Slurm job
+was killed, signalled, suspended, cancelled, reprioritized, requeued, held,
+released, or otherwise altered.
