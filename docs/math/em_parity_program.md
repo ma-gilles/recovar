@@ -14548,3 +14548,69 @@ immutable quality metrics remain K=1 strict `28/34`, topology `32/34`,
 evaluated `34/34`; K=4 direct `41/60`, all-class `9/15`; K=4 exact-device
 causal `2/4`. Correlation was not computed. No Codex process or existing
 Slurm job was modified or interrupted.
+
+## 2026-07-31 K=1 continuation sampling-perturbation boundary
+
+A deterministic cross-arm analyzer now compares the uninterrupted case-22
+iteration-2 preprocessing and coarse operands against the resolution-only
+direct iteration-1 continuation. It loads the passive capture formats through
+their fail-closed validators, pairs all artifacts by exact part/stack
+identity, and reports scale-sensitive absolute and relative-L2 metrics.
+Correlation is absent.
+
+The fixed 14-particle result is:
+
+| Captured boundary | Bitwise exact | Evaluated | Maximum absolute gap | Maximum relative L2 |
+| --- | ---: | ---: | ---: | ---: |
+| raw input real image | 14 | 14 | 0 | 0 |
+| normalization correction | 0 | 14 | 3.09944153e-6 | 2.26335532e-6 |
+| rounded old offset | 14 | 14 | 0 | 0 |
+| rotation key | 14 | 14 | n/a | n/a |
+| local rotation index | 14 | 14 | n/a | n/a |
+| Euler matrix | 0 | 14 | 0.143614752 | 0.117463678 |
+| translation grid | 0 | 14 | 0.0241493657 | 0.310371525 |
+| projected-reference real | 0 | 14 | 0.0125608065 | 0.169790122 |
+| translated-image real | 0 | 14 | 33.7238340 | 0.943291482 |
+
+The topology identities are exact while the geometry values diverge. The
+sampling STAR sequence makes the cause explicit:
+
+| State | Perturbation |
+| --- | ---: |
+| serialized source iteration 1 | -0.04799 |
+| continuation output iteration 1 | 0.460047 |
+| uninterrupted iteration 2 | 0.409490 |
+| continuation iteration 2 | -0.08248 |
+
+`HealpixSampling::write` serializes `_rlnSamplingPerturbInstance`, but stock
+`HealpixSampling::read` loads only the perturbation factor. The continuation
+therefore enters sampling initialization from zero. Its first deterministic
+draw reproduces the fresh iteration-0 value `0.460047`, not the serialized
+iteration-1 state. The iteration-2 reset then advances by the same wrapped
+`+0.45748` increment in both processes, producing `0.409490` only for the
+uninterrupted arm.
+
+The fixed classification is
+`serialized_sampling_perturbation_discarded_before_euler_and_translation_geometry`.
+The checked implementation is
+`scripts/analyze_em_k1_continuation_operand_boundary.py`; focused tests are
+`tests/unit/test_analyze_em_k1_continuation_operand_boundary.py`. The
+immutable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_continuation_operand_boundary_v1_20260731T1450ET/analysis/CONTINUATION_OPERAND_BOUNDARY_V1.json`
+(SHA-256
+`520c4eaba86f0f9641963420433463084f8e78e7e59dee52bb106241e48e3aed`).
+
+Private diagnostic RELION commit
+`54616ee5ab4d6f61849eea50e9ebde74bb7db228` reads the serialized
+perturbation and restores it after sampling-topology initialization for
+continuations. It includes the preceding continuation-resolution change.
+The binary SHA-256 is
+`cb98144eba1c2fee962978d38307ae6fa31d27729945dfeb3416b0728788cf7c`.
+Same-A100 job `11842188` was predeclared and submitted to run fresh, stock
+direct iteration-1 continuation, and sampling-preserving continuation
+sequentially on the unchanged 42-gate denominator. This paragraph records
+submission only; it does not claim the in-progress hypothesis passed.
+
+No production RECOVAR behavior, tolerance, baseline, or frozen quality
+score changed. No Codex process or existing Slurm job was modified or
+interrupted.
