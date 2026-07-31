@@ -10823,6 +10823,12 @@ and `9/15` all-class.
   `a922d8a71b0e32212392a94a9f3efd81f51dd9f633ab0c710c08df74300dfe12`;
   run root is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_contribution_stop_repeat_retry2_3gpu_d1fb8e52_20260731T0447ET`.
+- A normalized launcher audit accepts retry2 as
+  `allocation_and_provenance_only_change`: the launchers are byte-identical
+  after replacing only the job/launcher names, exclusive run/runtime roots,
+  and the predeclared two-to-three-GPU allocation/count gate. There are zero
+  science-relevant differences after normalization. The JSON SHA-256 is
+  `9b21a05bf8b037ae13be5c0059e6899c6dca2e84f742c1a527395f4f55f66571`.
 - Strict outcome-safe audit `11823392` depends on `afterany:11823179`, uses
   frozen analyzer source `e87565c5`, and remains dependency-pending. Its
   launcher SHA-256 is

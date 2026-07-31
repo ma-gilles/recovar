@@ -272,7 +272,13 @@ Authoritative checkpoint on 2026-07-31 at 04:53 ET:
 - Isolated retry `11823179` requests the three A100 slots not held by the
   long-lived index-0 job, still fails closed unless the pinned UUID is present,
   and exposes only that UUID to the process. It is pending at zero elapsed for
-  resources. Strict `afterany` audit `11823392`, frozen at `e87565c5`, is
+  resources. A normalized launcher audit classifies the retry as
+  `allocation_and_provenance_only_change`: after replacing only fixed
+  job/launcher names, exclusive roots, and the predeclared two-to-three-GPU
+  allocation/count gate, the launcher bytes are identical and the
+  science-relevant difference count is zero. Its JSON SHA-256 is
+  `9b21a05bf8b037ae13be5c0059e6899c6dca2e84f742c1a527395f4f55f66571`.
+  Strict `afterany` audit `11823392`, frozen at `e87565c5`, is
   dependency-pending and will produce complete mismatch accounting or an
   explicit missing-artifact rejection.
 - The active K=1 causal gate remains the live-versus-serialized low-shell
