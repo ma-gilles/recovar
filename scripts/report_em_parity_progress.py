@@ -18,6 +18,15 @@ from scripts.summarize_em_k4_causal_boundary_scorecard import (  # noqa: E402
 from scripts.summarize_em_k4_causal_boundary_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k4_causal,
 )
+from scripts.summarize_em_k4_class_fsc_auc_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K4_CLASS_SCORECARD,
+)
+from scripts.summarize_em_k4_class_fsc_auc_scorecard import (  # noqa: E402
+    failed_checks as k4_failed_checks,
+)
+from scripts.summarize_em_k4_class_fsc_auc_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k4_classes,
+)
 from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     DEFAULT_FIXTURE_MANIFEST,
     DEFAULT_K4_SNAPSHOT,
@@ -28,7 +37,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v2"
+SCHEMA = "recovar.em_parity_progress.v3"
 
 
 def _panel(
@@ -72,6 +81,7 @@ def build_progress(
     scorecard_path: Path = DEFAULT_SCORECARD,
     fixture_manifest_path: Path = DEFAULT_FIXTURE_MANIFEST,
     k4_snapshot_path: Path = DEFAULT_K4_SNAPSHOT,
+    k4_class_path: Path = DEFAULT_K4_CLASS_SCORECARD,
     k4_causal_path: Path = DEFAULT_K4_CAUSAL_SCORECARD,
 ) -> dict[str, object]:
     """Validate every fixed source and return the consolidated progress report."""
@@ -79,6 +89,7 @@ def build_progress(
     scorecard = load_and_validate(scorecard_path)
     load_and_validate_fixture_manifest(fixture_manifest_path, scorecard)
     k4_snapshot = load_and_validate_k4_snapshot(k4_snapshot_path)
+    k4_class_scorecard = load_and_validate_k4_classes(k4_class_path)
     k4_causal = load_and_validate_k4_causal(k4_causal_path)
 
     k1_counts = scorecard["current_snapshot"]["counts"]
@@ -89,6 +100,13 @@ def build_progress(
     k4_iteration_denominator = k4_snapshot["numbered_iterations"]
     k4_classes = k4_snapshot["classes"]
     k4_causal_summary = k4_causal["summary"]
+    if (
+        k4_class_scorecard["summary"]["pass"] != k4_snapshot["direct_fsc_auc_checks_passed"]
+        or k4_class_scorecard["summary"]["evaluated"] != k4_snapshot["direct_fsc_auc_checks_total"]
+        or k4_class_scorecard["summary"]["iterations_all_classes_passed"]
+        != k4_snapshot["iterations_all_classes_passed"]
+    ):
+        raise ValueError("K=4 class scorecard does not replay the fixed trajectory snapshot")
     k1_strict_failures = [
         _case_identity(case) | {"intermediate_result": case["intermediate_result"]}
         for case in scorecard["cases"]
@@ -174,6 +192,7 @@ def build_progress(
             "k1_strict_failures": k1_strict_failures,
             "k1_topology_failures": k1_topology_failures,
             "k4_direct_failures_by_iteration": k4_direct_failures,
+            "k4_direct_failures": k4_failed_checks(k4_class_scorecard),
             "k4_all_class_failure_iterations": [record["iteration"] for record in k4_direct_failures],
             "k4_causal_failures": k4_causal_failures,
         },
@@ -181,6 +200,7 @@ def build_progress(
             "k1_scorecard": _input_record(scorecard_path),
             "k1_fixture_manifest": _input_record(fixture_manifest_path),
             "k4_trajectory_snapshot": _input_record(k4_snapshot_path),
+            "k4_class_scorecard": _input_record(k4_class_path),
             "k4_causal_scorecard": _input_record(k4_causal_path),
         },
     }
@@ -211,6 +231,7 @@ def render_markdown(progress: dict[str, object]) -> str:
         )
         or "none"
     )
+    k4_direct_classes = ", ".join(record["id"] for record in remaining["k4_direct_failures"]) or "none"
     k4_causal = ", ".join(case["id"] for case in remaining["k4_causal_failures"]) or "none"
     lines.extend(
         [
@@ -220,6 +241,7 @@ def render_markdown(progress: dict[str, object]) -> str:
             f"Remaining K=1 strict cases: {k1_strict}.",
             f"Remaining K=1 topology cases: {k1_topology}.",
             f"Remaining K=4 direct iterations: {k4_direct}.",
+            f"Remaining K=4 direct classes: {k4_direct_classes}.",
             f"Remaining K=4 causal cases: {k4_causal}.",
             "",
             str(progress["metric_policy"]),

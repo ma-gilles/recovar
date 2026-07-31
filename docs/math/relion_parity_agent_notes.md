@@ -10717,3 +10717,22 @@ and `9/15` all-class.
 - This exposes where the fixed counts can improve in PR-ready Markdown and
   machine-readable JSON without changing any result, tolerance, denominator,
   FSC/FSC-AUC gate, or scorecard.
+
+## 2026-07-31 00:20 ET — fixed 60-cell K=4 class checklist
+
+- The pinned K=4 trajectory evidence contains every direct per-class
+  cross-engine FSC-AUC, while the previous checked ledger exposed only the
+  per-iteration pass counts.
+- `docs/math/em_k4_class_fsc_auc_scorecard_v1.json` now freezes all 15 x 4
+  cells and binds them to the existing K=4 snapshot SHA-256
+  `bc10d0555488b22f0bc8d54afe5afc5288064ddb4708bd1c75f3b55dd4c0060a`
+  and trajectory SHA-256
+  `5e030ab63c779b8e3050c8fc63ad4efabcc3e353d3b77ce047da8c20e63076fd`.
+- The generated Markdown shows 41 checked and 19 unchecked cells with their
+  exact iteration/class identities and FSC-AUC values. The first failed cell
+  is `k4-it10-class2`; all failures remain in the fixed 60-cell denominator.
+- The consolidated V3 reporter validates this fifth source and emits all 19
+  failed cell identities in both JSON and PR-ready Markdown.
+- This is measurement/provenance only. It changes no numerical path,
+  tolerance, denominator, baseline, grid/finalization policy, or FSC/FSC-AUC
+  result; correlation is not used.

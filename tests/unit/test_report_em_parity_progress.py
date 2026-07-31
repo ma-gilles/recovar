@@ -11,7 +11,7 @@ from scripts.report_em_parity_progress import build_progress, render_markdown
 def test_reports_all_fixed_em_parity_panels() -> None:
     progress = build_progress()
 
-    assert progress["schema"] == "recovar.em_parity_progress.v2"
+    assert progress["schema"] == "recovar.em_parity_progress.v3"
     assert progress["scorecard_change_admissible"] is False
     assert progress["k1_strict_history"] == [20, 21, 22, 23, 25, 26, 27, 28]
     assert [
@@ -36,6 +36,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "k1_scorecard",
         "k1_fixture_manifest",
         "k4_trajectory_snapshot",
+        "k4_class_scorecard",
         "k4_causal_scorecard",
     }
     assert all(len(record["sha256"]) == 64 for record in progress["inputs"].values())
@@ -90,6 +91,122 @@ def test_reports_all_fixed_em_parity_panels() -> None:
             {"iteration": 14, "passed": 0, "failed": 4},
             {"iteration": 15, "passed": 0, "failed": 4},
         ],
+        "k4_direct_failures": [
+            {
+                "id": "k4-it10-class2",
+                "iteration": 10,
+                "class": 2,
+                "fsc_auc": 0.9948890936244424,
+            },
+            {
+                "id": "k4-it11-class1",
+                "iteration": 11,
+                "class": 1,
+                "fsc_auc": 0.9948252391062554,
+            },
+            {
+                "id": "k4-it11-class2",
+                "iteration": 11,
+                "class": 2,
+                "fsc_auc": 0.9934831677593646,
+            },
+            {
+                "id": "k4-it11-class3",
+                "iteration": 11,
+                "class": 3,
+                "fsc_auc": 0.9933616944645686,
+            },
+            {
+                "id": "k4-it11-class4",
+                "iteration": 11,
+                "class": 4,
+                "fsc_auc": 0.9946532315314668,
+            },
+            {
+                "id": "k4-it12-class2",
+                "iteration": 12,
+                "class": 2,
+                "fsc_auc": 0.9940211272807769,
+            },
+            {
+                "id": "k4-it12-class3",
+                "iteration": 12,
+                "class": 3,
+                "fsc_auc": 0.9936717912244045,
+            },
+            {
+                "id": "k4-it13-class1",
+                "iteration": 13,
+                "class": 1,
+                "fsc_auc": 0.9948790904352033,
+            },
+            {
+                "id": "k4-it13-class2",
+                "iteration": 13,
+                "class": 2,
+                "fsc_auc": 0.9933167865795268,
+            },
+            {
+                "id": "k4-it13-class3",
+                "iteration": 13,
+                "class": 3,
+                "fsc_auc": 0.9924670644050795,
+            },
+            {
+                "id": "k4-it13-class4",
+                "iteration": 13,
+                "class": 4,
+                "fsc_auc": 0.9944513966582168,
+            },
+            {
+                "id": "k4-it14-class1",
+                "iteration": 14,
+                "class": 1,
+                "fsc_auc": 0.9935362674564922,
+            },
+            {
+                "id": "k4-it14-class2",
+                "iteration": 14,
+                "class": 2,
+                "fsc_auc": 0.9919011463930602,
+            },
+            {
+                "id": "k4-it14-class3",
+                "iteration": 14,
+                "class": 3,
+                "fsc_auc": 0.9915812757362203,
+            },
+            {
+                "id": "k4-it14-class4",
+                "iteration": 14,
+                "class": 4,
+                "fsc_auc": 0.9943106599903103,
+            },
+            {
+                "id": "k4-it15-class1",
+                "iteration": 15,
+                "class": 1,
+                "fsc_auc": 0.9936005126730775,
+            },
+            {
+                "id": "k4-it15-class2",
+                "iteration": 15,
+                "class": 2,
+                "fsc_auc": 0.9912818890621345,
+            },
+            {
+                "id": "k4-it15-class3",
+                "iteration": 15,
+                "class": 3,
+                "fsc_auc": 0.9900911277299856,
+            },
+            {
+                "id": "k4-it15-class4",
+                "iteration": 15,
+                "class": 4,
+                "fsc_auc": 0.9938280816577081,
+            },
+        ],
         "k4_all_class_failure_iterations": [10, 11, 12, 13, 14, 15],
         "k4_causal_failures": [
             {"id": "global-raw-diff2", "name": "Complete active-table raw diff2"},
@@ -115,6 +232,14 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
         "Remaining K=4 direct iterations: 10 (1/4 failed), 11 (4/4 failed), "
         "12 (2/4 failed), 13 (4/4 failed), 14 (4/4 failed), 15 (4/4 failed)." in rendered
     )
+    assert (
+        "Remaining K=4 direct classes: k4-it10-class2, k4-it11-class1, "
+        "k4-it11-class2, k4-it11-class3, k4-it11-class4, k4-it12-class2, "
+        "k4-it12-class3, k4-it13-class1, k4-it13-class2, k4-it13-class3, "
+        "k4-it13-class4, k4-it14-class1, k4-it14-class2, k4-it14-class3, "
+        "k4-it14-class4, k4-it15-class1, k4-it15-class2, k4-it15-class3, "
+        "k4-it15-class4." in rendered
+    )
     assert "Remaining K=4 causal cases: global-raw-diff2, global-combined-score." in rendered
     assert "correlation is not used" in rendered
 
@@ -130,4 +255,5 @@ def test_renders_completed_gap_lists_without_empty_punctuation() -> None:
     assert "Remaining K=1 strict cases: none." in rendered
     assert "Remaining K=1 topology cases: none." in rendered
     assert "Remaining K=4 direct iterations: none." in rendered
+    assert "Remaining K=4 direct classes: none." in rendered
     assert "Remaining K=4 causal cases: none." in rendered

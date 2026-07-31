@@ -281,15 +281,19 @@ pixi run python scripts/report_em_parity_progress.py --format markdown
 ```
 
 The consolidated report also names the exact remaining K=1 strict/topology
-cases, the K=4 iterations with failed class checks and their failed-class
-counts, and the remaining non-scoring K=4 causal cases. These gap lists are
-derived from the same validated, versioned inputs as the aggregate panels, so
-they cannot silently drift from the fixed denominators.
+cases, every failed K=4 iteration/class cell, and the remaining non-scoring
+K=4 causal cases. The K=4 class checklist, including all 60 measured FSC-AUC
+values and checkmarks, can be validated independently:
+
+```bash
+pixi run python scripts/summarize_em_k4_class_fsc_auc_scorecard.py --check
+```
 
 The reporter validates the frozen K=1 scorecard and fixture manifest, the
-fixed K=4 trajectory snapshot, and the separate K=4 causal scorecard before
-emitting any count.  It cannot modify a scorecard or authorize a production
-change.
+fixed K=4 trajectory snapshot, its 60-cell class-level scorecard, and the
+separate K=4 causal scorecard before emitting any count. These gap lists
+cannot silently drift from the fixed denominators. The reporter cannot modify
+a scorecard or authorize a production change.
 
 Authoritative status on 2026-07-17:
 
