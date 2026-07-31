@@ -11208,3 +11208,48 @@ and `9/15` all-class.
   non-scoring while active. Fixed K=1/K=4/causal metrics remain `28/34`,
   `32/34`, `34/34`, `41/60`, `9/15`, and `2/4`; correlation is forbidden.
   No existing process or Slurm job was modified or interrupted.
+
+## 2026-07-31 12:05 ET — iteration-0 continuation repaired and resubmitted
+
+- Job `11836574` completed its fresh arm and then failed naturally `1:0`
+  before any restart capture or map existed. The fresh arm sealed all
+  `14` component, `14` direct-operand, and `14` preprocessing captures.
+  Direct-operand and preprocessing validators passed `14/14`; the legacy
+  component validator returned its permitted diagnostic exit `1` because
+  two replay p95 values were `6.103515625e-5` against its `5e-5` gate.
+- Restart-0 failed in `MlModel::initialiseFromImages` with an empty reference
+  filename. RELION used `iter == 0` as a fresh-run proxy even though
+  `--continue` had already loaded model/data/sampling state. No restart
+  science, score report, map report, pair report, or completion ledger was
+  written; job `11836574` is immutable failed provenance only.
+- A private diagnostic RELION repair distinguishes a true fresh run from an
+  iteration-0 continuation. It preserves the loaded references, data,
+  sampling, data-versus-prior arrays, and fresh current-resolution sentinel,
+  and restores non-serialized `--firstiter_cc` / `--ini_high` controls.
+  Source commit is
+  `ed53c60d83125902c456b7fc5461c78c3966b306`; final binary SHA-256 is
+  `a274dda1b0b40478ddd7f2b81d144bec20510db369225f365f1be7d27ac45309`.
+- The exact final binary passed a pool-matched one-iteration A100
+  qualification. Fresh versus restart particle identities, subsets, groups,
+  classes, poses, translations, and sampling are exact for `3,000/3,000`
+  rows. Half-1, half-2, and merged FSC-AUC are
+  `0.9999999999870963`, `0.9999999999864432`, and
+  `0.9999999999911986`; minimum non-DC shell FSC is
+  `0.9999999998870037`. Norm and likelihood differences are six-decimal
+  STAR rounding only. Correlation was not computed.
+- An iteration-1 no-op control produced identical non-path
+  optimiser/data/sampling/model tables and bitwise-identical half maps with
+  patched and original binaries. This bounds the private change to the
+  iteration-0 continuation path.
+- Independent corrected job `11838510` started at `12:05:45 ET` on
+  `della-l07g4`. It runs fresh, restart-0, and restart-1 sequentially on one
+  scheduler-selected A100. The launcher additionally fails closed on the
+  fresh iteration-0 sentinel/schedule and on exact restart-0 iteration-1
+  state across all `3,000` rows before accepting iteration-2 evidence.
+  Launcher SHA-256:
+  `70401a2e7b82df4c7bedd0972570f76b98783cf47ecf32c2cb38d8bb1c206b02`.
+  Predeclaration SHA-256:
+  `da9bb7e0054f244ac352a0e703a6724e1f5513eb3eac31b7feca784ad542fb15`.
+- The corrected job remains non-scoring while active. Fixed K=1/K=4/causal
+  metrics remain `28/34`, `32/34`, `34/34`, `41/60`, `9/15`, and `2/4`.
+  No existing process or Slurm job was modified or interrupted.

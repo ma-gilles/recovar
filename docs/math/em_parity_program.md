@@ -412,6 +412,55 @@ fixed analyzers complete. K=1 remains `28/34` strict, `32/34` topology, and
 `34/34` evaluated; K=4 remains `41/60` direct and `9/15` all-class. No
 existing process or Slurm job was modified or interrupted.
 
+#### Iteration-0 continuation repair
+
+Job `11836574` completed and sealed only its fresh arm, then failed naturally
+before restart science. Its direct-operand and preprocessing capture gates
+passed `14/14`, but restart-0 entered RELION's fresh-run initialization
+because the serialized iteration number was zero and attempted to load an
+empty reference filename. It wrote no restart capture, score/map report, pair
+report, or completion ledger. This is orchestration/provenance evidence, not a
+result for or against the serialized-restart hypothesis.
+
+Private diagnostic RELION source commit
+`ed53c60d83125902c456b7fc5461c78c3966b306` repairs only this boundary. It
+distinguishes `--continue` from a true fresh run; preserves already loaded
+data, references, sampling, and leader/follower data-versus-prior arrays;
+avoids a second pixel-to-Angstrom sampling conversion and reference low-pass;
+and restores the internal zero current-resolution sentinel that the
+iteration-0 model serializes as `inf` Angstrom. Because RELION does not
+serialize its first-iteration controls, restart-0 also restates
+`--firstiter_cc --ini_high 30 --pool 3`. The pinned executable SHA-256 is
+`a274dda1b0b40478ddd7f2b81d144bec20510db369225f365f1be7d27ac45309`.
+
+The exact final binary passed a local pool-matched A100 qualification at the
+iteration-1 boundary:
+
+| Fixed control | Result |
+| --- | ---: |
+| particle identity/subset/group/class/pose/translation | exact `3,000/3,000` |
+| sampling STAR | exact |
+| half-1 fresh/restart FSC-AUC | `0.9999999999870963` |
+| half-2 fresh/restart FSC-AUC | `0.9999999999864432` |
+| merged fresh/restart FSC-AUC | `0.9999999999911986` |
+| minimum non-DC shell FSC | `0.9999999998870037` |
+
+Norm/likelihood differences are at most one six-decimal STAR unit.
+Correlation was forbidden and not computed. A patched-versus-original
+iteration-1 no-op control produced identical non-path tables and
+bitwise-identical half maps, bounding the repair to iteration zero.
+
+Corrected independent job `11838510` started at `12:05:45 ET` on
+`della-l07g4`. It reruns fresh, restart-0, and restart-1 sequentially on one
+A100 and adds fail-closed checks for the fresh iteration-0 sentinel/schedule,
+the fresh-equivalent restart-0 iteration-1 topology, all `3,000` exact
+particle state rows, exact sampling, and exact non-path optimiser state before
+iteration-2 evidence is admissible. Launcher and predeclaration SHA-256 are
+`70401a2e7b82df4c7bedd0972570f76b98783cf47ecf32c2cb38d8bb1c206b02`
+and
+`da9bb7e0054f244ac352a0e703a6724e1f5513eb3eac31b7feca784ad542fb15`.
+The job is non-scoring while active; all fixed scorecards remain unchanged.
+
 The consolidated report also names the exact remaining K=1 strict/topology
 cases, every failed K=4 iteration/class cell, and the remaining non-scoring
 K=4 causal cases. The K=4 class checklist, including all 60 measured FSC-AUC
