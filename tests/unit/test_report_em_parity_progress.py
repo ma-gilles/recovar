@@ -11,7 +11,7 @@ from scripts.report_em_parity_progress import build_progress, render_markdown
 def test_reports_all_fixed_em_parity_panels() -> None:
     progress = build_progress()
 
-    assert progress["schema"] == "recovar.em_parity_progress.v8"
+    assert progress["schema"] == "recovar.em_parity_progress.v9"
     assert progress["scorecard_change_admissible"] is False
     assert progress["k1_strict_history"] == [20, 21, 22, 23, 25, 26, 27, 28]
     assert progress["k1_continuation_initializer_progress"] == {
@@ -54,6 +54,20 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "score_map_denominator": 21,
         "score_map_gain": 0,
     }
+    assert progress["k1_mask_deterministic_progress"] == {
+        "preprocess_baseline_pass": 0,
+        "preprocess_treatment_pass": 3,
+        "preprocess_denominator": 3,
+        "preprocess_gain": 3,
+        "geometry_baseline_pass": 5,
+        "geometry_treatment_pass": 5,
+        "geometry_denominator": 5,
+        "geometry_gain": 0,
+        "score_map_baseline_pass": 17,
+        "score_map_treatment_pass": 17,
+        "score_map_denominator": 21,
+        "score_map_gain": 0,
+    }
     assert [
         (
             panel["id"],
@@ -77,6 +91,9 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         ("k1_norm_roundtrip_preprocess", 2, 2, 2, 100.0, False),
         ("k1_norm_roundtrip_geometry", 5, 5, 5, 100.0, False),
         ("k1_norm_roundtrip_score_map", 17, 21, 21, 81.0, False),
+        ("k1_mask_deterministic_preprocess", 3, 3, 3, 100.0, False),
+        ("k1_mask_deterministic_geometry", 5, 5, 5, 100.0, False),
+        ("k1_mask_deterministic_score_map", 17, 21, 21, 81.0, False),
         ("k4_direct", 41, 60, 60, 68.3, True),
         ("k4_all_class", 9, 15, 15, 60.0, True),
         ("k4_causal", 2, 4, 4, 50.0, False),
@@ -91,6 +108,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "k1_sampling_perturbation_scorecard",
         "k1_sampling_roundtrip_scorecard",
         "k1_norm_roundtrip_scorecard",
+        "k1_mask_deterministic_scorecard",
         "k4_trajectory_snapshot",
         "k4_class_scorecard",
         "k4_causal_scorecard",
@@ -437,6 +455,9 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
     assert "| K=1 normalization-roundtrip preprocessing exactness | **2** | 2 | 2 | 100.0% | no |" in rendered
     assert "| K=1 normalization-roundtrip geometry identity | **5** | 5 | 5 | 100.0% | no |" in rendered
     assert "| K=1 normalization-roundtrip score/map gates | **17** | 21 | 21 | 81.0% | no |" in rendered
+    assert "| K=1 deterministic-mask preprocessing exactness | **3** | 3 | 3 | 100.0% | no |" in rendered
+    assert "| K=1 deterministic-mask geometry identity | **5** | 5 | 5 | 100.0% | no |" in rendered
+    assert "| K=1 deterministic-mask score/map gates | **17** | 21 | 21 | 81.0% | no |" in rendered
     assert "| K=4 direct per-class FSC-AUC | **41** | 60 | 60 | 68.3% | yes |" in rendered
     assert "| K=4 exact-device causal boundary | **2** | 4 | 4 | 50.0% | no |" in rendered
     assert "| K=4 preprocess bitwise replay | **3** | 9 | 9 | 33.3% | no |" in rendered
@@ -467,6 +488,17 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
     assert (
         "K=1 normalization-roundtrip score/map gates on the unchanged denominator: "
         "**17/21 sampling-only → 17/21 treatment (+0)**."
+    ) in rendered
+    assert (
+        "K=1 deterministic-mask preprocessing on the unchanged denominator: "
+        "**0/3 normalization-only → 3/3 treatment (+3)**."
+    ) in rendered
+    assert (
+        "K=1 deterministic-mask geometry on the unchanged denominator: **5/5 normalization-only → 5/5 treatment (+0)**."
+    ) in rendered
+    assert (
+        "K=1 deterministic-mask score/map gates on the unchanged denominator: "
+        "**17/21 normalization-only → 17/21 treatment (+0)**."
     ) in rendered
     assert "Remaining K=1 strict cases: k1-04, k1-05, k1-07, k1-10, k1-22, k1-26." in rendered
     assert "Remaining K=1 topology cases: k1-07, k1-22." in rendered
