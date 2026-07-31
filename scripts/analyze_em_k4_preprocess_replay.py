@@ -401,8 +401,8 @@ def main() -> None:
     args = _parser().parse_args()
     _require(not args.output_json.exists(), f"refusing to overwrite {args.output_json}")
     _require(not args.output_npz.exists(), f"refusing to overwrite {args.output_npz}")
-    configured_cuda = os.environ.get("RECOVAR_CUDA_LIBRARY_PATH")
-    _require(configured_cuda is not None, "RECOVAR_CUDA_LIBRARY_PATH is unset")
+    configured_cuda = os.environ.get("RECOVAR_CUDA_LIB")
+    _require(configured_cuda is not None, "RECOVAR_CUDA_LIB is unset")
     _require(
         Path(configured_cuda).resolve() == args.cuda_library.resolve(),
         "configured CUDA library differs from the declared library",
