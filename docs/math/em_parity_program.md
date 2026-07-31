@@ -232,10 +232,12 @@ checkpoint.
 
 ### Next experiment
 
-Authoritative checkpoint on 2026-07-31 at 04:13 ET:
+Authoritative checkpoint on 2026-07-31 at 04:53 ET:
 
-- Published PR HEAD is
-  `72a0a3969a5ceca304c59403ae69a6e7b68122db`. Fixed metrics remain K=1
+- The published PR lineage includes strict-audit code through
+  `e87565c5d02c5ff3cd7d035c8d225e9047ae13a2` and its NaN-accounting
+  documentation through `39c0cd1af3aa5bee768cea314e830e2f159bff9f`.
+  Fixed metrics remain K=1
   `28/34` strict FSC/FSC-AUC, `32/34` topology, and `34/34` evaluated;
   K=4 remains `41/60` direct per-class FSC-AUC and `9/15` all-class
   iterations. The separate non-scoring K=4 exact-device causal boundary
@@ -251,9 +253,10 @@ Authoritative checkpoint on 2026-07-31 at 04:13 ET:
 - Commit `d1fb8e52` adds an explicit contribution-stop boundary so the
   diagnostic exits only after the contribution and requested device signature
   exist, without falling into final reconstruction. Same-observer retry
-  `11822111` is resource-pending at zero elapsed on the exact A100 node.
-  Existing operand comparator `11822185` remains dependency-pending through
-  `afterok:11822111`.
+  `11822111` received GPUs `41:00.0` and `C1:00.0`, excluding the pinned
+  `81:00.0` UUID, and failed closed with exit `42:0` after three seconds,
+  before import or science. Existing operand comparator `11822185` is
+  `DependencyNeverSatisfied` and remains untouched.
 - The retry launcher's value-equality checks do not literally prove the stated
   bitwise contract for signed zeros or distinct NaN payloads. Commit
   `72a0a396` adds a strict per-element byte auditor with structured incomplete
@@ -262,17 +265,23 @@ Authoritative checkpoint on 2026-07-31 at 04:13 ET:
   corrected historical recapture counts are `18,397`, `12,029`, and `16,531`
   strict raw byte mismatches, not `253,501`, `247,133`, and `251,635`; each
   larger value included 235,104 paired NaNs whose bytes are identical. CPU
-  audit `11822605` is dependency-pending through
-  `afterany:11822111`; it cannot alter the producer and cannot make a scoring
-  claim. A strict mismatch rejects any downstream causal interpretation even
-  if the older value-equality gate passes.
+  audit `11822605` completed successfully and wrote an explicit incomplete,
+  rejected `0/3` report because all three producer archives are absent. Its
+  report SHA-256 is
+  `7e0db0f81931ec54bde2a55fee274303fc77247e722980818d024af700b366d9`.
+- Isolated retry `11823179` requests the three A100 slots not held by the
+  long-lived index-0 job, still fails closed unless the pinned UUID is present,
+  and exposes only that UUID to the process. It is pending at zero elapsed for
+  resources. Strict `afterany` audit `11823392`, frozen at `e87565c5`, is
+  dependency-pending and will produce complete mismatch accounting or an
+  explicit missing-artifact rejection.
 - The active K=1 causal gate remains the live-versus-serialized low-shell
   noise-state restart. Iteration-0 owner `11785428` and iteration-1 owner
   `11785547` remain pending at zero elapsed on the exact A100 node; robust
   auditors `11791340` and `11791341` and pair auditor `11791712` remain
   dependency-pending. The evidence source remains clean at
   `81af6687a6f0fbf2efc54dc1edf64cc2803894d6`.
-- Neither pending chain is a quality result. Ingest the strict K=4
+- Neither pending chain is a quality result. Ingest retry-2's strict K=4
   repeatability report before accepting an operand classification, or ingest
   the K=1 restarted trajectory plus FSC/FSC-AUC if that chain starts first.
   Any K=4 production proposal still requires the frozen multistratum repeat

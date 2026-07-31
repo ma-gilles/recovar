@@ -10791,3 +10791,43 @@ and `9/15` all-class.
 - Fixed scores remain K=1 `28/34` strict, `32/34` topology, `34/34`
   evaluated; K=4 `41/60` direct and `9/15` all-class. The non-scoring K=4
   causal boundary remains `2/4`.
+
+## 2026-07-31 04:53 ET — exact-UUID rejection and three-GPU retry
+
+- Same-observer producer `11822111` started on `della-l07g2` at 04:44:38 ET
+  and failed closed after three seconds with exit `42:0`. Slurm assigned
+  `GPU-417804ab-9a47-49c5-7937-2e65c4c1466a` (`41:00.0`) and
+  `GPU-3b10bc7d-5485-6b3a-5607-da203ef39bd3` (`C1:00.0`), excluding pinned
+  `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30` (`81:00.0`).
+- The failure occurred before import, runner execution, particle
+  transformation, CUDA rebuild, or science output. The private and restored
+  shared CUDA libraries remain byte-identical at SHA-256
+  `9d2ae812b56f7b109d93aefcb32016beaef4d91108a2871def7f1784493f4e28`.
+  Comparator `11822185` became `DependencyNeverSatisfied` and was not
+  modified.
+- Outcome-safe CPU audit `11822605` completed with exit `0:0` and wrote an
+  explicit `incomplete`, rejected `0/3` strict archive report. All three
+  observed paths are absent and their `FileNotFoundError` values are
+  serialized. Report SHA-256 is
+  `7e0db0f81931ec54bde2a55fee274303fc77247e722980818d024af700b366d9`;
+  completion sentinel SHA-256 is
+  `9311c4025c421e2e3f780f0439bca4addf1f56d94705a3bae67cfee5692c6261`.
+- Isolated producer retry `11823179` changes only the Slurm allocation from
+  two to three A100s. The node's long-lived unrelated job occupies index 0;
+  requesting the other three slots guarantees the pinned index-2/`81:00.0`
+  UUID is present once resources release. The launcher still rejects any
+  allocation without exactly three GPUs and the pinned UUID, then exposes
+  only that UUID with `CUDA_VISIBLE_DEVICES`. Science source, runner command,
+  data/state, target, and fixed acceptance contract remain unchanged.
+- Retry `11823179` is pending at zero elapsed. Its launcher SHA-256 is
+  `a922d8a71b0e32212392a94a9f3efd81f51dd9f633ab0c710c08df74300dfe12`;
+  run root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_contribution_stop_repeat_retry2_3gpu_d1fb8e52_20260731T0447ET`.
+- Strict outcome-safe audit `11823392` depends on `afterany:11823179`, uses
+  frozen analyzer source `e87565c5`, and remains dependency-pending. Its
+  launcher SHA-256 is
+  `0418fc0b514ecf1ebfe61eb4e9b394779fd5348054c3ddf080eb73090f2744ec`.
+- This remains non-scoring. Fixed K=1 and K=4 metrics and the separate K=4
+  causal numerator do not change. No process or existing Slurm job was
+  killed, signalled, suspended, cancelled, reprioritized, requeued, held,
+  released, or otherwise altered.
