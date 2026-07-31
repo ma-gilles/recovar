@@ -14650,8 +14650,53 @@ Build provenance is
 Same-A100 job `11843191` was predeclared and submitted from
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_roundtrip_ab_7d61ca4_20260731T1541ET`.
 Its primary fixed gate is geometry identity `3/5 -> 5/5`; the existing
-score/map gates remain observational. This records submission only and does
-not claim the running hypothesis passed.
+score/map gates remain observational.
+
+All three arms and all `126` captures completed naturally on `della-l08g3`,
+physical A100 UUID
+`GPU-98fb77aa-8391-8a59-9417-606deb654b53`. The Slurm job nevertheless
+failed closed `1:0` after `00:45:00`: the launcher retained an obsolete
+assertion that compared the new exact iteration-1 value
+`-0.047986328601837158` to the old rounded literal `-0.04799` within
+`1e-8`. Their absolute gap is `3.67139816284e-6`. The failed job is not
+relabeled as successful; its launcher gate is recorded as invalid.
+
+Post-terminal analysis of the completed pinned captures accepts the
+predeclared primary scientific hypothesis:
+
+| Fixed paired panel | Stock | Round-trip treatment | Gain |
+| --- | ---: | ---: | ---: |
+| geometry identity | 3/5 | **5/5** | **+2** |
+| observational score/map gates | 3/21 | **17/21** | **+14** |
+
+Fresh and treatment sampling perturbations are exactly equal as binary64 at
+both iteration 1 (`-0.04798632860183716`) and iteration 2
+(`0.4094899296760559`). Raw input, rotation keys, local rotation indices,
+Euler matrices, and translations are each bitwise exact for `14/14`
+particles. In particular, the Euler and translation maximum absolute gaps
+are both zero.
+
+All `14/14` score gates pass, with treatment p95 residuals from
+`3.42780146e-5` to `5.79552562e-5`. All three signed map-parity FSC-AUC
+gates also pass:
+
+| Map | Round-trip parity delta | Round-trip GT delta |
+| --- | ---: | ---: |
+| half 1 | +2.46680715965e-7 | -2.08306407599e-5 |
+| half 2 | +6.20228254311e-8 | -1.67426148376e-5 |
+| merged | +1.44716856831e-7 | -1.89465661311e-5 |
+
+The remaining four observational failures are the three GT
+non-degradation gates and overall acceptance. No tolerance, sign, scale,
+shell boundary, or denominator changed.
+
+An independent replay reproduced the operand and both score reports
+byte-for-byte. Both map reports are semantically identical after normalizing
+only their embedded alternate score-report path; embedded score hashes and
+all science values are unchanged. The sealed post-terminal result is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_roundtrip_ab_7d61ca4_20260731T1541ET/provenance/FAIL_CLOSED_POST_TERMINAL_RESULT.json`
+(SHA-256
+`22fefd3a3597403c747ba832493792a405634fa0cddeddc773295e79f798edee`).
 
 The checked paired ledger is
 `docs/math/em_k1_sampling_perturbation_scorecard_v1.json`; its generated
@@ -14659,6 +14704,13 @@ checklist is `docs/math/em_k1_sampling_perturbation_scorecard.md`. The
 consolidated reporter exposes both non-scoring panels and validates their
 source hashes. An independent post-terminal replay reproduced all five
 analysis reports byte-for-byte.
+
+The exact-round-trip result has a second immutable ledger,
+`docs/math/em_k1_sampling_roundtrip_scorecard_v1.json`, and generated
+checklist, `docs/math/em_k1_sampling_roundtrip_scorecard.md`. The
+consolidated reporter retains the failed five-decimal treatment panels and
+adds the `5/5` geometry and `17/21` score/map round-trip panels; later
+experiments cannot rewrite either denominator.
 
 No production RECOVAR behavior, tolerance, baseline, or frozen quality
 score changed. No Codex process or existing Slurm job was modified or
