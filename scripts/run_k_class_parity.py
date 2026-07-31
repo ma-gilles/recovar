@@ -1126,6 +1126,12 @@ def main() -> None:
                 "--stop-after-pass2-dump requires RECOVAR_PASS2_DUMP_ORIGINAL_INDICES "
                 "or RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES"
             )
+        if os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "").strip():
+            parser.error(
+                "--stop-after-pass2-dump is incompatible with "
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR because contribution "
+                "capture runs during the M-step"
+            )
         os.environ["RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"] = "1"
         os.environ["RECOVAR_K_CLASS_PARITY_STOP_AFTER_PASS2_DUMP"] = "1"
         print(

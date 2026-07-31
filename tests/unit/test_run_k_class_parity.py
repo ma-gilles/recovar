@@ -1,5 +1,6 @@
 import argparse
 import inspect
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -358,6 +359,34 @@ def test_k_class_replay_supports_stop_after_pass2_dump_diagnostic():
     assert "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET" in main_source
     assert "RECOVAR_K_CLASS_PARITY_STOP_AFTER_PASS2_DUMP" in module_source
     assert "Pass2DumpComplete" in module_source
+
+
+def test_k_class_replay_rejects_stop_after_pass2_with_contribution_capture(
+    monkeypatch,
+    capsys,
+):
+    import scripts.run_k_class_parity as run_k_class_parity
+
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", "/tmp/pass2")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "53722")
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "/tmp/contribution")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_k_class_parity",
+            "--relion-dir",
+            "/tmp/relion",
+            "--data-star",
+            "/tmp/particles.star",
+            "--stop-after-pass2-dump",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        run_k_class_parity.main()
+
+    assert "contribution capture runs during the M-step" in capsys.readouterr().err
 
 
 def test_k_class_replay_exposes_image_fourier_backend_control():
