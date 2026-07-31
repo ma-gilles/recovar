@@ -139,6 +139,28 @@ def _component_by_stack(directory: Path) -> dict[int, Any]:
     return result
 
 
+def _validate_fresh_capture_arguments(
+    *,
+    fresh_capture_directory: Path | None,
+    fresh_component_validation_json: Path | None,
+    fresh_operand_validation_json: Path | None,
+) -> bool:
+    """Require the complete fresh-capture qualification tuple or none of it."""
+
+    values = (
+        fresh_capture_directory,
+        fresh_component_validation_json,
+        fresh_operand_validation_json,
+    )
+    supplied = sum(value is not None for value in values)
+    _require(
+        supplied in (0, len(values)),
+        "fresh capture directory and both validation reports must be "
+        "supplied together",
+    )
+    return supplied == len(values)
+
+
 def _mapped_selected_raw(
     *,
     component: Any,
@@ -186,6 +208,9 @@ def build_report(
     restart_component_validation_json: Path,
     restart_operand_validation_json: Path,
     source_optimiser_star: Path,
+    fresh_capture_directory: Path | None = None,
+    fresh_component_validation_json: Path | None = None,
+    fresh_operand_validation_json: Path | None = None,
 ) -> dict[str, Any]:
     """Build the fixed fresh-process versus serialized-restart comparison."""
 
@@ -197,23 +222,50 @@ def build_report(
         restart_operand_validation_json
     )
     restart_by_stack = _component_by_stack(restart_capture_directory)
+    use_explicit_fresh_capture = _validate_fresh_capture_arguments(
+        fresh_capture_directory=fresh_capture_directory,
+        fresh_component_validation_json=fresh_component_validation_json,
+        fresh_operand_validation_json=fresh_operand_validation_json,
+    )
+    fresh_by_stack = None
+    fresh_component_validation = None
+    fresh_operand_validation = None
+    if use_explicit_fresh_capture:
+        assert fresh_capture_directory is not None
+        assert fresh_component_validation_json is not None
+        assert fresh_operand_validation_json is not None
+        fresh_by_stack = _component_by_stack(fresh_capture_directory)
+        fresh_component_validation = _validate_component_report(
+            fresh_component_validation_json
+        )
+        fresh_operand_validation = _validate_operand_report(
+            fresh_operand_validation_json
+        )
     particles = []
     for parent_row in parent["particles"]:
         stack_index = int(parent_row["stack_index_one_based"])
         original_index = int(parent_row["original_index_zero_based"])
-        fresh_path = Path(parent_row["artifact_paths"]["component"])
         recovar_path = Path(parent_row["artifact_paths"]["recovar"])
-        _require(
-            _sha256(fresh_path)
-            == parent_row["artifact_sha256"]["component"],
-            "fresh component artifact hash changed",
-        )
         _require(
             _sha256(recovar_path)
             == parent_row["artifact_sha256"]["recovar"],
             "RECOVAR artifact hash changed",
         )
-        fresh = load_artifact(fresh_path)
+        if fresh_by_stack is None:
+            fresh_path = Path(parent_row["artifact_paths"]["component"])
+            _require(
+                _sha256(fresh_path)
+                == parent_row["artifact_sha256"]["component"],
+                "fresh component artifact hash changed",
+            )
+            fresh = load_artifact(fresh_path)
+        else:
+            fresh = fresh_by_stack.get(stack_index)
+            _require(
+                fresh is not None,
+                "explicit fresh component stack identity missing",
+            )
+            fresh_path = fresh.path
         restart = restart_by_stack.get(stack_index)
         _require(restart is not None, "restart component stack identity missing")
         recovar = _load_recovar(recovar_path)
@@ -297,6 +349,34 @@ def build_report(
         absolute_gate_passed=absolute_gate_passed,
         expected_particles=EXPECTED_PARTICLES,
     )
+    fresh_capture_source: dict[str, Any]
+    if use_explicit_fresh_capture:
+        assert fresh_capture_directory is not None
+        assert fresh_component_validation_json is not None
+        assert fresh_operand_validation_json is not None
+        assert fresh_component_validation is not None
+        assert fresh_operand_validation is not None
+        fresh_capture_source = {
+            "mode": "explicit_same_allocation_fresh_capture",
+            "directory": str(fresh_capture_directory.resolve()),
+            "component_validation": {
+                "path": str(fresh_component_validation_json.resolve()),
+                "sha256": _sha256(fresh_component_validation_json),
+                "status": fresh_component_validation.get("status"),
+                "fixed_metric": fresh_component_validation["fixed_metric"],
+            },
+            "operand_validation": {
+                "path": str(fresh_operand_validation_json.resolve()),
+                "sha256": _sha256(fresh_operand_validation_json),
+                "status": fresh_operand_validation["status"],
+                "fixed_metric": fresh_operand_validation["fixed_metric"],
+            },
+        }
+    else:
+        fresh_capture_source = {
+            "mode": "parent_analysis_hash_bound_capture",
+            "directory": None,
+        }
     return {
         "schema": "em-k1-serialized-restart-boundary-v1",
         "status": "complete",
@@ -350,6 +430,7 @@ def build_report(
                 parent["shell_partition_metric"]["classification"]
             ),
         },
+        "fresh_capture_source": fresh_capture_source,
         "restart_component_validation": {
             "path": str(Path(restart_component_validation_json).resolve()),
             "sha256": _sha256(restart_component_validation_json),
@@ -374,7 +455,7 @@ def build_report(
                 "translations against the same RECOVAR score artifact."
             ),
             (
-                "The restart begins from RELION's serialized iteration-0 "
+                "The restart begins from a serialized RELION optimiser "
                 "state; the fresh run created that state and continued in "
                 "the same process."
             ),
@@ -400,6 +481,9 @@ def main() -> None:
         type=Path,
         required=True,
     )
+    parser.add_argument("--fresh-capture-directory", type=Path)
+    parser.add_argument("--fresh-component-validation-json", type=Path)
+    parser.add_argument("--fresh-operand-validation-json", type=Path)
     parser.add_argument("--source-optimiser-star", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
@@ -417,6 +501,11 @@ def main() -> None:
             args.restart_operand_validation_json
         ),
         source_optimiser_star=args.source_optimiser_star,
+        fresh_capture_directory=args.fresh_capture_directory,
+        fresh_component_validation_json=(
+            args.fresh_component_validation_json
+        ),
+        fresh_operand_validation_json=args.fresh_operand_validation_json,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(

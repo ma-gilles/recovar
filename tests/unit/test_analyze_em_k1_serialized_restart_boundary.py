@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -119,3 +120,23 @@ def test_direct_operand_validation_fails_closed(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="fixed gates"):
         analyzer._validate_operand_report(path)
+
+
+def test_explicit_fresh_capture_requires_complete_qualification_tuple() -> None:
+    assert not analyzer._validate_fresh_capture_arguments(
+        fresh_capture_directory=None,
+        fresh_component_validation_json=None,
+        fresh_operand_validation_json=None,
+    )
+    assert analyzer._validate_fresh_capture_arguments(
+        fresh_capture_directory=Path("/fresh"),
+        fresh_component_validation_json=Path("/component.json"),
+        fresh_operand_validation_json=Path("/operand.json"),
+    )
+
+    with pytest.raises(ValueError, match="supplied together"):
+        analyzer._validate_fresh_capture_arguments(
+            fresh_capture_directory=Path("/fresh"),
+            fresh_component_validation_json=Path("/component.json"),
+            fresh_operand_validation_json=None,
+        )
