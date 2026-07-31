@@ -18,6 +18,12 @@ from scripts.summarize_em_k1_continuation_initializer_scorecard import (  # noqa
 from scripts.summarize_em_k1_continuation_initializer_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k1_continuation_initializer,
 )
+from scripts.summarize_em_k1_norm_roundtrip_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K1_NORM_ROUNDTRIP_SCORECARD,
+)
+from scripts.summarize_em_k1_norm_roundtrip_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k1_norm_roundtrip,
+)
 from scripts.summarize_em_k1_sampling_perturbation_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K1_SAMPLING_PERTURBATION_SCORECARD,
 )
@@ -67,7 +73,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v7"
+SCHEMA = "recovar.em_parity_progress.v8"
 
 
 def _panel(
@@ -118,6 +124,7 @@ def build_progress(
     k1_continuation_initializer_path: Path = (DEFAULT_K1_CONTINUATION_INITIALIZER_SCORECARD),
     k1_sampling_perturbation_path: Path = DEFAULT_K1_SAMPLING_PERTURBATION_SCORECARD,
     k1_sampling_roundtrip_path: Path = DEFAULT_K1_SAMPLING_ROUNDTRIP_SCORECARD,
+    k1_norm_roundtrip_path: Path = DEFAULT_K1_NORM_ROUNDTRIP_SCORECARD,
 ) -> dict[str, object]:
     """Validate every fixed source and return the consolidated progress report."""
 
@@ -131,6 +138,7 @@ def build_progress(
     k1_continuation_initializer = load_and_validate_k1_continuation_initializer(k1_continuation_initializer_path)
     k1_sampling_perturbation = load_and_validate_k1_sampling_perturbation(k1_sampling_perturbation_path)
     k1_sampling_roundtrip = load_and_validate_k1_sampling_roundtrip(k1_sampling_roundtrip_path)
+    k1_norm_roundtrip = load_and_validate_k1_norm_roundtrip(k1_norm_roundtrip_path)
 
     k1_counts = scorecard["current_snapshot"]["counts"]
     k1_denominator = scorecard["frozen_denominator"]
@@ -148,6 +156,9 @@ def build_progress(
     k1_sampling_score_map = k1_sampling_perturbation["score_map_summary"]
     k1_roundtrip_geometry = k1_sampling_roundtrip["geometry_summary"]
     k1_roundtrip_score_map = k1_sampling_roundtrip["score_map_summary"]
+    k1_norm_preprocess = k1_norm_roundtrip["preprocess_summary"]
+    k1_norm_geometry = k1_norm_roundtrip["geometry_summary"]
+    k1_norm_score_map = k1_norm_roundtrip["score_map_summary"]
     if (
         k4_class_scorecard["summary"]["pass"] != k4_snapshot["direct_fsc_auc_checks_passed"]
         or k4_class_scorecard["summary"]["evaluated"] != k4_snapshot["direct_fsc_auc_checks_total"]
@@ -255,6 +266,30 @@ def build_progress(
             scoring=False,
         ),
         _panel(
+            "k1_norm_roundtrip_preprocess",
+            "K=1 normalization-roundtrip preprocessing exactness",
+            k1_norm_preprocess["treatment_pass"],
+            k1_norm_preprocess["evaluated"],
+            k1_norm_preprocess["denominator"],
+            scoring=False,
+        ),
+        _panel(
+            "k1_norm_roundtrip_geometry",
+            "K=1 normalization-roundtrip geometry identity",
+            k1_norm_geometry["treatment_pass"],
+            k1_norm_geometry["evaluated"],
+            k1_norm_geometry["denominator"],
+            scoring=False,
+        ),
+        _panel(
+            "k1_norm_roundtrip_score_map",
+            "K=1 normalization-roundtrip score/map gates",
+            k1_norm_score_map["treatment_pass"],
+            k1_norm_score_map["evaluated"],
+            k1_norm_score_map["denominator"],
+            scoring=False,
+        ),
+        _panel(
             "k4_direct",
             "K=4 direct per-class FSC-AUC",
             k4_snapshot["direct_fsc_auc_checks_passed"],
@@ -301,8 +336,8 @@ def build_progress(
             "K=1 and K=4 quality panels use shellwise FSC/FSC-AUC; "
             "correlation is not used. The K=1 serialized-restart, K=1 "
             "continuation-initializer, K=1 sampling-perturbation, K=1 "
-            "sampling-roundtrip, K=4 causal, and K=4 preprocessing panels "
-            "are non-scoring."
+            "sampling-roundtrip, K=1 normalization-roundtrip, K=4 causal, "
+            "and K=4 preprocessing panels are non-scoring."
         ),
         "scorecard_change_admissible": False,
         "panels": panels,
@@ -333,6 +368,20 @@ def build_progress(
             "score_map_denominator": k1_roundtrip_score_map["denominator"],
             "score_map_gain": k1_roundtrip_score_map["paired_gain"],
         },
+        "k1_norm_roundtrip_progress": {
+            "preprocess_baseline_pass": k1_norm_preprocess["baseline_pass"],
+            "preprocess_treatment_pass": k1_norm_preprocess["treatment_pass"],
+            "preprocess_denominator": k1_norm_preprocess["denominator"],
+            "preprocess_gain": k1_norm_preprocess["paired_gain"],
+            "geometry_baseline_pass": k1_norm_geometry["baseline_pass"],
+            "geometry_treatment_pass": k1_norm_geometry["treatment_pass"],
+            "geometry_denominator": k1_norm_geometry["denominator"],
+            "geometry_gain": k1_norm_geometry["paired_gain"],
+            "score_map_baseline_pass": k1_norm_score_map["baseline_pass"],
+            "score_map_treatment_pass": k1_norm_score_map["treatment_pass"],
+            "score_map_denominator": k1_norm_score_map["denominator"],
+            "score_map_gain": k1_norm_score_map["paired_gain"],
+        },
         "remaining": {
             "k1_strict_failures": k1_strict_failures,
             "k1_topology_failures": k1_topology_failures,
@@ -350,6 +399,7 @@ def build_progress(
             "k1_continuation_initializer_scorecard": _input_record(k1_continuation_initializer_path),
             "k1_sampling_perturbation_scorecard": _input_record(k1_sampling_perturbation_path),
             "k1_sampling_roundtrip_scorecard": _input_record(k1_sampling_roundtrip_path),
+            "k1_norm_roundtrip_scorecard": _input_record(k1_norm_roundtrip_path),
             "k4_trajectory_snapshot": _input_record(k4_snapshot_path),
             "k4_class_scorecard": _input_record(k4_class_path),
             "k4_causal_scorecard": _input_record(k4_causal_path),
@@ -376,6 +426,7 @@ def render_markdown(progress: dict[str, object]) -> str:
     initializer = progress["k1_continuation_initializer_progress"]
     sampling = progress["k1_sampling_perturbation_progress"]
     roundtrip = progress["k1_sampling_roundtrip_progress"]
+    norm_roundtrip = progress["k1_norm_roundtrip_progress"]
     remaining = progress["remaining"]
     k1_strict = ", ".join(case["id"] for case in remaining["k1_strict_failures"]) or "none"
     k1_topology = ", ".join(case["id"] for case in remaining["k1_topology_failures"]) or "none"
@@ -438,6 +489,31 @@ def render_markdown(progress: dict[str, object]) -> str:
                 f"{roundtrip['score_map_treatment_pass']}/"
                 f"{roundtrip['score_map_denominator']} treatment "
                 f"({roundtrip['score_map_gain']:+d})**."
+            ),
+            "",
+            (
+                "K=1 normalization-roundtrip preprocessing on the unchanged denominator: "
+                f"**{norm_roundtrip['preprocess_baseline_pass']}/"
+                f"{norm_roundtrip['preprocess_denominator']} sampling-only → "
+                f"{norm_roundtrip['preprocess_treatment_pass']}/"
+                f"{norm_roundtrip['preprocess_denominator']} treatment "
+                f"({norm_roundtrip['preprocess_gain']:+d})**."
+            ),
+            (
+                "K=1 normalization-roundtrip geometry on the unchanged denominator: "
+                f"**{norm_roundtrip['geometry_baseline_pass']}/"
+                f"{norm_roundtrip['geometry_denominator']} sampling-only → "
+                f"{norm_roundtrip['geometry_treatment_pass']}/"
+                f"{norm_roundtrip['geometry_denominator']} treatment "
+                f"({norm_roundtrip['geometry_gain']:+d})**."
+            ),
+            (
+                "K=1 normalization-roundtrip score/map gates on the unchanged denominator: "
+                f"**{norm_roundtrip['score_map_baseline_pass']}/"
+                f"{norm_roundtrip['score_map_denominator']} sampling-only → "
+                f"{norm_roundtrip['score_map_treatment_pass']}/"
+                f"{norm_roundtrip['score_map_denominator']} treatment "
+                f"({norm_roundtrip['score_map_gain']:+d})**."
             ),
             "",
             f"Remaining K=1 strict cases: {k1_strict}.",
