@@ -11253,3 +11253,32 @@ and `9/15` all-class.
 - The corrected job remains non-scoring while active. Fixed K=1/K=4/causal
   metrics remain `28/34`, `32/34`, `34/34`, `41/60`, `9/15`, and `2/4`.
   No existing process or Slurm job was modified or interrupted.
+
+## 2026-07-31 12:27 ET — continuation iteration limit pinned explicitly
+
+- A read-only live audit of job `11838510`'s completed fresh/restart-0
+  iteration-1 boundary found exact `3,000/3,000` particle state rows, exact
+  sampling, the fresh topology, and the correct zero no-resolution-gain
+  count. Norm and likelihood fields differ only by one six-decimal STAR
+  unit.
+- Its sole non-path optimiser mismatch is
+  `_rlnNumberOfIterations: 2` fresh versus `999` restart. RELION's
+  continuation parser replaces the serialized value with the command-line
+  default unless `--auto_iter_max` is restated. This is an orchestration
+  confound, so job `11838510` is non-qualifying even if it finishes. It was
+  not cancelled or modified and may complete naturally.
+- Independent job `11839040` restates `--auto_iter_max 2` on both restart
+  arms. Restart-0 now uses
+  `--firstiter_cc --ini_high 30 --auto_iter_max 2 --pool 3`; restart-1 uses
+  `--auto_iter_max 2 --pool 3`. Its fail-closed non-path optimiser equality
+  gate will reject any remaining limit mismatch.
+- Launcher SHA-256:
+  `6ef245eb663ae55eac0d6e4eae07de42f131713929056c1266d3b4620e74ff01`.
+  Predeclaration SHA-256:
+  `f8a6f1867d271dd69d489940f108f8311ed03aef599e3fe669acfc734e625ad2`.
+  Scheduler test-only predicted `12:58:35 ET` on `della-l07g3`; the job is
+  pending resources and non-scoring.
+- Fixed K=1/K=4/causal metrics remain `28/34`, `32/34`, `34/34`, `41/60`,
+  `9/15`, and `2/4`; correlation was not computed. No existing process or
+  Slurm job was killed, signalled, suspended, cancelled, reprioritized,
+  requeued, held, released, or otherwise altered.

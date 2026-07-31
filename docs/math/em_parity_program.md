@@ -461,6 +461,25 @@ and
 `da9bb7e0054f244ac352a0e703a6724e1f5513eb3eac31b7feca784ad542fb15`.
 The job is non-scoring while active; all fixed scorecards remain unchanged.
 
+A read-only live check then found one remaining command-state confound before
+acceptance. At the completed fresh/restart-0 iteration-1 boundary, all
+`3,000` fixed particle state rows, sampling, first-iteration topology, and
+zero no-resolution-gain count match. The sole non-path optimiser difference
+is `_rlnNumberOfIterations: 2` fresh versus `999` restart: RELION's
+continuation parser uses its command-line default unless
+`--auto_iter_max` is restated. Job `11838510` is therefore
+non-qualifying and remains untouched to finish naturally.
+
+Independent job `11839040` explicitly pins `--auto_iter_max 2` on both
+restart arms and retains the exact non-path optimiser equality gate.
+Restart-0 uses
+`--firstiter_cc --ini_high 30 --auto_iter_max 2 --pool 3`; restart-1 uses
+`--auto_iter_max 2 --pool 3`. Launcher and predeclaration SHA-256 are
+`6ef245eb663ae55eac0d6e4eae07de42f131713929056c1266d3b4620e74ff01`
+and
+`f8a6f1867d271dd69d489940f108f8311ed03aef599e3fe669acfc734e625ad2`.
+It is pending A100 resources and remains non-scoring.
+
 The consolidated report also names the exact remaining K=1 strict/topology
 cases, every failed K=4 iteration/class cell, and the remaining non-scoring
 K=4 causal cases. The K=4 class checklist, including all 60 measured FSC-AUC
