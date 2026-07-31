@@ -955,6 +955,88 @@ def test_kclass_dense_pass2_dump_preserves_selected_raw_diff2(monkeypatch, tmp_p
     assert payload["relion_min_diff2"] == np.float32(499.0)
 
 
+def test_kclass_pass2_dump_preserves_effective_raw_operands(monkeypatch, tmp_path):
+    n_rot = 2
+    n_trans = 3
+    n_pix = 4
+    experiment_dataset = SimpleNamespace(
+        dataset_indices=np.asarray([42], dtype=np.int64),
+    )
+    rotations = np.tile(np.eye(3, dtype=np.float32), (n_rot, 1, 1))
+    per_image_inputs = {
+        "oversampled_rots": [rotations],
+        "oversampled_rot_indices": [np.asarray([10, 11], dtype=np.int64)],
+        "parent_map": [np.asarray([0, 1], dtype=np.int32)],
+        "log_prior": [np.asarray([0.1, -0.2], dtype=np.float32)],
+    }
+    candidate_mask = np.ones((1, n_rot, n_trans), dtype=bool)
+    shifted_corrected = (
+        np.arange(n_trans * n_pix, dtype=np.float32).reshape(n_trans, n_pix)
+        + 1j
+    ).astype(np.complex64)
+    proj_half = (
+        np.arange(n_rot * n_pix, dtype=np.float32).reshape(n_rot, n_pix)
+        - 2j
+    ).astype(np.complex64)
+    corr_img_score = np.arange(n_pix, dtype=np.float32) + 0.5
+    half_weights = np.arange(n_pix, dtype=np.float32) + 1.0
+    full_to_compact = np.asarray([0, -1, 1, 2, 3], dtype=np.int32)
+    raw_operands = sparse_pass2_mod._capture_k_class_pass2_raw_operands(
+        raw_diff2=np.zeros((1, n_rot, n_trans), dtype=np.float32),
+        target_rows=np.asarray([0], dtype=np.int64),
+        actual_counts=np.asarray([n_rot], dtype=np.int64),
+        shifted_corrected=shifted_corrected[None, ...],
+        corr_img_score=corr_img_score[None, ...],
+        proj_half=proj_half[None, ...],
+        half_weights=half_weights,
+        relion_full_to_compact=full_to_compact,
+        highres_xi2_half=np.asarray([7.25], dtype=np.float32),
+    )
+
+    dump_dir = tmp_path / "pass2"
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    sparse_pass2_mod._maybe_dump_k_class_pass2_bucket(
+        experiment_dataset=experiment_dataset,
+        image_indices=np.asarray([0], dtype=np.int64),
+        class_index=0,
+        per_image_inputs=per_image_inputs,
+        class_bucket_arrays={"candidate_mask": candidate_mask},
+        compact_pair_arrays=None,
+        current_size=14,
+        n_fine_trans=n_trans,
+        fine_translations=np.zeros((n_trans, 2), dtype=np.float32),
+        scores=np.zeros((1, n_rot, n_trans), dtype=np.float32),
+        probs=np.full((1, n_rot, n_trans), 1.0 / (n_rot * n_trans)),
+        bucket_translation_prior=np.zeros((1, n_trans), dtype=np.float32),
+        compact_pairs=False,
+        raw_operands_by_batch_row=raw_operands,
+    )
+
+    payload = np.load(dump_dir / "pass2_orig000042_class001_cs014.npz")
+    assert str(payload["raw_operand_schema"]) == (
+        "recovar-kclass-pass2-effective-raw-operands-v1"
+    )
+    np.testing.assert_array_equal(
+        payload["raw_operand_shifted_corrected"],
+        shifted_corrected,
+    )
+    np.testing.assert_array_equal(payload["raw_operand_proj_half"], proj_half)
+    np.testing.assert_array_equal(
+        payload["raw_operand_corr_img_score"],
+        corr_img_score,
+    )
+    np.testing.assert_array_equal(
+        payload["raw_operand_half_weights"],
+        half_weights,
+    )
+    np.testing.assert_array_equal(
+        payload["raw_operand_relion_full_to_compact"],
+        full_to_compact,
+    )
+    assert payload["raw_operand_highres_xi2_half"] == np.float32(7.25)
+
+
 def test_pass2_dump_target_rows_use_original_index_mapping(monkeypatch, tmp_path):
     experiment_dataset = SimpleNamespace(
         original_image_indices_from_local=lambda indices: np.asarray(

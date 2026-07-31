@@ -10959,3 +10959,24 @@ and `9/15` all-class.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_dynamicref_retry2_20260731T0520ET/provenance/chain_outputs_11825133.sha256`.
 - No Codex process or Slurm job was killed, signalled, suspended, cancelled,
   reprioritized, requeued, held, released, or otherwise altered.
+
+## 2026-07-31 — predeclared K=4 effective-operand repeatability audit
+
+- One diagnostic-only hypothesis is fixed before another GPU result:
+  same-A100 raw-cost drift first appears in at least one effective input to
+  the explicit RELION-style 256-lane reduction.
+- Opt-in `RECOVAR_PASS2_DUMP_RAW_OPERANDS=1` records the target's effective
+  complex64 shifted image and projections, float32 score/half weights, packed
+  lookup, and float32 high-shell scalar only after raw scoring is ready. It is
+  off by default and does not change production behavior.
+- The next run is two identical `--stop-after-pass2-dump` arms, sequential in
+  one allocation on one recorded physical A100, with the same committed
+  source, iteration-1 state, original particle `53722`, class `1`, current
+  size `38`, CUDA bytes, and runtime policy.
+- Acceptance requires exact topology/lookup equality and bitwise self-replay
+  of each arm's active raw costs. Operand byte equality is reported by fixed
+  family; if multiple families differ, fixed-order one-family substitutions
+  report every exact maximum without an insertion-order winner.
+- Missing data, failed self-replay, topology drift, or an attribution tie
+  fails closed. This is non-scoring and cannot authorize a tolerance,
+  production fix, native RELION claim, or FSC/FSC-AUC scorecard change.

@@ -14016,6 +14016,39 @@ This result is non-scoring: fixed K=1 remains `28/34` strict, `32/34`
 topology, and `34/34` evaluated; fixed K=4 remains `41/60` direct and
 `9/15` all-class; the separate causal boundary remains `2/4`.
 
+### Predeclared effective-operand repeatability audit
+
+The next diagnostic fixes one hypothesis: run-to-run raw-cost drift first
+appears in at least one effective input to the explicit RELION-style
+256-lane reduction.  An opt-in
+`RECOVAR_PASS2_DUMP_RAW_OPERANDS=1` capture records, after raw scoring has
+completed, the requested particle/class's effective complex64 shifted image
+and projected references, float32 pixel weights and half weights, packed
+index lookup, and float32 high-shell scalar.  The default path is unchanged.
+
+Two otherwise identical `--stop-after-pass2-dump` arms will run sequentially
+in one Slurm allocation on one recorded physical A100.  Both arms use the
+same committed source, RELION iteration-1 state, particle order, current size
+`38`, original particle `53722`, class `1`, CUDA library, and runtime policy.
+Each arm must stop successfully only after the target pass-2 archive exists.
+
+Before inspecting values, the audit fixes these gates:
+
+1. keys, shapes, dtypes, masks, rotations, translations, and packed lookup
+   must agree exactly;
+2. each captured operand set must replay its own saved active raw costs
+   bitwise with the explicit 256-lane tree;
+3. strict byte equality is reported separately for shifted image,
+   projection, score weight, half weight, and high-shell scalar;
+4. if more than one operand family differs, one-family substitutions into
+   the first arm are evaluated in the fixed order above and all exact
+   maximizers are reported; no insertion-order winner is allowed.
+
+Any missing archive, failed self-replay, topology mismatch, or ambiguous
+maximum fails closed.  The diagnostic cannot authorize a tolerance, scoring
+change, component fix, native RELION claim, or scorecard change.  A later
+fixed FSC/FSC-AUC run remains necessary for any parity numerator movement.
+
 A subsequent pre-result audit found a second insertion-order ambiguity:
 multiple components can have the same exact largest energy-removed fraction.
 The current comparator now records the complete exact-maximizer set and emits

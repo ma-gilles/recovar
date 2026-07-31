@@ -224,6 +224,7 @@ _BPREF_CONTRIBUTION_STOP_AFTER_TARGET_ENV = (
 _PASS2_DUMP_DIR_ENV = "RECOVAR_PASS2_DUMP_DIR"
 _PASS2_DUMP_CONSERVATIVE_EXECUTION_ENV = "RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
+_PASS2_DUMP_RAW_OPERANDS_ENV = "RECOVAR_PASS2_DUMP_RAW_OPERANDS"
 _SPARSE_PASS2_PROJECTION_CACHE_ENV = "RECOVAR_SPARSE_PASS2_PROJECTION_CACHE"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_JOINT_MODES = {"joint", "global", "class_pose", "class-pose"}
 _SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK_ENV = "RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK"
@@ -7339,6 +7340,7 @@ def _maybe_dump_k_class_pass2_bucket(
     reconstruction_mask=None,
     reconstruction_probs=None,
     raw_diff2_by_batch_row=None,
+    raw_operands_by_batch_row=None,
     relion_min_diff2=None,
 ):
     """Env-gated K-class sparse pass-2 dump for RELION parity debugging."""
@@ -7494,6 +7496,41 @@ def _maybe_dump_k_class_pass2_bucket(
                 "relion_raw_diff2": raw_diff2_dense,
                 "relion_min_diff2": np.float32(min_diff2_np[row]),
             }
+        raw_operand_fields = {}
+        if raw_operands_by_batch_row is not None:
+            if row not in raw_operands_by_batch_row:
+                raise ValueError(
+                    f"raw operand pass-2 dump is missing batch row {row}"
+                )
+            raw_operands = raw_operands_by_batch_row[row]
+            raw_operand_fields = {
+                "raw_operand_schema": np.asarray(
+                    "recovar-kclass-pass2-effective-raw-operands-v1"
+                ),
+                "raw_operand_shifted_corrected": np.asarray(
+                    raw_operands["shifted_corrected"],
+                    dtype=np.complex64,
+                ),
+                "raw_operand_corr_img_score": np.asarray(
+                    raw_operands["corr_img_score"],
+                    dtype=np.float32,
+                ),
+                "raw_operand_proj_half": np.asarray(
+                    raw_operands["proj_half"],
+                    dtype=np.complex64,
+                ),
+                "raw_operand_half_weights": np.asarray(
+                    raw_operands["half_weights"],
+                    dtype=np.float32,
+                ),
+                "raw_operand_relion_full_to_compact": np.asarray(
+                    raw_operands["relion_full_to_compact"],
+                    dtype=np.int32,
+                ),
+                "raw_operand_highres_xi2_half": np.float32(
+                    raw_operands["highres_xi2_half"]
+                ),
+            }
         out_path = os.path.join(
             dump_dir,
             f"pass2_orig{original_idx:06d}_class{int(class_index) + 1:03d}_cs"
@@ -7520,9 +7557,67 @@ def _maybe_dump_k_class_pass2_bucket(
             compact_pair_dump=np.bool_(compact_pairs),
             **reconstruction_fields,
             **raw_diff2_fields,
+            **raw_operand_fields,
         )
         dump_count += 1
     return dump_count
+
+
+def _capture_k_class_pass2_raw_operands(
+    *,
+    raw_diff2,
+    target_rows,
+    actual_counts,
+    shifted_corrected,
+    corr_img_score,
+    proj_half,
+    half_weights,
+    relion_full_to_compact,
+    highres_xi2_half,
+):
+    """Stage the effective float32 raw-diff2 operands after scoring completes."""
+
+    jax.block_until_ready(raw_diff2)
+    target_rows = np.asarray(target_rows, dtype=np.int64)
+    actual_counts = np.asarray(actual_counts, dtype=np.int64)
+    shifted_corrected = np.asarray(shifted_corrected, dtype=np.complex64)
+    corr_img_score = np.asarray(corr_img_score, dtype=np.float32)
+    proj_half = np.asarray(proj_half, dtype=np.complex64)
+    half_weights = np.asarray(half_weights, dtype=np.float32)
+    if relion_full_to_compact is None:
+        relion_full_to_compact = np.arange(
+            proj_half.shape[-1],
+            dtype=np.int32,
+        )
+    else:
+        relion_full_to_compact = np.asarray(
+            relion_full_to_compact,
+            dtype=np.int32,
+        )
+    if highres_xi2_half is None:
+        highres_xi2_half = np.zeros(shifted_corrected.shape[0], dtype=np.float32)
+    else:
+        highres_xi2_half = np.asarray(highres_xi2_half, dtype=np.float32)
+
+    captured = {}
+    for row in target_rows:
+        row = int(row)
+        n_rot = int(actual_counts[row])
+        captured[row] = {
+            "shifted_corrected": np.array(
+                shifted_corrected[row],
+                copy=True,
+            ),
+            "corr_img_score": np.array(corr_img_score[row], copy=True),
+            "proj_half": np.array(proj_half[row, :n_rot], copy=True),
+            "half_weights": np.array(half_weights, copy=True),
+            "relion_full_to_compact": np.array(
+                relion_full_to_compact,
+                copy=True,
+            ),
+            "highres_xi2_half": np.float32(highres_xi2_half[row]),
+        }
+    return captured
 
 
 def _materialize_k_class_capture_rows(
@@ -12508,6 +12603,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         raw_diff2_rotation_priors_by_class = []
         raw_diff2_translation_priors_by_class = []
         raw_diff2_dump_by_class = [None] * n_classes
+        raw_operand_dump_by_class = [None] * n_classes
         score_projection_for_compact_check_by_class = []
         flat_backproject_rotations_by_class = []
         proj_for_noise_by_class = []
@@ -12769,6 +12865,32 @@ def compute_k_class_pass2_stats_sparse_fused(
                         )
                 if not use_exact_relion_gaussian:
                     class_log_z_for_bucket = _logsumexp_pass2_bucket_score_only(scores)
+            target_dump_class = os.environ.get("RECOVAR_PASS2_DUMP_CLASS")
+            if (
+                use_exact_relion_gaussian
+                and pass2_dump_rows.size
+                and _env_flag_enabled(
+                    _PASS2_DUMP_RAW_OPERANDS_ENV,
+                    default=False,
+                )
+                and (
+                    not target_dump_class
+                    or int(target_dump_class) == class_index + 1
+                )
+            ):
+                raw_operand_dump_by_class[class_index] = (
+                    _capture_k_class_pass2_raw_operands(
+                        raw_diff2=raw_diff2,
+                        target_rows=pass2_dump_rows,
+                        actual_counts=arrays["actual_counts"],
+                        shifted_corrected=shifted_corrected_score_split,
+                        corr_img_score=ctf2_over_nv_score,
+                        proj_half=proj_half,
+                        half_weights=direct_half_weights,
+                        relion_full_to_compact=relion_score_full_to_compact,
+                        highres_xi2_half=relion_highres_xi2_half,
+                    )
+                )
             scores_by_class.append(scores)
             score_projection_for_compact_check_by_class.append(
                 proj_half if compact_pair_inputs_by_class_for_check is not None else None
@@ -13079,6 +13201,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                         raw_diff2_by_batch_row=raw_diff2_dump_by_class[
                             class_index
                         ],
+                        raw_operands_by_batch_row=raw_operand_dump_by_class[
+                            class_index
+                        ],
                         relion_min_diff2=relion_min_diff2_dump,
                     )
                 else:
@@ -13122,6 +13247,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                         reconstruction_mask=dump_reconstruction_mask,
                         reconstruction_probs=dump_reconstruction_probs,
                         raw_diff2_by_batch_row=raw_diff2_dump_by_class[
+                            class_index
+                        ],
+                        raw_operands_by_batch_row=raw_operand_dump_by_class[
                             class_index
                         ],
                         relion_min_diff2=relion_min_diff2_dump,
@@ -13245,6 +13373,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                     raw_diff2_by_batch_row=raw_diff2_dump_by_class[
                         class_index
                     ],
+                    raw_operands_by_batch_row=raw_operand_dump_by_class[
+                        class_index
+                    ],
                     relion_min_diff2=relion_min_diff2_dump,
                 )
                 if accumulate_noise and reuse_compact_noise_sums and not compact_noise_sums_match_mstep:
@@ -13330,6 +13461,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                     reconstruction_mask=reconstruction_mask if relion_fine_mstep_prune else None,
                     reconstruction_probs=reconstruction_probs,
                     raw_diff2_by_batch_row=raw_diff2_dump_by_class[
+                        class_index
+                    ],
+                    raw_operands_by_batch_row=raw_operand_dump_by_class[
                         class_index
                     ],
                     relion_min_diff2=relion_min_diff2_dump,
