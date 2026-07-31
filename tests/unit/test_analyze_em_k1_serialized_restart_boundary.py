@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from scripts import analyze_em_k1_serialized_restart_boundary as analyzer
@@ -140,3 +142,134 @@ def test_explicit_fresh_capture_requires_complete_qualification_tuple() -> None:
             fresh_component_validation_json=Path("/component.json"),
             fresh_operand_validation_json=None,
         )
+
+
+def test_explicit_fresh_capture_replaces_parent_particle_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fresh_directory = tmp_path / "fresh"
+    restart_directory = tmp_path / "restart"
+    rows = [
+        {
+            "group": "control",
+            "stack_index_one_based": index + 1,
+            "original_index_zero_based": index,
+            "artifact_paths": {
+                "component": str(tmp_path / f"parent_{index}.bin"),
+                "recovar": str(tmp_path / f"recovar_{index}.npz"),
+            },
+            "artifact_sha256": {
+                "component": f"sha:parent_{index}.bin",
+                "recovar": f"sha:recovar_{index}.npz",
+            },
+        }
+        for index in range(14)
+    ]
+    parent = {
+        "particles": rows,
+        "shell_partition_metric": {
+            "classification": analyzer.SHELL_PARTITION_CLASSIFICATION
+        },
+    }
+    component_validation = {
+        "status": "pass",
+        "fixed_metric": {"evaluated_particles": 14},
+    }
+    operand_fixed_metric = {
+        "evaluated_particles": 14,
+        "expected_particles": 14,
+        "reference_replay_passed": 14,
+        "cross_replay_p95_passed": 14,
+        "cross_replay_max_passed": 14,
+        "production_diff2_centered_replay_p95_passed": 14,
+        "production_diff2_centered_replay_max_passed": 14,
+    }
+    operand_validation = {
+        "status": "pass",
+        "classification_ready": True,
+        "fixed_metric": operand_fixed_metric,
+    }
+
+    monkeypatch.setattr(analyzer, "_validate_parent", lambda _path: parent)
+    monkeypatch.setattr(
+        analyzer,
+        "_validate_component_report",
+        lambda _path: component_validation,
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "_validate_operand_report",
+        lambda _path: operand_validation,
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "_sha256",
+        lambda path: f"sha:{Path(path).name}",
+    )
+
+    def component_by_stack(directory: Path) -> dict[int, SimpleNamespace]:
+        prefix = "fresh" if directory == fresh_directory else "restart"
+        return {
+            index + 1: SimpleNamespace(
+                stack_index=index + 1,
+                part_id=index + 101,
+                header=[0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 8, 4, 3, 96],
+                path=directory / f"{prefix}_{index}.bin",
+                sha256=f"sha:{prefix}_{index}.bin",
+                raw_kind=prefix,
+            )
+            for index in range(14)
+        }
+
+    monkeypatch.setattr(analyzer, "_component_by_stack", component_by_stack)
+    monkeypatch.setattr(
+        analyzer,
+        "_load_recovar",
+        lambda path: {
+            "original_index": int(path.stem.removeprefix("recovar_")),
+            "scores": np.asarray([0.0]),
+            "rotation_ids": np.asarray([0]),
+            "sha256": f"sha:{path.name}",
+        },
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "_mapped_selected_raw",
+        lambda component, recovar: (
+            np.asarray([1.0 if component.raw_kind == "fresh" else 2.0]),
+            {"exact": True},
+        ),
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "reference_swap_counterfactual",
+        lambda _fresh, _restart: {
+            "live_reference_dominated": True,
+            "counterfactual_energy_removal_fraction": 1.0,
+            "swapped_centered_p95_abs": 0.0,
+            "swapped_centered_max_abs": 0.0,
+        },
+    )
+
+    report = analyzer.build_report(
+        parent_analysis_json=tmp_path / "parent.json",
+        restart_capture_directory=restart_directory,
+        restart_component_validation_json=tmp_path / "restart_component.json",
+        restart_operand_validation_json=tmp_path / "restart_operand.json",
+        source_optimiser_star=tmp_path / "run_it000_optimiser.star",
+        fresh_capture_directory=fresh_directory,
+        fresh_component_validation_json=tmp_path / "fresh_component.json",
+        fresh_operand_validation_json=tmp_path / "fresh_operand.json",
+    )
+
+    assert report["classification"] == analyzer.CLASSIFICATION
+    assert report["fixed_metric"]["serialized_restart_dominated"] == 14
+    assert report["fresh_capture_source"]["mode"] == (
+        "explicit_same_allocation_fresh_capture"
+    )
+    assert all(
+        Path(row["artifact_paths"]["fresh_component"]).parent
+        == fresh_directory
+        for row in report["particles"]
+    )
