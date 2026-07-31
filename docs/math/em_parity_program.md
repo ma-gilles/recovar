@@ -14048,6 +14048,10 @@ Any missing archive, failed self-replay, topology mismatch, or ambiguous
 maximum fails closed.  The diagnostic cannot authorize a tolerance, scoring
 change, component fix, native RELION claim, or scorecard change.  A later
 fixed FSC/FSC-AUC run remains necessary for any parity numerator movement.
+The outcome-safe analyzer is
+`scripts/analyze_em_k4_raw_operand_repeatability.py`; its focused tests fix
+both a unique projection divergence and an exact multi-family attribution
+tie before the GPU result is inspected.
 
 A subsequent pre-result audit found a second insertion-order ambiguity:
 multiple components can have the same exact largest energy-removed fraction.

@@ -10980,3 +10980,6 @@ and `9/15` all-class.
 - Missing data, failed self-replay, topology drift, or an attribution tie
   fails closed. This is non-scoring and cannot authorize a tolerance,
   production fix, native RELION claim, or FSC/FSC-AUC scorecard change.
+- `scripts/analyze_em_k4_raw_operand_repeatability.py` implements the sealed
+  self-replay and fixed-order substitutions. Two focused tests pass for a
+  unique projection result and an exact multi-family tie.
