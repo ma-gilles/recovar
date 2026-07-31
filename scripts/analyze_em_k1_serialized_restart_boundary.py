@@ -383,7 +383,7 @@ def build_report(
         "classification_ready": True,
         "classification": classification,
         "metric_policy": (
-            "fixed 14-particle fresh-process versus serialized-it000 "
+            "fixed 14-particle fresh-process versus serialized-optimiser "
             "restart intervention on the same RECOVAR coarse score panels; "
             "centered residual-energy removal strictly above 0.5; "
             "centered p95 <=1e-4 and max <1e-3; no fitted scale/sign; "

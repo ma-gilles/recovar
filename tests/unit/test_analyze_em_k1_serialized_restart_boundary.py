@@ -265,6 +265,8 @@ def test_explicit_fresh_capture_replaces_parent_particle_artifacts(
 
     assert report["classification"] == analyzer.CLASSIFICATION
     assert report["fixed_metric"]["serialized_restart_dominated"] == 14
+    assert "serialized-optimiser restart" in report["metric_policy"]
+    assert "serialized-it000" not in report["metric_policy"]
     assert report["fresh_capture_source"]["mode"] == (
         "explicit_same_allocation_fresh_capture"
     )
