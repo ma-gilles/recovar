@@ -10987,3 +10987,50 @@ and `9/15` all-class.
   projection shape, raw pair outputs, and actual rotation count. The analyzer
   validates that pair identities reconstruct the dense candidate mask before
   accepting a self-replay.
+
+## 2026-07-31 07:54 ET — effective-operand arm-1 capture and clean retry
+
+- Producer `11828686` failed with exit `1:0` after `00:38:31` on
+  `della-l07g4`, UUID
+  `GPU-ab7221db-5a74-4e07-9521-0c63530c053d`. The RECOVAR runner itself
+  completed arm 1 successfully in `2,302` seconds and wrote the requested
+  capture before the launcher failed.
+- The failure is post-capture orchestration, not a science result: the
+  launcher asserted score width `565`, but the effective raw-score operands
+  correctly use `596` coefficients. Because the arm helper re-enabled
+  `set -e`, the nonzero validator status escaped before the normal serializer.
+  Arm 2 and the repeatability analyzer did not run.
+- The immutable capture is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_effective_operands_db05537d_20260731T0700ET/arm1/capture/pass2/pass2_orig053722_class001_cs038.npz`,
+  SHA-256
+  `3edc9ff6a5e8fa62f95ef3ca5f9157a7c86873c308a796831589604f3e125a98`.
+  It validates schema v2, `109,184` active candidates, dense raw shape
+  `(2968, 116)`, padded exact-pair shape `(110592,)`, shifted image
+  `(116, 596)`, score/half weights `(596,)`, projected references
+  `(4096, 596)`, lookup `(760,)`, and high-shell scalar
+  `0.07816561311483383`.
+- The sealed postmortem outcome and note SHA-256 values are
+  `87acc1499c09d9a9790f6266f39638b56d5d394ab12f587f0e9eb9a172b74106`
+  and
+  `14f70b93b7b681788fa757dc522ad98576f93c4b269592433de5fbbae10d6171`;
+  all entries pass
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_effective_operands_db05537d_20260731T0700ET/provenance/postmortem_outputs_11828686.sha256`.
+- Fresh independent retry `11830484` started at 07:53:41 ET on
+  `della-l07g4`. It keeps source
+  `db1ab501570b507ac29e262a9204f46fb37b28f8`, state, data, target,
+  capture, analyzer, and runtime policy fixed. It changes only validation
+  width `565` to `596`, explicit failure-status serialization, and use of the
+  immutable private CUDA library SHA-256
+  `9d2ae812b56f7b109d93aefcb32016beaef4d91108a2871def7f1784493f4e28`
+  to avoid an irrelevant rebuild.
+- Retry launcher SHA-256 is
+  `4a5c813797ef582b7789624ab029f70c2a69f37732e0efe6c9bf88479f98442c`;
+  predeclaration SHA-256 is
+  `89bd3dbc59e3d179411e5bd588b9569f23be9caff23fbee4065aa43475bff2f2`.
+  Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_effective_operands_retry2_db1ab501_20260731T0750ET`.
+- Both jobs are diagnostic-only. Fixed K=1 remains `28/34` strict, `32/34`
+  topology, and `34/34` evaluated; fixed K=4 remains `41/60` direct and
+  `9/15` all-class; causal boundary remains `2/4`. No Codex process or
+  existing Slurm job was killed, signalled, suspended, cancelled,
+  reprioritized, requeued, held, released, or otherwise altered.

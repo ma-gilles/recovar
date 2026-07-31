@@ -14056,6 +14056,42 @@ The v2 capture also seals compact-pair order, padding, raw pair outputs, and
 actual rotation count so self-replay uses the same scoring shape rather than
 a smaller dense surrogate.
 
+The first effective-operand producer, Slurm job `11828686`, failed closed
+after `00:38:31` on `della-l07g4` only after successfully writing the arm-1
+v2 archive.  Its runner exited zero; the launcher then incorrectly validated
+the effective score width against reconstruction width `565` instead of the
+captured scoring width `596`.  A second launcher defect allowed that
+post-capture validator status to escape before the normal outcome serializer.
+Arm 2 and the analyzer did not run, so the job is non-scoring and cannot
+answer repeatability.
+
+The immutable arm-1 archive has SHA-256
+`3edc9ff6a5e8fa62f95ef3ca5f9157a7c86873c308a796831589604f3e125a98`.
+It validates as schema
+`recovar-kclass-pass2-effective-raw-operands-v2`: `109,184` active
+candidates, raw dense shape `(2968, 116)`, exact-pair padded shape
+`(110592,)` with `109,184` valid pairs, shifted image `(116, 596)`,
+score weights `(596,)`, projected references `(4096, 596)`, half weights
+`(596,)`, packed lookup `(760,)`, and high-shell scalar
+`0.07816561311483383`.  The sealed postmortem outcome SHA-256 is
+`87acc1499c09d9a9790f6266f39638b56d5d394ab12f587f0e9eb9a172b74106`;
+its postmortem SHA-256 is
+`14f70b93b7b681788fa757dc522ad98576f93c4b269592433de5fbbae10d6171`.
+
+Fresh independent retry `11830484` started on `della-l07g4` at
+`2026-07-31T07:53:41-04:00`.  It changes no source, science input, target,
+capture, or analyzer: source remains
+`db1ab501570b507ac29e262a9204f46fb37b28f8`.  It corrects only the validator
+width to `596`, uses explicit conditional status capture so every failure
+reaches the JSON serializer, and supplies the already validated immutable
+private CUDA library to avoid an irrelevant rebuild before the pass-2 stop.
+The launcher and predeclaration SHA-256 values are respectively
+`4a5c813797ef582b7789624ab029f70c2a69f37732e0efe6c9bf88479f98442c`
+and
+`89bd3dbc59e3d179411e5bd588b9569f23be9caff23fbee4065aa43475bff2f2`.
+The result remains pending and non-scoring; all fixed K=1/K=4 metrics remain
+unchanged.
+
 A subsequent pre-result audit found a second insertion-order ambiguity:
 multiple components can have the same exact largest energy-removed fraction.
 The current comparator now records the complete exact-maximizer set and emits
