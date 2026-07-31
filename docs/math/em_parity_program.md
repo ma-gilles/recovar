@@ -13835,3 +13835,11 @@ single-candidate, multi-candidate, and zero-residual behaviors before the
 representative audit is interpreted.  This reporting correction is
 non-scoring and does not change the `2/4` causal boundary or either frozen
 FSC/FSC-AUC scorecard.
+
+The already queued exact-device comparator is pinned to its pre-fix source,
+so its immutable raw/centered counterfactuals remain the science evidence but
+its top-level label is not accepted directly.  The CPU-only compatibility
+auditor `scripts/reclassify_k4_fine_operand_comparison.py` validates the
+input schema, candidate denominator, component identity/order, common target
+energy, and recorded strongest component, then emits a separate hashed V2
+classification using the corrected rule.  It never rewrites the GPU report.
