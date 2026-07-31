@@ -13964,6 +13964,58 @@ input schema, candidate denominator, component identity/order, common target
 energy, and recorded strongest component, then emits a separate hashed V2
 classification using the corrected rule.  It never rewrites the GPU report.
 
+### Same-A100 dynamic-reference repeatability result
+
+Slurm job `11825133` completed `0:0` in `01:24:35` on
+`della-l07g5`, physical UUID
+`GPU-803dc869-2e74-273c-1df4-08adbc94e1b3`.  Its reference and
+contribution-stop arms ran sequentially in one allocation with the same
+clean sources, private CUDA library, runtime policy, and physical GPU.
+The strict three-archive report is complete but rejects all `3/3` gates:
+pass 2, contribution, and device signature are not byte-identical.
+Consequently the native RELION capture and comparator correctly did not run.
+
+The pass-2 structure is stable: archive keys, shapes, dtypes, candidate mask,
+reconstruction mask, rotations, translations, and priors are exact.  Among
+the `109,184` finite active raw costs, `16,216` differ: `15,304` by one ULP,
+`906` by two ULPs, and `6` by three ULPs.  Maximum absolute raw delta is
+`0.0001220703125`.  The raw archive also contains `235,104` paired NaNs
+whose payload bytes are identical, so they are not strict mismatches.  There
+are no NaN-payload or signed-zero mismatches.
+
+The three frozen multistratum probes separate:
+
+| Probe | Candidate | RECOVAR row / translation | Reference | Stop arm | Result |
+| --- | ---: | --- | ---: | ---: | --- |
+| rank 1 | 66561 | 954 / 13 | 516.3260498046875 | 516.3261108398438 | +1 ULP |
+| rank 2 | 62317 | 951 / 29 | 508.0726013183594 | 508.0726013183594 | exact |
+| rank 3 | 63564 | 1921 / 28 | 510.322509765625 | 510.322509765625 | exact |
+
+Thus rank 1 toggles between the native RELION-matching value and the
+previous RECOVAR value across two executions on the same A100.  It cannot
+support a component attribution across separately executed arms.  Ranks 2
+and 3 remain repeatable in this pair, but the predeclared cohort cannot
+override the failed whole-archive gate.
+
+The device signature has `2,634,453` strict `source_values` mismatches and
+`1,831,050` paired NaNs with identical payloads.  All mismatches are confined
+to the downstream `data_re`, `data_im`, and `Fweight` channels; `rk0`,
+`rk1`, `rk2`, neighbor indices and coefficients, row flags, and program
+geometry are exact.  This localizes the failed repeatability to numerical
+score/posterior/data-weight values rather than candidate or scatter
+topology.
+
+The strict report SHA-256 is
+`316cae2608a66b161b1c0985974534e2bef91f27b61e44a19e94193254df1cc8`;
+the chain report SHA-256 is
+`97d52f884efb0ad75cb46f27f2c82fd13de057d6526d97efa112372480582954`.
+Both pass the sealed
+`provenance/chain_outputs_11825133.sha256` manifest.  The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_dynamicref_retry2_20260731T0520ET`.
+This result is non-scoring: fixed K=1 remains `28/34` strict, `32/34`
+topology, and `34/34` evaluated; fixed K=4 remains `41/60` direct and
+`9/15` all-class; the separate causal boundary remains `2/4`.
+
 A subsequent pre-result audit found a second insertion-order ambiguity:
 multiple components can have the same exact largest energy-removed fraction.
 The current comparator now records the complete exact-maximizer set and emits

@@ -10919,3 +10919,43 @@ and `9/15` all-class.
   runs. Fixed K=1 remains `28/34` strict, `32/34` topology, and `34/34`
   evaluated; fixed K=4 remains `41/60` direct and `9/15` all-class. No
   process or existing Slurm job was modified or interrupted.
+
+## 2026-07-31 06:49 ET — same-A100 strict repeatability rejects 0/3
+
+- Dynamic-reference job `11825133` completed `0:0` in `01:24:35` on
+  `della-l07g5`, UUID
+  `GPU-803dc869-2e74-273c-1df4-08adbc94e1b3`. Reference and
+  contribution-stop arms used one allocation, one physical GPU, identical
+  clean sources, the same private CUDA bytes, grid correction unset/off, and
+  forced final all-data unset.
+- The strict report is complete, accepted false, and classifies
+  `same_observer_archives_do_not_repeat_bit_for_bit`. Pass-2, contribution,
+  and device-signature gates all fail, so native RELION and the comparator
+  correctly did not run. Fixed scorecards and the `2/4` non-scoring causal
+  ledger are unchanged.
+- Pass-2 keys, shapes, dtypes, candidate/reconstruction masks, rotations,
+  translations, and priors are exact. Of `109,184` finite active raw costs,
+  `16,216` differ: `15,304` by one ULP, `906` by two, and `6` by three;
+  maximum absolute delta is `0.0001220703125`. The additional `235,104`
+  paired NaNs have identical payload bytes. There are no NaN-payload or
+  signed-zero mismatches.
+- Frozen rank-1 candidate `66561` at row `954`, translation `13`, flips from
+  `516.3260498046875` (bits `1140921566`, the native RELION value) in the
+  reference arm to `516.3261108398438` (bits `1140921567`, the prior RECOVAR
+  value) in the stop arm. Rank-2 candidate `62317` and rank-3 candidate
+  `63564` repeat exactly at `508.0726013183594` and `510.322509765625`.
+  The rank-1 operand attribution is therefore not admissible across separate
+  executions, even on the same A100.
+- Device `source_values` have `2,634,453` strict mismatches plus `1,831,050`
+  byte-identical paired NaNs. Mismatches occur only in `data_re`, `data_im`,
+  and `Fweight`; all `rk` coordinate channels, neighbor geometry, flags, and
+  scatter program geometry are exact. This is numerical value drift, not a
+  candidate/scatter-topology change.
+- Strict report SHA-256:
+  `316cae2608a66b161b1c0985974534e2bef91f27b61e44a19e94193254df1cc8`.
+  Chain report SHA-256:
+  `97d52f884efb0ad75cb46f27f2c82fd13de057d6526d97efa112372480582954`.
+  Both pass
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_dynamicref_retry2_20260731T0520ET/provenance/chain_outputs_11825133.sha256`.
+- No Codex process or Slurm job was killed, signalled, suspended, cancelled,
+  reprioritized, requeued, held, released, or otherwise altered.
