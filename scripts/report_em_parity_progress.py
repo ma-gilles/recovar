@@ -63,6 +63,12 @@ from scripts.summarize_em_k4_class_fsc_auc_scorecard import (  # noqa: E402
 from scripts.summarize_em_k4_class_fsc_auc_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k4_classes,
 )
+from scripts.summarize_em_k4_contribution_repeatability_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K4_CONTRIBUTION_REPEATABILITY_SCORECARD,
+)
+from scripts.summarize_em_k4_contribution_repeatability_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k4_contribution_repeatability,
+)
 from scripts.summarize_em_k4_preprocess_replay_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K4_PREPROCESS_SCORECARD,
 )
@@ -79,7 +85,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v9"
+SCHEMA = "recovar.em_parity_progress.v10"
 
 
 def _panel(
@@ -125,6 +131,9 @@ def build_progress(
     k4_snapshot_path: Path = DEFAULT_K4_SNAPSHOT,
     k4_class_path: Path = DEFAULT_K4_CLASS_SCORECARD,
     k4_causal_path: Path = DEFAULT_K4_CAUSAL_SCORECARD,
+    k4_contribution_repeatability_path: Path = (
+        DEFAULT_K4_CONTRIBUTION_REPEATABILITY_SCORECARD
+    ),
     k4_preprocess_path: Path = DEFAULT_K4_PREPROCESS_SCORECARD,
     k1_restart_path: Path = DEFAULT_K1_RESTART_SCORECARD,
     k1_continuation_initializer_path: Path = (DEFAULT_K1_CONTINUATION_INITIALIZER_SCORECARD),
@@ -140,6 +149,11 @@ def build_progress(
     k4_snapshot = load_and_validate_k4_snapshot(k4_snapshot_path)
     k4_class_scorecard = load_and_validate_k4_classes(k4_class_path)
     k4_causal = load_and_validate_k4_causal(k4_causal_path)
+    k4_contribution_repeatability = (
+        load_and_validate_k4_contribution_repeatability(
+            k4_contribution_repeatability_path
+        )
+    )
     k4_preprocess = load_and_validate_k4_preprocess(k4_preprocess_path)
     k1_restart = load_and_validate_k1_restart(k1_restart_path)
     k1_continuation_initializer = load_and_validate_k1_continuation_initializer(k1_continuation_initializer_path)
@@ -156,6 +170,9 @@ def build_progress(
     k4_iteration_denominator = k4_snapshot["numbered_iterations"]
     k4_classes = k4_snapshot["classes"]
     k4_causal_summary = k4_causal["summary"]
+    k4_contribution_repeatability_summary = k4_contribution_repeatability[
+        "summary"
+    ]
     k4_preprocess_summary = k4_preprocess["summary"]
     k1_restart_summary = k1_restart["summary"]
     k1_continuation_initializer_baseline = k1_continuation_initializer["baseline_summary"]
@@ -349,6 +366,14 @@ def build_progress(
             scoring=False,
         ),
         _panel(
+            "k4_contribution_repeatability",
+            "K=4 contribution archive repeatability",
+            k4_contribution_repeatability_summary["pass"],
+            k4_contribution_repeatability_summary["evaluated"],
+            k4_contribution_repeatability["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
             "k4_preprocess_bitwise",
             "K=4 preprocess bitwise replay",
             k4_preprocess_summary["bitwise_equal"],
@@ -372,7 +397,8 @@ def build_progress(
             "correlation is not used. The K=1 serialized-restart, K=1 "
             "continuation-initializer, K=1 sampling-perturbation, K=1 "
             "sampling-roundtrip, K=1 normalization-roundtrip, K=4 causal, "
-            "K=1 deterministic-mask, and K=4 preprocessing panels are non-scoring."
+            "K=1 deterministic-mask, K=4 contribution-repeatability, and K=4 "
+            "preprocessing panels are non-scoring."
         ),
         "scorecard_change_admissible": False,
         "panels": panels,
@@ -453,6 +479,9 @@ def build_progress(
             "k4_trajectory_snapshot": _input_record(k4_snapshot_path),
             "k4_class_scorecard": _input_record(k4_class_path),
             "k4_causal_scorecard": _input_record(k4_causal_path),
+            "k4_contribution_repeatability_scorecard": _input_record(
+                k4_contribution_repeatability_path
+            ),
             "k4_preprocess_scorecard": _input_record(k4_preprocess_path),
         },
     }
