@@ -981,8 +981,11 @@ def test_kclass_pass2_dump_preserves_effective_raw_operands(monkeypatch, tmp_pat
     corr_img_score = np.arange(n_pix, dtype=np.float32) + 0.5
     half_weights = np.arange(n_pix, dtype=np.float32) + 1.0
     full_to_compact = np.asarray([0, -1, 1, 2, 3], dtype=np.int32)
+    pair_mask = np.asarray([[True, True, False, False]], dtype=bool)
+    pair_rotation_row = np.asarray([[0, 1, 0, 0]], dtype=np.int32)
+    pair_translation_idx = np.asarray([[1, 2, 0, 0]], dtype=np.int32)
     raw_operands = sparse_pass2_mod._capture_k_class_pass2_raw_operands(
-        raw_diff2=np.zeros((1, n_rot, n_trans), dtype=np.float32),
+        raw_diff2=np.zeros((1, pair_mask.shape[1]), dtype=np.float32),
         target_rows=np.asarray([0], dtype=np.int64),
         actual_counts=np.asarray([n_rot], dtype=np.int64),
         shifted_corrected=shifted_corrected[None, ...],
@@ -991,6 +994,9 @@ def test_kclass_pass2_dump_preserves_effective_raw_operands(monkeypatch, tmp_pat
         half_weights=half_weights,
         relion_full_to_compact=full_to_compact,
         highres_xi2_half=np.asarray([7.25], dtype=np.float32),
+        pair_mask=pair_mask,
+        pair_rotation_row=pair_rotation_row,
+        pair_translation_idx=pair_translation_idx,
     )
 
     dump_dir = tmp_path / "pass2"
@@ -1015,7 +1021,12 @@ def test_kclass_pass2_dump_preserves_effective_raw_operands(monkeypatch, tmp_pat
 
     payload = np.load(dump_dir / "pass2_orig000042_class001_cs014.npz")
     assert str(payload["raw_operand_schema"]) == (
-        "recovar-kclass-pass2-effective-raw-operands-v1"
+        "recovar-kclass-pass2-effective-raw-operands-v2"
+    )
+    assert int(payload["raw_operand_actual_rotation_count"]) == n_rot
+    np.testing.assert_array_equal(
+        payload["raw_operand_raw_diff2"],
+        np.zeros(pair_mask.shape[1], dtype=np.float32),
     )
     np.testing.assert_array_equal(
         payload["raw_operand_shifted_corrected"],
@@ -1035,6 +1046,15 @@ def test_kclass_pass2_dump_preserves_effective_raw_operands(monkeypatch, tmp_pat
         full_to_compact,
     )
     assert payload["raw_operand_highres_xi2_half"] == np.float32(7.25)
+    np.testing.assert_array_equal(payload["raw_operand_pair_mask"], pair_mask[0])
+    np.testing.assert_array_equal(
+        payload["raw_operand_pair_rotation_row"],
+        pair_rotation_row[0],
+    )
+    np.testing.assert_array_equal(
+        payload["raw_operand_pair_translation_idx"],
+        pair_translation_idx[0],
+    )
 
 
 def test_pass2_dump_target_rows_use_original_index_mapping(monkeypatch, tmp_path):

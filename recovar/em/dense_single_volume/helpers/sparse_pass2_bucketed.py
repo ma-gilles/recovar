@@ -7505,7 +7505,14 @@ def _maybe_dump_k_class_pass2_bucket(
             raw_operands = raw_operands_by_batch_row[row]
             raw_operand_fields = {
                 "raw_operand_schema": np.asarray(
-                    "recovar-kclass-pass2-effective-raw-operands-v1"
+                    "recovar-kclass-pass2-effective-raw-operands-v2"
+                ),
+                "raw_operand_actual_rotation_count": np.int64(
+                    raw_operands["actual_rotation_count"]
+                ),
+                "raw_operand_raw_diff2": np.asarray(
+                    raw_operands["raw_diff2"],
+                    dtype=np.float32,
                 ),
                 "raw_operand_shifted_corrected": np.asarray(
                     raw_operands["shifted_corrected"],
@@ -7529,6 +7536,18 @@ def _maybe_dump_k_class_pass2_bucket(
                 ),
                 "raw_operand_highres_xi2_half": np.float32(
                     raw_operands["highres_xi2_half"]
+                ),
+                "raw_operand_pair_mask": np.asarray(
+                    raw_operands["pair_mask"],
+                    dtype=bool,
+                ),
+                "raw_operand_pair_rotation_row": np.asarray(
+                    raw_operands["pair_rotation_row"],
+                    dtype=np.int32,
+                ),
+                "raw_operand_pair_translation_idx": np.asarray(
+                    raw_operands["pair_translation_idx"],
+                    dtype=np.int32,
                 ),
             }
         out_path = os.path.join(
@@ -7574,10 +7593,13 @@ def _capture_k_class_pass2_raw_operands(
     half_weights,
     relion_full_to_compact,
     highres_xi2_half,
+    pair_mask=None,
+    pair_rotation_row=None,
+    pair_translation_idx=None,
 ):
     """Stage the effective float32 raw-diff2 operands after scoring completes."""
 
-    jax.block_until_ready(raw_diff2)
+    raw_diff2 = np.asarray(jax.block_until_ready(raw_diff2), dtype=np.float32)
     target_rows = np.asarray(target_rows, dtype=np.int64)
     actual_counts = np.asarray(actual_counts, dtype=np.int64)
     shifted_corrected = np.asarray(shifted_corrected, dtype=np.complex64)
@@ -7598,24 +7620,46 @@ def _capture_k_class_pass2_raw_operands(
         highres_xi2_half = np.zeros(shifted_corrected.shape[0], dtype=np.float32)
     else:
         highres_xi2_half = np.asarray(highres_xi2_half, dtype=np.float32)
+    if pair_mask is None:
+        pair_mask = np.empty((shifted_corrected.shape[0], 0), dtype=bool)
+        pair_rotation_row = np.empty(
+            (shifted_corrected.shape[0], 0),
+            dtype=np.int32,
+        )
+        pair_translation_idx = np.empty(
+            (shifted_corrected.shape[0], 0),
+            dtype=np.int32,
+        )
+    else:
+        pair_mask = np.asarray(pair_mask, dtype=bool)
+        pair_rotation_row = np.asarray(pair_rotation_row, dtype=np.int32)
+        pair_translation_idx = np.asarray(pair_translation_idx, dtype=np.int32)
 
     captured = {}
     for row in target_rows:
         row = int(row)
         n_rot = int(actual_counts[row])
         captured[row] = {
+            "actual_rotation_count": np.int64(n_rot),
+            "raw_diff2": np.array(raw_diff2[row], copy=True),
             "shifted_corrected": np.array(
                 shifted_corrected[row],
                 copy=True,
             ),
             "corr_img_score": np.array(corr_img_score[row], copy=True),
-            "proj_half": np.array(proj_half[row, :n_rot], copy=True),
+            "proj_half": np.array(proj_half[row], copy=True),
             "half_weights": np.array(half_weights, copy=True),
             "relion_full_to_compact": np.array(
                 relion_full_to_compact,
                 copy=True,
             ),
             "highres_xi2_half": np.float32(highres_xi2_half[row]),
+            "pair_mask": np.array(pair_mask[row], copy=True),
+            "pair_rotation_row": np.array(pair_rotation_row[row], copy=True),
+            "pair_translation_idx": np.array(
+                pair_translation_idx[row],
+                copy=True,
+            ),
         }
     return captured
 
@@ -12889,6 +12933,27 @@ def compute_k_class_pass2_stats_sparse_fused(
                         half_weights=direct_half_weights,
                         relion_full_to_compact=relion_score_full_to_compact,
                         highres_xi2_half=relion_highres_xi2_half,
+                        pair_mask=(
+                            compact_pair_arrays_by_class[class_index][
+                                "pair_mask"
+                            ]
+                            if bucket_uses_compact_pairs
+                            else None
+                        ),
+                        pair_rotation_row=(
+                            compact_pair_arrays_by_class[class_index][
+                                "local_rotation_row"
+                            ]
+                            if bucket_uses_compact_pairs
+                            else None
+                        ),
+                        pair_translation_idx=(
+                            compact_pair_arrays_by_class[class_index][
+                                "translation_idx"
+                            ]
+                            if bucket_uses_compact_pairs
+                            else None
+                        ),
                     )
                 )
             scores_by_class.append(scores)

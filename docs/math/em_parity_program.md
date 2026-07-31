@@ -14052,6 +14052,9 @@ The outcome-safe analyzer is
 `scripts/analyze_em_k4_raw_operand_repeatability.py`; its focused tests fix
 both a unique projection divergence and an exact multi-family attribution
 tie before the GPU result is inspected.
+The v2 capture also seals compact-pair order, padding, raw pair outputs, and
+actual rotation count so self-replay uses the same scoring shape rather than
+a smaller dense surrogate.
 
 A subsequent pre-result audit found a second insertion-order ambiguity:
 multiple components can have the same exact largest energy-removed fraction.

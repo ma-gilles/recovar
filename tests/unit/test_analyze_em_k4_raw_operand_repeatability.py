@@ -28,6 +28,10 @@ def _write_archive(
         "fine_translations": np.zeros((n_trans, 2), dtype=np.float32),
         "fine_translation_parent": np.arange(n_trans, dtype=np.int32),
         "raw_operand_relion_full_to_compact": np.arange(2, dtype=np.int32),
+        "raw_operand_actual_rotation_count": np.int64(n_rot),
+        "raw_operand_pair_mask": np.empty((0,), dtype=bool),
+        "raw_operand_pair_rotation_row": np.empty((0,), dtype=np.int32),
+        "raw_operand_pair_translation_idx": np.empty((0,), dtype=np.int32),
         "raw_operand_shifted_corrected": shifted,
         "raw_operand_proj_half": projection,
         "raw_operand_corr_img_score": np.ones(2, dtype=np.float32),
@@ -35,6 +39,7 @@ def _write_archive(
         "raw_operand_highres_xi2_half": np.float32(high_shell_offset),
     }
     values["relion_raw_diff2"] = _fake_replay(values)
+    values["raw_operand_raw_diff2"] = values["relion_raw_diff2"]
     np.savez(path, **values)
 
 

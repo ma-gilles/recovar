@@ -25,9 +25,14 @@ TOPOLOGY_FIELDS = (
     "fine_translations",
     "fine_translation_parent",
     "raw_operand_relion_full_to_compact",
+    "raw_operand_actual_rotation_count",
+    "raw_operand_pair_mask",
+    "raw_operand_pair_rotation_row",
+    "raw_operand_pair_translation_idx",
 )
 REQUIRED_FIELDS = {
     "relion_raw_diff2",
+    "raw_operand_raw_diff2",
     "original_index",
     "class_index",
     "current_size",
@@ -107,22 +112,136 @@ def _raw_stats(
     }
 
 
+def _pair_mapping_stats(values: dict[str, np.ndarray]) -> dict[str, object]:
+    candidate_mask = np.asarray(values["candidate_mask"], dtype=bool)
+    projection = np.asarray(values["raw_operand_proj_half"])
+    actual_count = int(values["raw_operand_actual_rotation_count"])
+    pair_mask = np.asarray(values["raw_operand_pair_mask"], dtype=bool)
+    rotation_row = np.asarray(
+        values["raw_operand_pair_rotation_row"],
+        dtype=np.int64,
+    )
+    translation_idx = np.asarray(
+        values["raw_operand_pair_translation_idx"],
+        dtype=np.int64,
+    )
+    projection_shape_valid = (
+        0 <= actual_count <= projection.shape[0]
+        and candidate_mask.shape[0] == actual_count
+    )
+    if not pair_mask.size:
+        return {
+            "compact_pairs": False,
+            "projection_shape_valid": projection_shape_valid,
+            "pair_shapes_equal": True,
+            "valid_indices": True,
+            "unique_pairs": True,
+            "candidate_mask_equal": True,
+            "passed": projection_shape_valid,
+        }
+    pair_shapes_equal = (
+        pair_mask.shape == rotation_row.shape == translation_idx.shape
+    )
+    if not pair_shapes_equal:
+        return {
+            "compact_pairs": True,
+            "projection_shape_valid": projection_shape_valid,
+            "pair_shapes_equal": False,
+            "valid_indices": False,
+            "unique_pairs": False,
+            "candidate_mask_equal": False,
+            "passed": False,
+        }
+    valid = (
+        pair_mask
+        & (rotation_row >= 0)
+        & (rotation_row < candidate_mask.shape[0])
+        & (translation_idx >= 0)
+        & (translation_idx < candidate_mask.shape[1])
+    )
+    valid_indices = bool(np.all(~pair_mask | valid))
+    linear = (
+        rotation_row[valid] * candidate_mask.shape[1]
+        + translation_idx[valid]
+    )
+    unique_pairs = np.unique(linear).size == linear.size
+    reconstructed = np.zeros_like(candidate_mask)
+    reconstructed[rotation_row[valid], translation_idx[valid]] = True
+    candidate_mask_equal = np.array_equal(reconstructed, candidate_mask)
+    passed = bool(
+        projection_shape_valid
+        and pair_shapes_equal
+        and valid_indices
+        and unique_pairs
+        and candidate_mask_equal
+    )
+    return {
+        "compact_pairs": True,
+        "projection_shape_valid": projection_shape_valid,
+        "pair_shapes_equal": pair_shapes_equal,
+        "valid_indices": valid_indices,
+        "unique_pairs": unique_pairs,
+        "candidate_mask_equal": candidate_mask_equal,
+        "valid_pair_count": int(np.count_nonzero(valid)),
+        "passed": passed,
+    }
+
+
 def _jax_replay(values: dict[str, np.ndarray]) -> np.ndarray:
     import jax.numpy as jnp
 
     from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
         _score_pass2_bucket_relion_gpu_diff2_raw,
+        _score_pass2_pairs_relion_gpu_diff2_raw,
     )
 
-    replay = _score_pass2_bucket_relion_gpu_diff2_raw(
+    pair_mask = np.asarray(values["raw_operand_pair_mask"], dtype=bool)
+    common_args = (
         jnp.asarray(values["raw_operand_shifted_corrected"])[None, ...],
         jnp.asarray(values["raw_operand_corr_img_score"])[None, ...],
         jnp.asarray(values["raw_operand_proj_half"])[None, ...],
         jnp.asarray(values["raw_operand_half_weights"]),
+    )
+    if pair_mask.size:
+        replay = _score_pass2_pairs_relion_gpu_diff2_raw(
+            *common_args,
+            jnp.asarray(values["raw_operand_pair_rotation_row"])[None, ...],
+            jnp.asarray(values["raw_operand_pair_translation_idx"])[None, ...],
+            jnp.asarray(pair_mask)[None, ...],
+            jnp.asarray(values["raw_operand_relion_full_to_compact"]),
+            jnp.asarray(values["raw_operand_highres_xi2_half"])[None],
+        )
+        dense = np.full_like(
+            np.asarray(values["relion_raw_diff2"], dtype=np.float32),
+            np.nan,
+        )
+        rotation_row = np.asarray(
+            values["raw_operand_pair_rotation_row"],
+            dtype=np.int64,
+        )
+        translation_idx = np.asarray(
+            values["raw_operand_pair_translation_idx"],
+            dtype=np.int64,
+        )
+        valid = (
+            pair_mask
+            & (rotation_row >= 0)
+            & (rotation_row < dense.shape[0])
+            & (translation_idx >= 0)
+            & (translation_idx < dense.shape[1])
+        )
+        dense[rotation_row[valid], translation_idx[valid]] = np.asarray(
+            replay[0],
+            dtype=np.float32,
+        )[valid]
+        return dense
+    replay = _score_pass2_bucket_relion_gpu_diff2_raw(
+        *common_args,
         jnp.asarray(values["raw_operand_relion_full_to_compact"]),
         jnp.asarray(values["raw_operand_highres_xi2_half"])[None],
     )
-    return np.asarray(replay[0], dtype=np.float32)
+    n_rot = int(values["raw_operand_actual_rotation_count"])
+    return np.asarray(replay[0, :n_rot], dtype=np.float32)
 
 
 def analyze(
@@ -138,7 +257,15 @@ def analyze(
         field: _strict_element_stats(first[field], second[field])
         for field in TOPOLOGY_FIELDS
     }
-    topology_equal = all(record["byte_equal"] for record in topology.values())
+    pair_mapping = {
+        "first": _pair_mapping_stats(first),
+        "second": _pair_mapping_stats(second),
+    }
+    topology_equal = bool(
+        all(record["byte_equal"] for record in topology.values())
+        and pair_mapping["first"]["passed"]
+        and pair_mapping["second"]["passed"]
+    )
     identity_equal = all(
         np.array_equal(first[field], second[field])
         for field in ("original_index", "class_index", "current_size")
@@ -226,6 +353,7 @@ def analyze(
             and baseline["byte_equal"]
         ),
         "topology": topology,
+        "pair_mapping": pair_mapping,
         "operands": operands,
         "differing_operand_families": differing_families,
         "self_replay": {

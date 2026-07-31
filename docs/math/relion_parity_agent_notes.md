@@ -10983,3 +10983,7 @@ and `9/15` all-class.
 - `scripts/analyze_em_k4_raw_operand_repeatability.py` implements the sealed
   self-replay and fixed-order substitutions. Two focused tests pass for a
   unique projection result and an exact multi-family tie.
+- Capture schema v2 additionally seals compact-pair mask/order, padded
+  projection shape, raw pair outputs, and actual rotation count. The analyzer
+  validates that pair identities reconstruct the dense candidate mask before
+  accepting a self-replay.
