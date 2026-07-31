@@ -14104,6 +14104,31 @@ move a scorecard.  The live-audit note SHA-256 is
 `9795fe582edc589b271f5d9d637993d2ec74fe37eab8ca9cd19a4f8fd26f0a76`.
 All fixed K=1/K=4 metrics remain unchanged.
 
+The exploratory arm-1 runner subsequently completed successfully in `2,360`
+seconds.  Its corrected width-596 validator, schema-v2 shape, pair topology,
+and capture-hash gates all passed; archive SHA-256 is
+`507bdb074b63eb2dced19edf3f554ccf7c40fec453b7f24c55c0aa340353c772`.
+A strict read-only comparison with job `11828686`'s arm-1 archive found exact
+candidate/topology arrays, packed lookup, projection, score weight, half
+weight, and high-shell scalar.  Only the shifted image differs, in `17,854`
+of `69,136` complex elements.  The corresponding active raw table differs in
+`11,994/109,184` entries: `11,329` by one ULP, `663` by two, and `2` by
+three, with maximum absolute delta `0.0001220703125`.  This comparison spans
+different allocations and GPUs, so it is only a narrowed hypothesis, not the
+same-allocation classification.
+
+Fresh independent retry `11831421` started on `della-l07g5` at
+`2026-07-31T08:35:43-04:00`.  It builds the custom CUDA library once inside
+its own run root from the pinned clean `db1ab501` source and CUDA 12.8
+toolchain, then seals its dynamic SHA-256 plus inode/mtime/size/mode before
+arm 1 and rechecks the signature before and after both arms and the analyzer.
+No source, state, data, target, capture, analyzer, or acceptance metric
+changed.  Launcher SHA-256 is
+`f5c2db4965845b87c02fea11c52ccf441a5ff893b7e6f3973edd3844d43f2972`;
+predeclaration SHA-256 is
+`73eee82bc6a68901094a13378ae0e9b6276ecb78cddf81b9372885d9ba913b03`.
+The clean result remains pending and non-scoring.
+
 A subsequent pre-result audit found a second insertion-order ambiguity:
 multiple components can have the same exact largest energy-removed fraction.
 The current comparator now records the complete exact-maximizer set and emits

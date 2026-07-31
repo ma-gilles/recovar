@@ -11043,3 +11043,25 @@ and `9/15` all-class.
   `9/15` all-class; causal boundary remains `2/4`. No Codex process or
   existing Slurm job was killed, signalled, suspended, cancelled,
   reprioritized, requeued, held, released, or otherwise altered.
+- Exploratory arm 1 then completed with runner status zero in `2,360`
+  seconds. Its corrected 596-width validator and schema-v2 gates passed.
+  Capture SHA-256:
+  `507bdb074b63eb2dced19edf3f554ccf7c40fec453b7f24c55c0aa340353c772`.
+- Against immutable job `11828686` arm 1, topology, lookup, projection,
+  score/half weights, and high-shell scalar are byte-exact. Only shifted
+  image differs (`17,854/69,136` complex elements); active raw costs differ
+  `11,994/109,184`, comprising `11,329` one-ULP, `663` two-ULP, and `2`
+  three-ULP values, maximum delta `0.0001220703125`. Because this is a
+  cross-allocation/GPU comparison, it is a narrowed hypothesis only.
+- Independent clean retry `11831421` started at 08:35:43 ET on
+  `della-l07g5`. It builds the CUDA library once into its own run root from
+  pinned source/toolchain, seals hash plus file signature before arm 1, and
+  rechecks both around every arm and the analyzer. Launcher SHA-256:
+  `f5c2db4965845b87c02fea11c52ccf441a5ff893b7e6f3973edd3844d43f2972`;
+  predeclaration SHA-256:
+  `73eee82bc6a68901094a13378ae0e9b6276ecb78cddf81b9372885d9ba913b03`.
+  Root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_effective_operands_retry3_db1ab501_20260731T0810ET`.
+- Job `11830484` was not altered and continues its exploratory arm 2.
+  Retry `11831421` is independent; no existing process or Slurm job was
+  modified or interrupted.
