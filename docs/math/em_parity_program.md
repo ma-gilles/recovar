@@ -14411,3 +14411,66 @@ This is a non-scoring causal diagnostic.  K=1 remains `28/34` strict,
 `9/15` all-class; the exact-device causal boundary remains `2/4`.
 Correlation was not computed.  No existing process or Slurm job was
 modified or interrupted.
+
+## 2026-07-31 case-22 same-A100 serialized-restart result
+
+Authoritative job `11839040` completed naturally `0:0` in `00:38:51` on
+`della-l07g3`, physical A100 UUID
+`GPU-eb1c5b04-20c1-b6c9-16e6-b3dc87905bd7`.  Fresh, serialized-iteration-0,
+and serialized-iteration-1 arms ran sequentially in that one allocation.
+All three arm completion ledgers, `234` arm-output hashes, eight analysis
+outputs, and the final completion ledger pass.  RECOVAR source was clean
+`d676d9d8ac4ca91b4e74b6b29ebe817dd889bc36`; private RELION source was
+`ed53c60d83125902c456b7fc5461c78c3966b306`, with binary SHA-256
+`a274dda1b0b40478ddd7f2b81d144bec20510db369225f365f1be7d27ac45309`.
+The launcher and predeclaration SHA-256 values are
+`6ef245eb663ae55eac0d6e4eae07de42f131713929056c1266d3b4620e74ff01`
+and
+`f8a6f1867d271dd69d489940f108f8311ed03aef599e3fe669acfc734e625ad2`.
+`RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` and forced final-all-data after
+non-convergence were unset.  Both continuation arms explicitly restated
+`--auto_iter_max 2`.
+
+The fixed `42`-gate causal score is `24/42`, fully evaluated:
+
+| Gate group | Iteration-0 restart | Iteration-1 restart | Total |
+| --- | ---: | ---: | ---: |
+| particle score counterfactual | 14/14 | 0/14 | 14/28 |
+| signed RECOVAR-to-RELION FSC-AUC improvement | 3/3 | 0/3 | 3/6 |
+| GT FSC-AUC non-degradation | 3/3 | 3/3 | 6/6 |
+| overall arm acceptance | 1/1 | 0/1 | 1/2 |
+
+The serialized-iteration-0 arm removes `0.6781150236301074` to
+`0.9440941738309356` of the fixed score residual energy across all `14`
+particles.  Its half-1, half-2, and merged parity FSC-AUC deltas are
+`+1.1301743318981039e-08`, `+1.1023217227901227e-08`, and
+`+1.1198937777123774e-08`; its GT deltas are all positive.
+
+The direct serialized-iteration-1 arm does not reproduce that recovery:
+all `14` score gates fail, and parity FSC-AUC changes by
+`-0.027929095236306267`, `-0.03369456874674115`, and
+`-0.028284902225018227`.  Its GT FSC-AUC nevertheless improves by
+`+0.0027846093419554296`, `+0.003047600199027445`, and
+`+0.0028650938146021487`.  The pair classification is therefore
+`only_iteration0_restart_closes_score_and_map_gates`; the fixed causal
+interpretation is
+`case22_recovery_requires_replaying_iteration1_from_serialized_it0`.
+This distinguishes process-resident state reconstructed while replaying
+iteration 1 from state that RELION serializes at iteration 1.
+
+An independent CPU analyzer replay from
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_sameallocation_restart_pair_autoiter2_d676d9d8_20260731T1225ET/independent_replay_CgAcEM`
+reproduced both score reports byte-for-byte and all five score/map/pair
+reports semantically exactly after normalizing only self-referential paths
+and hashes.  That disposable root contains `SAFE_TO_DELETE`.
+
+The checked ledger is
+`docs/math/em_k1_serialized_restart_scorecard_v1.json`; its generated table
+is `docs/math/em_k1_serialized_restart_scorecard.md`.  The consolidated
+report exposes `24/42` as a separate non-scoring panel.  It does not change
+the immutable quality metrics: K=1 remains `28/34` strict, `32/34` topology,
+and `34/34` evaluated; K=4 remains `41/60` direct and `9/15` all-class; the
+K=4 exact-device causal panel remains `2/4`.  Correlation was not computed.
+Run root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sameallocation_restart_pair_autoiter2_d676d9d8_20260731T1225ET`.
+No Codex process or existing Slurm job was modified or interrupted.

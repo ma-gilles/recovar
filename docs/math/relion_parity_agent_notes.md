@@ -11282,3 +11282,56 @@ and `9/15` all-class.
   `9/15`, and `2/4`; correlation was not computed. No existing process or
   Slurm job was killed, signalled, suspended, cancelled, reprioritized,
   requeued, held, released, or otherwise altered.
+
+## 2026-07-31 13:05 ET — same-A100 restart pair requires iteration-1 replay
+
+- Authoritative job `11839040` completed naturally `0:0` in `00:38:51` on
+  `della-l07g3`, UUID
+  `GPU-eb1c5b04-20c1-b6c9-16e6-b3dc87905bd7`. Fresh, restart-from-iteration-0,
+  and restart-from-iteration-1 arms ran sequentially in one allocation.
+- RECOVAR source:
+  `d676d9d8ac4ca91b4e74b6b29ebe817dd889bc36`. Private RELION source:
+  `ed53c60d83125902c456b7fc5461c78c3966b306`. RELION binary SHA-256:
+  `a274dda1b0b40478ddd7f2b81d144bec20510db369225f365f1be7d27ac45309`.
+  Launcher/predeclaration SHA-256:
+  `6ef245eb663ae55eac0d6e4eae07de42f131713929056c1266d3b4620e74ff01`
+  and
+  `f8a6f1867d271dd69d489940f108f8311ed03aef599e3fe669acfc734e625ad2`.
+- All three `ARM_COMPLETE.json` ledgers, `234` arm hashes, all analysis
+  hashes, and `SCIENCE_COMPLETE.json` pass. Fresh iteration-0 and
+  restart-0/iteration-1 controls pass, including exact `3,000/3,000`
+  particle identity/state rows and exact sampling. Grid correction and
+  forced final-all-data were unset; both restarts used explicit
+  `--auto_iter_max 2`.
+- Fixed causal score: `24/42` (`42/42` evaluated). Restart-0 passes
+  `14/14` score, `3/3` parity FSC-AUC, `3/3` GT FSC-AUC, and its overall
+  arm. Restart-1 passes `0/14` score, `0/3` parity FSC-AUC, `3/3` GT
+  FSC-AUC, and fails its overall arm.
+- Restart-0 parity FSC-AUC deltas are
+  `+1.1301743318981039e-08`, `+1.1023217227901227e-08`, and
+  `+1.1198937777123774e-08`; its GT deltas are positive. Restart-1 parity
+  deltas are `-0.027929095236306267`, `-0.03369456874674115`, and
+  `-0.028284902225018227`, although its GT deltas are
+  `+0.0027846093419554296`, `+0.003047600199027445`, and
+  `+0.0028650938146021487`.
+- Pair classification:
+  `only_iteration0_restart_closes_score_and_map_gates`. Causal
+  interpretation:
+  `case22_recovery_requires_replaying_iteration1_from_serialized_it0`.
+  Thus the qualifying recovery depends on process-resident state rebuilt
+  while replaying iteration 1, not state present in the serialized
+  iteration-1 continuation alone.
+- Independent replay root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_sameallocation_restart_pair_autoiter2_d676d9d8_20260731T1225ET/independent_replay_CgAcEM`.
+  Both score reports are byte-exact; both map reports and the pair report
+  are semantically exact after normalizing only their self-referential
+  paths/hashes. The root contains `SAFE_TO_DELETE`.
+- Checked scorecard:
+  `docs/math/em_k1_serialized_restart_scorecard_v1.json`; generated table:
+  `docs/math/em_k1_serialized_restart_scorecard.md`. This is a separate
+  non-scoring panel. Immutable quality metrics remain K=1 `28/34` strict,
+  `32/34` topology, `34/34` evaluated; K=4 `41/60` direct and `9/15`
+  all-class; K=4 causal `2/4`. Correlation was not computed.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sameallocation_restart_pair_autoiter2_d676d9d8_20260731T1225ET`.
+  No Codex process or existing Slurm job was modified or interrupted.
