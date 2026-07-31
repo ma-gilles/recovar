@@ -389,6 +389,46 @@ def test_k_class_replay_rejects_stop_after_pass2_with_contribution_capture(
     assert "contribution capture runs during the M-step" in capsys.readouterr().err
 
 
+def test_k_class_replay_supports_stop_after_contribution_dump_diagnostic():
+    import scripts.run_k_class_parity as run_k_class_parity
+
+    main_source = inspect.getsource(run_k_class_parity.main)
+    module_source = inspect.getsource(run_k_class_parity)
+
+    assert "--stop-after-contribution-dump" in main_source
+    assert "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET" in main_source
+    assert "RECOVAR_K_CLASS_PARITY_STOP_AFTER_CONTRIBUTION_DUMP" in module_source
+    assert "BPrefContributionDumpComplete" in module_source
+
+
+def test_k_class_replay_stop_after_contribution_requires_exact_target_filters(
+    monkeypatch,
+    capsys,
+):
+    import scripts.run_k_class_parity as run_k_class_parity
+
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "/tmp/contribution")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_k_class_parity",
+            "--relion-dir",
+            "/tmp/relion",
+            "--data-star",
+            "/tmp/particles.star",
+            "--stop-after-contribution-dump",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        run_k_class_parity.main()
+
+    error = capsys.readouterr().err
+    assert "--stop-after-contribution-dump requires exact target filters" in error
+    assert "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES" in error
+
+
 def test_k_class_replay_exposes_image_fourier_backend_control():
     import scripts.run_k_class_parity as run_k_class_parity
 

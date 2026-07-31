@@ -218,6 +218,9 @@ _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIO
 _RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV = "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH"
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
 _BPREF_CONTRIBUTION_DUMP_CLASS_ENV = "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS"
+_BPREF_CONTRIBUTION_STOP_AFTER_TARGET_ENV = (
+    "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET"
+)
 _PASS2_DUMP_DIR_ENV = "RECOVAR_PASS2_DUMP_DIR"
 _PASS2_DUMP_CONSERVATIVE_EXECUTION_ENV = "RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
@@ -289,6 +292,62 @@ class Pass2DumpComplete(RuntimeError):
             "requested RECOVAR pass-2 dump target set was written "
             f"(dump_count={self.dump_count}, current_size={self.current_size})"
         )
+
+
+class BPrefContributionDumpComplete(RuntimeError):
+    """Raised after an explicitly targeted BPref diagnostic bundle is written."""
+
+    def __init__(
+        self,
+        *,
+        contribution_path: str | Path,
+        device_signature_path: str | Path | None,
+    ):
+        self.contribution_path = Path(contribution_path)
+        self.device_signature_path = (
+            None if device_signature_path is None else Path(device_signature_path)
+        )
+        message = (
+            "requested RECOVAR BPref contribution target was written "
+            f"(contribution_path={self.contribution_path}"
+        )
+        if self.device_signature_path is not None:
+            message += f", device_signature_path={self.device_signature_path}"
+        super().__init__(message + ")")
+
+
+def _maybe_stop_after_bpref_contribution_dump(
+    *,
+    contribution_path: str | Path,
+    device_signature_path: str | Path | None,
+) -> None:
+    """Stop an explicit diagnostic only after all requested files exist."""
+
+    if os.environ.get(_BPREF_CONTRIBUTION_STOP_AFTER_TARGET_ENV) != "1":
+        return
+    contribution_path = Path(contribution_path)
+    if not contribution_path.is_file():
+        raise RuntimeError(
+            "RECOVAR BPref contribution stop target is missing its contribution file: "
+            f"{contribution_path}"
+        )
+    device_dump_requested = bool(
+        os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
+    )
+    resolved_device_path = (
+        None if device_signature_path is None else Path(device_signature_path)
+    )
+    if device_dump_requested and (
+        resolved_device_path is None or not resolved_device_path.is_file()
+    ):
+        raise RuntimeError(
+            "RECOVAR BPref contribution stop target is missing its requested "
+            f"device-signature file: {resolved_device_path}"
+        )
+    raise BPrefContributionDumpComplete(
+        contribution_path=contribution_path,
+        device_signature_path=resolved_device_path,
+    )
 
 
 def _k_class_pass2_dump_progress(
@@ -1209,6 +1268,7 @@ def _maybe_dump_bpref_contribution_rows(
         active_rotations=rotations_np[active_particle_rows, active_rotation_rows],
     )
 
+    device_signature_path = None
     device_dump_dir = os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
     if device_dump_dir:
         from recovar import cuda_backproject
@@ -1398,8 +1458,9 @@ def _maybe_dump_bpref_contribution_rows(
         device_path = Path(device_dump_dir)
         device_path.mkdir(parents=True, exist_ok=True)
         contribution_sha256 = _sha256_file(contribution_path)
+        device_signature_path = device_path / f"{contribution_path.stem}.device.npz"
         np.savez(
-            device_path / f"{contribution_path.stem}.device.npz",
+            device_signature_path,
             magic=np.asarray("RECOVAR_DEVICE_SCATTER_SIGNATURE"),
             schema=np.asarray("recovar-device-scatter-signature-v1"),
             schema_version=np.int32(1),
@@ -1493,6 +1554,10 @@ def _maybe_dump_bpref_contribution_rows(
             neighbor_flag_legend=np.asarray("1=valid;2=hermitian-fold;4=nyquist;8=oob"),
             source_value_legend=np.asarray("data_re,data_im,Fweight,rk0,rk1,rk2 (pre-orientation-fold)"),
         )
+    _maybe_stop_after_bpref_contribution_dump(
+        contribution_path=contribution_path,
+        device_signature_path=device_signature_path,
+    )
 
 
 # ---------------------------------------------------------------------------

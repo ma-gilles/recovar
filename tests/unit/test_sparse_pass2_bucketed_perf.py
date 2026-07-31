@@ -8129,6 +8129,48 @@ def test_fused_sparse_k_class_capture_requires_companion_contribution_dump(monke
         )
 
 
+def test_bpref_contribution_stop_requires_completed_target_files(monkeypatch, tmp_path):
+    """The diagnostic sentinel fires only after requested files exist."""
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    contribution_path = tmp_path / "contribution.npz"
+    device_path = tmp_path / "contribution.device.npz"
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET", "1")
+    monkeypatch.delenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", raising=False)
+
+    with pytest.raises(RuntimeError, match="missing its contribution file"):
+        bucketed_mod._maybe_stop_after_bpref_contribution_dump(
+            contribution_path=contribution_path,
+            device_signature_path=None,
+        )
+
+    contribution_path.write_bytes(b"contribution")
+    with pytest.raises(bucketed_mod.BPrefContributionDumpComplete) as exc_info:
+        bucketed_mod._maybe_stop_after_bpref_contribution_dump(
+            contribution_path=contribution_path,
+            device_signature_path=None,
+        )
+    assert exc_info.value.contribution_path == contribution_path
+    assert exc_info.value.device_signature_path is None
+
+    monkeypatch.setenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", str(tmp_path))
+    with pytest.raises(RuntimeError, match="missing its requested device-signature file"):
+        bucketed_mod._maybe_stop_after_bpref_contribution_dump(
+            contribution_path=contribution_path,
+            device_signature_path=device_path,
+        )
+
+    device_path.write_bytes(b"device")
+    with pytest.raises(bucketed_mod.BPrefContributionDumpComplete) as exc_info:
+        bucketed_mod._maybe_stop_after_bpref_contribution_dump(
+            contribution_path=contribution_path,
+            device_signature_path=device_path,
+        )
+    assert exc_info.value.contribution_path == contribution_path
+    assert exc_info.value.device_signature_path == device_path
+
+
 def test_fused_sparse_k_class_capture_is_observational(monkeypatch, tmp_path):
     """Selected fused-K capture rows must not change authoritative accumulators."""
 

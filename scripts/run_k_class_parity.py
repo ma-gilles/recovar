@@ -1110,7 +1110,21 @@ def main() -> None:
             "does not depend on launcher environment propagation."
         ),
     )
+    parser.add_argument(
+        "--stop-after-contribution-dump",
+        action="store_true",
+        help=(
+            "Diagnostic-only: stop successfully after the exactly targeted BPref "
+            "contribution bundle and any requested device signature are written. "
+            "This avoids reconstructing a current-size diagnostic accumulator."
+        ),
+    )
     args = parser.parse_args()
+    if args.stop_after_pass2_dump and args.stop_after_contribution_dump:
+        parser.error(
+            "--stop-after-pass2-dump and --stop-after-contribution-dump "
+            "are mutually exclusive"
+        )
     if args.pass2_dump_class is not None:
         if not args.stop_after_pass2_dump:
             parser.error("--pass2-dump-class requires --stop-after-pass2-dump")
@@ -1138,6 +1152,37 @@ def main() -> None:
             "  pass2 dump class filter: "
             f"{os.environ.get('RECOVAR_PASS2_DUMP_CLASS', 'all')}"
         )
+    if args.stop_after_contribution_dump:
+        required_filters = (
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE",
+        )
+        missing_filters = [
+            name for name in required_filters if not os.environ.get(name, "").strip()
+        ]
+        if missing_filters:
+            parser.error(
+                "--stop-after-contribution-dump requires exact target filters: "
+                + ", ".join(missing_filters)
+            )
+        target_indices = {
+            value.strip()
+            for value in os.environ[
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES"
+            ].split(",")
+            if value.strip()
+        }
+        if len(target_indices) != 1:
+            parser.error(
+                "--stop-after-contribution-dump requires exactly one "
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES target"
+            )
+        os.environ["RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET"] = "1"
+        os.environ["RECOVAR_K_CLASS_PARITY_STOP_AFTER_CONTRIBUTION_DUMP"] = "1"
 
     import jax
     import jax.numpy as jnp
@@ -2001,5 +2046,17 @@ if __name__ == "__main__":
             and os.environ.get("RECOVAR_K_CLASS_PARITY_STOP_AFTER_PASS2_DUMP") == "1"
         ):
             print(f"RECOVAR pass-2 dump completed; stopping replay before remaining M-step work: {exc}")
+            sys.exit(0)
+        if (
+            exc.__class__.__name__ == "BPrefContributionDumpComplete"
+            and os.environ.get(
+                "RECOVAR_K_CLASS_PARITY_STOP_AFTER_CONTRIBUTION_DUMP"
+            )
+            == "1"
+        ):
+            print(
+                "RECOVAR BPref contribution dump completed; stopping replay "
+                f"before reconstruction: {exc}"
+            )
             sys.exit(0)
         raise
