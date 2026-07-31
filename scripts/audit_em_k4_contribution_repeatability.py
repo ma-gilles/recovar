@@ -194,14 +194,16 @@ def audit_repeatability(
     gates = {group: bool(comparisons[group]["strict_byte_equal"]) for group in GROUPS}
     passing = sum(gates.values())
     accepted = not errors and passing == len(gates)
+    if errors:
+        classification = "observer_archives_incomplete"
+    elif accepted:
+        classification = "same_observer_archives_repeat_bit_for_bit"
+    else:
+        classification = "same_observer_archives_do_not_repeat_bit_for_bit"
     return {
         "schema": SCHEMA,
         "status": "complete" if not errors else "incomplete",
-        "classification": (
-            "same_observer_archives_repeat_bit_for_bit"
-            if accepted
-            else "same_observer_archives_do_not_repeat_bit_for_bit"
-        ),
+        "classification": classification,
         "accepted": accepted,
         "scorecard_change_admissible": False,
         "metric_policy": (

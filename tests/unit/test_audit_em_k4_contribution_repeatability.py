@@ -154,6 +154,7 @@ def test_missing_observed_archive_emits_incomplete_report(
     report = auditor.audit_repeatability(paths)
 
     assert report["status"] == "incomplete"
+    assert report["classification"] == "observer_archives_incomplete"
     assert report["accepted"] is False
     assert "FileNotFoundError" in report["errors"]["pass2"]
     assert report["fixed_metric"]["gates"]["pass2"] is False
