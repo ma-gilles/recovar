@@ -13750,7 +13750,7 @@ selected target pair closes, but the complete class still differs.  The
 completion report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_owner_pair_raw11790517_operand11812925_9959cc8a_20260730T2042ET/provenance/ANY_OWNER_PAIR_AUDIT_COMPLETE.json`
 with SHA-256
-`963e9b6be044889757bd89fd2f7ca9cc06380186231419105264a11eea07dc1e`.
+`963e9b6b315368ae9a8201b73624163129f92e5626fff4089ad8fe3ce6516552`.
 The declared science gates reproduce exactly between local and Slurm
 evaluation.  The raw report itself is not byte-identical because three
 secondary CPU norm reductions differ only in their last printed digits;

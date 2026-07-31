@@ -10135,7 +10135,7 @@ and `9/15` all-class.
   `global_raw_and_score_paths_differ_but_fixed_target_closes`.  Completion:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_owner_pair_raw11790517_operand11812925_9959cc8a_20260730T2042ET/provenance/ANY_OWNER_PAIR_AUDIT_COMPLETE.json`,
   SHA-256
-  `963e9b6be044889757bd89fd2f7ca9cc06380186231419105264a11eea07dc1e`.
+  `963e9b6b315368ae9a8201b73624163129f92e5626fff4089ad8fe3ce6516552`.
 - Declared gates reproduce exactly locally and under Slurm.  Do not claim
   whole-report byte identity: three secondary raw-report CPU norm reductions
   differ only in their final printed digits.
