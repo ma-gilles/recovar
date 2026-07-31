@@ -14204,3 +14204,64 @@ evaluated `34/34`; K=4 direct per-class FSC-AUC `41/60`, all-class iterations
 `9/15`; exact-device causal boundary `2/4`.  No Codex process or Slurm job
 was killed, signalled, suspended, cancelled, reprioritized, requeued, held,
 released, or otherwise altered.
+
+### Fixed particle preprocessing replay
+
+The first bounded replay, job `11835359`, failed closed after `00:03:14` on
+`della-l07g4`.  Its import/GPU gate and private CUDA build passed, but the
+launcher called the analyzer by absolute filename while `PYTHONPATH` was
+intentionally unset.  That placed `scripts/` rather than the repository root
+on `sys.path`, producing `ModuleNotFoundError: No module named 'recovar'`.
+It wrote no replay JSON or NPZ and is not science evidence.  Postmortem
+SHA-256 is
+`ca6fb700f4c8e54d99475d6be8cbd8ad296feef519d9b1f2ba1ab06223bcea5d`.
+
+Fresh-root retry `11835495` changed only the invocation to
+`python -m scripts.analyze_em_k4_preprocess_replay`.  It completed `0:0` in
+`00:03:32` on `della-l03g8`, physical UUID
+`GPU-d911cc01-9225-9667-1645-69a5616fcc57`.  Source, analyzer, sealed input,
+CUDA source/loader/Makefile, allocation-private CUDA binary, report, and
+saved replay arrays all pass their manifests.  The CUDA SHA-256/signature
+remained exact before and after the replay.
+
+The fixed result is `3/9` bitwise exact and `9/9` within the existing `5e-7`
+material relative-L2 floor:
+
+| Stage | Bitwise exact | Within material floor | Maximum relative L2 | Maximum absolute delta |
+| --- | ---: | ---: | ---: | ---: |
+| normalized + integer shifted real | 3/3 | 3/3 | 0 | 0 |
+| soft-masked real | 0/3 | 3/3 | 7.400069142606838e-10 | 2.9802322387695312e-08 |
+| masked Fourier | 0/3 | 3/3 | 4.559462426669312e-08 | 6.291359902370698e-05 |
+
+The stored mask contains `25,121` fully inside, `2,904` edge, and `37,511`
+fully outside pixels.  Every normalized/shifted image is exact, and all
+fully inside masked pixels remain exact.  Each replay computes one constant
+but slightly different background scalar; all `37,511` outside pixels
+inherit the corresponding scalar delta
+(`+2.9467628337442875e-10`, `-4.874891601502895e-10`, or
+`+4.4019543565809727e-10` versus the first execution).  The taper and FFT
+then propagate that scalar floor.  This directly identifies the
+multi-block float32 atomic soft-mask background reduction as the
+run-to-run boundary.
+
+The checked JSON ledger is
+`docs/math/em_k4_preprocess_replay_scorecard_v1.json`; its generated table is
+`docs/math/em_k4_preprocess_replay_scorecard.md`.  The validator enforces the
+fixed nine-case identity/order, threshold, evidence hashes, per-case
+checkmarks, `3/9` exact count, and `9/9` material-floor count.  This evidence
+does not support a deterministic production rewrite: the path intentionally
+matches RELION's accelerated reduction, the observed drift is far below the
+fixed material floor, and no FSC-AUC improvement has been shown.
+
+Report SHA-256:
+`2059de0e8487e2b7dc7f13f94fffe87bdb801c17ccc377924ec297ea783de146`.
+Replay-array SHA-256:
+`123c51379bd563d9b22f45d7a797dc3cc6949f93d4f71ec376c347d71429fd74`.
+Run root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_preprocess_replay_retry2_f6b69788_20260731T1013ET`.
+
+This is a non-scoring causal diagnostic.  K=1 remains `28/34` strict,
+`32/34` topology, and `34/34` evaluated; K=4 remains `41/60` direct and
+`9/15` all-class; the exact-device causal boundary remains `2/4`.
+Correlation was not computed.  No existing process or Slurm job was
+modified or interrupted.

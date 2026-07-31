@@ -11117,3 +11117,46 @@ and `9/15` all-class.
   `41/60` direct and `9/15` all-class; causal boundary remains `2/4`.
 - No Codex process or Slurm job was killed, signalled, suspended, cancelled,
   reprioritized, requeued, held, released, or otherwise altered.
+
+## 2026-07-31 10:19 ET — fixed 9-case replay identifies soft-mask atomics
+
+- First launcher `11835359` failed closed after `00:03:14`: GPU/import and
+  private-CUDA gates passed, but absolute-filename analyzer execution with
+  `PYTHONPATH` unset could not import `recovar`. It wrote no replay output.
+  Postmortem SHA-256:
+  `ca6fb700f4c8e54d99475d6be8cbd8ad296feef519d9b1f2ba1ab06223bcea5d`.
+- Fresh-root retry `11835495` changed only to the validated module invocation
+  `python -m scripts.analyze_em_k4_preprocess_replay`. It completed `0:0` in
+  `00:03:32` on `della-l03g8`, UUID
+  `GPU-d911cc01-9225-9667-1645-69a5616fcc57`.
+- Source HEAD
+  `f6b69788a37220d614cc3ca7616eeac0bcd2eb07`, sealed input SHA-256
+  `98c8642d7b85645f6416aa834eef931d3561e3db651111cd5d22cbd6ff7e5c0b`,
+  and private CUDA SHA-256
+  `17c8dc20372eca091882f693aeec9f37bf0ccc7a5ba9a7985cdb6b149af765ee`
+  pass and remain exact. Static and output manifests pass.
+- Fixed score: `3/9` bitwise exact, `9/9` within the fixed `5e-7` material
+  relative-L2 floor.
+- Normalized/integer-shifted real is exact `3/3`. Soft-masked real is exact
+  `0/3`, with maximum relative L2 `7.400069142606838e-10` and maximum
+  absolute delta `2.9802322387695312e-08`. Masked Fourier is exact `0/3`,
+  with maximum relative L2 `4.559462426669312e-08` and maximum absolute
+  delta `6.291359902370698e-05`.
+- All `25,121` fully inside-mask pixels remain exact. Every replay has one
+  constant background value; all `37,511` fully outside-mask pixels receive
+  the same run-specific delta. The `2,904` edge pixels and FFT propagate that
+  scalar. This directly localizes the floor to the multi-block float32
+  atomic soft-mask background reduction.
+- Checked scorecard:
+  `docs/math/em_k4_preprocess_replay_scorecard_v1.json`. Generated table:
+  `docs/math/em_k4_preprocess_replay_scorecard.md`.
+- Report SHA-256:
+  `2059de0e8487e2b7dc7f13f94fffe87bdb801c17ccc377924ec297ea783de146`.
+  Replay arrays SHA-256:
+  `123c51379bd563d9b22f45d7a797dc3cc6949f93d4f71ec376c347d71429fd74`.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_preprocess_replay_retry2_f6b69788_20260731T1013ET`.
+- This is non-scoring and does not justify a production rewrite without an
+  FSC-AUC gain. Fixed K=1/K=4/causal metrics remain
+  `28/34`, `32/34`, `34/34`, `41/60`, `9/15`, and `2/4`. Correlation was
+  not computed. No existing process or Slurm job was modified or interrupted.
