@@ -10837,3 +10837,35 @@ and `9/15` all-class.
   causal numerator do not change. No process or existing Slurm job was
   killed, signalled, suspended, cancelled, reprioritized, requeued, held,
   released, or otherwise altered.
+
+## 2026-07-31 05:15 ET — scheduler-independent same-allocation K=4 chain
+
+- Pinned-node retry `11823179` remained resource-pending while higher-priority
+  two-GPU work could consume the next free pair. It and strict audit
+  `11823392` remain unchanged.
+- New independent job `11825092` requests one scheduler-selected A100 and runs
+  every conditional GPU stage sequentially on its recorded physical UUID:
+  frozen `ec68f651` continue-through reference, frozen `d1fb8e52`
+  contribution-stop arm, strict three-archive byte audit, accepted-only native
+  RELION representative capture, and accepted-only operand comparator.
+- The reference arm accepts only its known post-capture current-size/final-map
+  shape failure. Any other failure, missing artifact, strict mismatch, native
+  rejection, or comparator rejection fails closed and is serialized. No
+  tolerance, fitted scale/sign, map surrogate, or correlation is used.
+- Static materialization binds the four immutable launchers and restricts
+  changes to exclusive roots, ignored child SBATCH headers, one-GPU allocation
+  gates, runtime GPU UUID/owner ID, same-allocation reference paths, and the
+  predeclared expected reference failure boundary. The outer launcher SHA-256
+  is `5bd5d6e07a6bd054bc63e9cbf4d4eba4ef76f2b33c60ff3c47b8173640b3c165`;
+  the materialized-launcher manifest SHA-256 is
+  `f2151715ed14ba4b35f178c2ff6c119cb06d812cb3ca92dc3898a9d55671d5d9`.
+- Job `11825092` started at 05:14:59 ET on `della-l07g4`, UUID
+  `GPU-2a189b71-ee86-c95f-7bc0-93e83a0812e4`. Import provenance passed and
+  all three private CUDA consumers remain exact SHA-256
+  `9d2ae812b56f7b109d93aefcb32016beaef4d91108a2871def7f1784493f4e28`.
+  The reference arm is running.
+- Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_reference_stop_native_20260731T0515ET`.
+- This is non-scoring. Fixed K=1 remains `28/34` strict, `32/34` topology,
+  and `34/34` evaluated; fixed K=4 remains `41/60` direct and `9/15`
+  all-class. No existing job or process was modified or interrupted.
