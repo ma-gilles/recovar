@@ -30,6 +30,12 @@ from scripts.summarize_em_k1_norm_roundtrip_scorecard import (  # noqa: E402
 from scripts.summarize_em_k1_norm_roundtrip_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k1_norm_roundtrip,
 )
+from scripts.summarize_em_k1_reference_roundtrip_rejection_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K1_REFERENCE_ROUNDTRIP_REJECTION_SCORECARD,
+)
+from scripts.summarize_em_k1_reference_roundtrip_rejection_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k1_reference_roundtrip_rejection,
+)
 from scripts.summarize_em_k1_sampling_perturbation_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K1_SAMPLING_PERTURBATION_SCORECARD,
 )
@@ -85,7 +91,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v10"
+SCHEMA = "recovar.em_parity_progress.v11"
 
 
 def _panel(
@@ -141,6 +147,9 @@ def build_progress(
     k1_sampling_roundtrip_path: Path = DEFAULT_K1_SAMPLING_ROUNDTRIP_SCORECARD,
     k1_norm_roundtrip_path: Path = DEFAULT_K1_NORM_ROUNDTRIP_SCORECARD,
     k1_mask_deterministic_path: Path = DEFAULT_K1_MASK_DETERMINISTIC_SCORECARD,
+    k1_reference_roundtrip_rejection_path: Path = (
+        DEFAULT_K1_REFERENCE_ROUNDTRIP_REJECTION_SCORECARD
+    ),
 ) -> dict[str, object]:
     """Validate every fixed source and return the consolidated progress report."""
 
@@ -161,6 +170,11 @@ def build_progress(
     k1_sampling_roundtrip = load_and_validate_k1_sampling_roundtrip(k1_sampling_roundtrip_path)
     k1_norm_roundtrip = load_and_validate_k1_norm_roundtrip(k1_norm_roundtrip_path)
     k1_mask_deterministic = load_and_validate_k1_mask_deterministic(k1_mask_deterministic_path)
+    k1_reference_roundtrip_rejection = (
+        load_and_validate_k1_reference_roundtrip_rejection(
+            k1_reference_roundtrip_rejection_path
+        )
+    )
 
     k1_counts = scorecard["current_snapshot"]["counts"]
     k1_denominator = scorecard["frozen_denominator"]
@@ -187,6 +201,9 @@ def build_progress(
     k1_mask_preprocess = k1_mask_deterministic["preprocess_summary"]
     k1_mask_geometry = k1_mask_deterministic["geometry_summary"]
     k1_mask_score_map = k1_mask_deterministic["score_map_summary"]
+    k1_reference_roundtrip_rejection_summary = (
+        k1_reference_roundtrip_rejection["summary"]
+    )
     if (
         k4_class_scorecard["summary"]["pass"] != k4_snapshot["direct_fsc_auc_checks_passed"]
         or k4_class_scorecard["summary"]["evaluated"] != k4_snapshot["direct_fsc_auc_checks_total"]
@@ -342,6 +359,14 @@ def build_progress(
             scoring=False,
         ),
         _panel(
+            "k1_reference_roundtrip_rejection",
+            "K=1 reference-roundtrip rejected gates",
+            k1_reference_roundtrip_rejection_summary["pass"],
+            k1_reference_roundtrip_rejection_summary["evaluated"],
+            k1_reference_roundtrip_rejection["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
             "k4_direct",
             "K=4 direct per-class FSC-AUC",
             k4_snapshot["direct_fsc_auc_checks_passed"],
@@ -397,8 +422,9 @@ def build_progress(
             "correlation is not used. The K=1 serialized-restart, K=1 "
             "continuation-initializer, K=1 sampling-perturbation, K=1 "
             "sampling-roundtrip, K=1 normalization-roundtrip, K=4 causal, "
-            "K=1 deterministic-mask, K=4 contribution-repeatability, and K=4 "
-            "preprocessing panels are non-scoring."
+            "K=1 deterministic-mask, K=1 reference-roundtrip rejection, K=4 "
+            "contribution-repeatability, and K=4 preprocessing panels are "
+            "non-scoring."
         ),
         "scorecard_change_admissible": False,
         "panels": panels,
@@ -476,6 +502,9 @@ def build_progress(
             "k1_sampling_roundtrip_scorecard": _input_record(k1_sampling_roundtrip_path),
             "k1_norm_roundtrip_scorecard": _input_record(k1_norm_roundtrip_path),
             "k1_mask_deterministic_scorecard": _input_record(k1_mask_deterministic_path),
+            "k1_reference_roundtrip_rejection_scorecard": _input_record(
+                k1_reference_roundtrip_rejection_path
+            ),
             "k4_trajectory_snapshot": _input_record(k4_snapshot_path),
             "k4_class_scorecard": _input_record(k4_class_path),
             "k4_causal_scorecard": _input_record(k4_causal_path),
