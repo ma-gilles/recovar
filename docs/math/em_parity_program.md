@@ -14806,3 +14806,60 @@ Production integration remains false until the separately predeclared K=4
 FSC/FSC-AUC and GT-quality A/B in jobs `11854692` and `11854693` accepts the
 implementation. No quality denominator changed, and no Codex process or
 existing Slurm job was modified or interrupted.
+
+## 2026-08-01 K=1 exact initial-noise counterfactual rejection
+
+Same-A100 science job `11853352` completed generic A, generic B, and exact
+RELION-binary64 initial-noise arms with process exit status zero in `2977`,
+`2937`, and `2914` seconds on physical GPU
+`GPU-2a189b71-ee86-c95f-7bc0-93e83a0812e4`. All three refinement archives,
+all nine maps, and all 42 fixed captures were written. The owner then ended
+naturally as `FAILED 2:0` after `02:27:25` only because its preliminary
+legacy analyzer rejected the newer
+`--expected-recovar-stack-indices-npy` CLI argument.
+
+The original dependency-bound audit `11853523` remains untouched in
+`DependencyNeverSatisfied`. Predeclared analysis-only job `11856679` ran the
+intended component-aware analyzer twice in fresh CPU processes and completed
+`0:0` in `00:00:56`. Its reports are byte-identical with SHA-256
+`19855c6cff4a639af1f4c55c59ea9b70107d6de44f3ccf52c2e65e4a90796a26`.
+
+The fixed result is **4/24**, entirely from provenance:
+
+| Gate group | Passed | Denominator |
+| --- | ---: | ---: |
+| centered score residual | 0 | 14 |
+| RELION-parity FSC-AUC beyond same-device floor | 0 | 3 |
+| GT FSC-AUC non-regression | 0 | 3 |
+| science total | 0 | 20 |
+| provenance and independent replay | 4 | 4 |
+| sealed total | 4 | 24 |
+
+All 14 exact score captures are byte-identical to both generic controls, so
+their improvement and residual-energy removal are zero. The map treatment
+deltas are also negative:
+
+| Map | Exact parity FSC-AUC delta | Exact GT FSC-AUC delta |
+| --- | ---: | ---: |
+| half 1 | -1.63763447247e-11 | -2.13833169782e-8 |
+| half 2 | -1.19893317496e-10 | -1.90154565427e-8 |
+| merged | -7.85900233780e-11 | -1.30699061851e-8 |
+
+The predeclared classification is
+`exact_initial_noise_bootstrap_rejected_under_fixed_score_and_fsc_gates`;
+acceptance is false. Candidate source commit `8fc7c4c9` is rejected and must
+not be integrated.
+
+The immutable report and completion seal are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_initial_noise_ab_retry1_8fc7c4c_20260731T2324ET/analysis/EXACT_INITIAL_NOISE_AB_RETRY1.json`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_initial_noise_ab_retry1_8fc7c4c_20260731T2324ET/provenance/ANALYSIS_RETRY1_COMPLETE.json`.
+
+The checked ledger is
+`docs/math/em_k1_exact_initial_noise_counterfactual_scorecard_v1.json`; its
+generated checklist is
+`docs/math/em_k1_exact_initial_noise_counterfactual_scorecard.md`.
+Consolidated reporter schema v15 adds the non-scoring `4/24` panel and now
+contains 26 fixed panels. No quality denominator, tolerance, correlation, or
+published baseline changed. No Codex process or existing Slurm job was
+modified or interrupted.

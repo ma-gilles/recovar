@@ -11,7 +11,7 @@ from scripts.report_em_parity_progress import build_progress, render_markdown
 def test_reports_all_fixed_em_parity_panels() -> None:
     progress = build_progress()
 
-    assert progress["schema"] == "recovar.em_parity_progress.v14"
+    assert progress["schema"] == "recovar.em_parity_progress.v15"
     assert progress["scorecard_change_admissible"] is False
     assert progress["k1_strict_history"] == [20, 21, 22, 23, 25, 26, 27, 28]
     assert progress["k1_continuation_initializer_progress"] == {
@@ -94,6 +94,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         ("k1_mask_deterministic_preprocess", 3, 3, 3, 100.0, False),
         ("k1_mask_deterministic_geometry", 5, 5, 5, 100.0, False),
         ("k1_mask_deterministic_score_map", 17, 21, 21, 81.0, False),
+        ("k1_exact_initial_noise_counterfactual", 4, 24, 24, 16.7, False),
         ("k1_live_noise_counterfactual", 21, 24, 24, 87.5, False),
         ("k1_reference_roundtrip_rejection", 2, 9, 9, 22.2, False),
         ("k1_shared_checkpoint_fp64", 16, 34, 34, 47.1, False),
@@ -121,6 +122,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "k1_sampling_roundtrip_scorecard",
         "k1_norm_roundtrip_scorecard",
         "k1_mask_deterministic_scorecard",
+        "k1_exact_initial_noise_counterfactual_scorecard",
         "k1_live_noise_counterfactual_scorecard",
         "k1_reference_roundtrip_rejection_scorecard",
         "k1_shared_checkpoint_fp64_scorecard",
