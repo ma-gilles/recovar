@@ -14761,3 +14761,48 @@ contains 24 fixed panels. K=1 quality remains `28/34` strict and `32/34`
 topology; K=4 quality remains `41/60` direct and `9/15` all-class. No
 correlation, tolerance, baseline, or quality denominator changed. No Codex
 process or existing Slurm job was modified or interrupted.
+
+## 2026-08-01 K=4 deterministic contribution-repeatability candidate
+
+Corrected same-A100 job `11854999` completed naturally `0:0` in `01:10:11`
+on `della-l08g2`, physical GPU
+`GPU-207cab82-50a4-308f-2e39-5b84b6608639`. Both fresh processes used source
+commit `e98a5f333cc789f1e2511da58b95b974c6fe6636`, immutable CUDA library
+SHA-256
+`567f8d8af5a45a0a3501f30ee22bc8b012243de7edc1ad7464cfadb197bbea69`,
+and the constant diagnostic run ID `k4_softmask2_repeat_fixed`. Arm A took
+`2167` seconds and arm B took `2028` seconds.
+
+The fixed strict archive result is **3/3**:
+
+| Archive gate | Candidate result |
+| --- | ---: |
+| pass-2 scores | pass |
+| BPref contribution | pass |
+| device signature | pass |
+
+Keys, shapes, dtypes, and included per-element bytes are identical. The
+device-signature comparison ignores only the value of the arm-local
+`companion_contribution_path`; its key, dtype, and shape remain checked.
+Paired NaNs are compared by bytes and hide no mismatch. No tolerance, scale,
+sign, threshold, map metric, FSC claim, or correlation is used.
+
+The immutable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_contribution_repeatability_twostage_retry1_e98a5f33_20260801T0033ET/analysis/STRICT_BYTE_REPEATABILITY.json`
+(SHA-256
+`59e37fa9155075822ccbf1994d562dcab949cad9a49ea4261911184d12ed22ce`).
+The completion seal is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_contribution_repeatability_twostage_retry1_e98a5f33_20260801T0033ET/provenance/SCIENCE_COMPLETE_11854999.json`
+(SHA-256
+`071cc32789470d39f4a4045f5f796f99fcababe81d8eec60c6640186971672a0`).
+
+The checked candidate ledger is
+`docs/math/em_k4_deterministic_contribution_repeatability_candidate_scorecard_v1.json`;
+its generated checklist is
+`docs/math/em_k4_deterministic_contribution_repeatability_candidate_scorecard.md`.
+Consolidated reporter schema v14 adds the non-scoring candidate `3/3` panel
+while retaining the published contribution-repeatability baseline at `0/3`.
+Production integration remains false until the separately predeclared K=4
+FSC/FSC-AUC and GT-quality A/B in jobs `11854692` and `11854693` accepts the
+implementation. No quality denominator changed, and no Codex process or
+existing Slurm job was modified or interrupted.

@@ -87,6 +87,12 @@ from scripts.summarize_em_k4_contribution_repeatability_scorecard import (  # no
 from scripts.summarize_em_k4_contribution_repeatability_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k4_contribution_repeatability,
 )
+from scripts.summarize_em_k4_deterministic_contribution_repeatability_candidate_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K4_DETERMINISTIC_CONTRIBUTION_REPEATABILITY_CANDIDATE_SCORECARD,
+)
+from scripts.summarize_em_k4_deterministic_contribution_repeatability_candidate_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k4_deterministic_contribution_repeatability_candidate,
+)
 from scripts.summarize_em_k4_preprocess_replay_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K4_PREPROCESS_SCORECARD,
 )
@@ -103,7 +109,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v13"
+SCHEMA = "recovar.em_parity_progress.v14"
 
 
 def _panel(
@@ -152,6 +158,9 @@ def build_progress(
     k4_contribution_repeatability_path: Path = (
         DEFAULT_K4_CONTRIBUTION_REPEATABILITY_SCORECARD
     ),
+    k4_deterministic_contribution_repeatability_candidate_path: Path = (
+        DEFAULT_K4_DETERMINISTIC_CONTRIBUTION_REPEATABILITY_CANDIDATE_SCORECARD
+    ),
     k4_preprocess_path: Path = DEFAULT_K4_PREPROCESS_SCORECARD,
     k1_restart_path: Path = DEFAULT_K1_RESTART_SCORECARD,
     k1_continuation_initializer_path: Path = (DEFAULT_K1_CONTINUATION_INITIALIZER_SCORECARD),
@@ -177,6 +186,11 @@ def build_progress(
     k4_contribution_repeatability = (
         load_and_validate_k4_contribution_repeatability(
             k4_contribution_repeatability_path
+        )
+    )
+    k4_deterministic_contribution_repeatability_candidate = (
+        load_and_validate_k4_deterministic_contribution_repeatability_candidate(
+            k4_deterministic_contribution_repeatability_candidate_path
         )
     )
     k4_preprocess = load_and_validate_k4_preprocess(k4_preprocess_path)
@@ -209,6 +223,9 @@ def build_progress(
     k4_contribution_repeatability_summary = k4_contribution_repeatability[
         "summary"
     ]
+    k4_deterministic_contribution_repeatability_candidate_summary = (
+        k4_deterministic_contribution_repeatability_candidate["summary"]
+    )
     k4_preprocess_summary = k4_preprocess["summary"]
     k1_restart_summary = k1_restart["summary"]
     k1_continuation_initializer_baseline = k1_continuation_initializer["baseline_summary"]
@@ -439,6 +456,18 @@ def build_progress(
             scoring=False,
         ),
         _panel(
+            "k4_deterministic_contribution_repeatability_candidate",
+            "K=4 deterministic contribution candidate repeatability",
+            k4_deterministic_contribution_repeatability_candidate_summary["pass"],
+            k4_deterministic_contribution_repeatability_candidate_summary[
+                "evaluated"
+            ],
+            k4_deterministic_contribution_repeatability_candidate[
+                "frozen_denominator"
+            ],
+            scoring=False,
+        ),
+        _panel(
             "k4_preprocess_bitwise",
             "K=4 preprocess bitwise replay",
             k4_preprocess_summary["bitwise_equal"],
@@ -465,6 +494,7 @@ def build_progress(
             "K=1 deterministic-mask, K=1 live-noise counterfactual, K=1 "
             "reference-roundtrip rejection, K=1 "
             "shared-checkpoint FP64 reference, K=4 contribution-repeatability, "
+            "K=4 deterministic contribution candidate, "
             "and K=4 preprocessing panels are non-scoring."
         ),
         "scorecard_change_admissible": False,
@@ -557,6 +587,9 @@ def build_progress(
             "k4_causal_scorecard": _input_record(k4_causal_path),
             "k4_contribution_repeatability_scorecard": _input_record(
                 k4_contribution_repeatability_path
+            ),
+            "k4_deterministic_contribution_repeatability_candidate_scorecard": _input_record(
+                k4_deterministic_contribution_repeatability_candidate_path
             ),
             "k4_preprocess_scorecard": _input_record(k4_preprocess_path),
         },

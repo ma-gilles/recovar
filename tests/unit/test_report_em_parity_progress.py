@@ -11,7 +11,7 @@ from scripts.report_em_parity_progress import build_progress, render_markdown
 def test_reports_all_fixed_em_parity_panels() -> None:
     progress = build_progress()
 
-    assert progress["schema"] == "recovar.em_parity_progress.v13"
+    assert progress["schema"] == "recovar.em_parity_progress.v14"
     assert progress["scorecard_change_admissible"] is False
     assert progress["k1_strict_history"] == [20, 21, 22, 23, 25, 26, 27, 28]
     assert progress["k1_continuation_initializer_progress"] == {
@@ -101,6 +101,14 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         ("k4_all_class", 9, 15, 15, 60.0, True),
         ("k4_causal", 2, 4, 4, 50.0, False),
         ("k4_contribution_repeatability", 0, 3, 3, 0.0, False),
+        (
+            "k4_deterministic_contribution_repeatability_candidate",
+            3,
+            3,
+            3,
+            100.0,
+            False,
+        ),
         ("k4_preprocess_bitwise", 3, 9, 9, 33.3, False),
         ("k4_preprocess_material", 9, 9, 9, 100.0, False),
     ]
@@ -120,6 +128,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "k4_class_scorecard",
         "k4_causal_scorecard",
         "k4_contribution_repeatability_scorecard",
+        "k4_deterministic_contribution_repeatability_candidate_scorecard",
         "k4_preprocess_scorecard",
     }
     assert all(len(record["sha256"]) == 64 for record in progress["inputs"].values())
