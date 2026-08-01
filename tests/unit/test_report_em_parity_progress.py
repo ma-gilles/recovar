@@ -11,7 +11,7 @@ from scripts.report_em_parity_progress import build_progress, render_markdown
 def test_reports_all_fixed_em_parity_panels() -> None:
     progress = build_progress()
 
-    assert progress["schema"] == "recovar.em_parity_progress.v11"
+    assert progress["schema"] == "recovar.em_parity_progress.v12"
     assert progress["scorecard_change_admissible"] is False
     assert progress["k1_strict_history"] == [20, 21, 22, 23, 25, 26, 27, 28]
     assert progress["k1_continuation_initializer_progress"] == {
@@ -95,6 +95,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         ("k1_mask_deterministic_geometry", 5, 5, 5, 100.0, False),
         ("k1_mask_deterministic_score_map", 17, 21, 21, 81.0, False),
         ("k1_reference_roundtrip_rejection", 2, 9, 9, 22.2, False),
+        ("k1_shared_checkpoint_fp64", 16, 34, 34, 47.1, False),
         ("k4_direct", 41, 60, 60, 68.3, True),
         ("k4_all_class", 9, 15, 15, 60.0, True),
         ("k4_causal", 2, 4, 4, 50.0, False),
@@ -112,6 +113,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "k1_norm_roundtrip_scorecard",
         "k1_mask_deterministic_scorecard",
         "k1_reference_roundtrip_rejection_scorecard",
+        "k1_shared_checkpoint_fp64_scorecard",
         "k4_trajectory_snapshot",
         "k4_class_scorecard",
         "k4_causal_scorecard",
