@@ -18,6 +18,12 @@ from scripts.summarize_em_k1_continuation_initializer_scorecard import (  # noqa
 from scripts.summarize_em_k1_continuation_initializer_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k1_continuation_initializer,
 )
+from scripts.summarize_em_k1_live_noise_counterfactual_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K1_LIVE_NOISE_COUNTERFACTUAL_SCORECARD,
+)
+from scripts.summarize_em_k1_live_noise_counterfactual_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k1_live_noise_counterfactual,
+)
 from scripts.summarize_em_k1_mask_deterministic_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K1_MASK_DETERMINISTIC_SCORECARD,
 )
@@ -97,7 +103,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v12"
+SCHEMA = "recovar.em_parity_progress.v13"
 
 
 def _panel(
@@ -153,6 +159,9 @@ def build_progress(
     k1_sampling_roundtrip_path: Path = DEFAULT_K1_SAMPLING_ROUNDTRIP_SCORECARD,
     k1_norm_roundtrip_path: Path = DEFAULT_K1_NORM_ROUNDTRIP_SCORECARD,
     k1_mask_deterministic_path: Path = DEFAULT_K1_MASK_DETERMINISTIC_SCORECARD,
+    k1_live_noise_counterfactual_path: Path = (
+        DEFAULT_K1_LIVE_NOISE_COUNTERFACTUAL_SCORECARD
+    ),
     k1_reference_roundtrip_rejection_path: Path = (
         DEFAULT_K1_REFERENCE_ROUNDTRIP_REJECTION_SCORECARD
     ),
@@ -177,6 +186,9 @@ def build_progress(
     k1_sampling_roundtrip = load_and_validate_k1_sampling_roundtrip(k1_sampling_roundtrip_path)
     k1_norm_roundtrip = load_and_validate_k1_norm_roundtrip(k1_norm_roundtrip_path)
     k1_mask_deterministic = load_and_validate_k1_mask_deterministic(k1_mask_deterministic_path)
+    k1_live_noise_counterfactual = load_and_validate_k1_live_noise_counterfactual(
+        k1_live_noise_counterfactual_path
+    )
     k1_reference_roundtrip_rejection = (
         load_and_validate_k1_reference_roundtrip_rejection(
             k1_reference_roundtrip_rejection_path
@@ -211,6 +223,7 @@ def build_progress(
     k1_mask_preprocess = k1_mask_deterministic["preprocess_summary"]
     k1_mask_geometry = k1_mask_deterministic["geometry_summary"]
     k1_mask_score_map = k1_mask_deterministic["score_map_summary"]
+    k1_live_noise_counterfactual_summary = k1_live_noise_counterfactual["summary"]
     k1_reference_roundtrip_rejection_summary = (
         k1_reference_roundtrip_rejection["summary"]
     )
@@ -370,6 +383,14 @@ def build_progress(
             scoring=False,
         ),
         _panel(
+            "k1_live_noise_counterfactual",
+            "K=1 live-noise sealed counterfactual gates",
+            k1_live_noise_counterfactual_summary["pass"],
+            k1_live_noise_counterfactual_summary["evaluated"],
+            k1_live_noise_counterfactual["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
             "k1_reference_roundtrip_rejection",
             "K=1 reference-roundtrip rejected gates",
             k1_reference_roundtrip_rejection_summary["pass"],
@@ -441,7 +462,8 @@ def build_progress(
             "correlation is not used. The K=1 serialized-restart, K=1 "
             "continuation-initializer, K=1 sampling-perturbation, K=1 "
             "sampling-roundtrip, K=1 normalization-roundtrip, K=4 causal, "
-            "K=1 deterministic-mask, K=1 reference-roundtrip rejection, K=1 "
+            "K=1 deterministic-mask, K=1 live-noise counterfactual, K=1 "
+            "reference-roundtrip rejection, K=1 "
             "shared-checkpoint FP64 reference, K=4 contribution-repeatability, "
             "and K=4 preprocessing panels are non-scoring."
         ),
@@ -521,6 +543,9 @@ def build_progress(
             "k1_sampling_roundtrip_scorecard": _input_record(k1_sampling_roundtrip_path),
             "k1_norm_roundtrip_scorecard": _input_record(k1_norm_roundtrip_path),
             "k1_mask_deterministic_scorecard": _input_record(k1_mask_deterministic_path),
+            "k1_live_noise_counterfactual_scorecard": _input_record(
+                k1_live_noise_counterfactual_path
+            ),
             "k1_reference_roundtrip_rejection_scorecard": _input_record(
                 k1_reference_roundtrip_rejection_path
             ),

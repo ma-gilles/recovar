@@ -14715,3 +14715,49 @@ experiments cannot rewrite either denominator.
 No production RECOVAR behavior, tolerance, baseline, or frozen quality
 score changed. No Codex process or existing Slurm job was modified or
 interrupted.
+
+## 2026-08-01 K=1 live binary64-noise counterfactual
+
+Same-A100 science job `11852265` completed serialized controls A/B and a
+live RELION-binary64 noise treatment sequentially on physical GPU
+`GPU-acaaefb4-8c05-10ea-0c60-c9f85e7a81f8`. All three arm processes exited
+zero in `2955`, `2903`, and `2893` seconds. The Slurm owner ended `FAILED 1:0`
+only because a preliminary legacy post-run analyzer expected a different
+coarse-pass-1 capture format; none of the completed science artifacts was
+rerun or altered.
+
+Analysis-only job `11855557` ran the intended fixed analyzer twice in fresh
+Python processes and completed `0:0`. The primary and independent JSON
+reports are byte-identical, with SHA-256
+`c75a0855e73bf617bfff01c0a81ca54f022be9393a0ec7071425a88ee4e9a63c`.
+The fixed result is:
+
+| Gate group | Passed | Denominator |
+| --- | ---: | ---: |
+| centered score residual | 14 | 14 |
+| RELION-parity FSC-AUC beyond same-device floor | 3 | 3 |
+| GT FSC-AUC non-regression | 0 | 3 |
+| science total | 17 | 20 |
+| provenance and independent replay | 4 | 4 |
+| sealed total | 21 | 24 |
+
+The live-noise treatment improves RECOVAR-to-RELION FSC-AUC by
+`9.70486624e-9`, `9.84681547e-9`, and `9.79366521e-9`, but lowers GT
+FSC-AUC by `3.03073828e-7`, `2.25407228e-7`, and `2.38807130e-7` for half 1,
+half 2, and merged maps. The predeclared classification is
+`live_noise_improves_score_and_parity_but_regresses_gt`; acceptance is false.
+The candidate is rejected and must not be integrated.
+
+The immutable report and completion seal are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_live_noise_recovar_retry2_9132b2c_20260731T2226ET/analysis/LIVE_NOISE_COUNTERFACTUAL_RETRY1.json`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_live_noise_recovar_retry2_9132b2c_20260731T2226ET/provenance/ANALYSIS_RETRY1_COMPLETE.json`.
+
+The checked fixed ledger is
+`docs/math/em_k1_live_noise_counterfactual_scorecard_v1.json`; its generated
+checklist is `docs/math/em_k1_live_noise_counterfactual_scorecard.md`. The
+consolidated reporter schema v13 adds one non-scoring `21/24` panel and now
+contains 24 fixed panels. K=1 quality remains `28/34` strict and `32/34`
+topology; K=4 quality remains `41/60` direct and `9/15` all-class. No
+correlation, tolerance, baseline, or quality denominator changed. No Codex
+process or existing Slurm job was modified or interrupted.
