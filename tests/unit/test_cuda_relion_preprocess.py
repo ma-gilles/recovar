@@ -89,6 +89,31 @@ def test_relion_cuda_softmask_has_constant_exterior_and_finite_output(gpu_device
         np.testing.assert_array_equal(masked[row][exterior], np.full(np.count_nonzero(exterior), masked[row, 0, 0]))
 
 
+def test_relion_cuda_softmask_repeats_bit_exactly(gpu_device):
+    from recovar.cuda_backproject import relion_preprocess_real_f32
+
+    rng = np.random.default_rng(20260731)
+    images = rng.standard_normal((3, 128, 128)).astype(np.float32)
+    factors = np.asarray([0.9988004, 1.0, 1.03125], dtype=np.float32)
+    shifts = np.asarray([[-1, -1], [0, 0], [3, -2]], dtype=np.int32)
+
+    masked_repeats = []
+    with jax.default_device(gpu_device):
+        for _ in range(4):
+            _normalized_shifted, masked = relion_preprocess_real_f32(
+                jnp.asarray(images),
+                jnp.asarray(factors),
+                jnp.asarray(shifts),
+                radius=23.529411,
+                cosine_width=5.0,
+                apply_mask=True,
+            )
+            masked_repeats.append(np.asarray(masked))
+
+    for repeat in masked_repeats[1:]:
+        np.testing.assert_array_equal(repeat, masked_repeats[0])
+
+
 @pytest.mark.parametrize("radius,cosine_width", [(1.0e-6, 1.0), (15.999, 1.0e-4)])
 def test_relion_cuda_softmask_boundary_radii_remain_finite(radius, cosine_width, gpu_device):
     from recovar.cuda_backproject import relion_preprocess_real_f32

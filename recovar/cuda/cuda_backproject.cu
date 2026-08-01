@@ -3697,15 +3697,16 @@ __global__ void relion_softmask_background_f32_kernel(
     float* lane_sum_bg)
 {
     int tid = threadIdx.x;
-    int bid = blockIdx.x;
     float partial_sum = 0.0f;
     float partial_sum_bg = 0.0f;
-    int64_t passes = (image_size + kRelionPreprocessBlockSize * gridDim.x - 1) /
-                     (kRelionPreprocessBlockSize * gridDim.x);
-    int64_t texel = static_cast<int64_t>(bid) * kRelionPreprocessBlockSize * passes + tid;
 
-    for (int64_t pass = 0; pass < passes; ++pass, texel += kRelionPreprocessBlockSize) {
-        if (texel >= image_size) continue;
+    // One block owns the complete image.  Each lane therefore accumulates a
+    // fixed lexicographic strided sequence, and CUB reduces the 128 lanes in a
+    // fixed tree below.  The former 128-block atomicAdd into shared lane slots
+    // allowed block scheduling to change the background mean by a few ULPs
+    // between otherwise identical executions; that drift is amplified by the
+    // subsequent rFFT and score reduction.
+    for (int64_t texel = tid; texel < image_size; texel += blockDim.x) {
         float value = __ldg(&image[texel]);
         int y = static_cast<int>(texel / image_w) - yinit;
         int x = static_cast<int>(texel % image_w) - xinit;
@@ -3721,8 +3722,8 @@ __global__ void relion_softmask_background_f32_kernel(
         }
     }
 
-    atomicAdd(&lane_sum[tid], partial_sum);
-    atomicAdd(&lane_sum_bg[tid], partial_sum_bg);
+    lane_sum[tid] = partial_sum;
+    lane_sum_bg[tid] = partial_sum_bg;
 }
 
 __global__ void relion_cosine_fill_f32_kernel(
@@ -3824,7 +3825,7 @@ cudaError_t launch_relion_preprocess_real_f32(
         if (err != cudaSuccess) break;
         float* image_ptr = masked + image * pixels_per_image;
         relion_softmask_background_f32_kernel<<<
-            kRelionSoftMaskBlocks, kRelionPreprocessBlockSize, 0, stream>>>(
+            1, kRelionPreprocessBlockSize, 0, stream>>>(
             image_ptr, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
             radius, radius_p, cosine_width, lane_sum, lane_sum_bg);
         err = cudaGetLastError();
