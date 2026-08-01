@@ -1191,7 +1191,7 @@ def relion_preprocess_real_f32(
     Returns ``(normalized_shifted, masked)`` so captured operand tests can
     gate both stored RELION boundaries.  The implementation preserves
     RELION's separate float32 normalization and zero-filled translation,
-    deterministic 128-lane background reduction, CUB final sums, and CUDA
+    deterministic two-stage 128-block background reduction, CUB sums, and CUDA
     ``sqrtf``/``cospif`` mask arithmetic.
     """
 

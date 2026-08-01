@@ -3693,20 +3693,19 @@ __global__ void relion_softmask_background_f32_kernel(
     float radius,
     float radius_p,
     float cosine_width,
-    float* lane_sum,
-    float* lane_sum_bg)
+    float* block_sum,
+    float* block_sum_bg)
 {
     int tid = threadIdx.x;
+    int bid = blockIdx.x;
     float partial_sum = 0.0f;
     float partial_sum_bg = 0.0f;
+    int64_t passes = (image_size + kRelionPreprocessBlockSize * gridDim.x - 1) /
+                     (kRelionPreprocessBlockSize * gridDim.x);
+    int64_t texel = static_cast<int64_t>(bid) * kRelionPreprocessBlockSize * passes + tid;
 
-    // One block owns the complete image.  Each lane therefore accumulates a
-    // fixed lexicographic strided sequence, and CUB reduces the 128 lanes in a
-    // fixed tree below.  The former 128-block atomicAdd into shared lane slots
-    // allowed block scheduling to change the background mean by a few ULPs
-    // between otherwise identical executions; that drift is amplified by the
-    // subsequent rFFT and score reduction.
-    for (int64_t texel = tid; texel < image_size; texel += blockDim.x) {
+    for (int64_t pass = 0; pass < passes; ++pass, texel += kRelionPreprocessBlockSize) {
+        if (texel >= image_size) continue;
         float value = __ldg(&image[texel]);
         int y = static_cast<int>(texel / image_w) - yinit;
         int x = static_cast<int>(texel % image_w) - xinit;
@@ -3722,8 +3721,19 @@ __global__ void relion_softmask_background_f32_kernel(
         }
     }
 
-    lane_sum[tid] = partial_sum;
-    lane_sum_bg[tid] = partial_sum_bg;
+    // Preserve the original 128-block pixel parallelism, but give every block
+    // a unique output slot.  Two fixed CUB trees (block-local here, then
+    // device-wide below) replace the schedule-dependent atomicAdd into shared
+    // lane slots.
+    using BlockReduce = cub::BlockReduce<float, kRelionPreprocessBlockSize>;
+    __shared__ typename BlockReduce::TempStorage reduce_storage;
+    float reduced_sum = BlockReduce(reduce_storage).Sum(partial_sum);
+    __syncthreads();
+    float reduced_sum_bg = BlockReduce(reduce_storage).Sum(partial_sum_bg);
+    if (tid == 0) {
+        block_sum[bid] = reduced_sum;
+        block_sum_bg[bid] = reduced_sum_bg;
+    }
 }
 
 __global__ void relion_cosine_fill_f32_kernel(
@@ -3795,48 +3805,48 @@ cudaError_t launch_relion_preprocess_real_f32(
     err = cudaMemcpyAsync(masked, normalized_shifted, image_bytes, cudaMemcpyDeviceToDevice, stream);
     if (err != cudaSuccess || !apply_mask) return err;
 
-    float* lane_storage = nullptr;
+    float* block_storage = nullptr;
     float* reduce_values = nullptr;
     void* reduce_temp = nullptr;
     size_t reduce_temp_bytes = 0;
-    err = cudaMalloc(reinterpret_cast<void**>(&lane_storage), 2 * kRelionPreprocessBlockSize * sizeof(float));
+    err = cudaMalloc(
+        reinterpret_cast<void**>(&block_storage),
+        2 * kRelionSoftMaskBlocks * sizeof(float));
     if (err != cudaSuccess) return err;
     err = cudaMalloc(reinterpret_cast<void**>(&reduce_values), 2 * sizeof(float));
     if (err != cudaSuccess) {
-        cudaFree(lane_storage);
+        cudaFree(block_storage);
         return err;
     }
     err = cub::DeviceReduce::Sum(
-        nullptr, reduce_temp_bytes, lane_storage, reduce_values,
-        kRelionPreprocessBlockSize, stream);
+        nullptr, reduce_temp_bytes, block_storage, reduce_values,
+        kRelionSoftMaskBlocks, stream);
     if (err == cudaSuccess)
         err = cudaMalloc(&reduce_temp, reduce_temp_bytes == 0 ? 1 : reduce_temp_bytes);
     if (err != cudaSuccess) {
         cudaFree(reduce_values);
-        cudaFree(lane_storage);
+        cudaFree(block_storage);
         return err;
     }
 
     float radius_p = radius + cosine_width;
     for (int64_t image = 0; image < batch_size; ++image) {
-        float* lane_sum = lane_storage;
-        float* lane_sum_bg = lane_storage + kRelionPreprocessBlockSize;
-        err = cudaMemsetAsync(lane_storage, 0, 2 * kRelionPreprocessBlockSize * sizeof(float), stream);
-        if (err != cudaSuccess) break;
+        float* block_sum = block_storage;
+        float* block_sum_bg = block_storage + kRelionSoftMaskBlocks;
         float* image_ptr = masked + image * pixels_per_image;
         relion_softmask_background_f32_kernel<<<
-            1, kRelionPreprocessBlockSize, 0, stream>>>(
+            kRelionSoftMaskBlocks, kRelionPreprocessBlockSize, 0, stream>>>(
             image_ptr, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
-            radius, radius_p, cosine_width, lane_sum, lane_sum_bg);
+            radius, radius_p, cosine_width, block_sum, block_sum_bg);
         err = cudaGetLastError();
         if (err != cudaSuccess) break;
         err = cub::DeviceReduce::Sum(
-            reduce_temp, reduce_temp_bytes, lane_sum, reduce_values,
-            kRelionPreprocessBlockSize, stream);
+            reduce_temp, reduce_temp_bytes, block_sum, reduce_values,
+            kRelionSoftMaskBlocks, stream);
         if (err != cudaSuccess) break;
         err = cub::DeviceReduce::Sum(
-            reduce_temp, reduce_temp_bytes, lane_sum_bg, reduce_values + 1,
-            kRelionPreprocessBlockSize, stream);
+            reduce_temp, reduce_temp_bytes, block_sum_bg, reduce_values + 1,
+            kRelionSoftMaskBlocks, stream);
         if (err != cudaSuccess) break;
         float host_sums[2];
         err = cudaMemcpyAsync(
@@ -3859,11 +3869,11 @@ cudaError_t launch_relion_preprocess_real_f32(
 
     cudaError_t free_temp_err = cudaFree(reduce_temp);
     cudaError_t free_values_err = cudaFree(reduce_values);
-    cudaError_t free_lanes_err = cudaFree(lane_storage);
+    cudaError_t free_blocks_err = cudaFree(block_storage);
     if (err != cudaSuccess) return err;
     if (free_temp_err != cudaSuccess) return free_temp_err;
     if (free_values_err != cudaSuccess) return free_values_err;
-    return free_lanes_err;
+    return free_blocks_err;
 }
 
 }  // namespace
