@@ -79,7 +79,11 @@ def gpu_subprocess_env():
         if gpu_idx is not None:
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
 
-    if not _env_flag("RECOVAR_DISABLE_CUDA"):
+    if _env_flag("RECOVAR_DISABLE_CUDA"):
+        # An explicit disable must override inherited custom-CUDA settings.
+        env.pop("RECOVAR_CUDA_LIB", None)
+        env.pop("RECOVAR_ENABLE_CUSTOM_CUDA", None)
+    else:
         lib_path = _resolve_custom_cuda_test_lib(require=_env_flag(_REQUIRE_CUSTOM_CUDA_FOR_TESTS_ENV))
         if lib_path is not None:
             env["RECOVAR_CUDA_LIB"] = str(lib_path)
