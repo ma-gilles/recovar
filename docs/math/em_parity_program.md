@@ -14947,3 +14947,53 @@ contains 27 fixed panels. No tolerance, quality denominator, correlation, or
 published numerator changed. Serial audit job `11889557` remains read-only
 and continues naturally; no Codex process or existing Slurm job was modified
 or interrupted.
+
+## 2026-08-02 K=1 restart particle-order causal closure
+
+Same-A100 job `11905073` ran a fresh two-iteration RELION control, a stock
+iteration-1 checkpoint continuation, and two diagnostic continuations that
+changed only iteration 2's randomization seed so the exact iteration-1
+particle permutation was restored. All four arms ran sequentially on physical
+GPU `GPU-a1de512c-f178-a5e1-6c95-c54c6d07c9f3`. The job completed `0:0` in
+`00:46:29` on `della-l07g7`; the sealed output manifest and completion record
+both verify independently.
+
+The dispatch controls pass 4/4. Fresh iterations 1 and 2 have the same exact
+3,000-row permutation. The stock continuation differs from that permutation,
+while restored A and B both equal it exactly. Treatment markers occur zero
+times in fresh and stock and once in each restored arm.
+
+The unchanged 20-gate score/FSC-AUC denominator per continuation is:
+
+| Arm | Score | Parity FSC-AUC | GT FSC-AUC | Total |
+| --- | ---: | ---: | ---: | ---: |
+| stock restart | 14/14 | 3/3 | 0/3 | 17/20 |
+| restored A | 14/14 | 3/3 | 3/3 | 20/20 |
+| restored B | 14/14 | 3/3 | 3/3 | 20/20 |
+
+Both restored repeats have the same 20/20 decision vector. Their mutual
+FSC-AUC is `0.9999999999872374`, `0.9999999999871069`, and
+`0.9999999999932139` for half 1, half 2, and merged maps. Correlation was not
+computed. Grid correction and forced final all-data after non-convergence
+remain unset/off.
+
+The accepted classification is
+`serialized_iteration1_state_closes_case22_score_and_map_gates_when_iteration1_particle_order_is_restored`.
+This establishes that the stock restart's re-randomized order causes its
+three GT-FSC-AUC failures. The intervention is diagnostic and is not a
+production RELION patch.
+
+The immutable report and terminal audit are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_restart_order_restore_c1f5983_20260801T2342ET/analysis/RESTART_ORDER_RESTORE_AB.json`
+  (`e54ab9f917bdc1f6a66c68e38f84356b4d64eb3a2e1f6d143464f9811a2bd7d1`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_restart_order_restore_c1f5983_20260801T2342ET/provenance/POST_TERMINAL_AUDIT.md`
+  (`da98ef81dfc99bb0128d043c7b63cde0471b75e7667ddd24634ebe68d05a9dda`).
+
+The checked ledger is
+`docs/math/em_k1_restart_particle_order_scorecard_v1.json`; its generated
+checklist is `docs/math/em_k1_restart_particle_order_scorecard.md`.
+Consolidated reporter schema v17 adds the non-scoring restored-repeat `40/40`
+panel and now contains 28 fixed panels. No scoring denominator, published
+numerator, tolerance, or correlation changed. No Codex process or existing
+Slurm job was modified or interrupted.

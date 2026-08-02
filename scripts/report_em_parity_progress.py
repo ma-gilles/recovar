@@ -48,6 +48,12 @@ from scripts.summarize_em_k1_reference_roundtrip_rejection_scorecard import (  #
 from scripts.summarize_em_k1_reference_roundtrip_rejection_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k1_reference_roundtrip_rejection,
 )
+from scripts.summarize_em_k1_restart_particle_order_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K1_RESTART_PARTICLE_ORDER_SCORECARD,
+)
+from scripts.summarize_em_k1_restart_particle_order_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k1_restart_particle_order,
+)
 from scripts.summarize_em_k1_sampling_perturbation_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K1_SAMPLING_PERTURBATION_SCORECARD,
 )
@@ -121,7 +127,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v16"
+SCHEMA = "recovar.em_parity_progress.v17"
 
 
 def _panel(
@@ -178,6 +184,7 @@ def build_progress(
     ),
     k4_preprocess_path: Path = DEFAULT_K4_PREPROCESS_SCORECARD,
     k1_restart_path: Path = DEFAULT_K1_RESTART_SCORECARD,
+    k1_restart_particle_order_path: Path = DEFAULT_K1_RESTART_PARTICLE_ORDER_SCORECARD,
     k1_continuation_initializer_path: Path = (DEFAULT_K1_CONTINUATION_INITIALIZER_SCORECARD),
     k1_sampling_perturbation_path: Path = DEFAULT_K1_SAMPLING_PERTURBATION_SCORECARD,
     k1_sampling_roundtrip_path: Path = DEFAULT_K1_SAMPLING_ROUNDTRIP_SCORECARD,
@@ -218,6 +225,9 @@ def build_progress(
     )
     k4_preprocess = load_and_validate_k4_preprocess(k4_preprocess_path)
     k1_restart = load_and_validate_k1_restart(k1_restart_path)
+    k1_restart_particle_order = load_and_validate_k1_restart_particle_order(
+        k1_restart_particle_order_path
+    )
     k1_continuation_initializer = load_and_validate_k1_continuation_initializer(k1_continuation_initializer_path)
     k1_sampling_perturbation = load_and_validate_k1_sampling_perturbation(k1_sampling_perturbation_path)
     k1_sampling_roundtrip = load_and_validate_k1_sampling_roundtrip(k1_sampling_roundtrip_path)
@@ -259,6 +269,7 @@ def build_progress(
     )
     k4_preprocess_summary = k4_preprocess["summary"]
     k1_restart_summary = k1_restart["summary"]
+    k1_restart_particle_order_summary = k1_restart_particle_order["summary"]
     k1_continuation_initializer_baseline = k1_continuation_initializer["baseline_summary"]
     k1_continuation_initializer_treatment = k1_continuation_initializer["treatment_summary"]
     k1_sampling_geometry = k1_sampling_perturbation["geometry_summary"]
@@ -343,6 +354,14 @@ def build_progress(
             k1_restart_summary["pass"],
             k1_restart_summary["evaluated"],
             k1_restart["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
+            "k1_restart_particle_order",
+            "K=1 restart particle-order restored repeats",
+            k1_restart_particle_order_summary["restored_combined"]["pass"],
+            k1_restart_particle_order_summary["restored_combined"]["evaluated"],
+            k1_restart_particle_order["treatment_denominator"],
             scoring=False,
         ),
         _panel(
@@ -539,6 +558,7 @@ def build_progress(
         "metric_policy": (
             "K=1 and K=4 quality panels use shellwise FSC/FSC-AUC; "
             "correlation is not used. The K=1 serialized-restart, K=1 "
+            "restart particle-order restoration, K=1 "
             "continuation-initializer, K=1 sampling-perturbation, K=1 "
             "sampling-roundtrip, K=1 normalization-roundtrip, K=4 causal, "
             "K=1 deterministic-mask, K=1 exact-initial-noise counterfactual, "
@@ -552,6 +572,17 @@ def build_progress(
         "scorecard_change_admissible": False,
         "panels": panels,
         "k1_strict_history": [snapshot["counts"]["pass"] for snapshot in scorecard["history"]],
+        "k1_restart_particle_order_progress": {
+            "stock_pass": k1_restart_particle_order_summary["stock"]["pass"],
+            "restored_a_pass": k1_restart_particle_order_summary["restored_a"]["pass"],
+            "restored_b_pass": k1_restart_particle_order_summary["restored_b"]["pass"],
+            "denominator_per_arm": k1_restart_particle_order[
+                "frozen_denominator_per_arm"
+            ],
+            "paired_gain_per_repeat": k1_restart_particle_order[
+                "paired_gain_per_repeat"
+            ],
+        },
         "k1_continuation_initializer_progress": {
             "stock_pass": k1_continuation_initializer_baseline["pass"],
             "patched_pass": k1_continuation_initializer_treatment["pass"],
@@ -640,6 +671,9 @@ def build_progress(
             "k1_scorecard": _input_record(scorecard_path),
             "k1_fixture_manifest": _input_record(fixture_manifest_path),
             "k1_restart_scorecard": _input_record(k1_restart_path),
+            "k1_restart_particle_order_scorecard": _input_record(
+                k1_restart_particle_order_path
+            ),
             "k1_continuation_initializer_scorecard": _input_record(k1_continuation_initializer_path),
             "k1_sampling_perturbation_scorecard": _input_record(k1_sampling_perturbation_path),
             "k1_sampling_roundtrip_scorecard": _input_record(k1_sampling_roundtrip_path),
@@ -689,6 +723,7 @@ def render_markdown(progress: dict[str, object]) -> str:
             f"{panel['rate_percent']:.1f}% | {scoring} |"
         )
     history = " → ".join(str(value) for value in progress["k1_strict_history"])
+    restart_particle_order = progress["k1_restart_particle_order_progress"]
     initializer = progress["k1_continuation_initializer_progress"]
     sampling = progress["k1_sampling_perturbation_progress"]
     roundtrip = progress["k1_sampling_roundtrip_progress"]
@@ -715,6 +750,17 @@ def render_markdown(progress: dict[str, object]) -> str:
         [
             "",
             f"K=1 strict progress on the unchanged denominator: **{history}**.",
+            "",
+            (
+                "K=1 restart particle-order restoration on the unchanged denominator: "
+                f"**{restart_particle_order['stock_pass']}/"
+                f"{restart_particle_order['denominator_per_arm']} stock → "
+                f"{restart_particle_order['restored_a_pass']}/"
+                f"{restart_particle_order['denominator_per_arm']} restored A and "
+                f"{restart_particle_order['restored_b_pass']}/"
+                f"{restart_particle_order['denominator_per_arm']} restored B "
+                f"(+{restart_particle_order['paired_gain_per_repeat']} per repeat)**."
+            ),
             "",
             (
                 "K=1 continuation-initializer paired progress on the unchanged "

@@ -11,9 +11,16 @@ from scripts.report_em_parity_progress import build_progress, render_markdown
 def test_reports_all_fixed_em_parity_panels() -> None:
     progress = build_progress()
 
-    assert progress["schema"] == "recovar.em_parity_progress.v16"
+    assert progress["schema"] == "recovar.em_parity_progress.v17"
     assert progress["scorecard_change_admissible"] is False
     assert progress["k1_strict_history"] == [20, 21, 22, 23, 25, 26, 27, 28]
+    assert progress["k1_restart_particle_order_progress"] == {
+        "stock_pass": 17,
+        "restored_a_pass": 20,
+        "restored_b_pass": 20,
+        "denominator_per_arm": 20,
+        "paired_gain_per_repeat": 3,
+    }
     assert progress["k1_continuation_initializer_progress"] == {
         "stock_pass": 3,
         "patched_pass": 3,
@@ -91,6 +98,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         ("k1_topology", 32, 34, 34, 94.1, False),
         ("k1_evaluated", 34, 34, 34, 100.0, False),
         ("k1_restart_causal", 24, 42, 42, 57.1, False),
+        ("k1_restart_particle_order", 40, 40, 40, 100.0, False),
         ("k1_continuation_initializer", 3, 21, 21, 14.3, False),
         ("k1_sampling_perturbation_geometry", 3, 5, 5, 60.0, False),
         ("k1_sampling_perturbation_score_map", 0, 21, 21, 0.0, False),
@@ -126,6 +134,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "k1_scorecard",
         "k1_fixture_manifest",
         "k1_restart_scorecard",
+        "k1_restart_particle_order_scorecard",
         "k1_continuation_initializer_scorecard",
         "k1_sampling_perturbation_scorecard",
         "k1_sampling_roundtrip_scorecard",
@@ -476,6 +485,10 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
 
     assert "| K=1 strict FSC/FSC-AUC | **28** | 34 | 34 | 82.4% | yes |" in rendered
     assert "| K=1 serialized-restart causal gates | **24** | 42 | 42 | 57.1% | no |" in rendered
+    assert (
+        "| K=1 restart particle-order restored repeats | **40** | 40 | 40 | 100.0% | no |"
+        in rendered
+    )
     assert ("| K=1 continuation initializer patched arm | **3** | 21 | 21 | 14.3% | no |") in rendered
     assert "| K=1 sampling-perturbation geometry identity | **3** | 5 | 5 | 60.0% | no |" in rendered
     assert "| K=1 sampling-perturbation score/map gates | **0** | 21 | 21 | 0.0% | no |" in rendered
@@ -496,6 +509,11 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
     assert "| K=4 preprocess bitwise replay | **3** | 9 | 9 | 33.3% | no |" in rendered
     assert ("| K=4 preprocess within fixed material floor | **9** | 9 | 9 | 100.0% | no |") in rendered
     assert "K=1 strict progress on the unchanged denominator: **20 → 21 → 22 → 23 → 25 → 26 → 27 → 28**." in rendered
+    assert (
+        "K=1 restart particle-order restoration on the unchanged denominator: "
+        "**17/20 stock → 20/20 restored A and 20/20 restored B (+3 per repeat)**."
+        in rendered
+    )
     assert (
         "K=1 continuation-initializer paired progress on the unchanged denominator: **3/21 stock → 3/21 patched (+0)**."
     ) in rendered
