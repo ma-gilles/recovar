@@ -334,6 +334,7 @@ def generate_trajectory_volumes(
     pdb_path=None,
     prefix_name="vol",
     output_prefix=None,
+    finufft_nthreads=1,
 ):
     """Generate trajectory volumes from 5nrl using rigid-body subcomplex motions.
 
@@ -360,6 +361,10 @@ def generate_trajectory_volumes(
         Volume file prefix name (e.g. ``"vol"``).
     output_prefix : str or None
         Full prefix path override.
+    finufft_nthreads : int or None
+        FINUFFT thread count used to generate each spectrum.  The default of 1
+        avoids nondeterministic parallel spreading in generated regression
+        volumes.  Pass None to let FINUFFT choose its thread count.
 
     Returns
     -------
@@ -411,6 +416,7 @@ def generate_trajectory_volumes(
             force_symmetry=True,
             from_atom_group=True,
             do_center_atoms=False,
+            finufft_nthreads=finufft_nthreads,
         )
         ft_mol = ft_mol.reshape(volume_shape) * B_fac_scaling
         vol = ftu.get_idft3(ft_mol.reshape(volume_shape)).real

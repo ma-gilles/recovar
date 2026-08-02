@@ -214,6 +214,31 @@ class TestPrepare5nrl:
 
 
 class TestGenerateTrajectoryVolumes:
+    def test_uses_serial_finufft_by_default(self, monkeypatch, tmp_path):
+        from recovar.simulation import simulate_scattering_potential as ssp
+        from recovar.simulation import trajectory_generation as tg
+
+        group_coords = [np.zeros((1, 3), dtype=np.float64) for _ in range(3)]
+        group_elements = [np.array(["C"]) for _ in range(3)]
+        fixed_pt = np.zeros(3, dtype=np.float64)
+        monkeypatch.setattr(
+            tg,
+            "prepare_5nrl_subcomplexes",
+            lambda _path: (group_coords, group_elements, fixed_pt),
+        )
+
+        thread_counts = []
+
+        def fake_spectrum(*_args, grid_size, finufft_nthreads, **_kwargs):
+            thread_counts.append(finufft_nthreads)
+            return np.zeros((grid_size, grid_size, grid_size), dtype=np.complex128)
+
+        monkeypatch.setattr(ssp, "generate_molecule_spectrum_from_pdb_id", fake_spectrum)
+
+        tg.generate_trajectory_volumes(tmp_path, grid_size=4, n_volumes=2)
+
+        assert thread_counts == [1, 1]
+
     def test_generates_mrc_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             n_vols = 3
