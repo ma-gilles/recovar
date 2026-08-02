@@ -119,7 +119,7 @@ def _train_step(params: WHalfParametrization, opt_state: optax.OptState, batch: 
     def loss_for_params(params):
         masked_params = params.apply_masking(config.volume_shape, tensor_data.volume_mask) if config.project_mask else params
         return _batch_total_loss(
-            loadings_from_state(params),
+            loadings_from_state(masked_params),
             tensor_data.W_prior_half,
             batch.images_half,
             tensor_data.mean_for_slicing,
