@@ -28,6 +28,7 @@ from .prior_estimation import (
     make_radial_prior_from_shell_total,
     repair_shell_total_with_mean_sq,
     shell_average_real,
+    estimate_covariance_fsc_prior_from_halfsets
 )
 from .triangular import _tri_size, pack_upper_tri, unpack_tri_to_full
 
@@ -59,4 +60,5 @@ __all__ = [
     "make_gt_prior_from_variance_total",
     "estimate_gaussian_shell_prior_from_data",
     "estimate_hybrid_shell_prior_from_data",
+    "estimate_covariance_fsc_prior_from_halfsets"
 ]

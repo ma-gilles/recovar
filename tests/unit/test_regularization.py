@@ -670,3 +670,124 @@ def test_compute_fsc_prior_gpu_v2_on_gpu(gpu_device):
     np.testing.assert_allclose(cpu_prior, gpu_prior, atol=1e-4, rtol=1e-4)
     np.testing.assert_allclose(cpu_fsc, gpu_fsc, atol=1e-4, rtol=1e-4)
     np.testing.assert_allclose(cpu_avg, gpu_avg, atol=1e-4, rtol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# covariance_rpsd / covariance_fsc
+#
+# Naive references follow docs/math/covariance_fsc_rpsd.md directly:
+#   B_s[i, j] = mean_{k in shell s} conj(W1[k, i]) * W2[k, j]
+#   C[s, s']  = sum_{i,j} B_s[i, j] * conj(B_s'[i, j]) = <B_s, B_s'>_F
+# ---------------------------------------------------------------------------
+
+
+def _naive_shell_labels(volume_shape, frequency_shift=0):
+    return (
+        np.asarray(
+            fourier_transform_utils.get_grid_of_radial_distances(
+                volume_shape, scaled=False, frequency_shift=frequency_shift
+            )
+        )
+        .astype(int)
+        .reshape(-1)
+    )
+
+
+def _naive_shell_blocks(W1, W2, labels, n_shells):
+    """Brute-force per-shell cross Gram matrices B_s[i, j], shape (n_shells, r1, r2)."""
+    r1, r2 = W1.shape[1], W2.shape[1]
+    blocks = np.zeros((n_shells, r1, r2), dtype=np.complex128)
+    for shell in range(n_shells):
+        mask = labels == shell
+        if not np.any(mask):
+            continue
+        blocks[shell] = np.conj(W1[mask]).T @ W2[mask] / mask.sum()
+    return blocks
+
+
+def _naive_shell_correlate(W1, W2, volume_shape, frequency_shift=0):
+    """Brute-force C[s, s'] = <B_s, B_s'>_F for two per-voxel loading bases."""
+    n_shells = volume_shape[0] // 2 - 1
+    labels = _naive_shell_labels(volume_shape, frequency_shift)
+    blocks = _naive_shell_blocks(W1, W2, labels, n_shells).reshape(n_shells, -1)
+    return blocks @ np.conj(blocks).T
+
+
+def _random_loading(rng, n_voxels, rank):
+    return (rng.normal(size=(n_voxels, rank)) + 1j * rng.normal(size=(n_voxels, rank))).astype(np.complex128)
+
+
+def test_covariance_shell_correlate_matches_naive_per_shell_inner_products():
+    """_covariance_shell_correlate must equal a brute-force per-shell Frobenius inner product."""
+    shape = (8, 8, 8)
+    n = int(np.prod(shape))
+    rng = np.random.default_rng(0)
+    W1 = _random_loading(rng, n, 3)
+    W2 = _random_loading(rng, n, 2)
+
+    out = np.asarray(regularization._covariance_shell_correlate(jnp.asarray(W1), jnp.asarray(W2), shape))
+    expected = _naive_shell_correlate(W1, W2, shape)
+
+    n_shells = shape[0] // 2 - 1
+    assert out.shape == (n_shells, n_shells)
+    np.testing.assert_allclose(out, expected, rtol=1e-9, atol=1e-9)
+
+
+def test_covariance_rpsd_matches_naive_squared_shell_block_norms():
+    """covariance_rpsd[s, s'] must equal <B_s, B_s'>_F of the naive shell blocks, so its
+    diagonal is exactly the squared Frobenius norm of each shell's block."""
+    shape = (8, 8, 8)
+    n = int(np.prod(shape))
+    rng = np.random.default_rng(1)
+    U = _random_loading(rng, n, 3)
+    s = np.abs(rng.normal(size=3)) + 0.1
+
+    out = np.asarray(regularization.covariance_rpsd(jnp.asarray(U), jnp.asarray(s), shape))
+
+    W = U * np.sqrt(s)[None, :]
+    expected = _naive_shell_correlate(W, W, shape).real
+
+    np.testing.assert_allclose(out, expected, rtol=1e-9, atol=1e-9)
+    np.testing.assert_allclose(out, out.T, rtol=1e-9, atol=1e-9)
+    assert np.all(np.diag(out) >= -1e-9)
+
+
+def test_covariance_fsc_matches_naive_normalized_shell_correlation():
+    """covariance_fsc must equal the naive cross term normalized by the two naive rpsd matrices."""
+    shape = (8, 8, 8)
+    n = int(np.prod(shape))
+    rng = np.random.default_rng(2)
+    U1 = _random_loading(rng, n, 3)
+    s1 = np.abs(rng.normal(size=3)) + 0.1
+    U2 = _random_loading(rng, n, 2)
+    s2 = np.abs(rng.normal(size=2)) + 0.1
+
+    out = np.asarray(
+        regularization.covariance_fsc(jnp.asarray(U1), jnp.asarray(s1), jnp.asarray(U2), jnp.asarray(s2), shape)
+    )
+
+    W1 = U1 * np.sqrt(s1)[None, :]
+    W2 = U2 * np.sqrt(s2)[None, :]
+    correlation = _naive_shell_correlate(W1, W2, shape).real
+    rpsd1 = _naive_shell_correlate(W1, W1, shape).real
+    rpsd2 = _naive_shell_correlate(W2, W2, shape).real
+    expected = correlation / np.sqrt(rpsd1 * rpsd2)
+    expected = np.where(np.isfinite(expected), expected, 0.0)
+    expected[0, 0] = 1.0
+
+    np.testing.assert_allclose(out, expected, rtol=1e-8, atol=1e-8)
+
+
+def test_covariance_fsc_self_correlation_diagonal_is_one():
+    """FSC of a covariance against itself must be exactly 1 on every shell (own diagonal)."""
+    shape = (8, 8, 8)
+    n = int(np.prod(shape))
+    rng = np.random.default_rng(3)
+    U = _random_loading(rng, n, 3)
+    s = np.abs(rng.normal(size=3)) + 0.1
+
+    out = np.asarray(
+        regularization.covariance_fsc(jnp.asarray(U), jnp.asarray(s), jnp.asarray(U), jnp.asarray(s), shape)
+    )
+    np.testing.assert_allclose(np.diag(out), 1.0, rtol=1e-8, atol=1e-8)
+

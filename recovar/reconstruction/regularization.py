@@ -1477,3 +1477,78 @@ def join_halves_at_low_resolution(
     Ft_ctf_1_joined = jnp.where(join_mask_flat, avg_Ft_ctf, Ft_ctf_1_arr)
 
     return Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined
+
+
+
+def _covariance_shell_correlate(W1, W2, volume_shape, frequency_shift=0):
+    """Shell x shell Frobenius-inner-product matrix of two loading bases.
+
+    Returns ``C[s, s'] = sum_{i,j} B_s[i,j] * conj(B_{s'}[i,j])`` where
+    ``B_s[i,j] = mean_{k in shell s} conj(W1[k,i]) * W2[k,j]``. Chunks over
+    the (static) rank of ``W1`` so peak memory is ``O(r2 * n_voxels)``
+    instead of materializing the full ``(r1, r2, n_voxels)`` cross tensor.
+
+    See docs/math/covariance_fsc_rpsd.md.
+    """
+    r2 = W2.shape[1]
+    shell_rows = [
+        batch_average_over_shells(
+            (jnp.conj(W1[:, i : i + 1]) * W2).T, volume_shape, frequency_shift
+        )
+        for i in range(W1.shape[1])
+    ]
+    A = jnp.stack(shell_rows, axis=0).reshape(len(shell_rows) * r2, -1)
+    return A.T @ jnp.conj(A)
+
+
+def covariance_rpsd(U, s, volume_shape, frequency_shift=0):
+    """Shell x shell radial power spectral density of a low-rank covariance.
+
+    ``Cov = U diag(s) U^*``; returns the real, positive semi-definite
+    matrix ``C[s, s'] = <B_s, B_{s'}>_F`` (see
+    docs/math/covariance_fsc_rpsd.md), the shell-shell generalization of an
+    ordinary volume RPSD to a covariance operator represented by its
+    eigenbasis.
+
+    Args:
+        U: Eigenvector matrix, shape (n_voxels, n_pcs), full Fourier layout.
+        s: Eigenvalue array, shape (n_pcs,).
+        volume_shape: Tuple (N, N, N).
+        frequency_shift: Shift applied to frequency indices (see
+            ``regularization.average_over_shells``).
+
+    Returns:
+        Real array of shape (n_shells, n_shells).
+    """
+    W = U * jnp.sqrt(jnp.asarray(s))[None, :]
+    return _covariance_shell_correlate(W, W, volume_shape, frequency_shift).real
+
+
+def covariance_fsc(U1, s1, U2, s2, volume_shape, frequency_shift=0):
+    """Shell x shell Fourier Shell Correlation between two low-rank covariances.
+
+    Generalizes ``regularization.get_fsc_gpu`` from a single pair of volumes
+    to a pair of covariance operators represented by their eigenbases (e.g.
+    two half-set covariance/loading estimates). See
+    docs/math/covariance_fsc_rpsd.md.
+
+    Args:
+        U1, U2: Eigenvector matrices, shape (n_voxels, n_pcs), full Fourier
+            layout.
+        s1, s2: Eigenvalue arrays, shape (n_pcs,) each.
+        volume_shape: Tuple (N, N, N).
+        frequency_shift: Shift applied to frequency indices.
+
+    Returns:
+        Real array of shape (n_shells, n_shells). ``fsc[0, 0]`` is pinned to
+        1.0, matching ``get_fsc_gpu``'s RELION convention.
+    """
+    W1 = U1 * jnp.sqrt(jnp.asarray(s1))[None, :]
+    W2 = U2 * jnp.sqrt(jnp.asarray(s2))[None, :]
+    correlation = _covariance_shell_correlate(W1, W2, volume_shape, frequency_shift).real
+    rpsd1 = _covariance_shell_correlate(W1, W1, volume_shape, frequency_shift).real
+    rpsd2 = _covariance_shell_correlate(W2, W2, volume_shape, frequency_shift).real
+    fsc = correlation / jnp.sqrt(rpsd1 * rpsd2)
+    fsc = jnp.where(~jnp.isfinite(fsc), 0, fsc)
+    fsc = fsc.at[0, 0].set(1.0)
+    return fsc
