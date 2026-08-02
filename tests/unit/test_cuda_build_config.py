@@ -277,6 +277,18 @@ def test_cuda_available_accepts_cuda_platform_name(monkeypatch):
     assert cb.cuda_available() is True
 
 
+def test_cuda_available_respects_runtime_disable_without_poisoning_cached_success(monkeypatch):
+    import recovar.cuda_backproject as cb
+
+    monkeypatch.setattr(cb, "_cuda_ok", True)
+    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    assert cb.cuda_available() is False
+    assert cb._cuda_ok is True
+
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA")
+    assert cb.cuda_available() is True
+
+
 def test_slicing_uses_custom_cuda_by_default_on_gpu(monkeypatch):
     import recovar.core.slicing as core_slicing
     import recovar.cuda_backproject as cb

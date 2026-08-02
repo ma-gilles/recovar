@@ -782,12 +782,10 @@ def cuda_available() -> bool:
     ``RECOVAR_DISABLE_CUDA=1`` to force the slower JAX GPU path instead.
     """
     global _auto_build_error, _cuda_ok
-    if _cuda_ok is not None:
-        return _cuda_ok
-
     if not custom_cuda_requested():
-        _cuda_ok = False
         logger.info("CUDA kernels disabled via %s", _DISABLE_CUSTOM_CUDA_ENV)
+        return False
+    if _cuda_ok is not None:
         return _cuda_ok
     try:
         if not any(getattr(d, "platform", "") in {"gpu", "cuda"} for d in jax.devices()):

@@ -828,6 +828,7 @@ def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeyp
         firstiter_cc_pass2_only_best_coarse=True,
         skip_significance_pruning=True,
         return_best_pose_details=True,
+        coarse_healpix_order=0,
     )
 
     assert len(probe_calls) == 1
@@ -1010,6 +1011,7 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
         significance_image_batch_size=3,
         significance_rotation_block_size=5,
         firstiter_cc_pass2_only_best_coarse=True,
+        coarse_healpix_order=0,
     )
 
     assert len(probe_calls) == 1
@@ -1102,6 +1104,7 @@ def test_adaptive_k_class_firstiter_fine_pass_uses_global_winner_subsets(monkeyp
         "linear_interp",
         firstiter_cc_pass2_only_best_coarse=True,
         image_corrections=np.arange(4, dtype=np.float32),
+        coarse_healpix_order=0,
     )
 
     fine_calls = [call for call in calls if call[0]]
