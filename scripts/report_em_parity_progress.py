@@ -99,6 +99,12 @@ from scripts.summarize_em_k4_deterministic_contribution_repeatability_candidate_
 from scripts.summarize_em_k4_deterministic_contribution_repeatability_candidate_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k4_deterministic_contribution_repeatability_candidate,
 )
+from scripts.summarize_em_k4_deterministic_softmask_quality_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K4_DETERMINISTIC_SOFTMASK_QUALITY_SCORECARD,
+)
+from scripts.summarize_em_k4_deterministic_softmask_quality_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k4_deterministic_softmask_quality,
+)
 from scripts.summarize_em_k4_preprocess_replay_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K4_PREPROCESS_SCORECARD,
 )
@@ -115,7 +121,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v15"
+SCHEMA = "recovar.em_parity_progress.v16"
 
 
 def _panel(
@@ -167,6 +173,9 @@ def build_progress(
     k4_deterministic_contribution_repeatability_candidate_path: Path = (
         DEFAULT_K4_DETERMINISTIC_CONTRIBUTION_REPEATABILITY_CANDIDATE_SCORECARD
     ),
+    k4_deterministic_softmask_quality_path: Path = (
+        DEFAULT_K4_DETERMINISTIC_SOFTMASK_QUALITY_SCORECARD
+    ),
     k4_preprocess_path: Path = DEFAULT_K4_PREPROCESS_SCORECARD,
     k1_restart_path: Path = DEFAULT_K1_RESTART_SCORECARD,
     k1_continuation_initializer_path: Path = (DEFAULT_K1_CONTINUATION_INITIALIZER_SCORECARD),
@@ -200,6 +209,11 @@ def build_progress(
     k4_deterministic_contribution_repeatability_candidate = (
         load_and_validate_k4_deterministic_contribution_repeatability_candidate(
             k4_deterministic_contribution_repeatability_candidate_path
+        )
+    )
+    k4_deterministic_softmask_quality = (
+        load_and_validate_k4_deterministic_softmask_quality(
+            k4_deterministic_softmask_quality_path
         )
     )
     k4_preprocess = load_and_validate_k4_preprocess(k4_preprocess_path)
@@ -239,6 +253,9 @@ def build_progress(
     ]
     k4_deterministic_contribution_repeatability_candidate_summary = (
         k4_deterministic_contribution_repeatability_candidate["summary"]
+    )
+    k4_deterministic_softmask_quality_summary = (
+        k4_deterministic_softmask_quality["summary"]
     )
     k4_preprocess_summary = k4_preprocess["summary"]
     k1_restart_summary = k1_restart["summary"]
@@ -493,6 +510,14 @@ def build_progress(
             scoring=False,
         ),
         _panel(
+            "k4_deterministic_softmask_quality",
+            "K=4 deterministic soft-mask quality acceptance",
+            k4_deterministic_softmask_quality_summary["pass"],
+            k4_deterministic_softmask_quality_summary["evaluated"],
+            k4_deterministic_softmask_quality["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
             "k4_preprocess_bitwise",
             "K=4 preprocess bitwise replay",
             k4_preprocess_summary["bitwise_equal"],
@@ -521,6 +546,7 @@ def build_progress(
             "reference-roundtrip rejection, K=1 "
             "shared-checkpoint FP64 reference, K=4 contribution-repeatability, "
             "K=4 deterministic contribution candidate, "
+            "K=4 deterministic soft-mask quality acceptance, "
             "and K=4 preprocessing panels are non-scoring."
         ),
         "scorecard_change_admissible": False,
@@ -580,6 +606,26 @@ def build_progress(
             "score_map_denominator": k1_mask_score_map["denominator"],
             "score_map_gain": k1_mask_score_map["paired_gain"],
         },
+        "k4_deterministic_softmask_quality_progress": {
+            "control_direct_pass": k4_deterministic_softmask_quality["arms"]["control"][
+                "direct_fsc_auc"
+            ]["passed"],
+            "treatment_direct_pass": k4_deterministic_softmask_quality["arms"][
+                "treatment"
+            ]["direct_fsc_auc"]["passed"],
+            "direct_denominator": k4_deterministic_softmask_quality["arms"]["control"][
+                "direct_fsc_auc"
+            ]["evaluated"],
+            "control_all_class_pass": k4_deterministic_softmask_quality["arms"]["control"][
+                "all_class_iterations"
+            ]["passed"],
+            "treatment_all_class_pass": k4_deterministic_softmask_quality["arms"][
+                "treatment"
+            ]["all_class_iterations"]["passed"],
+            "all_class_denominator": k4_deterministic_softmask_quality["arms"]["control"][
+                "all_class_iterations"
+            ]["evaluated"],
+        },
         "remaining": {
             "k1_strict_failures": k1_strict_failures,
             "k1_topology_failures": k1_topology_failures,
@@ -620,6 +666,9 @@ def build_progress(
             "k4_deterministic_contribution_repeatability_candidate_scorecard": _input_record(
                 k4_deterministic_contribution_repeatability_candidate_path
             ),
+            "k4_deterministic_softmask_quality_scorecard": _input_record(
+                k4_deterministic_softmask_quality_path
+            ),
             "k4_preprocess_scorecard": _input_record(k4_preprocess_path),
         },
     }
@@ -645,6 +694,7 @@ def render_markdown(progress: dict[str, object]) -> str:
     roundtrip = progress["k1_sampling_roundtrip_progress"]
     norm_roundtrip = progress["k1_norm_roundtrip_progress"]
     mask_deterministic = progress["k1_mask_deterministic_progress"]
+    softmask_quality = progress["k4_deterministic_softmask_quality_progress"]
     remaining = progress["remaining"]
     k1_strict = ", ".join(case["id"] for case in remaining["k1_strict_failures"]) or "none"
     k1_topology = ", ".join(case["id"] for case in remaining["k1_topology_failures"]) or "none"
@@ -757,6 +807,23 @@ def render_markdown(progress: dict[str, object]) -> str:
                 f"{mask_deterministic['score_map_treatment_pass']}/"
                 f"{mask_deterministic['score_map_denominator']} treatment "
                 f"({mask_deterministic['score_map_gain']:+d})**."
+            ),
+            "",
+            (
+                "K=4 deterministic soft-mask direct quality on the unchanged denominator: "
+                f"**{softmask_quality['control_direct_pass']}/"
+                f"{softmask_quality['direct_denominator']} control → "
+                f"{softmask_quality['treatment_direct_pass']}/"
+                f"{softmask_quality['direct_denominator']} treatment "
+                "(+0)**."
+            ),
+            (
+                "K=4 deterministic soft-mask all-class iterations on the unchanged denominator: "
+                f"**{softmask_quality['control_all_class_pass']}/"
+                f"{softmask_quality['all_class_denominator']} control → "
+                f"{softmask_quality['treatment_all_class_pass']}/"
+                f"{softmask_quality['all_class_denominator']} treatment "
+                "(+0)**."
             ),
             "",
             f"Remaining K=1 strict cases: {k1_strict}.",

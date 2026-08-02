@@ -11,7 +11,7 @@ from scripts.report_em_parity_progress import build_progress, render_markdown
 def test_reports_all_fixed_em_parity_panels() -> None:
     progress = build_progress()
 
-    assert progress["schema"] == "recovar.em_parity_progress.v15"
+    assert progress["schema"] == "recovar.em_parity_progress.v16"
     assert progress["scorecard_change_admissible"] is False
     assert progress["k1_strict_history"] == [20, 21, 22, 23, 25, 26, 27, 28]
     assert progress["k1_continuation_initializer_progress"] == {
@@ -68,6 +68,14 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "score_map_denominator": 21,
         "score_map_gain": 0,
     }
+    assert progress["k4_deterministic_softmask_quality_progress"] == {
+        "control_direct_pass": 41,
+        "treatment_direct_pass": 41,
+        "direct_denominator": 60,
+        "control_all_class_pass": 9,
+        "treatment_all_class_pass": 9,
+        "all_class_denominator": 15,
+    }
     assert [
         (
             panel["id"],
@@ -110,6 +118,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
             100.0,
             False,
         ),
+        ("k4_deterministic_softmask_quality", 7, 7, 7, 100.0, False),
         ("k4_preprocess_bitwise", 3, 9, 9, 33.3, False),
         ("k4_preprocess_material", 9, 9, 9, 100.0, False),
     ]
@@ -131,6 +140,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "k4_causal_scorecard",
         "k4_contribution_repeatability_scorecard",
         "k4_deterministic_contribution_repeatability_candidate_scorecard",
+        "k4_deterministic_softmask_quality_scorecard",
         "k4_preprocess_scorecard",
     }
     assert all(len(record["sha256"]) == 64 for record in progress["inputs"].values())
@@ -479,6 +489,10 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
     assert "| K=1 deterministic-mask score/map gates | **17** | 21 | 21 | 81.0% | no |" in rendered
     assert "| K=4 direct per-class FSC-AUC | **41** | 60 | 60 | 68.3% | yes |" in rendered
     assert "| K=4 exact-device causal boundary | **2** | 4 | 4 | 50.0% | no |" in rendered
+    assert (
+        "| K=4 deterministic soft-mask quality acceptance | **7** | 7 | 7 | 100.0% | no |"
+        in rendered
+    )
     assert "| K=4 preprocess bitwise replay | **3** | 9 | 9 | 33.3% | no |" in rendered
     assert ("| K=4 preprocess within fixed material floor | **9** | 9 | 9 | 100.0% | no |") in rendered
     assert "K=1 strict progress on the unchanged denominator: **20 → 21 → 22 → 23 → 25 → 26 → 27 → 28**." in rendered
@@ -518,6 +532,14 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
     assert (
         "K=1 deterministic-mask score/map gates on the unchanged denominator: "
         "**17/21 normalization-only → 17/21 treatment (+0)**."
+    ) in rendered
+    assert (
+        "K=4 deterministic soft-mask direct quality on the unchanged denominator: "
+        "**41/60 control → 41/60 treatment (+0)**."
+    ) in rendered
+    assert (
+        "K=4 deterministic soft-mask all-class iterations on the unchanged denominator: "
+        "**9/15 control → 9/15 treatment (+0)**."
     ) in rendered
     assert "Remaining K=1 strict cases: k1-04, k1-05, k1-07, k1-10, k1-22, k1-26." in rendered
     assert "Remaining K=1 topology cases: k1-07, k1-22." in rendered

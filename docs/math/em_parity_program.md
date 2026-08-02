@@ -14863,3 +14863,87 @@ Consolidated reporter schema v15 adds the non-scoring `4/24` panel and now
 contains 26 fixed panels. No quality denominator, tolerance, correlation, or
 published baseline changed. No Codex process or existing Slurm job was
 modified or interrupted.
+
+## 2026-08-01 K=4 deterministic soft-mask full quality acceptance
+
+Same-A100 science job `11854692` completed both 100,000-particle, four-class,
+15-iteration arms sequentially on physical GPU
+`GPU-6ec3d0a5-efc4-2f4c-fa73-7d76b911a412`. The control and deterministic
+processes exited zero after `27,659` and `27,684` seconds. All `120` numbered
+half/class maps, `15` timing records, four final classes, merged map, result
+archive, and post-run GPU telemetry are present per arm. The Slurm owner ended
+`FAILED 1:0` after `15:22:34` only because its final launcher `sha256sum`
+received stray literal `+` arguments after both arms and the science seal had
+completed. The original `afterok` audit `11854693` remains untouched in
+`DependencyNeverSatisfied`.
+
+Independent parallel analysis job `11893992` completed `0:0` in `01:32:31`
+on `della-h12n9`. It ran the control and treatment FSC/topology pipelines
+twice in four fresh processes. Both JSON/Markdown reports and topology
+reports are byte-identical across repeats; every saved shellwise array is
+exact; and the pair analyzer reproduces byte-for-byte. Both output manifests
+verify. The fixed predeclared acceptance result is **7/7**:
+
+| Fixed gate | Control | Treatment | Result |
+| --- | ---: | ---: | --- |
+| direct per-class FSC-AUC | 41/60 | 41/60 | pass, not lower |
+| all-class iterations | 9/15 | 9/15 | pass, not lower |
+| GT-delta panels | 60/60 | 60/60 | pass, not lower |
+| class-agreement iterations | 15/15 | 15/15 | pass, not lower |
+| direct treatment-minus-control floor | - | 60/60 | pass |
+| GT treatment-minus-control floor | - | 60/60 | pass |
+| cohort/provenance | - | 4/4 | pass |
+
+The minimum treatment-minus-control direct FSC-AUC delta is
+`-0.0007612990230934091`; the minimum GT FSC-AUC delta is
+`-0.000109608469138045`. Both clear the unchanged `-0.002` material floor.
+The treatment minimum direct FSC-AUC, minimum RECOVAR-minus-RELION GT delta,
+and minimum class agreement are `0.9905422936627672`,
+`-0.0004546970772076331`, and `0.99203`. Current-size, resolution,
+Healpix, dispatch ownership, convergence, and non-converged finalization
+topology are exact for all `15/15` iterations. Grid correction and forced
+final all data remain unset/off.
+
+Whole-arm wall time changes by only `+0.0903865%` versus control. The full
+15-iteration timing sum is `+0.1078%` versus the paired control and
+`+2.8722%` versus the pinned historical baseline; iteration 15 is `+1.9874%`
+and `+4.6383%`, respectively. Performance was observed but was not one of the
+seven formal quality/provenance gates.
+
+The quality report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_softmask_twostage_ab_e98a5f33_20260801T0015ET/analysis_parallel_v3/PAIR_QUALITY_SUMMARY.json`
+(SHA-256
+`bf3ff3d6c3087c0bedcc62c48ff9e5eb7af95472c60f60d65fbcae65a68b6aa5`).
+The completion seal is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_softmask_twostage_ab_e98a5f33_20260801T0015ET/provenance/ANALYSIS_PARALLEL_V3_COMPLETE.json`
+(SHA-256
+`ac3c72ee9cb139169ff96d71e2c6b4ca5fcfdd3cab3750940f690e235908a6d8`).
+Run and runtime roots contain `SAFE_TO_DELETE` markers.
+
+The deterministic two-stage CUDA reduction at
+`e98a5f333cc789f1e2511da58b95b974c6fe6636` is therefore accepted for
+production integration as a reproducibility fix with preserved quality. It
+does not improve the published K=4 quality numerator: the frozen score stays
+`41/60` direct and `9/15` all-class. The prior baseline and candidate
+repeatability panels remain `0/3` and `3/3`.
+
+An exploratory cross-A100 comparison against the sealed native iteration-2
+raw table confirms that determinism is not the missing global RELION parity
+mechanism. The frozen representative now repeats and matches RELION exactly,
+but the complete raw table has `25,935/109,184` bit mismatches versus the
+prior `25,877/109,184`, with the same one-bit common-min difference and
+relative L2 near `4.96e-8`. This comparison is explicitly non-causal and
+non-scoring. Its report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_raw_diff2_strata_postterminal_20260801T2047ET/CROSS_A100_NATIVE_RAW_EXPLORATORY.json`
+(SHA-256
+`6ff80db978d6699499a1a87dedec4be1da8691ce1a305a6bba770432a8f26fc5`).
+
+The checked ledger is
+`docs/math/em_k4_deterministic_softmask_quality_scorecard_v1.json`; its
+generated checklist is
+`docs/math/em_k4_deterministic_softmask_quality_scorecard.md`. Consolidated
+reporter schema v16 adds one non-scoring `7/7` acceptance panel and now
+contains 27 fixed panels. No tolerance, quality denominator, correlation, or
+published numerator changed. Serial audit job `11889557` remains read-only
+and continues naturally; no Codex process or existing Slurm job was modified
+or interrupted.
