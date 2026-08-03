@@ -342,9 +342,13 @@ def estimate_covariance_fsc_prior_from_halfsets(U1, s1, U2, s2,dataset, mean_est
     fsc_clipped = np.clip(cov_fsc.diagonal(), 0.01, 0.999)
 
     ctf_4 = (ctf_w[0] + ctf_w[1]) / 2
+    #CTF should be normalized by sqrt(noise_variance) -> CTF^4 normalized by noise_variance^2
+    #TODO: implement this within `variance_relion_style_triangular_kernel`?
+    # the current approach won't work with a different noise model (which isn't a global radial model)
+    ctf_4 /= make_radial_image(dataset.noise.noise_variance_radial**2, volume_shape).reshape(-1)
     ctf4_inv = np.where(ctf_4 > 1e-20, 1/ctf_4, 0.0)
     shell_prior = fsc_clipped / (1.0 - fsc_clipped) * regularization.average_over_shells(ctf4_inv, volume_shape)
 
     radial_prior = make_radial_image(jnp.array(shell_prior), volume_shape).reshape(-1,1)
 
-    return (radial_prior/len(s1))**0.5
+    return (radial_prior)**0.5 /len(s1)
