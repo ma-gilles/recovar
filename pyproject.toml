@@ -114,6 +114,10 @@ gui = [
     "aiofiles>=23.0",
     "tomli_w>=1.0",
 ]
+# Comet ML experiment tracking
+comet = [
+    "comet_ml>=3.44.0",
+]
 # Development and testing
 dev = [
     "pytest>=8.0",
