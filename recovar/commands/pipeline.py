@@ -500,7 +500,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--solvar-learning-rate",
         dest="solvar_learning_rate",
         type=float,
-        default=1e-6,
+        default=1e-4,
         help="Adam learning rate for SOLVAR.",
     )
     adv.add_argument(
