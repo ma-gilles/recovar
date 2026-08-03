@@ -21,6 +21,7 @@ from recovar.reconstruction import homogeneous, noise
 from recovar.solvar import solvar as solvar_module
 from recovar.utils.helpers import RobustFileHandler as _RobustFileHandler
 from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
+from recovar.utils.metrics_logger import CometMLMetricsLogger, NullMetricsLogger
 
 logger = logging.getLogger(__name__)
 
@@ -553,7 +554,14 @@ def add_args(parser: argparse.ArgumentParser):
         type=os.path.abspath,
         default=None,
         help="Path to pickle file containing simulation info for SOLVAR evaluation (synthetic dataset only).",
-    )    
+    )
+    adv.add_argument(
+        "--solvar-comet-project",
+        dest="solvar_comet_project",
+        type=str,
+        default=None,
+        help="Comet ML project name for SOLVAR training metrics. Unset disables Comet logging.",
+    )
     adv.add_argument(
         "--test-covar-options",
         dest="test_covar_options",
@@ -1318,16 +1326,24 @@ def _run_solvar_refinement(
         from recovar.simulation.synthetic_dataset import load_heterogeneous_reconstruction
         gt_data = load_heterogeneous_reconstruction(gt_data_info)
 
+    comet_project = getattr(args, "solvar_comet_project", None)
+    metrics_logger = (
+        CometMLMetricsLogger(project_name=comet_project)
+        if comet_project
+        else NullMetricsLogger()
+    )
+
     result = solvar_module.fit(
         dataset,
         means.combined,
         rank=basis_size,
-        W_prior=gt_prior,
+        W_prior=prior_info["W_prior"],
         W_initial=W_initial,
         objective=objective,
         split_halfsets=bool(getattr(args, "solvar_split_halfsets", False)),
         n_epochs=int(getattr(args, "solvar_iters", 40)),
         batch_size=solvar_batch_size,
+        metrics_logger=metrics_logger,
         learning_rate=float(getattr(args, "solvar_learning_rate", 1e-6)),
         gradient_clip_norm=float(getattr(args, "solvar_gradient_clip_norm", 0.0)),
         volume_mask=np.asarray(focus_mask, dtype=np.float32),

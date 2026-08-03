@@ -25,6 +25,7 @@ from recovar.ppca import ppca, prior_estimation
 from recovar.ppca.w_regularization import w_prior_quadratic
 from recovar.simulation.synthetic_dataset import HeterogeneousVolumeDistribution
 from recovar.solvar import gt_metrics
+from recovar.utils.metrics_logger import MetricsLogger, NullMetricsLogger
 
 logger = logging.getLogger(__name__)
 
@@ -407,13 +408,14 @@ def _branch_optimizer(branch_learning_rate, gradient_clip_norm: float = 0.0, sch
 class Trainer():
     """Trainer for SOLVAR fixed-pose loadings."""
 
-    def __init__(self, config, tensor_data, gt_data=None, data_scale = 1.0):
+    def __init__(self, config, tensor_data, gt_data=None, data_scale = 1.0, metrics_logger: MetricsLogger | None = None):
         self.config = config
         self.tensor_data = tensor_data
         self.gt_data = gt_data
         self.data_scale = data_scale
         self.iteration_data = []
         self.volume_shape = self.config.volume_shape
+        self.metrics_logger = metrics_logger or NullMetricsLogger()
 
 
     def train(self, params, n_epochs, dataset, batch_size):
@@ -461,6 +463,7 @@ class Trainer():
             if self.gt_data is not None:
                 row.update(gt_metrics.compute_eigenvector_metrics(W_current, self.gt_data, self.volume_shape))
             self.iteration_data.append(row)
+            self.metrics_logger.log_metrics({k : v for k, v in row.items() if np.isscalar(v)}, step=epoch)
             logger.info(
                 "SOLVAR epoch %d/%d loss=%.6e prior=%.6e grad_norm=%.6e step scaling=%.2e",
                 epoch + 1,
@@ -528,6 +531,7 @@ def fit(
     seed: int | None = None,
     gt_data: HeterogeneousVolumeDistribution | None = None,
     return_iteration_data: bool = False,
+    metrics_logger: MetricsLogger | None = None,
 ):
     """Fit SOLVAR fixed-pose loadings with the LS or MLE objective.
 
@@ -613,7 +617,15 @@ def fit(
         params = _state_from_loadings(W, volume_shape)
 
         param_halfsets.append(_state_from_loadings(W, volume_shape))
-        trainer_halfsets.append(Trainer(config=config, tensor_data=tensor_data, gt_data=gt_data, data_scale = n_total/batch_size))
+        trainer_halfsets.append(
+            Trainer(
+                config=config,
+                tensor_data=tensor_data,
+                gt_data=gt_data,
+                data_scale=n_total / batch_size,
+                metrics_logger=metrics_logger if i ==0 else None,
+            )
+        )
 
         if (not split_halfsets) and (i == 0):
             #When not using split_halfsets estimates are shared between dataset halfsets
