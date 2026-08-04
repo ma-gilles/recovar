@@ -47,6 +47,7 @@ experiments supersede its ranking where they provide direct causal evidence.
 | K=4 fixed-label failures are class swaps | Falsified for the fixed exact-A100 trajectory | Identity map and particle class assignments are optimal at all 15 iterations |
 | K=4 class-1 tuples and significant support agree at the accepted observer boundary | Demonstrated provisionally | Exact `109184/109184` tuples and `38982/38982` support rows in the current one-class join |
 | K=4 raw `diff2` is the first unequal measured class-1 boundary | Demonstrated provisionally | 25,687 float32 mismatches, one-ULP median and three-ULP maximum; all-class admission and RECOVAR repeatability are still pending |
+| Native lane-first soft-mask reduction closes the pinned class-1 shifted-image residual | Falsified at the tested tuple | Native-lane relative L2 was `1.0312363428376726e-07`, slightly worse than default RELION-CUDA at `9.863882911656713e-08` |
 | K=4 reduction order alone is the primary cause | Disfavored, not eliminated | Determinism improves repeatability without improving the fixed 41/60 cross-engine score; identical all-class operands/destinations have not yet been shown |
 | Full deployed RELION in-memory order beyond the reconstructed source semantics has been directly hashed | Unknown | The candidate is source-faithful and fully internally checked, but no native full-order runtime hash is available |
 
@@ -304,6 +305,24 @@ CPU/GPU/symbol/routing/comparator panel passes 128/128 tests. New high-precision
 pass-2 captures also record the selected reduction tree explicitly, and all
 replay/comparison paths default legacy captures to the established block-first
 tree rather than inferring the mode from an output difference.
+
+The predeclared one-particle, one-candidate counterfactual then falsified the
+native lane-first tree as a local improvement at the pinned class-1 tuple. The
+sign-aligned shifted-image residual was relative L2
+`1.0312363428376726e-07` with maximum absolute delta
+`0.0004920811613951751`, compared with default RELION-CUDA relative L2
+`9.863882911656713e-08` and maximum absolute delta
+`0.00034526698300124393`. Dataset-native JAX FFT was worse at relative L2
+`2.88579426490984e-07`. All three centered score residuals are zero because the
+capture contains only one candidate, so they are non-informative and cannot
+support a posterior conclusion. The final immutable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_native_lane_operand_counterfactual_02681e7e_20260804T0850ET/analysis/NATIVE_LANE_OPERAND_COUNTERFACTUAL_V2.json`
+(SHA-256
+`df8b29cb834782abc478f556542d71847866977e6d86086d15a0145574af50af`).
+The old-source contribution's independent-process shifted-image warning still
+applies. This result therefore removes the soft-mask reduction tree from the
+leading fix queue without changing the fixed K=4 scorecards or the need for a
+current-source, multi-candidate admitted capture.
 
 As a separate provisional clue, that RECOVAR capture's high-shell scalar and
 the accepted native observer's per-candidate `sum_init` are bitwise identical:

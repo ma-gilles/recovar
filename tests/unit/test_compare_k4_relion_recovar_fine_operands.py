@@ -10,6 +10,7 @@ from scripts.compare_k4_relion_recovar_fine_operands import (
     _is_relion_cuda_replay_mode,
     _metric,
     _metric_up_to_global_sign,
+    _preprocess_normalization_source,
     _relion_cuda_normalization_factors,
     _select_component_classification,
     _translation_alignment,
@@ -323,6 +324,28 @@ def test_fine_operand_relion_cuda_counterfactual_derives_normalization():
 
 
 @pytest.mark.parametrize(
+    ("mode", "captured_backend_is_relion_cuda", "expected"),
+    [
+        ("dataset_native_jax_fft", True, "not_applied"),
+        ("dataset_native_jax_fft", False, "not_applied"),
+        ("relion_cuda", True, "captured"),
+        ("relion_cuda_native_lane", True, "captured"),
+        ("relion_cuda", False, "derived_image_correction_over_scale"),
+    ],
+)
+def test_fine_operand_reports_normalization_source(
+    mode, captured_backend_is_relion_cuda, expected
+):
+    assert (
+        _preprocess_normalization_source(
+            mode,
+            captured_backend_is_relion_cuda=captured_backend_is_relion_cuda,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
     ("mode", "expected_native_lane"),
     [("relion_cuda", False), ("relion_cuda_native_lane", True)],
 )
@@ -375,6 +398,59 @@ def test_fine_operand_relion_cuda_counterfactual_routes_reduction_tree(
         np.asarray([np.float32(0.9) / np.float32(0.6)], dtype=np.float32),
     )
     assert _is_relion_cuda_replay_mode(mode)
+
+
+def test_fine_operand_dataset_native_counterfactual_accepts_relion_capture():
+    values = {
+        "raw_real_images": np.arange(16, dtype=np.float32).reshape(1, 4, 4),
+        "relion_preprocess_normalization_factors": np.asarray(
+            [0.75], dtype=np.float32
+        ),
+        "integer_pre_shifts": np.zeros((1, 2), dtype=np.int32),
+        "relion_cuda_preprocess": np.bool_(True),
+        "preprocess_backend": np.asarray("relion_cuda"),
+        "score_with_masked_images": np.bool_(False),
+    }
+
+    processed, replay_mode = comparator._reconstruct_processed_score_half(
+        values,
+        particle_diameter_angstrom=3.0,
+        mask_edge_pixels=2.0,
+        mode_override="dataset_native_jax_fft",
+    )
+
+    assert replay_mode == "dataset_native_jax_fft"
+    np.testing.assert_array_equal(
+        np.asarray(processed),
+        np.asarray(
+            comparator._centered_rfft2_jax(
+                values["raw_real_images"]
+            ).reshape(1, -1)
+        ),
+    )
+
+
+def test_fine_operand_dataset_native_capture_rejects_active_normalization():
+    values = {
+        "raw_real_images": np.arange(16, dtype=np.float32).reshape(1, 4, 4),
+        "relion_preprocess_normalization_factors": np.asarray(
+            [0.75], dtype=np.float32
+        ),
+        "integer_pre_shifts": np.zeros((1, 2), dtype=np.int32),
+        "relion_cuda_preprocess": np.bool_(False),
+        "preprocess_backend": np.asarray("dataset_native"),
+        "score_with_masked_images": np.bool_(False),
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="dataset-native capture unexpectedly stored active RELION normalization",
+    ):
+        comparator._reconstruct_processed_score_half(
+            values,
+            particle_diameter_angstrom=3.0,
+            mask_edge_pixels=2.0,
+        )
 
 
 def test_fine_operand_replays_captured_native_lane_mode(monkeypatch):

@@ -156,6 +156,16 @@ def _is_relion_cuda_replay_mode(mode: str) -> bool:
     return mode in {"relion_cuda", "relion_cuda_native_lane"}
 
 
+def _preprocess_normalization_source(
+    mode: str, *, captured_backend_is_relion_cuda: bool
+) -> str:
+    if not _is_relion_cuda_replay_mode(mode):
+        return "not_applied"
+    if captured_backend_is_relion_cuda:
+        return "captured"
+    return "derived_image_correction_over_scale"
+
+
 def _reconstruct_processed_score_half(
     values: dict[str, np.ndarray],
     *,
@@ -215,7 +225,10 @@ def _reconstruct_processed_score_half(
         return processed.reshape(processed.shape[0], -1).astype(jnp.complex64), mode
 
     _require(
-        np.array_equal(captured_normalization, np.ones_like(captured_normalization)),
+        relion_cuda
+        or np.array_equal(
+            captured_normalization, np.ones_like(captured_normalization)
+        ),
         "dataset-native capture unexpectedly stored active RELION normalization",
     )
     processed_real = apply_relion_integer_pre_shifts(raw, integer_shifts)
@@ -523,11 +536,11 @@ def compare(
         )
         preprocessing_counterfactuals[mode] = {
             "direct_score_image_factor": float(alternate_factor),
-            "normalization_source": (
-                "derived_image_correction_over_scale"
-                if _is_relion_cuda_replay_mode(mode)
-                and not bool(np.asarray(values["relion_cuda_preprocess"]).item())
-                else "captured"
+            "normalization_source": _preprocess_normalization_source(
+                mode,
+                captured_backend_is_relion_cuda=bool(
+                    np.asarray(values["relion_cuda_preprocess"]).item()
+                ),
             ),
             "base_shifted": np.asarray(
                 jax.block_until_ready(alternate_base), dtype=np.complex64
