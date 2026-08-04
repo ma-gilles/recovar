@@ -62,3 +62,90 @@ def test_rejects_invalid_joint_prior() -> None:
         auditor.audit_joint_direction_prior(
             np.asarray([[0.5, 0.5], [0.0, 0.0]], dtype=np.float32)
         )
+
+
+def test_audits_live_sparse_capture_exposure() -> None:
+    joint = np.asarray(
+        [
+            [0.11, 0.13, 0.07],
+            [0.05, 0.17, 0.08],
+            [0.09, 0.06, 0.04],
+            [0.03, 0.10, 0.07],
+        ],
+        dtype=np.float32,
+    )
+    joint /= np.sum(joint, dtype=np.float64)
+    base_report = auditor.audit_joint_direction_prior(joint)
+    mismatch_flat = base_report["per_class"][0]["split_vs_direct"][
+        "mismatch_flat_indices"
+    ]
+    assert mismatch_flat
+    direction_id = int(mismatch_flat[0])
+
+    row_sums = joint.sum(axis=1, dtype=np.float64)
+    conditional = (
+        joint / row_sums[:, None].astype(np.float32)
+    ).astype(np.float32)
+    class_log = np.log(
+        (row_sums / float(row_sums.sum())).astype(np.float32)
+    ).astype(np.float32)
+    split_log = (
+        np.log(conditional).astype(np.float32) + class_log[:, None]
+    ).astype(np.float32)
+    global_parents = np.asarray(
+        [direction_id, direction_id + joint.shape[1]], dtype=np.int64
+    )
+    capture = {
+        "class_index": np.asarray(0, dtype=np.int64),
+        "oversampled_rot_indices": global_parents * 8,
+        "parent_map": np.asarray([0, 1], dtype=np.int32),
+        "rotation_log_prior": split_log[0, [direction_id, direction_id]],
+        "candidate_mask": np.asarray(
+            [[True, False, True], [True, True, False]], dtype=bool
+        ),
+        "reconstruction_mask": np.asarray(
+            [[True, False, False], [False, True, False]], dtype=bool
+        ),
+        "probs": np.asarray(
+            [[0.1, 0.0, 0.2], [0.3, 0.4, 0.0]], dtype=np.float64
+        ),
+        "reconstruction_probs": np.asarray(
+            [[0.1, 0.0, 0.0], [0.0, 0.4, 0.0]], dtype=np.float64
+        ),
+    }
+
+    report = auditor.audit_prior_capture_exposure(
+        joint,
+        capture,
+        fine_children_per_parent=8,
+    )
+
+    assert report["classification"] == "live_split_prior_mismatch"
+    assert report["local_parent_mapping_exact"] is True
+    assert report["captured_prior_matches_split_all_rows"] is True
+    assert report["captured_prior_direct_mismatch_rows"] == 2
+    assert report["candidate_active_mismatch_pair_count"] == 4
+    assert report["reconstruction_significant_mismatch_pair_count"] == 2
+    assert report["posterior_mass_on_mismatch_rows"] == pytest.approx(1.0)
+    assert report[
+        "reconstruction_posterior_mass_on_mismatch_rows"
+    ] == pytest.approx(0.5)
+    assert report["causal_claim_admissible"] is False
+
+
+def test_capture_exposure_rejects_inverted_local_parent_map() -> None:
+    joint = np.full((2, 3), np.float32(1.0 / 6.0), dtype=np.float32)
+    capture = {
+        "class_index": np.asarray(0, dtype=np.int64),
+        "oversampled_rot_indices": np.asarray([0, 8], dtype=np.int64),
+        "parent_map": np.asarray([1, 0], dtype=np.int32),
+        "rotation_log_prior": np.log(joint[0, :2]).astype(np.float32),
+        "candidate_mask": np.ones((2, 1), dtype=bool),
+    }
+
+    with pytest.raises(ValueError, match="parent_map"):
+        auditor.audit_prior_capture_exposure(
+            joint,
+            capture,
+            fine_children_per_parent=8,
+        )

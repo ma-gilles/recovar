@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import starfile
@@ -159,6 +159,176 @@ def audit_joint_direction_prior(
     }
 
 
+def audit_prior_capture_exposure(
+    direction_prior: np.ndarray,
+    capture: Mapping[str, np.ndarray],
+    *,
+    fine_children_per_parent: int,
+) -> dict[str, Any]:
+    """Audit whether a sparse pass-2 capture exercises split-log mismatches."""
+
+    joint = np.asarray(direction_prior, dtype=np.float32)
+    _require(
+        joint.ndim == 2 and joint.shape[0] > 1 and joint.shape[1] > 0,
+        "direction prior must have shape (n_classes, n_directions)",
+    )
+    _require(
+        int(fine_children_per_parent) > 0,
+        "fine_children_per_parent must be positive",
+    )
+    required = {
+        "class_index",
+        "oversampled_rot_indices",
+        "parent_map",
+        "rotation_log_prior",
+        "candidate_mask",
+    }
+    missing = sorted(required.difference(capture))
+    _require(not missing, f"capture is missing required arrays: {missing}")
+
+    class_index = int(np.asarray(capture["class_index"]).item())
+    _require(
+        0 <= class_index < joint.shape[0],
+        f"class_index {class_index} is outside [0, {joint.shape[0]})",
+    )
+    fine_indices = np.asarray(
+        capture["oversampled_rot_indices"], dtype=np.int64
+    ).reshape(-1)
+    local_parent = np.asarray(capture["parent_map"], dtype=np.int64).reshape(
+        -1
+    )
+    captured_prior = np.asarray(
+        capture["rotation_log_prior"], dtype=np.float32
+    ).reshape(-1)
+    _require(
+        fine_indices.shape == local_parent.shape == captured_prior.shape,
+        "capture rotation arrays must have identical one-dimensional shapes",
+    )
+    _require(
+        fine_indices.size > 0 and np.all(fine_indices >= 0),
+        "oversampled rotation indices must be nonempty and nonnegative",
+    )
+
+    global_parent = fine_indices // int(fine_children_per_parent)
+    unique_global_parent = np.unique(global_parent)
+    expected_local_parent = np.searchsorted(unique_global_parent, global_parent)
+    local_parent_exact = np.array_equal(local_parent, expected_local_parent)
+    _require(
+        local_parent_exact,
+        "parent_map is not the sorted-local gather of global coarse parents",
+    )
+    direction_ids = global_parent % int(joint.shape[1])
+
+    row_sums = joint.sum(axis=1, dtype=np.float64)
+    total = float(row_sums.sum())
+    conditional = (
+        joint / row_sums[:, None].astype(np.float32)
+    ).astype(np.float32)
+    conditional_log = np.full(joint.shape, -np.inf, dtype=np.float32)
+    direct_log = np.full(joint.shape, -np.inf, dtype=np.float32)
+    positive = joint > 0.0
+    conditional_log[positive] = np.log(conditional[positive]).astype(
+        np.float32
+    )
+    direct_log[positive] = np.log(joint[positive]).astype(np.float32)
+    class_log = np.log((row_sums / total).astype(np.float32)).astype(
+        np.float32
+    )
+    split_log = (conditional_log + class_log[:, None]).astype(np.float32)
+
+    expected_split_rows = split_log[class_index, direction_ids]
+    expected_direct_rows = direct_log[class_index, direction_ids]
+    split_exact_rows = (
+        captured_prior.view(np.uint32)
+        == expected_split_rows.view(np.uint32)
+    )
+    direct_exact_rows = (
+        captured_prior.view(np.uint32)
+        == expected_direct_rows.view(np.uint32)
+    )
+    mismatch_rows = ~direct_exact_rows
+
+    candidate_mask = np.asarray(capture["candidate_mask"], dtype=bool)
+    _require(
+        candidate_mask.ndim == 2
+        and candidate_mask.shape[0] == fine_indices.size,
+        "candidate_mask must have one row per fine rotation",
+    )
+    active_mismatch = mismatch_rows[:, None] & candidate_mask
+    report: dict[str, Any] = {
+        "classification": (
+            "live_split_prior_mismatch"
+            if np.all(split_exact_rows) and np.any(mismatch_rows)
+            else (
+                "captured_prior_matches_relion_direct"
+                if np.all(direct_exact_rows)
+                else "captured_prior_not_expected_split"
+            )
+        ),
+        "class_one_based": class_index + 1,
+        "fine_children_per_parent": int(fine_children_per_parent),
+        "fine_rotation_count": int(fine_indices.size),
+        "unique_global_parent_count": int(unique_global_parent.size),
+        "local_parent_mapping_exact": bool(local_parent_exact),
+        "captured_prior_matches_split_all_rows": bool(
+            np.all(split_exact_rows)
+        ),
+        "captured_prior_split_mismatch_rows": int(
+            np.count_nonzero(~split_exact_rows)
+        ),
+        "captured_prior_direct_mismatch_rows": int(
+            np.count_nonzero(mismatch_rows)
+        ),
+        "captured_prior_direct_mismatch_directions": np.unique(
+            direction_ids[mismatch_rows]
+        ).astype(np.int64).tolist(),
+        "candidate_active_pair_count": int(np.count_nonzero(candidate_mask)),
+        "candidate_active_mismatch_pair_count": int(
+            np.count_nonzero(active_mismatch)
+        ),
+        "causal_claim_admissible": False,
+        "scorecard_change_admissible": False,
+        "interpretation": (
+            "This verifies that a captured sparse pass-2 boundary uses the "
+            "split float32 prior on live candidate rows. It does not show that "
+            "the one-ULP operand difference changes the normalized posterior, "
+            "BPref accumulation, class maps, or FSC-AUC."
+        ),
+    }
+
+    for mask_name in ("reconstruction_mask",):
+        if mask_name not in capture:
+            continue
+        reconstruction_mask = np.asarray(capture[mask_name], dtype=bool)
+        _require(
+            reconstruction_mask.shape == candidate_mask.shape,
+            f"{mask_name} shape differs from candidate_mask",
+        )
+        report["reconstruction_significant_pair_count"] = int(
+            np.count_nonzero(reconstruction_mask)
+        )
+        report["reconstruction_significant_mismatch_pair_count"] = int(
+            np.count_nonzero(mismatch_rows[:, None] & reconstruction_mask)
+        )
+
+    for array_name, output_name in (
+        ("probs", "posterior_mass_on_mismatch_rows"),
+        (
+            "reconstruction_probs",
+            "reconstruction_posterior_mass_on_mismatch_rows",
+        ),
+    ):
+        if array_name not in capture:
+            continue
+        probabilities = np.asarray(capture[array_name], dtype=np.float64)
+        _require(
+            probabilities.shape == candidate_mask.shape,
+            f"{array_name} shape differs from candidate_mask",
+        )
+        report[output_name] = float(probabilities[mismatch_rows].sum())
+    return report
+
+
 def _read_model_direction_prior(model_path: Path) -> np.ndarray:
     model = starfile.read(model_path)
     pattern = re.compile(r"model_pdf_orient_class_(\d+)")
@@ -190,15 +360,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--capture", type=Path)
+    parser.add_argument("--fine-children-per-parent", type=int, default=8)
     args = parser.parse_args()
 
-    report = audit_joint_direction_prior(
-        _read_model_direction_prior(args.model)
-    )
+    direction_prior = _read_model_direction_prior(args.model)
+    report = audit_joint_direction_prior(direction_prior)
     report["input"] = {
         "path": str(args.model.resolve()),
         "sha256": _sha256(args.model),
     }
+    if args.capture is not None:
+        with np.load(args.capture, allow_pickle=False) as capture:
+            report["capture_exposure"] = audit_prior_capture_exposure(
+                direction_prior,
+                capture,
+                fine_children_per_parent=args.fine_children_per_parent,
+            )
+        report["capture_exposure"]["input"] = {
+            "path": str(args.capture.resolve()),
+            "sha256": _sha256(args.capture),
+        }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps(report, indent=2, sort_keys=True))
