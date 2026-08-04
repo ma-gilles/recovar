@@ -629,10 +629,18 @@ RECOVAR--RELION scientific parity.
 
 The contribution-repeatability metrics remain deliberately distinct. The
 historical fixed panel is immutable at 0/3, and the deterministic candidate
-panel is already 3/3 but non-scoring pending its separate quality A/B. If job
-`12004190` passes, it will be recorded as a third, current-source
-production-path 3/3 panel. It will not rewrite either historical result or
-change an FSC/FSC-AUC acceptance count.
+panel is already 3/3 but non-scoring pending its separate quality A/B. Jobs
+`12004190` and `12008172` both stopped at the immutable physical-GPU gate in
+two seconds, before imports or science: Slurm allocated only non-admitted A100
+UUIDs. Their empty arms and allocation tables are preserved as infrastructure
+failures, not counted experiments. Retry `12008294` changes only the allocation
+width to three A100s while unrelated work holds Slurm index 3, guaranteeing
+that indices 0--2 include the admitted index-0 UUID; execution remains exposed
+to that UUID alone. It is scheduled for 2026-08-04 13:56 EDT. If its unchanged
+3/3 gate passes, it will be recorded as a third, current-source production-path
+panel. It will not rewrite either historical result or change an FSC/FSC-AUC
+acceptance count. The exact v10 join remains unsubmitted until that admission
+and its manifests are inspected.
 
 ## Mandatory telemetry conventions
 
