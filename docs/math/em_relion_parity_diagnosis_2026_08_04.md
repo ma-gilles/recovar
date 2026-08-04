@@ -11,6 +11,8 @@ does not change any fixed acceptance threshold.
 - K=1 evaluated cases: **34 / 34**.
 - K=4 direct class-iteration comparisons: **41 / 60**.
 - K=4 all-class iterations: **9 / 15**.
+- K=4 RECOVAR all-class boundary captures: **4 / 4**; this is one-sided
+  capture completeness, not cross-engine parity.
 - K=4 native auxiliary-stream repeatability gates: **12 / 13**.
 - K=4 stable native operand-capture admission: **0 / 1**.
 - Fresh K=1 dispatch alignment: **2 / 2** cases verified.
@@ -108,6 +110,15 @@ half, class, rotation ID, and translation ID:
 The existing fixed-target operand replay closes exactly while the complete
 active raw table does not. Current prior mismatches are inert for the observed
 support and are routed downstream rather than treated as the causal boundary.
+
+The fixed RECOVAR iteration-2 boundary for stack identity 53723 is now complete
+for all four classes. Its four artifacts preserve 247,232 active class-pose
+tuples, 66,986 significant tuples, and a joint probability mass of
+`0.9999999999999997`; an independent fixed-order host replay agrees with the
+stored joint probabilities to maximum absolute error
+`4.336808689942018e-19`. This accepts only the RECOVAR side of the join. Native
+RELION capture must come from the same accepted observer lineage before tuple,
+raw-score, prior, normalization, support, or BPref comparisons are causal.
 The next all-class capture is intended to expose the first unequal global
 class-pose normalization/support boundary. Before direct class FSC is given a
 causal interpretation, a signed 4-by-4 class FSC-AUC matrix should diagnose
