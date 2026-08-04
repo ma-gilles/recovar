@@ -724,6 +724,7 @@ def test_exact_local_contribution_adapter_writes_versioned_pre_scatter_fixture(
         assert capture["iteration"].item() == 7
         assert capture["half"].item() == 2
         assert capture["current_size"].item() == 4
+        assert capture["relion_native_lane_reduction"].item() is False
         assert capture["active_summed"].dtype == np.complex64
         assert capture["active_ctf_probs"].dtype == np.float32
         assert capture["active_original_indices"].tolist() == [0, 0, 1]

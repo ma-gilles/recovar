@@ -169,12 +169,20 @@ def _reconstruct_processed_score_half(
     )
     integer_shifts = np.asarray(values["integer_pre_shifts"], dtype=np.int32)
     relion_cuda = bool(np.asarray(values["relion_cuda_preprocess"]).item())
+    captured_native_lane = bool(
+        np.asarray(values.get("relion_native_lane_reduction", False)).item()
+    )
     backend = str(np.asarray(values["preprocess_backend"]).item())
     _require(
         relion_cuda == (backend == "relion_cuda"),
         "RECOVAR preprocessing flag and backend disagree",
     )
-    mode = backend if mode_override is None else mode_override
+    _require(
+        not captured_native_lane or relion_cuda,
+        "native-lane capture requires RELION CUDA preprocessing",
+    )
+    captured_mode = "relion_cuda_native_lane" if captured_native_lane else backend
+    mode = captured_mode if mode_override is None else mode_override
     _require(
         mode
         in {
@@ -518,7 +526,7 @@ def compare(
             "normalization_source": (
                 "derived_image_correction_over_scale"
                 if _is_relion_cuda_replay_mode(mode)
-                and preprocess_backend != "relion_cuda"
+                and not bool(np.asarray(values["relion_cuda_preprocess"]).item())
                 else "captured"
             ),
             "base_shifted": np.asarray(

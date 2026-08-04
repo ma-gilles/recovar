@@ -65,6 +65,44 @@ def test_dataset_native_processed_reconstruction_inputs_reject_active_relion_nor
         comparator._processed_reconstruction_inputs(values)
 
 
+def test_relion_cuda_processed_reconstruction_replays_captured_native_lane(monkeypatch):
+    captured = {}
+    raw = np.arange(16, dtype=np.float32).reshape(1, 4, 4)
+
+    def fake_preprocess(
+        images,
+        normalization_factors,
+        integer_shifts,
+        radius,
+        cosine_width,
+        apply_mask,
+        *,
+        native_lane_reduction=False,
+    ):
+        captured["native_lane_reduction"] = native_lane_reduction
+        return images, images
+
+    monkeypatch.setattr(comparator, "relion_preprocess_real_f32", fake_preprocess)
+    values = {
+        "raw_real_images": raw,
+        "relion_preprocess_normalization_factors": np.ones(1, dtype=np.float32),
+        "integer_pre_shifts": np.zeros((1, 2), dtype=np.int32),
+        "relion_cuda_preprocess": np.bool_(True),
+        "relion_native_lane_reduction": np.bool_(True),
+        "preprocess_backend": np.asarray("relion_cuda"),
+        "image_corrections": np.asarray([1.25], dtype=np.float32),
+        "scale_corrections": np.asarray([2.0], dtype=np.float32),
+    }
+
+    processed, reconstruction_correction = comparator._processed_reconstruction_inputs(
+        values
+    )
+
+    assert processed.shape == (1, 12)
+    assert captured["native_lane_reduction"] is True
+    np.testing.assert_array_equal(reconstruction_correction, values["scale_corrections"])
+
+
 def test_scalar_rotation_records_are_identity_bound(tmp_path):
     report = {
         "classification": "pixel_varying_source_difference_not_explained_by_per_rotation_scalar",

@@ -679,6 +679,19 @@ def _validate_v3_replay_bundle(contribution):
 
     for key in ("relion_cuda_preprocess", "score_with_masked_images"):
         _require_array(contribution, key, shape=(), dtype=np.dtype(np.bool_))
+    if "relion_native_lane_reduction" in contribution:
+        _require_array(
+            contribution,
+            "relion_native_lane_reduction",
+            shape=(),
+            dtype=np.dtype(np.bool_),
+        )
+        if bool(_scalar(contribution, "relion_native_lane_reduction")) and not bool(
+            _scalar(contribution, "relion_cuda_preprocess")
+        ):
+            raise ValueError(
+                "native-lane contribution capture requires RELION CUDA preprocessing"
+            )
     for key in (
         "preprocess_backend",
         "preprocess_convention",
@@ -700,6 +713,11 @@ def _validate_v3_replay_bundle(contribution):
         set(vector_identity_fields)
         | set(high_precision_fields)
         | present_probability_dtype_metadata
+        | (
+            {"relion_native_lane_reduction"}
+            if "relion_native_lane_reduction" in contribution
+            else set()
+        )
         | {
             "raw_real_images", "raw_source_dtype", "raw_source_shape",
             "candidate_preprior_scores", "candidate_combined_scores",
@@ -713,6 +731,11 @@ def _validate_v3_replay_bundle(contribution):
         "shadow_score_bitwise_equal": shadow_score_equal,
         "shadow_reduction_metrics": shadow_metrics if shadow_only else None,
         "high_precision_operand_bundle": high_precision,
+        "relion_native_lane_reduction": bool(
+            _scalar(contribution, "relion_native_lane_reduction")
+        )
+        if "relion_native_lane_reduction" in contribution
+        else False,
         "particle_count": int(particle_count),
         "rotation_count": int(rotation_count),
         "translation_count": int(translation_count),

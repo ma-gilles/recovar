@@ -157,10 +157,17 @@ def _processed_reconstruction_inputs(
     )
     integer_shifts = np.asarray(values["integer_pre_shifts"], dtype=np.int32)
     relion_cuda = bool(np.asarray(values["relion_cuda_preprocess"]).item())
+    native_lane_reduction = bool(
+        np.asarray(values.get("relion_native_lane_reduction", False)).item()
+    )
     backend = str(np.asarray(values["preprocess_backend"]).item())
     _require(
         relion_cuda == (backend == "relion_cuda"),
         "RECOVAR preprocessing flag and backend disagree",
+    )
+    _require(
+        not native_lane_reduction or relion_cuda,
+        "native-lane capture requires RELION CUDA preprocessing",
     )
     if relion_cuda:
         _, preprocessed = relion_preprocess_real_f32(
@@ -170,6 +177,7 @@ def _processed_reconstruction_inputs(
             1.0,
             1.0,
             False,
+            native_lane_reduction=native_lane_reduction,
         )
         processed = _centered_rfft2_jax(preprocessed)
         reconstruction_correction = np.asarray(

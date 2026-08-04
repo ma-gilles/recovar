@@ -84,6 +84,7 @@ from recovar.em.dense_single_volume.helpers.oversampling import _find_significan
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     apply_half_translation_phases,
     half_translation_phase_table,
+    image_preprocess_backend,
     prepare_batch_preprocess_operands,
     process_half_image,
     resolve_image_mask_for_half_preprocess,
@@ -1037,6 +1038,15 @@ def _maybe_dump_bpref_contribution_rows(
         if current_size is None or int(current_size) != int(target_current_size):
             return
 
+    preprocess_backend_object = image_preprocess_backend(experiment_dataset)
+    relion_native_lane_reduction = bool(
+        getattr(preprocess_backend_object, "relion_native_lane_reduction", False)
+    )
+    if relion_native_lane_reduction and not relion_cuda_preprocess:
+        raise ValueError(
+            "native-lane preprocessing telemetry requires the RELION CUDA backend"
+        )
+
     local_indices = np.asarray(image_indices, dtype=np.int64)
     original_indices = _original_indices_for_local(experiment_dataset, local_indices)
     image_identities = _bpref_image_identities_for_original_indices(original_indices)
@@ -1216,6 +1226,7 @@ def _maybe_dump_bpref_contribution_rows(
         scale_corrections=captured_scale_corrections,
         relion_preprocess_normalization_factors=captured_normalization_factors,
         relion_cuda_preprocess=np.bool_(relion_cuda_preprocess),
+        relion_native_lane_reduction=np.bool_(relion_native_lane_reduction),
         preprocess_backend=np.asarray("relion_cuda" if relion_cuda_preprocess else "dataset_native"),
         preprocess_convention=np.asarray("recovar-half-preprocess-v1"),
         score_with_masked_images=np.bool_(score_with_masked_images),

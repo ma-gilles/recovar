@@ -375,3 +375,42 @@ def test_fine_operand_relion_cuda_counterfactual_routes_reduction_tree(
         np.asarray([np.float32(0.9) / np.float32(0.6)], dtype=np.float32),
     )
     assert _is_relion_cuda_replay_mode(mode)
+
+
+def test_fine_operand_replays_captured_native_lane_mode(monkeypatch):
+    captured = {}
+
+    def fake_preprocess(
+        images,
+        normalization_factors,
+        integer_shifts,
+        radius,
+        cosine_width,
+        apply_mask,
+        *,
+        native_lane_reduction=False,
+    ):
+        captured["native_lane_reduction"] = native_lane_reduction
+        return images, images
+
+    monkeypatch.setattr(comparator, "relion_preprocess_real_f32", fake_preprocess)
+    values = {
+        "raw_real_images": np.arange(16, dtype=np.float32).reshape(1, 4, 4),
+        "relion_preprocess_normalization_factors": np.ones(1, dtype=np.float32),
+        "integer_pre_shifts": np.zeros((1, 2), dtype=np.int32),
+        "relion_cuda_preprocess": np.bool_(True),
+        "relion_native_lane_reduction": np.bool_(True),
+        "preprocess_backend": np.asarray("relion_cuda"),
+        "score_with_masked_images": np.bool_(True),
+        "voxel_size": np.float32(1.5),
+    }
+
+    processed, replay_mode = comparator._reconstruct_processed_score_half(
+        values,
+        particle_diameter_angstrom=3.0,
+        mask_edge_pixels=2.0,
+    )
+
+    assert replay_mode == "relion_cuda_native_lane"
+    assert processed.shape == (1, 12)
+    assert captured["native_lane_reduction"] is True

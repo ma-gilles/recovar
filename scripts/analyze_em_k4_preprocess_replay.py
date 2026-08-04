@@ -246,6 +246,11 @@ def _load_bundle(
     _require(bool(values["high_precision_operand_bundle"]), "bundle is not high precision")
     _require(bool(values["relion_cuda_preprocess"]), "bundle did not use RELION CUDA preprocessing")
     _require(str(values["preprocess_backend"]) == "relion_cuda", "preprocess backend changed")
+    native_lane_reduction = bool(values.get("relion_native_lane_reduction", False))
+    _require(
+        not native_lane_reduction or bool(values["relion_cuda_preprocess"]),
+        "native-lane bundle requires RELION CUDA preprocessing",
+    )
     _require(bool(values["score_with_masked_images"]), "bundle did not score masked images")
     _require(str(values["image_mask_mode"]) == "relion_background_fill", "mask mode changed")
     _require(int(values["iteration"]) == expected_iteration, "bundle iteration changed")
@@ -332,6 +337,7 @@ def run_gpu_replays(
         dtype=jnp.float32,
     )
     shifts = jnp.asarray(values["integer_pre_shifts"], dtype=jnp.int32)
+    native_lane_reduction = bool(values.get("relion_native_lane_reduction", False))
     normalized_runs = []
     masked_runs = []
     masked_fourier_runs = []
@@ -343,6 +349,7 @@ def run_gpu_replays(
             mask_radius_pixels,
             mask_edge_width_pixels,
             True,
+            native_lane_reduction=native_lane_reduction,
         )
         masked_fourier = _centered_rfft2_jax(masked)
         masked_fourier.block_until_ready()
@@ -371,6 +378,7 @@ def run_gpu_replays(
         "mask_radius_pixels": mask_radius_pixels,
         "mask_edge_width_pixels": mask_edge_width_pixels,
         "gpu_uuid": gpu_uuid,
+        "native_lane_reduction": native_lane_reduction,
     }
     report["inputs"] = {
         "sealed_bundle": {

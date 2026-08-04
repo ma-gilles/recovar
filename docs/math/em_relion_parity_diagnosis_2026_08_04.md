@@ -298,7 +298,10 @@ preprocessing. It uses identical normalization, CTF, translation, projection,
 candidate, and score-reduction inputs; the only additional intervention is the
 soft-mask background addition tree. This is a diagnostic report field only
 and does not select the native-lane path in production. The focused
-CPU/GPU/symbol/routing/comparator panel passes 128/128 tests.
+CPU/GPU/symbol/routing/comparator panel passes 128/128 tests. New high-precision
+pass-2 captures also record the selected reduction tree explicitly, and all
+replay/comparison paths default legacy captures to the established block-first
+tree rather than inferring the mode from an output difference.
 
 As a separate provisional clue, that RECOVAR capture's high-shell scalar and
 the accepted native observer's per-candidate `sum_init` are bitwise identical:
