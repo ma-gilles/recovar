@@ -291,6 +291,15 @@ default path unchanged; it is still only a local diagnostic, not cross-engine
 causal evidence or a scorecard improvement. The immutable smoke report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_softmask_native_lane_bfaaec4d_20260804T0750ET/provenance/LOCAL_GPU_SMOKE.json`.
 
+The bounded fine-operand comparator now reports the native-lane path as a
+separate `relion_cuda_native_lane` preprocessing counterfactual alongside the
+captured production path, dataset-native JAX FFT, and default RELION-CUDA
+preprocessing. It uses identical normalization, CTF, translation, projection,
+candidate, and score-reduction inputs; the only additional intervention is the
+soft-mask background addition tree. This is a diagnostic report field only
+and does not select the native-lane path in production. The focused
+CPU/GPU/symbol/routing/comparator panel passes 128/128 tests.
+
 As a separate provisional clue, that RECOVAR capture's high-shell scalar and
 the accepted native observer's per-candidate `sum_init` are bitwise identical:
 float32 value `0.07816561311483383`, bits `1033901387`. This weakens a pure

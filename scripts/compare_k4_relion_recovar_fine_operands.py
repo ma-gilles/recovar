@@ -152,6 +152,10 @@ def _relion_cuda_normalization_factors(
     return np.asarray(image_correction / scale_correction, dtype=np.float32)
 
 
+def _is_relion_cuda_replay_mode(mode: str) -> bool:
+    return mode in {"relion_cuda", "relion_cuda_native_lane"}
+
+
 def _reconstruct_processed_score_half(
     values: dict[str, np.ndarray],
     *,
@@ -172,11 +176,17 @@ def _reconstruct_processed_score_half(
     )
     mode = backend if mode_override is None else mode_override
     _require(
-        mode in {"dataset_native", "dataset_native_jax_fft", "relion_cuda"},
+        mode
+        in {
+            "dataset_native",
+            "dataset_native_jax_fft",
+            "relion_cuda",
+            "relion_cuda_native_lane",
+        },
         f"unsupported preprocessing replay mode {mode!r}",
     )
     score_with_mask = bool(np.asarray(values["score_with_masked_images"]).item())
-    if mode == "relion_cuda":
+    if _is_relion_cuda_replay_mode(mode):
         normalization = _relion_cuda_normalization_factors(
             values,
             captured_backend_is_relion_cuda=relion_cuda,
@@ -191,6 +201,7 @@ def _reconstruct_processed_score_half(
             radius,
             float(mask_edge_pixels),
             score_with_mask,
+            native_lane_reduction=(mode == "relion_cuda_native_lane"),
         )
         processed = _centered_rfft2_jax(processed_real)
         return processed.reshape(processed.shape[0], -1).astype(jnp.complex64), mode
@@ -477,7 +488,11 @@ def compare(
     )
 
     preprocessing_counterfactuals: dict[str, dict[str, object]] = {}
-    for mode in ("dataset_native_jax_fft", "relion_cuda"):
+    for mode in (
+        "dataset_native_jax_fft",
+        "relion_cuda",
+        "relion_cuda_native_lane",
+    ):
         alternate_processed, _ = _reconstruct_processed_score_half(
             values,
             particle_diameter_angstrom=particle_diameter_angstrom,
@@ -485,7 +500,7 @@ def compare(
             mode_override=mode,
         )
         alternate_factor = _direct_score_image_factor(
-            relion_cuda_preprocess=(mode == "relion_cuda"),
+            relion_cuda_preprocess=_is_relion_cuda_replay_mode(mode),
             image_correction=np.float32(image_correction[particle]),
             scale_correction=np.float32(scale[particle]),
         )
@@ -502,7 +517,8 @@ def compare(
             "direct_score_image_factor": float(alternate_factor),
             "normalization_source": (
                 "derived_image_correction_over_scale"
-                if mode == "relion_cuda" and preprocess_backend != "relion_cuda"
+                if _is_relion_cuda_replay_mode(mode)
+                and preprocess_backend != "relion_cuda"
                 else "captured"
             ),
             "base_shifted": np.asarray(

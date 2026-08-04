@@ -1,10 +1,13 @@
 import numpy as np
+import pytest
 
+import scripts.compare_k4_relion_recovar_fine_operands as comparator
 from scripts.compare_k4_relion_recovar_fine_operands import (
     _center,
     _component_counterfactual,
     _direct_score_image_factor,
     _infer_current_size,
+    _is_relion_cuda_replay_mode,
     _metric,
     _metric_up_to_global_sign,
     _relion_cuda_normalization_factors,
@@ -317,3 +320,58 @@ def test_fine_operand_relion_cuda_counterfactual_derives_normalization():
         rtol=np.finfo(np.float32).eps,
         atol=0.0,
     )
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_native_lane"),
+    [("relion_cuda", False), ("relion_cuda_native_lane", True)],
+)
+def test_fine_operand_relion_cuda_counterfactual_routes_reduction_tree(
+    monkeypatch,
+    mode,
+    expected_native_lane,
+):
+    captured = {}
+
+    def fake_preprocess(
+        images,
+        normalization_factors,
+        integer_shifts,
+        radius,
+        cosine_width,
+        apply_mask,
+        *,
+        native_lane_reduction=False,
+    ):
+        captured["normalization_factors"] = np.asarray(normalization_factors)
+        captured["native_lane_reduction"] = native_lane_reduction
+        return images, images
+
+    monkeypatch.setattr(comparator, "relion_preprocess_real_f32", fake_preprocess)
+    values = {
+        "raw_real_images": np.arange(16, dtype=np.float32).reshape(1, 4, 4),
+        "relion_preprocess_normalization_factors": np.ones(1, dtype=np.float32),
+        "integer_pre_shifts": np.zeros((1, 2), dtype=np.int32),
+        "relion_cuda_preprocess": np.bool_(False),
+        "preprocess_backend": np.asarray("dataset_native"),
+        "score_with_masked_images": np.bool_(True),
+        "voxel_size": np.float32(1.5),
+        "image_corrections": np.asarray([0.9], dtype=np.float32),
+        "scale_corrections": np.asarray([0.6], dtype=np.float32),
+    }
+
+    processed, replay_mode = comparator._reconstruct_processed_score_half(
+        values,
+        particle_diameter_angstrom=3.0,
+        mask_edge_pixels=2.0,
+        mode_override=mode,
+    )
+
+    assert replay_mode == mode
+    assert processed.shape == (1, 12)
+    assert captured["native_lane_reduction"] is expected_native_lane
+    np.testing.assert_array_equal(
+        captured["normalization_factors"],
+        np.asarray([np.float32(0.9) / np.float32(0.6)], dtype=np.float32),
+    )
+    assert _is_relion_cuda_replay_mode(mode)
