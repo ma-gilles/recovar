@@ -52,6 +52,8 @@ def test_reports_exact_joint_support(tmp_path: Path) -> None:
     assert report["joint_mask_mismatch_count"] == 0
     assert report["repeat_mask_exact"] is True
     assert report["correlation_used"] is False
+    assert report["support_score_boundary"]["retained_minus_excluded_score_margin"] > 0.0
+    assert report["support_score_boundary"]["score_margin_float32_ulps"] > 0
 
 
 @pytest.mark.unit

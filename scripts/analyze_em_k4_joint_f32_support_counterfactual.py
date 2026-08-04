@@ -36,6 +36,15 @@ def _float32_bits(value: jax.Array) -> int:
     return int(scalar.view(np.uint32))
 
 
+def _ordered_float32_int(value: np.float32) -> int:
+    """Map a finite float32 to an integer ordered by numeric value."""
+
+    bits = int(np.asarray(value, dtype=np.float32).view(np.uint32))
+    if bits & 0x80000000:
+        return 0xFFFFFFFF - bits
+    return bits + 0x80000000
+
+
 def _load_captures(capture_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     paths = sorted(capture_root.glob("pass2_orig*_class*_cs*.npz"))
     _require(len(paths) == EXPECTED_CLASSES, "capture root must contain four class files")
@@ -154,6 +163,29 @@ def build_report(
     _require(not np.any(counterfactual & ~joint_candidate), "counterfactual retained an inactive candidate")
     _require(reference["n_significant"] == int(np.count_nonzero(counterfactual)), "counterfactual count changed")
 
+    scores_flat = joint_scores[0]
+    retained_scores = scores_flat[counterfactual]
+    excluded_active_scores = scores_flat[joint_candidate & ~counterfactual]
+    _require(retained_scores.size > 0, "counterfactual support is empty")
+    min_retained_score = np.float32(np.min(retained_scores))
+    if excluded_active_scores.size:
+        max_excluded_score = np.float32(np.max(excluded_active_scores))
+        score_margin = float(np.float64(min_retained_score) - np.float64(max_excluded_score))
+        score_margin_ulps = _ordered_float32_int(min_retained_score) - _ordered_float32_int(
+            max_excluded_score,
+        )
+        _require(score_margin >= 0.0 and score_margin_ulps >= 0, "support score boundary is inverted")
+        max_excluded_score_out: float | None = float(max_excluded_score)
+        max_excluded_score_bits: int | None = int(max_excluded_score.view(np.uint32))
+        score_margin_ulps_out: int | None = int(score_margin_ulps)
+        excluded_ties_at_max: int | None = int(np.count_nonzero(excluded_active_scores == max_excluded_score))
+    else:
+        max_excluded_score_out = None
+        max_excluded_score_bits = None
+        score_margin = None
+        score_margin_ulps_out = None
+        excluded_ties_at_max = None
+
     offsets = np.cumsum([0] + [capture["scores"].size for capture in captures])
     class_records = []
     for class_index, capture in enumerate(captures):
@@ -197,6 +229,16 @@ def build_report(
         "f32_sum_weight_bits": reference["sum_weight_bits"],
         "f32_threshold_bits": reference["threshold_bits"],
         "f32_mask_sha256": reference["mask_sha256"],
+        "support_score_boundary": {
+            "min_retained_score_f32": float(min_retained_score),
+            "min_retained_score_bits": int(min_retained_score.view(np.uint32)),
+            "retained_ties_at_min": int(np.count_nonzero(retained_scores == min_retained_score)),
+            "max_excluded_active_score_f32": max_excluded_score_out,
+            "max_excluded_active_score_bits": max_excluded_score_bits,
+            "excluded_ties_at_max": excluded_ties_at_max,
+            "retained_minus_excluded_score_margin": score_margin,
+            "score_margin_float32_ulps": score_margin_ulps_out,
+        },
         "classes": class_records,
         "inputs": input_records,
         "interpretation": (

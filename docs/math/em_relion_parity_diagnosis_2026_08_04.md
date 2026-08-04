@@ -332,12 +332,14 @@ therefore applied as a bounded counterfactual to the complete four-class
 iteration-2 target capture. It retained exactly the same `66,986` tuples as
 the current joint-probability path: class counts `38,982`, `14,076`, `11,804`,
 and `2,124`, with zero mask differences in four byte-exact repetitions. This
-falsifies that arithmetic distinction as a support owner for the pinned target;
+boundary is not an immediate tie: the minimum retained and maximum excluded
+float32 log scores are separated by `6.103515625e-05`, or 32 float32 ULPs.
+This falsifies that arithmetic distinction as a support owner for the pinned target;
 it does not establish native RELION support equality or rule out threshold
 differences at later, near-boundary particles. The immutable report is
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_joint_f32_support_probe_055ea5ca_20260804T0937ET/analysis/JOINT_F32_SUPPORT_PROBE_CHECKED_IN.json`
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_joint_f32_support_probe_055ea5ca_20260804T0937ET/analysis/JOINT_F32_SUPPORT_PROBE_V2.json`
 (SHA-256
-`c472d3bfe115dd68a804eb5d446b351fc2c34dbc9e1afee48f4438400594aede`).
+`93428560797d1b7f24e66f6519068794e827d3df5270c7d68ee316dac8649277`).
 
 As a separate provisional clue, that RECOVAR capture's high-shell scalar and
 the accepted native observer's per-candidate `sum_init` are bitwise identical:
