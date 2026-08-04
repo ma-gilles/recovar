@@ -1964,6 +1964,10 @@ def main() -> None:
         "random_perturbation_source": random_perturbation_source,
         "perturb_restart_state_iteration": args.perturb_restart_state_iteration,
         "elapsed_s": float(elapsed_s),
+        "image_fourier_backend": args.image_fourier_backend,
+        "relion_native_lane_softmask_reduction": bool(
+            args.relion_native_lane_softmask_reduction
+        ),
         "relion_optimiser_cli": relion_cli_flags,
         "firstiter_cc_mode": firstiter_cc_mode,
         "firstiter_cc_pass2_only_best_coarse": bool(
