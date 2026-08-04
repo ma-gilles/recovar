@@ -5,6 +5,8 @@ import pytest
 
 from scripts.analyze_em_k4_allclass_native_boundary import (
     BOUNDARY_ORDER,
+    candidate_key_from_flat_index,
+    candidate_key_from_sequence_index,
     classify_first_unequal_boundary,
     exact_rotation_permutation,
     float32_metric,
@@ -74,3 +76,37 @@ def test_float32_metric_is_bitwise_and_scale_sensitive() -> None:
     assert changed["first_mismatch_flat_index"] == 1
     assert changed["max_abs"] > 0
     assert changed["correlation_used"] is False
+
+
+@pytest.mark.unit
+def test_flat_candidate_key_uses_rotation_major_recovar_coordinates() -> None:
+    inverse = np.asarray((2, 0, 1), dtype=np.int64)
+
+    assert candidate_key_from_flat_index(
+        9,
+        (3, 4),
+        recovar_to_native_rotation=inverse,
+    ) == {
+        "native_rotation_local": 1,
+        "recovar_rotation_local": 2,
+        "translation_id": 1,
+    }
+    assert candidate_key_from_flat_index(
+        None,
+        (3, 4),
+        recovar_to_native_rotation=inverse,
+    ) is None
+
+
+@pytest.mark.unit
+def test_sequence_candidate_key_preserves_joined_native_and_recovar_rows() -> None:
+    assert candidate_key_from_sequence_index(
+        1,
+        native_rotation=np.asarray((5, 2, 8)),
+        recovar_rotation=np.asarray((1, 7, 3)),
+        translation=np.asarray((4, 6, 0)),
+    ) == {
+        "native_rotation_local": 2,
+        "recovar_rotation_local": 7,
+        "translation_id": 6,
+    }

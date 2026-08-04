@@ -102,6 +102,58 @@ def classify_first_unequal_boundary(stage_exact: dict[str, bool]) -> str:
     return "bpref_operands_unobserved"
 
 
+def candidate_key_from_flat_index(
+    flat_index: int | None,
+    shape: tuple[int, int],
+    *,
+    recovar_to_native_rotation: np.ndarray,
+) -> dict[str, int] | None:
+    """Resolve a RECOVAR rotation-major flat offset to an exact tuple key."""
+
+    if flat_index is None:
+        return None
+    n_rotations, n_translations = (int(value) for value in shape)
+    _require(
+        0 <= int(flat_index) < n_rotations * n_translations,
+        "candidate flat index is outside the class table",
+    )
+    inverse = np.asarray(recovar_to_native_rotation, dtype=np.int64).reshape(-1)
+    _require(inverse.shape == (n_rotations,), "rotation inverse shape changed")
+    recovar_rotation, translation = divmod(int(flat_index), n_translations)
+    return {
+        "native_rotation_local": int(inverse[recovar_rotation]),
+        "recovar_rotation_local": recovar_rotation,
+        "translation_id": translation,
+    }
+
+
+def candidate_key_from_sequence_index(
+    sequence_index: int | None,
+    *,
+    native_rotation: np.ndarray,
+    recovar_rotation: np.ndarray,
+    translation: np.ndarray,
+) -> dict[str, int] | None:
+    """Resolve an intersection-order offset to its exact native/RECOVAR key."""
+
+    if sequence_index is None:
+        return None
+    arrays = tuple(
+        np.asarray(values, dtype=np.int64).reshape(-1)
+        for values in (native_rotation, recovar_rotation, translation)
+    )
+    _require(len({values.size for values in arrays}) == 1, "candidate key arrays differ")
+    _require(
+        0 <= int(sequence_index) < arrays[0].size,
+        "candidate sequence index is outside the joined table",
+    )
+    return {
+        "native_rotation_local": int(arrays[0][sequence_index]),
+        "recovar_rotation_local": int(arrays[1][sequence_index]),
+        "translation_id": int(arrays[2][sequence_index]),
+    }
+
+
 def exact_rotation_permutation(
     native_rotations: np.ndarray,
     recovar_rotations: np.ndarray,
@@ -196,6 +248,8 @@ def _class_join(
     )
     recovar_rotations = np.asarray(recovar["rotations"], dtype=np.float32)
     native_to_recovar = exact_rotation_permutation(native_rotations, recovar_rotations)
+    recovar_to_native = np.empty_like(native_to_recovar)
+    recovar_to_native[native_to_recovar] = np.arange(native_to_recovar.size, dtype=np.int64)
     candidate_mask = np.asarray(recovar["candidate_mask"], dtype=bool)
     _require(
         candidate_mask.shape
@@ -227,6 +281,7 @@ def _class_join(
     intersection_count = int(np.count_nonzero(intersection_mask))
     union_count = int(np.count_nonzero(native_tuple_mask | candidate_mask))
 
+    common_native_rotation = native_rotation[intersection_mask]
     mapped_common_rotation = mapped_rotation[intersection_mask]
     common_translation = translation[intersection_mask]
     raw_metric = float32_metric(
@@ -277,8 +332,47 @@ def _class_join(
     posterior_metric = float32_metric(native_posterior, recovar_posterior)
     significant_exact = bool(np.array_equal(native_significant, recovar_significant))
 
+    candidate_mismatch = np.flatnonzero(
+        (native_tuple_mask ^ candidate_mask).reshape(-1)
+    )
+    candidate_first_key = candidate_key_from_flat_index(
+        int(candidate_mismatch[0]) if candidate_mismatch.size else None,
+        candidate_mask.shape,
+        recovar_to_native_rotation=recovar_to_native,
+    )
+    for metric in (
+        raw_metric,
+        rotation_prior_metric,
+        translation_prior_metric,
+        combined_metric,
+    ):
+        metric["first_mismatch_candidate_key"] = candidate_key_from_sequence_index(
+            metric["first_mismatch_flat_index"],
+            native_rotation=common_native_rotation,
+            recovar_rotation=mapped_common_rotation,
+            translation=common_translation,
+        )
+    posterior_metric["first_mismatch_candidate_key"] = candidate_key_from_flat_index(
+        posterior_metric["first_mismatch_flat_index"],
+        candidate_mask.shape,
+        recovar_to_native_rotation=recovar_to_native,
+    )
+    support_mismatch = np.flatnonzero(
+        (native_significant ^ recovar_significant).reshape(-1)
+    )
+    support_first_key = candidate_key_from_flat_index(
+        int(support_mismatch[0]) if support_mismatch.size else None,
+        candidate_mask.shape,
+        recovar_to_native_rotation=recovar_to_native,
+    )
+
     report = {
         "class_one_based": class_one_based,
+        "identity": {
+            "native_particle_id_zero_based": EXPECTED_PARTICLE_ID,
+            "stack_index_one_based": EXPECTED_STACK,
+            "recovar_original_index_zero_based": EXPECTED_ORIGINAL_INDEX,
+        },
         "rotation_mapping": {
             "count": int(native_to_recovar.size),
             "bitwise_exact_bijection": True,
@@ -290,6 +384,7 @@ def _class_join(
             "intersection": intersection_count,
             "union": union_count,
             "exact": tuple_exact,
+            "first_mismatch_candidate_key": candidate_first_key,
         },
         "raw_diff2": raw_metric,
         "combined_class_rotation_prior": rotation_prior_metric,
@@ -302,6 +397,7 @@ def _class_join(
             "intersection": int(np.count_nonzero(native_significant & recovar_significant)),
             "union": int(np.count_nonzero(native_significant | recovar_significant)),
             "exact": significant_exact,
+            "first_mismatch_candidate_key": support_first_key,
         },
         "native_global_scalars": {
             "fine_score_min_diff2_bits": int(score.header[18]),
