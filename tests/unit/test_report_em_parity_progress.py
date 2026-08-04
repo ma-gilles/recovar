@@ -23,6 +23,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
     }
     assert progress["k1_fresh_dispatch_causal_progress"] == {
         "evaluations_complete": 2,
+        "alignment_verified": 2,
         "standalone_rescues": 0,
         "not_supported": 2,
         "denominator": 2,
@@ -106,6 +107,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         ("k1_restart_causal", 24, 42, 42, 57.1, False),
         ("k1_restart_particle_order", 40, 40, 40, 100.0, False),
         ("k1_fresh_dispatch_causal_evaluated", 2, 2, 2, 100.0, False),
+        ("k1_fresh_dispatch_alignment", 2, 2, 2, 100.0, False),
         ("k1_fresh_dispatch_causal_rescues", 0, 2, 2, 0.0, False),
         ("k1_continuation_initializer", 3, 21, 21, 14.3, False),
         ("k1_sampling_perturbation_geometry", 3, 5, 5, 60.0, False),
@@ -551,7 +553,8 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
     ) in rendered
     assert (
         "K=1 fresh physical-dispatch causal evaluation on the unchanged denominator: "
-        "**2/2 evaluated; 0/2 standalone rescues; 2/2 not supported**."
+        "**2/2 evaluated; 2/2 alignment verified; 0/2 standalone rescues; "
+        "2/2 not supported**."
     ) in rendered
     assert (
         "K=1 deterministic-mask preprocessing on the unchanged denominator: "

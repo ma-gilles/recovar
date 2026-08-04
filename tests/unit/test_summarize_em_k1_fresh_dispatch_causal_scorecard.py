@@ -27,11 +27,13 @@ def test_fixed_fresh_dispatch_causal_scorecard_is_valid_and_fresh() -> None:
     assert scorecard["frozen_denominator"] == 2
     assert scorecard["summary"] == {
         "evaluations_complete": 2,
+        "alignment_verified": 2,
         "standalone_rescues": 0,
         "not_supported": 2,
         "evaluated": 2,
     }
     assert "Evaluated: **2 / 2**." in rendered
+    assert "Alignment verified: **2 / 2**." in rendered
     assert "Standalone rescues: **0 / 2**." in rendered
     assert rendered.count("| [x] |") == 2
     assert all(

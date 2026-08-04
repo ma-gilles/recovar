@@ -5,6 +5,7 @@ evaluations from successful treatment rescues. It is non-scoring.
 Map gates use signed FSC/FSC-AUC; correlation is forbidden.
 
 Evaluated: **2 / 2**.
+Alignment verified: **2 / 2**.
 Standalone rescues: **0 / 2**.
 
 | Checked | Case | Control final FSC-AUC | Dispatch final FSC-AUC | Delta | Strict rescue | Topology | Conclusion |

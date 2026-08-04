@@ -384,6 +384,14 @@ def build_progress(
             scoring=False,
         ),
         _panel(
+            "k1_fresh_dispatch_alignment",
+            "K=1 fresh dispatch alignment verified",
+            k1_fresh_dispatch_causal_summary["alignment_verified"],
+            k1_fresh_dispatch_causal_summary["evaluated"],
+            k1_fresh_dispatch_causal["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
             "k1_fresh_dispatch_causal_rescues",
             "K=1 fresh dispatch standalone rescues",
             k1_fresh_dispatch_causal_summary["standalone_rescues"],
@@ -614,6 +622,9 @@ def build_progress(
             "evaluations_complete": k1_fresh_dispatch_causal_summary[
                 "evaluations_complete"
             ],
+            "alignment_verified": k1_fresh_dispatch_causal_summary[
+                "alignment_verified"
+            ],
             "standalone_rescues": k1_fresh_dispatch_causal_summary[
                 "standalone_rescues"
             ],
@@ -807,6 +818,8 @@ def render_markdown(progress: dict[str, object]) -> str:
                 "K=1 fresh physical-dispatch causal evaluation on the unchanged "
                 f"denominator: **{fresh_dispatch['evaluations_complete']}/"
                 f"{fresh_dispatch['denominator']} evaluated; "
+                f"{fresh_dispatch['alignment_verified']}/"
+                f"{fresh_dispatch['denominator']} alignment verified; "
                 f"{fresh_dispatch['standalone_rescues']}/"
                 f"{fresh_dispatch['denominator']} standalone rescues; "
                 f"{fresh_dispatch['not_supported']}/"

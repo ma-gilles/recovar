@@ -200,6 +200,17 @@ def load_and_validate(path: Path) -> dict:
         "evaluations_complete": sum(
             case["evaluation_result"] == "complete" for case in cases
         ),
+        "alignment_verified": sum(
+            case["dispatch_alignment"]
+            == {
+                "full_physical_order_exact": True,
+                "expected_accuracy_identity_order_exact": True,
+                "expected_accuracy_runtime_ctf_rows_exact": True,
+                "physical_vs_internal_execution_equivalence_established": False,
+                "production_output_restoration_accepted": False,
+            }
+            for case in cases
+        ),
         "standalone_rescues": sum(
             case["standalone_rescue_result"] == "pass" for case in cases
         ),
@@ -211,6 +222,7 @@ def load_and_validate(path: Path) -> dict:
         summary
         == {
             "evaluations_complete": 2,
+            "alignment_verified": 2,
             "standalone_rescues": 0,
             "not_supported": 2,
             "evaluated": 2,
@@ -232,6 +244,7 @@ def render_markdown(scorecard: dict) -> str:
         "Map gates use signed FSC/FSC-AUC; correlation is forbidden.",
         "",
         f"Evaluated: **{summary['evaluations_complete']} / {scorecard['frozen_denominator']}**.",
+        f"Alignment verified: **{summary['alignment_verified']} / {scorecard['frozen_denominator']}**.",
         f"Standalone rescues: **{summary['standalone_rescues']} / {scorecard['frozen_denominator']}**.",
         "",
         "| Checked | Case | Control final FSC-AUC | Dispatch final FSC-AUC | Delta | Strict rescue | Topology | Conclusion |",
