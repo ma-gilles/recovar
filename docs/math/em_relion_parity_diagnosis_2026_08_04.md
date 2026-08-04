@@ -73,8 +73,8 @@ For K=1, the next discriminator is deliberately broader than a guessed fix:
 
 For K=4, the current order is:
 
-1. raw fine-score input/operand or arithmetic-order mismatch, provisionally
-   observed for class 1;
+1. raw fine-score input/operand or arithmetic-order mismatch, demonstrated but
+   not yet separated for class 1;
 2. combined class--rotation and translation-prior construction;
 3. flattened joint class-pose normalization and global support semantics;
 4. evaluated all-class tuple sets and `--firstiter_cc` global-winner routing;
@@ -595,21 +595,34 @@ all-class parity. The repository wrapper
 artifact hashes, same-physical-GPU identity, the 96-candidate scope, and
 production-exact centered-score classification before producing that report.
 
-An explicitly non-admitted exploratory run exercised this new arithmetic arm
-on local A100 UUID `GPU-8ce5064a-ca39-7724-975a-8c3efa36c12c`. It combined the
-sealed 96-candidate native operand capture, the accepted current-source
-RECOVAR raw-score table, and the older source's current-size-38 window indices
-(`565` compact pixels). Across all 96 candidates, the centered RECOVAR target
-had L2 `0.0002845808477116318`; subtracting the JAX-on-native arithmetic arm
-left L2 `0.0002860090315655426`, or `-0.010062290368951121` target-energy
-removal. On the 83 native-production-exact candidates, the target L2 was
-`0.0002324632246948317` and the residual L2 was
-`0.0002529884983719899`, or `-0.1843853820598007` target-energy removal. This
-provisionally disfavors fused score arithmetic as the dominant owner and
-raises the relative priority of the reference, shifted-image, and score-weight
-operands. It is not scientific admission: the execution GPU differs from the
-pinned A100 and the window indices precede the current-source contribution
-bundle. The same-UUID admitted comparison remains decisive.
+The comparator must use two distinct supports. The pass-2 raw scoring archive
+owns the `596`-pixel fine-score support and its production
+full-grid-to-compact lookup. The contribution archive owns the smaller
+`565`-pixel reconstruction/BPref window and is used only for preprocessing and
+score-weight cross-checks. The omitted 31-pixel ring is not numerically inert:
+the native capture has 3,072 nonzero correction and contribution entries there.
+Consequently, substituting the BPref window into the scorer is a boundary error,
+not a permissible compact-layout approximation.
+
+An explicitly non-admitted exploratory v9 run used that wrong `565`-pixel
+reconstruction window on local A100 UUID
+`GPU-8ce5064a-ca39-7724-975a-8c3efa36c12c`. Its previously recorded all-96 and
+exact-83 arithmetic residuals are therefore **invalidated as causal evidence**
+and must not rank arithmetic against reference, shifted-image, correction, or
+high-resolution-Xi2 operands. Comparator v10 instead reads the actual RECOVAR
+pass-2 reference projections, shifted images, correction inputs and half
+weights, high-resolution-Xi2 term, raw compact-pair values, and the exact
+`596`-pixel lookup. It fails closed on lookup direction, tuple identity, dense
+versus compact raw-score equality, or any nonzero native score term outside the
+production lookup. The admitted same-UUID run remains the first decisive
+component/arithmetic experiment.
+
+The v10 wrapper also hash-validates both the pass-2 and contribution artifacts
+and requires all five counterfactual boundaries: reference, shifted image,
+correction, high-resolution Xi2, and JAX/XLA arithmetic on native operands. Its
+focused structural/unit panel passes **63 / 63** in the bound pixi checkout,
+including the production score-tree and lookup tests; this validates the
+diagnostic machinery, not RECOVAR--RELION scientific parity.
 
 The contribution-repeatability metrics remain deliberately distinct. The
 historical fixed panel is immutable at 0/3, and the deterministic candidate

@@ -15,10 +15,10 @@ if __package__:
 else:
     from compare_k4_relion_recovar_fine_operands import compare  # type: ignore[no-redef]
 
-SCHEMA = "recovar.em_k4_admitted_fine_operand_comparison.v2"
+SCHEMA = "recovar.em_k4_admitted_fine_operand_comparison.v3"
 NATIVE_SCHEMA = "recovar.em_k4_native_class1_fine_operand_admission.v1"
 RECOVAR_SCHEMA = "recovar.em_k4_contribution_repeatability.v1"
-COMPARISON_SCHEMA = "k4_relion_recovar_fine_operand_comparison_v9"
+COMPARISON_SCHEMA = "k4_relion_recovar_fine_operand_comparison_v10"
 EXPECTED_SCOPE = "iteration2_half1_source53722_class1_only"
 EXPECTED_NATIVE_GATES = 7
 EXPECTED_RECOVAR_GATES = 3
@@ -118,7 +118,6 @@ def build_report(
     *,
     native_admission_path: Path,
     recovar_admission_path: Path,
-    reference_path: Path,
     particle_diameter_angstrom: float,
     mask_edge_pixels: float,
     compare_fn: Callable[..., dict[str, Any]] = compare,
@@ -135,15 +134,15 @@ def build_report(
         recovar.get("comparisons", {}).get("contribution", {}).get("reference", {}),
         label="RECOVAR contribution",
     )
-    _require(
-        reference_path.is_absolute() and reference_path.is_file(),
-        "reference path is invalid",
+    recovar_pass2 = _validated_artifact(
+        recovar.get("comparisons", {}).get("pass2", {}).get("reference", {}),
+        label="RECOVAR pass-2 raw operands",
     )
 
     comparison = compare_fn(
         native_operand,
+        recovar_pass2,
         recovar_contribution,
-        reference_path,
         recovar_global_rotation=EXPECTED_RECOVAR_GLOBAL_ROTATION,
         particle_diameter_angstrom=particle_diameter_angstrom,
         mask_edge_pixels=mask_edge_pixels,
@@ -187,6 +186,7 @@ def build_report(
             "reference",
             "shifted_image",
             "corr",
+            "highres_xi2",
             "jax_arithmetic_on_native_operands",
         }
         and isinstance(comparison.get("jax_arithmetic_on_native_operands"), dict),
@@ -220,16 +220,13 @@ def build_report(
                 "path": str(recovar_admission_path.resolve()),
                 "sha256": _sha256(recovar_admission_path),
             },
-            "reference": {
-                "path": str(reference_path.resolve()),
-                "sha256": _sha256(reference_path),
-            },
         },
         "metric_policy": (
-            "admitted original float32 operand bits and candidate-relative centered "
-            "raw diff2 on native-production-exact candidates, including a JAX/XLA "
-            "arithmetic-only counterfactual on native operands; no all-class "
-            "promotion, map-score promotion, or correlation"
+            "admitted original float32 native operand bits and exact RECOVAR pass-2 "
+            "raw scoring operands, with candidate-relative centered raw diff2 on "
+            "native-production-exact candidates and a JAX/XLA arithmetic-only "
+            "counterfactual on native operands; no all-class promotion, map-score "
+            "promotion, or correlation"
         ),
         "scorecard_change_admissible": False,
         "correlation_used": False,
@@ -240,7 +237,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native-admission", type=Path, required=True)
     parser.add_argument("--recovar-admission", type=Path, required=True)
-    parser.add_argument("--reference", type=Path, required=True)
     parser.add_argument("--particle-diameter-angstrom", type=float, required=True)
     parser.add_argument("--mask-edge-pixels", type=float, default=5.0)
     parser.add_argument("--output", type=Path, required=True)
@@ -249,7 +245,6 @@ def main() -> None:
     report = build_report(
         native_admission_path=args.native_admission,
         recovar_admission_path=args.recovar_admission,
-        reference_path=args.reference,
         particle_diameter_angstrom=args.particle_diameter_angstrom,
         mask_edge_pixels=args.mask_edge_pixels,
     )

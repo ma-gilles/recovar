@@ -4,6 +4,7 @@ import pytest
 import scripts.compare_k4_relion_recovar_fine_operands as comparator
 from scripts.compare_k4_relion_recovar_fine_operands import (
     _center,
+    _compact_indices_from_full_lookup,
     _component_counterfactual,
     _direct_score_image_factor,
     _infer_current_size,
@@ -18,6 +19,29 @@ from scripts.compare_k4_relion_recovar_fine_operands import (
     _tree_raw_diff2,
     _zero_dc_compact_score_weight,
 )
+
+
+def test_compact_indices_roundtrip_non_self_inverse_score_lookup():
+    image_shape = (8, 8)
+    current_size = 4
+    expected = np.asarray([27, 10, 21], dtype=np.int32)
+    lookup = comparator._relion_cuda_fine_full_to_compact_lookup(
+        image_shape,
+        current_size,
+        expected,
+    )
+
+    recovered = _compact_indices_from_full_lookup(
+        image_shape,
+        current_size,
+        lookup,
+    )
+
+    np.testing.assert_array_equal(recovered, expected)
+    np.testing.assert_array_equal(
+        lookup,
+        np.asarray([-1, 2, -1, -1, -1, 0, 1, -1, -1, -1, -1, -1]),
+    )
 
 
 def test_fine_operand_current_size_and_translation_alignment():
@@ -293,6 +317,34 @@ def test_multi_candidate_exact_centered_component_tie_is_unresolved():
         classification
         == "multiple_fine_operand_components_tie_for_largest_centered_"
         "single_substitution_effect"
+    )
+    assert basis == "centered_raw_diff2"
+
+
+def test_multi_candidate_classification_rejects_non_improving_substitutions():
+    relion = np.asarray([10, 20, 30], dtype=np.float32)
+    all_recovar = np.asarray([11, 18, 33], dtype=np.float32)
+    substitutions = {
+        "reference": relion.copy(),
+        "shifted_image": np.asarray([12, 16, 36], dtype=np.float32),
+        "corr": relion.copy(),
+    }
+    raw = _component_counterfactual(relion, all_recovar, substitutions)
+    centered = _component_counterfactual(
+        relion,
+        all_recovar,
+        substitutions,
+        center_deltas=True,
+    )
+
+    classification, basis = _select_component_classification(
+        raw,
+        centered,
+        candidate_count=3,
+    )
+
+    assert classification == (
+        "no_single_component_reduces_centered_fine_operand_residual"
     )
     assert basis == "centered_raw_diff2"
 

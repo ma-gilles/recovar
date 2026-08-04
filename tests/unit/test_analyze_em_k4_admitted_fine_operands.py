@@ -110,11 +110,11 @@ def test_rejects_cross_device_join() -> None:
 @pytest.mark.unit
 def test_build_report_uses_only_admitted_artifacts(tmp_path: Path) -> None:
     native_operand = tmp_path / "native.bin"
+    pass2 = tmp_path / "pass2.npz"
     contribution = tmp_path / "contribution.npz"
-    reference = tmp_path / "reference.mrc"
     native_operand.write_bytes(b"native")
+    pass2.write_bytes(b"pass2")
     contribution.write_bytes(b"recovar")
-    reference.write_bytes(b"reference")
 
     native = _native_admission()
     native["artifacts"] = {
@@ -125,6 +125,12 @@ def test_build_report_uses_only_admitted_artifacts(tmp_path: Path) -> None:
     }
     recovar = _recovar_admission()
     recovar["comparisons"] = {
+        "pass2": {
+            "reference": {
+                "path": str(pass2.resolve()),
+                "sha256": _sha256(pass2),
+            }
+        },
         "contribution": {
             "reference": {
                 "path": str(contribution.resolve()),
@@ -139,15 +145,15 @@ def test_build_report_uses_only_admitted_artifacts(tmp_path: Path) -> None:
 
     observed = {}
 
-    def compare_fn(capture, contribution_path, reference_path, **kwargs):
+    def compare_fn(capture, pass2_path, contribution_path, **kwargs):
         observed.update(
             capture=capture,
+            pass2=pass2_path,
             contribution=contribution_path,
-            reference=reference_path,
             kwargs=kwargs,
         )
         return {
-            "schema": "k4_relion_recovar_fine_operand_comparison_v9",
+            "schema": "k4_relion_recovar_fine_operand_comparison_v10",
             "status": "complete",
             "classification": (
                 "shifted_image_has_largest_centered_fine_operand_"
@@ -176,6 +182,7 @@ def test_build_report_uses_only_admitted_artifacts(tmp_path: Path) -> None:
                             "reference",
                             "shifted_image",
                             "corr",
+                            "highres_xi2",
                             "jax_arithmetic_on_native_operands",
                         )
                     }
@@ -188,20 +195,19 @@ def test_build_report_uses_only_admitted_artifacts(tmp_path: Path) -> None:
     report = build_report(
         native_admission_path=native_path,
         recovar_admission_path=recovar_path,
-        reference_path=reference,
         particle_diameter_angstrom=380.0,
         mask_edge_pixels=5.0,
         compare_fn=compare_fn,
     )
 
     assert observed["capture"] == native_operand
+    assert observed["pass2"] == pass2
     assert observed["contribution"] == contribution
-    assert observed["reference"] == reference
     assert observed["kwargs"]["recovar_global_rotation"] == 4446
     assert report["classification_basis"] == (
         "production_exact_candidates_centered_raw_diff2"
     )
-    assert report["schema"] == "recovar.em_k4_admitted_fine_operand_comparison.v2"
+    assert report["schema"] == "recovar.em_k4_admitted_fine_operand_comparison.v3"
     assert report["scope"]["candidate_count"] == 96
     assert report["scope"]["allclass_cross_engine_attribution_allowed"] is False
     assert report["scorecard_change_admissible"] is False
@@ -212,10 +218,8 @@ def test_build_report_uses_only_admitted_artifacts(tmp_path: Path) -> None:
 def test_rejects_artifact_hash_drift(tmp_path: Path) -> None:
     operand = tmp_path / "operand.bin"
     contribution = tmp_path / "contribution.npz"
-    reference = tmp_path / "reference.mrc"
     operand.write_bytes(b"operand")
     contribution.write_bytes(b"contribution")
-    reference.write_bytes(b"reference")
     native = _native_admission()
     native["artifacts"] = {
         "fine_operand": {"path": str(operand.resolve()), "sha256": "wrong"}
@@ -238,7 +242,6 @@ def test_rejects_artifact_hash_drift(tmp_path: Path) -> None:
         build_report(
             native_admission_path=native_path,
             recovar_admission_path=recovar_path,
-            reference_path=reference,
             particle_diameter_angstrom=380.0,
             mask_edge_pixels=5.0,
             compare_fn=lambda *_args, **_kwargs: {},
@@ -246,13 +249,13 @@ def test_rejects_artifact_hash_drift(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_rejects_single_candidate_comparison(tmp_path: Path) -> None:
+def test_rejects_pass2_artifact_hash_drift(tmp_path: Path) -> None:
     operand = tmp_path / "operand.bin"
+    pass2 = tmp_path / "pass2.npz"
     contribution = tmp_path / "contribution.npz"
-    reference = tmp_path / "reference.mrc"
     operand.write_bytes(b"operand")
+    pass2.write_bytes(b"pass2")
     contribution.write_bytes(b"contribution")
-    reference.write_bytes(b"reference")
     native = _native_admission()
     native["artifacts"] = {
         "fine_operand": {
@@ -262,6 +265,57 @@ def test_rejects_single_candidate_comparison(tmp_path: Path) -> None:
     }
     recovar = _recovar_admission()
     recovar["comparisons"] = {
+        "pass2": {
+            "reference": {
+                "path": str(pass2.resolve()),
+                "sha256": "wrong",
+            }
+        },
+        "contribution": {
+            "reference": {
+                "path": str(contribution.resolve()),
+                "sha256": _sha256(contribution),
+            }
+        },
+    }
+    native_path = tmp_path / "native.json"
+    recovar_path = tmp_path / "recovar.json"
+    native_path.write_text(json.dumps(native))
+    recovar_path.write_text(json.dumps(recovar))
+
+    with pytest.raises(ValueError, match="pass-2 raw operands hash changed"):
+        build_report(
+            native_admission_path=native_path,
+            recovar_admission_path=recovar_path,
+            particle_diameter_angstrom=380.0,
+            mask_edge_pixels=5.0,
+            compare_fn=lambda *_args, **_kwargs: {},
+        )
+
+
+@pytest.mark.unit
+def test_rejects_single_candidate_comparison(tmp_path: Path) -> None:
+    operand = tmp_path / "operand.bin"
+    pass2 = tmp_path / "pass2.npz"
+    contribution = tmp_path / "contribution.npz"
+    operand.write_bytes(b"operand")
+    pass2.write_bytes(b"pass2")
+    contribution.write_bytes(b"contribution")
+    native = _native_admission()
+    native["artifacts"] = {
+        "fine_operand": {
+            "path": str(operand.resolve()),
+            "sha256": _sha256(operand),
+        }
+    }
+    recovar = _recovar_admission()
+    recovar["comparisons"] = {
+        "pass2": {
+            "reference": {
+                "path": str(pass2.resolve()),
+                "sha256": _sha256(pass2),
+            }
+        },
         "contribution": {
             "reference": {
                 "path": str(contribution.resolve()),
@@ -276,7 +330,7 @@ def test_rejects_single_candidate_comparison(tmp_path: Path) -> None:
 
     def compare_fn(*_args, **_kwargs):
         return {
-            "schema": "k4_relion_recovar_fine_operand_comparison_v9",
+            "schema": "k4_relion_recovar_fine_operand_comparison_v10",
             "status": "complete",
             "classification": "uninformative",
             "classification_basis": "raw_diff2",
@@ -293,7 +347,6 @@ def test_rejects_single_candidate_comparison(tmp_path: Path) -> None:
         build_report(
             native_admission_path=native_path,
             recovar_admission_path=recovar_path,
-            reference_path=reference,
             particle_diameter_angstrom=380.0,
             mask_edge_pixels=5.0,
             compare_fn=compare_fn,
