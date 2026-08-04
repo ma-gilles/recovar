@@ -63,6 +63,29 @@ def _metric(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
     }
 
 
+def _relion_score_replay(
+    raw_diff2: np.ndarray,
+    rotation_prior: np.ndarray,
+    translation_prior: np.ndarray,
+    min_diff2: np.float32,
+) -> np.ndarray:
+    """Replay RELION's float32 prior/min/raw operation order."""
+
+    return np.subtract(
+        np.add(
+            np.add(
+                np.asarray(rotation_prior, dtype=np.float32),
+                np.asarray(translation_prior, dtype=np.float32),
+                dtype=np.float32,
+            ),
+            np.float32(min_diff2),
+            dtype=np.float32,
+        ),
+        np.asarray(raw_diff2, dtype=np.float32),
+        dtype=np.float32,
+    )
+
+
 def audit_joint_direction_prior(
     direction_prior: np.ndarray,
 ) -> dict[str, Any]:
@@ -326,6 +349,85 @@ def audit_prior_capture_exposure(
             f"{array_name} shape differs from candidate_mask",
         )
         report[output_name] = float(probabilities[mismatch_rows].sum())
+
+    score_fields = {
+        "relion_raw_diff2",
+        "relion_min_diff2",
+        "translation_log_prior",
+        "scores_with_prior",
+    }
+    present_score_fields = score_fields.intersection(capture)
+    _require(
+        not present_score_fields or present_score_fields == score_fields,
+        "capture must provide either all or none of the score-replay arrays",
+    )
+    if present_score_fields:
+        raw_diff2 = np.asarray(capture["relion_raw_diff2"], dtype=np.float32)
+        translation_prior = np.asarray(
+            capture["translation_log_prior"], dtype=np.float32
+        ).reshape(-1)
+        saved_score = np.asarray(
+            capture["scores_with_prior"], dtype=np.float32
+        )
+        _require(
+            raw_diff2.shape == saved_score.shape == candidate_mask.shape,
+            "raw diff2 and saved-score shapes must match candidate_mask",
+        )
+        _require(
+            translation_prior.shape == (candidate_mask.shape[1],),
+            "translation_log_prior has the wrong candidate dimension",
+        )
+        rotation_current = np.broadcast_to(
+            captured_prior[:, None], candidate_mask.shape
+        )[candidate_mask]
+        rotation_direct = np.broadcast_to(
+            expected_direct_rows[:, None], candidate_mask.shape
+        )[candidate_mask]
+        translation_active = np.broadcast_to(
+            translation_prior[None, :], candidate_mask.shape
+        )[candidate_mask]
+        raw_active = raw_diff2[candidate_mask]
+        current_replay = _relion_score_replay(
+            raw_active,
+            rotation_current,
+            translation_active,
+            np.float32(np.asarray(capture["relion_min_diff2"]).item()),
+        )
+        direct_replay = _relion_score_replay(
+            raw_active,
+            rotation_direct,
+            translation_active,
+            np.float32(np.asarray(capture["relion_min_diff2"]).item()),
+        )
+        saved_active = saved_score[candidate_mask]
+        counterfactual_metric = _metric(current_replay, direct_replay)
+        current_maximum = np.max(current_replay)
+        direct_maximum = np.max(direct_replay)
+        maximum_ties_exact = np.array_equal(
+            current_replay.view(np.uint32)
+            == current_maximum.view(np.uint32),
+            direct_replay.view(np.uint32)
+            == direct_maximum.view(np.uint32),
+        )
+        report["score_replay"] = {
+            "saved_score_matches_current_replay": _metric(
+                current_replay, saved_active
+            ),
+            "direct_joint_prior_counterfactual": counterfactual_metric,
+            "maximum_tie_sets_exact": bool(maximum_ties_exact),
+            "current_maximum": float(current_maximum),
+            "current_maximum_bits": int(current_maximum.view(np.uint32)),
+            "direct_joint_maximum": float(direct_maximum),
+            "direct_joint_maximum_bits": int(
+                direct_maximum.view(np.uint32)
+            ),
+            "classification": (
+                "direct_joint_prior_inert_at_float32_combined_score"
+                if counterfactual_metric["bitwise_exact"]
+                and maximum_ties_exact
+                else "direct_joint_prior_changes_float32_combined_score"
+            ),
+        }
     return report
 
 

@@ -113,6 +113,26 @@ def test_audits_live_sparse_capture_exposure() -> None:
             [[0.1, 0.0, 0.0], [0.0, 0.4, 0.0]], dtype=np.float64
         ),
     }
+    raw_diff2 = np.asarray(
+        [[500.0, 501.0, 502.0], [503.0, 504.0, 505.0]],
+        dtype=np.float32,
+    )
+    translation_prior = np.asarray([-2.0, -2.5, -3.0], dtype=np.float32)
+    rotation_prior = np.asarray(capture["rotation_log_prior"], dtype=np.float32)
+    current_score = auditor._relion_score_replay(
+        raw_diff2,
+        rotation_prior[:, None],
+        translation_prior[None, :],
+        np.float32(500.0),
+    )
+    capture.update(
+        {
+            "relion_raw_diff2": raw_diff2,
+            "relion_min_diff2": np.asarray(500.0, dtype=np.float32),
+            "translation_log_prior": translation_prior,
+            "scores_with_prior": current_score,
+        }
+    )
 
     report = auditor.audit_prior_capture_exposure(
         joint,
@@ -130,6 +150,13 @@ def test_audits_live_sparse_capture_exposure() -> None:
     assert report[
         "reconstruction_posterior_mass_on_mismatch_rows"
     ] == pytest.approx(0.5)
+    assert report["score_replay"]["saved_score_matches_current_replay"][
+        "bitwise_exact"
+    ] is True
+    assert report["score_replay"]["classification"] == (
+        "direct_joint_prior_inert_at_float32_combined_score"
+    )
+    assert report["score_replay"]["maximum_tie_sets_exact"] is True
     assert report["causal_claim_admissible"] is False
 
 

@@ -6,7 +6,12 @@ from scripts import analyze_em_k4_raw_diff2_parity as phase_a_analyzer
 from scripts import route_em_k4_phase_a as router
 
 
-def _phase_a_report(*, raw_exact: bool, score_exact: bool) -> dict:
+def _phase_a_report(
+    *,
+    raw_exact: bool,
+    score_exact: bool,
+    inert_score_operand_mismatch: bool = False,
+) -> dict:
     raw_classification = (
         phase_a_analyzer.PASS_CLASSIFICATION
         if raw_exact
@@ -28,6 +33,16 @@ def _phase_a_report(*, raw_exact: bool, score_exact: bool) -> dict:
         "score_path": {
             "classification": score_classification,
             "accepted": score_exact,
+            "saved_score_replay": {
+                "bitwise_exact": score_exact
+                or inert_score_operand_mismatch
+            },
+            "native_vs_recovar_replayed_combined_score": {
+                "bitwise_exact": score_exact
+                or inert_score_operand_mismatch
+            },
+            "maximum_tie_sets_exact": score_exact
+            or inert_score_operand_mismatch,
         },
     }
 
@@ -36,11 +51,13 @@ def _wrapped_phase_a_report(
     *,
     raw_exact: bool,
     score_exact: bool,
+    inert_score_operand_mismatch: bool = False,
     wrapper_classification: str | None = None,
 ) -> dict:
     comparison = _phase_a_report(
         raw_exact=raw_exact,
         score_exact=score_exact,
+        inert_score_operand_mismatch=inert_score_operand_mismatch,
     )
     comparison.pop("schema")
     comparison.pop("status")
@@ -90,6 +107,26 @@ def test_raw_match_but_score_mismatch_routes_to_prior_boundary() -> None:
     assert report["claims"]["class1_score_path_resolved"] is False
 
 
+def test_inert_prior_operand_mismatch_routes_to_joint_posterior() -> None:
+    report = router.build_causal_route(
+        _phase_a_report(
+            raw_exact=True,
+            score_exact=False,
+            inert_score_operand_mismatch=True,
+        )
+    )
+
+    assert report["route"] == router.INERT_OPERAND_JOINT_POSTERIOR_ROUTE
+    assert report["phase_a"]["class1_score_effect_exact"] is True
+    assert report["claims"]["class1_score_path_resolved"] is False
+    assert report["claims"]["class1_combined_score_effect_resolved"] is True
+    assert report["claims"][
+        "class1_operand_mismatch_arithmetically_inert"
+    ] is True
+    assert report["claims"]["joint_class_pose_normalization_resolved"] is False
+    assert report["scorecard_change_admissible"] is False
+
+
 def test_class1_score_match_still_requires_joint_k4_capture() -> None:
     report = router.build_causal_route(
         _phase_a_report(raw_exact=True, score_exact=True)
@@ -124,6 +161,24 @@ def test_wrapped_raw_mismatch_routes_to_bounded_operand_freeze() -> None:
 
     assert report["route"] == router.RAW_MISMATCH_ROUTE
     assert report["phase_b_raw_operand_freeze_required"] is True
+
+
+def test_wrapped_inert_operand_mismatch_routes_to_joint_posterior() -> None:
+    report = router.build_causal_route(
+        _wrapped_phase_a_report(
+            raw_exact=True,
+            score_exact=False,
+            inert_score_operand_mismatch=True,
+        )
+    )
+
+    assert report["route"] == router.INERT_OPERAND_JOINT_POSTERIOR_ROUTE
+    assert report["phase_a"]["wrapper_classification"] == (
+        router.WRAPPED_RAW_EXACT
+    )
+    assert report["claims"][
+        "class1_operand_mismatch_arithmetically_inert"
+    ] is True
 
 
 def test_wrapped_capture_rejection_does_not_authorize_operand_phase() -> None:

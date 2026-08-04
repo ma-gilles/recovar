@@ -37,6 +37,9 @@ WRAPPED_RAW_MISMATCH = (
 PRECONDITION_FAILURE_ROUTE = "phase_a_capture_or_inertness_repair"
 RAW_MISMATCH_ROUTE = "bounded_raw_operand_freeze"
 SCORE_PATH_MISMATCH_ROUTE = "class1_prior_or_combined_score_followup"
+INERT_OPERAND_JOINT_POSTERIOR_ROUTE = (
+    "multiclass_joint_posterior_after_inert_class1_operand_mismatch"
+)
 JOINT_POSTERIOR_ROUTE = "multiclass_joint_posterior_capture"
 
 
@@ -133,6 +136,27 @@ def build_causal_route(phase_a: dict[str, Any]) -> dict[str, Any]:
     support = comparison.get("support")
     _require(isinstance(support, dict), "Phase-A support record is missing")
     support_exact = support.get("exact") is True
+    saved_score_replay = score_path.get("saved_score_replay")
+    combined_score = score_path.get(
+        "native_vs_recovar_replayed_combined_score"
+    )
+    saved_score_replay_exact = bool(
+        isinstance(saved_score_replay, dict)
+        and saved_score_replay.get("bitwise_exact") is True
+    )
+    combined_score_exact = bool(
+        isinstance(combined_score, dict)
+        and combined_score.get("bitwise_exact") is True
+    )
+    maximum_tie_sets_exact = (
+        score_path.get("maximum_tie_sets_exact") is True
+    )
+    class1_score_effect_exact = bool(
+        support_exact
+        and saved_score_replay_exact
+        and combined_score_exact
+        and maximum_tie_sets_exact
+    )
 
     if not preconditions_passed:
         route = PRECONDITION_FAILURE_ROUTE
@@ -148,12 +172,22 @@ def build_causal_route(phase_a: dict[str, Any]) -> dict[str, Any]:
             "fixed representative raw operand decomposition before any "
             "posterior, BPref, or map comparison"
         )
-    elif not score_exact:
+    elif not score_exact and not class1_score_effect_exact:
         route = SCORE_PATH_MISMATCH_ROUTE
         first_unresolved_boundary = "class1_prior_or_combined_score"
         authorized_capture = (
             "class1 direct joint orientation prior, translation prior, "
             "float32 operation order, and combined-score replay"
+        )
+    elif not score_exact:
+        route = INERT_OPERAND_JOINT_POSTERIOR_ROUTE
+        first_unresolved_boundary = (
+            "remaining_classes_class_prior_joint_normalization_or_significance"
+        )
+        authorized_capture = (
+            "preserve the class1 operand discrepancy as telemetry, then "
+            "capture all-class tuple/raw/prior tables followed by one joint "
+            "class-pose logsumexp, posterior, and significance comparison"
         )
     else:
         route = JOINT_POSTERIOR_ROUTE
@@ -178,6 +212,10 @@ def build_causal_route(phase_a: dict[str, Any]) -> dict[str, Any]:
             "raw_exact": raw_exact,
             "class1_score_path_classification": score_classification,
             "class1_score_path_exact": score_exact,
+            "class1_saved_score_replay_exact": saved_score_replay_exact,
+            "class1_combined_score_exact": combined_score_exact,
+            "class1_maximum_tie_sets_exact": maximum_tie_sets_exact,
+            "class1_score_effect_exact": class1_score_effect_exact,
             "support_exact": support_exact,
         },
         "claims": {
@@ -186,6 +224,17 @@ def build_causal_route(phase_a: dict[str, Any]) -> dict[str, Any]:
             ),
             "class1_score_path_resolved": (
                 preconditions_passed and raw_exact and score_exact
+            ),
+            "class1_combined_score_effect_resolved": (
+                preconditions_passed
+                and raw_exact
+                and (score_exact or class1_score_effect_exact)
+            ),
+            "class1_operand_mismatch_arithmetically_inert": (
+                preconditions_passed
+                and raw_exact
+                and not score_exact
+                and class1_score_effect_exact
             ),
             "all_class_tuple_and_score_boundary_resolved": False,
             "joint_class_pose_normalization_resolved": False,
