@@ -195,6 +195,16 @@ replicate on case 22, and preserve every currently passing immutable K=1 case.
 The complete predeclared decision tree is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_bpref_exact_gate_89e3abb9_20260803T1930ET/provenance/POSTRESULT_DECISION_TREE_11982955.md`.
 
+Role-aware reanalysis v3 now makes that policy machine-checkable. Every output
+particle retains its immutable image identity and predeclared selection role;
+the report lists the identities and roles at the aggregate first-unequal exact
+boundary and marks a narrow diagnostic intervention eligible only for at least
+two particles from at least two roles. The gate always records
+`production_authorized=false`. Its 12/12 focused tests pass, and the new
+hash-pinned launcher remains unsubmitted until job `11982955` and its sealed
+manifest are manually admitted. The older prepared v2 launcher is preserved
+but superseded before execution because it dropped the role field.
+
 The first unequal level determines the next code change. A RELION-state
 substitution can distinguish inherited drift from a local RECOVAR mismatch,
 but native cross-engine raw equality requires an immutable-ID-aligned RELION
