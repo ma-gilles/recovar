@@ -13,7 +13,9 @@ does not change any fixed acceptance threshold.
 - K=4 all-class iterations: **9 / 15**.
 - K=4 RECOVAR all-class boundary captures: **4 / 4**; this is one-sided
   capture completeness, not cross-engine parity.
-- K=4 native auxiliary-stream repeatability gates: **12 / 13**.
+- K=4 native auxiliary-stream repeatability gates: **12 / 13** (historical
+  predecessor panel).
+- K=4 native soft-mask-partial repeatability gates: **13 / 14**.
 - K=4 stable native operand-capture admission: **0 / 1**.
 - Fresh K=1 dispatch alignment: **2 / 2** cases verified.
 - Fresh K=1 dispatch standalone rescue: **0 / 2** cases.
@@ -146,22 +148,33 @@ diagnostic and does not satisfy a fixed-label scorecard.
 
 Native RELION observer repeatability is an admission gate for this comparison.
 Stream-replay changes are observer controls, not RECOVAR parity fixes. The
-corrected same-A100 auxiliary-stream pair now rejects exact capture
-repeatability at 12/13 fixed gates. Dispatch, tuple identities, priors, target
-state, topology, capture validators, marker counts, and all four class-map
-signed FSC-AUC gates pass, but fine-score, fine-operand, and geometry-only
-BPref bytes differ.
+corrected same-A100 auxiliary-stream pair rejected exact capture repeatability
+at 12/13 fixed gates. Its first unequal captured level was preprocessing rather
+than tuple generation or priors: fixed-target preprocessed samples and
+`sum_init` differed while reference pixels and tuple identities were exact,
+propagating to 16,735/109,184 fine `diff2` rows and BPref `weight_norm`.
 
-The first unequal captured level is preprocessing rather than tuple generation
-or priors. For the fixed class-1 target, preprocessed image samples and
-`sum_init` differ while reference pixels and tuple identities are exact. This
-propagates to 16,735/109,184 raw fine `diff2` rows, posterior weights, and BPref
-`weight_norm`. The default-off deterministic soft-mask block-partial experiment
-is therefore activated. It preserves the deployed 128-block by 128-lane work
-decomposition and replaces only schedule-dependent inter-block lane atomics
-with increasing-block float32 finalization. It remains an observer control,
-not a RECOVAR parity fix, and must itself pass exact native repeatability and
-capture-inertness before cross-engine attribution.
+The next default-off soft-mask block-partial pair completed on job `11990914`
+and rejected at 13/14 fixed gates. It made the complete fine-score artifact and
+geometry-only BPref artifact byte-identical. The fine-operand artifact differed
+in only three bytes, solely in its two copies of `sum_init`; all 1,520
+per-pixel fields, lane partials, production/replay raw `diff2`, target state,
+dispatch, topology, capture identities, and validators were exact. The two
+`sum_init` values were `0.07816566526889801` and `0.07816564291715622`, a
+three-ULP float32 delta (`2.2351741790771484e-08`). All four same-label signed
+normalized non-DC FSC-AUC preservation values passed: `0.9999999942598741`,
+`0.9999999806617705`, `0.9999999895280383`, and `0.9999999866926460`.
+
+Source localization identifies `sum_init = highres_Xi2_img[img_id] / 2` as the
+only remaining field. The deployed power-class kernel uses the original
+128-lane tree within each block, then schedule-dependent inter-block atomics for
+the scalar `highres_Xi2`. The active default-off observer control preserves all
+per-pixel operations and the within-block tree, writes one scalar partial per
+block, and finalizes those partials in increasing block order. Its build passed
+as Slurm job `11992806`; fixed same-A100 pair job `11992900` is the causal gate.
+Neither result changes the K=4 scientific scorecard, and cross-engine
+attribution remains prohibited until the observer gate passes and deployed
+default-off/capture-inertness preservation is demonstrated.
 
 ## Mandatory telemetry conventions
 
