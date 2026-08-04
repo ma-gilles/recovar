@@ -657,6 +657,17 @@ in the bound pixi checkout, including the production score-tree, lookup, and
 execution-UUID tests; this validates the diagnostic machinery, not
 RECOVAR--RELION scientific parity.
 
+The downstream operand-by-arithmetic factorial now fails closed before
+classification when the centered target has zero energy, any admitted score or
+factorial vector is non-finite, or strict JSON serialization would emit NaN.
+Unexecuted v4 is preserved and superseded; hash-pinned v5 uses local diagnostic
+commit `3188670f`, passed 18/18 related admission/factorial tests, and remains
+unexecuted until the source and v10 reports are manually admitted. The
+one-particle result may select only a replication experiment. Its predeclared
+three-representative cohort must identify the same uniquely strongest axis in
+at least two representatives and agree with the aggregate centered cohort
+before a source edit is considered.
+
 The contribution-repeatability metrics remain deliberately distinct. The
 historical fixed panel is immutable at 0/3, and the deterministic candidate
 panel is already 3/3 but non-scoring pending its separate quality A/B. Jobs
