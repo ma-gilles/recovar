@@ -583,8 +583,10 @@ substitutions compare shifted-image, projection/reference, score-weight, and
 score-arithmetic boundaries after removing only the common
 candidate-independent offset. The arithmetic arm evaluates RECOVAR's actual
 JAX/XLA direct-Gaussian tree on the captured native RELION reference, shifted
-image, correction weights, and `sum_init`; this prevents XLA pointwise FMA
-rounding from being misattributed to an input operand. Classification uses
+image, correction weights, and `sum_init`, gathered through RECOVAR's
+production full-grid-to-compact lookup with its explicit zero-gap lane
+topology; this prevents XLA pointwise FMA or lookup rounding from being
+misattributed to an input operand. Classification uses
 only native candidates whose passive replay is bitwise equal to production;
 the complete 96-candidate panel remains telemetry. This is target/class-local
 causal evidence. It cannot change the fixed 41/60 K=4 scorecard or establish

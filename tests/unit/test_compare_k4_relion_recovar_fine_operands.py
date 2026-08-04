@@ -71,6 +71,37 @@ def test_fine_operand_jax_tree_accepts_batched_native_operands():
     assert raw.dtype == np.float32
 
 
+def test_fine_operand_jax_tree_preserves_full_grid_gap_topology():
+    full_to_compact = np.asarray([0, -1, -1, 1, -1, 2], dtype=np.int32)
+    reference = np.asarray([[1 + 2j, 2 + 0j, 3 - 1j]], dtype=np.complex64)
+    shifted = np.asarray([[0 + 1j, 1 + 0j, 2 - 2j]], dtype=np.complex64)
+    corr = np.asarray([[1, 2, 3]], dtype=np.float32)
+    sum_init = np.asarray([7], dtype=np.float32)
+    full_reference = np.zeros((1, full_to_compact.size), dtype=np.complex64)
+    full_shifted = np.zeros_like(full_reference)
+    full_corr = np.zeros((1, full_to_compact.size), dtype=np.float32)
+    valid = full_to_compact >= 0
+    full_reference[:, valid] = reference[:, full_to_compact[valid]]
+    full_shifted[:, valid] = shifted[:, full_to_compact[valid]]
+    full_corr[:, valid] = corr[:, full_to_compact[valid]]
+
+    compact = _jax_tree_raw_diff2(
+        reference,
+        shifted,
+        corr,
+        sum_init,
+        full_to_compact,
+    )
+    full = _jax_tree_raw_diff2(
+        full_reference,
+        full_shifted,
+        full_corr,
+        sum_init,
+    )
+
+    np.testing.assert_array_equal(compact, full)
+
+
 def test_fine_operand_counterfactual_can_identify_jax_arithmetic():
     relion = np.asarray([10, 20, 30], dtype=np.float32)
     all_recovar = np.asarray([11, 18, 33], dtype=np.float32)

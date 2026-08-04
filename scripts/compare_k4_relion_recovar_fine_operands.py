@@ -288,11 +288,18 @@ def _tree_raw_diff2(
 
 
 @jax.jit
-def _jax_tree_raw_diff2_device(reference, shifted, corr, sum_init):
+def _jax_tree_raw_diff2_device(
+    reference,
+    shifted,
+    corr,
+    sum_init,
+    relion_full_to_compact,
+):
     raw = _relion_cuda_fine_diff2_sum(
         reference,
         shifted,
         corr,
+        relion_full_to_compact,
     )
     return raw + sum_init
 
@@ -302,14 +309,18 @@ def _jax_tree_raw_diff2(
     shifted: np.ndarray,
     corr: np.ndarray,
     sum_init: np.ndarray,
+    relion_full_to_compact: np.ndarray | None = None,
 ) -> np.ndarray:
     """Evaluate RECOVAR's fused JAX/XLA tree on aligned native operands."""
 
+    if relion_full_to_compact is None:
+        relion_full_to_compact = np.arange(reference.shape[-1], dtype=np.int32)
     raw = _jax_tree_raw_diff2_device(
         jnp.asarray(reference, dtype=jnp.complex64),
         jnp.asarray(shifted, dtype=jnp.complex64),
         jnp.asarray(corr, dtype=jnp.float32),
         jnp.asarray(sum_init, dtype=jnp.float32),
+        jnp.asarray(relion_full_to_compact, dtype=jnp.int32),
     )
     return np.asarray(jax.block_until_ready(raw), dtype=np.float32)
 
@@ -723,24 +734,41 @@ def compare(
         )
     relion_raw_array = np.asarray(relion_raw, dtype=np.float32)
     all_recovar_raw_array = np.asarray(all_recovar_raw, dtype=np.float32)
-    native_reference = (
+    native_reference_full = (
         captured_pixels["reference_real"]
         + np.complex64(1j) * captured_pixels["reference_imag"]
     ).astype(np.complex64)
-    native_shifted = (
+    native_shifted_full = (
         captured_pixels["shifted_real"]
         + np.complex64(1j) * captured_pixels["shifted_imag"]
     ).astype(np.complex64)
-    native_corr = np.asarray(captured_pixels["corr"], dtype=np.float32)
+    native_corr_full = np.asarray(captured_pixels["corr"], dtype=np.float32)
+    native_reference_compact = np.zeros(
+        (capture.candidates.size, compact_indices.size),
+        dtype=np.complex64,
+    )
+    native_shifted_compact = np.zeros_like(native_reference_compact)
+    native_corr_compact = np.zeros(
+        (capture.candidates.size, compact_indices.size),
+        dtype=np.float32,
+    )
+    native_reference_compact[:, supported_compact] = native_reference_full[
+        :, supported_full
+    ]
+    native_shifted_compact[:, supported_compact] = native_shifted_full[
+        :, supported_full
+    ]
+    native_corr_compact[:, supported_compact] = native_corr_full[:, supported_full]
     native_sum_init = np.asarray(
         [candidate["sum_init"] for candidate in capture.candidates],
         dtype=np.float32,
     )
     jax_arithmetic_native_raw = _jax_tree_raw_diff2(
-        native_reference,
-        native_shifted,
-        native_corr,
+        native_reference_compact,
+        native_shifted_compact,
+        native_corr_compact,
         native_sum_init,
+        full_to_compact,
     )
     substitution_arrays = {
         name: np.asarray(records, dtype=np.float32)
