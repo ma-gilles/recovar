@@ -83,6 +83,14 @@ this order:
 8. Pmax, hard assignments, and per-particle BPref operands;
 9. partial reductions, final accumulators, and half maps.
 
+The fixed-panel BPref analyzer must require exact significant-support identity
+before it may classify the particle pre-scatter boundary as closed. Operand
+agreement evaluated only on RELION's retained tuples is insufficient when
+RECOVAR retains a different tuple set. The active Slurm launch is hash-pinned
+and is not mutated; its original report will be preserved, then a corrected
+post-terminal classification will place `support_exact` ahead of operand and
+translation-reduction closure.
+
 The first unequal level determines the next code change. A RELION-state
 substitution can distinguish inherited drift from a local RECOVAR mismatch,
 but native cross-engine raw equality requires an immutable-ID-aligned RELION
