@@ -193,17 +193,26 @@ materially improve that exact gate on an independent holdout or complete
 supported-row comparison, improve the earliest case-7 trajectory boundary,
 replicate on case 22, and preserve every currently passing immutable K=1 case.
 The complete predeclared decision tree is
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_bpref_exact_gate_89e3abb9_20260803T1930ET/provenance/POSTRESULT_DECISION_TREE_11982955.md`.
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_bpref_exact_gate_v4_35ec9ac5_20260804T1924ET/provenance/POSTRESULT_DECISION_TREE_V4_11982955.md`.
 
-Role-aware reanalysis v3 now makes that policy machine-checkable. Every output
-particle retains its immutable image identity and predeclared selection role;
-the report lists the identities and roles at the aggregate first-unequal exact
-boundary and marks a narrow diagnostic intervention eligible only for at least
-two particles from at least two roles. The gate always records
-`production_authorized=false`. Its 12/12 focused tests pass, and the new
-hash-pinned launcher remains unsubmitted until job `11982955` and its sealed
-manifest are manually admitted. The older prepared v2 launcher is preserved
-but superseded before execution because it dropped the role field.
+Role-aware reanalysis v4 now makes that policy machine-checkable and separates
+support membership from every order-sensitive boundary. Every output particle
+retains its immutable image identity and predeclared selection role; the report
+lists the identities and roles at the aggregate first-unequal exact boundary
+and marks a narrow diagnostic intervention eligible only for at least two
+particles from at least two roles. In addition to exact significant-support
+membership, v4 checks canonical orientation-major/translation-major support
+order, complete posterior rank order, support rank order, float32 tie groups,
+threshold margins, and the actual per-orientation translation sequence used by
+RELION's production BPref loop. The gate always records
+`production_authorized=false`. Its 33/33 focused tests pass. Local diagnostic
+commit `35ec9ac50f529743141051ffb1daefa6f0e1f276` and launcher SHA-256
+`b448d479c77ae12bd5306e8470e8937c72d7eb84ba0700d2a570014e5501c107`
+are pinned under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_bpref_exact_gate_v4_35ec9ac5_20260804T1924ET`.
+The launcher remains unsubmitted until job `11982955` and its sealed manifest
+are manually admitted. The older prepared v2/v3 launchers are preserved but
+superseded before execution.
 
 The first unequal level determines the next code change. A RELION-state
 substitution can distinguish inherited drift from a local RECOVAR mismatch,
@@ -716,18 +725,28 @@ No source job is altered or cancelled, and neither retry is scientific evidence
 until its allocation, artifacts, manifests, and unchanged 3/3 byte gate are
 manually admitted.
 
-The downstream audit then found a second deterministic gate defect: the
-prepared v10 join and V5 factorial still named `12011036`, its retry-5 source
-root, and source-job-specific output names. They therefore could not consume a
-successful `12016847` result. Corrected retry-6 launchers now require exact job
-`12016847`, its retry-6 report, terminal `COMPLETED` state, and strict
-verification of every entry in `accepted_outputs_12016847.sha256`. The V5
-factorial also requires the corrected v10 completion to identify `12016847`;
-both launchers independently require source-report `owner_job_id=12016847`.
-Both scripts pass `bash -n`; hash-pinned pre-admission executions exit 1 without
-creating output. They remain unsubmitted, and the superseded launchers and
-Slurm jobs remain untouched. This is readiness/provenance progress, not a
-scientific result or scorecard change.
+The downstream audit then found two deterministic postprocessing gate defects.
+First, the prepared retry-5 join/factorial still named `12011036`, its retry-5
+source root, and source-job-specific output names, so it could not consume a
+successful `12016847` result. Second, the initial retry-6 V10 join pinned stale
+expected HEAD `237bbc75...` even though its named checkout was clean at
+`2054b778...`; V10 and its dependent V5 factorial are therefore superseded
+before scientific execution.
+
+Corrected V11/V6 retry-6 launchers now require exact job `12016847`, its
+retry-6 report, terminal `COMPLETED` state with exit `0:0`, and strict
+verification of every entry in `accepted_outputs_12016847.sha256`. V11 pins
+clean repository HEAD `2054b7781c1cc81dfc5ab7c07e7e19342537ea9f`; V6
+requires the V11 completion to identify `12016847`, and both launchers
+independently require source-report `owner_job_id=12016847`. Their launcher
+SHA-256 values are respectively
+`200c0a4c19d3074eaa07da6d4972d1ccab87e9a6981bfb5f918628928fdec0c6`
+and `5749dca991b0d6947428e669279f471ccbc5911c36384b72a15645c3265404a8`.
+The V11 admission/comparator panel passes 50/50 focused tests and the V6
+factorial panel passes 10/10. Hash-pinned pre-admission executions exit 1
+without creating output. They remain unsubmitted, and every superseded
+launcher and Slurm job remains untouched. This is readiness/provenance
+progress, not a scientific result or scorecard change.
 
 ## Mandatory telemetry conventions
 
