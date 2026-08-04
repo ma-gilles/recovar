@@ -39,6 +39,15 @@ def test_detects_rounding_from_class_conditional_split() -> None:
     assert (
         report["split_vs_relion_direct_joint_log"]["mismatch_count"] > 0
     )
+    mismatch_indices = report["split_vs_relion_direct_joint_log"][
+        "mismatch_flat_indices"
+    ]
+    assert len(mismatch_indices) == report[
+        "split_vs_relion_direct_joint_log"
+    ]["mismatch_count"]
+    assert report["split_vs_relion_direct_joint_log"][
+        "first_mismatch_flat_index"
+    ] == mismatch_indices[0]
     assert (
         report["split_vs_relion_direct_joint_log"][
             "maximum_absolute_delta"

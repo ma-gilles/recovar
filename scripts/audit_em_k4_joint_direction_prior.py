@@ -39,6 +39,7 @@ def _metric(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
         np.isneginf(right),
     )
     mismatch = left.view(np.uint32) != right.view(np.uint32)
+    mismatch_flat_indices = np.flatnonzero(mismatch.reshape(-1))
     delta = np.zeros(left.shape, dtype=np.float64)
     delta[finite] = right[finite].astype(np.float64) - left[finite].astype(
         np.float64
@@ -47,6 +48,14 @@ def _metric(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
         "bitwise_exact": bool(not np.any(mismatch)),
         "same_negative_infinity_mask": bool(same_nonfinite),
         "mismatch_count": int(np.count_nonzero(mismatch)),
+        "mismatch_flat_indices": mismatch_flat_indices.astype(
+            np.int64
+        ).tolist(),
+        "first_mismatch_flat_index": (
+            int(mismatch_flat_indices[0])
+            if mismatch_flat_indices.size
+            else None
+        ),
         "total_count": int(left.size),
         "maximum_absolute_delta": float(
             np.max(np.abs(delta[finite])) if np.any(finite) else 0.0
