@@ -94,6 +94,18 @@ possible numerical mediator, but the tested implementation is rejected as a
 sufficient standalone K=1 parity fix. It must not be promoted to production on
 the basis of the current experiments.
 
+These claims apply to the sealed **local** candidate lineage, not the older
+public PR head. The initial guarded implementation is `71477afd`, explicit
+identity physical order for expected accuracy is `c9eec5ab`, and the scientific
+A/B source is sealed at `e2893cb3`. The static intervention audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_dispatch_static_audit_e2893cb3_20260802T1523ET/provenance/STATIC_INTERVENTION_AUDIT.json`
+(SHA-256
+`144b67dfcba4fed28d70b19f7a24a240147f759ea03d7b8a8f879ce161d08bf5`).
+It verifies all 13 STAR columns after immutable-ID inverse join, the complete
+treatment order, the ordered first-100 identities, and byte-exact runtime
+float64 CTF rows in both cases. The candidate remains unpushed because its
+scientific A/B result is negative.
+
 The physical-reorder versus internal-execution-permutation experiment remains
 conditional on a positive clean dispatch A/B. Running it after two unsupported
 A/B results would not be the next decisive experiment.
