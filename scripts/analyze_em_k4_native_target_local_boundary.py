@@ -8,14 +8,24 @@ import json
 from pathlib import Path
 from typing import Any
 
-from scripts.analyze_em_k4_allclass_native_boundary import (
-    BOUNDARY_ORDER,
-    EXPECTED_CURRENT_SIZE,
-    EXPECTED_ORIGINAL_INDEX,
-    _class_join,
-    _sha256,
-    classify_first_unequal_boundary,
-)
+if __package__:
+    from .analyze_em_k4_allclass_native_boundary import (
+        BOUNDARY_ORDER,
+        EXPECTED_CURRENT_SIZE,
+        EXPECTED_ORIGINAL_INDEX,
+        _class_join,
+        _sha256,
+        classify_first_unequal_boundary,
+    )
+else:
+    from analyze_em_k4_allclass_native_boundary import (  # type: ignore[no-redef]
+        BOUNDARY_ORDER,
+        EXPECTED_CURRENT_SIZE,
+        EXPECTED_ORIGINAL_INDEX,
+        _class_join,
+        _sha256,
+        classify_first_unequal_boundary,
+    )
 
 SCHEMA = "recovar.em_k4_native_target_local_boundary.v1"
 TARGET_ADMISSION_SCHEMA = "recovar-k4-native-target-artifact-repeatability-v1"

@@ -13,8 +13,17 @@ from typing import Any
 
 import numpy as np
 
-from scripts.validate_relion_bpref_factor_capture import load_factor_capture
-from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
+if __package__:
+    from .validate_relion_bpref_factor_capture import load_factor_capture
+    from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
+else:
+    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
+        load_factor_capture,
+    )
+    from validate_relion_fine_score_capture import (  # type: ignore[no-redef]
+        ACTIVE,
+        load_fine_score_capture,
+    )
 
 SCHEMA = "recovar.em_k4_allclass_native_boundary.v1"
 ADMISSION_SCHEMA = "recovar-k4-highres-treatment-allclass-capture-v1"

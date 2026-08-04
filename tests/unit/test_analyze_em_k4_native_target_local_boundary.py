@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -9,6 +12,8 @@ from scripts.analyze_em_k4_native_target_local_boundary import (
     class_stage_exact,
     validate_admissions,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _target_admission() -> dict:
@@ -44,6 +49,24 @@ def _recovar_repeatability() -> dict:
 @pytest.mark.unit
 def test_accepts_only_two_passed_one_sided_admissions() -> None:
     validate_admissions(_target_admission(), _recovar_repeatability())
+
+
+@pytest.mark.unit
+def test_direct_script_help_resolves_local_imports() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/analyze_em_k4_native_target_local_boundary.py"),
+            "--help",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--target-admission" in result.stdout
 
 
 @pytest.mark.unit
