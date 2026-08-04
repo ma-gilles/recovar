@@ -29,6 +29,12 @@ from scripts.analyze_em_k4_raw_diff2_parity import (
 )
 
 SCHEMA = "recovar-k4-phase-a-causal-route-v1"
+WRAPPED_PHASE_A_SCHEMA = "recovar-k4-postdet-samea100-phase-a-analysis-v1"
+WRAPPED_RAW_EXACT = "post_determinism_raw_boundary_exact"
+WRAPPED_RAW_MISMATCH = (
+    "post_determinism_raw_boundary_mismatch_requires_predeclared_operand_phase"
+)
+PRECONDITION_FAILURE_ROUTE = "phase_a_capture_or_inertness_repair"
 RAW_MISMATCH_ROUTE = "bounded_raw_operand_freeze"
 SCORE_PATH_MISMATCH_ROUTE = "class1_prior_or_combined_score_followup"
 JOINT_POSTERIOR_ROUTE = "multiclass_joint_posterior_capture"
@@ -47,10 +53,54 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _unwrap_phase_a(
+    phase_a: dict[str, Any],
+) -> tuple[dict[str, Any], str | None, bool]:
+    schema = phase_a.get("schema")
+    if schema == PHASE_A_SCHEMA:
+        return phase_a, None, True
+
+    _require(schema == WRAPPED_PHASE_A_SCHEMA, "Phase-A schema changed")
+    _require(
+        phase_a.get("correlation_used") is False,
+        "wrapped Phase-A report used correlation",
+    )
+    comparison = phase_a.get("cross_engine")
+    _require(
+        isinstance(comparison, dict),
+        "wrapped Phase-A cross_engine report is missing",
+    )
+    wrapper_classification = phase_a.get("classification")
+    preconditions_passed = wrapper_classification in {
+        WRAPPED_RAW_EXACT,
+        WRAPPED_RAW_MISMATCH,
+    }
+    wrapped_raw_exact = wrapper_classification == WRAPPED_RAW_EXACT
+    _require(
+        phase_a.get("accepted_raw_boundary_exact") is wrapped_raw_exact,
+        "wrapped raw classification and accepted flag disagree",
+    )
+    if preconditions_passed:
+        _require(
+            comparison.get("accepted") is wrapped_raw_exact,
+            "wrapped and cross-engine raw classifications disagree",
+        )
+        _require(
+            phase_a.get("phase_b_required")
+            is (wrapper_classification == WRAPPED_RAW_MISMATCH),
+            "wrapped Phase-B decision disagrees with raw classification",
+        )
+    else:
+        _require(
+            phase_a.get("phase_b_required") is False,
+            "failed Phase-A preconditions must not authorize Phase B",
+        )
+    return comparison, str(wrapper_classification), preconditions_passed
+
+
 def build_causal_route(phase_a: dict[str, Any]) -> dict[str, Any]:
     """Return the only admissible next boundary for a Phase-A report."""
 
-    _require(phase_a.get("schema") == PHASE_A_SCHEMA, "Phase-A schema changed")
     _require(phase_a.get("status") == "complete", "Phase-A report is incomplete")
     _require(
         phase_a.get("classification_ready") is True,
@@ -61,14 +111,17 @@ def build_causal_route(phase_a: dict[str, Any]) -> dict[str, Any]:
         "Phase-A report must not authorize a scorecard change",
     )
 
-    raw_classification = phase_a.get("classification")
+    comparison, wrapper_classification, preconditions_passed = (
+        _unwrap_phase_a(phase_a)
+    )
+    raw_classification = comparison.get("classification")
     raw_exact = raw_classification == PASS_CLASSIFICATION
     _require(
-        phase_a.get("accepted") is raw_exact,
+        comparison.get("accepted") is raw_exact,
         "raw classification and accepted flag disagree",
     )
 
-    score_path = phase_a.get("score_path")
+    score_path = comparison.get("score_path")
     _require(isinstance(score_path, dict), "Phase-A score_path is missing")
     score_classification = score_path.get("classification")
     score_exact = score_classification == PASS_SCORE_CLASSIFICATION
@@ -77,11 +130,18 @@ def build_causal_route(phase_a: dict[str, Any]) -> dict[str, Any]:
         "score-path classification and accepted flag disagree",
     )
 
-    support = phase_a.get("support")
+    support = comparison.get("support")
     _require(isinstance(support, dict), "Phase-A support record is missing")
     support_exact = support.get("exact") is True
 
-    if not raw_exact:
+    if not preconditions_passed:
+        route = PRECONDITION_FAILURE_ROUTE
+        first_unresolved_boundary = "phase_a_capture_inertness_or_repeatability"
+        authorized_capture = (
+            "repair or repeat the fixed Phase-A capture before any scientific "
+            "operand localization"
+        )
+    elif not raw_exact:
         route = RAW_MISMATCH_ROUTE
         first_unresolved_boundary = "class1_raw_diff2_or_its_operands"
         authorized_capture = (
@@ -112,6 +172,8 @@ def build_causal_route(phase_a: dict[str, Any]) -> dict[str, Any]:
         "first_unresolved_boundary": first_unresolved_boundary,
         "authorized_capture": authorized_capture,
         "phase_a": {
+            "wrapper_classification": wrapper_classification,
+            "preconditions_passed": preconditions_passed,
             "raw_classification": raw_classification,
             "raw_exact": raw_exact,
             "class1_score_path_classification": score_classification,
@@ -119,8 +181,12 @@ def build_causal_route(phase_a: dict[str, Any]) -> dict[str, Any]:
             "support_exact": support_exact,
         },
         "claims": {
-            "class1_raw_boundary_resolved": raw_exact,
-            "class1_score_path_resolved": raw_exact and score_exact,
+            "class1_raw_boundary_resolved": (
+                preconditions_passed and raw_exact
+            ),
+            "class1_score_path_resolved": (
+                preconditions_passed and raw_exact and score_exact
+            ),
             "all_class_tuple_and_score_boundary_resolved": False,
             "joint_class_pose_normalization_resolved": False,
             "joint_significance_resolved": False,
@@ -128,7 +194,9 @@ def build_causal_route(phase_a: dict[str, Any]) -> dict[str, Any]:
             "reduction_boundary_resolved": False,
             "map_parity_established": False,
         },
-        "phase_b_raw_operand_freeze_required": not raw_exact,
+        "phase_b_raw_operand_freeze_required": (
+            preconditions_passed and not raw_exact
+        ),
         "scorecard_change_admissible": False,
         "metric_policy": (
             "causal routing only; no map-level acceptance, fitted transform, "
@@ -143,6 +211,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
+    _require(not args.output.exists(), f"refusing to overwrite {args.output}")
     phase_a = json.loads(args.phase_a_report.read_text())
     routed = build_causal_route(phase_a)
     routed["input"] = {
