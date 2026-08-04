@@ -246,6 +246,14 @@ This is not stable cross-engine attribution because it used an older source and
 a different physical A100; it motivates the pending current-source exact-GPU
 repeatability gate.
 
+The relevant source change after `db1ab501` is known: `e0c51765` introduced a
+deterministic soft-mask background reduction and `8aa573f5` parallelized it
+without restoring schedule-dependent atomics. The previous 128-lane atomic
+background accumulation was replaced by fixed per-block reductions followed by
+a deterministic second-stage sum. Therefore the old shifted-image instability
+is not presumed to survive in current source `223e7e81`; job `11994138` is the
+direct independent-process regression test for that claim.
+
 As a separate provisional clue, that RECOVAR capture's high-shell scalar and
 the accepted native observer's per-candidate `sum_init` are bitwise identical:
 float32 value `0.07816561311483383`, bits `1033901387`. This weakens a pure
