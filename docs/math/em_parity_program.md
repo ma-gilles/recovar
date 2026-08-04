@@ -15027,3 +15027,27 @@ will be visible to RECOVAR/JAX. The exact v10 join is separately prepared and
 remains unsubmitted until the report and accepted-output manifest are inspected.
 No fixed FSC/FSC-AUC or topology count changes, and no existing job or process
 was altered, cancelled, signalled, requeued, or reprioritized.
+
+## 2026-08-04 K=4 device-signature fused-mode gate correction
+
+A later audit tested the complete launch environment against the exact pinned
+source rather than stopping at parser/sentinel coverage. Retry `12011036`
+requests `RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR` but unsets
+`RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS`. Calling the source gate with that
+environment reproduces the deterministic pre-EM failure
+`RECOVAR device signature requires RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS=1`.
+The queued job is preserved unchanged.
+
+Retry `12016847` changes only the fused-atomics environment setting to `1`, as
+required by the source and as used by the accepted deterministic contribution
+candidate. It preserves source `223e7e81`, tree `d5d021ad`, CUDA library
+`55d7c84...`, data, exact tuple, two sequential arms, target A100 UUID, and
+strict 3/3 byte admission. The exact environment gate passes, the focused
+interface/sentinel panel passes 4/4 with warnings promoted to errors, and the
+complete static audit reports `STATIC_PREFLIGHT=PASS`. The sealed launcher and
+predeclaration SHA-256 values are
+`d05b4a4d4b70be878a466e1e17a6d00696bbc6592a6b17b32880501bf25b367a`
+and `df1284bad3f67f7f28c31ab3c249cc854f659c7a02e9633a047e11411d237203`.
+It was submitted independently and is pending; no existing job or process was
+altered, cancelled, signalled, requeued, suspended, or reprioritized. No
+quality or causal claim is admitted before terminal artifact inspection.

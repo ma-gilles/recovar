@@ -698,6 +698,24 @@ as a third, current-source production-path panel. It will not rewrite either
 historical result or change an FSC/FSC-AUC acceptance count. The exact v10 join
 remains unsubmitted until that admission and its manifests are inspected.
 
+A subsequent exact-source audit supersedes the claim that `12011036` is fully
+executable. Its launcher requests a device signature while explicitly
+unsetting `RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS`; pinned source
+`223e7e81` fails closed on that combination before EM with
+`RECOVAR device signature requires RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS=1`.
+This was reproduced directly in the checkout-bound Python environment. The job
+remains pending and untouched. Retry `12016847` changes only that contradictory
+setting to `RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS=1`, matching the previously
+accepted deterministic contribution candidate. Its exact environment-contract
+probe, `bash -n`, static source/data/binary/root audit, and four focused
+interface/sentinel tests all pass. Launcher and predeclaration SHA-256 values
+are respectively `d05b4a4d4b70be878a466e1e17a6d00696bbc6592a6b17b32880501bf25b367a`
+and `df1284bad3f67f7f28c31ab3c249cc854f659c7a02e9633a047e11411d237203`.
+It is pending for the same three-A100 allocation and immutable target UUID.
+No source job is altered or cancelled, and neither retry is scientific evidence
+until its allocation, artifacts, manifests, and unchanged 3/3 byte gate are
+manually admitted.
+
 ## Mandatory telemetry conventions
 
 Every staged capture must include immutable particle identity, base/physical
