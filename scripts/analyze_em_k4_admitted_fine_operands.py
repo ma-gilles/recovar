@@ -10,7 +10,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from scripts.compare_k4_relion_recovar_fine_operands import compare
+if __package__:
+    from .compare_k4_relion_recovar_fine_operands import compare
+else:
+    from compare_k4_relion_recovar_fine_operands import compare  # type: ignore[no-redef]
 
 SCHEMA = "recovar.em_k4_admitted_fine_operand_comparison.v1"
 NATIVE_SCHEMA = "recovar.em_k4_native_class1_fine_operand_admission.v1"

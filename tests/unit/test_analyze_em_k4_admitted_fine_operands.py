@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -11,6 +13,8 @@ from scripts.analyze_em_k4_admitted_fine_operands import (
     build_report,
     validate_admissions,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _native_admission(gpu_uuid: str = "GPU-fixed") -> dict:
@@ -65,6 +69,24 @@ def _sha256(path: Path) -> str:
 @pytest.mark.unit
 def test_accepts_only_same_gpu_target_local_admissions() -> None:
     validate_admissions(_native_admission(), _recovar_admission())
+
+
+@pytest.mark.unit
+def test_direct_script_help_resolves_local_imports() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/analyze_em_k4_admitted_fine_operands.py"),
+            "--help",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--native-admission" in result.stdout
 
 
 @pytest.mark.unit
