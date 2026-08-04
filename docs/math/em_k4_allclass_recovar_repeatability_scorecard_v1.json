@@ -1,0 +1,119 @@
+{
+  "schema": "recovar.em_k4_allclass_recovar_repeatability_scorecard.v1",
+  "suite_id": "k4-it2-fixed-a100-recovar-allclass-pass2-repeatability",
+  "suite_version": 1,
+  "classification": "all_observed_pass2_fields_exact",
+  "frozen_denominator": 9,
+  "scorecard_change_admissible": false,
+  "correlation_used": false,
+  "cross_engine_parity_established": false,
+  "stable_recovar_boundary_established": true,
+  "acceptance_contract": {
+    "slurm_job_id": 11994138,
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed": "01:17:58",
+    "node": "della-l07g2",
+    "gpu_uuid": "GPU-f3e94635-d095-bea9-dbe3-26e91dd3ea27",
+    "recovar_science_commit": "223e7e81188e3d63217605245d08999c26a86d5b",
+    "accepted": true
+  },
+  "boundary": {
+    "iteration": 2,
+    "current_size": 38,
+    "target_original_index_zero_based": 53722,
+    "target_stack_index_one_based": 53723,
+    "joint_probability_mass_arm_a": 0.9999999999999997,
+    "joint_probability_mass_arm_b": 0.9999999999999997,
+    "active_candidate_count": 247232,
+    "significant_candidate_count": 66986,
+    "class_artifact_sha256": [
+      "32c0318a70f71437fab705cbd31fa6f7ef47ef542556954059d02628129f5b97",
+      "7c5e4dcbde0c5a2e3cfce238d737ac0a0525ae6e7f92b79a3c3cc404082516c7",
+      "986077d552326bebab005058068a83c5bc9725ec5ae61cb1ccd3896e2dae8535",
+      "4d80fc4b3cb0bccb8f7f772274ed2b2462d0544579b66180330a64b434c1402f"
+    ]
+  },
+  "cases": [
+    {
+      "id": "arm-a-valid",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "arm-b-valid",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "identity-exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "geometry-and-candidate-tuples-exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "raw-diff2-exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "priors-exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "unnormalized-scores-exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "joint-posterior-exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "global-significant-support-exact",
+      "result": "pass",
+      "checked": true
+    }
+  ],
+  "summary": {
+    "pass": 9,
+    "evaluated": 9
+  },
+  "evidence": {
+    "repeatability_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_repeat_223e7e81_20260804T0651ET/analysis/RECOVAR_ALLCLASS_REPEATABILITY_11994138.json",
+      "sha256": "3e2341222a1a2e00a014995245709f8c5383eed9d611adcf23128bbc34f7f4cd"
+    },
+    "launcher": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_repeat_223e7e81_20260804T0651ET/jobs/run_repeatability.sbatch",
+      "sha256": "b4b0bb886ae39df51c0cde8a99c599ddbb9615049780829dc38e10544f8e7fa9"
+    },
+    "predeclaration": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_repeat_223e7e81_20260804T0651ET/provenance/EXECUTION_PREDECLARATION.md",
+      "sha256": "935b032ad097816a5b6943a1a160c8ffc00adbfd47f0013f9a3a7897004ecca2"
+    },
+    "submission": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_repeat_223e7e81_20260804T0651ET/provenance/SUBMISSION_11994138.md",
+      "sha256": "4948b7220138bdfa0fb91fbd6c59ade980fa9bdbe8afaad9a92b394ecb73e79f"
+    },
+    "science_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_repeat_223e7e81_20260804T0651ET/provenance/science_outputs_11994138.sha256",
+      "sha256": "34b57e868fff2a9cdaab0b8dad3a77fbe313912e02c4883dd90793d1bc6bc294"
+    },
+    "static_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_repeat_223e7e81_20260804T0651ET/provenance/static_inputs_11994138.sha256",
+      "sha256": "dcea997986165acdd5826e4eadbf468c54b3e98685b7c15cdfa78fc4a74dff91"
+    },
+    "science_log": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_repeat_223e7e81_20260804T0651ET/logs/science_11994138.out",
+      "sha256": "2b9d6c6251f35b9066bf9d43df05fd4e5cfd3b56c32871be389d6052e0948580"
+    }
+  },
+  "metric_policy": "Exact original array bytes across two independent same-A100 RECOVAR executions; non-scoring; cross-engine parity not established; no correlation"
+}

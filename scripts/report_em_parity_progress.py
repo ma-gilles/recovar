@@ -90,6 +90,12 @@ from scripts.summarize_em_k4_allclass_boundary_capture_scorecard import (  # noq
 from scripts.summarize_em_k4_allclass_boundary_capture_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k4_allclass_boundary_capture,
 )
+from scripts.summarize_em_k4_allclass_recovar_repeatability_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K4_ALLCLASS_RECOVAR_REPEATABILITY_SCORECARD,
+)
+from scripts.summarize_em_k4_allclass_recovar_repeatability_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k4_allclass_recovar_repeatability,
+)
 from scripts.summarize_em_k4_causal_boundary_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K4_CAUSAL_SCORECARD,
 )
@@ -129,17 +135,17 @@ from scripts.summarize_em_k4_native_auxstream_repeatability_scorecard import (  
 from scripts.summarize_em_k4_native_auxstream_repeatability_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k4_native_auxstream_repeatability,
 )
-from scripts.summarize_em_k4_native_softmask_repeatability_scorecard import (  # noqa: E402
-    DEFAULT_SCORECARD as DEFAULT_K4_NATIVE_SOFTMASK_REPEATABILITY_SCORECARD,
-)
-from scripts.summarize_em_k4_native_softmask_repeatability_scorecard import (  # noqa: E402
-    load_and_validate as load_and_validate_k4_native_softmask_repeatability,
-)
 from scripts.summarize_em_k4_native_highres_xi2_repeatability_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K4_NATIVE_HIGHRES_XI2_REPEATABILITY_SCORECARD,
 )
 from scripts.summarize_em_k4_native_highres_xi2_repeatability_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k4_native_highres_xi2_repeatability,
+)
+from scripts.summarize_em_k4_native_softmask_repeatability_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K4_NATIVE_SOFTMASK_REPEATABILITY_SCORECARD,
+)
+from scripts.summarize_em_k4_native_softmask_repeatability_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k4_native_softmask_repeatability,
 )
 from scripts.summarize_em_k4_preprocess_replay_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K4_PREPROCESS_SCORECARD,
@@ -157,7 +163,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v22"
+SCHEMA = "recovar.em_parity_progress.v23"
 
 
 def _panel(
@@ -204,6 +210,9 @@ def build_progress(
     k4_class_path: Path = DEFAULT_K4_CLASS_SCORECARD,
     k4_allclass_boundary_capture_path: Path = (
         DEFAULT_K4_ALLCLASS_BOUNDARY_CAPTURE_SCORECARD
+    ),
+    k4_allclass_recovar_repeatability_path: Path = (
+        DEFAULT_K4_ALLCLASS_RECOVAR_REPEATABILITY_SCORECARD
     ),
     k4_causal_path: Path = DEFAULT_K4_CAUSAL_SCORECARD,
     k4_contribution_repeatability_path: Path = (
@@ -252,6 +261,11 @@ def build_progress(
     k4_class_scorecard = load_and_validate_k4_classes(k4_class_path)
     k4_allclass_boundary_capture = load_and_validate_k4_allclass_boundary_capture(
         k4_allclass_boundary_capture_path
+    )
+    k4_allclass_recovar_repeatability = (
+        load_and_validate_k4_allclass_recovar_repeatability(
+            k4_allclass_recovar_repeatability_path
+        )
     )
     k4_causal = load_and_validate_k4_causal(k4_causal_path)
     k4_contribution_repeatability = (
@@ -322,6 +336,9 @@ def build_progress(
     k4_iteration_denominator = k4_snapshot["numbered_iterations"]
     k4_classes = k4_snapshot["classes"]
     k4_allclass_boundary_capture_summary = k4_allclass_boundary_capture["summary"]
+    k4_allclass_recovar_repeatability_summary = (
+        k4_allclass_recovar_repeatability["summary"]
+    )
     k4_causal_summary = k4_causal["summary"]
     k4_contribution_repeatability_summary = k4_contribution_repeatability[
         "summary"
@@ -608,6 +625,14 @@ def build_progress(
             scoring=False,
         ),
         _panel(
+            "k4_allclass_recovar_repeatability",
+            "K=4 RECOVAR all-class boundary repeatability",
+            k4_allclass_recovar_repeatability_summary["pass"],
+            k4_allclass_recovar_repeatability_summary["evaluated"],
+            k4_allclass_recovar_repeatability["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
             "k4_causal",
             "K=4 exact-device causal boundary",
             k4_causal_summary["pass"],
@@ -696,7 +721,8 @@ def build_progress(
             "K=1 live-noise counterfactual, K=1 "
             "reference-roundtrip rejection, K=1 "
             "shared-checkpoint FP64 reference, K=4 RECOVAR all-class boundary "
-            "capture, K=4 contribution-repeatability, "
+            "capture, K=4 RECOVAR all-class boundary repeatability, "
+            "K=4 contribution-repeatability, "
             "K=4 native aux-stream repeatability, "
             "K=4 native soft-mask observer repeatability, "
             "K=4 deterministic contribution candidate, "
@@ -845,6 +871,9 @@ def build_progress(
             "k4_class_scorecard": _input_record(k4_class_path),
             "k4_allclass_boundary_capture_scorecard": _input_record(
                 k4_allclass_boundary_capture_path
+            ),
+            "k4_allclass_recovar_repeatability_scorecard": _input_record(
+                k4_allclass_recovar_repeatability_path
             ),
             "k4_causal_scorecard": _input_record(k4_causal_path),
             "k4_contribution_repeatability_scorecard": _input_record(

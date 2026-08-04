@@ -13,6 +13,8 @@ does not change any fixed acceptance threshold.
 - K=4 all-class iterations: **9 / 15**.
 - K=4 RECOVAR all-class boundary captures: **4 / 4**; this is one-sided
   capture completeness, not cross-engine parity.
+- K=4 RECOVAR all-class boundary repeatability gates: **9 / 9**; this makes
+  the fixed iteration-2 RECOVAR boundary stable, not cross-engine-equal.
 - K=4 native auxiliary-stream repeatability gates: **12 / 13** (historical
   predecessor panel).
 - K=4 native soft-mask-partial repeatability gates: **13 / 14**.
@@ -45,8 +47,9 @@ experiments supersede its ranking where they provide direct causal evidence.
 | The iteration-12 split amplifies earlier drift | Strongly inferred | It changes current size and angular search after earlier continuous-state divergence |
 | Final fine scoring or final reconstruction is the common dominant K=1 defect | Strongly disfavored | Joint pose/reference oracles and exact-boundary/float64 interventions rescue or nearly preserve the final path |
 | K=4 fixed-label failures are class swaps | Falsified for the fixed exact-A100 trajectory | Identity map and particle class assignments are optimal at all 15 iterations |
+| K=4 current-source RECOVAR iteration-2 all-class boundary is stable | Demonstrated | Job `11994138` passed all 9/9 exact-byte gates across two independent executions on one A100 |
 | K=4 class-1 tuples and significant support agree at the accepted observer boundary | Demonstrated provisionally | Exact `109184/109184` tuples and `38982/38982` support rows in the current one-class join |
-| K=4 raw `diff2` is the first unequal measured class-1 boundary | Demonstrated provisionally | 25,687 float32 mismatches, one-ULP median and three-ULP maximum; all-class admission and RECOVAR repeatability are still pending |
+| K=4 raw `diff2` is the first unequal measured class-1 boundary | Demonstrated in the narrow admitted class-1 scope | 25,687 float32 mismatches, one-ULP median and three-ULP maximum; RECOVAR repeatability passed, but broad native all-class admission failed |
 | Native lane-first soft-mask reduction closes the pinned class-1 shifted-image residual | Falsified at the tested tuple | Native-lane relative L2 was `1.0312363428376726e-07`, slightly worse than default RELION-CUDA at `9.863882911656713e-08` |
 | K=4 reduction order alone is the primary cause | Disfavored, not eliminated | Determinism improves repeatability without improving the fixed 41/60 cross-engine score; identical all-class operands/destinations have not yet been shown |
 | Full deployed RELION in-memory order beyond the reconstructed source semantics has been directly hashed | Unknown | The candidate is source-faithful and fully internally checked, but no native full-order runtime hash is available |
@@ -74,9 +77,10 @@ For K=4, the current order is:
 5. class-specific BPref operands and accumulator destinations;
 6. reduction arithmetic alone.
 
-The first unequal boundary after the pending native all-class admission and
-RECOVAR repeatability controls, rather than this provisional ordering, chooses
-the implementation target.
+The first unequal boundary in an admitted native capture scope, rather than
+this provisional ordering, chooses the implementation target. Broad native
+all-class attribution is currently prohibited by its failed 19/21 admission;
+the RECOVAR side is stable at 9/9 exact repeatability gates.
 
 ### K=1 particle order
 
@@ -222,8 +226,9 @@ for 23.9%. The predeclared representative-selection rule chooses native
 rotation-local 1790, mapped RECOVAR rotation row 2878, translation 28: native
 raw `diff2` `512.4172973632812` versus RECOVAR `512.4174194335938`, a
 two-ULP delta. This representative supersedes a simple first-mismatch target
-for a bounded operand capture if the pending admission and repeatability gates
-accept the all-class attribution.
+for a bounded operand capture only in a native scope that passes its own fixed
+admission. The broad all-class native panel did not pass, so the representative
+cannot authorize a broad join.
 
 The fixed RECOVAR iteration-2 boundary for stack identity 53723 is now complete
 for all four classes. Its four artifacts preserve 247,232 active class-pose
@@ -233,6 +238,22 @@ stored joint probabilities to maximum absolute error
 `4.336808689942018e-19`. This accepts only the RECOVAR side of the join. Native
 RELION capture must come from the same accepted observer lineage before tuple,
 raw-score, prior, normalization, support, or BPref comparisons are causal.
+
+That RECOVAR boundary is now independently repeatable. Slurm job `11994138`
+completed two fresh executions sequentially on node `della-l07g2`, physical
+A100 UUID `GPU-f3e94635-d095-bea9-dbe3-26e91dd3ea27`, and passed all **9/9**
+predeclared exact-byte gates: both-arm validity, immutable identity, geometry
+and candidate tuples, raw `diff2`, priors, unnormalized scores, joint
+posterior, and global significant support. The four artifacts in each arm have
+identical SHA-256 digests, preserving 247,232 active and 66,986 significant
+class-pose tuples. The result allows stable attribution on the RECOVAR side;
+it does not override the rejected broad native all-class admission and cannot
+change the frozen K=4 FSC/FSC-AUC score. The immutable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_repeat_223e7e81_20260804T0651ET/analysis/RECOVAR_ALLCLASS_REPEATABILITY_11994138.json`
+(SHA-256
+`3e2341222a1a2e00a014995245709f8c5383eed9d611adcf23128bbc34f7f4cd`).
+The checked fixed-denominator repo record is
+`docs/math/em_k4_allclass_recovar_repeatability_scorecard_v1.json`.
 
 A prior independent RECOVAR same-allocation raw-operand pair, job `11831421`
 at source `db1ab501`, is an explicit warning that one-sided captures need a
@@ -246,8 +267,8 @@ high-shell scalar, identity, and topology were byte-exact. The report is
 (SHA-256
 `8feb772f79278a09f2b9363f4c92c0c6d7189d3fabde513edb275e9506f9666f`).
 This is not stable cross-engine attribution because it used an older source and
-a different physical A100; it motivates the pending current-source exact-GPU
-repeatability gate.
+a different physical A100; it motivated the current-source exact-GPU
+repeatability gate described above.
 
 The relevant source change after `db1ab501` is known: `e0c51765` introduced a
 deterministic soft-mask background reduction and `8aa573f5` parallelized it
@@ -273,12 +294,11 @@ The two trees are deterministic but not arithmetically identical. This makes
 soft-mask background grouping a concrete candidate for stable shifted-image
 and raw-`diff2` ULP differences; it does not yet establish causality for the
 late class-map failures. No production change is admissible from source
-inspection alone. After native treatment/capture admission and current-source
-RECOVAR repeatability pass, a bounded same-input diagnostic should compare the
-two addition trees at the background scalar, masked image, shifted Fourier
-image, representative raw score, and all-class support boundaries. The
-hypothesis is falsified if matching the native tree does not close those first
-unequal operands.
+inspection alone. Current-source RECOVAR repeatability subsequently passed,
+while broad native treatment/capture admission failed. A bounded same-input
+diagnostic is therefore permitted only in a narrower native target scope that
+passes its own fixed admission. The hypothesis is falsified if matching the
+native tree does not close those first unequal operands.
 
 A local diagnostic implementation now exposes the native lane-first tree under
 a separate FFI symbol while preserving the accepted block-first symbol and ABI
@@ -322,7 +342,8 @@ support a posterior conclusion. The final immutable report is
 The old-source contribution's independent-process shifted-image warning still
 applies. This result therefore removes the soft-mask reduction tree from the
 leading fix queue without changing the fixed K=4 scorecards or the need for a
-current-source, multi-candidate admitted capture.
+current-source, multi-candidate native capture admitted in the same narrow
+scope.
 
 A separate source audit found that current joint K-class support pruning uses
 the normalized posterior, whereas the deployed RELION GPU path thresholds its
@@ -458,7 +479,8 @@ and BPref SHA
 are byte-identical to both arms of accepted job `11993105`. This does not
 override the failed all-class admission. It supports a narrower prospective
 per-target artifact-repeatability experiment for classes 2--4 while the
-independent RECOVAR repeatability gate remains pending.
+independent RECOVAR side is now fixed by the accepted 9/9 repeatability gate.
+Only a passing target-artifact admission can authorize a target-local join.
 
 ## Mandatory telemetry conventions
 
