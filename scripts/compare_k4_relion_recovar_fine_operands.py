@@ -31,6 +31,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _half_translation_phase_table_for_indices,
+    _relion_cuda_fine_diff2_sum,
     _relion_cuda_fine_full_to_compact_lookup,
 )
 from recovar.em.initial_model.dense_adapter import (
@@ -284,6 +285,33 @@ def _tree_raw_diff2(
     lanes = _replay_lanes(contribution)
     raw_diff2 = np.float32(_reduce_lanes(lanes) + np.float32(sum_init))
     return raw_diff2, contribution, lanes
+
+
+@jax.jit
+def _jax_tree_raw_diff2_device(reference, shifted, corr, sum_init):
+    raw = _relion_cuda_fine_diff2_sum(
+        reference,
+        shifted,
+        corr,
+    )
+    return raw + sum_init
+
+
+def _jax_tree_raw_diff2(
+    reference: np.ndarray,
+    shifted: np.ndarray,
+    corr: np.ndarray,
+    sum_init: np.ndarray,
+) -> np.ndarray:
+    """Evaluate RECOVAR's fused JAX/XLA tree on aligned native operands."""
+
+    raw = _jax_tree_raw_diff2_device(
+        jnp.asarray(reference, dtype=jnp.complex64),
+        jnp.asarray(shifted, dtype=jnp.complex64),
+        jnp.asarray(corr, dtype=jnp.float32),
+        jnp.asarray(sum_init, dtype=jnp.float32),
+    )
+    return np.asarray(jax.block_until_ready(raw), dtype=np.float32)
 
 
 def _component_counterfactual(
@@ -695,14 +723,57 @@ def compare(
         )
     relion_raw_array = np.asarray(relion_raw, dtype=np.float32)
     all_recovar_raw_array = np.asarray(all_recovar_raw, dtype=np.float32)
+    native_reference = (
+        captured_pixels["reference_real"]
+        + np.complex64(1j) * captured_pixels["reference_imag"]
+    ).astype(np.complex64)
+    native_shifted = (
+        captured_pixels["shifted_real"]
+        + np.complex64(1j) * captured_pixels["shifted_imag"]
+    ).astype(np.complex64)
+    native_corr = np.asarray(captured_pixels["corr"], dtype=np.float32)
+    native_sum_init = np.asarray(
+        [candidate["sum_init"] for candidate in capture.candidates],
+        dtype=np.float32,
+    )
+    jax_arithmetic_native_raw = _jax_tree_raw_diff2(
+        native_reference,
+        native_shifted,
+        native_corr,
+        native_sum_init,
+    )
+    substitution_arrays = {
+        name: np.asarray(records, dtype=np.float32)
+        for name, records in substituted_raw.items()
+    }
+    substitution_arrays["jax_arithmetic_on_native_operands"] = (
+        jax_arithmetic_native_raw
+    )
     raw_delta = all_recovar_raw_array.astype(np.float64) - relion_raw_array.astype(
         np.float64
     )
     raw_delta_centered = _center(raw_delta)
-    for row, centered_delta in zip(candidate_rows, raw_delta_centered, strict=True):
+    jax_arithmetic_delta = (
+        jax_arithmetic_native_raw.astype(np.float64)
+        - relion_raw_array.astype(np.float64)
+    )
+    jax_arithmetic_delta_centered = _center(jax_arithmetic_delta)
+    for row, centered_delta, arithmetic_raw, arithmetic_delta, arithmetic_centered in zip(
+        candidate_rows,
+        raw_delta_centered,
+        jax_arithmetic_native_raw,
+        jax_arithmetic_delta,
+        jax_arithmetic_delta_centered,
+        strict=True,
+    ):
         row["raw_diff2_delta_centered"] = float(centered_delta)
         row["implied_centered_data_score_delta_recovar_minus_relion"] = float(
             -centered_delta
+        )
+        row["jax_arithmetic_on_native_operands_raw_diff2"] = float(arithmetic_raw)
+        row["jax_arithmetic_on_native_operands_delta"] = float(arithmetic_delta)
+        row["jax_arithmetic_on_native_operands_delta_centered"] = float(
+            arithmetic_centered
         )
 
     relion_corr_supported = np.asarray(
@@ -724,18 +795,12 @@ def compare(
     raw_counterfactual = _component_counterfactual(
         relion_raw_array,
         all_recovar_raw_array,
-        {
-            name: np.asarray(records, dtype=np.float32)
-            for name, records in substituted_raw.items()
-        },
+        substitution_arrays,
     )
     centered_counterfactual = _component_counterfactual(
         relion_raw_array,
         all_recovar_raw_array,
-        {
-            name: np.asarray(records, dtype=np.float32)
-            for name, records in substituted_raw.items()
-        },
+        substitution_arrays,
         center_deltas=True,
     )
     recovar_rotation_rows = np.flatnonzero(
@@ -774,6 +839,9 @@ def compare(
         production_replay_exact_mask.shape == production_centered_data_delta.shape,
         "capture validation candidate order changed",
     )
+    production_replay_exact_count = int(
+        np.count_nonzero(production_replay_exact_mask)
+    )
     exact_production_centered = _center(
         production_centered_data_delta[production_replay_exact_mask]
     )
@@ -789,12 +857,21 @@ def compare(
         relion_raw_array[production_replay_exact_mask],
         all_recovar_raw_array[production_replay_exact_mask],
         {
-            name: np.asarray(records, dtype=np.float32)[
-                production_replay_exact_mask
-            ]
-            for name, records in substituted_raw.items()
+            name: records[production_replay_exact_mask]
+            for name, records in substitution_arrays.items()
         },
         center_deltas=True,
+    )
+    production_exact_raw_counterfactual = _component_counterfactual(
+        relion_raw_array[production_replay_exact_mask],
+        all_recovar_raw_array[production_replay_exact_mask],
+        {
+            name: records[production_replay_exact_mask]
+            for name, records in substitution_arrays.items()
+        },
+    )
+    production_exact_jax_arithmetic_delta_centered = _center(
+        jax_arithmetic_delta[production_replay_exact_mask]
     )
     production_centered_energy = float(
         np.vdot(production_centered_data_delta, production_centered_data_delta).real
@@ -856,13 +933,18 @@ def compare(
     rotation_transpose = _metric(
         capture.candidates[0]["matrix"], recovar_rotation.T.reshape(-1)
     )
-    classification, classification_basis = _select_component_classification(
-        raw_counterfactual,
-        centered_counterfactual,
-        candidate_count=len(candidate_rows),
+    classification, selected_basis = _select_component_classification(
+        production_exact_raw_counterfactual,
+        production_exact_centered_counterfactual,
+        candidate_count=production_replay_exact_count,
+    )
+    classification_basis = (
+        "production_exact_candidates_centered_raw_diff2"
+        if selected_basis == "centered_raw_diff2"
+        else selected_basis
     )
     return {
-        "schema": "k4_relion_recovar_fine_operand_comparison_v8",
+        "schema": "k4_relion_recovar_fine_operand_comparison_v9",
         "status": "complete",
         "classification": classification,
         "classification_basis": classification_basis,
@@ -953,11 +1035,56 @@ def compare(
             "production_exact_candidates_centered_component_counterfactual": (
                 production_exact_centered_counterfactual
             ),
+            "production_exact_candidates_raw_component_counterfactual": (
+                production_exact_raw_counterfactual
+            ),
+            "classification_candidate_count": production_replay_exact_count,
             "classification": (
                 "operand_replay_closes_all_production_exact_candidates; "
                 "remaining all-candidate residual is isolated to the known "
                 "one-ULP passive replay mismatch"
             ),
+        },
+        "jax_arithmetic_on_native_operands": {
+            "description": (
+                "RECOVAR's production JAX/XLA direct-Gaussian reduction tree "
+                "evaluated with the captured native RELION reference, shifted "
+                "image, correction weights, and sum_init"
+            ),
+            "raw_diff2_vs_native_production": _metric(
+                relion_raw_array,
+                jax_arithmetic_native_raw,
+            ),
+            "raw_diff2_delta_recovar_minus_relion": (
+                jax_arithmetic_delta.tolist()
+            ),
+            "raw_diff2_delta_centered": jax_arithmetic_delta_centered.tolist(),
+            "centered_delta_l2": float(
+                np.linalg.norm(jax_arithmetic_delta_centered)
+            ),
+            "centered_delta_max_abs": float(
+                np.max(np.abs(jax_arithmetic_delta_centered), initial=0.0)
+            ),
+            "production_exact_candidates_recentered": {
+                "raw_diff2_delta_centered": (
+                    production_exact_jax_arithmetic_delta_centered.tolist()
+                ),
+                "exact_zero": bool(
+                    np.all(production_exact_jax_arithmetic_delta_centered == 0)
+                ),
+                "mismatch_count_vs_zero": int(
+                    np.count_nonzero(production_exact_jax_arithmetic_delta_centered)
+                ),
+                "l2": float(
+                    np.linalg.norm(production_exact_jax_arithmetic_delta_centered)
+                ),
+                "max_abs": float(
+                    np.max(
+                        np.abs(production_exact_jax_arithmetic_delta_centered),
+                        initial=0.0,
+                    )
+                ),
+            },
         },
         "preprocessing_counterfactuals": preprocessing_reports,
         "raw_diff2_component_counterfactual": raw_counterfactual,

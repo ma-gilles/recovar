@@ -15,10 +15,10 @@ if __package__:
 else:
     from compare_k4_relion_recovar_fine_operands import compare  # type: ignore[no-redef]
 
-SCHEMA = "recovar.em_k4_admitted_fine_operand_comparison.v1"
+SCHEMA = "recovar.em_k4_admitted_fine_operand_comparison.v2"
 NATIVE_SCHEMA = "recovar.em_k4_native_class1_fine_operand_admission.v1"
 RECOVAR_SCHEMA = "recovar.em_k4_contribution_repeatability.v1"
-COMPARISON_SCHEMA = "k4_relion_recovar_fine_operand_comparison_v8"
+COMPARISON_SCHEMA = "k4_relion_recovar_fine_operand_comparison_v9"
 EXPECTED_SCOPE = "iteration2_half1_source53722_class1_only"
 EXPECTED_NATIVE_GATES = 7
 EXPECTED_RECOVAR_GATES = 3
@@ -150,6 +150,15 @@ def build_report(
     )
     validation = comparison.get("capture_validation", {})
     scope = comparison.get("scope", {})
+    score_closure = comparison.get("candidate_score_boundary_closure", {})
+    exact_counterfactual = score_closure.get(
+        "production_exact_candidates_centered_component_counterfactual",
+        {},
+    )
+    exact_substitutions = exact_counterfactual.get(
+        "single_component_substitution",
+        {},
+    )
     _require(
         comparison.get("schema") == COMPARISON_SCHEMA
         and comparison.get("status") == "complete"
@@ -165,8 +174,23 @@ def build_report(
         "fine-operand comparison escaped the admitted multi-candidate scope",
     )
     _require(
-        comparison.get("classification_basis") in {"centered_raw_diff2", "none"},
-        "multi-candidate classification did not use the centered score boundary",
+        comparison.get("classification_basis")
+        in {"production_exact_candidates_centered_raw_diff2", "none"},
+        "multi-candidate classification did not use the production-exact centered "
+        "score boundary",
+    )
+    _require(
+        score_closure.get("classification_candidate_count")
+        == validation.get("exact_production_replay_count")
+        and set(exact_substitutions)
+        == {
+            "reference",
+            "shifted_image",
+            "corr",
+            "jax_arithmetic_on_native_operands",
+        }
+        and isinstance(comparison.get("jax_arithmetic_on_native_operands"), dict),
+        "production-exact classification omitted or altered the JAX arithmetic arm",
     )
 
     return {
@@ -203,7 +227,9 @@ def build_report(
         },
         "metric_policy": (
             "admitted original float32 operand bits and candidate-relative centered "
-            "raw diff2; no all-class promotion, map-score promotion, or correlation"
+            "raw diff2 on native-production-exact candidates, including a JAX/XLA "
+            "arithmetic-only counterfactual on native operands; no all-class "
+            "promotion, map-score promotion, or correlation"
         ),
         "scorecard_change_admissible": False,
         "correlation_used": False,

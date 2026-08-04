@@ -573,19 +573,30 @@ Both failed roots are preserved with empty science logs and no capture
 artifacts. Neither contributes a scientific result, weakens the 3/3 gate, or
 permits the cross-engine operand join.
 
+Corrected retry `12004190` is queued with the same prospective 3/3 science
+gate, a new immutable root, and a scheduler begin time after the pinned GPU's
+current allocation. It retains the exact physical-GPU UUID gate and must fail
+before imports or science if that device is absent.
+
 If and only if the RECOVAR admission passes, the multi-candidate component
-substitutions compare shifted-image, projection/reference, and score-weight
-operands after removing only the common candidate-independent offset. This is
-target/class-local causal telemetry. It cannot change the fixed 41/60 K=4
-scorecard or establish all-class parity. The repository wrapper
+substitutions compare shifted-image, projection/reference, score-weight, and
+score-arithmetic boundaries after removing only the common
+candidate-independent offset. The arithmetic arm evaluates RECOVAR's actual
+JAX/XLA direct-Gaussian tree on the captured native RELION reference, shifted
+image, correction weights, and `sum_init`; this prevents XLA pointwise FMA
+rounding from being misattributed to an input operand. Classification uses
+only native candidates whose passive replay is bitwise equal to production;
+the complete 96-candidate panel remains telemetry. This is target/class-local
+causal evidence. It cannot change the fixed 41/60 K=4 scorecard or establish
+all-class parity. The repository wrapper
 `scripts/analyze_em_k4_admitted_fine_operands.py` enforces both admissions,
 artifact hashes, same-physical-GPU identity, the 96-candidate scope, and
-centered-score classification before producing that report.
+production-exact centered-score classification before producing that report.
 
 The contribution-repeatability metrics remain deliberately distinct. The
 historical fixed panel is immutable at 0/3, and the deterministic candidate
 panel is already 3/3 but non-scoring pending its separate quality A/B. If job
-`12001297` passes, it will be recorded as a third, current-source
+`12004190` passes, it will be recorded as a third, current-source
 production-path 3/3 panel. It will not rewrite either historical result or
 change an FSC/FSC-AUC acceptance count.
 

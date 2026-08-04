@@ -8,6 +8,7 @@ from scripts.compare_k4_relion_recovar_fine_operands import (
     _direct_score_image_factor,
     _infer_current_size,
     _is_relion_cuda_replay_mode,
+    _jax_tree_raw_diff2,
     _metric,
     _metric_up_to_global_sign,
     _preprocess_normalization_source,
@@ -42,6 +43,55 @@ def test_fine_operand_tree_replay_preserves_float32_topology():
     np.testing.assert_array_equal(contribution, np.asarray([1, 1, 3], dtype=np.float32))
     np.testing.assert_array_equal(lanes[:3], contribution)
     assert raw == np.float32(12)
+
+
+def test_fine_operand_jax_tree_accepts_batched_native_operands():
+    reference = np.asarray(
+        [[1 + 2j, 2 + 0j, 3 - 1j], [2 + 1j, 0 + 0j, 1 - 2j]],
+        dtype=np.complex64,
+    )
+    shifted = np.asarray(
+        [[0 + 1j, 1 + 0j, 2 - 2j], [1 + 0j, 0 + 0j, 2 - 1j]],
+        dtype=np.complex64,
+    )
+    corr = np.asarray([[1, 2, 3], [2, 1, 4]], dtype=np.float32)
+    sum_init = np.asarray([7, 3], dtype=np.float32)
+
+    raw = _jax_tree_raw_diff2(reference, shifted, corr, sum_init)
+    expected = np.asarray(
+        [
+            _tree_raw_diff2(reference[index], shifted[index], corr[index], sum_init[index])[0]
+            for index in range(2)
+        ],
+        dtype=np.float32,
+    )
+
+    np.testing.assert_array_max_ulp(raw, expected, maxulp=1)
+    assert raw.shape == (2,)
+    assert raw.dtype == np.float32
+
+
+def test_fine_operand_counterfactual_can_identify_jax_arithmetic():
+    relion = np.asarray([10, 20, 30], dtype=np.float32)
+    all_recovar = np.asarray([11, 18, 33], dtype=np.float32)
+    substitutions = {
+        "reference": np.asarray([10.5, 20, 30], dtype=np.float32),
+        "shifted_image": np.asarray([10, 19.5, 30], dtype=np.float32),
+        "corr": np.asarray([10, 20, 30.5], dtype=np.float32),
+        "jax_arithmetic_on_native_operands": all_recovar.copy(),
+    }
+
+    report = _component_counterfactual(
+        relion,
+        all_recovar,
+        substitutions,
+        center_deltas=True,
+    )
+
+    assert report["strongest_single_component"] == (
+        "jax_arithmetic_on_native_operands"
+    )
+    assert report["strongest_target_delta_energy_removed_fraction"] == 1.0
 
 
 def test_fine_operand_counterfactual_identifies_reference_component():
