@@ -324,6 +324,21 @@ applies. This result therefore removes the soft-mask reduction tree from the
 leading fix queue without changing the fixed K=4 scorecards or the need for a
 current-source, multi-candidate admitted capture.
 
+A separate source audit found that current joint K-class support pruning uses
+the normalized posterior, whereas the deployed RELION GPU path thresholds its
+flattened float32 raw weights after the `+50`/`expf` transform and a float32
+cumulative scan. The existing source-faithful RECOVAR float32 helper was
+therefore applied as a bounded counterfactual to the complete four-class
+iteration-2 target capture. It retained exactly the same `66,986` tuples as
+the current joint-probability path: class counts `38,982`, `14,076`, `11,804`,
+and `2,124`, with zero mask differences in four byte-exact repetitions. This
+falsifies that arithmetic distinction as a support owner for the pinned target;
+it does not establish native RELION support equality or rule out threshold
+differences at later, near-boundary particles. The immutable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_joint_f32_support_probe_055ea5ca_20260804T0937ET/analysis/JOINT_F32_SUPPORT_PROBE_CHECKED_IN.json`
+(SHA-256
+`c472d3bfe115dd68a804eb5d446b351fc2c34dbc9e1afee48f4438400594aede`).
+
 As a separate provisional clue, that RECOVAR capture's high-shell scalar and
 the accepted native observer's per-candidate `sum_init` are bitwise identical:
 float32 value `0.07816561311483383`, bits `1033901387`. This weakens a pure
