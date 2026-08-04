@@ -10,7 +10,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-
 INPUT_SCHEMA = "recovar.em_k1_case7_bpref_factor_boundary.v1"
 SCHEMA = "recovar.em_k1_case7_bpref_support_gated_boundary.v1"
 EXPECTED_PARTICLE_COUNT = 10
