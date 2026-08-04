@@ -11,6 +11,8 @@ does not change any fixed acceptance threshold.
 - K=1 evaluated cases: **34 / 34**.
 - K=4 direct class-iteration comparisons: **41 / 60**.
 - K=4 all-class iterations: **9 / 15**.
+- K=4 native auxiliary-stream repeatability gates: **12 / 13**.
+- K=4 stable native operand-capture admission: **0 / 1**.
 - Fresh K=1 dispatch alignment: **2 / 2** cases verified.
 - Fresh K=1 dispatch standalone rescue: **0 / 2** cases.
 
@@ -114,9 +116,22 @@ diagnostic and does not satisfy a fixed-label scorecard.
 
 Native RELION observer repeatability is an admission gate for this comparison.
 Stream-replay changes are observer controls, not RECOVAR parity fixes. The
-conditional deterministic soft-mask partial reduction remains dormant until a
-complete same-A100 auxiliary-stream pair produces a scientifically valid
-rejection and localizes the first unequal native operand.
+corrected same-A100 auxiliary-stream pair now rejects exact capture
+repeatability at 12/13 fixed gates. Dispatch, tuple identities, priors, target
+state, topology, capture validators, marker counts, and all four class-map
+signed FSC-AUC gates pass, but fine-score, fine-operand, and geometry-only
+BPref bytes differ.
+
+The first unequal captured level is preprocessing rather than tuple generation
+or priors. For the fixed class-1 target, preprocessed image samples and
+`sum_init` differ while reference pixels and tuple identities are exact. This
+propagates to 16,735/109,184 raw fine `diff2` rows, posterior weights, and BPref
+`weight_norm`. The default-off deterministic soft-mask block-partial experiment
+is therefore activated. It preserves the deployed 128-block by 128-lane work
+decomposition and replaces only schedule-dependent inter-block lane atomics
+with increasing-block float32 finalization. It remains an observer control,
+not a RECOVAR parity fix, and must itself pass exact native repeatability and
+capture-inertness before cross-engine attribution.
 
 ## Mandatory telemetry conventions
 
