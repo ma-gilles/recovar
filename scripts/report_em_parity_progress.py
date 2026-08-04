@@ -24,6 +24,12 @@ from scripts.summarize_em_k1_exact_initial_noise_counterfactual_scorecard import
 from scripts.summarize_em_k1_exact_initial_noise_counterfactual_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k1_exact_initial_noise_counterfactual,
 )
+from scripts.summarize_em_k1_fresh_dispatch_causal_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K1_FRESH_DISPATCH_CAUSAL_SCORECARD,
+)
+from scripts.summarize_em_k1_fresh_dispatch_causal_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k1_fresh_dispatch_causal,
+)
 from scripts.summarize_em_k1_live_noise_counterfactual_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K1_LIVE_NOISE_COUNTERFACTUAL_SCORECARD,
 )
@@ -127,7 +133,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v17"
+SCHEMA = "recovar.em_parity_progress.v18"
 
 
 def _panel(
@@ -185,6 +191,7 @@ def build_progress(
     k4_preprocess_path: Path = DEFAULT_K4_PREPROCESS_SCORECARD,
     k1_restart_path: Path = DEFAULT_K1_RESTART_SCORECARD,
     k1_restart_particle_order_path: Path = DEFAULT_K1_RESTART_PARTICLE_ORDER_SCORECARD,
+    k1_fresh_dispatch_causal_path: Path = DEFAULT_K1_FRESH_DISPATCH_CAUSAL_SCORECARD,
     k1_continuation_initializer_path: Path = (DEFAULT_K1_CONTINUATION_INITIALIZER_SCORECARD),
     k1_sampling_perturbation_path: Path = DEFAULT_K1_SAMPLING_PERTURBATION_SCORECARD,
     k1_sampling_roundtrip_path: Path = DEFAULT_K1_SAMPLING_ROUNDTRIP_SCORECARD,
@@ -228,6 +235,9 @@ def build_progress(
     k1_restart_particle_order = load_and_validate_k1_restart_particle_order(
         k1_restart_particle_order_path
     )
+    k1_fresh_dispatch_causal = load_and_validate_k1_fresh_dispatch_causal(
+        k1_fresh_dispatch_causal_path
+    )
     k1_continuation_initializer = load_and_validate_k1_continuation_initializer(k1_continuation_initializer_path)
     k1_sampling_perturbation = load_and_validate_k1_sampling_perturbation(k1_sampling_perturbation_path)
     k1_sampling_roundtrip = load_and_validate_k1_sampling_roundtrip(k1_sampling_roundtrip_path)
@@ -270,6 +280,7 @@ def build_progress(
     k4_preprocess_summary = k4_preprocess["summary"]
     k1_restart_summary = k1_restart["summary"]
     k1_restart_particle_order_summary = k1_restart_particle_order["summary"]
+    k1_fresh_dispatch_causal_summary = k1_fresh_dispatch_causal["summary"]
     k1_continuation_initializer_baseline = k1_continuation_initializer["baseline_summary"]
     k1_continuation_initializer_treatment = k1_continuation_initializer["treatment_summary"]
     k1_sampling_geometry = k1_sampling_perturbation["geometry_summary"]
@@ -362,6 +373,22 @@ def build_progress(
             k1_restart_particle_order_summary["restored_combined"]["pass"],
             k1_restart_particle_order_summary["restored_combined"]["evaluated"],
             k1_restart_particle_order["treatment_denominator"],
+            scoring=False,
+        ),
+        _panel(
+            "k1_fresh_dispatch_causal_evaluated",
+            "K=1 fresh dispatch causal evaluations",
+            k1_fresh_dispatch_causal_summary["evaluations_complete"],
+            k1_fresh_dispatch_causal_summary["evaluated"],
+            k1_fresh_dispatch_causal["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
+            "k1_fresh_dispatch_causal_rescues",
+            "K=1 fresh dispatch standalone rescues",
+            k1_fresh_dispatch_causal_summary["standalone_rescues"],
+            k1_fresh_dispatch_causal_summary["evaluated"],
+            k1_fresh_dispatch_causal["frozen_denominator"],
             scoring=False,
         ),
         _panel(
@@ -558,7 +585,7 @@ def build_progress(
         "metric_policy": (
             "K=1 and K=4 quality panels use shellwise FSC/FSC-AUC; "
             "correlation is not used. The K=1 serialized-restart, K=1 "
-            "restart particle-order restoration, K=1 "
+            "restart particle-order restoration, K=1 fresh-dispatch causal, K=1 "
             "continuation-initializer, K=1 sampling-perturbation, K=1 "
             "sampling-roundtrip, K=1 normalization-roundtrip, K=4 causal, "
             "K=1 deterministic-mask, K=1 exact-initial-noise counterfactual, "
@@ -582,6 +609,16 @@ def build_progress(
             "paired_gain_per_repeat": k1_restart_particle_order[
                 "paired_gain_per_repeat"
             ],
+        },
+        "k1_fresh_dispatch_causal_progress": {
+            "evaluations_complete": k1_fresh_dispatch_causal_summary[
+                "evaluations_complete"
+            ],
+            "standalone_rescues": k1_fresh_dispatch_causal_summary[
+                "standalone_rescues"
+            ],
+            "not_supported": k1_fresh_dispatch_causal_summary["not_supported"],
+            "denominator": k1_fresh_dispatch_causal["frozen_denominator"],
         },
         "k1_continuation_initializer_progress": {
             "stock_pass": k1_continuation_initializer_baseline["pass"],
@@ -674,6 +711,9 @@ def build_progress(
             "k1_restart_particle_order_scorecard": _input_record(
                 k1_restart_particle_order_path
             ),
+            "k1_fresh_dispatch_causal_scorecard": _input_record(
+                k1_fresh_dispatch_causal_path
+            ),
             "k1_continuation_initializer_scorecard": _input_record(k1_continuation_initializer_path),
             "k1_sampling_perturbation_scorecard": _input_record(k1_sampling_perturbation_path),
             "k1_sampling_roundtrip_scorecard": _input_record(k1_sampling_roundtrip_path),
@@ -724,6 +764,7 @@ def render_markdown(progress: dict[str, object]) -> str:
         )
     history = " → ".join(str(value) for value in progress["k1_strict_history"])
     restart_particle_order = progress["k1_restart_particle_order_progress"]
+    fresh_dispatch = progress["k1_fresh_dispatch_causal_progress"]
     initializer = progress["k1_continuation_initializer_progress"]
     sampling = progress["k1_sampling_perturbation_progress"]
     roundtrip = progress["k1_sampling_roundtrip_progress"]
@@ -760,6 +801,16 @@ def render_markdown(progress: dict[str, object]) -> str:
                 f"{restart_particle_order['restored_b_pass']}/"
                 f"{restart_particle_order['denominator_per_arm']} restored B "
                 f"(+{restart_particle_order['paired_gain_per_repeat']} per repeat)**."
+            ),
+            "",
+            (
+                "K=1 fresh physical-dispatch causal evaluation on the unchanged "
+                f"denominator: **{fresh_dispatch['evaluations_complete']}/"
+                f"{fresh_dispatch['denominator']} evaluated; "
+                f"{fresh_dispatch['standalone_rescues']}/"
+                f"{fresh_dispatch['denominator']} standalone rescues; "
+                f"{fresh_dispatch['not_supported']}/"
+                f"{fresh_dispatch['denominator']} not supported**."
             ),
             "",
             (

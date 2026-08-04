@@ -1,0 +1,146 @@
+{
+  "schema": "recovar.em_k1_fresh_dispatch_causal_scorecard.v1",
+  "suite_id": "k1-fresh-physical-dispatch-order-case22-case26-ab",
+  "suite_version": 1,
+  "recorded_et": "2026-08-03T21:35:00-04:00",
+  "classification": "fresh_dispatch_order_not_supported_as_standalone_fix_in_case22_or_case26",
+  "hypothesis": "RELION's fresh physical particle dispatch order is sufficient by itself to close the fixed K=1 parity failures",
+  "interpretation": "The order plan remains a verified structural invariant and possible execution mediator. These two clean fixed-GPU A/Bs do not authorize it as a standalone production fix.",
+  "metric_policy": "Primary map gates use signed shellwise FSC and normalized non-DC FSC-AUC. Correlation is forbidden. Latent pose, Pmax, and support movement is supporting telemetry only.",
+  "frozen_denominator": 2,
+  "correlation_used": false,
+  "fsc_auc_evaluated": true,
+  "scorecard_change_admissible": false,
+  "production_order_fix_accepted": false,
+  "cases": [
+    {
+      "id": "k1-22",
+      "name": "small_severe_outliers_3k_g128_radial_noise5_bf80",
+      "evaluation_result": "complete",
+      "standalone_rescue_result": "fail",
+      "causal_support": false,
+      "checked": true,
+      "producer": {
+        "slurm_job_id": 11928434,
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "elapsed": "01:19:39",
+        "start_et": "2026-08-02T22:01:53-04:00",
+        "end_et": "2026-08-02T23:21:32-04:00",
+        "gpu_uuid": "GPU-9f3ef2b2-6c59-a421-d927-697c58b38eb5",
+        "science_arms_completed_before_terminal_analysis_error": true,
+        "terminal_failure_stage": "post_science_topology_normalization_analysis"
+      },
+      "source_commit": "e2893cb3ef27061a77e39545f13edba202b952a1",
+      "source_tree": "ee01cf18b8b001bb293f45d034556ad304409afe",
+      "control_final_merged_cross_fsc_auc": 0.8260705143704488,
+      "treatment_final_merged_cross_fsc_auc": 0.8260839225848037,
+      "treatment_minus_control_final_merged_cross_fsc_auc": 0.000013408214354915238,
+      "material_fsc_auc_delta_min": 0.0001,
+      "materially_improved": false,
+      "control_reproduces_strict_failure": true,
+      "control_reproduces_topology_failure": true,
+      "treatment_passes_strict_fsc": false,
+      "treatment_passes_topology": false,
+      "control_vs_treatment_final_merged_fsc_auc": 0.9999995598380529,
+      "latent_classification": "treatment_has_mixed_but_net_latent_movement_toward_relion",
+      "latent_causal_acceptance": false,
+      "transform_controls_all_pass": true,
+      "grid_correction": "unset/default-off",
+      "forced_final_all_data_after_nonconvergence": false,
+      "evidence": {
+        "primary_report": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_dispatch_causal_clean_e2893cb3_20260802T1438ET/analysis/DISPATCH_ORDER_AB.json",
+          "sha256": "a6f74876a8c3249a1d604fa5a1f2261456a0c14cee89228f367aaa75de9a7476"
+        },
+        "latent_report": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_dispatch_causal_clean_e2893cb3_20260802T1438ET/analysis/DISPATCH_LATENT_MOVEMENT_V2_89e3abb9.json",
+          "sha256": "bc51728113bed57045e8071df9fcc0625376531f8163ff4c20db1b4ede1a2d1e"
+        },
+        "order_transform": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_dispatch_causal_clean_e2893cb3_20260802T1438ET/provenance/dispatch_order_transform.json",
+          "sha256": "79dc9bdbd1067494b709abe7cc788b048278159203b9296eae10a78a4f3f69e8"
+        },
+        "predeclaration": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_dispatch_causal_clean_e2893cb3_20260802T1438ET/provenance/PREDECLARATION.md",
+          "sha256": "94f33f4f260b2cb1a88e63ab7b1e0beab819148a1a6d6c0a441e3f81f74bb99e"
+        },
+        "static_inputs": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_dispatch_causal_clean_e2893cb3_20260802T1438ET/provenance/static_inputs_11928434.sha256",
+          "sha256": "fa0f3b6cfd28d6f3322591c61616b20262cdc58cab6b66cb7e9212417ca6911c"
+        },
+        "terminal_analysis_error": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_dispatch_causal_clean_e2893cb3_20260802T1438ET/logs/analyze.stderr",
+          "sha256": "afa2c8b25a39e13eec2dde7e135ca2ed495a40cff265fae7dbee540fe1168547"
+        }
+      }
+    },
+    {
+      "id": "k1-26",
+      "name": "tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80",
+      "evaluation_result": "complete",
+      "standalone_rescue_result": "fail",
+      "causal_support": false,
+      "checked": true,
+      "producer": {
+        "slurm_job_id": 11928437,
+        "state": "FAILED",
+        "exit_code": "2:0",
+        "elapsed": "00:34:41",
+        "start_et": "2026-08-02T22:37:53-04:00",
+        "end_et": "2026-08-02T23:12:34-04:00",
+        "gpu_uuid": "GPU-e61dd352-2cd2-c1ae-ea85-6bfe203572cb",
+        "science_arms_completed_before_negative_causal_exit": true,
+        "terminal_failure_stage": "post_science_negative_causal_acceptance"
+      },
+      "source_commit": "e2893cb3ef27061a77e39545f13edba202b952a1",
+      "source_tree": "ee01cf18b8b001bb293f45d034556ad304409afe",
+      "control_final_merged_cross_fsc_auc": 0.9633280568660826,
+      "treatment_final_merged_cross_fsc_auc": 0.9632747165209523,
+      "treatment_minus_control_final_merged_cross_fsc_auc": -0.00005334034513027053,
+      "strictly_improved": false,
+      "control_reproduces_strict_failure": true,
+      "control_preserves_topology": true,
+      "treatment_passes_strict_fsc": false,
+      "treatment_preserves_topology": true,
+      "control_vs_treatment_final_merged_fsc_auc": 0.9999917227463765,
+      "latent_classification": "treatment_has_mixed_but_net_latent_movement_toward_relion",
+      "latent_causal_acceptance": false,
+      "transform_controls_all_pass": true,
+      "grid_correction": "unset/default-off",
+      "forced_final_all_data_after_nonconvergence": false,
+      "evidence": {
+        "primary_report": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_dispatch_causal_clean_e2893cb3_20260802T1438ET/analysis/SOURCE_EXACT_ORDER_AB.json",
+          "sha256": "e72342d504417e383c7c1c9209d203e0ccdfe3220babcab560dedf237c532336"
+        },
+        "latent_report": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_dispatch_causal_clean_e2893cb3_20260802T1438ET/analysis/DISPATCH_LATENT_MOVEMENT_V2_89e3abb9.json",
+          "sha256": "c7002cb8f214bb5f8dccc7ccc898a9ea113b221d735c168183ca1878dd304dab"
+        },
+        "order_transform": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_dispatch_causal_clean_e2893cb3_20260802T1438ET/provenance/dispatch_order_transform.json",
+          "sha256": "583d7ffca010fd0b9dd4ff57194144e0edf3ae5ca991a337d2867fa2d8f37535"
+        },
+        "predeclaration": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_dispatch_causal_clean_e2893cb3_20260802T1438ET/provenance/PREDECLARATION.md",
+          "sha256": "750bf4ffe787bf594e9b496005b3464b4da21fc3968be82812151c892dba6ae9"
+        },
+        "static_inputs": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_dispatch_causal_clean_e2893cb3_20260802T1438ET/provenance/static_inputs_11928437.sha256",
+          "sha256": "7cfc02c9cfbfbed05b011a94cd0bf66f4ed13183a220a8f36176200dc03aac28"
+        },
+        "science_completion": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_dispatch_causal_clean_e2893cb3_20260802T1438ET/provenance/SCIENCE_COMPLETE.json",
+          "sha256": "6e3a71a111507a3c3a0fa15dd8c12aa5fc1c1090685879f34da36b0330649512"
+        }
+      }
+    }
+  ],
+  "summary": {
+    "evaluations_complete": 2,
+    "standalone_rescues": 0,
+    "not_supported": 2,
+    "evaluated": 2
+  }
+}
