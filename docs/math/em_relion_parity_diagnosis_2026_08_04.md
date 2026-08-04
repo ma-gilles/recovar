@@ -230,6 +230,29 @@ stored joint probabilities to maximum absolute error
 `4.336808689942018e-19`. This accepts only the RECOVAR side of the join. Native
 RELION capture must come from the same accepted observer lineage before tuple,
 raw-score, prior, normalization, support, or BPref comparisons are causal.
+
+A prior independent RECOVAR same-allocation raw-operand pair, job `11831421`
+at source `db1ab501`, is an explicit warning that one-sided captures need a
+repeatability control. Both arms self-replayed all 109,184 active raw costs
+bitwise, but 11,918 cross-arm raw costs differed by at most
+`0.0001220703125`. Of the captured operand families, only the shifted image
+differed (16,983/69,136 complex entries); substituting that one family closed
+all 11,918 raw-cost mismatches. Projection, score weights, half weights, the
+high-shell scalar, identity, and topology were byte-exact. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_effective_operands_retry3_db1ab501_20260731T0810ET/analysis/RAW_OPERAND_REPEATABILITY.json`
+(SHA-256
+`8feb772f79278a09f2b9363f4c92c0c6d7189d3fabde513edb275e9506f9666f`).
+This is not stable cross-engine attribution because it used an older source and
+a different physical A100; it motivates the pending current-source exact-GPU
+repeatability gate.
+
+As a separate provisional clue, that RECOVAR capture's high-shell scalar and
+the accepted native observer's per-candidate `sum_init` are bitwise identical:
+float32 value `0.07816561311483383`, bits `1033901387`. This weakens a pure
+high-shell-scalar explanation but does not close it at the current same-GPU
+boundary. The bounded follow-up should first compare shifted-image operands,
+then projections and score weights, before reduction arithmetic.
+
 The next all-class capture is intended to expose the first unequal global
 class-pose normalization/support boundary. Class permutation is already ruled
 out for the current exact-A100 fixed trajectory. Its signed 4-by-4
