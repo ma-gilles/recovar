@@ -11,7 +11,7 @@ from scripts.report_em_parity_progress import build_progress, render_markdown
 def test_reports_all_fixed_em_parity_panels() -> None:
     progress = build_progress()
 
-    assert progress["schema"] == "recovar.em_parity_progress.v18"
+    assert progress["schema"] == "recovar.em_parity_progress.v19"
     assert progress["scorecard_change_admissible"] is False
     assert progress["k1_strict_history"] == [20, 21, 22, 23, 25, 26, 27, 28]
     assert progress["k1_restart_particle_order_progress"] == {
@@ -128,6 +128,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         ("k4_all_class", 9, 15, 15, 60.0, True),
         ("k4_causal", 2, 4, 4, 50.0, False),
         ("k4_contribution_repeatability", 0, 3, 3, 0.0, False),
+        ("k4_native_auxstream_repeatability", 12, 13, 13, 92.3, False),
         (
             "k4_deterministic_contribution_repeatability_candidate",
             3,
@@ -159,6 +160,7 @@ def test_reports_all_fixed_em_parity_panels() -> None:
         "k4_class_scorecard",
         "k4_causal_scorecard",
         "k4_contribution_repeatability_scorecard",
+        "k4_native_auxstream_repeatability_scorecard",
         "k4_deterministic_contribution_repeatability_candidate_scorecard",
         "k4_deterministic_softmask_quality_scorecard",
         "k4_preprocess_scorecard",
@@ -513,6 +515,10 @@ def test_renders_pr_ready_fixed_metric_table() -> None:
     assert "| K=1 deterministic-mask score/map gates | **17** | 21 | 21 | 81.0% | no |" in rendered
     assert "| K=4 direct per-class FSC-AUC | **41** | 60 | 60 | 68.3% | yes |" in rendered
     assert "| K=4 exact-device causal boundary | **2** | 4 | 4 | 50.0% | no |" in rendered
+    assert (
+        "| K=4 native aux-stream repeatability | **12** | 13 | 13 | 92.3% | no |"
+        in rendered
+    )
     assert (
         "| K=4 deterministic soft-mask quality acceptance | **7** | 7 | 7 | 100.0% | no |"
         in rendered

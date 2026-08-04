@@ -1,0 +1,156 @@
+{
+  "schema": "recovar.em_k4_native_auxstream_repeatability_scorecard.v1",
+  "suite_id": "k4-it2-fixed-a100-native-auxstream-observer-repeatability",
+  "suite_version": 1,
+  "classification": "native_auxstream_observer_not_byte_repeatable",
+  "frozen_denominator": 13,
+  "scorecard_change_admissible": false,
+  "correlation_used": false,
+  "fsc_auc_evaluated": true,
+  "acceptance_contract": {
+    "science_job_id": 11988750,
+    "science_state": "COMPLETED",
+    "science_exit_code": "0:0",
+    "audit_job_id": 11988757,
+    "audit_state": "FAILED",
+    "audit_failure_class": "infrastructure_only_old_completion_schema",
+    "postterminal_analysis_completed": true,
+    "accepted": false
+  },
+  "cases": [
+    {
+      "id": "artifact_bytes_exact",
+      "name": "Selected native observer artifacts are byte-identical",
+      "result": "fail",
+      "checked": false
+    },
+    {
+      "id": "auxiliary_reduction_stream_markers_exact",
+      "name": "Auxiliary reduction-stream markers are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "capture_headers_mpi2_openmp1_exact",
+      "name": "Capture headers identify MPI rank 2 and OpenMP thread 1",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "capture_validators_passed",
+      "name": "All native capture validators pass",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "class_map_fsc_auc_at_least_threshold",
+      "name": "All signed class-map FSC-AUC values meet threshold",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "current_size_and_sampling_topology_exact",
+      "name": "Current size and sampling topology are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "dispatch_bytes_exact",
+      "name": "Dispatch logs are byte-identical",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "dispatch_row_count_exact",
+      "name": "Dispatch row counts are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "no_fatal_runtime_pattern",
+      "name": "No fatal runtime pattern is present",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "particle_count_exact",
+      "name": "Particle count is exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "powerclass_stream_markers_exact",
+      "name": "PowerClass stream markers are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "target_state_exact",
+      "name": "Target iteration, half, and observer state are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "thread_replay_markers_exact",
+      "name": "Thread replay markers are exact",
+      "result": "pass",
+      "checked": true
+    }
+  ],
+  "summary": {
+    "pass": 12,
+    "evaluated": 13
+  },
+  "class_map_fsc_auc": {
+    "metric": "signed normalized non-DC FSC-AUC",
+    "threshold": 0.999999,
+    "values": [
+      0.9999999895278622,
+      0.9999999846443698,
+      0.9999999749836932,
+      0.9999999778593218
+    ]
+  },
+  "first_unequal_boundary": {
+    "boundary": "preprocessed_image_then_native_fine_score",
+    "fine_score_unequal": 16735,
+    "fine_score_total": 109184,
+    "fine_score_max_abs": 0.0001220703125,
+    "preprocessed_real_unequal": 460,
+    "preprocessed_real_total": 1520,
+    "preprocessed_real_max_abs": 8.381903171539307e-09,
+    "preprocessed_imag_unequal": 470,
+    "preprocessed_imag_total": 1520,
+    "preprocessed_imag_max_abs": 3.725290298461914e-09,
+    "fine_score_headers_tuple_ids_flags_priors_exact": true,
+    "fine_operand_tuple_ids_reference_pixels_matrices_translations_raw_diff2_exact": true,
+    "bpref_geometry_exact_except_weight_norm": true
+  },
+  "evidence": {
+    "analysis_result": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_auxstream_pair_retry_a609886_20260804T0304ET/analysis/AUXSTREAM_PAIR_RESULT_11988750.json",
+      "sha256": "bc68328ef3c97f996018c4992ad69a3748c47eaca98f44e5b8c062f8c0fb8a57"
+    },
+    "analyzer": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_auxstream_pair_retry_a609886_20260804T0304ET/provenance/analyze_auxstream_pair_v2.py",
+      "sha256": "814b9785e068713852951a901e26d3dc07fc17ad612df743ffc0b5c1870a952a"
+    },
+    "science_completion": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_auxstream_pair_retry_a609886_20260804T0304ET/provenance/SCIENCE_PAIR_COMPLETE_11988750.json",
+      "sha256": "6463dea3c1b879097d27ae9e9338b3a18159c0e286421d6e6d27ad14d2fc5d9e"
+    },
+    "analysis_completion": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_auxstream_pair_retry_a609886_20260804T0304ET/provenance/AUXSTREAM_PAIR_ANALYSIS_COMPLETE_11988750.json",
+      "sha256": "2e679318eb603d75fdd2f73105096257ad5274118fdee89a7e7ae9530dcfbfcf"
+    },
+    "science_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_auxstream_pair_retry_a609886_20260804T0304ET/provenance/science_outputs_11988750.sha256",
+      "sha256": "bd3625b4c3cb57e272395c15687c9c3787481d9712a1f61fdaec569d142ae09b"
+    },
+    "static_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_auxstream_pair_retry_a609886_20260804T0304ET/provenance/static_inputs_11988750.sha256",
+      "sha256": "05707af0b37847264215238d7e72049a97acc996568048c2f0e93297193b86e8"
+    }
+  },
+  "metric_policy": "Exact byte, identity, dispatch, topology, and runtime gates plus signed shellwise normalized non-DC FSC-AUC; raw deltas are localization telemetry only; no correlation"
+}

@@ -117,6 +117,12 @@ from scripts.summarize_em_k4_deterministic_softmask_quality_scorecard import (  
 from scripts.summarize_em_k4_deterministic_softmask_quality_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k4_deterministic_softmask_quality,
 )
+from scripts.summarize_em_k4_native_auxstream_repeatability_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K4_NATIVE_AUXSTREAM_REPEATABILITY_SCORECARD,
+)
+from scripts.summarize_em_k4_native_auxstream_repeatability_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k4_native_auxstream_repeatability,
+)
 from scripts.summarize_em_k4_preprocess_replay_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K4_PREPROCESS_SCORECARD,
 )
@@ -133,7 +139,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v18"
+SCHEMA = "recovar.em_parity_progress.v19"
 
 
 def _panel(
@@ -182,6 +188,9 @@ def build_progress(
     k4_contribution_repeatability_path: Path = (
         DEFAULT_K4_CONTRIBUTION_REPEATABILITY_SCORECARD
     ),
+    k4_native_auxstream_repeatability_path: Path = (
+        DEFAULT_K4_NATIVE_AUXSTREAM_REPEATABILITY_SCORECARD
+    ),
     k4_deterministic_contribution_repeatability_candidate_path: Path = (
         DEFAULT_K4_DETERMINISTIC_CONTRIBUTION_REPEATABILITY_CANDIDATE_SCORECARD
     ),
@@ -218,6 +227,11 @@ def build_progress(
     k4_contribution_repeatability = (
         load_and_validate_k4_contribution_repeatability(
             k4_contribution_repeatability_path
+        )
+    )
+    k4_native_auxstream_repeatability = (
+        load_and_validate_k4_native_auxstream_repeatability(
+            k4_native_auxstream_repeatability_path
         )
     )
     k4_deterministic_contribution_repeatability_candidate = (
@@ -271,6 +285,9 @@ def build_progress(
     k4_contribution_repeatability_summary = k4_contribution_repeatability[
         "summary"
     ]
+    k4_native_auxstream_repeatability_summary = (
+        k4_native_auxstream_repeatability["summary"]
+    )
     k4_deterministic_contribution_repeatability_candidate_summary = (
         k4_deterministic_contribution_repeatability_candidate["summary"]
     )
@@ -552,6 +569,14 @@ def build_progress(
             scoring=False,
         ),
         _panel(
+            "k4_native_auxstream_repeatability",
+            "K=4 native aux-stream repeatability",
+            k4_native_auxstream_repeatability_summary["pass"],
+            k4_native_auxstream_repeatability_summary["evaluated"],
+            k4_native_auxstream_repeatability["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
             "k4_deterministic_contribution_repeatability_candidate",
             "K=4 deterministic contribution candidate repeatability",
             k4_deterministic_contribution_repeatability_candidate_summary["pass"],
@@ -600,6 +625,7 @@ def build_progress(
             "K=1 live-noise counterfactual, K=1 "
             "reference-roundtrip rejection, K=1 "
             "shared-checkpoint FP64 reference, K=4 contribution-repeatability, "
+            "K=4 native aux-stream repeatability, "
             "K=4 deterministic contribution candidate, "
             "K=4 deterministic soft-mask quality acceptance, "
             "and K=4 preprocessing panels are non-scoring."
@@ -747,6 +773,9 @@ def build_progress(
             "k4_causal_scorecard": _input_record(k4_causal_path),
             "k4_contribution_repeatability_scorecard": _input_record(
                 k4_contribution_repeatability_path
+            ),
+            "k4_native_auxstream_repeatability_scorecard": _input_record(
+                k4_native_auxstream_repeatability_path
             ),
             "k4_deterministic_contribution_repeatability_candidate_scorecard": _input_record(
                 k4_deterministic_contribution_repeatability_candidate_path
