@@ -183,6 +183,18 @@ and is not mutated; its original report will be preserved, then a corrected
 post-terminal classification will place `support_exact` ahead of operand and
 translation-reduction closure.
 
+The ten-particle panel is enriched for discrepant same-input replay strata and
+is a localization panel, not a prevalence sample. Its aggregate label cannot
+authorize a production change. Per-particle first-boundary identities and
+counts remain authoritative. A boundary observed in at least two immutable
+particles from at least two predeclared selection roles may justify only a
+narrow diagnostic intervention. A production fix additionally has to close or
+materially improve that exact gate on an independent holdout or complete
+supported-row comparison, improve the earliest case-7 trajectory boundary,
+replicate on case 22, and preserve every currently passing immutable K=1 case.
+The complete predeclared decision tree is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_bpref_exact_gate_89e3abb9_20260803T1930ET/provenance/POSTRESULT_DECISION_TREE_11982955.md`.
+
 The first unequal level determines the next code change. A RELION-state
 substitution can distinguish inherited drift from a local RECOVAR mismatch,
 but native cross-engine raw equality requires an immutable-ID-aligned RELION
