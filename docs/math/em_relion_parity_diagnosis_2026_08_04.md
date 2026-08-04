@@ -277,6 +277,20 @@ image, representative raw score, and all-class support boundaries. The
 hypothesis is falsified if matching the native tree does not close those first
 unequal operands.
 
+A local diagnostic implementation now exposes the native lane-first tree under
+a separate FFI symbol while preserving the accepted block-first symbol and ABI
+as the default. On one local A100 and a fixed four-image 256-by-256 smoke input,
+both modes repeated byte-exactly four times; normalization and integer
+translation were exact between modes. The default masked output was also
+byte-exact to the sealed pre-change library (SHA-256
+`811e8a647e0feba27fb5c4955f6092fb81f2756da50e47c9dc546f799c8f4caf`).
+The native-lane tree changed 56,683/262,144 masked float32 elements, with
+maximum absolute delta `5.960464477539063e-08`. This proves that the proposed
+intervention changes the intended arithmetic boundary while leaving the
+default path unchanged; it is still only a local diagnostic, not cross-engine
+causal evidence or a scorecard improvement. The immutable smoke report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_softmask_native_lane_bfaaec4d_20260804T0750ET/provenance/LOCAL_GPU_SMOKE.json`.
+
 As a separate provisional clue, that RECOVAR capture's high-shell scalar and
 the accepted native observer's per-candidate `sum_init` are bitwise identical:
 float32 value `0.07816561311483383`, bits `1033901387`. This weakens a pure

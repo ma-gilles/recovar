@@ -1093,6 +1093,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--relion-native-lane-softmask-reduction",
+        action="store_true",
+        help=(
+            "Diagnostic only: with --image-fourier-backend relion_cuda, "
+            "use the native observer's lane-across-blocks soft-mask addition "
+            "tree instead of RECOVAR's accepted block-first tree."
+        ),
+    )
+    parser.add_argument(
         "--stop-after-pass2-dump",
         action="store_true",
         help=(
@@ -1120,6 +1129,11 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    if args.relion_native_lane_softmask_reduction and args.image_fourier_backend != "relion_cuda":
+        parser.error(
+            "--relion-native-lane-softmask-reduction requires "
+            "--image-fourier-backend relion_cuda"
+        )
     if args.stop_after_pass2_dump and args.stop_after_contribution_dump:
         parser.error(
             "--stop-after-pass2-dump and --stop-after-contribution-dump "
@@ -1286,6 +1300,13 @@ def main() -> None:
         raise ValueError("Dataset backend does not support image Fourier backend selection")
     backend.set_relion_fourier_backend(args.image_fourier_backend)
     print(f"  image Fourier backend: {args.image_fourier_backend}")
+    if not hasattr(backend, "set_relion_native_lane_reduction"):
+        raise ValueError("Dataset backend does not support native-lane soft-mask selection")
+    backend.set_relion_native_lane_reduction(args.relion_native_lane_softmask_reduction)
+    print(
+        "  RELION native-lane soft-mask reduction: "
+        f"{args.relion_native_lane_softmask_reduction}"
+    )
 
     n4 = grid_size**4
     noise_spectrum = np.asarray(prev_model["model_optics_group_1"]["rlnSigma2Noise"], dtype=np.float64)

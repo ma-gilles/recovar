@@ -89,7 +89,8 @@ def test_relion_cuda_softmask_has_constant_exterior_and_finite_output(gpu_device
         np.testing.assert_array_equal(masked[row][exterior], np.full(np.count_nonzero(exterior), masked[row, 0, 0]))
 
 
-def test_relion_cuda_softmask_repeats_bit_exactly(gpu_device):
+@pytest.mark.parametrize("native_lane_reduction", [False, True])
+def test_relion_cuda_softmask_repeats_bit_exactly(gpu_device, native_lane_reduction):
     from recovar.cuda_backproject import relion_preprocess_real_f32
 
     rng = np.random.default_rng(20260731)
@@ -107,6 +108,7 @@ def test_relion_cuda_softmask_repeats_bit_exactly(gpu_device):
                 radius=23.529411,
                 cosine_width=5.0,
                 apply_mask=True,
+                native_lane_reduction=native_lane_reduction,
             )
             masked_repeats.append(np.asarray(masked))
 

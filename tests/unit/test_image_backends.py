@@ -134,7 +134,16 @@ def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch
     shifts = np.asarray([[2, -1]], dtype=np.int32)
     captured = {}
 
-    def fake_preprocess(got_images, got_factors, got_shifts, radius, width, apply_mask):
+    def fake_preprocess(
+        got_images,
+        got_factors,
+        got_shifts,
+        radius,
+        width,
+        apply_mask,
+        *,
+        native_lane_reduction,
+    ):
         captured.update(
             images=np.asarray(got_images),
             factors=np.asarray(got_factors),
@@ -142,6 +151,7 @@ def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch
             radius=radius,
             width=width,
             apply_mask=apply_mask,
+            native_lane_reduction=native_lane_reduction,
         )
         return got_images, got_images + jnp.float32(3.0)
 
@@ -161,7 +171,34 @@ def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch
     assert captured["radius"] == 3.0
     assert captured["width"] == 2.0
     assert captured["apply_mask"] is True
+    assert captured["native_lane_reduction"] is False
     np.testing.assert_array_equal(np.asarray(result).reshape(images.shape).real, images + 3.0)
+
+
+def test_particle_image_dataset_routes_native_lane_softmask_diagnostic(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    ds.set_relion_fourier_backend("relion_cuda")
+    ds.set_relion_native_lane_reduction(True)
+    images, _p_idx, _t_idx = ds[2]
+    captured = {}
+
+    def fake_preprocess(*args, **kwargs):
+        captured.update(kwargs)
+        return jnp.asarray(images), jnp.asarray(images)
+
+    monkeypatch.setattr(cuda_backproject, "relion_preprocess_real_f32", fake_preprocess)
+    ds.process_images_half(
+        images,
+        apply_image_mask=True,
+        relion_normalization_factors=np.ones(1, dtype=np.float32),
+        relion_integer_shifts=np.zeros((1, 2), dtype=np.int32),
+    )
+
+    assert captured["native_lane_reduction"] is True
 
 
 def test_particle_image_dataset_relion_cuda_fails_closed_without_operands(monkeypatch):

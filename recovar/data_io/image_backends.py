@@ -208,6 +208,9 @@ class ParticleImageDataset:
         # the packed rFFT; the real-space mask remains host-side until the
         # source-faithful CUDA reduction/cospif kernel is available.
         self.relion_fourier_backend: RelionFourierBackend = "host_numpy"
+        # Diagnostic-only alternative for the strict CUDA backend. The
+        # accepted block-first reduction remains the default.
+        self.relion_native_lane_reduction = False
         # When the user calls `set_relion_image_mask`, the mask geometry +
         # bg-fill + bg-std normalize chain matches RELION's normalize.cpp
         # exactly. Per-pixel preprocessed-Fimg CC vs RELION's exp_Fimg
@@ -290,6 +293,11 @@ class ParticleImageDataset:
             )
         self.relion_fourier_backend = backend
 
+    def set_relion_native_lane_reduction(self, enabled: bool) -> None:
+        """Select the source-faithful native-observer soft-mask addition tree."""
+
+        self.relion_native_lane_reduction = bool(enabled)
+
     @nvtx.annotate("ParticleImageDataset.__getitem__", color="yellow", domain=NVTX_DOMAIN_DATA_IO)
     def __getitem__(self, index):
         images = self.source.images(index)
@@ -369,6 +377,7 @@ class ParticleImageDataset:
                     radius,
                     float(width_mask_edge_px),
                     apply_image_mask,
+                    native_lane_reduction=self.relion_native_lane_reduction,
                 )
                 transformed = _centered_rfft2_jax(preprocessed)
                 return transformed.reshape((transformed.shape[0], -1)).astype(jnp.complex64)

@@ -437,6 +437,8 @@ def test_k_class_replay_exposes_image_fourier_backend_control():
     assert "--image-fourier-backend" in source
     assert 'choices=("host_numpy", "jax_gpu", "relion_cuda")' in source
     assert "backend.set_relion_fourier_backend(args.image_fourier_backend)" in source
+    assert "--relion-native-lane-softmask-reduction" in source
+    assert "backend.set_relion_native_lane_reduction" in source
 
 
 def test_k_class_replay_uses_exact_relion_projector_for_scoring():
