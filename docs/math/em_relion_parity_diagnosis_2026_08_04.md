@@ -633,14 +633,19 @@ panel is already 3/3 but non-scoring pending its separate quality A/B. Jobs
 `12004190` and `12008172` both stopped at the immutable physical-GPU gate in
 two seconds, before imports or science: Slurm allocated only non-admitted A100
 UUIDs. Their empty arms and allocation tables are preserved as infrastructure
-failures, not counted experiments. Retry `12008294` changes only the allocation
-width to three A100s while unrelated work holds Slurm index 3, guaranteeing
-that indices 0--2 include the admitted index-0 UUID; execution remains exposed
-to that UUID alone. It is scheduled for 2026-08-04 13:56 EDT. If its unchanged
-3/3 gate passes, it will be recorded as a third, current-source production-path
-panel. It will not rewrite either historical result or change an FSC/FSC-AUC
-acceptance count. The exact v10 join remains unsubmitted until that admission
-and its manifests are inspected.
+failures, not counted experiments. Three-GPU retry `12008294` admitted the
+intended index-0 UUID, then failed in 14 seconds during argument validation,
+before EM or any capture: `--pass2-dump-class` is intentionally coupled to the
+earlier pass-2 stop mode and cannot be used when the same replay must continue
+to the contribution boundary. Retry `12011036` instead sets the existing
+`RECOVAR_PASS2_DUMP_CLASS=1` environment filter and uses
+`--stop-after-contribution-dump`. The source scope and all science hashes are
+unchanged; the corrected interface passed its focused parser tests 2/2. It is
+pending for the same three-A100 allocation, with execution still exposed to
+the admitted UUID alone. If its unchanged 3/3 gate passes, it will be recorded
+as a third, current-source production-path panel. It will not rewrite either
+historical result or change an FSC/FSC-AUC acceptance count. The exact v10 join
+remains unsubmitted until that admission and its manifests are inspected.
 
 ## Mandatory telemetry conventions
 

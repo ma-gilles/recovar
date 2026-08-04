@@ -14997,3 +14997,33 @@ Consolidated reporter schema v17 adds the non-scoring restored-repeat `40/40`
 panel and now contains 28 fixed panels. No scoring denominator, published
 numerator, tolerance, or correlation changed. No Codex process or existing
 Slurm job was modified or interrupted.
+
+## 2026-08-04 exact-device K=4 contribution retry interface correction
+
+Three-A100 job `12008294` started on `della-l07g2` with the admitted target
+UUID `GPU-f3e94635-d095-bea9-dbe3-26e91dd3ea27` present at PCI `01:00.0`.
+It exited `2:0` after 14 seconds during argument validation, before EM or any
+pass-2, contribution, or device-signature capture. The invalid launcher used
+`--pass2-dump-class 1` without `--stop-after-pass2-dump`; that selector is
+deliberately restricted to the early-stop CLI mode, whereas this experiment
+must retain the pass-2 archive and continue to the later contribution boundary.
+This is a pre-science interface failure, not a failed repeatability or parity
+experiment. Its allocation and stderr SHA-256 values are respectively
+`0d5aed296513179a1159b45b7ebce106b7484d2215f89047ec3feefcfde539aa`
+and
+`e545c94a18b4998382c04c4260060921a0265f04d7d79d77df39a760a4a65a38`.
+
+Retry `12011036` uses the existing environment interface
+`RECOVAR_PASS2_DUMP_CLASS=1` and `--stop-after-contribution-dump`. Its source,
+tree, data, binary, target, two-arm, device, and 3/3 byte-exact admission gates
+are unchanged. `bash -n`, pristine-root checks, and the source-checkout focused
+parser panel pass 2/2. Launcher, predeclaration, and JUnit SHA-256 values are
+`bf24c312cc57f9b24b5fecf418211655f1694c8b6b8ee3c179923f979fe41160`,
+`caed208352048961eab3b703f9565ccf1328ae21321312f4ae608f987f2ac5d6`,
+and
+`b8f6fb9f579cceafd2659b167a3f76f6dd9d1b408ee1dda1c28584e7fd27560c`.
+It is pending for three A100s on `della-l07g2`; only the admitted physical UUID
+will be visible to RECOVAR/JAX. The exact v10 join is separately prepared and
+remains unsubmitted until the report and accepted-output manifest are inspected.
+No fixed FSC/FSC-AUC or topology count changes, and no existing job or process
+was altered, cancelled, signalled, requeued, or reprioritized.
