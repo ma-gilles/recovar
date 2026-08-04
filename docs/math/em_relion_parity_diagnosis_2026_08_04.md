@@ -47,8 +47,8 @@ experiments supersede its ranking where they provide direct causal evidence.
 | The guarded RECOVAR candidate constructs the intended permutation and keeps the first 100 expected-accuracy identities, order, and runtime CTF rows aligned | Demonstrated for cases 22 and 26 | Complete candidate-order, inverse-map, identity, and CTF gates passed in both A/Bs |
 | The guarded physical dispatch is a sufficient fix for case 22 or case 26 | Falsified at the tested boundary | Alignment passed 2/2; standalone rescues were 0/2; case 22 changed by `+0.000013408214354915238` FSC-AUC and case 26 by `-0.00005334034513027053` |
 | Particle order can remain a numerical mediator through stable support buckets and reductions | Mechanistically supported, not causal here | Stable within-bucket execution preserves input order, but no tested scientific rescue |
-| The iteration-12 controller split is the original case-7 defect | Strongly disfavored | Material Pmax/map drift is reported from iteration 2 through 11 |
-| The iteration-12 split amplifies earlier drift | Strongly inferred | It changes current size and angular search after earlier continuous-state divergence |
+| An independent current-size/angular-controller formula bug causes the case-7 or case-22 topology split | Falsified at both tested boundaries | On each recorded engine state, RECOVAR production helpers exactly match the pinned RELION scalar reference and reproduce the distinct recorded size/order decision |
+| The discrete controller amplifies earlier state drift | Demonstrated for the recorded case-7 and case-22 boundaries | Equivalent formulae map the already-different shell, stall, Pmax, and accuracy states to the observed distinct current-size/HEALPix decisions |
 | Final fine scoring or final reconstruction is the common dominant K=1 defect | Strongly disfavored | Joint pose/reference oracles and exact-boundary/float64 interventions rescue or nearly preserve the final path |
 | K=4 fixed-label failures are class swaps | Falsified for the fixed exact-A100 trajectory | Identity map and particle class assignments are optimal at all 15 iterations |
 | K=4 current-source RECOVAR iteration-2 all-class boundary is stable | Demonstrated | Job `11994138` passed all 9/9 exact-byte gates across two independent executions on one A100 |
@@ -132,10 +132,28 @@ CTF rows rather than reconstructing identity through another shuffle/inverse.
 
 The first reported material case-7 posterior mismatch is iteration 2. The
 iteration-12 current-size/HEALPix split is a downstream discrete controller
-bifurcation and likely amplifier; it is not treated as the original defect.
-Controller code is not changed unless identical FSC, data-versus-prior,
-tau-squared, accuracy, size/order, and convergence-history inputs produce a
-different RELION decision.
+bifurcation and amplifier; it is not the original defect. Two predeclared
+identical-input audits now compare RECOVAR's production helpers with a direct
+scalar transcription of pinned RELION `d476e6f`.
+
+For case 7, both implementations map the recorded RECOVAR arm to current
+size/order `102/5` and the recorded RELION arm to `104/4`. For case 22, both
+map the recorded RELION arm to `70/5` and the recorded RECOVAR arm to `72/4`.
+All formula checks and all four recorded decisions are exact. The resulting
+classification is
+`upstream_state_difference_not_controller_formula_mismatch` in both cases.
+The immutable reports are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_identical_controller_audit_v2_48865025_20260804T1640ET/output/CASE7_IDENTICAL_CONTROLLER_AUDIT_V2.json`
+  (SHA-256
+  `fccd3ca4fc31c44fe1875a520d074d07852a31db3197b75866ef719068f08d17`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_identical_controller_audit_48865025_20260804T1630ET/output/CASE22_IDENTICAL_CONTROLLER_AUDIT.json`
+  (SHA-256
+  `3040e2bff2d2b2587f94f59b18e90b85d3ef24abb9b16188ce44283800443bc9`).
+
+Controller overrides are therefore removed from the active fix queue. The
+controller remains a deterministic amplifier of earlier state drift, and the
+iteration-2 same-input/BPref localization remains the next causal boundary.
 
 The final-only failures are treated as upstream last-numbered pose/reference
 state errors. Joint pose-and-reference oracles and exact-boundary runs strongly
