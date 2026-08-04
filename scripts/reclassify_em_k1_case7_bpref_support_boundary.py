@@ -15,12 +15,19 @@ INPUT_SCHEMA = "recovar.em_k1_case7_bpref_factor_boundary.v1"
 SCHEMA = "recovar.em_k1_case7_bpref_support_gated_boundary.v1"
 EXPECTED_PARTICLE_COUNT = 10
 EXACT_COMPARISONS = (
+    "posterior_full_matrix",
     "same_posterior_numerator_terms",
     "same_posterior_denominator_terms",
+    "base_numerator_operand",
+    "base_denominator_operand",
+    "relion_terms_to_relion_summary_numerator",
+    "relion_terms_to_relion_summary_denominator",
     "relion_summary_to_recovar_sequential_numerator",
     "relion_summary_to_recovar_sequential_denominator",
     "relion_summary_to_recovar_highest_numerator",
     "relion_summary_to_recovar_highest_denominator",
+    "host_to_device_sequential_numerator",
+    "host_to_device_sequential_denominator",
 )
 
 
