@@ -492,6 +492,46 @@ per-target artifact-repeatability experiment for classes 2--4 while the
 independent RECOVAR side is now fixed by the accepted 9/9 repeatability gate.
 Only a passing target-artifact admission can authorize a target-local join.
 
+## Active decisive captures
+
+The prospective classes 2--4 target-artifact repeat is Slurm job `11996846`.
+It began on the pinned A100 at `2026-08-04 10:37:16 EDT`. Its fixed denominator
+is 32 gates. Only 32/32 can authorize the already fail-closed target-local join;
+it can never authorize the rejected broad all-class join. At the time of this
+record it was still running, so it contributes no scientific result yet.
+
+The class-1 raw-score mismatch is independently reproducible over the admitted
+narrow tuple join: 25,687 of 109,184 raw `diff2` values differ by at most three
+float32 ULPs while tuple, prior, and significant-support identities remain
+exact. A one-candidate operand dump cannot localize this residual because
+centering one value removes all candidate-relative information. The new panel
+therefore freezes native rotation-local `1790`, which maps to RECOVAR class-local
+row `2878` and global rotation ID `4446`. It has 96 active translations. In the
+already admitted fine-score/pass-2 artifacts, 29 of those 96 raw values differ;
+the centered RECOVAR-minus-RELION residual has L2
+`0.0002845808477116318` and maximum absolute value
+`0.00011507670084635417`.
+
+Two fail-closed jobs implement the staged comparison:
+
+- Slurm job `12001297` captures two independent RECOVAR class-1 contribution
+  bundles in one allocation. It requires exact bytes for pass-2 state plus raw
+  operands, the full high-precision contribution archive, and its device
+  signature: a prospective 3/3 gate. Its root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_class1_contribution_repeat_223e7e81_20260804T1034ET`.
+- Slurm job `12001296` captures the 96 native RELION fine operands. It requires
+  the accepted native observer, exact source/binary and replay streams, exact
+  predecessor class-1 fine-score and BPref hashes, the fine-operand validator,
+  and the fixed candidate panel: a prospective 7/7 gate. Its root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_native_class1_fine_operands_rot1790_17a9769_20260804T1034ET`.
+
+Both were pending for priority at submission. Existing jobs were not altered,
+cancelled, suspended, requeued, or reprioritized. If and only if both admissions
+pass, the multi-candidate component substitutions compare shifted-image,
+projection/reference, and score-weight operands after removing only the common
+candidate-independent offset. This is target/class-local causal telemetry. It
+cannot change the fixed 41/60 K=4 scorecard or establish all-class parity.
+
 ## Mandatory telemetry conventions
 
 Every staged capture must include immutable particle identity, base/physical
