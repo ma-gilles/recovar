@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -19,6 +21,29 @@ from scripts.compare_k4_relion_recovar_fine_operands import (
     _tree_raw_diff2,
     _zero_dc_compact_score_weight,
 )
+
+
+def test_execution_gpu_uuid_requires_exact_visible_device(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-fixed")
+    monkeypatch.setattr(
+        comparator.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="GPU-fixed\n"),
+    )
+    monkeypatch.setattr(
+        comparator.jax,
+        "devices",
+        lambda: [SimpleNamespace(platform="gpu")],
+    )
+
+    assert comparator._require_execution_gpu_uuid("GPU-fixed") == "GPU-fixed"
+
+
+def test_execution_gpu_uuid_rejects_index_only_visibility(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+
+    with pytest.raises(ValueError, match="admitted physical GPU UUID"):
+        comparator._require_execution_gpu_uuid("GPU-fixed")
 
 
 def test_compact_indices_roundtrip_non_self_inverse_score_lookup():

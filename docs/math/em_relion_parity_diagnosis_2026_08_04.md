@@ -620,9 +620,12 @@ component/arithmetic experiment.
 The v10 wrapper also hash-validates both the pass-2 and contribution artifacts
 and requires all five counterfactual boundaries: reference, shifted image,
 correction, high-resolution Xi2, and JAX/XLA arithmetic on native operands. Its
-focused structural/unit panel passes **63 / 63** in the bound pixi checkout,
-including the production score-tree and lookup tests; this validates the
-diagnostic machinery, not RECOVAR--RELION scientific parity.
+execution gate also requires the admitted physical GPU UUID to be the sole
+`CUDA_VISIBLE_DEVICES` token, confirms that UUID with `nvidia-smi`, and requires
+exactly one visible JAX GPU. Its focused structural/unit panel passes **65 / 65**
+in the bound pixi checkout, including the production score-tree, lookup, and
+execution-UUID tests; this validates the diagnostic machinery, not
+RECOVAR--RELION scientific parity.
 
 The contribution-repeatability metrics remain deliberately distinct. The
 historical fixed panel is immutable at 0/3, and the deterministic candidate

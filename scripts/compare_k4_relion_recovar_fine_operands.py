@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import jax
@@ -62,6 +64,40 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(8 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _require_execution_gpu_uuid(expected_gpu_uuid: str) -> str:
+    """Bind JAX counterfactual arithmetic to the capture's physical GPU."""
+
+    _require(
+        expected_gpu_uuid.startswith("GPU-"),
+        "expected execution GPU UUID is invalid",
+    )
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    _require(
+        visible == expected_gpu_uuid,
+        "CUDA_VISIBLE_DEVICES must contain only the admitted physical GPU UUID",
+    )
+    completed = subprocess.run(
+        [
+            "nvidia-smi",
+            "-i",
+            expected_gpu_uuid,
+            "--query-gpu=uuid",
+            "--format=csv,noheader",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    actual = completed.stdout.strip()
+    _require(actual == expected_gpu_uuid, "execution GPU UUID does not match admission")
+    devices = jax.devices()
+    _require(
+        len(devices) == 1 and devices[0].platform in {"gpu", "cuda"},
+        "fine-operand comparison requires exactly one visible JAX GPU",
+    )
+    return actual
 
 
 def _metric(relion: np.ndarray, recovar: np.ndarray) -> dict[str, object]:
@@ -476,10 +512,12 @@ def compare(
     contribution_path: Path,
     *,
     recovar_global_rotation: int,
+    expected_gpu_uuid: str,
     particle_diameter_angstrom: float,
     mask_edge_pixels: float,
 ) -> dict[str, object]:
     _require(jax.default_backend() == "gpu", "fine-operand comparison requires a JAX GPU")
+    execution_gpu_uuid = _require_execution_gpu_uuid(expected_gpu_uuid)
     capture = load_fine_operand_capture(capture_path)
     validation = validate_capture(capture)
     with np.load(pass2_path, allow_pickle=False) as archive:
@@ -1157,6 +1195,7 @@ def compare(
             "particle_row_in_contribution_shard": particle,
             "original_index_zero_based": original_index,
             "recovar_global_rotation": recovar_global_rotation,
+            "execution_gpu_uuid": execution_gpu_uuid,
             "relion_rotation_local": int(capture.candidates[0]["rotation_local"]),
             "physical_image_size": physical_image_size,
             "current_size": current_size,
@@ -1320,6 +1359,7 @@ def main() -> None:
     parser.add_argument("--pass2", type=Path, required=True)
     parser.add_argument("--contribution", type=Path, required=True)
     parser.add_argument("--recovar-global-rotation", type=int, required=True)
+    parser.add_argument("--expected-gpu-uuid", required=True)
     parser.add_argument("--particle-diameter-angstrom", type=float, required=True)
     parser.add_argument("--mask-edge-pixels", type=float, default=5.0)
     parser.add_argument("--output", type=Path)
@@ -1329,6 +1369,7 @@ def main() -> None:
         args.pass2,
         args.contribution,
         recovar_global_rotation=args.recovar_global_rotation,
+        expected_gpu_uuid=args.expected_gpu_uuid,
         particle_diameter_angstrom=args.particle_diameter_angstrom,
         mask_edge_pixels=args.mask_edge_pixels,
     )

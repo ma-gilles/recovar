@@ -144,6 +144,7 @@ def build_report(
         recovar_pass2,
         recovar_contribution,
         recovar_global_rotation=EXPECTED_RECOVAR_GLOBAL_ROTATION,
+        expected_gpu_uuid=native["gpu_uuid"],
         particle_diameter_angstrom=particle_diameter_angstrom,
         mask_edge_pixels=mask_edge_pixels,
     )
@@ -169,7 +170,8 @@ def build_report(
         and scope.get("stack_index_one_based") == 53723
         and scope.get("relion_rotation_local") == EXPECTED_NATIVE_ROTATION
         and scope.get("recovar_global_rotation")
-        == EXPECTED_RECOVAR_GLOBAL_ROTATION,
+        == EXPECTED_RECOVAR_GLOBAL_ROTATION
+        and scope.get("execution_gpu_uuid") == native["gpu_uuid"],
         "fine-operand comparison escaped the admitted multi-candidate scope",
     )
     _require(

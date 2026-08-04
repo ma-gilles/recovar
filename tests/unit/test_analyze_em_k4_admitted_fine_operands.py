@@ -172,6 +172,7 @@ def test_build_report_uses_only_admitted_artifacts(tmp_path: Path) -> None:
                 "stack_index_one_based": 53723,
                 "relion_rotation_local": 1790,
                 "recovar_global_rotation": 4446,
+                "execution_gpu_uuid": "GPU-fixed",
             },
             "candidate_score_boundary_closure": {
                 "classification_candidate_count": 96,
@@ -204,6 +205,7 @@ def test_build_report_uses_only_admitted_artifacts(tmp_path: Path) -> None:
     assert observed["pass2"] == pass2
     assert observed["contribution"] == contribution
     assert observed["kwargs"]["recovar_global_rotation"] == 4446
+    assert observed["kwargs"]["expected_gpu_uuid"] == "GPU-fixed"
     assert report["classification_basis"] == (
         "production_exact_candidates_centered_raw_diff2"
     )
