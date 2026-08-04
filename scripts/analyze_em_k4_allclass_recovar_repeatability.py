@@ -12,7 +12,6 @@ from typing import Any
 
 import numpy as np
 
-
 SCHEMA = "recovar.em_k4_allclass_recovar_repeatability.v1"
 EXPECTED_CLASSES = 4
 EXPECTED_ORIGINAL_INDEX = 53_722
