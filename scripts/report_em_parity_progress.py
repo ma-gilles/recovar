@@ -147,6 +147,12 @@ from scripts.summarize_em_k4_native_softmask_repeatability_scorecard import (  #
 from scripts.summarize_em_k4_native_softmask_repeatability_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k4_native_softmask_repeatability,
 )
+from scripts.summarize_em_k4_native_target_artifact_repeatability_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K4_NATIVE_TARGET_ARTIFACT_REPEATABILITY_SCORECARD,
+)
+from scripts.summarize_em_k4_native_target_artifact_repeatability_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k4_native_target_artifact_repeatability,
+)
 from scripts.summarize_em_k4_preprocess_replay_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K4_PREPROCESS_SCORECARD,
 )
@@ -163,7 +169,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v23"
+SCHEMA = "recovar.em_parity_progress.v24"
 
 
 def _panel(
@@ -227,6 +233,9 @@ def build_progress(
     k4_native_highres_xi2_repeatability_path: Path = (
         DEFAULT_K4_NATIVE_HIGHRES_XI2_REPEATABILITY_SCORECARD
     ),
+    k4_native_target_artifact_repeatability_path: Path = (
+        DEFAULT_K4_NATIVE_TARGET_ARTIFACT_REPEATABILITY_SCORECARD
+    ),
     k4_deterministic_contribution_repeatability_candidate_path: Path = (
         DEFAULT_K4_DETERMINISTIC_CONTRIBUTION_REPEATABILITY_CANDIDATE_SCORECARD
     ),
@@ -286,6 +295,11 @@ def build_progress(
     k4_native_highres_xi2_repeatability = (
         load_and_validate_k4_native_highres_xi2_repeatability(
             k4_native_highres_xi2_repeatability_path
+        )
+    )
+    k4_native_target_artifact_repeatability = (
+        load_and_validate_k4_native_target_artifact_repeatability(
+            k4_native_target_artifact_repeatability_path
         )
     )
     k4_deterministic_contribution_repeatability_candidate = (
@@ -351,6 +365,9 @@ def build_progress(
     )
     k4_native_highres_xi2_repeatability_summary = (
         k4_native_highres_xi2_repeatability["summary"]
+    )
+    k4_native_target_artifact_repeatability_summary = (
+        k4_native_target_artifact_repeatability["summary"]
     )
     k4_deterministic_contribution_repeatability_candidate_summary = (
         k4_deterministic_contribution_repeatability_candidate["summary"]
@@ -673,6 +690,14 @@ def build_progress(
             scoring=False,
         ),
         _panel(
+            "k4_native_target_artifact_repeatability",
+            "K=4 native target-artifact repeatability",
+            k4_native_target_artifact_repeatability_summary["pass"],
+            k4_native_target_artifact_repeatability_summary["evaluated"],
+            k4_native_target_artifact_repeatability["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
             "k4_deterministic_contribution_repeatability_candidate",
             "K=4 deterministic contribution candidate repeatability",
             k4_deterministic_contribution_repeatability_candidate_summary["pass"],
@@ -725,6 +750,7 @@ def build_progress(
             "K=4 contribution-repeatability, "
             "K=4 native aux-stream repeatability, "
             "K=4 native soft-mask observer repeatability, "
+            "K=4 native target-artifact repeatability, "
             "K=4 deterministic contribution candidate, "
             "K=4 deterministic soft-mask quality acceptance, "
             "and K=4 preprocessing panels are non-scoring."
@@ -887,6 +913,9 @@ def build_progress(
             ),
             "k4_native_highres_xi2_repeatability_scorecard": _input_record(
                 k4_native_highres_xi2_repeatability_path
+            ),
+            "k4_native_target_artifact_repeatability_scorecard": _input_record(
+                k4_native_target_artifact_repeatability_path
             ),
             "k4_deterministic_contribution_repeatability_candidate_scorecard": _input_record(
                 k4_deterministic_contribution_repeatability_candidate_path

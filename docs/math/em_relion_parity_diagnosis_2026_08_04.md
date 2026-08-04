@@ -23,6 +23,10 @@ does not change any fixed acceptance threshold.
   admission result, not cross-engine posterior/BPref/map parity.
 - K=4 native highres-treatment/all-class admission: **19 / 21**; rejected on
   the fixed global Pmax and support-count repeatability envelopes.
+- K=4 native classes-2--4 target-artifact admission: **32 / 32**; accepted for
+  target-local use only.
+- K=4 target-local classes with exact tuples and support but first unequal raw
+  `diff2`: **4 / 4**.
 - Fresh K=1 dispatch alignment: **2 / 2** cases verified.
 - Fresh K=1 dispatch standalone rescue: **0 / 2** cases.
 
@@ -48,8 +52,8 @@ experiments supersede its ranking where they provide direct causal evidence.
 | Final fine scoring or final reconstruction is the common dominant K=1 defect | Strongly disfavored | Joint pose/reference oracles and exact-boundary/float64 interventions rescue or nearly preserve the final path |
 | K=4 fixed-label failures are class swaps | Falsified for the fixed exact-A100 trajectory | Identity map and particle class assignments are optimal at all 15 iterations |
 | K=4 current-source RECOVAR iteration-2 all-class boundary is stable | Demonstrated | Job `11994138` passed all 9/9 exact-byte gates across two independent executions on one A100 |
-| K=4 class-1 tuples and significant support agree at the accepted observer boundary | Demonstrated provisionally | Exact `109184/109184` tuples and `38982/38982` support rows in the current one-class join |
-| K=4 raw `diff2` is the first unequal measured class-1 boundary | Demonstrated in the narrow admitted class-1 scope | 25,687 float32 mismatches, one-ULP median and three-ULP maximum; RECOVAR repeatability passed, but broad native all-class admission failed |
+| K=4 target-local tuples and significant support agree in all four admitted classes | Demonstrated | Exact `247232/247232` tuples and `66986/66986` support rows across four independent target-local joins |
+| K=4 raw `diff2` is the first unequal measured boundary in all four admitted classes | Demonstrated in the narrow target-local scopes | 55,658 float32 mismatches, at most three ULPs; broad native all-class admission remains rejected |
 | Native lane-first soft-mask reduction closes the pinned class-1 shifted-image residual | Falsified at the tested tuple | Native-lane relative L2 was `1.0312363428376726e-07`, slightly worse than default RELION-CUDA at `9.863882911656713e-08` |
 | K=4 reduction order alone is the primary cause | Disfavored, not eliminated | Determinism improves repeatability without improving the fixed 41/60 cross-engine score; identical all-class operands/destinations have not yet been shown |
 | Full deployed RELION in-memory order beyond the reconstructed source semantics has been directly hashed | Unknown | The candidate is source-faithful and fully internally checked, but no native full-order runtime hash is available |
@@ -494,11 +498,38 @@ Only a passing target-artifact admission can authorize a target-local join.
 
 ## Active decisive captures
 
-The prospective classes 2--4 target-artifact repeat is Slurm job `11996846`.
-It began on the pinned A100 at `2026-08-04 10:37:16 EDT`. Its fixed denominator
-is 32 gates. Only 32/32 can authorize the already fail-closed target-local join;
-it can never authorize the rejected broad all-class join. At the time of this
-record it was still running, so it contributes no scientific result yet.
+The prospective classes 2--4 target-artifact repeat, Slurm job `11996846`,
+completed on the pinned A100 in 25m32s and passed all **32/32** fixed gates.
+All three classes passed byte-exact fine-score and BPref artifact comparison,
+artifact validation, dispatch, hard pose/class/shift, target state, topology,
+runtime replay, and signed normalized non-DC map FSC-AUC preservation. This
+authorizes target-local use only; the rejected broad all-class join remains
+prohibited. The immutable admission report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_native_target_artifact_repeat_17a9769_20260804T0915ET/analysis/NATIVE_TARGET_ARTIFACT_REPEAT_RESULT_11996846.json`
+(SHA-256
+`da59157b92956fca4095b87d2dce850cc53d1e21e4e3321474d12bd651f3c4b8`).
+
+The fail-closed join to the RECOVAR 9/9 repeatability boundary localizes the
+first unequal target-local boundary to raw `diff2` independently for classes
+2, 3, and 4, matching the already admitted class-1 result. Candidate tuples
+and significant support are exact in every class:
+
+| Class | Active tuples | Raw `diff2` mismatches | Max float32 ULP | Significant support |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 109,184 | 25,687 | 3 | 38,982 / 38,982 exact |
+| 2 | 65,952 | 14,503 | 3 | 14,076 / 14,076 exact |
+| 3 | 64,704 | 13,806 | 3 | 11,804 / 11,804 exact |
+| 4 | 7,392 | 1,662 | 3 | 2,124 / 2,124 exact |
+
+Across the four target-local joins, all 247,232 candidate tuples and 66,986
+retained tuples agree, while 55,658 raw scores differ by at most three float32
+ULPs. Priors and normalized posteriors also differ, but raw `diff2` is earlier
+in the causal ordering. The result prioritizes score inputs and arithmetic; it
+does not prove that these small score differences cause the late class-map
+failures. The immutable target-local report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_target_local_join_11996846_11994138_20260804T1104ET/analysis/K4_TARGET_LOCAL_BOUNDARY.json`
+(SHA-256
+`66695693709c34ec036632aaec9de91f024af9a596d4882f4312ccea3e0f6a27`).
 
 The class-1 raw-score mismatch is independently reproducible over the admitted
 narrow tuple join: 25,687 of 109,184 raw `diff2` values differ by at most three
@@ -525,16 +556,38 @@ Two fail-closed jobs implement the staged comparison:
   and the fixed candidate panel: a prospective 7/7 gate. Its root is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_native_class1_fine_operands_rot1790_17a9769_20260804T1034ET`.
 
-Both were pending for priority at submission. Existing jobs were not altered,
-cancelled, suspended, requeued, or reprioritized. If and only if both admissions
-pass, the multi-candidate component substitutions compare shifted-image,
-projection/reference, and score-weight operands after removing only the common
-candidate-independent offset. This is target/class-local causal telemetry. It
-cannot change the fixed 41/60 K=4 scorecard or establish all-class parity.
-The repository wrapper
+Native job `12001296` completed in 8m38s and passed all **7/7** fixed gates,
+including the 96-candidate scope, artifact validators, exact predecessor
+fine-score and BPref hashes, replay/dispatch markers, and exact treatment
+source and binary. Its immutable admission report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_native_class1_fine_operands_rot1790_17a9769_20260804T1034ET/analysis/NATIVE_FINE_OPERAND_ADMISSION_12001296.json`
+(SHA-256
+`37d58d00dbc250a0d12dd834920c07b1c8b193b47cd1645c561a7c5f0089c60c`).
+
+RECOVAR job `12001297` is infrastructure-invalid: its emptiness guard counted
+the intentionally pre-created empty capture leaf directories and exited in two
+seconds before GPU validation, imports, or either science arm. Corrected retry
+job `12003112` passed that guard but received the other two A100s on the node;
+the prospective physical-GPU UUID gate stopped it before imports or science.
+Both failed roots are preserved with empty science logs and no capture
+artifacts. Neither contributes a scientific result, weakens the 3/3 gate, or
+permits the cross-engine operand join.
+
+If and only if the RECOVAR admission passes, the multi-candidate component
+substitutions compare shifted-image, projection/reference, and score-weight
+operands after removing only the common candidate-independent offset. This is
+target/class-local causal telemetry. It cannot change the fixed 41/60 K=4
+scorecard or establish all-class parity. The repository wrapper
 `scripts/analyze_em_k4_admitted_fine_operands.py` enforces both admissions,
 artifact hashes, same-physical-GPU identity, the 96-candidate scope, and
 centered-score classification before producing that report.
+
+The contribution-repeatability metrics remain deliberately distinct. The
+historical fixed panel is immutable at 0/3, and the deterministic candidate
+panel is already 3/3 but non-scoring pending its separate quality A/B. If job
+`12001297` passes, it will be recorded as a third, current-source
+production-path 3/3 panel. It will not rewrite either historical result or
+change an FSC/FSC-AUC acceptance count.
 
 ## Mandatory telemetry conventions
 
