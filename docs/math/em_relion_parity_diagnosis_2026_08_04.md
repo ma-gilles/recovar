@@ -134,6 +134,23 @@ The existing fixed-target operand replay closes exactly while the complete
 active raw table does not. Current prior mismatches are inert for the observed
 support and are routed downstream rather than treated as the causal boundary.
 
+A provisional class-1 join between the admitted native observer and the
+same-UUID RECOVAR capture now gives exact tuple and support identities:
+`109184/109184` active tuples and `38982/38982` significant tuples. The first
+unequal measured boundary is raw `diff2`: `25687/109184` float32 values differ,
+with maximum absolute delta `0.0001220703125`, relative L2
+`4.9158666958484043e-08`, median mismatch distance one ULP, p95 two ULPs, and
+maximum three ULPs. The first unequal tuple is native/RECOVAR rotation-local
+zero and translation 66. The combined class--rotation prior differs in 15,264
+rows by at most one ULP; the translation prior differs in 40,800 rows by at
+most two ULPs. The resulting unnormalized score differs in 101,388 rows and
+the class-1 posterior differs bitwise in all 109,184 rows, while global
+significant support remains exact. This is evidence for a small scorer/operand
+or arithmetic-order discrepancy before normalization, not evidence that such
+a discrepancy causes the late map failures. It remains provisional until the
+four native class captures and their treatment/capture-inertness admission
+pass.
+
 The fixed RECOVAR iteration-2 boundary for stack identity 53723 is now complete
 for all four classes. Its four artifacts preserve 247,232 active class-pose
 tuples, 66,986 significant tuples, and a joint probability mass of
