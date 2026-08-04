@@ -19,6 +19,8 @@ does not change any fixed acceptance threshold.
 - K=4 native high-resolution-Xi2 observer repeatability gates: **15 / 15**.
 - K=4 stable native operand-capture admission: **1 / 1**; this is an observer
   admission result, not cross-engine posterior/BPref/map parity.
+- K=4 native highres-treatment/all-class admission: **19 / 21**; rejected on
+  the fixed global Pmax and support-count repeatability envelopes.
 - Fresh K=1 dispatch alignment: **2 / 2** cases verified.
 - Fresh K=1 dispatch standalone rescue: **0 / 2** cases.
 
@@ -384,6 +386,43 @@ pose/class/shift and topology, require signed map FSC-AUC at least `0.999999`,
 measure Pmax/support against the admitted native envelope, and capture all four
 classes for the immutable-ID-aligned join to RECOVAR. Cross-engine attribution
 remains prohibited until treatment preservation and capture inertness pass.
+
+That seven-arm panel completed as Slurm job `11993773` on the pinned A100 and
+was rejected at **19/21** fixed gates. The following gates passed: all hard
+pose/class/shift fields, target-particle state, dispatch bytes and row counts,
+topology, all signed map FSC-AUC checks, all four fine-score and geometry-only
+BPref validators, global stabilization bits, observer markers, manifests, and
+runtime checks. The minimum same-label signed normalized non-DC map FSC-AUC was
+`0.9999999849558822`, above the fixed `0.999999` threshold. The two failed
+gates were the prospectively fixed global Pmax and significant-support native
+envelopes:
+
+| Comparison | Pmax mismatches (max abs) | Support-count mismatches (max abs) |
+| --- | ---: | ---: |
+| source control vs default-off | 36 (`2.0e-5`) | 22 (`1`) |
+| default-off vs highres treatment | 26 (`1.5e-5`) | 17 (`1`) |
+| treatment vs class-1 capture | 10 (`2.0e-5`) | 22 (`1`) |
+| treatment vs class-2 capture | 9 (`2.0e-5`) | 19 (`1`) |
+| treatment vs class-3 capture | 12 (`2.7e-5`) | 17 (`1`) |
+| treatment vs class-4 capture | 9 (`5.0e-6`) | 18 (`1`) |
+
+The admitted envelope was at most 13 Pmax rows and 15 support rows, so it is
+not weakened after seeing this result. The report classifies the panel as
+`rejected_highres_treatment_or_allclass_capture`, sets
+`allclass_operand_localization_allowed=false`, and prohibits the all-class
+cross-engine join. The immutable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_highres_treatment_allclass_capture_17a9769_20260804T0626ET/analysis/TREATMENT_ALLCLASS_RESULT_11993773.json`
+(SHA-256
+`c4b68323df6e31c12f5c6b32668187a082f2ab4e44a79601d32e18664f789ad7`).
+
+The narrower class-1 target artifacts remain stable: the new fine-score SHA
+`de5816046f21266c2f675c74cdbed799046bd3654e88d4e40210860ec2ede24b`
+and BPref SHA
+`5d1c9f08eac3e46d9ecb6aa6b1040ec28ffed929cc128637f757309ca82d7f57`
+are byte-identical to both arms of accepted job `11993105`. This does not
+override the failed all-class admission. It supports a narrower prospective
+per-target artifact-repeatability experiment for classes 2--4 while the
+independent RECOVAR repeatability gate remains pending.
 
 ## Mandatory telemetry conventions
 
