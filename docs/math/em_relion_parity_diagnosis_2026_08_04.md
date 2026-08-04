@@ -171,10 +171,15 @@ only remaining field. The deployed power-class kernel uses the original
 the scalar `highres_Xi2`. The active default-off observer control preserves all
 per-pixel operations and the within-block tree, writes one scalar partial per
 block, and finalizes those partials in increasing block order. Its build passed
-as Slurm job `11992806`; fixed same-A100 pair job `11992900` is the causal gate.
-Neither result changes the K=4 scientific scorecard, and cross-engine
-attribution remains prohibited until the observer gate passes and deployed
-default-off/capture-inertness preservation is demonstrated.
+as Slurm job `11992806`. Initial pair job `11992900` is infrastructure-invalid:
+the deterministic wrapper bypassed the predecessor function that emitted the
+required powerClass-stream marker, so the hash-pinned launcher stopped after a
+successful arm A and arm B never ran. That job is not a scientific result and
+its outputs remain preserved. Marker-only commit `17a97690` built successfully
+as job `11993050`; corrected fixed pair job `11993105` is the active causal
+gate. None of these results changes the K=4 scientific scorecard, and
+cross-engine attribution remains prohibited until the observer gate passes and
+deployed default-off/capture-inertness preservation is demonstrated.
 
 ## Mandatory telemetry conventions
 
