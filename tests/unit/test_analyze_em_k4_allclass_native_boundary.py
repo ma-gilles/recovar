@@ -75,7 +75,27 @@ def test_float32_metric_is_bitwise_and_scale_sensitive() -> None:
     assert changed["bitwise_mismatch_count"] == 1
     assert changed["first_mismatch_flat_index"] == 1
     assert changed["max_abs"] > 0
+    assert changed["finite_mismatch_max_ulp"] == 1
+    assert changed["finite_mismatch_p50_ulp"] == 1
+    assert changed["finite_mismatch_p95_ulp"] == 1
     assert changed["correlation_used"] is False
+
+
+@pytest.mark.unit
+def test_float32_metric_ulp_distance_is_ordered_across_signs() -> None:
+    left = np.asarray((-1.0, 1.0), dtype=np.float32)
+    right = np.asarray(
+        (
+            np.nextafter(left[0], np.float32(-np.inf)),
+            np.nextafter(left[1], np.float32(np.inf)),
+        ),
+        dtype=np.float32,
+    )
+
+    metric = float32_metric(left, right)
+
+    assert metric["finite_mismatch_max_ulp"] == 1
+    assert metric["finite_mismatch_p50_ulp"] == 1
 
 
 @pytest.mark.unit

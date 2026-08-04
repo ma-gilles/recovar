@@ -53,6 +53,18 @@ def _float32_from_bits(value: int) -> np.float32:
     return np.float32(struct.unpack("<f", struct.pack("<I", value & 0xFFFFFFFF))[0])
 
 
+def _ordered_float32_bits(values: np.ndarray) -> np.ndarray:
+    """Map float32 bits to monotone integer codes for exact ULP distances."""
+
+    bits = np.asarray(values, dtype=np.float32).view(np.uint32)
+    sign = (bits & np.uint32(0x80000000)) != 0
+    return np.where(
+        sign,
+        np.bitwise_not(bits),
+        bits | np.uint32(0x80000000),
+    ).astype(np.uint64)
+
+
 def float32_metric(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
     """Return scale-sensitive float32 metrics without correlation."""
 
@@ -76,6 +88,12 @@ def float32_metric(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
     )
     mismatch = left_bits != right_bits
     mismatch_indices = np.flatnonzero(mismatch.reshape(-1))
+    finite_mismatch = finite & mismatch
+    left_ordered = _ordered_float32_bits(left[finite_mismatch])
+    right_ordered = _ordered_float32_bits(right[finite_mismatch])
+    mismatch_ulp = np.abs(
+        left_ordered.astype(np.int64) - right_ordered.astype(np.int64)
+    )
     return {
         "count": int(left.size),
         "bitwise_exact": bool(not np.any(mismatch)),
@@ -85,6 +103,15 @@ def float32_metric(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
             int(mismatch_indices[0]) if mismatch_indices.size else None
         ),
         "max_abs": float(np.max(np.abs(delta), initial=0.0)),
+        "finite_mismatch_max_ulp": (
+            int(np.max(mismatch_ulp)) if mismatch_ulp.size else 0
+        ),
+        "finite_mismatch_p50_ulp": (
+            float(np.quantile(mismatch_ulp, 0.50)) if mismatch_ulp.size else 0.0
+        ),
+        "finite_mismatch_p95_ulp": (
+            float(np.quantile(mismatch_ulp, 0.95)) if mismatch_ulp.size else 0.0
+        ),
         "relative_l2_over_right": float(
             numerator / max(denominator, np.finfo(np.float64).tiny)
         ),
