@@ -107,6 +107,17 @@ half, class, rotation ID, and translation ID:
 8. accumulator destinations and partial/final reductions;
 9. reconstructed class maps.
 
+At the deployed no-orientation-prior boundary, RELION's captured
+`orientation_log_prior` is not a direction-only term: it is constructed from
+`mymodel.pdf_direction[exp_iclass]`, whose class row carries the class mass.
+The skip-align branch uses `mymodel.pdf_class[exp_iclass]` directly. RECOVAR's
+captured `rotation_log_prior` likewise contains the combined class--rotation
+term. The staged analyzer must therefore label this a **combined
+class--rotation prior** comparison. If that is the first unequal boundary, the
+next capture must also retain `pdf_class` and the conditional direction prior
+separately; it must not attribute the mismatch to direction or class priors
+from the combined value alone.
+
 The existing fixed-target operand replay closes exactly while the complete
 active raw table does not. Current prior mismatches are inert for the observed
 support and are routed downstream rather than treated as the causal boundary.
