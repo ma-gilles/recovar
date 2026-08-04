@@ -531,6 +531,10 @@ pass, the multi-candidate component substitutions compare shifted-image,
 projection/reference, and score-weight operands after removing only the common
 candidate-independent offset. This is target/class-local causal telemetry. It
 cannot change the fixed 41/60 K=4 scorecard or establish all-class parity.
+The repository wrapper
+`scripts/analyze_em_k4_admitted_fine_operands.py` enforces both admissions,
+artifact hashes, same-physical-GPU identity, the 96-candidate scope, and
+centered-score classification before producing that report.
 
 ## Mandatory telemetry conventions
 
