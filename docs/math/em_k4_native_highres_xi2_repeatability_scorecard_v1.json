@@ -1,0 +1,190 @@
+{
+  "schema": "recovar.em_k4_native_highres_xi2_repeatability_scorecard.v1",
+  "suite_id": "k4-it2-fixed-a100-native-highres-xi2-observer-repeatability",
+  "suite_version": 1,
+  "classification": "deterministic_thread_highres_xi2_partial_replay_pair_exact",
+  "frozen_denominator": 15,
+  "scorecard_change_admissible": false,
+  "correlation_used": false,
+  "fsc_auc_evaluated": true,
+  "acceptance_contract": {
+    "science_job_id": 11993105,
+    "science_state": "COMPLETED",
+    "science_exit_code": "0:0",
+    "same_gpu_uuid": "GPU-f3e94635-d095-bea9-dbe3-26e91dd3ea27",
+    "postterminal_analysis_completed": true,
+    "accepted": true,
+    "stable_native_operand_localization_allowed": true,
+    "joint_posterior_bpref_map_parity_established": false
+  },
+  "cases": [
+    {
+      "id": "artifact_bytes_exact",
+      "name": "Selected native observer artifacts are byte-identical",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "auxiliary_reduction_stream_markers_exact",
+      "name": "Auxiliary reduction-stream markers are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "capture_headers_mpi2_openmp1_exact",
+      "name": "Capture headers identify MPI rank 2 and OpenMP thread 1",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "capture_validators_passed",
+      "name": "All native capture validators pass",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "class_map_fsc_auc_at_least_threshold",
+      "name": "All signed class-map FSC-AUC values meet threshold",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "current_size_and_sampling_topology_exact",
+      "name": "Current size and sampling topology are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "dispatch_bytes_exact",
+      "name": "Dispatch logs are byte-identical",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "dispatch_row_count_exact",
+      "name": "Dispatch row counts are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "highres_xi2_block_partial_markers_exact",
+      "name": "High-resolution Xi2 block-partial markers are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "no_fatal_runtime_pattern",
+      "name": "No fatal runtime pattern is present",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "particle_count_exact",
+      "name": "Particle count is exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "powerclass_stream_markers_exact",
+      "name": "PowerClass stream markers are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "softmask_block_partial_markers_exact",
+      "name": "Soft-mask block-partial markers are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "target_state_exact",
+      "name": "Target iteration, half, and observer state are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "thread_replay_markers_exact",
+      "name": "Thread replay markers are exact",
+      "result": "pass",
+      "checked": true
+    }
+  ],
+  "summary": {
+    "pass": 15,
+    "evaluated": 15
+  },
+  "artifact_exactness": {
+    "fine_score": true,
+    "fine_operand": true,
+    "bpref": true,
+    "fine_score_sha256": "de5816046f21266c2f675c74cdbed799046bd3654e88d4e40210860ec2ede24b",
+    "fine_operand_sha256": "a0ffefab0b30b602c5b18d4c73be70f510b32ee074132046f9bbc6e01d678a54",
+    "bpref_sha256": "5d1c9f08eac3e46d9ecb6aa6b1040ec28ffed929cc128637f757309ca82d7f57"
+  },
+  "class_map_fsc_auc": {
+    "metric": "signed normalized non-DC FSC-AUC",
+    "threshold": 0.999999,
+    "values": [
+      0.9999999961725112,
+      0.999999980710069,
+      0.9999999921474709,
+      0.9999999852511
+    ]
+  },
+  "particle_state_telemetry": {
+    "particle_count": 100000,
+    "raw_row_order_exact": true,
+    "hard_pose_class_shift_exact": true,
+    "pmax_mismatch_count": 13,
+    "support_count_mismatch_count": 15,
+    "maximum_support_count_delta": 1,
+    "full_particle_state_exact": false
+  },
+  "excluded_attempt": {
+    "science_job_id": 11992900,
+    "reason": "The first wrapper bypassed the predeclared powerClass marker and completed only arm A; it is not a 15-gate scientific pair."
+  },
+  "evidence": {
+    "analysis_result": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_highres_xi2_partials_pair_retry_17a9769_20260804T0555ET/analysis/HIGHRES_XI2_PAIR_RESULT_11993105.json",
+      "sha256": "ee98144916d69ac618b8696176a8ec84d97d1c9d7c6dbfa9c3b0632235ecb900"
+    },
+    "analyzer": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_highres_xi2_partials_pair_retry_17a9769_20260804T0555ET/provenance/analyze_highres_xi2_pair.py",
+      "sha256": "29a9ab99d0ff57619249d03dc11554fbd1fc24d89bff0a70a09164464d9ab003"
+    },
+    "science_completion": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_highres_xi2_partials_pair_retry_17a9769_20260804T0555ET/provenance/SCIENCE_PAIR_COMPLETE_11993105.json",
+      "sha256": "b78436fb5b88c493cfe077f0e1a9f3b54561bf9a5197652af7d582c276d02f79"
+    },
+    "analysis_completion": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_highres_xi2_partials_pair_retry_17a9769_20260804T0555ET/provenance/HIGHRES_XI2_ANALYSIS_COMPLETE_11993105.json",
+      "sha256": "d1383debda55421ce1348f9facbc68c5c7b550d8af3cc62ac7cf7424da2c5d61"
+    },
+    "science_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_highres_xi2_partials_pair_retry_17a9769_20260804T0555ET/provenance/science_outputs_11993105.sha256",
+      "sha256": "0af13e1ed0a109842b275e85976907265d89f7834d1a3a7fb158a1b87366f787"
+    },
+    "static_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_highres_xi2_partials_pair_retry_17a9769_20260804T0555ET/provenance/static_inputs_11993105.sha256",
+      "sha256": "05f53af5ff3bd15b8e12c152d6a6fed222f7a333773c78c4d7e8ea157380adb5"
+    },
+    "postterminal_audit": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_highres_xi2_partials_pair_retry_17a9769_20260804T0555ET/provenance/POSTTERMINAL_AUDIT_11993105.md",
+      "sha256": "27ac3362cde4ddfb324405817562ad1d567b4795f1424d3851e2cea68e966009"
+    },
+    "binary": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k4_highres_xi2_marker_829f3bc_20260804T0551ET/build/bin/relion_refine_mpi",
+      "sha256": "01e5ee2bd1db2612e374a21060dd7b4b9bd72c3cccea86f9d0225102082849da"
+    },
+    "build_completion": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k4_highres_xi2_marker_829f3bc_20260804T0551ET/provenance/BUILD_COMPLETE_11993050.json",
+      "sha256": "0a05f99fd5d8fabfaebace7c88307caeb37ddce36b33a886cbf34fcf824d08f3"
+    },
+    "build_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k4_highres_xi2_marker_829f3bc_20260804T0551ET/provenance/build_outputs_11993050.sha256",
+      "sha256": "f968e86a12ef7b77442c8c8121840906cae2e8e34334a9ddf4303d0fa1ab629e"
+    }
+  },
+  "metric_policy": "Exact byte, identity, dispatch, topology, runtime, and observer-marker gates plus signed shellwise normalized non-DC FSC-AUC; Pmax/support deltas are telemetry only; no correlation"
+}

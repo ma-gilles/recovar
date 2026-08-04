@@ -16,7 +16,9 @@ does not change any fixed acceptance threshold.
 - K=4 native auxiliary-stream repeatability gates: **12 / 13** (historical
   predecessor panel).
 - K=4 native soft-mask-partial repeatability gates: **13 / 14**.
-- K=4 stable native operand-capture admission: **0 / 1**.
+- K=4 native high-resolution-Xi2 observer repeatability gates: **15 / 15**.
+- K=4 stable native operand-capture admission: **1 / 1**; this is an observer
+  admission result, not cross-engine posterior/BPref/map parity.
 - Fresh K=1 dispatch alignment: **2 / 2** cases verified.
 - Fresh K=1 dispatch standalone rescue: **0 / 2** cases.
 
@@ -165,10 +167,10 @@ three-ULP float32 delta (`2.2351741790771484e-08`). All four same-label signed
 normalized non-DC FSC-AUC preservation values passed: `0.9999999942598741`,
 `0.9999999806617705`, `0.9999999895280383`, and `0.9999999866926460`.
 
-Source localization identifies `sum_init = highres_Xi2_img[img_id] / 2` as the
+Source localization identified `sum_init = highres_Xi2_img[img_id] / 2` as the
 only remaining field. The deployed power-class kernel uses the original
 128-lane tree within each block, then schedule-dependent inter-block atomics for
-the scalar `highres_Xi2`. The active default-off observer control preserves all
+the scalar `highres_Xi2`. The default-off observer control preserves all
 per-pixel operations and the within-block tree, writes one scalar partial per
 block, and finalizes those partials in increasing block order. Its build passed
 as Slurm job `11992806`. Initial pair job `11992900` is infrastructure-invalid:
@@ -176,10 +178,28 @@ the deterministic wrapper bypassed the predecessor function that emitted the
 required powerClass-stream marker, so the hash-pinned launcher stopped after a
 successful arm A and arm B never ran. That job is not a scientific result and
 its outputs remain preserved. Marker-only commit `17a97690` built successfully
-as job `11993050`; corrected fixed pair job `11993105` is the active causal
-gate. None of these results changes the K=4 scientific scorecard, and
-cross-engine attribution remains prohibited until the observer gate passes and
-deployed default-off/capture-inertness preservation is demonstrated.
+as job `11993050`.
+
+Corrected fixed pair job `11993105` completed on the same A100 and passed all
+15/15 predeclared observer gates. Fine score, fine operand, and BPref artifacts
+were byte-identical. The four signed normalized non-DC same-label map FSC-AUC
+values were `0.9999999961725112`, `0.9999999807100690`,
+`0.9999999921474709`, and `0.9999999852511000`, each above the fixed
+`0.999999` threshold. Dispatch, topology, capture identities, target state,
+runtime, and all observer-marker families also passed. Across the full 100,000
+particle state, hard pose/class/shift stayed exact, while 13 Pmax rows and 15
+support-count rows differed, with a maximum support-count delta of one. This
+admits stable native operand localization; it does not establish joint
+posterior/BPref/map parity or change the 41/60 cross-engine score.
+
+The next K=4 causal gate separates observer treatment from capture effects. A
+fixed same-A100 panel must compare predecessor/default-off high-resolution Xi2
+against deterministic high-resolution Xi2 with capture disabled, then compare
+that treatment against per-class capture arms. It must preserve exact hard
+pose/class/shift and topology, require signed map FSC-AUC at least `0.999999`,
+measure Pmax/support against the admitted native envelope, and capture all four
+classes for the immutable-ID-aligned join to RECOVAR. Cross-engine attribution
+remains prohibited until treatment preservation and capture inertness pass.
 
 ## Mandatory telemetry conventions
 
