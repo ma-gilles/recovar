@@ -28,6 +28,53 @@ and 22 are the topology failures. The K=4 failures are the late iterations
 
 ## Current causal decisions
 
+### Evidence-status ledger
+
+The external review's evidence labels are retained, but later fixed-panel
+experiments supersede its ranking where they provide direct causal evidence.
+
+| Conclusion | Status | Current evidence |
+| --- | --- | --- |
+| RELION uses one continued C RNG stream for the two half shuffles and then stable integer-optics sorts | Demonstrated structurally | Exact deployed-revision source and paired-helper tests |
+| The guarded RECOVAR candidate constructs the intended permutation and keeps the first 100 expected-accuracy identities, order, and runtime CTF rows aligned | Demonstrated for cases 22 and 26 | Complete candidate-order, inverse-map, identity, and CTF gates passed in both A/Bs |
+| The guarded physical dispatch is a sufficient fix for case 22 or case 26 | Falsified at the tested boundary | Alignment passed 2/2; standalone rescues were 0/2; case 22 changed by `+0.000013408214354915238` FSC-AUC and case 26 by `-0.00005334034513027053` |
+| Particle order can remain a numerical mediator through stable support buckets and reductions | Mechanistically supported, not causal here | Stable within-bucket execution preserves input order, but no tested scientific rescue |
+| The iteration-12 controller split is the original case-7 defect | Strongly disfavored | Material Pmax/map drift is reported from iteration 2 through 11 |
+| The iteration-12 split amplifies earlier drift | Strongly inferred | It changes current size and angular search after earlier continuous-state divergence |
+| Final fine scoring or final reconstruction is the common dominant K=1 defect | Strongly disfavored | Joint pose/reference oracles and exact-boundary/float64 interventions rescue or nearly preserve the final path |
+| K=4 fixed-label failures are class swaps | Falsified for the fixed exact-A100 trajectory | Identity map and particle class assignments are optimal at all 15 iterations |
+| K=4 class-1 tuples and significant support agree at the accepted observer boundary | Demonstrated provisionally | Exact `109184/109184` tuples and `38982/38982` support rows in the current one-class join |
+| K=4 raw `diff2` is the first unequal measured class-1 boundary | Demonstrated provisionally | 25,687 float32 mismatches, one-ULP median and three-ULP maximum; all-class admission and RECOVAR repeatability are still pending |
+| K=4 reduction order alone is the primary cause | Disfavored, not eliminated | Determinism improves repeatability without improving the fixed 41/60 cross-engine score; identical all-class operands/destinations have not yet been shown |
+| Full deployed RELION in-memory order beyond the reconstructed source semantics has been directly hashed | Unknown | The candidate is source-faithful and fully internally checked, but no native full-order runtime hash is available |
+
+### Active hypothesis queue
+
+For K=1, the next discriminator is deliberately broader than a guessed fix:
+
+1. inherited incoming reference/state drift at the iteration-2 boundary;
+2. raw coarse/fine score, CTF, phase, interpolation, or normalization operands;
+3. additive direction/translation priors or particle-aligned metadata;
+4. joint normalization, ordered significant-support threshold, or tie semantics;
+5. per-particle BPref operands or destination indexing;
+6. reduction order, padding, or scatter after identical support and operands;
+7. particle dispatch as a possible mediator, but not a sufficient production
+   fix on the current 0/2 causal result.
+
+For K=4, the current order is:
+
+1. raw fine-score input/operand or arithmetic-order mismatch, provisionally
+   observed for class 1;
+2. combined class--rotation and translation-prior construction;
+3. flattened joint class-pose normalization and global support semantics;
+4. evaluated all-class tuple sets and `--firstiter_cc` global-winner routing;
+5. class-specific BPref operands and accumulator destinations;
+6. reduction arithmetic alone.
+
+The first unequal boundary after the pending native all-class admission and
+RECOVAR repeatability controls, rather than this provisional ordering, chooses
+the implementation target.
+
 ### K=1 particle order
 
 The exact RELION fresh-run order is structurally established:
