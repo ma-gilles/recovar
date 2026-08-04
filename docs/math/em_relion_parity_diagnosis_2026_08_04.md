@@ -595,6 +595,22 @@ all-class parity. The repository wrapper
 artifact hashes, same-physical-GPU identity, the 96-candidate scope, and
 production-exact centered-score classification before producing that report.
 
+An explicitly non-admitted exploratory run exercised this new arithmetic arm
+on local A100 UUID `GPU-8ce5064a-ca39-7724-975a-8c3efa36c12c`. It combined the
+sealed 96-candidate native operand capture, the accepted current-source
+RECOVAR raw-score table, and the older source's current-size-38 window indices
+(`565` compact pixels). Across all 96 candidates, the centered RECOVAR target
+had L2 `0.0002845808477116318`; subtracting the JAX-on-native arithmetic arm
+left L2 `0.0002860090315655426`, or `-0.010062290368951121` target-energy
+removal. On the 83 native-production-exact candidates, the target L2 was
+`0.0002324632246948317` and the residual L2 was
+`0.0002529884983719899`, or `-0.1843853820598007` target-energy removal. This
+provisionally disfavors fused score arithmetic as the dominant owner and
+raises the relative priority of the reference, shifted-image, and score-weight
+operands. It is not scientific admission: the execution GPU differs from the
+pinned A100 and the window indices precede the current-source contribution
+bundle. The same-UUID admitted comparison remains decisive.
+
 The contribution-repeatability metrics remain deliberately distinct. The
 historical fixed panel is immutable at 0/3, and the deterministic candidate
 panel is already 3/3 but non-scoring pending its separate quality A/B. If job
