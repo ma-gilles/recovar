@@ -716,6 +716,19 @@ No source job is altered or cancelled, and neither retry is scientific evidence
 until its allocation, artifacts, manifests, and unchanged 3/3 byte gate are
 manually admitted.
 
+The downstream audit then found a second deterministic gate defect: the
+prepared v10 join and V5 factorial still named `12011036`, its retry-5 source
+root, and source-job-specific output names. They therefore could not consume a
+successful `12016847` result. Corrected retry-6 launchers now require exact job
+`12016847`, its retry-6 report, terminal `COMPLETED` state, and strict
+verification of every entry in `accepted_outputs_12016847.sha256`. The V5
+factorial also requires the corrected v10 completion to identify `12016847`;
+both launchers independently require source-report `owner_job_id=12016847`.
+Both scripts pass `bash -n`; hash-pinned pre-admission executions exit 1 without
+creating output. They remain unsubmitted, and the superseded launchers and
+Slurm jobs remain untouched. This is readiness/provenance progress, not a
+scientific result or scorecard change.
+
 ## Mandatory telemetry conventions
 
 Every staged capture must include immutable particle identity, base/physical

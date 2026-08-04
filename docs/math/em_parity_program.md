@@ -15051,3 +15051,32 @@ and `df1284bad3f67f7f28c31ab3c249cc854f659c7a02e9633a047e11411d237203`.
 It was submitted independently and is pending; no existing job or process was
 altered, cancelled, signalled, requeued, suspended, or reprioritized. No
 quality or causal claim is admitted before terminal artifact inspection.
+
+## 2026-08-04 corrected K=4 downstream source binding
+
+Static execution of the prepared v10 join and V5 operand-by-arithmetic
+factorial found that both were still pinned to superseded producer `12011036`
+and its retry-5 root. Because exact-source inspection already proves that
+`12011036` fails before EM, those downstream launchers could never consume a
+successful corrected capture from `12016847`.
+
+New immutable retry-6 roots bind the exact corrected owner, report, accepted
+output manifest, and downstream completion identity:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_class1_operand_join_v10_retry6_b36a8c5f_20260804T1900ET`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_class1_operand_arithmetic_factorial_v5_retry6_3188670f_20260804T1900ET`.
+
+The join launcher SHA-256 is
+`a0855fa54fc42a903f220b417517f8e1dcec7bd9f9f5e04bc673c7ae2e5d5828`;
+the factorial launcher SHA-256 is
+`3b3a403778bf8f1a2263f0437165592db0b520a2e4b22c06aa0145a3037ebf21`.
+Both pass `bash -n`, fail closed with exit 1 before admission, and leave their
+analysis roots empty. They additionally require terminal `COMPLETED` state for
+`12016847`, explicitly require `owner_job_id=12016847`, and verify every digest in
+`accepted_outputs_12016847.sha256`. Neither is submitted before manual source
+admission; old roots and all Slurm jobs remain untouched.
+
+The checked progress reporter was independently regenerated at `ef35544c` and
+its complete scorecard panel passed **147/147** unit tests with warnings
+promoted to errors. Fixed quality remains K=1 `28/34` strict FSC/FSC-AUC and
+K=4 `41/60` direct per-class FSC-AUC (`9/15` all-class iterations).
