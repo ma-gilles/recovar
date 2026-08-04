@@ -210,6 +210,18 @@ a discrepancy causes the late map failures. It remains provisional until the
 four native class captures and their treatment/capture-inertness admission
 pass.
 
+The provisional mismatch is distributed rather than confined to one tuple:
+25,687/109,184 active candidates differ (23.5%), with 18,766 positive and
+6,921 negative RECOVAR-minus-RELION deltas, signed sum `0.628997802734375`,
+and L1 sum `1.267913818359375`. The ten largest rotation strata account for
+only 1.06% of mismatch L1, whereas the ten largest translation strata account
+for 23.9%. The predeclared representative-selection rule chooses native
+rotation-local 1790, mapped RECOVAR rotation row 2878, translation 28: native
+raw `diff2` `512.4172973632812` versus RECOVAR `512.4174194335938`, a
+two-ULP delta. This representative supersedes a simple first-mismatch target
+for a bounded operand capture if the pending admission and repeatability gates
+accept the all-class attribution.
+
 The fixed RECOVAR iteration-2 boundary for stack identity 53723 is now complete
 for all four classes. Its four artifacts preserve 247,232 active class-pose
 tuples, 66,986 significant tuples, and a joint probability mass of
