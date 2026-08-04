@@ -254,6 +254,29 @@ a deterministic second-stage sum. Therefore the old shifted-image instability
 is not presumed to survive in current source `223e7e81`; job `11994138` is the
 direct independent-process regression test for that claim.
 
+Source comparison now identifies a narrower, falsifiable preprocessing
+hypothesis even if both implementations are repeatable. The accepted native
+observer and current RECOVAR use the same 128 blocks, 128 lanes, pixel-owner
+formula, radius tests, and per-lane pixel traversal, but they use different
+float32 addition trees:
+
+1. The native observer writes all `128 * 128` block--lane partials, adds a
+   fixed lane across blocks in increasing block order, and finally applies a
+   CUB reduction to the 128 lane totals.
+2. RECOVAR applies a CUB block reduction across the 128 lanes first, writes
+   128 block totals, and finally applies a CUB reduction to those block totals.
+
+The two trees are deterministic but not arithmetically identical. This makes
+soft-mask background grouping a concrete candidate for stable shifted-image
+and raw-`diff2` ULP differences; it does not yet establish causality for the
+late class-map failures. No production change is admissible from source
+inspection alone. After native treatment/capture admission and current-source
+RECOVAR repeatability pass, a bounded same-input diagnostic should compare the
+two addition trees at the background scalar, masked image, shifted Fourier
+image, representative raw score, and all-class support boundaries. The
+hypothesis is falsified if matching the native tree does not close those first
+unequal operands.
+
 As a separate provisional clue, that RECOVAR capture's high-shell scalar and
 the accepted native observer's per-candidate `sum_init` are bitwise identical:
 float32 value `0.07816561311483383`, bits `1033901387`. This weakens a pure
