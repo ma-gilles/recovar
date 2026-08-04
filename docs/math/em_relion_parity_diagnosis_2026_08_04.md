@@ -143,10 +143,26 @@ stored joint probabilities to maximum absolute error
 RELION capture must come from the same accepted observer lineage before tuple,
 raw-score, prior, normalization, support, or BPref comparisons are causal.
 The next all-class capture is intended to expose the first unequal global
-class-pose normalization/support boundary. Before direct class FSC is given a
-causal interpretation, a signed 4-by-4 class FSC-AUC matrix should diagnose
-class permutation separately from map-content error; a permutation rescue is
-diagnostic and does not satisfy a fixed-label scorecard.
+class-pose normalization/support boundary. Class permutation is already ruled
+out for the current exact-A100 fixed trajectory. Its signed 4-by-4
+cross-engine FSC-AUC matrices select the identity map assignment at every one
+of 15 numbered iterations, and the independently joined particle assignments
+also select the identity class permutation at every iteration. At iteration
+15 the matrix is
+
+```text
+[[0.993726871, 0.168255188, 0.325498694, 0.037487868],
+ [0.170138501, 0.991635133, 0.320108931, 0.027329405],
+ [0.324291781, 0.319346012, 0.990841324, 0.026526720],
+ [0.035612276, 0.027311323, 0.028779669, 0.994521524]]
+```
+
+The source report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_phaseffi_exactgpu_retry1_31c4a0ca_20260727T040500ET/analysis/relion_cuda/k4_fsc_trajectory.json`
+(SHA-256
+`ff35e7d548c4c0157aac349e83aadf1c1814a791f9904a8c6c93c813eae9615e`).
+This excludes a label swap for the fixed late-trajectory failures; it does not
+waive fixed-label acceptance or replace the operand-level localization.
 
 Native RELION observer repeatability is an admission gate for this comparison.
 Stream-replay changes are observer controls, not RECOVAR parity fixes. The
