@@ -72,7 +72,9 @@ def test_fine_operand_jax_tree_accepts_batched_native_operands():
 
 
 def test_fine_operand_jax_tree_preserves_full_grid_gap_topology():
-    full_to_compact = np.asarray([0, -1, -1, 1, -1, 2], dtype=np.int32)
+    # Use a non-self-inverse gather so this checks map direction as well as
+    # explicit zero-gap lane placement.
+    full_to_compact = np.asarray([2, -1, -1, 0, -1, 1], dtype=np.int32)
     reference = np.asarray([[1 + 2j, 2 + 0j, 3 - 1j]], dtype=np.complex64)
     shifted = np.asarray([[0 + 1j, 1 + 0j, 2 - 2j]], dtype=np.complex64)
     corr = np.asarray([[1, 2, 3]], dtype=np.float32)
