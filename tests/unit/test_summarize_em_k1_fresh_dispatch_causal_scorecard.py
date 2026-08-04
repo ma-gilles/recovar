@@ -34,6 +34,18 @@ def test_fixed_fresh_dispatch_causal_scorecard_is_valid_and_fresh() -> None:
     assert "Evaluated: **2 / 2**." in rendered
     assert "Standalone rescues: **0 / 2**." in rendered
     assert rendered.count("| [x] |") == 2
+    assert all(
+        case["dispatch_alignment"]
+        == {
+            "full_physical_order_exact": True,
+            "expected_accuracy_identity_order_exact": True,
+            "expected_accuracy_runtime_ctf_rows_exact": True,
+            "physical_vs_internal_execution_equivalence_established": False,
+            "production_output_restoration_accepted": False,
+        }
+        for case in scorecard["cases"]
+    )
+    assert "runtime float64 expected-accuracy CTF rows" in rendered
     assert MODULE.DEFAULT_MARKDOWN.read_text() == rendered
 
 

@@ -20,6 +20,13 @@ also retained its topology failure; case 26's final FSC-AUC
 decreased. Particle order remains a structural invariant and
 possible mediator, not an accepted standalone production fix.
 
+Both A/Bs now explicitly verify the complete treatment physical
+order, the ordered first 100 expected-accuracy identities and local
+gathers, and the runtime float64 expected-accuracy CTF rows. This
+closes the alignment audit, but it does not establish physical-vs-
+internal execution equivalence or accept production output
+restoration.
+
 The producer Slurm states are preserved exactly: case 22 ended
 after a post-science analysis exception and was reanalyzed from
 sealed arm outputs; case 26 intentionally exited nonzero after

@@ -38,6 +38,7 @@ EXPECTED_REPORTS = {
             "predeclaration": "94f33f4f260b2cb1a88e63ab7b1e0beab819148a1a6d6c0a441e3f81f74bb99e",
             "static_inputs": "fa0f3b6cfd28d6f3322591c61616b20262cdc58cab6b66cb7e9212417ca6911c",
             "terminal_analysis_error": "afa2c8b25a39e13eec2dde7e135ca2ed495a40cff265fae7dbee540fe1168547",
+            "alignment_report": "b3d0a1e325aee01081056c0f3689b06f89b032fd836b8b5c32d1a6ff0bf76e43",
         },
     },
     "k1-26": {
@@ -56,6 +57,7 @@ EXPECTED_REPORTS = {
             "predeclaration": "750bf4ffe787bf594e9b496005b3464b4da21fc3968be82812151c892dba6ae9",
             "static_inputs": "7cfc02c9cfbfbed05b011a94cd0bf66f4ed13183a220a8f36176200dc03aac28",
             "science_completion": "6e3a71a111507a3c3a0fa15dd8c12aa5fc1c1090685879f34da36b0330649512",
+            "alignment_report": "d6dfe66a22e114f125fc679902d2ccafaf0bdb0c5cad9122063b14149993773b",
         },
     },
 }
@@ -130,6 +132,17 @@ def load_and_validate(path: Path) -> dict:
             and case.get("grid_correction") == "unset/default-off"
             and case.get("forced_final_all_data_after_nonconvergence") is False,
             f"{case_id}: causal or policy result changed",
+        )
+        _require(
+            case.get("dispatch_alignment")
+            == {
+                "full_physical_order_exact": True,
+                "expected_accuracy_identity_order_exact": True,
+                "expected_accuracy_runtime_ctf_rows_exact": True,
+                "physical_vs_internal_execution_equivalence_established": False,
+                "production_output_restoration_accepted": False,
+            },
+            f"{case_id}: dispatch alignment scope changed",
         )
         _require(
             case.get("control_final_merged_cross_fsc_auc") == expected["control"]
@@ -248,6 +261,13 @@ def render_markdown(scorecard: dict) -> str:
             "also retained its topology failure; case 26's final FSC-AUC",
             "decreased. Particle order remains a structural invariant and",
             "possible mediator, not an accepted standalone production fix.",
+            "",
+            "Both A/Bs now explicitly verify the complete treatment physical",
+            "order, the ordered first 100 expected-accuracy identities and local",
+            "gathers, and the runtime float64 expected-accuracy CTF rows. This",
+            "closes the alignment audit, but it does not establish physical-vs-",
+            "internal execution equivalence or accept production output",
+            "restoration.",
             "",
             "The producer Slurm states are preserved exactly: case 22 ended",
             "after a post-science analysis exception and was reanalyzed from",
