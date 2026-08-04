@@ -84,6 +84,12 @@ from scripts.summarize_em_k1_shared_checkpoint_fp64_scorecard import (  # noqa: 
 from scripts.summarize_em_k1_shared_checkpoint_fp64_scorecard import (  # noqa: E402
     load_and_validate as load_and_validate_k1_shared_checkpoint_fp64,
 )
+from scripts.summarize_em_k4_allclass_boundary_capture_scorecard import (  # noqa: E402
+    DEFAULT_SCORECARD as DEFAULT_K4_ALLCLASS_BOUNDARY_CAPTURE_SCORECARD,
+)
+from scripts.summarize_em_k4_allclass_boundary_capture_scorecard import (  # noqa: E402
+    load_and_validate as load_and_validate_k4_allclass_boundary_capture,
+)
 from scripts.summarize_em_k4_causal_boundary_scorecard import (  # noqa: E402
     DEFAULT_SCORECARD as DEFAULT_K4_CAUSAL_SCORECARD,
 )
@@ -139,7 +145,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v19"
+SCHEMA = "recovar.em_parity_progress.v20"
 
 
 def _panel(
@@ -184,6 +190,9 @@ def build_progress(
     fixture_manifest_path: Path = DEFAULT_FIXTURE_MANIFEST,
     k4_snapshot_path: Path = DEFAULT_K4_SNAPSHOT,
     k4_class_path: Path = DEFAULT_K4_CLASS_SCORECARD,
+    k4_allclass_boundary_capture_path: Path = (
+        DEFAULT_K4_ALLCLASS_BOUNDARY_CAPTURE_SCORECARD
+    ),
     k4_causal_path: Path = DEFAULT_K4_CAUSAL_SCORECARD,
     k4_contribution_repeatability_path: Path = (
         DEFAULT_K4_CONTRIBUTION_REPEATABILITY_SCORECARD
@@ -223,6 +232,9 @@ def build_progress(
     load_and_validate_fixture_manifest(fixture_manifest_path, scorecard)
     k4_snapshot = load_and_validate_k4_snapshot(k4_snapshot_path)
     k4_class_scorecard = load_and_validate_k4_classes(k4_class_path)
+    k4_allclass_boundary_capture = load_and_validate_k4_allclass_boundary_capture(
+        k4_allclass_boundary_capture_path
+    )
     k4_causal = load_and_validate_k4_causal(k4_causal_path)
     k4_contribution_repeatability = (
         load_and_validate_k4_contribution_repeatability(
@@ -281,6 +293,7 @@ def build_progress(
     k4_direct_denominator = k4_snapshot["direct_fsc_auc_checks_total"]
     k4_iteration_denominator = k4_snapshot["numbered_iterations"]
     k4_classes = k4_snapshot["classes"]
+    k4_allclass_boundary_capture_summary = k4_allclass_boundary_capture["summary"]
     k4_causal_summary = k4_causal["summary"]
     k4_contribution_repeatability_summary = k4_contribution_repeatability[
         "summary"
@@ -553,6 +566,14 @@ def build_progress(
             scoring=True,
         ),
         _panel(
+            "k4_allclass_boundary_capture",
+            "K=4 RECOVAR all-class boundary capture",
+            k4_allclass_boundary_capture_summary["pass"],
+            k4_allclass_boundary_capture_summary["evaluated"],
+            k4_allclass_boundary_capture["frozen_denominator"],
+            scoring=False,
+        ),
+        _panel(
             "k4_causal",
             "K=4 exact-device causal boundary",
             k4_causal_summary["pass"],
@@ -624,7 +645,8 @@ def build_progress(
             "K=1 deterministic-mask, K=1 exact-initial-noise counterfactual, "
             "K=1 live-noise counterfactual, K=1 "
             "reference-roundtrip rejection, K=1 "
-            "shared-checkpoint FP64 reference, K=4 contribution-repeatability, "
+            "shared-checkpoint FP64 reference, K=4 RECOVAR all-class boundary "
+            "capture, K=4 contribution-repeatability, "
             "K=4 native aux-stream repeatability, "
             "K=4 deterministic contribution candidate, "
             "K=4 deterministic soft-mask quality acceptance, "
@@ -770,6 +792,9 @@ def build_progress(
             ),
             "k4_trajectory_snapshot": _input_record(k4_snapshot_path),
             "k4_class_scorecard": _input_record(k4_class_path),
+            "k4_allclass_boundary_capture_scorecard": _input_record(
+                k4_allclass_boundary_capture_path
+            ),
             "k4_causal_scorecard": _input_record(k4_causal_path),
             "k4_contribution_repeatability_scorecard": _input_record(
                 k4_contribution_repeatability_path
