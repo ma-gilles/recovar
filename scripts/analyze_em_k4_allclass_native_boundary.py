@@ -16,7 +16,6 @@ import numpy as np
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
-
 SCHEMA = "recovar.em_k4_allclass_native_boundary.v1"
 ADMISSION_SCHEMA = "recovar-k4-highres-treatment-allclass-capture-v1"
 EXPECTED_CLASSES = 4
@@ -117,6 +116,102 @@ def float32_metric(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
         ),
         "correlation_used": False,
     }
+
+
+def nonnegative_support_boundary(
+    values: np.ndarray,
+    active_mask: np.ndarray,
+    selected_mask: np.ndarray,
+    *,
+    threshold: float | np.floating[Any] | None = None,
+) -> dict[str, Any]:
+    """Describe a nonnegative support boundary in its original float dtype."""
+
+    values = np.asarray(values)
+    active = np.asarray(active_mask, dtype=bool)
+    selected = np.asarray(selected_mask, dtype=bool)
+    _require(
+        values.shape == active.shape == selected.shape,
+        "support-boundary shapes differ",
+    )
+    _require(values.dtype in (np.dtype(np.float32), np.dtype(np.float64)), "unsupported support dtype")
+    _require(np.all(~selected | active), "selected support contains an inactive value")
+    _require(
+        np.all(np.isfinite(values[active])) and np.all(values[active] >= 0),
+        "active support values must be finite and nonnegative",
+    )
+    retained = values[selected]
+    excluded = values[active & ~selected]
+    _require(retained.size > 0, "selected support is empty")
+    bit_dtype = np.uint32 if values.dtype == np.float32 else np.uint64
+
+    minimum = values.dtype.type(np.min(retained))
+    minimum_bits = int(np.asarray(minimum).view(bit_dtype))
+    record: dict[str, Any] = {
+        "dtype": str(values.dtype),
+        "selected_count": int(retained.size),
+        "excluded_active_count": int(excluded.size),
+        "minimum_selected": float(minimum),
+        "minimum_selected_bits": minimum_bits,
+        "minimum_selected_ties": int(np.count_nonzero(retained == minimum)),
+    }
+    if excluded.size:
+        maximum = values.dtype.type(np.max(excluded))
+        maximum_bits = int(np.asarray(maximum).view(bit_dtype))
+        _require(minimum >= maximum, "support boundary is inverted")
+        record.update(
+            {
+                "maximum_excluded_active": float(maximum),
+                "maximum_excluded_active_bits": maximum_bits,
+                "maximum_excluded_active_ties": int(
+                    np.count_nonzero(excluded == maximum)
+                ),
+                "selected_minus_excluded_margin": float(
+                    np.float64(minimum) - np.float64(maximum)
+                ),
+                "selected_minus_excluded_margin_ulps": minimum_bits - maximum_bits,
+            }
+        )
+    else:
+        record.update(
+            {
+                "maximum_excluded_active": None,
+                "maximum_excluded_active_bits": None,
+                "maximum_excluded_active_ties": None,
+                "selected_minus_excluded_margin": None,
+                "selected_minus_excluded_margin_ulps": None,
+            }
+        )
+
+    if threshold is not None:
+        threshold_value = values.dtype.type(threshold)
+        _require(
+            np.isfinite(threshold_value) and threshold_value >= 0,
+            "support threshold is invalid",
+        )
+        threshold_bits = int(np.asarray(threshold_value).view(bit_dtype))
+        replayed = active & (values >= threshold_value)
+        record["recorded_threshold"] = {
+            "value": float(threshold_value),
+            "bits": threshold_bits,
+            "replays_selection_exact": bool(np.array_equal(replayed, selected)),
+            "selected_ties_at_threshold": int(
+                np.count_nonzero(selected & (values == threshold_value))
+            ),
+            "minimum_selected_minus_threshold": float(
+                np.float64(minimum) - np.float64(threshold_value)
+            ),
+            "minimum_selected_minus_threshold_ulps": minimum_bits - threshold_bits,
+            "threshold_minus_maximum_excluded": (
+                float(np.float64(threshold_value) - np.float64(maximum))
+                if excluded.size
+                else None
+            ),
+            "threshold_minus_maximum_excluded_ulps": (
+                threshold_bits - maximum_bits if excluded.size else None
+            ),
+        }
+    return record
 
 
 def classify_first_unequal_boundary(stage_exact: dict[str, bool]) -> str:
@@ -358,6 +453,30 @@ def _class_join(
     )
     posterior_metric = float32_metric(native_posterior, recovar_posterior)
     significant_exact = bool(np.array_equal(native_significant, recovar_significant))
+    normalized_native_threshold = np.divide(
+        significant_weight,
+        weight_norm,
+        dtype=np.float32,
+    )
+    support_boundary = {
+        "native_raw_weight_float32": nonnegative_support_boundary(
+            candidates["post_exponent_weight"],
+            active,
+            significant_rows,
+            threshold=significant_weight,
+        ),
+        "native_normalized_probability_float32": nonnegative_support_boundary(
+            native_posterior,
+            native_tuple_mask,
+            native_significant,
+            threshold=normalized_native_threshold,
+        ),
+        "recovar_probability_original": nonnegative_support_boundary(
+            recovar_posterior,
+            candidate_mask,
+            recovar_significant,
+        ),
+    }
 
     candidate_mismatch = np.flatnonzero(
         (native_tuple_mask ^ candidate_mask).reshape(-1)
@@ -425,6 +544,7 @@ def _class_join(
             "union": int(np.count_nonzero(native_significant | recovar_significant)),
             "exact": significant_exact,
             "first_mismatch_candidate_key": support_first_key,
+            "boundary": support_boundary,
         },
         "native_global_scalars": {
             "fine_score_min_diff2_bits": int(score.header[18]),

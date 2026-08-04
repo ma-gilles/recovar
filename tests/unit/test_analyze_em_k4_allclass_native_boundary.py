@@ -10,6 +10,7 @@ from scripts.analyze_em_k4_allclass_native_boundary import (
     classify_first_unequal_boundary,
     exact_rotation_permutation,
     float32_metric,
+    nonnegative_support_boundary,
 )
 
 
@@ -96,6 +97,43 @@ def test_float32_metric_ulp_distance_is_ordered_across_signs() -> None:
 
     assert metric["finite_mismatch_max_ulp"] == 1
     assert metric["finite_mismatch_p50_ulp"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("dtype", (np.float32, np.float64))
+def test_support_boundary_preserves_dtype_bits_and_margin(dtype) -> None:
+    values = np.asarray((0.1, 0.2, 0.3, 0.4), dtype=dtype)
+    active = np.asarray((True, True, True, False))
+    selected = np.asarray((False, True, True, False))
+
+    boundary = nonnegative_support_boundary(
+        values,
+        active,
+        selected,
+        threshold=dtype(0.2),
+    )
+
+    assert boundary["dtype"] == np.dtype(dtype).name
+    assert boundary["selected_count"] == 2
+    assert boundary["excluded_active_count"] == 1
+    assert boundary["minimum_selected"] == float(dtype(0.2))
+    assert boundary["maximum_excluded_active"] == float(dtype(0.1))
+    assert boundary["selected_minus_excluded_margin"] > 0
+    assert boundary["selected_minus_excluded_margin_ulps"] > 0
+    assert boundary["recorded_threshold"]["replays_selection_exact"] is True
+    assert boundary["recorded_threshold"]["minimum_selected_minus_threshold"] == 0
+
+
+@pytest.mark.unit
+def test_support_boundary_rejects_inverted_selection() -> None:
+    values = np.asarray((0.1, 0.2), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="boundary is inverted"):
+        nonnegative_support_boundary(
+            values,
+            np.asarray((True, True)),
+            np.asarray((True, False)),
+        )
 
 
 @pytest.mark.unit

@@ -213,9 +213,19 @@ most two ULPs. The resulting unnormalized score differs in 101,388 rows and
 the class-1 posterior differs bitwise in all 109,184 rows, while global
 significant support remains exact. This is evidence for a small scorer/operand
 or arithmetic-order discrepancy before normalization, not evidence that such
-a discrepancy causes the late map failures. It remains provisional until the
-four native class captures and their treatment/capture-inertness admission
-pass.
+a discrepancy causes the late map failures. It is accepted only in the narrow
+class-1 target scope; the rejected broad native admission prevents an
+all-class generalization.
+
+The accepted class-1 support identity is not an immediate class-local tie. In
+the native raw float32 weights, the minimum retained value equals the recorded
+threshold and is 1,917 float32 ULPs above the maximum excluded active value;
+after native float32 normalization, the retained/excluded gap is
+`8.618883384770015e-12`, or 2,426 ULPs. RECOVAR's original float64
+probabilities have a corresponding class-local gap of
+`8.614616903405886e-12`. These margins weaken tie behavior as the owner for
+this target/class. They do not establish the global four-class margin or rule
+out later particles near a support boundary.
 
 The provisional mismatch is distributed rather than confined to one tuple:
 25,687/109,184 active candidates differ (23.5%), with 18,766 positive and
