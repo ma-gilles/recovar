@@ -216,6 +216,7 @@ _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT
 _SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTEP"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
+_RELION_FINE_DIFF2_FUSED_FFI_ENV = "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI"
 _RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV = "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH"
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
 _BPREF_CONTRIBUTION_DUMP_CLASS_ENV = "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS"
@@ -5277,6 +5278,56 @@ def _relion_cuda_fine_diff2_sum(
                 "RELION full-to-compact lookup must be one-dimensional, got "
                 f"{relion_full_to_compact.shape}"
             )
+    if _env_flag_enabled(_RELION_FINE_DIFF2_FUSED_FFI_ENV, default=False):
+        from recovar import cuda_backproject
+
+        if reference.ndim == 4:
+            if (
+                shifted_image.ndim != 4
+                or pixel_weight.ndim != 4
+                or reference.shape[2] != 1
+                or shifted_image.shape[1] != 1
+                or pixel_weight.shape[1:3] != (1, 1)
+                or reference.shape[0] != shifted_image.shape[0]
+                or reference.shape[0] != pixel_weight.shape[0]
+            ):
+                raise ValueError(
+                    "fused rectangular fine diff2 received unsupported broadcast shapes: "
+                    f"{reference.shape}, {shifted_image.shape}, {pixel_weight.shape}"
+                )
+            return cuda_backproject.relion_fine_diff2_rectangular_f32(
+                reference[:, :, 0, :],
+                shifted_image[:, 0, :, :],
+                pixel_weight[:, 0, 0, :],
+                relion_full_to_compact,
+            )
+        if reference.ndim == 3 and shifted_image.ndim == 3 and pixel_weight.ndim == 3:
+            if (
+                reference.shape == shifted_image.shape
+                and pixel_weight.shape[1] == 1
+                and reference.shape[0] == pixel_weight.shape[0]
+            ):
+                return cuda_backproject.relion_fine_diff2_pairs_f32(
+                    reference,
+                    shifted_image,
+                    pixel_weight[:, 0, :],
+                    relion_full_to_compact,
+                )
+            if (
+                reference.shape[1] == 1
+                and shifted_image.shape[0] == 1
+                and pixel_weight.shape[:2] == (1, 1)
+            ):
+                return cuda_backproject.relion_fine_diff2_rectangular_f32(
+                    reference[:, 0, :][None, :, :],
+                    shifted_image[0, :, :][None, :, :],
+                    pixel_weight[0, 0, :][None, :],
+                    relion_full_to_compact,
+                )[0]
+        raise ValueError(
+            "fused fine diff2 received unsupported operand ranks/shapes: "
+            f"{reference.shape}, {shifted_image.shape}, {pixel_weight.shape}"
+        )
     full_image_size = int(relion_full_to_compact.shape[0])
     block_size = _RELION_CUDA_FINE_REF3D_BLOCK_SIZE
     n_passes = (full_image_size + block_size - 1) // block_size

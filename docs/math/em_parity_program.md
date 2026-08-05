@@ -15080,3 +15080,57 @@ The checked progress reporter was independently regenerated at `ef35544c` and
 its complete scorecard panel passed **147/147** unit tests with warnings
 promoted to errors. Fixed quality remains K=1 `28/34` strict FSC/FSC-AUC and
 K=4 `41/60` direct per-class FSC-AUC (`9/15` all-class iterations).
+
+## 2026-08-04 K=4 fine-score FMA boundary closed locally
+
+The active candidate checkout is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_phase_a_router_223e7e81_20260803T2035ET/checkout`
+at clean parent `2ed195a91926dd0a223acdeaf0efed9da987dcd2` on
+`codex/em-k4-phase-a-router`, with an uncommitted custom-CUDA counterfactual.
+Its measured hypothesis is deliberately narrow: changing only the fine-score
+binary32 instruction and 256-lane reduction order to the pinned RELION A100
+SASS order closes the captured raw-score residual.
+
+The implemented FFI evaluates both rectangular and compact-pair sparse-pass-2
+layouts. It uses the demonstrated sequence `FADD`, `FMUL`, `FFMA`, `FMUL
+0.5`, `FFMA`, followed by the fixed 256-lane binary-tree reduction. The
+existing high-resolution initialization term remains outside the FFI and is
+added at the existing production boundary. The route is disabled by default
+and enabled only by the diagnostic
+`RECOVAR_RELION_FINE_DIFF2_FUSED_FFI=1`; it is not yet an accepted public
+configuration surface.
+
+On native RELION job `12001296`'s admitted 96-candidate operand capture, the
+current JAX production route reproduces `83/96` final raw-score words. The new
+custom-CUDA route reproduces **`96/96`**, with maximum ULP difference zero.
+The final-SM80 reports are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_fused_diff2_ffi_2ed195a9_20260804T2020ET/analysis/FUSED_FINE_DIFF2_FFI_NATIVE_FINAL_SM80_12001296.json`
+  (SHA-256
+  `c70e18ae7c1e5f39c5da79a36f24e2602cfa6619b83b0c8f57a1fab7e303dbf1`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_fused_diff2_ffi_2ed195a9_20260804T2020ET/analysis/SPARSE_PASS2_FUSED_FINE_DIFF2_DISPATCH_FINAL_SM80_12001296.json`
+  (SHA-256
+  `186576d13b67db50311c9378d4b0663152096f47a1a4a67aace6e1068cefff7f`).
+
+The final SM80-only library is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_fused_diff2_ffi_2ed195a9_20260804T2020ET/libcuda_backproject_sm80.so`
+(SHA-256
+`2d0111b41cf6667829ffe4001375793e27da492fd12a16fafd6c59bbfc5222de`).
+Focused CUDA/source/route tests passed `32/32` before the final route cases;
+the expanded CPU-only panel passed `33` with two GPU cases deselected. The
+final expanded GPU panel passes `35/35` in `367.29` seconds, and the final
+SM80-library native replay remains exact `96/96` both directly and through
+the enabled sparse-pass-2 dispatch.
+
+This is exact operand-boundary evidence, not FSC evidence. Fixed scoring
+metrics remain K=1 `28/34` strict, `32/34` topology, `34/34` evaluated; K=4
+`41/60` direct and `9/15` all-class. The next decisive experiment is one
+same-A100, 100,000-particle, four-class, 15-iteration control/treatment pair.
+Both arms must use the same source, custom library, dispatch schedule, seed,
+inputs, caches-by-arm, policy, and GPU; the treatment changes only the fine
+diff2 route. Acceptance is based on signed shellwise FSC/FSC-AUC, Hungarian
+per-class matching, GT deltas, class agreement, exact controller/finalization
+topology, and provenance. Correlation is not computed. If the trajectory is
+not rescued, the next boundary is the first iteration at which identical raw
+tuples cease to yield identical posterior, support, BPref operands, or
+reductions.

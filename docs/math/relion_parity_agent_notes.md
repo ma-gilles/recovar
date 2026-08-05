@@ -11335,3 +11335,56 @@ and `9/15` all-class.
 - Run root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sameallocation_restart_pair_autoiter2_d676d9d8_20260731T1225ET`.
   No Codex process or existing Slurm job was modified or interrupted.
+
+## 2026-08-04 20:40 ET — exact custom-CUDA fine-score counterfactual
+
+- Validation scope: algorithmic-quality candidate, still diagnostic and
+  default-off until a fixed same-GPU FSC/FSC-AUC A/B accepts it.
+- Active parent is `2ed195a91926dd0a223acdeaf0efed9da987dcd2` on
+  `codex/em-k4-phase-a-router`. The candidate adds custom-CUDA FFI entry
+  points for rectangular and compact-pair fine-score layouts and routes only
+  `_relion_cuda_fine_diff2_sum` when
+  `RECOVAR_RELION_FINE_DIFF2_FUSED_FFI=1`.
+- Disassembly of the final SM80 library shows the intended per-pixel core at
+  offsets `0x05e0` through `0x0630`: two `FADD` differences, one `FMUL`
+  square, one `FFMA` square-plus-square, one `FMUL` by `0.5`, and one `FFMA`
+  of weighted contribution into the lane accumulator. The reduction uses
+  explicit round-to-nearest binary32 additions over 256 lanes.
+- Final SM80 library:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_fused_diff2_ffi_2ed195a9_20260804T2020ET/libcuda_backproject_sm80.so`,
+  SHA-256
+  `2d0111b41cf6667829ffe4001375793e27da492fd12a16fafd6c59bbfc5222de`.
+- Admitted native operand capture:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_native_class1_fine_operands_rot1790_17a9769_20260804T1034ET/capture/factors/part48584_stack53723_class1.fine-operand-v1.bin`,
+  SHA-256
+  `24b1f069ced47eebdb6d68c230f870c756b7e1a749d3b84c4c20b39f243d37f0`.
+- The direct FFI plus the unchanged captured high-resolution initialization
+  term matches all `96/96` native production raw-score words exactly, maximum
+  zero ULP. Through the actual sparse-pass-2 dispatch helper, the default JAX
+  control matches `83/96`; the FFI treatment matches `96/96`. Control
+  mismatch indices are `8, 10, 22, 31, 34, 35, 36, 41, 49, 50, 65, 92, 95`.
+- Final-SM80 report paths are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_fused_diff2_ffi_2ed195a9_20260804T2020ET/analysis/FUSED_FINE_DIFF2_FFI_NATIVE_FINAL_SM80_12001296.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_fused_diff2_ffi_2ed195a9_20260804T2020ET/analysis/SPARSE_PASS2_FUSED_FINE_DIFF2_DISPATCH_FINAL_SM80_12001296.json`.
+  Their SHA-256 values are
+  `c70e18ae7c1e5f39c5da79a36f24e2602cfa6619b83b0c8f57a1fab7e303dbf1`
+  and
+  `186576d13b67db50311c9378d4b0663152096f47a1a4a67aace6e1068cefff7f`.
+  They pin the final library SHA-256, parent HEAD, and dirty diff SHA-256
+  `2c205e45d376f4d0522c3bdd70bd451da9ace2d3d45cb8d89b44d1513826314e`.
+- Focused custom-CUDA/source/tree tests passed `32/32` before three final
+  dispatch-route cases were added. The expanded CPU-only panel passed `33`
+  with the two GPU cases deselected. The final expanded GPU run passed
+  `35/35` in `367.29` seconds on idle local A100
+  `GPU-c6d48651-75fd-c644-a83f-3879c0a58186`. No test tolerance, baseline, scorecard
+  denominator, controller, finalization policy, grid correction, or forced
+  final-all-data behavior changed.
+- Scientific interpretation: this closes the demonstrated native fine-score
+  arithmetic boundary for the fixed capture. It does not yet show that the
+  arithmetic mismatch causes iterations 10--15 to fail map parity. The next
+  gate is a sequential same-A100 full-trajectory control/treatment pair that
+  changes only this route, evaluated with signed shellwise FSC/FSC-AUC and
+  Hungarian per-class matching. If it is null, resume the staged
+  tuple-to-posterior-to-support-to-BPref-to-reduction localization rather than
+  widening thresholds.

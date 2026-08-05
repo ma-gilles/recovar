@@ -516,6 +516,10 @@ _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE = (
 )
 _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32 = "cuda_relion_make_scoring_rotations_f32"
 _TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
+_TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32 = (
+    "cuda_relion_fine_diff2_rectangular_f32"
+)
+_TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
 
 # Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
 # Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
@@ -548,6 +552,11 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionMakeScoringRotationsF32",
     ),
     (_TARGET_RELION_TRANSLATE_SCORE_F32, "RelionTranslateScoreF32"),
+    (
+        _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32,
+        "RelionFineDiff2RectangularF32",
+    ),
+    (_TARGET_RELION_FINE_DIFF2_PAIRS_F32, "RelionFineDiff2PairsF32"),
 )
 
 
@@ -1180,6 +1189,132 @@ def relion_translate_score_f32(
         image_h=np.int64(image_h),
         image_half_width=np.int64(half_width),
     )
+
+
+def _validate_relion_fine_diff2_inputs(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+) -> None:
+    if reference.dtype != jnp.complex64:
+        raise TypeError(f"reference must be complex64, got {reference.dtype}")
+    if shifted_image.dtype != jnp.complex64:
+        raise TypeError(f"shifted_image must be complex64, got {shifted_image.dtype}")
+    if weight.dtype != jnp.float32:
+        raise TypeError(f"weight must be float32, got {weight.dtype}")
+    if full_to_compact.dtype != jnp.int32:
+        raise TypeError(
+            f"full_to_compact must be int32, got {full_to_compact.dtype}"
+        )
+    if full_to_compact.ndim != 1 or full_to_compact.shape[0] <= 0:
+        raise ValueError(
+            "full_to_compact must be a nonempty rank-1 array, got "
+            f"{full_to_compact.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION fine diff2 requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION fine diff2 was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+
+@jax.jit
+def relion_fine_diff2_rectangular_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+) -> jax.Array:
+    """Evaluate RELION's SM80 fine Gaussian tree on a rectangular grid.
+
+    Shapes are ``reference=(B,R,N)``, ``shifted_image=(B,T,N)``,
+    ``weight=(B,N)``, and ``full_to_compact=(F,)``. One CUDA block evaluates
+    each output hypothesis ``(B,R,T)`` with the production 256-lane topology
+    and explicit binary32 FMA rounding boundaries.
+    """
+
+    _validate_relion_fine_diff2_inputs(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+    )
+    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError(
+            "rectangular fine diff2 expects reference/shifted rank 3 and "
+            f"weight rank 2, got {reference.shape}, {shifted_image.shape}, "
+            f"{weight.shape}"
+        )
+    if (
+        reference.shape[0] != shifted_image.shape[0]
+        or reference.shape[0] != weight.shape[0]
+        or reference.shape[2] != shifted_image.shape[2]
+        or reference.shape[2] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or shifted_image.shape[1] <= 0
+        or reference.shape[2] <= 0
+    ):
+        raise ValueError(
+            "rectangular fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    out_type = jax.ShapeDtypeStruct(
+        (reference.shape[0], reference.shape[1], shifted_image.shape[1]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(reference, shifted_image, weight, full_to_compact)
+
+
+@jax.jit
+def relion_fine_diff2_pairs_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+) -> jax.Array:
+    """Evaluate RELION's SM80 fine Gaussian tree for compact candidate pairs.
+
+    Shapes are ``reference=(B,P,N)``, ``shifted_image=(B,P,N)``,
+    ``weight=(B,N)``, and ``full_to_compact=(F,)``; output is ``(B,P)``.
+    """
+
+    _validate_relion_fine_diff2_inputs(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+    )
+    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError(
+            "pair fine diff2 expects reference/shifted rank 3 and weight rank "
+            f"2, got {reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    if (
+        reference.shape != shifted_image.shape
+        or reference.shape[0] != weight.shape[0]
+        or reference.shape[2] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or reference.shape[2] <= 0
+    ):
+        raise ValueError(
+            "pair fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    out_type = jax.ShapeDtypeStruct(reference.shape[:2], jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_PAIRS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(reference, shifted_image, weight, full_to_compact)
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6))
