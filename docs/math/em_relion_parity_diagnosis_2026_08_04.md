@@ -27,6 +27,8 @@ does not change any fixed acceptance threshold.
   target-local use only.
 - K=4 target-local classes with exact tuples and support but first unequal raw
   `diff2`: **4 / 4**.
+- K=4 admitted native production fine scores reproduced by the disassembled
+  SM80 arithmetic order: **96 / 96** bit-exact.
 - Fresh K=1 dispatch alignment: **2 / 2** cases verified.
 - Fresh K=1 dispatch standalone rescue: **0 / 2** cases.
 
@@ -54,6 +56,7 @@ experiments supersede its ranking where they provide direct causal evidence.
 | K=4 current-source RECOVAR iteration-2 all-class boundary is stable | Demonstrated | Job `11994138` passed all 9/9 exact-byte gates across two independent executions on one A100 |
 | K=4 target-local tuples and significant support agree in all four admitted classes | Demonstrated | Exact `247232/247232` tuples and `66986/66986` support rows across four independent target-local joins |
 | K=4 raw `diff2` is the first unequal measured boundary in all four admitted classes | Demonstrated in the narrow target-local scopes | 55,658 float32 mismatches, at most three ULPs; broad native all-class admission remains rejected |
+| RELION and RECOVAR/XLA execute different fine-score accumulation arithmetic on SM80 | Demonstrated for the audited kernels | The exact RELION binary emits fused norm and fused correlation-plus-lane FFMA; the compiled RECOVAR/XLA helper emits separate multiplies/adds. Replaying RELION's order reproduces 96/96 admitted native scores bit-exact, versus 83/96 for the passive-capture order |
 | Native lane-first soft-mask reduction closes the pinned class-1 shifted-image residual | Falsified at the tested tuple | Native-lane relative L2 was `1.0312363428376726e-07`, slightly worse than default RELION-CUDA at `9.863882911656713e-08` |
 | K=4 reduction order alone is the primary cause | Disfavored, not eliminated | Determinism improves repeatability without improving the fixed 41/60 cross-engine score; identical all-class operands/destinations have not yet been shown |
 | Full deployed RELION in-memory order beyond the reconstructed source semantics has been directly hashed | Unknown | The candidate is source-faithful and fully internally checked, but no native full-order runtime hash is available |
@@ -73,13 +76,15 @@ For K=1, the next discriminator is deliberately broader than a guessed fix:
 
 For K=4, the current order is:
 
-1. raw fine-score input/operand or arithmetic-order mismatch, demonstrated but
-   not yet separated for class 1;
-2. combined class--rotation and translation-prior construction;
-3. flattened joint class-pose normalization and global support semantics;
-4. evaluated all-class tuple sets and `--firstiter_cc` global-winner routing;
-5. class-specific BPref operands and accumulator destinations;
-6. reduction arithmetic alone.
+1. fine-score arithmetic order, demonstrated at the exact kernel and admitted
+   96-candidate native boundary but not yet shown sufficient for map parity;
+2. raw fine-score inputs/operands, still coupled to arithmetic in the pending
+   same-GPU source join;
+3. combined class--rotation and translation-prior construction;
+4. flattened joint class-pose normalization and global support semantics;
+5. evaluated all-class tuple sets and `--firstiter_cc` global-winner routing;
+6. class-specific BPref operands and accumulator destinations;
+7. reduction arithmetic alone.
 
 The first unequal boundary in an admitted native capture scope, rather than
 this provisional ordering, chooses the implementation target. Broad native
@@ -747,6 +752,45 @@ factorial panel passes 10/10. Hash-pinned pre-admission executions exit 1
 without creating output. They remain unsubmitted, and every superseded
 launcher and Slurm job remains untouched. This is readiness/provenance
 progress, not a scientific result or scorecard change.
+
+An exact SM80 instruction audit now isolates a concrete fine-score arithmetic
+boundary independently of those pending joins. The admitted RELION binary
+`relion_refine_mpi` (SHA-256
+`01e5ee2bd1db2612e374a21060dd7b4b9bd72c3cccea86f9d0225102082849da`)
+executes the production `REF3D=true`, `DATA3D=false`, 256-lane fine kernel as:
+
+1. `FADD` for real and imaginary differences;
+2. one rounded square and one contracted square-plus-square `FFMA`;
+3. `FMUL` by `0.5`;
+4. `FFMA` of the weighted term into the lane accumulator.
+
+Compiling RECOVAR's production `_relion_cuda_fine_diff2_sum` through its bound
+JAX/XLA environment instead emits two square `FMUL`s, a separate square-sum
+`FADD`, separate `0.5` and correction `FMUL`s, and a final `FADD`. The audited
+XLA PTX SHA-256 is
+`8463cf95f03e36bbdff428c4351d9726be432fcfe33b69ff9acef6d7cc47c4cb`;
+the assembled SM80 cubin SHA-256 is
+`d8cd2672e0dce667c582f1366c5d04aa96eed6bb1bd79966ea62d1383b484afb`.
+
+This difference also explains the passive observer's prior 83/96 replay
+result. Its capture kernel materializes the per-pixel correction product before
+adding it to the lane, while the production kernel contracts that product with
+the lane accumulator. Replaying the four combinations of square association
+and fused/separate lane accumulation gives exact production counts of 83, 96,
+81, and 86 out of 96 respectively. Only the disassembled production order is
+bit-exact for all 96 candidates. The accepted report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_fine_sass_audit_fb0c4837_20260804T1950ET/NATIVE_FINE_SASS_REPLAY_12001296.json`
+(SHA-256
+`7d21ea073f0a4972ab0c0d3561babf790643f325934deb690fe63d7e6e9a1f9c`).
+
+This demonstrates an implementation-level arithmetic mismatch and validates
+the native production replay. It does **not** yet show that correcting this
+boundary is sufficient to improve the fixed 41/60 class FSC score, nor does it
+exclude an additional operand mismatch. The next implementation gate is a
+narrow custom-CUDA counterfactual that preserves the exact tuple, operands,
+256-lane topology, and all controller policies while changing only these
+rounding boundaries. Production adoption still requires replicated target
+closure followed by the fixed same-GPU signed FSC/FSC-AUC panel.
 
 ## Mandatory telemetry conventions
 

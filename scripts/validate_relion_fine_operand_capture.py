@@ -191,6 +191,33 @@ def _reduce_lanes(lanes: np.ndarray) -> np.float32:
     return np.float32(values[0])
 
 
+def _fma_float32(
+    left: np.ndarray,
+    right: np.ndarray,
+    addend: np.ndarray,
+) -> np.ndarray:
+    """Round one exact binary32 multiply-add to binary32."""
+
+    return np.asarray(
+        np.asarray(left, dtype=np.float64) * np.asarray(right, dtype=np.float64)
+        + np.asarray(addend, dtype=np.float64),
+        dtype=np.float32,
+    )
+
+
+def _cuda_fine_half_squared_difference(
+    diff_real: np.ndarray,
+    diff_imag: np.ndarray,
+) -> np.ndarray:
+    """Replay the contracted norm and following 0.5 multiply from SM80 SASS."""
+
+    real = np.asarray(diff_real, dtype=np.float32)
+    imag = np.asarray(diff_imag, dtype=np.float32)
+    imag_square = np.multiply(imag, imag, dtype=np.float32)
+    contracted_square_sum = _fma_float32(real, real, imag_square)
+    return np.multiply(contracted_square_sum, np.float32(0.5), dtype=np.float32)
+
+
 def _cuda_fine_contribution(
     diff_real: np.ndarray,
     diff_imag: np.ndarray,
@@ -206,20 +233,40 @@ def _cuda_fine_contribution(
     rounded float32 operations.
     """
 
-    real = np.asarray(diff_real, dtype=np.float32)
-    imag = np.asarray(diff_imag, dtype=np.float32)
     weight = np.asarray(corr, dtype=np.float32)
-    imag_square = np.multiply(imag, imag, dtype=np.float32)
-    contracted_square_sum = np.asarray(
-        real.astype(np.float64) * real.astype(np.float64)
-        + imag_square.astype(np.float64),
-        dtype=np.float32,
-    )
     return np.multiply(
-        np.multiply(contracted_square_sum, np.float32(0.5), dtype=np.float32),
+        _cuda_fine_half_squared_difference(diff_real, diff_imag),
         weight,
         dtype=np.float32,
     )
+
+
+def _cuda_fine_production_lanes(
+    diff_real: np.ndarray,
+    diff_imag: np.ndarray,
+    corr: np.ndarray,
+) -> np.ndarray:
+    """Replay production SM80's fused correlation-and-lane accumulation."""
+
+    half_squared_difference = _cuda_fine_half_squared_difference(
+        diff_real,
+        diff_imag,
+    ).reshape(-1)
+    weight = np.asarray(corr, dtype=np.float32).reshape(-1)
+    _require(
+        half_squared_difference.shape == weight.shape,
+        "fine-score operands have different shapes",
+    )
+    lanes = np.zeros(LANE_COUNT, dtype=np.float32)
+    for start in range(0, half_squared_difference.size, LANE_COUNT):
+        stop = min(start + LANE_COUNT, half_squared_difference.size)
+        width = stop - start
+        lanes[:width] = _fma_float32(
+            half_squared_difference[start:stop],
+            weight[start:stop],
+            lanes[:width],
+        )
+    return lanes
 
 
 def validate_capture(
@@ -323,6 +370,7 @@ def validate_capture(
 
     rows = []
     exact_production_count = 0
+    exact_production_sass_count = 0
     for target, candidate in enumerate(candidates):
         replay_lanes = _replay_lanes(pixels[target]["contribution"])
         _require(
@@ -349,6 +397,19 @@ def validate_capture(
             f"target {target}: exact-replay flag disagrees with the values",
         )
         exact_production_count += int(production_exact)
+        production_sass_lanes = _cuda_fine_production_lanes(
+            pixels[target]["diff_real"],
+            pixels[target]["diff_imag"],
+            pixels[target]["corr"],
+        )
+        production_sass_sum = np.float32(
+            _reduce_lanes(production_sass_lanes) + np.float32(candidate["sum_init"])
+        )
+        production_sass_exact = bool(
+            _float32_bits(np.asarray([candidate["production_raw_diff2"]]))[0]
+            == _float32_bits(np.asarray([production_sass_sum]))[0]
+        )
+        exact_production_sass_count += int(production_sass_exact)
         rows.append(
             {
                 "target_index": target,
@@ -360,6 +421,8 @@ def validate_capture(
                 "production_raw_diff2": float(candidate["production_raw_diff2"]),
                 "replay_raw_diff2": float(candidate["replay_raw_diff2"]),
                 "production_replay_exact": production_exact,
+                "production_sass_replay_raw_diff2": float(production_sass_sum),
+                "production_sass_replay_exact": production_sass_exact,
             }
         )
     _require(
@@ -383,6 +446,10 @@ def validate_capture(
         "sum_init_from_header_bits": float(_float32_from_bits(int(capture.header[20]))),
         "exact_production_replay_count": exact_production_count,
         "production_replay_mismatch_count": int(candidates.size - exact_production_count),
+        "exact_production_sass_replay_count": exact_production_sass_count,
+        "production_sass_replay_mismatch_count": int(
+            candidates.size - exact_production_sass_count
+        ),
         "candidates": rows,
     }
 
