@@ -11428,3 +11428,32 @@ and `9/15` all-class.
   Fixed quality remains K=1 `28/34` strict FSC/FSC-AUC and K=4 `41/60`
   direct per-class FSC-AUC (`9/15` all-class). No Slurm job or Codex process
   was cancelled, signalled, suspended, requeued, or reprioritized.
+
+## 2026-08-05 01:00 ET — fail-closed controller telemetry through iteration 8
+
+- `scripts/audit_em_k4_live_checkpoint.py` schema v2 adds exact log-segment
+  parsing for optimizer Pmax and operands, iteration completion, next-half
+  dispatch, current-size decisions, and expected-accuracy trial identities.
+  Missing, duplicate, non-finite, or internally inconsistent records are audit
+  errors. A changed discrete controller route is a topology failure; continuous
+  Pmax and accuracy deltas are reported separately rather than used as map
+  acceptance criteria.
+- The v2 auditor passed all real live-versus-sealed control checkpoints through
+  iteration 8. Persisted grids, metadata, dispatch counts, current-size route,
+  HEALPix order, local-search state, convergence state, trial count, and trial
+  identities remain exact. The final hard-assignment mismatch trajectory is
+  `2, 8, 17, 56, 171, 371, 696, 937` of 100,000 particles for iterations 1--8.
+- Optimizer-Pmax live-minus-sealed deltas are `0`, `-1.3e-8`, `-4.72e-7`,
+  `+5.34e-6`, `+1.5116e-5`, `-1.8209e-5`, `+1.6258e-5`, and `+4.4486e-5`.
+  Expected rotational/translational accuracy values differ at iterations 4--6,
+  then realign at iterations 7--8 while hard-assignment drift continues. This
+  disfavors expected accuracy as the sole root cause and supports localization
+  before the first discrete controller bifurcation.
+- Machine-readable v2 reports are under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_fine_diff2_fma_quality_ab_retry1_03070d97_20260804T2105ET/analysis_live_checkpoint`.
+  The iteration-8 report SHA-256 is
+  `05d2abb12c4a75bea4c633d1769bb1f39673e0a18819e0dcddf2f18ec58415fb`.
+- Focused validation passed Ruff, Python compilation, 5/5 auditor unit tests
+  under `-W error`, and the 16/16 EM fast guard. This is diagnostic telemetry,
+  not a production EM change. Fixed FSC/FSC-AUC scorecard denominators and
+  thresholds remain unchanged.
