@@ -11388,3 +11388,43 @@ and `9/15` all-class.
   Hungarian per-class matching. If it is null, resume the staged
   tuple-to-posterior-to-support-to-BPref-to-reduction localization rather than
   widening thresholds.
+
+## 2026-08-04 23:58 ET — live same-A100 control checkpoint through iteration 6
+
+- Validation scope remains the predeclared algorithmic-quality A/B for the
+  exact custom-CUDA fine-score arithmetic candidate. Slurm job `12021097`
+  runs control then treatment sequentially on A100 UUID
+  `GPU-a1bb1fb4-d5e3-1c72-3382-63f6032e9fc6`; treatment alone sets
+  `RECOVAR_RELION_FINE_DIFF2_FUSED_FFI=1`. Dependent fixed-panel analyzer
+  `12021256` remains `afterok:12021097`.
+- The control completed iterations 1--6 and entered iteration 7 at current
+  size 68, HEALPix order 1, global search. Every completed checkpoint has
+  exact persisted metadata, rotation grid, and translation grid versus the
+  sealed deterministic control. Different-A100 hard-assignment drift grows
+  recurrently without changing topology:
+
+  | Iteration | Coarse unequal / 100,000 | Final unequal / 100,000 | Noise L2 | Wall delta |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 1 | 1 | 2 | 0 | -3.722% |
+  | 2 | 6 | 8 | 0 | -3.921% |
+  | 3 | 10 | 17 | 0.295405 | -4.020% |
+  | 4 | 39 | 56 | 0.909644 | -2.236% |
+  | 5 | 107 | 171 | 2.815713 | -1.042% |
+  | 6 | 237 | 371 | 7.104815 | +0.635% |
+
+- A new fail-closed diagnostic,
+  `scripts/audit_em_k4_live_checkpoint.py`, now generates these state metrics
+  and live-artifact SHA-256 values from one completed checkpoint. It makes no
+  map-quality claim: correlation is not computed and map acceptance remains
+  exclusively shellwise FSC/FSC-AUC in `audit_k4_fsc_trajectory.py`. Its
+  focused unit panel passes 3/3.
+- Machine-readable iteration 1--6 reports are under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_fine_diff2_fma_quality_ab_retry1_03070d97_20260804T2105ET/analysis_live_checkpoint`.
+  Iteration 6 reports exact topology, 237 coarse and 371 final unequal rows,
+  noise maximum absolute delta `0.5625`, noise L2 `7.1048153519`, and wall
+  delta `+0.635260%`; its JSON SHA-256 is
+  `30afe4af719049fcbfda8fdd7ab5aacca075ab6ef4b4fafdff8874d8ca7d47bf`.
+- This is control-health and provenance evidence, not treatment acceptance.
+  Fixed quality remains K=1 `28/34` strict FSC/FSC-AUC and K=4 `41/60`
+  direct per-class FSC-AUC (`9/15` all-class). No Slurm job or Codex process
+  was cancelled, signalled, suspended, requeued, or reprioritized.
