@@ -34,6 +34,89 @@ logger = logging.getLogger(__name__)
 _FAST_SIGNIFICANCE_TOPK = 64
 
 
+@partial(jax.jit, static_argnames=("adaptive_fraction", "max_significants"))
+def relion_cuda_f32_coarse_posterior(
+    scores_flat,
+    *,
+    adaptive_fraction=0.999,
+    max_significants=500,
+):
+    """Reproduce RELION CUDA coarse-weight and significance arithmetic.
+
+    RELION's accelerated coarse pass stores log weights in ``XFLOAT``
+    (float32 in the deployed build), shifts their maximum to 50, applies
+    ``expf``, radix-sorts positive weights in ascending order, and uses an
+    inclusive float32 scan to select the lower-tail cutoff.  The surviving
+    weights remain normalized by the full, pre-pruning sum.
+
+    ``cutoff_count`` is the pre-tie rank serialized by RELION.  ``mask`` and
+    ``n_significant`` include every positive weight tied at the cutoff.
+    """
+
+    scores_f32 = jnp.asarray(scores_flat, dtype=jnp.float32)
+    finite = jnp.isfinite(scores_f32)
+    best = jnp.max(jnp.where(finite, scores_f32, -jnp.inf), axis=1)
+    has_finite = jnp.isfinite(best)
+    safe_best = jnp.where(has_finite, best, jnp.float32(0.0))
+    shifted = jnp.where(
+        finite,
+        scores_f32 - safe_best[:, None] + jnp.float32(50.0),
+        -jnp.inf,
+    )
+    raw_weights = jnp.where(
+        shifted < jnp.float32(-88.0),
+        jnp.float32(0.0),
+        jnp.exp(shifted),
+    )
+    raw_weights = jnp.where(
+        finite & jnp.isfinite(raw_weights),
+        raw_weights,
+        jnp.float32(0.0),
+    )
+
+    sorted_weights = jnp.sort(raw_weights, axis=1)
+    cumulative = jnp.cumsum(sorted_weights, axis=1, dtype=jnp.float32)
+    sum_weight = cumulative[:, -1]
+    has_mass = has_finite & jnp.isfinite(sum_weight) & (sum_weight > jnp.float32(0.0))
+    tail_target = jnp.asarray(
+        (jnp.float64(1.0) - jnp.float64(adaptive_fraction))
+        * sum_weight.astype(jnp.float64),
+        dtype=jnp.float32,
+    )
+    threshold_idx = jax.vmap(
+        lambda row, target: jnp.searchsorted(row, target, side="right"),
+    )(cumulative, tail_target)
+
+    n_samples = scores_f32.shape[1]
+    positive_count = jnp.sum(raw_weights > jnp.float32(0.0), axis=1).astype(jnp.int32)
+    first_positive = jnp.asarray(n_samples, dtype=jnp.int32) - positive_count
+    threshold_idx = jnp.maximum(threshold_idx.astype(jnp.int32), first_positive)
+    threshold_idx = jnp.minimum(threshold_idx, jnp.asarray(n_samples - 1, dtype=jnp.int32))
+    if max_significants is not None and int(max_significants) > 0:
+        threshold_idx = jnp.maximum(
+            threshold_idx,
+            jnp.asarray(n_samples - int(max_significants), dtype=jnp.int32),
+        )
+
+    threshold = sorted_weights[jnp.arange(scores_f32.shape[0]), threshold_idx]
+    mask = has_mass[:, None] & (raw_weights > jnp.float32(0.0)) & (
+        raw_weights >= threshold[:, None]
+    )
+    safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
+    probabilities = jnp.where(
+        has_mass[:, None],
+        raw_weights / safe_sum_weight[:, None],
+        jnp.float32(0.0),
+    )
+    n_significant = jnp.sum(mask, axis=1).astype(jnp.int32)
+    cutoff_count = jnp.where(
+        has_mass,
+        jnp.asarray(n_samples, dtype=jnp.int32) - threshold_idx,
+        jnp.int32(0),
+    )
+    return probabilities, mask, n_significant, cutoff_count, sum_weight, threshold
+
+
 def map_translation_log_prior_to_fine_grid(
     translation_log_prior,
     fine_translation_parent,

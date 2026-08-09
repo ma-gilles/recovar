@@ -32,6 +32,7 @@ _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
     "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN"
 )
 _K1_COARSE_GAUSSIAN_FFI_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_FFI"
+_K1_RELION_F32_COARSE_SUPPORT_ENV = "RECOVAR_K1_RELION_F32_COARSE_SUPPORT"
 NVTX_DOMAIN_EM = "recovar_em"
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,19 @@ def _k1_coarse_gaussian_ffi_enabled() -> bool:
     if token in {"1", "true", "yes", "on"}:
         return True
     raise ValueError(f"Unsupported {_K1_COARSE_GAUSSIAN_FFI_ENV}={token!r}")
+
+
+def _k1_relion_f32_coarse_support_enabled() -> bool:
+    """Return whether the diagnostic RELION CUDA coarse support is active."""
+
+    token = os.environ.get(_K1_RELION_F32_COARSE_SUPPORT_ENV, "0").strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_K1_RELION_F32_COARSE_SUPPORT_ENV}={token!r}",
+    )
 
 
 def _relion_coarse_gaussian_square_operands(
@@ -1701,6 +1715,23 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_ffi_enabled = (
         coarse_gaussian_ffi_requested and score_mode == "gaussian"
     )
+    relion_f32_coarse_support_requested = _k1_relion_f32_coarse_support_enabled()
+    relion_f32_coarse_support_enabled = (
+        relion_f32_coarse_support_requested and score_mode == "gaussian"
+    )
+    if relion_f32_coarse_support_enabled:
+        if n_classes != 1:
+            raise ValueError(
+                f"{_K1_RELION_F32_COARSE_SUPPORT_ENV} is restricted to K=1",
+            )
+        if use_float64_scoring:
+            raise ValueError(
+                f"{_K1_RELION_F32_COARSE_SUPPORT_ENV} requires production float32 scoring",
+            )
+        logger.warning(
+            "Opt-in RELION CUDA float32 coarse support enabled: current_size=%d",
+            int(image_shape[0]) if current_size is None else int(current_size),
+        )
     coarse_gaussian_full_to_compact = None
     coarse_gaussian_score_indices = None
     coarse_gaussian_powerclass = None
@@ -2571,21 +2602,55 @@ def _compute_k_class_significance_batched(
                         scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
                     else:
                         scores = cached_class_score_blocks[class_index][block_index]
-                    probs = jnp.exp(scores - global_log_z[:, None, None])
-
                     actual_rot = min(rotation_block_size, n_rot - r0)
-                    class_weight_blocks.append(probs[:, :actual_rot, :].reshape(batch_size, -1))
+                    if relion_f32_coarse_support_enabled:
+                        class_weight_blocks.append(
+                            scores[:, :actual_rot, :].reshape(batch_size, -1),
+                        )
+                    else:
+                        probs = jnp.exp(scores - global_log_z[:, None, None])
+                        class_weight_blocks.append(
+                            probs[:, :actual_rot, :].reshape(batch_size, -1),
+                        )
                 class_weight_mats.append(jnp.concatenate(class_weight_blocks, axis=1))
 
-            batch_weights = jnp.concatenate(class_weight_mats, axis=1)
-            batch_sig_mask, batch_sig_rot_mask, batch_n_sig, batch_cutoff_count = _find_sig(
-                batch_weights,
-                n_classes * n_rot,
-                n_trans,
-                adaptive_fraction=adaptive_fraction,
-                max_significants=max_significants,
-                return_cutoff_count=True,
-            )
+            batch_values = jnp.concatenate(class_weight_mats, axis=1)
+            if relion_f32_coarse_support_enabled:
+                from recovar.em.dense_single_volume.helpers.oversampling import (
+                    relion_cuda_f32_coarse_posterior,
+                )
+
+                (
+                    batch_weights,
+                    batch_sig_mask,
+                    batch_n_sig,
+                    batch_cutoff_count,
+                    _batch_sum_weight,
+                    _batch_significant_weight,
+                ) = relion_cuda_f32_coarse_posterior(
+                    batch_values,
+                    adaptive_fraction=float(adaptive_fraction),
+                    max_significants=max_significants,
+                )
+                batch_sig_rot_mask = jnp.any(
+                    batch_sig_mask.reshape(batch_size, n_classes * n_rot, n_trans),
+                    axis=2,
+                )
+            else:
+                batch_weights = batch_values
+                (
+                    batch_sig_mask,
+                    batch_sig_rot_mask,
+                    batch_n_sig,
+                    batch_cutoff_count,
+                ) = _find_sig(
+                    batch_weights,
+                    n_classes * n_rot,
+                    n_trans,
+                    adaptive_fraction=adaptive_fraction,
+                    max_significants=max_significants,
+                    return_cutoff_count=True,
+                )
             batch_sig_mask_np = np.asarray(batch_sig_mask, dtype=bool)
             sig_rot_any |= np.asarray(jnp.any(batch_sig_rot_mask, axis=0), dtype=bool).reshape(n_classes, n_rot)
             n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig, dtype=np.int32)
