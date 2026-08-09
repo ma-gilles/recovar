@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from scripts import analyze_em_k1_inferred_score_transfer_factorial as inferred_analyzer
 from scripts import analyze_em_k1_score_transfer_factorial as analyzer
 
 
@@ -90,6 +91,18 @@ def test_inferred_factorial_rejects_zero_recovar_corr_img() -> None:
             half_weights=np.ones(2),
             full_image_size=4,
         )
+
+
+def test_inferred_factorial_parent_gate_fails_closed(tmp_path) -> None:
+    parent = tmp_path / "parent.json"
+    parent.write_text(
+        '{"status":"complete","classification_ready":true,'
+        '"classification":"raw_coarse_residual_has_mixed_live_operand_effect",'
+        '"fixed_metric":{"evaluated_particles":1,"expected_particles":1,'
+        '"live_operand_dominated":{"base_corrected_image":1}}}\n'
+    )
+    with pytest.raises(ValueError, match="does not localize"):
+        inferred_analyzer._validate_parent(parent, expected_particles=1)
 
 
 def test_rejects_zero_ctf_in_fixed_cohort() -> None:
