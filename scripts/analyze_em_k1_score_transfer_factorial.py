@@ -129,6 +129,69 @@ def score_transfer_factorial_bases(
     }
 
 
+def inferred_score_transfer_factorial_bases(
+    *,
+    relion_pixel_corrected_native: np.ndarray,
+    relion_corr_img: np.ndarray,
+    recovar_base_corrected: np.ndarray,
+    recovar_ctf2_data: np.ndarray,
+    half_weights: np.ndarray,
+    full_image_size: int,
+) -> dict[str, np.ndarray]:
+    """Build the same 2x2 split without a separate preprocess capture.
+
+    RECOVAR's effective pixel operand is inferred algebraically from its
+    captured corrected base and ``corr_img = N^4 * half_weights * ctf2``.
+    The two diagonal arms therefore replay the captured RELION and RECOVAR
+    bases, while the off-diagonal arms isolate the pixel and ``corr_img``
+    factors.  This is intended for passive score-boundary diagnostics where
+    the downstream RECOVAR operand capture is available but a RELION
+    post-optics capture is not.
+    """
+
+    relion_pixel = np.asarray(
+        relion_pixel_corrected_native,
+        dtype=np.complex128,
+    )
+    relion_corr = np.asarray(relion_corr_img, dtype=np.float64)
+    recovar_base = np.asarray(recovar_base_corrected, dtype=np.complex128)
+    recovar_ctf2 = np.asarray(recovar_ctf2_data, dtype=np.float64)
+    half_weights = np.asarray(half_weights, dtype=np.float64)
+    shape = relion_pixel.shape
+    _require(
+        shape
+        == relion_corr.shape
+        == recovar_base.shape
+        == recovar_ctf2.shape
+        == half_weights.shape,
+        "inferred score-transfer operand shapes differ",
+    )
+    _require(
+        full_image_size > 0 and full_image_size % 2 == 0,
+        "full image size must be positive and even",
+    )
+    _require(np.all(half_weights > 0.0), "half weights must be positive")
+    image_normalization = float(full_image_size**2)
+    recovar_corr = image_normalization**2 * half_weights * recovar_ctf2
+    _require(
+        np.all(np.isfinite(recovar_corr)) and np.all(recovar_corr != 0.0),
+        "RECOVAR corr_img must be finite and nonzero",
+    )
+    recovar_pixel = (
+        -recovar_base * image_normalization * half_weights / recovar_corr
+    )
+
+    def base(image: np.ndarray, correction: np.ndarray) -> np.ndarray:
+        return -image * correction / (image_normalization * half_weights)
+
+    return {
+        "actual_relion": base(relion_pixel, relion_corr),
+        "recovar_pixel_correction_only": base(recovar_pixel, relion_corr),
+        "recovar_corr_img_only": base(relion_pixel, recovar_corr),
+        "recovar_pixel_and_corr_img": base(recovar_pixel, recovar_corr),
+    }
+
+
 def classify_score_transfer_factorial(
     *,
     qualified: bool,

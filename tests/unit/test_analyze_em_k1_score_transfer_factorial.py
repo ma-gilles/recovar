@@ -47,6 +47,51 @@ def test_builds_fixed_two_by_two_score_transfer_bases() -> None:
     )
 
 
+def test_infers_fixed_two_by_two_bases_without_preprocess_capture() -> None:
+    relion_pixel = np.asarray([4 + 6j, -2 + 1j])
+    relion_corr = np.asarray([5.0, 7.0])
+    recovar_pixel = np.asarray([2 - 1j, -3 + 0.25j])
+    recovar_ctf2 = np.asarray([0.2, 0.4])
+    half_weights = np.asarray([1.0, 2.0])
+    size = 4
+    recovar_corr = size**4 * half_weights * recovar_ctf2
+
+    def expected(image: np.ndarray, correction: np.ndarray) -> np.ndarray:
+        return -image * correction / (size**2 * half_weights)
+
+    recovar_base = expected(recovar_pixel, recovar_corr)
+    got = analyzer.inferred_score_transfer_factorial_bases(
+        relion_pixel_corrected_native=relion_pixel,
+        relion_corr_img=relion_corr,
+        recovar_base_corrected=recovar_base,
+        recovar_ctf2_data=recovar_ctf2,
+        half_weights=half_weights,
+        full_image_size=size,
+    )
+    assert np.allclose(got["actual_relion"], expected(relion_pixel, relion_corr))
+    assert np.allclose(
+        got["recovar_pixel_correction_only"],
+        expected(recovar_pixel, relion_corr),
+    )
+    assert np.allclose(
+        got["recovar_corr_img_only"],
+        expected(relion_pixel, recovar_corr),
+    )
+    assert np.allclose(got["recovar_pixel_and_corr_img"], recovar_base)
+
+
+def test_inferred_factorial_rejects_zero_recovar_corr_img() -> None:
+    with pytest.raises(ValueError, match="corr_img must be finite and nonzero"):
+        analyzer.inferred_score_transfer_factorial_bases(
+            relion_pixel_corrected_native=np.ones(2),
+            relion_corr_img=np.ones(2),
+            recovar_base_corrected=np.ones(2),
+            recovar_ctf2_data=np.asarray([1.0, 0.0]),
+            half_weights=np.ones(2),
+            full_image_size=4,
+        )
+
+
 def test_rejects_zero_ctf_in_fixed_cohort() -> None:
     with pytest.raises(ValueError, match="zero-CTF score pixel"):
         analyzer.score_transfer_factorial_bases(
