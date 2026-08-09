@@ -264,8 +264,8 @@ def _fma_float32(
     ).astype(np.float32)
 
 
-def replay_production_diff2(artifact: CoarseOperandCapture) -> np.ndarray:
-    """Replay the CUDA coarse squared-difference path for captured rotations."""
+def replay_production_lanes(artifact: CoarseOperandCapture) -> np.ndarray:
+    """Replay each CUDA coarse thread's pre-atomic float32 partial."""
 
     rotation_count = artifact.rotation_keys.size
     image_size = artifact.header[13]
@@ -311,7 +311,16 @@ def replay_production_diff2(artifact: CoarseOperandCapture) -> np.ndarray:
                 )
         partials[thread] = accumulator
 
-    scores = np.zeros((rotation_count, translation_count), dtype=np.float32)
+    return partials.T.copy()
+
+
+def replay_production_diff2(artifact: CoarseOperandCapture) -> np.ndarray:
+    """Replay the CUDA coarse squared-difference path for captured rotations."""
+
+    translation_count = artifact.header[14]
+    block_size = artifact.header[37]
+    partials = replay_production_lanes(artifact).T
+    scores = np.zeros((artifact.rotation_keys.size, translation_count), dtype=np.float32)
     for thread in range(block_size):
         translation = thread % translation_count
         scores[:, translation] = (scores[:, translation] + partials[thread]).astype(np.float32)
