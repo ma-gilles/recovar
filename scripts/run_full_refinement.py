@@ -1126,31 +1126,77 @@ def _relion_halfset_and_accuracy_layout(our_particles, relion_particles):
     )
 
 
+def _relion_fresh_initial_noise_layout(our_particles, relion_particles):
+    """Map RELION's pre-randomisation ``sorted_idx`` to RECOVAR rows.
+
+    ``divideParticlesInRandomHalves`` stable-sorts the source insertion order
+    by random subset before follower rank 1 estimates the startup noise.  For
+    datasets with fewer than 1,000 particles in half 1, that estimate therefore
+    continues into half 2; it is not a half-1-only calculation.
+    """
+
+    our_row_by_identity = _particle_identity_rows(
+        our_particles,
+        label="RECOVAR input STAR",
+    )
+    relion_row_by_identity = _particle_identity_rows(
+        relion_particles,
+        label="RELION data STAR",
+    )
+    if set(our_row_by_identity) != set(relion_row_by_identity):
+        raise ValueError(
+            "RELION and RECOVAR STAR files do not contain the same "
+            "rlnImageName/stack identities"
+        )
+
+    relion_identities = list(relion_row_by_identity)
+    relion_subsets = np.asarray(relion_particles["rlnRandomSubset"], dtype=np.int64)
+    if not np.all(np.isin(relion_subsets, (1, 2))):
+        raise ValueError("RELION random subsets must contain only 1 and 2")
+    relion_sorted_rows = np.concatenate(
+        [
+            np.flatnonzero(relion_subsets == 1),
+            np.flatnonzero(relion_subsets == 2),
+        ]
+    ).astype(np.int64, copy=False)
+    source_rows = np.asarray(
+        [our_row_by_identity[relion_identities[row]] for row in relion_sorted_rows],
+        dtype=np.int64,
+    )
+    if "rlnOpticsGroup" in relion_particles.columns:
+        relion_optics = np.asarray(relion_particles["rlnOpticsGroup"], dtype=np.int64)
+        optics_group_ids = relion_optics[relion_sorted_rows]
+    else:
+        optics_group_ids = np.zeros(source_rows.size, dtype=np.int64)
+    return source_rows, optics_group_ids
+
+
 def _compute_relion_fresh_k1_initial_sigma2(
     dataset,
     *,
-    half1_source_rows,
-    half1_optics_group_ids,
+    source_rows,
+    optics_group_ids,
     particle_diameter_ang: float,
     width_mask_edge_px: int,
     minimum_nr_particles: int = 1000,
 ) -> np.ndarray:
     """Reproduce RELION's process-resident fresh AutoRefine noise spectrum.
 
-    MPI follower rank 1 computes the initial spectrum from the first 1,000
-    particles per optics group in random-subset-1 source order, then broadcasts
-    it to the other follower.  RELION writes a rounded copy to model STAR, but
-    its first expectation step consumes these unrounded values.
+    MPI follower rank 1 computes the initial spectrum from at most 1,000
+    particles per optics group in the stable subset-1-then-subset-2 source
+    order, then broadcasts it to the other follower.  RELION writes a rounded
+    copy to model STAR, but its first expectation step consumes these unrounded
+    values.
     """
 
-    source_rows = np.asarray(half1_source_rows, dtype=np.int64).reshape(-1)
-    optics_labels = np.asarray(half1_optics_group_ids, dtype=np.int64).reshape(-1)
+    source_rows = np.asarray(source_rows, dtype=np.int64).reshape(-1)
+    optics_labels = np.asarray(optics_group_ids, dtype=np.int64).reshape(-1)
     if source_rows.shape != optics_labels.shape:
         raise ValueError(
-            "half-1 source rows and optics-group labels must have identical shapes",
+            "source rows and optics-group labels must have identical shapes",
         )
     if source_rows.size == 0:
-        raise ValueError("fresh K=1 live-noise bootstrap requires a non-empty half 1")
+        raise ValueError("fresh K=1 live-noise bootstrap requires at least one particle")
     if np.unique(source_rows).size != source_rows.size:
         raise ValueError("fresh K=1 live-noise source rows contain duplicates")
     if int(np.min(source_rows)) < 0 or int(np.max(source_rows)) >= int(dataset.n_units):
@@ -3071,6 +3117,8 @@ def main():
     expected_accuracy_half1_particle_ids = None
     expected_accuracy_half1_ctf_params = None
     expected_accuracy_do_ctf_correction = None
+    relion_fresh_initial_noise_source_rows = None
+    relion_fresh_initial_noise_optics_group_ids = None
     relion_particles = None
     relion_group_particles = None
     relion_group_source = None
@@ -3087,6 +3135,10 @@ def main():
             expected_accuracy_half1_optics_group_ids,
             expected_accuracy_half1_particle_ids,
         ) = _relion_halfset_and_accuracy_layout(our_particles, relion_particles)
+        (
+            relion_fresh_initial_noise_source_rows,
+            relion_fresh_initial_noise_optics_group_ids,
+        ) = _relion_fresh_initial_noise_layout(our_particles, relion_particles)
         from recovar.data_io import metadata_readers
 
         relion_ctf_with_apix = metadata_readers.parse_ctf_from_star(
@@ -3760,26 +3812,19 @@ def main():
             invalid_reasons.append("RELION half-set data are required")
         if relion_mask_params is None:
             invalid_reasons.append("RELION particle-diameter mask parameters are required")
-        if expected_accuracy_half1_base_order_local is None:
-            invalid_reasons.append("RELION half-1 source order is required")
-        if expected_accuracy_half1_optics_group_ids is None:
-            invalid_reasons.append("RELION half-1 optics groups are required")
+        if relion_fresh_initial_noise_source_rows is None:
+            invalid_reasons.append("RELION initial-noise source order is required")
+        if relion_fresh_initial_noise_optics_group_ids is None:
+            invalid_reasons.append("RELION initial-noise optics groups are required")
         if invalid_reasons:
             raise ValueError(
                 f"{_K1_RELION_LIVE_INITIAL_NOISE_ENV} is restricted to a strict fresh "
                 f"K=1 cold start: {'; '.join(invalid_reasons)}",
             )
-        source_order_local = np.asarray(
-            expected_accuracy_half1_base_order_local,
-            dtype=np.int64,
-        )
         relion_live_initial_sigma2_per_group = _compute_relion_fresh_k1_initial_sigma2(
             ds,
-            half1_source_rows=np.asarray(half1_idx, dtype=np.int64)[source_order_local],
-            half1_optics_group_ids=np.asarray(
-                expected_accuracy_half1_optics_group_ids,
-                dtype=np.int64,
-            )[source_order_local],
+            source_rows=relion_fresh_initial_noise_source_rows,
+            optics_group_ids=relion_fresh_initial_noise_optics_group_ids,
             particle_diameter_ang=float(relion_mask_params[0]),
             width_mask_edge_px=int(relion_mask_params[1]),
         )
@@ -3795,8 +3840,8 @@ def main():
         logger.warning(
             "Opt-in fresh K=1 RELION live initial noise enabled: particles=%d "
             "source_rows_head=%s sigma2_head=%s",
-            min(1000, int(source_order_local.size)),
-            np.asarray(half1_idx, dtype=np.int64)[source_order_local[:5]].tolist(),
+            min(1000, int(np.asarray(relion_fresh_initial_noise_source_rows).size)),
+            np.asarray(relion_fresh_initial_noise_source_rows, dtype=np.int64)[:5].tolist(),
             np.asarray(relion_live_initial_sigma2[:5]),
         )
     if args.relion_init_dir is not None and frozen_boundary is None:

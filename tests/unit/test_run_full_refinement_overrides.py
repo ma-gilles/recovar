@@ -51,6 +51,7 @@ from scripts.run_full_refinement import (
     _parse_relion_cli_ini_high,
     _parse_relion_tau2_fudge,
     _read_relion_single_optics_sigma2_noise,
+    _relion_fresh_initial_noise_layout,
     _relion_halfset_and_accuracy_layout,
     _relion_mpi_process_start_scoring_noise_pair,
     _relion_optimiser_star_for_runtime,
@@ -113,7 +114,7 @@ class _FakeImageSource:
             yield self.images[batch_rows], batch_rows.copy(), batch_rows.copy()
 
 
-def test_compute_relion_fresh_k1_initial_sigma2_preserves_half1_source_order():
+def test_compute_relion_fresh_k1_initial_sigma2_preserves_source_order():
     rng = np.random.default_rng(19)
     images = rng.normal(size=(6, 8, 8)).astype(np.float32)
     dataset = SimpleNamespace(
@@ -125,8 +126,8 @@ def test_compute_relion_fresh_k1_initial_sigma2_preserves_half1_source_order():
     source_rows = np.asarray([4, 1, 5], dtype=np.int64)
     got = _compute_relion_fresh_k1_initial_sigma2(
         dataset,
-        half1_source_rows=source_rows,
-        half1_optics_group_ids=np.asarray([7, 7, 7], dtype=np.int64),
+        source_rows=source_rows,
+        optics_group_ids=np.asarray([7, 7, 7], dtype=np.int64),
         particle_diameter_ang=8.0,
         width_mask_edge_px=2,
         minimum_nr_particles=2,
@@ -155,8 +156,8 @@ def test_compute_relion_fresh_k1_initial_sigma2_rejects_duplicate_rows():
     with pytest.raises(ValueError, match="contain duplicates"):
         _compute_relion_fresh_k1_initial_sigma2(
             dataset,
-            half1_source_rows=np.asarray([1, 1], dtype=np.int64),
-            half1_optics_group_ids=np.asarray([1, 1], dtype=np.int64),
+            source_rows=np.asarray([1, 1], dtype=np.int64),
+            optics_group_ids=np.asarray([1, 1], dtype=np.int64),
             particle_diameter_ang=8.0,
             width_mask_edge_px=2,
         )
@@ -1233,6 +1234,28 @@ def test_relion_expected_accuracy_layout_preserves_relion_particle_rows():
     np.testing.assert_array_equal(base_order, [1, 0, 2])
     np.testing.assert_array_equal(optics, [1, 2, 2])
     np.testing.assert_array_equal(particle_ids, [2, 0, 3])
+
+
+def test_relion_fresh_initial_noise_layout_continues_from_half1_into_half2():
+    pd = pytest.importorskip("pandas")
+    our_particles = pd.DataFrame(
+        {"rlnImageName": ["30@x.mrcs", "10@x.mrcs", "40@x.mrcs", "20@x.mrcs"]},
+    )
+    relion_particles = pd.DataFrame(
+        {
+            "rlnImageName": ["10@x.mrcs", "20@x.mrcs", "30@x.mrcs", "40@x.mrcs"],
+            "rlnRandomSubset": [1, 2, 1, 1],
+            "rlnOpticsGroup": [2, 1, 1, 2],
+        },
+    )
+
+    source_rows, optics = _relion_fresh_initial_noise_layout(
+        our_particles,
+        relion_particles,
+    )
+
+    np.testing.assert_array_equal(source_rows, [1, 0, 2, 3])
+    np.testing.assert_array_equal(optics, [2, 1, 2, 1])
 
 
 def test_relion_expected_accuracy_layout_supports_repeated_indices_across_stacks():

@@ -11496,3 +11496,18 @@ and `9/15` all-class.
   full-trajectory causal gate. A same-device implementation A/B must then
   demonstrate that the self-contained candidate reproduces the accepted
   trajectory before integration or promotion to a default.
+- Preservation audit after the first commit found an important small-dataset
+  boundary: follower rank 1 iterates RELION's complete pre-randomisation
+  `sorted_idx`, which is stable subset-1 followed by subset-2 source order.
+  Thus a fixture with fewer than 1,000 half-1 particles continues into half 2
+  until the per-optics-group cap is reached. The candidate now constructs that
+  complete order explicitly instead of assuming half 1 alone supplies the
+  panel. This leaves the case-22 reproduced values unchanged and prevents an
+  invalid generalisation to small K=1 fixtures such as case 26.
+- On the real case-26 fixture, the invalid 517-row half-1-only calculation has
+  relative-L2 error `23.3855572170` against the serialized spectrum. The
+  corrected 1,000-row stable half-1-then-half-2 calculation differs from the
+  six-decimal model STAR by only `3.4171777740e-7` maximum absolute and
+  `4.3960111614e-5` relative L2, the expected serialization scale. The
+  corrected case-22 result remains `8.6736173799e-18` maximum absolute from
+  the sealed process-resident binary64 spectrum.
