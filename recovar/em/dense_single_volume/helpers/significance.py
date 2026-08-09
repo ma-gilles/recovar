@@ -32,6 +32,7 @@ _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
     "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN"
 )
 _K1_COARSE_GAUSSIAN_FFI_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_FFI"
+_K1_COARSE_GAUSSIAN_SINCOSF_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF"
 _K1_RELION_F32_COARSE_SUPPORT_ENV = "RECOVAR_K1_RELION_F32_COARSE_SUPPORT"
 NVTX_DOMAIN_EM = "recovar_em"
 logger = logging.getLogger(__name__)
@@ -46,6 +47,19 @@ def _k1_coarse_gaussian_ffi_enabled() -> bool:
     if token in {"1", "true", "yes", "on"}:
         return True
     raise ValueError(f"Unsupported {_K1_COARSE_GAUSSIAN_FFI_ENV}={token!r}")
+
+
+def _k1_coarse_gaussian_sincosf_enabled() -> bool:
+    """Return whether exact RELION coarse score translation is active."""
+
+    token = os.environ.get(_K1_COARSE_GAUSSIAN_SINCOSF_ENV, "0").strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_K1_COARSE_GAUSSIAN_SINCOSF_ENV}={token!r}",
+    )
 
 
 def _k1_relion_f32_coarse_support_enabled() -> bool:
@@ -89,6 +103,52 @@ def _relion_coarse_gaussian_square_operands(
     pixel_weight = square_score_weight * half_weights[score_indices][None, :]
     return (
         jnp.asarray(shifted_corrected, dtype=jnp.complex64),
+        jnp.asarray(pixel_weight, dtype=jnp.float32),
+    )
+
+
+def _relion_coarse_gaussian_square_operands_sincosf(
+    unshifted_score_weighted,
+    score_weight_half,
+    half_weights,
+    score_indices,
+    translations,
+    image_shape,
+):
+    """Build corrected coarse images with RELION's CUDA ``sincosf`` path."""
+
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_translation_angles_f32,
+    )
+
+    score_indices = jnp.asarray(score_indices, dtype=jnp.int32)
+    square_score_weight = score_weight_half[:, score_indices]
+    square_unshifted_weighted = unshifted_score_weighted[:, score_indices]
+    nonzero_weight = square_score_weight != 0.0
+    safe_weight = jnp.where(nonzero_weight, square_score_weight, 1.0)
+    unshifted_corrected = square_unshifted_weighted / safe_weight
+    unshifted_corrected = jnp.where(
+        nonzero_weight,
+        unshifted_corrected,
+        jnp.zeros((), dtype=unshifted_corrected.dtype),
+    )
+    shifted_corrected = cuda_backproject.relion_translate_score_f32(
+        jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
+        jnp.asarray(
+            _relion_translation_angles_f32(translations, image_shape),
+            dtype=jnp.float32,
+        ),
+        score_indices,
+        image_shape,
+    )
+    pixel_weight = square_score_weight * half_weights[score_indices][None, :]
+    return (
+        shifted_corrected.reshape(
+            unshifted_corrected.shape[0],
+            len(translations),
+            unshifted_corrected.shape[1],
+        ),
         jnp.asarray(pixel_weight, dtype=jnp.float32),
     )
 
@@ -1715,6 +1775,15 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_ffi_enabled = (
         coarse_gaussian_ffi_requested and score_mode == "gaussian"
     )
+    coarse_gaussian_sincosf_requested = _k1_coarse_gaussian_sincosf_enabled()
+    coarse_gaussian_sincosf_enabled = (
+        coarse_gaussian_sincosf_requested and score_mode == "gaussian"
+    )
+    if coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled:
+        raise ValueError(
+            f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV} requires "
+            f"{_K1_COARSE_GAUSSIAN_FFI_ENV}=1",
+        )
     relion_f32_coarse_support_requested = _k1_relion_f32_coarse_support_enabled()
     relion_f32_coarse_support_enabled = (
         relion_f32_coarse_support_requested and score_mode == "gaussian"
@@ -1801,6 +1870,14 @@ def _compute_k_class_significance_batched(
             square_score_count,
             n_trans,
         )
+        if coarse_gaussian_sincosf_enabled:
+            logger.warning(
+                "Opt-in K=1 RELION coarse CUDA sincosf translation enabled: "
+                "current_size=%d square_pixels=%d translations=%d",
+                score_size,
+                square_score_count,
+                n_trans,
+            )
     tree_rescore_fftw_order = None
     if tree_rescore_enabled:
         if n_classes != 1:
@@ -2158,13 +2235,18 @@ def _compute_k_class_significance_batched(
                 relion_preprocess_kwargs=relion_preprocess_kwargs,
             )
         elif use_relion_numpy_preprocess and not relion_cuda_preprocess:
+            if coarse_gaussian_sincosf_enabled:
+                raise ValueError(
+                    f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV} requires the "
+                    "production half-image preprocessing path",
+                )
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch_relion_numpy(
                 batch_data,
                 ctf_params,
                 batch_size,
             )
         else:
-            shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+            preprocess_result = _preprocess_batch(
                 experiment_dataset,
                 batch_data,
                 ctf_params,
@@ -2173,13 +2255,28 @@ def _compute_k_class_significance_batched(
                 config,
                 score_with_masked_images,
                 relion_preprocess_kwargs=relion_preprocess_kwargs,
+                return_unshifted_score_weighted=coarse_gaussian_sincosf_enabled,
             )
+            if coarse_gaussian_sincosf_enabled:
+                (
+                    shifted_half,
+                    batch_norm,
+                    ctf2_over_nv_half,
+                    coarse_gaussian_unshifted_score_weighted,
+                ) = preprocess_result
+            else:
+                shifted_half, batch_norm, ctf2_over_nv_half = preprocess_result
         batch_scale = jnp.asarray(batch_scale_np)
         if image_corrections is not None:
             batch_corr = jnp.asarray(batch_corr_np)
             applied_corr = batch_scale if relion_cuda_preprocess else batch_corr
             corr_expanded = jnp.repeat(applied_corr, n_trans)
             shifted_half = shifted_half * corr_expanded[:, None]
+            if coarse_gaussian_sincosf_enabled:
+                coarse_gaussian_unshifted_score_weighted = (
+                    coarse_gaussian_unshifted_score_weighted
+                    * applied_corr[:, None]
+                )
             # ``image_corrections`` carries ``(avg_norm/normcorr) * scale``;
             # ``scale_corrections`` carries ``scale``. The image-only
             # ``|F_img|^2`` term must be weighted by ``(avg_norm/normcorr)^2``
@@ -2200,6 +2297,15 @@ def _compute_k_class_significance_batched(
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
             shifted_half = shifted_half * tiled_half_image_phase_factors(image_shape, batch_shifts, n_trans)
+            if coarse_gaussian_sincosf_enabled:
+                coarse_gaussian_unshifted_score_weighted = (
+                    coarse_gaussian_unshifted_score_weighted
+                    * tiled_half_image_phase_factors(
+                        image_shape,
+                        batch_shifts,
+                        1,
+                    )
+                )
         if score_mode == "normalized_cc":
             inv_xi2 = 1.0 / jnp.maximum(batch_norm, jnp.asarray(1e-30, dtype=batch_norm.dtype))
             score_weight_half = ctf2_half_score * inv_xi2
@@ -2212,6 +2318,12 @@ def _compute_k_class_significance_batched(
             dc_mask = _mshi(image_shape) == 0
             shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
             score_weight_half = jnp.where(dc_mask[None, :], 0.0, score_weight_half)
+            if coarse_gaussian_sincosf_enabled:
+                coarse_gaussian_unshifted_score_weighted = jnp.where(
+                    dc_mask[None, :],
+                    0.0,
+                    coarse_gaussian_unshifted_score_weighted,
+                )
         if use_window:
             shifted_data = shifted_half[:, window_indices]
             ctf2_data = score_weight_half[:, window_indices]
@@ -2244,17 +2356,30 @@ def _compute_k_class_significance_batched(
             # ``shifted_half / score_weight_half`` is the shifted image divided
             # by CTF, and RELION's square-difference weight is
             # ``score_weight_half * half_weights``.
-            (
-                coarse_gaussian_shifted_corrected,
-                coarse_gaussian_pixel_weight,
-            ) = _relion_coarse_gaussian_square_operands(
-                shifted_half,
-                score_weight_half,
-                half_weights,
-                coarse_gaussian_score_indices,
-                batch_size=batch_size,
-                n_trans=n_trans,
-            )
+            if coarse_gaussian_sincosf_enabled:
+                (
+                    coarse_gaussian_shifted_corrected,
+                    coarse_gaussian_pixel_weight,
+                ) = _relion_coarse_gaussian_square_operands_sincosf(
+                    coarse_gaussian_unshifted_score_weighted,
+                    score_weight_half,
+                    half_weights,
+                    coarse_gaussian_score_indices,
+                    translations,
+                    image_shape,
+                )
+            else:
+                (
+                    coarse_gaussian_shifted_corrected,
+                    coarse_gaussian_pixel_weight,
+                ) = _relion_coarse_gaussian_square_operands(
+                    shifted_half,
+                    score_weight_half,
+                    half_weights,
+                    coarse_gaussian_score_indices,
+                    batch_size=batch_size,
+                    n_trans=n_trans,
+                )
             coarse_gaussian_initial_diff2 = coarse_gaussian_powerclass(
                 processed_for_powerclass,
                 image_shape=image_shape,

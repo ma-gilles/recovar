@@ -103,6 +103,7 @@ def preprocess_batch(
     score_real_dtype=None,
     norm_real_dtype=None,
     relion_preprocess_kwargs=None,
+    return_unshifted_score_weighted=False,
 ):
     """Preprocess one dense image batch for E-step scoring."""
 
@@ -141,6 +142,8 @@ def preprocess_batch(
     weight_ctf_half = shift_ctf_half if score_real_dtype is not None else ctf_half
     weight_noise_half = shift_noise_half if score_real_dtype is not None else noise_variance_half
     ctf2_over_nv_half = weight_ctf_half**2 / weight_noise_half
+    if return_unshifted_score_weighted:
+        return shifted_half, batch_norm, ctf2_over_nv_half, score_weighted_half
     return shifted_half, batch_norm, ctf2_over_nv_half
 
 

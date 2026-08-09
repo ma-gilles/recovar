@@ -156,6 +156,19 @@ def test_k1_coarse_gaussian_flag_is_off_by_default_and_k1_only(monkeypatch):
     assert "include_dc=True" in guard
 
 
+def test_k1_coarse_gaussian_sincosf_flag_is_off_and_requires_ffi(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import significance
+
+    monkeypatch.delenv("RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF", raising=False)
+    assert not significance._k1_coarse_gaussian_sincosf_enabled()
+    monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF", "1")
+    assert significance._k1_coarse_gaussian_sincosf_enabled()
+
+    source = Path(significance.__file__).read_text()
+    assert "coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled" in source
+    assert "production half-image preprocessing path" in source
+
+
 def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():
     from recovar.em.dense_single_volume.helpers.significance import (
         _relion_coarse_gaussian_square_operands,
@@ -198,6 +211,136 @@ def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():
     np.testing.assert_array_equal(
         np.asarray(pixel_weight),
         np.asarray([[4.0, 6.0, 0.0]], dtype=np.float32),
+    )
+
+
+def test_coarse_gaussian_sincosf_operands_reuse_unshifted_weighted_input(
+    monkeypatch,
+):
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _relion_coarse_gaussian_square_operands_sincosf,
+    )
+
+    captured = {}
+
+    def fake_translate(images, translation_angles, pixel_indices, image_shape):
+        captured.update(
+            images=np.asarray(images),
+            translation_angles=np.asarray(translation_angles),
+            pixel_indices=np.asarray(pixel_indices),
+            image_shape=tuple(image_shape),
+        )
+        return jnp.repeat(images[:, None, :], 2, axis=1).reshape(2, -1)
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_score_f32",
+        fake_translate,
+    )
+    unshifted_weighted = jnp.asarray(
+        [[2 + 4j, 12 + 6j, 99 + 3j, -8 + 16j]],
+        dtype=jnp.complex64,
+    )
+    score_weight = jnp.asarray([[2.0, 3.0, 0.0, 4.0]], dtype=jnp.float32)
+    half_weights = jnp.asarray([1.0, 2.0, 2.0, 1.0], dtype=jnp.float32)
+    score_indices = jnp.asarray([3, 1, 2], dtype=jnp.int32)
+    translations = np.asarray([[0.0, 0.0], [1.0, -2.0]], dtype=np.float32)
+
+    corrected, pixel_weight = _relion_coarse_gaussian_square_operands_sincosf(
+        unshifted_weighted,
+        score_weight,
+        half_weights,
+        score_indices,
+        translations,
+        (8, 8),
+    )
+
+    expected_base = np.asarray(
+        [[(-8 + 16j) / 4, (12 + 6j) / 3, 0]],
+        dtype=np.complex64,
+    )
+    np.testing.assert_array_equal(captured["images"], expected_base)
+    np.testing.assert_array_equal(captured["pixel_indices"], np.asarray([3, 1, 2]))
+    np.testing.assert_allclose(
+        captured["translation_angles"],
+        -2.0 * np.pi * translations / 8.0,
+        rtol=0,
+        atol=np.finfo(np.float32).eps,
+    )
+    assert captured["image_shape"] == (8, 8)
+    np.testing.assert_array_equal(
+        np.asarray(corrected),
+        np.repeat(expected_base[:, None, :], 2, axis=1),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(pixel_weight),
+        np.asarray([[4.0, 6.0, 0.0]], dtype=np.float32),
+    )
+
+
+@pytest.mark.gpu
+def test_coarse_gaussian_sincosf_operands_run_cuda_translation(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _relion_coarse_gaussian_square_operands_sincosf,
+    )
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_translation_angles_f32,
+    )
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    image_shape = (16, 16)
+    score_indices = jnp.asarray([0, 1, 8, 17, 46, 88], dtype=jnp.int32)
+    translations = np.asarray([[0.0, 0.0], [1.25, -0.75]], dtype=np.float32)
+    half_size = image_shape[0] * (image_shape[1] // 2 + 1)
+    score_weight = jnp.zeros((1, half_size), dtype=jnp.float32).at[:, score_indices].set(
+        jnp.asarray([[2.0, 4.0, 3.0, 5.0, 0.0, 2.0]], dtype=jnp.float32),
+    )
+    half_weights = jnp.zeros(half_size, dtype=jnp.float32).at[score_indices].set(
+        jnp.asarray([1.0, 2.0, 1.0, 2.0, 2.0, 1.0], dtype=jnp.float32),
+    )
+    unshifted_weighted = jnp.zeros((1, half_size), dtype=jnp.complex64).at[:, score_indices].set(
+        jnp.asarray(
+            [[2 + 1j, -4 + 2j, 3 - 6j, 10 + 5j, 7 + 9j, -2 - 4j]],
+            dtype=jnp.complex64,
+        ),
+    )
+    expected_input = jnp.asarray(
+        [[1 + 0.5j, -1 + 0.5j, 1 - 2j, 2 + 1j, 0, -1 - 2j]],
+        dtype=jnp.complex64,
+    )
+
+    with jax.default_device(gpu_device):
+        actual, actual_weight = _relion_coarse_gaussian_square_operands_sincosf(
+            unshifted_weighted,
+            score_weight,
+            half_weights,
+            score_indices,
+            translations,
+            image_shape,
+        )
+        expected = cuda_backproject.relion_translate_score_f32(
+            expected_input,
+            jnp.asarray(
+                _relion_translation_angles_f32(translations, image_shape),
+                dtype=jnp.float32,
+            ),
+            score_indices,
+            image_shape,
+        ).reshape(1, 2, 6)
+
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+    np.testing.assert_array_equal(
+        np.asarray(actual_weight),
+        np.asarray([[2.0, 8.0, 3.0, 10.0, 0.0, 2.0]], dtype=np.float32),
     )
 
 
