@@ -418,7 +418,11 @@ def test_kclass_significance_dump_threads_one_based_iteration():
     score_source = inspect.getsource(iteration_loop._score_half_dense)
     adaptive_source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
     significance_source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
-    assert "debug_iteration=iteration + 1" in loop_source
+    assert iteration_loop._numbered_relion_iteration(0, 0) == 1
+    assert iteration_loop._numbered_relion_iteration(1, 0) == 2
+    assert iteration_loop._numbered_relion_iteration(11, 2) == 14
+    assert "numbered_relion_iteration = _numbered_relion_iteration(" in loop_source
+    assert loop_source.count("debug_iteration=numbered_relion_iteration") >= 3
     assert score_source.count("debug_iteration=debug_iteration") >= 3
     assert adaptive_source.count("debug_iteration=debug_iteration") >= 1
     assert "debug_iteration=debug_iteration" in significance_source

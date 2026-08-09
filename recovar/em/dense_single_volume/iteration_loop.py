@@ -2814,6 +2814,7 @@ def _score_half_local(
     max_significants,
     state,
     iteration: int,
+    debug_iteration: int | None = None,
     save_intermediates_dir,
     local_search_random_perturbation,
     local_search_angular_sampling_deg,
@@ -2880,7 +2881,7 @@ def _score_half_local(
     local_n_trans = int(current_translations.shape[0])
     if int(local_parent_oversampling_order) > 0:
         local_n_trans *= int(4 ** int(local_parent_oversampling_order))
-    local_debug_iteration = iteration + 1
+    local_debug_iteration = iteration + 1 if debug_iteration is None else int(debug_iteration)
     parent_use_float64_scoring, parent_use_float64_projections = _local_search_precision_flags(
         local_debug_iteration,
         pass_index=1,
@@ -3051,7 +3052,7 @@ def _score_half_local(
             max_significants=max_significants,
             reconstruct_significant_only=True,
             translation_prior_reference_translations=translation_prior_reference_translations,
-            debug_iteration=iteration + 1,
+            debug_iteration=local_debug_iteration,
             pass2_layout=parent_layout,
             return_best_pose_details=False,
             translation_prior_centers=trans_prior_center_for_engine,
@@ -3351,7 +3352,7 @@ def _score_half_local(
         reconstruct_significant_only=local_reconstruct_significant_only,
         stats_use_reconstruction_probs=local_reconstruct_significant_only,
         translation_prior_reference_translations=translation_prior_reference_translations,
-        debug_iteration=iteration + 1,
+        debug_iteration=local_debug_iteration,
         pass2_layout=pass2_layout,
         return_best_pose_details=True,
         normalization_log_evidence=local_normalization_log_evidence,
@@ -4626,6 +4627,12 @@ def refine_single_volume(
 # ---------------------------------------------------------------------------
 
 
+def _numbered_relion_iteration(init_relion_iteration: int, local_iteration: int) -> int:
+    """Map a restart-local zero-based loop index to RELION's numbered iteration."""
+
+    return int(init_relion_iteration) + int(local_iteration) + 1
+
+
 def _run_relion_iteration_loop(
     experiment_datasets,
     init_volume,
@@ -5605,9 +5612,9 @@ def _run_relion_iteration_loop(
         firstiter_winner_take_all_this_iter = bool(
             relion_firstiter_cc_this_iter or first_iter_hard_reconstruction_this_iter
         )
+        numbered_relion_iteration = _numbered_relion_iteration(init_relion_iteration, iteration)
 
         if relion_follower_scale_state is not None:
-            numbered_relion_iteration = int(init_relion_iteration) + iteration + 1
             relion_follower_owners_per_half = [
                 owners.copy()
                 for owners in _require_relion_follower_owners(
@@ -6949,6 +6956,7 @@ def _run_relion_iteration_loop(
                     max_significants=max_significants,
                     state=state,
                     iteration=iteration,
+                    debug_iteration=numbered_relion_iteration,
                     save_intermediates_dir=save_intermediates_dir,
                     local_search_random_perturbation=local_search_random_perturbation,
                     local_search_angular_sampling_deg=local_search_angular_sampling_deg,
@@ -7040,7 +7048,7 @@ def _run_relion_iteration_loop(
                     firstiter_updates_em_kwargs_ibs=True,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
-                    debug_iteration=iteration + 1,
+                    debug_iteration=numbered_relion_iteration,
                     coarse_rotation_ids=coarse_rotation_ids_for_scoring,
                 )
                 ha_k = adaptive_result.ha
@@ -7105,7 +7113,7 @@ def _run_relion_iteration_loop(
                     best_pose_translations=best_pose_translations,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
-                    debug_iteration=iteration + 1,
+                    debug_iteration=numbered_relion_iteration,
                     coarse_rotation_ids=coarse_rotation_ids_for_scoring,
                 )
                 ha_k = single_pass_result.ha
