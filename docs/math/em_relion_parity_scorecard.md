@@ -1299,11 +1299,40 @@ interaction rather than rotation-only or translation-only terms.  The
 combined RELION-style CUDA coarse scorer arm, Slurm job `12166028`, worsens
 the preliminary p95 and maximum discrepancies to `0.00439453125` and
 `0.00830078125`, with posterior L1 `0.00160483`, so that intervention is
-rejected.  Dependent job `12166593` passively captures a fixed 12-rotation
-panel for projected-reference, base corrected-image, translation-phase, and
-correction decomposition on the same H100.  These diagnostics are non-scoring:
-K=1 remains 28/34 strict, 32/34 topology, and 34/34 evaluated.  K=4 work is
-parked until the K=1 gap is closed or sharply isolated.
+rejected.  Original capture job `12166593` failed its provenance preflight
+before science.  Replacement job `12167115` completed the RECOVAR iteration-2
+capture on H100 `GPU-001059ff-99a2-6f12-fc4d-40b13f6f8013` but exited on a
+stale post-capture shape assertion; RELION-only salvage job `12168200` then
+completed `0:0` on the same physical H100.  The sealed panel contains the
+declared particle, all `1,069,056` coarse tuples, 12 requested rotations, 29
+translations, and four RELION-significant tuples.
+
+Fail-closed analysis `12168434` rejects numerical classification at the
+operand-replay boundary.  RELION's CPU operand replay has centered p95/max
+absolute errors `0.00048828125/0.00048828125`, outside the unchanged
+`5e-5/5e-4` gates.  RECOVAR's NumPy component replay has p95/max errors
+`0.000376799337/0.000641672289`, outside the unchanged `5e-5/2e-4` gates.
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it2_operand_decomp_retry1_fd8e27b9_20260809T0610ET/analysis/PARTICLE21874_IT2_LIVE_OPERAND_FACTORIAL.json`,
+SHA-256
+`dbe154d8062e77ba668f865036dc8e04cf80472c4d6030b3597c4c82fc8df446`.
+This is a production-accumulation boundary, not evidence to widen either
+gate.
+
+An explicitly non-classification-ready follow-up anchors float64 operand
+deltas to the actual production residual.  No projected-reference,
+base-image, translation-phase, correction, pairwise, or all-live arm crosses
+the fixed greater-than-`0.5` dominance threshold; the largest exploratory
+energy removal is only `0.002059784925` for shifted image plus correction.
+Its audit JSON is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it2_operand_decomp_retry1_fd8e27b9_20260809T0610ET/analysis/PARTICLE21874_IT2_COMPONENT_ANCHORED_OPERAND_DIAGNOSTIC.json`,
+SHA-256
+`ee48ebacd61461f9aef633674176fdd219f5defed8a8f321b977a44a340c1a72`.
+The next case-4 gate is therefore the first production score-component or
+reduction operation that differs under identical operands, not another broad
+input-factor substitution.  These diagnostics are non-scoring: K=1 remains
+28/34 strict, 32/34 topology, and 34/34 evaluated.  K=4 work is parked until
+the K=1 gap is closed or sharply isolated.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
