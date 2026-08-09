@@ -5363,6 +5363,102 @@ def _relion_cuda_fine_diff2_sum(
     return _relion_cuda_fine_reduce_lanes(lanes)
 
 
+def _relion_cuda_fine_normalized_cc_score(
+    reference,
+    shifted_score,
+    score_weight,
+    half_weights,
+    relion_full_to_compact=None,
+):
+    """Reproduce RELION CUDA's 256-lane fine normalized-CC reduction.
+
+    The pinned ``cuda_kernel_diff2_CC_fine<REF3D=true>`` accumulates numerator
+    and reference norm over pixels ``tid + pass * 256`` in float32, then uses
+    the same shared-memory tree as fine Gaussian ``diff2``.  RECOVAR stores
+    the score window in centered compact order, so ``relion_full_to_compact``
+    restores RELION's packed current-size FFTW pixel order before accumulation.
+    """
+
+    reference = jnp.asarray(reference, dtype=jnp.complex64)
+    shifted_score = jnp.asarray(shifted_score, dtype=jnp.complex64)
+    score_weight = jnp.asarray(score_weight, dtype=jnp.float32)
+    half_weights = jnp.asarray(half_weights, dtype=jnp.float32)
+    n_values = int(reference.shape[-1])
+    if (
+        shifted_score.shape[-1] != n_values
+        or score_weight.shape[-1] != n_values
+        or half_weights.shape != (n_values,)
+    ):
+        raise ValueError(
+            "RELION CUDA fine normalized-CC operands must have the same pixel count: "
+            f"reference={reference.shape[-1]}, shifted={shifted_score.shape[-1]}, "
+            f"score_weight={score_weight.shape[-1]}, half_weights={half_weights.shape}"
+        )
+    numerator_shape = jnp.broadcast_shapes(
+        reference.shape[:-1], shifted_score.shape[:-1], score_weight.shape[:-1]
+    )
+    norm_shape = jnp.broadcast_shapes(reference.shape[:-1], score_weight.shape[:-1])
+    if n_values == 0:
+        return jnp.full(numerator_shape, -jnp.inf, dtype=jnp.float32)
+
+    if relion_full_to_compact is None:
+        relion_full_to_compact = jnp.arange(n_values, dtype=jnp.int32)
+    else:
+        relion_full_to_compact = jnp.asarray(relion_full_to_compact, dtype=jnp.int32)
+        if relion_full_to_compact.ndim != 1:
+            raise ValueError(
+                "RELION full-to-compact lookup must be one-dimensional, got "
+                f"{relion_full_to_compact.shape}"
+            )
+
+    full_image_size = int(relion_full_to_compact.shape[0])
+    block_size = _RELION_CUDA_FINE_REF3D_BLOCK_SIZE
+    n_passes = (full_image_size + block_size - 1) // block_size
+    padded_size = n_passes * block_size
+    relion_full_to_compact = jnp.pad(
+        relion_full_to_compact,
+        [(0, padded_size - full_image_size)],
+        constant_values=-1,
+    )
+    numerator_lanes = jnp.zeros(numerator_shape + (block_size,), dtype=jnp.float32)
+    norm_lanes = jnp.zeros(norm_shape + (block_size,), dtype=jnp.float32)
+
+    def accumulate_pass(pass_index, lane_values):
+        numerator, norm = lane_values
+        start = pass_index * block_size
+        compact_rows = jax.lax.dynamic_slice_in_dim(
+            relion_full_to_compact, start, block_size, axis=-1
+        )
+        valid_pixel = compact_rows >= 0
+        safe_rows = jnp.where(valid_pixel, compact_rows, 0)
+        ref_pass = jnp.take(reference, safe_rows, axis=-1)
+        shifted_pass = jnp.take(shifted_score, safe_rows, axis=-1)
+        score_weight_pass = jnp.take(score_weight, safe_rows, axis=-1)
+        half_weight_pass = jnp.take(half_weights, safe_rows, axis=-1)
+        numerator_terms = (
+            ref_pass.real * shifted_pass.real + ref_pass.imag * shifted_pass.imag
+        ) * half_weight_pass
+        norm_terms = (
+            ref_pass.real * ref_pass.real + ref_pass.imag * ref_pass.imag
+        ) * score_weight_pass * half_weight_pass
+        zero = jnp.asarray(0.0, dtype=jnp.float32)
+        numerator_terms = jnp.where(valid_pixel, numerator_terms, zero)
+        norm_terms = jnp.where(valid_pixel, norm_terms, zero)
+        return numerator + numerator_terms, norm + norm_terms
+
+    numerator_lanes, norm_lanes = jax.lax.fori_loop(
+        0,
+        n_passes,
+        accumulate_pass,
+        (numerator_lanes, norm_lanes),
+    )
+    numerator = _relion_cuda_fine_reduce_lanes(numerator_lanes)
+    norm = _relion_cuda_fine_reduce_lanes(norm_lanes)
+    return numerator / jnp.sqrt(
+        jnp.maximum(norm, jnp.asarray(1e-30, dtype=jnp.float32))
+    )
+
+
 def _relion_cuda_fine_pixel_weights(corr_img_score, half_weights):
     """Form RELION XFLOAT pixel weights without a float64 intermediate."""
 
@@ -5750,6 +5846,50 @@ def _score_pass2_bucket_relion_gpu_diff2_single_cached(
 
 
 @jax.jit
+def _score_pass2_bucket_relion_gpu_normalized_cc(
+    shifted_score,  # (B, T, N) complex, image * CTF * shift / Xi2
+    score_weight,  # (B, N) real, CTF^2 / Xi2
+    proj_half,  # (B, R, N) complex
+    half_weights,  # (N,) real
+    candidate_mask,  # (B, R, T) bool
+    relion_full_to_compact=None,  # packed current-size FFTW order -> compact row
+):
+    """RELION iter-1 normalized-CC scoring for sparse pass-2 buckets."""
+
+    scores = _relion_cuda_fine_normalized_cc_score(
+        proj_half[:, :, None, :],
+        shifted_score[:, None, :, :],
+        score_weight[:, None, None, :],
+        half_weights,
+        relion_full_to_compact,
+    )
+    scores = jnp.where(candidate_mask, scores, -jnp.inf)
+    return jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
+
+
+@jax.jit
+def _score_pass2_bucket_relion_gpu_normalized_cc_single_cached(
+    shifted_score,  # (T, N) complex
+    score_weight,  # (N,) real
+    proj_half,  # (R, N) complex
+    half_weights,  # (N,) real
+    candidate_mask,  # (R, T) bool
+    relion_full_to_compact=None,  # packed current-size FFTW order -> compact row
+):
+    """Single-image normalized-CC scorer for cached ``(R, N)`` projections."""
+
+    scores = _relion_cuda_fine_normalized_cc_score(
+        proj_half[:, None, :],
+        shifted_score[None, :, :],
+        score_weight[None, None, :],
+        half_weights,
+        relion_full_to_compact,
+    )
+    scores = jnp.where(candidate_mask, scores, -jnp.inf)
+    return jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
+
+
+@jax.jit
 def _score_pass2_bucket_normalized_cc(
     shifted_score,  # (B, T, N) complex, image * CTF * shift / Xi2
     score_weight,  # (B, N) real, CTF^2 / Xi2
@@ -5757,20 +5897,16 @@ def _score_pass2_bucket_normalized_cc(
     half_weights,  # (N,) real
     candidate_mask,  # (B, R, T) bool
 ):
-    """RELION iter-1 normalized-CC scoring for sparse pass-2 buckets."""
+    """Historical algebraic normalized-CC scorer retained outside K=1."""
 
-    # RELION's CUDA kernel forms pointwise real/imaginary products and then
-    # reduces them in float32.  A complex GEMM is algebraically equivalent but
-    # has a different accumulation order; one-ULP firstiter-CC ties can choose
-    # different winners and subsequently alter the full refinement schedule.
     cross_products = (
         proj_half[:, :, None, :].real * shifted_score[:, None, :, :].real
         + proj_half[:, :, None, :].imag * shifted_score[:, None, :, :].imag
     ) * jnp.asarray(half_weights, dtype=jnp.float32)[None, None, None, :]
     cross = -2.0 * jnp.sum(cross_products, axis=-1, dtype=jnp.float32)
-    proj_abs2_weighted = (proj_half.real * proj_half.real + proj_half.imag * proj_half.imag) * half_weights[
-        None, None, :
-    ]
+    proj_abs2_weighted = (
+        proj_half.real * proj_half.real + proj_half.imag * proj_half.imag
+    ) * half_weights[None, None, :]
     norms = jnp.einsum(
         "bn,brn->br",
         score_weight,
@@ -5791,14 +5927,16 @@ def _score_pass2_bucket_normalized_cc_single_cached(
     half_weights,  # (N,) real
     candidate_mask,  # (R, T) bool
 ):
-    """Single-image normalized-CC scorer for cached ``(R, N)`` projections."""
+    """Historical cached normalized-CC scorer retained outside K=1."""
 
     cross_products = (
         proj_half[:, None, :].real * shifted_score[None, :, :].real
         + proj_half[:, None, :].imag * shifted_score[None, :, :].imag
     ) * jnp.asarray(half_weights, dtype=jnp.float32)[None, None, :]
     cross = -2.0 * jnp.sum(cross_products, axis=-1, dtype=jnp.float32)
-    proj_abs2_weighted = (proj_half.real * proj_half.real + proj_half.imag * proj_half.imag) * half_weights[None, :]
+    proj_abs2_weighted = (
+        proj_half.real * proj_half.real + proj_half.imag * proj_half.imag
+    ) * half_weights[None, :]
     norms = jnp.einsum(
         "n,rn->r",
         score_weight,
@@ -5933,6 +6071,37 @@ def _score_pass2_pairs_relion_gpu_diff2(
 
 
 @jax.jit
+def _score_pass2_pairs_relion_gpu_normalized_cc(
+    shifted_score,  # (B, T, N) complex, image * CTF * shift / Xi2
+    score_weight,  # (B, N) real, CTF^2 / Xi2
+    proj_half,  # (B, R, N) complex
+    half_weights,  # (N,) real
+    local_rotation_row,  # (B, P) int
+    translation_idx,  # (B, P) int
+    pair_mask,  # (B, P) bool
+    relion_full_to_compact=None,  # packed current-size FFTW order -> compact row
+):
+    """RELION iter-1 normalized-CC scoring for compact pass-2 pairs."""
+
+    batch = shifted_score.shape[0]
+    row = jnp.arange(batch)[:, None]
+    safe_rotation_row = jnp.where(pair_mask, local_rotation_row, 0).astype(jnp.int32)
+    safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
+
+    shifted_pair = shifted_score[row, safe_translation_idx, :]
+    proj_pair = proj_half[row, safe_rotation_row, :]
+    scores = _relion_cuda_fine_normalized_cc_score(
+        proj_pair,
+        shifted_pair,
+        score_weight[:, None, :],
+        half_weights,
+        relion_full_to_compact,
+    )
+    scores = jnp.where(pair_mask, scores, -jnp.inf)
+    return jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
+
+
+@jax.jit
 def _score_pass2_pairs_normalized_cc(
     shifted_score,  # (B, T, N) complex, image * CTF * shift / Xi2
     score_weight,  # (B, N) real, CTF^2 / Xi2
@@ -5942,13 +6111,12 @@ def _score_pass2_pairs_normalized_cc(
     translation_idx,  # (B, P) int
     pair_mask,  # (B, P) bool
 ):
-    """RELION iter-1 normalized-CC scoring for compact pass-2 pairs."""
+    """Historical compact-pair normalized-CC scorer retained outside K=1."""
 
     batch = shifted_score.shape[0]
     row = jnp.arange(batch)[:, None]
     safe_rotation_row = jnp.where(pair_mask, local_rotation_row, 0).astype(jnp.int32)
     safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
-
     shifted_pair = shifted_score[row, safe_translation_idx, :]
     proj_pair = proj_half[row, safe_rotation_row, :]
     cross_products = (
@@ -8264,6 +8432,7 @@ def compute_pass2_stats_sparse_bucketed(
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
     relion_exact_fine_gaussian=True,
+    relion_exact_fine_normalized_cc=False,
     relion_projector_half=None,
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
@@ -9467,13 +9636,20 @@ def compute_pass2_stats_sparse_bucketed(
                 if relion_firstiter_score_mode == "normalized_cc":
                     if raw_diff2:
                         raise ValueError("normalized-CC scoring has no raw Gaussian diff2 tensor")
-                    score_chunk = _score_pass2_bucket_normalized_cc(
+                    score_args = (
                         shifted_corrected_score_split,
                         ctf2_over_nv_score,
                         proj_chunk,
                         direct_half_weights,
                         jnp.asarray(candidate_mask[:, start:stop, :]),
                     )
+                    if relion_exact_fine_normalized_cc:
+                        score_chunk = _score_pass2_bucket_relion_gpu_normalized_cc(
+                            *score_args,
+                            relion_score_full_to_compact,
+                        )
+                    else:
+                        score_chunk = _score_pass2_bucket_normalized_cc(*score_args)
                 elif use_exact_relion_gaussian:
                     if raw_diff2:
                         score_chunk = _score_pass2_bucket_relion_gpu_diff2_raw(
@@ -10366,22 +10542,29 @@ def compute_pass2_stats_sparse_bucketed(
         shadow_score_bitwise_equal = False
         if relion_firstiter_score_mode == "normalized_cc":
             min_diff2 = None
-            scores = _score_pass2_bucket_normalized_cc(
+            score_args = (
                 shifted_corrected_score_split,
                 ctf2_over_nv_score,
                 proj_half,
                 direct_half_weights,
                 jnp.asarray(candidate_mask),
             )
+            if relion_exact_fine_normalized_cc:
+                scores = _score_pass2_bucket_relion_gpu_normalized_cc(
+                    *score_args,
+                    relion_score_full_to_compact,
+                )
+            else:
+                scores = _score_pass2_bucket_normalized_cc(*score_args)
             preprior_scores = scores
             if bucket_shadow_only_mode:
-                shadow_scores = _score_pass2_bucket_normalized_cc(
-                    shifted_corrected_score_split,
-                    ctf2_over_nv_score,
-                    proj_half,
-                    direct_half_weights,
-                    jnp.asarray(candidate_mask),
-                )
+                if relion_exact_fine_normalized_cc:
+                    shadow_scores = _score_pass2_bucket_relion_gpu_normalized_cc(
+                        *score_args,
+                        relion_score_full_to_compact,
+                    )
+                else:
+                    shadow_scores = _score_pass2_bucket_normalized_cc(*score_args)
                 _require_bpref_shadow_exact("normalized-CC score", scores, shadow_scores)
                 shadow_score_bitwise_equal = True
         elif use_exact_relion_gaussian:

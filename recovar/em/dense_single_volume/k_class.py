@@ -902,6 +902,9 @@ def _run_sparse_k_class_adaptive_pass2(
         relion_exact_fine_gaussian=bool(
             base_engine_kwargs.get("relion_exact_fine_gaussian", True)
         ),
+        # The exact normalized-CC tree is a deliberately K=1-scoped parity
+        # candidate. Keep the K>1 route byte-preserving until K=1 closes.
+        relion_exact_fine_normalized_cc=n_classes == 1,
         relion_firstiter_winner_take_all=bool(
             base_engine_kwargs.get("relion_firstiter_winner_take_all", False)
         ),
@@ -959,6 +962,7 @@ def _run_sparse_k_class_adaptive_pass2(
         fused_t0 = time.time()
         fused_common = dict(common)
         fused_common.pop("relion_fine_mstep_prune", None)
+        fused_common.pop("relion_exact_fine_normalized_cc", None)
         fused_common["relion_projector_half"] = relion_projector_half_by_class
         fused_common["relion_projector_r_max"] = relion_projector_r_max
         try:

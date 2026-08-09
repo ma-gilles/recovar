@@ -1451,6 +1451,7 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
     )
 
     assert len(calls) == 3
+    assert all(call["relion_exact_fine_normalized_cc"] is False for call in calls)
     assert calls[0].get("return_score_log_z_only")
     assert calls[1].get("return_score_log_z")
     np.testing.assert_allclose(calls[1]["normalization_other_score_log_z"], probe_score_log_z[0])
@@ -1554,6 +1555,10 @@ def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypa
     )
 
     assert [class_index for class_index, _ in calls] == [0, 2, 1, 0, 2]
+    assert all(
+        call_kwargs["relion_exact_fine_normalized_cc"] is False
+        for _, call_kwargs in calls
+    )
     other_log_z = np.logaddexp(score_log_z[0], score_log_z[2])
     global_log_z = np.logaddexp(other_log_z, score_log_z[1])
     np.testing.assert_allclose(calls[2][1]["normalization_other_score_log_z"], other_log_z)
