@@ -1,5 +1,6 @@
 """Focused tests for RELION's fused fine-Gaussian CUDA FFI."""
 
+from itertools import permutations
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +42,49 @@ def _production_reference(reference, shifted, weight, lookup):
     return np.float32(lanes[0])
 
 
+def _coarse_production_results(
+    reference,
+    shifted,
+    weight,
+    lookup,
+    *,
+    translation_count,
+    initial_diff2=np.float32(0),
+):
+    active_lanes = 128 // translation_count
+    lanes = np.zeros(active_lanes, dtype=np.float32)
+    for chunk_start in range(0, lookup.size, 32):
+        for lane in range(active_lanes):
+            for pixel_in_chunk in range(lane, 32, active_lanes):
+                full_pixel = chunk_start + pixel_in_chunk
+                if full_pixel >= lookup.size:
+                    break
+                compact_pixel = lookup[full_pixel]
+                if compact_pixel < 0:
+                    continue
+                diff_real = np.float32(
+                    reference[compact_pixel].real - shifted[compact_pixel].real
+                )
+                diff_imag = np.float32(
+                    reference[compact_pixel].imag - shifted[compact_pixel].imag
+                )
+                imag_square = np.float32(diff_imag * diff_imag)
+                square_sum = _fma32(diff_real, diff_real, imag_square)
+                half_square_sum = np.float32(square_sum * np.float32(0.5))
+                lanes[lane] = _fma32(
+                    half_square_sum,
+                    weight[compact_pixel],
+                    lanes[lane],
+                )
+    possible = set()
+    for order in permutations(range(active_lanes)):
+        total = np.float32(initial_diff2)
+        for lane in order:
+            total = np.float32(total + lanes[lane])
+        possible.add(int(total.view(np.uint32)))
+    return possible
+
+
 def _operands():
     rng = np.random.default_rng(20)
     pixel_count = 513
@@ -73,6 +117,109 @@ def test_relion_fine_diff2_cuda_source_pins_production_rounding_order():
     assert "__fmaf_rn(diff_real, diff_real, imag_square)" in block
     assert "__fmul_rn(square_sum, 0.5f)" in block
     assert "__fmaf_rn(half_square_sum, weight, lane_sum)" in block
+
+
+def test_relion_coarse_diff2_cuda_source_pins_production_topology():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+
+    start = source.index("relion_coarse_diff2_rectangular_f32_kernel")
+    block = source[start : source.index("cudaError_t", start)]
+    assert "kRelionCoarseDiff2BlockSize = 128" in source
+    assert "kRelionCoarseEulersPerBlock = 16" in source
+    assert "kRelionCoarsePrefetchFraction = 4" in source
+    assert "threadIdx.x % translation_count" in block
+    assert "threadIdx.x / translation_count" in block
+    assert "pixel_in_chunk += active_lanes" in block
+    assert "atomicAdd(" in block
+
+
+def test_k1_coarse_gaussian_flag_is_off_by_default_and_k1_only(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import significance
+
+    monkeypatch.delenv("RECOVAR_K1_COARSE_GAUSSIAN_FFI", raising=False)
+    assert not significance._k1_coarse_gaussian_ffi_enabled()
+    monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_FFI", "1")
+    assert significance._k1_coarse_gaussian_ffi_enabled()
+
+    source = Path(significance.__file__).read_text()
+    start = source.index("if coarse_gaussian_ffi_enabled:")
+    guard = source[start : source.index("tree_rescore_fftw_order", start)]
+    assert "if n_classes != 1:" in guard
+    assert "restricted to K=1" in guard
+
+
+@pytest.mark.gpu
+def test_relion_coarse_diff2_rectangular_matches_atomic_envelope(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(29)
+    batch_size, rotation_count, translation_count = 2, 17, 29
+    compact_pixel_count, full_pixel_count = 421, 513
+    reference = (
+        rng.normal(0, 0.02, (rotation_count, compact_pixel_count))
+        + 1j * rng.normal(0, 0.02, (rotation_count, compact_pixel_count))
+    ).astype(np.complex64)
+    shifted = (
+        rng.normal(
+            0,
+            0.02,
+            (batch_size, translation_count, compact_pixel_count),
+        )
+        + 1j
+        * rng.normal(
+            0,
+            0.02,
+            (batch_size, translation_count, compact_pixel_count),
+        )
+    ).astype(np.complex64)
+    weight = rng.uniform(0, 150_000, (batch_size, compact_pixel_count)).astype(
+        np.float32
+    )
+    initial_diff2 = rng.uniform(10_000, 20_000, batch_size).astype(np.float32)
+    retained = np.sort(
+        rng.choice(full_pixel_count, compact_pixel_count, replace=False)
+    )
+    lookup = np.full(full_pixel_count, -1, dtype=np.int32)
+    lookup[retained] = np.arange(compact_pixel_count, dtype=np.int32)
+
+    with jax.default_device(gpu_device):
+        actual = np.asarray(
+            cuda_backproject.relion_coarse_diff2_rectangular_f32(
+                jnp.asarray(reference),
+                jnp.asarray(shifted),
+                jnp.asarray(weight),
+                jnp.asarray(initial_diff2),
+                jnp.asarray(lookup),
+            )
+        )
+
+    for batch in range(batch_size):
+        for rotation in range(rotation_count):
+            for translation in range(translation_count):
+                possible = _coarse_production_results(
+                    reference[rotation],
+                    shifted[batch, translation],
+                    weight[batch],
+                    lookup,
+                    translation_count=translation_count,
+                    initial_diff2=initial_diff2[batch],
+                )
+                actual_bits = int(
+                    actual[batch, rotation, translation].view(np.uint32)
+                )
+                assert actual_bits in possible
 
 
 @pytest.mark.gpu
@@ -145,6 +292,20 @@ def test_relion_fine_diff2_fails_closed_without_gpu(monkeypatch, function_name):
             jnp.zeros((1, 1, 2), dtype=jnp.complex64),
             jnp.zeros((1, 1, 2), dtype=jnp.complex64),
             jnp.ones((1, 2), dtype=jnp.float32),
+            jnp.asarray([0, 1], dtype=jnp.int32),
+        )
+
+
+def test_relion_coarse_diff2_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_coarse_diff2_rectangular_f32.__wrapped__(
+            jnp.zeros((1, 2), dtype=jnp.complex64),
+            jnp.zeros((1, 29, 2), dtype=jnp.complex64),
+            jnp.ones((1, 2), dtype=jnp.float32),
+            jnp.zeros((1,), dtype=jnp.float32),
             jnp.asarray([0, 1], dtype=jnp.int32),
         )
 

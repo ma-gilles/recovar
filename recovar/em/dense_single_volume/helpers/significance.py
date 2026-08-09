@@ -31,8 +31,20 @@ _GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_GLOBAL_PASS1_PROJEC
 _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
     "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN"
 )
+_K1_COARSE_GAUSSIAN_FFI_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_FFI"
 NVTX_DOMAIN_EM = "recovar_em"
 logger = logging.getLogger(__name__)
+
+
+def _k1_coarse_gaussian_ffi_enabled() -> bool:
+    """Return whether the diagnostic RELION coarse Gaussian FFI is active."""
+
+    token = os.environ.get(_K1_COARSE_GAUSSIAN_FFI_ENV, "0").strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(f"Unsupported {_K1_COARSE_GAUSSIAN_FFI_ENV}={token!r}")
 
 
 def _capture_offset_free_and_absolute_float32_scores(scores, log_score_offset):
@@ -1522,6 +1534,7 @@ def _compute_k_class_significance_batched(
     )
     from recovar.em.dense_single_volume.helpers.image_shifts import (
         apply_relion_integer_pre_shifts,
+        half_image_phase_factors,
         tiled_half_image_phase_factors,
     )
     from recovar.em.dense_single_volume.helpers.oversampling import (
@@ -1529,6 +1542,7 @@ def _compute_k_class_significance_batched(
     )
     from recovar.em.dense_single_volume.helpers.preprocessing import (
         prepare_batch_preprocess_operands,
+        process_half_image,
     )
     from recovar.em.dense_single_volume.helpers.preprocessing import (
         preprocess_batch as _preprocess_batch,
@@ -1647,6 +1661,74 @@ def _compute_k_class_significance_batched(
     tree_rescore_enabled = (
         tree_rescore_max_margin is not None and score_mode == "normalized_cc"
     )
+    coarse_gaussian_ffi_enabled = _k1_coarse_gaussian_ffi_enabled()
+    coarse_gaussian_full_to_compact = None
+    coarse_gaussian_translation_angles = None
+    coarse_gaussian_powerclass = None
+    if coarse_gaussian_ffi_enabled:
+        if n_classes != 1:
+            raise ValueError(
+                f"{_K1_COARSE_GAUSSIAN_FFI_ENV} is restricted to K=1"
+            )
+        if score_mode != "gaussian":
+            raise ValueError(
+                f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires Gaussian scoring"
+            )
+        if use_float64_scoring:
+            raise ValueError(
+                f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires production float32 scoring"
+            )
+        if not use_relion_projector or not coarse_texture_interp:
+            raise ValueError(
+                f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires the supplied RELION "
+                "texture projector"
+            )
+        if not half_spectrum_scoring or not square_window:
+            raise ValueError(
+                f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires the RELION square "
+                "half-spectrum scoring path"
+            )
+        if n_trans > 128:
+            raise ValueError(
+                f"{_K1_COARSE_GAUSSIAN_FFI_ENV} supports at most 128 "
+                f"translations, got {n_trans}"
+            )
+        from recovar import cuda_backproject
+        from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+            _relion_cuda_fine_full_to_compact_lookup,
+            _relion_cuda_powerclass_highres_xi2_half,
+            _relion_translation_angles_f32,
+        )
+
+        if jax.default_backend() != "gpu" or not cuda_backproject.cuda_available():
+            raise RuntimeError(
+                f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires the custom CUDA backend"
+            )
+        score_size = int(image_shape[0]) if current_size is None else int(current_size)
+        compact_score_indices = (
+            np.arange(n_half, dtype=np.int32)
+            if window_spec.score_indices_np is None
+            else window_spec.score_indices_np
+        )
+        coarse_gaussian_full_to_compact = jnp.asarray(
+            _relion_cuda_fine_full_to_compact_lookup(
+                image_shape,
+                score_size,
+                compact_score_indices,
+            ),
+            dtype=jnp.int32,
+        )
+        coarse_gaussian_translation_angles = jnp.asarray(
+            _relion_translation_angles_f32(translations, image_shape),
+            dtype=jnp.float32,
+        )
+        coarse_gaussian_powerclass = _relion_cuda_powerclass_highres_xi2_half
+        logger.warning(
+            "Opt-in K=1 RELION coarse Gaussian FFI enabled: "
+            "current_size=%d translations=%d",
+            score_size,
+            n_trans,
+        )
     tree_rescore_fftw_order = None
     if tree_rescore_enabled:
         if n_classes != 1:
@@ -1782,6 +1864,10 @@ def _compute_k_class_significance_batched(
         ).real
         return shifted_half, batch_norm, ctf2_over_nv_half
 
+    coarse_gaussian_shifted_corrected = None
+    coarse_gaussian_pixel_weight = None
+    coarse_gaussian_initial_diff2 = None
+
     def _project_block(class_index, mean_for_proj, rots_b):
         if use_relion_projector:
             projector_kwargs = {}
@@ -1829,6 +1915,17 @@ def _compute_k_class_significance_batched(
             if not use_float64_scoring:
                 proj_w = proj_w.astype(jnp.complex64)
                 proj_abs2_w = proj_abs2_w.astype(jnp.float32)
+            if coarse_gaussian_ffi_enabled:
+                from recovar import cuda_backproject
+
+                diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
+                    proj_w,
+                    coarse_gaussian_shifted_corrected,
+                    coarse_gaussian_pixel_weight,
+                    coarse_gaussian_initial_diff2,
+                    coarse_gaussian_full_to_compact,
+                )
+                return -diff2
             if score_mode == "normalized_cc":
                 return _e_step_block_scores_windowed_normalized_cc(
                     shifted_data,
@@ -1858,6 +1955,17 @@ def _compute_k_class_significance_batched(
         if not use_float64_scoring:
             proj_half_b = proj_half_b.astype(jnp.complex64)
             proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
+        if coarse_gaussian_ffi_enabled:
+            from recovar import cuda_backproject
+
+            diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
+                proj_half_b,
+                coarse_gaussian_shifted_corrected,
+                coarse_gaussian_pixel_weight,
+                coarse_gaussian_initial_diff2,
+                coarse_gaussian_full_to_compact,
+            )
+            return -diff2
         if score_mode == "normalized_cc":
             return _e_step_block_scores_normalized_cc(
                 shifted_data,
@@ -2053,6 +2161,66 @@ def _compute_k_class_significance_batched(
         else:
             shifted_data = shifted_data.astype(jnp.complex64)
             ctf2_data = ctf2_data.astype(jnp.float32)
+
+        if coarse_gaussian_ffi_enabled:
+            from recovar import cuda_backproject
+
+            processed_direct = process_half_image(
+                experiment_dataset,
+                batch_data,
+                score_with_masked_images,
+                relion_preprocess_kwargs=relion_preprocess_kwargs,
+            )
+            processed_for_powerclass = processed_direct
+            direct_score_input = processed_direct
+            if image_corrections is not None and not relion_cuda_preprocess:
+                image_only_correction = batch_corr / batch_scale
+                direct_score_input = direct_score_input * image_only_correction[:, None]
+                processed_for_powerclass = (
+                    processed_for_powerclass * image_only_correction[:, None]
+                )
+            if scale_corrections is not None:
+                direct_score_input = direct_score_input / batch_scale[:, None]
+            ctf_half = config.compute_ctf_half(ctf_params)
+            direct_score_input = jnp.where(
+                jnp.abs(ctf_half) > 1e-8,
+                direct_score_input / ctf_half,
+                direct_score_input,
+            )
+            if image_pre_shifts is not None and not real_space_pre_shift_applied:
+                batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
+                direct_score_input = direct_score_input * half_image_phase_factors(
+                    image_shape,
+                    batch_shifts,
+                )
+            compact_score_indices = (
+                jnp.arange(n_half, dtype=jnp.int32)
+                if window_indices is None
+                else jnp.asarray(window_indices, dtype=jnp.int32)
+            )
+            direct_score_input = direct_score_input[:, compact_score_indices]
+            coarse_gaussian_shifted_corrected = (
+                cuda_backproject.relion_translate_score_f32(
+                    jnp.asarray(direct_score_input, dtype=jnp.complex64),
+                    coarse_gaussian_translation_angles,
+                    compact_score_indices,
+                    image_shape,
+                ).reshape(batch_size, n_trans, -1)
+            )
+            coarse_gaussian_pixel_weight = ctf2_data * (
+                half_weights_windowed[None, :]
+                if use_window
+                else half_weights[None, :]
+            )
+            coarse_gaussian_pixel_weight = jnp.asarray(
+                coarse_gaussian_pixel_weight,
+                dtype=jnp.float32,
+            )
+            coarse_gaussian_initial_diff2 = coarse_gaussian_powerclass(
+                processed_for_powerclass,
+                image_shape=image_shape,
+                current_size=current_size,
+            )
 
         # Identify per-batch dump target rows so we can record raw scores
         # (pre-prior) for each target image inside the per-class block loop.
@@ -2422,7 +2590,12 @@ def _compute_k_class_significance_batched(
         hard_assignment[start_idx:end_idx] = np.asarray(best_argmax_batch, dtype=np.int32)
         class_assignment[start_idx:end_idx] = np.asarray(best_class_batch, dtype=np.int32)
 
-        log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+        log_score_offset = (
+            np.zeros(batch_size, dtype=np.float64)
+            if coarse_gaussian_ffi_enabled
+            else -0.5
+            * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+        )
         global_log_z_np = np.asarray(global_log_z, dtype=np.float64)
         best_score_np = np.asarray(best_score_batch, dtype=np.float64)
         normalization_log_z[start_idx:end_idx] = global_log_z_np

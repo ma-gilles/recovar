@@ -516,6 +516,9 @@ _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE = (
 )
 _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32 = "cuda_relion_make_scoring_rotations_f32"
 _TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
+_TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
+    "cuda_relion_coarse_diff2_rectangular_f32"
+)
 _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_rectangular_f32"
 )
@@ -552,6 +555,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionMakeScoringRotationsF32",
     ),
     (_TARGET_RELION_TRANSLATE_SCORE_F32, "RelionTranslateScoreF32"),
+    (
+        _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
+        "RelionCoarseDiff2RectangularF32",
+    ),
     (
         _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32,
         "RelionFineDiff2RectangularF32",
@@ -1219,6 +1226,67 @@ def _validate_relion_fine_diff2_inputs(
             "RELION fine diff2 was explicitly requested but custom CUDA is disabled"
         )
     _ensure_ffi()
+
+
+@jax.jit
+def relion_coarse_diff2_rectangular_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+) -> jax.Array:
+    """Evaluate RELION's coarse Gaussian CUDA reduction topology.
+
+    Shapes are ``reference=(R,N)``, ``shifted_image=(B,T,N)``,
+    ``weight=(B,N)``, ``initial_diff2=(B,)``, and
+    ``full_to_compact=(F,)``. The kernel uses RELION's 128-thread,
+    16-orientation blocks and its native per-translation lane assignment. The
+    lane partials are combined with CUDA atomics on top of the supplied
+    high-resolution image term, as in RELION's coarse scorer.
+    """
+
+    _validate_relion_fine_diff2_inputs(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+    )
+    if initial_diff2.dtype != jnp.float32:
+        raise TypeError(
+            f"initial_diff2 must be float32, got {initial_diff2.dtype}"
+        )
+    if reference.ndim != 2 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError(
+            "rectangular coarse diff2 expects reference rank 2, shifted rank "
+            f"3, and weight rank 2, got {reference.shape}, "
+            f"{shifted_image.shape}, {weight.shape}"
+        )
+    if (
+        shifted_image.shape[0] != weight.shape[0]
+        or reference.shape[1] != shifted_image.shape[2]
+        or reference.shape[1] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or shifted_image.shape[0] <= 0
+        or shifted_image.shape[1] <= 0
+        or shifted_image.shape[1] > 128
+        or initial_diff2.shape != (shifted_image.shape[0],)
+    ):
+        raise ValueError(
+            "rectangular coarse diff2 operands have inconsistent shapes or "
+            "more than 128 translations: "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    out_type = jax.ShapeDtypeStruct(
+        (shifted_image.shape[0], reference.shape[0], shifted_image.shape[1]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(reference, shifted_image, weight, initial_diff2, full_to_compact)
 
 
 @jax.jit

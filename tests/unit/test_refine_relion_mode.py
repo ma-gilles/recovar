@@ -10837,6 +10837,54 @@ class TestRelionModeSmokeTest:
 
         assert manual_calls
 
+    @pytest.mark.gpu
+    def test_k1_coarse_gaussian_ffi_runs_significance_path(
+        self,
+        half_datasets,
+        init_volume,
+        monkeypatch,
+        custom_cuda_lib,
+        gpu_device,
+    ):
+        """Exercise the opt-in K=1 coarse scorer through significance."""
+
+        import jax
+
+        monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+        monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_FFI", "1")
+        monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+        dataset = half_datasets[0]
+        with jax.default_device(gpu_device):
+            result = _compute_k_class_significance_batched(
+                dataset,
+                init_volume[None, :],
+                jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+                _make_rotations(3, seed=21),
+                jnp.zeros((1, 2), dtype=jnp.float32),
+                "linear_interp",
+                class_log_priors=np.zeros(1, dtype=np.float64),
+                adaptive_fraction=0.999,
+                max_significants=-1,
+                image_batch_size=dataset.n_units,
+                rotation_block_size=2,
+                current_size=6,
+                half_spectrum_scoring=True,
+                square_window=True,
+                relion_projector_half=jnp.zeros(
+                    (1, 3, 3, 2),
+                    dtype=jnp.complex64,
+                ),
+                relion_projector_r_max=1,
+                relion_projector_texture_interp=True,
+                collect_significance=False,
+                return_class_best=True,
+            )
+
+        assert np.asarray(result[2]).shape == (dataset.n_units,)
+        assert np.asarray(result[-1]["max_posterior_per_image"]).shape == (
+            dataset.n_units,
+        )
+
     def test_significance_batched_matches_run_em_with_pre_shifts_scales_and_projection_padding(
         self,
         half_datasets,
