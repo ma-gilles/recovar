@@ -834,6 +834,7 @@ def _candidate_table_from_relion(
         generic_candidate_prefix = None
         adaptive_pass0 = False
         score_with_override = None
+        prior_source = "candidate_arrays"
         if firstiter_pass is None:
             generic_candidate_prefix = (
                 "pass1"
@@ -899,6 +900,38 @@ def _candidate_table_from_relion(
         rot_prior = generic_candidate_field("candidate_orientation_log_prior")
         trans_prior = generic_candidate_field("candidate_offset_log_prior")
         combined_prior = generic_candidate_field("candidate_combined_log_prior")
+        if adaptive_pass0 and rot_prior is None and trans_prior is None:
+            # Dense adaptive pass 0 has one row for every rotation/translation
+            # pair, but older RELION capture builds did not duplicate priors
+            # into candidate-sized arrays. The pass-level pdf arrays already
+            # contain log-priors indexed by the explicit coarse candidate ids.
+            dense_rot_prior = _get_by_suffix_from_prefix(
+                payload,
+                "pdf_orientation",
+                "pass0",
+            )
+            dense_trans_prior = _get_by_suffix_from_prefix(
+                payload,
+                "pdf_offset",
+                "pass0",
+            )
+            rot_rows = np.asarray(rot_idx, dtype=np.int64).reshape(-1)
+            trans_rows = np.asarray(trans_idx, dtype=np.int64).reshape(-1)
+            if dense_rot_prior is not None and dense_trans_prior is not None:
+                dense_rot_prior = np.asarray(dense_rot_prior, dtype=np.float64).reshape(-1)
+                dense_trans_prior = np.asarray(dense_trans_prior, dtype=np.float64).reshape(-1)
+                if (
+                    rot_rows.size
+                    and trans_rows.size
+                    and np.min(rot_rows) >= 0
+                    and np.min(trans_rows) >= 0
+                    and np.max(rot_rows) < dense_rot_prior.size
+                    and np.max(trans_rows) < dense_trans_prior.size
+                ):
+                    rot_prior = dense_rot_prior[rot_rows]
+                    trans_prior = dense_trans_prior[trans_rows]
+                    combined_prior = rot_prior + trans_prior
+                    prior_source = "pass0_pdf_orientation_plus_pdf_offset"
         if adaptive_pass0:
             candidate_class_idx = payload.get("pass0_coarse_candidate_class_idx")
             reconstruction_mask = payload.get("pass0_coarse_candidate_in_threshold_set")
@@ -956,6 +989,7 @@ def _candidate_table_from_relion(
             selected_field = "implicit_firstiter_cc_grid:pass0" if implicit_firstiter is not None else "all_candidates"
     else:
         generic_candidate_prefix = None
+        prior_source = None
         rot_idx = prefixed_table["rot_idx"]
         trans_idx = prefixed_table["trans_idx"]
         prob = prefixed_table["prob"]
@@ -1120,6 +1154,7 @@ def _candidate_table_from_relion(
         "rotation_count": rotation_count,
         "relion_rotation_key_mode": prefixed_table.get("rotation_key_mode") if prefixed_table is not None else None,
         "generic_candidate_prefix": generic_candidate_prefix,
+        "prior_source": prior_source,
         "selected_field": selected_field,
         "prob": prob[:n][selected],
         "score_pre_prior": score_pre_trimmed[selected],
@@ -1564,6 +1599,7 @@ def compare_dumps(
         "reconstruction_only": bool(reconstruction_only),
         "relion_selected_field": relion["selected_field"],
         "relion_generic_candidate_prefix": relion.get("generic_candidate_prefix"),
+        "relion_prior_source": relion.get("prior_source"),
         "relion_rotation_key_mode": relion.get("relion_rotation_key_mode"),
         "recovar_selected_field": recovar["selected_field"],
         "recovar_reconstruction_n_significant": recovar["reconstruction_n_significant"],

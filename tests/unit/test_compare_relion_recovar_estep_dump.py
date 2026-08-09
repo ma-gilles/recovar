@@ -258,6 +258,8 @@ def test_compare_explicit_adaptive_pass0_coarse_grid(tmp_path):
     )
     _write_flat_real(relion_dir / "pass0_coarse_raw_diff2.bin", [12.0, 11.0, 10.0, 9.0])
     _write_flat_real(relion_dir / "pass0_coarse_log_weight_preexp.bin", [-4.0, -3.0, -2.0, -1.0])
+    _write_flat_real(relion_dir / "pass0_pdf_orientation.bin", [-1.0, -2.0])
+    _write_flat_real(relion_dir / "pass0_pdf_offset.bin", [-0.1, -0.2])
     # Explicit pass selection must not mix the incompatible fine table.
     _write_flat_int(relion_dir / "pass1_acc_rot_id.bin", [99])
     _write_flat_int(relion_dir / "pass1_acc_rot_idx.bin", [0])
@@ -278,8 +280,8 @@ def test_compare_explicit_adaptive_pass0_coarse_grid(tmp_path):
         scores_with_prior_per_class=scores_with[None],
         weights_per_class=np.array([[[0.1, 0.2], [0.3, 0.4]]], dtype=np.float64),
         rotations=np.broadcast_to(np.eye(3), (2, 3, 3)).copy(),
-        rotation_log_prior=np.zeros((1, 2), dtype=np.float64),
-        translation_log_prior=np.zeros(2, dtype=np.float64),
+        rotation_log_prior=np.array([[-1.0, -2.0]], dtype=np.float64),
+        translation_log_prior=np.array([-0.1, -0.2], dtype=np.float64),
     )
 
     result = compare_dumps(
@@ -292,12 +294,16 @@ def test_compare_explicit_adaptive_pass0_coarse_grid(tmp_path):
 
     assert result["relion_selected_field"] == "explicit_adaptive_grid:pass0_coarse:class0"
     assert result["relion_generic_candidate_prefix"] == "pass0_coarse"
+    assert result["relion_prior_source"] == "pass0_pdf_orientation_plus_pdf_offset"
     assert result["common_candidate_count"] == 4
     assert result["candidate_jaccard"] == 1.0
     assert result["relion_top_key"] == [1, 1]
     assert result["recovar_top_key"] == [1, 1]
     assert result["common_score_pre_prior_centered_diff"]["max_abs"] == 0.0
     assert result["common_score_with_prior_centered_diff"]["max_abs"] == 0.0
+    assert result["common_rotation_log_prior_diff"]["max_abs"] == 0.0
+    assert result["common_translation_log_prior_diff"]["max_abs"] == 0.0
+    assert result["common_combined_log_prior_diff"]["max_abs"] == 0.0
 
 
 def test_compare_relion_recovar_estep_dump_reports_both_engines_top_candidate_terms(tmp_path):

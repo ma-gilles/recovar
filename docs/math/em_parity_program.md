@@ -15134,3 +15134,102 @@ topology, and provenance. Correlation is not computed. If the trajectory is
 not rescued, the next boundary is the first iteration at which identical raw
 tuples cease to yield identical posterior, support, BPref operands, or
 reductions.
+
+## 2026-08-09 K=1 first-divergence program supersedes broad hypotheses
+
+K=4 work is parked until the six frozen K=1 failures are closed or their
+remaining hypotheses are explicitly falsified. The immutable K=1 scorecard
+therefore remains the progress denominator: **28/34** strict signed
+FSC/FSC-AUC gates, **32/34** exact topology gates, and **34/34** evaluated.
+The failing frozen cases remain `4`, `5`, `7`, `10`, `22`, and `26`; neither
+the denominator nor any tolerance changed.
+
+Two clean same-GPU dispatch-order A/Bs reject fresh-run physical particle
+order as a sufficient fix. Case 22 changed only from `0.8260705` to
+`0.8260839`, and case 26 changed from `0.9633281` to `0.9632747`; both remain
+failures. The earlier case-22 restart-order rescue remains valid for the
+restart defect it measured, but it must not be generalized into a fresh-run
+trajectory fix.
+
+A case-7 coarse Gaussian square-crop A/B is also negative. Its immutable
+report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_coarse_gaussian_square_ab_96313061_20260809T0211ET/analysis/CASE07_COARSE_GAUSSIAN_SQUARE_AB_SALVAGED_V1.json`.
+This falsifies that intervention for case 7; it does not establish equality
+of all coarse score operands in the other failures.
+
+Case-4 physical iteration 2 also rejects binary32 emulation of the fine
+posterior as the missing boundary. On the same fixed state and GPU, the
+merged signed FSC-AUC changed from `0.999999805695688` to
+`0.9999998056810736`; the Pmax p95 difference remained exactly `9.756e-5`,
+with 96 support-count mismatches, six rotation mismatches, and nine
+translation mismatches. The immutable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it2_f32_posterior_ab_fd8e27b9_20260809T0340ET/analysis/F32_POSTERIOR_AB.json`
+(SHA-256
+`2d9f7dece398557f4ddb1be91e660112049896f44ae2b02ea659b7163c712996`).
+Slurm job `12162482` completed `0:0` in `00:31:23` on `della-h19g1`.
+
+The next discriminator is an exact case-4, physical-iteration-2 dense coarse
+join for original particle `21874` (one-based stack index `21875`). An
+initial native RELION capture is inadmissible because continuation produced
+sampling perturbation `-0.35578`, whereas the uninterrupted frozen run and
+RECOVAR replay use `+0.184179782867`. Candidate and score differences from
+that mismatched-geometry comparison are descriptive only.
+
+The capture interface also exposed a coordinate bug: restart-local iteration
+labels were being used where physical RELION iteration labels were required.
+Commit `ac017267` adds one physical-iteration helper and preserves local
+profile filenames. The focused command
+
+```text
+/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar/.pixi/envs/default/bin/python -m pytest tests/unit/test_em_kclass_merge_guards.py -vv
+```
+
+passes `43/43`. This is a telemetry correction, not a quality fix, and is not
+yet pushed. The corrected scientific comparison will force only the known
+uninterrupted perturbation and must join exactly `1,069,056/1,069,056` dense
+coarse candidate keys after RELION pixel-major to RECOVAR psi-major
+remapping. The first unequal level among raw score, prior, posterior
+normalization, significance support, BPref operand, and reduction will
+determine the next bounded K=1 implementation. Correlation is not used for
+acceptance; final-grid correction and forced final-all-data remain unset/off.
+
+## 2026-08-09 case-4 physical-iteration-2 coarse boundary localized
+
+The exact-perturbation comparison is complete despite both capture wrappers
+ending nonzero in post-run validation. RECOVAR job `12163693` completed the
+requested EM computation and wrote a complete current-schema significance
+capture before its obsolete validator requested `scores_pre_prior_full`.
+RELION job `12164059` completed expectation, maximization, reconstruction, and
+`run_it002` output before the patched executable returned nonzero to its
+wrapper. No scientific array needed by the post-hoc comparison is missing.
+
+For case 4 original row `21874`, physical iteration 2, current size 100, and
+forced uninterrupted perturbation `+0.184179782867`, the comparison joins
+exactly **1,069,056/1,069,056** coarse candidate keys after RELION
+pixel-major to RECOVAR psi-major remapping. Candidate Jaccard is 1.0 and both
+engines select top key `(16806, 14)`. The centered raw-score difference has
+p95 absolute value `0.0020904541015625` and maximum absolute value
+`0.0051116943359375`; posterior L1 after common renormalization is
+`0.0011182639366247552`.
+
+The comparator now reconstructs dense adaptive-pass-0 candidate priors from
+RELION's pass-level `pdf_orientation` and `pdf_offset` log-prior arrays when
+candidate-sized prior dumps are absent. The focused comparator suite passes
+`29/29`. The enhanced immutable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_it2_exactperturb_relion_retry1_fd8e27b9_20260809T0455ET/analysis/PARTICLE21874_IT2_COARSE_VS_RELION_WITH_PRIORS.json`
+(SHA-256
+`280b524f6c364f933381f657c9436fe770017532cdad179e6d24dc2c00fd2509`).
+It directly measures rotation-prior maximum absolute error
+`4.76837158203125e-7`, translation-prior maximum absolute error
+`9.5367431640625e-7`, and combined-prior maximum absolute error
+`1.430511474609375e-6`. Thus candidate generation and priors are rejected as
+the first material boundary for this particle; raw coarse scoring is first.
+
+The preregistered next discriminator is Slurm job `12166028`, using source
+`963130615dbc518d63851f7cadd20cf489a71d9b` and changing only
+`RECOVAR_K1_COARSE_GAUSSIAN_FFI=1` on the same H100 and serialized iteration-1
+state. It must preserve every candidate and the RELION top key while reducing
+both the raw-score p95 error and posterior L1. A negative result sends the
+program to a fixed operand decomposition of projection, shifted image, pixel
+weight, and reduction arithmetic; it does not justify another broad
+trajectory run. K=4 remains parked.
