@@ -131,14 +131,18 @@ def load_artifact(path: Path) -> CoarseLaneCapture:
     return CoarseLaneCapture(path, _sha256(path), header, rotation_keys, local_rotation_indices, lane_partials)
 
 
-def possible_atomic_sums(values: np.ndarray) -> np.ndarray:
+def possible_atomic_sums(
+    values: np.ndarray,
+    *,
+    initial: np.float32 = np.float32(0.0),
+) -> np.ndarray:
     """Return the unique binary32 results of all legal atomic-add orders."""
 
     operands = np.asarray(values, dtype=np.float32).reshape(-1)
     _require(operands.size <= 8, "refusing factorial enumeration of more than eight active lanes")
     outcomes: dict[int, np.float32] = {}
     for order in itertools.permutations(range(operands.size)):
-        total = np.float32(0.0)
+        total = np.float32(initial)
         for index in order:
             total = np.float32(total + operands[index])
         bits = int(_float32_bits(np.asarray([total]))[0])
@@ -168,10 +172,8 @@ def validate_capture(
     _require(np.array_equal(lane.rotation_keys, operand.rotation_keys), "rotation keys differ")
     _require(np.array_equal(lane.local_rotation_indices, operand.local_rotation_indices), "local rotations differ")
     _require(np.all(lane.rotation_keys < component.raw_diff2.shape[0]), "rotation key outside component table")
-    _require(
-        _float32_from_bits(lane.header[20]) == np.float32(0.0) or np.isfinite(_float32_from_bits(lane.header[20])),
-        "invalid recorded initial term",
-    )
+    initial_term = _float32_from_bits(lane.header[20])
+    _require(np.isfinite(initial_term), "invalid recorded initial term")
 
     translation_count = lane.header[14]
     lane_count = lane.header[17]
@@ -186,34 +188,62 @@ def validate_capture(
     modeled_lanes = operand_validator.replay_production_lanes(operand)
     _require(modeled_lanes.shape == lane.lane_partials.shape, "modeled lane shape differs")
     lane_exact = _float32_bits(modeled_lanes) == _float32_bits(lane.lane_partials)
+    active_lane_exact = lane_exact[:, active_mask]
+    active_lane_difference = np.abs(
+        modeled_lanes[:, active_mask].astype(np.float64) - lane.lane_partials[:, active_mask].astype(np.float64)
+    )
 
     target_scores = component.raw_diff2[lane.rotation_keys]
     _require(
         np.all(target_scores != component_validator.RELION_INVALID_DIFF2), "selected target includes inactive score"
     )
     reachable = np.zeros(target_scores.shape, dtype=bool)
+    modeled_reachable = np.zeros(target_scores.shape, dtype=bool)
     outcome_counts = np.zeros(target_scores.shape, dtype=np.int64)
     envelope_low = np.empty(target_scores.shape, dtype=np.float32)
     envelope_high = np.empty(target_scores.shape, dtype=np.float32)
     for rotation in range(lane.rotation_keys.size):
         for translation in range(translation_count):
             thread_ids = translation + np.arange(active_rows_per_translation) * translation_count
-            outcomes = possible_atomic_sums(lane.lane_partials[rotation, thread_ids])
+            outcomes = possible_atomic_sums(
+                lane.lane_partials[rotation, thread_ids],
+                initial=initial_term,
+            )
             outcome_counts[rotation, translation] = outcomes.size
             envelope_low[rotation, translation] = np.min(outcomes)
             envelope_high[rotation, translation] = np.max(outcomes)
             target_bits = _float32_bits(target_scores[rotation, translation : translation + 1])[0]
             reachable[rotation, translation] = bool(np.any(_float32_bits(outcomes) == target_bits))
+            modeled_outcomes = possible_atomic_sums(
+                modeled_lanes[rotation, thread_ids],
+                initial=initial_term,
+            )
+            modeled_reachable[rotation, translation] = bool(np.any(_float32_bits(modeled_outcomes) == target_bits))
 
     candidate_count = int(reachable.size)
     reachable_count = int(np.count_nonzero(reachable))
     lane_value_count = int(lane_exact.size)
     lane_exact_count = int(np.count_nonzero(lane_exact))
-    status = "pass" if reachable_count == candidate_count and lane_exact_count == lane_value_count else "rejected"
+    active_lane_value_count = int(active_lane_exact.size)
+    active_lane_exact_count = int(np.count_nonzero(active_lane_exact))
+    modeled_reachable_count = int(np.count_nonzero(modeled_reachable))
+    capture_qualified = reachable_count == candidate_count
+    operand_replay_qualified = (
+        modeled_reachable_count == candidate_count and active_lane_exact_count == active_lane_value_count
+    )
+    status = "pass" if capture_qualified else "rejected"
+    classification = (
+        "native_atomic_reduction_exact_and_operand_replay_exact"
+        if capture_qualified and operand_replay_qualified
+        else "native_atomic_reduction_exact_but_passive_operand_replay_differs"
+        if capture_qualified
+        else "native_lane_capture_does_not_reproduce_production_scores"
+    )
     return {
         "schema": "relion-coarse-lane-capture-validation-v1",
         "status": status,
-        "classification_ready": status == "pass",
+        "classification_ready": capture_qualified,
+        "classification": classification,
         "path": str(lane.path.resolve()),
         "sha256": lane.sha256,
         "part_id": lane.part_id,
@@ -222,7 +252,9 @@ def validate_capture(
         "translation_count": translation_count,
         "lane_count": lane_count,
         "active_lanes_per_translation": active_rows_per_translation,
-        "recorded_initial_term": float(_float32_from_bits(lane.header[20])),
+        "recorded_initial_term": float(initial_term),
+        "capture_qualified": capture_qualified,
+        "operand_replay_qualified": operand_replay_qualified,
         "fixed_metric": {
             "atomic_target_evaluated": candidate_count,
             "atomic_target_exactly_reachable": reachable_count,
@@ -230,11 +262,20 @@ def validate_capture(
             "operand_lane_values_evaluated": lane_value_count,
             "operand_lane_values_bitwise_equal": lane_exact_count,
             "operand_lane_values_bitwise_equal_fraction": lane_exact_count / lane_value_count,
+            "active_operand_lane_values_evaluated": active_lane_value_count,
+            "active_operand_lane_values_bitwise_equal": active_lane_exact_count,
+            "active_operand_lane_values_bitwise_equal_fraction": active_lane_exact_count / active_lane_value_count,
+            "operand_atomic_target_exactly_reachable": modeled_reachable_count,
+            "operand_atomic_target_exactly_reachable_fraction": modeled_reachable_count / candidate_count,
         },
+        "active_operand_lane_abs_difference_p50": float(np.percentile(active_lane_difference, 50)),
+        "active_operand_lane_abs_difference_p95": float(np.percentile(active_lane_difference, 95)),
+        "active_operand_lane_abs_difference_max": float(np.max(active_lane_difference)),
         "atomic_outcome_count_min": int(np.min(outcome_counts)),
         "atomic_outcome_count_max": int(np.max(outcome_counts)),
         "atomic_envelope_width_max": float(np.max(envelope_high.astype(np.float64) - envelope_low.astype(np.float64))),
         "atomic_unreachable_indices": np.argwhere(~reachable).astype(int).tolist(),
+        "operand_atomic_unreachable_indices": np.argwhere(~modeled_reachable).astype(int).tolist(),
         "operand_lane_first_mismatch": (
             None if lane_exact_count == lane_value_count else np.argwhere(~lane_exact)[0].astype(int).tolist()
         ),

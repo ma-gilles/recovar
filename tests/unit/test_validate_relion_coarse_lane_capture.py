@@ -39,11 +39,19 @@ def _fixture(monkeypatch, *, perturb_target: bool = False, perturb_model: bool =
     for rotation, key in enumerate(rotation_keys):
         for translation in range(3):
             thread_ids = translation + np.arange(3) * 3
-            target[key, translation] = validator.possible_atomic_sums(lanes[rotation, thread_ids])[0]
+            target[key, translation] = validator.possible_atomic_sums(
+                lanes[rotation, thread_ids],
+                initial=np.float32(0.25),
+            )[0]
     if perturb_target:
         target[rotation_keys[0], 0] = np.nextafter(target[rotation_keys[0], 0], np.float32(np.inf))
         while np.any(
-            validator._float32_bits(validator.possible_atomic_sums(lanes[0, np.asarray([0, 3, 6])]))
+            validator._float32_bits(
+                validator.possible_atomic_sums(
+                    lanes[0, np.asarray([0, 3, 6])],
+                    initial=np.float32(0.25),
+                )
+            )
             == validator._float32_bits(target[rotation_keys[0], 0:1])[0]
         ):
             target[rotation_keys[0], 0] = np.nextafter(target[rotation_keys[0], 0], np.float32(np.inf))
@@ -80,6 +88,14 @@ def _fixture(monkeypatch, *, perturb_target: bool = False, perturb_model: bool =
 def test_possible_atomic_sums_preserve_distinct_float32_orders() -> None:
     outcomes = validator.possible_atomic_sums(np.asarray([16_777_216.0, -16_777_216.0, 1.0], dtype=np.float32))
     assert set(outcomes.tolist()) == {0.0, 1.0}
+
+
+def test_possible_atomic_sums_starts_from_recorded_initial_term() -> None:
+    outcomes = validator.possible_atomic_sums(
+        np.asarray([0.5, 0.25], dtype=np.float32),
+        initial=np.float32(2.0),
+    )
+    assert outcomes.tolist() == [2.75]
 
 
 def test_loads_sealed_lane_artifact(tmp_path: Path) -> None:
@@ -123,9 +139,12 @@ def test_lane_capture_rejects_target_outside_atomic_outcomes(monkeypatch) -> Non
     assert report["fixed_metric"]["atomic_target_exactly_reachable"] < 6
 
 
-def test_lane_capture_rejects_operand_lane_mismatch(monkeypatch) -> None:
+def test_lane_capture_classifies_operand_lane_mismatch(monkeypatch) -> None:
     report = validator.validate_capture(*_fixture(monkeypatch, perturb_model=True))
-    assert report["status"] == "rejected"
+    assert report["status"] == "pass"
+    assert report["classification_ready"] is True
+    assert report["operand_replay_qualified"] is False
+    assert report["classification"] == "native_atomic_reduction_exact_but_passive_operand_replay_differs"
     assert report["fixed_metric"]["atomic_target_exactly_reachable"] == 6
     assert report["fixed_metric"]["operand_lane_values_bitwise_equal"] == 19
     assert report["operand_lane_first_mismatch"] == [0, 0]
