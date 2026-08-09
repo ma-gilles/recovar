@@ -11580,3 +11580,50 @@ and `9/15` all-class.
 - Case-22 autonomous live-noise job `12176902` began on the H100 released by
   `12174607`. Existing jobs were not altered. K=4 remains parked and the
   frozen K=1 score remains `28/34` strict and `32/34` exact topology.
+
+## 2026-08-09 15:08 ET — autonomous live noise is causal but insufficient
+
+- K=4 remains parked. Same-H100 case-22 job `12176902` completed `0:0` in
+  `01:17:48` on UUID `GPU-4d28eafb-13ca-043d-dfc4-4b24c9913233`.
+  Control and treatment ran sequentially for `2440` and `2188` seconds. The
+  treatment changed only the two iteration-0 model-STAR noise spectra to the
+  sealed binary64 live values; all other starting bytes and policies were
+  fixed by the predeclaration.
+- The treatment is causal at the iteration-2 posterior boundary. Exact
+  image-identity alignment reduces Pmax relative L2 from
+  `9.2363171154e-6` to `7.4867613785e-6` (`18.94%`) and Pmax RMSE from
+  `4.3662496542e-7` to `3.5391887125e-7`. Significant-support-count
+  mismatches fall from `1104/3000` to `463/3000` (`58.06%`). All iteration-2
+  coarse and fine hard assignments remain exact between the two RECOVAR arms.
+- This does not close map or controller parity. The iteration-2 merged
+  cross-engine signed FSC-AUC changes only from `0.9999933521267331` to
+  `0.9999933622020829`, a `0.152%` reduction in its deficit. Both arms take
+  the same first wrong controller branch at iteration 9: RECOVAR size/order
+  `72/4` versus RELION `70/5`, followed by order `4` versus `5` at iteration
+  10.
+- Final merged cross-engine signed FSC-AUC worsens from
+  `0.8260823362939780` to `0.8260685255065392`. Final half-2 GT FSC-AUC
+  worsens by `4.2483240e-7`, and merged GT FSC-AUC worsens by
+  `3.9768051e-6`; only half 1 improves negligibly. The treatment therefore
+  fails the frozen non-regression gate and is rejected as a standalone fix.
+  It remains evidence that serialized inverse-noise rounding accounts for a
+  material part of the iteration-2 posterior/support mismatch.
+- Complete FSC reports have SHA-256 values
+  `16efda8f0a612e6f811cabe6e107c1c674aaff54afb60a92cb67ef325d22082d`
+  (control) and
+  `5a68fc0ac113c811e1e65d1a7e9bf8ee91df0c9a4e153d368efd3e08b6353688`
+  (treatment). Iteration-2 particle-state reports have SHA-256 values
+  `f719444204f10e435885fd359cf9cc1c25dcd75bfb213be2176928b46a18a57d`
+  and
+  `74dde73c3e6bbac7def9d4d4ea10adc5eee4effdf36b324a557b48214e340df3`.
+  Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_autonomous_live_noise_ab_35733819_20260809T1155ET`.
+- Case-7 corrected coarse-sincosf factorial `12180758` is running on an H100.
+  The case-4 inline-pixel build's first retry `12180787` failed before
+  diagnostic-source compilation: `nvcc` could not resolve `curand.h`, even
+  though CMake's cache and generated include list named the CUDA 12.6 include
+  directory. Fresh-tree, explicit-header retry `12181853` was submitted
+  independently. No existing Slurm job or Codex process was changed or
+  interrupted.
+- The frozen K=1 score therefore remains `28/34` strict signed FSC/FSC-AUC,
+  `32/34` exact topology, and `34/34` evaluated. Correlation was not computed.
