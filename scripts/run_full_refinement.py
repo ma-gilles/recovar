@@ -3117,6 +3117,7 @@ def main():
     expected_accuracy_half1_particle_ids = None
     expected_accuracy_half1_ctf_params = None
     expected_accuracy_do_ctf_correction = None
+    use_relion_live_initial_noise = _k1_relion_live_initial_noise_enabled()
     relion_fresh_initial_noise_source_rows = None
     relion_fresh_initial_noise_optics_group_ids = None
     relion_particles = None
@@ -3135,10 +3136,11 @@ def main():
             expected_accuracy_half1_optics_group_ids,
             expected_accuracy_half1_particle_ids,
         ) = _relion_halfset_and_accuracy_layout(our_particles, relion_particles)
-        (
-            relion_fresh_initial_noise_source_rows,
-            relion_fresh_initial_noise_optics_group_ids,
-        ) = _relion_fresh_initial_noise_layout(our_particles, relion_particles)
+        if use_relion_live_initial_noise:
+            (
+                relion_fresh_initial_noise_source_rows,
+                relion_fresh_initial_noise_optics_group_ids,
+            ) = _relion_fresh_initial_noise_layout(our_particles, relion_particles)
         from recovar.data_io import metadata_readers
 
         relion_ctf_with_apix = metadata_readers.parse_ctf_from_star(
@@ -3795,7 +3797,6 @@ def main():
     relion_init_tau2_fudge = None
     relion_live_initial_sigma2 = None
     relion_live_initial_noise_variance = None
-    use_relion_live_initial_noise = _k1_relion_live_initial_noise_enabled()
     if use_relion_live_initial_noise:
         invalid_reasons = []
         if int(args.n_classes) != 1:
