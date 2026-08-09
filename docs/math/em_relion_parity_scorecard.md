@@ -1286,6 +1286,24 @@ cases, checkmarks, owner jobs, policy, and evidence hashes are checked in as
 `pixi run python scripts/summarize_em_k4_causal_boundary_scorecard.py
 --check`.  This diagnostic is non-scoring and cannot change the frozen K=1
 or K=4 FSC/FSC-AUC totals.
+
+The exact case-4 iteration-2 coarse join now covers all
+`1,069,056/1,069,056` class-pose-translation candidates.  RELION and RECOVAR
+select the same top tuple `(rotation 16806, translation 14)`.  Direction,
+translation, and combined log-prior maximum absolute differences are
+`4.768e-7`, `9.537e-7`, and `1.431e-6`, respectively, while centered raw
+coarse-score p95 and maximum absolute differences are `0.0020904541` and
+`0.0051116943`; posterior L1 is `0.00111826394`.  An additive factorial
+attributes `95.771%` of centered residual energy to the rotation-by-translation
+interaction rather than rotation-only or translation-only terms.  The
+combined RELION-style CUDA coarse scorer arm, Slurm job `12166028`, worsens
+the preliminary p95 and maximum discrepancies to `0.00439453125` and
+`0.00830078125`, with posterior L1 `0.00160483`, so that intervention is
+rejected.  Dependent job `12166593` passively captures a fixed 12-rotation
+panel for projected-reference, base corrected-image, translation-phase, and
+correction decomposition on the same H100.  These diagnostics are non-scoring:
+K=1 remains 28/34 strict, 32/34 topology, and 34/34 evaluated.  K=4 work is
+parked until the K=1 gap is closed or sharply isolated.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

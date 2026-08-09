@@ -1,14 +1,87 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 
+from scripts import analyze_em_k1_live_reference_counterfactual as live_factorial
 from scripts.analyze_em_k1_live_reference_counterfactual import (
+    build_report,
     classify_live_operands,
     classify_live_reference,
     recovar_score_components,
     reference_swap_counterfactual,
     relion_reference_on_recovar_window,
 )
+
+
+def test_pass1_v1_operand_capture_replay_is_validated(tmp_path, monkeypatch) -> None:
+    (tmp_path / "part1_stack7.p1-v1.bin").touch()
+    operand_path = tmp_path / "part1_stack7.p1-op-v2.bin"
+    operand_path.touch()
+    component_header = [0] * 40
+    component_header[12] = 2
+    component_header[27] = 100
+    component = SimpleNamespace(
+        part_id=1,
+        stack_index=7,
+        mpi_rank=1,
+        header=tuple(component_header),
+        raw_diff2=np.asarray([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float32),
+    )
+    operand_header = [0] * 40
+    operand_header[12] = 100
+    operand_header[14] = 2
+    operand = SimpleNamespace(
+        part_id=1,
+        stack_index=7,
+        mpi_rank=1,
+        header=tuple(operand_header),
+        rotation_keys=np.asarray([0, 2], dtype=np.uint64),
+        path=operand_path,
+    )
+    monkeypatch.setattr(
+        live_factorial,
+        "validate_pass1",
+        lambda *args, **kwargs: ((component,), {"status": "pass"}),
+    )
+    monkeypatch.setattr(live_factorial, "load_operand_artifact", lambda path: operand)
+    monkeypatch.setattr(
+        live_factorial,
+        "replay_production_diff2",
+        lambda item: component.raw_diff2[item.rotation_keys] + np.float32(8.0),
+    )
+
+    operands, components, validation = live_factorial._validate_operand_capture(
+        tmp_path,
+        expected_particles=1,
+        expected_stacks=np.asarray([7]),
+    )
+
+    assert operands == (operand,)
+    assert components == (component,)
+    assert validation["status"] == "pass"
+    assert validation["classification_ready"]
+    assert validation["metrics"][operand_path.name][
+        "production_diff2_additive_constant_median"
+    ] == 8.0
+
+
+def test_single_particle_diagnostic_denominator_is_supported(tmp_path) -> None:
+    cohort = tmp_path / "cohort.json"
+    cohort.write_text('{"selected_particle_count": 2, "rows": []}\n')
+    try:
+        build_report(
+            cohort_json=cohort,
+            capture_directory=tmp_path / "relion",
+            recovar_directory=tmp_path / "recovar",
+            full_image_size=256,
+            expected_particles=1,
+        )
+    except ValueError as exc:
+        assert "cohort denominator differs" in str(exc)
+    else:
+        raise AssertionError("mismatched diagnostic denominator must fail closed")
 
 
 def test_maps_relion_fftw_rows_to_recovar_centered_window() -> None:

@@ -18,6 +18,10 @@ from scripts.analyze_em_k1_coarse_pass1_boundary import (
 )
 from scripts.validate_relion_coarse_operand_capture import (
     CoarseOperandCapture,
+    DEFAULT_PRODUCTION_REPLAY_MAX_ABS,
+    DEFAULT_PRODUCTION_REPLAY_P95_ABS,
+    load_artifact as load_operand_artifact,
+    replay_production_diff2,
 )
 from scripts.validate_relion_coarse_operand_capture import (
     validate_directory as validate_operands,
@@ -27,6 +31,9 @@ from scripts.validate_relion_coarse_pass1_components import (
 )
 from scripts.validate_relion_coarse_pass1_components import (
     validate_directory as validate_components,
+)
+from scripts.validate_relion_coarse_pass1_capture import (
+    validate_directory as validate_pass1,
 )
 
 COMPONENT_DOMINANCE_FRACTION = 0.5
@@ -260,37 +267,150 @@ def _operand_complex(operand: CoarseOperandCapture) -> np.ndarray:
     return operand.reference_real.astype(np.float64) + 1j * operand.reference_imag.astype(np.float64)
 
 
+def _validate_operand_capture(
+    capture_directory: Path,
+    *,
+    expected_particles: int,
+    expected_stacks: np.ndarray,
+) -> tuple[tuple[CoarseOperandCapture, ...], tuple[Any, ...], dict[str, Any]]:
+    """Validate either full component-v2 or passive pass1-v1 operand captures."""
+
+    capture_directory = Path(capture_directory)
+    if any(capture_directory.glob("*.p1-v2.bin")):
+        operands, validation = validate_operands(
+            capture_directory,
+            expected_particles=expected_particles,
+            expected_stack_indices=expected_stacks,
+            expected_mpi_rank=1,
+        )
+        components, _ = validate_components(
+            capture_directory,
+            expected_particles=expected_particles,
+            expected_stack_indices=expected_stacks,
+            expected_mpi_rank=1,
+        )
+        return operands, components, validation
+
+    components, component_validation = validate_pass1(
+        capture_directory,
+        expected_particles=expected_particles,
+        expected_stack_indices=expected_stacks,
+        expected_mpi_rank=1,
+    )
+    operand_paths = sorted(capture_directory.glob("*.p1-op-v2.bin"))
+    _require(
+        len(operand_paths) == expected_particles,
+        "operand capture denominator differs from the expected particle count",
+    )
+    operands = tuple(load_operand_artifact(path) for path in operand_paths)
+    operands_by_part = {item.part_id: item for item in operands}
+    components_by_part = {item.part_id: item for item in components}
+    _require(
+        len(operands_by_part) == expected_particles,
+        "duplicate RELION operand particle identity",
+    )
+    _require(
+        set(operands_by_part) == set(components_by_part),
+        "operand/pass1 particle identity sets differ",
+    )
+
+    metrics = {}
+    qualified = True
+    for part_id, operand in operands_by_part.items():
+        component = components_by_part[part_id]
+        _require(
+            operand.stack_index == component.stack_index,
+            "operand/pass1 stack identity differs",
+        )
+        _require(
+            operand.mpi_rank == component.mpi_rank,
+            "operand/pass1 MPI rank differs",
+        )
+        _require(
+            operand.header[12] == component.header[27],
+            "operand/pass1 current size differs",
+        )
+        _require(
+            operand.header[14] == component.header[12],
+            "operand/pass1 translation count differs",
+        )
+        _require(
+            np.all(operand.rotation_keys < component.raw_diff2.shape[0]),
+            "operand rotation key is outside pass1 score table",
+        )
+        target = component.raw_diff2[operand.rotation_keys]
+        _require(
+            np.all(target != RELION_INVALID_DIFF2),
+            "captured operand rotation has inactive pass1 score",
+        )
+        replay = replay_production_diff2(operand)
+        difference = replay.astype(np.float64) - target.astype(np.float64)
+        additive_constant = float(np.median(difference))
+        absolute = np.abs(difference - additive_constant)
+        p95_abs = float(np.percentile(absolute, 95))
+        max_abs = float(np.max(absolute))
+        particle_qualified = (
+            p95_abs <= DEFAULT_PRODUCTION_REPLAY_P95_ABS
+            and max_abs <= DEFAULT_PRODUCTION_REPLAY_MAX_ABS
+        )
+        qualified = qualified and particle_qualified
+        metrics[operand.path.name] = {
+            "production_diff2_additive_constant_median": additive_constant,
+            "production_diff2_centered_replay_p95_abs": p95_abs,
+            "production_diff2_centered_replay_max_abs": max_abs,
+            "qualified": particle_qualified,
+        }
+
+    validation = {
+        "schema": "relion-coarse-operand-pass1-v1-validation-v1",
+        "status": "pass" if qualified else "fail",
+        "classification_ready": qualified,
+        "particle_count": len(operands),
+        "component_capture": component_validation,
+        "fixed_gates": {
+            "production_diff2_centered_replay_p95_abs_max": DEFAULT_PRODUCTION_REPLAY_P95_ABS,
+            "production_diff2_centered_replay_max_abs_max": DEFAULT_PRODUCTION_REPLAY_MAX_ABS,
+        },
+        "metrics": metrics,
+    }
+    return operands, components, validation
+
+
 def build_report(
     *,
     cohort_json: Path,
     capture_directory: Path,
     recovar_directory: Path,
     full_image_size: int,
+    expected_particles: int = 14,
 ) -> dict[str, Any]:
     cohort = json.loads(Path(cohort_json).read_text())
-    _require(cohort["selected_particle_count"] == 14, "cohort denominator must be 14")
+    _require(expected_particles > 0, "expected particle count must be positive")
+    _require(
+        cohort["selected_particle_count"] == expected_particles,
+        "cohort denominator differs from the expected particle count",
+    )
     expected_stacks = np.asarray(
         cohort["selected_stack_indices_one_based"],
         dtype=np.int64,
     )
-    operands, operand_validation = validate_operands(
+    operands, components, operand_validation = _validate_operand_capture(
         capture_directory,
-        expected_particles=14,
-        expected_stack_indices=expected_stacks,
-        expected_mpi_rank=1,
-    )
-    components, _ = validate_components(
-        capture_directory,
-        expected_particles=14,
-        expected_stack_indices=expected_stacks,
-        expected_mpi_rank=1,
+        expected_particles=expected_particles,
+        expected_stacks=expected_stacks,
     )
     operands_by_stack = {item.stack_index: item for item in operands}
     components_by_stack = {item.stack_index: item for item in components}
     recovar_items = [_load_recovar(path) for path in sorted(Path(recovar_directory).glob("*.npz"))]
-    _require(len(recovar_items) == 14, "RECOVAR denominator must be 14")
+    _require(
+        len(recovar_items) == expected_particles,
+        "RECOVAR denominator differs from the expected particle count",
+    )
     recovar_by_index = {item["original_index"]: item for item in recovar_items}
-    _require(len(recovar_by_index) == 14, "duplicate RECOVAR original index")
+    _require(
+        len(recovar_by_index) == expected_particles,
+        "duplicate RECOVAR original index",
+    )
 
     particles = []
     for cohort_row in cohort["rows"]:
@@ -550,8 +670,8 @@ def build_report(
     }
     fixed_metric = {
         "evaluated_particles": len(particles),
-        "expected_particles": 14,
-        "operand_capture_qualified": 14 if qualified else 0,
+        "expected_particles": expected_particles,
+        "operand_capture_qualified": expected_particles if qualified else 0,
         "recovar_replay_passed": sum(row["recovar_replay_passed"] for row in particles),
         "live_reference_dominated": dominated["reference"],
         "live_operand_dominated": dominated,
@@ -601,6 +721,7 @@ def main() -> None:
     parser.add_argument("--capture-directory", type=Path, required=True)
     parser.add_argument("--recovar-directory", type=Path, required=True)
     parser.add_argument("--full-image-size", type=int, default=128)
+    parser.add_argument("--expected-particles", type=int, default=14)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     report = build_report(
@@ -608,6 +729,7 @@ def main() -> None:
         capture_directory=args.capture_directory,
         recovar_directory=args.recovar_directory,
         full_image_size=args.full_image_size,
+        expected_particles=args.expected_particles,
     )
     if args.output_json.exists():
         raise FileExistsError(f"refusing to overwrite report: {args.output_json}")
