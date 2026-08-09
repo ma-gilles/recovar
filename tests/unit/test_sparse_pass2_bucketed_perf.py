@@ -5546,6 +5546,53 @@ def test_prepare_bucket_io_routes_direct_score_translation_through_relion_cuda(
     )
 
 
+def test_prepare_bucket_io_exact_cc_keeps_relion_image_and_corr_operands_separate():
+    ds = MockDataset(n_images=2, seed=20260809)
+    batch_indices = np.asarray([0, 1], dtype=np.int64)
+    batch = jnp.asarray(ds._images[batch_indices])
+    config = ForwardModelConfig.from_dataset(
+        ds,
+        disc_type="linear_interp",
+        process_fn=ds.process_images,
+    )
+    n_half = IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1)
+    common = dict(
+        experiment_dataset=ds,
+        batch=batch,
+        ctf_params=jnp.asarray(ds.CTF_params[batch_indices]),
+        image_indices=batch_indices,
+        noise_variance_half=jnp.ones(n_half, dtype=jnp.float32),
+        fine_translations=jnp.zeros((1, 2), dtype=jnp.float32),
+        config=config,
+        n_trans=1,
+        score_with_masked_images=False,
+        half_spectrum_scoring=True,
+        image_corrections=None,
+        scale_corrections=None,
+        image_pre_shifts=None,
+        use_float64_scoring=False,
+        return_direct_scoring_io=True,
+        score_mode="normalized_cc",
+    )
+
+    folded = _prepare_bucket_io(**common)
+    exact = _prepare_bucket_io(
+        **common,
+        relion_exact_normalized_cc_operands=True,
+    )
+    folded_image = np.asarray(folded[7]).reshape(batch_indices.size, 1, n_half)
+    corrected_image = np.asarray(exact[7]).reshape(batch_indices.size, 1, n_half)
+    corr_image = np.asarray(exact[3])[:, None, :]
+
+    assert not np.array_equal(corrected_image, folded_image)
+    np.testing.assert_allclose(
+        corrected_image * corr_image,
+        folded_image,
+        rtol=2e-5,
+        atol=2e-6,
+    )
+
+
 def test_prepare_bucket_io_routes_relion_cuda_operands_to_score_and_reconstruction():
     ds = MockDataset(n_images=2, seed=714)
 

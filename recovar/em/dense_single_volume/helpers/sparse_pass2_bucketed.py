@@ -5437,7 +5437,7 @@ def _relion_cuda_fine_normalized_cc_score(
         half_weight_pass = jnp.take(half_weights, safe_rows, axis=-1)
         numerator_terms = (
             ref_pass.real * shifted_pass.real + ref_pass.imag * shifted_pass.imag
-        ) * half_weight_pass
+        ) * score_weight_pass * half_weight_pass
         norm_terms = (
             ref_pass.real * ref_pass.real + ref_pass.imag * ref_pass.imag
         ) * score_weight_pass * half_weight_pass
@@ -5847,7 +5847,7 @@ def _score_pass2_bucket_relion_gpu_diff2_single_cached(
 
 @jax.jit
 def _score_pass2_bucket_relion_gpu_normalized_cc(
-    shifted_score,  # (B, T, N) complex, image * CTF * shift / Xi2
+    shifted_score,  # (B, T, N) complex, RELION-corrected image after shift
     score_weight,  # (B, N) real, CTF^2 / Xi2
     proj_half,  # (B, R, N) complex
     half_weights,  # (N,) real
@@ -5869,7 +5869,7 @@ def _score_pass2_bucket_relion_gpu_normalized_cc(
 
 @jax.jit
 def _score_pass2_bucket_relion_gpu_normalized_cc_single_cached(
-    shifted_score,  # (T, N) complex
+    shifted_score,  # (T, N) complex, RELION-corrected image after shift
     score_weight,  # (N,) real
     proj_half,  # (R, N) complex
     half_weights,  # (N,) real
@@ -6072,7 +6072,7 @@ def _score_pass2_pairs_relion_gpu_diff2(
 
 @jax.jit
 def _score_pass2_pairs_relion_gpu_normalized_cc(
-    shifted_score,  # (B, T, N) complex, image * CTF * shift / Xi2
+    shifted_score,  # (B, T, N) complex, RELION-corrected image after shift
     score_weight,  # (B, N) real, CTF^2 / Xi2
     proj_half,  # (B, R, N) complex
     half_weights,  # (N,) real
@@ -8085,6 +8085,7 @@ def _prepare_bucket_io(
     relion_score_translation_angles=None,
     return_windowed_shifted=False,
     return_shifted_score=True,
+    relion_exact_normalized_cc_operands=False,
 ):
     """Run preprocessing for a batch of images (translations tiled, CTF/noise ratios).
 
@@ -8163,7 +8164,14 @@ def _prepare_bucket_io(
 
     score_weighted_half = processed_score_half_raw * ctf_half / noise_variance_half
     recon_weighted_half = processed_recon_half_raw * ctf_half / noise_variance_half
-    sparse_score_input_half = processed_score_half_raw * ctf_half if use_normalized_cc else processed_score_half_raw
+    folded_normalized_cc_operands = (
+        use_normalized_cc and not relion_exact_normalized_cc_operands
+    )
+    sparse_score_input_half = (
+        processed_score_half_raw * ctf_half
+        if folded_normalized_cc_operands
+        else processed_score_half_raw
+    )
     processed_score_half_for_noise = processed_score_half_raw
 
     batch_scale = jnp.asarray(batch_scale_np, dtype=ctf_half.dtype)
@@ -8180,7 +8188,7 @@ def _prepare_bucket_io(
         recon_weighted_half = recon_weighted_half * applied_corr[:, None]
         if return_direct_scoring_io:
             direct_raw_corr = batch_corr / batch_scale
-            if use_normalized_cc:
+            if folded_normalized_cc_operands:
                 sparse_score_input_half = sparse_score_input_half * applied_corr[:, None]
             elif not relion_cuda_preprocess:
                 sparse_score_input_half = sparse_score_input_half * direct_raw_corr[:, None]
@@ -8193,10 +8201,10 @@ def _prepare_bucket_io(
         ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
         ctf2_score_half = ctf2_score_half * (batch_scale**2)[:, None]
         if return_direct_scoring_io:
-            if not use_normalized_cc:
+            if not folded_normalized_cc_operands:
                 sparse_score_input_half = sparse_score_input_half / batch_scale[:, None]
 
-    if return_direct_scoring_io and not use_normalized_cc:
+    if return_direct_scoring_io and not folded_normalized_cc_operands:
         ctf_safe = jnp.abs(ctf_half) > 1e-8
         sparse_score_input_half = jnp.where(
             ctf_safe,
@@ -8346,7 +8354,8 @@ def _prepare_bucket_io(
         inv_xi2 = (1.0 / jnp.maximum(batch_norm, jnp.asarray(1e-30, dtype=batch_norm.dtype))).astype(
             precision_policy.score_real_dtype,
         )
-        shifted_corrected_score_half = shifted_corrected_score_half * jnp.repeat(inv_xi2, n_trans, axis=0)
+        if folded_normalized_cc_operands:
+            shifted_corrected_score_half = shifted_corrected_score_half * jnp.repeat(inv_xi2, n_trans, axis=0)
         ctf2_over_nv_half = ctf2_score_half * inv_xi2
     if return_windowed_shifted:
         score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
@@ -9466,6 +9475,7 @@ def compute_pass2_stats_sparse_bucketed(
             translation_phases_half=translation_phases_half,
             relion_score_translation_angles=relion_score_translation_angles,
             return_windowed_shifted=windowed_prepare,
+            relion_exact_normalized_cc_operands=relion_exact_fine_normalized_cc,
         )
         relion_highres_xi2_half = None
         if (
