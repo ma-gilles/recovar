@@ -11457,3 +11457,42 @@ and `9/15` all-class.
   under `-W error`, and the 16/16 EM fast guard. This is diagnostic telemetry,
   not a production EM change. Fixed FSC/FSC-AUC scorecard denominators and
   thresholds remain unchanged.
+
+## 2026-08-09 12:15 ET — K=1 live initial-noise state is reproducible without an oracle
+
+- K=4 is parked. The fixed K=1 score remains `28/34` strict signed
+  FSC/FSC-AUC (`82.4%`), `32/34` exact topology, and `34/34` evaluated until
+  an autonomous trajectory qualifies.
+- The fixed case-22 raw coarse-score chain had already localized the
+  iteration-2 discrepancy to inverse noise on shells 1--4, where RECOVAR
+  consumes six-decimal model-STAR tokens while uninterrupted RELION retains
+  binary64 state.
+- A CPU-only fixed-panel diagnostic now evaluates the first 1,000
+  random-subset-1 particles in RELION's `run_it000_data.star` source order.
+  RECOVAR's existing `compute_avg_unaligned_and_sigma2` reproduces both sealed
+  RELION live spectra with maximum absolute error
+  `8.673617379884035e-18` and relative L2 `6.26940943607801e-16`. The rounded
+  STAR control differs by `4.0261022042718114e-7` maximum absolute and
+  `5.027161296829998e-5` relative L2.
+- Classification:
+  `existing_relion_structured_bootstrap_reproduces_sealed_live_noise`. This
+  eliminates hidden oracle data as a requirement for the candidate fix.
+- The checked report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_live_noise_reproduction_cpu_35733819_20260809T1205ET/analysis/LIVE_NOISE_REPRODUCTION_V1.json`,
+  SHA-256
+  `6e570ed9411d99b2b6f4f720d647354f9942dc8e541b81f9aca6c64523b22ee9`.
+- The guarded candidate computes this spectrum only for a fresh K=1 cold
+  start, applies RELION's rank-1 broadcast semantics to both halves, and
+  replaces both the initial noise state and the iteration-1 cold-start replay
+  override. Continuation, frozen-boundary replay, perturbation replay, and K=4
+  are rejected by the guard or remain unchanged. The environment gate is
+  `RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=1` and defaults off while causal
+  qualification is pending.
+- Focused validation passes `102/102` unit tests, Ruff, Python compilation,
+  `git diff --check`, and a real case-22 dataset-loader reproduction at the
+  same `8.673617379884035e-18` maximum absolute error. No correlation was
+  computed; no scorecard threshold or denominator changed.
+- Same-H100 autonomous STAR-injection job `12176902` remains the primary
+  full-trajectory causal gate. A same-device implementation A/B must then
+  demonstrate that the self-contained candidate reproduces the accepted
+  trajectory before integration or promotion to a default.

@@ -70,6 +70,7 @@ from recovar.em.dense_single_volume.relion_worker_scale import (
     validate_relion_follower_scale_replay,
     verify_relion_dispatch_schedule_oracle,
 )
+from recovar.em.initial_model.avg_unaligned import compute_avg_unaligned_and_sigma2
 from recovar.utils.parity_provenance import _safe_git_commit, git_worktree_provenance
 
 logging.basicConfig(
@@ -91,6 +92,23 @@ _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
     "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN"
 )
 _FIRSTITER_CC_TREE_TOP2_RESCORE_DEFAULT_MAX_MARGIN = "4e-6"
+_K1_RELION_LIVE_INITIAL_NOISE_ENV = "RECOVAR_K1_RELION_LIVE_INITIAL_NOISE"
+
+
+def _k1_relion_live_initial_noise_enabled(
+    environ: MutableMapping[str, str] | None = None,
+) -> bool:
+    """Return whether the diagnostic fresh-K=1 live-noise bootstrap is active."""
+
+    environment = os.environ if environ is None else environ
+    token = environment.get(_K1_RELION_LIVE_INITIAL_NOISE_ENV, "0").strip().lower()
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off", ""}:
+        return False
+    raise ValueError(
+        f"Unsupported {_K1_RELION_LIVE_INITIAL_NOISE_ENV}={token!r}",
+    )
 
 
 def _configure_relion_firstiter_controls(
@@ -1106,6 +1124,97 @@ def _relion_halfset_and_accuracy_layout(our_particles, relion_particles):
         half1_optics_group_ids,
         half1_particle_ids,
     )
+
+
+def _compute_relion_fresh_k1_initial_sigma2(
+    dataset,
+    *,
+    half1_source_rows,
+    half1_optics_group_ids,
+    particle_diameter_ang: float,
+    width_mask_edge_px: int,
+    minimum_nr_particles: int = 1000,
+) -> np.ndarray:
+    """Reproduce RELION's process-resident fresh AutoRefine noise spectrum.
+
+    MPI follower rank 1 computes the initial spectrum from the first 1,000
+    particles per optics group in random-subset-1 source order, then broadcasts
+    it to the other follower.  RELION writes a rounded copy to model STAR, but
+    its first expectation step consumes these unrounded values.
+    """
+
+    source_rows = np.asarray(half1_source_rows, dtype=np.int64).reshape(-1)
+    optics_labels = np.asarray(half1_optics_group_ids, dtype=np.int64).reshape(-1)
+    if source_rows.shape != optics_labels.shape:
+        raise ValueError(
+            "half-1 source rows and optics-group labels must have identical shapes",
+        )
+    if source_rows.size == 0:
+        raise ValueError("fresh K=1 live-noise bootstrap requires a non-empty half 1")
+    if np.unique(source_rows).size != source_rows.size:
+        raise ValueError("fresh K=1 live-noise source rows contain duplicates")
+    if int(np.min(source_rows)) < 0 or int(np.max(source_rows)) >= int(dataset.n_units):
+        raise ValueError("fresh K=1 live-noise source rows are out of dataset bounds")
+    if int(minimum_nr_particles) <= 0:
+        raise ValueError("minimum_nr_particles must be positive")
+
+    unique_optics = sorted(np.unique(optics_labels).tolist())
+    optics_to_dense = {int(label): index for index, label in enumerate(unique_optics)}
+    optics_by_source_row = {
+        int(source_row): optics_to_dense[int(optics_label)]
+        for source_row, optics_label in zip(source_rows, optics_labels, strict=True)
+    }
+
+    def image_iter():
+        for batch_images, _particle_indices, local_indices in dataset.image_source.iter_batches(
+            batch_size=min(256, source_rows.size),
+            batch_mode="images",
+            subset_indices=source_rows,
+        ):
+            batch_images = np.asarray(batch_images)
+            local_indices = np.asarray(local_indices, dtype=np.int64).reshape(-1)
+            if batch_images.shape[0] != local_indices.size:
+                raise ValueError("image batch and source-row batch lengths differ")
+            for image, source_row in zip(batch_images, local_indices, strict=True):
+                row = int(source_row)
+                if row not in optics_by_source_row:
+                    raise ValueError(f"image source returned an unexpected source row: {row}")
+                yield optics_by_source_row[row], image
+
+    _average_image, sigma2_per_group = compute_avg_unaligned_and_sigma2(
+        image_iter(),
+        ori_size=int(dataset.grid_size),
+        pixel_size=float(dataset.voxel_size),
+        particle_diameter_ang=float(particle_diameter_ang),
+        width_mask_edge_px=int(width_mask_edge_px),
+        do_zero_mask=True,
+        nr_optics_groups=len(unique_optics),
+        minimum_nr_particles=int(minimum_nr_particles),
+    )
+    sigma2_per_group = np.asarray(sigma2_per_group, dtype=np.float64)
+    expected_shape = (len(unique_optics), int(dataset.grid_size) // 2 + 1)
+    if sigma2_per_group.shape != expected_shape:
+        raise ValueError(
+            f"fresh K=1 live-noise spectrum shape {sigma2_per_group.shape} "
+            f"does not match expected {expected_shape}",
+        )
+    if not np.all(np.isfinite(sigma2_per_group)) or not np.all(sigma2_per_group > 0.0):
+        raise ValueError("fresh K=1 live-noise spectrum must be positive and finite")
+    return sigma2_per_group
+
+
+def _relion_sigma2_to_native_noise_variance(sigma2, *, grid_size: int) -> np.ndarray:
+    """Expand a RELION-unit radial sigma2 spectrum into RECOVAR FFT units."""
+
+    radial_native = np.asarray(sigma2, dtype=np.float64) * float(grid_size) ** 4
+    return np.asarray(
+        utils.make_radial_image(
+            jnp.asarray(radial_native),
+            (int(grid_size), int(grid_size)),
+            extend_last_frequency=True,
+        ),
+        dtype=np.float32,
+    ).reshape(-1)
 
 
 def _replay_complete_initial_particle_state(n_classes, init_relion_iteration):
@@ -3632,6 +3741,64 @@ def main():
     # of K=4 iter-1 class assignments and caps cold-start mean_corr at 0.94.
     relion_init_sigma_offset_angstrom = None
     relion_init_tau2_fudge = None
+    relion_live_initial_sigma2 = None
+    relion_live_initial_noise_variance = None
+    use_relion_live_initial_noise = _k1_relion_live_initial_noise_enabled()
+    if use_relion_live_initial_noise:
+        invalid_reasons = []
+        if int(args.n_classes) != 1:
+            invalid_reasons.append("n_classes must equal 1")
+        if int(args.init_relion_iteration) != 0:
+            invalid_reasons.append("init_relion_iteration must equal 0")
+        if frozen_boundary is not None:
+            invalid_reasons.append("frozen boundary must be absent")
+        if args.perturb_replay_relion_dir is not None:
+            invalid_reasons.append("perturb replay must be absent")
+        if args.relion_init_dir is None:
+            invalid_reasons.append("relion_init_dir is required")
+        if relion_particles is None or args.relion_half_sets is None:
+            invalid_reasons.append("RELION half-set data are required")
+        if relion_mask_params is None:
+            invalid_reasons.append("RELION particle-diameter mask parameters are required")
+        if expected_accuracy_half1_base_order_local is None:
+            invalid_reasons.append("RELION half-1 source order is required")
+        if expected_accuracy_half1_optics_group_ids is None:
+            invalid_reasons.append("RELION half-1 optics groups are required")
+        if invalid_reasons:
+            raise ValueError(
+                f"{_K1_RELION_LIVE_INITIAL_NOISE_ENV} is restricted to a strict fresh "
+                f"K=1 cold start: {'; '.join(invalid_reasons)}",
+            )
+        source_order_local = np.asarray(
+            expected_accuracy_half1_base_order_local,
+            dtype=np.int64,
+        )
+        relion_live_initial_sigma2_per_group = _compute_relion_fresh_k1_initial_sigma2(
+            ds,
+            half1_source_rows=np.asarray(half1_idx, dtype=np.int64)[source_order_local],
+            half1_optics_group_ids=np.asarray(
+                expected_accuracy_half1_optics_group_ids,
+                dtype=np.int64,
+            )[source_order_local],
+            particle_diameter_ang=float(relion_mask_params[0]),
+            width_mask_edge_px=int(relion_mask_params[1]),
+        )
+        if relion_live_initial_sigma2_per_group.shape[0] != 1:
+            raise NotImplementedError(
+                "fresh K=1 live-noise scoring currently requires one optics group",
+            )
+        relion_live_initial_sigma2 = relion_live_initial_sigma2_per_group[0]
+        relion_live_initial_noise_variance = _relion_sigma2_to_native_noise_variance(
+            relion_live_initial_sigma2,
+            grid_size=int(ds.grid_size),
+        )
+        logger.warning(
+            "Opt-in fresh K=1 RELION live initial noise enabled: particles=%d "
+            "source_rows_head=%s sigma2_head=%s",
+            min(1000, int(source_order_local.size)),
+            np.asarray(half1_idx, dtype=np.int64)[source_order_local[:5]].tolist(),
+            np.asarray(relion_live_initial_sigma2[:5]),
+        )
     if args.relion_init_dir is not None and frozen_boundary is None:
         import re as _re
         from pathlib import Path as _Path
@@ -3654,6 +3821,11 @@ def main():
         ]
         if any(sigma2 is None for sigma2 in _relion_sigma2_per_model):
             raise ValueError("RELION iteration-0 model is missing rlnSigma2Noise")
+        if relion_live_initial_sigma2 is not None:
+            _relion_sigma2_per_model = [
+                np.asarray(relion_live_initial_sigma2, dtype=np.float64).copy()
+                for _model in _relion_sigma2_per_model
+            ]
         if _it0_model_bundle["source"] == "half-specific":
             # RELION MPI follower rank 1 broadcasts its scoring noise spectrum
             # to the half-2 follower during initialisation.
@@ -3919,6 +4091,16 @@ def main():
             strict=True,
         )
         if initial_overrides[0] is not None:
+            if relion_live_initial_noise_variance is not None:
+                initial_overrides[0] = dict(initial_overrides[0])
+                initial_overrides[0]["noise_variance"] = [
+                    np.asarray(relion_live_initial_noise_variance, dtype=np.float32).copy(),
+                    np.asarray(relion_live_initial_noise_variance, dtype=np.float32).copy(),
+                ]
+                logger.info(
+                    "STRICT-PARITY: first expectation consumes computed live "
+                    "binary64 K=1 startup noise instead of rounded model-STAR noise",
+                )
             if replay_iteration_overrides is None:
                 replay_iteration_overrides = [None] * (args.max_iter + 1)
             replay_iteration_overrides[0] = initial_overrides[0]

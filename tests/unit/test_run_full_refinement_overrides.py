@@ -28,15 +28,18 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _mean_variance_for_scoring_half,
     _updated_mean_variance_per_half,
 )
+from recovar.em.initial_model.avg_unaligned import compute_avg_unaligned_and_sigma2
 from scripts import run_full_refinement
 from scripts.run_full_refinement import (
     _assert_frozen_replay_slots_projector_only,
     _attach_relion_projector_capture,
     _build_frozen_replay_slots,
     _build_replay_iteration_overrides,
+    _compute_relion_fresh_k1_initial_sigma2,
     _default_refinement_subsets,
     _fixed_diagnostic_source_paths,
     _format_replay_mean_for_log,
+    _k1_relion_live_initial_noise_enabled,
     _load_init_noise_radial_npz,
     _load_init_previous_best_poses_npz,
     _load_initial_noise_cache,
@@ -51,6 +54,7 @@ from scripts.run_full_refinement import (
     _relion_halfset_and_accuracy_layout,
     _relion_mpi_process_start_scoring_noise_pair,
     _relion_optimiser_star_for_runtime,
+    _relion_sigma2_to_native_noise_variance,
     _replay_complete_initial_particle_state,
     _resolve_native_group_layout,
     _resolve_replay_normcorr,
@@ -74,6 +78,96 @@ def test_complete_initial_particle_state_is_autorefine_only():
     assert _replay_complete_initial_particle_state(1, 0)
     assert not _replay_complete_initial_particle_state(4, 0)
     assert not _replay_complete_initial_particle_state(1, 1)
+
+
+@pytest.mark.parametrize("token", ["1", "true", "YES", "on"])
+def test_k1_relion_live_initial_noise_truthy_tokens(token):
+    assert _k1_relion_live_initial_noise_enabled(
+        {"RECOVAR_K1_RELION_LIVE_INITIAL_NOISE": token},
+    )
+
+
+@pytest.mark.parametrize("token", ["0", "false", "NO", "off", ""])
+def test_k1_relion_live_initial_noise_falsey_tokens(token):
+    assert not _k1_relion_live_initial_noise_enabled(
+        {"RECOVAR_K1_RELION_LIVE_INITIAL_NOISE": token},
+    )
+
+
+def test_k1_relion_live_initial_noise_rejects_unknown_token():
+    with pytest.raises(ValueError, match="Unsupported RECOVAR_K1_RELION_LIVE_INITIAL_NOISE"):
+        _k1_relion_live_initial_noise_enabled(
+            {"RECOVAR_K1_RELION_LIVE_INITIAL_NOISE": "maybe"},
+        )
+
+
+class _FakeImageSource:
+    def __init__(self, images):
+        self.images = np.asarray(images)
+
+    def iter_batches(self, *, batch_size, batch_mode, subset_indices):
+        assert batch_mode == "images"
+        rows = np.asarray(subset_indices, dtype=np.int64)
+        for start in range(0, rows.size, int(batch_size)):
+            batch_rows = rows[start : start + int(batch_size)]
+            yield self.images[batch_rows], batch_rows.copy(), batch_rows.copy()
+
+
+def test_compute_relion_fresh_k1_initial_sigma2_preserves_half1_source_order():
+    rng = np.random.default_rng(19)
+    images = rng.normal(size=(6, 8, 8)).astype(np.float32)
+    dataset = SimpleNamespace(
+        n_units=images.shape[0],
+        grid_size=8,
+        voxel_size=2.0,
+        image_source=_FakeImageSource(images),
+    )
+    source_rows = np.asarray([4, 1, 5], dtype=np.int64)
+    got = _compute_relion_fresh_k1_initial_sigma2(
+        dataset,
+        half1_source_rows=source_rows,
+        half1_optics_group_ids=np.asarray([7, 7, 7], dtype=np.int64),
+        particle_diameter_ang=8.0,
+        width_mask_edge_px=2,
+        minimum_nr_particles=2,
+    )
+    _average, expected = compute_avg_unaligned_and_sigma2(
+        iter([(0, images[4]), (0, images[1])]),
+        ori_size=8,
+        pixel_size=2.0,
+        particle_diameter_ang=8.0,
+        width_mask_edge_px=2,
+        do_zero_mask=True,
+        nr_optics_groups=1,
+        minimum_nr_particles=2,
+    )
+    np.testing.assert_array_equal(got, expected)
+
+
+def test_compute_relion_fresh_k1_initial_sigma2_rejects_duplicate_rows():
+    images = np.ones((3, 8, 8), dtype=np.float32)
+    dataset = SimpleNamespace(
+        n_units=images.shape[0],
+        grid_size=8,
+        voxel_size=2.0,
+        image_source=_FakeImageSource(images),
+    )
+    with pytest.raises(ValueError, match="contain duplicates"):
+        _compute_relion_fresh_k1_initial_sigma2(
+            dataset,
+            half1_source_rows=np.asarray([1, 1], dtype=np.int64),
+            half1_optics_group_ids=np.asarray([1, 1], dtype=np.int64),
+            particle_diameter_ang=8.0,
+            width_mask_edge_px=2,
+        )
+
+
+def test_relion_sigma2_to_native_noise_variance_keeps_float32_scoring_dtype():
+    radial = np.asarray([0.0, 0.5, 0.25, 0.125, 0.0625], dtype=np.float64)
+    got = _relion_sigma2_to_native_noise_variance(radial, grid_size=8)
+    assert got.shape == (64,)
+    assert got.dtype == np.float32
+    assert np.all(np.isfinite(got))
 
 
 def test_frozen_replay_is_exactly_projector_only():
