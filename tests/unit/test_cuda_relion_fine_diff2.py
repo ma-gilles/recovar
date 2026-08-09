@@ -151,6 +151,9 @@ def test_k1_coarse_gaussian_flag_is_off_by_default_and_k1_only(monkeypatch):
     guard = source[start : source.index("tree_rescore_fftw_order", start)]
     assert "if n_classes != 1:" in guard
     assert "restricted to K=1" in guard
+    assert "square_score_indices_np" in guard
+    assert "square=True" in guard
+    assert "include_dc=True" in guard
 
 
 @pytest.mark.gpu

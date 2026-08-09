@@ -10849,10 +10849,36 @@ class TestRelionModeSmokeTest:
         """Exercise the opt-in K=1 coarse scorer through significance."""
 
         import jax
+        from recovar import cuda_backproject
 
         monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
         monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_FFI", "1")
         monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+        coarse_pixel_counts = []
+        original_coarse_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32
+
+        def capture_square_crop(reference, shifted_image, weight, initial_diff2, full_to_compact):
+            coarse_pixel_counts.append(
+                (
+                    int(reference.shape[-1]),
+                    int(shifted_image.shape[-1]),
+                    int(weight.shape[-1]),
+                    int(full_to_compact.shape[-1]),
+                )
+            )
+            return original_coarse_diff2(
+                reference,
+                shifted_image,
+                weight,
+                initial_diff2,
+                full_to_compact,
+            )
+
+        monkeypatch.setattr(
+            cuda_backproject,
+            "relion_coarse_diff2_rectangular_f32",
+            capture_square_crop,
+        )
         dataset = half_datasets[0]
         with jax.default_device(gpu_device):
             result = _compute_k_class_significance_batched(
@@ -10869,7 +10895,7 @@ class TestRelionModeSmokeTest:
                 rotation_block_size=2,
                 current_size=6,
                 half_spectrum_scoring=True,
-                square_window=True,
+                square_window=False,
                 relion_projector_half=jnp.zeros(
                     (1, 3, 3, 2),
                     dtype=jnp.complex64,
@@ -10883,6 +10909,12 @@ class TestRelionModeSmokeTest:
         assert np.asarray(result[2]).shape == (dataset.n_units,)
         assert np.asarray(result[-1]["max_posterior_per_image"]).shape == (
             dataset.n_units,
+        )
+        expected_square_pixels = 6 * (6 // 2 + 1)
+        assert coarse_pixel_counts
+        assert all(
+            counts == (expected_square_pixels,) * 4
+            for counts in coarse_pixel_counts
         )
 
     def test_significance_batched_matches_run_em_with_pre_shifts_scales_and_projection_padding(
