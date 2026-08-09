@@ -156,6 +156,51 @@ def test_k1_coarse_gaussian_flag_is_off_by_default_and_k1_only(monkeypatch):
     assert "include_dc=True" in guard
 
 
+def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _relion_coarse_gaussian_square_operands,
+    )
+
+    shifted = jnp.asarray(
+        [
+            [2 + 4j, 12 + 6j, 99 + 3j, -8 + 16j],
+            [4 + 2j, 6 + 18j, 77 + 5j, 12 - 4j],
+        ],
+        dtype=jnp.complex64,
+    )
+    score_weight = jnp.asarray([[2.0, 3.0, 0.0, 4.0]], dtype=jnp.float32)
+    half_weights = jnp.asarray([1.0, 2.0, 2.0, 1.0], dtype=jnp.float32)
+    score_indices = jnp.asarray([3, 1, 2], dtype=jnp.int32)
+
+    corrected, pixel_weight = _relion_coarse_gaussian_square_operands(
+        shifted,
+        score_weight,
+        half_weights,
+        score_indices,
+        batch_size=1,
+        n_trans=2,
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(corrected),
+        np.asarray(
+            [
+                [
+                    [(-8 + 16j) / 4, (12 + 6j) / 3, 0],
+                    [(12 - 4j) / 4, (6 + 18j) / 3, 0],
+                ]
+            ],
+            dtype=np.complex64,
+        ),
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(pixel_weight),
+        np.asarray([[4.0, 6.0, 0.0]], dtype=np.float32),
+    )
+
+
 @pytest.mark.gpu
 def test_relion_coarse_diff2_rectangular_matches_atomic_envelope(
     monkeypatch,

@@ -47,6 +47,38 @@ def _k1_coarse_gaussian_ffi_enabled() -> bool:
     raise ValueError(f"Unsupported {_K1_COARSE_GAUSSIAN_FFI_ENV}={token!r}")
 
 
+def _relion_coarse_gaussian_square_operands(
+    shifted_half,
+    score_weight_half,
+    half_weights,
+    score_indices,
+    *,
+    batch_size: int,
+    n_trans: int,
+):
+    """Derive RELION square-difference operands from accepted score inputs."""
+
+    square_score_weight = score_weight_half[:, score_indices]
+    square_shifted_weighted = shifted_half.reshape(
+        batch_size,
+        n_trans,
+        -1,
+    )[:, :, score_indices]
+    nonzero_weight = square_score_weight != 0.0
+    safe_weight = jnp.where(nonzero_weight, square_score_weight, 1.0)
+    shifted_corrected = square_shifted_weighted / safe_weight[:, None, :]
+    shifted_corrected = jnp.where(
+        nonzero_weight[:, None, :],
+        shifted_corrected,
+        jnp.zeros((), dtype=shifted_corrected.dtype),
+    )
+    pixel_weight = square_score_weight * half_weights[score_indices][None, :]
+    return (
+        jnp.asarray(shifted_corrected, dtype=jnp.complex64),
+        jnp.asarray(pixel_weight, dtype=jnp.float32),
+    )
+
+
 def _capture_offset_free_and_absolute_float32_scores(scores, log_score_offset):
     """Capture native score margins before adding a large common offset."""
 
@@ -1535,7 +1567,6 @@ def _compute_k_class_significance_batched(
     )
     from recovar.em.dense_single_volume.helpers.image_shifts import (
         apply_relion_integer_pre_shifts,
-        half_image_phase_factors,
         tiled_half_image_phase_factors,
     )
     from recovar.em.dense_single_volume.helpers.oversampling import (
@@ -1672,7 +1703,6 @@ def _compute_k_class_significance_batched(
     )
     coarse_gaussian_full_to_compact = None
     coarse_gaussian_score_indices = None
-    coarse_gaussian_translation_angles = None
     coarse_gaussian_powerclass = None
     if coarse_gaussian_ffi_enabled:
         if n_classes != 1:
@@ -1701,7 +1731,6 @@ def _compute_k_class_significance_batched(
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
             _relion_cuda_fine_full_to_compact_lookup,
             _relion_cuda_powerclass_highres_xi2_half,
-            _relion_translation_angles_f32,
         )
 
         if jax.default_backend() != "gpu" or not cuda_backproject.cuda_available():
@@ -1732,10 +1761,6 @@ def _compute_k_class_significance_batched(
                 square_score_indices_np,
             ),
             dtype=jnp.int32,
-        )
-        coarse_gaussian_translation_angles = jnp.asarray(
-            _relion_translation_angles_f32(translations, image_shape),
-            dtype=jnp.float32,
         )
         coarse_gaussian_powerclass = _relion_cuda_powerclass_highres_xi2_half
         logger.warning(
@@ -2170,8 +2195,6 @@ def _compute_k_class_significance_batched(
             ctf2_data = ctf2_data.astype(jnp.float32)
 
         if coarse_gaussian_ffi_enabled:
-            from recovar import cuda_backproject
-
             processed_direct = process_half_image(
                 experiment_dataset,
                 batch_data,
@@ -2179,43 +2202,27 @@ def _compute_k_class_significance_batched(
                 relion_preprocess_kwargs=relion_preprocess_kwargs,
             )
             processed_for_powerclass = processed_direct
-            direct_score_input = processed_direct
             if image_corrections is not None and not relion_cuda_preprocess:
                 image_only_correction = batch_corr / batch_scale
-                direct_score_input = direct_score_input * image_only_correction[:, None]
                 processed_for_powerclass = (
                     processed_for_powerclass * image_only_correction[:, None]
                 )
-            if scale_corrections is not None:
-                direct_score_input = direct_score_input / batch_scale[:, None]
-            ctf_half = config.compute_ctf_half(ctf_params)
-            direct_score_input = jnp.where(
-                jnp.abs(ctf_half) > 1e-8,
-                direct_score_input / ctf_half,
-                direct_score_input,
-            )
-            if image_pre_shifts is not None and not real_space_pre_shift_applied:
-                batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
-                direct_score_input = direct_score_input * half_image_phase_factors(
-                    image_shape,
-                    batch_shifts,
-                )
-            direct_score_input = direct_score_input[:, coarse_gaussian_score_indices]
-            coarse_gaussian_shifted_corrected = (
-                cuda_backproject.relion_translate_score_f32(
-                    jnp.asarray(direct_score_input, dtype=jnp.complex64),
-                    coarse_gaussian_translation_angles,
-                    coarse_gaussian_score_indices,
-                    image_shape,
-                ).reshape(batch_size, n_trans, -1)
-            )
-            coarse_gaussian_pixel_weight = (
-                score_weight_half[:, coarse_gaussian_score_indices]
-                * half_weights[coarse_gaussian_score_indices][None, :]
-            )
-            coarse_gaussian_pixel_weight = jnp.asarray(
+            # Reuse the exact operands of RECOVAR's accepted Gaussian score
+            # boundary. Reprocessing and translating a second image copy here
+            # changed the operands as well as the reduction. Algebraically,
+            # ``shifted_half / score_weight_half`` is the shifted image divided
+            # by CTF, and RELION's square-difference weight is
+            # ``score_weight_half * half_weights``.
+            (
+                coarse_gaussian_shifted_corrected,
                 coarse_gaussian_pixel_weight,
-                dtype=jnp.float32,
+            ) = _relion_coarse_gaussian_square_operands(
+                shifted_half,
+                score_weight_half,
+                half_weights,
+                coarse_gaussian_score_indices,
+                batch_size=batch_size,
+                n_trans=n_trans,
             )
             coarse_gaussian_initial_diff2 = coarse_gaussian_powerclass(
                 processed_for_powerclass,
