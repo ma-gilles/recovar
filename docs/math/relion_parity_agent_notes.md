@@ -11511,3 +11511,43 @@ and `9/15` all-class.
   `4.3960111614e-5` relative L2, the expected serialization scale. The
   corrected case-22 result remains `8.6736173799e-18` maximum absolute from
   the sealed process-resident binary64 spectrum.
+
+## 2026-08-09 13:15 ET — K=1 running-job checkpoint and exact-coarse rejection
+
+- K=4 remains parked. The frozen K=1 denominator remains unchanged at
+  `28/34` strict signed FSC/FSC-AUC and `32/34` exact topology.
+- In the same-H100 case-7 iteration-2 factorial, the completed exact-coarse
+  arm changes no iteration-1 Pmax, rotation, or translation rows. At
+  iteration 2 it changes 40,920 Pmax values, four best rotations, and six best
+  translations relative to control. Cross-engine Pmax relative L2 improves
+  only `0.72%`, from `0.0041464369015` to `0.0041165897805`, while the merged
+  signed FSC-AUC deficit worsens by approximately `144.67%`, from
+  `2.1947918e-7` to `5.3700889e-7`. Significant-support-count mismatches
+  increase from 37 to 41. The exact-coarse arm is therefore rejected as a
+  standalone fix under its predeclared gate. The exact-plus-float32 arm in
+  Slurm job `12174607` remains in progress and is not classified here.
+- Identity-aligned particle-state reports are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_coarse_factorial_caf341d3_20260809T1059ET/analysis_live/control_particle_state_it002.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_coarse_factorial_caf341d3_20260809T1059ET/analysis_live/exact_particle_state_it002.json`.
+- A new diagnostic-only `--allow-incomplete` mode for numbered-only K=1 FSC
+  audits was committed as `2b87b07e`. It permits a missing terminal
+  `refinement_results.npz`, compares only the complete numbered-map prefix,
+  and writes `completion_claim=false`. Its focused panel passes 11/11 tests
+  and Ruff; the audit-tool worktree is clean.
+- Applying that mode to the running case-10 current-head job `12167885`
+  verifies iterations 1--9. The worst merged cross-engine signed FSC-AUC is
+  `0.999969997279` at iteration 9 and the worst merged RECOVAR-minus-RELION GT
+  FSC-AUC is `-2.2085450e-6`. A separate exact metadata join verifies all
+  current-size and HEALPix decisions through iteration 11. Both reports are
+  explicitly incomplete-prefix observations and make no final acceptance
+  claim:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_cuda_async_retry_f1e22231_20260809T0640ET/analysis_live/partial_numbered_fsc.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_cuda_async_retry_f1e22231_20260809T0640ET/analysis_live/partial_topology.json`.
+- The live-initial-noise implementation branch passes the CPU EM fast
+  guardrail `16/16` in `52.37` seconds with checkout-bound RECOVAR and JAX
+  from the checkout's pixi environment. Runtime scratch is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_live_noise_fast_guard_20260809T1310ET`
+  and contains `SAFE_TO_DELETE`. No correlation was computed and no Slurm job
+  or Codex process was changed.
