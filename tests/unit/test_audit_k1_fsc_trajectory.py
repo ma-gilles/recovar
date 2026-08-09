@@ -267,3 +267,73 @@ def test_partial_final_products_fail_closed(tmp_path, monkeypatch):
     assert status == 2
     assert report["status"] == "error"
     assert "final products are partially present" in report["earliest_failure"]
+
+
+@pytest.mark.unit
+def test_numbered_only_explicitly_ignores_partial_final_products(tmp_path, monkeypatch):
+    case_root, arrays = _make_case(
+        tmp_path,
+        monkeypatch,
+        recovar_indices=(0,),
+        relion_iterations=(1,),
+    )
+    partial_final = _touch(case_root / "recovar" / "final_merged.mrc")
+    arrays[partial_final] = next(iter(arrays.values()))
+
+    status, report, output_npz = _run(
+        case_root,
+        tmp_path,
+        "--numbered-only",
+    )
+
+    assert status == 0
+    assert report["status"] == "pass"
+    assert report["final"] is None
+    assert report["final_policy"] == "numbered_only"
+    assert report["numbered_iteration_count"] == 1
+    assert report["numbered_iterations"][0]["relion_iteration"] == 1
+    with np.load(output_npz, allow_pickle=False) as curves:
+        assert "it001_cross_merged" in curves.files
+        assert not any(name.startswith("final_") for name in curves.files)
+
+
+@pytest.mark.unit
+def test_allow_incomplete_audits_available_numbered_prefix_without_results(tmp_path, monkeypatch):
+    case_root, _ = _make_case(
+        tmp_path,
+        monkeypatch,
+        recovar_indices=(0,),
+        relion_iterations=(1, 2),
+    )
+    (case_root / "recovar" / "refinement_results.npz").unlink()
+
+    status, report, output_npz = _run(
+        case_root,
+        tmp_path,
+        "--numbered-only",
+        "--allow-incomplete",
+    )
+
+    assert status == 0
+    assert report["status"] == "pass"
+    assert report["trajectory_scope"] == "in_progress_numbered_prefix"
+    assert report["completion_claim"] is False
+    assert report["final_policy"] == "in_progress_numbered_prefix"
+    assert report["topology_failures"] == []
+    assert report["numbered_iteration_count"] == 1
+    assert report["recovar_numbered_iteration_count"] == 1
+    assert report["relion_numbered_iteration_count"] == 2
+    with np.load(output_npz, allow_pickle=False) as curves:
+        assert "it001_cross_merged" in curves.files
+        assert "it002_cross_merged" not in curves.files
+
+
+@pytest.mark.unit
+def test_allow_incomplete_requires_numbered_only(tmp_path, monkeypatch):
+    case_root, _ = _make_case(tmp_path, monkeypatch)
+
+    status, report, _ = _run(case_root, tmp_path, "--allow-incomplete")
+
+    assert status == 2
+    assert report["status"] == "error"
+    assert report["earliest_failure"] == "--allow-incomplete requires --numbered-only"

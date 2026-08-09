@@ -112,6 +112,8 @@ def _validate_numbered_topology(
     recovar_maps: dict[int, dict[int, Path]],
     relion_maps: dict[int, dict[int, Path]],
     refinement_results: Path,
+    *,
+    allow_incomplete: bool = False,
 ) -> tuple[list[tuple[int, int]], list[str]]:
     if not recovar_maps:
         raise AuditError("no RECOVAR numbered regularized half maps found")
@@ -135,18 +137,22 @@ def _validate_numbered_topology(
         raise AuditError(
             f"RELION iterations are not contiguous one-based: found {relion_iterations}, expected {expected_relion}"
         )
-    if not refinement_results.is_file():
+    if refinement_results.is_file():
+        with np.load(refinement_results, allow_pickle=False) as payload:
+            if "current_sizes" not in payload.files:
+                raise AuditError(f"missing current_sizes in {refinement_results}")
+            result_count = int(np.asarray(payload["current_sizes"]).size)
+        if result_count != len(recovar_iterations):
+            raise AuditError(
+                f"RECOVAR map/result iteration count mismatch: maps={len(recovar_iterations)} "
+                f"current_sizes={result_count}"
+            )
+    elif not allow_incomplete:
         raise AuditError(f"missing RECOVAR refinement results: {refinement_results}")
-    with np.load(refinement_results, allow_pickle=False) as payload:
-        if "current_sizes" not in payload.files:
-            raise AuditError(f"missing current_sizes in {refinement_results}")
-        result_count = int(np.asarray(payload["current_sizes"]).size)
-    if result_count != len(recovar_iterations):
-        raise AuditError(
-            f"RECOVAR map/result iteration count mismatch: maps={len(recovar_iterations)} current_sizes={result_count}"
-        )
     topology_failures = []
-    if len(recovar_iterations) != len(relion_iterations):
+    count_mismatch = len(recovar_iterations) != len(relion_iterations)
+    incomplete_prefix = allow_incomplete and len(recovar_iterations) <= len(relion_iterations)
+    if count_mismatch and not incomplete_prefix:
         topology_failures.append(
             f"numbered iteration count mismatch: RECOVAR={len(recovar_iterations)} "
             f"RELION={len(relion_iterations)}"
@@ -368,6 +374,8 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         raise AuditError(f"missing RELION directory: {relion_dir}")
     if not gt_path.is_file():
         raise AuditError(f"missing GT volume: {gt_path}")
+    if args.allow_incomplete and not args.numbered_only:
+        raise AuditError("--allow-incomplete requires --numbered-only")
 
     recovar_maps = _discover_maps(intermediates, RECOVAR_MAP_RE, engine="RECOVAR")
     relion_maps = _discover_maps(relion_dir, RELION_MAP_RE, engine="RELION")
@@ -375,6 +383,7 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         recovar_maps,
         relion_maps,
         recovar_dir / "refinement_results.npz",
+        allow_incomplete=bool(args.allow_incomplete),
     )
     gt_sign_invariant, sign_reason = _gt_sign_invariant(case_root, args.gt_sign_mode)
     gt = _load_recovar_volume(gt_path)
@@ -390,13 +399,15 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         )
         for recovar_index, relion_iteration in pairs
     ]
-    final = _optional_final_metrics(
-        recovar_dir,
-        relion_dir,
-        gt,
-        gt_sign_invariant=gt_sign_invariant,
-        shellwise=shellwise,
-    )
+    final = None
+    if not args.numbered_only:
+        final = _optional_final_metrics(
+            recovar_dir,
+            relion_dir,
+            gt,
+            gt_sign_invariant=gt_sign_invariant,
+            shellwise=shellwise,
+        )
     failures = topology_failures + _apply_gates(
         rows,
         final,
@@ -425,9 +436,20 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         "numbered_iteration_count": len(rows),
         "recovar_numbered_iteration_count": len(recovar_maps),
         "relion_numbered_iteration_count": len(relion_maps),
+        "trajectory_scope": (
+            "in_progress_numbered_prefix" if args.allow_incomplete else "complete_numbered_trajectory"
+        ),
+        "completion_claim": not bool(args.allow_incomplete),
         "topology_failures": topology_failures,
         "numbered_iterations": rows,
         "final": final,
+        "final_policy": (
+            "in_progress_numbered_prefix"
+            if args.allow_incomplete
+            else "numbered_only"
+            if args.numbered_only
+            else "complete_if_present"
+        ),
         "failures": failures,
         "earliest_failure": failures[0] if failures else None,
     }
@@ -488,6 +510,24 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-markdown", type=Path)
     parser.add_argument("--output-shellwise-npz", type=Path)
+    parser.add_argument(
+        "--numbered-only",
+        action="store_true",
+        help=(
+            "Audit numbered half-map iterations only. Ignore all final products, "
+            "including incomplete convenience outputs from --skip_final_iteration."
+        ),
+    )
+    parser.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help=(
+            "Audit the currently complete RECOVAR numbered-map prefix while a run is "
+            "still in progress. Requires --numbered-only, permits a missing "
+            "refinement_results.npz and extra later RELION iterations, and never "
+            "claims trajectory completion."
+        ),
+    )
     parser.add_argument(
         "--gt-sign-mode",
         choices=("auto", "signed", "sign-invariant"),
