@@ -8424,10 +8424,14 @@ def test_dense_engine_routes_relion_cuda_norm_and_shift_before_fft(rng):
     assert captured["apply_image_mask"] is True
 
 
-def test_k_class_firstiter_cc_routes_relion_cuda_norm_and_shift_before_fft(rng):
+def test_k_class_firstiter_cc_routes_relion_cuda_norm_and_shift_before_fft(
+    rng,
+    monkeypatch,
+):
     dataset = MockDataset(1, rng)
     dataset.image_source.backend.image_mask_mode = "relion_background_fill"
     dataset.image_source.backend.relion_fourier_backend = "relion_cuda"
+    monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_FFI", "1")
     captured = {}
 
     class _CapturedStrictPreprocess(RuntimeError):

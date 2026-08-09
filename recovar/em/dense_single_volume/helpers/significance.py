@@ -1662,7 +1662,14 @@ def _compute_k_class_significance_batched(
     tree_rescore_enabled = (
         tree_rescore_max_margin is not None and score_mode == "normalized_cc"
     )
-    coarse_gaussian_ffi_enabled = _k1_coarse_gaussian_ffi_enabled()
+    # The environment flag spans the complete refinement process. Iteration 1
+    # may use normalized CC, while this intervention applies only to later
+    # Gaussian coarse passes. Keep the flag dormant for the CC call instead of
+    # rejecting the process before it reaches the intended boundary.
+    coarse_gaussian_ffi_requested = _k1_coarse_gaussian_ffi_enabled()
+    coarse_gaussian_ffi_enabled = (
+        coarse_gaussian_ffi_requested and score_mode == "gaussian"
+    )
     coarse_gaussian_full_to_compact = None
     coarse_gaussian_score_indices = None
     coarse_gaussian_translation_angles = None
@@ -1671,10 +1678,6 @@ def _compute_k_class_significance_batched(
         if n_classes != 1:
             raise ValueError(
                 f"{_K1_COARSE_GAUSSIAN_FFI_ENV} is restricted to K=1"
-            )
-        if score_mode != "gaussian":
-            raise ValueError(
-                f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires Gaussian scoring"
             )
         if use_float64_scoring:
             raise ValueError(
