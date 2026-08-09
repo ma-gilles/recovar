@@ -122,10 +122,12 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR,
     EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
     EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
+    EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV,
     LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
     _build_reconstruction_pack_indices,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_max_hypotheses_per_microbatch,
+    _exact_local_xhalf_projection_microbatch_cap,
     _exact_local_xhalf_tail_microbatch_cap,
     _adjoint_slice_volume_maybe_windowed_row_chunks,
     _local_processed_half_cache_enabled,
@@ -1787,6 +1789,72 @@ def test_exact_local_xhalf_tail_microbatch_keeps_cap_for_planned_neighborhoods()
             rotation_block_size=136,
         )
         == 15_500
+    )
+
+
+def test_exact_local_xhalf_projection_cap_matches_case10_proven_bucket_boundary(monkeypatch):
+    monkeypatch.delenv(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV, raising=False)
+    rotation_counts = np.asarray([128, 256, 520], dtype=np.int32)
+    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
+    total_rotations = int(rotation_offsets[-1])
+    layout = LocalHypothesisLayout(
+        n_global_rotations=total_rotations,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=np.arange(total_rotations, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total_rotations, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(total_rotations, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((116, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((3, 116), dtype=np.float32),
+    )
+
+    cap = _exact_local_xhalf_projection_microbatch_cap(
+        14_171,
+        layout,
+        n_projection_pixels=8_258,
+        rotation_block_size=383,
+    )
+    buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=37,
+        rotation_block_size=383,
+        max_hypotheses_per_microbatch=cap,
+    )
+
+    assert cap == 40_000_000 // 8_258
+    assert max(
+        int(bucket.bucket_image_count) * int(bucket.bucket_rotation_count) * 8_258
+        for bucket in buckets
+    ) <= 40_000_000
+    assert {int(bucket.bucket_rotation_count) for bucket in buckets} == {128, 256, 766}
+
+
+def test_exact_local_xhalf_projection_cap_preserves_one_exact_neighborhood(monkeypatch):
+    monkeypatch.setenv(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV, "1000")
+    rotation_counts = np.asarray([520], dtype=np.int32)
+    layout = LocalHypothesisLayout(
+        n_global_rotations=520,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=np.asarray([0, 520], dtype=np.int64),
+        rotation_ids_flat=np.arange(520, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (520, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(520, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((116, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((1, 116), dtype=np.float32),
+    )
+
+    assert (
+        _exact_local_xhalf_projection_microbatch_cap(
+            14_171,
+            layout,
+            n_projection_pixels=8_258,
+            rotation_block_size=383,
+        )
+        == 766
     )
 
 

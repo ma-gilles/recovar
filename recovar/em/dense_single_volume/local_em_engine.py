@@ -249,6 +249,16 @@ EXACT_LOCAL_AUTO_MICROBATCH_BOOST = 2.0
 EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV = "RECOVAR_EXACT_LOCAL_AUTO_MICROBATCH_BOOST"
 EXACT_LOCAL_XHALF_AUTO_MICROBATCH_BOOST = 1.0
 EXACT_LOCAL_XHALF_AUTO_MICROBATCH_BOOST_ENV = "RECOVAR_EXACT_LOCAL_XHALF_AUTO_MICROBATCH_BOOST"
+# The fused RELION-projector M-step has a projection/interpolation temporary
+# whose peak follows padded rotation rows times projected pixels.  A 384-box
+# H100 run completed 37x128x8258 row-pixels but OOMed when the next static
+# bucket doubled to 37x256x8258 and requested a 10.12-GiB allocation.  Keep
+# automatic x-half buckets on the proven side of that boundary.  The cap never
+# splits one particle's exact rotation neighborhood.
+EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS = 40_000_000
+EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV = (
+    "RECOVAR_EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS"
+)
 # Score-only big-JIT lowers the score residual to a dense
 # (image, rotation, translation, pixel) float32 tile.  Limit that one tile to
 # a conservative share of memory that is still free at local-search entry;
@@ -1515,6 +1525,58 @@ def _exact_local_xhalf_tail_microbatch_cap(
     return min(cap, planned_row_cap)
 
 
+def _exact_local_xhalf_projection_target_row_pixels() -> int:
+    """Resolve the x-half projection row-pixel budget."""
+
+    target_row_pixels = int(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS)
+    raw = os.environ.get(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV, "").strip()
+    if raw:
+        try:
+            target_row_pixels = max(1, int(raw))
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid %s=%r; using default %d row-pixels",
+                EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV,
+                raw,
+                EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS,
+            )
+            target_row_pixels = int(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS)
+    return target_row_pixels
+
+
+def _exact_local_xhalf_projection_microbatch_cap(
+    cap: int,
+    local_layout: LocalHypothesisLayout,
+    *,
+    n_projection_pixels: int,
+    rotation_block_size: int,
+) -> int:
+    """Bound fused x-half projection rows without truncating neighborhoods."""
+
+    cap = max(1, int(cap))
+    n_projection_pixels = max(1, int(n_projection_pixels))
+    rotation_block_size = max(1, int(rotation_block_size))
+    target_row_pixels = _exact_local_xhalf_projection_target_row_pixels()
+
+    rotation_counts = np.asarray(local_layout.rotation_counts, dtype=np.int64)
+    if rotation_counts.size == 0:
+        return cap
+    large_bucket_quantum = _exact_local_large_bucket_quantum(rotation_block_size)
+    max_bucket_rotation_count = max(
+        _exact_bucket_rotation_size(
+            int(count),
+            rotation_block_size,
+            large_bucket_quantum=large_bucket_quantum,
+        )
+        for count in rotation_counts
+    )
+    projection_row_cap = max(1, target_row_pixels // n_projection_pixels)
+    # Exact neighborhoods are indivisible; permit at least one image from the
+    # largest padded bucket even when that exceeds the configured row target.
+    safe_cap = max(int(max_bucket_rotation_count), int(projection_row_cap))
+    return min(cap, safe_cap)
+
+
 def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.ndarray) -> LocalBucketSpec:
     if np.array_equal(returned_indices, bucket.image_indices):
         return bucket
@@ -2256,6 +2318,22 @@ def run_local_em_exact(
                 int(np.max(np.asarray(local_layout.rotation_counts), initial=0)),
                 int(image_batch_size),
                 int(rotation_block_size),
+            )
+        tail_capped_hypotheses_per_microbatch = int(max_hypotheses_per_microbatch)
+        max_hypotheses_per_microbatch = _exact_local_xhalf_projection_microbatch_cap(
+            tail_capped_hypotheses_per_microbatch,
+            local_layout,
+            n_projection_pixels=int(window_spec.n_projection),
+            rotation_block_size=rotation_block_size,
+        )
+        if max_hypotheses_per_microbatch < tail_capped_hypotheses_per_microbatch:
+            logger.info(
+                "Exact local RELION x-half projection microbatch cap: %d -> %d "
+                "(projection_pixels=%d target_row_pixels=%d)",
+                tail_capped_hypotheses_per_microbatch,
+                int(max_hypotheses_per_microbatch),
+                int(window_spec.n_projection),
+                int(_exact_local_xhalf_projection_target_row_pixels()),
             )
     bucket_build_t0 = time.time()
     bucket_specs = bucket_local_hypothesis_layout(

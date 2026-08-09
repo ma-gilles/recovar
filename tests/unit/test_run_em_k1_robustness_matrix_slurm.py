@@ -808,6 +808,7 @@ def test_exact_local_packed_noise_chunk_target_env_is_forwarded(tmp_path):
         case="26",
         extra_env={
             "RECOVAR_EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS": "16000000",
+            "RECOVAR_EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS": "32000000",
             "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS": "250",
             "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS": "90",
         },
@@ -819,6 +820,10 @@ def test_exact_local_packed_noise_chunk_target_env_is_forwarded(tmp_path):
     text = scripts[0].read_text()
     assert "export RECOVAR_EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS=16000000" in text
     assert "RECOVAR_EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS=16000000" in (
+        scratch / "submission.env"
+    ).read_text()
+    assert "export RECOVAR_EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS=32000000" in text
+    assert "RECOVAR_EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS=32000000" in (
         scratch / "submission.env"
     ).read_text()
     assert "export RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS=250" in text
