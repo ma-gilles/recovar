@@ -1333,6 +1333,36 @@ reduction operation that differs under identical operands, not another broad
 input-factor substitution.  These diagnostics are non-scoring: K=1 remains
 28/34 strict, 32/34 topology, and 34/34 evaluated.  K=4 work is parked until
 the K=1 gap is closed or sharply isolated.
+
+The exact production CUDA-lane capture now closes the reduction side of that
+gate.  RELION source commit `8ba3e0a86fef0ad16d83206be4a219fe74cf28df`
+and binary SHA-256
+`53a6bd57df57d3c36711f1658bc6947a3a68592406b2a5b12123e8cd02110a3e`
+recorded the four active float32 lane partials for every one of the fixed
+`12 x 29 = 348` case-4 scores in Slurm job `12169330`.  After including the
+recorded preloaded high-resolution term `0.01898874156177044`, every
+production score is bitwise reachable by a legal ordering of its four native
+atomic additions (`348/348`).  The passive operand replay is not exact:
+`1173/1392` active lane values are bitwise equal, its active-lane absolute
+difference has p95/max `0.0001220703125/0.000244140625`, and only `328/348`
+production scores are reachable from those replayed lanes.  The native atomic
+envelope width is at most `0.0009765625`, materially below the already sealed
+full cross-engine centered maximum `0.0051116943`.  Capture inertness passes
+all `3/3` half-1, half-2, and merged signed FSC-AUC gates, with the worst AUC
+`0.999999998985640` at a fixed threshold of `0.999999`.
+
+This falsifies atomic-add ordering as the case-4 root defect and moves the
+first open boundary upstream to the values accumulated inside each native
+lane: projected-reference interpolation, translated image/phase, correction,
+or their float32 contraction.  The corrected lane, operand, and inertness
+reports are respectively
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_coarse_lane_capture_4cf1015c_20260809T0805ET/analysis/RELION_LANE_VALIDATION_CORRECTED.json`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_coarse_lane_capture_4cf1015c_20260809T0805ET/analysis/RELION_OPERAND_VALIDATION_MODULE.json`,
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_coarse_lane_capture_4cf1015c_20260809T0805ET/analysis/RELION_CAPTURE_INERTNESS_MODULE.json`,
+with SHA-256 values `02ec06fc1f06d99580f969ac78a96b54c3d44ee201e7c532a621c8648817356e`,
+`6e42e19020c627a90380c5090219e44c629180ac4661ebe02af8627818566a00`, and
+`ff219c9dea0d2199a7d12b1ec87a9169e5bb6aa5c4171d683f9d9cdd0af26c7c`.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
