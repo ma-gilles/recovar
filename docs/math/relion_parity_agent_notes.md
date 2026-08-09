@@ -11551,3 +11551,32 @@ and `9/15` all-class.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_live_noise_fast_guard_20260809T1310ET`
   and contains `SAFE_TO_DELETE`. No correlation was computed and no Slurm job
   or Codex process was changed.
+
+## 2026-08-09 13:50 ET — case-7 exact-plus-float32 arm is also rejected
+
+- Slurm job `12174607` completed all three requested two-iteration science
+  arms on one H100. Its batch status is `FAILED 1:0` only because the embedded
+  older FSC auditor rejected intentionally absent final unfiltered products
+  after `--skip_final_iteration`; all numbered maps and particle states are
+  complete. Reanalysis uses numbered-only auditor commit `2b87b07e` and
+  records `completion_claim=false`.
+- The exact-plus-float32 arm has iteration-2 cross-engine Pmax relative L2
+  `0.0041166518493`, only a `0.7183%` improvement from control and a
+  `0.00151%` regression from exact coarse alone. Its merged signed FSC-AUC is
+  `0.9999994631370`: the deficit is `144.61%` worse than control and only
+  `0.0272%` better than exact coarse alone. Significant-support-count
+  mismatches increase from `37` in control and `41` in exact coarse to `42`.
+- The exact-plus-float32 arm is therefore negative under the predeclared
+  policy. Exact coarse reduction and float32 coarse significance are removed
+  from the standalone K=1 fix queue. The next case-7 discriminator remains
+  the iteration-1 map/noise-to-iteration-2 score boundary, while the separate
+  coarse-sincosf factorial continues as a narrow arithmetic control.
+- Machine-readable post-terminal classification:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_coarse_factorial_caf341d3_20260809T1059ET/analysis_live/CASE07_EXACT_COARSE_FACTORIAL_POSTHOC.json`
+  (SHA-256 `4251c5e45bff57f1c2162b61c17ef36fb478ca8b5a3261825023f151d8b8a88e`).
+  The numbered FSC report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_coarse_factorial_caf341d3_20260809T1059ET/analysis_live/exact_f32_numbered_fsc_v2.json`
+  (SHA-256 `bfed7be2f0feb3022aa89556acf306cb3652f3f9ad946af993ed46d633d4998f`).
+- Case-22 autonomous live-noise job `12176902` began on the H100 released by
+  `12174607`. Existing jobs were not altered. K=4 remains parked and the
+  frozen K=1 score remains `28/34` strict and `32/34` exact topology.
