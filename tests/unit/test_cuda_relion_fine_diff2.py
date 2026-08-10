@@ -184,12 +184,14 @@ def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():
     score_weight = jnp.asarray([[2.0, 3.0, 0.0, 4.0]], dtype=jnp.float32)
     half_weights = jnp.asarray([1.0, 2.0, 2.0, 1.0], dtype=jnp.float32)
     score_indices = jnp.asarray([3, 1, 2], dtype=jnp.int32)
+    score_active_mask = jnp.asarray([True, False, True])
 
     corrected, pixel_weight = _relion_coarse_gaussian_square_operands(
         shifted,
         score_weight,
         half_weights,
         score_indices,
+        score_active_mask,
         batch_size=1,
         n_trans=2,
     )
@@ -199,8 +201,8 @@ def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():
         np.asarray(
             [
                 [
-                    [(-8 + 16j) / 4, (12 + 6j) / 3, 0],
-                    [(12 - 4j) / 4, (6 + 18j) / 3, 0],
+                    [(-8 + 16j) / 4, 0, 0],
+                    [(12 - 4j) / 4, 0, 0],
                 ]
             ],
             dtype=np.complex64,
@@ -210,7 +212,7 @@ def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():
     )
     np.testing.assert_array_equal(
         np.asarray(pixel_weight),
-        np.asarray([[4.0, 6.0, 0.0]], dtype=np.float32),
+        np.asarray([[4.0, 0.0, 0.0]], dtype=np.float32),
     )
 
 
@@ -245,6 +247,7 @@ def test_coarse_gaussian_sincosf_operands_reuse_unshifted_weighted_input(
     score_weight = jnp.asarray([[2.0, 3.0, 0.0, 4.0]], dtype=jnp.float32)
     half_weights = jnp.asarray([1.0, 2.0, 2.0, 1.0], dtype=jnp.float32)
     score_indices = jnp.asarray([3, 1, 2], dtype=jnp.int32)
+    score_active_mask = jnp.asarray([True, False, True])
     translations = np.asarray([[0.0, 0.0], [1.0, -2.0]], dtype=np.float32)
 
     corrected, pixel_weight = _relion_coarse_gaussian_square_operands_sincosf(
@@ -252,12 +255,13 @@ def test_coarse_gaussian_sincosf_operands_reuse_unshifted_weighted_input(
         score_weight,
         half_weights,
         score_indices,
+        score_active_mask,
         translations,
         (8, 8),
     )
 
     expected_base = np.asarray(
-        [[(-8 + 16j) / 4, (12 + 6j) / 3, 0]],
+        [[(-8 + 16j) / 4, 0, 0]],
         dtype=np.complex64,
     )
     np.testing.assert_array_equal(captured["images"], expected_base)
@@ -275,7 +279,7 @@ def test_coarse_gaussian_sincosf_operands_reuse_unshifted_weighted_input(
     )
     np.testing.assert_array_equal(
         np.asarray(pixel_weight),
-        np.asarray([[4.0, 6.0, 0.0]], dtype=np.float32),
+        np.asarray([[4.0, 0.0, 0.0]], dtype=np.float32),
     )
 
 
@@ -324,6 +328,7 @@ def test_coarse_gaussian_sincosf_operands_run_cuda_translation(
             score_weight,
             half_weights,
             score_indices,
+            jnp.ones(score_indices.shape, dtype=jnp.bool_),
             translations,
             image_shape,
         )

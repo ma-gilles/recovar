@@ -80,6 +80,7 @@ def _relion_coarse_gaussian_square_operands(
     score_weight_half,
     half_weights,
     score_indices,
+    score_active_mask,
     *,
     batch_size: int,
     n_trans: int,
@@ -87,6 +88,11 @@ def _relion_coarse_gaussian_square_operands(
     """Derive RELION square-difference operands from accepted score inputs."""
 
     square_score_weight = score_weight_half[:, score_indices]
+    square_score_weight = jnp.where(
+        score_active_mask[None, :],
+        square_score_weight,
+        jnp.zeros((), dtype=square_score_weight.dtype),
+    )
     square_shifted_weighted = shifted_half.reshape(
         batch_size,
         n_trans,
@@ -112,6 +118,7 @@ def _relion_coarse_gaussian_square_operands_sincosf(
     score_weight_half,
     half_weights,
     score_indices,
+    score_active_mask,
     translations,
     image_shape,
 ):
@@ -124,6 +131,11 @@ def _relion_coarse_gaussian_square_operands_sincosf(
 
     score_indices = jnp.asarray(score_indices, dtype=jnp.int32)
     square_score_weight = score_weight_half[:, score_indices]
+    square_score_weight = jnp.where(
+        score_active_mask[None, :],
+        square_score_weight,
+        jnp.zeros((), dtype=square_score_weight.dtype),
+    )
     square_unshifted_weighted = unshifted_score_weighted[:, score_indices]
     nonzero_weight = square_score_weight != 0.0
     safe_weight = jnp.where(nonzero_weight, square_score_weight, 1.0)
@@ -1803,6 +1815,7 @@ def _compute_k_class_significance_batched(
         )
     coarse_gaussian_full_to_compact = None
     coarse_gaussian_score_indices = None
+    coarse_gaussian_score_active_mask = None
     coarse_gaussian_powerclass = None
     if coarse_gaussian_ffi_enabled:
         if n_classes != 1:
@@ -1853,6 +1866,15 @@ def _compute_k_class_significance_batched(
         coarse_gaussian_score_indices = jnp.asarray(
             square_score_indices_np,
             dtype=jnp.int32,
+        )
+        active_score_indices_np = (
+            np.arange(n_half, dtype=np.int32)
+            if window_spec.score_indices_np is None
+            else np.asarray(window_spec.score_indices_np, dtype=np.int32)
+        )
+        coarse_gaussian_score_active_mask = jnp.asarray(
+            np.isin(square_score_indices_np, active_score_indices_np),
+            dtype=jnp.bool_,
         )
         coarse_gaussian_full_to_compact = jnp.asarray(
             _relion_cuda_fine_full_to_compact_lookup(
@@ -2365,6 +2387,7 @@ def _compute_k_class_significance_batched(
                     score_weight_half,
                     half_weights,
                     coarse_gaussian_score_indices,
+                    coarse_gaussian_score_active_mask,
                     translations,
                     image_shape,
                 )
@@ -2377,6 +2400,7 @@ def _compute_k_class_significance_batched(
                     score_weight_half,
                     half_weights,
                     coarse_gaussian_score_indices,
+                    coarse_gaussian_score_active_mask,
                     batch_size=batch_size,
                     n_trans=n_trans,
                 )
