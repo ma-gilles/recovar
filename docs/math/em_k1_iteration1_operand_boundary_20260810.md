@@ -449,3 +449,46 @@ previously positive exact coarse-Gaussian tree with live initial noise, exact
 BPref operands, fresh physical dispatch, and the global per-particle BPref
 sequence.  It saves numbered maps, particle state, and the complete
 iteration-2 accumulator; it does not run a full trajectory or final pass.
+
+## Case-26 two-iteration generalization gate
+
+Focused H100 job `12228267` applied the same production order and exact-BPref
+route to the independent 1,000-particle case 26.  The EM computation completed
+two physical iterations in 438.5 seconds and wrote all requested maps,
+particle state, and iteration-2 accumulator artifacts.  The Slurm wrapper then
+returned status 2 only because the complete-trajectory auditor correctly
+reported that a deliberately truncated two-iteration run does not have the
+11 numbered iterations of the RELION reference.  The focused scientific
+artifacts themselves are complete.
+
+The numbered map boundary is essentially closed:
+
+| physical iteration | half 1 FSC-AUC | half 2 FSC-AUC | merged FSC-AUC |
+|---:|---:|---:|---:|
+| 1 | `0.999999999962` | `0.999999999957` | `0.999999999973` |
+| 2 | `0.999999999855` | `0.999999999824` | `0.999999999887` |
+
+At physical iteration 2, the signed merged GT FSC-AUC differs from RELION by
+only `-1.28434e-7`.  Particle identity, current size (`56`), HEALPix order
+(`3`), and all hard rotations and translations are preserved.  Pmax
+relative-L2 is `1.22543e-5`; 65 of 1,000 significant-support counts differ by
+exactly one.  This remaining support boundary is numerically small and does
+not prevent closure of the reconstructed-map boundary, but it remains the
+first discrete intermediary to investigate before claiming exact posterior
+parity.
+
+The reports are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_ordered_exact_it2_20260810T1925ET/analysis/case26_ordered_exact_fsc_it2.json`,
+  SHA-256 `55b47ab9934bb31b55260014d3a8d58a652ddd665b9075860a811e892a8fd5a7`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_ordered_exact_it2_20260810T1925ET/analysis/case26_ordered_exact_state_it2.json`,
+  SHA-256 `ef502beb52cbf82cb9d165d80e991dde22bd64e5590905248c15bf49cc7227bd`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_ordered_exact_it2_20260810T1925ET/analysis/case26_ordered_exact_particle_state_it2.json`,
+  SHA-256 `c6ce62ac145ff5f97479043e9d3d71beac49e6751735aeb281c23e05e9ab3694`.
+
+This independent case confirms that the order correction is not a case-22
+overfit.  It also narrows the next posterior investigation to the cumulative
+significance threshold for the 65 one-count disagreements: dump the ordered
+weights and cumulative mass immediately around each boundary, then compare
+raw fine score, additive priors, normalization constant, and threshold
+strictness in that order.
