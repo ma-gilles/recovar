@@ -1554,6 +1554,24 @@ The cap is integrated on the active K=1 branch as `3bc635cd`; its focused
 unit/launcher checks pass `3/3`.  K=1 remains `28/34` strict and `32/34`
 topology.
 
+Shellwise radius partition of that terminal case-10 run localizes the final
+defect to frequencies introduced beyond the last-numbered reconstruction
+radius.  The last numbered current size is 68 (radius 34).  Final merged
+cross-engine FSC-AUC remains `0.996178939540` inside that active radius, while
+the outside-radius FSC-AUC is `0.981627711718`; `95.785837293%` of the total
+final FSC-AUC deficit lies outside radius 34.  The merged final deficit is
+`538.91x` the last-numbered deficit.  Both half maps independently put more
+than 95% of their deficit outside the same radius.  The fixed classification
+is
+`final_full_grid_fsc_deficit_is_over_95pct_outside_last_numbered_radius`.
+This rejects an active-radius numbered-map failure as the dominant case-10
+cause and makes the next gate a high-frequency final scoring/BPref operand
+comparison from an identical last-numbered boundary.  It does not promote the
+case.  The diagnostic report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_projection_cap_eea20d72_20260809T1340ET/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0/trajectory_analysis/k1_final_grid_fsc_deficit.json`,
+SHA-256
+`b12d6a15643b08d7fd0cd7e9afe43683ab2d9ab729ac4ec40550376dd20e06f7`.
+
 The corrected case-4 coarse Gaussian radial-support gate passes at the fixed
 physical-iteration-2 boundary.  Same-H100 job `12190420` completed both
 half-set science paths from clean source `35314b6b`, then exited `1:0` only
