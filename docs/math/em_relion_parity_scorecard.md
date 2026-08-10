@@ -1363,6 +1363,28 @@ and
 with SHA-256 values `02ec06fc1f06d99580f969ac78a96b54c3d44ee201e7c532a621c8648817356e`,
 `6e42e19020c627a90380c5090219e44c629180ac4661ebe02af8627818566a00`, and
 `ff219c9dea0d2199a7d12b1ec87a9169e5bb6aa5c4171d683f9d9cdd0af26c7c`.
+The predeclared case-26 exact-bootstrap A/B now rejects loss of RELION's
+binary64 initial noise through STAR serialization as the final-only cause.
+Both autonomous arms preserve all `11/11` numbered topology gates.  Replacing
+the rounded STAR values with the exact source-row estimator changes final
+signed merged cross-engine FSC-AUC from `0.955103218555` to
+`0.954913999481` (`-0.000189219074`), leaves physical-iteration-2 support
+mismatch at `89`, and improves physical-iteration-11 Pmax p95 by only
+`0.7096%`.  The fixed classification is
+`exact_relion_bootstrap_does_not_materially_improve_case26`; the candidate is
+not admissible and the frozen score remains `28/34`.
+
+Science job `12188057` completed both arms and all arm-level FSC, topology,
+and particle-state audits, then exited `1:0` because its absolute-path
+analyzer invocation imported an unrelated shared checkout.  CPU-only
+reanalysis from the hash-pinned source produced the terminal report at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_bootstrap_ab_221d09eb_20260809T1633ET/analysis/CASE26_EXACT_BOOTSTRAP_AB.json`,
+SHA-256
+`417316aa2d8de7fb2f4d9d25ec19ddd0e0994a8deb6d4e172ccc7a7ad9d2fe68`.
+The recovery audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_bootstrap_ab_221d09eb_20260809T1633ET/provenance/CPU_REANALYSIS_20260809.md`,
+SHA-256
+`9c4194f35a2d88ceec48aa4293cb8daac7ff51a6c030d68f00593c9df4bd3170`.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
