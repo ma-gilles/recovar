@@ -1448,6 +1448,22 @@ The recovery audit is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_bootstrap_ab_221d09eb_20260809T1633ET/provenance/CPU_REANALYSIS_20260809.md`,
 SHA-256
 `9c4194f35a2d88ceec48aa4293cb8daac7ff51a6c030d68f00593c9df4bd3170`.
+
+The exact-RELION-state case-26 coarse-significance A/B separately rejects the
+coarse cutoff arithmetic as the iteration-2 support cause.  Same-H100 job
+`12184269` completed both GPU arms before its artifact analyzer failed on an
+import/path assumption; hash-pinned posthoc analysis reran only the analyzer.
+The control reproduces `419/1000` RELION support-count mismatches (`411` at
+`-1`, `8` at `+1`) with zero rotation or translation mismatches above the
+fixed `0.01` gates.  Enabling only RELION-style float32 descending coarse
+significance changes the mismatch count to `422`, changes Pmax p95 by less
+than displayed precision, and reduces merged normalized non-DC FSC-AUC from
+`0.999999925850` to `0.999999833112`.  The predeclared classification is
+`falsified_at_this_boundary`; no support threshold is weakened and the
+candidate remains unaccepted.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_coarse_significance_ab_5e37ee98_20260809T1705ET/analysis/CASE26_COARSE_SIGNIFICANCE_AB_V1.json`,
+SHA-256
+`78069603fa9326d527b489b0871dd241bba66eecbc8279b5c6be598aac3afac1`.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
