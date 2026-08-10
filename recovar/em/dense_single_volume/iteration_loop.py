@@ -197,11 +197,25 @@ from recovar.reconstruction.regularization import (  # noqa: F401
 _EM_RAW_IMAGE_CACHE_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE"
 _EM_RAW_IMAGE_CACHE_MAX_GB_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB"
 _EM_RAW_IMAGE_CACHE_DEFAULT_MAX_GB = 16.0
+_K1_RELION_EXACT_TRANSLATION_GRID_ENV = "RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID"
+
+
+def _k1_relion_exact_translation_grid_enabled(environ=None):
+    """Return the production-on K=1 grid policy with a diagnostic opt-out."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(_K1_RELION_EXACT_TRANSLATION_GRID_ENV, "")).strip().lower()
+    if raw in {"", "1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{_K1_RELION_EXACT_TRANSLATION_GRID_ENV} must be a boolean value, got {raw!r}"
+    )
 
 
 def _translation_grid_for_class_count(max_pixel, pixel_offset, *, n_classes):
     """Use source-exact RELION translation enumeration for K=1 only."""
-    if int(n_classes) == 1:
+    if int(n_classes) == 1 and _k1_relion_exact_translation_grid_enabled():
         return get_relion_translation_grid(max_pixel, pixel_offset)
     return get_translation_grid(max_pixel, pixel_offset)
 

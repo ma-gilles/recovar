@@ -504,7 +504,7 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
     np.testing.assert_allclose(replay_grid, state_grid, rtol=0.0, atol=1e-6)
 
 
-def test_k1_translation_grid_matches_relion_ceil_boundary_without_changing_k4():
+def test_k1_translation_grid_matches_relion_ceil_boundary_without_changing_k4(monkeypatch):
     rounded_range = 4.25 / 1.4166666666666667
     rounded_step = 1.416667 / 1.4166666666666667
 
@@ -518,15 +518,28 @@ def test_k1_translation_grid_matches_relion_ceil_boundary_without_changing_k4():
         rounded_step,
         n_classes=4,
     )
+    monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID", "0")
+    diagnostic_control_grid = iteration_loop_module._translation_grid_for_class_count(
+        rounded_range,
+        rounded_step,
+        n_classes=1,
+    )
 
     assert k1_grid.shape == (29, 2)
     assert k4_grid.shape == (25, 2)
+    assert diagnostic_control_grid.shape == (25, 2)
     np.testing.assert_allclose(
         k1_grid[[0, 14, -1]],
         np.asarray([[-3.0, 0.0], [0.0, 0.0], [3.0, 0.0]]) * rounded_step,
         rtol=0.0,
         atol=1e-12,
     )
+
+
+def test_k1_translation_grid_rejects_invalid_diagnostic_switch(monkeypatch):
+    monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID", "sometimes")
+    with pytest.raises(ValueError, match="must be a boolean value"):
+        iteration_loop_module._translation_grid_for_class_count(3.0, 1.0, n_classes=1)
 
 
 def _sealed_sampling_fixture():
