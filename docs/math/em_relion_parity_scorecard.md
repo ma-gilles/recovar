@@ -1955,13 +1955,44 @@ The fixed structural classification is
 
 This is guidance, not production-fix authorization: the native RELION capture
 observer is map-stable (minimum signed normalized non-DC FSC-AUC
-`0.9999999980158729`) but is not particle-state exact. The next case-7 gate is
-therefore a score-component decomposition of projected reference, shifted
-image, correction/CTF, and contraction arithmetic, followed by an inert
-same-input intervention. The report is
+`0.9999999980158729`) but is not particle-state exact. The report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_structural_coarse_boundary_20260810T0425ET/analysis/CASE07_STRUCTURAL_COARSE_BOUNDARY.json`
 with SHA-256
 `a5b7f9b94e2577c4015c543e3c72b9752917eb91ec9ca6fcc2613fe2623b811f`.
+
+The already sealed score-component chain further localizes that structural
+raw-score difference to the arithmetic tree rather than the captured input
+operands. On the fixed 12-rotation by 29-translation particle panel, RECOVAR's
+production-shape score replay is exact. Cross-engine relative L2 differences
+for projected reference, shifted image, and correction are respectively
+`1.957749859421822e-7`, approximately `5.95e-7`, and
+`6.288039530499883e-7`; all six repeat-specific operand gates pass the fixed
+`1e-6` limit. Substituting every captured RELION operand into RECOVAR's
+production-shape algebraic GEMM does not remove the centered raw-score
+residual in either independent repeat. The fixed classification is
+`structural_score_arithmetic_or_uncaptured_operand_dominates_fixed_panel`.
+
+A same-operand reduction replay then feeds exact captured RELION reference,
+shifted-image, and correction bytes through RECOVAR's production image-batch
+and rotation-block GEMM tree. On the 32-particle population panel, all `32/32`
+particles exceed the predeclared two-times-native-floor gate in both repeats;
+the pooled algebraic-versus-direct p95 is `0.0020294189453125`, versus a
+combined native p95 floor of `0.00048828125`, a `4.15625x` separation. The
+fixed classification is
+`structural_same_operand_gemm_tree_population_separated`. The panel remains
+structural because its RELION capture observer is not trajectory-inert and it
+evaluates bounded rotation panels, not all candidates.
+
+The operand-factorial and 32-particle reduction reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_score_operand_factorial_70effd75_20260803T1007ET/analysis/OFFLINE_PROJECTION_REPLAY.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_relion_k1_case7_reduction_panel_781e4080_20260803T1059ET/analysis/SAME_OPERAND_REDUCTION_PANEL.json`,
+with SHA-256 values
+`5def2bcc11bda9ef4b92b4701dd190a8162e1a4a9f517f9dc2599ce508f1bed7`
+and
+`b94be28a1af413d00fbf64b94ec4c618dd52332904550aa06952f05c3ea25ad5`.
+The next causal gate is the exact coarse Gaussian FFI arithmetic-tree A/B at
+the exact incoming boundary, followed by autonomous case 7 if positive.
 The frozen score remains `28/34` strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
