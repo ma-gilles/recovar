@@ -140,6 +140,32 @@ def map_pose_arrays_to_particle_order(our_names, gt_rot_all, gt_trans_all=None):
     return gt_rotations_orig, gt_translations_orig
 
 
+def add_significant_count_artifacts(save_dict, significant_counts, half_indices, n_images):
+    """Save parity support counts in explicit half and source-image order."""
+    half_order_indices = np.concatenate(
+        [np.asarray(indices, dtype=np.int64) for indices in half_indices],
+    )
+    for iteration, counts in enumerate(significant_counts):
+        if counts is None:
+            continue
+        if isinstance(counts, (list, tuple)):
+            present = [np.asarray(value) for value in counts if value is not None]
+            if not present:
+                continue
+            counts_half_order = np.concatenate(present, axis=0)
+        else:
+            counts_half_order = np.asarray(counts)
+        flat_counts = counts_half_order.reshape(-1)
+        legacy_key = f"sig_counts_iter_{iteration:03d}"
+        save_dict[legacy_key] = counts_half_order
+        save_dict[f"sig_counts_half_order_iter_{iteration:03d}"] = counts_half_order
+        if flat_counts.shape[0] != half_order_indices.shape[0]:
+            continue
+        counts_by_image = np.full(int(n_images), -1, dtype=flat_counts.dtype)
+        counts_by_image[half_order_indices] = flat_counts
+        save_dict[f"sig_counts_by_image_iter_{iteration:03d}"] = counts_by_image
+
+
 def _count_compile_lines(log_path):
     if log_path is None:
         return None
@@ -1600,12 +1626,18 @@ def main():
         ("tau2_shell_count_trajectory", "tau2_shell_count_iter"),
         ("tau2_fsc_used_trajectory", "tau2_fsc_used_iter"),
         ("tau2_ssnr_trajectory", "tau2_ssnr_iter"),
-        ("significant_counts", "sig_counts_iter"),
     ]:
         if result.get(traj_name):
             for i, arr_i in enumerate(result[traj_name]):
                 if arr_i is not None:
                     _save_array_or_half_sequence(f"{prefix_name}_{i:03d}", arr_i)
+    if result.get("significant_counts"):
+        add_significant_count_artifacts(
+            save_dict,
+            result["significant_counts"],
+            [np.flatnonzero(our_subsets == 1), np.flatnonzero(our_subsets == 2)],
+            len(our_subsets),
+        )
     for traj_name, prefix_name in [
         ("best_rotation_eulers_history", "best_rotation_eulers_iter"),
         ("best_translations_history", "best_translations_iter"),

@@ -8,6 +8,7 @@ from scripts.postprocess_multi_iter_gt import resolve_intermediates_dir
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
     _read_relion_scheduling_average_pmax,
+    add_significant_count_artifacts,
     build_gt_postprocess_command,
     final_output_fourier_volumes,
     initial_scoring_noise_pair,
@@ -23,6 +24,30 @@ from scripts.run_multi_iter_parity import (
     stack_index_from_image_name,
     validate_final_only_replay_args,
 )
+
+
+def test_significant_count_artifacts_expose_source_image_order():
+    save_dict = {}
+    half1 = np.asarray([3, 0], dtype=np.int64)
+    half2 = np.asarray([1, 2, 4], dtype=np.int64)
+    counts_half_order = np.asarray([30, 10, 20, 40, 50], dtype=np.int32)
+
+    add_significant_count_artifacts(
+        save_dict,
+        [counts_half_order, None],
+        [half1, half2],
+        n_images=5,
+    )
+
+    np.testing.assert_array_equal(save_dict["sig_counts_iter_000"], counts_half_order)
+    np.testing.assert_array_equal(
+        save_dict["sig_counts_half_order_iter_000"], counts_half_order
+    )
+    np.testing.assert_array_equal(
+        save_dict["sig_counts_by_image_iter_000"],
+        np.asarray([10, 20, 40, 30, 50], dtype=np.int32),
+    )
+    assert "sig_counts_iter_001" not in save_dict
 
 
 def test_gt_postprocess_command_uses_module_with_pythonpath_unset(monkeypatch, tmp_path):

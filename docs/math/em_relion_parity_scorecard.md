@@ -1792,23 +1792,28 @@ Angular errors above `0.1` degrees fall from `11,740` to `2`, translation
 errors above `0.1 px` fall from `23,006` to `9`, and merged cross-engine signed
 normalized non-DC FSC-AUC rises from `0.9999376001811845` to
 `0.9999999977741721`. Current size `[56]` and HEALPix order `[3]` remain exact.
-Significant-count mismatches remain essentially unchanged
-(`97,682 -> 97,707`), so the predeclared joint classification remains
-`mixed_exact_iteration2_result_requires_operand_localization`; the grid is
-nevertheless the demonstrated dominant cause of the Pmax, pose, translation,
-and map mismatch at this boundary. The residual significant-count discrepancy
-must be localized separately, including whether RECOVAR and RELION expose the
-same count semantics.
+The initial analyzer incorrectly compared RECOVAR's legacy concatenated
+half-1/half-2 count array with source-order RELION rows. After restoring the
+RECOVAR counts to source-image order using the iteration-1 random-subset
+assignment joined by `rlnImageName`, significant-count mismatches fall from
+`85,622` to `72`; absolute count-error p95 falls from `13` to `0`, and maximum
+absolute error falls from `381` to `1`. This is a `99.9159%` mismatch
+reduction. The corrected predeclared classification is therefore
+`translation_grid_is_dominant_exact_iteration2_cause` across posterior,
+support, pose, translation, map, and topology gates. The parity replay writer
+now emits `sig_counts_half_order_iter_NNN` and
+`sig_counts_by_image_iter_NNN` alongside the legacy key so future audits
+cannot silently compare different particle coordinate systems.
 
-The immutable same-source report and shellwise artifact are
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_translation_grid_same_source_ab_5a69ca0f_20260810T0157ET/analysis/CASE10_TRANSLATION_GRID_SAME_SOURCE_AB.json`
+The corrected same-source report and shellwise artifact are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_translation_grid_same_source_ab_5a69ca0f_20260810T0157ET/analysis/CASE10_TRANSLATION_GRID_SAME_SOURCE_AB_V2.json`
 and
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_translation_grid_same_source_ab_5a69ca0f_20260810T0157ET/analysis/CASE10_TRANSLATION_GRID_SAME_SOURCE_AB_shellwise.npz`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_translation_grid_same_source_ab_5a69ca0f_20260810T0157ET/analysis/CASE10_TRANSLATION_GRID_SAME_SOURCE_AB_V2_shellwise.npz`,
 with SHA-256 values
-`10815c720cdf61b4e2b7e36be61b02362eb6e64bb86fad9dd95f9ef8a09aef70`
+`e8263d4356483f58d66df4b3308ad2dd161c810e86e5b4cf2340634d07e60bbe`
 and
 `8cd58211a216d2e500145adf363eff990130a0ee4f65f84951458fd30820a950`.
-All 11 analysis input hashes verify independently. Direct trapezoidal
+All 12 analysis input hashes verify independently. Direct trapezoidal
 integration of every saved signed non-DC shell curve reproduces the reported
 AUCs within floating-point roundoff. The run rebuilt its pinned CUDA library
 once at `02:02:10`, before either arm began GPU scoring; both arms then used
