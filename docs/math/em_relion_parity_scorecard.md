@@ -2062,6 +2062,43 @@ with report SHA-256
 The next case-22 gate moves downstream to fine candidate/support and BPref
 operands under the corrected coarse support convention. The frozen score
 remains `28/34` strict and `32/34` topology.
+
+The exact incoming-boundary case-7 coarse-Gaussian FFI A/B provides the first
+clean causal evidence for matching RELION's native coarse score reduction tree.
+Same-H100 science job `12202056` completed both arms and their source-ID-aligned
+particle audits on `della-h19g2`. Its allocation returned `1:0` only after the
+science was sealed because the final analyzer could not import the
+checkout-local `scripts` package from its launch directory. An unchanged
+CPU-only recovery generated the predeclared report without rerunning science.
+
+At physical iteration 2, the exact-tree treatment reduces Pmax relative L2
+from `0.004234873226208419` to `0.0019467323573112518`, a `54.0309%`
+improvement. Significant-support count mismatches fall from `40` to `12`, a
+`70%` improvement; translation mismatches above `1e-3` Angstrom fall from `8`
+to `3`, while rotation mismatches above `1e-3` degrees remain `3`. The merged
+signed normalized non-DC FSC-AUC changes from `0.9999997816357243` to
+`0.9999997829796026`, only a `0.6154%` reduction in its deficit. Topology is
+exact. The fixed classification is
+`exact_coarse_ffi_partially_improves_case7_iteration2_boundary`: the partial
+gate passes, the strong gate does not, and no scorecard promotion is allowed.
+
+The older autonomous attempt `12154251` is not trajectory evidence for this
+intervention. Its two-iteration control completed, but the candidate failed at
+startup with `ValueError: RECOVAR_K1_COARSE_GAUSSIAN_FFI requires Gaussian
+scoring` in the older first-iteration K=1 route. A corrected autonomous
+trajectory confirmation is therefore still required before accepting the
+implementation.
+
+The report, shellwise artifact, and recovery audit are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_boundary_coarseffi_ab_dd6acb5e_20260810T0440ET/analysis/CASE07_EXACT_BOUNDARY_COARSEFFI_AB.json`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_boundary_coarseffi_ab_dd6acb5e_20260810T0440ET/analysis/CASE07_EXACT_BOUNDARY_COARSEFFI_AB_shellwise.npz`,
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_boundary_coarseffi_ab_dd6acb5e_20260810T0440ET/provenance/CPU_ANALYZER_RECOVERY_20260810.md`.
+The report and shellwise SHA-256 values are
+`a1f597b6b836a19ec2a9416b091991d04129b333c4ec740b6eb71774f47ac3aa`
+and
+`5f0cb8b6f380ac18fbcb445d681d9df4fa49d0794e12d5922ee4b05cf95d82da`.
+The frozen score remains `28/34` strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
