@@ -770,6 +770,21 @@ def test_k1_skip_significance_pruning_diagnostic_env_is_forwarded(tmp_path):
     assert "RECOVAR_K1_SKIP_SIGNIFICANCE_PRUNING=1" in (scratch / "submission.env").read_text()
 
 
+def test_k1_coarse_gaussian_ffi_env_is_forwarded(tmp_path):
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="4",
+        extra_env={"RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1"},
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    scripts = list((scratch / "jobs").glob("em_k1_matrix_4_*.sh"))
+    assert len(scripts) == 1
+    text = scripts[0].read_text()
+    assert "export RECOVAR_K1_COARSE_GAUSSIAN_FFI=1" in text
+    assert "RECOVAR_K1_COARSE_GAUSSIAN_FFI=1" in (scratch / "submission.env").read_text()
+
+
 def test_k1_relion_x_half_mstep_diagnostic_env_is_forwarded(tmp_path):
     proc, scratch = _dry_run_launcher(
         tmp_path,
