@@ -1751,6 +1751,34 @@ and
 All analyzer and particle-artifact hashes independently verify. This narrows
 case 7 to the incoming-map/noise through raw-score/BPref boundary and leaves
 the frozen score unchanged at `28/34` strict and `32/34` topology.
+
+Case-10 exact-iteration-2 translation-grid screening is strongly positive but
+revision-confounded. Science job `12197149` completed `0:0`; CPU analyzer job
+`12198187` also completed `0:0`. RELION CEIL enumeration changes the coarse
+and fine translation grids from `25/100` to `29/116` rows. Candidate Pmax
+absolute p95 error falls from `0.270430812366246` to
+`3.369388313294441e-5` (`99.9875%` reduction), and merged cross-engine signed
+normalized non-DC FSC-AUC rises from `0.999937600319247` to
+`0.9999999977759247`. Significant-support mismatch does not improve
+(`97,682 -> 97,707`), so the predeclared classification is
+`mixed_exact_iteration2_result_requires_operand_localization`.
+
+The control is commit `fd8e27b9a6e85d974224964e4e80b023c559c083` and the
+treatment is `69cc45ca7f699b827be63dca6af40a5d58187711`; executable K=1
+changes besides the grid fix exist in that interval. This result therefore
+prioritizes the grid but cannot establish causality. Same-source sequential
+A/B job `12197647`, with both arms at commit
+`5a69ca0f795a4762918e46015515b27f6b9c8734`, remains the acceptance gate.
+The screening report and shellwise artifact are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_translation_grid_it2_69cc45ca_20260810T0140ET/analysis/CASE10_EXACT_IT2_TRANSLATION_GRID_AB.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_translation_grid_it2_69cc45ca_20260810T0140ET/analysis/CASE10_EXACT_IT2_TRANSLATION_GRID_AB_shellwise.npz`,
+with SHA-256 values
+`ddaa0f78bb6fd1f9bdcab1bc491fb25f5498f6ba73a71824f5132f797e17fe62`
+and
+`ec9d3ce15fbe0b4aca01ecd38f6e19d6d7ab8fbdc031365154c318e53b048556`.
+All 11 declared input hashes independently verify. The frozen score remains
+`28/34` strict and `32/34` topology; correlation was not computed.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

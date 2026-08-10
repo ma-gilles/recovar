@@ -11703,3 +11703,38 @@ and `9/15` all-class.
   Independent `sha256sum -c` verification passed for the analyzer, launcher,
   both outputs, and all six identity-aligned particle artifacts. Correlation
   was not computed.
+
+## 2026-08-10 02:20 ET — case-10 translation-grid screening is strongly positive but revision-confounded
+
+- K=4 remains parked. The frozen K=1 score remains `28/34` strict signed
+  FSC/FSC-AUC and `32/34` exact topology.
+- Exact iteration-2 screening science job `12197149` completed `0:0` in
+  `00:33:03` on H100 node `della-h19g4`; CPU analysis job `12198187`
+  completed `0:0` in `00:01:15` with `8,982,188 KiB` peak RSS. The candidate
+  uses RELION CEIL translation enumeration (`25 -> 29` coarse rows and
+  `100 -> 116` fine rows), while K=4 remains unchanged.
+- Candidate Pmax absolute p95 error falls from `0.270430812366246` to
+  `3.369388313294441e-5`, a `99.987540664158%` reduction. Merged
+  cross-engine signed normalized non-DC FSC-AUC rises from
+  `0.999937600319247` to `0.9999999977759247`, a delta of
+  `+6.239745667768748e-5`; current size `[56]` and HEALPix order `[3]` remain
+  exact.
+- Significant-support mismatch does not improve: `97,682` particles in the
+  reused control versus `97,707` in the candidate. The predeclared classifier
+  therefore reports `mixed_exact_iteration2_result_requires_operand_localization`.
+- This is screening evidence only. The control is commit
+  `fd8e27b9a6e85d974224964e4e80b023c559c083`, while the treatment is
+  `69cc45ca7f699b827be63dca6af40a5d58187711`; the intervening source changes
+  include executable K=1 work beyond the translation-grid fix. Same-source,
+  same-H100 sequential A/B job `12197647` is the causal gate and remains
+  running.
+- The report and shellwise artifact are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_translation_grid_it2_69cc45ca_20260810T0140ET/analysis/CASE10_EXACT_IT2_TRANSLATION_GRID_AB.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_translation_grid_it2_69cc45ca_20260810T0140ET/analysis/CASE10_EXACT_IT2_TRANSLATION_GRID_AB_shellwise.npz`,
+  with SHA-256 values
+  `ddaa0f78bb6fd1f9bdcab1bc491fb25f5498f6ba73a71824f5132f797e17fe62`
+  and
+  `ec9d3ce15fbe0b4aca01ecd38f6e19d6d7ab8fbdc031365154c318e53b048556`.
+  Both artifact hashes and all 11 declared input hashes independently verify.
+  Correlation was not computed.
