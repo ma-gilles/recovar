@@ -17,7 +17,13 @@ from typing import Any
 
 import numpy as np
 
-from scripts.validate_relion_bpref_factor_capture import fnv1a64, load_factor_capture
+if __package__:
+    from .validate_relion_bpref_factor_capture import fnv1a64, load_factor_capture
+else:
+    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
+        fnv1a64,
+        load_factor_capture,
+    )
 
 
 SELECTION_SCHEMA = "recovar.em.k1_bpref_factor_panel.v1"
