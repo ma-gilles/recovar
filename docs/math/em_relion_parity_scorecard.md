@@ -1384,6 +1384,48 @@ and
 The frozen score remains `28/34`; the next bounded gate is the fresh native
 iteration-2 operand alignment, submitted as Slurm job `12188952`.
 
+The earlier source-exact physical-dispatch A/Bs are now explicitly recovered
+into this ledger.  For case 22, both H100 arms of job `11928434` completed
+before a post-science topology-normalization exception left the Slurm producer
+`FAILED 1:0`.  A subsequent immutable-archive audit passes all `10/10`
+structural gates: the treatment's complete two-half execution order equals the
+paired RELION shuffle plus stable integer-optics order, the ordered first 100
+expected-accuracy identities and runtime float64 CTF rows agree exactly between
+arms, and every particle column round-trips through the input permutation.
+Nevertheless, the treatment retains the same numbered-count and controller
+topology failures, and changes final signed merged FSC-AUC only from
+`0.826070514370` to `0.826083922585` (`+1.3408214e-5`, below the predeclared
+`1e-4` material threshold).  The fixed classification is
+`particle_order_does_not_materially_change_case22_under_fixed_acceptance`.
+The science and alignment reports are respectively
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_dispatch_causal_clean_e2893cb3_20260802T1438ET/analysis/DISPATCH_ORDER_AB.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_dispatch_causal_clean_e2893cb3_20260802T1438ET/analysis/DISPATCH_ALIGNMENT_SUPPLEMENT_20260804.json`,
+with SHA-256 values
+`a6f74876a8c3249a1d604fa5a1f2261456a0c14cee89228f367aaa75de9a7476`
+and
+`b3d0a1e325aee01081056c0f3689b06f89b032fd836b8b5c32d1a6ff0bf76e43`.
+This recovered result does not prove physical-reorder versus internal-
+permutation equivalence or every output scatter, but it sharply rejects the
+implemented source-exact dispatch plan as a material case-22 rescue.
+
+For case 26, job `11928437` completed and sealed both science arms before a
+later launcher failure left the allocation `FAILED 2:0`.  The treatment has
+exact physical RELION order, exact ordered expected-accuracy identities and
+CTF rows, bijective complete particle coverage, and preserves all `11/11`
+numbered topology gates.  It changes final signed merged cross-engine FSC-AUC
+from `0.963328056866` to `0.963274716521` (`-5.3340e-5`) and therefore does
+not improve the final-only failure.  The fixed classification is
+`particle_order_does_not_improve_case26_under_fixed_acceptance`.  The sealed
+report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_dispatch_causal_clean_e2893cb3_20260802T1438ET/analysis/SOURCE_EXACT_ORDER_AB.json`,
+SHA-256
+`e72342d504417e383c7c1c9209d203e0ccdfe3220babcab560dedf237c532336`.
+Thus physical dispatch remains an implementation-sensitive numerical degree of
+freedom, but is no longer the leading root-cause hypothesis for either fixed
+case 22 or fixed case 26.  No production order change is accepted from these
+experiments.
+
 The predeclared case-26 exact-bootstrap A/B now rejects loss of RELION's
 binary64 initial noise through STAR serialization as the final-only cause.
 Both autonomous arms preserve all `11/11` numbered topology gates.  Replacing
