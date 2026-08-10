@@ -573,6 +573,15 @@ def main():
         default=5000,
         help="Rotations per dispatch in the score pass. Reduce on 256³ to bound transient peak working set.",
     )
+    parser.add_argument(
+        "--image-fourier-backend",
+        choices=("host_numpy", "jax_gpu", "relion_cuda"),
+        default="host_numpy",
+        help=(
+            "Fourier preprocessing backend for RELION-masked images. Use "
+            "relion_cuda for source-level CUDA operand comparisons."
+        ),
+    )
     parser.add_argument("--max_healpix_order", type=int, default=8)
     parser.add_argument("--skip_final_iteration", action="store_true", help="Skip the final combined-data Nyquist iter")
     parser.add_argument(
@@ -1483,6 +1492,7 @@ def main():
         first_iteration_score_mode=args.first_iteration_score_mode,
         first_iteration_reconstruction_mode=args.first_iteration_reconstruction_mode,
         force_max_iter_after_convergence=args.force_max_iter_after_convergence,
+        image_fourier_backend=args.image_fourier_backend,
     )
     elapsed = time.time() - t0
     completed_iters = len(result.get("current_sizes", []))

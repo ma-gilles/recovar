@@ -122,6 +122,19 @@ def test_relion_jax_fourier_backend_requires_gpu(monkeypatch):
         image_backends._centered_rfft2_jax(np.zeros((8, 8), dtype=np.float32))
 
 
+@pytest.mark.gpu
+def test_relion_per_image_fft_is_batch_size_invariant(gpu_device):
+    images = np.random.default_rng(1722).standard_normal((64, 128, 128)).astype(
+        np.float32
+    )
+
+    with image_backends.jax.default_device(gpu_device):
+        single = image_backends._centered_rfft2_jax(images[:1])
+        per_image = image_backends._centered_rfft2_jax_per_image(images)
+
+    np.testing.assert_array_equal(np.asarray(per_image[0]), np.asarray(single[0]))
+
+
 def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
 
@@ -173,6 +186,53 @@ def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch
     assert captured["apply_mask"] is True
     assert captured["native_lane_reduction"] is False
     np.testing.assert_array_equal(np.asarray(result).reshape(images.shape).real, images + 3.0)
+
+
+def test_particle_image_dataset_relion_cuda_routes_per_image_fft(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(
+        image_backends.ImageLoader,
+        "from_file",
+        lambda *args, **kwargs: _DummySource(n=4, D=8),
+    )
+    ds = image_backends.ParticleImageDataset(
+        "dummy.mrcs", lazy=True, invert_data=False
+    )
+    ds.set_relion_image_mask(
+        pixel_size=1.0,
+        particle_diameter_ang=6.0,
+        width_mask_edge_px=2.0,
+    )
+    ds.set_relion_fourier_backend("relion_cuda")
+    images, _p_idx, _t_idx = ds[2]
+
+    def fake_preprocess(*args, **kwargs):
+        return jnp.asarray(images), jnp.asarray(images)
+
+    monkeypatch.setattr(
+        cuda_backproject, "relion_preprocess_real_f32", fake_preprocess
+    )
+    monkeypatch.setattr(
+        image_backends,
+        "_centered_rfft2_jax",
+        lambda _images: pytest.fail("per-image mode must not use a batched FFT"),
+    )
+    monkeypatch.setattr(
+        image_backends,
+        "_centered_rfft2_jax_per_image",
+        lambda values: values.astype(jnp.complex64),
+    )
+
+    result = ds.process_images_half(
+        images,
+        apply_image_mask=False,
+        relion_normalization_factors=np.ones(1, dtype=np.float32),
+        relion_integer_shifts=np.zeros((1, 2), dtype=np.int32),
+        relion_fft_per_image=True,
+    )
+
+    np.testing.assert_array_equal(np.asarray(result).reshape(images.shape).real, images)
 
 
 def test_particle_image_dataset_routes_native_lane_softmask_diagnostic(monkeypatch):

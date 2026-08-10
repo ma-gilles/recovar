@@ -11,6 +11,9 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     normalize_class_direction_prior_per_half,
 )
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_translation_angles_f32,
+)
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.k_class import (
     _ClassFineGridSignificanceMask,
@@ -1221,6 +1224,7 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
         )
         assert kwargs["relion_firstiter_score_mode"] == "normalized_cc"
         assert kwargs["relion_firstiter_winner_take_all"] is True
+        assert "preserve_bpref_particle_order" not in kwargs
         n_images = int(dataset.n_units)
         hard = np.arange(n_images, dtype=np.int32) % n_fine_trans
         best_rot_ids = np.full(n_images, class_index, dtype=np.int32)
@@ -1608,6 +1612,42 @@ def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
     ) + np.float32(expected_shift)
     np.testing.assert_allclose(fine_trans, expected, atol=1e-6)
     np.testing.assert_array_equal(trans_parent_map, np.zeros(4, dtype=np.int64))
+
+
+def test_firstiter_adaptive_translation_angle_preserves_relion_host_precision():
+    """Do not round fine translations before RELION's float32 angle cast."""
+
+    coarse_rot = np.eye(3, dtype=np.float32)[None]
+    base_trans = np.asarray([[1.0, 0.0]], dtype=np.float64)
+    random_perturbation = -0.04798632860183716
+    coarse_trans = np.asarray(
+        base_trans + random_perturbation,
+        dtype=np.float32,
+    )
+
+    fine_trans = _build_firstiter_cc_pass2_grids(
+        coarse_rot,
+        coarse_trans,
+        base_trans,
+        coarse_healpix_order=0,
+        adaptive_oversampling=1,
+        translation_step_px=1.0,
+        random_perturbation=random_perturbation,
+    )[3]
+
+    assert fine_trans.dtype == np.float64
+    source_angle_bits = _relion_translation_angles_f32(
+        fine_trans,
+        (128, 128),
+    ).view(np.uint32)
+    rounded_angle_bits = _relion_translation_angles_f32(
+        fine_trans.astype(np.float32),
+        (128, 128),
+    ).view(np.uint32)
+    # The x=1.25 child is the exact case-22 stack-2124 boundary: RELION's
+    # host-double translation produces one lower float32 angle bit pattern.
+    assert source_angle_bits[2, 0] == np.uint32(3178343903)
+    assert rounded_angle_bits[2, 0] == np.uint32(3178343904)
 
 
 def test_firstiter_adaptive_grid_can_return_relion_host_mstep_rotations():

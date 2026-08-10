@@ -23,6 +23,55 @@ class ExpectedAccuracy:
     trial_particle_ids: np.ndarray
 
 
+def relion_auto_refine_half_orders(
+    random_subsets,
+    random_seed: int,
+    first_iteration: int = 1,
+    *,
+    optics_group_ids=None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return RELION's fresh AutoRefine particle-row order for both halves.
+
+    RELION seeds libc ``rand`` once, shuffles half 1 and then half 2 without
+    reseeding, and finally stable-sorts each half by numeric optics group.
+    Returned values index the supplied full particle table.
+    """
+    from recovar.relion_bind import _relion_bind_core as bind
+
+    subsets = np.asarray(random_subsets, dtype=np.int64).reshape(-1)
+    if set(subsets.tolist()) != {1, 2}:
+        raise ValueError("random_subsets must contain exactly RELION half labels 1 and 2")
+    base_orders = (
+        np.flatnonzero(subsets == 1).astype(np.int64),
+        np.flatnonzero(subsets == 2).astype(np.int64),
+    )
+    if not hasattr(bind, "auto_refine_randomise_half_orders"):
+        raise RuntimeError(
+            "RELION binding lacks auto_refine_randomise_half_orders; rebuild recovar/relion_bind"
+        )
+    positions = bind.auto_refine_randomise_half_orders(
+        int(base_orders[0].size),
+        int(base_orders[1].size),
+        int(random_seed) + int(first_iteration),
+    )
+    orders = [
+        base[np.asarray(permutation, dtype=np.int64)]
+        for base, permutation in zip(base_orders, positions, strict=True)
+    ]
+
+    if optics_group_ids is not None:
+        optics = np.asarray(optics_group_ids, dtype=np.int64).reshape(-1)
+        if optics.shape != subsets.shape:
+            raise ValueError(
+                f"optics_group_ids must have shape {subsets.shape}, got {optics.shape}"
+            )
+        orders = [
+            order[np.argsort(optics[order], kind="stable")]
+            for order in orders
+        ]
+    return orders[0], orders[1]
+
+
 def relion_half1_trial_order(
     n_particles: int,
     random_seed: int,

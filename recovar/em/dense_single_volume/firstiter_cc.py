@@ -101,16 +101,22 @@ def _build_firstiter_cc_pass2_grids(
     """
     coarse_rot_np = np.asarray(coarse_rotations, dtype=np.float32)
     coarse_trans_np = np.asarray(coarse_translations, dtype=np.float32)
+    base_translations_f64 = np.asarray(base_translations, dtype=np.float64)
     if int(adaptive_oversampling) <= 0:
         n_rot = int(coarse_rot_np.shape[0])
         n_trans = int(coarse_trans_np.shape[0])
         rot_parent_map = np.arange(n_rot, dtype=np.int64)
         trans_parent_map = np.arange(n_trans, dtype=np.int64)
+        fine_translations = apply_relion_translation_perturbation(
+            base_translations_f64,
+            float(random_perturbation),
+            float(translation_step_px),
+        )
         outputs = (
             coarse_rot_np,
             coarse_trans_np,
             coarse_rot_np,
-            coarse_trans_np,
+            fine_translations,
             rot_parent_map,
             trans_parent_map,
         )
@@ -143,7 +149,7 @@ def _build_firstiter_cc_pass2_grids(
     rot_parent_map = np.asarray(rot_parent_map, dtype=np.int64)
 
     fine_base_translations, trans_parent_map = get_oversampled_translation_grid(
-        np.asarray(base_translations, dtype=np.float32),
+        base_translations_f64,
         float(translation_step_px),
         oversampling_order=adaptive_os,
     )
@@ -151,7 +157,7 @@ def _build_firstiter_cc_pass2_grids(
         fine_base_translations,
         float(random_perturbation),
         float(translation_step_px),
-    ).astype(np.float32)
+    )
     trans_parent_map = np.asarray(trans_parent_map, dtype=np.int64)
 
     outputs = (

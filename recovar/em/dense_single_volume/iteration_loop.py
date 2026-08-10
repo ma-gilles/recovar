@@ -2224,6 +2224,7 @@ def _score_half_dense(
     bpref_device_signature_active: bool = False,
     debug_iteration: int | None = None,
     coarse_rotation_ids=None,
+    preserve_bpref_particle_order: bool = False,
 ) -> HalfScoreResult:
     """Dense (non-local-search) E+M scoring for one half-set.
 
@@ -2273,6 +2274,10 @@ def _score_half_dense(
         "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
         "relion_firstiter_winner_take_all": firstiter_winner_take_all_this_iter,
     }
+    if preserve_bpref_particle_order and k_class_enabled:
+        raise ValueError("RELION BPref particle-order preservation is K=1-only")
+    if preserve_bpref_particle_order:
+        em_kwargs["preserve_bpref_particle_order"] = True
     diagnostic_float64_pass2 = _diagnostic_float64_pass2_matches(debug_iteration)
     if diagnostic_float64_pass2:
         logger.info(
@@ -4296,6 +4301,7 @@ def refine_single_volume(
     perturb_seed=None,
     optimizer_random_seed=None,
     expected_accuracy_half1_base_order_local=None,
+    expected_accuracy_half1_trial_order_local=None,
     expected_accuracy_half1_optics_group_ids=None,
     expected_accuracy_half1_particle_ids=None,
     expected_accuracy_half1_ctf_params=None,
@@ -4354,6 +4360,7 @@ def refine_single_volume(
     sealed_sampling_state=None,
     sealed_scoring_context=None,
     use_per_half_mean_variance=False,
+    preserve_bpref_particle_order=False,
 ):
     """Multi-iteration RELION-parity EM refinement.
 
@@ -4586,6 +4593,7 @@ def refine_single_volume(
         perturb_seed=perturb_seed,
         optimizer_random_seed=optimizer_random_seed,
         expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
+        expected_accuracy_half1_trial_order_local=expected_accuracy_half1_trial_order_local,
         expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
         expected_accuracy_half1_particle_ids=expected_accuracy_half1_particle_ids,
         expected_accuracy_half1_ctf_params=expected_accuracy_half1_ctf_params,
@@ -4641,6 +4649,7 @@ def refine_single_volume(
         sealed_sampling_state=sealed_sampling_state,
         sealed_scoring_context=sealed_scoring_context,
         use_per_half_mean_variance=use_per_half_mean_variance,
+        preserve_bpref_particle_order=preserve_bpref_particle_order,
     )
 
 
@@ -4689,6 +4698,7 @@ def _run_relion_iteration_loop(
     perturb_seed=None,
     optimizer_random_seed=None,
     expected_accuracy_half1_base_order_local=None,
+    expected_accuracy_half1_trial_order_local=None,
     expected_accuracy_half1_optics_group_ids=None,
     expected_accuracy_half1_particle_ids=None,
     expected_accuracy_half1_ctf_params=None,
@@ -4744,6 +4754,7 @@ def _run_relion_iteration_loop(
     sealed_sampling_state=None,
     sealed_scoring_context=None,
     use_per_half_mean_variance=False,
+    preserve_bpref_particle_order=False,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -4993,6 +5004,7 @@ def _run_relion_iteration_loop(
             sealed_sampling_state,
             voxel_size_angstrom=cryo.voxel_size,
         )
+        base_translations = np.asarray(current_translations, dtype=np.float64)
         current_healpix_order = int(sealed_sampling_state["healpix_order_original"])
         if current_healpix_order != int(init_healpix_order):
             raise ValueError(
@@ -5006,21 +5018,26 @@ def _run_relion_iteration_loop(
         )
     elif translations is None:
         current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
+        base_translations = _translation_grid_for_class_count(
+            init_translation_range,
+            init_translation_step,
+            n_classes=n_classes,
+        ).astype(np.float64, copy=False)
         current_translations = jnp.asarray(
-            _translation_grid_for_class_count(
-                init_translation_range,
-                init_translation_step,
-                n_classes=n_classes,
-            ),
+            base_translations,
             dtype=jnp.float32,
         )
     else:
         current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
+        base_translations = np.asarray(translations, dtype=np.float64)
         current_translations = jnp.asarray(translations, dtype=jnp.float32)
     # Unperturbed base grid — `current_translations` may be replaced per-iter by
     # a perturbed copy (SamplingPerturbation). Keep the base so each iter
     # perturbs a fresh copy rather than compounding prior perturbations.
-    base_translations = current_translations
+    # Keep RELION's host-RFLOAT translation grid separate from the float32
+    # score/pose grid. The deployed RELION build forms fine translations in
+    # double and rounds only the CUDA angle; recovering double after this
+    # boundary is one ULP too late for some selected poses.
     if save_intermediates_dir is not None:
         os.makedirs(save_intermediates_dir, exist_ok=True)
     if local_search_profile_mode not in {"auto", "on", "off"}:
@@ -5307,7 +5324,31 @@ def _run_relion_iteration_loop(
     effective_optimizer_random_seed = (
         perturb_seed if optimizer_random_seed is None else optimizer_random_seed
     )
-    if effective_optimizer_random_seed is not None and int(experiment_datasets[0].n_units) > 0:
+    if expected_accuracy_half1_trial_order_local is not None:
+        expected_accuracy_trial_order = np.asarray(
+            expected_accuracy_half1_trial_order_local,
+            dtype=np.int64,
+        ).reshape(-1)
+        expected_trial_count = int(experiment_datasets[0].n_units)
+        if expected_accuracy_trial_order.shape != (expected_trial_count,):
+            raise ValueError(
+                "expected_accuracy_half1_trial_order_local must have shape "
+                f"({expected_trial_count},), got {expected_accuracy_trial_order.shape}"
+            )
+        if not np.array_equal(
+            np.sort(expected_accuracy_trial_order),
+            np.arange(expected_trial_count, dtype=np.int64),
+        ):
+            raise ValueError(
+                "expected_accuracy_half1_trial_order_local must be a permutation "
+                "of half-1 local particle indices"
+            )
+        logger.info(
+            "RELION expected accuracy consumes an explicit physical trial order "
+            "(%d particles)",
+            expected_trial_count,
+        )
+    elif effective_optimizer_random_seed is not None and int(experiment_datasets[0].n_units) > 0:
         try:
             expected_accuracy_trial_order = relion_half1_trial_order(
                 int(experiment_datasets[0].n_units),
@@ -6239,14 +6280,14 @@ def _run_relion_iteration_loop(
                 )
 
             # Regenerate translation grid based on updated parameters
+            base_translations = _translation_grid_for_class_count(
+                state.translation_range,
+                state.translation_step,
+                n_classes=n_classes,
+            ).astype(np.float64, copy=False)
             current_translations = jnp.array(
-                _translation_grid_for_class_count(
-                    state.translation_range,
-                    state.translation_step,
-                    n_classes=n_classes,
-                ).astype(np.float32)
+                base_translations.astype(np.float32)
             )
-            base_translations = current_translations
             logger.info(
                 "New grid: %d rotations, %d translations (range=%.1f, step=%.1f)",
                 current_rotations.shape[0],
@@ -6257,16 +6298,20 @@ def _run_relion_iteration_loop(
         elif perturb_replay_relion_dir is not None and sealed_sampling_state is None:
             # Translation params may have changed under replay without an
             # hp_order bump. Regenerate the translation grid to match RELION.
+            _new_t_source = _translation_grid_for_class_count(
+                state.translation_range,
+                state.translation_step,
+                n_classes=n_classes,
+            ).astype(np.float64, copy=False)
             _new_t = jnp.array(
-                _translation_grid_for_class_count(
-                    state.translation_range,
-                    state.translation_step,
-                    n_classes=n_classes,
-                ).astype(np.float32)
+                _new_t_source.astype(np.float32)
             )
-            if _new_t.shape != base_translations.shape or not jnp.allclose(_new_t, base_translations):
+            if _new_t.shape != base_translations.shape or not jnp.allclose(
+                _new_t,
+                np.asarray(base_translations, dtype=np.float32),
+            ):
                 current_translations = _new_t
-                base_translations = _new_t
+                base_translations = _new_t_source
                 logger.info(
                     "Replay: regenerated translation grid: %d translations (range=%.2f px, step=%.2f px)",
                     current_translations.shape[0],
@@ -7079,6 +7124,7 @@ def _run_relion_iteration_loop(
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     debug_iteration=numbered_relion_iteration,
                     coarse_rotation_ids=coarse_rotation_ids_for_scoring,
+                    preserve_bpref_particle_order=preserve_bpref_particle_order,
                 )
                 ha_k = adaptive_result.ha
                 Ft_y_k = adaptive_result.Ft_y
@@ -7140,6 +7186,7 @@ def _run_relion_iteration_loop(
                     best_pose_rotations=best_pose_rotations,
                     best_pose_rotation_eulers=best_pose_rotation_eulers,
                     best_pose_translations=best_pose_translations,
+                    preserve_bpref_particle_order=preserve_bpref_particle_order,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     debug_iteration=numbered_relion_iteration,
@@ -10032,6 +10079,7 @@ def _run_relion_iteration_loop(
                 firstiter_updates_em_kwargs_ibs=True,
                 return_best_pose_details=not k_class_enabled,
                 debug_iteration=final_sampling_relion_iteration,
+                preserve_bpref_particle_order=preserve_bpref_particle_order,
             )
         if final_result.best_pose_translations is not None:
             final_result.best_pose_translations = _relion_metadata_translations(

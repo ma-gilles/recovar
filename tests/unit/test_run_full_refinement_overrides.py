@@ -62,6 +62,7 @@ from scripts.run_full_refinement import (
     _resolve_tau2_fudge,
     _save_initial_noise_cache,
     _select_authoritative_group_particles,
+    _use_fresh_auto_refine_particle_order,
     _validate_fixed_diagnostic_arm_cli,
     _validate_fixed_diagnostic_math_environment,
     _verify_fixed_diagnostic_provenance_manifests,
@@ -79,6 +80,26 @@ def test_complete_initial_particle_state_is_autorefine_only():
     assert _replay_complete_initial_particle_state(1, 0)
     assert not _replay_complete_initial_particle_state(4, 0)
     assert not _replay_complete_initial_particle_state(1, 1)
+
+
+def test_fresh_auto_refine_particle_order_excludes_kclass_and_replays():
+    args = SimpleNamespace(
+        n_classes=1,
+        init_relion_iteration=0,
+        perturb_replay_relion_dir=None,
+    )
+    assert _use_fresh_auto_refine_particle_order(args, None)
+
+    args.n_classes = 4
+    assert not _use_fresh_auto_refine_particle_order(args, None)
+    args.n_classes = 1
+    args.init_relion_iteration = 1
+    assert not _use_fresh_auto_refine_particle_order(args, None)
+    args.init_relion_iteration = 0
+    args.perturb_replay_relion_dir = "/sealed/restart"
+    assert not _use_fresh_auto_refine_particle_order(args, None)
+    args.perturb_replay_relion_dir = None
+    assert not _use_fresh_auto_refine_particle_order(args, object())
 
 
 @pytest.mark.parametrize("token", ["1", "true", "YES", "on"])
@@ -169,6 +190,21 @@ def test_relion_sigma2_to_native_noise_variance_keeps_float32_scoring_dtype():
     assert got.shape == (64,)
     assert got.dtype == np.float32
     assert np.all(np.isfinite(got))
+
+
+def test_relion_sigma2_to_native_noise_variance_can_preserve_float64_reciprocal_boundary():
+    radial = np.asarray([0.125, 0.3, 0.7, 1.1, 2.3], dtype=np.float64)
+    got = _relion_sigma2_to_native_noise_variance(
+        radial,
+        grid_size=8,
+        output_dtype=np.float64,
+    )
+
+    assert got.shape == (64,)
+    assert got.dtype == np.float64
+    # The exact K=1 path must retain information that an early float32 cast
+    # would lose before RELION's reciprocal-to-float32 boundary.
+    assert np.any(got != got.astype(np.float32).astype(np.float64))
 
 
 def test_frozen_replay_is_exactly_projector_only():
@@ -1281,6 +1317,70 @@ def test_relion_expected_accuracy_layout_supports_repeated_indices_across_stacks
     np.testing.assert_array_equal(base_order, [1, 0, 2])
     np.testing.assert_array_equal(optics, [1, 2, 2])
     np.testing.assert_array_equal(particle_ids, [2, 0, 3])
+
+
+def test_fresh_relion_layout_is_physical_order_with_identity_accuracy_trials():
+    pd = pytest.importorskip("pandas")
+    from recovar.em.dense_single_volume.helpers.expected_accuracy import (
+        relion_auto_refine_half_orders,
+    )
+
+    relion_particles = pd.DataFrame(
+        {
+            "rlnImageName": [
+                "1@a.mrcs",
+                "1@b.mrcs",
+                "2@a.mrcs",
+                "2@b.mrcs",
+                "3@a.mrcs",
+                "3@b.mrcs",
+                "4@a.mrcs",
+                "4@b.mrcs",
+            ],
+            "rlnRandomSubset": [1, 2, 1, 2, 1, 2, 1, 2],
+            "rlnOpticsGroup": [2, 1, 1, 2, 2, 1, 1, 2],
+        },
+    )
+    our_particles = relion_particles.iloc[[5, 0, 7, 2, 1, 6, 4, 3]].reset_index(
+        drop=True
+    )
+    expected_relion_half1, expected_relion_half2 = relion_auto_refine_half_orders(
+        relion_particles["rlnRandomSubset"],
+        1711,
+        optics_group_ids=relion_particles["rlnOpticsGroup"],
+    )
+    our_row_by_name = {
+        name: row
+        for row, name in enumerate(
+            np.asarray(our_particles["rlnImageName"], dtype=str)
+        )
+    }
+
+    half1, half2, base_order, optics, particle_ids = (
+        _relion_halfset_and_accuracy_layout(
+            our_particles,
+            relion_particles,
+            random_seed=1711,
+        )
+    )
+
+    np.testing.assert_array_equal(
+        half1,
+        [
+            our_row_by_name[relion_particles.iloc[row]["rlnImageName"]]
+            for row in expected_relion_half1
+        ],
+    )
+    np.testing.assert_array_equal(
+        half2,
+        [
+            our_row_by_name[relion_particles.iloc[row]["rlnImageName"]]
+            for row in expected_relion_half2
+        ],
+    )
+    assert base_order is None
+    np.testing.assert_array_equal(particle_ids, expected_relion_half1)
+    np.testing.assert_array_equal(optics, relion_particles.iloc[particle_ids]["rlnOpticsGroup"])
 
 
 def test_runner_keeps_input_particle_names_for_replay_mapping():

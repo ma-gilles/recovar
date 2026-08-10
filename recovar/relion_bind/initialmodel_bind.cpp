@@ -1025,6 +1025,51 @@ static py::array_t<long> auto_refine_randomise_half_order(
 
 
 /**
+ * RELION AutoRefine's paired one-time randomisation of both half-sets.
+ *
+ * Experiment::randomiseParticlesOrder calls srand(seed) once, then applies
+ * std::random_shuffle to half 1 and half 2 without reseeding between them.
+ * Keeping both shuffles in one binding call preserves the process-global
+ * libc rand() state consumed by the first half.
+ */
+static py::tuple auto_refine_randomise_half_orders(
+    long nr_particles_half1,
+    long nr_particles_half2,
+    int seed
+) {
+    if (nr_particles_half1 < 0 || nr_particles_half2 < 0)
+        throw std::runtime_error("half particle counts must be non-negative");
+
+    std::vector<long> order_half1((size_t)nr_particles_half1);
+    std::vector<long> order_half2((size_t)nr_particles_half2);
+    for (long i = 0; i < nr_particles_half1; i++)
+        order_half1[(size_t)i] = i;
+    for (long i = 0; i < nr_particles_half2; i++)
+        order_half2[(size_t)i] = i;
+
+    std::srand(seed);
+    std::random_shuffle(order_half1.begin(), order_half1.end());
+    std::random_shuffle(order_half2.begin(), order_half2.end());
+
+    py::array_t<long> out_half1((py::ssize_t)nr_particles_half1);
+    py::array_t<long> out_half2((py::ssize_t)nr_particles_half2);
+    if (nr_particles_half1 > 0)
+        std::memcpy(
+            out_half1.request().ptr,
+            order_half1.data(),
+            (size_t)nr_particles_half1 * sizeof(long)
+        );
+    if (nr_particles_half2 > 0)
+        std::memcpy(
+            out_half2.request().ptr,
+            order_half2.data(),
+            (size_t)nr_particles_half2 * sizeof(long)
+        );
+    return py::make_tuple(out_half1, out_half2);
+}
+
+
+/**
  * RELION InitialModel expected angular/translation accuracy estimator.
  *
  * This is the SPA 3D-reference-to-2D-image subset loop from
@@ -1501,6 +1546,10 @@ Returns -1 when subset should span all particles.
     m.def("auto_refine_randomise_half_order", &auto_refine_randomise_half_order,
           py::arg("nr_particles"), py::arg("seed"),
           "AutoRefine's one-time libc-rand/std::random_shuffle order for half 1.");
+
+    m.def("auto_refine_randomise_half_orders", &auto_refine_randomise_half_orders,
+          py::arg("nr_particles_half1"), py::arg("nr_particles_half2"), py::arg("seed"),
+          "AutoRefine's paired one-time half orders with libc rand state preserved.");
 
     m.def("vdam_rnd_unif_sequence", &vdam_rnd_unif_sequence,
           py::arg("seed"), py::arg("n_draws"),

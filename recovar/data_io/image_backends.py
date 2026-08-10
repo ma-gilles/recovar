@@ -110,6 +110,22 @@ def _centered_rfft2_jax(images):
     return jnp.fft.fftshift(transformed, axes=(-2,))
 
 
+@jax.jit
+def _centered_rfft2_jax_per_image(images):
+    """Run one cuFFT plan per image so arithmetic is independent of batch size."""
+
+    images_jax = jnp.asarray(images, dtype=jnp.float32)
+    if images_jax.ndim == 2:
+        images_jax = images_jax[None, ...]
+
+    def transform(image):
+        shifted = jnp.fft.fftshift(image, axes=(-2, -1))
+        transformed = jnp.fft.rfft2(shifted, axes=(-2, -1))
+        return jnp.fft.fftshift(transformed, axes=(-2,))
+
+    return jax.lax.map(transform, images_jax)
+
+
 class _SimpleSubset:
     """Lightweight subset wrapper (replaces torch.utils.data.Subset).
 
@@ -343,6 +359,7 @@ class ParticleImageDataset:
         *,
         relion_normalization_factors=None,
         relion_integer_shifts=None,
+        relion_fft_per_image: bool = False,
     ) -> np.ndarray:
         """Return preprocessed images directly in packed half-spectrum layout."""
 
@@ -379,7 +396,11 @@ class ParticleImageDataset:
                     apply_image_mask,
                     native_lane_reduction=self.relion_native_lane_reduction,
                 )
-                transformed = _centered_rfft2_jax(preprocessed)
+                transformed = (
+                    _centered_rfft2_jax_per_image(preprocessed)
+                    if relion_fft_per_image
+                    else _centered_rfft2_jax(preprocessed)
+                )
                 return transformed.reshape((transformed.shape[0], -1)).astype(jnp.complex64)
             try:
                 images_np = np.asarray(images)

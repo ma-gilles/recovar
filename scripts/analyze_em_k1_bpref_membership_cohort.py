@@ -169,6 +169,42 @@ def compare_particle(
         recovar_reconstruction_mass[recovar_rows[both_positive]],
         relion_reconstruction_mass[relion_rows[both_positive]],
     )
+    relion_posterior_union = np.concatenate(
+        (
+            relion_posterior_mass[relion_rows],
+            relion_posterior_mass[matches.relion_unmatched],
+            np.zeros(matches.recovar_unmatched.size, dtype=np.float64),
+        )
+    )
+    recovar_posterior_union = np.concatenate(
+        (
+            recovar_posterior_mass[recovar_rows],
+            np.zeros(matches.relion_unmatched.size, dtype=np.float64),
+            recovar_posterior_mass[matches.recovar_unmatched],
+        )
+    )
+    relion_reconstruction_union = np.concatenate(
+        (
+            relion_reconstruction_mass[relion_rows],
+            relion_reconstruction_mass[matches.relion_unmatched],
+            np.zeros(matches.recovar_unmatched.size, dtype=np.float64),
+        )
+    )
+    recovar_reconstruction_union = np.concatenate(
+        (
+            recovar_reconstruction_mass[recovar_rows],
+            np.zeros(matches.relion_unmatched.size, dtype=np.float64),
+            recovar_reconstruction_mass[matches.recovar_unmatched],
+        )
+    )
+    posterior_union_l2 = _relative_l2(
+        recovar_posterior_union,
+        relion_posterior_union,
+    )
+    reconstruction_union_l2 = _relative_l2(
+        recovar_reconstruction_union,
+        relion_reconstruction_union,
+    )
     mass_gate_passed = bool(
         reconstruction_l2 is not None
         and reconstruction_l2 <= MASS_RELATIVE_L2_TOLERANCE
@@ -203,6 +239,8 @@ def compare_particle(
         ),
         "matched_candidate_posterior_mass_relative_l2": posterior_l2,
         "matched_positive_reconstruction_mass_relative_l2": reconstruction_l2,
+        "candidate_union_posterior_mass_relative_l2": posterior_union_l2,
+        "candidate_union_reconstruction_mass_relative_l2": reconstruction_union_l2,
         "reconstruction_mass_gate_tolerance": MASS_RELATIVE_L2_TOLERANCE,
         "reconstruction_mass_gate_passed": mass_gate_passed,
         "strict_particle_passed": bool(
@@ -210,6 +248,192 @@ def compare_particle(
             and positive_sets_exact
             and significant_count_relion == significant_count_recovar
             and mass_gate_passed
+        ),
+    }
+
+
+def compare_particle_rotation_mass(
+    *,
+    relion_rotations: np.ndarray,
+    relion_weights: np.ndarray,
+    relion_significant_weight: float,
+    relion_weight_norm: float,
+    recovar_rotations: np.ndarray,
+    recovar_candidate_translation_count: np.ndarray,
+    recovar_posterior_rotation_mass: np.ndarray,
+    recovar_reconstruction_rotation_mass: np.ndarray,
+    recovar_significant_translation_count: np.ndarray,
+    rotation_tolerance: float = ROTATION_TOLERANCE,
+) -> dict[str, Any]:
+    """Compare native fine weights with RECOVAR's denominator-sufficient masses."""
+
+    relion_rotations = np.asarray(relion_rotations, dtype=np.float32).reshape(-1, 3, 3)
+    relion_weights = np.asarray(relion_weights, dtype=np.float64)
+    recovar_rotations = np.asarray(recovar_rotations, dtype=np.float32).reshape(-1, 3, 3)
+    recovar_candidate_count = np.asarray(
+        recovar_candidate_translation_count,
+        dtype=np.int64,
+    )
+    recovar_posterior_mass = np.asarray(
+        recovar_posterior_rotation_mass,
+        dtype=np.float64,
+    )
+    recovar_reconstruction_mass = np.asarray(
+        recovar_reconstruction_rotation_mass,
+        dtype=np.float64,
+    )
+    recovar_significant_count = np.asarray(
+        recovar_significant_translation_count,
+        dtype=np.int64,
+    )
+    _require(
+        relion_weights.ndim == 2
+        and relion_weights.shape[0] == relion_rotations.shape[0],
+        "RELION rotation-mass topology mismatch",
+    )
+    recovar_shape = (recovar_rotations.shape[0],)
+    _require(
+        recovar_candidate_count.shape
+        == recovar_posterior_mass.shape
+        == recovar_reconstruction_mass.shape
+        == recovar_significant_count.shape
+        == recovar_shape,
+        "RECOVAR rotation-mass topology mismatch",
+    )
+    _require(
+        np.isfinite(relion_significant_weight) and relion_significant_weight >= 0.0,
+        "invalid RELION significant threshold",
+    )
+    _require(
+        np.isfinite(relion_weight_norm) and relion_weight_norm > 0.0,
+        "invalid RELION weight norm",
+    )
+    _require(
+        np.all(np.isfinite(relion_weights))
+        and np.all(np.isfinite(recovar_posterior_mass))
+        and np.all(np.isfinite(recovar_reconstruction_mass)),
+        "non-finite rotation mass",
+    )
+
+    relion_candidate_samples = relion_weights != float(INVALID_WEIGHT_SENTINEL)
+    relion_candidate_rotations = np.any(relion_candidate_samples, axis=1)
+    relion_rotations = relion_rotations[relion_candidate_rotations]
+    relion_weights = relion_weights[relion_candidate_rotations]
+    relion_candidate_samples = relion_candidate_samples[relion_candidate_rotations]
+    recovar_candidate_rotations = recovar_candidate_count > 0
+    recovar_rotations = recovar_rotations[recovar_candidate_rotations]
+    recovar_posterior_mass = recovar_posterior_mass[recovar_candidate_rotations]
+    recovar_reconstruction_mass = recovar_reconstruction_mass[recovar_candidate_rotations]
+    recovar_significant_count = recovar_significant_count[recovar_candidate_rotations]
+
+    relion_positive_samples = relion_weights >= relion_significant_weight
+    relion_positive_rotations = np.any(relion_positive_samples, axis=1)
+    relion_posterior_mass = np.sum(
+        np.where(relion_candidate_samples, relion_weights, 0.0),
+        axis=1,
+    ) / relion_weight_norm
+    relion_reconstruction_mass = np.sum(
+        np.where(relion_positive_samples, relion_weights, 0.0),
+        axis=1,
+    ) / relion_weight_norm
+    recovar_positive_rotations = recovar_significant_count > 0
+    matches = match_rotations(
+        relion_rotations,
+        recovar_rotations,
+        tolerance=rotation_tolerance,
+    )
+    relion_rows = matches.pairs[:, 0]
+    recovar_rows = matches.pairs[:, 1]
+    matched_relion_positive = relion_positive_rotations[relion_rows]
+    matched_recovar_positive = recovar_positive_rotations[recovar_rows]
+    both_positive = matched_relion_positive & matched_recovar_positive
+
+    def union_metric(relion_mass: np.ndarray, recovar_mass: np.ndarray) -> float | None:
+        relion_union = np.concatenate(
+            (
+                relion_mass[relion_rows],
+                relion_mass[matches.relion_unmatched],
+                np.zeros(matches.recovar_unmatched.size, dtype=np.float64),
+            )
+        )
+        recovar_union = np.concatenate(
+            (
+                recovar_mass[recovar_rows],
+                np.zeros(matches.relion_unmatched.size, dtype=np.float64),
+                recovar_mass[matches.recovar_unmatched],
+            )
+        )
+        return _relative_l2(recovar_union, relion_union)
+
+    candidate_sets_exact = bool(
+        matches.relion_unmatched.size == 0
+        and matches.recovar_unmatched.size == 0
+        and matches.pairs.shape[0] == relion_rotations.shape[0]
+        and matches.pairs.shape[0] == recovar_rotations.shape[0]
+    )
+    relion_only_positive_matched = int(
+        np.count_nonzero(matched_relion_positive & ~matched_recovar_positive)
+    )
+    recovar_only_positive_matched = int(
+        np.count_nonzero(~matched_relion_positive & matched_recovar_positive)
+    )
+    significant_count_relion = int(np.count_nonzero(relion_positive_samples))
+    significant_count_recovar = int(np.sum(recovar_significant_count))
+    reconstruction_l2 = _relative_l2(
+        recovar_reconstruction_mass[recovar_rows[both_positive]],
+        relion_reconstruction_mass[relion_rows[both_positive]],
+    )
+    return {
+        "relion_candidate_count": int(relion_rotations.shape[0]),
+        "recovar_candidate_count": int(recovar_rotations.shape[0]),
+        "matched_candidate_count": int(matches.pairs.shape[0]),
+        "relion_unmatched_candidate_count": int(matches.relion_unmatched.size),
+        "recovar_unmatched_candidate_count": int(matches.recovar_unmatched.size),
+        "candidate_sets_exact": candidate_sets_exact,
+        "relion_positive_rotation_count": int(np.count_nonzero(relion_positive_rotations)),
+        "recovar_positive_rotation_count": int(np.count_nonzero(recovar_positive_rotations)),
+        "both_positive_matched_rotation_count": int(np.count_nonzero(both_positive)),
+        "relion_only_positive_matched_rotation_count": relion_only_positive_matched,
+        "recovar_only_positive_matched_rotation_count": recovar_only_positive_matched,
+        "relion_only_positive_unmatched_rotation_count": int(
+            np.count_nonzero(relion_positive_rotations[matches.relion_unmatched])
+        ),
+        "recovar_only_positive_unmatched_rotation_count": int(
+            np.count_nonzero(recovar_positive_rotations[matches.recovar_unmatched])
+        ),
+        "positive_rotation_sets_exact": bool(
+            candidate_sets_exact
+            and relion_only_positive_matched == 0
+            and recovar_only_positive_matched == 0
+        ),
+        "relion_significant_sample_count": significant_count_relion,
+        "recovar_significant_sample_count": significant_count_recovar,
+        "significant_sample_count_exact": significant_count_relion == significant_count_recovar,
+        "matched_candidate_posterior_mass_relative_l2": _relative_l2(
+            recovar_posterior_mass[recovar_rows],
+            relion_posterior_mass[relion_rows],
+        ),
+        "matched_positive_reconstruction_mass_relative_l2": reconstruction_l2,
+        "candidate_union_posterior_mass_relative_l2": union_metric(
+            relion_posterior_mass,
+            recovar_posterior_mass,
+        ),
+        "candidate_union_reconstruction_mass_relative_l2": union_metric(
+            relion_reconstruction_mass,
+            recovar_reconstruction_mass,
+        ),
+        "reconstruction_mass_gate_tolerance": MASS_RELATIVE_L2_TOLERANCE,
+        "reconstruction_mass_gate_passed": bool(
+            reconstruction_l2 is not None
+            and reconstruction_l2 <= MASS_RELATIVE_L2_TOLERANCE
+        ),
+        "strict_particle_passed": bool(
+            candidate_sets_exact
+            and relion_only_positive_matched == 0
+            and recovar_only_positive_matched == 0
+            and significant_count_relion == significant_count_recovar
+            and reconstruction_l2 is not None
+            and reconstruction_l2 <= MASS_RELATIVE_L2_TOLERANCE
         ),
     }
 

@@ -186,6 +186,22 @@ def _use_fused_sparse_k_class_pass2(n_classes: int) -> bool:
     return _env_flag_enabled("RECOVAR_SPARSE_KCLASS_FUSED", default=int(n_classes) > 1)
 
 
+def _apply_bpref_particle_order_policy(
+    common: dict,
+    engine_kwargs: dict,
+    *,
+    n_classes: int,
+) -> bool:
+    """Forward the guarded fresh-K=1 BPref order into a sparse pass."""
+
+    preserve = bool(engine_kwargs.get("preserve_bpref_particle_order", False))
+    if preserve and int(n_classes) != 1:
+        raise ValueError("RELION BPref particle-order preservation is K=1-only")
+    if preserve:
+        common["preserve_bpref_particle_order"] = True
+    return preserve
+
+
 def _validate_bpref_device_signature_sparse_route(
     *,
     active: bool,
@@ -918,6 +934,11 @@ def _run_sparse_k_class_adaptive_pass2(
             base_engine_kwargs.get("bpref_device_signature_active", False)
         ),
     )
+    preserve_bpref_particle_order = _apply_bpref_particle_order_policy(
+        common,
+        base_engine_kwargs,
+        n_classes=n_classes,
+    )
     mstep_accumulator_shape = (
         relion_backprojector_volume_shape(
             experiment_dataset.volume_shape,
@@ -944,6 +965,10 @@ def _run_sparse_k_class_adaptive_pass2(
         return class_common
 
     use_fused_pass2 = _use_fused_sparse_k_class_pass2(n_classes)
+    if preserve_bpref_particle_order and use_fused_pass2:
+        raise RuntimeError(
+            "RELION BPref particle-order preservation requires the K=1 single-class sparse path"
+        )
     strict_exact_gaussian = bool(
         common["relion_exact_fine_gaussian"]
         and common["relion_firstiter_score_mode"] == "gaussian"
@@ -1997,6 +2022,11 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
             pass2_kwargs.get("bpref_device_signature_active", False)
         ),
     )
+    _apply_bpref_particle_order_policy(
+        common,
+        pass2_kwargs,
+        n_classes=n_classes,
+    )
     mstep_accumulator_shape = (
         relion_backprojector_volume_shape(
             experiment_dataset.volume_shape,
@@ -2891,7 +2921,8 @@ def run_dense_k_class_em_adaptive(
         if fine_mstep_rotations_override is None
         else np.asarray(fine_mstep_rotations_override, dtype=np.float32)
     )
-    fine_translations_np = np.asarray(fine_translations, dtype=np.float32)
+    fine_translations_source_np = np.asarray(fine_translations)
+    fine_translations_np = np.asarray(fine_translations_source_np, dtype=np.float32)
     rot_parent_map_np = np.asarray(rot_parent_map, dtype=np.int64)
     trans_parent_map_np = np.asarray(trans_parent_map, dtype=np.int64)
 
@@ -2899,6 +2930,13 @@ def run_dense_k_class_em_adaptive(
     n_trans_coarse = int(coarse_translations_np.shape[0])
     n_rot_fine = int(fine_rotations_np.shape[0])
     n_trans_fine = int(fine_translations_np.shape[0])
+    # RELION constructs oversampled translations in host RFLOAT (double in
+    # the deployed build) and rounds only the CUDA translation angle to
+    # float32. Preserve that source precision for K=1 sparse pass 2 while
+    # retaining the established float32 pose/prior/output representation.
+    sparse_fine_translations_np = (
+        fine_translations_source_np if n_classes == 1 else fine_translations_np
+    )
 
     if fine_mstep_rotations_np is not None and fine_mstep_rotations_np.shape != fine_rotations_np.shape:
         raise ValueError(
@@ -3093,6 +3131,10 @@ def run_dense_k_class_em_adaptive(
     # Build a per-particle, per-class fine-grid mask from the coarse significance.
     pass2_kwargs.pop("rotation_translation_mask", None)
     sparse_pass2_requested = bool(pass2_kwargs.pop("sparse_pass2", False))
+    if bool(pass2_kwargs.get("preserve_bpref_particle_order", False)) and not sparse_pass2_requested:
+        raise RuntimeError(
+            "RELION BPref particle-order preservation requires sparse adaptive pass 2"
+        )
     if fine_mstep_rotations_np is not None and not sparse_pass2_requested:
         raise NotImplementedError("fine_mstep_rotations_override requires sparse_pass2=True")
     # The explicit bucketed sparse pass-2 path consumes ``sparse_pass2`` above.
@@ -3169,7 +3211,7 @@ def run_dense_k_class_em_adaptive(
             coarse_translations_np,
             fine_rotations_np,
             fine_mstep_rotations_np,
-            fine_translations_np,
+            sparse_fine_translations_np,
             rot_parent_map_np,
             trans_parent_map_np,
             sig_sample_indices_by_class,
@@ -3369,7 +3411,7 @@ def run_dense_k_class_em_adaptive(
             fine_rotations_np,
             fine_mstep_rotations_np,
             rot_parent_map_np,
-            fine_translations_np,
+            sparse_fine_translations_np,
             trans_parent_map_np,
             sig_sample_indices_by_class,
             disc_type,

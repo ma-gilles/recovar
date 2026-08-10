@@ -49,6 +49,9 @@ def test_relion_translation_cuda_source_preserves_explicit_arithmetic():
     assert "sincosf(x * tx + y * ty, &sine, &cosine);" in source
     assert "cosine * value.x - sine * value.y" in source
     assert "cosine * value.y + sine * value.x" in source
+    assert "float translated_real = cosine * value.x - sine * value.y;" in source
+    assert "translated_real * factor" in source
+    assert "translated_imag * factor" in source
 
 
 @pytest.mark.gpu
@@ -198,3 +201,75 @@ def test_relion_translate_score_f32_fails_closed_without_gpu(monkeypatch):
             jnp.asarray([0, 1], dtype=jnp.int32),
             (8, 8),
         )
+
+
+def test_relion_translate_bpref_f32_validates_weight_shape(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    with pytest.raises(ValueError, match="weighted_ctf must have shape"):
+        cuda_backproject.relion_translate_bpref_f32.__wrapped__(
+            jnp.zeros((2, 3), dtype=jnp.complex64),
+            jnp.zeros((1, 3), dtype=jnp.float32),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.arange(3, dtype=jnp.int32),
+            (8, 8),
+        )
+
+
+@pytest.mark.gpu
+def test_relion_translate_bpref_f32_matches_translate_then_weight(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    image_shape = (16, 16)
+    half_width = image_shape[1] // 2 + 1
+    pixel_indices = np.asarray(
+        [0, 1, 3 * half_width + 2, 8 * half_width, 15 * half_width + 7],
+        dtype=np.int32,
+    )
+    images = np.asarray(
+        [[1.0 + 0.5j, -2.0 + 0.25j, 0.125 - 4.0j, 3.0 + 2.0j, -0.75 - 0.5j]],
+        dtype=np.complex64,
+    )
+    weighted_ctf = np.asarray(
+        [[2.0, -0.25, 1.5, 1000.0, -3.0]],
+        dtype=np.float32,
+    )
+    angles = np.asarray(
+        [[0.0, 0.0], [0.018312519416213036, -0.006231173872947693]],
+        dtype=np.float32,
+    )
+
+    with jax.default_device(gpu_device):
+        actual = cuda_backproject.relion_translate_bpref_f32(
+            jnp.asarray(images),
+            jnp.asarray(weighted_ctf),
+            jnp.asarray(angles),
+            jnp.asarray(pixel_indices),
+            image_shape,
+        )
+        translated = cuda_backproject.relion_translate_score_f32(
+            jnp.asarray(images),
+            jnp.asarray(angles),
+            jnp.asarray(pixel_indices),
+            image_shape,
+        )
+    actual = np.asarray(actual)
+    translated = np.asarray(translated).reshape(1, angles.shape[0], -1)
+    expected = np.empty_like(translated)
+    for translation_index in range(angles.shape[0]):
+        for pixel_index in range(images.shape[1]):
+            expected[0, translation_index, pixel_index] = np.complex64(
+                np.float32(translated[0, translation_index, pixel_index].real * weighted_ctf[0, pixel_index])
+                + 1j
+                * np.float32(translated[0, translation_index, pixel_index].imag * weighted_ctf[0, pixel_index])
+            )
+
+    np.testing.assert_array_equal(actual.reshape(expected.shape), expected)

@@ -3516,6 +3516,8 @@ constexpr int kRelionPreprocessBlockSize = 128;
 constexpr int kRelionSoftMaskBlocks = 128;
 constexpr int kRelionEulerBlockSize = 128;
 constexpr int kRelionTranslateScoreBlockSize = 256;
+constexpr int kRelionTranslateBprefBlockSize = 256;
+constexpr int kRelionBprefOperandsBlockSize = 128;
 constexpr int kRelionCoarseDiff2BlockSize = 128;
 constexpr int kRelionCoarseEulersPerBlock = 16;
 constexpr int kRelionCoarsePrefetchFraction = 4;
@@ -3648,6 +3650,231 @@ cudaError_t launch_relion_translate_score_f32(
             pixel_count,
             image_h,
             image_half_width);
+    return cudaGetLastError();
+}
+
+__global__ void relion_translate_bpref_f32_kernel(
+    const float2* images,
+    const float* weighted_ctf,
+    const float* translation_angles,
+    const int32_t* pixel_indices,
+    float2* weighted_shifted,
+    int64_t batch_size,
+    int64_t translation_count,
+    int64_t pixel_count,
+    int image_h,
+    int image_half_width)
+{
+    int64_t flat = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int64_t total = batch_size * translation_count * pixel_count;
+    if (flat >= total) return;
+
+    int64_t pixel_row = flat % pixel_count;
+    int64_t batch_translation = flat / pixel_count;
+    int64_t translation = batch_translation % translation_count;
+    int64_t image = batch_translation / translation_count;
+    int pixel_index = pixel_indices[pixel_row];
+    int x = pixel_index % image_half_width;
+    int y = pixel_index / image_half_width - image_h / 2;
+    float tx = translation_angles[2 * translation];
+    float ty = translation_angles[2 * translation + 1];
+    float sine;
+    float cosine;
+    sincosf(x * tx + y * ty, &sine, &cosine);
+
+    float2 value = images[image * pixel_count + pixel_row];
+    float factor = weighted_ctf[image * pixel_count + pixel_row];
+    float translated_real = cosine * value.x - sine * value.y;
+    float translated_imag = cosine * value.y + sine * value.x;
+    weighted_shifted[flat] = make_float2(
+        translated_real * factor,
+        translated_imag * factor);
+}
+
+cudaError_t launch_relion_translate_bpref_f32(
+    cudaStream_t stream,
+    const float2* images,
+    const float* weighted_ctf,
+    const float* translation_angles,
+    const int32_t* pixel_indices,
+    float2* weighted_shifted,
+    int64_t batch_size,
+    int64_t translation_count,
+    int64_t pixel_count,
+    int image_h,
+    int image_half_width)
+{
+    int64_t total = batch_size * translation_count * pixel_count;
+    if (total == 0) return cudaSuccess;
+    int blocks = static_cast<int>(
+        (total + kRelionTranslateBprefBlockSize - 1) /
+        kRelionTranslateBprefBlockSize);
+    relion_translate_bpref_f32_kernel<<<
+        blocks, kRelionTranslateBprefBlockSize, 0, stream>>>(
+            images,
+            weighted_ctf,
+            translation_angles,
+            pixel_indices,
+            weighted_shifted,
+            batch_size,
+            translation_count,
+            pixel_count,
+            image_h,
+            image_half_width);
+    return cudaGetLastError();
+}
+
+template <int PhaseMode, int TranslateMode>
+__global__ void relion_bpref_operands_f32_kernel(
+    const float2* images,
+    const float* ctf,
+    const float* minvsigma2,
+    const float* posterior_over_weight_norm,
+    const float* translation_angles,
+    const int32_t* pixel_indices,
+    float2* numerator,
+    float* denominator,
+    float2* translated,
+    float* weighted_ctf,
+    int64_t batch_size,
+    int64_t translation_count,
+    int64_t pixel_count,
+    int image_h,
+    int image_half_width)
+{
+    int64_t batch_translation = static_cast<int64_t>(blockIdx.x);
+    if (batch_translation >= batch_size * translation_count) return;
+    int64_t translation = batch_translation % translation_count;
+    int64_t image = batch_translation / translation_count;
+    const int passes = ceilf(
+        static_cast<float>(pixel_count) /
+        static_cast<float>(kRelionBprefOperandsBlockSize));
+    for (unsigned pass = 0; pass < static_cast<unsigned>(passes); ++pass)
+    {
+        int64_t pixel_row =
+            static_cast<int64_t>(pass) * kRelionBprefOperandsBlockSize +
+            threadIdx.x;
+        if (pixel_row >= pixel_count) continue;
+        int64_t flat = batch_translation * pixel_count + pixel_row;
+        int64_t image_pixel = image * pixel_count + pixel_row;
+        int pixel_index = pixel_indices[pixel_row];
+        int x = pixel_index % image_half_width;
+        int y = pixel_index / image_half_width;
+        if (y > image_h / 2) y -= image_h;
+        float tx = translation_angles[2 * translation];
+        float ty = translation_angles[2 * translation + 1];
+        float phase;
+        if constexpr (PhaseMode == 0)
+            phase = x * tx + y * ty;
+        else if constexpr (PhaseMode == 1)
+            phase = __fadd_rn(__fmul_rn(static_cast<float>(x), tx),
+                              __fmul_rn(static_cast<float>(y), ty));
+        else if constexpr (PhaseMode == 2)
+            phase = __fmaf_rn(static_cast<float>(x), tx,
+                              __fmul_rn(static_cast<float>(y), ty));
+        else
+            phase = __fmaf_rn(static_cast<float>(y), ty,
+                              __fmul_rn(static_cast<float>(x), tx));
+        float sine;
+        float cosine;
+        sincosf(phase, &sine, &cosine);
+
+        // Preserve the source statement order in RELION BP.cuh. This
+        // primitive accepts native-unit inputs, so RECOVAR normalization is
+        // outside the comparison boundary.
+        float weight = posterior_over_weight_norm[
+            image * translation_count + translation];
+        weight = weight * ctf[image_pixel] * minvsigma2[image_pixel];
+        weighted_ctf[flat] = weight;
+        denominator[flat] = weight * ctf[image_pixel];
+
+        float2 value = images[image_pixel];
+        float translated_real;
+        float translated_imag;
+        if constexpr (TranslateMode == 0)
+        {
+            translated_real = cosine * value.x - sine * value.y;
+            translated_imag = cosine * value.y + sine * value.x;
+        }
+        else if constexpr (TranslateMode == 1)
+        {
+            translated_real = __fsub_rn(__fmul_rn(cosine, value.x),
+                                        __fmul_rn(sine, value.y));
+            translated_imag = __fadd_rn(__fmul_rn(cosine, value.y),
+                                        __fmul_rn(sine, value.x));
+        }
+        else if constexpr (TranslateMode == 2)
+        {
+            translated_real = __fmaf_rn(cosine, value.x,
+                                        -__fmul_rn(sine, value.y));
+            translated_imag = __fmaf_rn(cosine, value.y,
+                                        __fmul_rn(sine, value.x));
+        }
+        else
+        {
+            translated_real = __fmaf_rn(-sine, value.y,
+                                        __fmul_rn(cosine, value.x));
+            translated_imag = __fmaf_rn(sine, value.x,
+                                        __fmul_rn(cosine, value.y));
+        }
+        translated[flat] = make_float2(translated_real, translated_imag);
+        numerator[flat] = make_float2(
+            translated_real * weight,
+            translated_imag * weight);
+    }
+}
+
+cudaError_t launch_relion_bpref_operands_f32(
+    cudaStream_t stream,
+    const float2* images,
+    const float* ctf,
+    const float* minvsigma2,
+    const float* posterior_over_weight_norm,
+    const float* translation_angles,
+    const int32_t* pixel_indices,
+    float2* numerator,
+    float* denominator,
+    float2* translated,
+    float* weighted_ctf,
+    int64_t batch_size,
+    int64_t translation_count,
+    int64_t pixel_count,
+    int image_h,
+    int image_half_width,
+    int arithmetic_variant)
+{
+    int64_t total = batch_size * translation_count * pixel_count;
+    if (total == 0) return cudaSuccess;
+    int blocks = static_cast<int>(batch_size * translation_count);
+    #define RELION_BPREF_VARIANT(PHASE, TRANSLATE)                         \
+        relion_bpref_operands_f32_kernel<PHASE, TRANSLATE><<<              \
+            blocks, kRelionBprefOperandsBlockSize, 0, stream>>>(           \
+            images, ctf, minvsigma2, posterior_over_weight_norm,           \
+            translation_angles, pixel_indices, numerator, denominator,     \
+            translated, weighted_ctf,                                      \
+            batch_size, translation_count, pixel_count, image_h,           \
+            image_half_width)
+    switch (arithmetic_variant)
+    {
+    case 0: RELION_BPREF_VARIANT(0, 0); break;
+    case 1: RELION_BPREF_VARIANT(0, 1); break;
+    case 2: RELION_BPREF_VARIANT(0, 2); break;
+    case 3: RELION_BPREF_VARIANT(0, 3); break;
+    case 4: RELION_BPREF_VARIANT(1, 0); break;
+    case 5: RELION_BPREF_VARIANT(1, 1); break;
+    case 6: RELION_BPREF_VARIANT(1, 2); break;
+    case 7: RELION_BPREF_VARIANT(1, 3); break;
+    case 8: RELION_BPREF_VARIANT(2, 0); break;
+    case 9: RELION_BPREF_VARIANT(2, 1); break;
+    case 10: RELION_BPREF_VARIANT(2, 2); break;
+    case 11: RELION_BPREF_VARIANT(2, 3); break;
+    case 12: RELION_BPREF_VARIANT(3, 0); break;
+    case 13: RELION_BPREF_VARIANT(3, 1); break;
+    case 14: RELION_BPREF_VARIANT(3, 2); break;
+    case 15: RELION_BPREF_VARIANT(3, 3); break;
+    default: return cudaErrorInvalidValue;
+    }
+    #undef RELION_BPREF_VARIANT
     return cudaGetLastError();
 }
 
@@ -4421,6 +4648,212 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionTranslateBprefF32Impl(
+    cudaStream_t stream,
+    int64_t image_h,
+    int64_t image_half_width,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer weighted_ctf,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer pixel_indices,
+    ffi::Result<ffi::AnyBuffer> weighted_shifted)
+{
+    if (images.element_type() != ffi::DataType::C64 ||
+        weighted_shifted->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateBprefF32: images/output must be C64");
+    if (weighted_ctf.element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateBprefF32: weighted CTF must be F32");
+    if (translation_angles.element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateBprefF32: translation angles must be F32");
+    if (pixel_indices.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateBprefF32: pixel indices must be S32");
+    if (image_h <= 0 || image_half_width <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateBprefF32: image dimensions must be positive");
+
+    auto image_dims = images.dimensions();
+    auto weighted_ctf_dims = weighted_ctf.dimensions();
+    auto translation_dims = translation_angles.dimensions();
+    auto pixel_dims = pixel_indices.dimensions();
+    auto output_dims = weighted_shifted->dimensions();
+    if (image_dims.size() != 2)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateBprefF32: images must have shape (B,P)");
+    if (weighted_ctf_dims.size() != 2 ||
+        weighted_ctf_dims[0] != image_dims[0] ||
+        weighted_ctf_dims[1] != image_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateBprefF32: weighted CTF must have shape (B,P)");
+    if (translation_dims.size() != 2 || translation_dims[1] != 2)
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateBprefF32: translation angles must have shape (T,2)");
+    if (pixel_dims.size() != 1 || pixel_dims[0] != image_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateBprefF32: pixel indices must have shape (P,)");
+    if (output_dims.size() != 2 ||
+        output_dims[0] != image_dims[0] * translation_dims[0] ||
+        output_dims[1] != image_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateBprefF32: output must have shape (B*T,P)");
+
+    cudaError_t err = launch_relion_translate_bpref_f32(
+        stream,
+        reinterpret_cast<const float2*>(images.untyped_data()),
+        static_cast<const float*>(weighted_ctf.untyped_data()),
+        static_cast<const float*>(translation_angles.untyped_data()),
+        static_cast<const int32_t*>(pixel_indices.untyped_data()),
+        reinterpret_cast<float2*>(weighted_shifted->untyped_data()),
+        image_dims[0],
+        translation_dims[0],
+        image_dims[1],
+        static_cast<int>(image_h),
+        static_cast<int>(image_half_width));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionTranslateBprefF32, RelionTranslateBprefF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_half_width")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionBprefOperandsF32Impl(
+    cudaStream_t stream,
+    int64_t image_h,
+    int64_t image_half_width,
+    int64_t arithmetic_variant,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer ctf,
+    ffi::AnyBuffer minvsigma2,
+    ffi::AnyBuffer posterior_over_weight_norm,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer pixel_indices,
+    ffi::Result<ffi::AnyBuffer> numerator,
+    ffi::Result<ffi::AnyBuffer> denominator,
+    ffi::Result<ffi::AnyBuffer> translated,
+    ffi::Result<ffi::AnyBuffer> weighted_ctf)
+{
+    if (images.element_type() != ffi::DataType::C64 ||
+        numerator->element_type() != ffi::DataType::C64 ||
+        translated->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionBprefOperandsF32: complex inputs/outputs must be C64");
+    if (ctf.element_type() != ffi::DataType::F32 ||
+        minvsigma2.element_type() != ffi::DataType::F32 ||
+        posterior_over_weight_norm.element_type() != ffi::DataType::F32 ||
+        translation_angles.element_type() != ffi::DataType::F32 ||
+        denominator->element_type() != ffi::DataType::F32 ||
+        weighted_ctf->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionBprefOperandsF32: scalar inputs/denominator must be F32");
+    if (pixel_indices.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument(
+            "RelionBprefOperandsF32: pixel indices must be S32");
+    if (image_h <= 0 || image_half_width <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionBprefOperandsF32: image dimensions must be positive");
+    if (arithmetic_variant < 0 || arithmetic_variant > 15)
+        return ffi::Error::InvalidArgument(
+            "RelionBprefOperandsF32: arithmetic variant must be in [0,15]");
+
+    auto image_dims = images.dimensions();
+    auto ctf_dims = ctf.dimensions();
+    auto noise_dims = minvsigma2.dimensions();
+    auto posterior_dims = posterior_over_weight_norm.dimensions();
+    auto translation_dims = translation_angles.dimensions();
+    auto pixel_dims = pixel_indices.dimensions();
+    auto numerator_dims = numerator->dimensions();
+    auto denominator_dims = denominator->dimensions();
+    auto translated_dims = translated->dimensions();
+    auto weighted_ctf_dims = weighted_ctf->dimensions();
+    if (image_dims.size() != 2)
+        return ffi::Error::InvalidArgument(
+            "RelionBprefOperandsF32: images must have shape (B,P)");
+    if (ctf_dims.size() != 2 || noise_dims.size() != 2 ||
+        ctf_dims[0] != image_dims[0] || ctf_dims[1] != image_dims[1] ||
+        noise_dims[0] != image_dims[0] || noise_dims[1] != image_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionBprefOperandsF32: ctf/minvsigma2 must match images");
+    if (translation_dims.size() != 2 || translation_dims[1] != 2)
+        return ffi::Error::InvalidArgument(
+            "RelionBprefOperandsF32: translation angles must have shape (T,2)");
+    if (posterior_dims.size() != 2 || posterior_dims[0] != image_dims[0] ||
+        posterior_dims[1] != translation_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionBprefOperandsF32: posterior must have shape (B,T)");
+    if (pixel_dims.size() != 1 || pixel_dims[0] != image_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionBprefOperandsF32: pixel indices must have shape (P,)");
+    if (numerator_dims.size() != 2 || denominator_dims.size() != 2 ||
+        translated_dims.size() != 2 || weighted_ctf_dims.size() != 2 ||
+        numerator_dims[0] != image_dims[0] * translation_dims[0] ||
+        numerator_dims[1] != image_dims[1] ||
+        denominator_dims[0] != numerator_dims[0] ||
+        denominator_dims[1] != numerator_dims[1] ||
+        translated_dims[0] != numerator_dims[0] ||
+        translated_dims[1] != numerator_dims[1] ||
+        weighted_ctf_dims[0] != numerator_dims[0] ||
+        weighted_ctf_dims[1] != numerator_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionBprefOperandsF32: outputs must have shape (B*T,P)");
+
+    cudaError_t err = launch_relion_bpref_operands_f32(
+        stream,
+        reinterpret_cast<const float2*>(images.untyped_data()),
+        static_cast<const float*>(ctf.untyped_data()),
+        static_cast<const float*>(minvsigma2.untyped_data()),
+        static_cast<const float*>(posterior_over_weight_norm.untyped_data()),
+        static_cast<const float*>(translation_angles.untyped_data()),
+        static_cast<const int32_t*>(pixel_indices.untyped_data()),
+        reinterpret_cast<float2*>(numerator->untyped_data()),
+        static_cast<float*>(denominator->untyped_data()),
+        reinterpret_cast<float2*>(translated->untyped_data()),
+        static_cast<float*>(weighted_ctf->untyped_data()),
+        image_dims[0],
+        translation_dims[0],
+        image_dims[1],
+        static_cast<int>(image_h),
+        static_cast<int>(image_half_width),
+        static_cast<int>(arithmetic_variant));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionBprefOperandsF32, RelionBprefOperandsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_half_width")
+        .Attr<int64_t>("arithmetic_variant")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
 );
 

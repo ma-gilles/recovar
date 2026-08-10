@@ -1076,8 +1076,20 @@ def _default_refinement_subsets(n_images, seed, n_classes):
     return np.sort(indices[: int(n_images) // 2]), np.sort(indices[int(n_images) // 2 :])
 
 
-def _relion_halfset_and_accuracy_layout(our_particles, relion_particles):
-    """Map RELION's internal data rows onto RECOVAR's half-local ordering."""
+def _relion_halfset_and_accuracy_layout(
+    our_particles,
+    relion_particles,
+    *,
+    random_seed=None,
+    first_iteration=1,
+):
+    """Map RELION particle rows onto RECOVAR's half-local ordering.
+
+    Supplying ``random_seed`` selects fresh AutoRefine semantics: one paired
+    half shuffle under a continued libc-rand stream, followed by a stable
+    numeric optics-group sort. Continuation and replay callers omit the seed
+    and retain their existing row order.
+    """
     our_row_by_identity = _particle_identity_rows(
         our_particles,
         label="RECOVAR input STAR",
@@ -1099,18 +1111,52 @@ def _relion_halfset_and_accuracy_layout(our_particles, relion_particles):
         [relion_row_by_identity[identity] for identity in our_identities],
         dtype=np.int64,
     )
-    our_subsets = relion_subsets[our_relion_rows]
-    half1_idx = np.flatnonzero(our_subsets == 1).astype(np.int64)
-    half2_idx = np.flatnonzero(our_subsets == 2).astype(np.int64)
+    if random_seed is None:
+        our_subsets = relion_subsets[our_relion_rows]
+        half1_idx = np.flatnonzero(our_subsets == 1).astype(np.int64)
+        half2_idx = np.flatnonzero(our_subsets == 2).astype(np.int64)
+        half1_local_by_our_row = {
+            int(our_row): local for local, our_row in enumerate(half1_idx)
+        }
+        half1_base_order_local = np.asarray(
+            [
+                half1_local_by_our_row[
+                    our_row_by_identity[relion_identities[relion_row]]
+                ]
+                for relion_row in np.flatnonzero(relion_subsets == 1)
+            ],
+            dtype=np.int64,
+        )
+    else:
+        from recovar.em.dense_single_volume.helpers.expected_accuracy import (
+            relion_auto_refine_half_orders,
+        )
 
-    half1_local_by_our_row = {int(our_row): local for local, our_row in enumerate(half1_idx)}
-    half1_base_order_local = np.asarray(
-        [
-            half1_local_by_our_row[our_row_by_identity[relion_identities[relion_row]]]
-            for relion_row in np.flatnonzero(relion_subsets == 1)
-        ],
-        dtype=np.int64,
-    )
+        relion_optics = (
+            np.asarray(relion_particles["rlnOpticsGroup"], dtype=np.int64)
+            if "rlnOpticsGroup" in relion_particles.columns
+            else None
+        )
+        ordered_relion_rows = relion_auto_refine_half_orders(
+            relion_subsets,
+            int(random_seed),
+            int(first_iteration),
+            optics_group_ids=relion_optics,
+        )
+        half1_idx, half2_idx = (
+            np.asarray(
+                [
+                    our_row_by_identity[relion_identities[relion_row]]
+                    for relion_row in order
+                ],
+                dtype=np.int64,
+            )
+            for order in ordered_relion_rows
+        )
+        # The dataset is already in RELION's physical order. Expected
+        # accuracy consumes an explicit identity trial order rather than
+        # replaying the shuffle through an inverse permutation.
+        half1_base_order_local = None
     half1_particle_ids = our_relion_rows[half1_idx]
     if "rlnOpticsGroup" in relion_particles.columns:
         relion_optics = np.asarray(relion_particles["rlnOpticsGroup"], dtype=np.int64)
@@ -1249,7 +1295,12 @@ def _compute_relion_fresh_k1_initial_sigma2(
     return sigma2_per_group
 
 
-def _relion_sigma2_to_native_noise_variance(sigma2, *, grid_size: int) -> np.ndarray:
+def _relion_sigma2_to_native_noise_variance(
+    sigma2,
+    *,
+    grid_size: int,
+    output_dtype=np.float32,
+) -> np.ndarray:
     """Expand a RELION-unit radial sigma2 spectrum into RECOVAR FFT units."""
 
     radial_native = np.asarray(sigma2, dtype=np.float64) * float(grid_size) ** 4
@@ -1259,7 +1310,7 @@ def _relion_sigma2_to_native_noise_variance(sigma2, *, grid_size: int) -> np.nda
             (int(grid_size), int(grid_size)),
             extend_last_frequency=True,
         ),
-        dtype=np.float32,
+        dtype=output_dtype,
     ).reshape(-1)
 
 
@@ -1274,6 +1325,17 @@ def _replay_complete_initial_particle_state(n_classes, init_relion_iteration):
     """
 
     return int(n_classes) == 1 and int(init_relion_iteration) == 0
+
+
+def _use_fresh_auto_refine_particle_order(args, frozen_boundary) -> bool:
+    """Whether this run owns RELION's one-time fresh AutoRefine ordering."""
+
+    return (
+        int(args.n_classes) == 1
+        and int(args.init_relion_iteration) == 0
+        and frozen_boundary is None
+        and args.perturb_replay_relion_dir is None
+    )
 
 
 def _refine_sampling_kwargs(args, init_healpix_order):
@@ -3113,29 +3175,50 @@ def main():
     # must map by rlnImageName rather than assuming row positions coincide.
     our_names = np.asarray(our_particles["rlnImageName"])
     expected_accuracy_half1_base_order_local = None
+    expected_accuracy_half1_trial_order_local = None
     expected_accuracy_half1_optics_group_ids = None
     expected_accuracy_half1_particle_ids = None
     expected_accuracy_half1_ctf_params = None
     expected_accuracy_do_ctf_correction = None
     use_relion_live_initial_noise = _k1_relion_live_initial_noise_enabled()
+    exact_relion_bpref_operands_requested = (
+        os.environ.get("RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS", "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"}
+    )
     relion_fresh_initial_noise_source_rows = None
     relion_fresh_initial_noise_optics_group_ids = None
     relion_particles = None
     relion_group_particles = None
     relion_group_source = None
+    use_fresh_auto_refine_order = False
 
     if args.relion_half_sets is not None:
         # Use RELION's half-set split from rlnRandomSubset
         logger.info("Loading RELION half-set assignments from %s", args.relion_half_sets)
         relion_data = _starfile.read(args.relion_half_sets)
         relion_particles = relion_data["particles"]
+        use_fresh_auto_refine_order = _use_fresh_auto_refine_particle_order(
+            args,
+            frozen_boundary,
+        )
         (
             half1_idx,
             half2_idx,
             expected_accuracy_half1_base_order_local,
             expected_accuracy_half1_optics_group_ids,
             expected_accuracy_half1_particle_ids,
-        ) = _relion_halfset_and_accuracy_layout(our_particles, relion_particles)
+        ) = _relion_halfset_and_accuracy_layout(
+            our_particles,
+            relion_particles,
+            random_seed=args.seed if use_fresh_auto_refine_order else None,
+        )
+        if use_fresh_auto_refine_order:
+            expected_accuracy_half1_trial_order_local = np.arange(
+                half1_idx.size,
+                dtype=np.int64,
+            )
         if use_relion_live_initial_noise:
             (
                 relion_fresh_initial_noise_source_rows,
@@ -3152,6 +3235,12 @@ def main():
             dtype=np.float64,
         )
         logger.info("Using RELION half-set split: %d (subset=1) + %d (subset=2)", len(half1_idx), len(half2_idx))
+        if use_fresh_auto_refine_order:
+            logger.info(
+                "Applied RELION fresh paired AutoRefine particle order with effective seed %d; "
+                "BPref will preserve this physical order",
+                int(args.seed) + 1,
+            )
     else:
         half1_idx, half2_idx = _default_refinement_subsets(n_images, args.seed, args.n_classes)
         if args.n_classes > 1:
@@ -3837,6 +3926,9 @@ def main():
         relion_live_initial_noise_variance = _relion_sigma2_to_native_noise_variance(
             relion_live_initial_sigma2,
             grid_size=int(ds.grid_size),
+            output_dtype=(
+                np.float64 if exact_relion_bpref_operands_requested else np.float32
+            ),
         )
         logger.warning(
             "Opt-in fresh K=1 RELION live initial noise enabled: particles=%d "
@@ -4139,9 +4231,14 @@ def main():
         if initial_overrides[0] is not None:
             if relion_live_initial_noise_variance is not None:
                 initial_overrides[0] = dict(initial_overrides[0])
+                initial_noise_dtype = (
+                    np.float64
+                    if exact_relion_bpref_operands_requested
+                    else np.float32
+                )
                 initial_overrides[0]["noise_variance"] = [
-                    np.asarray(relion_live_initial_noise_variance, dtype=np.float32).copy(),
-                    np.asarray(relion_live_initial_noise_variance, dtype=np.float32).copy(),
+                    np.asarray(relion_live_initial_noise_variance, dtype=initial_noise_dtype).copy(),
+                    np.asarray(relion_live_initial_noise_variance, dtype=initial_noise_dtype).copy(),
                 ]
                 logger.info(
                     "STRICT-PARITY: first expectation consumes computed live "
@@ -4392,6 +4489,7 @@ def main():
         perturb_seed=effective_perturb_seed,
         optimizer_random_seed=args.seed,
         expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
+        expected_accuracy_half1_trial_order_local=expected_accuracy_half1_trial_order_local,
         expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
         expected_accuracy_half1_particle_ids=expected_accuracy_half1_particle_ids,
         expected_accuracy_half1_ctf_params=expected_accuracy_half1_ctf_params,
@@ -4473,6 +4571,7 @@ def main():
         use_per_half_mean_variance=(
             frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
         ),
+        preserve_bpref_particle_order=use_fresh_auto_refine_order,
         state_swap_probe=state_swap_probe,
     )
 

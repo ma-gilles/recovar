@@ -31,7 +31,29 @@ def test_compare_particle_exact_membership_and_mass() -> None:
     assert report["positive_rotation_sets_exact"]
     assert report["significant_sample_count_exact"]
     assert report["reconstruction_mass_gate_passed"]
+    assert report["candidate_union_posterior_mass_relative_l2"] < 1.0e-7
+    assert report["candidate_union_reconstruction_mass_relative_l2"] < 1.0e-7
     assert report["strict_particle_passed"]
+    compact = analyzer.compare_particle_rotation_mass(
+        relion_rotations=rotations,
+        relion_weights=relion,
+        relion_significant_weight=0.1,
+        relion_weight_norm=1.0,
+        recovar_rotations=rotations,
+        recovar_candidate_translation_count=np.sum(recovar > 0, axis=1),
+        recovar_posterior_rotation_mass=np.sum(recovar, axis=1),
+        recovar_reconstruction_rotation_mass=np.sum(reconstruction, axis=1),
+        recovar_significant_translation_count=np.sum(reconstruction > 0, axis=1),
+    )
+    for key in (
+        "candidate_sets_exact",
+        "positive_rotation_sets_exact",
+        "significant_sample_count_exact",
+        "strict_particle_passed",
+        "candidate_union_posterior_mass_relative_l2",
+        "candidate_union_reconstruction_mass_relative_l2",
+    ):
+        assert compact[key] == report[key]
 
 
 def test_compare_particle_detects_translation_support_difference() -> None:
@@ -63,6 +85,7 @@ def test_compare_particle_detects_candidate_difference() -> None:
     assert not report["candidate_sets_exact"]
     assert not report["positive_rotation_sets_exact"]
     assert report["relion_unmatched_candidate_count"] == 1
+    assert report["candidate_union_reconstruction_mass_relative_l2"] > 0.0
 
 
 def test_compare_particle_detects_mass_difference() -> None:

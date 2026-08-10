@@ -223,6 +223,14 @@ _BPREF_CONTRIBUTION_DUMP_CLASS_ENV = "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS"
 _BPREF_CONTRIBUTION_STOP_AFTER_TARGET_ENV = (
     "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET"
 )
+_BPREF_MEMBERSHIP_DUMP_DIR_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR"
+_BPREF_MEMBERSHIP_DUMP_ITERATION_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_ITERATION"
+_BPREF_MEMBERSHIP_DUMP_HALF_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_HALF"
+_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV = "RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE"
+_BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV = "RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE"
+_BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV = (
+    "RECOVAR_K1_BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE"
+)
 _PASS2_DUMP_DIR_ENV = "RECOVAR_PASS2_DUMP_DIR"
 _PASS2_DUMP_CONSERVATIVE_EXECUTION_ENV = "RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
@@ -258,6 +266,7 @@ _DEFAULT_KCLASS_RAW_HOST_STAGING_MAX_BYTES = 8 * 1024**3
 _native_mstep_dump_counter = 0
 _bpref_contribution_dump_counter = 0
 _bpref_contribution_call_counter = 0
+_bpref_membership_dump_counter = 0
 _bpref_contribution_context = {"iteration": -1, "half": -1}
 _bpref_image_identity_cache: dict[str, np.ndarray] = {}
 _BPrefPanelKey = tuple[int, int, str, int]
@@ -996,6 +1005,8 @@ def _maybe_dump_bpref_contribution_rows(
     shadow_reduction_agreement,
     device_signature_active: bool | None = None,
     class_index: int = 0,
+    mstep_shifted_recon=None,
+    mstep_ctf2_over_nv=None,
 ):
     """Dump posterior-reduced active rows for whole-accumulator scatter replay.
 
@@ -1126,6 +1137,16 @@ def _maybe_dump_bpref_contribution_rows(
             relion_preprocess_normalization_factors
         ).astype(np.float32, copy=False)
         captured_image_mask = np.asarray(image_mask, dtype=np.float32)
+        captured_mstep_shifted_recon = (
+            np.empty((0,), dtype=np.complex64)
+            if mstep_shifted_recon is None
+            else _select_particle_axis(mstep_shifted_recon)
+        )
+        captured_mstep_ctf2_over_nv = (
+            np.empty((0,), dtype=np.float32)
+            if mstep_ctf2_over_nv is None
+            else _select_particle_axis(mstep_ctf2_over_nv)
+        )
     else:
         raw_real_images = np.empty((0,), dtype=np.float32)
         raw_source_dtype = ""
@@ -1136,6 +1157,8 @@ def _maybe_dump_bpref_contribution_rows(
         captured_scale_corrections = np.empty((0,), dtype=np.float32)
         captured_normalization_factors = np.empty((0,), dtype=np.float32)
         captured_image_mask = np.empty((0,), dtype=np.float32)
+        captured_mstep_shifted_recon = np.empty((0,), dtype=np.complex64)
+        captured_mstep_ctf2_over_nv = np.empty((0,), dtype=np.float32)
     rotation_log_prior_np = _select_particle_axis(rotation_log_prior).astype(np.float64, copy=False)
     translation_log_prior_np = _select_particle_axis(translation_log_prior).astype(np.float64, copy=False)
     combined_scores_np = _select_particle_axis(scores).astype(np.float64, copy=False)
@@ -1268,6 +1291,8 @@ def _maybe_dump_bpref_contribution_rows(
         reconstruction_probs_storage_policy=np.asarray(
             "native-dtype-preserved;dtype-itemsize-nbytes-bound"
         ),
+        mstep_shifted_recon=captured_mstep_shifted_recon,
+        mstep_ctf2_over_nv=captured_mstep_ctf2_over_nv,
         reconstruction_mask=_select_particle_axis(reconstruction_mask).astype(bool, copy=False),
         reconstruction_sum_weight=_select_particle_axis(reconstruction_sum_weight).astype(np.float64, copy=False),
         reconstruction_threshold=_select_particle_axis(reconstruction_threshold).astype(np.float64, copy=False),
@@ -2450,6 +2475,9 @@ def _bucket_pass2_inputs(
     tail_bucket_coalesce_max_images=None,
     tail_bucket_coalesce_max_inflation=None,
     tail_bucket_coalesce_min_bucket_size=None,
+    processing_order_override=None,
+    processing_order_chunk_size=1,
+    processing_order_group_by_bucket_size=False,
 ):
     """Group images into buckets that share a padded rotation count.
 
@@ -2487,8 +2515,33 @@ def _bucket_pass2_inputs(
         n_classes=1,
     )
 
-    # Group by bucket size, smaller buckets first
-    processing_order = np.lexsort((rotation_counts, bucket_sizes)).astype(np.int64)
+    if processing_order_override is not None:
+        processing_order = np.asarray(processing_order_override, dtype=np.int64).reshape(-1)
+        if processing_order.shape != (n_images,):
+            raise ValueError(
+                "processing_order_override must have shape "
+                f"({n_images},), got {processing_order.shape}",
+            )
+        if not np.array_equal(np.sort(processing_order), np.arange(n_images, dtype=np.int64)):
+            raise ValueError("processing_order_override must be a permutation of image indices")
+        if not processing_order_group_by_bucket_size:
+            ordered_chunk_size = int(processing_order_chunk_size)
+            if ordered_chunk_size <= 0:
+                raise ValueError("processing_order_chunk_size must be positive")
+            return [
+                {
+                    "bucket_size": int(np.max(bucket_sizes[chunk])),
+                    "image_indices": np.asarray(chunk, dtype=np.int64),
+                }
+                for start in range(0, n_images, ordered_chunk_size)
+                for chunk in (processing_order[start : start + ordered_chunk_size],)
+            ]
+    else:
+        # Group by bucket size, smaller buckets first. The secondary rotation
+        # count key is historical RECOVAR behavior; an explicit order keeps
+        # RELION order stable within each equal padded-size bucket.
+        processing_order = np.lexsort((rotation_counts, bucket_sizes)).astype(np.int64)
+
     unique_bucket_sizes = np.unique(bucket_sizes[processing_order])
 
     buckets = []
@@ -2510,6 +2563,46 @@ def _bucket_pass2_inputs(
                 }
             )
     return buckets
+
+
+def _load_bpref_execution_order_local_override(n_images: int) -> np.ndarray | None:
+    """Load a fail-closed diagnostic K=1 particle execution permutation."""
+
+    raw_path = os.environ.get(_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV)
+    if raw_path is None or not raw_path.strip():
+        return None
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute() or not path.is_file():
+        raise ValueError(
+            f"{_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV} must name an existing absolute file",
+        )
+    order = np.asarray(np.loadtxt(path, dtype=np.int64, ndmin=1), dtype=np.int64).reshape(-1)
+    if order.shape != (int(n_images),):
+        raise ValueError(
+            f"{_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV} must contain {int(n_images)} rows, "
+            f"got {order.shape[0]}",
+        )
+    if not np.array_equal(np.sort(order), np.arange(int(n_images), dtype=np.int64)):
+        raise ValueError(f"{_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV} must contain a permutation")
+    return order
+
+
+def _resolve_bpref_processing_order(
+    n_images: int,
+    *,
+    preserve_bpref_particle_order: bool,
+) -> np.ndarray | None:
+    """Resolve production or diagnostic K=1 BPref execution ordering."""
+
+    diagnostic_order = _load_bpref_execution_order_local_override(n_images)
+    if preserve_bpref_particle_order and diagnostic_order is not None:
+        raise ValueError(
+            "preserve_bpref_particle_order cannot be combined with "
+            f"{_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV}"
+        )
+    if preserve_bpref_particle_order:
+        return np.arange(int(n_images), dtype=np.int64)
+    return diagnostic_order
 
 
 def _bucket_sparse_k_class_pass2_inputs(
@@ -7416,6 +7509,176 @@ def _reorder_to_indices(image_indices_returned, requested_image_indices, *arrays
     return tuple(arr[order] for arr in arrays)
 
 
+def _bpref_membership_dump_requested():
+    dump_dir = os.environ.get(_BPREF_MEMBERSHIP_DUMP_DIR_ENV, "").strip()
+    if not dump_dir:
+        return False
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    context_half = int(_bpref_contribution_context["half"])
+    target_iteration = os.environ.get(_BPREF_MEMBERSHIP_DUMP_ITERATION_ENV)
+    if target_iteration and context_iteration != int(target_iteration):
+        return False
+    target_half = os.environ.get(_BPREF_MEMBERSHIP_DUMP_HALF_ENV)
+    if target_half:
+        if int(target_half) not in {1, 2}:
+            raise ValueError(f"{_BPREF_MEMBERSHIP_DUMP_HALF_ENV} must be 1 or 2")
+        if context_half != int(target_half):
+            return False
+    return True
+
+
+def _maybe_dump_k1_bpref_rotation_mass(
+    *,
+    experiment_dataset,
+    image_indices,
+    current_size,
+    actual_counts,
+    rotations,
+    rotation_indices,
+    candidate_translation_count,
+    posterior_rotation_mass,
+    reconstruction_rotation_mass,
+    significant_translation_count,
+    reconstruction_sum_weight,
+    reconstruction_threshold,
+):
+    """Dump the sufficient per-rotation inputs to the BPref denominator."""
+
+    if not _bpref_membership_dump_requested():
+        return
+    dump_dir = os.environ[_BPREF_MEMBERSHIP_DUMP_DIR_ENV].strip()
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    context_half = int(_bpref_contribution_context["half"])
+
+    local_indices = np.asarray(image_indices, dtype=np.int64)
+    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    counts = np.asarray(actual_counts, dtype=np.int64)
+    rotations_np = np.asarray(rotations, dtype=np.float32)
+    rotation_indices_np = np.asarray(rotation_indices, dtype=np.int64)
+    candidate_count_np = np.asarray(candidate_translation_count, dtype=np.int32)
+    posterior_mass_np = np.asarray(posterior_rotation_mass)
+    reconstruction_mass_np = np.asarray(reconstruction_rotation_mass)
+    significant_count_np = np.asarray(significant_translation_count, dtype=np.int32)
+    sum_weight_np = np.asarray(reconstruction_sum_weight)
+    threshold_np = np.asarray(reconstruction_threshold)
+
+    batch = local_indices.size
+    topology = posterior_mass_np.shape
+    if counts.shape != (batch,) or len(topology) != 2 or topology[0] != batch:
+        raise ValueError("BPref rotation-mass topology mismatch")
+    if (
+        reconstruction_mass_np.shape != topology
+        or candidate_count_np.shape != topology
+        or significant_count_np.shape != topology
+    ):
+        raise ValueError("BPref rotation-mass arrays have inconsistent topology")
+    if rotations_np.shape != (*topology, 3, 3):
+        raise ValueError("BPref rotation-mass rotation topology mismatch")
+    if rotation_indices_np.ndim == 1:
+        rotation_indices_np = np.broadcast_to(rotation_indices_np[None, :], topology)
+    if rotation_indices_np.shape != topology:
+        raise ValueError("BPref rotation-mass index topology mismatch")
+    if np.any(counts < 0) or np.any(counts > topology[1]):
+        raise ValueError("BPref rotation counts are outside the padded rotation axis")
+    if np.any(candidate_count_np < 0) or np.any(significant_count_np < 0):
+        raise ValueError("BPref translation counts are negative")
+    if np.any(significant_count_np > candidate_count_np):
+        raise ValueError("BPref significant translations exceed candidate translations")
+    if np.any(posterior_mass_np < 0) or np.any(reconstruction_mass_np < 0):
+        raise ValueError("BPref rotation masses are negative")
+    if np.any(reconstruction_mass_np > posterior_mass_np + np.finfo(np.float32).eps):
+        raise ValueError("BPref reconstruction mass exceeds posterior mass")
+    padded = np.arange(topology[1])[None, :] >= counts[:, None]
+    if (
+        np.any(candidate_count_np[padded])
+        or np.any(significant_count_np[padded])
+        or np.any(posterior_mass_np[padded])
+        or np.any(reconstruction_mass_np[padded])
+    ):
+        raise ValueError("BPref padded rotations carry membership or mass")
+    if np.max(candidate_count_np, initial=0) > np.iinfo(np.uint16).max:
+        raise ValueError("BPref candidate translation count exceeds uint16")
+
+    global _bpref_membership_dump_counter
+    dump_index = _bpref_membership_dump_counter
+    _bpref_membership_dump_counter += 1
+    path = Path(dump_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    output = path / (
+        f"bpref_membership_it{context_iteration:03d}_h{context_half}"
+        f"_dump{dump_index:06d}_cs{int(current_size):03d}.npz"
+    )
+    np.savez(
+        output,
+        schema=np.asarray("recovar-bpref-rotation-mass-v2"),
+        iteration=np.int32(context_iteration),
+        half=np.int32(context_half),
+        current_size=np.int32(current_size),
+        local_indices=local_indices,
+        original_indices=original_indices,
+        stack_indices_1based=original_indices + 1,
+        actual_counts=counts,
+        rotations=rotations,
+        rotation_indices=rotation_indices_np,
+        candidate_translation_count=candidate_count_np.astype(np.uint16),
+        posterior_rotation_mass=posterior_mass_np,
+        reconstruction_rotation_mass=reconstruction_mass_np,
+        significant_translation_count=significant_count_np.astype(np.uint16),
+        reconstruction_sum_weight=sum_weight_np,
+        reconstruction_threshold=threshold_np,
+    )
+
+
+def _maybe_dump_k1_bpref_membership(
+    *,
+    experiment_dataset,
+    image_indices,
+    current_size,
+    actual_counts,
+    rotations,
+    rotation_indices,
+    fine_translations,
+    candidate_mask,
+    posterior_probs,
+    reconstruction_probs,
+    reconstruction_mask,
+    reconstruction_sum_weight,
+    reconstruction_threshold,
+):
+    """Collapse a rectangular fine posterior to sufficient rotation masses."""
+
+    if not _bpref_membership_dump_requested():
+        return
+    candidate_mask_np = np.asarray(candidate_mask, dtype=bool)
+    posterior_np = np.asarray(posterior_probs)
+    reconstruction_np = np.asarray(reconstruction_probs)
+    reconstruction_mask_np = np.asarray(reconstruction_mask, dtype=bool)
+    if posterior_np.ndim != 3:
+        raise ValueError("BPref membership posterior topology mismatch")
+    if reconstruction_np.shape != posterior_np.shape:
+        raise ValueError("BPref membership reconstruction-posterior shape mismatch")
+    if candidate_mask_np.shape != posterior_np.shape:
+        raise ValueError("BPref membership candidate-mask shape mismatch")
+    if reconstruction_mask_np.shape != posterior_np.shape:
+        raise ValueError("BPref membership reconstruction-mask shape mismatch")
+    if not np.array_equal(reconstruction_mask_np, reconstruction_np > 0):
+        raise ValueError("BPref membership mask does not equal positive reconstruction posterior")
+    _maybe_dump_k1_bpref_rotation_mass(
+        experiment_dataset=experiment_dataset,
+        image_indices=image_indices,
+        current_size=current_size,
+        actual_counts=actual_counts,
+        rotations=rotations,
+        rotation_indices=rotation_indices,
+        candidate_translation_count=np.sum(candidate_mask_np, axis=-1, dtype=np.int32),
+        posterior_rotation_mass=np.sum(posterior_np, axis=-1),
+        reconstruction_rotation_mass=np.sum(reconstruction_np, axis=-1),
+        significant_translation_count=np.sum(reconstruction_mask_np, axis=-1, dtype=np.int32),
+        reconstruction_sum_weight=reconstruction_sum_weight,
+        reconstruction_threshold=reconstruction_threshold,
+    )
+
+
 def _maybe_dump_pass2_bucket(
     *,
     experiment_dataset,
@@ -8059,6 +8322,117 @@ def _pass2_dump_requested_for_bucket(
     )
 
 
+_RELION_EXACT_CTF_SOURCE_CACHE: dict[tuple[str, tuple[int, int]], dict] = {}
+
+
+def _star_column(table, name: str):
+    """Return a RELION STAR column with or without its legacy underscore."""
+
+    for candidate in (name, f"_{name}"):
+        if candidate in table.columns:
+            return table[candidate]
+    raise ValueError(f"RELION source STAR column {name} is missing")
+
+
+def _relion_exact_ctf_half_from_source_star(
+    experiment_dataset,
+    image_indices,
+    image_shape,
+):
+    """Evaluate source-precision SPA CTFs with RELION's scalar implementation.
+
+    The result uses RECOVAR's centered-y half-spectrum coordinates and sign.
+    The source STAR is mandatory because the ordinary dataset metadata has
+    already been rounded to float32 before pass 2.
+    """
+
+    source_star = os.environ.get("RECOVAR_K1_RELION_EXACT_CTF_STAR", "").strip()
+    if not source_star:
+        raise ValueError(
+            "exact RELION BPref operands require RECOVAR_K1_RELION_EXACT_CTF_STAR"
+        )
+    source_path = Path(source_star).expanduser().resolve()
+    cache_key = (str(source_path), tuple(int(size) for size in image_shape))
+    cache = _RELION_EXACT_CTF_SOURCE_CACHE.get(cache_key)
+    if cache is None:
+        from recovar.data_io.starfile import read_star
+        from recovar.relion_bind import _relion_bind_core as relion_bind
+
+        particles, optics = read_star(str(source_path))
+        if optics is None:
+            raise ValueError(f"RELION source STAR has no optics table: {source_path}")
+        optics_ids = np.asarray(_star_column(optics, "rlnOpticsGroup"), dtype=np.int64)
+        if np.unique(optics_ids).size != optics_ids.size:
+            raise ValueError(f"RELION source STAR has duplicate optics groups: {source_path}")
+        cache = {
+            "particles": particles,
+            "optics": {
+                int(group): optics.iloc[row]
+                for row, group in enumerate(optics_ids)
+            },
+            "relion_bind": relion_bind,
+            "images": {},
+        }
+        _RELION_EXACT_CTF_SOURCE_CACHE[cache_key] = cache
+
+    original_indices = _original_indices_for_local(
+        experiment_dataset,
+        np.asarray(image_indices, dtype=np.int64),
+    )
+    image_h, image_w = (int(size) for size in image_shape)
+    if image_h != image_w:
+        raise ValueError("exact RELION CTF replay currently requires square images")
+    ctf_rows = []
+    for original_index in original_indices:
+        original_index = int(original_index)
+        cached_image = cache["images"].get(original_index)
+        if cached_image is None:
+            particle = cache["particles"].iloc[original_index]
+            optics_group = int(
+                particle["rlnOpticsGroup"]
+                if "rlnOpticsGroup" in particle
+                else particle["_rlnOpticsGroup"]
+            )
+            optics = cache["optics"][optics_group]
+
+            def particle_value(name: str) -> float:
+                return float(
+                    particle[name] if name in particle else particle[f"_{name}"]
+                )
+
+            def optics_value(name: str) -> float:
+                return float(optics[name] if name in optics else optics[f"_{name}"])
+
+            native = np.asarray(
+                cache["relion_bind"].get_ctf_image(
+                    particle_value("rlnDefocusU"),
+                    particle_value("rlnDefocusV"),
+                    particle_value("rlnDefocusAngle"),
+                    optics_value("rlnVoltage"),
+                    optics_value("rlnSphericalAberration"),
+                    optics_value("rlnAmplitudeContrast"),
+                    0.0,
+                    optics_value("rlnImagePixelSize"),
+                    image_w,
+                    image_h,
+                    False,
+                    False,
+                    False,
+                    particle_value("rlnPhaseShift"),
+                    1.0,
+                ),
+                dtype=np.float64,
+            )
+            # RELION/FFTW stores y in standard order and uses the opposite CTF
+            # sign from RECOVAR's forward-model convention.
+            cached_image = (-np.fft.fftshift(native, axes=0)).astype(
+                np.float32
+            ).reshape(-1)
+            cache["images"][original_index] = cached_image
+        ctf_rows.append(cached_image)
+    return jnp.asarray(np.stack(ctf_rows, axis=0), dtype=jnp.float32)
+
+
 def _prepare_bucket_io(
     experiment_dataset,
     batch,
@@ -8086,6 +8460,7 @@ def _prepare_bucket_io(
     return_windowed_shifted=False,
     return_shifted_score=True,
     relion_exact_normalized_cc_operands=False,
+    relion_exact_bpref_operands=False,
 ):
     """Run preprocessing for a batch of images (translations tiled, CTF/noise ratios).
 
@@ -8122,8 +8497,36 @@ def _prepare_bucket_io(
     if real_space_pre_shift_applied and not relion_cuda_preprocess:
         batch = apply_relion_integer_pre_shifts(batch, integer_pre_shifts)
 
-    ctf_half = config.compute_ctf_half(ctf_params)
-    ctf2_over_nv_half = ctf_half**2 / noise_variance_half
+    ctf_half = (
+        _relion_exact_ctf_half_from_source_star(
+            experiment_dataset,
+            image_indices,
+            image_shape,
+        )
+        if relion_exact_bpref_operands
+        else config.compute_ctf_half(ctf_params)
+    )
+    if relion_exact_bpref_operands:
+        if relion_preprocess_kwargs is None:
+            raise ValueError(
+                "exact RELION BPref operands require RELION CUDA preprocessing"
+            )
+        relion_preprocess_kwargs = dict(relion_preprocess_kwargs)
+        relion_preprocess_kwargs["relion_fft_per_image"] = True
+        # RELION computes minvsigma2 from its binary64 sigma2 spectrum, then
+        # stores the reciprocal as float32.  Preserve that cast boundary and
+        # its scalar multiplication order instead of dividing by an already
+        # rounded float32 variance.
+        inverse_noise_half = jnp.reciprocal(
+            jnp.asarray(noise_variance_half, dtype=jnp.float64)
+        ).astype(jnp.float32)
+        ctf_half = jnp.asarray(ctf_half, dtype=jnp.float32)
+        weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
+        ctf2_over_nv_half = weighted_ctf_half * ctf_half
+    else:
+        inverse_noise_half = None
+        weighted_ctf_half = None
+        ctf2_over_nv_half = ctf_half**2 / noise_variance_half
     ctf2_score_half = ctf_half**2
 
     # Raw processed half-spectrum images (BEFORE any per-image correction).
@@ -8156,14 +8559,25 @@ def _prepare_bucket_io(
         # batch_norm starts from raw processed-score images, then follows dense
         # run_em's image-only correction convention below.
         norm_half_weights = make_half_image_weights(image_shape)
+        score_power_over_noise = (
+            jnp.abs(processed_score_half_raw) ** 2 * inverse_noise_half[None, :]
+            if relion_exact_bpref_operands
+            else jnp.abs(processed_score_half_raw) ** 2 / noise_variance_half
+        )
         batch_norm = jnp.sum(
-            (jnp.abs(processed_score_half_raw) ** 2 / noise_variance_half) * norm_half_weights[None, :],
+            score_power_over_noise * norm_half_weights[None, :],
             axis=-1,
             keepdims=True,
         ).real
 
-    score_weighted_half = processed_score_half_raw * ctf_half / noise_variance_half
-    recon_weighted_half = processed_recon_half_raw * ctf_half / noise_variance_half
+    if relion_exact_bpref_operands:
+        score_weighted_half = processed_score_half_raw * weighted_ctf_half
+        recon_weighted_half = processed_recon_half_raw * weighted_ctf_half
+        recon_bpref_input_half = processed_recon_half_raw
+    else:
+        score_weighted_half = processed_score_half_raw * ctf_half / noise_variance_half
+        recon_weighted_half = processed_recon_half_raw * ctf_half / noise_variance_half
+        recon_bpref_input_half = None
     folded_normalized_cc_operands = (
         use_normalized_cc and not relion_exact_normalized_cc_operands
     )
@@ -8186,6 +8600,8 @@ def _prepare_bucket_io(
         applied_corr = batch_scale if relion_cuda_preprocess else batch_corr
         score_weighted_half = score_weighted_half * applied_corr[:, None]
         recon_weighted_half = recon_weighted_half * applied_corr[:, None]
+        if relion_exact_bpref_operands:
+            recon_bpref_input_half = recon_bpref_input_half * applied_corr[:, None]
         if return_direct_scoring_io:
             direct_raw_corr = batch_corr / batch_scale
             if folded_normalized_cc_operands:
@@ -8221,6 +8637,8 @@ def _prepare_bucket_io(
         if not score_only:
             score_weighted_half = score_weighted_half * phase_factors
             recon_weighted_half = recon_weighted_half * phase_factors
+            if relion_exact_bpref_operands:
+                recon_bpref_input_half = recon_bpref_input_half * phase_factors
         if return_direct_scoring_io:
             sparse_score_input_half = sparse_score_input_half * phase_factors
 
@@ -8265,10 +8683,25 @@ def _prepare_bucket_io(
                 if return_shifted_score
                 else None
             )
-            shifted_recon_half = apply_half_translation_phases(
-                recon_weighted_half[:, recon_indices],
-                recon_phase,
-            )
+            if relion_exact_bpref_operands:
+                if relion_score_translation_angles is None:
+                    raise ValueError(
+                        "exact RELION BPref operands require RELION translation angles"
+                    )
+                from recovar import cuda_backproject
+
+                shifted_recon_half = cuda_backproject.relion_translate_bpref_f32(
+                    jnp.asarray(recon_bpref_input_half[:, recon_indices], dtype=jnp.complex64),
+                    jnp.asarray(weighted_ctf_half[:, recon_indices], dtype=jnp.float32),
+                    jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                    recon_indices,
+                    image_shape,
+                )
+            else:
+                shifted_recon_half = apply_half_translation_phases(
+                    recon_weighted_half[:, recon_indices],
+                    recon_phase,
+                )
             if score_with_masked_images:
                 shifted_score_half_with_dc = apply_half_translation_phases(
                     score_weighted_half[:, recon_indices],
@@ -8277,19 +8710,43 @@ def _prepare_bucket_io(
             else:
                 shifted_score_half_with_dc = shifted_recon_half
         else:
+            if relion_exact_bpref_operands:
+                if relion_score_translation_angles is None:
+                    raise ValueError(
+                        "exact RELION BPref operands require RELION translation angles"
+                    )
+                from recovar import cuda_backproject
+
+                exact_shifted_recon_half = cuda_backproject.relion_translate_bpref_f32(
+                    jnp.asarray(recon_bpref_input_half, dtype=jnp.complex64),
+                    jnp.asarray(weighted_ctf_half, dtype=jnp.float32),
+                    jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                    jnp.arange(recon_bpref_input_half.shape[1], dtype=jnp.int32),
+                    image_shape,
+                )
+            else:
+                exact_shifted_recon_half = None
             shifted_score_half = (
                 apply_half_translation_phases(score_weighted_half_for_score, translation_phases_half)
                 if return_shifted_score
                 else None
             )
             if score_with_masked_images:
-                shifted_recon_half = apply_half_translation_phases(recon_weighted_half, translation_phases_half)
+                shifted_recon_half = (
+                    exact_shifted_recon_half
+                    if exact_shifted_recon_half is not None
+                    else apply_half_translation_phases(recon_weighted_half, translation_phases_half)
+                )
                 shifted_score_half_with_dc = apply_half_translation_phases(
                     score_weighted_half,
                     translation_phases_half,
                 )
             else:
-                shifted_recon_half = apply_half_translation_phases(recon_weighted_half, translation_phases_half)
+                shifted_recon_half = (
+                    exact_shifted_recon_half
+                    if exact_shifted_recon_half is not None
+                    else apply_half_translation_phases(recon_weighted_half, translation_phases_half)
+                )
                 shifted_score_half_with_dc = shifted_recon_half
         ctf2_over_nv_half_with_dc = ctf2_over_nv_half
 
@@ -8448,6 +8905,7 @@ def compute_pass2_stats_sparse_bucketed(
     bpref_device_signature_active: bool = False,
     bpref_class_index: int = 0,
     include_unweighted_norm_high_shell: bool = True,
+    preserve_bpref_particle_order: bool = False,
 ):
     """Bucketed batched implementation of sparse pass-2 oversampling.
 
@@ -8467,6 +8925,7 @@ def compute_pass2_stats_sparse_bucketed(
         os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "").strip()
         and (bpref_device_signature_active or not device_signature_configured)
     )
+    membership_diagnostics_active = _bpref_membership_dump_requested()
     scoped_diagnostic_flags = _scoped_bpref_diagnostic_flags(
         active=bpref_device_signature_active
     )
@@ -8672,22 +9131,24 @@ def compute_pass2_stats_sparse_bucketed(
         proj_volume_shape = volume_shape
 
     # Fine translations and prior mapping
-    translations_np = np.asarray(translations, dtype=np.float32)
+    translations_source_np = np.asarray(translations)
+    translations_np = np.asarray(translations_source_np, dtype=np.float32)
     if translation_step is None:
         unique_vals = np.unique(translations_np)
         diffs = np.diff(np.sort(unique_vals))
         diffs = diffs[diffs > 1e-6]
         translation_step = float(diffs.min()) if diffs.size else 1.0
     if fine_translations_override is None and fine_translation_parent_override is None:
-        fine_translations, fine_translation_parent = get_oversampled_translation_grid(
-            translations_np,
+        fine_translations_source, fine_translation_parent = get_oversampled_translation_grid(
+            translations_source_np,
             translation_step,
             oversampling_order=oversampling_order,
         )
-        fine_translations = np.asarray(fine_translations, dtype=np.float32)
+        fine_translations = np.asarray(fine_translations_source, dtype=np.float32)
         fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
     elif fine_translations_override is not None and fine_translation_parent_override is not None:
-        fine_translations = np.asarray(fine_translations_override, dtype=np.float32)
+        fine_translations_source = np.asarray(fine_translations_override)
+        fine_translations = np.asarray(fine_translations_source, dtype=np.float32)
         fine_translation_parent = np.asarray(fine_translation_parent_override, dtype=np.int32)
         if fine_translations.ndim != 2 or fine_translations.shape[1] != translations_np.shape[1]:
             raise ValueError(
@@ -8812,6 +9273,39 @@ def compute_pass2_stats_sparse_bucketed(
         include_abs2=not (budget_window_spec.use_window or score_only),
     )
     max_projection_gather_bytes = _max_projection_gather_bytes_for_pass(device_memory_bytes)
+    processing_order_override = _resolve_bpref_processing_order(
+        n_images,
+        preserve_bpref_particle_order=preserve_bpref_particle_order,
+    )
+    processing_order_chunk_size = 1
+    processing_order_group_by_bucket_size = False
+    if processing_order_override is not None:
+        processing_order_chunk_size = _optional_positive_int_env(
+            _BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV,
+        ) or 1
+        processing_order_group_by_bucket_size = _env_flag_enabled(
+            _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
+            default=False,
+        )
+        if preserve_bpref_particle_order:
+            logger.info(
+                "STRICT-PARITY: preserving fresh RELION physical BPref particle "
+                "order (%s; %d contiguous particles per bucket call)",
+                "stable within support-size buckets"
+                if processing_order_group_by_bucket_size
+                else "global",
+                processing_order_chunk_size,
+            )
+        else:
+            logger.info(
+                "STRICT-PARITY diagnostic: executing K=1 BPref particles in the "
+                "explicit local order from %s (%s; %d contiguous particles per bucket call)",
+                os.environ[_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV],
+                "stable within support-size buckets"
+                if processing_order_group_by_bucket_size
+                else "global",
+                processing_order_chunk_size,
+            )
     bucket_t0 = time.time()
     buckets = _bucket_pass2_inputs(
         per_image_inputs,
@@ -8823,6 +9317,9 @@ def compute_pass2_stats_sparse_bucketed(
         tail_bucket_coalesce_max_images=tail_bucket_coalesce_max_images,
         tail_bucket_coalesce_max_inflation=tail_bucket_coalesce_max_inflation,
         tail_bucket_coalesce_min_bucket_size=tail_bucket_coalesce_min_bucket_size,
+        processing_order_override=processing_order_override,
+        processing_order_chunk_size=processing_order_chunk_size,
+        processing_order_group_by_bucket_size=processing_order_group_by_bucket_size,
     )
     bucket_s = time.time() - bucket_t0
 
@@ -9015,6 +9512,17 @@ def compute_pass2_stats_sparse_bucketed(
     )
 
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
+    relion_exact_bpref_operands = _env_flag_enabled(
+        "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS",
+        default=False,
+    )
+    if relion_exact_bpref_operands:
+        if use_float64_scoring:
+            raise ValueError("exact RELION BPref operands require the native float32 path")
+        logger.info(
+            "STRICT-PARITY: using RELION binary64-to-float32 inverse-noise and "
+            "fused translate-then-weight BPref operands"
+        )
 
     if accumulate_noise:
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
@@ -9144,9 +9652,9 @@ def compute_pass2_stats_sparse_bucketed(
     overall_t0 = time.time()
     relion_score_translation_angles = (
         _relion_cuda_score_translation_angles_if_available(
-            fine_translations,
+            fine_translations_source,
             image_shape,
-            enabled=use_exact_relion_gaussian,
+            enabled=use_exact_relion_gaussian or relion_exact_bpref_operands,
         )
     )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
@@ -9476,6 +9984,7 @@ def compute_pass2_stats_sparse_bucketed(
             relion_score_translation_angles=relion_score_translation_angles,
             return_windowed_shifted=windowed_prepare,
             relion_exact_normalized_cc_operands=relion_exact_fine_normalized_cc,
+            relion_exact_bpref_operands=relion_exact_bpref_operands,
         )
         relion_highres_xi2_half = None
         if (
@@ -9861,6 +10370,9 @@ def compute_pass2_stats_sparse_bucketed(
             contribution_chunked_bucket = bool(
                 not score_only and bucket_contribution_diagnostics_active
             )
+            membership_chunked_bucket = bool(
+                not score_only and membership_diagnostics_active
+            )
             if capture_chunked_bucket:
                 require_chunked_capture_capacity(batch, bucket_size, n_fine_trans)
             capture_score_chunks = [] if capture_chunked_bucket else None
@@ -9879,6 +10391,10 @@ def compute_pass2_stats_sparse_bucketed(
             contribution_authoritative_ctf_prob_chunks = (
                 [] if contribution_chunked_bucket and bucket_shadow_only_mode else None
             )
+            membership_candidate_count_chunks = [] if membership_chunked_bucket else None
+            membership_posterior_mass_chunks = [] if membership_chunked_bucket else None
+            membership_reconstruction_mass_chunks = [] if membership_chunked_bucket else None
+            membership_significant_count_chunks = [] if membership_chunked_bucket else None
             chunk_shadow_score_bitwise_equal = False
 
             ctf_probs = None
@@ -10073,6 +10589,29 @@ def compute_pass2_stats_sparse_bucketed(
                             mstep_probs = jnp.where(reconstruction_mask_chunks[chunk_idx], probs, 0.0)
                         else:
                             mstep_probs = reconstruction_prob_chunks[chunk_idx]
+                    if membership_chunked_bucket:
+                        membership_candidate_count_chunks.append(
+                            np.asarray(
+                                jnp.sum(
+                                    jnp.asarray(candidate_mask[:, start:stop, :]),
+                                    axis=-1,
+                                    dtype=jnp.int32,
+                                ),
+                                dtype=np.int32,
+                            )
+                        )
+                        membership_posterior_mass_chunks.append(
+                            np.asarray(jnp.sum(probs, axis=-1))
+                        )
+                        membership_reconstruction_mass_chunks.append(
+                            np.asarray(jnp.sum(mstep_probs, axis=-1))
+                        )
+                        membership_significant_count_chunks.append(
+                            np.asarray(
+                                jnp.sum(mstep_probs > 0, axis=-1, dtype=jnp.int32),
+                                dtype=np.int32,
+                            )
+                        )
                     summed, ctf_probs = compute_local_mstep_sums(
                         mstep_probs,
                         shifted_recon_split,
@@ -10230,6 +10769,45 @@ def compute_pass2_stats_sparse_bucketed(
                         coarse_rot_indices = unique_rot_image[parent_rows[valid_parent_rows]]
                         np.add.at(rotation_posterior_sums, coarse_rot_indices, probs_sum_t[row, :cnt][valid_parent_rows])
 
+            if membership_chunked_bucket:
+                if chunk_reconstruction_sum_weight is None:
+                    chunk_reconstruction_sum_weight = np.sum(
+                        np.concatenate(membership_posterior_mass_chunks, axis=1),
+                        axis=1,
+                        dtype=np.float64,
+                    )
+                if chunk_reconstruction_threshold is None:
+                    chunk_reconstruction_threshold = np.zeros(
+                        (batch,),
+                        dtype=np.float64,
+                    )
+                _maybe_dump_k1_bpref_rotation_mass(
+                    experiment_dataset=experiment_dataset,
+                    image_indices=image_indices,
+                    current_size=current_size,
+                    actual_counts=actual_counts,
+                    rotations=mstep_rotations,
+                    rotation_indices=rotation_indices,
+                    candidate_translation_count=np.concatenate(
+                        membership_candidate_count_chunks,
+                        axis=1,
+                    ),
+                    posterior_rotation_mass=np.concatenate(
+                        membership_posterior_mass_chunks,
+                        axis=1,
+                    ),
+                    reconstruction_rotation_mass=np.concatenate(
+                        membership_reconstruction_mass_chunks,
+                        axis=1,
+                    ),
+                    significant_translation_count=np.concatenate(
+                        membership_significant_count_chunks,
+                        axis=1,
+                    ),
+                    reconstruction_sum_weight=chunk_reconstruction_sum_weight,
+                    reconstruction_threshold=chunk_reconstruction_threshold,
+                )
+
             if contribution_chunked_bucket:
                 contribution_scores = jnp.concatenate(
                     contribution_score_chunks,
@@ -10381,6 +10959,16 @@ def compute_pass2_stats_sparse_bucketed(
                     ),
                     device_signature_active=bucket_device_signature_requested,
                     class_index=int(bpref_class_index),
+                    mstep_shifted_recon=(
+                        shifted_recon_split
+                        if high_precision_operand_bundle
+                        else None
+                    ),
+                    mstep_ctf2_over_nv=(
+                        ctf2_over_nv_recon
+                        if high_precision_operand_bundle
+                        else None
+                    ),
                 )
 
             if capture_chunked_bucket:
@@ -10598,7 +11186,7 @@ def compute_pass2_stats_sparse_bucketed(
                 min_diff2=min_diff2,
             )
             preprior_scores = None
-            if bucket_contribution_diagnostics_active:
+            if bucket_contribution_diagnostics_active or membership_diagnostics_active:
                 zero_rotation_prior = jnp.zeros_like(jnp.asarray(log_prior))[:, :, None]
                 zero_translation_prior = jnp.zeros_like(bucket_translation_prior)[:, None, :]
                 preprior_scores = _relion_cuda_fine_diff2_to_scores(
@@ -10861,6 +11449,34 @@ def compute_pass2_stats_sparse_bucketed(
                 mstep_probs = reconstruction_probs
             else:
                 mstep_probs = probs
+            if membership_diagnostics_active:
+                _maybe_dump_k1_bpref_membership(
+                    experiment_dataset=experiment_dataset,
+                    image_indices=image_indices,
+                    current_size=current_size,
+                    actual_counts=actual_counts,
+                    rotations=mstep_rotations,
+                    rotation_indices=rotation_indices,
+                    fine_translations=fine_translations,
+                    candidate_mask=candidate_mask,
+                    posterior_probs=probs,
+                    reconstruction_probs=mstep_probs,
+                    reconstruction_mask=(
+                        reconstruction_mask
+                        if reconstruction_mask is not None
+                        else jnp.asarray(mstep_probs) > 0
+                    ),
+                    reconstruction_sum_weight=(
+                        reconstruction_sum_weight
+                        if reconstruction_sum_weight is not None
+                        else jnp.sum(jnp.asarray(probs).reshape(batch, -1), axis=1)
+                    ),
+                    reconstruction_threshold=(
+                        reconstruction_threshold
+                        if reconstruction_threshold is not None
+                        else jnp.zeros((batch,), dtype=jnp.float64)
+                    ),
+                )
             shifted_recon_split = shifted_recon_split_for_dump
             summed, ctf_probs = compute_local_mstep_sums(
                 mstep_probs,
@@ -10974,6 +11590,16 @@ def compute_pass2_stats_sparse_bucketed(
                 shadow_reduction_agreement=shadow_reduction_agreement,
                 device_signature_active=bucket_device_signature_requested,
                 class_index=int(bpref_class_index),
+                mstep_shifted_recon=(
+                    shifted_recon_split
+                    if high_precision_operand_bundle
+                    else None
+                ),
+                mstep_ctf2_over_nv=(
+                    ctf2_over_nv_recon
+                    if high_precision_operand_bundle
+                    else None
+                ),
             )
 
             diagnostic_particle_launches_effective = bool(
