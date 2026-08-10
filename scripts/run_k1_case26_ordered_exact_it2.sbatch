@@ -18,8 +18,14 @@ set -euo pipefail
 : "${EXPECTED_REPO_HEAD:?submission must pin repository head}"
 : "${EXPECTED_REPO_DIFF_SHA256:?submission must pin repository diff}"
 
-ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_ordered_exact_it2_20260810T1925ET
-RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_ordered_exact_it2_20260810T1925ET
+ROOT=${K1_CASE26_RUN_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_ordered_exact_it2_20260810T1925ET}
+RUNTIME=${K1_CASE26_RUNTIME_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_ordered_exact_it2_20260810T1925ET}
+MAX_ITER=${K1_CASE26_MAX_ITER:-2}
+case "${MAX_ITER}" in
+    2|3) ;;
+    *) echo "K1_CASE26_MAX_ITER must be 2 or 3" >&2; exit 2 ;;
+esac
+REPORT_STEM=case26_ordered_exact_it${MAX_ITER}
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
@@ -108,7 +114,7 @@ PY
 
 COMMAND=(
     "${PYTHON}" -m scripts.run_full_refinement
-    --data_dir "${DATA}" --output "${OUTPUT}" --max_iter 2 --skip_final_iteration
+    --data_dir "${DATA}" --output "${OUTPUT}" --max_iter "${MAX_ITER}" --skip_final_iteration
     --healpix_order 3 --auto_local_healpix_order 4 --offset_range 3.0 --offset_step 1.0
     --adaptive_oversampling 1 --init_resolution 30.0 --image-fourier-backend relion_cuda
     --image_batch_size 187 --rotation_block_size 8192 --seed 1726 --perturb_seed 1726
@@ -143,24 +149,24 @@ fsc_audit_status=0
 "${PYTHON}" -m scripts.audit_k1_fsc_trajectory \
     --case-root "${SOURCE_CASE}" --recovar-dir "${OUTPUT}" --relion-dir "${RELION}" \
     --numbered-only \
-    --output-json "${ANALYSIS}/case26_ordered_exact_fsc_it2.json" \
-    --output-markdown "${ANALYSIS}/case26_ordered_exact_fsc_it2.md" \
-    --output-shellwise-npz "${ANALYSIS}/case26_ordered_exact_fsc_it2_shellwise.npz" \
+    --output-json "${ANALYSIS}/${REPORT_STEM}_fsc.json" \
+    --output-markdown "${ANALYSIS}/${REPORT_STEM}_fsc.md" \
+    --output-shellwise-npz "${ANALYSIS}/${REPORT_STEM}_fsc_shellwise.npz" \
     --min-cross-merged-fsc-auc 0 --min-merged-gt-delta -1 || fsc_audit_status=$?
-# This is deliberately a two-iteration discriminator against an 11-iteration
+# This is deliberately a short prefix discriminator against an 11-iteration
 # reference.  The trajectory auditor returns 2 for that expected topology
 # mismatch after writing the requested scientific comparison.
 test "${fsc_audit_status}" -eq 0 -o "${fsc_audit_status}" -eq 2
 "${PYTHON}" -m scripts.audit_k1_intermediate_trajectory \
     --case-root "${SOURCE_CASE}" --recovar-dir "${OUTPUT}" --relion-dir "${RELION}" \
-    --output-json "${ANALYSIS}/case26_ordered_exact_state_it2.json" \
-    --output-markdown "${ANALYSIS}/case26_ordered_exact_state_it2.md"
+    --output-json "${ANALYSIS}/${REPORT_STEM}_state.json" \
+    --output-markdown "${ANALYSIS}/${REPORT_STEM}_state.md"
 
-printf '{"job_id":"%s","wall_s":%d,"max_physical_iteration":2,"intervention":"live_noise_plus_exact_bpref_operands_plus_global_relion_particle_accumulation"}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
-sha256sum "${ANALYSIS}/case26_ordered_exact_fsc_it2.json" \
-    "${ANALYSIS}/case26_ordered_exact_fsc_it2_shellwise.npz" \
-    "${ANALYSIS}/case26_ordered_exact_state_it2.json" \
+printf '{"job_id":"%s","wall_s":%d,"max_physical_iteration":%d,"intervention":"live_noise_plus_exact_bpref_operands_plus_global_relion_particle_accumulation"}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
+sha256sum "${ANALYSIS}/${REPORT_STEM}_fsc.json" \
+    "${ANALYSIS}/${REPORT_STEM}_fsc_shellwise.npz" \
+    "${ANALYSIS}/${REPORT_STEM}_state.json" \
     "${ACCUM}/recovar_bpref_accum_it002.npz" \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
