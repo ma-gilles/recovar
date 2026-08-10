@@ -1715,6 +1715,19 @@ and
 `59ed4324b0f57990fab6bc27b36838de15595a8e51ef2f5f213b67e9d3dd21d6`.
 This proves structural equivalence but still does not substitute for the
 running case-10 FSC/state A/B.
+
+The fixed 24-particle case-10 panel confirms that the dropped rows are not
+merely unused lattice points. All `24/24` native RELION iteration-2 relative
+translations match the 116-row exact fine grid within `1e-5 px`, with maximum
+error `5.4956237032358255e-6 px`. None of the `24` matches the legacy 100-row
+fine grid; its minimum nearest-state error is
+`0.9999954727786254 px`. The classification is
+`all_native_panel_translations_require_relion_exact_outer_grid`. The immutable
+report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it2_panel_capture_96b98858_20260810T0030ET/analysis/CASE10_IT2_TRANSLATION_GRID_BOUNDARY.json`
+with SHA-256
+`4651196c4d965a1bfe1af69468bbbdc68f1a1f696b4a6ef1ed6bfc00f8b28285`.
+All four report input hashes were independently verified.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

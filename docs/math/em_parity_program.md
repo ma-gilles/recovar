@@ -15425,3 +15425,22 @@ and
 The corresponding RELION-binding boundary test and K=1/K=4 guard both pass.
 This closes structural uncertainty about the lattice implementation; causal
 acceptance still depends on Slurm job `12197149` and case-9 preservation.
+
+## 2026-08-10 all case-10 panel translations require the outer grid
+
+The source-ID-aligned 24-particle iteration-2 panel maps every native RELION
+output offset back to its relative sampled translation using the previous
+absolute offset and RELION's rounded pre-shift convention. All `24/24` targets
+match the new 116-row fine grid within the fixed `1e-5 px` tolerance; maximum
+error is `5.4956237032358255e-6 px`. The legacy 100-row grid matches `0/24`,
+and even its nearest panel target remains `0.9999954727786254 px` away.
+
+The fixed classification is
+`all_native_panel_translations_require_relion_exact_outer_grid`. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it2_panel_capture_96b98858_20260810T0030ET/analysis/CASE10_IT2_TRANSLATION_GRID_BOUNDARY.json`
+with SHA-256
+`4651196c4d965a1bfe1af69468bbbdc68f1a1f696b4a6ef1ed6bfc00f8b28285`;
+all four input hashes were independently recomputed. This demonstrates that
+case 10's native selected poses require the missing outer lattice. It does not
+yet quantify the trajectory rescue, which remains the purpose of job
+`12197149`.
