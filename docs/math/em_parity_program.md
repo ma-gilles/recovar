@@ -15353,3 +15353,28 @@ bounded gate is the already running native RELION iteration-2 coarse-component
 and preprocessing capture for these same 24 identities, Slurm job `12196543`.
 K=1 remains `28/34` strict, `32/34` topology, and `34/34` evaluated; K=4
 remains parked.
+
+## 2026-08-10 case-10 translation lattice boundary candidate
+
+The 24-particle panel also exposes a source-level discrepancy before coarse
+scoring. The deployed RELION source constructs non-helical translations with
+`maxp = CEIL(offset_range / offset_step)` and then applies its squared-radius
+test. RECOVAR's existing pixel-grid helper uses floor division. Case 10's
+fixed-decimal sampling and optics values convert the mathematically integral
+three-step range to a floating ratio just below three, so the frozen RECOVAR
+coarse lattice has only 25 rows. Native RELION has 29, including the four
+axial parents at radius three.
+
+This directly explains why the native panel offsets could not be mapped to
+the captured RECOVAR fine translation table: the native relative shifts reach
+approximately `-3.240716` and `+3.259284` pixels after the iteration-2
+perturbation, while the captured RECOVAR table stops near `-2.240716` and
+`+2.259284`. Reconstructing RELION's 29-parent table yields 116 oversampled
+children and contains those native shifts to fixed-decimal STAR precision.
+
+The candidate introduces source-exact ceil enumeration only when
+`n_classes == 1`; K=4 deliberately remains on the legacy path. The frozen unit
+gate asserts 29 K=1 rows and 25 K=4 rows for the rounded case-10 boundary.
+This structural result does not change the scorecard. Acceptance requires a
+case-10 exact-boundary and autonomous signed-FSC A/B with all thresholds and
+finalization policies unchanged.

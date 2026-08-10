@@ -1662,6 +1662,26 @@ This rejects fine child generation as the case-10 first defect and moves the
 next exact discriminator to native-versus-RECOVAR coarse raw-score operands,
 priors, and support. It is localization rather than FSC acceptance, so K=1
 remains `28/34` strict and `32/34` topology.
+
+A source-level follow-up identifies a more upstream case-10 candidate at the
+translation-lattice boundary. RELION's deployed
+`HealpixSampling::setTranslations` enumerates integer step indices through
+`CEIL(offset_range / offset_step)` before its squared-radius cutoff. RECOVAR's
+legacy helper instead floor-divides the pixel-valued ratio. For case 10, the
+sampling STAR values `4.25 A / 1.416667 A` become just below `3.0` after
+conversion by the `1.416667 A/px` optics value. The frozen RECOVAR iteration-2
+coarse grid therefore has `25` rows and excludes the four axial parents at
+`(+/-3, 0)` and `(0, +/-3)`, whereas the native RELION grid has `29` rows.
+
+The native iteration-2 offsets for the 24-particle panel map to fine relative
+translations as large as approximately `+3.259284` and `-3.240716` pixels.
+Those states are outside the captured RECOVAR fine range
+`[-2.240716, +2.259284]`, but are reproduced by the RELION-exact 29-parent,
+116-child grid within the precision of the fixed-decimal STAR output. A
+K=1-only candidate now uses RELION's ceil enumeration while explicitly
+retaining the legacy 25-row path for K=4. Unit tests freeze the `29` versus
+`25` class-count guard. This is a structurally demonstrated candidate, not
+FSC acceptance; the next required result is the same case-10 scientific A/B.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

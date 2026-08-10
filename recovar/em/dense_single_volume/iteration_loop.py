@@ -170,6 +170,7 @@ from recovar.em.sampling import (  # noqa: F401  -- monkeypatched by tests/unit/
     build_local_search_grid_metadata,
     get_relion_rotation_grid,
     get_relion_rotation_grid_eulers,
+    get_relion_translation_grid,
     get_translation_grid,
     read_relion_direction_prior,
     read_relion_direction_priors,
@@ -196,6 +197,13 @@ from recovar.reconstruction.regularization import (  # noqa: F401
 _EM_RAW_IMAGE_CACHE_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE"
 _EM_RAW_IMAGE_CACHE_MAX_GB_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB"
 _EM_RAW_IMAGE_CACHE_DEFAULT_MAX_GB = 16.0
+
+
+def _translation_grid_for_class_count(max_pixel, pixel_offset, *, n_classes):
+    """Use source-exact RELION translation enumeration for K=1 only."""
+    if int(n_classes) == 1:
+        return get_relion_translation_grid(max_pixel, pixel_offset)
+    return get_translation_grid(max_pixel, pixel_offset)
 
 
 def _bpref_device_signature_active_for_numbered_half(
@@ -4985,7 +4993,12 @@ def _run_relion_iteration_loop(
     elif translations is None:
         current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
         current_translations = jnp.asarray(
-            get_translation_grid(init_translation_range, init_translation_step), dtype=jnp.float32
+            _translation_grid_for_class_count(
+                init_translation_range,
+                init_translation_step,
+                n_classes=n_classes,
+            ),
+            dtype=jnp.float32,
         )
     else:
         current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
@@ -6213,9 +6226,10 @@ def _run_relion_iteration_loop(
 
             # Regenerate translation grid based on updated parameters
             current_translations = jnp.array(
-                get_translation_grid(
+                _translation_grid_for_class_count(
                     state.translation_range,
                     state.translation_step,
+                    n_classes=n_classes,
                 ).astype(np.float32)
             )
             base_translations = current_translations
@@ -6230,9 +6244,10 @@ def _run_relion_iteration_loop(
             # Translation params may have changed under replay without an
             # hp_order bump. Regenerate the translation grid to match RELION.
             _new_t = jnp.array(
-                get_translation_grid(
+                _translation_grid_for_class_count(
                     state.translation_range,
                     state.translation_step,
+                    n_classes=n_classes,
                 ).astype(np.float32)
             )
             if _new_t.shape != base_translations.shape or not jnp.allclose(_new_t, base_translations):
@@ -9395,9 +9410,10 @@ def _run_relion_iteration_loop(
     final_effective_rotation_eulers = np.asarray(final_current_rotation_eulers, dtype=np.float32)
     final_effective_mstep_rotations = None
     final_base_translations = jnp.asarray(
-        get_translation_grid(
+        _translation_grid_for_class_count(
             state.translation_range,
             state.translation_step,
+            n_classes=n_classes,
         ).astype(np.float32),
         dtype=jnp.float32,
     )
@@ -9510,13 +9526,15 @@ def _run_relion_iteration_loop(
                 numbered_meta = read_relion_sampling_metadata(numbered_sampling_path)
                 numbered_range = float(numbered_meta["offset_range"]) / px
                 numbered_step = float(numbered_meta["offset_step"]) / px
-                numbered_grid = get_translation_grid(
+                numbered_grid = _translation_grid_for_class_count(
                     numbered_range,
                     numbered_step,
+                    n_classes=n_classes,
                 ).astype(np.float32)
-                final_grid_preview = get_translation_grid(
+                final_grid_preview = _translation_grid_for_class_count(
                     final_translation_range,
                     final_translation_step,
+                    n_classes=n_classes,
                 ).astype(np.float32)
                 same_shape = numbered_grid.shape == final_grid_preview.shape
                 same_grid = bool(
@@ -9542,9 +9560,10 @@ def _run_relion_iteration_loop(
                         final_perturbation_healpix_order,
                     )
             final_base_translations = jnp.asarray(
-                get_translation_grid(
+                _translation_grid_for_class_count(
                     final_translation_range,
                     final_translation_step,
+                    n_classes=n_classes,
                 ).astype(np.float32),
                 dtype=jnp.float32,
             )

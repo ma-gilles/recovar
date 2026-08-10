@@ -285,6 +285,34 @@ def get_translation_grid(max_pixel, pixel_offset):
     return grid
 
 
+def get_relion_translation_grid(max_pixel, pixel_offset):
+    """Return RELION's non-helical 2D translation grid in pixel units.
+
+    RELION enumerates integer step indices through
+    ``CEIL(offset_range / offset_step)`` and then applies its squared-radius
+    cutoff.  The ceil is important when rounded STAR values convert to a
+    ratio just below an integer (for example, 4.25 / 1.416667 pixels): using
+    floor division silently drops the outer axial translation samples.
+    """
+    max_pixel = float(max_pixel)
+    pixel_offset = float(pixel_offset)
+    if not np.isfinite(max_pixel) or max_pixel < 0.0:
+        raise ValueError(f"max_pixel must be finite and nonnegative, got {max_pixel}")
+    if not np.isfinite(pixel_offset) or pixel_offset <= 0.0:
+        raise ValueError(f"pixel_offset must be finite and positive, got {pixel_offset}")
+
+    max_index = int(np.ceil(max_pixel / pixel_offset))
+    indices = np.arange(-max_index, max_index + 1, dtype=np.int64)
+    x_index, y_index = np.meshgrid(indices, indices, indexing="ij")
+    grid = np.stack(
+        [x_index.reshape(-1), y_index.reshape(-1)],
+        axis=1,
+    ).astype(np.float64)
+    grid *= pixel_offset
+    squared_radius = np.sum(grid * grid, axis=1)
+    return grid[squared_radius < max_pixel * max_pixel + 0.001]
+
+
 def rotation_indices_to_relion_eulers(indices, healpix_order, *, rotation_index_order: str = "recovar"):
     """Convert ring-order full-grid indices to RELION Euler angles."""
     meta = _get_relion_grid_metadata(int(healpix_order))

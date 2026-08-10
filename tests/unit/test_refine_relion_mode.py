@@ -504,6 +504,31 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
     np.testing.assert_allclose(replay_grid, state_grid, rtol=0.0, atol=1e-6)
 
 
+def test_k1_translation_grid_matches_relion_ceil_boundary_without_changing_k4():
+    rounded_range = 4.25 / 1.4166666666666667
+    rounded_step = 1.416667 / 1.4166666666666667
+
+    k1_grid = iteration_loop_module._translation_grid_for_class_count(
+        rounded_range,
+        rounded_step,
+        n_classes=1,
+    )
+    k4_grid = iteration_loop_module._translation_grid_for_class_count(
+        rounded_range,
+        rounded_step,
+        n_classes=4,
+    )
+
+    assert k1_grid.shape == (29, 2)
+    assert k4_grid.shape == (25, 2)
+    np.testing.assert_allclose(
+        k1_grid[[0, 14, -1]],
+        np.asarray([[-3.0, 0.0], [0.0, 0.0], [3.0, 0.0]]) * rounded_step,
+        rtol=0.0,
+        atol=1e-12,
+    )
+
+
 def _sealed_sampling_fixture():
     return {
         "consumer_relion_iteration": 2,

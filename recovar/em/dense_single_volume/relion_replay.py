@@ -578,13 +578,15 @@ def apply_iter_replay_overrides(
         _px = float(cryo.voxel_size) if cryo.voxel_size > 0 else 1.0
         _relion_offset_range = float(_replay_meta["offset_range"]) / _px
         _relion_offset_step = float(_replay_meta["offset_step"]) / _px
-        _replay_prior_translations_np = _il.get_translation_grid(
+        _replay_prior_translations_np = _il._translation_grid_for_class_count(
             _relion_offset_range,
             _relion_offset_step,
+            n_classes=n_classes,
         ).astype(np.float32)
-        _state_prior_translations = _il.get_translation_grid(
+        _state_prior_translations = _il._translation_grid_for_class_count(
             float(state.translation_range),
             float(state.translation_step),
+            n_classes=n_classes,
         ).astype(np.float32)
         _translation_grid_differs = _state_prior_translations.shape != _replay_prior_translations_np.shape
         if not _translation_grid_differs:
