@@ -2126,6 +2126,35 @@ with SHA-256
 Both the science and analysis manifests verify. Grid correction and forced
 after-max finalization were unset. No correlation was computed. The frozen
 score remains `28/34` strict and `32/34` topology.
+
+A diagnostic-only case-22 A/B rejects RELION-style float32 fine-posterior
+arithmetic as a standalone repair under the older serialized iteration-0
+noise boundary. Science job `12202433` and its dependent analysis job
+`12203543` completed naturally `0:0`; both artifact manifests verify. The
+launcher originally named its arms as live-noise arms, but pinned source
+`b488fb523a53bd36154f9571b0a43720236a8ff6` did not implement the live-noise
+flag. Both logs instead contain the serialized-noise activation record and no
+live-noise activation record. Consequently the formal predeclared experiment
+is invalid, and the result is interpreted only as serialized noise with the
+float32 fine-posterior flag unset versus set.
+
+At physical iteration 2, significant-support mismatches remain exactly
+`1102 -> 1102`; Pmax relative L2 changes from `9.21031695e-6` to
+`9.25011711e-6`; and merged signed normalized non-DC FSC-AUC changes only from
+`0.9999933523036098` to `0.9999933523281569`. Final FSC-AUC changes from
+`0.8260825478` to `0.8260731725`. This supplies no evidence for a standalone
+float32 fine-posterior repair and does not test its interaction with verified
+live initial noise.
+
+The diagnostic report and interpretation correction are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_live_noise_f32fine_ab_b488fb52_20260810T0455ET/analysis/CASE22_SERIALIZED_NOISE_F32_FINE_AB.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_live_noise_f32fine_ab_b488fb52_20260810T0455ET/provenance/INTERPRETATION_SCOPE_20260810.md`,
+with SHA-256 values
+`e421e62497db27df0a091e8909de129b12f00b51326303500e425a5cd18a6d9d`
+and
+`9d1a1a60c662efe424b98c69e285ab97e08b7efd7e35e63f7e8e444802e7a637`.
+The frozen score remains `28/34` strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
