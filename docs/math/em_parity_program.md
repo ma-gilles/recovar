@@ -15378,3 +15378,32 @@ gate asserts 29 K=1 rows and 25 K=4 rows for the rounded case-10 boundary.
 This structural result does not change the scorecard. Acceptance requires a
 case-10 exact-boundary and autonomous signed-FSC A/B with all thresholds and
 finalization policies unchanged.
+
+## 2026-08-10 case-22 H100 code-generation target is falsified
+
+Same-H100 job `12195487` completed naturally `0:0` in `01:00:18` and isolates
+the custom coarse scorer's compilation target. The control library contains a
+native `sm90` image; treatment contains compute-80 PTX and therefore JITs on
+the same physical H100. Inputs, source, state, seed, batching, controller,
+finalization policy, and all non-library artifacts are fixed.
+
+The intervention produces exactly zero reduction in both source-ID-aligned
+Pmax absolute p95 and the count of particles with significant-count mismatch.
+The merged signed normalized non-DC FSC-AUC changes from
+`0.9999933544462649` to `0.9999933542399817`, a delta of only
+`-2.062832127336378e-10`. Both arms retain exact iteration-2 topology at
+current size 60 and HEALPix order 3. The classification is
+`compute80_ptx_codegen_is_falsified_for_case22_iteration2`.
+
+The report and shellwise artifact are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_ptx_codegen_ab_96b98858_20260810T0045ET/analysis/CASE22_H100_CODEGEN_AB.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_ptx_codegen_ab_96b98858_20260810T0045ET/analysis/CASE22_H100_CODEGEN_AB_shellwise.npz`,
+with SHA-256 values
+`dc8caa88e3950b4fa7cf3e3ee9509ca47d697ea55ab4e1ed594683718cb5e068`
+and
+`d59f3e6e16948decff8d5d170b4a95c6f674c879e70ef8a424a0eb2e57e16ea8`.
+All six report input hashes were independently recomputed. CUDA codegen is
+therefore removed from the case-22 hypothesis set; the next boundary remains
+the native-versus-RECOVAR raw coarse score components and preprocessing state.
+K=1 remains `28/34` strict and `32/34` topology; K=4 remains parked.

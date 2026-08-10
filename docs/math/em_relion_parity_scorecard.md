@@ -1682,6 +1682,26 @@ K=1-only candidate now uses RELION's ceil enumeration while explicitly
 retaining the legacy 25-row path for K=4. Unit tests freeze the `29` versus
 `25` class-count guard. This is a structurally demonstrated candidate, not
 FSC acceptance; the next required result is the same case-10 scientific A/B.
+
+Case 22's H100 code-generation A/B rejects a CUDA target mismatch as the
+iteration-2 cause. Job `12195487` completed naturally `0:0` in `01:00:18` on
+one H100. The control custom scorer was compiled natively for `sm90`; the
+treatment used compute-80 PTX JIT on the same physical GPU. Pmax absolute-p95
+reduction and significant-count mismatch reduction are both exactly `0.0`.
+Merged signed normalized non-DC FSC-AUC changes only from
+`0.9999933544462649` to `0.9999933542399817`, or
+`-2.062832127336378e-10`, and both arms retain current size `[60]` and
+HEALPix order `[3]`. The fixed classification is
+`compute80_ptx_codegen_is_falsified_for_case22_iteration2`.
+
+The immutable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_ptx_codegen_ab_96b98858_20260810T0045ET/analysis/CASE22_H100_CODEGEN_AB.json`
+with SHA-256
+`dc8caa88e3950b4fa7cf3e3ee9509ca47d697ea55ab4e1ed594683718cb5e068`;
+the shellwise artifact SHA-256 is
+`d59f3e6e16948decff8d5d170b4a95c6f674c879e70ef8a424a0eb2e57e16ea8`.
+All six input hashes were independently verified. This leaves case 22 at the
+raw coarse operand/preprocessing boundary and does not change the scorecard.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
