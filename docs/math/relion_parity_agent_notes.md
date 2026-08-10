@@ -11663,3 +11663,43 @@ and `9/15` all-class.
   panel at the first unequal coarse/fine score, posterior, support, or BPref
   operand boundary. No threshold, denominator, controller, finalization, or
   grid-correction policy changed, and no correlation was used.
+
+## 2026-08-10 02:10 ET — case-7 coarse `sincosf` is below the causal gate
+
+- K=4 remains parked. The frozen K=1 score remains `28/34` strict signed
+  FSC/FSC-AUC and `32/34` exact topology.
+- Same-H100 science job `12180758` completed naturally `0:0` in `02:41:13`
+  on UUID `GPU-4d28eafb-13ca-043d-dfc4-4b24c9913233`. Dependency-gated
+  analysis job `12182355` completed `0:0`. All three arms share source commit
+  `b488fb523a53bd36154f9571b0a43720236a8ff6`, the fixed case-7 bytes,
+  iteration-0 state, seed, controller, physical GPU, two numbered iterations,
+  and disabled final pass.
+- Relative to the exact-coarse control, adding CUDA `sincosf` translation
+  improves iteration-2 cross-engine Pmax relative L2 by only `5.3115%`, from
+  `0.0047680568717` to `0.0045148021256`. Support mismatches change from
+  `44` to `43`, hard rotation mismatches remain `6`, and hard translation
+  mismatches change from `9` to `8`.
+- The merged signed normalized non-DC FSC-AUC changes only from
+  `0.9999994619042879` to `0.9999994619096201`, a `0.0009909%` reduction of
+  the remaining deficit. The arm-to-control merged-map FSC-AUC is
+  `0.9999999996946477`, within the predeclared exact-repeat floor. Adding the
+  float32 support path also remains within that floor and improves the merged
+  deficit by only `0.06553%`.
+- Both treatments are therefore classified
+  `inconclusive_within_exact_repeatability_floor` and fail the predeclared
+  partial gate of at least `10%` improvement in either Pmax error or FSC-AUC
+  deficit. Coarse translation-phase `sincosf`, with or without float32 coarse
+  support, is removed from the standalone case-7 fix queue. The next case-7
+  discriminator remains the incoming iteration-1 map/noise to iteration-2
+  raw-score/BPref operand boundary.
+- The immutable report and shellwise artifact are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_coarse_sincosf_factorial_b488fb52_20260809T1440ET/analysis/factorial.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_coarse_sincosf_factorial_b488fb52_20260809T1440ET/analysis/factorial_shellwise.npz`,
+  with SHA-256 values
+  `9649a0bdac9695436f4bc4007d2198efc814adf470e1f730a69dec52efb0e840`
+  and
+  `d257ec9f6e6c7d5e992dc4f7954057ca5189f69d4725fbc046ad4132bba97f4c`.
+  Independent `sha256sum -c` verification passed for the analyzer, launcher,
+  both outputs, and all six identity-aligned particle artifacts. Correlation
+  was not computed.

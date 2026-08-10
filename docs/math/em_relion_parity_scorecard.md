@@ -1728,6 +1728,29 @@ report is
 with SHA-256
 `4651196c4d965a1bfe1af69468bbbdc68f1a1f696b4a6ef1ed6bfc00f8b28285`.
 All four report input hashes were independently verified.
+
+The completed case-7 same-H100 coarse-translation arithmetic factorial rejects
+CUDA `sincosf` as a standalone repair. Science job `12180758` and its
+dependency-gated analyzer `12182355` both completed naturally `0:0`. Relative
+to the exact-coarse control, `sincosf` improves iteration-2 Pmax relative L2
+by only `5.3115%` and the merged signed FSC-AUC deficit by only `0.0009909%`.
+The merged treatment-versus-control FSC-AUC is `0.9999999996946477`, within
+the predeclared independent exact-repeat floor. Adding float32 coarse support
+also remains inside that floor. Both arms are classified
+`inconclusive_within_exact_repeatability_floor` and fail the fixed partial
+gate of at least `10%` improvement in either Pmax or FSC-AUC deficit.
+
+The immutable report and shellwise artifact are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_coarse_sincosf_factorial_b488fb52_20260809T1440ET/analysis/factorial.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_coarse_sincosf_factorial_b488fb52_20260809T1440ET/analysis/factorial_shellwise.npz`,
+with SHA-256 values
+`9649a0bdac9695436f4bc4007d2198efc814adf470e1f730a69dec52efb0e840`
+and
+`d257ec9f6e6c7d5e992dc4f7954057ca5189f69d4725fbc046ad4132bba97f4c`.
+All analyzer and particle-artifact hashes independently verify. This narrows
+case 7 to the incoming-map/noise through raw-score/BPref boundary and leaves
+the frozen score unchanged at `28/34` strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
