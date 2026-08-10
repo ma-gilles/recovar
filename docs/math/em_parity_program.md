@@ -15301,3 +15301,55 @@ the remaining case-26 cause even after the independently positive native
 preprocessing intervention. Case 26 returns to an exact high-frequency final
 score/BPref boundary from the same last-numbered state. K=1 remains `28/34`
 strict, `32/34` topology, and `34/34` evaluated; K=4 remains parked.
+
+## 2026-08-10 case-10 coarse-parent support localization
+
+The fixed 24-particle case-10 iteration-2 panel is complete. H100 job
+`12195093` ran naturally to `COMPLETED 0:0` in `00:54:37` on `della-h19g4`.
+It captured one complete coarse-significance artifact and one complete fine
+pass-2 artifact for each immutable particle identity. The terminal validator
+requires physical iteration 2, current size 56, K=1, exact array shapes,
+finite active values, complete significance masks, and reproduction of every
+frozen RECOVAR fine Pmax within `1e-6`. All `24/24 + 24/24` artifacts pass;
+the submitted artifact ledger contains exactly 48 SHA-256 rows.
+
+The source-ID-aligned rotation audit first establishes that RELION's native
+iteration-2 output rotation is present in RECOVAR's local fine candidate set
+for only `9/24` particles. A second independent grid audit then distinguishes
+parent pruning from child construction. It regenerates all `294,912` shared
+fine rotations from the fixed order-3 coarse grid, oversampling order 1, and
+seed-exact perturbation `+0.00928428769112`. All `24/24` native RELION
+rotations match that global fine grid under the fixed `2e-6` Frobenius gate,
+with maximum error `1.7854209194066762e-7`. Every captured RECOVAR local
+fine grid is an exact subset of the regenerated global grid, with maximum
+Frobenius replay error exactly zero for `24/24`.
+
+RECOVAR pass 1 retains the native rotation's coarse parent for only `9/24`
+particles; those same nine native children are present in pass 2. The other
+`15/24` native children are absent exactly because their coarse parents were
+excluded. The fixed classification is
+`relion_fine_rotation_loss_occurs_at_recovar_coarse_parent_support`. This
+rules out the child-orientation generator and local/global fine-grid mapping
+as the first case-10 defect. It does not yet separate coarse raw-score,
+additive-prior, posterior-normalization, or threshold effects.
+
+The terminal manifest, candidate-inclusion report, and coarse-parent report
+are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it2_panel_capture_96b98858_20260810T0030ET/analysis/CASE10_IT2_CAPTURE_PANEL_MANIFEST.json`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it2_panel_capture_96b98858_20260810T0030ET/analysis/CASE10_IT2_CANDIDATE_INCLUSION.json`,
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it2_panel_capture_96b98858_20260810T0030ET/analysis/CASE10_IT2_COARSE_PARENT_INCLUSION.json`.
+Their SHA-256 values are
+`791d5a1b660935ca7516a8f05f14654c8aecdd80e3623df62b2c795a2b5f10e0`,
+`63862b6f42c366da0ba17b5e6981edfc4f0f01c1d485dd3877755b9e4ba9fa30`,
+and
+`3c4cca6064b5649a81d79331006ac10c70e1180d3ff9dcf1a3146b07dca97f50`.
+The aggregate hash of a fresh independent hash listing over all 48 artifacts
+is `ea99ee49fbeae8ac52ee19181aa3f247f64b98f77644d95608c3ab74fae4608c`.
+
+This panel is an operand-localization result, not a map-quality acceptance
+result. No correlation was computed and no threshold changed. The next
+bounded gate is the already running native RELION iteration-2 coarse-component
+and preprocessing capture for these same 24 identities, Slurm job `12196543`.
+K=1 remains `28/34` strict, `32/34` topology, and `34/34` evaluated; K=4
+remains parked.

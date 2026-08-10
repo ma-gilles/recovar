@@ -1629,6 +1629,39 @@ the sealed final maps and reproduced the two reported AUC values within
 `3.3e-16`. This rejects radial coarse support as the residual case-26 fix and
 leaves native preprocessing as a verified but insufficient contributor. K=1
 remains `28/34` strict and `32/34` topology.
+The fixed case-10 iteration-2 panel now localizes its missing native fine
+poses to coarse-parent support rather than fine-grid construction. H100 job
+`12195093` completed naturally `0:0` in `00:54:37` and captured complete
+coarse-significance and fine-pass artifacts for the frozen 24 particles with
+the largest source-ID-aligned Pmax errors. All `24/24` captured fine Pmax
+values reproduce the frozen RECOVAR values within `1e-6`; the terminal
+manifest hashes all `48` NPZ artifacts.
+
+Every native RELION output rotation has an exact shared-global fine-grid
+counterpart under the fixed `2e-6` Frobenius tolerance (`24/24`, maximum
+error `1.7854209194e-7`). RECOVAR's local fine rotations replay from that
+global grid with zero maximum Frobenius error for `24/24`. Nevertheless,
+RECOVAR pass 1 retains the native pose's coarse parent for only `9/24`
+particles. The same `9/24` native children are present in pass 2; all other
+`15/24` are lost exactly when their coarse parent is excluded. The fixed
+classification is
+`relion_fine_rotation_loss_occurs_at_recovar_coarse_parent_support`.
+
+The terminal manifest, direct candidate audit, and parent-localization report
+are respectively
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it2_panel_capture_96b98858_20260810T0030ET/analysis/CASE10_IT2_CAPTURE_PANEL_MANIFEST.json`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it2_panel_capture_96b98858_20260810T0030ET/analysis/CASE10_IT2_CANDIDATE_INCLUSION.json`,
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it2_panel_capture_96b98858_20260810T0030ET/analysis/CASE10_IT2_COARSE_PARENT_INCLUSION.json`,
+with SHA-256 values
+`791d5a1b660935ca7516a8f05f14654c8aecdd80e3623df62b2c795a2b5f10e0`,
+`63862b6f42c366da0ba17b5e6981edfc4f0f01c1d485dd3877755b9e4ba9fa30`,
+and
+`3c4cca6064b5649a81d79331006ac10c70e1180d3ff9dcf1a3146b07dca97f50`.
+This rejects fine child generation as the case-10 first defect and moves the
+next exact discriminator to native-versus-RECOVAR coarse raw-score operands,
+priors, and support. It is localization rather than FSC acceptance, so K=1
+remains `28/34` strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
