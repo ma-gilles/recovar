@@ -15269,3 +15269,35 @@ their independent autonomous runs finish. Case 10 now advances to the fixed
 24-particle score/posterior/support/BPref capture instead of another full
 trajectory hypothesis. The immutable K=1 denominator remains `28/34` strict,
 `32/34` topology, and `34/34` evaluated. K=4 remains parked.
+
+## 2026-08-10 case-26 RELION-CUDA radial scorer is negative
+
+The combined case-26 intervention is complete and rejects a compositional
+rescue. Same-H100 job `12194926` completed naturally `0:0` in `00:34:11`.
+Both autonomous arms used native RELION-CUDA image preprocessing, source
+`5c6cc17c`, identical inputs, seed, controller and finalization policy, the
+same custom CUDA library, and physical GPU
+`GPU-235ec3bc-ca9f-1c0e-88eb-c8b37c5e0480`. Treatment changed only
+`RECOVAR_K1_COARSE_GAUSSIAN_FFI` from unset to `1`; grid correction and forced
+final-after-max processing remained unset.
+
+The final merged signed normalized non-DC FSC-AUC changes from
+`0.9549136569752534` to `0.9549149317870570`, or
+`+1.2748118035643685e-6`. All 11 numbered current-size and HEALPix-order pairs
+are exact in both arms. The treatment moves physical-iteration-2 support
+mismatches from 90 to 89, worsens iteration-2 Pmax p95 by `0.840%`, improves
+iteration-11 Pmax p95 by only `0.0158%`, and changes neither iteration-11
+rotation-error nor translation-error p95. It therefore passes no predeclared
+material latent or final gate. The classification is
+`radial_support_conditioned_on_relion_cuda_does_not_materially_improve_case26`.
+
+The sealed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_relion_cuda_radmask_ab_5c6cc17c_20260809T2323ET/analysis/CASE26_RELION_CUDA_RADMASK_AB.json`
+(SHA-256
+`37c0c1995fecfb8b3689468caf1d1e117624239e2aec220d779a3be11a07d3b3`).
+An independent CPU shellwise implementation recomputed both final AUC values
+from the sealed maps within `3.3e-16`. This falsifies radial coarse support as
+the remaining case-26 cause even after the independently positive native
+preprocessing intervention. Case 26 returns to an exact high-frequency final
+score/BPref boundary from the same last-numbered state. K=1 remains `28/34`
+strict, `32/34` topology, and `34/34` evaluated; K=4 remains parked.

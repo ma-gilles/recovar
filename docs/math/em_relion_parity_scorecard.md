@@ -1601,6 +1601,34 @@ The recovered completion-seal SHA-256 is
 This promotes the radial-support correction to an autonomous frozen case-4
 trajectory, but is not itself scorecard acceptance; K=1 remains `28/34`
 strict and `32/34` topology.
+
+The same radial-support correction is now rejected for the remaining
+case-26 final-only deficit even when both arms use native RELION-CUDA image
+preprocessing. Same-H100 job `12194926` completed naturally `0:0` in
+`00:34:11`; the arms shared source `5c6cc17c`, inputs, seed, controller,
+finalization policy, custom CUDA library, and physical GPU. The treatment
+changed only `RECOVAR_K1_COARSE_GAUSSIAN_FFI` from unset to `1`. Grid
+correction and forced final-after-max processing remained unset.
+
+All `11/11` numbered current-size and HEALPix-order pairs remain exact. Final
+merged signed normalized non-DC FSC-AUC changes only from
+`0.9549136569752534` to `0.9549149317870570`, a delta of
+`1.2748118035643685e-6`. Physical-iteration-2 support mismatches change from
+`90` to `89`, iteration-2 Pmax p95 worsens by `0.840%`, iteration-11 Pmax p95
+improves by only `0.0158%`, and iteration-11 rotation and translation p95 are
+unchanged. No predeclared material latent or final gate passes. The fixed
+classification is
+`radial_support_conditioned_on_relion_cuda_does_not_materially_improve_case26`.
+
+The immutable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_relion_cuda_radmask_ab_5c6cc17c_20260809T2323ET/analysis/CASE26_RELION_CUDA_RADMASK_AB.json`
+with SHA-256
+`37c0c1995fecfb8b3689468caf1d1e117624239e2aec220d779a3be11a07d3b3`.
+An independent CPU implementation recomputed the 63 signed FSC shells from
+the sealed final maps and reproduced the two reported AUC values within
+`3.3e-16`. This rejects radial coarse support as the residual case-26 fix and
+leaves native preprocessing as a verified but insufficient contributor. K=1
+remains `28/34` strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
