@@ -36,6 +36,7 @@ from .k_class import run_dense_k_class_em as run_dense_k_class_em
 from .k_class import run_local_k_class_em as run_local_k_class_em
 from .refinement_options import AdaptiveOptions as AdaptiveOptions
 from .refinement_options import EngineDebugOptions as EngineDebugOptions
+from .refinement_options import ExpectedAccuracyOptions as ExpectedAccuracyOptions
 from .refinement_options import KClassOptions as KClassOptions
 from .refinement_options import LocalSearchOptions as LocalSearchOptions
 from .refinement_options import RefinementBatching as RefinementBatching

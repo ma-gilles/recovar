@@ -73,6 +73,18 @@ FIXTURE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normal
 RUN_FULL_REFINEMENT = Path(__file__).resolve().parents[2] / "scripts" / "run_full_refinement.py"
 
 
+def _single_constructor_keywords(tree, constructor_name):
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == constructor_name
+    ]
+    assert len(calls) == 1
+    return {keyword.arg: keyword.value for keyword in calls[0].keywords}
+
+
 def test_full_refinement_supports_stop_after_coarse_significance_dump():
     source = RUN_FULL_REFINEMENT.read_text()
     assert "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET" in source
@@ -630,15 +642,7 @@ def test_frozen_boundary_source_hashes_bind_live_stars(tmp_path):
 
 def test_frozen_boundary_schedule_is_threaded_exactly_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {keyword.arg: keyword.value for keyword in calls[0].keywords}
+    keywords = _single_constructor_keywords(tree, "RefinementSchedule")
     assert isinstance(keywords["init_current_size"], ast.Name)
     assert keywords["init_current_size"].id == "init_current_size"
     relion_incr = keywords["init_relion_incr_size"]
@@ -928,13 +932,7 @@ def test_firstiter_cc_passes_relion_cli_ini_high_to_refinement_loop():
     """
 
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    keywords = _single_constructor_keywords(tree, "RelionParityOptions")
     assert "relion_firstiter_ini_high_angstrom" in keywords
     value = keywords["relion_firstiter_ini_high_angstrom"]
     assert isinstance(value, ast.IfExp)
@@ -1005,13 +1003,7 @@ def test_runner_requires_and_persists_perturbation_restart_provenance():
 
 def test_save_intermediates_skip_unregularized_passes_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    keywords = _single_constructor_keywords(tree, "EngineDebugOptions")
     value = keywords["save_intermediates_skip_unregularized"]
     assert isinstance(value, ast.Call)
     assert isinstance(value.func, ast.Name)
@@ -1023,13 +1015,7 @@ def test_save_intermediates_skip_unregularized_passes_to_refinement_loop():
 def test_stop_after_local_search_passes_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
     assert "--stop_after_local_search" in RUN_FULL_REFINEMENT.read_text()
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    keywords = _single_constructor_keywords(tree, "EngineDebugOptions")
     value = keywords["stop_after_local_search"]
     assert isinstance(value, ast.Call)
     assert isinstance(value.func, ast.Name)
@@ -1041,13 +1027,7 @@ def test_stop_after_local_search_passes_to_refinement_loop():
 def test_stop_after_local_search_score_only_passes_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
     assert "--stop_after_local_search_score_only" in RUN_FULL_REFINEMENT.read_text()
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    keywords = _single_constructor_keywords(tree, "EngineDebugOptions")
     value = keywords["stop_after_local_search_score_only"]
     assert isinstance(value, ast.Call)
     assert isinstance(value.func, ast.Name)
