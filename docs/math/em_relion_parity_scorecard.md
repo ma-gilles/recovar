@@ -1821,6 +1821,41 @@ that same rebuilt binary. The pre-run library entry in the static manifest is
 therefore intentionally stale and is not counted as a verified terminal hash.
 Autonomous case-10 acceptance and passing-case preservation remain pending, so
 the frozen score is still `28/34` strict and `32/34` topology.
+
+The clean current-source case-7 physical-dispatch A/B now rejects the proposed
+RELION physical particle order as a standalone repair for the first material
+iteration-2 discrepancy. Science job `12198517` completed both sequential arms
+naturally `0:0` on one H100. The first analyzer job `12198569` failed only
+after both particle audits completed because its external-script invocation
+removed the checkout from Python's import path. Hash-pinned replacement
+analyzer `12200698` completed naturally `0:0`; its saved signed shellwise
+artifact is byte-identical to the independent preliminary analysis.
+
+All structural gates pass: both gather/inverse maps are exact, the treatment
+changes the physical order materially (only `3/100000` fixed positions), and
+the ordered first 100 expected-accuracy particle identities and float64 CTF
+rows agree exactly. Nevertheless, Pmax relative L2 changes only from
+`0.004146431476436497` to `0.0041464161887471`, an improvement of
+`0.0003687%`. Significant-count mismatches remain `37`, rotation mismatches
+above `1e-3` degrees remain `7`, and translation mismatches above `1e-3`
+Angstrom worsen from `9` to `11`. Merged signed normalized non-DC FSC-AUC
+against RELION falls from `0.9999997804911148` to `0.9999994617377909`; the
+treatment-versus-control map difference is beyond the independent exact-repeat
+floor. The fixed classification is
+`dispatch_falsified_as_standalone_case7_iteration2_repair`. No production
+particle-order change is accepted.
+
+The official report and shellwise artifact are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_dispatch_current_ab_8b9f3646_20260810T0225ET/analysis/CASE07_CURRENT_DISPATCH_AB.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_dispatch_current_ab_8b9f3646_20260810T0225ET/analysis/CASE07_CURRENT_DISPATCH_AB_shellwise.npz`,
+with SHA-256 values
+`a500a88d506c7b5fac10694d6fd42070740a2c12e89aa765f50f99afa2ed84d1`
+and
+`0c7d372dc51d0872b8b557286ab5e2806224e8778cf8bf1dd5b24c4eba162881`.
+All declared input hashes verify independently. The exact RELION
+iteration-1-state to iteration-2 discriminator is the next case-7 causal gate;
+the frozen score remains unchanged.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
