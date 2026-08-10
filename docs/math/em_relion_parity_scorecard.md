@@ -1493,6 +1493,37 @@ An earlier analyzer output that incorrectly joined internal phase arguments as
 physical translations is explicitly preserved and marked rejected; it is not
 used for this classification.  This gate is non-scoring and leaves K=1 at
 `28/34` strict and `32/34` topology.
+
+The predeclared case-26 host-NumPy versus native RELION-CUDA preprocessing A/B
+provides partial causal support, but does not close the final-only failure.
+Same-H100 retry job `12189684` completed both autonomous arms and preserved all
+`11/11` numbered topology gates.  Native preprocessing improves final signed
+merged cross-engine FSC-AUC from `0.954916210032` to `0.963330542199`
+(`+0.008414332167`).  It also improves physical-iteration-11 Pmax p95 by
+`5.655%` and rotation-error p95 by `2.955%`, but changes the iteration-2
+support mismatch from `88` to `90` and does not cross the predeclared latent
+material-improvement gate.  The fixed classification is
+`relion_cuda_preprocessing_partially_improves_case26`; strong causal support
+and scorecard admissibility remain false.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_relion_cuda_preprocess_ab_221d09eb_20260809T2056ET/analysis/CASE26_RELION_CUDA_PREPROCESS_AB.json`,
+SHA-256
+`d1209c462bc11a1e091e1952ff07143ec4c3118c272141a6d1480347dc0c3682`.
+This makes preprocessing a verified contributor to case 26, but not its sole
+remaining cause; K=1 remains `28/34` strict and `32/34` topology.
+
+The fresh case-22 native coarse-operand capture completed its RELION and
+RECOVAR science before a legacy filename assumption stopped the Slurm job.
+The predeclared operand analyzer was run CPU-only against the sealed artifacts.
+The passive native validator passes and all 14 RECOVAR dumps use the exact
+float32 coarse-FFI operand schema, but the fixed all-native replay gate passes
+only `7/14`; every projected-reference, shifted-image, and pixel-weight arm has
+the same `7/14` dominance count.  Classification is therefore not ready and
+the result supplies no dominant operand.  The diagnostic-only report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_fresh_coarse_operand_alignment_987fd622_20260809T1912ET/analysis/COARSE_OPERAND_ALIGNMENT.json`,
+SHA-256
+`e5affbac683e85522979ab199e8ef787777adbbd205a6561b4eef48acffc750c`.
+It cannot promote a change because job `12188952` rebuilt the CUDA library
+after its preflight hash gate.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
