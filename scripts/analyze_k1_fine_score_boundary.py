@@ -18,8 +18,18 @@ from typing import Any
 import numpy as np
 import starfile
 
-from scripts.validate_relion_bpref_factor_capture import fnv1a64, load_factor_capture
-from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
+if __package__:
+    from .validate_relion_bpref_factor_capture import fnv1a64, load_factor_capture
+    from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
+else:
+    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
+        fnv1a64,
+        load_factor_capture,
+    )
+    from validate_relion_fine_score_capture import (  # type: ignore[no-redef]
+        ACTIVE,
+        load_fine_score_capture,
+    )
 
 
 SELECTION_SCHEMA = "recovar.em.k1_fine_score_panel.v1"
@@ -454,4 +464,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
