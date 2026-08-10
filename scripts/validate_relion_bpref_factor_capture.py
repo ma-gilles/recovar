@@ -108,6 +108,27 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
+def _selection_records(selection: dict[str, object]) -> list[dict[str, object]]:
+    """Normalize legacy stratification and K=1 boundary-panel selections."""
+
+    schema = selection.get("schema")
+    if schema == "bpref-factor-stratification-v1":
+        records = selection.get("selected")
+        stack_field = "stack_index_1based"
+    elif schema == "recovar.em.k1_bpref_factor_panel.v1":
+        records = selection.get("targets")
+        stack_field = "stack_index_one_based"
+    else:
+        raise ValueError("unexpected selection schema")
+    _require(isinstance(records, list) and bool(records), "selection is empty")
+    normalized = []
+    for record in records:
+        _require(isinstance(record, dict), "selection record is not an object")
+        _require(stack_field in record, "selection record is missing stack identity")
+        normalized.append({**record, "stack_index_1based": int(record[stack_field])})
+    return normalized
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -309,9 +330,7 @@ def validate_directory(
 ) -> dict[str, object]:
     selection_json = Path(selection_json)
     selection = json.loads(selection_json.read_text())
-    _require(selection.get("schema") == "bpref-factor-stratification-v1", "unexpected selection schema")
-    selected = selection.get("selected")
-    _require(isinstance(selected, list) and selected, "selection is empty")
+    selected = _selection_records(selection)
     expected_stacks = [int(record["stack_index_1based"]) for record in selected]
     _require(len(expected_stacks) == len(set(expected_stacks)), "selection contains duplicate stacks")
     canonical_stack_text = ",".join(str(value) for value in expected_stacks)

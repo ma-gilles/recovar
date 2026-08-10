@@ -76,6 +76,20 @@ def _selection(path, *, ranks=(2, 2)):
     )
 
 
+def _k1_selection(path, *, ranks=(2, 2)):
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "recovar.em.k1_bpref_factor_panel.v1",
+                "targets": [
+                    {"stack_index_one_based": 17, "expected_mpi_rank": ranks[0]},
+                    {"stack_index_one_based": 23, "expected_mpi_rank": ranks[1]},
+                ],
+            }
+        )
+    )
+
+
 def test_fine_score_capture_directory_is_complete_and_algebra_checked(tmp_path):
     selection = tmp_path / "selection.json"
     _selection(selection)
@@ -106,6 +120,18 @@ def test_fine_score_capture_uses_per_particle_mpi_ranks(tmp_path):
 
     assert report["mpi_rank"] is None
     assert report["mpi_rank_counts"] == {"1": 1, "2": 1}
+    assert report["mpi_rank_by_stack"] == {"17": 1, "23": 2}
+
+
+def test_fine_score_capture_accepts_k1_boundary_panel_schema(tmp_path):
+    selection = tmp_path / "selection.json"
+    _k1_selection(selection, ranks=(1, 2))
+    _write_capture(tmp_path / "part117_stack17_class2.fine-score-v1.bin", stack=17, rank=1)
+    _write_capture(tmp_path / "part123_stack23_class2.fine-score-v1.bin", stack=23, rank=2)
+
+    report = validator.validate_directory(tmp_path, selection)
+
+    assert report["capture_ready"] is True
     assert report["mpi_rank_by_stack"] == {"17": 1, "23": 2}
 
 
