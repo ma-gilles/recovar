@@ -1932,6 +1932,37 @@ with SHA-256 values
 and
 `911819a4c07e63c4c0cd85d9f82e34355a902d33479e53502789b4d90663e3de`.
 The frozen score remains `28/34` strict and `32/34` topology.
+
+A CPU-only reanalysis of the sealed case-7 source-row `15588` captures now
+identifies the first structural mismatch inside iteration 2. The RECOVAR
+capture already uses the exact 29-row K=1 translation grid and the exact
+RELION-state/reference boundary. It is joined separately to two independent
+seed-exact native RELION pass-1 captures for stack index `15589`, particle id
+`6212`. In both joins the finite-prior candidate support is exactly equal at
+`270,048/270,048`, and both engines select coarse winner rotation `28067`,
+translation `15`. The significant parent set is also exact.
+
+The centered raw coarse score surface is the first unequal boundary. Its
+cross-engine p95 absolute discrepancy is `0.0045166015625` in repeat A and
+`0.00450897216796875` in repeat B, with maxima `0.0079345703125` and
+`0.0075531005859375`. The paired native RELION repeat floor is
+`0.00048828125` p95 and `0.0009765625` maximum, so the cross-engine p95 is
+`9.25x` the repeat floor. Posterior total variation is approximately
+`0.00045536`; RECOVAR retains one extra significant candidate (`6` versus
+`5`) while keeping the same winning candidate and significant parent set.
+The fixed structural classification is
+`raw_coarse_score_surface_is_first_structural_case7_difference`.
+
+This is guidance, not production-fix authorization: the native RELION capture
+observer is map-stable (minimum signed normalized non-DC FSC-AUC
+`0.9999999980158729`) but is not particle-state exact. The next case-7 gate is
+therefore a score-component decomposition of projected reference, shifted
+image, correction/CTF, and contraction arithmetic, followed by an inert
+same-input intervention. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_structural_coarse_boundary_20260810T0425ET/analysis/CASE07_STRUCTURAL_COARSE_BOUNDARY.json`
+with SHA-256
+`a5b7f9b94e2577c4015c543e3c72b9752917eb91ec9ca6fcc2613fe2623b811f`.
+The frozen score remains `28/34` strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
