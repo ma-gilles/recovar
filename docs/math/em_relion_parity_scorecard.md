@@ -2155,6 +2155,56 @@ with SHA-256 values
 and
 `9d1a1a60c662efe424b98c69e285ab97e08b7efd7e35e63f7e8e444802e7a637`.
 The frozen score remains `28/34` strict and `32/34` topology.
+
+The corrected case-22 live-initial-noise plus float32 fine-posterior A/B also
+rejects that arithmetic change as the missing interaction repair. Science job
+`12202665` and analysis job `12202695` completed naturally `0:0`; both
+manifests verify, and the required live-noise activation appears exactly once
+in both arms. The formal report classification is `invalid` because neither
+arm restores exact topology, not because provenance or activation failed.
+
+At physical iteration 2, significant-support mismatches worsen from `464` to
+`465`; Pmax relative L2 worsens from `7.320333684264581e-6` to
+`7.615738100569056e-6` (`4.0354%`); and merged signed normalized non-DC
+FSC-AUC changes from `0.999993362190299` to `0.9999933621156101`, a
+`0.001125%` worsening of its deficit. Final FSC-AUC changes only from
+`0.8260813754716488` to `0.8260825530412778`. Both arms remain strict and
+topology failures. Float32 fine-posterior arithmetic is therefore rejected as
+a standalone repair under both serialized and verified live initial noise.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_live_noise_f32fine_ab_2f619791_20260810T0520ET/analysis/CASE22_VERIFIED_LIVE_NOISE_F32_FINE_AB.json`,
+with SHA-256
+`26c56998f301624299b98dc44be86537144b081cb590445cda7c24f6eafc656f`.
+The next case-22 gate remains the aligned fine-score/BPref operand boundary.
+
+The fresh cold-start case-7 coarse-Gaussian FFI A/B confirms that the positive
+exact-boundary posterior effect survives from iteration 0. Slurm job
+`12203248` completed both intentional two-iteration, skip-final science arms.
+Its wrapper then returned `2:0` because it omitted the trajectory auditor's
+`--numbered-only` flag and incorrectly requested absent final products. The
+original error artifact is preserved. A CPU-only recovery re-ran the unchanged
+FSC and state auditors on the immutable numbered outputs and applied the
+predeclared classification without rerunning science.
+
+At physical iteration 2, Pmax relative L2 improves from
+`0.004146445346361666` to `0.001520572979795622`, a `63.3283%` improvement.
+Merged signed normalized non-DC FSC-AUC changes from `0.9999997805482789` to
+`0.9999997827139099`, a `0.9868%` reduction in its deficit. Current size and
+HEALPix topology remain exact. The GT delta changes by only
+`-2.11883839473792e-7`, so the strong gate does not pass, while the fixed
+partial-positive gate does. The classification is
+`coldstart_coarse_ffi_partially_improves_case7_iteration2`; this authorizes a
+complete autonomous case-7 trajectory but cannot itself change the scorecard.
+
+The recovered report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_coldstart_coarseffi_ab_dd6acb5e_20260810T0535ET/analysis/CASE07_COLDSTART_COARSEFFI_AB_NUMBERED_SALVAGE.json`,
+with SHA-256
+`792d65c7a2583d28308f76dc240d2a453fa72e61503df424b57e1afb4c2998b0`.
+The frozen full case-7 promotion run is Slurm `12204959`, with dependent
+summary `12204960`, under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_coarseffi_autonomous_dd6acb5e_20260810T0701ET`.
+The frozen score remains `28/34` strict and `32/34` topology while it runs.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
