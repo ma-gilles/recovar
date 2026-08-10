@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=k1c26-exact-it3
-#SBATCH --output=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_it3_dump_20260810T1950ET/logs/run-%j.out
-#SBATCH --error=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_it3_dump_20260810T1950ET/logs/run-%j.err
+#SBATCH --output=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_it3_dump_retry1_20260810T1955ET/logs/run-%j.out
+#SBATCH --error=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_it3_dump_retry1_20260810T1955ET/logs/run-%j.err
 #SBATCH --partition=cryoem
 #SBATCH --account=gilles
 #SBATCH --qos=della-cryoem
@@ -18,8 +18,8 @@ set -euo pipefail
 : "${EXPECTED_REPO_HEAD:?submission must pin repository head}"
 : "${EXPECTED_REPO_DIFF_SHA256:?submission must pin repository diff}"
 
-ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_it3_dump_20260810T1950ET
-RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_exact_it3_dump_20260810T1950ET
+ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_it3_dump_retry1_20260810T1955ET
+RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_exact_it3_dump_retry1_20260810T1955ET
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
@@ -105,6 +105,7 @@ COMMAND=(
     --iter 2 --max_iter 1
     --continuous-relion-noise-state
     --skip_final_iteration
+    --image-fourier-backend relion_cuda
     --image_batch_size 187
     --rotation_block_size 8192
     --output_dir "${OUTPUT}"
