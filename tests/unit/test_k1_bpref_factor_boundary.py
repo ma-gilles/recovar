@@ -4,6 +4,7 @@ import pytest
 from scripts.analyze_k1_bpref_factor_boundary import (
     _classify_localization,
     _metric,
+    _recovar_capture_path,
     _translation_map,
 )
 from scripts.validate_relion_bpref_factor_capture import TRANSLATION_DTYPE
@@ -52,3 +53,17 @@ def test_metric_uses_exact_and_relative_l2_without_correlation():
     assert metric["mismatch_count"] == 1
     assert metric["relative_l2_over_reference"] > 0.0
     assert "correlation" not in metric
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "pass2_orig000192_cs060.npz",
+        "pass2_orig000192_class001_cs060.npz",
+    ],
+)
+def test_recovar_capture_path_accepts_k1_filename_variants(tmp_path, filename):
+    expected = tmp_path / filename
+    expected.touch()
+    assert _recovar_capture_path(tmp_path, original_index=192, current_size=60) == expected

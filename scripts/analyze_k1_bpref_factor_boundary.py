@@ -186,6 +186,11 @@ def _classify_localization(
 
 def _recovar_capture_path(directory: Path, original_index: int, current_size: int) -> Path:
     matches = sorted(directory.glob(f"pass2_orig{original_index:06d}_cs{current_size:03d}.npz"))
+    matches += sorted(
+        directory.glob(
+            f"pass2_orig{original_index:06d}_class001_cs{current_size:03d}.npz"
+        )
+    )
     _require(len(matches) == 1, f"expected one RECOVAR pass-2 capture for source row {original_index}")
     return matches[0]
 
