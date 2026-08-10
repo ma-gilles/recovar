@@ -1464,6 +1464,35 @@ candidate remains unaccepted.  The report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_coarse_significance_ab_5e37ee98_20260809T1705ET/analysis/CASE26_COARSE_SIGNIFICANCE_AB_V1.json`,
 SHA-256
 `78069603fa9326d527b489b0871dd241bba66eecbc8279b5c6be598aac3afac1`.
+The native-inline case-4 operand join closes the diagnostic gap left by the
+rejected passive operand replay without identifying an input-operand cause.
+For original particle `21874`, RELION direction-major rotation `32565` maps
+exactly to RECOVAR psi-major rotation `16806`; the fixed panel contains all 29
+translations and 4003 RECOVAR score pixels.  The native inline accumulator is
+continuous for all `147900/147900` pixel updates, its final values equal all
+`116/116` native lane partials, and all `29/29` production raw scores are
+atomically reachable.  After the audited physical translation join, native
+RELION versus RECOVAR relative L2 differences are `2.08687e-7` for the
+projected reference, `6.59136e-7` for the shifted image, and `6.17515e-7` for
+the correction/CTF-squared operand.  Adding the all-native operand delta to the
+actual RECOVAR production score removes only `0.00106226` of the centered
+cross-engine residual energy; reference-only removes `0.00134840`, shifted-
+image-only worsens it by `0.000309543`, and correction-only is unchanged.  All
+arms therefore fail the fixed strictly-greater-than-`0.5` dominance gate.
+
+The classification is
+`native_relion_operands_do_not_dominate_case04_fixed_candidate_residual`.
+This rejects projection, native translation, and correction values as the
+leading case-4 cause at the fixed candidate and moves the first open boundary
+to the exact weighted-square/contraction path before the already-qualified
+native lane reduction.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_native_inline_vs_recovar_20260809T2115ET/analysis/NATIVE_INLINE_RECOVAR_OPERAND.json`,
+SHA-256
+`27fe96e81f4a88e111e56707b73c89dd700605baa6163064b30e10a18776caff`.
+An earlier analyzer output that incorrectly joined internal phase arguments as
+physical translations is explicitly preserved and marked rejected; it is not
+used for this classification.  This gate is non-scoring and leaves K=1 at
+`28/34` strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
