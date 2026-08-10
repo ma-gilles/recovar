@@ -2099,6 +2099,33 @@ The report and shellwise SHA-256 values are
 and
 `5f0cb8b6f380ac18fbcb445d681d9df4fa49d0794e12d5922ee4b05cf95d82da`.
 The frozen score remains `28/34` strict and `32/34` topology.
+
+Case 26's same-H100 RELION-CUDA preprocessing/live-initial-noise A/B confirms
+that the full-precision initial spectrum is a posterior-support mediator but
+not a final-only repair. Science job `12202784` and its dependent fail-closed
+analysis `12202830` completed naturally `0:0` on physical GPU
+`GPU-099c0d77-bb85-f2e9-f628-148b733c9176`. The activation audit observes no
+live-noise marker in the control and exactly one in the treatment. Both arms
+preserve the numbered topology and remain strict failures.
+
+At physical iteration 2, support-count mismatches fall from `90` to `61`, a
+`32.2222%` improvement. The iteration-1 merged FSC-AUC deficit improves by
+`15.7879%`, but the last-numbered iteration-11 Pmax p95 error slightly worsens
+from `0.1268552620` to `0.1277541135`. Final signed normalized non-DC merged
+FSC-AUC changes only from `0.9549130442` to `0.9551012988`, a delta of
+`+0.0001882546`, and remains far below the unchanged `0.995` gate. Therefore
+the predeclared strong *diagnostic* gate is positive, while scorecard closure
+is false. The next case-26 discriminator is the exact BPref operand and
+contraction boundary under matched posterior support, not another final
+reconstruction variant.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_relion_cuda_live_noise_ab_2f619791_20260810T0520ET/analysis/CASE26_RELION_CUDA_LIVE_NOISE_AB.json`,
+with SHA-256
+`b750db606dea89087d5939640505780d94bd4714a10c64ff197689600ca77b31`.
+Both the science and analysis manifests verify. Grid correction and forced
+after-max finalization were unset. No correlation was computed. The frozen
+score remains `28/34` strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
