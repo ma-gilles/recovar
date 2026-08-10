@@ -1511,6 +1511,24 @@ SHA-256
 This makes preprocessing a verified contributor to case 26, but not its sole
 remaining cause; K=1 remains `28/34` strict and `32/34` topology.
 
+A sealed CPU reanalysis now places that partial preprocessing effect relative
+to the earliest known case-26 BPref boundary. At physical iteration 1, changing
+host-NumPy preprocessing to native RELION-CUDA changes `Ft_y` by at most
+`2.747977987383e-7` relative L2 and `Ft_ctf` by at most
+`3.087948385883e-8`. Those are only `4.7527%` and `1.0594%`, respectively,
+of the minimum half-wise unresolved RECOVAR-to-RELION data and weight
+boundaries in the exact historical BPref audit. Both pass the fixed `<10%`
+subdominance criterion. The classification is
+`native_preprocessing_effect_is_subdominant_at_iteration1_bpref_boundary`.
+This scale comparison cannot establish vector direction because the historical
+cross-engine capture is separate, but it rules out preprocessing alone as the
+dominant earliest-boundary repair and moves the next case-26 discriminator to
+the exact BPref operand/contraction path. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_preprocess_bpref_reanalysis_20260810T0500ET/analysis/CASE26_PREPROCESS_BPREF_REANALYSIS.json`,
+SHA-256
+`7226b4cebb004038189fb49d17213067e5c7c36f30b8db471f4f0ca97ecb0f9c`.
+This is non-scoring; K=1 remains `28/34` strict and `32/34` topology.
+
 The fresh case-22 native coarse-operand capture completed its RELION and
 RECOVAR science before a legacy filename assumption stopped the Slurm job.
 The predeclared operand analyzer was run CPU-only against the sealed artifacts.
