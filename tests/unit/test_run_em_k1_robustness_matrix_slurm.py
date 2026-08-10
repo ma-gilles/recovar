@@ -256,6 +256,27 @@ def test_scorecard_mode_rejects_grid_correction(tmp_path):
     assert "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT unset/off" in proc.stdout
 
 
+def test_scorecard_mode_rejects_legacy_k1_translation_grid(tmp_path):
+    fixture_root = tmp_path / "fixtures"
+    fixture_root.mkdir()
+    fixture_manifest = tmp_path / "fixtures.json"
+    fixture_manifest.write_text('{"schema":"recovar.em_k1_fixture_manifest.v1","cases":[]}\n')
+
+    proc, _ = _dry_run_launcher(
+        tmp_path,
+        case="10",
+        extra_env={
+            "EM_K1_MATRIX_FIXTURE_MANIFEST": str(fixture_manifest),
+            "EM_K1_MATRIX_FIXTURE_ROOT": str(fixture_root),
+            "RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID": "0",
+        },
+        extra_args=["--scorecard"],
+    )
+
+    assert proc.returncode == 2
+    assert "RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID unset/on" in proc.stdout
+
+
 def test_artifact_pinned_fixture_requires_manifest_and_root_together(tmp_path):
     fixture_manifest = tmp_path / "fixtures.json"
     fixture_manifest.write_text("{}\n")
@@ -783,6 +804,23 @@ def test_k1_coarse_gaussian_ffi_env_is_forwarded(tmp_path):
     text = scripts[0].read_text()
     assert "export RECOVAR_K1_COARSE_GAUSSIAN_FFI=1" in text
     assert "RECOVAR_K1_COARSE_GAUSSIAN_FFI=1" in (scratch / "submission.env").read_text()
+
+
+def test_k1_legacy_translation_grid_diagnostic_env_is_forwarded(tmp_path):
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="10",
+        extra_env={"RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID": "0"},
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    scripts = list((scratch / "jobs").glob("em_k1_matrix_10_*.sh"))
+    assert len(scripts) == 1
+    text = scripts[0].read_text()
+    assert "export RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID=0" in text
+    assert "RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID=0" in (
+        scratch / "submission.env"
+    ).read_text()
 
 
 def test_k1_relion_x_half_mstep_diagnostic_env_is_forwarded(tmp_path):
