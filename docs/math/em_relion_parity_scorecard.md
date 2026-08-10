@@ -1856,6 +1856,39 @@ and
 All declared input hashes verify independently. The exact RELION
 iteration-1-state to iteration-2 discriminator is the next case-7 causal gate;
 the frozen score remains unchanged.
+
+The autonomous case-22 coarse-Gaussian FFI A/B rejects that scorer path as a
+trajectory repair. Control science job `12199006` and candidate science job
+`12199026` both completed all scientific work and final artifacts; each then
+returned `2:0` only because the unchanged case-quality gate remained failed.
+The arms used the same commit
+`ebbd19b1fe811b6e91bd2af32dd803dd39390bc7`, identical materialized fixture
+targets, and differed only in `RECOVAR_K1_COARSE_GAUSSIAN_FFI` (unset versus
+`1`). Both converge at physical iteration 10 with current sizes
+`[56, 60, 80, 70, 76, 70, 72, 70, 72, 70]` and HEALPix orders
+`[3, 3, 3, 4, 4, 4, 4, 4, 4, 4]`.
+
+The naive paired final signed normalized non-DC FSC-AUC rises from
+`0.8258969679412923` to `0.8259432603313058`, but the fixed-reference 2-by-2
+analysis shows that this is RELION repeat variation. Against the control
+RELION map, the candidate-minus-control effect is
+`-8.506228688087702e-6`; against the candidate RELION map it is
+`-8.501909530944651e-6`. RECOVAR control-versus-candidate final FSC-AUC is
+`0.9999998265011718`, while the two RELION repeats agree at only
+`0.9999937079369684`. All ten numbered RECOVAR arm comparisons are at least
+`0.9999999903263447`. The fixed classification is
+`coarse_gaussian_ffi_does_not_improve_case22_autonomous_trajectory`.
+
+The immutable analysis report and shellwise artifact are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_coarse_ffi_ab_analysis_20260810T0350ET/analysis/CASE22_COARSE_GAUSSIAN_FFI_AB.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_coarse_ffi_ab_analysis_20260810T0350ET/analysis/CASE22_COARSE_GAUSSIAN_FFI_AB_SHELLWISE.npz`,
+with SHA-256 values
+`efffbbe8ca49a536c0e2f2a186daf8476c5c84d46388f26746dcd0a29d556915`
+and
+`9295842e0b83284389c7205c2b032bc5083d5a7df3b3cbdff04c18da64366e22`.
+No production FFI change is accepted, and the frozen score remains `28/34`
+strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
