@@ -1524,6 +1524,35 @@ SHA-256
 `e5affbac683e85522979ab199e8ef787777adbbd205a6561b4eef48acffc750c`.
 It cannot promote a change because job `12188952` rebuilt the CUDA library
 after its preflight hash gate.
+
+The case-10 fused x-half projection cap is accepted as a memory-preserving
+execution fix, not as a parity rescue.  Autonomous H100 science `12179483`
+and summary `12179484` completed `0:0` from clean source `eea20d72`; the cap
+kept the final 384-box x-half M-step below its observed projection-temporary
+OOM boundary and completed all `49,643/49,643` half-2 buckets.  Independent
+signed shellwise audit covers all 15 numbered half-map pairs.  Its worst
+numbered merged cross-engine FSC-AUC is `0.999967498697` at iteration 12,
+all numbered GT-delta gates pass, and the exact intermediate-trajectory audit
+passes.  The known final-only failure remains: final merged cross-engine
+FSC-AUC is `0.984168402290 < 0.995`, with RECOVAR-minus-RELION merged GT
+FSC-AUC `+0.000172507443`.  Thus this bounded batching change permits the
+fixed case to finish without changing its scientific classification; it does
+not add a K=1 scorecard pass.
+
+The strict FSC, intermediate-trajectory, and matrix-summary reports are
+respectively
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_projection_cap_eea20d72_20260809T1340ET/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0/trajectory_analysis/k1_fsc_trajectory.json`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_projection_cap_eea20d72_20260809T1340ET/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0/trajectory_analysis/k1_intermediate_trajectory.json`,
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_projection_cap_eea20d72_20260809T1340ET/k1_robustness_matrix_summary.json`,
+with SHA-256 values
+`dba5de2b75e49a1144f0b1948a63ea186453ae0ade29261b5432489cc79257f8`,
+`192629b89e866e6f8fd800bde35a314457b8ebca6edaa69cf911212fbc9a5d12`,
+and
+`0c59fd66f5b35a5bd00720b21d16a6794076d678a7c87e2b63e11e8b6fe8acfd`.
+The cap is integrated on the active K=1 branch as `3bc635cd`; its focused
+unit/launcher checks pass `3/3`.  K=1 remains `28/34` strict and `32/34`
+topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
