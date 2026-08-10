@@ -78,6 +78,35 @@ def test_sparse_pass2_execution_order_override_chunks_only_adjacent_particles():
         )
 
 
+def test_sparse_pass2_execution_order_batches_only_consecutive_equal_sizes():
+    counts = [16, 16, 64, 64, 16, 32, 32, 32]
+    per_image = {
+        "oversampled_rots": [
+            np.zeros((count, 3, 3), dtype=np.float32) for count in counts
+        ],
+    }
+    order = np.asarray([4, 0, 1, 2, 3, 7, 5, 6], dtype=np.int64)
+
+    buckets = _bucket_pass2_inputs(
+        per_image,
+        n_fine_trans=4,
+        processing_order_override=order,
+        processing_order_batch_consecutive_bucket_sizes=True,
+        max_hypotheses_per_microbatch=256,
+        max_images_per_microbatch=8,
+    )
+
+    assert [bucket["image_indices"].tolist() for bucket in buckets] == [
+        [4, 0, 1],
+        [2],
+        [3],
+        [7, 5],
+        [6],
+    ]
+    assert [int(bucket["bucket_size"]) for bucket in buckets] == [16, 64, 64, 32, 32]
+    assert np.concatenate([bucket["image_indices"] for bucket in buckets]).tolist() == order.tolist()
+
+
 def test_sparse_pass2_execution_order_can_stay_stable_within_size_buckets():
     counts = [16, 64, 32, 16, 48]
     per_image = {

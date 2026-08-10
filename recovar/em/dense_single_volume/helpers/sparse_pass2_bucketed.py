@@ -2478,6 +2478,7 @@ def _bucket_pass2_inputs(
     processing_order_override=None,
     processing_order_chunk_size=1,
     processing_order_group_by_bucket_size=False,
+    processing_order_batch_consecutive_bucket_sizes=False,
 ):
     """Group images into buckets that share a padded rotation count.
 
@@ -2525,6 +2526,36 @@ def _bucket_pass2_inputs(
         if not np.array_equal(np.sort(processing_order), np.arange(n_images, dtype=np.int64)):
             raise ValueError("processing_order_override must be a permutation of image indices")
         if not processing_order_group_by_bucket_size:
+            if processing_order_batch_consecutive_bucket_sizes:
+                buckets = []
+                run_start = 0
+                while run_start < n_images:
+                    run_bucket_size = int(bucket_sizes[processing_order[run_start]])
+                    run_end = run_start + 1
+                    while (
+                        run_end < n_images
+                        and int(bucket_sizes[processing_order[run_end]]) == run_bucket_size
+                    ):
+                        run_end += 1
+                    cap_by_hypotheses = max(
+                        1,
+                        int(max_hypotheses_per_microbatch)
+                        // max(1, run_bucket_size * int(n_fine_trans)),
+                    )
+                    max_per_chunk = max(
+                        1,
+                        min(int(max_images_per_microbatch), cap_by_hypotheses),
+                    )
+                    for start in range(run_start, run_end, max_per_chunk):
+                        chunk = processing_order[start : min(start + max_per_chunk, run_end)]
+                        buckets.append(
+                            {
+                                "bucket_size": run_bucket_size,
+                                "image_indices": np.asarray(chunk, dtype=np.int64),
+                            }
+                        )
+                    run_start = run_end
+                return buckets
             ordered_chunk_size = int(processing_order_chunk_size)
             if ordered_chunk_size <= 0:
                 raise ValueError("processing_order_chunk_size must be positive")
@@ -4542,6 +4573,7 @@ def _accumulate_relion_x_half_per_particle_launches(
     max_r,
     log_label_prefix: str,
     winner_take_all: bool = False,
+    strict_particle_order: bool = False,
 ):
     """Accumulate one particle-owned orientation grid per FFI launch.
 
@@ -4553,7 +4585,7 @@ def _accumulate_relion_x_half_per_particle_launches(
     """
 
     use_fused_atomics = relion_x_half_bp_fused_atomics_enabled()
-    if not winner_take_all:
+    if not winner_take_all and not strict_particle_order:
         logger.warning(
             "RECOVAR soft-posterior per-particle x-half causal arm enabled; "
             "this does not claim RELION hypothesis-arithmetic closure"
@@ -8946,6 +8978,15 @@ def compute_pass2_stats_sparse_bucketed(
         "live_sequential_translation_reduction"
     ]
     use_per_particle_launches = execution_modes["live_per_particle_launches"]
+    if preserve_bpref_particle_order:
+        if not relion_x_half_mstep:
+            raise ValueError(
+                "preserve_bpref_particle_order requires the RELION x-half M-step"
+            )
+        # Scoring may batch adjacent particles with the same padded support,
+        # but RELION contributes one particle at a time to BPref.  Keep that
+        # launch boundary authoritative even when no diagnostic flag is set.
+        use_per_particle_launches = True
     if device_signature_requested:
         if not os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR"):
             raise RuntimeError(
@@ -9279,6 +9320,7 @@ def compute_pass2_stats_sparse_bucketed(
     )
     processing_order_chunk_size = 1
     processing_order_group_by_bucket_size = False
+    processing_order_batch_consecutive_bucket_sizes = False
     if processing_order_override is not None:
         processing_order_chunk_size = _optional_positive_int_env(
             _BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV,
@@ -9287,14 +9329,16 @@ def compute_pass2_stats_sparse_bucketed(
             _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
             default=False,
         )
+        processing_order_batch_consecutive_bucket_sizes = bool(
+            preserve_bpref_particle_order and not processing_order_group_by_bucket_size
+        )
         if preserve_bpref_particle_order:
             logger.info(
                 "STRICT-PARITY: preserving fresh RELION physical BPref particle "
-                "order (%s; %d contiguous particles per bucket call)",
+                "order (%s)",
                 "stable within support-size buckets"
                 if processing_order_group_by_bucket_size
-                else "global",
-                processing_order_chunk_size,
+                else "global; batching only consecutive equal-size supports",
             )
         else:
             logger.info(
@@ -9320,6 +9364,9 @@ def compute_pass2_stats_sparse_bucketed(
         processing_order_override=processing_order_override,
         processing_order_chunk_size=processing_order_chunk_size,
         processing_order_group_by_bucket_size=processing_order_group_by_bucket_size,
+        processing_order_batch_consecutive_bucket_sizes=(
+            processing_order_batch_consecutive_bucket_sizes
+        ),
     )
     bucket_s = time.time() - bucket_t0
 
@@ -11657,6 +11704,7 @@ def compute_pass2_stats_sparse_bucketed(
                     half_volume=use_half_volume_mstep,
                     max_r=float(current_size // 2) if use_window else None,
                     winner_take_all=winner_take_all,
+                    strict_particle_order=preserve_bpref_particle_order,
                     log_label_prefix="single-particle-xhalf",
                 )
 

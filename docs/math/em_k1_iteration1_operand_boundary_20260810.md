@@ -403,3 +403,49 @@ accumulation sequence.  Stable order only inside sparse size buckets is not
 sufficient, and float64 accumulation does not provide a parity-equivalent
 order-independent substitute.  Among the tested direct routes, one particle
 per call is both the most accurate and the fastest.
+
+## Consecutive-support scoring batches
+
+The production scheduler now separates the two relevant boundaries.  It may
+score a contiguous run of physical particles together when every row has the
+same padded support size, but it backprojects the resulting BPref operands one
+particle at a time in the original physical order.  It never groups
+non-adjacent equal-size rows.  Concatenating the scheduled batches therefore
+reproduces the authoritative physical permutation exactly.
+
+Focused H100 job `12226818` compared this scheduler directly with the sealed
+one-score-call-per-particle iteration-1 route.  For half 1, 1,490 scoring calls
+became two calls and sparse E+M time fell from `49.88` to `15.54` seconds.  For
+half 2, 1,510 calls became two calls and sparse E+M time fell from `45.43` to
+`8.36` seconds.  Total scientific wall time was `84` seconds, versus `156`
+seconds for the singleton job.
+
+Batched and singleton accumulators differ only at relative-L2
+`1.12e-9`--`1.41e-9`, consistent with rowwise JAX batching arithmetic.  The
+decisive native RELION boundary is unchanged:
+
+| iteration-1 half-1 quantity | singleton relative-L2 | consecutive-batch relative-L2 |
+|---|---:|---:|
+| denominator | `6.49466497e-7` | `6.49463588e-7` |
+| numerator | `2.76033522e-6` | `2.76033358e-6` |
+| average | `2.58089213e-6` | `2.58089348e-6` |
+
+Both routes retain support Jaccard `1.0` with zero mismatches.  The batching
+route is therefore parity-equivalent at the measured physical boundary, not
+bitwise identical to the singleton implementation.
+
+The singleton comparison and native comparison reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_consecutive_batch_it1_20260810T1945ET/analysis/K1_CASE22_IT1_BATCH_VS_SINGLETON.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_consecutive_batch_it1_20260810T1945ET/analysis/K1_CASE22_IT1_BATCH_VS_NATIVE.json`,
+with SHA-256 values
+`0dd458a5ac1b75c34d5d2a994e1a59acc5c3d67399aae3e9bf03762242faf553`
+and
+`78580b73677bef63deabc061f1ef0a7de52f7da72d8379189ed008a2e14a15d3`.
+
+This clears the practical gate for the fixed 100,000-particle case 7.  Focused
+job `12227271` is the bounded two-iteration discriminator combining the
+previously positive exact coarse-Gaussian tree with live initial noise, exact
+BPref operands, fresh physical dispatch, and the global per-particle BPref
+sequence.  It saves numbered maps, particle state, and the complete
+iteration-2 accumulator; it does not run a full trajectory or final pass.
