@@ -1553,6 +1553,36 @@ and
 The cap is integrated on the active K=1 branch as `3bc635cd`; its focused
 unit/launcher checks pass `3/3`.  K=1 remains `28/34` strict and `32/34`
 topology.
+
+The corrected case-4 coarse Gaussian radial-support gate passes at the fixed
+physical-iteration-2 boundary.  Same-H100 job `12190420` completed both
+half-set science paths from clean source `35314b6b`, then exited `1:0` only
+because an absolute-path analyzer invocation could not import the `scripts`
+package.  Module-based CPU recovery reran only that analyzer against the
+sealed significance dump.  The treatment removes `95.116100143%` of the
+predeclared fixed-particle centered score-residual energy
+(`3.838046164862041e-5` to `1.8744633115571122e-6`) and lowers centered p95
+absolute residual from `0.002231992524` to `0.000521955819`, passing the
+fixed greater-than-80% gate.
+
+The full `1,069,056`-candidate coarse table is exact on both sides with zero
+one-sided candidates and the same top key `(16806, 14)`.  Its common
+posterior L1 error after common renormalization is `1.665520104319e-6`.
+The full-table report, recovered fixed-particle report, and completion seal
+are respectively
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_coarse_radial_mask_35314b6b_20260809T2147ET/analysis/FULL_COARSE_VS_RELION.json`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_coarse_radial_mask_35314b6b_20260809T2147ET/analysis/FIXED_NATIVE_INLINE_VS_RECOVAR.json`,
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_coarse_radial_mask_35314b6b_20260809T2147ET/provenance/SCIENCE_COMPLETE.json`.
+The two report SHA-256 values are
+`6151230a21f1dff7896f278bb8dee87e3d7b73285415b6665ccddb38ed06bf0b`
+and
+`009064f518270499684ec4845d449fa80d3b36464b8f8f3275e0aa946bbc0187`.
+The recovered completion-seal SHA-256 is
+`9f7f30c93c849a2ab4cec182b02b08cb3797d80b5179ec202c84eeb257d9f69c`.
+This promotes the radial-support correction to an autonomous frozen case-4
+trajectory, but is not itself scorecard acceptance; K=1 remains `28/34`
+strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
