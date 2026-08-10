@@ -1889,6 +1889,49 @@ and
 `9295842e0b83284389c7205c2b032bc5083d5a7df3b3cbdff04c18da64366e22`.
 No production FFI change is accepted, and the frozen score remains `28/34`
 strict and `32/34` topology.
+
+The exact RELION iteration-1-boundary to iteration-2 case-7 discriminator now
+localizes the first material defect inside RECOVAR's physical iteration-2
+computation. Science job `12200862` completed naturally `0:0` on one H100 at
+commit `70c37ed89903ab31ebda25f74aca93a14c526100`. It ran exactly one physical
+iteration 2 (`--iter 1 --max_iter 1`) using RELION `run_it001` incoming half
+maps, controller state, noise, poses, translations, and priors, then compared
+RECOVAR local iteration `000` with RELION `run_it002`. The separate replay-log
+entry naming RECOVAR iteration 2 as `prev=002 control=003` is the unused
+next/final override slot and does not alter the executed local iteration.
+
+The intervention does not collapse the discrepancy. Source-ID-aligned Pmax
+relative L2 changes from the fresh-run baseline
+`0.004146431476436499` to `0.004234873226208419`, a `2.13%` worsening. The
+merged signed normalized non-DC FSC-AUC is `0.9999997816278514`; its deficit
+improves by only `0.52%` from `2.195088851797422e-7` to
+`2.1837214858599907e-7`. There remain `40` significant-support count
+mismatches, `3` rotation mismatches above `1e-3` degrees, and `8` translation
+mismatches above `1e-3` Angstrom. Half-1 and half-2 FSC-AUCs are
+`0.9999997804072633` and `0.9999997790503283`, and topology remains exact.
+The fixed classification is
+`case7_defect_persists_inside_iteration2_local_computation`. This rejects
+inherited iteration-1 maps/state as the leading explanation and narrows the
+next causal gate to candidate score operands, priors/normalization,
+significance, BPref operands, or reduction.
+
+Audit job `12201077` returned `2:0` after science completion only because the
+generic particle auditor could not infer half membership from its combined
+NPZ. Its incomplete outputs were preserved. A CPU-only recovery joined the
+sealed Pmax, pose, support, trajectory, and explicit half-index arrays in
+source order; the unchanged auditor and predeclared analyzer then completed.
+The recovery did not rerun or modify scientific computation. Its full audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_it2_70c37ed8_20260810T0335ET/provenance/CPU_AUDIT_RECOVERY_20260810.md`.
+
+The official report and shellwise artifact are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_it2_70c37ed8_20260810T0335ET/analysis/CASE07_EXACT_IT2_DISCRIMINATOR.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_it2_70c37ed8_20260810T0335ET/analysis/CASE07_EXACT_IT2_DISCRIMINATOR_shellwise.npz`,
+with SHA-256 values
+`f972bf561ae6e0e45033346f95e14b6eff98ae773864d591411ddb8343a9ead8`
+and
+`911819a4c07e63c4c0cd85d9f82e34355a902d33479e53502789b4d90663e3de`.
+The frozen score remains `28/34` strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
