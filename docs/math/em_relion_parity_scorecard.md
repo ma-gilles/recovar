@@ -1363,6 +1363,27 @@ and
 with SHA-256 values `02ec06fc1f06d99580f969ac78a96b54c3d44ee201e7c532a621c8648817356e`,
 `6e42e19020c627a90380c5090219e44c629180ac4661ebe02af8627818566a00`, and
 `ff219c9dea0d2199a7d12b1ec87a9169e5bb6aa5c4171d683f9d9cdd0af26c7c`.
+The predeclared case-22 exact-boundary `2 x 2` factorial rejects a causal
+interaction between binary64 live RELION noise and the native coarse CUDA
+reduction.  Same-H100 job `12186630` completed all four arms `0:0` from the
+physical iteration-1 RELION boundary.  Relative to serialized-noise/current-
+scorer control, the combined arm improves Pmax p95 by only `3.5997%`, worsens
+support mismatches from `1603` to `1658`, improves the merged FSC deficit by
+only `0.1475%`, and slightly worsens the signed merged GT delta by
+`-3.5999e-7`.  It also introduces one `107.05`-degree / `3.005`-Angstrom hard
+pose outlier, while exact current-size and HEALPix topology remain preserved.
+
+The fixed classification is
+`live_noise_and_exact_coarse_scorer_do_not_improve_local_iteration2_boundary`;
+neither strong nor partial support passes, and the combined arm does not beat
+both individual interventions on all three primary metrics.  The report and
+completion-seal SHA-256 values are
+`32e4e0f032f71cb81dc42cd6c50a118b5ecfeb52345fb6868d170912d51b661a`
+and
+`239f7cc182163c616ff7a7c72df8861f27dec2bf9aee2b4d9658a158f8e0bc2b`.
+The frozen score remains `28/34`; the next bounded gate is the fresh native
+iteration-2 operand alignment, submitted as Slurm job `12188952`.
+
 The predeclared case-26 exact-bootstrap A/B now rejects loss of RELION's
 binary64 initial noise through STAR serialization as the final-only cause.
 Both autonomous arms preserve all `11/11` numbered topology gates.  Replacing
