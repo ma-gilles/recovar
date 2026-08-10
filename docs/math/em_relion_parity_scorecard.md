@@ -1994,6 +1994,56 @@ and
 The next causal gate is the exact coarse Gaussian FFI arithmetic-tree A/B at
 the exact incoming boundary, followed by autonomous case 7 if positive.
 The frozen score remains `28/34` strict and `32/34` topology.
+
+The exact-boundary case-7 translation-grid preservation repeat rejects that
+boundary as a repair for the remaining iteration-2 discrepancy. Science job
+`12201785` completed its scientific computation; its final external analyzer
+then returned `1:0` only because path invocation omitted the checkout-local
+`scripts` package. A CPU-only recovery invoked the unchanged analyzer from the
+pinned checkout without rerunning science. Exact RELION translation
+enumeration was already the default on this source, so this is a preservation
+repeat rather than a distinct treatment.
+
+Pmax relative L2 is unchanged at `0.004234873226208419`; significant-support
+count mismatches remain `40`; rotation and translation mismatch counts above
+their fixed thresholds remain `3` and `8`; and merged signed normalized
+non-DC FSC-AUC is `0.9999997816315006`. The fractional merged FSC-deficit
+improvement is only `1.6710885904038748e-5`. The fixed classification is
+`exact_translation_grid_rejected_for_case7_iteration2`.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_grid_it2_a876a2f6_20260810T0415ET/analysis/CASE07_EXACT_GRID_IT2.json`,
+with SHA-256
+`79068cd18e00ba5983e65290bb75baabb17ca4838a9c8aa50300ecf7d5dcf6bb`.
+The recovery audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exact_grid_it2_a876a2f6_20260810T0415ET/provenance/CPU_AUDIT_RECOVERY_20260810.md`.
+
+A corrected CPU-only reanalysis of the sealed case-22 iteration-2 coarse
+operand panel repairs an analysis replay defect. The earlier direct-float64
+contraction reproduced only `7/14` particles per engine because it did not
+model RELION's float32 128-thread/atomic reduction tree. The corrected exact
+tree passes the fixed replay tolerance for `14/14` RECOVAR captures and
+`14/14` native RELION captures.
+
+The eight-arm factorial localizes the bounded raw-score residual to Fourier
+weight support. Native weights dominate centered residual energy for `14/14`
+particles. RECOVAR has `1830` nonzero weights versus RELION's `1461`; all
+`1461` native pixels overlap and the remaining `369` are RECOVAR-only square
+corners. The exact-tree classification is
+`coarse_residual_is_square_corner_weight_support_dominated`.
+
+This structural result does not override the autonomous trajectory gate. The
+already completed same-GPU corner-mask A/B remains authoritative and rejects
+this component as a standalone case-22 repair. The corrected report and audit
+are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_tree_operand_reanalysis_20260810T0443ET/analysis/CASE22_EXACT_TREE_OPERAND_REANALYSIS.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_tree_operand_reanalysis_20260810T0443ET/provenance/CPU_EXACT_TREE_REANALYSIS_20260810.md`,
+with report SHA-256
+`9ae5e4fb8d0c39ef9d84b0981ca4320dda39757dc5511b3407d7045c071dc061`.
+The next case-22 gate moves downstream to fine candidate/support and BPref
+operands under the corrected coarse support convention. The frozen score
+remains `28/34` strict and `32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
