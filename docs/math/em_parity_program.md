@@ -15233,3 +15233,39 @@ both the raw-score p95 error and posterior L1. A negative result sends the
 program to a fixed operand decomposition of projection, shifted image, pixel
 weight, and reduction arithmetic; it does not justify another broad
 trajectory run. K=4 remains parked.
+
+## 2026-08-09 case-10 exact boundary rejects a common radial-scorer fix
+
+The corrected radial coarse Gaussian scorer is not a common cause of the K=1
+posterior drift. Exact-boundary case-10 job `12192546` completed naturally
+`0:0` in `00:47:15` on an H100, starting from the immutable RELION
+iteration-1 boundary and executing only physical iteration 2. Treatment set
+only `RECOVAR_K1_COARSE_GAUSSIAN_FFI=1`; final all-data processing was skipped,
+and grid correction and forced after-max finalization remained unset.
+
+Both primary causal metrics are exactly unchanged from control. Pmax absolute
+p95 remains `0.270430812366246`, and the significant-support-count mismatch
+remains `97,682/100,000`. Merged cross-engine signed normalized non-DC FSC-AUC
+changes from `0.999937600319247` to `0.999937566706344`, or
+`-3.36129030165111e-8`. The topology remains exactly current size `[56]` and
+HEALPix order `[3]`. The fixed classification is
+`radial_support_is_falsified_at_exact_iteration2_boundary`.
+
+The immutable JSON and shellwise NPZ are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it2_radmask_5c6cc17c_20260809T2259ET/analysis/CASE10_EXACT_IT2_RADMASK_AB.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it2_radmask_5c6cc17c_20260809T2259ET/analysis/CASE10_EXACT_IT2_RADMASK_AB_shellwise.npz`,
+with SHA-256 values
+`f33c95112a8986ff2033a1466d9ff411172d518b6dc122940af7f64fafd5e117`
+and
+`371de20c2975fae5bb9824d8c846571c907008e44f4ea556c4797e18eabac084`.
+An independent CPU-only recomputation reproduced both files byte-for-byte.
+
+Autonomous case-22 job `12192107` also rejects broad promotion. Its science
+completed, but the launcher exited `2:0` because the unchanged strict gate
+failed; final merged RECOVAR-versus-RELION signed FSC-AUC is `0.826107`.
+The scorer therefore remains a bounded case-4/case-5 candidate only while
+their independent autonomous runs finish. Case 10 now advances to the fixed
+24-particle score/posterior/support/BPref capture instead of another full
+trajectory hypothesis. The immutable K=1 denominator remains `28/34` strict,
+`32/34` topology, and `34/34` evaluated. K=4 remains parked.

@@ -11627,3 +11627,39 @@ and `9/15` all-class.
   interrupted.
 - The frozen K=1 score therefore remains `28/34` strict signed FSC/FSC-AUC,
   `32/34` exact topology, and `34/34` evaluated. Correlation was not computed.
+
+## 2026-08-09 23:59 ET — radial coarse scorer is not the common K=1 cause
+
+- K=4 remains parked. The immutable K=1 score remains `28/34` strict signed
+  FSC/FSC-AUC, `32/34` exact topology, and `34/34` evaluated.
+- Exact-boundary case-10 job `12192546` completed `0:0` in `00:47:15` on an
+  H100. It starts from the sealed RELION iteration-1 state and runs only
+  physical iteration 2. The sole intervention is the default-off corrected
+  radial coarse Gaussian scorer, `RECOVAR_K1_COARSE_GAUSSIAN_FFI=1`.
+- The candidate changes neither primary posterior boundary: Pmax absolute
+  p95 remains exactly `0.270430812366246`, and the significant-count mismatch
+  remains exactly `97,682/100,000`. The merged cross-engine signed normalized
+  non-DC FSC-AUC changes from `0.999937600319247` to
+  `0.999937566706344`, a delta of `-3.36129030165111e-8`. Current size `[56]`
+  and HEALPix order `[3]` remain exact.
+- The predeclared classification is
+  `radial_support_is_falsified_at_exact_iteration2_boundary`. A separate
+  CPU-only recomputation produced byte-identical JSON and shellwise NPZ
+  outputs. Their SHA-256 values are
+  `f33c95112a8986ff2033a1466d9ff411172d518b6dc122940af7f64fafd5e117`
+  and
+  `371de20c2975fae5bb9824d8c846571c907008e44f4ea556c4797e18eabac084`.
+  The sealed report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it2_radmask_5c6cc17c_20260809T2259ET/analysis/CASE10_EXACT_IT2_RADMASK_AB.json`.
+- Autonomous case-22 job `12192107` completed all RELION and RECOVAR science,
+  then exited `2:0` only because the unchanged strict correctness gate failed.
+  Its final merged RECOVAR-versus-RELION signed FSC-AUC is `0.826107`, with
+  exact numbered completion but the known wrong trajectory topology. This is
+  another negative generalisation result, not an infrastructure failure.
+- These results reject the corrected radial scorer as a shared explanation
+  for cases 10 and 22. They do not invalidate the qualified case-4 raw-score
+  arithmetic result; autonomous case-4 and case-5 runs remain the required
+  case-specific gates. The next case-10 discriminator is a fixed particle
+  panel at the first unequal coarse/fine score, posterior, support, or BPref
+  operand boundary. No threshold, denominator, controller, finalization, or
+  grid-correction policy changed, and no correlation was used.
