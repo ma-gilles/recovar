@@ -17,6 +17,7 @@ import os
 import re
 import time
 from collections.abc import Mapping
+import dataclasses
 from dataclasses import dataclass
 
 import jax
@@ -26,6 +27,7 @@ import numpy as np
 from recovar import utils
 from recovar import cuda_backproject as _cuda_backproject_diagnostics
 from recovar.core import fourier_transform_utils
+from recovar.data_io import cryoem_dataset
 from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.batch_planning import (
     _estimate_relion_em_batch_sizes,
@@ -132,6 +134,9 @@ from recovar.em.dense_single_volume.mean_helpers import (
 )
 from recovar.em.dense_single_volume.mean_helpers import (
     _combined_noise_stats as _combined_noise_stats,
+)
+from recovar.em.dense_single_volume.refinement_options import (
+    RefinementOptions,
 )
 from recovar.em.dense_single_volume.relion_metadata import (
     _radial_profile_from_noise_variance,
@@ -4275,6 +4280,21 @@ def _validate_relion_healpix_orders(orders, *, max_iter, init_healpix_order, max
         )
     return orders
 
+def _with_validated_relion_healpix_orders(options: RefinementOptions) -> RefinementOptions:
+    """Return a copy of `options` with validated `adaptive.relion_healpix_orders`.
+    """
+    adaptive = options.adaptive
+    if adaptive.relion_current_sizes is not None and len(adaptive.relion_current_sizes) == 0:
+        raise ValueError("relion_current_sizes must be non-empty when provided")
+    validated_orders = _validate_relion_healpix_orders(
+        adaptive.relion_healpix_orders,
+        max_iter=options.schedule.max_iter,
+        init_healpix_order=options.schedule.init_healpix_order,
+        max_healpix_order=options.schedule.max_healpix_order,
+    )
+    return dataclasses.replace(
+        options, adaptive=dataclasses.replace(adaptive, relion_healpix_orders=validated_orders)
+    )
 
 def _apply_relion_healpix_order_oracle(state, target_order, *, iteration_number):
     target_order = int(target_order)
@@ -4376,125 +4396,26 @@ def _updated_mean_variance_per_half(
 
 
 def refine_single_volume(
-    experiment_datasets,
-    init_volume,
-    init_noise_variance,
-    init_mean_variance,
-    rotations,
-    translations,
-    disc_type="linear_interp",
-    max_iter=10,
-    image_batch_size=500,
-    rotation_block_size=5000,
-    relion_current_sizes=None,
-    init_current_size=32,
-    fsc_threshold=1.0 / 7.0,
-    adaptive_oversampling=0,
-    max_significants=500,
-    nside_level=None,
-    translation_pixel_offset=None,
-    # --- RELION-mode parameters ---
-    init_healpix_order=2,
-    max_healpix_order=7,
-    auto_local_healpix_order=LOCAL_SEARCH_HEALPIX_ORDER,
-    init_translation_range=10.0,
-    init_translation_step=2.0,
-    init_translation_sigma_angstrom=10.0,
-    particle_diameter_ang=None,
-    save_intermediates_dir=None,
-    save_intermediates_skip_unregularized=False,
-    low_resol_join_halves_angstrom=40.0,
-    tau2_fudge=1.0,
-    perturb_factor=0.0,
-    perturb_seed=None,
-    optimizer_random_seed=None,
-    expected_accuracy_half1_base_order_local=None,
-    expected_accuracy_half1_trial_order_local=None,
-    expected_accuracy_half1_optics_group_ids=None,
-    expected_accuracy_half1_particle_ids=None,
-    expected_accuracy_half1_ctf_params=None,
-    expected_accuracy_do_ctf_correction=None,
-    perturb_replay_relion_dir=None,
-    perturb_replay_relion_prefix="run",
-    perturb_replay_precision="auto",
-    perturb_replay_restart_state_iterations=(),
-    final_sampling_replay_relion_dir=None,
-    init_fsc=None,
-    init_ave_Pmax=None,
-    init_has_high_fsc_at_limit=None,
-    init_relion_incr_size=10,
-    init_refinement_state_fields=None,
-    init_relion_iteration=0,
-    init_reference_real=None,
-    init_image_corrections=None,
-    init_scale_corrections=None,
-    init_group_ids=None,
-    init_group_count=None,
-    relion_scale_follower_count=0,
-    relion_scale_follower_owners_by_iteration=None,
-    relion_follower_scale_replay=None,
-    init_relion_particle_ids=None,
-    init_relion_optics_group_ids=None,
-    init_relion_optics_group_count=None,
-    init_direction_prior=None,
-    init_previous_best_translations=None,
-    init_previous_best_rotation_eulers=None,
-    replay_iteration_overrides=None,
-    final_replay_override=None,
-    final_replay_reference_maps=None,
-    final_replay_source_iteration=None,
-    skip_final_iteration=False,
-    local_search_profile_mode="auto",
-    local_search_translation_prior_mode="coarse",
-    disable_adjoint_y=False,
-    disable_adjoint_ctf=False,
-    emulate_relion_firstiter_cc=False,
-    relion_firstiter_ini_high_angstrom=None,
-    do_solvent_fsc_correction=False,
-    first_iteration_score_mode="gaussian",
-    first_iteration_reconstruction_mode="soft",
-    image_fourier_backend="host_numpy",
-    force_max_iter_after_convergence=False,
-    n_classes=1,
-    init_class_log_priors=None,
-    state_swap_probe=None,
-    assert_initial_scoring_state_immutable=False,
-    preserve_initial_direction_prior=False,
-    stop_after_local_search_profile=False,
-    stop_after_local_search=False,
-    stop_after_local_search_score_only=False,
-    options=None,
-    relion_healpix_orders=None,
-    sealed_sampling_state=None,
-    sealed_scoring_context=None,
-    use_per_half_mean_variance=False,
-    preserve_bpref_particle_order=False,
-):
+    experiment_datasets: list[cryoem_dataset.CryoEMDataset],
+    init_volume: list[jnp.ndarray] | jnp.ndarray,
+    init_noise_variance: jnp.ndarray,
+    init_mean_variance: jnp.ndarray,
+    rotations: jnp.ndarray | None,
+    translations: jnp.ndarray | None,
+    options: RefinementOptions | None = None,
+) -> dict:
     """Multi-iteration RELION-parity EM refinement.
 
     This API always runs the RELION-parity refinement loop.
-
-    ``options`` accepts a :class:`recovar.em.dense_single_volume.refinement_options.RefinementOptions`
-    struct that bundles the schedule / adaptive / parity / local-search /
-    K-class / replay / debug / batching kwarg groups. When provided, its
-    fields override the individual kwargs below. Existing callers that
-    pass individual kwargs continue to work unchanged.
 
     Parameters
     ----------
     experiment_datasets : list of 2 dataset objects
         Half-set datasets (same format as split_E_M_v2 expects).
-    init_volume : jnp.ndarray, shape (volume_size,)
-        Initial volume in Fourier space.
-    init_reference_real : array-like or None
-        Optional real-space source for the first iteration's RELION
-        ``Projector::data`` construction. This bypasses a lossy
-        complex64 Fourier-to-real roundtrip without changing the resident
-        Fourier reference used elsewhere. A shared ``(N,N,N)`` reference,
-        per-class ``(K,N,N,N)`` references, or explicit two-half input is
-        accepted.
-    init_noise_variance : jnp.ndarray, shape (image_size,)
-        Initial per-pixel noise variance.
+    init_volume : list of 2 jnp.ndarray, shape (volume_size,) or jnp.ndarray, shape (volume_size,)
+        Initial volume in Fourier space for each half-set.
+    init_noise_variance : jnp.ndarray, shape (2,image_size)
+        Initial per-pixel noise variance for each half-set.
     init_mean_variance : jnp.ndarray, shape (volume_size,)
         Initial signal prior (tau^2).
     rotations : np.ndarray, shape (n_rot, 3, 3)
@@ -4502,62 +4423,9 @@ def refine_single_volume(
         regenerates grids from the HEALPix refinement state.
     translations : jnp.ndarray, shape (n_trans, 2)
         Translation grid.
-    disc_type : str
-        Discretization type for forward/adjoint slicing.
-    max_iter : int
-        Maximum number of iterations.
-    image_batch_size : int
-        Number of images per GPU batch.
-    rotation_block_size : int
-        Number of rotations per block in em_engine.
-    relion_current_sizes : list of int or None
-        Oracle mode: if provided, use these current_sizes instead of
-        computing RELION-style current sizes from the FSC/data-vs-prior
-        trajectory. relion_current_sizes[i] is used at iteration i.
-    relion_healpix_orders : list of int or None
-        Diagnostic oracle mode: if provided, use these base HEALPix orders
-        instead of making autonomous angular-sampling transitions.
-        relion_healpix_orders[i] is used at iteration i. The schedule must
-        cover ``max_iter`` and must be monotone nondecreasing.
-    init_current_size : int
-        Starting current_size for the first iteration (when no FSC is
-        available yet).  Ignored if relion_current_sizes is provided.
-    fsc_threshold : float
-        FSC threshold for resolution estimation.
-    adaptive_oversampling : int
-        Number of HEALPix subdivision levels for pass 2 (0=disabled,
-        1=2x finer = 4 children, 2=4x finer = 16 children).
-    max_significants : int
-        Maximum significant (rotation x translation) samples per image.
-        Matches RELION's --maxsig semantics (counts SAMPLES, not just
-        orientations; see C5 in plan_relion_parity.md).
-    nside_level : int or None
-        Compatibility keyword for older callers. RELION mode derives the
-        coarse rotation grid from ``init_healpix_order``.
-    translation_pixel_offset : float or None
-        Step size between coarse translation grid points (pixels).
-        Required when adaptive_oversampling > 0.
-    init_healpix_order : int
-        Starting HEALPix order for RELION mode (default 2, ~14.7 deg).
-    max_healpix_order : int
-        Maximum HEALPix order (finest angular sampling, default 7).
-    auto_local_healpix_order : int
-        RELION ``--auto_local_healpix_order`` threshold for switching from
-        global to local angular searches.
-    init_translation_range : float
-        Initial translation search range in pixels (RELION mode).
-    init_translation_step : float
-        Initial translation step size in pixels (RELION mode).
-    init_translation_sigma_angstrom : float
-        Initial RELION-style translation prior width in Angstrom.
-    particle_diameter_ang : float or None
-        RELION particle diameter in Angstrom for the adaptive coarse-image-size
-        formula. When None, fall back to ``ori_size * pixel_size``.
-    image_fourier_backend : {"host_numpy", "jax_gpu", "relion_cuda"}
-        Fourier backend for RELION background-filled particle images. The
-        default preserves the established host path; ``jax_gpu`` uses cuFFT
-        from host-masked pixels. ``relion_cuda`` additionally requires the
-        source-faithful CUDA normalization/translation/mask operands.
+    options : `RefinementOptions` struct that bundles the schedule / adaptive / parity
+        / local-search / K-class / replay / debug / batching kwarg groups.
+        Defaults to ``RefinementOptions()`` when omitted.
 
     Returns
     -------
@@ -4581,183 +4449,22 @@ def refine_single_volume(
         healpix_order_trajectory : list of int -- HEALPix order per iter
         ave_Pmax_trajectory : list of float -- average Pmax per iter
     """
-    if options is not None:
-        # Pull from RefinementOptions struct. Per-field unpacking lets old kwargs
-        # remain authoritative when no struct is passed.
-        schedule = options.schedule
-        max_iter = schedule.max_iter
-        init_current_size = schedule.init_current_size
-        fsc_threshold = schedule.fsc_threshold
-        init_healpix_order = schedule.init_healpix_order
-        max_healpix_order = schedule.max_healpix_order
-        init_translation_range = schedule.init_translation_range
-        init_translation_step = schedule.init_translation_step
-        init_translation_sigma_angstrom = schedule.init_translation_sigma_angstrom
-        particle_diameter_ang = schedule.particle_diameter_ang
-        init_relion_iteration = schedule.init_relion_iteration
-        init_fsc = schedule.init_fsc
-        init_ave_Pmax = schedule.init_ave_Pmax
-        init_has_high_fsc_at_limit = schedule.init_has_high_fsc_at_limit
-        force_max_iter_after_convergence = schedule.force_max_iter_after_convergence
-        skip_final_iteration = schedule.skip_final_iteration
+    if options is None:
+        options = RefinementOptions()
 
-        adaptive = options.adaptive
-        adaptive_oversampling = adaptive.adaptive_oversampling
-        max_significants = adaptive.max_significants
-        nside_level = adaptive.nside_level
-        relion_current_sizes = adaptive.relion_current_sizes
-        relion_healpix_orders = getattr(adaptive, "relion_healpix_orders", None)
-
-        parity = options.parity
-        low_resol_join_halves_angstrom = parity.low_resol_join_halves_angstrom
-        tau2_fudge = parity.tau2_fudge
-        perturb_factor = parity.perturb_factor
-        perturb_seed = parity.perturb_seed
-        perturb_replay_relion_dir = parity.perturb_replay_relion_dir
-        perturb_replay_relion_prefix = parity.perturb_replay_relion_prefix
-        perturb_replay_precision = parity.perturb_replay_precision
-        perturb_replay_restart_state_iterations = parity.perturb_replay_restart_state_iterations
-        final_sampling_replay_relion_dir = parity.final_sampling_replay_relion_dir
-        emulate_relion_firstiter_cc = parity.emulate_relion_firstiter_cc
-        relion_firstiter_ini_high_angstrom = parity.relion_firstiter_ini_high_angstrom
-        do_solvent_fsc_correction = parity.do_solvent_fsc_correction
-        first_iteration_score_mode = parity.first_iteration_score_mode
-        first_iteration_reconstruction_mode = parity.first_iteration_reconstruction_mode
-        image_fourier_backend = parity.image_fourier_backend
-
-        local_search = options.local_search
-        auto_local_healpix_order = local_search.auto_local_healpix_order
-        local_search_profile_mode = local_search.local_search_profile_mode
-        local_search_translation_prior_mode = local_search.local_search_translation_prior_mode
-
-        debug_opts = options.debug
-        disable_adjoint_y = debug_opts.disable_adjoint_y
-        disable_adjoint_ctf = debug_opts.disable_adjoint_ctf
-        save_intermediates_dir = debug_opts.save_intermediates_dir
-
-        k_class_opts = options.k_class
-        n_classes = k_class_opts.n_classes
-        init_class_log_priors = k_class_opts.init_class_log_priors
-
-        replay = options.replay
-        init_image_corrections = replay.init_image_corrections
-        init_scale_corrections = replay.init_scale_corrections
-        init_group_ids = replay.init_group_ids
-        init_group_count = replay.init_group_count
-        init_direction_prior = replay.init_direction_prior
-        init_previous_best_translations = replay.init_previous_best_translations
-        init_previous_best_rotation_eulers = replay.init_previous_best_rotation_eulers
-        replay_iteration_overrides = replay.replay_iteration_overrides
-        final_replay_override = replay.final_replay_override
-        final_replay_reference_maps = replay.final_replay_reference_maps
-        final_replay_source_iteration = replay.final_replay_source_iteration
-
-        batching = options.batching
-        image_batch_size = batching.image_batch_size
-        rotation_block_size = batching.rotation_block_size
-
-        disc_type = options.disc_type
-
-    if relion_current_sizes is not None and len(relion_current_sizes) == 0:
+    if options.adaptive.relion_current_sizes is not None and len(options.adaptive.relion_current_sizes) == 0:
         raise ValueError("relion_current_sizes must be non-empty when provided")
-    relion_healpix_orders = _validate_relion_healpix_orders(
-        relion_healpix_orders,
-        max_iter=max_iter,
-        init_healpix_order=init_healpix_order,
-        max_healpix_order=max_healpix_order,
-    )
+    options = _with_validated_relion_healpix_orders(options)
 
     return _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
         init_volume=init_volume,
-        init_reference_real=init_reference_real,
+        init_reference_real=options.replay.init_reference_real,
         init_noise_variance=init_noise_variance,
         init_mean_variance=init_mean_variance,
         rotations=rotations,
         translations=translations,
-        disc_type=disc_type,
-        max_iter=max_iter,
-        image_batch_size=image_batch_size,
-        rotation_block_size=rotation_block_size,
-        init_current_size=init_current_size,
-        fsc_threshold=fsc_threshold,
-        adaptive_oversampling=adaptive_oversampling,
-        max_significants=max_significants,
-        relion_current_sizes=relion_current_sizes,
-        relion_healpix_orders=relion_healpix_orders,
-        init_healpix_order=init_healpix_order,
-        max_healpix_order=max_healpix_order,
-        auto_local_healpix_order=auto_local_healpix_order,
-        init_translation_range=init_translation_range,
-        init_translation_step=init_translation_step,
-        init_translation_sigma_angstrom=init_translation_sigma_angstrom,
-        particle_diameter_ang=particle_diameter_ang,
-        nside_level=nside_level,
-        save_intermediates_dir=save_intermediates_dir,
-        save_intermediates_skip_unregularized=save_intermediates_skip_unregularized,
-        low_resol_join_halves_angstrom=low_resol_join_halves_angstrom,
-        tau2_fudge=tau2_fudge,
-        perturb_factor=perturb_factor,
-        perturb_seed=perturb_seed,
-        optimizer_random_seed=optimizer_random_seed,
-        expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
-        expected_accuracy_half1_trial_order_local=expected_accuracy_half1_trial_order_local,
-        expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
-        expected_accuracy_half1_particle_ids=expected_accuracy_half1_particle_ids,
-        expected_accuracy_half1_ctf_params=expected_accuracy_half1_ctf_params,
-        expected_accuracy_do_ctf_correction=expected_accuracy_do_ctf_correction,
-        perturb_replay_relion_dir=perturb_replay_relion_dir,
-        perturb_replay_relion_prefix=perturb_replay_relion_prefix,
-        perturb_replay_precision=perturb_replay_precision,
-        perturb_replay_restart_state_iterations=perturb_replay_restart_state_iterations,
-        final_sampling_replay_relion_dir=final_sampling_replay_relion_dir,
-        init_fsc=init_fsc,
-        init_ave_Pmax=init_ave_Pmax,
-        init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
-        init_relion_incr_size=init_relion_incr_size,
-        init_refinement_state_fields=init_refinement_state_fields,
-        init_relion_iteration=init_relion_iteration,
-        init_image_corrections=init_image_corrections,
-        init_scale_corrections=init_scale_corrections,
-        init_group_ids=init_group_ids,
-        init_group_count=init_group_count,
-        relion_scale_follower_count=relion_scale_follower_count,
-        relion_scale_follower_owners_by_iteration=relion_scale_follower_owners_by_iteration,
-        relion_follower_scale_replay=relion_follower_scale_replay,
-        init_relion_particle_ids=init_relion_particle_ids,
-        init_relion_optics_group_ids=init_relion_optics_group_ids,
-        init_relion_optics_group_count=init_relion_optics_group_count,
-        init_direction_prior=init_direction_prior,
-        init_previous_best_translations=init_previous_best_translations,
-        init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
-        replay_iteration_overrides=replay_iteration_overrides,
-        final_replay_override=final_replay_override,
-        final_replay_reference_maps=final_replay_reference_maps,
-        final_replay_source_iteration=final_replay_source_iteration,
-        skip_final_iteration=skip_final_iteration,
-        local_search_profile_mode=local_search_profile_mode,
-        local_search_translation_prior_mode=local_search_translation_prior_mode,
-        disable_adjoint_y=disable_adjoint_y,
-        disable_adjoint_ctf=disable_adjoint_ctf,
-        emulate_relion_firstiter_cc=emulate_relion_firstiter_cc,
-        relion_firstiter_ini_high_angstrom=relion_firstiter_ini_high_angstrom,
-        do_solvent_fsc_correction=do_solvent_fsc_correction,
-        first_iteration_score_mode=first_iteration_score_mode,
-        first_iteration_reconstruction_mode=first_iteration_reconstruction_mode,
-        image_fourier_backend=image_fourier_backend,
-        force_max_iter_after_convergence=force_max_iter_after_convergence,
-        n_classes=n_classes,
-        init_class_log_priors=init_class_log_priors,
-        state_swap_probe=state_swap_probe,
-        assert_initial_scoring_state_immutable=assert_initial_scoring_state_immutable,
-        preserve_initial_direction_prior=preserve_initial_direction_prior,
-        stop_after_local_search_profile=stop_after_local_search_profile,
-        stop_after_local_search=stop_after_local_search,
-        stop_after_local_search_score_only=stop_after_local_search_score_only,
-        sealed_sampling_state=sealed_sampling_state,
-        sealed_scoring_context=sealed_scoring_context,
-        use_per_half_mean_variance=use_per_half_mean_variance,
-        preserve_bpref_particle_order=preserve_bpref_particle_order,
+        options=options,
     )
 
 
@@ -4780,89 +4487,7 @@ def _run_relion_iteration_loop(
     init_mean_variance,
     rotations,
     translations,
-    disc_type,
-    max_iter,
-    image_batch_size,
-    rotation_block_size,
-    init_current_size,
-    fsc_threshold,
-    adaptive_oversampling,
-    max_significants,
-    relion_current_sizes,
-    relion_healpix_orders,
-    init_healpix_order,
-    max_healpix_order,
-    auto_local_healpix_order,
-    init_translation_range,
-    init_translation_step,
-    init_translation_sigma_angstrom,
-    particle_diameter_ang,
-    nside_level,
-    save_intermediates_dir=None,
-    save_intermediates_skip_unregularized=False,
-    low_resol_join_halves_angstrom=40.0,
-    tau2_fudge=1.0,
-    perturb_factor=0.0,
-    perturb_seed=None,
-    optimizer_random_seed=None,
-    expected_accuracy_half1_base_order_local=None,
-    expected_accuracy_half1_trial_order_local=None,
-    expected_accuracy_half1_optics_group_ids=None,
-    expected_accuracy_half1_particle_ids=None,
-    expected_accuracy_half1_ctf_params=None,
-    expected_accuracy_do_ctf_correction=None,
-    perturb_replay_relion_dir=None,
-    perturb_replay_relion_prefix="run",
-    perturb_replay_precision="auto",
-    perturb_replay_restart_state_iterations=(),
-    final_sampling_replay_relion_dir=None,
-    init_fsc=None,
-    init_ave_Pmax=None,
-    init_has_high_fsc_at_limit=None,
-    init_relion_incr_size=10,
-    init_refinement_state_fields=None,
-    init_relion_iteration=0,
-    init_image_corrections=None,
-    init_scale_corrections=None,
-    init_group_ids=None,
-    init_group_count=None,
-    relion_scale_follower_count=0,
-    relion_scale_follower_owners_by_iteration=None,
-    relion_follower_scale_replay=None,
-    init_relion_particle_ids=None,
-    init_relion_optics_group_ids=None,
-    init_relion_optics_group_count=None,
-    init_direction_prior=None,
-    init_previous_best_translations=None,
-    init_previous_best_rotation_eulers=None,
-    replay_iteration_overrides=None,
-    final_replay_override=None,
-    final_replay_reference_maps=None,
-    final_replay_source_iteration=None,
-    skip_final_iteration=False,
-    local_search_profile_mode="auto",
-    local_search_translation_prior_mode="coarse",
-    disable_adjoint_y=False,
-    disable_adjoint_ctf=False,
-    emulate_relion_firstiter_cc=False,
-    relion_firstiter_ini_high_angstrom=None,
-    do_solvent_fsc_correction=False,
-    first_iteration_score_mode="gaussian",
-    first_iteration_reconstruction_mode="soft",
-    image_fourier_backend="host_numpy",
-    force_max_iter_after_convergence=False,
-    n_classes=1,
-    init_class_log_priors=None,
-    state_swap_probe=None,
-    assert_initial_scoring_state_immutable=False,
-    preserve_initial_direction_prior=False,
-    stop_after_local_search_profile=False,
-    stop_after_local_search=False,
-    stop_after_local_search_score_only=False,
-    sealed_sampling_state=None,
-    sealed_scoring_context=None,
-    use_per_half_mean_variance=False,
-    preserve_bpref_particle_order=False,
+    options,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -4878,6 +4503,100 @@ def _run_relion_iteration_loop(
     See docs/relion5_auto_refine_algorithm.md.
     """
     from recovar.reconstruction import regularization
+
+    schedule = options.schedule
+    adaptive = options.adaptive
+    parity = options.parity
+    local_search = options.local_search
+    k_class = options.k_class
+    replay = options.replay
+    debug = options.debug
+    batching = options.batching
+    expected_accuracy = debug.expected_accuracy
+
+    disc_type = options.disc_type
+    max_iter = schedule.max_iter
+    image_batch_size = batching.image_batch_size
+    rotation_block_size = batching.rotation_block_size
+    init_current_size = schedule.init_current_size
+    fsc_threshold = schedule.fsc_threshold
+    adaptive_oversampling = adaptive.adaptive_oversampling
+    max_significants = adaptive.max_significants
+    relion_current_sizes = adaptive.relion_current_sizes
+    relion_healpix_orders = adaptive.relion_healpix_orders
+    init_healpix_order = schedule.init_healpix_order
+    max_healpix_order = schedule.max_healpix_order
+    auto_local_healpix_order = local_search.auto_local_healpix_order
+    init_translation_range = schedule.init_translation_range
+    init_translation_step = schedule.init_translation_step
+    init_translation_sigma_angstrom = schedule.init_translation_sigma_angstrom
+    particle_diameter_ang = schedule.particle_diameter_ang
+    nside_level = adaptive.nside_level
+    save_intermediates_dir = debug.save_intermediates_dir
+    save_intermediates_skip_unregularized = debug.save_intermediates_skip_unregularized
+    low_resol_join_halves_angstrom = parity.low_resol_join_halves_angstrom
+    tau2_fudge = parity.tau2_fudge
+    perturb_factor = parity.perturb_factor
+    perturb_seed = parity.perturb_seed
+    optimizer_random_seed = parity.optimizer_random_seed
+    expected_accuracy_half1_base_order_local = expected_accuracy.half1_base_order_local
+    expected_accuracy_half1_trial_order_local = expected_accuracy.half1_trial_order_local
+    expected_accuracy_half1_optics_group_ids = expected_accuracy.half1_optics_group_ids
+    expected_accuracy_half1_particle_ids = expected_accuracy.half1_particle_ids
+    expected_accuracy_half1_ctf_params = expected_accuracy.half1_ctf_params
+    expected_accuracy_do_ctf_correction = expected_accuracy.do_ctf_correction
+    perturb_replay_relion_dir = parity.perturb_replay_relion_dir
+    perturb_replay_relion_prefix = parity.perturb_replay_relion_prefix
+    perturb_replay_precision = parity.perturb_replay_precision
+    perturb_replay_restart_state_iterations = parity.perturb_replay_restart_state_iterations
+    final_sampling_replay_relion_dir = parity.final_sampling_replay_relion_dir
+    init_fsc = schedule.init_fsc
+    init_ave_Pmax = schedule.init_ave_Pmax
+    init_has_high_fsc_at_limit = schedule.init_has_high_fsc_at_limit
+    init_relion_incr_size = schedule.init_relion_incr_size
+    init_refinement_state_fields = replay.init_refinement_state_fields
+    init_relion_iteration = schedule.init_relion_iteration
+    init_image_corrections = replay.init_image_corrections
+    init_scale_corrections = replay.init_scale_corrections
+    init_group_ids = replay.init_group_ids
+    init_group_count = replay.init_group_count
+    relion_scale_follower_count = replay.relion_scale_follower_count
+    relion_scale_follower_owners_by_iteration = replay.relion_scale_follower_owners_by_iteration
+    relion_follower_scale_replay = replay.relion_follower_scale_replay
+    init_relion_particle_ids = replay.init_relion_particle_ids
+    init_relion_optics_group_ids = replay.init_relion_optics_group_ids
+    init_relion_optics_group_count = replay.init_relion_optics_group_count
+    init_direction_prior = replay.init_direction_prior
+    init_previous_best_translations = replay.init_previous_best_translations
+    init_previous_best_rotation_eulers = replay.init_previous_best_rotation_eulers
+    replay_iteration_overrides = replay.replay_iteration_overrides
+    final_replay_override = replay.final_replay_override
+    final_replay_reference_maps = replay.final_replay_reference_maps
+    final_replay_source_iteration = replay.final_replay_source_iteration
+    skip_final_iteration = schedule.skip_final_iteration
+    local_search_profile_mode = local_search.local_search_profile_mode
+    local_search_translation_prior_mode = local_search.local_search_translation_prior_mode
+    disable_adjoint_y = debug.disable_adjoint_y
+    disable_adjoint_ctf = debug.disable_adjoint_ctf
+    emulate_relion_firstiter_cc = parity.emulate_relion_firstiter_cc
+    relion_firstiter_ini_high_angstrom = parity.relion_firstiter_ini_high_angstrom
+    do_solvent_fsc_correction = parity.do_solvent_fsc_correction
+    first_iteration_score_mode = parity.first_iteration_score_mode
+    first_iteration_reconstruction_mode = parity.first_iteration_reconstruction_mode
+    image_fourier_backend = parity.image_fourier_backend
+    force_max_iter_after_convergence = schedule.force_max_iter_after_convergence
+    n_classes = k_class.n_classes
+    init_class_log_priors = k_class.init_class_log_priors
+    state_swap_probe = debug.state_swap_probe
+    assert_initial_scoring_state_immutable = debug.assert_initial_scoring_state_immutable
+    preserve_initial_direction_prior = replay.preserve_initial_direction_prior
+    stop_after_local_search_profile = debug.stop_after_local_search_profile
+    stop_after_local_search = debug.stop_after_local_search
+    stop_after_local_search_score_only = debug.stop_after_local_search_score_only
+    sealed_sampling_state = debug.sealed_sampling_state
+    sealed_scoring_context = debug.sealed_scoring_context
+    use_per_half_mean_variance = parity.use_per_half_mean_variance
+    preserve_bpref_particle_order = parity.preserve_bpref_particle_order
 
     if image_fourier_backend not in {"host_numpy", "jax_gpu", "relion_cuda"}:
         raise ValueError(
