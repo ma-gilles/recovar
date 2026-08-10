@@ -54,6 +54,31 @@ class TestCoarseTranslations:
         assert np.all(norms <= 5.001), "Points outside circular boundary"
         assert np.any(norms > 4.5), "No points near boundary — too conservative"
 
+    def test_rounded_star_integer_boundary_matches_k1_exact_grid(self):
+        """Fixed-decimal STAR values must not drop RELION's outer axial rows."""
+        from recovar.em.sampling import get_relion_translation_grid, get_translation_grid
+
+        offset_range_angstrom = 4.25
+        offset_step_angstrom = 1.416667
+        pixel_size = 1.416667
+        relion_grid_pixels = (
+            get_coarse_translations(offset_range_angstrom, offset_step_angstrom)
+            / pixel_size
+        )
+        exact_grid = get_relion_translation_grid(
+            offset_range_angstrom / pixel_size,
+            offset_step_angstrom / pixel_size,
+        )
+        legacy_grid = get_translation_grid(
+            offset_range_angstrom / pixel_size,
+            offset_step_angstrom / pixel_size,
+        )
+
+        assert relion_grid_pixels.shape == (29, 2)
+        assert exact_grid.shape == (29, 2)
+        assert legacy_grid.shape == (25, 2)
+        np.testing.assert_allclose(exact_grid, relion_grid_pixels, rtol=0.0, atol=1e-12)
+
 
 class TestOversampledTranslations:
     """Compare oversampled translation sub-grids."""

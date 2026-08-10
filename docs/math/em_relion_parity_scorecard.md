@@ -1702,6 +1702,19 @@ the shellwise artifact SHA-256 is
 `d59f3e6e16948decff8d5d170b4a95c6f674c879e70ef8a424a0eb2e57e16ea8`.
 All six input hashes were independently verified. This leaves case 22 at the
 raw coarse operand/preprocessing boundary and does not change the scorecard.
+
+The case-10 translation candidate also passes direct executable equivalence
+against the deployed RELION binding. For offset range `4.25 A`, step
+`1.416667 A`, pixel size `1.416667 A/px`, and perturbation `0.009284`, the
+candidate and binding contain the same `29/29` coarse rows and `116/116` fine
+rows. The maximum absolute fine-row difference is
+`8.881784197001252e-16`; the legacy RECOVAR path contains only 25 coarse rows.
+The coarse and fine candidate byte hashes are respectively
+`cf16523d45b521a8a412661bcee1cf14dafd69e863dde61c034a5ec5b206558b`
+and
+`59ed4324b0f57990fab6bc27b36838de15595a8e51ef2f5f213b67e9d3dd21d6`.
+This proves structural equivalence but still does not substitute for the
+running case-10 FSC/state A/B.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

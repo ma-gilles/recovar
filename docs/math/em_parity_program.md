@@ -15407,3 +15407,21 @@ All six report input hashes were independently recomputed. CUDA codegen is
 therefore removed from the case-22 hypothesis set; the next boundary remains
 the native-versus-RECOVAR raw coarse score components and preprocessing state.
 K=1 remains `28/34` strict and `32/34` topology; K=4 remains parked.
+
+## 2026-08-10 case-10 executable translation-grid equivalence
+
+The candidate translation lattice was compared directly with the deployed
+RELION binding, not only reconstructed from source. At the exact case-10
+fixed-decimal boundary (`4.25 A` range, `1.416667 A` step and pixel size), both
+produce the same 29 coarse rows. After oversampling order 1 and perturbation
+`0.009284`, both produce the same 116 fine rows with maximum absolute
+difference `8.881784197001252e-16`. The legacy RECOVAR grid has only 25
+coarse rows.
+
+The exact candidate coarse and fine byte hashes are
+`cf16523d45b521a8a412661bcee1cf14dafd69e863dde61c034a5ec5b206558b`
+and
+`59ed4324b0f57990fab6bc27b36838de15595a8e51ef2f5f213b67e9d3dd21d6`.
+The corresponding RELION-binding boundary test and K=1/K=4 guard both pass.
+This closes structural uncertainty about the lattice implementation; causal
+acceptance still depends on Slurm job `12197149` and case-9 preservation.
