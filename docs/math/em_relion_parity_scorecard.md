@@ -2205,6 +2205,40 @@ The frozen full case-7 promotion run is Slurm `12204959`, with dependent
 summary `12204960`, under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_coarseffi_autonomous_dd6acb5e_20260810T0701ET`.
 The frozen score remains `28/34` strict and `32/34` topology while it runs.
+
+The autonomous frozen case-4 radial-support/coarse-Gaussian-FFI promotion
+run localizes the remaining discrepancy to the final all-data boundary but
+does not pass the unchanged strict gate. Science job `12191802` and summary
+job `12191803` completed naturally `0:0` from clean source
+`3ec2a48d47b5b821adab132ffe4faad8f119710d`. RECOVAR and RELION emit 17
+numbered iterations with exact current-size and HEALPix topology throughout.
+Merged signed normalized non-DC cross-engine FSC-AUC is
+`0.9999999998950143` at iteration 1 and remains `0.9997261264633223` at
+iteration 17; every numbered map and GT-delta gate passes. The intermediate
+audit also verifies exact particle identity and complete finite,
+shape-compatible state arrays. It records diagnostic Pmax relative L2 growing
+from exactly zero at iteration 1 to `0.08134031276760485` at iteration 17,
+while the controller topology remains exact.
+
+The final all-data products are the sole FSC failure: half-1, half-2, and
+merged cross-engine FSC-AUC values are `0.9944927291811599`,
+`0.9940657140210540`, and `0.9930871850579513`, respectively. The merged
+RECOVAR-minus-RELION GT FSC-AUC delta is positive at
+`+0.0038651335144210264`, so this is not a GT-quality regression. The result
+supports a latent posterior/final-boundary mismatch rather than a numbered-map
+or controller defect, but it cannot promote case 4.
+
+The FSC and intermediate-state reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_radmask_autonomous_3ec2a48d_20260809T2241ET/cases/4_high_noise_100k_g256_white_noise3_bf80/trajectory_analysis/k1_fsc_trajectory.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_radmask_autonomous_3ec2a48d_20260809T2241ET/cases/4_high_noise_100k_g256_white_noise3_bf80/trajectory_analysis/k1_intermediate_trajectory.json`,
+with SHA-256 values
+`cccac40061c96a55fdb9feb73836a7ff4a70ff8f24edb3dfa92bee1b2770f16b`
+and
+`ee35881d3977738073aacf544eb6deb3674e076a4a2a0dc0df30d19d4d55a051`.
+Grid correction remained off, forced final-after-max remained off, and no
+correlation was computed. The frozen score remains `28/34` strict and
+`32/34` topology.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
