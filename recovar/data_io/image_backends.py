@@ -14,19 +14,17 @@ import logging
 import queue
 import threading
 import time
-from collections import OrderedDict, Counter
+from collections import Counter, OrderedDict
 from typing import Dict, List, Optional
 
-import numpy as np
-import jax.numpy as jnp
-
 import grain.python as grain
+import jax.numpy as jnp
+import numpy as np
 
+from recovar.core import mask
+from recovar.data_io import starfile
 from recovar.data_io._index_utils import normalize_indices
 from recovar.data_io.image_loader import ImageLoader
-from recovar.data_io import starfile
-from recovar.core import mask
-
 from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
@@ -387,13 +385,14 @@ class TiltSeriesDataset(ParticleImageDataset):
         star = starfile.StarFile.load(starfile_path)
         df = star.df
 
-        tilt_col = None
-        for col in ["_rlnTiltName", "rlnTiltName"]:
-            if col in df.columns:
-                tilt_col = col
-                break
-
-        if tilt_col is None:
+        # STAR labels are represented canonically with their leading underscore.
+        # RECOVAR-native files use _rlnTiltName; RELION 5 uses
+        # _rlnMicrographName for the same physical tilt identity.
+        if "_rlnTiltName" in df.columns:
+            tilt_col = "_rlnTiltName"
+        elif "_rlnMicrographName" in df.columns:
+            tilt_col = "_rlnMicrographName"
+        else:
             raise ValueError(f"No tilt name column found. Available: {list(df.columns)}")
 
         grouped = df.groupby(tilt_col).groups

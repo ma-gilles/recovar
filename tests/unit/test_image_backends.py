@@ -3,10 +3,10 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
-
-from recovar.data_io import image_backends
-from recovar.core import fourier_transform_utils
 from helpers import tiny_synthetic
+
+from recovar.core import fourier_transform_utils
+from recovar.data_io import image_backends
 
 pytestmark = pytest.mark.unit
 
@@ -184,16 +184,16 @@ def test_tiltseries_parse_micrograph_tilt_mapping(monkeypatch):
     assert sorted(reverse.keys()) == [0, 1, 2, 3]
 
 
-def test_tiltseries_parse_micrograph_tilt_mapping_alt_column_name(monkeypatch):
+def test_tiltseries_parse_micrograph_tilt_mapping_relion5_micrograph_fallback(monkeypatch):
     df = pd.DataFrame(
         {
-            "rlnTiltName": ["tA", "tA", "tB"],
+            "_rlnMicrographName": ["mic_a.mrc", "mic_a.mrc", "mic_b.mrc"],
         }
     )
     monkeypatch.setattr(image_backends.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
     groups, reverse = image_backends.TiltSeriesDataset.parse_micrograph_tilt_mapping("dummy.star")
-    assert len(groups) == 2
-    assert set(reverse.keys()) == {0, 1, 2}
+    assert [group.tolist() for group in groups] == [[0, 1], [2]]
+    assert reverse == {0: 0, 1: 0, 2: 1}
 
 
 def test_tiltseries_parse_micrograph_tilt_mapping_missing_column(monkeypatch):

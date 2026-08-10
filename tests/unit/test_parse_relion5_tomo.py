@@ -13,7 +13,7 @@ from recovar.commands.parse_relion5_tomo import (
     _parse_visible_frames,
     convert,
 )
-from recovar.data_io.starfile import read_star, StarFile
+from recovar.data_io.starfile import StarFile, read_star
 
 pytestmark = pytest.mark.unit
 
@@ -370,6 +370,7 @@ class TestConvert:
             "_rlnDefocusV",
             "_rlnDefocusAngle",
             "_rlnImageName",
+            "_rlnTiltName",
             "_rlnGroupName",
             "_rlnAngleRot",
             "_rlnAngleTilt",
@@ -383,6 +384,8 @@ class TestConvert:
         ]
         for col in required:
             assert col in df.columns, f"Missing column: {col}"
+
+        np.testing.assert_array_equal(df["_rlnTiltName"], df["_rlnMicrographName"])
 
     def test_dose_sorted_within_groups(self, relion5_data, tmp_path):
         output = str(tmp_path / "output.star")
@@ -790,6 +793,44 @@ class TestTomogramEdgeCases:
         assert df["_rlnMicrographPreExposure"].dtype in [np.float64, np.float32]
         assert df["_rlnCtfScalefactor"].dtype in [np.float64, np.float32]
         np.testing.assert_allclose(df["_rlnDefocusU"].values, [20000.0, 21000.0, 22000.0], atol=1e-6)
+
+    def test_expand_particles_batch_infers_missing_ctf_scale_from_tilt(self):
+        """Infer the geometric scale when external RELION-like STARs omit it."""
+        n = 3
+        tomo = Tomogram(
+            pixel_size=1.54,
+            defocus_u=np.full(n, 20_000.0),
+            defocus_v=np.full(n, 20_100.0),
+            defocus_angle=np.zeros(n),
+            x_tilts=np.zeros(n),
+            y_tilts=np.linspace(-30.0, 30.0, n),
+            z_rots=np.zeros(n),
+            x_shifts=np.zeros(n),
+            y_shifts=np.zeros(n),
+            hand=1,
+        )
+        tilt_df = pd.DataFrame(
+            {
+                "_rlnMicrographName": [f"tilt_{i}.mrc" for i in range(n)],
+                "_rlnMicrographPreExposure": [0.0, 2.0, 4.0],
+                "_rlnTomoYTilt": [-30.0, 0.0, 30.0],
+                "_rlnTomoNominalStageTiltAngle": [-30.0, 0.0, 30.0],
+            }
+        )
+
+        df = tomo.expand_particles_batch(
+            np.zeros((1, 3)),
+            ["particle.mrcs"],
+            tilt_df,
+            ["particle_1"],
+            R.identity(),
+            np.array([1]),
+        )
+
+        np.testing.assert_allclose(
+            df["_rlnCtfScalefactor"].values,
+            np.cos(np.deg2rad([-30.0, 0.0, 30.0])),
+        )
 
     def test_expand_preserves_ctf_scalefactor(self):
         """CTF scale factors from the tilt series should appear unchanged."""
