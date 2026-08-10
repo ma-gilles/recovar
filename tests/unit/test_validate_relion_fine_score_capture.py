@@ -76,11 +76,11 @@ def _selection(path, *, ranks=(2, 2)):
     )
 
 
-def _k1_selection(path, *, ranks=(2, 2)):
+def _k1_selection(path, *, ranks=(2, 2), schema="recovar.em.k1_bpref_factor_panel.v1"):
     path.write_text(
         json.dumps(
             {
-                "schema": "recovar.em.k1_bpref_factor_panel.v1",
+                "schema": schema,
                 "targets": [
                     {"stack_index_one_based": 17, "expected_mpi_rank": ranks[0]},
                     {"stack_index_one_based": 23, "expected_mpi_rank": ranks[1]},
@@ -133,6 +133,17 @@ def test_fine_score_capture_accepts_k1_boundary_panel_schema(tmp_path):
 
     assert report["capture_ready"] is True
     assert report["mpi_rank_by_stack"] == {"17": 1, "23": 2}
+
+
+def test_fine_score_capture_accepts_k1_fine_score_panel_schema(tmp_path):
+    selection = tmp_path / "selection.json"
+    _k1_selection(selection, schema="recovar.em.k1_fine_score_panel.v1")
+    _write_capture(tmp_path / "part117_stack17_class2.fine-score-v1.bin", stack=17)
+    _write_capture(tmp_path / "part123_stack23_class2.fine-score-v1.bin", stack=23)
+
+    report = validator.validate_directory(tmp_path, selection, expected_rank=2)
+
+    assert report["capture_ready"] is True
 
 
 def test_fine_score_capture_rejects_score_algebra_drift(tmp_path):

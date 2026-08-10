@@ -115,7 +115,10 @@ def _selection_records(selection: dict[str, object]) -> list[dict[str, object]]:
     if schema == "bpref-factor-stratification-v1":
         records = selection.get("selected")
         stack_field = "stack_index_1based"
-    elif schema == "recovar.em.k1_bpref_factor_panel.v1":
+    elif schema in {
+        "recovar.em.k1_bpref_factor_panel.v1",
+        "recovar.em.k1_fine_score_panel.v1",
+    }:
         records = selection.get("targets")
         stack_field = "stack_index_one_based"
     else:
