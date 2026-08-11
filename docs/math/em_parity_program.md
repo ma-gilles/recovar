@@ -15520,3 +15520,98 @@ order is bit-exact at 641 pixels and the candidate at 618. The candidate is
 therefore removed, no longer prefix is scheduled, and the next discriminator
 must dump native `Fctf`, `Minvsigma2`, scale, and every intermediate multiply
 before `corr_img` is consumed.
+
+That staged discriminator is complete.  Native Slurm `12250962` demonstrates
+that the deployed build squares a binary64 RFLOAT CTF before the compound
+multiply casts back to the binary32 XFLOAT `corr_img`.  The exact replay
+matches `1624/1624` pixels; the rejected binary32-CTF arm matches only
+`991/1624` with a maximum two-ULP discrepancy.  Source-STAR CTF evaluation
+also matches the captured native RFLOAT magnitude on all `1275/1275` common
+score pixels.  The native capture remained map-stable and topology-exact.
+
+The next gate is therefore the score-only RFLOAT-square two-iteration prefix,
+Slurm `12251045`, with five aligned raw panels and unchanged BPref operands.
+It must reduce the raw fine-score and posterior residual before any longer
+trajectory is run.  The fixed K=1 scorecard remains `28/34` strict,
+`32/34` topology, and `34/34` evaluated.
+
+Native Slurm `12251220` also closes the parallel corrected-image arithmetic
+audit.  The RFLOAT-CTF pixel correction and RFLOAT-Fimg multiply replay the
+actual XFLOAT real and imaginary `Fimg_` values at `1624/1624` pixels.  A
+narrowed float32-CTF division matches only `1267/1624` (maximum one ULP,
+relative-L2 `6.410e-8`).  The eventual score-path fix must therefore preserve
+both RFLOAT CTF consumers while keeping the already exact BPref path
+unchanged.  The current `12251045` arm intentionally tests only `corr_img`
+before the coupled intervention is attempted.
+
+The score-only arm completed in `00:17:42`.  It makes source-66 pixel weight
+bit-exact, improves centered raw-score RMS from `2.054413e-5` to
+`2.045918e-5`, and improves global iteration-2 Pmax relative-L2 from
+`1.293417e-5` to `1.218472e-5`.  It does not close the posterior or raw
+accumulator, as expected while shifted-image precision remains unchanged.
+The same two-iteration gate with both demonstrated RFLOAT CTF consumers,
+Slurm `12251311`, completed `0:0` in `00:17:42`.  It makes the score weight
+bit-exact and improves shifted-corrected-image relative-L2 from
+`1.758960e-7` to `1.700775e-7`, centered raw-score RMS from `2.045918e-5` to
+`2.044150e-5`, and source-66 posterior L1 from `9.991521e-6` to
+`9.637696e-6`.  The global result is not monotone: Pmax relative-L2 is
+`1.290916e-5`, worse than the RFLOAT-square-only arm's `1.218472e-5` and only
+marginally better than the fused control's `1.293417e-5`; half-1 raw numerator
+relative-L2 worsens to `5.822836e-6` while half 2 improves to `7.418843e-6`.
+This is a demonstrated local semantics correction, not a trajectory rescue,
+so no longer run is justified.
+
+The next focused gate follows the first remaining operand instead of final
+FSC.  Candidate tuples, top pose, translation prior, pixel weight, and support
+are exact; the live values are the corrected/translated image and projected
+reference.  Relative translation phases agree to about `9e-8`.  Initial
+state-swap attempts `12252000` (`all_relion`) and `12252001` (`recovar_maps`)
+failed closed before iteration 1 because the launcher combined replay with the
+fresh-cold-start-only live-noise flag; they produced no scientific result.
+Replacement jobs `12252029` (`all_relion`) and `12252030` (`recovar_maps`)
+hold the complete replayed RELION iteration-2 boundary fixed and vary only the
+scoring maps.  If the projected-reference/raw-score residual collapses only
+with RELION maps, the defect is inherited from the iteration-1 reconstruction;
+if it persists, projector interpolation arithmetic is the next dump boundary.
+Both jobs are two-iteration, five-panel diagnostics, not scorecard runs.  K=1
+remains `28/34` strict, `32/34` topology, and `34/34` evaluated; K=4 remains
+parked.
+
+The incoming-map scale is already consistent with that hypothesis.  At
+iteration 1, direct RECOVAR-to-RELION map relative-L2 is `7.608370e-7` for
+half 1 and `1.523678e-6` for half 2, while the source-66 projected-reference
+relative-L2 is `6.392237e-7`.  Iteration-2 map relative-L2 then grows to
+`8.463864e-6` / `8.428652e-6`.  These direct array errors are localization
+telemetry only; FSC/FSC-AUC remains the map-quality gate.
+
+The map-only replay is now decisive.  With the complete serialized RELION
+iteration-2 state fixed, jobs `12252029` and `12252030` vary only the incoming
+maps.  RELION maps reduce source-66 projected-reference relative-L2 from
+`3.457410e-6` to `2.410177e-7` (`14.3x`) while preserving all `22656`
+candidate keys and the selected pose.  Most of the live projector operand
+gap is therefore inherited from the iteration-1 map.
+
+The first post-join reconstruction boundary is also localized.  Native versus
+RECOVAR post-low-resolution-join BPref numerator/denominator remains at about
+`1.3e-8` to `1.5e-8`, but same-input premask reconstruction differs by
+`1.127772e-6` / `3.547779e-6` for halves 1/2.  A native Fourier capture after
+Wiener division shows exact raw weights and identifies float32 evaluation of
+the inverse-tau term in RECOVAR, versus double `RFLOAT` in RELION.  Promoting
+the unchanged tau2 values only for K=1 reconstruction reduces the discrepancy
+to `3.010432e-7` / `4.833783e-7`.  Stored tau2/controller behavior is not
+changed.  Focused one-iteration production validation `12252525` completed
+`0:0` in `00:01:24` and improves actual numbered map relative-L2 from
+`7.609880e-7` / `1.523602e-6` to `3.200862e-7` / `3.216119e-7` for halves
+1/2.  The two-iteration posterior/accumulator gate `12252541` completed `0:0`
+in `00:08:12`.  Pmax relative-L2 remains essentially unchanged
+(`1.291868e-5` versus `1.290916e-5` in the coupled RFLOAT-CTF arm), so the
+inverse-tau fix is not the dominant posterior root cause.  It nevertheless
+improves iteration-2 FSC relative-L2 from `5.120341e-7` to `4.719380e-7` and
+reduces all four pre-join raw BPref errors: numerator/denominator changes from
+`3.289099e-6` / `4.644272e-6` to `2.708196e-6` / `4.534888e-6` for half 1,
+and from `5.311427e-6` / `2.889127e-6` to
+`4.004386e-6` / `2.747994e-6` for half 2.  Support remains exact.  The next
+gate is therefore an aligned iteration-2 E-step capture from raw score
+components through normalization, posterior, and the first per-particle
+BPref operand; no full trajectory is scheduled first.  The fixed scorecard
+remains `28/34` strict, `32/34` topology, and `34/34` evaluated.

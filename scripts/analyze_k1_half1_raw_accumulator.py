@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare one RECOVAR pre-join BPref aggregate with native RELION raw BPref."""
+"""Compare one RECOVAR BPref aggregate with the matching native RELION stage."""
 
 from __future__ import annotations
 
@@ -79,11 +79,13 @@ def _load_recovar(path: Path, *, half: int = 1) -> dict[str, Any]:
     _require(half in (1, 2), "half must be 1 or 2")
     half_index = half - 1
     with np.load(path, allow_pickle=False) as archive:
+        schema = str(np.asarray(archive["schema"]).item())
         _require(
-            str(np.asarray(archive["schema"]).item()) == "recovar-bpref-prejoin-v2",
-            "unexpected RECOVAR pre-join schema",
+            schema in {"recovar-bpref-prejoin-v2", "recovar-bpref-accum-v2"},
+            "unexpected RECOVAR BPref schema",
         )
         return {
+            "stage": "pre_lowres_join" if schema == "recovar-bpref-prejoin-v2" else "post_lowres_join",
             "iteration": int(archive["iteration"]),
             "current_size": int(archive["current_size"]),
             "padding_factor": int(archive["padding_factor"]),
@@ -223,7 +225,8 @@ def main() -> None:
     _require(radius == native_radius, "downsample radii differ")
     report: dict[str, Any] = {
         "schema": "recovar.em.k1_half1_raw_accumulator.v1",
-        "metric_policy": "scale-sensitive relative-L2 on pre-join BPref intermediates; no correlation",
+        "metric_policy": "scale-sensitive relative-L2 on matched BPref intermediates; no correlation",
+        "bpref_stage": recovar["stage"],
         "physical_iteration": args.physical_iteration,
         "recovar_local_iteration_label": recovar["iteration"],
         "half": recovar["half"],

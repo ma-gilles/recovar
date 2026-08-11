@@ -771,3 +771,189 @@ Reports are under
 The run completed as Slurm `12250645` in `00:17:45`; both run and runtime
 roots contain `SAFE_TO_DELETE` markers. The fixed K=1 scorecard remains
 `28/34` strict, `32/34` topology, and `34/34` evaluated.
+
+## Native RFLOAT/XFLOAT stage resolution
+
+The rejected arm reproduced the source parentheses after first narrowing the
+CTF to float32.  A staged native capture now identifies that earlier cast as
+the missing operation.  The deployed build has `DoublePrec_CPU=ON` and
+`DoublePrec_ACC=OFF`, hence `RFLOAT=double` and `XFLOAT=float`.  RELION keeps
+`local_Fctf` in RFLOAT while `Minvsigma2` and `corr_img` are XFLOAT.
+
+Native job `12250962` captured the unrounded RFLOAT CTF, its RFLOAT square,
+the XFLOAT Minvsigma2, both candidate arithmetic paths, and the actual
+`corr_img` for iteration 2 particle 634.  The exact source-semantics replay
+
+```text
+float32(float32(Minvsigma2) * (float64(CTF) * float64(CTF)))
+```
+
+matches `1624/1624` pixels bit-for-bit.  The narrowed float32-CTF-square path
+matches only `991/1624`, has relative-L2 `6.607464652e-8`, and differs by up
+to two ULP.  The source STAR plus pinned RELION binding independently
+reconstruct the native RFLOAT CTF magnitudes bit-for-bit on all `1275/1275`
+RECOVAR score-window pixels; the sign is intentionally opposite and cancels
+under the square.
+
+The native instrumentation is inert: job `12250962` completed in `00:01:51`,
+preserved selected topology at both iterations, and had a minimum merged
+signed FSC-AUC of `0.999999999987` against the control.  The stage report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_corr_stages_rfloat_20260811T0159ET/analysis/CORR_STAGE_BOUNDARY.json`.
+Both the run and runtime roots contain `SAFE_TO_DELETE` markers.
+
+This demonstrates the first operand-level cause, but not yet a trajectory
+rescue.  The guarded score-only RFLOAT-square candidate is being tested by
+the two-iteration, five-particle-panel job `12251045`; reconstruction/BPref
+operand order remains unchanged.  No complete-case run is justified until
+that candidate improves raw fine score, posterior, and iteration-2 state.
+
+The adjacent corrected-image path has now been staged as well.  Native job
+`12251220` completed in `00:01:52` and was inert at the same map/topology
+gates.  RELION first forms an XFLOAT pixel correction, compound-divides it by
+the RFLOAT CTF, multiplies the RFLOAT Fourier image by that XFLOAT correction,
+and assigns the result to XFLOAT `Fimg_`.  The source replay matches both real
+and imaginary `Fimg_` arrays at `1624/1624` pixels.  Replacing the RFLOAT CTF
+division with a narrowed float32 division matches only `1267/1624`, with
+relative-L2 `6.410369846e-8` and a maximum one-ULP difference.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_fimg_stages_20260811T0211ET/analysis/CORR_AND_FIMG_STAGE_BOUNDARY.json`.
+
+Thus the CTF precision defect has two coupled score operands: `corr_img` and
+the corrected/shifted image.  Job `12251045` deliberately changes only the
+first so its result remains a clean attribution experiment; it cannot be
+expected to make the complete raw score bit-exact while the second boundary
+is unchanged.
+
+Job `12251045` completed successfully in `00:17:42` and validates that
+attribution.  On source 66, the score pixel-weight relative-L2 closes from
+`6.607464e-8` to exactly `0.0`, with all `22656` candidate keys and the top
+pose unchanged.  Centered raw-score RMS improves from `2.054413e-5` to
+`2.045918e-5`.  Global iteration-2 Pmax relative-L2 improves from the fused
+control's `1.293417e-5` to `1.218472e-5` (about `5.8%`).  Raw numerator
+relative-L2 moves from `5.804861e-6` / `7.708592e-6` to
+`5.743178e-6` / `7.627677e-6` for halves 1/2; support remains exact.
+
+The standalone arm is not sufficient: source-66 common posterior L1 is
+`9.991521e-6`, and the complete raw-score residual remains dominated by the
+shifted image and projected reference.  Therefore no longer trajectory was
+scheduled.  The coupled RFLOAT-square plus RFLOAT-pixel-correction prefix was
+the next same-size gate, Slurm `12251311`.
+
+Job `12251311` completed successfully in `00:17:42`.  The coupled expression
+improves the shifted-corrected-image relative-L2 from `1.758960e-7` to
+`1.700775e-7` and the centered raw-score RMS from `2.045918e-5` to
+`2.044150e-5`.  Candidate keys, top pose, translation prior, pixel weights,
+and aggregate support remain exact.  The downstream result is mixed:
+source-66 common posterior L1 improves from the RFLOAT-square-only arm's
+`9.991521e-6` to `9.637696e-6`, but iteration-2 Pmax relative-L2 regresses
+from `1.218472e-5` to `1.290916e-5`, nearly the fused control's
+`1.293417e-5`.  Half-1 raw numerator relative-L2 changes from
+`5.743178e-6` to `5.822836e-6`, while half 2 improves from `7.627677e-6` to
+`7.418843e-6`; denominators are effectively unchanged.  This proves both CTF
+precision corrections locally but does not justify a longer trajectory.
+
+With weight, candidates, priors, and support closed, the first live operands
+are the shifted image before/after translation and the projected reference.
+Relative translation-phase ratios agree at approximately `9e-8`, so the next
+causal gate is a same-boundary map intervention rather than translation-grid
+tuning.  Initial state-swap attempts `12252000` (`all_relion`) and `12252001`
+(`recovar_maps`) failed closed before iteration 1 because the launcher still
+enabled the cold-start-only live-noise flag while requesting trajectory
+replay.  They produced no scientific output.  Replacement jobs `12252029`
+(`all_relion`) and `12252030` (`recovar_maps`) use the same complete RELION
+iteration-2 state and vary only whether the scoring maps come from RELION or
+RECOVAR.  They stop after two numbered iterations and write the same
+five-particle fine-score and BPref panels.  No full-case or 12-hour run is
+scheduled.
+
+A direct map-array check strengthens this localization without replacing the
+state-swap experiment.  Before the iteration-2 E-step, iteration-1 RECOVAR to
+RELION map relative-L2 is `7.608370e-7` for half 1 and `1.523678e-6` for half
+2; after an optimal scalar it is `5.539472e-7` and `1.444176e-6`.  The
+source-66 projected-reference relative-L2 is `6.392237e-7`, on the same scale
+as its incoming half-1 map discrepancy.  After iteration 2 the map
+relative-L2 has grown to `8.463864e-6` / `8.428652e-6`.  This is strong
+evidence for inherited reference drift, but only the matched `all_relion`
+versus `recovar_maps` boundary can distinguish it causally from projector
+arithmetic.
+
+## Iteration-2 map-only state swap result
+
+Replacement jobs `12252029` (`all_relion`) and `12252030` (`recovar_maps`)
+completed both scientific iterations.  Their Slurm wrappers exited only in
+post-run assertions that incorrectly required fresh-order log lines during a
+replay; the refinement results, five score panels, maps, and accumulator dumps
+are complete and passed the manual state auditor.  The launcher now scopes
+those assertions to non-replay runs.
+
+With the complete serialized iteration-2 RELION state held fixed, substituting
+RELION maps reduces source-66 projected-reference relative-L2 from
+`3.457410e-6` to `2.410177e-7`, a `14.3x` collapse.  Candidate Jaccard remains
+`1.0`, all `22656` candidate keys remain common, and the selected pose remains
+exact.  The two arms differ only in projected reference, score, posterior, and
+two support-mask entries.  This demonstrates that most of the live projected-
+reference discrepancy is inherited from the incoming map rather than created
+by the projector.
+
+The serialized replay boundary is not a native-private exact operand boundary:
+both arms retain pixel-weight relative-L2 `1.854959e-7` and shifted-image
+relative-L2 `8.129298e-7`.  Therefore this experiment is used only for map
+causality, not as a trajectory-improvement score.
+
+## First post-accumulator boundary: reconstruction
+
+The production fused iteration-1 accumulator was compared with the passive
+native post-low-resolution-join BPref capture.  Complete raw numerator and
+denominator relative-L2 values remain at the native repeat floor:
+`1.472631e-8` / `1.403778e-8` for half 1 and
+`1.326482e-8` / `1.417275e-8` for half 2.  Support Jaccard is `1.0` with no
+mismatched coordinates.  The first iteration-1 map discrepancy is therefore
+introduced after the half join, inside reconstruction/regularization.
+
+An offline same-input reconstruction routes the exact captured native BPref
+arrays through both `BackProjector::reconstruct` and RECOVAR.  FSC and the
+untapered per-half tau2 are recomputed from those same arrays.  With the
+historical float32 tau2 reconstruction operand, native-versus-RECOVAR premask
+relative-L2 is `1.127772e-6` for half 1 and `3.547779e-6` for half 2.  Removing
+the final sinc-squared gridding correction leaves essentially the same gap, so
+that correction is not causal.
+
+A passive native Fourier dump immediately after Wiener division localizes the
+first unequal arithmetic to the inverse-tau term.  Raw weights are exactly
+equal after frame conversion.  RECOVAR explicitly returns the tau2 volume as
+float32, so `1 / (padding_factor**3 * tau2)` is rounded in float32; the deployed
+RELION build uses double `RFLOAT` for this division.  Promoting the unchanged
+tau2 values to float64 only at the reconstruction call reduces the premask
+gap to `3.010432e-7` for half 1 and `4.833783e-7` for half 2, improvements of
+`3.7x` and `7.3x`.  The stored/controller tau2 state remains unchanged.
+
+The native S4/S5 captures, recomputed tau2 arrays, and frame-aligned premask
+volumes are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_reconstruct_boundary_20260811/`;
+the disposable run and runtime roots contain `SAFE_TO_DELETE` markers.  A
+single-iteration production validation of the narrow promotion, Slurm job
+`12252525`, completed `0:0` in `00:01:24`.  Half-1 map relative-L2 improves
+from `7.609880e-7` to `3.200862e-7`; half 2 improves from `1.523602e-6` to
+`3.216119e-7`.  After an optimal scalar the residuals are
+`1.658642e-7` / `1.638572e-7`, and merged signed FSC-AUC remains
+`0.999999999976`.  The two previously asymmetric half errors have collapsed
+to the same residual floor.
+
+The focused two-iteration gate, Slurm `12252541`, completed `0:0` in
+`00:08:12` (maximum RSS `9,969,680K`).  The improved iteration-1 maps do not
+materially close the iteration-2 posterior discrepancy: Pmax relative-L2 is
+`1.291868e-5`, versus `1.290916e-5` in the otherwise matching coupled RFLOAT
+CTF arm.  The iteration-2 shellwise FSC relative-L2 does improve from
+`5.120341e-7` to `4.719380e-7`, and the raw pre-join BPref errors improve in
+both halves: numerator/denominator relative-L2 changes from
+`3.289099e-6` / `4.644272e-6` to `2.708196e-6` / `4.534888e-6` for half 1,
+and from `5.311427e-6` / `2.889127e-6` to
+`4.004386e-6` / `2.747994e-6` for half 2.  Support remains exact
+(`Jaccard=1.0`, zero mismatched coordinates).
+
+Therefore the inverse-tau precision mismatch is a demonstrated K=1
+reconstruction bug and reduces the next M-step map error, but it is not the
+dominant cause of the remaining iteration-2 posterior gap.  The next focused
+capture starts inside the iteration-2 E-step and compares aligned raw score
+components, normalization constants, posterior weights, and the first BPref
+operand before any reduction.  No complete trajectory or scorecard run is
+justified until that first unequal boundary is localized.

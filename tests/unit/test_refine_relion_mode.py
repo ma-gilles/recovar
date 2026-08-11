@@ -8827,6 +8827,8 @@ class TestRelionModeSmokeTest:
         assert len(reconstruction_tau) == 2
         np.testing.assert_array_equal(reconstruction_tau[0], untapered_tau[0])
         np.testing.assert_array_equal(reconstruction_tau[1], untapered_tau[1])
+        assert reconstruction_tau[0].dtype == np.float64
+        assert reconstruction_tau[1].dtype == np.float64
         np.testing.assert_allclose(
             result["tau2_radial_trajectory"][0],
             untapered_tau[0] * taper,

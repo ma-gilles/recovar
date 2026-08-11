@@ -6,10 +6,10 @@ import pytest
 from scripts.analyze_k1_half1_raw_accumulator import _load_native_bpref, _load_recovar
 
 
-def _write_prejoin(path: Path) -> None:
+def _write_bpref(path: Path, *, schema: str = "recovar-bpref-prejoin-v2") -> None:
     np.savez(
         path,
-        schema=np.asarray("recovar-bpref-prejoin-v2"),
+        schema=np.asarray(schema),
         iteration=np.int32(1),
         current_size=np.int32(56),
         padding_factor=np.int32(2),
@@ -34,18 +34,29 @@ def test_load_recovar_selects_requested_half(
     expected_weight: float,
 ) -> None:
     path = tmp_path / "prejoin.npz"
-    _write_prejoin(path)
+    _write_bpref(path)
 
     loaded = _load_recovar(path, half=half)
 
     assert loaded["half"] == half
     assert loaded["numerator"].item() == expected_numerator
     assert loaded["weight"].item() == expected_weight
+    assert loaded["stage"] == "pre_lowres_join"
+
+
+def test_load_recovar_accepts_post_lowres_join_dump(tmp_path: Path) -> None:
+    path = tmp_path / "postjoin.npz"
+    _write_bpref(path, schema="recovar-bpref-accum-v2")
+
+    loaded = _load_recovar(path, half=1)
+
+    assert loaded["stage"] == "post_lowres_join"
+    assert loaded["numerator"].item() == 1 + 2j
 
 
 def test_load_recovar_rejects_invalid_half(tmp_path: Path) -> None:
     path = tmp_path / "prejoin.npz"
-    _write_prejoin(path)
+    _write_bpref(path)
 
     with pytest.raises(ValueError, match="half must be 1 or 2"):
         _load_recovar(path, half=0)

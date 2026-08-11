@@ -141,6 +141,8 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _pass2_conservative_dump_execution_enabled,
     _pass2_dump_enabled,
     _rectangular_active_prematmul_is_efficient,
+    _relion_cuda_corr_img_from_rfloat_ctf,
+    _relion_cuda_pixel_correction_from_rfloat_ctf,
     _relion_fine_mstep_prune_mode,
     _relion_joint_winner_take_all_masks,
     _relion_pass2_reconstruction_joint_masks,
@@ -179,6 +181,48 @@ from recovar.em.dense_single_volume.local_backprojection import (
 from scripts import validate_bpref_device_signature as bpref_signature_validator
 
 pytestmark = pytest.mark.unit
+
+
+def test_relion_corr_img_squares_rfloat_ctf_before_xfloat_cast():
+    inverse_noise = np.asarray([0.13333298, 1.750001], dtype=np.float32)
+    ctf_rfloat = np.asarray([0.994443123456, -0.7135792468], dtype=np.float64)
+    expected = np.asarray(
+        inverse_noise.astype(np.float64) * (ctf_rfloat * ctf_rfloat),
+        dtype=np.float32,
+    )
+    float_ctf = ctf_rfloat.astype(np.float32)
+    rejected_float_path = np.asarray(
+        inverse_noise * (float_ctf * float_ctf),
+        dtype=np.float32,
+    )
+    assert np.any(expected != rejected_float_path)
+
+    actual = np.asarray(
+        _relion_cuda_corr_img_from_rfloat_ctf(inverse_noise, ctf_rfloat)
+    )
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_relion_pixel_correction_divides_by_rfloat_ctf_before_xfloat_cast():
+    scale = np.asarray([[1.0]], dtype=np.float32)
+    ctf_rfloat = np.asarray(
+        [[0.07354116995482596, 0.1265216380265534]], dtype=np.float64
+    )
+    initial = np.asarray(1.0 / scale, dtype=np.float32)
+    expected = np.asarray(
+        initial.astype(np.float64) / ctf_rfloat,
+        dtype=np.float32,
+    )
+    rejected_float_path = np.asarray(
+        initial / ctf_rfloat.astype(np.float32),
+        dtype=np.float32,
+    )
+    assert np.any(expected != rejected_float_path)
+
+    actual = np.asarray(
+        _relion_cuda_pixel_correction_from_rfloat_ctf(scale, ctf_rfloat)
+    )
+    np.testing.assert_array_equal(actual, expected)
 
 
 # Mock dataset (mirrors test_sparse_pass2_bucketed_parity.MockDataset).

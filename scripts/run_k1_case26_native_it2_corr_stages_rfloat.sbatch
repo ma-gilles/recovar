@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=k1c26-rfloat
-#SBATCH --output=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_corr_stages_rfloat_20260811T0159ET/logs/run-%j.out
-#SBATCH --error=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_corr_stages_rfloat_20260811T0159ET/logs/run-%j.err
+#SBATCH --job-name=k1c26-fimg-stage
+#SBATCH --output=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_fimg_stages_20260811T0211ET/logs/run-%j.out
+#SBATCH --error=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_fimg_stages_20260811T0211ET/logs/run-%j.err
 #SBATCH --partition=cryoem
 #SBATCH --account=gilles
 #SBATCH --qos=della-cryoem
@@ -17,8 +17,8 @@ set -euo pipefail
 : "${EXPECTED_LAUNCHER_SHA256:?submission must pin launcher hash}"
 : "${EXPECTED_REPO_HEAD:?submission must pin repository head}"
 
-ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_corr_stages_rfloat_20260811T0159ET
-RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_native_it2_corr_stages_rfloat_20260811T0159ET
+ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_fimg_stages_20260811T0211ET
+RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_native_it2_fimg_stages_20260811T0211ET
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 LAUNCHER=${REPO}/scripts/run_k1_case26_native_it2_corr_stages_rfloat.sbatch
@@ -36,8 +36,8 @@ test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${RELION_SOURCE}" rev-parse HEAD)" = ed53c60d83125902c456b7fc5461c78c3966b306
-test "$(git -C "${RELION_SOURCE}" diff -- src/acc/acc_ml_optimiser_impl.h | sha256sum | awk '{print $1}')" = 5f027ae872fca578ef8b8f9667a634f9fd3a6b77f53c95a81a57731ac836d863
-test "$(sha256sum "${RELION_BINARY}" | awk '{print $1}')" = 7ac817e5c35d736f20c5a517f7df0804eb36863086eaf810daa2bb1cd5e7c542
+test "$(git -C "${RELION_SOURCE}" diff -- src/acc/acc_ml_optimiser_impl.h | sha256sum | awk '{print $1}')" = 0cee18d29599a9466db40b7cd0302412e3234f7f2e81960ac84b5f1a074b59cd
+test "$(sha256sum "${RELION_BINARY}" | awk '{print $1}')" = f37f04ebab33682c7917d6bfac925357165a95f513fe81daea290d8f88a801f3
 test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = 34016f7f367587125956de8f00895c27b14225511c8ef0f517179b890685e139
 test -x "${PYTHON}" -a -x "${RELION_BINARY}"
 test -z "$(find "${OUTPUT}" "${DUMP}" -mindepth 1 -print -quit)"
@@ -99,6 +99,9 @@ wall_s=$(( $(date +%s) - start_epoch ))
 test -s "${OUTPUT}/run_it002_data.star"
 for name in minvsigma2 fctf fctf_squared fctf_rfloat fctf_squared_rfloat \
     after_ctf after_ctf_source_semantics after_scale corr_img scale scale_squared \
+    fimg_raw_real_rfloat fimg_raw_imag_rfloat pixel_correction \
+    fimg_corrected_expected_real fimg_corrected_expected_imag \
+    fimg_corrected_actual_real fimg_corrected_actual_imag \
     do_ctf_correction refs_are_ctf_corrected do_scale_correction; do
     test -s "${DUMP}/img0_part634_fineCorr_${name}.bin"
 done

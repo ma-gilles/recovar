@@ -5626,6 +5626,42 @@ def _relion_cuda_fine_pixel_weights(corr_img_score, half_weights):
     )
 
 
+def _relion_cuda_corr_img_from_rfloat_ctf(inverse_noise, ctf_rfloat, scale=None):
+    """Form XFLOAT ``corr_img`` after RELION's RFLOAT CTF square.
+
+    The deployed mixed-precision build stores ``Minvsigma2`` and ``corr_img``
+    as float32 (XFLOAT), but evaluates the CTF and ``CTF * CTF`` as float64
+    (RFLOAT).  The compound multiplication promotes Minvsigma2 to float64 and
+    casts the product back to float32 before the optional float32 scale square.
+    """
+
+    inverse_noise_rfloat = jnp.asarray(inverse_noise, dtype=jnp.float32).astype(
+        jnp.float64
+    )
+    ctf_rfloat = jnp.asarray(ctf_rfloat, dtype=jnp.float64)
+    ctf_squared_rfloat = jax.lax.optimization_barrier(ctf_rfloat * ctf_rfloat)
+    corr_img = jax.lax.optimization_barrier(
+        inverse_noise_rfloat * ctf_squared_rfloat
+    ).astype(jnp.float32)
+    if scale is not None:
+        scale = jnp.asarray(scale, dtype=jnp.float32)
+        scale_squared = jax.lax.optimization_barrier(scale * scale)
+        corr_img = corr_img * scale_squared
+    return corr_img
+
+
+def _relion_cuda_pixel_correction_from_rfloat_ctf(scale, ctf_rfloat):
+    """Form RELION's XFLOAT score-image correction from an RFLOAT CTF."""
+
+    scale = jnp.asarray(scale, dtype=jnp.float32)
+    ctf_rfloat = jnp.asarray(ctf_rfloat, dtype=jnp.float64)
+    pixel_correction = jax.lax.optimization_barrier(jnp.reciprocal(scale))
+    corrected = jax.lax.optimization_barrier(
+        pixel_correction.astype(jnp.float64) / ctf_rfloat
+    ).astype(jnp.float32)
+    return jnp.where(jnp.abs(ctf_rfloat) > 1e-8, corrected, pixel_correction)
+
+
 _RELION_CUDA_POWERCLASS_BLOCK_SIZE = 128
 
 
@@ -8659,12 +8695,10 @@ def _relion_exact_ctf_half_from_source_star(
             )
             # RELION/FFTW stores y in standard order and uses the opposite CTF
             # sign from RECOVAR's forward-model convention.
-            cached_image = (-np.fft.fftshift(native, axes=0)).astype(
-                np.float32
-            ).reshape(-1)
+            cached_image = (-np.fft.fftshift(native, axes=0)).reshape(-1)
             cache["images"][original_index] = cached_image
         ctf_rows.append(cached_image)
-    return jnp.asarray(np.stack(ctf_rows, axis=0), dtype=jnp.float32)
+    return jnp.asarray(np.stack(ctf_rows, axis=0), dtype=jnp.float64)
 
 
 def _prepare_bucket_io(
@@ -8731,15 +8765,22 @@ def _prepare_bucket_io(
     if real_space_pre_shift_applied and not relion_cuda_preprocess:
         batch = apply_relion_integer_pre_shifts(batch, integer_pre_shifts)
 
-    ctf_half = (
+    ctf_half_rfloat = (
         _relion_exact_ctf_half_from_source_star(
             experiment_dataset,
             image_indices,
             image_shape,
         )
         if relion_exact_bpref_operands
+        else None
+    )
+    ctf_half = (
+        jnp.asarray(ctf_half_rfloat, dtype=jnp.float32)
+        if ctf_half_rfloat is not None
         else config.compute_ctf_half(ctf_params)
     )
+    batch_scale = jnp.asarray(batch_scale_np, dtype=ctf_half.dtype)
+    relion_score_corr_img_half = None
     if relion_exact_bpref_operands:
         if relion_preprocess_kwargs is None:
             raise ValueError(
@@ -8754,9 +8795,13 @@ def _prepare_bucket_io(
         inverse_noise_half = jnp.reciprocal(
             jnp.asarray(noise_variance_half, dtype=jnp.float64)
         ).astype(jnp.float32)
-        ctf_half = jnp.asarray(ctf_half, dtype=jnp.float32)
         weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
         ctf2_over_nv_half = weighted_ctf_half * ctf_half
+        relion_score_corr_img_half = _relion_cuda_corr_img_from_rfloat_ctf(
+            inverse_noise_half[None, :],
+            ctf_half_rfloat,
+            batch_scale[:, None] if scale_corrections is not None else None,
+        )
     else:
         inverse_noise_half = None
         weighted_ctf_half = None
@@ -8822,8 +8867,6 @@ def _prepare_bucket_io(
     )
     processed_score_half_for_noise = processed_score_half_raw
 
-    batch_scale = jnp.asarray(batch_scale_np, dtype=ctf_half.dtype)
-
     # Per-image image corrections follow dense run_em's image-only convention.
     if image_corrections is not None:
         batch_corr = jnp.asarray(batch_corr_np)
@@ -8851,16 +8894,29 @@ def _prepare_bucket_io(
         ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
         ctf2_score_half = ctf2_score_half * (batch_scale**2)[:, None]
         if return_direct_scoring_io:
-            if not folded_normalized_cc_operands:
+            if not folded_normalized_cc_operands and not relion_exact_bpref_operands:
                 sparse_score_input_half = sparse_score_input_half / batch_scale[:, None]
 
+    # BPref operands remain in their demonstrated native float32 order.  Only
+    # fine-score corr_img uses RELION's distinct RFLOAT-square construction.
+    ctf2_over_nv_recon_half = ctf2_over_nv_half
+    if relion_score_corr_img_half is not None:
+        ctf2_over_nv_half = relion_score_corr_img_half
+
     if return_direct_scoring_io and not folded_normalized_cc_operands:
-        ctf_safe = jnp.abs(ctf_half) > 1e-8
-        sparse_score_input_half = jnp.where(
-            ctf_safe,
-            sparse_score_input_half / ctf_half,
-            sparse_score_input_half,
-        )
+        if relion_exact_bpref_operands:
+            pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
+                batch_scale[:, None],
+                ctf_half_rfloat,
+            )
+            sparse_score_input_half = sparse_score_input_half * pixel_correction
+        else:
+            ctf_safe = jnp.abs(ctf_half) > 1e-8
+            sparse_score_input_half = jnp.where(
+                ctf_safe,
+                sparse_score_input_half / ctf_half,
+                sparse_score_input_half,
+            )
     if score_only and not return_direct_scoring_io:
         raise ValueError("score-only sparse pass-2 requires direct scoring I/O")
 
@@ -8982,7 +9038,7 @@ def _prepare_bucket_io(
                     else apply_half_translation_phases(recon_weighted_half, translation_phases_half)
                 )
                 shifted_score_half_with_dc = shifted_recon_half
-        ctf2_over_nv_half_with_dc = ctf2_over_nv_half
+        ctf2_over_nv_half_with_dc = ctf2_over_nv_recon_half
 
     shifted_corrected_score_half = None
     if return_direct_scoring_io:

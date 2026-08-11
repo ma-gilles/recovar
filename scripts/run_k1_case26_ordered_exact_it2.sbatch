@@ -42,6 +42,7 @@ PREJOIN=${ROOT}/prejoin
 PASS2_DUMP_DIR=${K1_CASE26_PASS2_DUMP_DIR:-}
 PASS2_DUMP_IDS=${K1_CASE26_PASS2_DUMP_IDS:-23,66,305,459,497}
 PASS2_DUMP_CURRENT_SIZE=${K1_CASE26_PASS2_DUMP_CURRENT_SIZE:-56}
+STATE_SWAP_VARIANT=${K1_CASE26_STATE_SWAP_VARIANT:-}
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -88,7 +89,9 @@ export RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0
 export RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE=1
 export RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN=4e-6
 export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0
-export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=1
+if [[ -z "${STATE_SWAP_VARIANT}" ]]; then
+    export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=1
+fi
 export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
@@ -137,6 +140,14 @@ COMMAND=(
     --relion_optimiser "${RELION}/run_it000_optimiser.star"
     --relion_init_dir "${RELION}"
 )
+if [[ -n "${STATE_SWAP_VARIANT}" ]]; then
+    COMMAND+=(
+        --perturb_replay_relion_dir "${RELION}"
+        --state-swap-target-relion-iteration 2
+        --state-swap-variant "${STATE_SWAP_VARIANT}"
+        --state-swap-replay-relion-references
+    )
+fi
 printf '%q ' "${COMMAND[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 nvidia-smi --query-gpu=index,name,uuid,memory.total,driver_version --format=csv \
@@ -150,9 +161,13 @@ test -s "${OUTPUT}/intermediates/it001_half1_reg.mrc"
 test -s "${ACCUM}/recovar_bpref_accum_it002.npz"
 test -s "${PREJOIN}/recovar_bpref_prejoin_it002.npz"
 ! rg -q 'Traceback|RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' "${OUTPUT}/run.log"
-rg -q 'Applied RELION fresh paired AutoRefine particle order with effective seed 1727' "${OUTPUT}/run.log"
-rg -q 'global; batching only consecutive equal-size supports' "${OUTPUT}/run.log"
-rg -q 'one adjoint launch per particle' "${OUTPUT}/run.log"
+if [[ -n "${STATE_SWAP_VARIANT}" ]]; then
+    rg -q "STATE-SWAP diagnostic: iteration=2 variant=${STATE_SWAP_VARIANT}" "${OUTPUT}/run.log"
+else
+    rg -q 'Applied RELION fresh paired AutoRefine particle order with effective seed 1727' "${OUTPUT}/run.log"
+    rg -q 'global; batching only consecutive equal-size supports' "${OUTPUT}/run.log"
+    rg -q 'one adjoint launch per particle' "${OUTPUT}/run.log"
+fi
 if [[ -n "${PASS2_DUMP_DIR}" ]]; then
     test "$(find "${PASS2_DUMP_DIR}" -maxdepth 1 -type f -name 'pass2_orig*_cs056.npz' | wc -l)" -eq 5
 fi
@@ -174,8 +189,9 @@ test "${fsc_audit_status}" -eq 0 -o "${fsc_audit_status}" -eq 2
     --output-json "${ANALYSIS}/${REPORT_STEM}_state.json" \
     --output-markdown "${ANALYSIS}/${REPORT_STEM}_state.md"
 
-printf '{"job_id":"%s","wall_s":%d,"max_physical_iteration":%d,"intervention":"live_noise_plus_exact_bpref_operands_plus_global_relion_particle_accumulation"}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
+printf '{"job_id":"%s","wall_s":%d,"max_physical_iteration":%d,"intervention":"live_noise_plus_exact_bpref_operands_plus_global_relion_particle_accumulation","state_swap_variant":"%s"}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${STATE_SWAP_VARIANT}" \
+    > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 sha256sum "${ANALYSIS}/${REPORT_STEM}_fsc.json" \
     "${ANALYSIS}/${REPORT_STEM}_fsc_shellwise.npz" \
     "${ANALYSIS}/${REPORT_STEM}_state.json" \

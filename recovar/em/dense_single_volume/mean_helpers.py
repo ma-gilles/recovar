@@ -415,12 +415,20 @@ def _reconstruct_and_postprocess_means(
         for k in range(2):
             Ft_y_k_local = Ft_y_0 if k == 0 else Ft_y_1
             Ft_ctf_k_local = Ft_ctf_0 if k == 0 else Ft_ctf_1
+            # This RELION build uses double RFLOAT in BackProjector::reconstruct.
+            # Keep the stored/controller tau2 state compact, but promote the
+            # reconstruction operand so 1 / (padding_factor**3 * tau2) is not
+            # rounded in float32 before it enters the Wiener denominator.
+            reconstruction_tau = jnp.asarray(
+                mean_signal_variance_per_half[k],
+                dtype=jnp.float64,
+            )
             means[k] = _reconstruct_volume_eager(
                 Ft_ctf_k_local,
                 Ft_y_k_local,
                 volume_shape,
                 padding_factor,
-                tau=mean_signal_variance_per_half[k],
+                tau=reconstruction_tau,
                 tau2_fudge=tau2_fudge,
                 projection_padding_factor=projection_padding_factor,
                 minres_map=relion_minres_map,
