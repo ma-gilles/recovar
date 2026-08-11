@@ -228,6 +228,18 @@ def test_factor_capture_accepts_explicit_zero_accepted_hypotheses(tmp_path):
     assert capture.terms.size == 0
 
 
+def test_factor_pixel_capture_matches_complete_loader(tmp_path):
+    path = tmp_path / "part117_stack17_img0_class1.bpre-v2.bin"
+    _write_capture(path, stack=17)
+
+    complete = validator.load_factor_capture(path)
+    pixels_only = validator.load_factor_pixel_capture(path)
+
+    assert pixels_only.stack_index == complete.stack_index
+    assert pixels_only.header == complete.header
+    np.testing.assert_array_equal(pixels_only.pixels, complete.pixels)
+
+
 def test_factor_capture_accepts_explicit_geometry_only_panel(tmp_path):
     selection = tmp_path / "selection.json"
     _selection(selection)

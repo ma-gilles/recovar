@@ -514,6 +514,9 @@ _TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
 _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE = (
     "cuda_relion_preprocess_real_f32_native_lane"
 )
+_TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_ATOMIC = (
+    "cuda_relion_preprocess_real_f32_native_atomic"
+)
 _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32 = "cuda_relion_make_scoring_rotations_f32"
 _TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
 _TARGET_RELION_TRANSLATE_BPREF_F32 = "cuda_relion_translate_bpref_f32"
@@ -551,6 +554,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE,
         "RelionPreprocessRealF32NativeLane",
+    ),
+    (
+        _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_ATOMIC,
+        "RelionPreprocessRealF32NativeAtomic",
     ),
     (
         _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32,
@@ -1547,7 +1554,7 @@ def relion_fine_diff2_pairs_f32(
     )(reference, shifted_image, weight, full_to_compact)
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6))
+@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
 def relion_preprocess_real_f32(
     images: jax.Array,
     normalization_factors: jax.Array,
@@ -1556,6 +1563,7 @@ def relion_preprocess_real_f32(
     cosine_width: float,
     apply_mask: bool = True,
     native_lane_reduction: bool = False,
+    native_atomic_reduction: bool = False,
 ) -> tuple[jax.Array, jax.Array]:
     """Apply RELION's accelerated float32 real-space preprocessing.
 
@@ -1564,8 +1572,10 @@ def relion_preprocess_real_f32(
     RELION's separate float32 normalization and zero-filled translation and
     CUDA ``sqrtf``/``cospif`` mask arithmetic.  The default uses RECOVAR's
     accepted deterministic block-first addition tree.  The diagnostic-only
-    ``native_lane_reduction`` mode instead reproduces the native observer's
-    lane-across-blocks tree before its final CUB sum.
+    ``native_lane_reduction`` mode instead deterministically reproduces the
+    native observer's lane-across-blocks tree before its final CUB sum. The
+    diagnostic ``native_atomic_reduction`` mode reproduces RELION's actual
+    schedule-dependent atomic lane accumulation.
     """
 
     if jax.default_backend() != "gpu":
@@ -1590,12 +1600,18 @@ def relion_preprocess_real_f32(
         raise ValueError(f"radius must be finite and positive, got {radius}")
     if not np.isfinite(cosine_width) or cosine_width <= 0.0:
         raise ValueError(f"cosine_width must be finite and positive, got {cosine_width}")
+    if native_lane_reduction and native_atomic_reduction:
+        raise ValueError("native lane and native atomic reductions are mutually exclusive")
 
     out_type = jax.ShapeDtypeStruct(images.shape, jnp.float32)
     target = (
-        _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE
-        if native_lane_reduction
-        else _TARGET_RELION_PREPROCESS_REAL_F32
+        _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_ATOMIC
+        if native_atomic_reduction
+        else (
+            _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE
+            if native_lane_reduction
+            else _TARGET_RELION_PREPROCESS_REAL_F32
+        )
     )
     return jax.ffi.ffi_call(
         target,

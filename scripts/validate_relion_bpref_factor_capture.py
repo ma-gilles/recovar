@@ -103,6 +103,19 @@ class FactorCapture:
         return bool(self.header[53])
 
 
+@dataclass(frozen=True)
+class FactorPixelCapture:
+    """Validated header and pixel operands without loading dense factor terms."""
+
+    path: Path
+    header: tuple[int, ...]
+    pixels: np.ndarray
+
+    @property
+    def stack_index(self) -> int:
+        return self.header[12]
+
+
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
@@ -199,6 +212,76 @@ def load_factor_capture(path: Path) -> FactorCapture:
     _require(int(match["class_"]) == header[10], f"factor class identity mismatch: {path}")
     _validate_arrays(path, header, rotations, translations, hypotheses, pixels, summaries, terms)
     return FactorCapture(path, _sha256(path), header, rotations, translations, hypotheses, pixels, summaries, terms)
+
+
+def load_factor_pixel_capture(path: Path) -> FactorPixelCapture:
+    """Load only the small per-pixel operand table from a complete capture."""
+
+    path = Path(path)
+    match = FILE_NAME.fullmatch(path.name)
+    _require(match is not None, f"unexpected factor-capture file name: {path.name}")
+    with path.open("rb") as stream:
+        header_payload = stream.read(HEADER_STRUCT.size)
+    _require(len(header_payload) == HEADER_STRUCT.size, f"truncated factor capture: {path}")
+    magic, *raw_header = HEADER_STRUCT.unpack(header_payload)
+    header = tuple(int(value) for value in raw_header)
+    _require(magic == HEADER_MAGIC, f"factor header magic mismatch: {path}")
+    expected_sizes = (
+        2,
+        HEADER_STRUCT.size,
+        ROTATION_DTYPE.itemsize,
+        TRANSLATION_DTYPE.itemsize,
+        HYPOTHESIS_DTYPE.itemsize,
+        PIXEL_DTYPE.itemsize,
+        ROW_DTYPE.itemsize,
+        TERM_DTYPE.itemsize,
+        FOOTER_STRUCT.size,
+    )
+    _require(header[:9] == expected_sizes, f"factor schema/record sizes changed: {path}")
+    counts = header[46:52]
+    pixel_offset = (
+        HEADER_STRUCT.size
+        + counts[0] * ROTATION_DTYPE.itemsize
+        + counts[1] * TRANSLATION_DTYPE.itemsize
+        + counts[2] * HYPOTHESIS_DTYPE.itemsize
+    )
+    footer_offset = (
+        pixel_offset
+        + counts[3] * PIXEL_DTYPE.itemsize
+        + counts[4] * ROW_DTYPE.itemsize
+        + counts[5] * TERM_DTYPE.itemsize
+    )
+    _require(
+        footer_offset + FOOTER_STRUCT.size == path.stat().st_size,
+        f"factor byte count mismatch: {path}",
+    )
+    pixels = np.array(
+        np.memmap(path, dtype=PIXEL_DTYPE, mode="r", offset=pixel_offset, shape=(counts[3],)),
+        copy=True,
+    )
+    with path.open("rb") as stream:
+        stream.seek(footer_offset)
+        footer_payload = stream.read(FOOTER_STRUCT.size)
+    footer_magic, *footer_counts = FOOTER_STRUCT.unpack(footer_payload)
+    _require(footer_magic == FOOTER_MAGIC, f"factor footer magic mismatch: {path}")
+    _require(tuple(int(value) for value in footer_counts) == counts, f"factor footer counts changed: {path}")
+    assert match is not None
+    _require(int(match["part"]) == header[11], f"factor part identity mismatch: {path}")
+    _require(int(match["stack"]) == header[12], f"factor stack identity mismatch: {path}")
+    _require(int(match["img"]) == header[13], f"factor image identity mismatch: {path}")
+    _require(int(match["class_"]) == header[10], f"factor class identity mismatch: {path}")
+    _require(not bool(header[53]), f"geometry-only capture has no pixel operands: {path}")
+    expected_pixels = np.arange(pixels.size, dtype=np.uint32)
+    _require(np.array_equal(pixels["pixel"], expected_pixels), f"pixel order changed: {path}")
+    _require(np.array_equal(pixels["x"], expected_pixels % header[16]), f"pixel x coordinate changed: {path}")
+    raw_y = expected_pixels.astype(np.int64) // header[16]
+    expected_y = np.where(raw_y > header[17] // 2, raw_y - header[17], raw_y)
+    _require(np.array_equal(pixels["y"], expected_y), f"pixel y coordinate changed: {path}")
+    pixel_values = np.stack(
+        (pixels["image_re"], pixels["image_im"], pixels["ctf"], pixels["minvsigma2"])
+    )
+    _require(np.all(np.isfinite(pixel_values)), f"non-finite pixel factor: {path}")
+    return FactorPixelCapture(path=path, header=header, pixels=pixels)
 
 
 def _validate_arrays(path, header, rotations, translations, hypotheses, pixels, summaries, terms) -> None:

@@ -156,6 +156,7 @@ def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch
         apply_mask,
         *,
         native_lane_reduction,
+        native_atomic_reduction,
     ):
         captured.update(
             images=np.asarray(got_images),
@@ -165,6 +166,7 @@ def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch
             width=width,
             apply_mask=apply_mask,
             native_lane_reduction=native_lane_reduction,
+            native_atomic_reduction=native_atomic_reduction,
         )
         return got_images, got_images + jnp.float32(3.0)
 
@@ -185,6 +187,7 @@ def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch
     assert captured["width"] == 2.0
     assert captured["apply_mask"] is True
     assert captured["native_lane_reduction"] is False
+    assert captured["native_atomic_reduction"] is False
     np.testing.assert_array_equal(np.asarray(result).reshape(images.shape).real, images + 3.0)
 
 

@@ -11,6 +11,7 @@ Those live in ``image_metadata.py``, ``halfsets.py``, and
 """
 
 import logging
+import os
 import queue
 import threading
 import time
@@ -382,6 +383,21 @@ class ParticleImageDataset:
                     )
                 from recovar.cuda_backproject import relion_preprocess_real_f32
 
+                native_atomic_value = os.environ.get(
+                    "RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION",
+                    "0",
+                )
+                if native_atomic_value not in {"0", "1"}:
+                    raise ValueError(
+                        "RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION must be 0 or 1"
+                    )
+                native_atomic_reduction = native_atomic_value == "1"
+                if self.relion_native_lane_reduction and native_atomic_reduction:
+                    raise ValueError(
+                        "deterministic native-lane and native-atomic soft-mask reductions "
+                        "are mutually exclusive"
+                    )
+
                 pixel_size, particle_diameter_ang, width_mask_edge_px = self._relion_image_mask_params
                 radius = float(particle_diameter_ang) / (2.0 * float(pixel_size))
                 images_f32 = jnp.asarray(images, dtype=jnp.float32)
@@ -395,6 +411,7 @@ class ParticleImageDataset:
                     float(width_mask_edge_px),
                     apply_image_mask,
                     native_lane_reduction=self.relion_native_lane_reduction,
+                    native_atomic_reduction=native_atomic_reduction,
                 )
                 transformed = (
                     _centered_rfft2_jax_per_image(preprocessed)

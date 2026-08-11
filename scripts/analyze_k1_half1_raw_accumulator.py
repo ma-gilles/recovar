@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare a RECOVAR half-1 pre-join BPref aggregate with native RELION raw BPref."""
+"""Compare one RECOVAR pre-join BPref aggregate with native RELION raw BPref."""
 
 from __future__ import annotations
 
@@ -34,6 +34,23 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _load_native_bpref(path: Path, *, value_dtype: np.dtype) -> tuple[np.ndarray, np.ndarray]:
+    """Load either the state-v1 three-shape header or the older raw header."""
+
+    dtype = np.dtype(value_dtype)
+    with path.open("rb") as stream:
+        shape = np.fromfile(stream, dtype=np.int64, count=3)
+    if shape.size == 3 and np.all(shape > 0):
+        count = int(np.prod(shape, dtype=np.int64))
+        if path.stat().st_size == 3 * np.dtype(np.int64).itemsize + count * dtype.itemsize:
+            with path.open("rb") as stream:
+                actual_shape = np.fromfile(stream, dtype=np.int64, count=3)
+                values = np.fromfile(stream, dtype=dtype, count=count)
+            _require(np.array_equal(actual_shape, shape), "native state-v1 shape changed while reading")
+            return shape, values.reshape(tuple(int(value) for value in shape))
+    return load_relion_raw(path, value_dtype=dtype)
+
+
 def _metric(source: np.ndarray, target: np.ndarray, *, allow_sign: bool) -> dict[str, Any]:
     source = np.asarray(source).reshape(-1)
     target = np.asarray(target).reshape(-1)
@@ -58,7 +75,9 @@ def _metric(source: np.ndarray, target: np.ndarray, *, allow_sign: bool) -> dict
     }
 
 
-def _load_recovar(path: Path) -> dict[str, Any]:
+def _load_recovar(path: Path, *, half: int = 1) -> dict[str, Any]:
+    _require(half in (1, 2), "half must be 1 or 2")
+    half_index = half - 1
     with np.load(path, allow_pickle=False) as archive:
         _require(
             str(np.asarray(archive["schema"]).item()) == "recovar-bpref-prejoin-v2",
@@ -73,8 +92,9 @@ def _load_recovar(path: Path) -> dict[str, Any]:
             "accumulator_shape": tuple(
                 int(value) for value in archive["mstep_accumulator_shape"]
             ),
-            "numerator": np.asarray(archive["Ft_y_0"]),
-            "weight": np.asarray(archive["Ft_ctf_0"]),
+            "half": half,
+            "numerator": np.asarray(archive[f"Ft_y_{half_index}"]),
+            "weight": np.asarray(archive[f"Ft_ctf_{half_index}"]),
         }
 
 
@@ -165,22 +185,23 @@ def main() -> None:
     parser.add_argument("--native-weight", type=Path, required=True)
     parser.add_argument("--native-repeat-data", type=Path)
     parser.add_argument("--native-repeat-weight", type=Path)
+    parser.add_argument("--half", type=int, choices=(1, 2), default=1)
     parser.add_argument("--expected-local-iteration", type=int, default=2)
     parser.add_argument("--physical-iteration", type=int, default=2)
     parser.add_argument("--first-shell", type=int, default=15)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
 
-    recovar = _load_recovar(args.recovar_prejoin)
+    recovar = _load_recovar(args.recovar_prejoin, half=args.half)
     _require(
         recovar["iteration"] == args.expected_local_iteration,
         "RECOVAR dump local-iteration label differs",
     )
     max_shell = recovar["current_size"] // 2
-    native_data_header, native_data = load_relion_raw(
+    native_data_header, native_data = _load_native_bpref(
         args.native_data, value_dtype=np.complex128
     )
-    native_weight_header, native_weight = load_relion_raw(
+    native_weight_header, native_weight = _load_native_bpref(
         args.native_weight, value_dtype=np.float64
     )
     _require(np.array_equal(native_data_header, native_weight_header), "native raw headers differ")
@@ -205,7 +226,16 @@ def main() -> None:
         "metric_policy": "scale-sensitive relative-L2 on pre-join BPref intermediates; no correlation",
         "physical_iteration": args.physical_iteration,
         "recovar_local_iteration_label": recovar["iteration"],
+        "half": recovar["half"],
         "current_size": recovar["current_size"],
+        "raw_accumulator": {
+            "numerator": _metric(
+                recovar["numerator"], native_numerator, allow_sign=True
+            ),
+            "denominator": _metric(
+                recovar["weight"], native_denominator, allow_sign=False
+            ),
+        },
         "recovar_vs_native": _comparison(
             rec_average,
             rec_weight,
@@ -223,10 +253,10 @@ def main() -> None:
     if (args.native_repeat_data is None) != (args.native_repeat_weight is None):
         raise ValueError("native repeat data and weight must be supplied together")
     if args.native_repeat_data is not None and args.native_repeat_weight is not None:
-        repeat_data_header, repeat_data = load_relion_raw(
+        repeat_data_header, repeat_data = _load_native_bpref(
             args.native_repeat_data, value_dtype=np.complex128
         )
-        repeat_weight_header, repeat_weight = load_relion_raw(
+        repeat_weight_header, repeat_weight = _load_native_bpref(
             args.native_repeat_weight, value_dtype=np.float64
         )
         _require(np.array_equal(repeat_data_header, repeat_weight_header), "repeat raw headers differ")

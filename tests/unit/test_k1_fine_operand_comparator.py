@@ -4,9 +4,11 @@ import numpy as np
 
 from scripts.compare_k1_relion_recovar_fine_operands import (
     _expanded_score_components,
+    _gather_fftw_half_by_xy,
     _json_default,
     _metric,
     _score_terms,
+    _validate_alternate_geometry,
 )
 from scripts.validate_relion_fine_operand_capture import (
     _cuda_fine_contribution,
@@ -83,3 +85,39 @@ def test_expanded_score_components_recombine_squared_difference():
     ) + np.float64(sum_init)
 
     assert np.isclose(components["total"], expected, rtol=0, atol=1e-14)
+
+
+def test_gather_fftw_half_by_xy_wraps_negative_y_rows():
+    image_size = 8
+    fftw_half = np.arange(image_size * (image_size // 2 + 1), dtype=np.float32).reshape(
+        image_size,
+        -1,
+    )
+
+    gathered = _gather_fftw_half_by_xy(
+        fftw_half,
+        np.asarray([0, 3, 4], dtype=np.int32),
+        np.asarray([0, -1, -4], dtype=np.int32),
+        image_size,
+    )
+
+    assert np.array_equal(
+        gathered,
+        np.asarray([fftw_half[0, 0], fftw_half[7, 3], fftw_half[4, 4]]),
+    )
+
+
+def test_validate_alternate_geometry_accepts_state_only_changes():
+    geometry = {
+        "original_index": np.asarray(66),
+        "current_size": np.asarray(56),
+        "fine_translations": np.asarray([[0.0, 1.0]], dtype=np.float32),
+        "rotations": np.eye(3, dtype=np.float32)[None],
+        "candidate_mask": np.asarray([[True]]),
+        "window_indices": np.asarray([0, 1], dtype=np.int32),
+        "proj_half": np.asarray([[1 + 2j]], dtype=np.complex64),
+    }
+    alternate = {name: value.copy() for name, value in geometry.items()}
+    alternate["proj_half"] += np.complex64(1 + 0j)
+
+    _validate_alternate_geometry(geometry, alternate)

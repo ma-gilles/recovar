@@ -3,7 +3,11 @@
 import numpy as np
 import pytest
 
-from scripts.analyze_em_k1_native_fine_operands import _full_to_compact, _tree_sum
+from scripts.analyze_em_k1_native_fine_operands import (
+    _full_to_compact,
+    _infer_float32_common_addend,
+    _tree_sum,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -29,3 +33,14 @@ def test_full_to_compact_maps_centered_rows_to_relion_fftw_rows():
     expected = np.full(12, -1, dtype=np.int32)
     expected[[2 * 3, 3 * 3 + 1, 2]] = np.arange(3, dtype=np.int32)
     np.testing.assert_array_equal(lookup, expected)
+
+
+def test_infer_float32_common_addend_replays_large_costs():
+    base = np.linspace(250.0, 280.0, 1000, dtype=np.float32)
+    expected_addend = np.float32(0.029396063)
+    target = np.asarray(base + expected_addend, dtype=np.float32)
+
+    inferred, exact = _infer_float32_common_addend(base, target)
+
+    np.testing.assert_array_equal(base + inferred, target)
+    assert exact == base.size

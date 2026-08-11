@@ -15444,3 +15444,49 @@ all four input hashes were independently recomputed. This demonstrates that
 case 10's native selected poses require the missing outer lattice. It does not
 yet quantify the trajectory rescue, which remains the purpose of job
 `12197149`.
+
+## 2026-08-11 case-26 iteration-1 BPref atomic boundary closure
+
+A same-H100, one-iteration capture now localizes the first case-26 M-step
+difference to the atomic scatter itself. Native RELION job `12249593` and
+RECOVAR control/treatment job `12249594` completed naturally in `00:01:56`
+and `00:02:18`. The fixed 17-particle source-ID panel has bit-exact
+pre-scatter numerator and denominator operands for every supported pixel in
+both halves. The complete post-scatter support also agrees exactly.
+
+The ordinary per-particle RECOVAR scatter nevertheless differs from native
+RELION at the raw accumulator boundary. Half-1/half-2 numerator relative L2 is
+`5.628161429882981e-6` / `5.87300991113795e-6`; denominator relative L2 is
+`3.022482924747913e-6` / `2.948372865899232e-6`. Enabling the native fused
+real/imaginary/weight atomic stream reduces those values to
+`1.4591893049312468e-8` / `1.316061924955966e-8` and
+`1.4147656586751162e-8` / `1.4127715386238086e-8`, respectively. These are at
+the independently measured native RELION repeat floor.
+
+The block-topology-only ablation, Slurm `12249629`, leaves the discrepancy
+unchanged: numerator relative L2 remains `5.628147018335018e-6` /
+`5.873023940564318e-6` and denominator relative L2 remains
+`3.0224456855153976e-6` / `2.9483544968953317e-6`. The cause is therefore the
+fused atomic instruction sequence, not only the CUDA block dimensions.
+
+The production candidate is deliberately narrow. It selects fused atomics
+only for a fresh K=1 physical-order `--firstiter_cc` reconstruction, where the
+winner-take-all boundary supplies exactly one hypothesis per particle. It does
+not alter later soft-posterior iterations or K=4. A no-diagnostic-environment
+validation, Slurm `12249655`, reproduces the native-floor result: raw
+numerator relative L2 `1.4615562328235729e-8` / `1.3181448584397421e-8` and
+denominator relative L2 `1.4026559687712405e-8` /
+`1.4162282286691923e-8`.
+
+The iteration-1 merged signed normalized non-DC FSC-AUC is already saturated
+near `0.999999999973` in every arm and is therefore insensitive to this
+operand-level closure. No scorecard credit is claimed until a short prefix
+shows that the iteration-2 posterior/accumulator drift is reduced and a later
+fixed-case run clears a frozen gate. K=1 remains `28/34` strict, `32/34`
+topology, and `34/34` evaluated; K=4 remains parked.
+
+The primary reports are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_it1_scatter_ab_20260811T0120ET/analysis/`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_it1_scatter_block_only_20260811T0125ET/analysis/`,
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_it1_scatter_production_20260811T0130ET/analysis/`.

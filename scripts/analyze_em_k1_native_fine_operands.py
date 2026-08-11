@@ -67,6 +67,36 @@ def _relative_l2(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.linalg.norm((np.asarray(left) - np.asarray(right)).reshape(-1)) / denominator)
 
 
+def _infer_float32_common_addend(base: np.ndarray, target: np.ndarray) -> tuple[np.float32, int]:
+    """Infer a common addend applied by one final float32 addition."""
+
+    base = np.asarray(base, dtype=np.float32)
+    target = np.asarray(target, dtype=np.float32)
+    differences = target.astype(np.float64) - base.astype(np.float64)
+    half_ulp = 0.5 * np.abs(np.spacing(target).astype(np.float64))
+    lower = float(np.max(differences - half_ulp))
+    upper = float(np.min(differences + half_ulp))
+    center = np.float32(0.5 * (lower + upper)) if lower <= upper else np.float32(np.median(differences))
+    candidates = [
+        center,
+        np.nextafter(center, np.float32(-np.inf), dtype=np.float32),
+        np.nextafter(center, np.float32(np.inf), dtype=np.float32),
+    ]
+
+    best = center
+    best_exact = -1
+    best_max = np.inf
+    for candidate in candidates:
+        replay = np.asarray(base + candidate, dtype=np.float32)
+        exact = int(np.count_nonzero(replay == target))
+        max_error = float(np.max(np.abs(replay.astype(np.float64) - target.astype(np.float64))))
+        if exact > best_exact or (exact == best_exact and max_error < best_max):
+            best = candidate
+            best_exact = exact
+            best_max = max_error
+    return np.float32(best), best_exact
+
+
 def _full_to_compact(window_indices: np.ndarray, *, full_size: int, current_size: int) -> np.ndarray:
     full_half = full_size // 2 + 1
     current_half = current_size // 2 + 1
@@ -87,10 +117,19 @@ def analyze(
     *,
     full_image_size: int,
     chunk_size: int,
+    alternate_reference_npz: Path | None = None,
 ) -> dict:
     dump_dir = Path(dump_dir)
     with np.load(recovar_npz, allow_pickle=False) as payload:
         rec = {name: np.array(payload[name]) for name in payload.files}
+    alternate_reference = None
+    if alternate_reference_npz is not None:
+        with np.load(alternate_reference_npz, allow_pickle=False) as payload:
+            alternate = {name: np.array(payload[name]) for name in payload.files}
+        for name in ("rotations", "candidate_mask", "window_indices"):
+            if not np.array_equal(rec[name], alternate[name]):
+                raise ValueError(f"alternate reference has different {name}")
+        alternate_reference = alternate["proj_half"]
 
     native_eulers = _flat_memmap(dump_dir / "pass1_class0_fine_eulers.bin").reshape(-1, 3, 3)
     nearest, rotation_distance, orientation = _nearest_rotation_rows_by_matrix(
@@ -143,7 +182,7 @@ def analyze(
     if any(item.size != expected_values for item in (native_ref_real, native_ref_imag, native_shift_real, native_shift_imag)):
         raise ValueError("native fine operand tensor size does not match candidate topology")
 
-    labels = (
+    labels = [
         "native",
         "recovar_reference_only",
         "recovar_shifted_image_only",
@@ -152,7 +191,9 @@ def analyze(
         "recovar_reference_and_weight",
         "recovar_shifted_image_and_weight",
         "recovar_all",
-    )
+    ]
+    if alternate_reference is not None:
+        labels.append("alternate_reference_with_recovar_image_and_weight")
     costs = {label: np.empty(candidate_count, dtype=np.float32) for label in labels}
     operand_error = {"reference_num": 0.0, "reference_den": 0.0, "shifted_num": 0.0, "shifted_den": 0.0}
 
@@ -195,8 +236,28 @@ def analyze(
             "recovar_shifted_image_and_weight": (native_reference, rec_shifted, rec_weight),
             "recovar_all": (rec_reference, rec_shifted, rec_weight),
         }
+        if alternate_reference is not None:
+            alternate_projected = np.zeros(shape, dtype=np.complex64)
+            alternate_projected[:, valid] = alternate_reference[
+                rec_rotation_row[start:stop]
+            ][:, compact]
+            arms["alternate_reference_with_recovar_image_and_weight"] = (
+                alternate_projected,
+                rec_shifted,
+                rec_weight,
+            )
         for label, operands in arms.items():
             costs[label][start:stop] = _diff2(*operands)
+
+    native_highres, native_highres_exact = _infer_float32_common_addend(costs["native"], native_raw)
+    recovar_highres = np.float32(rec["relion_highres_xi2_half"])
+    for label in labels:
+        highres = (
+            recovar_highres
+            if "shifted_image" in label or label in {"recovar_all", "alternate_reference_with_recovar_image_and_weight"}
+            else native_highres
+        )
+        costs[label] = np.asarray(costs[label] + highres, dtype=np.float32)
 
     rec_score = np.asarray(rec["scores_pre_prior"], dtype=np.float64)[rec_rotation_row, translation]
     captured_residual = _center(rec_score + native_raw)
@@ -236,6 +297,11 @@ def analyze(
         "rotation_matrix_median_frobenius": float(np.median(rotation_distance)),
         "rotation_matrix_max_frobenius": float(np.max(rotation_distance)),
         "translation_max_abs": float(np.max(np.abs(native_translation - rec_translation))),
+        "highres_xi2_half": {
+            "native_inferred": float(native_highres),
+            "native_exact_replay_count": int(native_highres_exact),
+            "recovar_captured": float(recovar_highres),
+        },
         "operand_relative_l2": {
             "projected_reference": float(np.sqrt(operand_error["reference_num"] / operand_error["reference_den"])),
             "shifted_corrected_image": float(np.sqrt(operand_error["shifted_num"] / operand_error["shifted_den"])),
@@ -245,6 +311,11 @@ def analyze(
         "native_cost_replay_error": _stats(native_replay_error),
         "recovar_cost_replay_error": _stats(recovar_replay_error),
         "interventions": interventions,
+        "alternate_reference_npz": (
+            str(Path(alternate_reference_npz).resolve())
+            if alternate_reference_npz is not None
+            else None
+        ),
     }
 
 
@@ -254,6 +325,7 @@ def main() -> None:
     parser.add_argument("--recovar-pass2-npz", required=True, type=Path)
     parser.add_argument("--full-image-size", type=int, default=128)
     parser.add_argument("--chunk-size", type=int, default=64)
+    parser.add_argument("--alternate-reference-npz", type=Path)
     parser.add_argument("--output-json", required=True, type=Path)
     args = parser.parse_args()
     result = analyze(
@@ -261,6 +333,7 @@ def main() -> None:
         args.recovar_pass2_npz,
         full_image_size=args.full_image_size,
         chunk_size=args.chunk_size,
+        alternate_reference_npz=args.alternate_reference_npz,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

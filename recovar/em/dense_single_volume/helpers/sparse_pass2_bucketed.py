@@ -4336,26 +4336,36 @@ def _weighted_image_power_shells_and_per_image(
         unweighted_shell = valid_norm_shell & (shell_indices_half > int(norm_unweighted_shell_cutoff))
         high_shell_mass = full_mass if include_unweighted_high_shell else jnp.zeros_like(full_mass)
         norm_mass = jnp.where(unweighted_shell[None, :], high_shell_mass[:, None], norm_mass)
-    weighted_per_image = jnp.sum(pixel_power * norm_mass, axis=-1).astype(jnp.float32)
+    deterministic_norm_reduction = _env_flag_enabled(
+        "RECOVAR_K1_RELION_DETERMINISTIC_NORM_REDUCTION",
+        default=False,
+    )
+    norm_reduction_dtype = jnp.float64 if deterministic_norm_reduction else pixel_power.dtype
+    weighted_per_image = jnp.sum(
+        (pixel_power * norm_mass).astype(norm_reduction_dtype),
+        axis=-1,
+    )
     if norm_unweighted_high_shell is not None and include_unweighted_high_shell:
         if norm_unweighted_shell_cutoff is None:
             raise ValueError("a replacement high-shell norm term requires a shell cutoff")
-        replacement_high = jnp.asarray(norm_unweighted_high_shell, dtype=jnp.float32)
+        replacement_high = jnp.asarray(norm_unweighted_high_shell, dtype=norm_reduction_dtype)
         if replacement_high.shape != mass.shape:
             raise ValueError(
                 "replacement high-shell norm term must match the particle axis, got "
                 f"{replacement_high.shape} for {mass.shape}"
             )
         generic_high = jnp.sum(
-            jnp.where(unweighted_shell[None, :], pixel_power, 0.0),
+            jnp.where(unweighted_shell[None, :], pixel_power, 0.0).astype(
+                norm_reduction_dtype
+            ),
             axis=-1,
-        ).astype(jnp.float32)
+        )
         # Preserve the existing support-weighted shell/noise reduction and the
         # current-size norm path. Replace only the unweighted high-shell term
         # with RELION powerClass's divide-before-square float32 arithmetic.
         weighted_per_image = jax.lax.optimization_barrier(weighted_per_image)
         weighted_per_image = weighted_per_image + full_mass * (replacement_high - generic_high)
-    return weighted_shells, weighted_per_image
+    return weighted_shells, weighted_per_image.astype(jnp.float32)
 
 
 @partial(jax.jit, static_argnames=("batch_size",))
@@ -4584,7 +4594,15 @@ def _accumulate_relion_x_half_per_particle_launches(
     imaginary, and weight atomics in one kernel.
     """
 
-    use_fused_atomics = relion_x_half_bp_fused_atomics_enabled()
+    diagnostic_fused_atomics = relion_x_half_bp_fused_atomics_enabled()
+    # Fresh K=1 --firstiter_cc contributes exactly one winning hypothesis per
+    # particle.  At this boundary the native RELION data/weight atomic stream
+    # is reproduced exactly by the fused target; unlike later soft-posterior
+    # iterations, no translation reduction changes the contributor stream.
+    production_firstiter_fused_atomics = bool(winner_take_all and strict_particle_order)
+    use_fused_atomics = bool(
+        diagnostic_fused_atomics or production_firstiter_fused_atomics
+    )
     if not winner_take_all and not strict_particle_order:
         logger.warning(
             "RECOVAR soft-posterior per-particle x-half causal arm enabled; "
@@ -4593,21 +4611,37 @@ def _accumulate_relion_x_half_per_particle_launches(
     if use_fused_atomics:
         import recovar.cuda_backproject as cuda_backproject
 
-        if not relion_x_half_bp_per_particle_launch_enabled():
+        if (
+            diagnostic_fused_atomics
+            and not production_firstiter_fused_atomics
+            and not relion_x_half_bp_per_particle_launch_enabled()
+        ):
             raise RuntimeError(
                 "RELION fused-atomics diagnostic requires "
                 "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH=1"
             )
-        if not cuda_backproject.relion_x_half_bp_block_topology_enabled():
+        if (
+            diagnostic_fused_atomics
+            and not production_firstiter_fused_atomics
+            and not cuda_backproject.relion_x_half_bp_block_topology_enabled()
+        ):
             raise RuntimeError(
                 "RELION fused-atomics diagnostic requires "
                 "RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY=1"
             )
-        logger.info(
-            "RELION x-half diagnostic: fused real/imaginary/weight atomics enabled "
-            "for particle-owned launches (label=%s)",
-            log_label_prefix,
-        )
+        if production_firstiter_fused_atomics:
+            logger.info(
+                "STRICT-PARITY: fresh K=1 firstiter-CC uses RELION fused "
+                "real/imaginary/weight atomics for particle-owned launches "
+                "(label=%s)",
+                log_label_prefix,
+            )
+        else:
+            logger.info(
+                "RELION x-half diagnostic: fused real/imaginary/weight atomics enabled "
+                "for particle-owned launches (label=%s)",
+                log_label_prefix,
+            )
 
     actual_counts = np.asarray(actual_counts, dtype=np.int64)
     if values.shape[:2] != rotations.shape[:2] or ctf_values.shape[:2] != values.shape[:2]:
@@ -7851,6 +7885,160 @@ def _maybe_dump_pass2_bucket(
         )
         dump_count += 1
     return dump_count
+
+
+def _maybe_dump_norm_residual_inputs(
+    *,
+    experiment_dataset,
+    image_indices,
+    current_size,
+    proj_for_noise,
+    proj_abs2_for_noise,
+    summed_masked_noise,
+    ctf_probs,
+    noise_variance_for_noise,
+    block_norm_residual,
+    processed_score_half_for_noise,
+    shell_indices_half,
+    support_mass,
+    relion_norm_high_shell,
+    weighted_img_per_image,
+    relion_score_translation_angles,
+    recon_window_indices,
+    score_window_indices,
+    image_shape,
+):
+    """Capture the exact inputs and output of the per-image norm reduction.
+
+    This diagnostic is deliberately separate from the ordinary pass-2 dump:
+    that dump records score-window projections, while the normalization update
+    consumes the reconstruction/noise window and its squared projections.
+    """
+
+    if not _env_flag_enabled("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS", default=False):
+        return 0
+    dump_dir = os.environ.get(_PASS2_DUMP_DIR_ENV)
+    if not dump_dir:
+        raise ValueError(
+            "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS requires RECOVAR_PASS2_DUMP_DIR"
+        )
+    target_iteration = os.environ.get("RECOVAR_PASS2_DUMP_ITERATION")
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    if target_iteration and context_iteration != int(target_iteration):
+        return 0
+    target_rows = _pass2_dump_target_rows(
+        experiment_dataset=experiment_dataset,
+        image_indices=image_indices,
+        current_size=current_size,
+    )
+    if target_rows.size == 0:
+        return 0
+
+    selected = jnp.asarray(target_rows, dtype=jnp.int32)
+    raw_translated_recon = None
+    raw_translated_wavg = None
+    if relion_score_translation_angles is not None:
+        from recovar import cuda_backproject
+
+        recon_indices_jax = jnp.asarray(recon_window_indices, dtype=jnp.int32)
+        translation_angles_jax = jnp.asarray(
+            relion_score_translation_angles,
+            dtype=jnp.float32,
+        )
+        raw_translated_recon = cuda_backproject.relion_translate_score_f32(
+            jnp.asarray(processed_score_half_for_noise)[selected][:, recon_indices_jax],
+            translation_angles_jax,
+            recon_indices_jax,
+            image_shape,
+        ).reshape(target_rows.size, translation_angles_jax.shape[0], -1)
+        score_indices_jax = jnp.asarray(score_window_indices, dtype=jnp.int32)
+        raw_translated_wavg = cuda_backproject.relion_translate_score_f32(
+            jnp.asarray(processed_score_half_for_noise)[selected][:, score_indices_jax],
+            translation_angles_jax,
+            score_indices_jax,
+            image_shape,
+        ).reshape(target_rows.size, translation_angles_jax.shape[0], -1)
+    staged = jax.block_until_ready(
+        (
+            jnp.asarray(proj_for_noise)[selected],
+            jnp.asarray(proj_abs2_for_noise)[selected],
+            jnp.asarray(summed_masked_noise)[selected],
+            jnp.asarray(ctf_probs)[selected],
+            jnp.asarray(block_norm_residual)[selected],
+            jnp.asarray(processed_score_half_for_noise)[selected],
+            jnp.asarray(support_mass)[selected],
+            jnp.asarray(weighted_img_per_image)[selected],
+            (
+                jnp.empty((target_rows.size, 0, 0), dtype=jnp.complex64)
+                if raw_translated_recon is None
+                else raw_translated_recon
+            ),
+            (
+                jnp.empty((target_rows.size, 0, 0), dtype=jnp.complex64)
+                if raw_translated_wavg is None
+                else raw_translated_wavg
+            ),
+        )
+    )
+    (
+        proj_np,
+        proj_abs2_np,
+        summed_np,
+        ctf_probs_np,
+        residual_np,
+        processed_image_np,
+        support_mass_np,
+        weighted_image_power_np,
+        raw_translated_recon_np,
+        raw_translated_wavg_np,
+    ) = (np.asarray(value) for value in staged)
+    noise_np = np.asarray(jax.block_until_ready(noise_variance_for_noise))
+    shell_indices_np = np.asarray(jax.block_until_ready(shell_indices_half), dtype=np.int32)
+    relion_high_shell_np = (
+        np.empty((0,), dtype=np.float32)
+        if relion_norm_high_shell is None
+        else np.asarray(jax.block_until_ready(relion_norm_high_shell), dtype=np.float32)
+    )
+    local_indices = np.asarray(image_indices, dtype=np.int64)
+    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    os.makedirs(dump_dir, exist_ok=True)
+    context_half = int(_bpref_contribution_context["half"])
+    size_label = -1 if current_size is None else int(current_size)
+    for selected_row, bucket_row in enumerate(target_rows.tolist()):
+        original_index = int(original_indices[bucket_row])
+        out_path = os.path.join(
+            dump_dir,
+            f"norm_residual_orig{original_index:06d}_half{context_half}_cs{size_label:03d}.npz",
+        )
+        np.savez_compressed(
+            out_path,
+            schema=np.asarray("recovar-k1-norm-residual-inputs-v1"),
+            iteration=np.int64(context_iteration),
+            half=np.int64(context_half),
+            original_index=np.int64(original_index),
+            local_index=np.int64(local_indices[bucket_row]),
+            bucket_row=np.int64(bucket_row),
+            current_size=np.int64(size_label),
+            proj_for_noise=proj_np[selected_row],
+            proj_abs2_for_noise=proj_abs2_np[selected_row],
+            summed_masked_noise=summed_np[selected_row],
+            ctf_probs=ctf_probs_np[selected_row],
+            noise_variance_for_noise=noise_np,
+            block_norm_residual=np.asarray(residual_np[selected_row]),
+            processed_score_half_for_noise=processed_image_np[selected_row],
+            shell_indices_half=shell_indices_np,
+            support_mass=np.asarray(support_mass_np[selected_row]),
+            relion_norm_high_shell=(
+                relion_high_shell_np
+                if relion_high_shell_np.size == 0
+                else np.asarray(relion_high_shell_np[bucket_row])
+            ),
+            weighted_img_per_image=np.asarray(weighted_image_power_np[selected_row]),
+            raw_translated_recon=raw_translated_recon_np[selected_row],
+            raw_translated_wavg=raw_translated_wavg_np[selected_row],
+            wavg_window_indices=np.asarray(score_window_indices, dtype=np.int32),
+        )
+    return int(target_rows.size)
 
 
 def _maybe_dump_k_class_pass2_bucket(
@@ -11876,6 +12064,26 @@ def compute_pass2_stats_sparse_bucketed(
                 summed_masked_noise,
                 ctf_probs,
                 noise_variance_for_noise,
+            )
+            _maybe_dump_norm_residual_inputs(
+                experiment_dataset=experiment_dataset,
+                image_indices=image_indices,
+                current_size=current_size,
+                proj_for_noise=proj_for_noise,
+                proj_abs2_for_noise=proj_abs2_for_noise,
+                summed_masked_noise=summed_masked_noise,
+                ctf_probs=ctf_probs,
+                noise_variance_for_noise=noise_variance_for_noise,
+                block_norm_residual=block_norm_residual,
+                processed_score_half_for_noise=processed_score_half_for_noise,
+                shell_indices_half=shell_indices_half,
+                support_mass=support_mass,
+                relion_norm_high_shell=relion_norm_high_shell,
+                weighted_img_per_image=weighted_img_per_image,
+                relion_score_translation_angles=relion_score_translation_angles,
+                recon_window_indices=recon_window_indices,
+                score_window_indices=window_indices,
+                image_shape=image_shape,
             )
             noise_norm_correction_total[image_indices] += np.asarray(block_norm_residual, dtype=np.float64)
             if noise_scale_correction_xa_total is not None:
