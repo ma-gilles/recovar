@@ -525,6 +525,24 @@ def test_queued_jobs_unset_inherited_non_matrix_refinement_overrides(tmp_path):
             assert f"export {name}={value}" not in text
 
 
+def test_fused_fine_diff2_override_is_recorded_and_replayed(tmp_path):
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="26",
+        extra_env={"RECOVAR_RELION_FINE_DIFF2_FUSED_FFI": "1"},
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    job_texts = [path.read_text() for path in sorted((scratch / "jobs").glob("*.sh"))]
+    assert len(job_texts) == 3
+    for text in job_texts:
+        assert "unset RECOVAR_RELION_FINE_DIFF2_FUSED_FFI" in text
+        assert "export RECOVAR_RELION_FINE_DIFF2_FUSED_FFI=1" in text
+    assert "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI=1\n" in (
+        scratch / "submission.env"
+    ).read_text()
+
+
 def test_case_jobs_build_cuda_lib_atomically_under_lock(tmp_path):
     proc, scratch = _dry_run_launcher(tmp_path, case="14")
 
