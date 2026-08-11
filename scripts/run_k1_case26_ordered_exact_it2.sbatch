@@ -52,7 +52,7 @@ test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = 50a0b3b86478a31bd64e8202e
 test -s "${RELION}/run_it000_data.star" -a -s "${RELION}/run_it002_optimiser.star"
 test -s "${DATA}/particles.star"
 test ! -e "${OUTPUT}"
-mkdir -p "${OUTPUT}" "${ANALYSIS}" "${ACCUM}" "${PREJOIN}"
+mkdir -p "${OUTPUT}" "${ANALYSIS}" "${ACCUM}" "${PREJOIN}" "${ROOT}/provenance"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
