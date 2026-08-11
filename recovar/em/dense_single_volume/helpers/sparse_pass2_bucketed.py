@@ -7751,6 +7751,11 @@ def _maybe_dump_pass2_bucket(
     if target_current_size:
         if current_size is None or int(current_size) != int(target_current_size):
             return 0
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    context_half = int(_bpref_contribution_context["half"])
+    target_iteration = os.environ.get("RECOVAR_PASS2_DUMP_ITERATION")
+    if target_iteration and context_iteration != int(target_iteration):
+        return 0
     local_indices = np.asarray(image_indices, dtype=np.int64)
     original_indices = _original_indices_for_local(experiment_dataset, local_indices)
 
@@ -7808,6 +7813,8 @@ def _maybe_dump_pass2_bucket(
             reconstruction_fields["relion_min_diff2"] = np.float32(min_diff2_np[row])
         np.savez_compressed(
             out_path,
+            iteration=np.int64(context_iteration),
+            half=np.int64(context_half),
             original_index=np.int64(original_idx),
             local_index=np.int64(image_idx),
             current_size=np.int64(-1 if current_size is None else int(current_size)),
@@ -7882,6 +7889,11 @@ def _maybe_dump_k_class_pass2_bucket(
     if target_current_size:
         if current_size is None or int(current_size) != int(target_current_size):
             return 0
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    context_half = int(_bpref_contribution_context["half"])
+    target_iteration = os.environ.get("RECOVAR_PASS2_DUMP_ITERATION")
+    if target_iteration and context_iteration != int(target_iteration):
+        return 0
     target_class = os.environ.get("RECOVAR_PASS2_DUMP_CLASS")
     if target_class and int(target_class) != int(class_index) + 1:
         return 0
@@ -8082,6 +8094,8 @@ def _maybe_dump_k_class_pass2_bucket(
         )
         np.savez_compressed(
             out_path,
+            iteration=np.int64(context_iteration),
+            half=np.int64(context_half),
             original_index=np.int64(original_idx),
             local_index=np.int64(image_idx),
             class_index=np.int64(class_index),

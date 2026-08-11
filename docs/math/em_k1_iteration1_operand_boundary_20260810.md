@@ -557,3 +557,49 @@ replay is a conservative discriminator with a known serialization residual;
 it cannot be called an exact copy of RELION's private in-memory direction
 prior.  The newly captured pre-collapse rotation-posterior trajectory avoids
 conflating posterior aggregation with this output rounding on future runs.
+
+## Case-26 iteration-2 serialization floor
+
+Job `12237191` completed the exact-RELION-iteration-1 to RECOVAR-iteration-2
+discriminator.  Contrary to the iteration-3 replay, loading the serialized
+RELION boundary made the already small iteration-2 posterior discrepancy
+worse:
+
+| iteration-2 quantity | autonomous candidate | serialized RELION boundary |
+|---|---:|---:|
+| Pmax relative-L2 | `1.34011e-5` | `2.86879e-5` |
+| Pmax RMSE | `2.71936e-7` | `5.82137e-7` |
+| significant-count mismatches | `65 / 1000` | `418 / 1000` |
+
+All 418 support-count differences remain exactly one.  This is not evidence
+that the live autonomous state is farther from RELION.  It demonstrates that
+the autonomous state is already closer than the six-decimal model/data STAR
+serialization floor.  The serialized boundary is therefore not a valid
+oracle for localizing the residual iteration-2 error.
+
+Five source-particle pass-2 panels were captured under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_it2_dump_20260810T2005ET/pass2/`.
+For every panel,
+`scores_with_prior == scores_pre_prior + rotation_log_prior + translation_log_prior`
+is bitwise exact, and an independent float64 softmax reproduces the stored
+probabilities to approximately `1e-15`.  This exonerates RECOVAR's internal
+prior addition and normalization at the captured boundary.  It does not
+compare the pre-prior scores with native in-memory RELION scores because the
+incoming RELION maps, noise, and priors have already been rounded during STAR
+serialization.
+
+The particle-state report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_it2_dump_20260810T2005ET/analysis/case26_exact_it2_particle_state.json`,
+with SHA-256
+`12e562005193b7216c71664e470df0c262c681a6637d85d553e17b24a7ab41ac`.
+The Pmax comparison has SHA-256
+`d89d4f8700500191fc7aed7494cbbc1b4dde18eac395ed5b4f98314fb78cffd9`.
+Both the run root and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_exact_it2_dump_20260810T2005ET/`
+contain `SAFE_TO_DELETE` markers.
+
+The next decisive iteration-2 comparison must therefore capture native
+RELION values before six-decimal metadata serialization, or compare two
+RECOVAR arms whose only difference is a single unrounded incoming operand.
+Another broad trajectory from the rounded STAR boundary would not resolve
+this question.

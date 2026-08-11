@@ -720,6 +720,9 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
     dump_dir = tmp_path / "pass2"
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ITERATION", "2")
+    monkeypatch.setitem(sparse_pass2_mod._bpref_contribution_context, "iteration", 2)
+    monkeypatch.setitem(sparse_pass2_mod._bpref_contribution_context, "half", 1)
     sparse_pass2_mod._maybe_dump_pass2_bucket(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([0], dtype=np.int64),
@@ -765,6 +768,8 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
     assert payload["recon_window_indices"].shape == (n_recon_pix,)
     assert payload["shifted_recon"].dtype == np.complex64
     assert payload["ctf2_over_nv_recon"].dtype == np.float64
+    assert int(payload["iteration"]) == 2
+    assert int(payload["half"]) == 1
 
 
 def test_sparse_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_path):
