@@ -4895,6 +4895,15 @@ def main():
         save_dict["direction_prior_trajectory_per_half"] = np.asarray(
             result["direction_prior_trajectory_per_half"], dtype=object
         )
+    if result.get("rotation_posterior_trajectory_per_half") is not None:
+        for i, posterior_per_half in enumerate(
+            result["rotation_posterior_trajectory_per_half"]
+        ):
+            if posterior_per_half is not None:
+                save_dict[f"rotation_posterior_per_half_iter_{i:03d}"] = np.asarray(
+                    posterior_per_half,
+                    dtype=np.float64,
+                )
     if "convergence_state" in result:
         state = result["convergence_state"]
         save_dict["convergence_iteration"] = np.int32(state.iteration)

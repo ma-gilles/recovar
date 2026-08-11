@@ -5240,6 +5240,9 @@ def _run_relion_iteration_loop(
     # Per-iteration snapshots of RELION's learned pdf_direction state.
     # Entries are [half1, half2] and may be ragged as HEALPix order grows.
     direction_prior_trajectory_per_half = []
+    # Preserve the pre-collapse orientation posterior so a direction-prior
+    # mismatch can be localized to posterior aggregation versus collapse.
+    rotation_posterior_trajectory_per_half = []
     frac_changed_trajectory = []
     acc_rot_trajectory = []
     acc_trans_trajectory = []
@@ -8072,6 +8075,12 @@ def _run_relion_iteration_loop(
 
         significant_counts.append(iter_recorded_sig_counts)
 
+        rotation_posterior_trajectory_per_half.append(
+            [
+                None if value is None else np.asarray(value, dtype=np.float64).copy()
+                for value in rotation_posterior_per_half
+            ]
+        )
         if all(rot_sum is not None for rot_sum in rotation_posterior_per_half):
             k1_direction_prior_order = current_healpix_order
             if use_local:
@@ -9119,6 +9128,7 @@ def _run_relion_iteration_loop(
             "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
             "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
             "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
+            "rotation_posterior_trajectory_per_half": rotation_posterior_trajectory_per_half,
             "frozen_initial_scoring_state_sha256": frozen_initial_scoring_state_sha256,
             "frac_changed_trajectory": frac_changed_trajectory,
             "acc_rot_trajectory": acc_rot_trajectory,
@@ -10633,6 +10643,7 @@ def _run_relion_iteration_loop(
         "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
         "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
         "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
+        "rotation_posterior_trajectory_per_half": rotation_posterior_trajectory_per_half,
         "frozen_initial_scoring_state_sha256": frozen_initial_scoring_state_sha256,
         "frac_changed_trajectory": frac_changed_trajectory,
         "acc_rot_trajectory": acc_rot_trajectory,

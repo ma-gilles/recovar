@@ -1648,6 +1648,7 @@ def main():
         ("tau2_shell_count_trajectory", "tau2_shell_count_iter"),
         ("tau2_fsc_used_trajectory", "tau2_fsc_used_iter"),
         ("tau2_ssnr_trajectory", "tau2_ssnr_iter"),
+        ("rotation_posterior_trajectory_per_half", "rotation_posterior_per_half_iter"),
     ]:
         if result.get(traj_name):
             for i, arr_i in enumerate(result[traj_name]):
