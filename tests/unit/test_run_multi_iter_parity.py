@@ -15,6 +15,7 @@ from scripts.run_multi_iter_parity import (
     load_initial_fourier_volume,
     map_pose_arrays_to_particle_order,
     parse_relion_optimiser_cli_flags,
+    particle_half_indices,
     relion_final_gt_series,
     replay_control_relion_iteration,
     replay_override_iteration_pairs,
@@ -24,6 +25,15 @@ from scripts.run_multi_iter_parity import (
     stack_index_from_image_name,
     validate_final_only_replay_args,
 )
+
+
+def test_particle_half_indices_preserve_source_order_and_int64_dtype():
+    half1, half2 = particle_half_indices(np.asarray([2, 1, 2, 1, 1, 2]))
+
+    np.testing.assert_array_equal(half1, np.asarray([1, 3, 4], dtype=np.int64))
+    np.testing.assert_array_equal(half2, np.asarray([0, 2, 5], dtype=np.int64))
+    assert half1.dtype == np.int64
+    assert half2.dtype == np.int64
 
 
 def test_significant_count_artifacts_expose_source_image_order():

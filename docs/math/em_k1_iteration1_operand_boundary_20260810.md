@@ -492,3 +492,55 @@ significance threshold for the 65 one-count disagreements: dump the ordered
 weights and cumulative mass immediately around each boundary, then compare
 raw fine score, additive priors, normalization constant, and threshold
 strictness in that order.
+
+## Case-26 iteration-3 localization
+
+Focused H100 job `12230608` extended the same autonomous candidate by exactly
+one numbered iteration.  It did not run convergence or final reconstruction.
+The iteration-3 merged map remains close to RELION, but the posterior boundary
+has begun to amplify:
+
+| quantity | physical iteration 2 | physical iteration 3 |
+|---|---:|---:|
+| merged map FSC-AUC | `0.999999999882` | `0.999999772413` |
+| Pmax relative-L2 | `1.34011e-5` | `1.06287e-3` |
+| Pmax RMSE | `2.71936e-7` | `4.95422e-4` |
+| significant-count mismatches | `65 / 1000` | `53 / 1000` |
+
+Current size (`66`) and HEALPix order (`3`) remain exactly on the RELION
+topology.  Compared with the prior live-noise arm, the candidate reduces the
+iteration-3 map FSC-AUC deficit by about 73%, Pmax RMSE by about 74%, and
+support mismatches from 167 to 53.  This is material improvement, but not
+posterior closure.
+
+The reports are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_ordered_exact_it3_20260810T1935ET/analysis/case26_ordered_exact_it3_fsc.json`,
+  SHA-256 `f4302f03934c2004603e219645e159098bdabf80d1e928c48da82b01a8641b6b`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_ordered_exact_it3_20260810T1935ET/analysis/case26_ordered_exact_it3_state.json`,
+  SHA-256 `43eb76dc6f92a0b9e80be206106480292cde4a751d8bf61b3866fe92209a82ec`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_ordered_exact_it3_20260810T1935ET/analysis/case26_ordered_exact_it3_particle_state.json`,
+  SHA-256 `6e87b5fbb84b4d7e5334b8425b95cb67ba65d756e2c2b3095496817ca0417afe`.
+
+Job `12234888` then held the physical iteration-3 scorer fixed while replacing
+its complete incoming boundary with exact RELION iteration-2 state.  This is
+the causal discriminator requested by the first-divergence strategy.  The
+Pmax relative-L2 collapsed from `1.06287e-3` to `4.19309e-5` (about 96%), Pmax
+RMSE collapsed to `1.95448e-5`, and support mismatches fell from 53 to 5.  All
+five previously selected tail particles had exact significant counts.  The
+largest remaining Pmax error is `2.17471e-4` at source particle 819.
+
+The five raw pass-2 captures are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_exact_it3_dump_retry1_20260810T1955ET/pass2/`.
+This experiment largely exonerates the physical iteration-3 scorer,
+normalizer, significance selection, and BPref routing.  The dominant residual
+is inherited from the small iteration-2 state discrepancy.  The next gate is
+therefore exact RELION iteration 1 into RECOVAR iteration 2, with raw captures
+for the largest iteration-2 Pmax tails.  That gate is Slurm job `12237191`.
+
+The exact-input wrapper completed its scientific output but exposed an audit
+instrumentation omission: `refinement_results.npz` did not contain the two
+source-order half-index arrays needed by the generic particle auditor.  The
+runner now saves `half1_indices` and `half2_indices` before writing the NPZ;
+the focused regression panel passes 61 tests.  This changes only diagnostic
+capture, not EM arithmetic.

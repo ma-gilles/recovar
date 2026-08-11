@@ -166,6 +166,15 @@ def add_significant_count_artifacts(save_dict, significant_counts, half_indices,
         save_dict[f"sig_counts_by_image_iter_{iteration:03d}"] = counts_by_image
 
 
+def particle_half_indices(random_subsets):
+    """Return source-order particle indices for the two RELION half sets."""
+    subsets = np.asarray(random_subsets)
+    return (
+        np.flatnonzero(subsets == 1).astype(np.int64),
+        np.flatnonzero(subsets == 2).astype(np.int64),
+    )
+
+
 def _count_compile_lines(log_path):
     if log_path is None:
         return None
@@ -1543,13 +1552,16 @@ def main():
         return
 
     # ---- Save results ----
+    half1_indices, half2_indices = particle_half_indices(our_subsets)
     save_dict = {
         "volume_shape": np.array([N, N, N]),
         "voxel_size": np.float64(pixel_size),
         "current_sizes": np.array(result["current_sizes"]),
         "pixel_resolutions": np.array(result["pixel_resolutions"]),
-        "n_half1_particles": np.int32(len(np.where(our_subsets == 1)[0])),
-        "n_half2_particles": np.int32(len(np.where(our_subsets == 2)[0])),
+        "n_half1_particles": np.int32(half1_indices.size),
+        "n_half2_particles": np.int32(half2_indices.size),
+        "half1_indices": half1_indices,
+        "half2_indices": half2_indices,
         "max_significants": np.int32(max_significants),
         "local_search_profile_mode": np.array(args.local_search_profile),
         "local_search_translation_prior_mode": np.array(args.local_search_translation_prior_mode),
@@ -1645,7 +1657,7 @@ def main():
         add_significant_count_artifacts(
             save_dict,
             result["significant_counts"],
-            [np.flatnonzero(our_subsets == 1), np.flatnonzero(our_subsets == 2)],
+            [half1_indices, half2_indices],
             len(our_subsets),
         )
     for traj_name, prefix_name in [
@@ -1977,8 +1989,6 @@ def main():
     # ---- Per-particle Pmax comparison with RELION ----
     # pmax_per_image_history entries are in (half1, half2) concatenated order.
     # Map them back to original particle ordering for matched comparison.
-    half1_indices = np.where(our_subsets == 1)[0]
-    half2_indices = np.where(our_subsets == 2)[0]
     n_total = len(our_names)
     gt_pose_path = Path(args.data_star).with_name("poses.pkl")
     gt_rotations_orig = None
