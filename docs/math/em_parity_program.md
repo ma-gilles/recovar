@@ -15510,3 +15510,13 @@ leaving the native-bit-exact BPref operands untouched.  Acceptance requires a
 two-iteration raw-score/posterior/accumulator improvement before any complete
 case is submitted.  The frozen K=1 scorecard remains `28/34` strict,
 `32/34` topology, and `34/34` evaluated.
+
+The required A/B, Slurm `12250645`, rejects the proposed multiplication order
+as the root cause. Pixel-weight relative-L2 worsens from `6.33847e-8` to
+`6.60746e-8`; centered raw-score RMS improves only `0.18%`; iteration-2 Pmax
+relative-L2 worsens from `1.29342e-5` to `1.30326e-5`; and raw accumulator
+changes are below `1%`. On 1,226 common score/reconstruction pixels the old
+order is bit-exact at 641 pixels and the candidate at 618. The candidate is
+therefore removed, no longer prefix is scheduled, and the next discriminator
+must dump native `Fctf`, `Minvsigma2`, scale, and every intermediate multiply
+before `corr_img` is consumed.

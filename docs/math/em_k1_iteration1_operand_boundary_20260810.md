@@ -732,3 +732,42 @@ with SHA-256 values
 and
 `30590eebf18d758363bf36d59ef4f4c2521a3c0e44586ce02401fe34984ef1e6`.
 Both run and runtime roots contain `SAFE_TO_DELETE` markers.
+
+## Case-26 `corr_img` multiplication-order falsification
+
+Slurm job `12250645` completed the same-H100, two-iteration candidate with
+five source-ID-aligned raw pass-2 panels. It changes only the Gaussian
+fine-score pixel-weight construction from `(Minvsigma2 * CTF) * CTF` to
+`Minvsigma2 * (CTF * CTF)`; first-iteration BPref atomics and later BPref
+operands remain unchanged.
+
+The source-66 focused native join falsifies this operation-order change as the
+remaining root cause:
+
+| boundary | prior fused-firstiter arm | `corr_img` candidate |
+|---|---:|---:|
+| pixel-weight relative-L2 | `6.33847e-8` | `6.60746e-8` |
+| centered raw-score RMS | `2.05813e-5` | `2.05441e-5` |
+| common-renormalized posterior L1 | `8.44159e-6` | `7.76724e-6` |
+| iteration-2 Pmax relative-L2 | `1.29342e-5` | `1.30326e-5` |
+| merged cross-engine FSC-AUC | `0.999999999885` | `0.999999999880` |
+
+The raw accumulator moves by less than one percent: half-1 numerator and
+denominator relative-L2 change from `5.80486e-6` / `6.59064e-6` to
+`5.78506e-6` / `6.58397e-6`; half 2 changes from `7.70859e-6` /
+`4.71130e-6` to `7.63898e-6` / `4.70787e-6`. Support remains exact.
+
+A direct common-pixel bit audit is more specific. The historical
+reconstruction-order expression matches `641/1226` native pixels exactly;
+the source-spelling candidate matches `618/1226`. Native values are within
+two ULPs of both, but neither expression is globally authoritative: the old
+order is closer on 225 pixels, the candidate on 199, and they tie on 802.
+This means an earlier factor, cast, or deployed CUDA compiler instruction is
+still unmatched. The candidate scoring change is removed rather than
+promoted, and no three-iteration or complete-case run is justified.
+
+Reports are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_corrimg_order_it2_20260811T0124ET/analysis/`.
+The run completed as Slurm `12250645` in `00:17:45`; both run and runtime
+roots contain `SAFE_TO_DELETE` markers. The fixed K=1 scorecard remains
+`28/34` strict, `32/34` topology, and `34/34` evaluated.
