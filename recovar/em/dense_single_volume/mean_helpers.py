@@ -16,6 +16,7 @@ import numpy as np
 
 from recovar.core import fourier_transform_utils, mask
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
+    class_weights_from_direction_prior,
     collapse_rotation_posterior_to_direction_prior,
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats
@@ -81,6 +82,20 @@ def _normalize_class_log_priors(n_classes: int, class_log_priors=None) -> np.nda
     max_log_prior = float(np.max(log_priors))
     log_norm = max_log_prior + float(np.log(np.sum(np.exp(log_priors - max_log_prior))))
     return log_priors - log_norm
+
+
+def _initialize_class_log_priors(n_classes: int, init_class_log_priors=None, init_direction_prior=None) -> tuple[np.ndarray, np.ndarray]:
+    """Return normalized log priors for the class axis and class weights, defaulting to uniform."""
+    class_log_priors = _normalize_class_log_priors(n_classes, init_class_log_priors)
+    class_weights = np.exp(class_log_priors)
+    if n_classes > 1 and init_class_log_priors is None and init_direction_prior is not None:
+        inferred_class_weights = class_weights_from_direction_prior(init_direction_prior, n_classes)
+        if inferred_class_weights is not None:
+            if np.any(inferred_class_weights <= 0.0):
+                raise ValueError("RELION direction-prior row sums imply a zero-probability class")
+            class_weights = inferred_class_weights
+            class_log_priors = np.log(class_weights)
+    return class_log_priors, class_weights
 
 
 def _normalize_initial_means(init_volume, n_classes: int):

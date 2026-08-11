@@ -9,6 +9,7 @@ All supporting helpers live in ``helpers/``.
 See ``docs/math/relion_refinement_algorithm.md`` for the full algorithm map.
 """
 
+import dataclasses
 import gc
 import hashlib
 import json
@@ -17,15 +18,14 @@ import os
 import re
 import time
 from collections.abc import Mapping
-import dataclasses
 from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import utils
 from recovar import cuda_backproject as _cuda_backproject_diagnostics
+from recovar import utils
 from recovar.core import fourier_transform_utils
 from recovar.data_io import cryoem_dataset
 from recovar.em.dense_single_volume import parity_dump as _parity_dump
@@ -40,8 +40,8 @@ from recovar.em.dense_single_volume.firstiter_cc import (
     _safe_dense_k_class_rotation_block_size,
     _safe_firstiter_cc_image_batch_size,
 )
+from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as _sparse_pass2_diagnostics
 from recovar.em.dense_single_volume.helpers.convergence import (
-    LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
     calculate_expected_angular_errors,
     check_convergence,
@@ -61,18 +61,17 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     relion_x_half_accumulators_to_public_layout,
 )
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
-    class_weights_from_direction_prior,
     collapse_rotation_posterior_to_direction_prior,
     infer_direction_prior_healpix_order,
     make_relion_direction_log_prior,
     make_relion_translation_log_prior,
     normalize_class_direction_prior_per_half,
     normalize_direction_prior_per_half,
-    remap_direction_prior_to_healpix_order,
     relion_local_translation_prior_center,
     relion_sigma_offset_prior_center,
     relion_translation_prior_center,
     relion_translation_search_base,
+    remap_direction_prior_to_healpix_order,
 )
 from recovar.em.dense_single_volume.helpers.resolution import (
     _bootstrap_current_size_relion,
@@ -84,7 +83,6 @@ from recovar.em.dense_single_volume.helpers.resolution import (
 
 
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as _sparse_pass2_diagnostics
 from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
@@ -119,14 +117,14 @@ from recovar.em.dense_single_volume.mean_helpers import (  # noqa: F401  -- impo
 from recovar.em.dense_single_volume.mean_helpers import (
     _class_weights_from_posterior,
     _combined_class_direction_prior_from_halves,
+    _initialize_class_log_priors,
     _mean_noise_variance,
     _merged_mean_from_halves,
-    _normalize_class_log_priors,
     _normalize_initial_means,
     _normalize_noise_variance_per_half,
-    _relion_optimizer_average_pmax,
     _reconstruct_and_postprocess_means,
     _reconstruct_volume_eager,
+    _relion_optimizer_average_pmax,
     compute_unregularized_halfmaps_and_align_signs,
     update_c1_sigma_offset_from_posterior,
     update_posterior_noise_variance,
@@ -146,11 +144,11 @@ from recovar.em.dense_single_volume.relion_metadata import (
 )
 from recovar.em.dense_single_volume.relion_replay import (
     RelionProjectorReplayState,
-    _RelionHalfInputState,
     _apply_replay_correction_overrides,
     _as_sigma_offset_half_pair,
     _mean_sigma_offset_per_half,
     _normalize_sigma_offset_per_half,
+    _RelionHalfInputState,
     apply_iter_replay_overrides,
 )
 from recovar.em.dense_single_volume.relion_replay import (  # noqa: F401
@@ -4615,15 +4613,7 @@ def _run_relion_iteration_loop(
     grid_size = cryo.image_shape[0]  # ori_size in RELION terms
     n_classes = int(n_classes)
     k_class_enabled = n_classes > 1
-    class_log_priors = _normalize_class_log_priors(n_classes, init_class_log_priors)
-    class_weights = np.exp(class_log_priors)
-    if k_class_enabled and init_class_log_priors is None and init_direction_prior is not None:
-        inferred_class_weights = class_weights_from_direction_prior(init_direction_prior, n_classes)
-        if inferred_class_weights is not None:
-            if np.any(inferred_class_weights <= 0.0):
-                raise ValueError("RELION direction-prior row sums imply a zero-probability class")
-            class_weights = inferred_class_weights
-            class_log_priors = np.log(class_weights)
+    class_log_priors, class_weights = _initialize_class_log_priors(n_classes, init_class_log_priors, init_direction_prior)
 
     # --- RELION image mask (softMaskOutsideMap on particles) ---
     # RELION masks images to particle_diameter/(2*pixel_size) with a 5-pixel
