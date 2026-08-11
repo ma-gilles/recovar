@@ -1055,3 +1055,39 @@ the complete core-mask unit file passes `55/55`, and the focused EM guardrail
 passes.  This is again same-input causal evidence, not an autonomous scorecard
 promotion: the fixed K=1 score remains `28/34` strict, `32/34` topology, and
 `34/34` evaluated.
+
+## Two-iteration discriminator after the reconstruction fixes
+
+A local A100 prefix propagated the combined tau-operand, nonredundant
+shell-floor, and float64 solvent-mask fixes through two physical iterations.
+The run completed successfully under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_softmask_local_a100_it2_20260811T0512ET/`;
+the run and runtime roots contain `SAFE_TO_DELETE`.  It is diagnostic rather
+than scoring because the qualified case-26 reference was produced on H100.
+
+Both numbered FSC gates remain extremely close: signed merged FSC-AUC is
+`0.9999999999764076` at iteration 1 and `0.9999999999586052` at iteration 2.
+The iteration-2 Pmax relative-L2 is `1.3101096e-5`, compared with the prior
+H100 tau64 prefix's `1.291868e-5`.  The iteration-2 pre-join native comparisons
+are:
+
+| half | numerator relative-L2 | denominator relative-L2 | support |
+|---:|---:|---:|---:|
+| 1 | `2.771475e-6` | `4.536796e-6` | Jaccard `1.0`, zero mismatches |
+| 2 | `3.784376e-6` | `2.750142e-6` | Jaccard `1.0`, zero mismatches |
+
+These values are essentially unchanged from the preceding H100 tau64 prefix,
+apart from a modest half-2 numerator improvement.  The reconstruction fixes
+are exact and necessary at their isolated same-input boundaries, but they are
+falsified as the dominant cause of the iteration-2 posterior discrepancy.
+The first material remaining boundary is therefore before reconstruction, in
+the score/prior/posterior operands that feed the iteration-2 accumulator.
+
+The run also exposed an audit-harness defect.  The launcher constrained pass-2
+panel dumps by current size 56 but not by iteration; case 26 uses that size in
+both iterations, so the write-once files captured iteration 1.  They are
+explicitly marked invalid in the run root and were not used above.  The
+launcher now exports `RECOVAR_PASS2_DUMP_ITERATION=${MAX_ITER}` so the next
+five-particle capture cannot silently bind to the wrong physical iteration.
+The fixed score remains `28/34` strict, `32/34` topology, and `34/34`
+evaluated.

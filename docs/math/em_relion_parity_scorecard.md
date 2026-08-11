@@ -2278,6 +2278,23 @@ guardrail passes. This is a second demonstrated iteration-1 reconstruction
 repair, but it remains non-scoring until an autonomous fixed-fixture gate
 finishes. The frozen score is unchanged at `28/34` strict, `32/34` topology,
 and `34/34` evaluated.
+
+A non-scoring local-A100 two-iteration prefix then tested whether the combined
+reconstruction fixes close the first posterior discrepancy. Signed merged
+FSC-AUC is `0.9999999999764076` / `0.9999999999586052` at iterations 1/2,
+but iteration-2 Pmax relative-L2 remains `1.3101096e-5`. Pre-join
+numerator/denominator relative-L2 is `2.771475e-6` / `4.536796e-6` for half 1
+and `3.784376e-6` / `2.750142e-6` for half 2, with exact support. Thus the
+repairs are not the dominant iteration-2 trajectory cause; the next boundary
+is before reconstruction in score/prior/posterior operands. The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_softmask_local_a100_it2_20260811T0512ET/`.
+
+That run also found that the focused launcher omitted its pass-2 iteration
+filter. The five write-once panels captured iteration 1 because both
+iterations use current size 56; they are marked invalid and excluded from all
+claims. The launcher now exports the requested physical iteration explicitly.
+The fixed score remains `28/34` strict, `32/34` topology, and `34/34`
+evaluated.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
