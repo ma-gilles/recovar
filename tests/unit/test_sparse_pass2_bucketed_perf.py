@@ -141,6 +141,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _pass2_conservative_dump_execution_enabled,
     _pass2_dump_enabled,
     _rectangular_active_prematmul_is_efficient,
+    _relion_cuda_corr_img,
     _relion_fine_mstep_prune_mode,
     _relion_joint_winner_take_all_masks,
     _relion_pass2_reconstruction_joint_masks,
@@ -177,6 +178,18 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rows,
 )
 from scripts import validate_bpref_device_signature as bpref_signature_validator
+
+
+def test_relion_cuda_corr_img_preserves_ctf_square_before_noise_multiply():
+    inverse_noise = np.float32(22520.71875)
+    ctf = np.float32(-0.7145116329193115)
+
+    relion_order = np.asarray(_relion_cuda_corr_img(inverse_noise, ctf))
+    weighted_ctf_order = np.float32(np.float32(inverse_noise * ctf) * ctf)
+
+    assert relion_order.dtype == np.float32
+    assert relion_order.view(np.uint32) == np.uint32(0x4633A5BB)
+    assert weighted_ctf_order.view(np.uint32) == np.uint32(0x4633A5BA)
 
 pytestmark = pytest.mark.unit
 

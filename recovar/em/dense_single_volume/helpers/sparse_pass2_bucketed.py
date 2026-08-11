@@ -5626,6 +5626,26 @@ def _relion_cuda_fine_pixel_weights(corr_img_score, half_weights):
     )
 
 
+def _relion_cuda_corr_img(inverse_noise, ctf, scale=None):
+    """Form RELION's float32 fine-score ``corr_img`` in source order.
+
+    RELION initializes ``corr_img`` from ``Minvsigma2``, multiplies it by the
+    already-evaluated ``CTF * CTF`` expression, and only then applies
+    ``scale_correction * scale_correction``.  The barriers preserve those
+    float32 rounding boundaries instead of reassociating the three factors.
+    """
+
+    inverse_noise = jnp.asarray(inverse_noise, dtype=jnp.float32)
+    ctf = jnp.asarray(ctf, dtype=jnp.float32)
+    ctf_squared = jax.lax.optimization_barrier(ctf * ctf)
+    corr_img = jax.lax.optimization_barrier(inverse_noise * ctf_squared)
+    if scale is not None:
+        scale = jnp.asarray(scale, dtype=jnp.float32)
+        scale_squared = jax.lax.optimization_barrier(scale * scale)
+        corr_img = corr_img * scale_squared
+    return corr_img
+
+
 _RELION_CUDA_POWERCLASS_BLOCK_SIZE = 128
 
 
@@ -8740,6 +8760,8 @@ def _prepare_bucket_io(
         if relion_exact_bpref_operands
         else config.compute_ctf_half(ctf_params)
     )
+    batch_scale = jnp.asarray(batch_scale_np, dtype=ctf_half.dtype)
+    relion_score_corr_img_half = None
     if relion_exact_bpref_operands:
         if relion_preprocess_kwargs is None:
             raise ValueError(
@@ -8756,7 +8778,16 @@ def _prepare_bucket_io(
         ).astype(jnp.float32)
         ctf_half = jnp.asarray(ctf_half, dtype=jnp.float32)
         weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
+        # Preserve the BPref operand order above: its per-pixel numerator and
+        # denominator are already native-bit exact.  Fine scoring uses a
+        # distinct RELION source order, Minvsigma2 * (CTF * CTF), and must not
+        # reuse (Minvsigma2 * CTF) * CTF.
         ctf2_over_nv_half = weighted_ctf_half * ctf_half
+        relion_score_corr_img_half = _relion_cuda_corr_img(
+            inverse_noise_half[None, :],
+            ctf_half,
+            batch_scale[:, None] if scale_corrections is not None else None,
+        )
     else:
         inverse_noise_half = None
         weighted_ctf_half = None
@@ -8822,8 +8853,6 @@ def _prepare_bucket_io(
     )
     processed_score_half_for_noise = processed_score_half_raw
 
-    batch_scale = jnp.asarray(batch_scale_np, dtype=ctf_half.dtype)
-
     # Per-image image corrections follow dense run_em's image-only convention.
     if image_corrections is not None:
         batch_corr = jnp.asarray(batch_corr_np)
@@ -8853,6 +8882,13 @@ def _prepare_bucket_io(
         if return_direct_scoring_io:
             if not folded_normalized_cc_operands:
                 sparse_score_input_half = sparse_score_input_half / batch_scale[:, None]
+
+    # Keep the reconstruction/BPref factor in its demonstrated native order,
+    # while routing only the fine-score corr_img through RELION's distinct
+    # Minvsigma2 * (CTF * CTF) construction.
+    ctf2_over_nv_recon_half = ctf2_over_nv_half
+    if relion_score_corr_img_half is not None:
+        ctf2_over_nv_half = relion_score_corr_img_half
 
     if return_direct_scoring_io and not folded_normalized_cc_operands:
         ctf_safe = jnp.abs(ctf_half) > 1e-8
@@ -8982,7 +9018,7 @@ def _prepare_bucket_io(
                     else apply_half_translation_phases(recon_weighted_half, translation_phases_half)
                 )
                 shifted_score_half_with_dc = shifted_recon_half
-        ctf2_over_nv_half_with_dc = ctf2_over_nv_half
+        ctf2_over_nv_half_with_dc = ctf2_over_nv_recon_half
 
     shifted_corrected_score_half = None
     if return_direct_scoring_io:

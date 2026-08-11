@@ -15490,3 +15490,23 @@ The primary reports are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_it1_scatter_block_only_20260811T0125ET/analysis/`,
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_it1_scatter_production_20260811T0130ET/analysis/`.
+
+## 2026-08-11 case-26 iteration-2 fine-score pixel-weight boundary
+
+The fused first-iteration atomic fix does not by itself reduce the next
+posterior discrepancy.  Two-iteration prefix job `12249681` changes Pmax
+relative-L2 from the previous `1.225434e-5` to `1.293417e-5`; hard poses and
+noise are unchanged between the two RECOVAR arms.  Native iteration-2 raw
+accumulator job `12249766` confirms a pre-reconstruction residual of order
+`4.7e-6` to `7.7e-6`, despite exact aggregate Fourier support.
+
+The next earlier unequal value is therefore the already captured native
+source-66 raw fine score.  The deployed RELION source constructs its float32
+score pixel weight as `Minvsigma2 * (CTF * CTF)`, whereas RECOVAR had reused
+the reconstruction order `(Minvsigma2 * CTF) * CTF`.  A real captured operand
+pair differs by one ULP (`0x4633a5bb` versus `0x4633a5ba`).  The focused
+candidate gives scoring its own source-faithful `corr_img` construction while
+leaving the native-bit-exact BPref operands untouched.  Acceptance requires a
+two-iteration raw-score/posterior/accumulator improvement before any complete
+case is submitted.  The frozen K=1 scorecard remains `28/34` strict,
+`32/34` topology, and `34/34` evaluated.

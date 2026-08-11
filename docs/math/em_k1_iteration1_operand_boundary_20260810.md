@@ -678,3 +678,57 @@ falsified as a sufficient case-7 root cause at this boundary.
 The report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_combined_it2_20260810T1920ET/analysis/case07_combined_fsc_it2.json`,
 SHA-256 `f351ce6d4b72235789bc8371db5977c5f5abf0a632d209916de46849bd793990`.
+
+## Case-26 iteration-2 boundary after first-iteration atomic closure
+
+The two-iteration candidate prefix, Slurm job `12249681`, demonstrates that
+closing the first-iteration fused-atomic boundary is necessary locally but is
+not sufficient to close the next posterior.  Relative to native RELION,
+iteration-2 Pmax relative-L2 changes from `1.225434e-5` in the previous
+control to `1.293417e-5` with the fused first-iteration reconstruction; the
+dominant direction-prior and noise residuals are essentially unchanged.
+Iteration-1 raw accumulators move to the native repeat floor as intended, but
+the iteration-2 hard rotations, translations, coarse assignments, fine
+assignments, and noise remain identical to the old RECOVAR arm.  The fixed
+scorecard therefore remains `28/34` strict, `32/34` topology, and `34/34`
+evaluated.
+
+Native RELION iteration-2 raw-accumulator job `12249766` then compared the
+same physical boundary with the fused-first-iteration RECOVAR prefix.  The
+complete raw numerator/denominator relative-L2 values are
+`5.804861e-6` / `6.590637e-6` for half 1 and
+`7.708592e-6` / `4.711303e-6` for half 2.  Aggregate Fourier support is
+identical, with Jaccard `1.0` and no support-coordinate mismatch.  This
+localizes a real iteration-2 difference before reconstruction, but aggregate
+accumulators alone do not distinguish changed posterior operands from
+soft-posterior reduction order.
+
+The existing source-66 native fine-score capture provides the earlier
+boundary.  Candidate keys, the selected pose, and translation prior agree;
+the first meaningful mismatch is the raw pre-prior fine score.  Inspection of
+the exact deployed RELION source identifies one previously unmatched float32
+operation order in its pixel weight:
+
+```text
+RELION: Minvsigma2 * (CTF * CTF)
+RECOVAR: (Minvsigma2 * CTF) * CTF
+```
+
+These are not bit-equivalent.  For the observed sensitive operands
+`Minvsigma2=22520.71875` and `CTF=-0.7145116329193115`, RELION's order yields
+float32 bits `0x4633a5bb`, while RECOVAR's order yields `0x4633a5ba`.
+The candidate changes only the fine-score `corr_img` construction.  It keeps
+the reconstruction/BPref multiplication order unchanged because those
+pre-scatter operands are already bit-exact against native RELION.  A focused
+two-iteration A/B must reduce the native raw-score residual before this is
+accepted as causal; no full trajectory is justified before that gate.
+
+The native iteration-2 accumulator reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_raw_accum_20260811T0120ET/analysis/CASE26_IT2_RAW_ACCUM_HALF1.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_raw_accum_20260811T0120ET/analysis/CASE26_IT2_RAW_ACCUM_HALF2.json`,
+with SHA-256 values
+`38078ea16526513521576ed69e245715b559a5246d2a29f2b5190fd5762970b5`
+and
+`30590eebf18d758363bf36d59ef4f4c2521a3c0e44586ce02401fe34984ef1e6`.
+Both run and runtime roots contain `SAFE_TO_DELETE` markers.
