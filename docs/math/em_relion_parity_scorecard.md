@@ -2263,6 +2263,21 @@ with scheduled start `2026-08-11T18:00:00`; it has not been altered or counted
 as evidence. This is a demonstrated implementation defect and a positive
 same-input repair, but not yet an autonomous scorecard pass. The frozen K=1
 score remains `28/34` strict, `32/34` topology, and `34/34` evaluated.
+
+The next exact same-input boundary localizes the post-Wiener residual to
+RELION's raised-cosine solvent mask. Fourier windowing is bit-exact in both
+halves. With the native S4 input, the historical S5 relative-L2 is
+`1.198380e-7` / `1.216213e-7`, entirely within the `64 <= r <= 67` transition:
+the strict interior and exterior are exact after the native float32 dump cast.
+RECOVAR evaluated the mask radius and cosine on float32 coordinates even for a
+float64 reconstruction; the deployed RELION build uses double `RFLOAT`.
+Matching the mask geometry to the input volume's real dtype reduces S5
+relative-L2 to `1.368256e-16` / `4.205085e-15`. Float32 callers remain
+float32, the complete core-mask unit file passes `55/55`, and the focused EM
+guardrail passes. This is a second demonstrated iteration-1 reconstruction
+repair, but it remains non-scoring until an autonomous fixed-fixture gate
+finishes. The frozen score is unchanged at `28/34` strict, `32/34` topology,
+and `34/34` evaluated.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

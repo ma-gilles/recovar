@@ -7,8 +7,8 @@ from scipy.ndimage import binary_dilation, distance_transform_edt
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-import recovar.core.mask as mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.core.mask as mask
 import recovar.utils as utils
 
 pytestmark = pytest.mark.unit
@@ -405,6 +405,43 @@ class TestSoftMaskOutsideMap:
 
         np.testing.assert_allclose(np.asarray(result), expected, rtol=1e-6, atol=1e-5)
         np.testing.assert_allclose(np.asarray(returned_mask), protein_weight, rtol=1e-6, atol=1e-6)
+
+    def test_float64_transition_matches_relion_double_arithmetic(self):
+        shape = (16, 16, 16)
+        radius = 5.0
+        cosine_width = 3.0
+        vol = jnp.ones(shape, dtype=jnp.float64)
+
+        _, returned_mask = mask.soft_mask_outside_map(
+            vol,
+            radius=radius,
+            cosine_width=cosine_width,
+            Mnoise=jnp.zeros(shape, dtype=jnp.float64),
+        )
+
+        # Offset (5, 2, 0) lies in the cosine transition.  RELION's deployed
+        # double-RFLOAT build evaluates both the radius and cosine in float64.
+        transition_radius = np.sqrt(np.float64(29.0))
+        raised_cos = np.float64(0.5) + np.float64(0.5) * np.cos(
+            np.float64(np.pi) * (np.float64(radius + cosine_width) - transition_radius) / np.float64(cosine_width)
+        )
+        expected = np.float64(1.0) - raised_cos
+        actual = np.asarray(returned_mask)[10, 13, 8]
+
+        assert returned_mask.dtype == jnp.float64
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=np.finfo(np.float64).eps)
+
+        float32_radius = np.sqrt(np.float32(29.0), dtype=np.float32)
+        old_float32_value = np.float32(1.0) - (
+            np.float32(0.5)
+            + np.float32(0.5)
+            * np.cos(
+                np.float32(np.pi)
+                * (np.float32(radius + cosine_width) - float32_radius)
+                / np.float32(cosine_width)
+            )
+        )
+        assert abs(actual - np.float64(old_float32_value)) > 1e-9
 
     def test_raised_cosine_mask_matches_relion_solvent_flatten_mask(self):
         shape = (9, 9, 9)

@@ -452,18 +452,28 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
     if radius < 0:
         radius = np.max(np.array(vol.shape) // 2)
 
+    # RELION evaluates the solvent-mask geometry in RFLOAT.  Keep the mask
+    # arithmetic at the real precision of the input volume instead of
+    # inheriting the float32 dtype of the shared Fourier-coordinate helper.
+    # This matters for the reconstruction path, where ``vol`` is float64.
+    real_dtype = vol.real.dtype
+    radius = jnp.asarray(radius, dtype=real_dtype)
+    cosine_width = jnp.asarray(cosine_width, dtype=real_dtype)
     radius_p = radius + cosine_width
     shape = vol.shape
 
-    volume_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False).reshape(
-        list(shape) + [len(list(shape))]
+    volume_coords = (
+        fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False)
+        .astype(real_dtype)
+        .reshape(list(shape) + [len(list(shape))])
     )
     r = jnp.linalg.norm(volume_coords, axis=-1)
 
     mask1 = r < radius
     mask2 = (r >= radius) & (r <= radius_p)
     mask3 = r > radius_p
-    raised_cos = 0.5 + 0.5 * jnp.cos(jnp.pi * (radius_p - r) / cosine_width)
+    half = jnp.asarray(0.5, dtype=real_dtype)
+    raised_cos = half + half * jnp.cos(jnp.asarray(np.pi, dtype=real_dtype) * (radius_p - r) / cosine_width)
 
     mask = jnp.zeros_like(vol).real
     mask = jnp.where(mask1, 1, mask)

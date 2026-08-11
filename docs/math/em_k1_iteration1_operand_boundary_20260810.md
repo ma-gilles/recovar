@@ -1020,3 +1020,38 @@ the next bounded gate is a two-iteration replay to measure how much the exact
 floor correction reduces the already-captured iteration-2 reference,
 raw-score, posterior, and BPref residuals; no full trajectory is justified
 before that result.
+
+## Exact S4-to-S5 post-Wiener boundary
+
+The same immutable native S4 capture was then propagated one operation at a
+time through Fourier windowing, inverse FFT, and `softMaskOutsideMap`.  The
+RELION binding and RECOVAR Fourier-window implementations are bit-exact for
+both halves: relative-L2 and maximum absolute difference are both zero.  With
+the corrected nonredundant shell floor, RECOVAR's complete S4-to-S5 result
+still differs from native S5 by `1.211760e-7` / `1.230728e-7`.  Supplying the
+exact native S4 directly leaves essentially the same `1.198380e-7` /
+`1.216213e-7`, so this residual is created downstream rather than inherited
+from Wiener division.
+
+The mismatch is spatially exhaustive to a single operation.  After matching
+the native float32 S5 dump, every voxel strictly inside radius 64 and every
+voxel outside radius 67 is exact; all measurable error lies in the
+`64 <= r <= 67` raised-cosine transition.  RECOVAR constructed the coordinates
+with the shared float32 Fourier-grid helper and therefore evaluated the
+radius and cosine in float32 even though the reconstruction volume is float64.
+The deployed RELION build evaluates these quantities in double `RFLOAT`.
+
+Keeping mask geometry at the real dtype of the input volume reduces the exact
+native-S4-to-S5 relative-L2 to `1.368256e-16` for half 1 and `4.205085e-15`
+for half 2.  In each half, `2,097,151` of `2,097,152` float32 output voxels are
+bit-exact; the sole remaining value differs only at roundoff
+(`3.55e-15` / `1.14e-13` before the native float32 cast).  Float32 callers
+retain float32 mask arithmetic.  This identifies and repairs the next unequal
+iteration-1 reconstruction operation without running a trajectory.
+
+Focused verification is
+`tests/unit/test_core_mask.py::TestSoftMaskOutsideMap::test_float64_transition_matches_relion_double_arithmetic`;
+the complete core-mask unit file passes `55/55`, and the focused EM guardrail
+passes.  This is again same-input causal evidence, not an autonomous scorecard
+promotion: the fixed K=1 score remains `28/34` strict, `32/34` topology, and
+`34/34` evaluated.
