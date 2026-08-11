@@ -2239,6 +2239,30 @@ and
 Grid correction remained off, forced final-after-max remained off, and no
 correlation was computed. The frozen score remains `28/34` strict and
 `32/34` topology.
+
+The case-26 first-iteration Wiener boundary now has an exact causal
+localization. H100 job `12253382` completed naturally `0:0` in `00:01:24` and
+captured both halves immediately after regularization/division and before
+Fourier windowing. Replacing only RECOVAR's regularized denominator with the
+native effective denominator reduces divided-volume relative-L2 from
+`6.494010e-7` / `1.101362e-6` to `3.331524e-8` / `3.163885e-8`; replacing
+only the numerator does not materially improve it.
+
+The residual is concentrated at padded radius 56. RELION averages its stored
+FFTW x-half to construct the shell-27 denominator floor, while RECOVAR
+averaged a Hermitian-expanded full cube. The resulting half-1 floor is
+`11189.4212137` versus native `11193.3290538`; half 2 is `10451.3293231`
+versus `10455.0850665`. Selecting the nonredundant x bins reproduces both
+native constants. Same-input replay predicts divided-volume relative-L2
+`4.785819e-8` / `4.626395e-8` after the candidate fix. Four focused unit
+tests pass. The exact capture root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_wiener_boundary_callback_it1_20260811T0445ET/`.
+
+H100 production confirmation `12253435` is pending a maintenance reservation
+with scheduled start `2026-08-11T18:00:00`; it has not been altered or counted
+as evidence. This is a demonstrated implementation defect and a positive
+same-input repair, but not yet an autonomous scorecard pass. The frozen K=1
+score remains `28/34` strict, `32/34` topology, and `34/34` evaluated.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics

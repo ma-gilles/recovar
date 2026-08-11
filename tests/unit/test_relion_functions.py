@@ -409,13 +409,19 @@ def test_adjust_regularization_relion_style_native_shell_floor_under_padding():
             scaled=False,
         )
     )
-    native_floor_shell = np.floor(np.linalg.norm(pixels, axis=-1) / padding_factor).astype(np.int32).reshape(-1)
+    native_floor_shell_grid = np.floor(np.linalg.norm(pixels, axis=-1) / padding_factor).astype(np.int32)
+    native_floor_shell_grid = native_floor_shell_grid.reshape(padded_shape)
+    native_floor_shell = native_floor_shell_grid.reshape(-1)
+    packed_x = np.asarray(ftu.get_real_fft_packed_last_axis_indices(padded_shape[0]))
+    native_storage_shell = native_floor_shell_grid[packed_x, :, :]
     shell_values = np.asarray([2.0, 7.0], dtype=np.float32)
-    filt = np.zeros(int(np.prod(padded_shape)), dtype=np.float32)
+    filt_grid = np.zeros(padded_shape, dtype=np.float32)
     for shell, value in enumerate(shell_values):
-        members = np.flatnonzero(native_floor_shell == shell)
-        assert members.size > 0
-        filt[members[0]] = np.float32(value * 1000.0 * members.size)
+        members = np.argwhere(native_storage_shell == shell)
+        assert members.shape[0] > 0
+        packed_i, y, z = members[0]
+        filt_grid[packed_x[packed_i], y, z] = np.float32(value * 1000.0 * members.shape[0])
+    filt = filt_grid.reshape(-1)
 
     reg = np.asarray(
         rf.adjust_regularization_relion_style(
@@ -634,6 +640,53 @@ def test_post_process_from_filter_v2_accepts_relion_odd_accumulator_shape():
 
     assert np.asarray(out).shape == volume_shape
     assert np.all(np.isfinite(np.asarray(out)))
+
+
+def test_relion_wiener_boundary_dump_records_pre_ifft_operands(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECOVAR_RELION_WIENER_BOUNDARY_DUMP_DIR", str(tmp_path))
+    monkeypatch.setattr(rf, "_RELION_WIENER_BOUNDARY_DUMP_CALL", 0)
+    numerator = jnp.asarray([1.0 + 2.0j, 3.0 + 4.0j], dtype=jnp.complex64)
+    raw_filter = jnp.asarray([5.0, 6.0], dtype=jnp.float32)
+    regularized_filter = jnp.asarray([7.0, 8.0], dtype=jnp.float64)
+    support = jnp.asarray([1.0, 0.0], dtype=jnp.float32)
+    divided = numerator * support / regularized_filter
+    tau = jnp.asarray([9.0, 10.0], dtype=jnp.float64)
+
+    @jax.jit
+    def dump_inside_jit(raw_filter, numerator, regularized_filter, support, divided, tau):
+        rf._maybe_dump_relion_wiener_boundary(
+            Ft_ctf_input=raw_filter,
+            F_ty_input=numerator,
+            regularized_filter=regularized_filter,
+            valid_indices=support,
+            divided_volume=divided,
+            tau=tau,
+            input_half_volume=True,
+            accumulator_volume_shape=(3, 3, 3),
+            reconstruction_volume_shape=(2, 2, 2),
+            current_size=2,
+            padding_factor=2,
+            tau2_fudge=1.5,
+            minres_map=5,
+            tau_is_1d=False,
+        )
+        return divided
+
+    dump_inside_jit(raw_filter, numerator, regularized_filter, support, divided, tau).block_until_ready()
+    jax.effects_barrier()
+
+    with np.load(tmp_path / "recovar_wiener_boundary_0000.npz") as capture:
+        assert str(capture["schema"]) == "recovar-relion-wiener-boundary-v1"
+        assert bool(capture["input_half_volume"])
+        assert int(capture["current_size"]) == 2
+        assert int(capture["padding_factor"]) == 2
+        assert float(capture["tau2_fudge"]) == 1.5
+        assert int(capture["minres_map"]) == 5
+        assert not bool(capture["tau_is_1d"])
+        assert capture["regularized_filter"].dtype == np.float64
+        assert capture["tau"].dtype == np.float64
+        np.testing.assert_array_equal(capture["F_ty_input"], np.asarray(numerator))
+        np.testing.assert_array_equal(capture["divided_volume"], np.asarray(divided))
 
 
 @pytest.mark.parametrize(("old_dim", "new_dim"), [(11, 8), (7, 10)])

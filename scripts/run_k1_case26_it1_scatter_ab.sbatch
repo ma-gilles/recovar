@@ -20,6 +20,7 @@ set -euo pipefail
 
 ROOT=${RUN_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_it1_scatter_ab_20260811T0120ET}
 RUNTIME=${RUNTIME_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_it1_scatter_ab_20260811T0120ET}
+WIENER_DUMP_DIR=${K1_WIENER_BOUNDARY_DUMP_DIR:-}
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
@@ -76,6 +77,10 @@ export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=1
 export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
+if [[ -n "${WIENER_DUMP_DIR}" ]]; then
+    mkdir -p "${WIENER_DUMP_DIR}"
+    export RECOVAR_RELION_WIENER_BOUNDARY_DUMP_DIR=${WIENER_DUMP_DIR}
+fi
 unset RECOVAR_K1_COARSE_GAUSSIAN_FFI RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 
@@ -169,6 +174,9 @@ for arm in "${scatter_arms[@]}"; do
         *) echo "unknown scatter arm: ${arm}" >&2; exit 2 ;;
     esac
 done
+if [[ -n "${WIENER_DUMP_DIR}" ]]; then
+    test "$(find "${WIENER_DUMP_DIR}" -maxdepth 1 -type f -name 'recovar_wiener_boundary_*.npz' | wc -l)" -eq 2
+fi
 sha256sum "${ROOT}"/*/prejoin/recovar_bpref_prejoin_it001.npz \
     "${ROOT}"/*/accum/recovar_bpref_accum_it001.npz \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"

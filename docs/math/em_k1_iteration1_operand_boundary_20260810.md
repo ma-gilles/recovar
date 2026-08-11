@@ -952,8 +952,71 @@ and from `5.311427e-6` / `2.889127e-6` to
 
 Therefore the inverse-tau precision mismatch is a demonstrated K=1
 reconstruction bug and reduces the next M-step map error, but it is not the
-dominant cause of the remaining iteration-2 posterior gap.  The next focused
-capture starts inside the iteration-2 E-step and compares aligned raw score
-components, normalization constants, posterior weights, and the first BPref
-operand before any reduction.  No complete trajectory or scorecard run is
-justified until that first unequal boundary is localized.
+dominant cause of the remaining iteration-2 posterior gap.
+
+## Iteration-2 fine-score operand panel
+
+Focused H100 job `12253082` captured the complete source-66 iteration-2,
+half-2 fine panel after the reconstruction-precision fix.  The valid capture
+contains all `22656` candidate keys; candidate Jaccard, the top candidate, and
+the pixel weights are exact.  Projected-reference and shifted-corrected-image
+relative-L2 are `2.7987092e-7` and `1.7007746e-7`.  Translation priors are
+exact; rotation-prior maximum absolute error is `2.384e-7` with p95 equal to
+zero.  Centered raw-score maximum error is `5.65e-5`, posterior L1 after a
+common renormalization is `9.919424e-6`, and support remains exact.
+
+Replacing only the projected reference removes `54.5%` of the centered
+raw-score residual energy: RMS changes from `1.745746e-5` to `1.177507e-5`.
+Replacing the shifted image does not rescue the residual.  This independently
+localizes most of the first iteration-2 fine-score mismatch to the incoming
+reference reconstructed at iteration 1, not candidate generation, priors,
+normalization, support, or translation.  Reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_tau64_pass2_panel_it2_20260811T0348ET/analysis/native_part634_source000066_tau64_matrix.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_tau64_pass2_panel_it2_20260811T0348ET/analysis/native_part634_source000066_tau64_operands.json`.
+
+## Exact pre-IFFT denominator-floor boundary
+
+An environment-gated capture now records the raw numerator, raw denominator,
+regularized denominator, support mask, tau operand, and divided Fourier volume
+after Wiener division and before Fourier windowing.  The first attempt, job
+`12253342`, failed only when the diagnostic tried to convert a JAX tracer to a
+NumPy array; it produced no boundary files.  The writer was moved to an
+ordered JAX host callback and its jitted unit test passes.  Replacement job
+`12253382` completed `0:0` in `00:01:24` with maximum RSS `4,172,772K` and
+wrote both half captures under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_wiener_boundary_callback_it1_20260811T0445ET/wiener_boundary/`.
+
+Against the passive native S4 dump, the captured divided-volume relative-L2
+is `6.494010e-7` for half 1 and `1.101362e-6` for half 2.  Replacing only the
+numerator leaves `6.484593e-7` / `1.100861e-6`; replacing only the regularized
+denominator collapses the residual to `3.331524e-8` / `3.163885e-8`.  The ten
+largest half-1 residual voxels explain `96.4%` of squared residual energy; the
+ten largest half-2 voxels explain `98.96%`.  Every one is on padded radius 56,
+where RELION applies the shell-27 denominator floor.
+
+The exact mismatch is the population used for that floor.  RELION computes
+the `1/1000` shell average over its stored FFTW x-half.  RECOVAR expanded the
+Hermitian accumulator to a full cube and averaged that cube, counting x>0 and
+x<0 partners twice while counting the x=0 plane once.  At shell 27 this gives
+`11189.4212137` instead of RELION's `11193.3290538` in half 1 and
+`10451.3293231` instead of `10455.0850665` in half 2.  Selecting the exact
+nonredundant x bins reproduces the native constants to below `5e-9` absolute.
+
+The candidate fix therefore performs only the shell reduction over the
+nonredundant x-half and broadcasts the resulting floor back to the existing
+full layout.  A same-input CPU replay of the immutable job-`12253382` operands,
+with RELION's `minres_map=5`, predicts divided-volume relative-L2
+`4.785819e-8` / `4.626395e-8`.  Four focused unit tests pass.  H100 production
+validation job `12253435` is pinned to diff
+`7bc4666d4e6d406ded17136a8ba5fb0553773f0caeff0d74ec6f5da9ce3d1b17`;
+Slurm scheduled it for `2026-08-11T18:00:00` because of H100 maintenance.  It
+has not been cancelled, modified, or treated as completed evidence.
+
+This closes the first unequal iteration-1 reconstruction operation, but it is
+not yet a scorecard promotion.  The fixed K=1 score remains `28/34` strict,
+`32/34` topology, and `34/34` evaluated.  After the short H100 confirmation,
+the next bounded gate is a two-iteration replay to measure how much the exact
+floor correction reduces the already-captured iteration-2 reference,
+raw-score, posterior, and BPref residuals; no full trajectory is justified
+before that result.

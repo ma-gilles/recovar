@@ -3,6 +3,7 @@
 import functools
 import logging
 import os
+from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -19,6 +20,105 @@ logger = logging.getLogger(__name__)
 
 _RELION_PROJECTION_PAD_HOST_FFT_MIN_VOXELS = 200_000_000
 _RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS = 200_000_000
+_RELION_WIENER_BOUNDARY_DUMP_CALL = 0
+
+
+def _write_relion_wiener_boundary(
+    Ft_ctf_input,
+    F_ty_input,
+    regularized_filter,
+    valid_indices,
+    divided_volume,
+    tau,
+    *,
+    dump_dir,
+    input_half_volume,
+    accumulator_volume_shape,
+    reconstruction_volume_shape,
+    current_size,
+    padding_factor,
+    tau2_fudge,
+    minres_map,
+    tau_is_1d,
+):
+    """Host callback for the opt-in Wiener-boundary diagnostic."""
+
+    global _RELION_WIENER_BOUNDARY_DUMP_CALL
+    call_index = _RELION_WIENER_BOUNDARY_DUMP_CALL
+    _RELION_WIENER_BOUNDARY_DUMP_CALL += 1
+    output_dir = Path(dump_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        output_dir / f"recovar_wiener_boundary_{call_index:04d}.npz",
+        schema=np.asarray("recovar-relion-wiener-boundary-v1"),
+        call_index=np.int32(call_index),
+        input_half_volume=np.bool_(input_half_volume),
+        accumulator_volume_shape=np.asarray(accumulator_volume_shape, dtype=np.int32),
+        reconstruction_volume_shape=np.asarray(reconstruction_volume_shape, dtype=np.int32),
+        current_size=np.int32(-1 if current_size is None else current_size),
+        padding_factor=np.int32(padding_factor),
+        tau2_fudge=np.float64(tau2_fudge),
+        minres_map=np.int32(minres_map),
+        tau_is_1d=np.bool_(tau_is_1d),
+        Ft_ctf_input=np.asarray(Ft_ctf_input),
+        F_ty_input=np.asarray(F_ty_input),
+        regularized_filter=np.asarray(regularized_filter),
+        valid_indices=np.asarray(valid_indices),
+        divided_volume=np.asarray(divided_volume),
+        tau=np.asarray(tau),
+    )
+
+
+def _maybe_dump_relion_wiener_boundary(
+    *,
+    Ft_ctf_input,
+    F_ty_input,
+    regularized_filter,
+    valid_indices,
+    divided_volume,
+    tau,
+    input_half_volume,
+    accumulator_volume_shape,
+    reconstruction_volume_shape,
+    current_size,
+    padding_factor,
+    tau2_fudge,
+    minres_map,
+    tau_is_1d,
+):
+    """Write an opt-in, pre-IFFT reconstruction boundary capture.
+
+    This diagnostic is deliberately after Wiener regularization/division and
+    before Fourier windowing.  It is inert unless
+    ``RECOVAR_RELION_WIENER_BOUNDARY_DUMP_DIR`` is set.
+    """
+
+    dump_dir = os.environ.get("RECOVAR_RELION_WIENER_BOUNDARY_DUMP_DIR")
+    if not dump_dir:
+        return
+
+    host_callback = functools.partial(
+        _write_relion_wiener_boundary,
+        dump_dir=dump_dir,
+        input_half_volume=input_half_volume,
+        accumulator_volume_shape=accumulator_volume_shape,
+        reconstruction_volume_shape=reconstruction_volume_shape,
+        current_size=current_size,
+        padding_factor=padding_factor,
+        tau2_fudge=tau2_fudge,
+        minres_map=minres_map,
+        tau_is_1d=tau_is_1d,
+    )
+    jax.debug.callback(
+        host_callback,
+        jnp.asarray(Ft_ctf_input),
+        jnp.asarray(F_ty_input),
+        jnp.asarray(regularized_filter),
+        jnp.asarray(valid_indices),
+        jnp.asarray(divided_volume),
+        jnp.asarray(tau) if tau is not None else jnp.asarray([], dtype=jnp.float32),
+        ordered=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -727,16 +827,28 @@ def _relion_reconstruct_floor_volume(regularized_filter, volume_shape, padding_f
         max_res_shell = int(volume_shape[0]) // (2 * int(padding_factor))
     max_res_shell = max(1, int(max_res_shell))
     shell = _relion_reconstruct_floor_shell_indices(volume_shape, padding_factor, half_volume=half_volume)
-    valid = shell < max_res_shell
     shell_clipped = jnp.minimum(shell, max_res_shell - 1)
+    average_filter = regularized_filter.reshape(-1)
+    average_shell = shell
+    if not half_volume:
+        # RELION averages its stored FFTW x-half, not a Hermitian-expanded
+        # full cube.  The public full accumulator layout is (x, y, z), so
+        # select the non-redundant x bins before the shell reduction.  Using
+        # the full cube would count x>0/x<0 pairs twice but the x=0 plane only
+        # once, which measurably changes the high-shell denominator floor.
+        packed_x = fourier_transform_utils.get_real_fft_packed_last_axis_indices(volume_shape[0])
+        average_filter = jnp.take(regularized_filter.reshape(volume_shape), packed_x, axis=0).reshape(-1)
+        average_shell = jnp.take(shell.reshape(volume_shape), packed_x, axis=0).reshape(-1)
+    average_valid = average_shell < max_res_shell
+    average_shell_clipped = jnp.minimum(average_shell, max_res_shell - 1)
     dtype = regularized_filter.real.dtype
-    valid_weights = valid.astype(dtype)
+    valid_weights = average_valid.astype(dtype)
     shell_sum = jnp.bincount(
-        shell_clipped,
-        weights=jnp.where(valid, regularized_filter.reshape(-1), 0.0),
+        average_shell_clipped,
+        weights=jnp.where(average_valid, average_filter, 0.0),
         length=max_res_shell,
     )
-    shell_count = jnp.bincount(shell_clipped, weights=valid_weights, length=max_res_shell)
+    shell_count = jnp.bincount(average_shell_clipped, weights=valid_weights, length=max_res_shell)
     shell_avg = jnp.where(shell_count > 0, shell_sum / shell_count, 0.0) / 1000.0
     return shell_avg[shell_clipped].reshape(regularized_filter.shape)
 
@@ -1187,6 +1299,22 @@ def post_process_from_filter_v2(
     # inverse FFT.  Preserve that convention here; directly inverse-FFTing
     # the odd accumulator introduces a common map-origin shift.
     reconstruction_volume_shape = _relion_reconstruction_padded_shape(og_volume_shape, volume_upsampling_factor)
+    _maybe_dump_relion_wiener_boundary(
+        Ft_ctf_input=Ft_ctf_flat,
+        F_ty_input=F_ty_flat,
+        regularized_filter=Ft_ctf2,
+        valid_indices=valid_indices,
+        divided_volume=vol,
+        tau=tau_for_filter,
+        input_half_volume=input_half_volume,
+        accumulator_volume_shape=upsampled_volume_shape,
+        reconstruction_volume_shape=reconstruction_volume_shape,
+        current_size=current_size,
+        padding_factor=volume_upsampling_factor,
+        tau2_fudge=tau2_fudge,
+        minres_map=minres_map,
+        tau_is_1d=tau_is_1d,
+    )
 
     # iDFT → crop to original size
     if input_half_volume:
