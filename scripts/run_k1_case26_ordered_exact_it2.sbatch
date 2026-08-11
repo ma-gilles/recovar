@@ -39,6 +39,9 @@ OUTPUT=${ROOT}/output
 ANALYSIS=${ROOT}/analysis
 ACCUM=${ROOT}/accum
 PREJOIN=${ROOT}/prejoin
+PASS2_DUMP_DIR=${K1_CASE26_PASS2_DUMP_DIR:-}
+PASS2_DUMP_IDS=${K1_CASE26_PASS2_DUMP_IDS:-23,66,305,459,497}
+PASS2_DUMP_CURRENT_SIZE=${K1_CASE26_PASS2_DUMP_CURRENT_SIZE:-56}
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -93,6 +96,12 @@ export RECOVAR_BPREF_ACCUM_DUMP_DIR=${ACCUM}
 export RECOVAR_BPREF_PREJOIN_DUMP_DIR=${PREJOIN}
 export RECOVAR_BPREF_BOUNDARY_DUMP_ITERATION=2
 export RECOVAR_BPREF_BOUNDARY_DUMP_RUN_ID=case26_ordered_exact_physical_it2
+if [[ -n "${PASS2_DUMP_DIR}" ]]; then
+    mkdir -p "${PASS2_DUMP_DIR}"
+    export RECOVAR_PASS2_DUMP_DIR=${PASS2_DUMP_DIR}
+    export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${PASS2_DUMP_IDS}
+    export RECOVAR_PASS2_DUMP_CURRENT_SIZE=${PASS2_DUMP_CURRENT_SIZE}
+fi
 unset RECOVAR_K1_COARSE_GAUSSIAN_FFI RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 
@@ -144,6 +153,9 @@ test -s "${PREJOIN}/recovar_bpref_prejoin_it002.npz"
 rg -q 'Applied RELION fresh paired AutoRefine particle order with effective seed 1727' "${OUTPUT}/run.log"
 rg -q 'global; batching only consecutive equal-size supports' "${OUTPUT}/run.log"
 rg -q 'one adjoint launch per particle' "${OUTPUT}/run.log"
+if [[ -n "${PASS2_DUMP_DIR}" ]]; then
+    test "$(find "${PASS2_DUMP_DIR}" -maxdepth 1 -type f -name 'pass2_orig*_cs056.npz' | wc -l)" -eq 5
+fi
 
 fsc_audit_status=0
 "${PYTHON}" -m scripts.audit_k1_fsc_trajectory \

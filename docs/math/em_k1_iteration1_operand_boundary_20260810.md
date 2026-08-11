@@ -544,3 +544,16 @@ source-order half-index arrays needed by the generic particle auditor.  The
 runner now saves `half1_indices` and `half2_indices` before writing the NPZ;
 the focused regression panel passes 61 tests.  This changes only diagnostic
 capture, not EM arithmetic.
+
+The apparent iteration-1 direction-prior relative-L2 values (`7.10e-5` and
+`6.26e-5`) are a STAR-serialization floor, not evidence of a live-state
+formula mismatch.  RECOVAR's positive values are exact normalized count
+multiples (`1/517` and `1/483`) and sum to one.  RELION's saved model STAR
+rounds each probability to six decimal places; its half sums are
+`0.9999410242` and `0.9999579987`.  The two engines have the same nonzero-bin
+counts (287 and 250), and iteration-1 hard poses/support are identical up to
+STAR Euler/translation precision.  Consequently, a STAR-seeded exact-input
+replay is a conservative discriminator with a known serialization residual;
+it cannot be called an exact copy of RELION's private in-memory direction
+prior.  The newly captured pre-collapse rotation-posterior trajectory avoids
+conflating posterior aggregation with this output rounding on future runs.
