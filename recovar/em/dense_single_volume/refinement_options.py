@@ -72,6 +72,39 @@ class RelionParityOptions:
     use_per_half_mean_variance: bool = False
     preserve_bpref_particle_order: bool = False
 
+    def __post_init__(self):
+        if self.image_fourier_backend not in {
+            "host_numpy",
+            "jax_gpu",
+            "relion_cuda",
+        }:
+            raise ValueError(
+                "image_fourier_backend must be "
+                "'host_numpy', 'jax_gpu', or 'relion_cuda', "
+                f"got {self.image_fourier_backend!r}"
+            )
+
+        iterations = tuple(
+            sorted({int(value) for value in self.perturb_replay_restart_state_iterations})
+        )
+
+        if any(value < 0 for value in iterations):
+            raise ValueError(
+                "perturbation replay restart-state iterations must be non-negative"
+            )
+
+        if iterations and self.perturb_replay_relion_dir is None:
+            raise ValueError(
+                "perturbation replay restart-state iterations require "
+                "perturb_replay_relion_dir"
+            )
+
+        object.__setattr__(
+            self,
+            "perturb_replay_restart_state_iterations",
+            iterations,
+        )
+
 
 @dataclass(frozen=True)
 class LocalSearchOptions:

@@ -4598,25 +4598,10 @@ def _run_relion_iteration_loop(
     use_per_half_mean_variance = parity.use_per_half_mean_variance
     preserve_bpref_particle_order = parity.preserve_bpref_particle_order
 
-    if image_fourier_backend not in {"host_numpy", "jax_gpu", "relion_cuda"}:
-        raise ValueError(
-            "image_fourier_backend must be 'host_numpy', 'jax_gpu', or 'relion_cuda', "
-            f"got {image_fourier_backend!r}"
-        )
-
-    perturb_replay_restart_state_iterations = tuple(
-        sorted({int(value) for value in perturb_replay_restart_state_iterations})
-    )
-    if any(value < 0 for value in perturb_replay_restart_state_iterations):
-        raise ValueError("perturbation replay restart-state iterations must be non-negative")
-    if perturb_replay_restart_state_iterations and perturb_replay_relion_dir is None:
-        raise ValueError(
-            "perturbation replay restart-state iterations require perturb_replay_relion_dir"
-        )
-    if perturb_replay_restart_state_iterations:
+    if options.parity.perturb_replay_restart_state_iterations:
         logger.info(
             "Perturbation replay restart provenance: saved-state iterations=%s",
-            list(perturb_replay_restart_state_iterations),
+            list(options.parity.perturb_replay_restart_state_iterations),
         )
 
     setup_t0 = time.time()
