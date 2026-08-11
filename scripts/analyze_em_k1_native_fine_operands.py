@@ -206,12 +206,15 @@ def analyze(
     baseline_energy = float(np.sum(baseline * baseline))
     interventions = {}
     for label in labels:
-        residual = _center(costs["recovar_all"] - costs[label])
-        energy = float(np.sum(residual * residual))
+        recovar_target_residual = _center(costs["recovar_all"] - costs[label])
+        recovar_target_energy = float(np.sum(recovar_target_residual * recovar_target_residual))
+        native_target_residual = _center(costs[label] - costs["native"])
+        native_target_energy = float(np.sum(native_target_residual * native_target_residual))
         interventions[label] = {
-            "residual": _stats(residual),
-            "centered_energy": energy,
-            "baseline_energy_removal_fraction": 1.0 - energy / baseline_energy,
+            "recovar_target_residual": _stats(recovar_target_residual),
+            "recovar_target_energy_removal_fraction": 1.0 - recovar_target_energy / baseline_energy,
+            "native_target_residual": _stats(native_target_residual),
+            "native_target_energy_removal_fraction": 1.0 - native_target_energy / baseline_energy,
         }
 
     native_translation = np.stack(

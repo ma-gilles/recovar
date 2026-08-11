@@ -637,17 +637,31 @@ three-factor intervention attributes only `0.92%` of centered residual-energy
 removal to replacing the pixel weight, while replacing reference and shifted
 image together removes `67.16%`.  The remaining replay floor is approximately
 `1e-5`, principally because the passive decomposition does not capture the
-private high-resolution Xi2 addend before float32 addition.  Therefore the
-factorial is directional rather than an exact algebraic attribution, but it
-strongly rejects `corr_img`/noise weight as the dominant live fine-score
-residual for this particle.
+private high-resolution Xi2 addend before float32 addition.  The two
+intervention directions are correspondingly asymmetric, so the factorial does
+not yet assign the residual to one operand.  It does establish that all three
+operands are extremely close and that their float32 interaction, rather than a
+candidate or prior mismatch, produces the remaining score-scale discrepancy.
+
+The serialized-RELION-boundary arm makes this more specific.  Relative to the
+autonomous arm it improves projected-reference relative-L2 from `8.84e-7` to
+`2.41e-7`, but worsens shifted-image relative-L2 from `1.76e-7` to `8.14e-7`
+and pixel-weight relative-L2 from `6.34e-8` to `1.94e-7`.  Its native raw-score
+p95 residual consequently worsens from `5.79e-5` to `2.72e-4`.  This explains
+why wholesale STAR-boundary replay regressed: it fixes the incoming reference
+while injecting larger serialized image/noise operands.  The next causal test
+must swap one unrounded live operand at a time.
 
 Reports:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_estep_20260810T2034ET/analysis/native_part634_source000066_generic_matrix.json`,
   SHA-256 `c900947402d5b0104d6de918038c18164611e10c18a29a3ae243b60fd3536983`;
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_estep_20260810T2034ET/analysis/native_part634_source000066_operand_factorial.json`,
-  SHA-256 `111b83e884f2a9a04ddd0fff2d7a39a9de088723c1e9cfa92f77468bde22b8cf`.
+  SHA-256 `60270cd4d5de7f02a3561d84d83866ac8fbd7a137a18493197d471cf91b668a6`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_estep_20260810T2034ET/analysis/native_part634_source000066_exact_star_matrix.json`,
+  SHA-256 `b1d1787374f6b25627fa2046c5e5f11ecb8ed6d35e2b2f0df13c0989b6dd39a7`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_estep_20260810T2034ET/analysis/native_part634_source000066_exact_star_operands.json`,
+  SHA-256 `f134067cbf40a1df392c2fa704a8fe3a1f46c0d7ab952e273bec9bf294187730`.
 
 ## Case-7 two-iteration dispatch discriminator
 
