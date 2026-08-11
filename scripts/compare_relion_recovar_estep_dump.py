@@ -805,8 +805,17 @@ def _candidate_table_from_relion(
     class_index: int | None = None,
     parent_rotation_divisor: int | None = None,
     parent_translation_divisor: int | None = None,
+    acc_prefix_only: bool = False,
 ) -> dict[str, Any]:
-    payload = parse_dump_dir(path)
+    include_names = None
+    if acc_prefix_only:
+        if acc_table_prefix is None:
+            raise ValueError("acc_prefix_only requires an explicit acc_table_prefix")
+        include_names = {
+            bin_path.stem
+            for bin_path in Path(path).glob(f"{acc_table_prefix}_*.bin")
+        }
+    payload = parse_dump_dir(path, include_names=include_names)
     if firstiter_pass not in {None, "pass0", "pass1"}:
         raise ValueError(f"firstiter_pass must be pass0 or pass1, got {firstiter_pass!r}")
     if firstiter_pass is not None and acc_table_prefix is not None:
@@ -1536,6 +1545,7 @@ def compare_dumps(
     relion_parent_trans_divisor: int | None = None,
     recovar_parent_rot_divisor: int | None = None,
     recovar_parent_trans_divisor: int | None = None,
+    acc_prefix_only: bool = False,
 ) -> dict[str, Any]:
     recovar = _candidate_table_from_recovar(
         recovar_pass2_npz,
@@ -1568,6 +1578,7 @@ def compare_dumps(
         class_index=recovar.get("class_index"),
         parent_rotation_divisor=relion_parent_rot_divisor,
         parent_translation_divisor=relion_parent_trans_divisor,
+        acc_prefix_only=acc_prefix_only,
     )
     chosen_match_mode, relion_keys, recovar_keys, match_details = _choose_match_keys(
         relion=relion,
@@ -1666,7 +1677,7 @@ def compare_dumps(
         result.update(auto_prefix_rankings)
         result["requested_relion_acc_table_prefix"] = requested_relion_acc_table_prefix
         result["selected_relion_acc_table_prefix"] = relion_acc_table_prefix
-    elif relion_acc_table_prefix is not None:
+    elif relion_acc_table_prefix is not None and not acc_prefix_only:
         prefix_rankings = _rank_relion_acc_table_prefixes(
             relion_dump_dir=relion_dump_dir,
             recovar=recovar,
@@ -1697,6 +1708,14 @@ def main() -> None:
             "img0_part7778_pass1_class0_pass1 for "
             "img0_part7778_pass1_class0_pass1_diff2_weights.bin. "
             "Use 'auto' to rank and select the best part-specific table."
+        ),
+    )
+    parser.add_argument(
+        "--relion-acc-prefix-only",
+        action="store_true",
+        help=(
+            "Load only files belonging to the explicit part-specific ACC prefix and "
+            "skip ranking other particle tables. Use this for large multi-particle dumps."
         ),
     )
     parser.add_argument(
@@ -1786,6 +1805,7 @@ def main() -> None:
         relion_parent_trans_divisor=args.relion_parent_trans_divisor,
         recovar_parent_rot_divisor=args.recovar_parent_rot_divisor,
         recovar_parent_trans_divisor=args.recovar_parent_trans_divisor,
+        acc_prefix_only=args.relion_acc_prefix_only,
     )
     text = json.dumps(_jsonable(result), indent=2, sort_keys=True) + "\n"
     if args.output_json is not None:

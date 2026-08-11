@@ -1696,3 +1696,44 @@ def test_compare_relion_generic_candidate_table_filters_to_recovar_class(tmp_pat
     assert result["common_candidate_count"] == 2
     assert result["relion_top_key"] == [1, 0]
     assert result["recovar_top_key"] == [1, 0]
+
+
+def test_compare_relion_explicit_acc_prefix_can_skip_unrelated_payloads(tmp_path):
+    relion_dir = tmp_path / "relion"
+    relion_dir.mkdir()
+    prefix = "img0_part7778_pass1_class0_pass1"
+    _write_flat_real(relion_dir / f"{prefix}_diff2_weights.bin", [-1.0, -2.0])
+    _write_scalar(relion_dir / f"{prefix}_orientation_num.bin", 1)
+    _write_scalar(relion_dir / f"{prefix}_translation_num.bin", 2)
+    (relion_dir / "pass1_class0_fine_ref_real.bin").write_bytes(b"not-a-dump")
+
+    recovar_npz = tmp_path / "recovar.npz"
+    scores = np.array([[1.0, 2.0]], dtype=np.float64)
+    np.savez_compressed(
+        recovar_npz,
+        original_index=np.int64(7),
+        local_index=np.int64(7),
+        current_size=np.int64(56),
+        n_classes=np.int64(1),
+        n_rot=np.int64(1),
+        n_trans=np.int64(2),
+        weights_full=np.array([0.0, 1.0]),
+        weights_per_class=np.array([[[0.0, 1.0]]]),
+        scores_pre_prior_per_class=scores[None],
+        scores_with_prior_per_class=scores[None],
+        rotations=np.zeros((1, 3, 3), dtype=np.float32),
+        translations=np.zeros((2, 2), dtype=np.float32),
+        rotation_log_prior=np.zeros(1, dtype=np.float64),
+        translation_log_prior=np.zeros(2, dtype=np.float64),
+    )
+
+    result = compare_dumps(
+        relion_dir,
+        recovar_npz,
+        relion_acc_table_prefix=prefix,
+        acc_prefix_only=True,
+    )
+
+    assert result["common_candidate_count"] == 2
+    assert result["common_score_pre_prior_centered_diff"]["max_abs"] == 0.0
+    assert "best_relion_acc_table_prefix" not in result

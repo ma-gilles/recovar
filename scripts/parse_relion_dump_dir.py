@@ -9,7 +9,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 REAL_2D_FILES = {"Fctf", "Minvsigma2", "Mctf", "pdf_direction", "sigma2_noise"}
 COMPLEX_2D_FILES = {
     "Fimg_store",
@@ -165,11 +164,20 @@ def _layout_name(name):
         name = stripped
 
 
-def parse_dump_dir(dump_dir):
+def parse_dump_dir(dump_dir, *, include_names=None):
+    """Parse RELION dump files, optionally restricting by filename stem.
+
+    ``include_names`` keeps focused diagnostics from materializing unrelated
+    projection tensors when a dump directory contains several particle panels.
+    The default remains the historical eager parse.
+    """
+
     dump_dir = Path(dump_dir)
     payload = _parse_dimensions(dump_dir / "dimensions.txt")
     for bin_path in sorted(dump_dir.glob("*.bin")):
         name = bin_path.stem
+        if include_names is not None and name not in include_names:
+            continue
         layout_name = _layout_name(name)
         if layout_name in REAL_2D_FILES:
             payload[name] = _read_real_2d(bin_path)

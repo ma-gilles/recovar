@@ -9,7 +9,6 @@ import pytest
 
 from scripts.parse_relion_dump_dir import parse_dump_dir
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -277,3 +276,15 @@ def test_parse_relion_dump_dir_classifies_store_wavg_and_candidate_files(tmp_pat
         np.arange(6, dtype=np.float64).reshape(2, 3) + 0.5,
     )
     assert float(parsed["store_candidate0_weight_normalized"]) == pytest.approx(0.25)
+
+
+def test_parse_relion_dump_dir_can_restrict_filename_stems(tmp_path):
+    _write_flat_real(tmp_path / "pass1_diff2_weights.bin", [1.0, 2.0])
+    # This deliberately malformed file proves that excluded payloads are not
+    # opened or materialized by a focused diagnostic.
+    (tmp_path / "unrelated_fine_ref_real.bin").write_bytes(b"not-a-dump")
+
+    parsed = parse_dump_dir(tmp_path, include_names={"pass1_diff2_weights"})
+
+    assert set(parsed) == {"pass1_diff2_weights"}
+    np.testing.assert_array_equal(parsed["pass1_diff2_weights"], np.array([1.0, 2.0]))

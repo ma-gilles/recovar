@@ -603,3 +603,64 @@ RELION values before six-decimal metadata serialization, or compare two
 RECOVAR arms whose only difference is a single unrounded incoming operand.
 Another broad trajectory from the rounded STAR boundary would not resolve
 this question.
+
+## Native iteration-2 fine-score boundary
+
+Job `12240570` completed both requested RELION iterations and captured all five
+part-specific ACC panels before its wrapper rejected the absent legacy CPU
+dump files.  The scientific ACC capture is complete; no rerun was needed.
+The generic verbose arrays identify RELION `part_id=634`, source particle 66,
+and contain the complete compact pass-2 boundary.
+
+The source-66 native comparison is decisive at the candidate and score
+boundary:
+
+| causal boundary | result |
+|---|---:|
+| candidate keys | `22656 / 22656` exact |
+| rotation matrices | median Frobenius `0`, max `4.21e-8` after transpose |
+| translations | max absolute difference `5.96e-8` |
+| top pose key | exact: `(2841, 57)` |
+| translation log prior | bit-identical |
+| rotation log prior | max absolute difference `2.38e-7` |
+| raw pre-prior centered residual | p95 `4.52e-5`, max `1.08e-4` |
+| posterior L1 after common renormalization | `8.44e-6` |
+
+Thus the first meaningful native iteration-2 mismatch is the raw fine score,
+not candidate generation, priors, normalization, or support routing.
+
+The streamed operand comparison then placed both engines in the same packed
+current-size Fourier topology.  On score-relevant pixels the relative-L2
+operand differences are `8.84e-7` for the projected reference, `1.76e-7` for
+the shifted corrected image, and `6.34e-8` for the pixel weight.  A fixed
+three-factor intervention attributes only `0.92%` of centered residual-energy
+removal to replacing the pixel weight, while replacing reference and shifted
+image together removes `67.16%`.  The remaining replay floor is approximately
+`1e-5`, principally because the passive decomposition does not capture the
+private high-resolution Xi2 addend before float32 addition.  Therefore the
+factorial is directional rather than an exact algebraic attribution, but it
+strongly rejects `corr_img`/noise weight as the dominant live fine-score
+residual for this particle.
+
+Reports:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_estep_20260810T2034ET/analysis/native_part634_source000066_generic_matrix.json`,
+  SHA-256 `c900947402d5b0104d6de918038c18164611e10c18a29a3ae243b60fd3536983`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_it2_estep_20260810T2034ET/analysis/native_part634_source000066_operand_factorial.json`,
+  SHA-256 `111b83e884f2a9a04ddd0fff2d7a39a9de088723c1e9cfa92f77468bde22b8cf`.
+
+## Case-7 two-iteration dispatch discriminator
+
+Job `12227271` also completed its two scientific iterations.  Its wrapper exit
+2 is solely the expected complete-trajectory audit mismatch (two RECOVAR
+iterations versus the 15-iteration RELION reference).  At iteration 2 the
+cross-engine signed merged FSC-AUC is `0.9999997822479294` (half 1
+`0.9999997802837153`, half 2 `0.9999997822816254`).  This is essentially
+unchanged from the prior case-7 iteration-2 result, so the combined physical
+dispatch and global particle accumulation correction does not close case 7's
+early residual.  Particle order remains demonstrated for case 22, but is now
+falsified as a sufficient case-7 root cause at this boundary.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_combined_it2_20260810T1920ET/analysis/case07_combined_fsc_it2.json`,
+SHA-256 `f351ce6d4b72235789bc8371db5977c5f5abf0a632d209916de46849bd793990`.
