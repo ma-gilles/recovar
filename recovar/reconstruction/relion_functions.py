@@ -30,6 +30,7 @@ def _write_relion_wiener_boundary(
     valid_indices,
     divided_volume,
     tau,
+    tau2_fudge_value,
     *,
     dump_dir,
     input_half_volume,
@@ -37,7 +38,6 @@ def _write_relion_wiener_boundary(
     reconstruction_volume_shape,
     current_size,
     padding_factor,
-    tau2_fudge,
     minres_map,
     tau_is_1d,
 ):
@@ -57,7 +57,7 @@ def _write_relion_wiener_boundary(
         reconstruction_volume_shape=np.asarray(reconstruction_volume_shape, dtype=np.int32),
         current_size=np.int32(-1 if current_size is None else current_size),
         padding_factor=np.int32(padding_factor),
-        tau2_fudge=np.float64(tau2_fudge),
+        tau2_fudge=np.float64(tau2_fudge_value),
         minres_map=np.int32(minres_map),
         tau_is_1d=np.bool_(tau_is_1d),
         Ft_ctf_input=np.asarray(Ft_ctf_input),
@@ -105,7 +105,6 @@ def _maybe_dump_relion_wiener_boundary(
         reconstruction_volume_shape=reconstruction_volume_shape,
         current_size=current_size,
         padding_factor=padding_factor,
-        tau2_fudge=tau2_fudge,
         minres_map=minres_map,
         tau_is_1d=tau_is_1d,
     )
@@ -117,6 +116,7 @@ def _maybe_dump_relion_wiener_boundary(
         jnp.asarray(valid_indices),
         jnp.asarray(divided_volume),
         jnp.asarray(tau) if tau is not None else jnp.asarray([], dtype=jnp.float32),
+        jnp.asarray(tau2_fudge),
         ordered=True,
     )
 
@@ -1177,7 +1177,7 @@ def post_process_from_filter(
     )
 
 
-@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17, 18, 19, 20])
+@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17, 18, 19, 20, 21])
 def post_process_from_filter_v2(
     Ft_ctf,
     F_ty,
@@ -1200,6 +1200,7 @@ def post_process_from_filter_v2(
     current_size=None,
     accumulator_volume_shape=None,
     tau_is_1d=False,
+    preserve_output_precision=False,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -1379,10 +1380,11 @@ def post_process_from_filter_v2(
     if return_half_volume:
         if not input_half_volume:
             vol = fourier_transform_utils.full_volume_to_half_volume(vol, og_volume_shape)
-        return vol.reshape(-1).astype(F_ty_flat.dtype)
+        vol = vol.reshape(-1)
+        return vol if preserve_output_precision else vol.astype(F_ty_flat.dtype)
     if input_half_volume:
         vol = fourier_transform_utils.half_volume_to_full_volume(vol, og_volume_shape)
-    return vol.astype(F_ty_flat.dtype)
+    return vol if preserve_output_precision else vol.astype(F_ty_flat.dtype)
 
 
 def relion_reconstruct(

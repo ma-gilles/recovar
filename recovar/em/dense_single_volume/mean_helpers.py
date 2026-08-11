@@ -249,6 +249,7 @@ def _reconstruct_volume_eager(
     return_real_space=False,
     accumulator_volume_shape=None,
     tau_is_1d=False,
+    preserve_output_precision=False,
 ):
     """Eager RELION-style reconstruction from full or half Fourier accumulators.
 
@@ -276,6 +277,7 @@ def _reconstruct_volume_eager(
         return_real_space=return_real_space,
         accumulator_volume_shape=accumulator_volume_shape,
         tau_is_1d=tau_is_1d,
+        preserve_output_precision=preserve_output_precision,
     )
 
 
@@ -434,6 +436,7 @@ def _reconstruct_and_postprocess_means(
                 minres_map=relion_minres_map,
                 current_size=cs_int,
                 accumulator_volume_shape=accumulator_volume_shape,
+                preserve_output_precision=True,
             ).reshape(-1)
 
     for k in range(2):

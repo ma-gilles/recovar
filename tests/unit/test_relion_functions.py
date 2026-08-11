@@ -365,6 +365,41 @@ def test_post_process_large_grid_guard_avoids_complex128_padded_volume(monkeypat
         clear_cache()
 
 
+def test_post_process_can_preserve_double_reconstruction_output():
+    volume_shape = (6, 6, 6)
+    n_voxels = int(np.prod(volume_shape))
+    Ft_ctf = np.ones(n_voxels, dtype=np.float32)
+    F_ty = np.zeros(n_voxels, dtype=np.complex64)
+    F_ty[n_voxels // 2] = 1.0 + 0.25j
+    tau = np.ones(n_voxels, dtype=np.float64)
+
+    common = dict(
+        tau=jnp.asarray(tau),
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=False,
+        current_size=4,
+    )
+    compact = rf.post_process_from_filter_v2(
+        jnp.asarray(Ft_ctf),
+        jnp.asarray(F_ty),
+        volume_shape,
+        1,
+        **common,
+    )
+    preserved = rf.post_process_from_filter_v2(
+        jnp.asarray(Ft_ctf),
+        jnp.asarray(F_ty),
+        volume_shape,
+        1,
+        preserve_output_precision=True,
+        **common,
+    )
+
+    assert np.asarray(compact).dtype == np.complex64
+    assert np.asarray(preserved).dtype == np.complex128
+
+
 def test_adjust_regularization_relion_style_lower_bounded():
     filt = np.zeros((4, 4, 4), dtype=np.float32)
     reg = rf.adjust_regularization_relion_style(filt, volume_shape=(4, 4, 4))
@@ -653,7 +688,7 @@ def test_relion_wiener_boundary_dump_records_pre_ifft_operands(tmp_path, monkeyp
     tau = jnp.asarray([9.0, 10.0], dtype=jnp.float64)
 
     @jax.jit
-    def dump_inside_jit(raw_filter, numerator, regularized_filter, support, divided, tau):
+    def dump_inside_jit(raw_filter, numerator, regularized_filter, support, divided, tau, tau2_fudge):
         rf._maybe_dump_relion_wiener_boundary(
             Ft_ctf_input=raw_filter,
             F_ty_input=numerator,
@@ -666,13 +701,21 @@ def test_relion_wiener_boundary_dump_records_pre_ifft_operands(tmp_path, monkeyp
             reconstruction_volume_shape=(2, 2, 2),
             current_size=2,
             padding_factor=2,
-            tau2_fudge=1.5,
+            tau2_fudge=tau2_fudge,
             minres_map=5,
             tau_is_1d=False,
         )
         return divided
 
-    dump_inside_jit(raw_filter, numerator, regularized_filter, support, divided, tau).block_until_ready()
+    dump_inside_jit(
+        raw_filter,
+        numerator,
+        regularized_filter,
+        support,
+        divided,
+        tau,
+        jnp.asarray(1.5, dtype=jnp.float64),
+    ).block_until_ready()
     jax.effects_barrier()
 
     with np.load(tmp_path / "recovar_wiener_boundary_0000.npz") as capture:

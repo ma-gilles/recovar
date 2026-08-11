@@ -12355,8 +12355,10 @@ class TestRelionModeSmokeTest:
         from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
 
         events = []
+        reconstruct_calls = []
 
-        def fake_reconstruct(*_args, **_kwargs):
+        def fake_reconstruct(*_args, **kwargs):
+            reconstruct_calls.append(kwargs)
             return jnp.ones(VOLUME_SIZE, dtype=jnp.complex64)
 
         def fake_lowpass(volume_ft_flat, *_args, **_kwargs):
@@ -12407,6 +12409,8 @@ class TestRelionModeSmokeTest:
         )
 
         assert events[:3] == ["lowpass", "flatten_idft", "flatten_dft"]
+        assert len(reconstruct_calls) == 2
+        assert all(call["preserve_output_precision"] is True for call in reconstruct_calls)
 
     def test_kclass_reconstruction_uses_1d_tau_shell_prior(self, monkeypatch):
         """K-class M-step reconstruction should index RELION tau2 as shells."""
@@ -12464,6 +12468,7 @@ class TestRelionModeSmokeTest:
 
         assert len(calls) == n_classes
         assert all(call["tau_is_1d"] is True for call in calls)
+        assert all(call.get("preserve_output_precision", False) is False for call in calls)
         np.testing.assert_allclose(np.asarray(calls[0]["tau"]), np.asarray(tau_shells[0]))
         np.testing.assert_allclose(np.asarray(calls[1]["tau"]), np.asarray(tau_shells[1]))
         assert means[0].shape == (n_classes, VOLUME_SIZE)
