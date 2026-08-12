@@ -4628,41 +4628,25 @@ def _run_relion_iteration_loop(
     # semantic units and different RELION defaults (2 vs 5).
     RELION_WIDTH_FMASK_EDGE = 2
 
+
     for ds in experiment_datasets:
         backend = _image_backend(ds)
-        if backend is not None and hasattr(backend, "image_mask_mode"):
-            backend.image_mask_mode = "multiply"
-        if backend is not None and hasattr(backend, "set_relion_fourier_backend"):
+        if backend is None:
+            continue
+        if hasattr(backend, "set_relion_fourier_backend"):
             backend.set_relion_fourier_backend(image_fourier_backend)
-    if particle_diameter_ang is not None and particle_diameter_ang > 0:
-        from recovar.core.mask import relion_soft_image_mask
-
-        relion_mask = relion_soft_image_mask(
-            image_size=grid_size,
-            pixel_size=cryo.voxel_size,
-            particle_diameter_ang=particle_diameter_ang,
-            width_mask_edge_px=RELION_WIDTH_MASK_EDGE,
-        )
-        for ds in experiment_datasets:
-            backend = _image_backend(ds)
-            if backend is None:
-                continue
-            if hasattr(backend, "set_relion_image_mask"):
-                backend.set_relion_image_mask(
-                    pixel_size=cryo.voxel_size,
-                    particle_diameter_ang=particle_diameter_ang,
-                    width_mask_edge_px=RELION_WIDTH_MASK_EDGE,
-                )
-            else:
-                backend.image_mask = relion_mask
-                if hasattr(backend, "image_mask_mode"):
-                    backend.image_mask_mode = "relion_background_fill"
-        logger.info(
-            "RELION mode: image mask radius=%.1f px (particle_diameter=%.1f A, edge=%d px)",
-            particle_diameter_ang / (2.0 * cryo.voxel_size),
-            particle_diameter_ang,
-            RELION_WIDTH_MASK_EDGE,
-        )
+        if particle_diameter_ang is not None and particle_diameter_ang > 0:
+            backend.set_relion_image_mask(
+                pixel_size=cryo.voxel_size,
+                particle_diameter_ang=particle_diameter_ang,
+                width_mask_edge_px=RELION_WIDTH_MASK_EDGE,
+            )
+            logger.info(
+                "RELION mode: image mask radius=%.1f px (particle_diameter=%.1f A, edge=%d px)",
+                particle_diameter_ang / (2.0 * cryo.voxel_size),
+                particle_diameter_ang,
+                RELION_WIDTH_MASK_EDGE,
+            )
 
     _maybe_cache_raw_image_loaders(experiment_datasets)
     _mark_setup_phase("mask_and_image_cache")

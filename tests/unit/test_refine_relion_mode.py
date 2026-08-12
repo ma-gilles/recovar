@@ -8462,6 +8462,9 @@ class MockDataset:
             image_mask = np.asarray(_unit_image_mask(np.float32), dtype=np.float32)
             image_mask_mode = "multiply"
 
+            def set_relion_image_mask(self, pixel_size: float, particle_diameter_ang: float, width_mask_edge_px: float = 5.0):
+                self.image_mask_mode = "relion_background_fill"
+
         class _ImageSource:
             process_images = staticmethod(_raw_real_process)
             process_images_half = staticmethod(_raw_real_process_half)
@@ -8648,6 +8651,9 @@ class RawRealImageDataset:
         class _Backend:
             image_mask = None
             image_mask_mode = "multiply"
+
+            def set_relion_image_mask(self, pixel_size: float, particle_diameter_ang: float, width_mask_edge_px: float = 5.0):
+                self.image_mask_mode = "relion_background_fill"
 
         class _ImageSource:
             process_images = staticmethod(_raw_real_process)
