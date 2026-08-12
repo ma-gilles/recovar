@@ -121,10 +121,23 @@
     "exact_raw_centered_max_abs": 4.57763671875e-05,
     "classification": "positive causal A/B for the discrete coarse-parent defect; residual raw arithmetic remains"
   },
+  "minimal_coarse_factorial": {
+    "gaussian_sincosf_slurm_job_id": 12281516,
+    "gaussian_without_sincosf_slurm_job_id": 12281588,
+    "both_native_parent_count": 73431,
+    "both_recovar_parent_count": 73431,
+    "both_support_mismatch_count": 0,
+    "both_target_raw_relative_score_exact": true,
+    "gaussian_without_sincosf_raw_centered_median_abs": 0.0,
+    "gaussian_without_sincosf_raw_centered_p95_abs": 1.52587890625e-05,
+    "gaussian_without_sincosf_raw_centered_max_abs": 4.57763671875e-05,
+    "classification": "RELION CUDA Gaussian coarse reduction is sufficient; native sincosf and special FFT/CTF/noise operand rebuild are not required"
+  },
   "next_gate": {
-    "description": "bounded two-iteration exact-coarse prefix plus native reference-norm/cross-term operand decomposition",
-    "prefix_slurm_job_id": 12281298,
-    "prefix_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_fresh_exact_coarse_it2_prefix_20260812T0335ET",
+    "description": "bounded two-iteration minimal CUDA-Gaussian prefix and all-particle posterior/map comparison",
+    "diagnostic_exact_prefix_slurm_job_id": 12281298,
+    "minimal_prefix_slurm_job_id": 12281662,
+    "minimal_prefix_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_fresh_minimal_gaussian_it2_prefix_20260812T0410ET",
     "trajectory_scope": "numbered iterations 1-2 only"
   }
 }

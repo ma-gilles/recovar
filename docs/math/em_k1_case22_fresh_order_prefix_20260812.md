@@ -118,10 +118,27 @@ centered raw-score residual versus native improves from median/p95/max
 `0 / 1.526e-5 / 4.578e-5`. The path therefore causally closes this discrete
 defect but does not yet make every raw score bit-identical.
 
+Two additional stop-after-dump factorial arms reduce the causal change further.
+Job `12281516` used the RELION CUDA Gaussian reduction, native `sincosf`
+translation, and exact CUB support but retained the ordinary RECOVAR image/CTF
+operands. Job `12281588` also removed native `sincosf`, leaving the RELION CUDA
+Gaussian reduction as the only score-path change. Both arms retain exactly
+73,431 parents with zero support mismatches, and both make the target raw score
+relative to the common best exact. Their full-table centered raw residuals are
+median/p95/max `0 / 1.526e-5 / 4.578e-5`.
+
+Therefore the minimal demonstrated cause of the discrete parent defect is the
+ordinary RECOVAR/JAX coarse reduction arithmetic/order. Candidate generation,
+priors, translation phases, special per-image FFT/CTF operands, normalization,
+and the CUB cutoff are not required to explain or repair this boundary.
+
 The exact dump and report are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_fresh_exact_coarse_stack1204_it2_20260812T0315ET/`.
-Bounded two-iteration prefix job `12281298` tests whether the repaired boundary
-improves the complete 3,000-particle posterior/map state. A separate native
-component capture will split the remaining raw residual into reference-norm,
-cross-term, and live image/CTF/noise operands before any broader trajectory is
-run.
+Bounded two-iteration prefix job `12281298` tests the diagnostic all-exact arm
+on the complete 3,000-particle posterior/map state. Job `12281662` repeats that
+same bounded gate using only the minimal CUDA Gaussian score reduction. Native
+component job `12281434` captured reference-norm, cross-term, and live operands
+for the target and common best; its individual files validate, while its
+directory-level provenance header incorrectly declared three expected follower
+ranks although the explicit particle was owned by one. The launcher is
+corrected to one expected follower for future reproduction.

@@ -27,6 +27,8 @@ MAX_ITER=${K1_CASE22_MAX_ITER:-3}
 COMPACT_STACK1204_DUMP=${K1_CASE22_COMPACT_STACK1204_DUMP:-0}
 STOP_AFTER_COMPACT_DUMP=${K1_CASE22_STOP_AFTER_COMPACT_DUMP:-0}
 COARSE_STACK1204_DUMP=${K1_CASE22_COARSE_STACK1204_DUMP:-0}
+GAUSSIAN_COARSE_STACK1204=${K1_CASE22_GAUSSIAN_COARSE_STACK1204:-0}
+GAUSSIAN_SINCOSF_STACK1204=${K1_CASE22_GAUSSIAN_SINCOSF_STACK1204:-${GAUSSIAN_COARSE_STACK1204}}
 EXACT_COARSE_STACK1204=${K1_CASE22_EXACT_COARSE_STACK1204:-0}
 PYTHON=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default/bin/python
 PIXI_ENV=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default
@@ -83,10 +85,18 @@ export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
 if [[ "${EXACT_COARSE_STACK1204}" = 1 ]]; then
+    GAUSSIAN_COARSE_STACK1204=1
+    GAUSSIAN_SINCOSF_STACK1204=1
+fi
+if [[ "${GAUSSIAN_COARSE_STACK1204}" = 1 ]]; then
     export RECOVAR_K1_COARSE_GAUSSIAN_FFI=1
-    export RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF=1
-    export RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS=1
     export RECOVAR_K1_RELION_F32_COARSE_SUPPORT=1
+fi
+if [[ "${GAUSSIAN_SINCOSF_STACK1204}" = 1 ]]; then
+    export RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF=1
+fi
+if [[ "${EXACT_COARSE_STACK1204}" = 1 ]]; then
+    export RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS=1
 fi
 unset RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
@@ -182,8 +192,8 @@ if [[ "${COARSE_STACK1204_DUMP}" = 1 ]]; then
     test -s "${coarse_dump}"
     rg -q 'coarse-significance dump completed; stopping before pass-2/M-step work' \
         "${OUTPUT}/run.log"
-    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","coarse_stack1204_dump":true,"exact_coarse":%s,"stopped_after_dump":true}\n' \
-        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${EXACT_COARSE_STACK1204}" \
+    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","coarse_stack1204_dump":true,"gaussian_coarse":%s,"gaussian_sincosf":%s,"exact_coarse":%s,"stopped_after_dump":true}\n' \
+        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${GAUSSIAN_COARSE_STACK1204}" "${GAUSSIAN_SINCOSF_STACK1204}" "${EXACT_COARSE_STACK1204}" \
         > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
     touch "${ROOT}/DUMP_SUCCESS_${SLURM_JOB_ID}"
     exit 0
