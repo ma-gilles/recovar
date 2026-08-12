@@ -4340,7 +4340,11 @@ def _weighted_image_power_shells_and_per_image(
         unweighted_shell = valid_norm_shell & (shell_indices_half > int(norm_unweighted_shell_cutoff))
         high_shell_mass = full_mass if include_unweighted_high_shell else jnp.zeros_like(full_mass)
         norm_mass = jnp.where(unweighted_shell[None, :], high_shell_mass[:, None], norm_mass)
-    deterministic_norm_reduction = _env_flag_enabled(
+    source_faithful_spectrum_norm = _env_flag_enabled(
+        "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM",
+        default=False,
+    )
+    deterministic_norm_reduction = source_faithful_spectrum_norm or _env_flag_enabled(
         "RECOVAR_K1_RELION_DETERMINISTIC_NORM_REDUCTION",
         default=False,
     )
@@ -4369,7 +4373,8 @@ def _weighted_image_power_shells_and_per_image(
         # with RELION powerClass's divide-before-square float32 arithmetic.
         weighted_per_image = jax.lax.optimization_barrier(weighted_per_image)
         weighted_per_image = weighted_per_image + full_mass * (replacement_high - generic_high)
-    return weighted_shells, weighted_per_image.astype(jnp.float32)
+    output_dtype = norm_reduction_dtype if source_faithful_spectrum_norm else jnp.float32
+    return weighted_shells, weighted_per_image.astype(output_dtype)
 
 
 @partial(jax.jit, static_argnames=("batch_size",))
@@ -5784,6 +5789,74 @@ def _relion_cuda_powerclass_highres_norm_units(
         ),
         image_shape,
     )
+
+
+@partial(jax.jit, static_argnames=("image_shape", "current_size"))
+def _relion_cuda_powerclass_spectrum_highres_norm_units(
+    processed_score_half,
+    *,
+    image_shape,
+    current_size,
+):
+    """Reproduce the high-shell norm term from RELION's power spectrum.
+
+    RELION's ``powerClass`` kernel produces two independently reduced values:
+    a block-tree ``highres_Xi2`` scalar used by fine scoring, and an
+    atomically binned shell spectrum.  Norm correction consumes the latter,
+    summing its high shells sequentially in host RFLOAT.  These reductions are
+    numerically distinct, so the fine-score scalar cannot be reused here.
+    """
+
+    image_height = int(image_shape[0])
+    image_width = int(image_shape[1])
+    if image_height != image_width:
+        raise ValueError(f"RELION powerClass parity requires square images, got {image_shape}")
+    half_width = image_width // 2 + 1
+    processed_score_half = jnp.asarray(processed_score_half, dtype=jnp.complex64)
+    if processed_score_half.ndim != 2 or processed_score_half.shape[-1] != image_height * half_width:
+        raise ValueError(
+            "RELION powerClass input must be flattened centred rfft images, got "
+            f"{processed_score_half.shape} for image_shape={image_shape}"
+        )
+    resolution_limit = int(current_size) // 2 + 1
+    relion_image = jnp.roll(
+        processed_score_half.reshape((-1, image_height, half_width)),
+        -(image_height // 2),
+        axis=1,
+    ).reshape((processed_score_half.shape[0], -1))
+    relion_image = relion_image / jnp.asarray(image_height * image_width, dtype=jnp.float32)
+
+    rows = np.arange(image_height, dtype=np.int32)[:, None]
+    columns = np.arange(half_width, dtype=np.int32)[None, :]
+    signed_rows = np.where(rows < half_width, rows, rows - image_height)
+    radius_squared = columns * columns + signed_rows * signed_rows
+    shell = np.rint(np.sqrt(radius_squared.astype(np.float32))).astype(np.int32)
+    valid = (
+        (shell > 0)
+        & (shell < half_width)
+        & ~((columns == 0) & (signed_rows < 0))
+    ).reshape(-1)
+    shell = np.where(valid, shell.reshape(-1), half_width).astype(np.int32)
+
+    power = relion_image.real * relion_image.real
+    power = jax.lax.optimization_barrier(power)
+    power = power + relion_image.imag * relion_image.imag
+    spectrum = jax.vmap(
+        lambda row: bin_shell_values_jax(row, jnp.asarray(shell), half_width)
+    )(power)
+
+    # RELION copies the float32 spectrum to the host and adds the selected
+    # shells into an RFLOAT accumulator in increasing shell order.
+    def add_shell(shell_index, total):
+        return total + spectrum[:, shell_index].astype(jnp.float64)
+
+    high_shell = jax.lax.fori_loop(
+        resolution_limit,
+        half_width,
+        add_shell,
+        jnp.zeros((processed_score_half.shape[0],), dtype=jnp.float64),
+    )
+    return high_shell * jnp.asarray((image_height * image_width) ** 2, dtype=jnp.float64)
 
 
 def _relion_cuda_fine_diff2_min(diff2, candidate_mask):
@@ -10566,14 +10639,23 @@ def compute_pass2_stats_sparse_bucketed(
                 image_shape=image_shape,
                 current_size=current_size,
             )
-        relion_norm_high_shell = (
-            _relion_powerclass_highres_xi2_half_to_norm_units(
-                relion_highres_xi2_half,
-                image_shape,
-            )
-            if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None
-            else None
-        )
+        if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
+            if _env_flag_enabled(
+                "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM",
+                default=False,
+            ):
+                relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
+                    processed_score_half_for_noise,
+                    image_shape=image_shape,
+                    current_size=current_size,
+                )
+            else:
+                relion_norm_high_shell = _relion_powerclass_highres_xi2_half_to_norm_units(
+                    relion_highres_xi2_half,
+                    image_shape,
+                )
+        else:
+            relion_norm_high_shell = None
 
         # Window gather (if applicable)
         if use_window:
@@ -14115,14 +14197,23 @@ def compute_k_class_pass2_stats_sparse_fused(
                 image_shape=image_shape,
                 current_size=current_size,
             )
-        relion_norm_high_shell = (
-            _relion_powerclass_highres_xi2_half_to_norm_units(
-                relion_highres_xi2_half,
-                image_shape,
-            )
-            if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None
-            else None
-        )
+        if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
+            if _env_flag_enabled(
+                "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM",
+                default=False,
+            ):
+                relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
+                    processed_score_half_for_noise,
+                    image_shape=image_shape,
+                    current_size=current_size,
+                )
+            else:
+                relion_norm_high_shell = _relion_powerclass_highres_xi2_half_to_norm_units(
+                    relion_highres_xi2_half,
+                    image_shape,
+                )
+        else:
+            relion_norm_high_shell = None
         if use_window:
             ctf2_over_nv_score = ctf2_over_nv_half if windowed_prepare else ctf2_over_nv_half[:, window_indices]
             shifted_corrected_score = (

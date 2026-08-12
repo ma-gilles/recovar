@@ -86,6 +86,23 @@ def test_deterministic_norm_reduction_uses_float64_sum(monkeypatch):
     assert np.float32(per_image[0]) == expected
 
 
+def test_powerclass_spectrum_norm_preserves_float64_per_image(monkeypatch):
+    monkeypatch.setenv("RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM", "1")
+    processed = jnp.asarray([[3 + 4j, 5 + 12j]], dtype=jnp.complex64)
+
+    _, per_image = sparse._weighted_image_power_shells_and_per_image(
+        processed,
+        jnp.asarray([0, 1], dtype=jnp.int32),
+        jnp.ones(1, dtype=jnp.float32),
+        shell_count=2,
+        norm_unweighted_shell_cutoff=0,
+        norm_unweighted_high_shell=jnp.asarray([169.25], dtype=jnp.float64),
+    )
+
+    assert np.asarray(per_image).dtype == np.float64
+    np.testing.assert_array_equal(np.asarray(per_image), np.asarray([194.25]))
+
+
 def test_norm_capture_slices_and_reshapes_raw_translation_rows(tmp_path, monkeypatch):
     from recovar import cuda_backproject
 

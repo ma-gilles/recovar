@@ -9,6 +9,7 @@ import jax.numpy as jnp
 from recovar.em.dense_single_volume.helpers.half_spectrum import make_relion_noise_shell_indices_half
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_powerclass_highres_norm_units,
+    _relion_cuda_powerclass_spectrum_highres_norm_units,
 )
 from recovar.em.dense_single_volume.local_big_jit import (
     _norm_correction_image_power_mass,
@@ -137,3 +138,38 @@ def test_norm_correction_power_uses_relion_powerclass_once_or_not_at_all():
         rtol=2e-7,
         atol=2e-2,
     )
+
+
+def test_powerclass_spectrum_norm_sums_shell_bins_in_host_precision():
+    height = 8
+    current_size = 4
+    half_width = height // 2 + 1
+    centered = np.arange(height * half_width, dtype=np.float32).reshape(height, half_width)
+    centered = ((centered % 4) + 1j * (centered % 3)).astype(np.complex64)
+    processed = centered.reshape(1, -1) * np.float32(height * height)
+
+    actual = _relion_cuda_powerclass_spectrum_highres_norm_units(
+        jnp.asarray(processed),
+        image_shape=(height, height),
+        current_size=current_size,
+    )
+
+    relion_image = np.roll(centered, -(height // 2), axis=0)
+    expected = np.float64(0.0)
+    for y in range(height):
+        signed_y = y if y < half_width else y - height
+        for x in range(half_width):
+            shell = int(np.rint(np.sqrt(np.float32(x * x + signed_y * signed_y))))
+            if (
+                shell >= current_size // 2 + 1
+                and shell < half_width
+                and not (x == 0 and signed_y < 0)
+            ):
+                value = relion_image[y, x]
+                expected += np.float64(
+                    np.float32(value.real * value.real + value.imag * value.imag)
+                )
+    expected *= np.float64((height * height) ** 2)
+
+    assert np.asarray(actual).dtype == np.float64
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray([expected]))
