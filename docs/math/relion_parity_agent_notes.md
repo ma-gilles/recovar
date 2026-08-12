@@ -11738,3 +11738,36 @@ and `9/15` all-class.
   `ec9d3ce15fbe0b4aca01ecd38f6e19d6d7ab8fbdc031365154c318e53b048556`.
   Both artifact hashes and all 11 declared input hashes independently verify.
   Correlation was not computed.
+
+## 2026-08-12 case-22 iteration-1 normalization factor closure
+
+The first exact scalar departure after case-22's otherwise exact
+first-iteration E-step is now closed. Native RELION uses two distinct image
+power reductions for scoring and normalization: a block-tree high-resolution
+scalar for fine scoring, and a shellwise `powerClass` spectrum for the
+high-shell normalization tail. Its Wavg kernel also computes low-shell image
+power after float32 translation and retains per-pixel float32 accumulators
+until the host sum. RECOVAR had reused the scoring high-resolution scalar and
+untranslated image power.
+
+Default-off diagnostics at commits `030fdaae`, `74dae7fb`, and `58394280`
+replay those source-level boundaries. The initial combined integration job
+`12289683` failed before serialization because it passed a noise-weighted
+score image to Wavg; this is a rejected implementation, not science evidence.
+Corrected one-iteration job `12289913` passes. For captured stack image 1462,
+RECOVAR and native RELION now produce the same float32 normalization factor,
+`0x3f7ad9e2`. Across all 3,000 particles the correction changes 1,213 factors,
+almost always by one ULP and never by more than two. It leaves every Pmax,
+support count, and hard assignment unchanged. The merged iteration-1 signed
+non-DC FSC-AUC is `0.9999999999978554`.
+
+Reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_translated_wavg_norm_it1_retry2_20260812T1110ET/analysis/K1_STACK1462_NORM_STATE_BOUNDARY.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_translated_wavg_norm_it1_retry2_20260812T1110ET/analysis/K1_NORM_POPULATION_AB.json`.
+The remaining causal question is whether the corrected factor reduces the
+first iteration-2 posterior/map departure. High-shell-only prefix `12289068`
+and combined prefix `12290158` are bounded to two iterations; no longer run is
+authorized until their aligned iteration-2 comparison is positive. K=4 is
+parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
+`34/34` evaluated.

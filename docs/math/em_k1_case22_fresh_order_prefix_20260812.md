@@ -404,7 +404,26 @@ The power-spectrum-only counterfactual in job `12288900` makes the target
 normalization factor bit-exact and reduces its full update-input error by about
 52%. The combined captured-operand replay at commit `74dae7fb` gives
 `25091865.932280898`, only `0.11676681041717529` from native, a 95.2% closure
-relative to the historical 2.451-unit error. Both changes remain opt-in
-diagnostics. Two-iteration high-shell job `12289068` and one-iteration combined
-Wavg job `12289683` are the bounded downstream gates; neither changes the fixed
-`28/34` strict, `32/34` topology, `34/34` evaluated scorecard while pending.
+relative to the historical 2.451-unit error.
+
+The first combined integration attempt, job `12289683`, failed before state
+serialization because it incorrectly supplied the noise-weighted score image
+to the Wavg power boundary. Commit `58394280` instead routes the raw masked
+image through the exact CUDA Wavg translation. Corrected one-iteration job
+`12289913` completed `0:0` in `00:01:50`. For stack image 1462, the resulting
+RECOVAR factor is bit-exact with the captured native in-memory value:
+`0x3f7ad9e2` in both engines. Across all 3,000 particles, the combined path
+changes 1,213 factors relative to the historical control, with a maximum
+distance of two float32 ULP and a 95th percentile of one ULP in each half.
+All 3,000 Pmax values and all 3,000 significant-support counts remain exact;
+hard assignments are unchanged. The iteration-1 merged signed non-DC
+FSC-AUC is `0.9999999999978554`.
+
+The exact tagged-particle report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_translated_wavg_norm_it1_retry2_20260812T1110ET/analysis/K1_STACK1462_NORM_STATE_BOUNDARY.json`.
+The population A/B report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_translated_wavg_norm_it1_retry2_20260812T1110ET/analysis/K1_NORM_POPULATION_AB.json`.
+Both changes remain opt-in diagnostics. Two-iteration high-shell-only job
+`12289068` is running, and combined two-iteration causal gate `12290158` is
+pending. Neither changes the fixed `28/34` strict, `32/34` topology,
+`34/34` evaluated scorecard before its iteration-2 comparison passes.

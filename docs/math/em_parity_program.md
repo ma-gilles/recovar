@@ -15615,3 +15615,29 @@ gate is therefore an aligned iteration-2 E-step capture from raw score
 components through normalization, posterior, and the first per-particle
 BPref operand; no full trajectory is scheduled first.  The fixed scorecard
 remains `28/34` strict, `32/34` topology, and `34/34` evaluated.
+
+## 2026-08-12 case-22 first normalization boundary and next gate
+
+K=4 remains parked. The first exact scalar difference in the fresh-order
+case-22 trajectory is an iteration-1 normalization update, not a candidate,
+posterior, support, or reconstruction-map difference. Native RELION uses its
+shellwise `powerClass` spectrum for the normalization high tail and translated
+per-pixel Wavg image power for the low shell. RECOVAR had reused the distinct
+fine-score high-resolution scalar and untranslated image power.
+
+The corrected default-off diagnostic at commit `58394280` passes its focused
+unit gate and one-iteration integration job `12289913`. Captured stack image
+1462 now has the native bit-exact factor `0x3f7ad9e2`. Across all 3,000
+particles, 1,213 factors move by at most two ULP while Pmax, significant
+support, hard assignments, FSC, and noise state remain unchanged. The
+iteration-1 merged signed non-DC FSC-AUC is `0.9999999999978554`.
+
+The only active scientific discriminator is iteration 2. High-shell-only job
+`12289068` and combined high-plus-Wavg job `12290158` are bounded two-iteration
+prefixes. Compare their identity-aligned Pmax, support, poses, BPref
+accumulators, maps, signed shellwise FSC, and FSC-AUC with the frozen control
+and native iteration-2 state. If the combined arm does not materially reduce
+the first divergence, reject normalization as the dominant trajectory cause
+and return to the first unequal iteration-2 posterior/BPref operand. Do not
+run a longer trajectory first. The fixed K=1 score remains `28/34` strict,
+`32/34` topology, and `34/34` evaluated.
