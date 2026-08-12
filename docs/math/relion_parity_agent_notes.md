@@ -11844,3 +11844,40 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   coincident cutoff weights and are support-threshold amplifiers.
 - Analyzer/launcher changes are diagnostic only. K=4 remains parked and the
   fixed scorecard remains `28/34` strict, `32/34` topology, `34/34` evaluated.
+
+## 2026-08-12 14:45 ET — K=1 fine negative control and repeat-stable target
+
+- The complete stack-1462 iteration-2 fine table contains all 384 native
+  active tuples and exactly the same 195 significant tuples. Orientation
+  priors are bit-exact. The first exact inequality is raw `diff2`, with maximum
+  `1.52587890625e-5`; direction-posterior relative L2 is only
+  `6.274222675024169e-7`. A native reduction counterfactual changes raw-score
+  relative L2 only `3.80073e-8 -> 3.63420e-8`. This capture trajectory is
+  outside the robust native repeat envelope, so the residual is quarantined.
+- Stack 2739 is the repeat-stable target: RECOVAR Pmax is
+  `0.2612946927547455`, while two independent RELION runs give `0.250893` and
+  `0.250892` with identical pose, shift, and support count 40. Native coarse
+  capture job `12298305` preserves those discrete values and gives Pmax
+  `0.250913`; its target record is locally admissible.
+- Stopped stack-232 exact-coarse job `12297876` removes its one support-mask
+  mismatch (`52/52`) but slightly worsens coarse Pmax error and posterior TV.
+  The exact scorer is a demonstrated cutoff-amplifier repair, not the soft
+  trajectory seed, and is not promoted from this result.
+- The completed production fine dump proves the downstream topology change:
+  native has 248 unique fine rotations and 1,664 active tuples; RECOVAR is a
+  strict superset with eight extra rotations and 32 extra tuples from its one
+  extra coarse parent. There are no native-only fine tuples.
+- Stopped RECOVAR coarse job `12298296` will decide whether stack 2739 first
+  diverges in coarse scoring or fine pass 2. Native fine-side job `12298637`
+  completed in 517 seconds and wrote the complete fine score and BPref
+  geometry; its target remains locally stable at Pmax `0.250902`, support 40,
+  and the same hard pose/shift. K=4 remains parked and the fixed scorecard is
+  unchanged.
+- Job `12298296` completes that gate: coarse candidate topology, best tuple,
+  and support count 40 are exact. Posterior TV is `7.01740e-5` and maximum
+  posterior residual `6.24359e-5`, far below the final Pmax residual
+  `0.0104017`. The retained sets swap exactly two cutoff parents,
+  `(15173,20)` and `(29447,7)`. Fine-table job `12299407` failed only its
+  pre-run diff-hash gate and wrote no science output. Production retry
+  `12299447` and exact-coarse arm `12299506` test tuple-set propagation before
+  score, prior, normalization, support, and Pmax.

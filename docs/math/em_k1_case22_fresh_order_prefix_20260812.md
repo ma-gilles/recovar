@@ -562,3 +562,67 @@ Artifacts:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_coarse_panel_20260812T1404ET/coarse/significance_orig001461_it002_cs060.npz`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_coarse_panel_b_20260812T1407ET/coarse/`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1462_native_coarse_it2_20260812T1410ET/analysis/K1_STACK1462_IT2_COARSE_BOUNDARY.json`
+
+## Fine negative control and repeat-stable soft-posterior target
+
+The complete iteration-2 fine table for stack image 1462 provides a negative
+control. All 384 native active tuples are present, orientation priors are
+bit-exact, and both engines retain the same 195 significant tuples. The first
+exact inequality is raw fine `diff2`: 107/384 values differ, with maximum
+absolute residual `1.52587890625e-5` (one or two binary32 ULP at this scale).
+The normalized posterior relative L2 is `1.725562371054519e-6`, while the
+direction-binned posterior relative L2 is `6.274222675024169e-7`. Replaying
+RECOVAR operands with the source-faithful native reduction lowers raw-score
+relative L2 only from `3.800734571580958e-8` to
+`3.6341973571518895e-8`. Because this native capture trajectory is itself
+outside the robust repeat envelope at iteration 2, the residual is not a
+production-fix target. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1462_full_fine_it2_20260812T1420ET/analysis/K1_STACK1462_IT2_FINE_BOUNDARY.json`.
+
+Stack image 2739 is the repeat-stable soft-posterior control. After the
+direction-mass fix, RECOVAR has Pmax `0.2612946927547455`; two independent
+RELION controls have `0.250893` and `0.250892`, with identical pose, shift,
+and support count 40. Native coarse-capture job `12298305` retains those same
+discrete values and has Pmax `0.250913`, so the target particle remains locally
+valid even though passive capture may perturb unrelated particles. Its native
+coarse artifact is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2739_native_coarse_it3_20260812T1435ET/capture/part1933_stack2739.coarse-v1.bin`.
+The stopped stack-232 exact-coarse arm `12297876` removes the single support
+mismatch and retains RELION's 52 candidates, but does not improve its soft
+posterior. Coarse Pmax changes from production `0.4345438778400421` to
+`0.43452826142311096`, versus native `0.434539794921875`; posterior total
+variation versus the captured native table changes from `0.00015537` to
+`0.00017368`. This classifies exact coarse arithmetic as a cutoff-amplifier
+repair, not the remaining trajectory seed, and the broad diagnostic path is
+not promoted on this evidence.
+
+The completed production fine dump makes the structural consequence exact.
+Native stack 232 has 248 unique fine rotations and 1,664 active tuples;
+RECOVAR has the same 248 rotations and tuples plus eight child rotations and
+32 active tuples from its one extra coarse parent. There are zero native-only
+fine tuples. Thus the coarse cutoff mismatch is neither a reporting-only
+support difference nor a fine-grid construction bug: it directly changes the
+evaluated fine candidate set.
+
+Stopped RECOVAR stack-2739 coarse job `12298296` is the next staged gate. The
+matching native fine-side job `12298637` completed in 517 seconds and wrote
+coarse, complete fine-score, and BPref-geometry captures under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2739_native_fine_it3_20260812T1442ET/capture/`.
+Its target particle again has the same pose, shift, and support count 40, with
+Pmax `0.250902`. If the RECOVAR coarse posterior is close, the first material
+boundary is fine pass 2; otherwise the coarse raw-score/prior decomposition is
+continued. No full trajectory is authorized by these captures.
+
+Job `12298296` completed the coarse gate in 1,888 seconds. Candidate topology,
+the best coarse tuple, and the support count `40` are exact. Coarse posterior
+total variation is `7.017404100055894e-5`; the maximum posterior residual is
+`6.243586540222168e-5`, versus the final Pmax residual
+`0.010401692754745506`. The only discrete difference is a two-parent swap at
+the cutoff: RECOVAR includes `(15173,20)` instead of native `(29447,7)`, with
+posterior values around `5.21e-5`. The first material amplification is thus
+the coarse-support-to-fine-candidate boundary, or fine scoring on the common
+children, rather than coarse normalization itself. Fine-table job `12299407`
+failed its pre-run diff-hash provenance gate in four seconds and produced no
+science output. Retry `12299447` captures the production table, while exact-
+coarse arm `12299506` tests whether restoring the parent set closes the fine
+boundary; both stop before any M-step.
