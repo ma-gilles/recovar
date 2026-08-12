@@ -83,6 +83,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
 
 
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
+from recovar.em.dense_single_volume.helpers.iteration_history import RefinementHistory
 from recovar.em.dense_single_volume.frozen_boundary import (
     _restore_diagnostic_frozen_boundary_state,
 )
@@ -4831,14 +4832,9 @@ def _run_relion_iteration_loop(
         mean_variance_per_half = [mean_variance, mean_variance]
     _mark_setup_phase("initial_arrays")
 
-    # History tracking. Keep these plain lists because intermediate outputs
-    # serialize them directly.
-    current_sizes = []
-    state_swap_probe_applied_relion_iterations = []
-    fsc_history = []
-    fsc_for_growth_history = []
-    pixel_resolutions = []
-    wall_times = []
+    # History tracking: one RefinementHistory instance accumulates every
+    # per-iteration trajectory (see helpers/iteration_history.py).
+    history = RefinementHistory()
     per_half = PerHalfOutputs.empty()
     hard_assignments = per_half.hard_assignments
     previous_assignments = [None, None]
@@ -4856,26 +4852,7 @@ def _run_relion_iteration_loop(
     max_posterior_per_half = per_half.max_posterior
     rotation_posterior_per_half = per_half.rotation_posterior
     class_rotation_posterior_per_half = per_half.class_rotation_posterior
-    significant_counts = []
-    data_vs_prior_trajectory = []
     previous_data_vs_prior_for_scheduling = None
-    healpix_order_trajectory = []
-    ave_Pmax_trajectory = []
-    ave_Pmax_denominator_trajectory = []
-    pmax_per_image_history = []
-    # Per-iter per-shell trajectories for RELION parity diff (added for the
-    # 2026-04 audit). noise_radial_trajectory[i] = sigma2_noise per shell after
-    # iter i's noise update; tau2_radial_trajectory[i] = recovar's tau2 prior
-    # per shell after iter i's signal-prior update.
-    noise_radial_trajectory = []
-    noise_radial_per_half_trajectory = []
-    tau2_radial_trajectory = []
-    tau2_sigma2_trajectory = []
-    tau2_avg_weight_trajectory = []
-    tau2_shell_sum_trajectory = []
-    tau2_shell_count_trajectory = []
-    tau2_fsc_used_trajectory = []
-    tau2_ssnr_trajectory = []
     tau2_update_details = None
     tau2_update_details_per_half = None
 
@@ -4886,39 +4863,8 @@ def _run_relion_iteration_loop(
     # lower bound is min_sigma2_offset=2 Å² (ml_optimiser.cpp).
     current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(schedule.init_translation_sigma_angstrom)
     current_sigma_offset_angstrom = _mean_sigma_offset_per_half(current_sigma_offset_angstrom_per_half)
-    sigma_offset_used_trajectory = []
-    sigma_offset_used_per_half_trajectory = []
-    sigma_offset_trajectory = []
-    sigma_offset_per_half_trajectory = []
-    # D.2: per-class sigma_offset diagnostic trajectory. RELION Class3D uses
-    # one shared sigma2_offset; K>1 vectors here are telemetry only and must
-    # not feed the live translation prior.
-    per_class_sigma_offset_trajectory = []
-    # Per-iteration snapshots of RELION's learned pdf_direction state.
-    # Entries are [half1, half2] and may be ragged as HEALPix order grows.
-    direction_prior_trajectory_per_half = []
-    # Preserve the pre-collapse orientation posterior so a direction-prior
-    # mismatch can be localized to posterior aggregation versus collapse.
-    rotation_posterior_trajectory_per_half = []
-    frac_changed_trajectory = []
-    acc_rot_trajectory = []
-    acc_trans_trajectory = []
-    acc_rot_per_class_trajectory = []
-    acc_trans_per_class_trajectory = []
-    expected_accuracy_class_counts_trajectory = []
-    expected_accuracy_status_trajectory = []
     expected_accuracy_trial_local_indices = None
     expected_accuracy_trial_particle_ids = None
-    smallest_change_angles_trajectory = []
-    smallest_change_offsets_trajectory = []
-    best_rotation_eulers_history = []
-    best_translations_history = []
-    class_weight_trajectory = []
-    class_mstep_weight_trajectory = []
-    class_full_posterior_weight_trajectory = []
-    class_assignment_history = []
-    local_profile_history = []
-    global_profile_history = []
     relion_incr_size = int(schedule.init_relion_incr_size)
     if relion_incr_size <= 0:
         raise ValueError("init_relion_incr_size must be positive")
@@ -5032,11 +4978,7 @@ def _run_relion_iteration_loop(
     relion_follower_scale_state = None
     relion_follower_owners_per_half = [None, None]
     relion_follower_owners_by_iteration = None
-    relion_follower_owners_half1_trajectory = []
-    relion_scale_follower_scales_numbered_pre_score_trajectory = []
-    relion_scale_follower_scales_numbered_post_mstep_trajectory = []
     relion_follower_scale_replay_by_iteration = {}
-    relion_follower_scale_replay_applied_iterations = []
     relion_scale_stats_group_ids_per_half = relion_half_inputs.group_ids
     relion_scale_stats_group_count_per_half = relion_half_inputs.group_count
     physical_group_count = 0
@@ -5232,7 +5174,7 @@ def _run_relion_iteration_loop(
             return None, None
         requested, applied = validate_relion_follower_scale_replay_application(
             replay.relion_follower_scale_replay,
-            applied_iterations=relion_follower_scale_replay_applied_iterations,
+            applied_iterations=history.relion_follower_scale_replay_applied_iterations,
         )
         logger.info(
             "Diagnostic RELION follower-scale replay complete: source=%s requested=%s applied=%s",
@@ -5353,7 +5295,7 @@ def _run_relion_iteration_loop(
             ]
             replayed_follower_scale_state = False
             if numbered_relion_iteration in relion_follower_scale_replay_by_iteration:
-                if numbered_relion_iteration in relion_follower_scale_replay_applied_iterations:
+                if numbered_relion_iteration in history.relion_follower_scale_replay_applied_iterations:
                     raise RuntimeError(
                         "RELION follower-scale replay iteration was reached more than once: "
                         f"{numbered_relion_iteration}"
@@ -5368,9 +5310,7 @@ def _run_relion_iteration_loop(
                     ).copy(),
                     n_optics_groups=int(relion_follower_scale_state.n_optics_groups),
                 )
-                relion_follower_scale_replay_applied_iterations.append(
-                    numbered_relion_iteration
-                )
+                history.record_follower_replay_applied(numbered_relion_iteration)
                 replayed_follower_scale_state = True
                 logger.info(
                     "Diagnostic RELION follower-scale replay: numbered_iter=%d source=%s",
@@ -5384,11 +5324,9 @@ def _run_relion_iteration_loop(
                     follower_owners_per_half=relion_follower_owners_per_half,
                     physical_group_count=physical_group_count,
                 )
-            relion_scale_follower_scales_numbered_pre_score_trajectory.append(
-                np.asarray(relion_follower_scale_state.scales, dtype=np.float64).copy()
-            )
-            relion_follower_owners_half1_trajectory.append(
-                relion_follower_owners_per_half[0].copy()
+            history.record_follower_scale_pre_score(
+                np.asarray(relion_follower_scale_state.scales, dtype=np.float64).copy(),
+                relion_follower_owners_per_half[0].copy(),
             )
             logger.info(
                 "Strict RELION dynamic dispatch: numbered_iter=%d rank_particle_counts=%s",
@@ -5459,7 +5397,7 @@ def _run_relion_iteration_loop(
                 cs = _bootstrap_current_size_relion(schedule.init_current_size, grid_size)
                 data_vs_prior_iter = None
         else:
-            prev_cs = current_sizes[-1]
+            prev_cs = history.current_sizes[-1]
             if k_class_enabled:
                 if previous_data_vs_prior_for_scheduling is None:
                     raise RuntimeError("K-class current-size scheduling requires a previous data_vs_prior curve")
@@ -5523,9 +5461,9 @@ def _run_relion_iteration_loop(
                     )
                 cs = computed_cs
             else:
-                fsc_prev_raw = np.asarray(fsc_history[-1], dtype=np.float32).copy()
+                fsc_prev_raw = np.asarray(history.fsc_history[-1], dtype=np.float32).copy()
                 fsc_prev_for_growth = _truncate_fsc_for_current_size_growth(
-                    fsc_for_growth_history[-1] if fsc_for_growth_history else fsc_prev_raw,
+                    history.fsc_for_growth_history[-1] if history.fsc_for_growth_history else fsc_prev_raw,
                     current_size=prev_cs,
                     grid_size=grid_size,
                 )
@@ -5768,9 +5706,7 @@ def _run_relion_iteration_loop(
                 use_per_half_mean_variance=False,
             )
         if state_swap_target_this_iteration:
-            state_swap_probe_applied_relion_iterations.append(
-                int(init_relion_iteration) + int(iteration) + 1
-            )
+            history.record_state_swap_probe_iteration(int(init_relion_iteration) + int(iteration) + 1)
         if frozen_initial_scoring_state is not None and iteration == 0:
             frozen_initial_scoring_state_sha256 = _assert_frozen_scoring_state_unchanged(
                 frozen_initial_scoring_state,
@@ -5900,10 +5836,12 @@ def _run_relion_iteration_loop(
                 target_healpix_order,
             )
 
-        sigma_offset_used_trajectory.append(float(current_sigma_offset_angstrom))
-        sigma_offset_used_per_half_trajectory.append(_copy_optional_float_pair(current_sigma_offset_angstrom_per_half))
-        current_sizes.append(cs)
-        healpix_order_trajectory.append(state.healpix_order)
+        history.record_scheduling(
+            cs,
+            state.healpix_order,
+            float(current_sigma_offset_angstrom),
+            _copy_optional_float_pair(current_sigma_offset_angstrom_per_half),
+        )
         current_size = int(cs)
 
         logger.info(
@@ -6714,7 +6652,7 @@ def _run_relion_iteration_loop(
                     best_pose_rotations=best_pose_rotations,
                     best_pose_rotation_eulers=best_pose_rotation_eulers,
                     best_pose_translations=best_pose_translations,
-                    local_profile_history=local_profile_history,
+                    local_profile_history=history.local_profile_history,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                 )
@@ -6927,7 +6865,7 @@ def _run_relion_iteration_loop(
             Ft_ctf_k = score_result.Ft_ctf
             per_half.update_from(k, score_result)
             _record_score_profile(
-                global_profile_history,
+                history.global_profile_history,
                 score_result,
                 phase="iteration",
                 iteration=iteration,
@@ -7015,7 +6953,7 @@ def _run_relion_iteration_loop(
             logger.info(
                 "Stopping after local-search diagnostic at iteration %d: profiles=%d score_only=%s wall=%.1fs",
                 iteration + 1,
-                len(local_profile_history),
+                len(history.local_profile_history),
                 bool(debug.stop_after_local_search_score_only),
                 elapsed,
             )
@@ -7034,64 +6972,19 @@ def _run_relion_iteration_loop(
                 "class_means": merged_class_means,
                 "class_weights": class_weights if k_class_enabled else None,
                 "class_assignments": class_assignments if k_class_enabled else None,
-                "class_weight_trajectory": class_weight_trajectory,
-                "class_mstep_weight_trajectory": class_mstep_weight_trajectory,
-                "class_full_posterior_weight_trajectory": class_full_posterior_weight_trajectory,
-                "class_assignment_history": class_assignment_history,
                 "relion_follower_scale_replay_requested_iterations": replay_requested_iterations,
                 "relion_follower_scale_replay_applied_iterations": replay_applied_iterations,
-                "state_swap_probe_applied_relion_iterations": list(
-                    state_swap_probe_applied_relion_iterations
-                ),
-                "fsc": fsc_history[-1] if fsc_history else None,
                 "hard_assignments": hard_assignments,
-                "current_sizes": current_sizes,
-                "fsc_history": fsc_history,
-                "pixel_resolutions": pixel_resolutions,
-                "wall_times": [elapsed],
-                "significant_counts": [iter_recorded_sig_counts],
                 "convergence_state": state,
-                "data_vs_prior_trajectory": data_vs_prior_trajectory,
-                "healpix_order_trajectory": healpix_order_trajectory,
-                "ave_Pmax_trajectory": ave_Pmax_trajectory,
-                "ave_Pmax_denominator_trajectory": ave_Pmax_denominator_trajectory,
-                "pmax_per_image_history": pmax_per_image_history,
-                "noise_radial_trajectory": noise_radial_trajectory,
-                "noise_radial_per_half_trajectory": noise_radial_per_half_trajectory,
-                "tau2_radial_trajectory": tau2_radial_trajectory,
-                "tau2_sigma2_trajectory": tau2_sigma2_trajectory,
-                "tau2_avg_weight_trajectory": tau2_avg_weight_trajectory,
-                "tau2_shell_sum_trajectory": tau2_shell_sum_trajectory,
-                "tau2_shell_count_trajectory": tau2_shell_count_trajectory,
-                "tau2_fsc_used_trajectory": tau2_fsc_used_trajectory,
-                "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
-                "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
-                "sigma_offset_used_per_half_trajectory": sigma_offset_used_per_half_trajectory,
-                "sigma_offset_used_trajectory_per_half": sigma_offset_used_per_half_trajectory,
-                "sigma_offset_trajectory": sigma_offset_trajectory,
-                "sigma_offset_per_half_trajectory": sigma_offset_per_half_trajectory,
-                "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
-                "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
-                "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
                 "frozen_initial_scoring_state_sha256": frozen_initial_scoring_state_sha256,
-                "frac_changed_trajectory": frac_changed_trajectory,
-                "acc_rot_trajectory": acc_rot_trajectory,
-                "acc_trans_trajectory": acc_trans_trajectory,
-                "acc_rot_per_class_trajectory": acc_rot_per_class_trajectory,
-                "acc_trans_per_class_trajectory": acc_trans_per_class_trajectory,
-                "expected_accuracy_class_counts_trajectory": expected_accuracy_class_counts_trajectory,
-                "expected_accuracy_status_trajectory": expected_accuracy_status_trajectory,
                 "expected_accuracy_trial_local_indices": expected_accuracy_trial_local_indices,
                 "expected_accuracy_trial_particle_ids": expected_accuracy_trial_particle_ids,
-                "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
-                "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
-                "best_rotation_eulers_history": best_rotation_eulers_history,
-                "best_translations_history": best_translations_history,
                 "final_all_data_ran": False,
                 "stop_after_local_search_score_only": bool(debug.stop_after_local_search_score_only),
-                "local_profile_history": local_profile_history,
-                "global_profile_history": global_profile_history,
                 "setup_phase_seconds": setup_phase_seconds,
+                **history.to_dict(),
+                "wall_times": [elapsed],
+                "significant_counts": [iter_recorded_sig_counts],
             }
         if k_class_enabled:
             class_weights = _class_weights_from_posterior(
@@ -7100,14 +6993,14 @@ def _run_relion_iteration_loop(
                 class_weights,
             )
             class_log_priors = np.log(class_weights)
-            class_weight_trajectory.append(class_weights.copy())
-            class_mstep_weight_trajectory.append(class_weights.copy())
-            class_full_posterior_weight_trajectory.append(
+            history.record_class_weights(
+                class_weights.copy(),
+                class_weights.copy(),
                 _class_weights_from_posterior(
                     class_full_posterior_per_half,
                     n_classes,
                     class_weights,
-                ).copy()
+                ).copy(),
             )
             logger.info(
                 "K-class occupancies: %s",
@@ -7172,8 +7065,8 @@ def _run_relion_iteration_loop(
             Ft_ctf_combined = _combine_optional_half_accumulators(Ft_ctf_0, Ft_ctf_1, label="Ft_ctf")
         elif parity.low_resol_join_halves_angstrom is not None and parity.low_resol_join_halves_angstrom > 0:
             prev_res_angstrom = None
-            if pixel_resolutions:
-                prev_pixel_res = pixel_resolutions[-1]
+            if history.pixel_resolutions:
+                prev_pixel_res = history.pixel_resolutions[-1]
                 if prev_pixel_res > 0:
                     prev_res_angstrom = shell_index_to_resolution_angstrom(
                         prev_pixel_res,
@@ -7472,7 +7365,7 @@ def _run_relion_iteration_loop(
             data_vs_prior_iter = np.stack(
                 [np.asarray(dvp, dtype=np.float32) for dvp in data_vs_prior_per_class], axis=0
             )
-            data_vs_prior_trajectory.append(data_vs_prior_iter)
+            history.record_data_vs_prior(data_vs_prior_iter)
             previous_data_vs_prior_for_scheduling = data_vs_prior_iter
             tau2_update_details = {
                 key: np.stack([detail[key] for detail in tau2_update_details_per_class], axis=0)
@@ -7741,9 +7634,9 @@ def _run_relion_iteration_loop(
             )
         _parity_dump.mark_stage(iteration, "recon")
 
-        significant_counts.append(iter_recorded_sig_counts)
+        history.record_significant_counts(iter_recorded_sig_counts)
 
-        rotation_posterior_trajectory_per_half.append(
+        history.record_rotation_posterior(
             [
                 None if value is None else np.asarray(value, dtype=np.float64).copy()
                 for value in rotation_posterior_per_half
@@ -7809,7 +7702,7 @@ def _run_relion_iteration_loop(
                 else np.asarray(global_direction_prior_per_half[k], dtype=np.float64).copy()
                 for k in range(2)
             ]
-        direction_prior_trajectory_per_half.append(direction_prior_snapshot)
+        history.record_direction_prior(direction_prior_snapshot)
 
         # --- Compute unregularized half-maps only when diagnostics need them ---
         # K=1 FSC was already computed above directly from the BackProjector
@@ -7844,8 +7737,7 @@ def _run_relion_iteration_loop(
         # K=1 keeps the split-half FSC history.
         if k_class_enabled:
             fsc = None
-            fsc_history.append(fsc)
-            fsc_for_growth_history.append(None)
+            history.record_fsc(fsc, None)
             _parity_dump.mark_stage(iteration, "fsc")
         else:
             # FSC was already computed above in the RELION-exact ordering block
@@ -7853,8 +7745,7 @@ def _run_relion_iteration_loop(
             # Reuse it here — recomputing would give the same value (same
             # underlying unreg accumulators).
             fsc = current_iter_fsc
-            fsc_history.append(fsc)
-            fsc_for_growth_history.append(tau2_fsc_for_update)
+            history.record_fsc(fsc, tau2_fsc_for_update)
             _parity_dump.mark_stage(iteration, "fsc")
 
         # --- Save intermediate volumes if requested ---
@@ -7914,9 +7805,7 @@ def _run_relion_iteration_loop(
                 ave_pmax_denominator,
                 int(np.asarray(max_posterior_per_half[0]).size),
             )
-        ave_Pmax_trajectory.append(ave_pmax)
-        ave_Pmax_denominator_trajectory.append(ave_pmax_denominator)
-        pmax_per_image_history.append(combined_max_posterior.copy())
+        history.record_pmax(ave_pmax, ave_pmax_denominator, combined_max_posterior.copy())
 
         # --- Track per-image best assignments for convergence detection ---
         # Combine both half-sets' assignments into a single array for
@@ -7938,7 +7827,7 @@ def _run_relion_iteration_loop(
                 [np.asarray(cls, dtype=np.int32) for cls in class_assignments],
                 axis=0,
             )
-            class_assignment_history.append(current_combined_classes.copy())
+            history.record_class_assignment(current_combined_classes.copy())
             if all(cls is not None for cls in previous_class_assignments):
                 previous_combined_classes = np.concatenate(
                     [np.asarray(cls, dtype=np.int32) for cls in previous_class_assignments],
@@ -7959,7 +7848,7 @@ def _run_relion_iteration_loop(
         # combined class accumulators.
         if k_class_enabled:
             dvp_iter = _truncate_data_vs_prior_for_current_size(
-                data_vs_prior_trajectory[-1],
+                history.data_vs_prior_trajectory[-1],
                 current_size=cs,
                 grid_size=grid_size,
             )
@@ -8064,7 +7953,7 @@ def _run_relion_iteration_loop(
             )
             np.savez(_tau2_dump_path, **_tau2_dump)
             logger.info("RELION tau2 debug dump written: %s", _tau2_dump_path)
-        pixel_resolutions.append(pixel_res)
+        history.record_pixel_resolution(pixel_res)
 
         # --- Update poses and noise ---
         # Snapshot the iter K-1 best rotations / translations BEFORE the
@@ -8127,11 +8016,9 @@ def _run_relion_iteration_loop(
         previous_best_rotations = new_iter_best_rotations
         relion_half_inputs.previous_best_rotation_eulers = new_iter_best_rotation_eulers
         relion_half_inputs.previous_best_translations = new_iter_best_translations
-        best_rotation_eulers_history.append(
-            [np.asarray(e).copy() if e is not None else None for e in new_iter_best_rotation_eulers]
-        )
-        best_translations_history.append(
-            [np.asarray(t).copy() if t is not None else None for t in new_iter_best_translations]
+        history.record_pose_history(
+            [np.asarray(e).copy() if e is not None else None for e in new_iter_best_rotation_eulers],
+            [np.asarray(t).copy() if t is not None else None for t in new_iter_best_translations],
         )
 
         current_rotation_matrices_combined = _concatenate_pose_stacks_or_none(
@@ -8156,7 +8043,7 @@ def _run_relion_iteration_loop(
         )
 
         if not k_class_enabled:
-            data_vs_prior_trajectory.append(np.asarray(dvp_iter, dtype=np.float32))
+            history.record_data_vs_prior(np.asarray(dvp_iter, dtype=np.float32))
             previous_data_vs_prior_for_scheduling = np.asarray(dvp_iter, dtype=np.float32)
 
         # RELION-style posterior-weighted noise update. Helper folds the
@@ -8293,36 +8180,28 @@ def _run_relion_iteration_loop(
                 "for every numbered iteration"
             )
         if relion_follower_scale_state is not None:
-            relion_scale_follower_scales_numbered_post_mstep_trajectory.append(
+            history.record_follower_scale_post_mstep(
                 np.asarray(relion_follower_scale_state.scales, dtype=np.float64).copy()
             )
 
         # Save per-iter per-shell sigma2 (after this iter's noise update) and
         # the exact shell-wise tau2 ingredients used in the Wiener update.
-        noise_radial_trajectory.append(np.asarray(noise_from_res, dtype=np.float64))
-        noise_radial_per_half_trajectory.append(
+        history.record_noise_and_tau2(
+            np.asarray(noise_from_res, dtype=np.float64),
             np.stack([np.asarray(noise_k, dtype=np.float64) for noise_k in noise_from_res_per_half], axis=0),
+            None
+            if tau2_update_details is None
+            else {
+                "prior_shells": np.asarray(tau2_update_details["prior_shells"], dtype=np.float64),
+                "sigma2_shells": np.asarray(tau2_update_details["sigma2_shells"], dtype=np.float64),
+                "avg_weight_shells": np.asarray(tau2_update_details["avg_weight_shells"], dtype=np.float64),
+                "shell_sum": np.asarray(tau2_update_details["shell_sum"], dtype=np.float64),
+                "shell_count": np.asarray(tau2_update_details["shell_count"], dtype=np.float64),
+                "fsc_shells": None if k_class_enabled else np.asarray(tau2_update_details["fsc_shells"], dtype=np.float64),
+                "ssnr_shells": np.asarray(tau2_update_details["ssnr_shells"], dtype=np.float64),
+            },
+            k_class_enabled=k_class_enabled,
         )
-        if tau2_update_details is not None:
-            tau2_radial_trajectory.append(np.asarray(tau2_update_details["prior_shells"], dtype=np.float64))
-            tau2_sigma2_trajectory.append(np.asarray(tau2_update_details["sigma2_shells"], dtype=np.float64))
-            tau2_avg_weight_trajectory.append(np.asarray(tau2_update_details["avg_weight_shells"], dtype=np.float64))
-            tau2_shell_sum_trajectory.append(np.asarray(tau2_update_details["shell_sum"], dtype=np.float64))
-            tau2_shell_count_trajectory.append(np.asarray(tau2_update_details["shell_count"], dtype=np.float64))
-            if k_class_enabled:
-                tau2_fsc_used_trajectory.append(None)
-                tau2_ssnr_trajectory.append(np.asarray(tau2_update_details["ssnr_shells"], dtype=np.float64))
-            else:
-                tau2_fsc_used_trajectory.append(np.asarray(tau2_update_details["fsc_shells"], dtype=np.float64))
-                tau2_ssnr_trajectory.append(np.asarray(tau2_update_details["ssnr_shells"], dtype=np.float64))
-        else:
-            tau2_radial_trajectory.append(None)
-            tau2_sigma2_trajectory.append(None)
-            tau2_avg_weight_trajectory.append(None)
-            tau2_shell_sum_trajectory.append(None)
-            tau2_shell_count_trajectory.append(None)
-            tau2_fsc_used_trajectory.append(None)
-            tau2_ssnr_trajectory.append(None)
 
         # --- Update convergence state ---
         # This checks assignment changes, resolution stalls, and may trigger
@@ -8521,7 +8400,7 @@ def _run_relion_iteration_loop(
             current_healpix_order,
         )
         state._last_frac_changed = frac_changed
-        frac_changed_trajectory.append(float(frac_changed))
+        history.record_frac_changed(float(frac_changed))
 
         # --- C1 (RELION-parity): update sigma2_offset from data ---
         # Posterior-weighted RELION update with fallback to hard-assignment
@@ -8540,31 +8419,27 @@ def _run_relion_iteration_loop(
             sigma_offset_result.current_sigma_offset_angstrom_per_half
         )
         per_class_sigma_offset = sigma_offset_result.per_class_sigma_offset_angstrom
-        sigma_offset_trajectory.append(float(current_sigma_offset_angstrom))
-        sigma_offset_per_half_trajectory.append(_copy_optional_float_pair(current_sigma_offset_angstrom_per_half))
-        per_class_sigma_offset_trajectory.append(
-            None if per_class_sigma_offset is None else per_class_sigma_offset.tolist()
+        history.record_sigma_offset_update(
+            float(current_sigma_offset_angstrom),
+            _copy_optional_float_pair(current_sigma_offset_angstrom_per_half),
+            None if per_class_sigma_offset is None else per_class_sigma_offset.tolist(),
         )
-        acc_rot_trajectory.append(float(iter_acc_rot) if iter_acc_rot is not None else np.nan)
-        acc_trans_trajectory.append(float(iter_acc_trans) if iter_acc_trans is not None else np.nan)
-        acc_rot_per_class_trajectory.append(
+        history.record_pose_accuracy_diagnostics(
+            float(iter_acc_rot) if iter_acc_rot is not None else np.nan,
+            float(iter_acc_trans) if iter_acc_trans is not None else np.nan,
             np.full(n_classes, np.nan, dtype=np.float64)
             if exact_acc_rot_per_class_this_iter is None
-            else exact_acc_rot_per_class_this_iter
-        )
-        acc_trans_per_class_trajectory.append(
+            else exact_acc_rot_per_class_this_iter,
             np.full(n_classes, np.nan, dtype=np.float64)
             if exact_acc_trans_per_class_this_iter is None
-            else exact_acc_trans_per_class_this_iter
-        )
-        expected_accuracy_class_counts_trajectory.append(
+            else exact_acc_trans_per_class_this_iter,
             np.full(n_classes, -1, dtype=np.int64)
             if exact_accuracy_class_counts_this_iter is None
-            else exact_accuracy_class_counts_this_iter
+            else exact_accuracy_class_counts_this_iter,
+            exact_accuracy_status_this_iter,
+            float(state.current_changes_optimal_orientations),
+            float(state.current_changes_optimal_offsets_angstrom),
         )
-        expected_accuracy_status_trajectory.append(exact_accuracy_status_this_iter)
-        smallest_change_angles_trajectory.append(float(state.current_changes_optimal_orientations))
-        smallest_change_offsets_trajectory.append(float(state.current_changes_optimal_offsets_angstrom))
 
         # Save assignments for next iteration's change tracking.
         # Use coarse_ha (indexed into effective_rotations/current_rotations)
@@ -8622,7 +8497,7 @@ def _run_relion_iteration_loop(
 
         # --- Timing ---
         elapsed = time.time() - t0
-        wall_times.append(elapsed)
+        history.record_wall_time(elapsed)
 
         res_angstrom = shell_index_to_resolution_angstrom(
             pixel_res,
@@ -8721,15 +8596,8 @@ def _run_relion_iteration_loop(
             "class_means": merged_class_means,
             "class_weights": class_weights if k_class_enabled else None,
             "class_assignments": class_assignments if k_class_enabled else None,
-            "class_weight_trajectory": class_weight_trajectory,
-            "class_mstep_weight_trajectory": class_mstep_weight_trajectory,
-            "class_full_posterior_weight_trajectory": class_full_posterior_weight_trajectory,
-            "class_assignment_history": class_assignment_history,
             "relion_follower_scale_replay_requested_iterations": replay_requested_iterations,
             "relion_follower_scale_replay_applied_iterations": replay_applied_iterations,
-            "state_swap_probe_applied_relion_iterations": list(
-                state_swap_probe_applied_relion_iterations
-            ),
             "relion_scale_follower_scales": (
                 None
                 if relion_follower_scale_state is None
@@ -8748,13 +8616,13 @@ def _run_relion_iteration_loop(
             "relion_scale_follower_owners_half1_trajectory": (
                 None
                 if relion_follower_scale_state is None
-                else np.asarray(relion_follower_owners_half1_trajectory, dtype=np.int64)
+                else np.asarray(history.relion_follower_owners_half1_trajectory, dtype=np.int64)
             ),
             "relion_scale_follower_scales_numbered_pre_score_trajectory": (
                 None
                 if relion_follower_scale_state is None
                 else np.asarray(
-                    relion_scale_follower_scales_numbered_pre_score_trajectory,
+                    history.relion_scale_follower_scales_numbered_pre_score_trajectory,
                     dtype=np.float64,
                 )
             ),
@@ -8762,59 +8630,18 @@ def _run_relion_iteration_loop(
                 None
                 if relion_follower_scale_state is None
                 else np.asarray(
-                    relion_scale_follower_scales_numbered_post_mstep_trajectory,
+                    history.relion_scale_follower_scales_numbered_post_mstep_trajectory,
                     dtype=np.float64,
                 )
             ),
-            "fsc": fsc_history[-1] if fsc_history else None,
             "hard_assignments": hard_assignments,
-            "current_sizes": current_sizes,
-            "fsc_history": fsc_history,
-            "pixel_resolutions": pixel_resolutions,
-            "wall_times": wall_times,
-            "significant_counts": significant_counts,
             "convergence_state": state,
-            "data_vs_prior_trajectory": data_vs_prior_trajectory,
-            "healpix_order_trajectory": healpix_order_trajectory,
-            "ave_Pmax_trajectory": ave_Pmax_trajectory,
-            "ave_Pmax_denominator_trajectory": ave_Pmax_denominator_trajectory,
-            "pmax_per_image_history": pmax_per_image_history,
-            "noise_radial_trajectory": noise_radial_trajectory,
-            "noise_radial_per_half_trajectory": noise_radial_per_half_trajectory,
-            "tau2_radial_trajectory": tau2_radial_trajectory,
-            "tau2_sigma2_trajectory": tau2_sigma2_trajectory,
-            "tau2_avg_weight_trajectory": tau2_avg_weight_trajectory,
-            "tau2_shell_sum_trajectory": tau2_shell_sum_trajectory,
-            "tau2_shell_count_trajectory": tau2_shell_count_trajectory,
-            "tau2_fsc_used_trajectory": tau2_fsc_used_trajectory,
-            "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
-            "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
-            "sigma_offset_used_per_half_trajectory": sigma_offset_used_per_half_trajectory,
-            "sigma_offset_used_trajectory_per_half": sigma_offset_used_per_half_trajectory,
-            "sigma_offset_trajectory": sigma_offset_trajectory,
-            "sigma_offset_per_half_trajectory": sigma_offset_per_half_trajectory,
-            "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
-            "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
-            "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
-            "rotation_posterior_trajectory_per_half": rotation_posterior_trajectory_per_half,
             "frozen_initial_scoring_state_sha256": frozen_initial_scoring_state_sha256,
-            "frac_changed_trajectory": frac_changed_trajectory,
-            "acc_rot_trajectory": acc_rot_trajectory,
-            "acc_trans_trajectory": acc_trans_trajectory,
-            "acc_rot_per_class_trajectory": acc_rot_per_class_trajectory,
-            "acc_trans_per_class_trajectory": acc_trans_per_class_trajectory,
-            "expected_accuracy_class_counts_trajectory": expected_accuracy_class_counts_trajectory,
-            "expected_accuracy_status_trajectory": expected_accuracy_status_trajectory,
             "expected_accuracy_trial_local_indices": expected_accuracy_trial_local_indices,
             "expected_accuracy_trial_particle_ids": expected_accuracy_trial_particle_ids,
-            "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
-            "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
-            "best_rotation_eulers_history": best_rotation_eulers_history,
-            "best_translations_history": best_translations_history,
             "final_all_data_ran": False,
-            "local_profile_history": local_profile_history,
-            "global_profile_history": global_profile_history,
             "setup_phase_seconds": setup_phase_seconds,
+            **history.to_dict(),
         }
     if not state.has_converged:
         logger.info(
@@ -8866,12 +8693,12 @@ def _run_relion_iteration_loop(
             or replay.final_replay_reference_maps is not None
         )
         and replay.final_replay_source_iteration is not None
-        and int(len(current_sizes)) != int(replay.final_replay_source_iteration)
+        and int(len(history.current_sizes)) != int(replay.final_replay_source_iteration)
     ):
         raise RuntimeError(
             "Diagnostic final-only substitution source does not match autonomous convergence boundary: "
             f"source_iteration={int(replay.final_replay_source_iteration)} "
-            f"numbered_iteration_count={int(len(current_sizes))}"
+            f"numbered_iteration_count={int(len(history.current_sizes))}"
         )
     if replay.final_replay_reference_maps is not None:
         if k_class_enabled:
@@ -8898,7 +8725,7 @@ def _run_relion_iteration_loop(
         ]
         logger.info(
             "Diagnostic final-only RELION reference substitution at numbered boundary %d",
-            int(len(current_sizes)),
+            int(len(history.current_sizes)),
         )
     final_replay_last_numbered_state = (
         diagnostic_final_replay_override is not None
@@ -8908,7 +8735,7 @@ def _run_relion_iteration_loop(
         )
     )
     if final_replay_last_numbered_state:
-        final_replay_requested_index = int(len(current_sizes))
+        final_replay_requested_index = int(len(history.current_sizes))
         final_replay_override_index = final_replay_requested_index
         if diagnostic_final_replay_override is not None:
             final_replay_override = diagnostic_final_replay_override
@@ -9050,7 +8877,7 @@ def _run_relion_iteration_loop(
         )
     if relion_follower_scale_state is not None:
         final_dispatch_relion_iteration = (
-            int(init_relion_iteration) + int(len(current_sizes)) + 1
+            int(init_relion_iteration) + int(len(history.current_sizes)) + 1
         )
         relion_follower_owners_per_half = [
             owners.copy()
@@ -9163,8 +8990,8 @@ def _run_relion_iteration_loop(
     # the last split-half refinement step. Prefer an explicit numbered final
     # STAR when available; otherwise use the unnumbered final run_sampling.star.
     # Current RELION writes final all-data metadata from run_sampling.star.
-    final_sampling_relion_iteration = int(init_relion_iteration) + int(len(current_sizes)) + 1
-    final_numbered_sampling_relion_iteration = int(init_relion_iteration) + int(len(current_sizes))
+    final_sampling_relion_iteration = int(init_relion_iteration) + int(len(history.current_sizes)) + 1
+    final_numbered_sampling_relion_iteration = int(init_relion_iteration) + int(len(history.current_sizes))
     final_sampling_star = None
     final_sampling_star_source = None
     final_random_perturbation = 0.0
@@ -9702,7 +9529,7 @@ def _run_relion_iteration_loop(
                 best_pose_rotations=final_outs.best_pose_rotations,
                 best_pose_rotation_eulers=final_outs.best_pose_rotation_eulers,
                 best_pose_translations=final_outs.best_pose_translations,
-                local_profile_history=local_profile_history,
+                local_profile_history=history.local_profile_history,
                 relion_projector_half=final_relion_projector_half_by_half[k],
                 relion_projector_r_max=final_relion_projector_r_max_by_half[k],
             )
@@ -9767,7 +9594,7 @@ def _run_relion_iteration_loop(
             )
         final_outs.update_from(k, final_result)
         _record_score_profile(
-            global_profile_history,
+            history.global_profile_history,
             final_result,
             phase="final_all_data",
             iteration=iteration + 1,
@@ -9852,8 +9679,8 @@ def _run_relion_iteration_loop(
     )
     if not k_class_enabled and parity.low_resol_join_halves_angstrom is not None and parity.low_resol_join_halves_angstrom > 0:
         final_prev_res_angstrom = None
-        if pixel_resolutions:
-            final_prev_pixel_res = pixel_resolutions[-1]
+        if history.pixel_resolutions:
+            final_prev_pixel_res = history.pixel_resolutions[-1]
             if final_prev_pixel_res > 0:
                 final_prev_res_angstrom = shell_index_to_resolution_angstrom(
                     final_prev_pixel_res,
@@ -9891,14 +9718,14 @@ def _run_relion_iteration_loop(
             class_weights,
         )
         class_log_priors = np.log(class_weights)
-        class_weight_trajectory.append(class_weights.copy())
-        class_mstep_weight_trajectory.append(class_weights.copy())
-        class_full_posterior_weight_trajectory.append(
+        history.record_class_weights(
+            class_weights.copy(),
+            class_weights.copy(),
             _class_weights_from_posterior(
                 final_outs.class_full_posterior,
                 n_classes,
                 class_weights,
-            ).copy()
+            ).copy(),
         )
         _t_final_tau2 = time.time()
         kclass_tau2_frame_scale = float(grid_size) ** 4
@@ -10222,7 +10049,7 @@ def _run_relion_iteration_loop(
         final_current_size,
         final_iter_elapsed,
     )
-    wall_times.append(final_iter_elapsed)
+    history.record_wall_time(final_iter_elapsed)
 
     (
         replay_requested_iterations,
@@ -10236,15 +10063,8 @@ def _run_relion_iteration_loop(
         "class_means": final_class_means,
         "class_weights": class_weights if k_class_enabled else None,
         "class_assignments": class_assignments if k_class_enabled else None,
-        "class_weight_trajectory": class_weight_trajectory,
-        "class_mstep_weight_trajectory": class_mstep_weight_trajectory,
-        "class_full_posterior_weight_trajectory": class_full_posterior_weight_trajectory,
-        "class_assignment_history": class_assignment_history,
         "relion_follower_scale_replay_requested_iterations": replay_requested_iterations,
         "relion_follower_scale_replay_applied_iterations": replay_applied_iterations,
-        "state_swap_probe_applied_relion_iterations": list(
-            state_swap_probe_applied_relion_iterations
-        ),
         "relion_scale_follower_scales": (
             None
             if relion_follower_scale_state is None
@@ -10263,13 +10083,13 @@ def _run_relion_iteration_loop(
         "relion_scale_follower_owners_half1_trajectory": (
             None
             if relion_follower_scale_state is None
-            else np.asarray(relion_follower_owners_half1_trajectory, dtype=np.int64)
+            else np.asarray(history.relion_follower_owners_half1_trajectory, dtype=np.int64)
         ),
         "relion_scale_follower_scales_numbered_pre_score_trajectory": (
             None
             if relion_follower_scale_state is None
             else np.asarray(
-                relion_scale_follower_scales_numbered_pre_score_trajectory,
+                history.relion_scale_follower_scales_numbered_pre_score_trajectory,
                 dtype=np.float64,
             )
         ),
@@ -10277,56 +10097,17 @@ def _run_relion_iteration_loop(
             None
             if relion_follower_scale_state is None
             else np.asarray(
-                relion_scale_follower_scales_numbered_post_mstep_trajectory,
+                history.relion_scale_follower_scales_numbered_post_mstep_trajectory,
                 dtype=np.float64,
             )
         ),
-        "fsc": fsc_history[-1] if fsc_history else None,
         "hard_assignments": hard_assignments,
-        "current_sizes": current_sizes,
-        "fsc_history": fsc_history,
-        "pixel_resolutions": pixel_resolutions,
-        "wall_times": wall_times,
-        "significant_counts": significant_counts,
         # RELION-mode specific outputs
         "convergence_state": state,
-        "data_vs_prior_trajectory": data_vs_prior_trajectory,
-        "healpix_order_trajectory": healpix_order_trajectory,
-        "ave_Pmax_trajectory": ave_Pmax_trajectory,
-        "ave_Pmax_denominator_trajectory": ave_Pmax_denominator_trajectory,
-        "pmax_per_image_history": pmax_per_image_history,
-        "noise_radial_trajectory": noise_radial_trajectory,
-        "noise_radial_per_half_trajectory": noise_radial_per_half_trajectory,
-        "tau2_radial_trajectory": tau2_radial_trajectory,
-        "tau2_sigma2_trajectory": tau2_sigma2_trajectory,
-        "tau2_avg_weight_trajectory": tau2_avg_weight_trajectory,
-        "tau2_shell_sum_trajectory": tau2_shell_sum_trajectory,
-        "tau2_shell_count_trajectory": tau2_shell_count_trajectory,
-        "tau2_fsc_used_trajectory": tau2_fsc_used_trajectory,
-        "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
-        "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
-        "sigma_offset_used_per_half_trajectory": sigma_offset_used_per_half_trajectory,
-        "sigma_offset_used_trajectory_per_half": sigma_offset_used_per_half_trajectory,
-        "sigma_offset_trajectory": sigma_offset_trajectory,
-        "sigma_offset_per_half_trajectory": sigma_offset_per_half_trajectory,
-        "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
-        "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
-        "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
-        "rotation_posterior_trajectory_per_half": rotation_posterior_trajectory_per_half,
         "frozen_initial_scoring_state_sha256": frozen_initial_scoring_state_sha256,
-        "frac_changed_trajectory": frac_changed_trajectory,
-        "acc_rot_trajectory": acc_rot_trajectory,
-        "acc_trans_trajectory": acc_trans_trajectory,
-        "acc_rot_per_class_trajectory": acc_rot_per_class_trajectory,
-        "acc_trans_per_class_trajectory": acc_trans_per_class_trajectory,
-        "expected_accuracy_class_counts_trajectory": expected_accuracy_class_counts_trajectory,
-        "expected_accuracy_status_trajectory": expected_accuracy_status_trajectory,
         "expected_accuracy_trial_local_indices": expected_accuracy_trial_local_indices,
         "expected_accuracy_trial_particle_ids": expected_accuracy_trial_particle_ids,
-        "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
-        "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
-        "best_rotation_eulers_history": best_rotation_eulers_history,
-        "best_translations_history": best_translations_history,
+        **history.to_dict(),
         "final_all_data_ran": True,
         "final_all_data_expected_accuracy_status": final_expected_accuracy_status,
         "final_all_data_acc_rot": (
@@ -10377,7 +10158,5 @@ def _run_relion_iteration_loop(
         "final_all_data_sampling_offset_step": final_translation_step,
         "final_all_data_grid_correct": final_grid_correct,
         "final_all_data_gridding_correct": "radial",
-        "local_profile_history": local_profile_history,
-        "global_profile_history": global_profile_history,
         "setup_phase_seconds": setup_phase_seconds,
     }

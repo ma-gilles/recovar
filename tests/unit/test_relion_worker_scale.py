@@ -968,14 +968,10 @@ def test_final_dispatch_remap_is_wired_before_final_scoring():
 
 def test_numbered_scale_telemetry_brackets_scoring_and_mstep_boundaries():
     source = inspect.getsource(_run_relion_iteration_loop)
-    pre_score_append = source.index(
-        "relion_scale_follower_scales_numbered_pre_score_trajectory.append("
-    )
+    pre_score_append = source.index("history.record_follower_scale_pre_score(")
     replay_apply = source.index("replay_result = apply_iter_replay_overrides(")
     scale_update = source.index("relion_follower_scale_state = update_relion_follower_scales(")
-    post_mstep_append = source.index(
-        "relion_scale_follower_scales_numbered_post_mstep_trajectory.append("
-    )
+    post_mstep_append = source.index("history.record_follower_scale_post_mstep(")
     convergence_update = source.index("# --- Update convergence state ---")
 
     assert pre_score_append < replay_apply
@@ -997,7 +993,7 @@ def test_sparse_follower_scale_replay_replaces_state_before_remap_and_telemetry(
     )
     owner_remap = source.index("_remap_relion_follower_runtime_inputs(", state_replace)
     pre_score_telemetry = source.index(
-        "relion_scale_follower_scales_numbered_pre_score_trajectory.append(",
+        "history.record_follower_scale_pre_score(",
         owner_remap,
     )
 

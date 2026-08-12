@@ -161,7 +161,7 @@ def test_empty_k1_local_or_adaptive_half_keeps_relion_x_half_shape_contract():
 def test_relion_norm_scale_updates_are_not_disabled_for_k_class():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     update_start = source.index("can_update_norm_scale = (")
-    update_source = source[update_start : source.index("noise_radial_trajectory.append", update_start)]
+    update_source = source[update_start : source.index("history.record_noise_and_tau2(", update_start)]
 
     assert "not k_class_enabled" not in update_source
     assert "update_relion_norm_scale_corrections(" in update_source
