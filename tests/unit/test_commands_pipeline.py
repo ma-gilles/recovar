@@ -275,19 +275,34 @@ def test_rescale_ppca_posteriors_matches_covariance_space_formula():
     np.testing.assert_allclose(covariances, expected_cov)
 
 
-def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
+@pytest.mark.parametrize(
+    ("tilt_series", "correct_contrast", "shared_contrast", "expected_contrast_mode"),
+    [
+        (False, True, False, "marginalize"),
+        (True, True, True, "marginalize"),
+        (True, False, False, "none"),
+    ],
+)
+def test_run_ppca_refinement_uses_hybrid_shell_prior(
+    monkeypatch,
+    tilt_series,
+    correct_contrast,
+    shared_contrast,
+    expected_contrast_mode,
+):
     fake_dataset = SimpleNamespace(volume_shape=(2, 2, 2), volume_size=8)
     means = SimpleNamespace(combined=np.zeros(8, dtype=np.complex64))
     options = SimpleNamespace(zs_dim_to_test=[4])
     args = SimpleNamespace(
         ppca_zdim=4,
         ppca_contrast_mode="auto",
-        correct_contrast=True,
+        correct_contrast=correct_contrast,
         ppca_em_iters=7,
         use_complement_mask=False,
         ppca_use_gridding_correction=True,
         ppca_projected_covariance=False,
-        tilt_series=False,
+        tilt_series=tilt_series,
+        shared_contrast_across_tilts=shared_contrast,
     )
 
     prior_calls = {}
@@ -366,17 +381,40 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
     assert prior_calls["args"][4] == 32
     assert em_calls["W_init"].shape == (8, 4)
     np.testing.assert_allclose(em_calls["W_prior"], np.full((8, 4), 3.0, dtype=np.float32))
-    assert em_calls["kwargs"]["contrast_mode"] == "marginalize"
+    assert em_calls["kwargs"]["contrast_mode"] == expected_contrast_mode
     assert em_calls["kwargs"]["EM_iter"] == 7
     assert em_calls["kwargs"]["return_posterior_info"] is True
     assert out["basis_size"] == 4
-    assert out["contrast_mode"] == "marginalize"
+    assert out["contrast_mode"] == expected_contrast_mode
     assert out["prior_mode"] == "hybrid_shell"
     assert out["u_rescaled"].dtype == np.complex64
     assert out["s_rescaled"].dtype == np.float32
     assert out["W"].dtype == np.complex64
     np.testing.assert_allclose(out["latent_coords"][4], np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32) * np.sqrt(np.arange(1, 5, dtype=np.float32))[None, :])
     np.testing.assert_allclose(out["contrasts"][4], np.array([1.25], dtype=np.float32))
+
+
+def test_run_ppca_refinement_rejects_unshared_cryoet_contrast():
+    args = SimpleNamespace(
+        ppca_contrast_mode="auto",
+        correct_contrast=True,
+        tilt_series=True,
+        shared_contrast_across_tilts=False,
+    )
+    with pytest.raises(ValueError, match="requires --shared_contrast_across_tilts"):
+        pipeline_cmd._run_ppca_refinement(
+            SimpleNamespace(volume_shape=(2, 2, 2), volume_size=8),
+            SimpleNamespace(combined=np.zeros(8, dtype=np.complex64)),
+            np.ones((2, 2, 2), dtype=np.float32),
+            np.ones((2, 2, 2), dtype=np.float32),
+            SimpleNamespace(zs_dim_to_test=[2]),
+            args,
+            batch_size=8,
+            gpu_memory=8,
+            covariance_options={"disc_type_u": "linear_interp"},
+            focus_masks=[np.ones((2, 2, 2), dtype=np.float32)],
+            zdim_for_rest=20,
+        )
 
 
 def test_standard_pipeline_passes_gpu_limit_to_predownsample(monkeypatch, tmp_path):

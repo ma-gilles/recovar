@@ -127,6 +127,81 @@ def _tri_size(q):
     return (q * (q + 1)) // 2
 
 
+def _particle_groups_for_batch(particle_indices, n_images):
+    """Return sorted particle ids and a consecutive group id per image."""
+    particle_ids = np.asarray(particle_indices, dtype=np.int32).reshape(-1)
+    if particle_ids.size == 1:
+        particle_ids = np.full(n_images, particle_ids[0], dtype=np.int32)
+    if particle_ids.size != n_images:
+        raise ValueError(f"Expected one particle id per image (or one shared id), got {particle_ids.size} ids for {n_images} images")
+    if np.any(particle_ids < 0):
+        raise ValueError("PPCA tilt-series batches must not contain padded particle ids")
+    unique_particles, group_ids = np.unique(particle_ids, return_inverse=True)
+    return unique_particles.astype(np.int32, copy=False), group_ids.astype(np.int32, copy=False)
+
+
+def _group_ppca_sufficient_statistics(H, g, h, t, nu, y_norm_sq, centered_norm_sq, particle_indices=None):
+    """Group per-image PPCA statistics by particle when labels are provided.
+
+    The returned ``image_to_group`` array broadcasts particle-level posterior
+    moments back to the per-tilt arrays used by the image-wise M-step.
+    """
+    n_images = int(H.shape[0])
+    if particle_indices is None:
+        image_to_group = jnp.arange(n_images, dtype=jnp.int32)
+        counts = jnp.ones(n_images, dtype=H.dtype)
+        return H, g, h, t, nu, y_norm_sq, centered_norm_sq, image_to_group, counts
+
+    _unique_particles, group_ids_np = _particle_groups_for_batch(particle_indices, n_images)
+    n_groups = int(np.max(group_ids_np)) + 1
+    image_to_group = jnp.asarray(group_ids_np, dtype=jnp.int32)
+
+    def group_sum(x):
+        return jax.ops.segment_sum(x, image_to_group, num_segments=n_groups)
+
+    counts = group_sum(jnp.ones(n_images, dtype=H.dtype))
+    return (
+        group_sum(H),
+        group_sum(g),
+        group_sum(h),
+        group_sum(t),
+        group_sum(nu),
+        group_sum(y_norm_sq),
+        group_sum(centered_norm_sq),
+        image_to_group,
+        counts,
+    )
+
+
+def _solve_grouped_no_contrast_posterior(
+    H,
+    g,
+    h,
+    centered_norm_sq,
+    z_prior_precision_diag,
+    image_shape,
+    observation_counts,
+    compute_ll,
+):
+    """Solve the c=1 posterior from image- or particle-level statistics."""
+    M_n = H + jnp.diag(z_prior_precision_diag)
+    b_n = (g - h)[..., None]
+    M_n_inv = jnp.linalg.pinv(M_n, hermitian=True)
+    expected_zs = (M_n_inv @ b_n).squeeze(-1)
+    second_moment_zs = M_n_inv + linalg.broadcast_outer(expected_zs, jnp.conj(expected_zs))
+
+    ll_sum = jnp.array(0.0, dtype=H.dtype)
+    if compute_ll:
+        u = b_n.squeeze(-1)
+        quad = jnp.real(jnp.sum(jnp.conj(u) * (M_n_inv @ u[..., None]).squeeze(-1), axis=-1))
+        L = jnp.linalg.cholesky(M_n)
+        logdetM = 2.0 * jnp.sum(jnp.log(jnp.real(jnp.diagonal(L, axis1=1, axis2=2))), axis=-1)
+        dimensions = observation_counts * np.prod(image_shape)
+        ll_per_unit = -0.5 * (dimensions * jnp.log(2.0 * jnp.pi) + centered_norm_sq - quad + logdetM)
+        ll_sum = jnp.sum(ll_per_unit)
+    return expected_zs, second_moment_zs, ll_sum
+
+
 _half_slice_volume = functools.partial(core.slice_volume, half_volume=True, half_image=True)
 batch_over_vol_slice_volume_half = jax.vmap(_half_slice_volume, in_axes=(1, None, None, None, None), out_axes=1)
 
@@ -153,11 +228,11 @@ def _e_step_half_inner(
     disc_type,
     z_prior_precision_diag,  # (q,) array of 1/var per dim. Use jnp.ones(q) for identity prior.
 ):
-    """JIT'd E-step core: computes sufficient stats and c=1 posterior.
+    """Compute per-image sufficient statistics for the PPCA E-step.
 
-    Returns sufficient statistics (H, g, h, t, nu, y_norm_sq) plus
-    noise-whitened images/mean/CTF for backprojection, and the standard
-    (c=1) posterior moments.
+    Returns sufficient statistics ``(H, g, h, t, nu, y_norm_sq)`` plus
+    noise-whitened images/mean/CTF/basis projections for the posterior solve
+    and backprojection.
 
     Contrast dispatch happens OUTSIDE JIT in E_M_step_batch_half.
     """
@@ -194,51 +269,22 @@ def _e_step_half_inner(
     t = jnp.sum(rfft_w * jnp.real(jnp.conj(images_half) * projected_mean_half), axis=-1)
     nu = jnp.sum(rfft_w * jnp.real(jnp.conj(projected_mean_half) * projected_mean_half), axis=-1)
     y_norm_sq = jnp.sum(rfft_w * jnp.real(jnp.conj(images_half) * images_half), axis=-1)
-
-    # Standard c=1 posterior (always computed — used for LL and as fallback).
-    # Caller always supplies z_prior_precision_diag (a (q,) array). For the
-    # default identity prior z ~ N(0, I), pass jnp.ones(q). For a calibrated
-    # prior z ~ N(0, diag(eig)), pass 1/eig.
-    M_n = H + jnp.diag(z_prior_precision_diag)
-    b_n = (g - h)[..., None]
-    M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
-    expected_zs = (M_n_inv @ b_n).squeeze(-1)
-    second_moment_zs = M_n_inv + linalg.broadcast_outer(expected_zs, jnp.conj(expected_zs))
-
-    ll_sum = jnp.array(0.0, dtype=images_half.dtype)
-    if compute_ll:
-        u = b_n.squeeze(-1)
-        quad = jnp.real(jnp.sum(jnp.conj(u) * (M_n_inv @ u[..., None]).squeeze(-1), axis=-1))
-        r2 = jnp.sum(rfft_w * jnp.real(jnp.conj(images_half) * images_half), axis=-1)
-        centered_half = images_half - projected_mean_half
-        r2 = jnp.sum(rfft_w * jnp.real(jnp.conj(centered_half) * centered_half), axis=-1)
-        L = jnp.linalg.cholesky(M_n)
-        logdetM = 2.0 * jnp.sum(jnp.log(jnp.real(jnp.diagonal(L, axis1=1, axis2=2))), axis=-1)
-        d_n = np.prod(image_shape)
-        ll_per_image = -0.5 * (d_n * jnp.log(2.0 * jnp.pi) + r2 - quad + logdetM)
-        ll_sum = jnp.sum(ll_per_image)
-
-    # Whitened residual power per half-pixel, summed over batch (c=1 approximation).
-    # Used by the noise update: new_σ²(k) ≈ σ²_old(k) * <|r_w|²>_shell.
-    Wz = jnp.einsum("bqp,bq->bp", PW_half, expected_zs)
-    residual_w = images_half - projected_mean_half - Wz
-    residual_power_half = jnp.sum(jnp.real(jnp.conj(residual_w) * residual_w), axis=0)
+    centered_half = images_half - projected_mean_half
+    centered_norm_sq = jnp.sum(rfft_w * jnp.real(jnp.conj(centered_half) * centered_half), axis=-1)
 
     return (
-        expected_zs,
-        second_moment_zs,
         ctf_squared_half,
         images_half,
         projected_mean_half,
         CTF_half,
-        ll_sum,
         H,
         g,
         h,
         t,
         nu,
         y_norm_sq,
-        residual_power_half,
+        centered_norm_sq,
+        PW_half,
     )
 
 
@@ -267,6 +313,7 @@ def E_M_step_batch_half(
     eigenvalues=None,
     contrast_mean=1.0,
     contrast_variance=np.inf,
+    particle_indices=None,
 ):
     """Half-spectrum, upper-triangular-LHS variant of :func:`E_M_step_batch`.
 
@@ -289,20 +336,18 @@ def E_M_step_batch_half(
     else:
         z_prior_precision_diag = jnp.ones(basis_size, dtype=W_half.real.dtype)
     (
-        expected_zs,
-        second_moment_zs,
         ctf_squared_half,
         images_half_w,
         projected_mean_half_w,
         CTF_half,
-        ll_sum,
         H,
         g,
         h,
         t,
         nu,
         y_norm_sq,
-        residual_power_half,
+        centered_norm_sq,
+        PW_half,
     ) = _e_step_half_inner(
         images_half,
         mean,
@@ -319,6 +364,31 @@ def E_M_step_batch_half(
         disc_type_mean,
         disc_type,
         z_prior_precision_diag,
+    )
+
+    # SPA has one latent variable per image. Cryo-ET has one latent variable
+    # per particle, shared by all of that particle's tilts. Segment-summing
+    # these sufficient statistics is the same shared-label construction used
+    # by RECOVAR's covariance and embedding paths.
+    H, g, h, t, nu, y_norm_sq, centered_norm_sq, image_to_group, observation_counts = _group_ppca_sufficient_statistics(
+        H,
+        g,
+        h,
+        t,
+        nu,
+        y_norm_sq,
+        centered_norm_sq,
+        particle_indices=particle_indices,
+    )
+    expected_zs, second_moment_zs, ll_sum = _solve_grouped_no_contrast_posterior(
+        H,
+        g,
+        h,
+        centered_norm_sq,
+        z_prior_precision_diag,
+        image_shape,
+        observation_counts,
+        compute_ll,
     )
     ## TODO: WHY IS THIS OUTSIDE OF JIT?
     # --- Contrast dispatch (outside JIT) ---
@@ -346,17 +416,31 @@ def E_M_step_batch_half(
             contrast_variance=contrast_variance,
         )
         expected_zs = result.mean_z
+        second_moment_zs = result.second_moment_z
         mean_cz = result.mean_cz
         mean_c2z = result.mean_c2z
         second_moment_czz = result.second_moment_czz
         mean_c = result.mean_c
         marginal_ll_batch = result.marginal_ll
 
+    # Backprojection remains image-wise, so repeat the shared particle
+    # posterior moments over that particle's tilts only at this boundary.
+    expected_zs_images = expected_zs[image_to_group]
+    mean_cz_images = mean_cz[image_to_group]
+    mean_c2z_images = mean_c2z[image_to_group]
+    second_moment_czz_images = second_moment_czz[image_to_group]
+
+    # Whitened residual power per half-pixel, summed over images (c=1
+    # approximation). This is used only by the optional noise update.
+    Wz = jnp.einsum("bqp,bq->bp", PW_half, expected_zs_images)
+    residual_w = images_half_w - projected_mean_half_w - Wz
+    residual_power_half = jnp.sum(jnp.real(jnp.conj(residual_w) * residual_w), axis=0)
+
     # --- backprojection ---
     if compute_stats:
         half_volume_size = lhs_summed.shape[0]
         # LHS uses E[c²zz^T] (= E[zz^T] when c=1)
-        second_moment_tri = second_moment_czz[:, tri_i, tri_j]
+        second_moment_tri = second_moment_czz_images[:, tri_i, tri_j]
         ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
         _max_r = image_shape[0] // 2 - 1
 
@@ -400,8 +484,8 @@ def E_M_step_batch_half(
         # must backproject through the basis interpolation disc_type. For c=1
         # this collapses to the original centered residual CTF · (y - Aμ) · E[z]^T.
         rhs_residual = (
-            images_half_w[..., None] * jnp.conj(mean_cz)[:, None, :]
-            - projected_mean_half_w[..., None] * jnp.conj(mean_c2z)[:, None, :]
+            images_half_w[..., None] * jnp.conj(mean_cz_images)[:, None, :]
+            - projected_mean_half_w[..., None] * jnp.conj(mean_c2z_images)[:, None, :]
         )
         before_rhs = (CTF_half[..., None] * rhs_residual).transpose(2, 0, 1)
         bp_rhs = core.batch_adjoint_slice_volume(
@@ -422,7 +506,7 @@ def E_M_step_batch_half(
         lhs_summed,
         rhs_summed,
         expected_zs,
-        second_moment_czz,
+        second_moment_zs,
         ll_sum,
         ll_per_image,
         mean_c,
@@ -736,17 +820,19 @@ def _iter_processed_batches_half(experiment_dataset, batch_size):
         translations,
         ctf_params,
         _noise_variance,
-        _particle_indices,
+        particle_indices,
         image_indices,
     ) in experiment_dataset.iter_batches(
         batch_size,
         by_image=not getattr(experiment_dataset, "tilt_series_flag", False),
+        pack_groups=getattr(experiment_dataset, "tilt_series_flag", False),
     ):
         yield (
             experiment_dataset.process_images_half(batch, apply_image_mask=False),
             ctf_params,
             rotation_matrices,
             translations,
+            particle_indices,
             image_indices,
         )
 
@@ -829,9 +915,14 @@ def EM_step_half(
     n_images_total = 0
 
     for ds in halfset_datasets:
-        for batch_half, ctf_params, rotation_matrices, translations, batch_image_ind in _iter_processed_batches_half(
-            ds, batch_size
-        ):
+        for (
+            batch_half,
+            ctf_params,
+            rotation_matrices,
+            translations,
+            particle_indices,
+            batch_image_ind,
+        ) in _iter_processed_batches_half(ds, batch_size):
             noise_variance_half = ds.noise.get_half(batch_image_ind)
             (
                 lhs_summed,
@@ -869,6 +960,7 @@ def EM_step_half(
                 eigenvalues=eigenvalues,
                 contrast_mean=contrast_mean,
                 contrast_variance=contrast_variance,
+                particle_indices=particle_indices if ds.tilt_series_flag else None,
             )
             expected_zs.append(np.array(ez_batch))
             second_moment_zs.append(np.array(smz_batch))
@@ -1568,7 +1660,7 @@ def EM(
                 disc_type_mean,
             )
             for _ds in halfset_datasets:
-                for _bh, _cp, _rm, _tr, _bi in _iter_processed_batches_half(_ds, batch_size):
+                for _bh, _cp, _rm, _tr, _pi, _bi in _iter_processed_batches_half(_ds, batch_size):
                     _nvh = _ds.noise.get_half(_bi)
                     _, _, _, _, _llb, _, _, _, _, _ = E_M_step_batch_half(
                         _bh,
@@ -1589,6 +1681,7 @@ def EM(
                         disc_type_mean=disc_type_mean,
                         disc_type=disc_type,
                         compute_stats=False,
+                        particle_indices=_pi if _ds.tilt_series_flag else None,
                     )
                     ll_sum_r += _llb
             _Wph = ftu.full_volume_to_half_volume(W_prior.T, vs).T if W_prior.shape[0] != W.shape[0] else W_prior
