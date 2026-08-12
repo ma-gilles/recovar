@@ -8,11 +8,16 @@ from byte-identical, explicitly sealed state.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from recovar.em.dense_single_volume.refinement_options import RefinementOptions
+
+logger = logging.getLogger(__name__)
 
 FROZEN_BOUNDARY_SCHEMA_V2 = "recovar.em.frozen_boundary.v2"
 FROZEN_BOUNDARY_SCHEMA_V3 = "recovar.em.frozen_boundary.v3"
@@ -48,6 +53,27 @@ _REFINEMENT_STATE_FIELD_DTYPES = {
     "acc_trans": np.dtype(np.float64),
     "has_converged": np.dtype(np.bool_),
 }
+
+
+def _restore_diagnostic_frozen_boundary_state(state, options: RefinementOptions) -> None:
+    """Overwrite explicit RefinementState fields for a diagnostic frozen-boundary restart.
+
+    The production refinement path does not call this -- see module docstring.
+    Allowed fields are the same ``RefinementState`` scalars a serialized
+    ``FrozenRefinementBoundary`` (below) can carry, so both restart paths
+    validate against ``_REFINEMENT_STATE_FIELD_DTYPES``.
+    """
+    fields = options.replay.init_refinement_state_fields
+    unexpected_fields = sorted(set(fields) - set(_REFINEMENT_STATE_FIELD_DTYPES))
+    if unexpected_fields:
+        raise ValueError(f"unsupported frozen-boundary RefinementState fields: {unexpected_fields}")
+    for field_name, value in fields.items():
+        setattr(state, field_name, value)
+    if state.has_converged:
+        raise ValueError("a numbered frozen-boundary restart cannot already be converged")
+    logger.info("Diagnostic frozen-boundary RefinementState restored: fields=%s", sorted(fields))
+
+
 _PROVENANCE_PAYLOAD_KEYS = {
     "source_job_id",
     "source_arm",
