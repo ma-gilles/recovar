@@ -4424,6 +4424,32 @@ def _translated_wavg_low_shell_power_pixels(
     return jnp.where(valid_low_shell[None, :], weighted_pixels, 0.0).astype(jnp.float32)
 
 
+def _relion_cuda_translate_wavg_norm_images(
+    processed_score_half,
+    translation_angles,
+    score_window_indices,
+    image_shape,
+):
+    """Translate the raw masked image at RELION's Wavg input boundary."""
+
+    from recovar import cuda_backproject
+
+    processed_score_half = jnp.asarray(processed_score_half, dtype=jnp.complex64)
+    score_window_indices = jnp.asarray(score_window_indices, dtype=jnp.int32)
+    translation_angles = jnp.asarray(translation_angles, dtype=jnp.float32)
+    translated = cuda_backproject.relion_translate_score_f32(
+        processed_score_half[:, score_window_indices],
+        translation_angles,
+        score_window_indices,
+        image_shape,
+    )
+    return translated.reshape(
+        processed_score_half.shape[0],
+        translation_angles.shape[0],
+        score_window_indices.shape[0],
+    )
+
+
 def _replace_untranslated_low_shell_norm_power(
     weighted_img_per_image,
     processed_score_half,
@@ -10759,6 +10785,18 @@ def compute_pass2_stats_sparse_bucketed(
             and current_size is not None
             and _env_flag_enabled(_RELION_TRANSLATED_WAVG_NORM_ENV, default=False)
         )
+        raw_translated_wavg_for_norm = None
+        if translated_wavg_norm:
+            if relion_score_translation_angles is None:
+                raise ValueError(
+                    "translated Wavg norm parity requires RELION translation angles"
+                )
+            raw_translated_wavg_for_norm = _relion_cuda_translate_wavg_norm_images(
+                processed_score_half_for_noise,
+                relion_score_translation_angles,
+                window_indices,
+                image_shape,
+            )
 
         # Window gather (if applicable)
         if use_window:
@@ -11762,7 +11800,7 @@ def compute_pass2_stats_sparse_bucketed(
                     weighted_img_per_image = _replace_untranslated_low_shell_norm_power(
                         weighted_img_per_image,
                         processed_score_half_for_noise,
-                        shifted_score.reshape(batch, n_fine_trans, -1),
+                        raw_translated_wavg_for_norm,
                         jnp.asarray(chunk_translation_posterior_total, dtype=jnp.float32),
                         shell_indices_half,
                         window_indices,
@@ -12578,7 +12616,7 @@ def compute_pass2_stats_sparse_bucketed(
                 weighted_img_per_image = _replace_untranslated_low_shell_norm_power(
                     weighted_img_per_image,
                     processed_score_half_for_noise,
-                    shifted_score.reshape(batch, n_fine_trans, -1),
+                    raw_translated_wavg_for_norm,
                     jnp.sum(noise_probs, axis=1, dtype=jnp.float32),
                     shell_indices_half,
                     window_indices,

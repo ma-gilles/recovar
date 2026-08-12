@@ -372,3 +372,39 @@ The machine-readable boundary report is
 is an iteration-2 posterior-aggregation panel: compare native and RECOVAR
 per-particle weights for a small set that spans the largest direction-prior
 residuals, then compare their direction-bin operands before global reduction.
+
+## Earlier iteration-1 normalization boundary
+
+An exact native update capture for stack image 1462 exposed an earlier scalar
+boundary than the iteration-2 learned-prior drift. RELION's iteration-1
+normalization update is `25091866.04904771` in RECOVAR's unnormalised Fourier
+units. The historical RECOVAR path produced `25091868.5`, yielding a one-ULP
+low next-iteration image factor (`0x3f7ad9e1` instead of native
+`0x3f7ad9e2`). Candidate weights are bit-exact for all 928 captured fine
+candidates, so this is an accumulation boundary rather than a posterior-set
+error.
+
+The discrepancy splits into two source-level reductions:
+
+1. RELION's `powerClass` emits an atomically accumulated shell spectrum for
+   the high-shell normalization tail. RECOVAR incorrectly reused the separate
+   block-tree `highres_Xi2` scalar used by fine scoring. The exact high-shell
+   native value is `12060356.349819839`; the old RECOVAR value was
+   `12060360.0`.
+2. RELION's Wavg kernel forms image power after applying each float32
+   translation and retains one float32 `wdiff2` accumulator per Fourier pixel
+   until a host RFLOAT sum. RECOVAR used untranslated image power and collapsed
+   `A2`/`XA` to GPU scalars first. Native low-shell image power is
+   `18968761.142488837`; the historical RECOVAR value is
+   `18968759.994586825`. Replaying RECOVAR's captured translated images with
+   the bit-exact candidate weights gives `18968761.057280898`, closing about
+   `1.06` of the `1.15`-unit image-power gap.
+
+The power-spectrum-only counterfactual in job `12288900` makes the target
+normalization factor bit-exact and reduces its full update-input error by about
+52%. The combined captured-operand replay at commit `74dae7fb` gives
+`25091865.932280898`, only `0.11676681041717529` from native, a 95.2% closure
+relative to the historical 2.451-unit error. Both changes remain opt-in
+diagnostics. Two-iteration high-shell job `12289068` and one-iteration combined
+Wavg job `12289683` are the bounded downstream gates; neither changes the fixed
+`28/34` strict, `32/34` topology, `34/34` evaluated scorecard while pending.

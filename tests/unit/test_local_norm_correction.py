@@ -9,6 +9,7 @@ import jax.numpy as jnp
 from recovar.em.dense_single_volume.helpers.half_spectrum import make_relion_noise_shell_indices_half
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _replace_untranslated_low_shell_norm_power,
+    _relion_cuda_translate_wavg_norm_images,
     _relion_cuda_powerclass_highres_norm_units,
     _relion_cuda_powerclass_spectrum_highres_norm_units,
     _translated_wavg_low_shell_power_pixels,
@@ -203,6 +204,37 @@ def test_translated_wavg_low_shell_power_preserves_per_pixel_boundary():
     expected = np.sum(posterior[:, :, None] * power, axis=1, dtype=np.float32)
     expected[:, 2:] = 0.0
     np.testing.assert_array_equal(np.asarray(actual), expected)
+
+
+def test_relion_wavg_norm_translation_uses_raw_windowed_image(monkeypatch):
+    from recovar import cuda_backproject
+
+    processed = jnp.asarray(
+        [[1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j]],
+        dtype=jnp.complex64,
+    )
+    indices = jnp.asarray([0, 2, 3], dtype=jnp.int32)
+    angles = jnp.asarray([[0.0, 0.0], [1.0, 2.0]], dtype=jnp.float32)
+
+    def fake_translate(images, received_angles, received_indices, image_shape):
+        np.testing.assert_array_equal(np.asarray(images), np.asarray(processed[:, indices]))
+        np.testing.assert_array_equal(np.asarray(received_angles), np.asarray(angles))
+        np.testing.assert_array_equal(np.asarray(received_indices), np.asarray(indices))
+        assert image_shape == (4, 4)
+        return jnp.arange(6, dtype=jnp.float32).astype(jnp.complex64).reshape(2, 3)
+
+    monkeypatch.setattr(cuda_backproject, "relion_translate_score_f32", fake_translate)
+    actual = _relion_cuda_translate_wavg_norm_images(
+        processed,
+        angles,
+        indices,
+        (4, 4),
+    )
+
+    np.testing.assert_array_equal(
+        np.asarray(actual),
+        np.arange(6, dtype=np.float32).astype(np.complex64).reshape(1, 2, 3),
+    )
 
 
 def test_translated_wavg_norm_replaces_only_untranslated_low_shell_power(monkeypatch):
