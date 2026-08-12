@@ -1,0 +1,130 @@
+{
+  "schema": "recovar.em_k1_case22_fresh_order_prefix_scorecard.v1",
+  "case_id": 22,
+  "scope": "fresh K=1 numbered iterations 1-3 only",
+  "scorecard_change_admissible": false,
+  "quality_metric_policy": "signed shellwise FSC and normalized non-DC FSC-AUC; correlation is not computed",
+  "fixed_k1_scorecard": {
+    "strict_passes": 28,
+    "topology_passes": 32,
+    "evaluated": 34
+  },
+  "candidate": {
+    "guard": "fresh K=1, init_relion_iteration=0, no frozen-boundary or perturbation replay",
+    "physical_particle_order": "paired continued-stream RELION half shuffle followed by stable numeric optics sort",
+    "expected_accuracy_order": "identity in the already-physical half-1 order",
+    "bpref_order": "global physical particle order preserved",
+    "recovar_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_fresh_order_production_it2_v3_20260810T1740ET/output",
+    "relion_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/native_capture/relion",
+    "slurm_job_id": 12223827
+  },
+  "numbered_prefix": [
+    {
+      "relion_iteration": 1,
+      "cross_engine_fsc_auc": {
+        "half1": 0.9999999999638328,
+        "half2": 0.9999999999635198,
+        "merged": 0.9999999999771184
+      },
+      "merged_gt_fsc_auc_delta_recovar_minus_relion": -1.3902901468965112e-08,
+      "pmax_relative_l2": 0.0,
+      "hard_pose_translation_mismatch_count": 0,
+      "support_count_mismatch_count": 0
+    },
+    {
+      "relion_iteration": 2,
+      "cross_engine_fsc_auc": {
+        "half1": 0.99999999984632,
+        "half2": 0.9999999998217303,
+        "merged": 0.9999999998805353
+      },
+      "merged_gt_fsc_auc_delta_recovar_minus_relion": 3.226791353561076e-08,
+      "pmax_relative_l2": 7.023881513013042e-06,
+      "hard_pose_translation_mismatch_count": 1,
+      "support_count_mismatch_count": 461,
+      "support_count_max_abs_delta": 1
+    },
+    {
+      "relion_iteration": 3,
+      "cross_engine_fsc_auc": {
+        "half1": 0.9999967079075652,
+        "half2": 0.9999987907677111,
+        "merged": 0.9999985920055022
+      },
+      "merged_gt_fsc_auc_delta_recovar_minus_relion": 3.3408322954731062e-06,
+      "pmax_relative_l2": 0.0038268203361925997,
+      "topology_exact": true,
+      "current_size": 80,
+      "healpix_order": 3
+    }
+  ],
+  "historical_comparison": {
+    "iteration_2_merged_fsc_auc_before_physical_order": 0.9999994611,
+    "iteration_2_map_deficit_reduction_factor": 4510.957451474942,
+    "iteration_2_pmax_relative_l2_before_physical_order": 0.00429,
+    "iteration_2_pmax_error_reduction_factor": 610.7734010108201
+  },
+  "native_iteration_2_repeat_floor": {
+    "pmax_relative_l2": 4.36963947607177e-06,
+    "hard_pose_translation_mismatch_count": 0,
+    "support_count_mismatch_count": 34,
+    "support_count_max_abs_delta": 1
+  },
+  "residual_winner_boundary": {
+    "stack_index_one_based": 1204,
+    "native_winning_raw_diff2": 130.35562133789062,
+    "native_runner_up_raw_diff2": 130.3556365966797,
+    "native_raw_diff2_margin_float32_ulps": 1,
+    "native_fine_capture_sha256": "f49761e6703929a3c9f12726d6e66fbde12c1b56d33f1c4b1372b7df713a16ca",
+    "classification": "native-repeat-scale arithmetic sensitivity; not a demonstrated tie-break defect"
+  },
+  "live_scoring_noise_boundary": {
+    "relion_iteration": 2,
+    "scorer_inverse_noise_exact_shells": 65,
+    "scorer_inverse_noise_shell_count": 65,
+    "both_halves_exact": true,
+    "binary64_sigma_relative_l2": 6.51156923946183e-16,
+    "serialized_star_shells_1_through_4_ulp": [696, 157, 1894, 4633],
+    "classification": "fresh scoring-noise boundary closes; serialized replay discrepancy is not a production defect",
+    "analysis_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_scoring_noise_capture_20260812T0220ET/analysis"
+  },
+  "native_coarse_boundary": {
+    "relion_iteration": 2,
+    "stack_index_one_based": 1204,
+    "candidate_count": 1069056,
+    "valid_prior_support_count": 631968,
+    "native_parent_count": 73431,
+    "recovar_control_parent_count": 73432,
+    "support_mismatch_count": 1,
+    "recovar_only_parent_recovar_coordinates": [4188, 15],
+    "common_best_recovar_coordinates": [13039, 20],
+    "orientation_prior_support_exact": true,
+    "orientation_prior_finite_values_exact": true,
+    "translation_prior_max_abs": 1.9073486328125e-06,
+    "target_translation_prior_exact": true,
+    "target_raw_relative_score_delta_recovar_minus_relion": 1.5735626220703125e-05,
+    "target_combined_relative_score_delta_recovar_minus_relion": 1.52587890625e-05,
+    "classification": "first material mismatch is the coarse Gaussian score before prior combination and support selection",
+    "native_capture_job_id": 12280812,
+    "native_capture_sha256": "724370b46c7a04f415764aa8d73c83f54184e022572f2dc1778056a19754cd9b"
+  },
+  "exact_coarse_causal_ab": {
+    "slurm_job_id": 12281174,
+    "wall_s": 122,
+    "stopped_before_pass2_mstep": true,
+    "native_parent_count": 73431,
+    "recovar_parent_count": 73431,
+    "native_only_parent_count": 0,
+    "recovar_only_parent_count": 0,
+    "control_raw_centered_p95_abs": 3.933906555175781e-05,
+    "exact_raw_centered_p95_abs": 1.52587890625e-05,
+    "exact_raw_centered_max_abs": 4.57763671875e-05,
+    "classification": "positive causal A/B for the discrete coarse-parent defect; residual raw arithmetic remains"
+  },
+  "next_gate": {
+    "description": "bounded two-iteration exact-coarse prefix plus native reference-norm/cross-term operand decomposition",
+    "prefix_slurm_job_id": 12281298,
+    "prefix_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_fresh_exact_coarse_it2_prefix_20260812T0335ET",
+    "trajectory_scope": "numbered iterations 1-2 only"
+  }
+}

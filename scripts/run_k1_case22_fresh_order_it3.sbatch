@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=k1c22-order-it3
+#SBATCH --partition=cryoem
+#SBATCH --account=gilles
+#SBATCH --qos=della-cryoem
+#SBATCH --constraint=h100
+#SBATCH --gres=gpu:h100:1
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=128G
+#SBATCH --time=02:00:00
+
+set -euo pipefail
+: "${K1_CASE22_IT3_ROOT:?set the disposable experiment root}"
+: "${K1_CASE22_IT3_RUNTIME:?set the disposable runtime root}"
+: "${K1_CASE22_IT3_REPO:?set the frozen source snapshot}"
+: "${EXPECTED_LAUNCHER_SHA256:?pin the launcher hash}"
+: "${EXPECTED_REPO_HEAD:?pin the source snapshot head}"
+: "${EXPECTED_REPO_DIFF_SHA256:?pin the source snapshot tracked diff}"
+: "${EXPECTED_CUDA_SHA256:?pin the CUDA library}"
+
+ROOT=${K1_CASE22_IT3_ROOT}
+RUNTIME=${K1_CASE22_IT3_RUNTIME}
+REPO=${K1_CASE22_IT3_REPO}
+MAX_ITER=${K1_CASE22_MAX_ITER:-3}
+COMPACT_STACK1204_DUMP=${K1_CASE22_COMPACT_STACK1204_DUMP:-0}
+STOP_AFTER_COMPACT_DUMP=${K1_CASE22_STOP_AFTER_COMPACT_DUMP:-0}
+COARSE_STACK1204_DUMP=${K1_CASE22_COARSE_STACK1204_DUMP:-0}
+EXACT_COARSE_STACK1204=${K1_CASE22_EXACT_COARSE_STACK1204:-0}
+PYTHON=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default/bin/python
+PIXI_ENV=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default
+LAUNCHER=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/scripts/run_k1_case22_fresh_order_it3.sbatch
+DATA=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_currenthead_25ab6e68_20260728T011020ET/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/data
+SEALED_CONTROL=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/native_control/relion
+CUDA_LIB=${K1_CASE22_CUDA_LIB:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/cuda/libcuda_backproject.so}
+RELION_BIND=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_bpref_order_fix_20260810/relion_bind
+OUTPUT=${ROOT}/output
+
+test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
+test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
+test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
+test "$(git -C "${REPO}" diff --binary | sha256sum | awk '{print $1}')" = "${EXPECTED_REPO_DIFF_SHA256}"
+test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
+test -z "$(find "${OUTPUT}" -mindepth 1 -print -quit)"
+
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
+unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
+while IFS='=' read -r variable_name _; do
+    case "${variable_name}" in RECOVAR_*) unset "${variable_name}" ;; esac
+done < <(env)
+export PYTHONNOUSERSITE=1 XLA_PYTHON_CLIENT_PREALLOCATE=false
+export TMPDIR=${RUNTIME}/${SLURM_JOB_ID}/tmp
+export PIXI_HOME=${RUNTIME}/${SLURM_JOB_ID}/pixi_home
+export RATTLER_CACHE_DIR=${RUNTIME}/${SLURM_JOB_ID}/rattler_cache
+export PYTHONPYCACHEPREFIX=${RUNTIME}/${SLURM_JOB_ID}/pycache
+export JAX_COMPILATION_CACHE_DIR=${RUNTIME}/${SLURM_JOB_ID}/jax_cache
+mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" \
+    "${PYTHONPYCACHEPREFIX}" "${JAX_COMPILATION_CACHE_DIR}" "${ROOT}/provenance"
+
+source /etc/profile.d/modules.sh
+set +u
+module purge
+module load cudatoolkit/12.8
+set -u
+CUDA_HOME=/usr/local/cuda-12.8
+export PATH=${CUDA_HOME}/bin:${PATH}
+NVIDIA_ROOT=$(find "${PIXI_ENV}/lib" -maxdepth 3 -type d -path '*/site-packages/nvidia' -print -quit)
+NVIDIA_LIBS=$(find "${NVIDIA_ROOT}" -type d -name lib | paste -sd: -)
+export LD_LIBRARY_PATH=${NVIDIA_LIBS}:${CUDA_HOME}/targets/x86_64-linux/lib:${PIXI_ENV}/lib
+export CUDA_VISIBLE_DEVICES=0
+
+export RECOVAR_CUDA_LIB=${CUDA_LIB}
+export RECOVAR_RELION_BIND_BUILD_DIR=${RELION_BIND}
+export RELION_SRC_DIR=/scratch/gpfs/GILLES/mg6942/relion/src
+export RECOVAR_EXPECTED_REPO_ROOT=${REPO}
+export RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION=0.40
+export RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE=1
+export RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN=4e-6
+export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0
+export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=1
+export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
+export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
+export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
+if [[ "${EXACT_COARSE_STACK1204}" = 1 ]]; then
+    export RECOVAR_K1_COARSE_GAUSSIAN_FFI=1
+    export RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF=1
+    export RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS=1
+    export RECOVAR_K1_RELION_F32_COARSE_SUPPORT=1
+fi
+unset RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE
+unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
+if [[ "${COMPACT_STACK1204_DUMP}" = 1 && "${COARSE_STACK1204_DUMP}" = 1 ]]; then
+    echo "compact pass-2 and coarse-significance dump modes are mutually exclusive" >&2
+    exit 2
+elif [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
+    export RECOVAR_PASS2_DUMP_DIR=${ROOT}/pass2
+    export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=1203
+    export RECOVAR_PASS2_DUMP_CURRENT_SIZE=60
+    export RECOVAR_PASS2_DUMP_ITERATION=2
+    # The compact analyzer reconstructs raw diff2 from the selected projection,
+    # image, correction, and high-resolution-tail operands.  Enabling the full
+    # raw dump materializes every large bucket and can require >17 GiB for a
+    # single diagnostic batch.
+    export RECOVAR_PASS2_DUMP_RAW_OPERANDS=0
+    export RECOVAR_PASS2_DUMP_ROTATION_ROWS=50293,50295
+    if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
+        export RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET=1
+    fi
+    mkdir -p "${RECOVAR_PASS2_DUMP_DIR}"
+elif [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
+    echo "K1_CASE22_STOP_AFTER_COMPACT_DUMP requires K1_CASE22_COMPACT_STACK1204_DUMP=1" >&2
+    exit 2
+elif [[ "${COARSE_STACK1204_DUMP}" = 1 ]]; then
+    export RECOVAR_SIGNIFICANCE_DUMP_DIR=${ROOT}/coarse
+    export RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES=1203
+    export RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE=60
+    export RECOVAR_SIGNIFICANCE_DUMP_ITERATION=2
+    export RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF=1
+    export RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET=1
+    mkdir -p "${RECOVAR_SIGNIFICANCE_DUMP_DIR}"
+fi
+
+mkdir -p "${OUTPUT}"
+cd "${REPO}"
+"${PYTHON}" - <<'PY'
+from pathlib import Path
+import jax
+import recovar
+from recovar import cuda_backproject
+from recovar.relion_bind import _relion_bind_core as bind
+
+root = Path.cwd().resolve()
+assert Path(recovar.__file__).resolve().is_relative_to(root)
+assert ".pixi/envs/default/" in str(Path(jax.__file__).resolve())
+assert len(jax.devices("gpu")) == 1 and "H100" in jax.devices("gpu")[0].device_kind.upper()
+assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
+assert hasattr(bind, "auto_refine_randomise_half_orders")
+print(jax.devices())
+print(bind.__file__)
+PY
+
+COMMAND=(
+    "${PYTHON}" -m scripts.run_full_refinement
+    --data_dir "${DATA}" --output "${OUTPUT}" --max_iter "${MAX_ITER}" --skip_final_iteration
+    --healpix_order 3 --auto_local_healpix_order 4 --offset_range 3.0 --offset_step 1.0
+    --adaptive_oversampling 1 --init_resolution 30.0 --image_batch_size 187
+    --rotation_block_size 8192 --seed 1722 --perturb_seed 1722
+    --particle_diameter_ang 200 --tau2_fudge 1.0 --max_significants -1
+    --firstiter_cc --apply-initial-lowpass --image-fourier-backend relion_cuda
+    --benchmark_ledger_json "${OUTPUT}/benchmark_ledger.json"
+    --timing_dir "${OUTPUT}/timing"
+    --save_intermediates_dir "${OUTPUT}/intermediates"
+    --save_intermediates_skip_unregularized
+    --relion_half_sets "${SEALED_CONTROL}/run_it000_data.star"
+    --relion_optimiser "${SEALED_CONTROL}/run_it000_optimiser.star"
+    --relion_init_dir "${SEALED_CONTROL}"
+)
+printf '%q ' "${COMMAND[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
+printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
+nvidia-smi -q > "${ROOT}/provenance/nvidia_smi_${SLURM_JOB_ID}.txt"
+sha256sum "${LAUNCHER}" "${CUDA_LIB}" "${RELION_BIND}"/_relion_bind_core*.so \
+    > "${ROOT}/provenance/static_inputs_${SLURM_JOB_ID}.sha256"
+
+start=$(date +%s)
+"${COMMAND[@]}" > "${OUTPUT}/run.log" 2>&1
+wall_s=$(( $(date +%s) - start ))
+
+if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
+    compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig001203_cs060.npz
+    test -s "${compact_dump}"
+    rg -q 'pass-2 operand dump completed; stopping at the requested fine-score boundary' \
+        "${OUTPUT}/run.log"
+    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":true,"stopped_after_dump":true}\n' \
+        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" \
+        > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
+    touch "${ROOT}/DUMP_SUCCESS_${SLURM_JOB_ID}"
+    exit 0
+fi
+if [[ "${COARSE_STACK1204_DUMP}" = 1 ]]; then
+    coarse_dump=${RECOVAR_SIGNIFICANCE_DUMP_DIR}/significance_orig001203_it002_cs060.npz
+    test -s "${coarse_dump}"
+    rg -q 'coarse-significance dump completed; stopping before pass-2/M-step work' \
+        "${OUTPUT}/run.log"
+    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","coarse_stack1204_dump":true,"exact_coarse":%s,"stopped_after_dump":true}\n' \
+        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${EXACT_COARSE_STACK1204}" \
+        > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
+    touch "${ROOT}/DUMP_SUCCESS_${SLURM_JOB_ID}"
+    exit 0
+fi
+
+last_index=$((MAX_ITER - 1))
+printf -v last_label '%03d' "${last_index}"
+test -s "${OUTPUT}/intermediates/it${last_label}_half1_reg.mrc"
+test -s "${OUTPUT}/intermediates/it${last_label}_half2_reg.mrc"
+if [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
+    compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig001203_cs060.npz
+    test -s "${compact_dump}"
+    "${PYTHON}" - <<'PY' "${compact_dump}"
+import numpy as np
+import sys
+
+with np.load(sys.argv[1], allow_pickle=False) as payload:
+    assert str(payload["schema"]) == "recovar.em.k1_pass2_selected_rotations.v1"
+    assert np.array_equal(payload["rotation_rows_global"], np.asarray([50293, 50295]))
+PY
+fi
+! rg -q 'Traceback|RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' "${OUTPUT}/run.log"
+rg -q 'Applied RELION fresh paired AutoRefine particle order with effective seed 1723' "${OUTPUT}/run.log"
+rg -q 'preserving fresh RELION physical BPref particle order' "${OUTPUT}/run.log"
+rg -q 'expected accuracy consumes an explicit physical trial order' "${OUTPUT}/run.log"
+
+printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" \
+    > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
+find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
+    > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
+touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
