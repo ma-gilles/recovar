@@ -978,9 +978,6 @@ def _run_ppca_refinement(
     if basis_size <= 0:
         raise ValueError(f"PPCA basis size must be positive, got {basis_size}")
 
-    if getattr(args, "tilt_series", False):
-        raise ValueError("PPCA pipeline mode does not support --tilt-series yet")
-
     # Multi-mask support: build masks array and PC assignment
     ppca_masks = None
     ppca_pc_mask_assignment = None
@@ -1004,6 +1001,17 @@ def _run_ppca_refinement(
     logger.warning("PPCA pipeline mode currently uses the provisional hybrid-shell prior. This should be tightened up.")
 
     contrast_mode = _resolve_ppca_contrast_mode(args)
+    if (
+        getattr(args, "tilt_series", False)
+        and contrast_mode != "none"
+        and not getattr(args, "shared_contrast_across_tilts", False)
+    ):
+        raise ValueError(
+            "Cryo-ET PPCA contrast refinement requires --shared_contrast_across_tilts; "
+            "without --correct-contrast, PPCA uses fixed contrast and supports either setting."
+        )
+    if getattr(args, "tilt_series", False):
+        logger.info("PPCA cryo-ET mode: sharing one latent conformation across all tilts of each particle")
     contrast_grid, contrast_weights = _resolve_ppca_contrast_grid(contrast_mode)
     W_init = _make_ppca_initial_loading(dataset.volume_size, basis_size, volume_shape=dataset.volume_shape)
     prior_info = ppca_prior_estimation.estimate_hybrid_shell_prior_from_data(
