@@ -49,16 +49,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native-preprocess-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output-npz", type=Path)
+    parser.add_argument("--expected-particles", type=int)
     parser.add_argument("--native-lane-reduction", action="store_true")
     parser.add_argument("--native-atomic-reduction", action="store_true")
+    parser.add_argument("--native-atomic-repeats", type=int, default=0)
     args = parser.parse_args()
+    if args.native_atomic_repeats < 0:
+        raise ValueError("--native-atomic-repeats must be nonnegative")
+    if args.native_atomic_repeats and not args.native_atomic_reduction:
+        raise ValueError("--native-atomic-repeats requires --native-atomic-reduction")
 
     artifacts = [
         load_artifact(path)
         for path in sorted(args.native_preprocess_dir.glob("*.preprocess-v1.bin"))
     ]
-    if len(artifacts) != 17:
-        raise ValueError(f"expected 17 native preprocess artifacts, found {len(artifacts)}")
+    if not artifacts:
+        raise ValueError("native preprocess capture directory is empty")
+    if args.expected_particles is not None and len(artifacts) != args.expected_particles:
+        raise ValueError(
+            f"expected {args.expected_particles} native preprocess artifacts, "
+            f"found {len(artifacts)}"
+        )
     raw = np.concatenate([artifact.raw_input_real for artifact in artifacts], axis=0)
     factors = np.asarray([artifact.norm_correction for artifact in artifacts], dtype=np.float32)
     shifts = np.stack([artifact.old_offset[:2] for artifact in artifacts]).astype(np.int32)
@@ -81,10 +93,18 @@ def main() -> None:
         native_lane_reduction=args.native_lane_reduction,
         native_atomic_reduction=args.native_atomic_reduction,
     )
+    native_masked_input = np.concatenate(
+        [artifact.masked_real for artifact in artifacts], axis=0
+    )
     transformed = _centered_rfft2_jax_per_image(masked)
-    normalized_np, masked_np, transformed_np = (
+    transformed_native_masked = _centered_rfft2_jax_per_image(
+        jnp.asarray(native_masked_input, dtype=jnp.float32)
+    )
+    normalized_np, masked_np, transformed_np, transformed_native_masked_np = (
         np.asarray(value)
-        for value in jax.block_until_ready((normalized, masked, transformed))
+        for value in jax.block_until_ready(
+            (normalized, masked, transformed, transformed_native_masked)
+        )
     )
     current_size = int(artifacts[0].header[17])
     image_size = int(artifacts[0].header[12])
@@ -105,6 +125,11 @@ def main() -> None:
     for row, artifact in enumerate(artifacts):
         recovar_fourier = np.asarray(
             transformed_np[row].reshape(-1)[centered_indices] * fourier_scale,
+            dtype=np.complex64,
+        )
+        native_masked_recovar_fourier = np.asarray(
+            transformed_native_masked_np[row].reshape(-1)[centered_indices]
+            * fourier_scale,
             dtype=np.complex64,
         )
         native_pre = artifact.masked_fourier_pre_optics.reshape(-1)
@@ -135,6 +160,11 @@ def main() -> None:
                     recovar_fourier,
                     valid,
                 ),
+                "native_masked_through_recovar_fft": _complex_comparison(
+                    native_post,
+                    native_masked_recovar_fourier,
+                    valid,
+                ),
                 "capture": str(artifact.path.resolve()),
             }
         )
@@ -144,6 +174,7 @@ def main() -> None:
         "masked_real",
         "masked_fourier_pre_optics",
         "masked_fourier_post_optics",
+        "native_masked_through_recovar_fft",
     )
     summaries = {}
     summaries["mask_background"] = {
@@ -157,7 +188,11 @@ def main() -> None:
         "max_abs": max(float(record["mask_background"]["max_abs"]) for record in records),
     }
     for stage in stage_names:
-        complex_stage = "fourier" in stage
+        complex_stage = stage in {
+            "masked_fourier_pre_optics",
+            "masked_fourier_post_optics",
+            "native_masked_through_recovar_fft",
+        }
         summaries[stage] = {
             "particle_count": len(records),
             "bit_exact_values": sum(
@@ -190,8 +225,75 @@ def main() -> None:
         "summaries": summaries,
         "particles": records,
     }
+    if args.native_atomic_repeats:
+        repeated_backgrounds = []
+        for _ in range(args.native_atomic_repeats):
+            _, repeated_masked = relion_preprocess_real_f32(
+                jnp.asarray(raw, dtype=jnp.float32),
+                jnp.asarray(factors, dtype=jnp.float32),
+                jnp.asarray(shifts, dtype=jnp.int32),
+                radius,
+                cosine_width,
+                True,
+                native_atomic_reduction=True,
+            )
+            repeated_backgrounds.append(
+                np.asarray(jax.block_until_ready(repeated_masked[:, 0, 0]), dtype=np.float32)
+            )
+        repeated_backgrounds_np = np.stack(repeated_backgrounds)
+        native_backgrounds = np.asarray(
+            [artifact.mask_parameters["background"] for artifact in artifacts],
+            dtype=np.float32,
+        )
+        repeated_bits = repeated_backgrounds_np.view(np.uint32)
+        native_bits = native_backgrounds.view(np.uint32)
+        report["native_atomic_background_repeats"] = {
+            "repeat_count": args.native_atomic_repeats,
+            "native_bits": native_bits.tolist(),
+            "unique_bits_by_particle": [
+                np.unique(repeated_bits[:, particle]).tolist()
+                for particle in range(len(artifacts))
+            ],
+            "exact_native_hits_by_particle": [
+                int(np.count_nonzero(repeated_bits[:, particle] == native_bits[particle]))
+                for particle in range(len(artifacts))
+            ],
+        }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    if args.output_npz is not None:
+        args.output_npz.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            args.output_npz,
+            part_ids=np.asarray([artifact.part_id for artifact in artifacts], dtype=np.int64),
+            stack_indices=np.asarray(
+                [artifact.stack_index for artifact in artifacts], dtype=np.int64
+            ),
+            native_normalized_shifted_real=np.stack(
+                [artifact.normalized_shifted_real[0] for artifact in artifacts]
+            ),
+            recovar_normalized_shifted_real=normalized_np,
+            native_masked_real=np.stack(
+                [artifact.masked_real[0] for artifact in artifacts]
+            ),
+            recovar_masked_real=masked_np,
+            native_masked_fourier_pre_optics=np.stack(
+                [artifact.masked_fourier_pre_optics[0] for artifact in artifacts]
+            ),
+            native_masked_fourier_post_optics=np.stack(
+                [artifact.masked_fourier_post_optics[0] for artifact in artifacts]
+            ),
+            native_masked_through_recovar_fft=transformed_native_masked_np.reshape(
+                len(artifacts), -1
+            )[:, centered_indices].reshape(
+                len(artifacts), current_size, current_half_width
+            )
+            * fourier_scale,
+            recovar_masked_fourier=transformed_np.reshape(len(artifacts), -1)[
+                :, centered_indices
+            ].reshape(len(artifacts), current_size, current_half_width)
+            * fourier_scale,
+        )
     print(json.dumps(summaries, indent=2, sort_keys=True))
 
 

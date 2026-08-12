@@ -354,7 +354,16 @@ def _compare_particle(
         capture_path.parent.glob(f"*_stack{expected_stack}_img0_class1.bpre-v2.bin")
     )
     _require(len(factor_matches) <= 1, "expected at most one colocated native BPref factor capture")
-    factor = load_factor_pixel_capture(factor_matches[0]) if factor_matches else None
+    factor = None
+    if factor_matches:
+        try:
+            factor = load_factor_pixel_capture(factor_matches[0])
+        except ValueError as error:
+            # Focused fine-score captures commonly colocate a geometry-only
+            # BPref sidecar.  It is useful provenance, but has no CTF/noise
+            # pixels to compare and must not block the score-boundary audit.
+            if "geometry-only capture has no pixel operands" not in str(error):
+                raise
     if factor is not None:
         _require(
             factor.pixels.shape == pixels.shape

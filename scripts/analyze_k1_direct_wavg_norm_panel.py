@@ -339,7 +339,7 @@ def main() -> None:
             }
             for method in methods
         }
-        for half in (1, 2)
+        for half in sorted({int(record["half"]) for record in records})
     }
     report = {
         "schema": "recovar.em.k1_direct_wavg_norm_panel.v1",

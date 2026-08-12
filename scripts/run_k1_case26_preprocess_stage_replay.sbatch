@@ -19,14 +19,15 @@ set -euo pipefail
 : "${EXPECTED_CUDA_LIB_SHA256:?submission must pin CUDA library hash}"
 : "${EXPECTED_REPO_HEAD:?submission must pin repository head}"
 
-ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_preprocess_stage_h100_20260811T0015ET
-RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_preprocess_stage_h100_20260811T0015ET
+ROOT=${RUN_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_preprocess_stage_h100_20260811T0015ET}
+RUNTIME=${RUNTIME_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_preprocess_stage_h100_20260811T0015ET}
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 LAUNCHER=${REPO}/scripts/run_k1_case26_preprocess_stage_replay.sbatch
 ANALYZER=${REPO}/scripts/analyze_k1_preprocess_stage_panel.py
-CUDA_LIB=${REPO}/recovar/cuda/libcuda_backproject.so
-CAPTURE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_preprocess_it1_panel_20260810T2340ET/capture
+CUDA_LIB=${CUDA_LIBRARY:-${REPO}/recovar/cuda/libcuda_backproject.so}
+CAPTURE=${CAPTURE_DIR:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_native_preprocess_it1_panel_20260810T2340ET/capture}
+EXPECTED_PARTICLES=${EXPECTED_PARTICLES:-17}
 
 require_sha() {
     test "$(sha256sum "$2" | awk '{print $1}')" = "$1"
@@ -37,10 +38,11 @@ require_sha "${EXPECTED_LAUNCHER_SHA256}" "${LAUNCHER}"
 require_sha "${EXPECTED_ANALYZER_SHA256}" "${ANALYZER}"
 require_sha "${EXPECTED_CUDA_LIB_SHA256}" "${CUDA_LIB}"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
-test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.preprocess-v1.bin' | wc -l)" -eq 17
+test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.preprocess-v1.bin' | wc -l)" -eq "${EXPECTED_PARTICLES}"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 export PYTHONNOUSERSITE=1 XLA_PYTHON_CLIENT_PREALLOCATE=false
+export RECOVAR_CUDA_LIB=${CUDA_LIB}
 export TMPDIR=${RUNTIME}/${SLURM_JOB_ID}/tmp
 export PIXI_HOME=${RUNTIME}/${SLURM_JOB_ID}/pixi_home
 export RATTLER_CACHE_DIR=${RUNTIME}/${SLURM_JOB_ID}/rattler_cache
@@ -65,14 +67,23 @@ run_mode() {
     shift
     "${PYTHON}" "${ANALYZER}" \
         --native-preprocess-dir "${CAPTURE}" \
+        --expected-particles "${EXPECTED_PARTICLES}" \
         --output "${ROOT}/analysis/K1_CASE26_PREPROCESS_STAGE_${mode}.json" \
+        --output-npz "${ROOT}/analysis/K1_CASE26_PREPROCESS_STAGE_${mode}.npz" \
         "$@" \
         > "${ROOT}/analysis/K1_CASE26_PREPROCESS_STAGE_${mode}.stdout"
 }
 
-run_mode DEFAULT
-run_mode DETERMINISTIC_LANE --native-lane-reduction
-run_mode NATIVE_ATOMIC --native-atomic-reduction
+IFS=, read -r -a replay_modes <<< "${REPLAY_MODES:-DEFAULT,DETERMINISTIC_LANE,NATIVE_ATOMIC}"
+for mode in "${replay_modes[@]}"; do
+    case "${mode}" in
+        DEFAULT) run_mode DEFAULT ;;
+        DETERMINISTIC_LANE) run_mode DETERMINISTIC_LANE --native-lane-reduction ;;
+        NATIVE_ATOMIC) run_mode NATIVE_ATOMIC --native-atomic-reduction \
+            --native-atomic-repeats "${NATIVE_ATOMIC_REPEATS:-0}" ;;
+        *) echo "unknown preprocessing replay mode: ${mode}" >&2; exit 2 ;;
+    esac
+done
 
 sha256sum "${ROOT}"/analysis/*.json > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
 touch "${ROOT}/SUCCESS_${SLURM_JOB_ID}"

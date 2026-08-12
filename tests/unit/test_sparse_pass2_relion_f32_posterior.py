@@ -41,7 +41,10 @@ def _numpy_relion_f32_reference(scores, adaptive_fraction):
         sum_weight = cumulative[-1]
         if not np.isfinite(sum_weight) or sum_weight <= np.float32(0.0):
             continue
-        target = np.float32(np.float64(1.0 - adaptive_fraction) * np.float64(sum_weight))
+        parsed_fraction = np.float32(adaptive_fraction)
+        target = np.float32(
+            (np.float64(1.0) - np.float64(parsed_fraction)) * np.float64(sum_weight)
+        )
         threshold_idx = min(int(np.searchsorted(cumulative, target, side="right")), row.size - 1)
         threshold = np.sort(raw)[threshold_idx]
         mask = finite & (raw >= threshold)

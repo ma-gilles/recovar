@@ -324,18 +324,49 @@ def _stable_top_n_mask(weights: np.ndarray, count: int) -> np.ndarray:
     return mask
 
 
+def _geometry_only_significant_count(factor) -> int:
+    """Return the native BPref acceptance count retained in a geometry capture."""
+
+    count = int(factor.header[45])
+    _require(
+        0 <= count <= int(factor.rotations.size) * int(factor.translations.size),
+        "geometry-only native BPref acceptance count is out of range",
+    )
+    return count
+
+
 def _rotation_map(factor_rotations: np.ndarray, recovar_rotations: np.ndarray) -> tuple[np.ndarray, float]:
     native = np.asarray(factor_rotations["matrix"], dtype=np.float32).reshape(-1, 3, 3)
-    native = native.transpose(0, 2, 1)
-    recovar = np.asarray(recovar_rotations, dtype=np.float32).reshape(-1, 3, 3)
-    distance = np.max(np.abs(native[:, None] - recovar[None]), axis=(2, 3))
-    nearest = np.argmin(distance, axis=1)
-    error = distance[np.arange(native.shape[0]), nearest]
-    _require(
-        np.all(error <= 1.0e-6) and np.unique(nearest).size == nearest.size,
-        "native and RECOVAR rotations do not map one-to-one",
+    native = np.ascontiguousarray(native.transpose(0, 2, 1))
+    recovar = np.ascontiguousarray(
+        np.asarray(recovar_rotations, dtype=np.float32).reshape(-1, 3, 3)
     )
-    return nearest.astype(np.int64), float(np.max(error, initial=0.0))
+    _require(
+        native.shape == recovar.shape and native.size > 0,
+        "native and RECOVAR rotation tables have different shapes",
+    )
+    # Production tables contain the same float32 matrices in different row
+    # orders.  Match their exact 36-byte keys in O(N log N); broadcasting an
+    # N-by-N distance matrix would require hundreds of gigabytes for the
+    # 150,840-row case-22 table and is not a viable diagnostic.
+    key_dtype = np.dtype((np.void, 9 * np.dtype(np.float32).itemsize))
+    native_keys = native.reshape(-1, 9).view(key_dtype).reshape(-1)
+    recovar_keys = recovar.reshape(-1, 9).view(key_dtype).reshape(-1)
+    _require(
+        np.unique(native_keys).size == native_keys.size
+        and np.unique(recovar_keys).size == recovar_keys.size,
+        "native or RECOVAR rotation table contains duplicate exact matrices",
+    )
+    recovar_order = np.argsort(recovar_keys)
+    sorted_recovar_keys = recovar_keys[recovar_order]
+    positions = np.searchsorted(sorted_recovar_keys, native_keys)
+    in_bounds = positions < sorted_recovar_keys.size
+    exact = np.zeros(native_keys.size, dtype=bool)
+    exact[in_bounds] = sorted_recovar_keys[positions[in_bounds]] == native_keys[in_bounds]
+    _require(np.all(exact), "native and RECOVAR rotation matrices are not byte-identical")
+    nearest = recovar_order[positions]
+    _require(np.unique(nearest).size == nearest.size, "rotation mapping is not bijective")
+    return nearest.astype(np.int64), 0.0
 
 
 def _translation_map(
@@ -509,13 +540,17 @@ def _compare_particle(
     _require(np.all(np.isfinite(recovar_prob)), f"stack {stack}: RECOVAR posterior is non-finite")
 
     if factor.geometry_only:
-        significant_count = int(native_state_row["rlnNrOfSignificantSamples"])
+        # rlnNrOfSignificantSamples is not the number of pass-2 class-pose
+        # hypotheses admitted to BPref.  Geometry-only captures omit the dense
+        # hypothesis records, but preserve that exact native count in header
+        # word 45.  Use it to select the stable top-N support.
+        significant_count = _geometry_only_significant_count(factor)
         native_support_flat = _stable_top_n_mask(native_weight, significant_count)
         native_support_keys = {
             (int(rotation), int(translation))
             for rotation, translation in mapped_keys[native_support_flat]
         }
-        support_source = "native_state_significant_count_stable_top_n"
+        support_source = "geometry_only_factor_header_accepted_count_stable_top_n"
     else:
         accepted = factor.hypotheses[(factor.hypotheses["flags"] & 1) != 0]
         accepted_rotation = rotation_map[np.asarray(accepted["orientation_local"], dtype=np.int64)]

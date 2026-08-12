@@ -4708,6 +4708,81 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
+ffi::Error RelionCubSortScanF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer values,
+    ffi::Result<ffi::AnyBuffer> sorted,
+    ffi::Result<ffi::AnyBuffer> cumulative)
+{
+    if (values.element_type() != ffi::DataType::F32 ||
+        sorted->element_type() != ffi::DataType::F32 ||
+        cumulative->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionCubSortScanF32: input and outputs must be F32");
+
+    auto input_dims = values.dimensions();
+    auto sorted_dims = sorted->dimensions();
+    auto cumulative_dims = cumulative->dimensions();
+    if (input_dims.size() != 1 || input_dims[0] < 1 ||
+        sorted_dims.size() != 1 || sorted_dims[0] != input_dims[0] ||
+        cumulative_dims.size() != 1 || cumulative_dims[0] != input_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionCubSortScanF32: input and outputs must have the same nonempty 1-D shape");
+
+    const int64_t count = input_dims[0];
+    if (count > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionCubSortScanF32: vector is too large for CUB's item count");
+
+    const float* input_ptr = static_cast<const float*>(values.untyped_data());
+    float* sorted_ptr = static_cast<float*>(sorted->untyped_data());
+    float* cumulative_ptr = static_cast<float*>(cumulative->untyped_data());
+    size_t sort_bytes = 0;
+    size_t scan_bytes = 0;
+    cudaError_t err = cub::DeviceRadixSort::SortKeys(
+        nullptr, sort_bytes, input_ptr, sorted_ptr, static_cast<int>(count),
+        0, sizeof(float) * 8, stream);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionCubSortScanF32 sort query: ") + cudaGetErrorString(err));
+    err = cub::DeviceScan::InclusiveSum(
+        nullptr, scan_bytes, sorted_ptr, cumulative_ptr, static_cast<int>(count), stream);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionCubSortScanF32 scan query: ") + cudaGetErrorString(err));
+
+    void* temporary = nullptr;
+    const size_t temporary_bytes = std::max<size_t>(1, std::max(sort_bytes, scan_bytes));
+    err = cudaMalloc(&temporary, temporary_bytes);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionCubSortScanF32 cudaMalloc: ") + cudaGetErrorString(err));
+
+    err = cub::DeviceRadixSort::SortKeys(
+        temporary, sort_bytes, input_ptr, sorted_ptr, static_cast<int>(count),
+        0, sizeof(float) * 8, stream);
+    if (err == cudaSuccess)
+        err = cub::DeviceScan::InclusiveSum(
+            temporary, scan_bytes, sorted_ptr, cumulative_ptr, static_cast<int>(count), stream);
+    cudaError_t free_error = cudaFree(temporary);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionCubSortScanF32 execute: ") + cudaGetErrorString(err));
+    if (free_error != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionCubSortScanF32 cudaFree: ") + cudaGetErrorString(free_error));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionCubSortScanF32, RelionCubSortScanF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
 ffi::Error RelionTranslateBprefF32Impl(
     cudaStream_t stream,
     int64_t image_h,

@@ -508,6 +508,23 @@ def initial_scoring_noise_pair(noise_half1, noise_half2, *, continuous_relion_no
     )
 
 
+def final_only_replay_override(replay_iteration_overrides, *, enabled: bool):
+    """Return the explicit final-boundary state for a zero-iteration replay.
+
+    A lone replay slot zero is intentionally ignored by the EM loop's
+    automatic final replay because ordinary refinements use that slot for
+    cold-start state.  The zero-iteration diagnostic is different: slot zero
+    is the requested last-numbered RELION state and must be passed through the
+    dedicated final override argument.
+    """
+
+    if not enabled:
+        return None
+    if not replay_iteration_overrides or replay_iteration_overrides[0] is None:
+        raise ValueError("final-only replay is missing its RELION boundary state")
+    return replay_iteration_overrides[0]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
@@ -589,6 +606,24 @@ def main():
         help=(
             "Fourier preprocessing backend for RELION-masked images. Use "
             "relion_cuda for source-level CUDA operand comparisons."
+        ),
+    )
+    parser.add_argument(
+        "--relion-native-lane-softmask-reduction",
+        action="store_true",
+        help=(
+            "Diagnostic only: reproduce RELION's per-lane CUDA soft-mask "
+            "background reduction when using --image-fourier-backend relion_cuda."
+        ),
+    )
+    parser.add_argument(
+        "--normalization-factor-override",
+        action="append",
+        default=[],
+        metavar="ZERO_BASED_STACK:FACTOR",
+        help=(
+            "Diagnostic only: replace avg_norm/normcorr for one stack row. "
+            "May be repeated; the factor is multiplied by the row's scale correction."
         ),
     )
     parser.add_argument("--max_healpix_order", type=int, default=8)
@@ -1045,6 +1080,17 @@ def main():
 
     # ---- Dataset + half-set split ----
     ds = load_dataset(args.data_star)
+    if args.relion_native_lane_softmask_reduction:
+        if args.image_fourier_backend != "relion_cuda":
+            raise ValueError(
+                "--relion-native-lane-softmask-reduction requires "
+                "--image-fourier-backend relion_cuda"
+            )
+        backend = getattr(getattr(ds, "image_source", None), "backend", None)
+        if backend is None or not hasattr(backend, "set_relion_native_lane_reduction"):
+            raise ValueError("Dataset backend does not support native-lane soft-mask reduction")
+        backend.set_relion_native_lane_reduction(True)
+        print("  RELION native-lane soft-mask reduction: enabled")
     relion_subsets = np.array(relion_df["rlnRandomSubset"])
     relion_names = list(relion_df["rlnImageName"])
     our_particles = starfile.read(args.data_star)
@@ -1146,6 +1192,31 @@ def main():
     corr_h2 = np.array([combined_h2[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
     scale_corr_h1 = np.array([pp_scale_h1[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
     scale_corr_h2 = np.array([pp_scale_h2[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+    for override in args.normalization_factor_override:
+        try:
+            stack_text, factor_text = override.split(":", maxsplit=1)
+            stack_index = int(stack_text)
+            normalization_factor = np.float32(factor_text)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "--normalization-factor-override must be ZERO_BASED_STACK:FACTOR"
+            ) from error
+        if not np.isfinite(normalization_factor) or normalization_factor <= 0:
+            raise ValueError("normalization-factor override must be finite and positive")
+        if stack_index in half1_our_idx:
+            half_position = half1_our_idx.index(stack_index)
+            corr_h1[half_position] = normalization_factor * scale_corr_h1[half_position]
+            half_number = 1
+        elif stack_index in half2_our_idx:
+            half_position = half2_our_idx.index(stack_index)
+            corr_h2[half_position] = normalization_factor * scale_corr_h2[half_position]
+            half_number = 2
+        else:
+            raise ValueError(f"normalization-factor override stack row is absent: {stack_index}")
+        print(
+            "  Diagnostic normalization-factor override: "
+            f"stack={stack_index} half={half_number} factor={float(normalization_factor):.9g}"
+        )
     print(
         "  Image corrections: "
         f"avg_norm_h1={avg_norm_h1:.6f}, avg_norm_h2={avg_norm_h2:.6f}, "
@@ -1397,13 +1468,17 @@ def main():
         replay_iteration_overrides[0] = _load_relion_iteration_override(
             iteration,
             iteration + 1,
-            process_start=True,
+            process_start=False,
         )
         os.environ["RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER"] = "1"
         print(
             "  Diagnostic final-only replay: forcing K=1 final all-data after zero numbered iterations "
             f"from RELION state {iteration:03d}"
         )
+    explicit_final_replay_override = final_only_replay_override(
+        replay_iteration_overrides,
+        enabled=args.force_final_after_zero_iterations,
+    )
 
     # ---- Output directory ----
     out_dir = args.output_dir or str(relion_dir.parent / "_agent_scratch" / f"{args.max_iter}iter_parity")
@@ -1490,6 +1565,7 @@ def main():
         init_previous_best_rotation_eulers=[euler_h1, euler_h2],
         init_direction_prior=direction_prior,
         replay_iteration_overrides=replay_iteration_overrides,
+        final_replay_override=explicit_final_replay_override,
         save_intermediates_dir=save_intermediates_dir,
         skip_final_iteration=args.skip_final_iteration,
         local_search_profile_mode=args.local_search_profile,
@@ -2365,4 +2441,16 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as exc:
+        if (
+            exc.__class__.__name__ == "SignificanceDumpComplete"
+            and os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET") == "1"
+        ):
+            print(
+                "RECOVAR coarse-significance dump completed; stopping before "
+                f"pass-2/M-step work: {exc}"
+            )
+            sys.exit(0)
+        raise

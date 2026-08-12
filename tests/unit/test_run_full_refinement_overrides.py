@@ -71,6 +71,27 @@ from scripts.run_full_refinement import (
 
 FIXTURE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0")
 RUN_FULL_REFINEMENT = Path(__file__).resolve().parents[2] / "scripts" / "run_full_refinement.py"
+
+
+def test_full_refinement_supports_stop_after_coarse_significance_dump():
+    source = RUN_FULL_REFINEMENT.read_text()
+    assert "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET" in source
+    assert "SignificanceDumpComplete" in source
+    assert "pass-2/M-step work" in source
+
+
+def test_full_refinement_supports_stop_after_bpref_contribution_dump():
+    source = RUN_FULL_REFINEMENT.read_text()
+    assert "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET" in source
+    assert "BPrefContributionDumpComplete" in source
+    assert "requested pass-2 boundary" in source
+
+
+def test_full_refinement_supports_stop_after_pass2_operand_dump():
+    source = RUN_FULL_REFINEMENT.read_text()
+    assert "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET" in source
+    assert "Pass2DumpComplete" in source
+    assert "requested fine-score boundary" in source
 ITERATION_LOOP = (
     Path(__file__).resolve().parents[2] / "recovar" / "em" / "dense_single_volume" / "iteration_loop.py"
 )
@@ -100,6 +121,24 @@ def test_fresh_auto_refine_particle_order_excludes_kclass_and_replays():
     assert not _use_fresh_auto_refine_particle_order(args, None)
     args.perturb_replay_relion_dir = None
     assert not _use_fresh_auto_refine_particle_order(args, object())
+
+
+def test_state_swap_diagnostic_can_preserve_fresh_auto_refine_particle_order():
+    args = SimpleNamespace(
+        n_classes=1,
+        init_relion_iteration=0,
+        perturb_replay_relion_dir="/sealed/restart",
+        state_swap_variant="all_relion",
+        state_swap_target_relion_iteration=2,
+    )
+    env = {"RECOVAR_STATE_SWAP_FORCE_FRESH_PARTICLE_ORDER": "1"}
+
+    assert _use_fresh_auto_refine_particle_order(args, None, environ=env)
+    assert not _use_fresh_auto_refine_particle_order(args, object(), environ=env)
+
+    args.state_swap_variant = None
+    with pytest.raises(ValueError, match="complete state-swap replay diagnostic"):
+        _use_fresh_auto_refine_particle_order(args, None, environ=env)
 
 
 @pytest.mark.parametrize("token", ["1", "true", "YES", "on"])

@@ -528,6 +528,7 @@ _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_rectangular_f32"
 )
 _TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
+_TARGET_RELION_CUB_SORT_SCAN_F32 = "cuda_relion_cub_sort_scan_f32"
 
 # Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
 # Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
@@ -575,6 +576,7 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionFineDiff2RectangularF32",
     ),
     (_TARGET_RELION_FINE_DIFF2_PAIRS_F32, "RelionFineDiff2PairsF32"),
+    (_TARGET_RELION_CUB_SORT_SCAN_F32, "RelionCubSortScanF32"),
 )
 
 
@@ -1207,6 +1209,35 @@ def relion_translate_score_f32(
         image_h=np.int64(image_h),
         image_half_width=np.int64(half_width),
     )
+
+
+@jax.jit
+def relion_cub_sort_scan_f32(values: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Sort and inclusively scan one float32 vector with RELION's CUB calls.
+
+    This is a strict diagnostic primitive for the coarse-significance boundary.
+    RELION invokes ``cub::DeviceRadixSort::SortKeys`` followed by
+    ``cub::DeviceScan::InclusiveSum`` on each particle's positive weights.
+    Keeping both intermediate arrays observable lets parity tests identify a
+    sort discrepancy separately from a scan discrepancy.
+    """
+
+    if values.dtype != jnp.float32:
+        raise TypeError(f"values must be float32, got {values.dtype}")
+    if values.ndim != 1 or values.shape[0] < 1:
+        raise ValueError(f"values must be a nonempty 1-D array, got {values.shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION CUB sort/scan requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("RELION CUB sort/scan was requested but custom CUDA is disabled")
+    _ensure_ffi()
+
+    output_type = jax.ShapeDtypeStruct(values.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_CUB_SORT_SCAN_F32,
+        (output_type, output_type),
+        vmap_method="sequential",
+    )(values)
 
 
 @functools.partial(jax.jit, static_argnums=(4,))

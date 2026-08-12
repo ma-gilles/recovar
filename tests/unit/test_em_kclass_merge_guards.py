@@ -638,6 +638,199 @@ def test_kclass_significance_dump_iteration_gate_suppresses_other_iterations(mon
     assert not dump_dir.exists()
 
 
+def test_kclass_significance_dump_can_stop_after_durable_target(monkeypatch, tmp_path):
+    """The opt-in short-run diagnostic stops only after writing its target."""
+
+    dump_dir = tmp_path / "dump"
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_DIR", str(dump_dir))
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES", "42")
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ITERATION", "2")
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET", "1")
+
+    with pytest.raises(sig_mod.SignificanceDumpComplete) as exc_info:
+        sig_mod._maybe_dump_k_class_significance_batch(
+            experiment_dataset=SimpleNamespace(
+                dataset_indices=np.asarray([42], dtype=np.int64),
+            ),
+            indices=np.asarray([0], dtype=np.int64),
+            n_classes=1,
+            rotations=np.tile(np.eye(3, dtype=np.float32), (2, 1, 1)),
+            translations=np.zeros((3, 2), dtype=np.float32),
+            class_weight_mats=[np.full((1, 6), 1.0 / 6.0, dtype=np.float64)],
+            batch_sig_mask=np.ones((1, 6), dtype=bool),
+            batch_n_sig=np.asarray([6], dtype=np.int64),
+            hard_assignment_batch=np.asarray([0], dtype=np.int64),
+            class_assignment_batch=np.asarray([0], dtype=np.int64),
+            global_log_z=np.asarray([0.0], dtype=np.float64),
+            class_log_z_values=[np.asarray([0.0], dtype=np.float64)],
+            best_score=np.asarray([0.0], dtype=np.float64),
+            max_posterior=np.asarray([1.0], dtype=np.float64),
+            rotation_log_prior_padded=None,
+            batch_translation_log_prior=None,
+            class_log_priors=np.zeros(1, dtype=np.float64),
+            current_size=14,
+            adaptive_fraction=0.999,
+            max_significants=100,
+            debug_iteration=2,
+        )
+
+    dump_path = dump_dir / "significance_orig000042_it002_cs014.npz"
+    assert dump_path.is_file()
+    assert exc_info.value.dump_path == str(dump_path)
+
+
+def test_kclass_significance_stop_respects_iteration_gate(monkeypatch, tmp_path):
+    """A future target must not stop the current scoring boundary."""
+
+    dump_dir = tmp_path / "dump"
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_DIR", str(dump_dir))
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES", "42")
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ITERATION", "3")
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET", "1")
+
+    sig_mod._maybe_dump_k_class_significance_batch(
+        experiment_dataset=None,
+        indices=None,
+        n_classes=1,
+        rotations=None,
+        translations=None,
+        class_weight_mats=None,
+        batch_sig_mask=None,
+        batch_n_sig=None,
+        hard_assignment_batch=None,
+        class_assignment_batch=None,
+        global_log_z=None,
+        class_log_z_values=None,
+        best_score=None,
+        max_posterior=None,
+        rotation_log_prior_padded=None,
+        batch_translation_log_prior=None,
+        class_log_priors=None,
+        current_size=14,
+        adaptive_fraction=0.999,
+        max_significants=-1,
+        debug_iteration=2,
+    )
+
+    assert not dump_dir.exists()
+
+
+def test_significance_stop_waits_for_complete_target_set(monkeypatch, tmp_path):
+    dump_dir = tmp_path / "dump"
+    dump_dir.mkdir()
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET", "1")
+    first_path = dump_dir / "significance_orig000042_it002_cs014.npz"
+    second_path = dump_dir / "significance_orig000043_it002_cs014.npz"
+    first_path.touch()
+
+    sig_mod._maybe_stop_after_significance_dump(
+        str(first_path),
+        dump_dir=str(dump_dir),
+        target_original_indices={42, 43},
+        current_size=14,
+        debug_iteration=2,
+    )
+
+    second_path.touch()
+    with pytest.raises(sig_mod.SignificanceDumpComplete):
+        sig_mod._maybe_stop_after_significance_dump(
+            str(second_path),
+            dump_dir=str(dump_dir),
+            target_original_indices={42, 43},
+            current_size=14,
+            debug_iteration=2,
+        )
+
+
+def test_significance_dump_half_selector_is_scoped_to_target_iteration(tmp_path):
+    datasets = [
+        SimpleNamespace(dataset_indices=np.asarray([2, 4], dtype=np.int64)),
+        SimpleNamespace(dataset_indices=np.asarray([1, 3], dtype=np.int64)),
+    ]
+    environ = {
+        "RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF": "2",
+        "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET": "1",
+        "RECOVAR_SIGNIFICANCE_DUMP_DIR": str(tmp_path),
+        "RECOVAR_SIGNIFICANCE_DUMP_ITERATION": "2",
+        "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES": "1,3",
+    }
+
+    assert iteration_loop._significance_dump_half_indices(
+        numbered_iteration=1,
+        n_classes=1,
+        experiment_datasets=datasets,
+        environ=environ,
+    ) == (0, 1)
+    assert iteration_loop._significance_dump_half_indices(
+        numbered_iteration=2,
+        n_classes=1,
+        experiment_datasets=datasets,
+        environ=environ,
+    ) == (1,)
+
+
+def test_significance_dump_half_selector_fails_closed(tmp_path):
+    datasets = [
+        SimpleNamespace(dataset_indices=np.asarray([2, 4], dtype=np.int64)),
+        SimpleNamespace(dataset_indices=np.asarray([1, 3], dtype=np.int64)),
+    ]
+    base_environ = {
+        "RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF": "2",
+        "RECOVAR_SIGNIFICANCE_DUMP_DIR": str(tmp_path),
+        "RECOVAR_SIGNIFICANCE_DUMP_ITERATION": "2",
+        "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES": "1",
+    }
+    with pytest.raises(RuntimeError, match="STOP_AFTER_TARGET"):
+        iteration_loop._significance_dump_half_indices(
+            numbered_iteration=2,
+            n_classes=1,
+            experiment_datasets=datasets,
+            environ=base_environ,
+        )
+
+    target_missing = dict(base_environ)
+    target_missing["RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET"] = "1"
+    target_missing["RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES"] = "2"
+    with pytest.raises(RuntimeError, match="not all present"):
+        iteration_loop._significance_dump_half_indices(
+            numbered_iteration=2,
+            n_classes=1,
+            experiment_datasets=datasets,
+            environ=target_missing,
+        )
+    with pytest.raises(RuntimeError, match="K=1 diagnostic-only"):
+        iteration_loop._significance_dump_half_indices(
+            numbered_iteration=2,
+            n_classes=4,
+            experiment_datasets=datasets,
+            environ={**base_environ, "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET": "1"},
+        )
+
+
+def test_relion_adaptive_fraction_preserves_text_to_float_boundary():
+    expected = float(np.float32("0.999"))
+    assert iteration_loop.RELION_ADAPTIVE_FRACTION == expected
+    assert iteration_loop.RELION_ADAPTIVE_FRACTION != 0.999
+    assert "adaptive_fraction=0.999" not in inspect.getsource(iteration_loop)
+
+    # This two-weight boundary is intentionally between Python's binary64
+    # literal and RELION's textToFloat value.  It locks down the observed
+    # one-sample support effect without depending on a bulky parity fixture.
+    weights = np.asarray([[0.999000006, 0.000999994]], dtype=np.float64)
+    _, binary64_count = oversampling_mod._find_significant_mask_full_sort(
+        weights,
+        adaptive_fraction=0.999,
+        max_significants=-1,
+    )
+    _, relion_count = oversampling_mod._find_significant_mask_full_sort(
+        weights,
+        adaptive_fraction=iteration_loop.RELION_ADAPTIVE_FRACTION,
+        max_significants=-1,
+    )
+    assert int(np.asarray(binary64_count)[0]) == 1
+    assert int(np.asarray(relion_count)[0]) == 2
+
+
 def test_kclass_significance_dump_uses_original_index_mapper(monkeypatch, tmp_path):
     """Subset datasets must target dumps by original RELION image id.
 
@@ -713,6 +906,9 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
     candidate_mask = np.ones((1, n_rot, n_trans), dtype=bool)
     reconstruction_mask = candidate_mask.copy()
     shifted_score = np.ones((1, n_trans, n_score_pix), dtype=np.complex64)
+    direct_score_input = np.ones((1, n_score_pix), dtype=np.complex64) * (5.0 + 6.0j)
+    direct_preprocessed = np.ones((1, n_score_pix), dtype=np.complex64) * (2.0 + 1.0j)
+    direct_pixel_correction = np.linspace(0.5, 1.5, n_score_pix, dtype=np.float32)[None, :]
     shifted_recon = np.ones((1, n_trans, n_recon_pix), dtype=np.complex64) * (2.0 + 3.0j)
     ctf_score = np.ones((1, n_score_pix), dtype=np.float64)
     ctf_recon = np.ones((1, n_recon_pix), dtype=np.float64) * 4.0
@@ -740,6 +936,13 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
         half_weights_used=np.ones(n_score_pix, dtype=np.float64),
         window_indices=np.arange(n_score_pix, dtype=np.int32),
         shifted_corrected_score_split=shifted_score,
+        direct_score_input=direct_score_input,
+        direct_preprocessed_score_input=direct_preprocessed,
+        direct_pixel_correction=direct_pixel_correction,
+        direct_preprocess_normalization_factors=np.asarray([0.75], dtype=np.float32),
+        direct_integer_pre_shifts=np.asarray([[2, -1]], dtype=np.int32),
+        direct_batch_image_corrections=np.asarray([1.5], dtype=np.float32),
+        direct_batch_scale_corrections=np.asarray([2.0], dtype=np.float32),
         shifted_recon_split=shifted_recon,
         ctf2_over_nv_recon=ctf_recon,
         recon_window_indices=np.asarray([0, 2, 3, 4], dtype=np.int32),
@@ -753,6 +956,13 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
     payload = np.load(dump_dir / files[0])
     for name in (
         "shifted_corrected",
+        "direct_score_input",
+        "direct_preprocessed_score_input",
+        "direct_pixel_correction",
+        "relion_preprocess_normalization_factor",
+        "relion_integer_pre_shift",
+        "batch_image_correction",
+        "batch_scale_correction",
         "ctf2_over_nv_score",
         "window_indices",
         "shifted_recon",
@@ -761,15 +971,102 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
     ):
         assert name in payload.files, f"Sparse pass-2 dump npz is missing schema field {name!r}"
     assert payload["shifted_corrected"].shape == (n_trans, n_score_pix)
+    np.testing.assert_array_equal(payload["direct_score_input"], direct_score_input[0])
+    np.testing.assert_array_equal(
+        payload["direct_preprocessed_score_input"], direct_preprocessed[0]
+    )
+    np.testing.assert_array_equal(
+        payload["direct_pixel_correction"], direct_pixel_correction[0]
+    )
+    assert float(payload["relion_preprocess_normalization_factor"]) == 0.75
+    np.testing.assert_array_equal(payload["relion_integer_pre_shift"], [2, -1])
+    assert float(payload["batch_image_correction"]) == 1.5
+    assert float(payload["batch_scale_correction"]) == 2.0
     assert payload["ctf2_over_nv_score"].shape == (n_score_pix,)
     assert payload["window_indices"].shape == (n_score_pix,)
     assert payload["shifted_recon"].shape == (n_trans, n_recon_pix)
     assert payload["ctf2_over_nv_recon"].shape == (n_recon_pix,)
     assert payload["recon_window_indices"].shape == (n_recon_pix,)
     assert payload["shifted_recon"].dtype == np.complex64
+    assert payload["direct_score_input"].dtype == np.complex64
     assert payload["ctf2_over_nv_recon"].dtype == np.float64
     assert int(payload["iteration"]) == 2
     assert int(payload["half"]) == 1
+
+
+def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, tmp_path):
+    n_rot = 4
+    n_trans = 3
+    n_pix = 5
+    experiment_dataset = SimpleNamespace(dataset_indices=np.array([42], dtype=np.int64))
+    rotations = np.arange(n_rot * 9, dtype=np.float32).reshape(n_rot, 3, 3)
+    per_image_inputs = {
+        "oversampled_rots": [rotations],
+        "oversampled_rot_indices": [np.arange(10, 10 + n_rot, dtype=np.int64)],
+        "parent_map": [np.arange(n_rot, dtype=np.int32)],
+    }
+    scores = np.arange(n_rot * n_trans, dtype=np.float64).reshape(1, n_rot, n_trans)
+    probs = np.full((1, n_rot, n_trans), 1.0 / (n_rot * n_trans), dtype=np.float64)
+    dump_dir = tmp_path / "pass2"
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ROTATION_ROWS", "1,3")
+
+    sparse_pass2_mod._maybe_dump_pass2_bucket(
+        experiment_dataset=experiment_dataset,
+        image_indices=np.asarray([0], dtype=np.int64),
+        per_image_inputs=per_image_inputs,
+        current_size=14,
+        n_fine_trans=n_trans,
+        fine_translations=np.zeros((n_trans, 2), dtype=np.float32),
+        scores=scores,
+        probs=probs,
+        rotation_log_prior=np.zeros((1, n_rot), dtype=np.float64),
+        translation_log_prior=np.zeros((1, n_trans), dtype=np.float64),
+        candidate_mask=np.ones((1, n_rot, n_trans), dtype=bool),
+        ctf2_over_nv_score=np.ones((1, n_pix), dtype=np.float32),
+        proj_half=np.arange(n_rot * n_pix, dtype=np.float32).reshape(1, n_rot, n_pix).astype(np.complex64),
+        half_weights_used=np.ones(n_pix, dtype=np.float32),
+        window_indices=np.arange(n_pix, dtype=np.int32),
+        shifted_corrected_score_split=np.ones((1, n_trans, n_pix), dtype=np.complex64),
+        direct_score_input=np.arange(n_pix, dtype=np.float32)[None, :].astype(np.complex64),
+        direct_preprocessed_score_input=(
+            np.arange(n_pix, dtype=np.float32)[None, :].astype(np.complex64) + 2j
+        ),
+        direct_pixel_correction=np.ones((1, n_pix), dtype=np.float32) * 3,
+        direct_preprocess_normalization_factors=np.asarray([0.25], dtype=np.float32),
+        direct_integer_pre_shifts=np.asarray([[1, 2]], dtype=np.int32),
+        direct_batch_image_corrections=np.asarray([0.5], dtype=np.float32),
+        direct_batch_scale_corrections=np.asarray([2.0], dtype=np.float32),
+    )
+
+    with np.load(dump_dir / "pass2_orig000042_cs014.npz", allow_pickle=False) as payload:
+        assert str(payload["schema"]) == "recovar.em.k1_pass2_selected_rotations.v1"
+        np.testing.assert_array_equal(payload["rotation_rows_global"], np.asarray([1, 3]))
+        np.testing.assert_array_equal(payload["scores_with_prior"], scores[0, [1, 3]])
+        np.testing.assert_array_equal(payload["rotations"], rotations[[1, 3]])
+        assert int(payload["candidate_rotation_count"]) == n_rot
+        assert int(payload["candidate_mask_total_count"]) == n_rot * n_trans
+        assert float(payload["score_max"]) == float(np.max(scores))
+        assert int(payload["score_argmax_rotation"]) == 3
+        assert int(payload["score_argmax_translation"]) == 2
+        assert float(payload["posterior_sum"]) == pytest.approx(1.0)
+        assert float(payload["posterior_max"]) == pytest.approx(1.0 / (n_rot * n_trans))
+        assert int(payload["posterior_argmax_rotation"]) == 0
+        assert int(payload["posterior_argmax_translation"]) == 0
+        assert payload["proj_half"].shape == (2, n_pix)
+        assert payload["shifted_corrected"].shape == (n_trans, n_pix)
+        np.testing.assert_array_equal(
+            payload["direct_score_input"],
+            np.arange(n_pix, dtype=np.float32).astype(np.complex64),
+        )
+        np.testing.assert_array_equal(
+            payload["direct_preprocessed_score_input"],
+            np.arange(n_pix, dtype=np.float32).astype(np.complex64) + 2j,
+        )
+        np.testing.assert_array_equal(payload["direct_pixel_correction"], 3)
+        assert float(payload["relion_preprocess_normalization_factor"]) == 0.25
+        np.testing.assert_array_equal(payload["relion_integer_pre_shift"], [1, 2])
 
 
 def test_sparse_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_path):

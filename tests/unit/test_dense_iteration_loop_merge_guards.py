@@ -681,6 +681,7 @@ def test_final_all_data_local_search_uses_replayed_translation_range():
     final_call = source[final_call_idx : source.index("            )", final_call_idx)]
     assert "current_translation_range=final_translation_range" in final_call
     assert "current_translation_range=float(state.translation_range)" not in final_call
+    assert "debug_iteration=final_sampling_relion_iteration" in final_call
 
 
 def test_final_all_data_sampling_replay_prefers_final_sampling_star_before_last_numbered():

@@ -170,6 +170,58 @@ def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
     }
 
 
+def _float32_bits(value: np.float32) -> int:
+    return int(np.asarray(value, dtype=np.float32).view(np.uint32).item())
+
+
+def _first_coordinate_mismatches(
+    *,
+    expected_coordinates: np.ndarray,
+    candidate_coordinates: np.ndarray,
+    active: np.ndarray,
+    factor_rows: np.ndarray,
+    contributor_rows: np.ndarray,
+    factor,
+    recovar_rotations: np.ndarray,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    """Serialize the exact inputs at the first unequal device coordinates."""
+
+    mismatch = active[..., None] & (expected_coordinates != candidate_coordinates)
+    records: list[dict[str, Any]] = []
+    for contributor_local, pixel, axis_zyx in np.argwhere(mismatch)[:limit]:
+        factor_row = int(factor_rows[contributor_local])
+        recovar_row = int(contributor_rows[contributor_local])
+        expected = np.float32(expected_coordinates[contributor_local, pixel, axis_zyx])
+        candidate = np.float32(candidate_coordinates[contributor_local, pixel, axis_zyx])
+        matrix = np.asarray(factor.rotations["matrix"][factor_row], dtype=np.float32).reshape(3, 3)
+        records.append(
+            {
+                "contributor_local": int(contributor_local),
+                "factor_orientation_local": factor_row,
+                "recovar_rotation_row": recovar_row,
+                "pixel": int(pixel),
+                "pixel_x": int(factor.pixels["x"][pixel]),
+                "pixel_y": int(factor.pixels["y"][pixel]),
+                "axis_zyx": int(axis_zyx),
+                "native_coordinate": float(expected),
+                "native_coordinate_bits": _float32_bits(expected),
+                "recovar_coordinate": float(candidate),
+                "recovar_coordinate_bits": _float32_bits(candidate),
+                "signed_bit_delta": _float32_bits(candidate) - _float32_bits(expected),
+                "native_matrix_flat": [float(value) for value in matrix.reshape(-1)],
+                "native_matrix_bits": [_float32_bits(value) for value in matrix.reshape(-1)],
+                "recovar_rotation_flat": [
+                    float(value) for value in recovar_rotations[recovar_row].reshape(-1)
+                ],
+                "recovar_rotation_bits": [
+                    _float32_bits(value) for value in recovar_rotations[recovar_row].reshape(-1)
+                ],
+            }
+        )
+    return records
+
+
 def _factor_native_rows(factor) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return dense native numerator/weight and the serialized support mask."""
 
@@ -197,6 +249,30 @@ def _factor_native_rows(factor) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return data, weight, support
 
 
+def _mul_rn_f32(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    """Emulate CUDA ``mul.rn.f32`` on float32 operands."""
+
+    return np.multiply(
+        np.asarray(left, dtype=np.float32),
+        np.asarray(right, dtype=np.float32),
+        dtype=np.float32,
+    )
+
+
+def _fma_rn_f32(left: np.ndarray, right: np.ndarray, addend: np.ndarray) -> np.ndarray:
+    """Emulate CUDA ``fma.rn.f32`` for this bounded coordinate calculation.
+
+    A float32 product has at most 48 significant bits. The frequency operands
+    here are exact small integers, and adding the already-rounded float32 second
+    product remains exact in float64 before the final float32 rounding.
+    """
+
+    return (
+        np.asarray(left, dtype=np.float64) * np.asarray(right, dtype=np.float64)
+        + np.asarray(addend, dtype=np.float64)
+    ).astype(np.float32)
+
+
 def _native_geometry(
     factor,
     *,
@@ -210,10 +286,18 @@ def _native_geometry(
     y = np.asarray(pixels["y"], dtype=np.float32)
     padding = np.float32(2.0)
 
-    # Preserve the source expression and addend order from BP.cuh.
-    xp = (rotations[:, 0, 0, None] * x + rotations[:, 0, 1, None] * y) * padding
-    yp = (rotations[:, 1, 0, None] * x + rotations[:, 1, 1, None] * y) * padding
-    zp = (rotations[:, 2, 0, None] * x + rotations[:, 2, 1, None] * y) * padding
+    # Match the exact deployed PTX, not NumPy's separate multiply/add ufuncs:
+    #   mul.f32 second_term, euler[row, 1], y
+    #   fma.rn.f32 sum, euler[row, 0], x, second_term
+    #   mul.f32 coordinate, sum, padding_factor
+    def coordinate(row: int) -> np.ndarray:
+        second_term = _mul_rn_f32(rotations[:, row, 1, None], y)
+        summed = _fma_rn_f32(rotations[:, row, 0, None], x, second_term)
+        return _mul_rn_f32(summed, padding)
+
+    xp = coordinate(0)
+    yp = coordinate(1)
+    zp = coordinate(2)
     coordinates_zyx = np.stack((zp, yp, xp), axis=-1).astype(np.float32, copy=False)
     folded = xp < np.float32(0.0)
     scatter_coordinates = np.where(folded[..., None], -coordinates_zyx, coordinates_zyx)
@@ -383,7 +467,7 @@ def _analyze_particle(factor_path: Path, pass2_path: Path) -> dict[str, Any]:
         "native_geometry_oracle": (
             "passive_relion_device_capture"
             if captured_geometry is not None
-            else "independent_host_float32_equations"
+            else "independent_host_cuda_fma_emulation"
         ),
         "fold_exact": bool(np.array_equal(expected_fold[active], (row_flags[active] & 16) != 0)),
         "source_data": _metric(
@@ -398,6 +482,15 @@ def _analyze_particle(factor_path: Path, pass2_path: Path) -> dict[str, Any]:
         ),
         "source_weight": _metric(weight_rows[contributor_rows][active], source_values[..., 2][active]),
         "coordinates_zyx": _metric(expected_coordinates[active], source_values[..., 3:6][active]),
+        "first_coordinate_mismatches": _first_coordinate_mismatches(
+            expected_coordinates=expected_coordinates,
+            candidate_coordinates=source_values[..., 3:6],
+            active=active,
+            factor_rows=factor_rows,
+            contributor_rows=contributor_rows,
+            factor=factor,
+            recovar_rotations=recovar_rotations,
+        ),
         "neighbor_indices_exact": bool(np.array_equal(expected_indices[active], neighbor_indices[active])),
         "neighbor_index_mismatch_count": int(np.count_nonzero(expected_indices[active] != neighbor_indices[active])),
         "neighbor_coefficients": _metric(expected_coefficients[active], coefficients[active]),

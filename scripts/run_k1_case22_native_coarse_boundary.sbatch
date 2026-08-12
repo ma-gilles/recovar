@@ -28,6 +28,16 @@ DATA=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_currenthead_25ab6
 LAUNCHER=${REPO}/scripts/run_k1_case22_native_coarse_boundary.sbatch
 CAPTURE=${ROOT}/capture
 RELION_OUT=${ROOT}/relion
+TARGET_STACK_ONE_BASED=${K1_CASE22_TARGET_STACK_ONE_BASED:-1204}
+CAPTURE_FINE=${K1_CASE22_CAPTURE_FINE:-0}
+if (( TARGET_STACK_ONE_BASED < 1 )); then
+    echo "K1_CASE22_TARGET_STACK_ONE_BASED must be positive" >&2
+    exit 2
+fi
+if [[ "${CAPTURE_FINE}" != 0 && "${CAPTURE_FINE}" != 1 ]]; then
+    echo "K1_CASE22_CAPTURE_FINE must be 0 or 1" >&2
+    exit 2
+fi
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -68,7 +78,21 @@ nvidia-smi -q > "${ROOT}/provenance/nvidia_smi_${SLURM_JOB_ID}.txt"
 
 export RELION_COARSE_CAPTURE_DIR=${CAPTURE}
 export RELION_COARSE_CAPTURE_ITER=2
-export RELION_COARSE_CAPTURE_STACK=1204
+export RELION_COARSE_CAPTURE_STACK=${TARGET_STACK_ONE_BASED}
+if [[ "${CAPTURE_FINE}" == 1 ]]; then
+    # Fine-score capture is enabled through the particle-scoped BPref selector.
+    # Geometry-only mode avoids retaining the large per-pixel factor payload.
+    export RELION_BPRE_CAPTURE_DIR=${CAPTURE}
+    export RELION_BPRE_CAPTURE_SCHEMA=2
+    export RELION_BPRE_CAPTURE_ITER=2
+    export RELION_BPRE_CAPTURE_CLASS=1
+    export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES=1
+    export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=1
+    export RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=2
+    export RELION_BPRE_CAPTURE_MAX_BYTES=2000000000
+    export RELION_BPRE_CAPTURE_STACKS=${TARGET_STACK_ONE_BASED}
+    export RELION_BPRE_CAPTURE_GEOMETRY_ONLY=1
+fi
 
 command=(
     srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
@@ -86,10 +110,16 @@ start=$(date +%s)
     cd "${DATA}"
     "${command[@]}"
 ) > "${RELION_OUT}/runner.stdout" 2> "${RELION_OUT}/runner.stderr"
-printf '{"job_id":"%s","wall_s":%d}\n' "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" \
+printf '{"job_id":"%s","wall_s":%d,"target_stack_one_based":%d,"capture_fine":%d}\n' \
+    "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" "${TARGET_STACK_ONE_BASED}" \
+    "${CAPTURE_FINE}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 
 test "$(find "${CAPTURE}" -maxdepth 1 -name '*.coarse-v1.bin' | wc -l)" -eq 1
+if [[ "${CAPTURE_FINE}" == 1 ]]; then
+    test "$(find "${CAPTURE}" -maxdepth 1 -name '*.fine-score-v1.bin' | wc -l)" -eq 1
+    test "$(find "${CAPTURE}" -maxdepth 1 -name '*.bpre-v2.bin' | wc -l)" -eq 1
+fi
 test -s "${RELION_OUT}/run_it002_data.star"
 find "${CAPTURE}" "${RELION_OUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"

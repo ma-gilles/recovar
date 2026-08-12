@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""Compare one matched K=1 fine-score tuple at the pixel/reduction boundary."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from scripts.compare_k4_relion_recovar_fine_operands import (
+    _compact_indices_from_full_lookup,
+    _infer_current_size,
+    _metric,
+    _metric_up_to_global_sign,
+    _translation_alignment,
+    _tree_raw_diff2,
+    _zero_dc_compact_score_weight,
+)
+from scripts.validate_relion_fine_operand_capture import (
+    load_fine_operand_capture,
+    validate_capture,
+)
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ValueError(message)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(8 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _largest_mismatches(
+    relion: np.ndarray,
+    recovar: np.ndarray,
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    left = np.asarray(relion)
+    right = np.asarray(recovar)
+    delta = np.abs(
+        right.astype(np.complex128 if np.iscomplexobj(right) else np.float64)
+        - left.astype(np.complex128 if np.iscomplexobj(left) else np.float64)
+    ).reshape(-1)
+    order = np.argsort(delta, kind="stable")[::-1][:limit]
+    return [
+        {
+            "flat_index": int(index),
+            "abs_delta": float(delta[index]),
+            "relion": (
+                [float(left.reshape(-1)[index].real), float(left.reshape(-1)[index].imag)]
+                if np.iscomplexobj(left)
+                else float(left.reshape(-1)[index])
+            ),
+            "recovar": (
+                [float(right.reshape(-1)[index].real), float(right.reshape(-1)[index].imag)]
+                if np.iscomplexobj(right)
+                else float(right.reshape(-1)[index])
+            ),
+        }
+        for index in order
+        if delta[index] != 0
+    ]
+
+
+def analyze(
+    capture_path: Path,
+    pass2_path: Path,
+    *,
+    recovar_global_rotation: int,
+    physical_image_size: int,
+) -> dict[str, Any]:
+    capture_path = capture_path.resolve()
+    pass2_path = pass2_path.resolve()
+    capture = load_fine_operand_capture(capture_path)
+    validation = validate_capture(capture)
+    _require(capture.candidates.size == 1, "capture must contain exactly one tuple")
+    candidate = capture.candidates[0]
+    pixels = capture.pixels.reshape(1, capture.image_size)[0]
+
+    with np.load(pass2_path, allow_pickle=False) as archive:
+        recovar = {name: np.asarray(archive[name]) for name in archive.files}
+    required = {
+        "current_size",
+        "fine_translations",
+        "oversampled_rot_indices",
+        "rotations",
+        "candidate_mask",
+        "relion_raw_diff2",
+        "raw_operand_actual_rotation_count",
+        "raw_operand_proj_half",
+        "raw_operand_shifted_corrected",
+        "raw_operand_corr_img_score",
+        "raw_operand_half_weights",
+        "raw_operand_relion_full_to_compact",
+        "raw_operand_highres_xi2_half",
+    }
+    _require(required <= set(recovar), f"pass-2 dump misses {sorted(required - set(recovar))}")
+
+    current_size = _infer_current_size(capture.image_size)
+    _require(int(np.asarray(recovar["current_size"]).item()) == current_size, "current size differs")
+    image_shape = (physical_image_size, physical_image_size)
+    lookup = np.asarray(recovar["raw_operand_relion_full_to_compact"], dtype=np.int32)
+    compact_indices = _compact_indices_from_full_lookup(image_shape, current_size, lookup)
+    supported_full = np.flatnonzero(lookup >= 0)
+    supported_compact = lookup[supported_full]
+
+    rotation_rows = np.flatnonzero(
+        np.asarray(recovar["oversampled_rot_indices"], dtype=np.int64)
+        == int(recovar_global_rotation)
+    )
+    _require(rotation_rows.size == 1, "RECOVAR global fine rotation is not unique")
+    rotation_row = int(rotation_rows[0])
+    actual_rotation_count = int(np.asarray(recovar["raw_operand_actual_rotation_count"]).item())
+    _require(rotation_row < actual_rotation_count, "target rotation is outside active raw operands")
+    native_matrix = np.asarray(candidate["matrix"], dtype=np.float32).reshape(3, 3)
+    recovar_matrix = np.asarray(recovar["rotations"][rotation_row], dtype=np.float32)
+    direct_matrix_error = float(np.max(np.abs(native_matrix - recovar_matrix)))
+    transpose_matrix_error = float(np.max(np.abs(native_matrix.T - recovar_matrix)))
+    _require(min(direct_matrix_error, transpose_matrix_error) <= 1e-6, "rotation matrix differs")
+
+    translation_row, translation_error = _translation_alignment(
+        candidate["translation"],
+        recovar["fine_translations"],
+        physical_image_size,
+    )
+    _require(translation_error <= 1e-6, "translation differs")
+    _require(bool(recovar["candidate_mask"][rotation_row, translation_row]), "tuple is masked")
+
+    recovar_weight = np.multiply(
+        np.asarray(recovar["raw_operand_corr_img_score"], dtype=np.float32),
+        np.asarray(recovar["raw_operand_half_weights"], dtype=np.float32),
+        dtype=np.float32,
+    )
+    recovar_weight, dc_mask = _zero_dc_compact_score_weight(
+        recovar_weight,
+        compact_indices,
+        image_shape,
+    )
+    n2 = np.float32(physical_image_size**2)
+    n4 = np.float32(physical_image_size**4)
+    recovar_reference = np.zeros(capture.image_size, dtype=np.complex64)
+    recovar_shifted = np.zeros(capture.image_size, dtype=np.complex64)
+    recovar_corr = np.zeros(capture.image_size, dtype=np.float32)
+    recovar_reference[supported_full] = -np.asarray(
+        recovar["raw_operand_proj_half"][rotation_row, supported_compact],
+        dtype=np.complex64,
+    ) / n2
+    recovar_shifted[supported_full] = -np.asarray(
+        recovar["raw_operand_shifted_corrected"][translation_row, supported_compact],
+        dtype=np.complex64,
+    ) / n2
+    recovar_corr[supported_full] = recovar_weight[supported_compact] * n4
+
+    relion_reference = (
+        np.asarray(pixels["reference_real"], dtype=np.float32)
+        + np.complex64(1j) * np.asarray(pixels["reference_imag"], dtype=np.float32)
+    ).astype(np.complex64)
+    relion_shifted = (
+        np.asarray(pixels["shifted_real"], dtype=np.float32)
+        + np.complex64(1j) * np.asarray(pixels["shifted_imag"], dtype=np.float32)
+    ).astype(np.complex64)
+    relion_corr = np.asarray(pixels["corr"], dtype=np.float32)
+    relion_contribution = np.asarray(pixels["contribution"], dtype=np.float32)
+    relion_sum = np.float32(candidate["sum_init"])
+    recovar_sum = np.float32(np.asarray(recovar["raw_operand_highres_xi2_half"]).item())
+
+    recovar_raw_replay, recovar_contribution, recovar_lanes = _tree_raw_diff2(
+        recovar_reference,
+        recovar_shifted,
+        recovar_corr,
+        recovar_sum,
+    )
+    native_raw_replay, native_contribution, native_lanes = _tree_raw_diff2(
+        relion_reference,
+        relion_shifted,
+        relion_corr,
+        relion_sum,
+    )
+    native_production_raw = np.float32(candidate["production_raw_diff2"])
+    recovar_production_raw = np.float32(
+        recovar["relion_raw_diff2"][rotation_row, translation_row]
+    )
+    _require(native_raw_replay == native_production_raw, "native host replay differs from production")
+    _require(np.array_equal(native_contribution, relion_contribution), "native contribution replay differs")
+    _require(np.array_equal(native_lanes, candidate["lane_partials"]), "native lanes replay differs")
+
+    substitutions = {}
+    for name, operands in {
+        "native": (relion_reference, relion_shifted, relion_corr, relion_sum),
+        "recovar": (recovar_reference, recovar_shifted, recovar_corr, recovar_sum),
+        "native_reference_only": (relion_reference, recovar_shifted, recovar_corr, recovar_sum),
+        "native_shifted_only": (recovar_reference, relion_shifted, recovar_corr, recovar_sum),
+        "native_corr_only": (recovar_reference, recovar_shifted, relion_corr, recovar_sum),
+        "native_highres_only": (recovar_reference, recovar_shifted, recovar_corr, relion_sum),
+    }.items():
+        substitutions[name] = float(_tree_raw_diff2(*operands)[0])
+
+    stage_arrays = {
+        "projected_reference": (relion_reference, recovar_reference),
+        "shifted_image": (relion_shifted, recovar_shifted),
+        "correction_weight": (relion_corr, recovar_corr),
+        "highres_sum": (np.asarray([relion_sum]), np.asarray([recovar_sum])),
+        "pixel_contribution": (relion_contribution, recovar_contribution),
+        "lane_partial": (candidate["lane_partials"], recovar_lanes),
+        "raw_diff2_replay": (
+            np.asarray([native_raw_replay]),
+            np.asarray([recovar_raw_replay]),
+        ),
+        "raw_diff2_production": (
+            np.asarray([native_production_raw]),
+            np.asarray([recovar_production_raw]),
+        ),
+    }
+    stage_metrics = {
+        name: _metric(left, right)
+        for name, (left, right) in stage_arrays.items()
+    }
+    first_unequal = next(
+        name for name, metric in stage_metrics.items() if not metric["exact_equal"]
+    )
+    return {
+        "schema": "recovar.em.k1_fine_operand_tuple.v1",
+        "identity": {
+            "stack_index_one_based": capture.stack_index,
+            "original_index_zero_based": int(np.asarray(recovar["original_index"]).item()),
+            "native_particle_id": capture.particle_id,
+            "native_rotation_local": int(candidate["rotation_local"]),
+            "recovar_global_rotation": int(recovar_global_rotation),
+            "recovar_rotation_row": rotation_row,
+            "native_translation": int(candidate["translation_id"]),
+            "recovar_translation_row": translation_row,
+        },
+        "alignment": {
+            "native_to_recovar_rotation_transform": (
+                "identity" if direct_matrix_error <= transpose_matrix_error else "transpose"
+            ),
+            "rotation_max_abs": min(direct_matrix_error, transpose_matrix_error),
+            "translation_max_abs": translation_error,
+            "supported_pixel_count": int(supported_full.size),
+            "dc_present_in_compact_support": bool(np.any(dc_mask)),
+        },
+        "first_exact_unequal_boundary": first_unequal,
+        "stage_metrics": stage_metrics,
+        "largest_pixel_mismatches": {
+            name: _largest_mismatches(left, right)
+            for name, (left, right) in stage_arrays.items()
+            if np.asarray(left).size > 1
+        },
+        "raw_scores": {
+            "native_production": float(native_production_raw),
+            "native_host_replay": float(native_raw_replay),
+            "recovar_production": float(recovar_production_raw),
+            "recovar_host_replay": float(recovar_raw_replay),
+            "substitutions": substitutions,
+        },
+        "native_capture_validation": validation,
+        "artifacts": {
+            "native_capture": str(capture_path),
+            "native_capture_sha256": _sha256(capture_path),
+            "recovar_pass2": str(pass2_path),
+            "recovar_pass2_sha256": _sha256(pass2_path),
+        },
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--capture", type=Path, required=True)
+    parser.add_argument("--pass2", type=Path, required=True)
+    parser.add_argument("--recovar-global-rotation", type=int, required=True)
+    parser.add_argument("--physical-image-size", type=int, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    report = analyze(
+        args.capture,
+        args.pass2,
+        recovar_global_rotation=args.recovar_global_rotation,
+        physical_image_size=args.physical_image_size,
+    )
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    args.output.write_text(rendered)
+    print(rendered, end="")
+
+
+if __name__ == "__main__":
+    main()

@@ -80,7 +80,10 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     half_image_phase_factors,
 )
-from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
+from recovar.em.dense_single_volume.helpers.oversampling import (
+    _find_significant_mask_full_sort,
+    _relion_cuda_f32_tail_target,
+)
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     apply_half_translation_phases,
     half_translation_phase_table,
@@ -235,6 +238,7 @@ _PASS2_DUMP_DIR_ENV = "RECOVAR_PASS2_DUMP_DIR"
 _PASS2_DUMP_CONSERVATIVE_EXECUTION_ENV = "RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
 _PASS2_DUMP_RAW_OPERANDS_ENV = "RECOVAR_PASS2_DUMP_RAW_OPERANDS"
+_PASS2_DUMP_ROTATION_ROWS_ENV = "RECOVAR_PASS2_DUMP_ROTATION_ROWS"
 _SPARSE_PASS2_PROJECTION_CACHE_ENV = "RECOVAR_SPARSE_PASS2_PROJECTION_CACHE"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_JOINT_MODES = {"joint", "global", "class_pose", "class-pose"}
 _SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK_ENV = "RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK"
@@ -7453,12 +7457,7 @@ def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
     cumulative = jnp.cumsum(sorted_weights, axis=1, dtype=jnp.float32)
     sum_weight = cumulative[:, -1]
     has_mass = has_finite & jnp.isfinite(sum_weight) & (sum_weight > jnp.float32(0.0))
-    # RELION forms this product in RFLOAT, then converts it to the XFLOAT
-    # threshold argument used by the device search.
-    tail_target = jnp.asarray(
-        (jnp.float64(1.0) - jnp.float64(adaptive_fraction)) * sum_weight.astype(jnp.float64),
-        dtype=jnp.float32,
-    )
+    tail_target = _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction)
     threshold_idx = jax.vmap(lambda row, target: jnp.searchsorted(row, target, side="right"))(
         cumulative,
         tail_target,
@@ -7799,6 +7798,13 @@ def _maybe_dump_pass2_bucket(
     half_weights_used,
     window_indices,
     shifted_corrected_score_split=None,
+    direct_score_input=None,
+    direct_preprocessed_score_input=None,
+    direct_pixel_correction=None,
+    direct_preprocess_normalization_factors=None,
+    direct_integer_pre_shifts=None,
+    direct_batch_image_corrections=None,
+    direct_batch_scale_corrections=None,
     shifted_recon_split=None,
     ctf2_over_nv_recon=None,
     recon_window_indices=None,
@@ -7833,6 +7839,191 @@ def _maybe_dump_pass2_bucket(
     if not wanted_rows:
         return 0
 
+    requested_rotation_rows = parse_env_int_set(_PASS2_DUMP_ROTATION_ROWS_ENV)
+    if requested_rotation_rows:
+        rotation_rows = np.asarray(sorted(requested_rotation_rows), dtype=np.int64)
+        os.makedirs(dump_dir, exist_ok=True)
+        dump_count = 0
+        for row in wanted_rows:
+            image_idx = int(local_indices[row])
+            original_idx = int(original_indices[row])
+            cnt = int(per_image_inputs["oversampled_rots"][image_idx].shape[0])
+            if np.any(rotation_rows < 0) or np.any(rotation_rows >= cnt):
+                raise ValueError(
+                    f"{_PASS2_DUMP_ROTATION_ROWS_ENV} contains a row outside "
+                    f"[0, {cnt}) for original particle {original_idx}",
+                )
+            selected_scores = np.asarray(
+                jnp.take(scores[row], jnp.asarray(rotation_rows), axis=0),
+                dtype=np.float64,
+            )
+            selected_rotation_prior = np.asarray(
+                jnp.take(rotation_log_prior[row], jnp.asarray(rotation_rows), axis=0),
+                dtype=np.float64,
+            )
+            translation_prior = np.asarray(translation_log_prior[row], dtype=np.float64)
+            pre_prior = (
+                selected_scores
+                - selected_rotation_prior[:, None]
+                - translation_prior[None, :]
+            )
+            full_mask = jnp.asarray(candidate_mask[row], dtype=bool)
+            full_scores = jnp.asarray(scores[row])
+            full_probs = jnp.asarray(probs[row])
+            masked_scores = jnp.where(full_mask, full_scores, -jnp.inf)
+            masked_probs = jnp.where(full_mask, full_probs, 0.0)
+            score_argmax_flat = int(np.asarray(jnp.argmax(masked_scores)))
+            prob_argmax_flat = int(np.asarray(jnp.argmax(masked_probs)))
+            score_argmax_rotation, score_argmax_translation = divmod(
+                score_argmax_flat, int(n_fine_trans)
+            )
+            prob_argmax_rotation, prob_argmax_translation = divmod(
+                prob_argmax_flat, int(n_fine_trans)
+            )
+            selected_reconstruction_fields = {}
+            if reconstruction_mask is not None:
+                selected_reconstruction_fields["reconstruction_mask"] = np.asarray(
+                    jnp.take(reconstruction_mask[row], jnp.asarray(rotation_rows), axis=0),
+                    dtype=bool,
+                )
+            if reconstruction_probs is not None:
+                selected_reconstruction_fields["reconstruction_probs"] = np.asarray(
+                    jnp.take(reconstruction_probs[row], jnp.asarray(rotation_rows), axis=0),
+                    dtype=np.float64,
+                )
+            if reconstruction_n_significant is not None:
+                recon_n_sig = np.asarray(reconstruction_n_significant, dtype=np.int64)
+                selected_reconstruction_fields["reconstruction_n_significant"] = (
+                    recon_n_sig[row] if recon_n_sig.ndim else recon_n_sig
+                )
+            if relion_highres_xi2_half is not None:
+                selected_reconstruction_fields["relion_highres_xi2_half"] = np.float32(
+                    np.asarray(relion_highres_xi2_half, dtype=np.float32)[row]
+                )
+            if relion_min_diff2 is not None:
+                selected_reconstruction_fields["relion_min_diff2"] = np.float32(
+                    np.asarray(relion_min_diff2, dtype=np.float32)[row]
+                )
+            out_path = os.path.join(
+                dump_dir,
+                f"pass2_orig{original_idx:06d}_cs{(-1 if current_size is None else int(current_size)):03d}.npz",
+            )
+            np.savez_compressed(
+                out_path,
+                schema=np.asarray("recovar.em.k1_pass2_selected_rotations.v1"),
+                iteration=np.int64(context_iteration),
+                half=np.int64(context_half),
+                original_index=np.int64(original_idx),
+                local_index=np.int64(image_idx),
+                current_size=np.int64(-1 if current_size is None else int(current_size)),
+                n_fine_trans=np.int64(n_fine_trans),
+                rotation_rows_global=rotation_rows,
+                fine_translations=np.asarray(fine_translations, dtype=np.float32),
+                rotations=np.asarray(
+                    per_image_inputs["oversampled_rots"][image_idx],
+                    dtype=np.float32,
+                )[rotation_rows],
+                oversampled_rot_indices=np.asarray(
+                    per_image_inputs["oversampled_rot_indices"][image_idx],
+                    dtype=np.int64,
+                )[rotation_rows],
+                parent_map=np.asarray(
+                    per_image_inputs["parent_map"][image_idx],
+                    dtype=np.int32,
+                )[rotation_rows],
+                candidate_mask=np.asarray(
+                    jnp.take(candidate_mask[row], jnp.asarray(rotation_rows), axis=0),
+                    dtype=bool,
+                ),
+                candidate_rotation_count=np.int64(cnt),
+                candidate_mask_total_count=np.int64(
+                    np.asarray(jnp.count_nonzero(full_mask))
+                ),
+                score_max=np.float64(np.asarray(jnp.max(masked_scores))),
+                score_argmax_rotation=np.int64(score_argmax_rotation),
+                score_argmax_translation=np.int64(score_argmax_translation),
+                posterior_sum=np.float64(np.asarray(jnp.sum(masked_probs))),
+                posterior_max=np.float64(np.asarray(jnp.max(masked_probs))),
+                posterior_argmax_rotation=np.int64(prob_argmax_rotation),
+                posterior_argmax_translation=np.int64(prob_argmax_translation),
+                scores_with_prior=selected_scores,
+                scores_pre_prior=pre_prior,
+                probs=np.asarray(
+                    jnp.take(probs[row], jnp.asarray(rotation_rows), axis=0),
+                    dtype=np.float64,
+                ),
+                rotation_log_prior=selected_rotation_prior,
+                translation_log_prior=translation_prior,
+                shifted_corrected=(
+                    np.asarray(shifted_corrected_score_split[row])
+                    if shifted_corrected_score_split is not None
+                    else np.empty((0,), dtype=np.complex64)
+                ),
+                direct_score_input=(
+                    np.asarray(direct_score_input[row])
+                    if direct_score_input is not None
+                    else np.empty((0,), dtype=np.complex64)
+                ),
+                direct_preprocessed_score_input=(
+                    np.asarray(direct_preprocessed_score_input[row])
+                    if direct_preprocessed_score_input is not None
+                    else np.empty((0,), dtype=np.complex64)
+                ),
+                direct_pixel_correction=(
+                    np.asarray(direct_pixel_correction[row])
+                    if direct_pixel_correction is not None
+                    else np.empty((0,), dtype=np.float32)
+                ),
+                relion_preprocess_normalization_factor=(
+                    np.float32(np.asarray(direct_preprocess_normalization_factors)[row])
+                    if direct_preprocess_normalization_factors is not None
+                    else np.float32(np.nan)
+                ),
+                relion_integer_pre_shift=(
+                    np.asarray(direct_integer_pre_shifts, dtype=np.int32)[row]
+                    if direct_integer_pre_shifts is not None
+                    else np.empty((0,), dtype=np.int32)
+                ),
+                batch_image_correction=(
+                    np.float32(np.asarray(direct_batch_image_corrections)[row])
+                    if direct_batch_image_corrections is not None
+                    else np.float32(np.nan)
+                ),
+                batch_scale_correction=(
+                    np.float32(np.asarray(direct_batch_scale_corrections)[row])
+                    if direct_batch_scale_corrections is not None
+                    else np.float32(np.nan)
+                ),
+                ctf2_over_nv_score=np.asarray(ctf2_over_nv_score[row], dtype=np.float64),
+                shifted_recon=(
+                    np.asarray(shifted_recon_split[row])
+                    if shifted_recon_split is not None
+                    else np.empty((0,), dtype=np.complex64)
+                ),
+                ctf2_over_nv_recon=(
+                    np.asarray(ctf2_over_nv_recon[row], dtype=np.float64)
+                    if ctf2_over_nv_recon is not None
+                    else np.empty((0,), dtype=np.float64)
+                ),
+                proj_half=np.asarray(
+                    jnp.take(proj_half[row], jnp.asarray(rotation_rows), axis=0),
+                ),
+                half_weights=np.asarray(half_weights_used, dtype=np.float64),
+                window_indices=(
+                    np.asarray(window_indices, dtype=np.int32)
+                    if window_indices is not None
+                    else np.empty((0,), dtype=np.int32)
+                ),
+                recon_window_indices=(
+                    np.asarray(recon_window_indices, dtype=np.int32)
+                    if recon_window_indices is not None
+                    else np.empty((0,), dtype=np.int32)
+                ),
+                **selected_reconstruction_fields,
+            )
+            dump_count += 1
+        return dump_count
+
     os.makedirs(dump_dir, exist_ok=True)
     scores_np = np.asarray(scores, dtype=np.float64)
     probs_np = np.asarray(probs, dtype=np.float64)
@@ -7848,6 +8039,17 @@ def _maybe_dump_pass2_bucket(
     proj_np = np.asarray(proj_half)
     shifted_corrected_np = (
         None if shifted_corrected_score_split is None else np.asarray(shifted_corrected_score_split)
+    )
+    direct_score_input_np = (
+        None if direct_score_input is None else np.asarray(direct_score_input)
+    )
+    direct_preprocessed_score_input_np = (
+        None
+        if direct_preprocessed_score_input is None
+        else np.asarray(direct_preprocessed_score_input)
+    )
+    direct_pixel_correction_np = (
+        None if direct_pixel_correction is None else np.asarray(direct_pixel_correction)
     )
     shifted_recon_np = None if shifted_recon_split is None else np.asarray(shifted_recon_split)
     ctf2_recon_np = None if ctf2_over_nv_recon is None else np.asarray(ctf2_over_nv_recon, dtype=np.float64)
@@ -7901,6 +8103,41 @@ def _maybe_dump_pass2_bucket(
             translation_log_prior=trans_prior_np[row],
             shifted_corrected=(
                 shifted_corrected_np[row] if shifted_corrected_np is not None else np.empty((0,), dtype=np.complex64)
+            ),
+            direct_score_input=(
+                direct_score_input_np[row]
+                if direct_score_input_np is not None
+                else np.empty((0,), dtype=np.complex64)
+            ),
+            direct_preprocessed_score_input=(
+                direct_preprocessed_score_input_np[row]
+                if direct_preprocessed_score_input_np is not None
+                else np.empty((0,), dtype=np.complex64)
+            ),
+            direct_pixel_correction=(
+                direct_pixel_correction_np[row]
+                if direct_pixel_correction_np is not None
+                else np.empty((0,), dtype=np.float32)
+            ),
+            relion_preprocess_normalization_factor=(
+                np.float32(np.asarray(direct_preprocess_normalization_factors)[row])
+                if direct_preprocess_normalization_factors is not None
+                else np.float32(np.nan)
+            ),
+            relion_integer_pre_shift=(
+                np.asarray(direct_integer_pre_shifts, dtype=np.int32)[row]
+                if direct_integer_pre_shifts is not None
+                else np.empty((0,), dtype=np.int32)
+            ),
+            batch_image_correction=(
+                np.float32(np.asarray(direct_batch_image_corrections)[row])
+                if direct_batch_image_corrections is not None
+                else np.float32(np.nan)
+            ),
+            batch_scale_correction=(
+                np.float32(np.asarray(direct_batch_scale_corrections)[row])
+                if direct_batch_scale_corrections is not None
+                else np.float32(np.nan)
             ),
             ctf2_over_nv_score=ctf2_np[row],
             shifted_recon=(
@@ -8781,6 +9018,7 @@ def _prepare_bucket_io(
     )
     batch_scale = jnp.asarray(batch_scale_np, dtype=ctf_half.dtype)
     relion_score_corr_img_half = None
+    direct_pixel_correction_full = None
     if relion_exact_bpref_operands:
         if relion_preprocess_kwargs is None:
             raise ValueError(
@@ -8909,6 +9147,7 @@ def _prepare_bucket_io(
                 batch_scale[:, None],
                 ctf_half_rfloat,
             )
+            direct_pixel_correction_full = pixel_correction
             sparse_score_input_half = sparse_score_input_half * pixel_correction
         else:
             ctf_safe = jnp.abs(ctf_half) > 1e-8
@@ -9041,13 +9280,21 @@ def _prepare_bucket_io(
         ctf2_over_nv_half_with_dc = ctf2_over_nv_recon_half
 
     shifted_corrected_score_half = None
+    direct_score_input = None
+    direct_preprocessed_score_input = None
+    direct_pixel_correction = None
     if return_direct_scoring_io:
         if return_windowed_shifted:
             score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
             direct_score_input = sparse_score_input_half[:, score_indices]
+            direct_preprocessed_score_input = processed_score_half_raw[:, score_indices]
+            if direct_pixel_correction_full is not None:
+                direct_pixel_correction = direct_pixel_correction_full[:, score_indices]
             direct_score_pixel_indices = score_indices
         else:
             direct_score_input = sparse_score_input_half
+            direct_preprocessed_score_input = processed_score_half_raw
+            direct_pixel_correction = direct_pixel_correction_full
             direct_score_pixel_indices = jnp.arange(
                 sparse_score_input_half.shape[1],
                 dtype=jnp.int32,
@@ -9134,6 +9381,17 @@ def _prepare_bucket_io(
         shifted_score_half_with_dc,
         processed_score_half_for_noise,
         shifted_corrected_score_half,
+        direct_score_input,
+        direct_preprocessed_score_input,
+        direct_pixel_correction,
+        (
+            None
+            if relion_preprocess_kwargs is None
+            else relion_preprocess_kwargs.get("relion_normalization_factors")
+        ),
+        integer_pre_shifts,
+        batch_corr_np,
+        batch_scale_np,
     )
 
 
@@ -10265,6 +10523,13 @@ def compute_pass2_stats_sparse_bucketed(
             shifted_score_half_with_dc,
             processed_score_half_for_noise,
             shifted_corrected_score_half,
+            direct_score_input,
+            direct_preprocessed_score_input,
+            direct_pixel_correction,
+            direct_preprocess_normalization_factors,
+            direct_integer_pre_shifts,
+            direct_batch_image_corrections,
+            direct_batch_scale_corrections,
         ) = _prepare_bucket_io(
             experiment_dataset,
             batch_data,
@@ -11721,7 +11986,7 @@ def compute_pass2_stats_sparse_bucketed(
                     best_argmax=best_argmax,
                     max_posterior=max_posterior_bucket,
                 )
-            _maybe_dump_pass2_bucket(
+            pass2_dump_count = _maybe_dump_pass2_bucket(
                 experiment_dataset=experiment_dataset,
                 image_indices=image_indices,
                 per_image_inputs=per_image_inputs,
@@ -11741,12 +12006,36 @@ def compute_pass2_stats_sparse_bucketed(
                 half_weights_used=half_weights_windowed if use_window else half_weights,
                 window_indices=window_indices_np,
                 shifted_corrected_score_split=shifted_corrected_score_split,
+                direct_score_input=direct_score_input,
+                direct_preprocessed_score_input=direct_preprocessed_score_input,
+                direct_pixel_correction=direct_pixel_correction,
+                direct_preprocess_normalization_factors=(
+                    direct_preprocess_normalization_factors
+                ),
+                direct_integer_pre_shifts=direct_integer_pre_shifts,
+                direct_batch_image_corrections=direct_batch_image_corrections,
+                direct_batch_scale_corrections=direct_batch_scale_corrections,
                 shifted_recon_split=shifted_recon_split_for_dump,
                 ctf2_over_nv_recon=ctf2_over_nv_recon_for_dump,
                 recon_window_indices=recon_window_indices_for_dump,
                 relion_highres_xi2_half=relion_highres_xi2_half,
                 relion_min_diff2=min_diff2,
             )
+            if pass2_dump_count and _env_flag_enabled(
+                _PASS2_DUMP_STOP_AFTER_TARGET_ENV,
+                default=False,
+            ):
+                logger.info(
+                    "Sparse K=1 pass-2 stop-after-dump requested via %s=1; "
+                    "wrote %d requested file(s) at current_size=%s",
+                    _PASS2_DUMP_STOP_AFTER_TARGET_ENV,
+                    int(pass2_dump_count),
+                    "None" if current_size is None else str(int(current_size)),
+                )
+                raise Pass2DumpComplete(
+                    dump_count=pass2_dump_count,
+                    current_size=current_size,
+                )
 
         if not score_only:
             # M-step accumulation: posterior-weighted sums per (image, rot).
@@ -12141,7 +12430,10 @@ def compute_pass2_stats_sparse_bucketed(
                 score_window_indices=window_indices,
                 image_shape=image_shape,
             )
-            noise_norm_correction_total[image_indices] += np.asarray(block_norm_residual, dtype=np.float64)
+            noise_norm_correction_total[image_indices] += np.asarray(
+                block_norm_residual,
+                dtype=np.float64,
+            )
             if noise_scale_correction_xa_total is not None:
                 scale_xa_per_image, scale_aa_per_image = _compute_scale_correction_terms_per_image(
                     proj_for_noise,
@@ -13782,6 +14074,13 @@ def compute_k_class_pass2_stats_sparse_fused(
             shifted_score_half_with_dc,
             processed_score_half_for_noise,
             shifted_corrected_score_half,
+            direct_score_input,
+            _direct_preprocessed_score_input,
+            _direct_pixel_correction,
+            _direct_preprocess_normalization_factors,
+            _direct_integer_pre_shifts,
+            _direct_batch_image_corrections,
+            _direct_batch_scale_corrections,
         ) = _prepare_bucket_io(
             experiment_dataset,
             batch_data,

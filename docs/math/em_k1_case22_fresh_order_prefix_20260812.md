@@ -142,3 +142,94 @@ for the target and common best; its individual files validate, while its
 directory-level provenance header incorrectly declared three expected follower
 ranks although the explicit particle was owned by one. The launcher is
 corrected to one expected follower for future reproduction.
+
+## Complete two-iteration coarse intervention
+
+The minimal CUDA-Gaussian prefix job `12281662` finishes with iteration-2
+merged cross-engine FSC-AUC `0.9999999999667588`, Pmax relative L2
+`5.9364088535e-6`, 121 support-count mismatches, and one hard pose/shift
+mismatch. The matching control has 461 support-count mismatches, while the
+all-exact coarse arm has 122. Thus the coarse intervention causally removes
+340 discrete support errors, but it does not move the worst soft-posterior
+error or the numbered map FSC materially. It is a real local repair, not the
+remaining dominant K=1 fix.
+
+The worst remaining iteration-2 Pmax particle is stack image 1574. Its native
+and minimal-coarse candidate topology, support, best coarse tuple, direction
+priors, and translation priors all agree. The complete coarse posterior total
+variation is only `1.0390690454e-6`, so the material Pmax residual begins in
+fine scoring.
+
+## First fine-score mismatch for the worst Pmax particle
+
+A fresh in-process two-row capture avoids the STAR-serialization artifacts of
+the earlier one-particle replay. For stack image 1574 and translation 56:
+
+| Fine tuple | Native raw `diff2` | RECOVAR raw `diff2` | Difference |
+|---|---:|---:|---:|
+| rotation 41 / RECOVAR row 17 | 144.39877319335938 | 144.39877319335938 | exact |
+| rotation 48 / RECOVAR row 48 (best) | 143.056884765625 | 143.05685424804688 | -2 float32 ULP |
+
+The resulting best-versus-competitor raw margin differs by exactly
+`-3.0517578125e-5`. Its posterior-max change is `+7.1026093250e-6`, which
+reproduces the full 3,000-particle maximum Pmax error. Direction and
+translation priors are bit-exact. This reduces the dominant iteration-2 soft
+posterior gap to one best fine tuple before normalization.
+
+The exact native `PPref` projector reproduces both captured native references
+bitwise. On the best tuple, RECOVAR's incoming projected reference differs by
+relative L2 `5.6706771179e-8`, and substituting it alone lowers native raw
+`diff2` by one ULP. RECOVAR's translated image differs by relative L2
+`7.3102294674e-8`, and substituting it alone also lowers native raw `diff2` by
+one ULP. Correction weights and the high-resolution contribution are exact.
+The ordinary JAX score is two ULP low; the source-faithful fused CUDA reduction
+on RECOVAR operands is one ULP low. Therefore a reduction-only fine-score fix
+is insufficient: the incoming iteration-1 reference state and the image path
+both contribute before posterior normalization.
+
+Focused job `12282767` captured RECOVAR's unshifted fine-score input at this
+same live boundary and stopped immediately after writing it. The corrected,
+authoritative one-tuple GPU replay is job `12283141`; job `12282844` used an
+incorrect report-only conversion for the native translation angle and is
+superseded.
+
+The translation angles in job `12283141` are bit-exact. Replaying RECOVAR's
+unshifted input through the exact CUDA translation reproduces the live RECOVAR
+translated operand bitwise. The first unequal boundary is therefore the
+unshifted score input, before translation: relative L2
+`8.364632316960114e-8`, maximum absolute difference
+`1.1920928955078125e-7`, and 847 of 1,461 complex values differ. The optimal
+positive scalar is `1.0000000136036735`, but the residual relative L2 after
+that scalar remains `8.253271911854404e-8`; this is not a single normalization
+factor error. Native input replay through the same CUDA translation differs
+from native production by only `2.3182520824272172e-8`, the remaining
+compiler/code-generation floor for that replay.
+
+This closes translation as the source of the observed image mismatch and moves
+the first unresolved boundary to normalized-real image construction, soft-mask
+background subtraction, or the real-to-Fourier transform. Native passive
+preprocessing capture job `12283196` and its dependent stage-by-stage analysis
+job `12283200` tested only those stages for stack image 1574; they did not run a
+new RECOVAR trajectory. The passive capture remained map-stable against its
+control at both numbered iterations, with minimum merged/half-map FSC-AUC
+`0.9999999999870683` and exact selected topology.
+
+Normalization plus integer shifting is bit-exact for all 16,384 real pixels.
+Starting from that exact image, RECOVAR's deterministic default soft-mask
+reduction produces a background value two float32 ULP from native RELION. This
+changes 13,940 masked pixels at very small magnitude and 530 of 1,860 complex
+Fourier values, with Fourier relative L2 `2.5018971530180866e-8`. Feeding the
+native masked real image through RECOVAR's per-image FFT reproduces all 1,860
+native Fourier values bitwise, so the FFT is closed.
+
+RELION's deployed mask reduction atomically accumulates 128 blocks into one
+slot per lane and is schedule-dependent. RECOVAR's diagnostic native-atomic
+replay happened to reproduce the captured native background, every masked
+pixel, and every Fourier value bitwise on its first invocation. Across eight
+additional invocations it produced seven background bit patterns and did not
+hit the captured value again. Thus this is a demonstrated preprocessing cause,
+but it cannot be made a deterministic exact-parity fix by simply enabling the
+native atomic schedule. The default mask discrepancy is also smaller than the
+complete live unshifted-input discrepancy. Focused job `12283431` therefore
+dumps the live Fourier image and every scalar/pixelwise correction immediately
+before the score input to localize the remaining component.

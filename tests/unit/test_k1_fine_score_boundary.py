@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -6,9 +8,11 @@ from scripts.analyze_k1_fine_score_boundary import (
     _first_exact_boundary,
     _first_mismatch_record,
     _float32_ulp_distance,
+    _geometry_only_significant_count,
     _metric,
     _raw_diff2_terms,
     _reduce_relion_fine_lanes,
+    _rotation_map,
     _stable_top_n_mask,
 )
 
@@ -20,6 +24,38 @@ def test_stable_top_n_mask_preserves_tie_order():
         _stable_top_n_mask(weights, 2),
         np.asarray([True, True, False, False]),
     )
+
+
+@pytest.mark.unit
+def test_rotation_map_uses_exact_transposed_matrix_permutation():
+    recovar = np.asarray(
+        [
+            np.eye(3, dtype=np.float32),
+            np.asarray([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float32),
+            np.asarray([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float32),
+        ]
+    )
+    permutation = np.asarray([2, 0, 1])
+    factor = np.empty(3, dtype=[("matrix", np.float32, (9,))])
+    factor["matrix"] = recovar[permutation].transpose(0, 2, 1).reshape(3, 9)
+
+    mapping, error = _rotation_map(factor, recovar)
+
+    np.testing.assert_array_equal(mapping, permutation)
+    assert error == 0.0
+
+
+@pytest.mark.unit
+def test_geometry_only_support_uses_native_bpref_header_count():
+    header = np.zeros(54, dtype=np.uint64)
+    header[45] = 227
+    factor = SimpleNamespace(
+        header=header,
+        rotations=np.empty(80),
+        translations=np.empty(116),
+    )
+
+    assert _geometry_only_significant_count(factor) == 227
 
 
 @pytest.mark.unit

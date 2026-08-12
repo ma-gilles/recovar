@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -301,6 +302,59 @@ def _source_by_part(preprocess_dir: Path) -> dict[int, int]:
     return result
 
 
+def _exact_ppref_projections(
+    ppref_path: Path,
+    rotations: np.ndarray,
+    window_indices: np.ndarray,
+    current_size: int,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Project the exact RELION host PPref through RECOVAR's texture emulator."""
+
+    import jax
+    import jax.numpy as jnp
+
+    from recovar.em.dense_single_volume.helpers.projection import (
+        compute_relion_projector_projections_block,
+    )
+    if __package__:
+        from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
+    else:
+        from analyze_k1_exact_ppref_fine_boundary import _load_ppref
+
+    if jax.default_backend() != "gpu":
+        raise ValueError("exact PPref Wavg replay requires a GPU")
+    ppref, metadata = _load_ppref(ppref_path)
+    if int(metadata["current_size"]) != current_size:
+        raise ValueError("PPref and Wavg current sizes disagree")
+    if int(metadata["r_max"]) != current_size // 2:
+        raise ValueError("PPref r_max and Wavg current size disagree")
+    if float(metadata["padding_factor"]) != 2.0:
+        raise ValueError("PPref padding factor is not two")
+    projections, _ = compute_relion_projector_projections_block(
+        jnp.asarray(ppref),
+        jnp.asarray(rotations, dtype=jnp.float32),
+        (128, 128),
+        r_max=int(metadata["r_max"]),
+        padding_factor=2,
+        return_abs2=False,
+        centered_rows=True,
+        dense_scale=True,
+        projector_output_size=current_size,
+        pixel_indices=jnp.asarray(window_indices, dtype=jnp.int32),
+        relion_texture_interp=True,
+    )
+    projection_array = np.asarray(
+        jax.block_until_ready(projections),
+        dtype=np.complex64,
+    )
+    digest = hashlib.sha256(ppref_path.read_bytes()).hexdigest()
+    return projection_array, {
+        **metadata,
+        "path": str(ppref_path.resolve()),
+        "sha256": digest,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recovar-pass2-dir", type=Path, required=True)
@@ -313,6 +367,9 @@ def main() -> None:
         type=Path,
         help="optional custom CUDA library for the native-preprocessing hybrid",
     )
+    parser.add_argument("--expected-particles", type=int, default=17)
+    parser.add_argument("--ppref-half1", type=Path)
+    parser.add_argument("--ppref-half2", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -336,6 +393,11 @@ def main() -> None:
     }
     if not source_by_part:
         raise ValueError(f"no native preprocess identity files in {args.native_preprocess_dir}")
+    ppref_by_half = {
+        half: path
+        for half, path in ((1, args.ppref_half1), (2, args.ppref_half2))
+        if path is not None
+    }
     records = []
     for native_path in sorted(args.native_wavg_dir.glob("*_storeWavg_wdiff2_pixels.bin")):
         match = _WDIFF_RE.fullmatch(native_path.name)
@@ -358,6 +420,9 @@ def main() -> None:
             for name in ("valid_wdiff2_sum", "image_size", "current_size")
         }
         has_native_inputs = (args.native_wavg_dir / f"{prefix}weights.bin").is_file()
+        has_native_reference = (
+            args.native_wavg_dir / f"{prefix}reference_real.bin"
+        ).is_file()
         if has_native_inputs:
             native.update(
                 {
@@ -373,6 +438,16 @@ def main() -> None:
                     )
                 }
             )
+            if has_native_reference:
+                native.update(
+                    {
+                        name: _load_counted(
+                            args.native_wavg_dir / f"{prefix}{name}.bin",
+                            "<f4",
+                        )
+                        for name in ("reference_real", "reference_imag")
+                    }
+                )
             native_scalar.update(
                 {
                     name: float(
@@ -456,6 +531,7 @@ def main() -> None:
         }
         native_order_candidates: set[str] = set()
         native_input_comparisons = None
+        ppref_metadata = None
         if has_native_inputs:
             from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
                 _relion_translation_angles_f32,
@@ -487,6 +563,17 @@ def main() -> None:
                 3,
                 3,
             )
+            native_reference = None
+            if has_native_reference:
+                native_reference = np.asarray(
+                    native["reference_real"]
+                    + np.complex64(1j) * native["reference_imag"],
+                    dtype=np.complex64,
+                ).reshape(orientation_num, -1)
+                if native_reference.shape != (orientation_num, native_fimg.size):
+                    raise ValueError(
+                        f"native Wavg reference dimensions disagree for part {part_id}"
+                    )
             native_input_comparisons = {
                 "fimg_vs_preprocess": _complex_comparison(
                     native_masked_fourier,
@@ -533,6 +620,80 @@ def main() -> None:
                     native_probabilities,
                 )
                 native_order_candidates.add("native_inputs_recovar_projection")
+                if native_reference is not None:
+                    candidates["native_inputs_native_projector_reference"] = (
+                        _wavg_components(
+                            native_reference,
+                            native_translated_images,
+                            native["ctf"],
+                            native_probabilities,
+                        )
+                    )
+                    native_order_candidates.add(
+                        "native_inputs_native_projector_reference"
+                    )
+                    valid_projection = np.broadcast_to(
+                        valid,
+                        native_reference.shape,
+                    ).reshape(-1)
+                    native_input_comparisons[
+                        "native_vs_recovar_projector_reference"
+                    ] = _complex_comparison(
+                        native_reference.reshape(-1),
+                        relion_scaled_projections[:, native_rows].reshape(-1),
+                        valid_projection,
+                    )
+                    native_input_comparisons[
+                        "native_vs_sign_normalized_recovar_projector_reference"
+                    ] = _complex_comparison(
+                        native_reference.reshape(-1),
+                        (-relion_scaled_projections[:, native_rows]).reshape(-1),
+                        valid_projection,
+                    )
+                if half in ppref_by_half:
+                    exact_ppref_projections, ppref_metadata = _exact_ppref_projections(
+                        ppref_by_half[half],
+                        rotations,
+                        window_indices,
+                        current_size,
+                    )
+                    exact_ppref_scaled = np.asarray(
+                        exact_ppref_projections * fourier_scale,
+                        dtype=np.complex64,
+                    )
+                    candidates["native_inputs_exact_ppref_projection"] = _wavg_components(
+                        exact_ppref_scaled[:, native_rows],
+                        native_translated_images,
+                        -native["ctf"],
+                        native_probabilities,
+                    )
+                    native_order_candidates.add("native_inputs_exact_ppref_projection")
+                    valid_projection = np.broadcast_to(
+                        valid,
+                        (rotations.shape[0], valid.size),
+                    ).reshape(-1)
+                    native_input_comparisons["exact_ppref_vs_recovar_projection"] = (
+                        _complex_comparison(
+                            exact_ppref_scaled[:, native_rows].reshape(-1),
+                            relion_scaled_projections[:, native_rows].reshape(-1),
+                            valid_projection,
+                        )
+                    )
+                    if native_reference is not None:
+                        native_input_comparisons[
+                            "native_vs_exact_ppref_projector_reference"
+                        ] = _complex_comparison(
+                            native_reference.reshape(-1),
+                            exact_ppref_scaled[:, native_rows].reshape(-1),
+                            valid_projection,
+                        )
+                        native_input_comparisons[
+                            "native_vs_sign_normalized_exact_ppref_projector_reference"
+                        ] = _complex_comparison(
+                            native_reference.reshape(-1),
+                            (-exact_ppref_scaled[:, native_rows]).reshape(-1),
+                            valid_projection,
+                        )
         if args.cuda_lib is not None:
             hybrid_processed_score = _replace_window_with_native_preprocess(
                 processed_score,
@@ -616,6 +777,7 @@ def main() -> None:
                 "native_sum_exact": native_scalar["valid_wdiff2_sum"] == native_host_sum,
                 "masked_fourier_pretranslation": preprocessing_comparison,
                 "native_input_comparisons": native_input_comparisons,
+                "exact_ppref": ppref_metadata,
                 "comparisons": comparisons,
                 "native_capture": str(native_path.resolve()),
                 "recovar_pass2_capture": str(pass2_path.resolve()),
@@ -623,12 +785,14 @@ def main() -> None:
             }
         )
 
-    if len(records) != 17:
-        raise ValueError(f"expected 17 Wavg panel records, found {len(records)}")
+    if len(records) != args.expected_particles:
+        raise ValueError(
+            f"expected {args.expected_particles} Wavg panel records, found {len(records)}"
+        )
     fields = ("wdiff2", "aa", "xa", "image_power")
     half_summaries = {}
     candidate_summaries = {}
-    for half in (1, 2):
+    for half in sorted({int(record["half"]) for record in records}):
         selected_records = [record for record in records if int(record["half"]) == half]
         summary = {
             "masked_fourier_pretranslation": {

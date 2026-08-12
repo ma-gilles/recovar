@@ -183,6 +183,7 @@ def _comparison(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recovar-prejoin", type=Path, required=True)
+    parser.add_argument("--recovar-repeat", type=Path)
     parser.add_argument("--native-data", type=Path, required=True)
     parser.add_argument("--native-weight", type=Path, required=True)
     parser.add_argument("--native-repeat-data", type=Path)
@@ -253,6 +254,63 @@ def main() -> None:
             for path in (args.recovar_prejoin, args.native_data, args.native_weight)
         },
     }
+    if args.recovar_repeat is not None:
+        repeat_recovar = _load_recovar(args.recovar_repeat, half=args.half)
+        for key in (
+            "stage",
+            "iteration",
+            "current_size",
+            "padding_factor",
+            "grid_size",
+            "volume_shape",
+            "accumulator_shape",
+            "half",
+        ):
+            _require(
+                repeat_recovar[key] == recovar[key],
+                f"RECOVAR repeat metadata differs for {key}",
+            )
+        repeat_average, repeat_weight, repeat_radius = _downsample(
+            repeat_recovar["numerator"],
+            repeat_recovar["weight"],
+            max_shell=max_shell,
+            **{
+                key: repeat_recovar[key]
+                for key in (
+                    "grid_size",
+                    "volume_shape",
+                    "accumulator_shape",
+                    "padding_factor",
+                )
+            },
+        )
+        _require(radius == repeat_radius, "RECOVAR repeat downsample radius differs")
+        report["recovar_vs_recovar_repeat"] = {
+            "raw_accumulator": {
+                "numerator": _metric(
+                    recovar["numerator"],
+                    repeat_recovar["numerator"],
+                    allow_sign=True,
+                ),
+                "denominator": _metric(
+                    recovar["weight"],
+                    repeat_recovar["weight"],
+                    allow_sign=False,
+                ),
+            },
+            "downsampled": _comparison(
+                rec_average,
+                rec_weight,
+                repeat_average,
+                repeat_weight,
+                radius=radius,
+                first_shell=args.first_shell,
+                max_shell=max_shell,
+            ),
+        }
+        report["artifacts"][str(args.recovar_repeat.resolve())] = _sha256(
+            args.recovar_repeat
+        )
     if (args.native_repeat_data is None) != (args.native_repeat_weight is None):
         raise ValueError("native repeat data and weight must be supplied together")
     if args.native_repeat_data is not None and args.native_repeat_weight is not None:

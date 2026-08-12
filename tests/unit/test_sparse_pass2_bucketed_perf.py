@@ -5540,6 +5540,8 @@ def test_prepare_bucket_io_windowed_shifted_matches_full_half_slice(monkeypatch)
         return_windowed_shifted=True,
     )
     for actual, expected in zip(precomputed, windowed, strict=True):
+        if actual is None and expected is None:
+            continue
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-6, atol=1e-6)
 
 

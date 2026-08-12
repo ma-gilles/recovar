@@ -79,6 +79,8 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     compute_coarse_image_size,
     shell_index_to_resolution_angstrom,
 )
+
+
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as _sparse_pass2_diagnostics
 from recovar.em.dense_single_volume.k_class import (
@@ -198,6 +200,7 @@ _EM_RAW_IMAGE_CACHE_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE"
 _EM_RAW_IMAGE_CACHE_MAX_GB_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB"
 _EM_RAW_IMAGE_CACHE_DEFAULT_MAX_GB = 16.0
 _K1_RELION_EXACT_TRANSLATION_GRID_ENV = "RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID"
+_SIGNIFICANCE_DUMP_TARGET_HALF_ENV = "RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF"
 
 
 def _k1_relion_exact_translation_grid_enabled(environ=None):
@@ -218,6 +221,74 @@ def _translation_grid_for_class_count(max_pixel, pixel_offset, *, n_classes):
     if int(n_classes) == 1 and _k1_relion_exact_translation_grid_enabled():
         return get_relion_translation_grid(max_pixel, pixel_offset)
     return get_translation_grid(max_pixel, pixel_offset)
+
+
+def _significance_dump_half_indices(
+    *,
+    numbered_iteration: int,
+    n_classes: int,
+    experiment_datasets,
+    environ=None,
+) -> tuple[int, ...]:
+    """Select one half only at an explicitly terminating coarse-dump boundary."""
+
+    env = os.environ if environ is None else environ
+    raw_half = str(env.get(_SIGNIFICANCE_DUMP_TARGET_HALF_ENV, "")).strip()
+    if not raw_half:
+        return (0, 1)
+    if str(env.get("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET", "")).strip() != "1":
+        raise RuntimeError(
+            f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} requires "
+            "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET=1"
+        )
+    if int(n_classes) != 1:
+        raise RuntimeError(f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} is K=1 diagnostic-only")
+    try:
+        target_half = int(raw_half)
+    except ValueError as exc:
+        raise ValueError(f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} must be 1 or 2") from exc
+    if target_half not in {1, 2}:
+        raise ValueError(f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} must be 1 or 2")
+
+    raw_iteration = str(env.get("RECOVAR_SIGNIFICANCE_DUMP_ITERATION", "")).strip()
+    raw_targets = str(
+        env.get("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES", "")
+    ).strip()
+    dump_dir = str(env.get("RECOVAR_SIGNIFICANCE_DUMP_DIR", "")).strip()
+    if not raw_iteration or not raw_targets or not dump_dir:
+        raise RuntimeError(
+            f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} requires an explicit dump directory, "
+            "iteration, and original-index target set"
+        )
+    try:
+        target_iteration = int(raw_iteration)
+        target_indices = {
+            int(token) for token in raw_targets.replace(",", " ").split()
+        }
+    except ValueError as exc:
+        raise ValueError("significance dump iteration and original indices must be integers") from exc
+    if target_iteration <= 0 or not target_indices:
+        raise ValueError("significance dump iteration and original-index target set must be nonempty")
+    if int(numbered_iteration) != target_iteration:
+        return (0, 1)
+
+    selected_half_indices = set(
+        np.asarray(experiment_datasets[target_half - 1].dataset_indices, dtype=np.int64).tolist()
+    )
+    missing = sorted(target_indices - selected_half_indices)
+    if missing:
+        raise RuntimeError(
+            "significance dump targets are not all present in the selected half: "
+            f"half={target_half} missing={missing}"
+        )
+    logger.info(
+        "RECOVAR coarse-significance diagnostic: iteration=%d entering only half=%d "
+        "for %d target particles; completion must occur before pass 2/M-step",
+        int(numbered_iteration),
+        target_half,
+        len(target_indices),
+    )
+    return (target_half - 1,)
 
 
 def _bpref_device_signature_active_for_numbered_half(
@@ -253,6 +324,12 @@ def _bpref_device_signature_active_for_numbered_half(
     return int(iteration) == target_iteration and int(half) == target_half
 
 logger = logging.getLogger(__name__)
+
+# RELION parses ``--adaptive_fraction 0.999`` through ``textToFloat`` and
+# stores that single-precision value in its optimiser state.  Python's literal
+# 0.999 is a different binary64 boundary and can change a one-sample support
+# cutoff when posterior weights are accumulated in float64.
+RELION_ADAPTIVE_FRACTION = float(np.float32("0.999"))
 
 RELION_SCORE_TENSOR_FLOAT_BUDGET = 200_000_000
 RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 268_435_456
@@ -1890,6 +1967,11 @@ def _score_kclass_firstiter_cc_pass2(
             else {}
         ),
     )
+    coarse_translation_phase_source = apply_relion_translation_perturbation(
+        np.asarray(base_translations, dtype=np.float64),
+        float(random_perturbation),
+        float(state.translation_step),
+    )
     n_classes = int(np.asarray(mean).shape[0]) if np.asarray(mean).ndim >= 2 else 1
     firstiter_significance_image_batch_size = None
     firstiter_significance_rotation_block_size = None
@@ -2001,6 +2083,9 @@ def _score_kclass_firstiter_cc_pass2(
         fine_mstep_rotations_override=(fine_mstep_rot if firstiter_sparse_pass2 else None),
         bpref_device_signature_active=bpref_device_signature_active,
         debug_iteration=debug_iteration,
+        coarse_translation_phase_source=(
+            coarse_translation_phase_source if n_classes == 1 else None
+        ),
         **extra,
         **firstiter_em_kwargs,
     )
@@ -2381,6 +2466,11 @@ def _score_half_dense(
                     else {}
                 ),
             )
+            coarse_translation_phase_source = apply_relion_translation_perturbation(
+                np.asarray(base_translations, dtype=np.float64),
+                float(random_perturbation),
+                float(state.translation_step),
+            )
             n_trans_fine_for_collapse = int(fine_trans.shape[0])
             adaptive_em_kwargs = dict(em_kwargs)
             n_classes_local = int(np.asarray(means_k).shape[0]) if np.asarray(means_k).ndim >= 2 else 1
@@ -2438,7 +2528,7 @@ def _score_half_dense(
                 disc_type,
                 class_log_priors=class_log_priors,
                 accumulate_noise=True,
-                adaptive_fraction=0.999,
+                adaptive_fraction=RELION_ADAPTIVE_FRACTION,
                 max_significants=-1 if max_significants is None else int(max_significants),
                 relion_fine_mstep_prune=bool(kclass_sparse_pass2),
                 significance_image_batch_size=significance_image_batch_size_override,
@@ -2593,6 +2683,11 @@ def _score_half_dense(
                     else {}
                 ),
             )
+            coarse_translation_phase_source = apply_relion_translation_perturbation(
+                np.asarray(base_translations, dtype=np.float64),
+                float(random_perturbation),
+                float(state.translation_step),
+            )
             n_trans_fine_for_collapse = int(fine_trans.shape[0])
             fine_rotations_for_pose = fine_rot
             adaptive_em_kwargs = dict(em_kwargs)
@@ -2633,7 +2728,7 @@ def _score_half_dense(
                 disc_type,
                 class_log_priors=class_log_priors,
                 accumulate_noise=True,
-                adaptive_fraction=0.999,
+                adaptive_fraction=RELION_ADAPTIVE_FRACTION,
                 max_significants=-1 if max_significants is None else int(max_significants),
                 skip_significance_pruning=k1_skip_significance_pruning,
                 relion_fine_mstep_prune=bool(k1_sparse_pass2),
@@ -2649,6 +2744,7 @@ def _score_half_dense(
                 debug_iteration=debug_iteration,
                 pass2_use_float64_scoring=True if diagnostic_float64_pass2 else None,
                 pass2_use_float64_projections=True if diagnostic_float64_pass2 else None,
+                coarse_translation_phase_source=coarse_translation_phase_source,
                 **adaptive_em_kwargs,
             )
         ha_k = np.asarray(k1_adaptive_result.pose_assignments, dtype=np.int32)
@@ -3075,7 +3171,7 @@ def _score_half_local(
             return_profile=True,
             disable_adjoint_y=True,
             disable_adjoint_ctf=True,
-            adaptive_fraction=0.999,
+            adaptive_fraction=RELION_ADAPTIVE_FRACTION,
             max_significants=max_significants,
             reconstruct_significant_only=True,
             translation_prior_reference_translations=translation_prior_reference_translations,
@@ -3284,7 +3380,7 @@ def _score_half_local(
                 return_profile=False,
                 disable_adjoint_y=True,
                 disable_adjoint_ctf=True,
-                adaptive_fraction=0.999,
+                adaptive_fraction=RELION_ADAPTIVE_FRACTION,
                 max_significants=max_significants,
                 reconstruct_significant_only=False,
                 translation_prior_reference_translations=translation_prior_reference_translations,
@@ -3374,7 +3470,7 @@ def _score_half_local(
         return_profile=collect_local_search_profile,
         disable_adjoint_y=local_disable_adjoint_y,
         disable_adjoint_ctf=local_disable_adjoint_ctf,
-        adaptive_fraction=0.999,
+        adaptive_fraction=RELION_ADAPTIVE_FRACTION,
         max_significants=max_significants,
         reconstruct_significant_only=local_reconstruct_significant_only,
         stats_use_reconstruction_probs=local_reconstruct_significant_only,
@@ -3489,6 +3585,18 @@ _STATE_SWAP_VARIANT_COMPONENTS = {
     "recovar_tau2_noise": {"tau2_noise"},
     "recovar_image_scale": {"image_scale"},
     "recovar_direction_prior": {"direction_prior"},
+    # Preserve every live RECOVAR boundary component except the learned
+    # direction prior.  The replayed RELION prior then becomes the sole
+    # intervention for first-divergence diagnostics.
+    "relion_direction_prior": {
+        "state",
+        "maps",
+        "tau2_noise",
+        "image_scale",
+        "sigma_offset",
+        "current_size",
+        "poses",
+    },
     "recovar_sigma_offset": {"sigma_offset"},
     "recovar_current_size": {"current_size"},
     "recovar_poses": {"poses"},
@@ -6757,7 +6865,12 @@ def _run_relion_iteration_loop(
         # reconstruction, before parity diagnostics are written.
         scale_correction_data_vs_prior_this_iter = previous_data_vs_prior_for_scheduling
 
-        for k in range(2):
+        diagnostic_half_indices = _significance_dump_half_indices(
+            numbered_iteration=numbered_relion_iteration,
+            n_classes=n_classes,
+            experiment_datasets=experiment_datasets,
+        )
+        for k in diagnostic_half_indices:
             _sparse_pass2_diagnostics.set_bpref_contribution_dump_context(
                 iteration=iteration + 1,
                 half=k + 1,
@@ -7334,6 +7447,12 @@ def _run_relion_iteration_loop(
                 best_pose_translations=best_pose_translations[k],
                 translation_search_base=translation_search_bases[k],
                 original_image_indices=_half_orig_idx,
+            )
+
+        if diagnostic_half_indices != (0, 1):
+            raise RuntimeError(
+                "targeted half-only significance diagnostic returned without writing its "
+                "complete target set; refusing to continue with one half missing"
             )
 
         # E-step + per-half M-step accumulators are now both populated.
@@ -10015,6 +10134,7 @@ def _run_relion_iteration_loop(
                 max_significants=max_significants,
                 state=state,
                 iteration=iteration + 1,
+                debug_iteration=final_sampling_relion_iteration,
                 save_intermediates_dir=save_intermediates_dir,
                 local_search_random_perturbation=final_local_search_random_perturbation,
                 local_search_angular_sampling_deg=final_local_search_angular_sampling_deg,

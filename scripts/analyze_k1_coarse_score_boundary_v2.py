@@ -331,7 +331,7 @@ def main() -> None:
         target = targets[native.stack_index]
         matches = sorted(
             args.recovar_directory.glob(
-                f"significance_orig{int(target['original_index_zero_based']):06d}_cs*.npz"
+                f"significance_orig{int(target['original_index_zero_based']):06d}*_cs*.npz"
             )
         )
         _require(len(matches) == 1, f"RECOVAR capture lookup failed for stack {native.stack_index}")

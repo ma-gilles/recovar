@@ -1,4 +1,5 @@
 import sys
+import inspect
 
 import numpy as np
 import pytest
@@ -12,6 +13,7 @@ from scripts.run_multi_iter_parity import (
     build_gt_postprocess_command,
     final_output_fourier_volumes,
     initial_scoring_noise_pair,
+    final_only_replay_override,
     load_initial_fourier_volume,
     map_pose_arrays_to_particle_order,
     parse_relion_optimiser_cli_flags,
@@ -25,6 +27,16 @@ from scripts.run_multi_iter_parity import (
     stack_index_from_image_name,
     validate_final_only_replay_args,
 )
+
+
+def test_multi_iter_parity_supports_stop_after_coarse_significance_dump():
+    import scripts.run_multi_iter_parity as runner
+
+    source = inspect.getsource(runner)
+    assert "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET" in source
+    assert "SignificanceDumpComplete" in source
+    assert "coarse-significance dump completed" in source
+    assert "pass-2/M-step work" in source
 
 
 def test_particle_half_indices_preserve_source_order_and_int64_dtype():
@@ -178,6 +190,16 @@ def test_final_only_replay_requires_zero_numbered_iterations():
             initial_half1_mrc="half1.mrc",
             initial_half2_mrc="half2.mrc",
         )
+
+
+def test_final_only_replay_promotes_slot_zero_to_explicit_final_override():
+    boundary = {"noise_variance": "per-half"}
+
+    assert final_only_replay_override([boundary], enabled=True) is boundary
+    assert final_only_replay_override([boundary], enabled=False) is None
+
+    with pytest.raises(ValueError, match="missing its RELION boundary state"):
+        final_only_replay_override([None], enabled=True)
 
 
 def test_final_only_replay_requires_paired_initial_half_maps():

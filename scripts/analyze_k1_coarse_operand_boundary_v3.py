@@ -389,7 +389,7 @@ def main() -> None:
         original = int(target["original_index_zero_based"])
         component_paths = list(args.native_directory.glob(f"part*_stack{stack}.p1-v2.bin"))
         operand_paths = list(args.native_directory.glob(f"part*_stack{stack}.p1-op-v2.bin"))
-        recovar_paths = list(args.recovar_directory.glob(f"significance_orig{original:06d}_cs*.npz"))
+        recovar_paths = list(args.recovar_directory.glob(f"significance_orig{original:06d}*_cs*.npz"))
         _require(len(component_paths) == len(operand_paths) == len(recovar_paths) == 1, f"artifact lookup failed for stack {stack}")
         rows.append(_compare(component_paths[0], operand_paths[0], recovar_paths[0]))
     report = {

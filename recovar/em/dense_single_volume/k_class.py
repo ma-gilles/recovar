@@ -2850,6 +2850,7 @@ def run_dense_k_class_em_adaptive(
     debug_iteration: int | None = None,
     pass2_use_float64_scoring: bool | None = None,
     pass2_use_float64_projections: bool | None = None,
+    coarse_translation_phase_source=None,
     **engine_kwargs,
 ) -> KClassEMResult:
     """K-class adaptive 2-pass EM: coarse pass-1 significance + fine pass-2 masked.
@@ -3086,6 +3087,7 @@ def run_dense_k_class_em_adaptive(
             relion_projector_r_max=relion_projector_r_max,
             relion_projector_texture_interp=coarse_relion_projector_texture_interp,
             debug_iteration=debug_iteration,
+            translation_phase_source=coarse_translation_phase_source,
         )
 
         with nvtx.annotate("kclass.adaptive.significance", color="orange", domain=NVTX_DOMAIN_EM):

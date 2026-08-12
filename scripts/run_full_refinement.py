@@ -93,6 +93,9 @@ _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
 )
 _FIRSTITER_CC_TREE_TOP2_RESCORE_DEFAULT_MAX_MARGIN = "4e-6"
 _K1_RELION_LIVE_INITIAL_NOISE_ENV = "RECOVAR_K1_RELION_LIVE_INITIAL_NOISE"
+_STATE_SWAP_FORCE_FRESH_PARTICLE_ORDER_ENV = (
+    "RECOVAR_STATE_SWAP_FORCE_FRESH_PARTICLE_ORDER"
+)
 
 
 def _k1_relion_live_initial_noise_enabled(
@@ -1327,14 +1330,38 @@ def _replay_complete_initial_particle_state(n_classes, init_relion_iteration):
     return int(n_classes) == 1 and int(init_relion_iteration) == 0
 
 
-def _use_fresh_auto_refine_particle_order(args, frozen_boundary) -> bool:
+def _use_fresh_auto_refine_particle_order(
+    args,
+    frozen_boundary,
+    *,
+    environ=None,
+) -> bool:
     """Whether this run owns RELION's one-time fresh AutoRefine ordering."""
 
+    env = os.environ if environ is None else environ
+    force_state_swap_order = (
+        str(env.get(_STATE_SWAP_FORCE_FRESH_PARTICLE_ORDER_ENV, "0"))
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"}
+    )
+    if force_state_swap_order and (
+        args.perturb_replay_relion_dir is None
+        or getattr(args, "state_swap_variant", None) is None
+        or getattr(args, "state_swap_target_relion_iteration", None) is None
+    ):
+        raise ValueError(
+            f"{_STATE_SWAP_FORCE_FRESH_PARTICLE_ORDER_ENV}=1 requires a complete "
+            "state-swap replay diagnostic"
+        )
     return (
         int(args.n_classes) == 1
         and int(args.init_relion_iteration) == 0
         and frozen_boundary is None
-        and args.perturb_replay_relion_dir is None
+        and (
+            args.perturb_replay_relion_dir is None
+            or force_state_swap_order
+        )
     )
 
 
@@ -5372,4 +5399,37 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as exc:
+        if (
+            exc.__class__.__name__ == "SignificanceDumpComplete"
+            and os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET") == "1"
+        ):
+            logger.info(
+                "RECOVAR coarse-significance dump completed; stopping before "
+                "pass-2/M-step work: %s",
+                exc,
+            )
+            sys.exit(0)
+        if (
+            exc.__class__.__name__ == "BPrefContributionDumpComplete"
+            and os.environ.get("RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET") == "1"
+        ):
+            logger.info(
+                "RECOVAR BPref contribution dump completed; stopping at the "
+                "requested pass-2 boundary: %s",
+                exc,
+            )
+            sys.exit(0)
+        if (
+            exc.__class__.__name__ == "Pass2DumpComplete"
+            and os.environ.get("RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET") == "1"
+        ):
+            logger.info(
+                "RECOVAR pass-2 operand dump completed; stopping at the "
+                "requested fine-score boundary: %s",
+                exc,
+            )
+            sys.exit(0)
+        raise

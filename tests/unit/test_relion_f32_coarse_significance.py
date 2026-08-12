@@ -3,6 +3,7 @@
 import numpy as np
 
 from recovar.em.dense_single_volume.helpers.oversampling import (
+    _relion_cuda_f32_tail_target,
     relion_cuda_f32_coarse_posterior,
 )
 from recovar.em.dense_single_volume.helpers.significance import (
@@ -33,7 +34,10 @@ def _numpy_reference(scores, adaptive_fraction, max_significants):
         ordered = np.sort(positive)
         cumulative = np.cumsum(ordered, dtype=np.float32)
         total = cumulative[-1]
-        target = np.float32((1.0 - adaptive_fraction) * np.float64(total))
+        parsed_fraction = np.float32(adaptive_fraction)
+        target = np.float32(
+            (np.float64(1.0) - np.float64(parsed_fraction)) * np.float64(total)
+        )
         threshold_index = int(np.searchsorted(cumulative, target, side="right"))
         if max_significants is not None and max_significants > 0:
             threshold_index = max(threshold_index, len(ordered) - max_significants)
@@ -92,6 +96,13 @@ def test_relion_cuda_f32_coarse_posterior_expands_cutoff_ties_after_rank_cap():
     np.testing.assert_array_equal(np.asarray(mask), [[True, True, True, True, False]])
     np.testing.assert_array_equal(np.asarray(n_significant), [4])
     np.testing.assert_array_equal(np.asarray(cutoff_count), [2])
+
+
+def test_relion_cuda_f32_tail_target_preserves_text_to_float_semantics():
+    sum_weight = np.asarray([2.8323050236340316e22], dtype=np.float32)
+    target = np.asarray(_relion_cuda_f32_tail_target(sum_weight, 0.999))
+
+    np.testing.assert_array_equal(target.view(np.uint32), [1606715186])
 
 
 def test_relion_f32_coarse_support_gate_defaults_off(monkeypatch):

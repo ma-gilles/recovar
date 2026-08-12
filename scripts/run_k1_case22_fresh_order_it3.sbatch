@@ -30,6 +30,13 @@ COARSE_STACK1204_DUMP=${K1_CASE22_COARSE_STACK1204_DUMP:-0}
 GAUSSIAN_COARSE_STACK1204=${K1_CASE22_GAUSSIAN_COARSE_STACK1204:-0}
 GAUSSIAN_SINCOSF_STACK1204=${K1_CASE22_GAUSSIAN_SINCOSF_STACK1204:-${GAUSSIAN_COARSE_STACK1204}}
 EXACT_COARSE_STACK1204=${K1_CASE22_EXACT_COARSE_STACK1204:-0}
+TARGET_STACK_ONE_BASED=${K1_CASE22_TARGET_STACK_ONE_BASED:-1204}
+if (( TARGET_STACK_ONE_BASED < 1 )); then
+    echo "K1_CASE22_TARGET_STACK_ONE_BASED must be positive" >&2
+    exit 2
+fi
+TARGET_ORIGINAL_INDEX=$((TARGET_STACK_ONE_BASED - 1))
+PASS2_ROTATION_ROWS=${K1_CASE22_PASS2_ROTATION_ROWS:-50293,50295}
 PYTHON=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default/bin/python
 PIXI_ENV=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default
 LAUNCHER=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/scripts/run_k1_case22_fresh_order_it3.sbatch
@@ -105,7 +112,7 @@ if [[ "${COMPACT_STACK1204_DUMP}" = 1 && "${COARSE_STACK1204_DUMP}" = 1 ]]; then
     exit 2
 elif [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
     export RECOVAR_PASS2_DUMP_DIR=${ROOT}/pass2
-    export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=1203
+    export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDEX}
     export RECOVAR_PASS2_DUMP_CURRENT_SIZE=60
     export RECOVAR_PASS2_DUMP_ITERATION=2
     # The compact analyzer reconstructs raw diff2 from the selected projection,
@@ -113,7 +120,7 @@ elif [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
     # raw dump materializes every large bucket and can require >17 GiB for a
     # single diagnostic batch.
     export RECOVAR_PASS2_DUMP_RAW_OPERANDS=0
-    export RECOVAR_PASS2_DUMP_ROTATION_ROWS=50293,50295
+    export RECOVAR_PASS2_DUMP_ROTATION_ROWS=${PASS2_ROTATION_ROWS}
     if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
         export RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET=1
     fi
@@ -123,7 +130,7 @@ elif [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
     exit 2
 elif [[ "${COARSE_STACK1204_DUMP}" = 1 ]]; then
     export RECOVAR_SIGNIFICANCE_DUMP_DIR=${ROOT}/coarse
-    export RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES=1203
+    export RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDEX}
     export RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE=60
     export RECOVAR_SIGNIFICANCE_DUMP_ITERATION=2
     export RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF=1
@@ -177,23 +184,26 @@ start=$(date +%s)
 wall_s=$(( $(date +%s) - start ))
 
 if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
-    compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig001203_cs060.npz
+    printf -v target_original_label '%06d' "${TARGET_ORIGINAL_INDEX}"
+    compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig${target_original_label}_cs060.npz
     test -s "${compact_dump}"
     rg -q 'pass-2 operand dump completed; stopping at the requested fine-score boundary' \
         "${OUTPUT}/run.log"
-    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":true,"stopped_after_dump":true}\n' \
-        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" \
+    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":true,"target_stack_one_based":%d,"pass2_rotation_rows":"%s","stopped_after_dump":true}\n' \
+        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${TARGET_STACK_ONE_BASED}" \
+        "${PASS2_ROTATION_ROWS}" \
         > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
     touch "${ROOT}/DUMP_SUCCESS_${SLURM_JOB_ID}"
     exit 0
 fi
 if [[ "${COARSE_STACK1204_DUMP}" = 1 ]]; then
-    coarse_dump=${RECOVAR_SIGNIFICANCE_DUMP_DIR}/significance_orig001203_it002_cs060.npz
+    printf -v target_original_label '%06d' "${TARGET_ORIGINAL_INDEX}"
+    coarse_dump=${RECOVAR_SIGNIFICANCE_DUMP_DIR}/significance_orig${target_original_label}_it002_cs060.npz
     test -s "${coarse_dump}"
     rg -q 'coarse-significance dump completed; stopping before pass-2/M-step work' \
         "${OUTPUT}/run.log"
-    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","coarse_stack1204_dump":true,"gaussian_coarse":%s,"gaussian_sincosf":%s,"exact_coarse":%s,"stopped_after_dump":true}\n' \
-        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${GAUSSIAN_COARSE_STACK1204}" "${GAUSSIAN_SINCOSF_STACK1204}" "${EXACT_COARSE_STACK1204}" \
+    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","coarse_stack1204_dump":true,"target_stack_one_based":%d,"gaussian_coarse":%s,"gaussian_sincosf":%s,"exact_coarse":%s,"stopped_after_dump":true}\n' \
+        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${TARGET_STACK_ONE_BASED}" "${GAUSSIAN_COARSE_STACK1204}" "${GAUSSIAN_SINCOSF_STACK1204}" "${EXACT_COARSE_STACK1204}" \
         > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
     touch "${ROOT}/DUMP_SUCCESS_${SLURM_JOB_ID}"
     exit 0
@@ -204,15 +214,17 @@ printf -v last_label '%03d' "${last_index}"
 test -s "${OUTPUT}/intermediates/it${last_label}_half1_reg.mrc"
 test -s "${OUTPUT}/intermediates/it${last_label}_half2_reg.mrc"
 if [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
-    compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig001203_cs060.npz
+    printf -v target_original_label '%06d' "${TARGET_ORIGINAL_INDEX}"
+    compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig${target_original_label}_cs060.npz
     test -s "${compact_dump}"
-    "${PYTHON}" - <<'PY' "${compact_dump}"
+    "${PYTHON}" - <<'PY' "${compact_dump}" "${PASS2_ROTATION_ROWS}"
 import numpy as np
 import sys
 
 with np.load(sys.argv[1], allow_pickle=False) as payload:
     assert str(payload["schema"]) == "recovar.em.k1_pass2_selected_rotations.v1"
-    assert np.array_equal(payload["rotation_rows_global"], np.asarray([50293, 50295]))
+    expected = np.asarray([int(value) for value in sys.argv[2].split(",")], dtype=np.int64)
+    assert np.array_equal(payload["rotation_rows_global"], expected)
 PY
 fi
 ! rg -q 'Traceback|RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' "${OUTPUT}/run.log"

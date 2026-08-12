@@ -26,7 +26,7 @@ AUDIT_REPO=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_factor_recov
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 LAUNCHER=${REPO}/scripts/run_k1_case26_native_wavg_pixel_capture.sbatch
 RELION_SOURCE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k1_case26_wavg_pixel_source_20260810
-RELION_BINARY=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k1_case26_wavg_pixel_build_20260810/bin/relion_refine_mpi
+RELION_BINARY=${RELION_BINARY_OVERRIDE:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k1_case26_wavg_pixel_build_20260810/bin/relion_refine_mpi}
 RELION_RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispatchv2_20260717
 CASE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_current_pr_failure_gate_fd8e27b9_20260808T1515ET/scorecard_remaining5/cases/26_tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80
 DATA=${CASE}/data
@@ -37,9 +37,12 @@ BPREF_ACCUM_DIR=${ROOT}/bpref_accum
 RELION_OUT=${ROOT}/relion
 CAPTURE_PART_IDS=${CAPTURE_PART_IDS:-0,131,150,1,284,285,410,445,567,573,634,698,731,843,862,998,999}
 CAPTURE_STACK_INDICES=${CAPTURE_STACK_INDICES:-1,216,233,10,354,355,468,5,609,614,67,727,757,858,875,998,999}
-CAPTURE_EXPECTED_PARTICLES=17
+CAPTURE_EXPECTED_PARTICLES=${CAPTURE_EXPECTED_PARTICLES:-17}
 CAPTURE_BPREF_PRESCATTER=${CAPTURE_BPREF_PRESCATTER:-0}
 CAPTURE_BPREF_ACCUM=${CAPTURE_BPREF_ACCUM:-0}
+CAPTURE_PPREF=${CAPTURE_PPREF:-0}
+CAPTURE_WAVG_REFERENCE=${CAPTURE_WAVG_REFERENCE:-0}
+PPREF_CAPTURE_DIR=${ROOT}/ppref
 
 require_sha() {
     test "$(sha256sum "$2" | awk '{print $1}')" = "$1"
@@ -49,7 +52,7 @@ test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 require_sha "${EXPECTED_LAUNCHER_SHA256}" "${LAUNCHER}"
 require_sha "${EXPECTED_RELION_BINARY_SHA256}" "${RELION_BINARY}"
 test "$(git -C "${RELION_SOURCE}" rev-parse HEAD)" = ed53c60d83125902c456b7fc5461c78c3966b306
-test "$(git -C "${RELION_SOURCE}" diff -- src/acc/acc_ml_optimiser_impl.h | sha256sum | awk '{print $1}')" = "${EXPECTED_RELION_SOURCE_DIFF_SHA256}"
+test "$(git -C "${RELION_SOURCE}" diff --binary | sha256sum | awk '{print $1}')" = "${EXPECTED_RELION_SOURCE_DIFF_SHA256}"
 require_sha 34016f7f367587125956de8f00895c27b14225511c8ef0f517179b890685e139 "${DATA}/particles.star"
 require_sha 4cd77e4ddeb731f719adb0cfd661e4f00221e07d08e15e1a5dc229737d9c848c "${DATA}/particles.128.mrcs"
 require_sha 7aafc4f04e482f7410ff37686ba46db14578334ca77909f04bff30dbba2789d1 "${DATA}/reference_init_relion.mrc"
@@ -67,12 +70,20 @@ if test "${CAPTURE_BPREF_ACCUM}" = 1; then
     test -d "${BPREF_ACCUM_DIR}"
     test -z "$(find "${BPREF_ACCUM_DIR}" -mindepth 1 -print -quit)"
 fi
+if test "${CAPTURE_PPREF}" = 1; then
+    mkdir -p "${PPREF_CAPTURE_DIR}"
+    test -z "$(find "${PPREF_CAPTURE_DIR}" -mindepth 1 -print -quit)"
+fi
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
 while IFS='=' read -r variable_name _; do
     case "${variable_name}" in RECOVAR_*|RELION_*) unset "${variable_name}" ;; esac
 done < <(env)
+if test "${CAPTURE_PPREF}" = 1; then
+    export RELION_PPREF_CAPTURE_DIR=${PPREF_CAPTURE_DIR}
+    export RELION_PPREF_CAPTURE_ITER=1
+fi
 export PYTHONNOUSERSITE=1 XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TMPDIR=${RUNTIME}/${SLURM_JOB_ID}/tmp
 export PIXI_HOME=${RUNTIME}/${SLURM_JOB_ID}/pixi_home
@@ -97,6 +108,9 @@ export RELION_ACC_DUMP_DIR=${CAPTURE_DIR}
 export RELION_ACC_DUMP_ITER=1
 export RELION_ACC_DUMP_PART_IDS=${CAPTURE_PART_IDS}
 export RELION_ACC_DUMP_WAVG_PIXELS=1
+if test "${CAPTURE_WAVG_REFERENCE}" = 1; then
+    export RELION_ACC_DUMP_WAVG_REFERENCE=1
+fi
 export RELION_P1_PREPROCESS_CAPTURE_DIR=${CAPTURE_DIR}
 export RELION_P1_PREPROCESS_CAPTURE_SCHEMA=1
 export RELION_P1_PREPROCESS_CAPTURE_ITER=1
@@ -140,13 +154,15 @@ case "${GPU_NAME}" in *H100*) ;; *) echo "Expected H100, got ${GPU_NAME}" >&2; e
     echo "capture_iteration=1"
     echo "capture_bpref_prescatter=${CAPTURE_BPREF_PRESCATTER}"
     echo "capture_bpref_accum=${CAPTURE_BPREF_ACCUM}"
+    echo "capture_ppref=${CAPTURE_PPREF}"
+    echo "capture_wavg_reference=${CAPTURE_WAVG_REFERENCE}"
     echo "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=unset"
     echo "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER=unset"
     sha256sum "${LAUNCHER}" "${RELION_BINARY}" \
         "${DATA}/particles.star" "${DATA}/particles.128.mrcs" \
         "${DATA}/reference_init_relion.mrc"
 } > "${ROOT}/provenance/PREFLIGHT_${SLURM_JOB_ID}.txt"
-git -C "${RELION_SOURCE}" diff -- src/acc/acc_ml_optimiser_impl.h \
+git -C "${RELION_SOURCE}" diff --binary \
     > "${ROOT}/provenance/relion_wavg_capture.patch"
 
 COMMAND=(
@@ -173,6 +189,11 @@ for suffix in \
     valid_wdiff2_sum image_size current_size orientation_num translation_num; do
     test "$(find "${CAPTURE_DIR}" -maxdepth 1 -type f -name "*_storeWavg_${suffix}.bin" | wc -l)" -eq "${CAPTURE_EXPECTED_PARTICLES}"
 done
+if test "${CAPTURE_WAVG_REFERENCE}" = 1; then
+    for suffix in reference_real reference_imag; do
+        test "$(find "${CAPTURE_DIR}" -maxdepth 1 -type f -name "*_storeWavg_${suffix}.bin" | wc -l)" -eq "${CAPTURE_EXPECTED_PARTICLES}"
+    done
+fi
 test "$(find "${CAPTURE_DIR}" -maxdepth 1 -type f -name '*.preprocess-v1.bin' | wc -l)" -eq "${CAPTURE_EXPECTED_PARTICLES}"
 test -z "$(find "${CAPTURE_DIR}" -maxdepth 1 -type f -name '*.tmp.*' -print -quit)"
 if test "${CAPTURE_BPREF_PRESCATTER}" = 1; then
@@ -192,12 +213,18 @@ if test "${CAPTURE_BPREF_ACCUM}" = 1; then
         test -s "${BPREF_ACCUM_DIR}/mstep_it001_rank${rank}_half${half}_c0_pre_lowres_join_bpref_meta.txt"
     done
 fi
+if test "${CAPTURE_PPREF}" = 1; then
+    # Both half projectors are constructed serially by the MPI master and use
+    # rank -1/model 0.  The second (half-2) construction intentionally
+    # overwrites the first; this focused capture therefore retains one file.
+    test "$(find "${PPREF_CAPTURE_DIR}" -maxdepth 1 -type f -name 'ppref_iter001_*.bin' | wc -l)" -eq 1
+fi
 "${PYTHON}" "${REPO}/scripts/validate_relion_preprocess_capture.py" \
     "${CAPTURE_DIR}" --expected-particles "${CAPTURE_EXPECTED_PARTICLES}" \
     --expected-part-ids "${CAPTURE_PART_IDS}" \
     --expected-stack-indices "${CAPTURE_STACK_INDICES}" --expected-iteration 1 \
     --output "${ROOT}/analysis/RELION_PREPROCESS_CAPTURE_V1.json"
-"${PYTHON}" - <<'PY' "${CAPTURE_DIR}" "${ROOT}/analysis/RELION_WAVG_CAPTURE_VALIDATION.json"
+"${PYTHON}" - <<'PY' "${CAPTURE_DIR}" "${ROOT}/analysis/RELION_WAVG_CAPTURE_VALIDATION.json" "${CAPTURE_EXPECTED_PARTICLES}"
 import hashlib
 import json
 import re
@@ -206,6 +233,7 @@ import sys
 from pathlib import Path
 
 capture_dir = Path(sys.argv[1])
+expected_particles = int(sys.argv[3])
 records = []
 for path in sorted(capture_dir.glob("*_storeWavg_wdiff2_pixels.bin")):
     match = re.fullmatch(r"img(\d+)_part(\d+)_storeWavg_wdiff2_pixels\.bin", path.name)
@@ -254,7 +282,7 @@ for path in sorted(capture_dir.glob("*_storeWavg_wdiff2_pixels.bin")):
         "valid_wdiff2_sum": scalars["valid_wdiff2_sum"],
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
     })
-assert len(records) == 17
+assert len(records) == expected_particles
 Path(sys.argv[2]).write_text(json.dumps({"schema": "relion.acc.wavg_inputs.v2", "records": records}, indent=2) + "\n")
 PY
 
@@ -287,6 +315,10 @@ if test "${CAPTURE_BPREF_ACCUM}" = 1; then
     sha256sum "${BPREF_ACCUM_DIR}"/*_bpref_data.bin \
         "${BPREF_ACCUM_DIR}"/*_bpref_weight.bin \
         "${BPREF_ACCUM_DIR}"/*_bpref_meta.txt \
+        >> "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
+fi
+if test "${CAPTURE_PPREF}" = 1; then
+    sha256sum "${PPREF_CAPTURE_DIR}"/ppref_iter001_*.bin \
         >> "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
 fi
 printf '{"job_id":"%s","wall_s":%d,"particle_count":%d}\n' \

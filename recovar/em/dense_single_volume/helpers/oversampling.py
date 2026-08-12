@@ -34,6 +34,24 @@ logger = logging.getLogger(__name__)
 _FAST_SIGNIFICANCE_TOPK = 64
 
 
+def _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction: float):
+    """Match RELION's parsed adaptive-fraction arithmetic at the CUDA cutoff.
+
+    RELION initializes ``adaptive_fraction`` with ``textToFloat`` even when
+    ``RFLOAT`` is double.  The resulting float32 value is widened for the host
+    product with ``op.sum_weight`` and finally narrowed to the CUDA ``XFLOAT``
+    threshold argument.  Starting from Python's float64 value can move a fine
+    significance cutoff across one or more nearly tied candidates.
+    """
+
+    parsed_fraction = jnp.asarray(adaptive_fraction, dtype=jnp.float32)
+    return jnp.asarray(
+        (jnp.float64(1.0) - parsed_fraction.astype(jnp.float64))
+        * jnp.asarray(sum_weight, dtype=jnp.float32).astype(jnp.float64),
+        dtype=jnp.float32,
+    )
+
+
 @partial(jax.jit, static_argnames=("adaptive_fraction", "max_significants"))
 def relion_cuda_f32_coarse_posterior(
     scores_flat,
@@ -74,15 +92,18 @@ def relion_cuda_f32_coarse_posterior(
         jnp.float32(0.0),
     )
 
-    sorted_weights = jnp.sort(raw_weights, axis=1)
-    cumulative = jnp.cumsum(sorted_weights, axis=1, dtype=jnp.float32)
+    if jax.default_backend() == "gpu":
+        from recovar.cuda_backproject import relion_cub_sort_scan_f32
+
+        sorted_weights, cumulative = jax.vmap(relion_cub_sort_scan_f32)(raw_weights)
+    else:
+        # Keep a CPU reference path for isolated unit tests. The live opt-in
+        # route is CUDA-only and uses RELION's exact CUB primitives above.
+        sorted_weights = jnp.sort(raw_weights, axis=1)
+        cumulative = jnp.cumsum(sorted_weights, axis=1, dtype=jnp.float32)
     sum_weight = cumulative[:, -1]
     has_mass = has_finite & jnp.isfinite(sum_weight) & (sum_weight > jnp.float32(0.0))
-    tail_target = jnp.asarray(
-        (jnp.float64(1.0) - jnp.float64(adaptive_fraction))
-        * sum_weight.astype(jnp.float64),
-        dtype=jnp.float32,
-    )
+    tail_target = _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction)
     threshold_idx = jax.vmap(
         lambda row, target: jnp.searchsorted(row, target, side="right"),
     )(cumulative, tail_target)
