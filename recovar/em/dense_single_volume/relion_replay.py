@@ -35,15 +35,17 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _mean_noise_variance,
     _normalize_noise_variance_per_half,
 )
+from recovar.em.dense_single_volume.refinement_options import RefinementOptions
 from recovar.em.dense_single_volume.relion_metadata import (
     _radial_profile_from_noise_variance,
 )
-
-# Sampling-module symbols (read_relion_*, get_translation_grid) are resolved
-# lazily through ``recovar.em.dense_single_volume.iteration_loop`` inside
-# ``apply_iter_replay_overrides`` so that test monkeypatches on the
-# iteration_loop module surface win without a per-test setattr on
-# ``relion_replay``. See tests/unit/test_refine_relion_mode.py:5408.
+from recovar.em.sampling import (
+    read_relion_direction_prior,
+    read_relion_direction_priors,
+    read_relion_model_metadata,
+    read_relion_optimiser_metadata,
+    read_relion_sampling_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -462,6 +464,64 @@ class ReplayOverrideResult:
     relion_projector_state: RelionProjectorReplayState | None = None
 
 
+def _restore_convergence_state_from_replay_restart(state, options: RefinementOptions) -> None:
+    """Restore convergence counters from a RELION optimiser/model STAR at a
+    perturbation-replay restart iteration.
+
+    RELION's convergence counters are not initialized against an infinite
+    previous resolution -- a replay restart resumes them from the previous
+    optimiser/model STAR instead of the fresh-run FSC/ini_high state. This is
+    the loop-boundary counterpart to ``apply_iter_replay_overrides`` below,
+    which handles the same ``perturb_replay_relion_dir`` source per mid-loop
+    iteration.
+    """
+    parity, schedule = options.parity, options.schedule
+    init_relion_iteration = int(schedule.init_relion_iteration)
+    init_opt_star = os.path.join(
+        parity.perturb_replay_relion_dir,
+        f"{parity.perturb_replay_relion_prefix}_it{init_relion_iteration:03d}_optimiser.star",
+    )
+    init_model_star = os.path.join(
+        parity.perturb_replay_relion_dir,
+        f"{parity.perturb_replay_relion_prefix}_it{init_relion_iteration:03d}_half1_model.star",
+    )
+    if os.path.exists(init_model_star):
+        model_meta = read_relion_model_metadata(init_model_star)
+        resolution_angstrom = float(model_meta["current_resolution"])
+        if np.isfinite(resolution_angstrom) and resolution_angstrom > 0.0:
+            state.current_resolution = resolution_angstrom
+            state.previous_resolution = resolution_angstrom
+    if os.path.exists(init_opt_star):
+        opt_meta = read_relion_optimiser_metadata(init_opt_star)
+        state.nr_iter_wo_resol_gain = int(opt_meta.get("number_iter_without_resolution_gain") or 0)
+        hidden_variable_changes = int(opt_meta.get("number_iter_without_changing_assignments") or 0)
+        state.nr_iter_wo_large_hidden_variable_changes = hidden_variable_changes
+        state.nr_iter_wo_assignment_changes = hidden_variable_changes
+        if opt_meta.get("overall_accuracy_rotations") is not None:
+            state.acc_rot = float(opt_meta["overall_accuracy_rotations"])
+        if opt_meta.get("overall_accuracy_translations_angst") is not None:
+            state.acc_trans = float(opt_meta["overall_accuracy_translations_angst"])
+        if opt_meta.get("smallest_changes_orientations") is not None:
+            state.smallest_changes_optimal_orientations = float(opt_meta["smallest_changes_orientations"])
+        if opt_meta.get("smallest_changes_offsets") is not None:
+            state.smallest_changes_optimal_offsets_angstrom = float(opt_meta["smallest_changes_offsets"])
+        if opt_meta.get("smallest_changes_classes") is not None:
+            state.smallest_changes_optimal_classes = float(opt_meta["smallest_changes_classes"])
+        if opt_meta.get("has_converged") is not None:
+            state.has_converged = bool(int(opt_meta["has_converged"]))
+    logger.info(
+        "Replay convergence init from RELION iter %03d: res=%.2f A, "
+        "stalls=(res=%d,hvc=%d), smallest=(rot=%.3f deg, trans=%.3f A, class=%.3f)",
+        init_relion_iteration,
+        state.current_resolution,
+        state.nr_iter_wo_resol_gain,
+        state.nr_iter_wo_large_hidden_variable_changes,
+        state.smallest_changes_optimal_orientations,
+        state.smallest_changes_optimal_offsets_angstrom,
+        state.smallest_changes_optimal_classes,
+    )
+
+
 def apply_iter_replay_overrides(
     *,
     iter_replay_override: dict | None,
@@ -509,10 +569,9 @@ def apply_iter_replay_overrides(
        per-half RELION projector state.
     """
 
-    # Resolve sampling-module helpers through iteration_loop so test
-    # monkeypatches (``monkeypatch.setattr(refine_mod, "read_relion_*", ...)``)
-    # win without monkeypatching this module too. Import is lazy to avoid a
-    # circular import at module-load time (iteration_loop imports this module).
+    # ``_translation_grid_for_class_count`` is the K=1 exact-grid parity
+    # dispatcher and lives in iteration_loop, not in recovar.em.sampling.
+    # Import it lazily: iteration_loop imports this module at load time.
     from recovar.em.dense_single_volume import iteration_loop as _il
 
     _replay_prior_translations = None
@@ -574,7 +633,7 @@ def apply_iter_replay_overrides(
             perturb_replay_relion_dir,
             f"{perturb_replay_relion_prefix}_it{init_relion_iteration + iteration + 1:03d}_sampling.star",
         )
-        _replay_meta = _il.read_relion_sampling_metadata(_star)
+        _replay_meta = read_relion_sampling_metadata(_star)
         _relion_hp = int(_replay_meta["healpix_order"])
         _relion_psi_step_deg = float(_replay_meta.get("psi_step", healpix_angular_step(_relion_hp)))
         # RELION stores offset_{range,step} in Angstroms; convert to px.
@@ -668,7 +727,7 @@ def apply_iter_replay_overrides(
         ]
         _model_star = next((path for path in _model_star_candidates if os.path.exists(path)), None)
         if _model_star is not None:
-            _model_meta = _il.read_relion_model_metadata(_model_star)
+            _model_meta = read_relion_model_metadata(_model_star)
         if _replay_do_local:
             _relion_sigma_rot_deg = None
             _relion_sigma_psi_deg = None
@@ -764,9 +823,9 @@ def apply_iter_replay_overrides(
                         if not os.path.exists(_prior_star):
                             continue
                     _relion_direction_prior = (
-                        _il.read_relion_direction_priors(_prior_star, n_classes)
+                        read_relion_direction_priors(_prior_star, n_classes)
                         if k_class_enabled
-                        else _il.read_relion_direction_prior(_prior_star)
+                        else read_relion_direction_prior(_prior_star)
                     )
                     if k_class_enabled:
                         inferred_weights = class_weights_from_direction_prior(_relion_direction_prior, n_classes)

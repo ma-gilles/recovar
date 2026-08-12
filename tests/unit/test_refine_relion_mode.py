@@ -469,7 +469,7 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
             "offset_step": 1.416667,
         }
 
-    monkeypatch.setattr(iteration_loop_module, "read_relion_sampling_metadata", fake_sampling_metadata)
+    monkeypatch.setattr(relion_replay_module, "read_relion_sampling_metadata", fake_sampling_metadata)
 
     state = State()
     state_grid = get_translation_grid(state.translation_range, state.translation_step)
@@ -633,12 +633,12 @@ def test_sealed_sampling_override_never_reads_external_replay_files(monkeypatch,
         translation_step=99.0,
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_sampling_metadata",
         lambda path: pytest.fail(f"unexpected external sampling read: {path}"),
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_model_metadata",
         lambda path: pytest.fail(f"unexpected external model read: {path}"),
     )
@@ -699,7 +699,7 @@ def test_frozen_replay_explicitly_suppresses_external_direction_prior_reload(
     for half in (1, 2):
         (tmp_path / f"run_it001_half{half}_model.star").write_text("must not read\n")
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_sampling_metadata",
         lambda path: {
             "random_perturbation": 0.0,
@@ -711,12 +711,12 @@ def test_frozen_replay_explicitly_suppresses_external_direction_prior_reload(
         },
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_model_metadata",
         lambda path: {"current_image_size": 8},
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_direction_prior",
         lambda path: pytest.fail(f"unexpected direction-prior reload: {path}"),
     )
@@ -14747,7 +14747,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         ),
     )
     monkeypatch.setattr(
-        refine_mod,
+        relion_replay_module,
         "read_relion_sampling_metadata",
         lambda _path: {
             "random_perturbation": refine_mod.relion_sampling_perturbation_for_iteration(

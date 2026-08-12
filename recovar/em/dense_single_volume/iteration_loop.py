@@ -83,6 +83,9 @@ from recovar.em.dense_single_volume.helpers.resolution import (
 
 
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
+from recovar.em.dense_single_volume.frozen_boundary import (
+    _restore_diagnostic_frozen_boundary_state,
+)
 from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
@@ -149,6 +152,7 @@ from recovar.em.dense_single_volume.relion_replay import (
     _mean_sigma_offset_per_half,
     _normalize_sigma_offset_per_half,
     _RelionHalfInputState,
+    _restore_convergence_state_from_replay_restart,
     apply_iter_replay_overrides,
 )
 from recovar.em.dense_single_volume.relion_replay import (  # noqa: F401
@@ -4393,6 +4397,37 @@ def _updated_mean_variance_per_half(
     return [shared_mean_variance, shared_mean_variance]
 
 
+def _init_resolution_from_fsc(
+    state: RefinementState, options: RefinementOptions, *, grid_size: int, voxel_size: float
+) -> None:
+    """Seed current/previous resolution from a caller-provided initial FSC curve."""
+    schedule = options.schedule
+    fsc = np.asarray(schedule.init_fsc, dtype=np.float32).copy()
+    previous_current_size = int(schedule.init_current_size)
+    if previous_current_size < grid_size:
+        fsc[min(len(fsc), previous_current_size // 2) :] = 0.0
+    data_vs_prior = np.asarray(fsc_to_relion_ssnr(fsc, tau2_fudge=options.parity.tau2_fudge))
+    resolution_shell = resolution_from_data_vs_prior(data_vs_prior, allow_high_res_recovery=True)
+    resolution_angstrom = shell_index_to_resolution_angstrom(resolution_shell, grid_size, voxel_size)
+    if np.isfinite(resolution_angstrom) and resolution_angstrom > 0.0:
+        state.current_resolution = float(resolution_angstrom)
+        state.previous_resolution = float(resolution_angstrom)
+
+
+def _init_resolution_from_firstiter_ini_high(
+    state: RefinementState, options: RefinementOptions, *, grid_size: int, voxel_size: float
+) -> None:
+    """Seed current/previous resolution from the first-iteration ini_high lowpass."""
+    ini_high_angstrom = options.parity.relion_firstiter_ini_high_angstrom
+    pixel_size = float(voxel_size if voxel_size > 0 else 1.0)
+    shell = int(np.floor(grid_size * pixel_size / float(ini_high_angstrom) + 0.5))
+    shell = max(1, min(grid_size // 2, shell))
+    resolution_angstrom = shell_index_to_resolution_angstrom(shell, grid_size, pixel_size)
+    state.current_resolution = float(resolution_angstrom)
+    state.previous_resolution = float(resolution_angstrom)
+
+
+
 def refine_single_volume(
     experiment_datasets: list[cryoem_dataset.CryoEMDataset],
     init_volume: list[jnp.ndarray] | jnp.ndarray,
@@ -4673,101 +4708,13 @@ def _run_relion_iteration_loop(
         and perturb_replay_relion_dir is not None
         and int(init_relion_iteration) > 0
     ):
-        _init_opt_star = os.path.join(
-            perturb_replay_relion_dir,
-            f"{perturb_replay_relion_prefix}_it{int(init_relion_iteration):03d}_optimiser.star",
-        )
-        _init_model_star = os.path.join(
-            perturb_replay_relion_dir,
-            f"{perturb_replay_relion_prefix}_it{int(init_relion_iteration):03d}_half1_model.star",
-        )
-        if os.path.exists(_init_model_star):
-            _init_model_meta = read_relion_model_metadata(_init_model_star)
-            _init_res_angstrom = float(_init_model_meta["current_resolution"])
-            if np.isfinite(_init_res_angstrom) and _init_res_angstrom > 0.0:
-                state.current_resolution = _init_res_angstrom
-                state.previous_resolution = _init_res_angstrom
-        if os.path.exists(_init_opt_star):
-            _init_opt_meta = read_relion_optimiser_metadata(_init_opt_star)
-            state.nr_iter_wo_resol_gain = int(_init_opt_meta.get("number_iter_without_resolution_gain") or 0)
-            _hvc = int(_init_opt_meta.get("number_iter_without_changing_assignments") or 0)
-            state.nr_iter_wo_large_hidden_variable_changes = _hvc
-            state.nr_iter_wo_assignment_changes = _hvc
-            if _init_opt_meta.get("overall_accuracy_rotations") is not None:
-                state.acc_rot = float(_init_opt_meta["overall_accuracy_rotations"])
-            if _init_opt_meta.get("overall_accuracy_translations_angst") is not None:
-                state.acc_trans = float(_init_opt_meta["overall_accuracy_translations_angst"])
-            if _init_opt_meta.get("smallest_changes_orientations") is not None:
-                state.smallest_changes_optimal_orientations = float(_init_opt_meta["smallest_changes_orientations"])
-            if _init_opt_meta.get("smallest_changes_offsets") is not None:
-                state.smallest_changes_optimal_offsets_angstrom = float(_init_opt_meta["smallest_changes_offsets"])
-            if _init_opt_meta.get("smallest_changes_classes") is not None:
-                state.smallest_changes_optimal_classes = float(_init_opt_meta["smallest_changes_classes"])
-            if _init_opt_meta.get("has_converged") is not None:
-                state.has_converged = bool(int(_init_opt_meta["has_converged"]))
-        logger.info(
-            "Replay convergence init from RELION iter %03d: res=%.2f A, "
-            "stalls=(res=%d,hvc=%d), smallest=(rot=%.3f deg, trans=%.3f A, class=%.3f)",
-            int(init_relion_iteration),
-            state.current_resolution,
-            state.nr_iter_wo_resol_gain,
-            state.nr_iter_wo_large_hidden_variable_changes,
-            state.smallest_changes_optimal_orientations,
-            state.smallest_changes_optimal_offsets_angstrom,
-            state.smallest_changes_optimal_classes,
-        )
+        _restore_convergence_state_from_replay_restart(state, options)
     elif init_fsc is not None:
-        _init_fsc_for_state = np.asarray(init_fsc, dtype=np.float32).copy()
-        _prev_cs_for_state = int(init_current_size)
-        if _prev_cs_for_state < grid_size:
-            _init_fsc_for_state[min(len(_init_fsc_for_state), _prev_cs_for_state // 2) :] = 0.0
-        _init_dvp = np.asarray(fsc_to_relion_ssnr(_init_fsc_for_state, tau2_fudge=tau2_fudge))
-        _init_res_shell = resolution_from_data_vs_prior(_init_dvp, allow_high_res_recovery=True)
-        _init_res_angstrom = shell_index_to_resolution_angstrom(
-            _init_res_shell,
-            grid_size,
-            cryo.voxel_size,
-        )
-        if np.isfinite(_init_res_angstrom) and _init_res_angstrom > 0.0:
-            state.current_resolution = float(_init_res_angstrom)
-            state.previous_resolution = float(_init_res_angstrom)
+        _init_resolution_from_fsc(state, options, grid_size=grid_size, voxel_size=cryo.voxel_size)
     elif init_relion_iteration == 0 and relion_firstiter_ini_high_angstrom is not None:
-        _px = float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0)
-        _init_shell = int(np.floor(grid_size * _px / float(relion_firstiter_ini_high_angstrom) + 0.5))
-        _init_shell = max(1, min(grid_size // 2, _init_shell))
-        _init_res_angstrom = shell_index_to_resolution_angstrom(_init_shell, grid_size, _px)
-        state.current_resolution = float(_init_res_angstrom)
-        state.previous_resolution = float(_init_res_angstrom)
+        _init_resolution_from_firstiter_ini_high(state, options, grid_size=grid_size, voxel_size=cryo.voxel_size)
     if init_refinement_state_fields is not None:
-        allowed_boundary_fields = {
-            "current_resolution",
-            "previous_resolution",
-            "nr_iter_wo_resol_gain",
-            "nr_iter_wo_assignment_changes",
-            "nr_iter_wo_large_hidden_variable_changes",
-            "ave_Pmax",
-            "current_changes_optimal_orientations",
-            "current_changes_optimal_offsets_angstrom",
-            "smallest_changes_optimal_orientations",
-            "smallest_changes_optimal_offsets_angstrom",
-            "acc_rot",
-            "acc_trans",
-            "has_converged",
-        }
-        unexpected_fields = sorted(set(init_refinement_state_fields) - allowed_boundary_fields)
-        if unexpected_fields:
-            raise ValueError(
-                "unsupported frozen-boundary RefinementState fields: "
-                f"{unexpected_fields}"
-            )
-        for field_name, value in init_refinement_state_fields.items():
-            setattr(state, field_name, value)
-        if state.has_converged:
-            raise ValueError("a numbered frozen-boundary restart cannot already be converged")
-        logger.info(
-            "Diagnostic frozen-boundary RefinementState restored: fields=%s",
-            sorted(init_refinement_state_fields),
-        )
+        _restore_diagnostic_frozen_boundary_state(state, options)
     _mark_setup_phase("state_init")
 
     # RELION mode owns the coarse HEALPix grid. When coarse-grid metadata is
