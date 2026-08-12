@@ -427,3 +427,55 @@ Both changes remain opt-in diagnostics. Two-iteration high-shell-only job
 `12289068` is running, and combined two-iteration causal gate `12290158` is
 pending. Neither changes the fixed `28/34` strict, `32/34` topology,
 `34/34` evaluated scorecard before its iteration-2 comparison passes.
+
+## Normalization propagation and raw-score closure
+
+The clean same-executable control `12290572`, high-shell-only arm `12289068`,
+and combined arm `12290158` complete the bounded two-iteration factorial. The
+high-shell correction reduces iteration-2 Pmax relative L2 from
+`6.2472020820489016e-6` to `5.161458798740429e-6` (17.4%) and support-count
+mismatches from 79 to 76. Adding translated Wavg gives
+`5.008111676411559e-6` and leaves support mismatches at 76. Merged signed
+FSC-AUC remains saturated at `0.9999999999664306`,
+`0.9999999999667298`, and `0.9999999999665399`, respectively. Normalization
+is causal for soft posterior state but is not the dominant trajectory cause.
+
+The stop-at-first-target job `12292842` nevertheless closes a concrete raw
+score. For stack image 1462 the corrected factor is the native float32 word
+`0x3f7ad9e2`. It reduces native-host-versus-RECOVAR preprocessed-image
+relative L2 from `1.265141074023961e-7` to `4.540843268410586e-8`, and the
+corrected score-input relative L2 from `2.3217287954294786e-7` to
+`6.530776649444363e-8`. Mismatching float components fall from 2,249 to
+1,230 of 2,922. The previously first unequal native production raw score is
+then bit-exact at `120.35405731201172`. The remaining image-input floor begins
+at RELION's schedule-dependent soft-mask background reduction; a native-style
+atomic replay is nondeterministic and is not promoted as an exact fix.
+
+## Significant-pruned direction-mass bug
+
+The next first wrong intermediate is a source bug in the large
+membership-chunked sparse pass-2 route. RELION's `collect2jobs` accumulates
+`pdf_direction` from the significant-pruned weights used by
+`storeWeightedSums`. RECOVAR's unchunked route did the same, but its chunked
+route accumulated `rotation_posterior_sums` from the unpruned posterior.
+Case 22 exercises that chunked route.
+
+Commit `61157af7` routes the chunked statistic through `mstep_probs` when
+RELION fine M-step pruning is active. Commit `2fb00d91` additionally proves
+that pruning decreases total direction mass, so chunked/unchunked equality
+cannot pass vacuously. The focused chunking test passes all four parameter
+cases; the normalization panel passes 12/12.
+
+Same-H100 job `12292691` closes the immediate learned-prior boundary. Half-1
+relative L2 falls from `7.202765521650175e-4` to
+`5.480119744181026e-5` (92.4% closure), and half 2 from
+`7.332348967195873e-4` to `5.164298054672068e-5` (93.0%). The half-1 retained
+mass is `1488.5108335142213`, only `2.9862e-5` from the native
+significant-pruned replay. Iteration-2 map FSC-AUC remains
+`0.999999999966509`, as expected because this prior is first consumed by
+iteration 3. Three-iteration job `12294318` is the only downstream causal
+gate; it tests whether the correction removes the known stack-992
+orientation-prior/winner split before any complete trajectory is attempted.
+
+The frozen scorecard remains `28/34` strict, `32/34` topology, and `34/34`
+evaluated until a full fixed case passes. K=4 remains parked.

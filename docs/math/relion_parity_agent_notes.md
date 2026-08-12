@@ -11771,3 +11771,30 @@ and combined prefix `12290158` are bounded to two iterations; no longer run is
 authorized until their aligned iteration-2 comparison is positive. K=4 is
 parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
 `34/34` evaluated.
+
+## 2026-08-12 12:40 ET — K=1 direction-prior operand root fixed
+
+- The same-executable normalization factorial classifies high-shell
+  normalization as causal but secondary: iteration-2 Pmax relative L2 changes
+  `6.247202e-6 -> 5.161459e-6 -> 5.008112e-6` for control, high-shell, and
+  combined arms; support mismatches are `79 -> 76 -> 76`; merged FSC-AUC is
+  unchanged at the `0.999999999966` floor.
+- Stop-at-first-target job `12292842` uses the native stack-1462 factor
+  `0x3f7ad9e2`, reduces corrected score-input relative L2 from
+  `2.321729e-7` to `6.530777e-8`, and makes native raw `diff2`
+  `120.35405731201172` bit-exact. The residual preprocessing boundary is the
+  soft-mask background reduction; native atomic replay is nondeterministic
+  and is not promoted.
+- The first wrong learned-prior operand is the membership-chunked sparse
+  pass-2 direction statistic. It used unpruned posterior mass; RELION and the
+  unchunked RECOVAR route use significant-pruned reconstruction mass.
+  Commits `61157af7` and `2fb00d91` fix and test this invariant.
+- Same-H100 job `12292691`, UUID
+  `GPU-2ee3da91-970a-6714-84df-530aefe04a08`, reduces direction-prior
+  relative L2 by 92.4%/93.0% for halves 1/2. Half-1 retained mass is
+  `1488.5108335142213`, within `2.99e-5` of native replay. FSC, topology, and
+  all standard audits pass.
+- Three-iteration job `12294318` is the only downstream causal gate. It tests
+  the known stack-992 iteration-3 orientation-prior/winner split. No full
+  trajectory is scheduled first. K=4 remains parked; fixed K=1 remains
+  `28/34` strict, `32/34` topology, `34/34` evaluated.

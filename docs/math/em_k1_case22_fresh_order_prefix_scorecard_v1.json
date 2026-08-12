@@ -353,5 +353,54 @@
       "direction_support_mismatch_count_half2": 0,
       "classification": "first actionable learned direction-prior mismatch; localize per-particle posterior-to-direction-bin operands before reduction"
     }
+  },
+  "normalization_two_iteration_factorial": {
+    "control_slurm_job_id": 12290572,
+    "high_shell_slurm_job_id": 12289068,
+    "combined_slurm_job_id": 12290158,
+    "control_iteration_2_pmax_relative_l2": 0.000006247202082048902,
+    "high_shell_iteration_2_pmax_relative_l2": 0.000005161458798740429,
+    "combined_iteration_2_pmax_relative_l2": 0.000005008111676411559,
+    "control_support_mismatch_count": 79,
+    "high_shell_support_mismatch_count": 76,
+    "combined_support_mismatch_count": 76,
+    "control_iteration_2_merged_fsc_auc": 0.9999999999664306,
+    "high_shell_iteration_2_merged_fsc_auc": 0.9999999999667298,
+    "combined_iteration_2_merged_fsc_auc": 0.9999999999665399,
+    "classification": "high-shell normalization is causal for posterior state but neither normalization correction is the dominant trajectory cause"
+  },
+  "normalization_raw_score_boundary": {
+    "stack_index_one_based": 1462,
+    "slurm_job_id": 12292842,
+    "native_factor_bits": "0x3f7ad9e2",
+    "control_preprocessed_image_relative_l2": 1.265141074023961e-7,
+    "corrected_preprocessed_image_relative_l2": 4.540843268410586e-8,
+    "control_corrected_score_input_relative_l2": 2.3217287954294786e-7,
+    "corrected_score_input_relative_l2": 6.530776649444363e-8,
+    "control_corrected_score_input_mismatch_components": 2249,
+    "corrected_score_input_mismatch_components": 1230,
+    "component_count": 2922,
+    "native_raw_diff2": 120.35405731201172,
+    "corrected_recovar_raw_diff2": 120.35405731201172,
+    "raw_diff2_bit_exact": true,
+    "analysis_sha256": "61138facb3469ea652597d11bad63c3eb507c871da72e4141e09a56983105942",
+    "classification": "the bit-exact normalization update closes the previously first unequal production raw-score word for the captured tuple"
+  },
+  "direction_prior_pruned_mass_fix": {
+    "commit": "61157af7ee7dec475dc4c1608a0a019538191cbf",
+    "regression_test_commit": "2fb00d91dd208371edeb25b03dee05282497ecf2",
+    "slurm_job_id": 12292691,
+    "same_gpu_control_slurm_job_id": 12290572,
+    "gpu_uuid": "GPU-2ee3da91-970a-6714-84df-530aefe04a08",
+    "half1_control_relative_l2": 0.0007202765521650175,
+    "half1_treatment_relative_l2": 0.00005480119744181026,
+    "half2_control_relative_l2": 0.0007332348967195873,
+    "half2_treatment_relative_l2": 0.00005164298054672068,
+    "half1_treatment_retained_mass": 1488.5108335142213,
+    "half1_native_replay_retained_mass": 1488.510803652216,
+    "half1_retained_mass_absolute_delta": 0.000029862005326285027,
+    "iteration_2_merged_fsc_auc": 0.999999999966509,
+    "iteration_3_causal_slurm_job_id": 12294318,
+    "classification": "demonstrated chunked-path bug: direction statistics used unpruned posterior mass instead of RELION significant-pruned reconstruction mass; immediate learned-prior error closes by more than 92 percent"
   }
 }

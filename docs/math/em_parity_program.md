@@ -15641,3 +15641,28 @@ the first divergence, reject normalization as the dominant trajectory cause
 and return to the first unequal iteration-2 posterior/BPref operand. Do not
 run a longer trajectory first. The fixed K=1 score remains `28/34` strict,
 `32/34` topology, and `34/34` evaluated.
+
+## 2026-08-12 case-22 normalization propagation and direction-prior root
+
+The bounded normalization factorial is complete. High-shell correction lowers
+iteration-2 Pmax relative L2 by 17.4% (`6.247202e-6` to `5.161459e-6`), and
+the combined translated-Wavg arm reaches `5.008112e-6`; merged FSC-AUC stays
+at the `0.999999999966` floor. A stop-at-first-target capture is more
+specific: the native `0x3f7ad9e2` factor reduces stack-1462 corrected
+score-input relative L2 from `2.321729e-7` to `6.530777e-8` and makes its
+previously first unequal production raw-score word bit-exact. Normalization is
+therefore retained as a demonstrated local correction, not classified as the
+dominant trajectory cause.
+
+The first wrong learned-prior operand is now identified. In the large
+membership-chunked sparse pass-2 path, RECOVAR accumulated direction
+statistics from the unpruned posterior, while RELION accumulates from the
+same significant-pruned reconstruction weights used by `collect2jobs` and
+`storeWeightedSums`. Commit `61157af7` fixes that branch; focused tests pass.
+Same-H100 job `12292691` reduces iteration-2 direction-prior relative L2 from
+`7.202766e-4` / `7.332349e-4` to `5.480120e-5` / `5.164298e-5` for halves
+1/2, over 92% closure. Half-1 retained mass is within `2.99e-5` of the native
+pruned replay. Job `12294318` advances exactly one boundary to iteration 3 to
+test the known orientation-prior winner split. No full trajectory or K=4 run
+is justified before that result. The frozen K=1 score remains `28/34` strict,
+`32/34` topology, and `34/34` evaluated.
