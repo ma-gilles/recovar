@@ -11548,7 +11548,12 @@ def compute_pass2_stats_sparse_bucketed(
                         )
 
                 if return_stats and probs is not None:
-                    probs_sum_t = np.asarray(jnp.sum(probs, axis=-1), dtype=np.float64)
+                    # RELION's pdf_direction update is accumulated from the
+                    # same significant-pruned weights produced by
+                    # collect2jobs for storeWeightedSums.  Keep the chunked
+                    # path consistent with the unchunked path and BPref.
+                    stats_probs = mstep_probs if use_relion_fine_mstep_prune and not score_only else probs
+                    probs_sum_t = np.asarray(jnp.sum(stats_probs, axis=-1), dtype=np.float64)
                     parent_map_chunk = np.asarray(parent_map_padded[:, start:stop], dtype=np.int32)
                     for row, image_idx in enumerate(image_indices.tolist()):
                         cnt = max(0, min(int(actual_counts[row]), int(stop)) - int(start))
