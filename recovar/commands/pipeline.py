@@ -830,6 +830,11 @@ def _resolve_ppca_contrast_mode(args):
     return "marginalize" if getattr(args, "correct_contrast", False) else "none"
 
 
+def _contrast_option_for_repeat(shared_contrast_across_tilts):
+    """Keep the second contrast-correction pass at the first pass's granularity."""
+    return "contrast_shared" if shared_contrast_across_tilts else "contrast"
+
+
 def _resolve_ppca_contrast_grid(contrast_mode):
     """Return PPCA contrast quadrature nodes and weights.
 
@@ -1086,6 +1091,15 @@ def _run_ppca_refinement(
         update_noise=ppca_update_noise,
     )
 
+    posterior_count = int(np.asarray(expected_zs).shape[0])
+    expected_posterior_count = int(dataset.n_units)
+    if posterior_count != expected_posterior_count:
+        raise RuntimeError(
+            f"PPCA returned {posterior_count} posteriors for {expected_posterior_count} dataset units"
+        )
+    posterior_unit = "tilt-series particles" if getattr(dataset, "tilt_series_flag", False) else "images"
+    logger.info("PPCA posterior count: %d (%s)", posterior_count, posterior_unit)
+
     half_vol_size = int(np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)))
     U_full = U_ppca
     if U_full.shape[0] == half_vol_size:
@@ -1187,6 +1201,7 @@ def _run_ppca_refinement(
         "contrasts": contrasts,
         "contrasts_noreg": contrasts_noreg,
         "em_mean_c": posterior_info.get("mean_c") if posterior_info else None,
+        "posterior_count": posterior_count,
     }
 
 
@@ -1459,7 +1474,7 @@ def standard_recovar_pipeline(args):
             contrasts_for_second /= np.mean(contrasts_for_second)
             # Embedding returns contrasts in original dataset order (no halfset reordering needed).
             ds.set_contrasts(contrasts_for_second)
-            options.contrast = "contrast"
+            options.contrast = _contrast_option_for_repeat(args.shared_contrast_across_tilts)
 
         ##TODO: mean functions return a dict with volume sized arrays.
         ## I think none of them are on gpu which is good (nothing should be on gpu that absolutely has to be)
@@ -1676,6 +1691,7 @@ def standard_recovar_pipeline(args):
                 "ppca_refitb_kappa": float(getattr(args, "ppca_refitb_kappa", 0.0)),
                 "ppca_effective_zdim": int(getattr(args, "ppca_effective_zdim", 0)),
                 "embedding_source": ppca_result["embedding_source"],
+                "posterior_count": int(ppca_result["posterior_count"]),
             }
         else:
             for idx, focus_mask in enumerate(focus_masks):

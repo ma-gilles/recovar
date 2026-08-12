@@ -392,6 +392,14 @@ def test_resolve_ppca_contrast_mode_auto():
     )
 
 
+@pytest.mark.parametrize(
+    ("shared_contrast_across_tilts", "expected"),
+    [(False, "contrast"), (True, "contrast_shared")],
+)
+def test_contrast_option_for_repeat_preserves_tilt_sharing(shared_contrast_across_tilts, expected):
+    assert pipeline_cmd._contrast_option_for_repeat(shared_contrast_across_tilts) == expected
+
+
 def test_configure_ppca_single_zdim_overrides_options():
     args = SimpleNamespace(ppca_zdim=7, zdim=[1, 2, 4])
     options = SimpleNamespace(zs_dim_to_test=[1, 2, 4, 10])
@@ -440,7 +448,12 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(
     shared_contrast,
     expected_contrast_mode,
 ):
-    fake_dataset = SimpleNamespace(volume_shape=(2, 2, 2), volume_size=8)
+    fake_dataset = SimpleNamespace(
+        volume_shape=(2, 2, 2),
+        volume_size=8,
+        n_units=1,
+        tilt_series_flag=tilt_series,
+    )
     means = SimpleNamespace(combined=np.zeros(8, dtype=np.complex64))
     options = SimpleNamespace(zs_dim_to_test=[4])
     args = SimpleNamespace(
@@ -540,6 +553,7 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(
     assert out["u_rescaled"].dtype == np.complex64
     assert out["s_rescaled"].dtype == np.float32
     assert out["W"].dtype == np.complex64
+    assert out["posterior_count"] == 1
     np.testing.assert_allclose(out["latent_coords"][4], np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32) * np.sqrt(np.arange(1, 5, dtype=np.float32))[None, :])
     np.testing.assert_allclose(out["contrasts"][4], np.array([1.25], dtype=np.float32))
 def test_run_ppca_refinement_rejects_unshared_cryoet_contrast():
