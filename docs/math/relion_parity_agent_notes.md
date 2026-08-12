@@ -11798,3 +11798,26 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   the known stack-992 iteration-3 orientation-prior/winner split. No full
   trajectory is scheduled first. K=4 remains parked; fixed K=1 remains
   `28/34` strict, `32/34` topology, `34/34` evaluated.
+
+## 2026-08-12 13:25 ET — K=1 direction-mass causal gate positive
+
+- Pinned H100 job `12294318` completed `0:0` in 2,319 seconds. The treatment
+  removes every first repeat-robust iteration-3 hard mismatch: stacks 941,
+  992, 1514, and 1770 all match both agreeing RELION trajectories.
+- Identity-aligned iteration-3 Pmax relative L2 improves from
+  `0.0014794409843944163` to `0.0003689264413191558`; support-count mismatches
+  improve from 65 to 5. The five residuals are stacks 232, 262, 1241, 2233,
+  and 2828, each with an absolute support-count delta of one and no hard-pose
+  change.
+- The sealed stack-992 counterfactual changes the native-winner margin from
+  `-0.000732421875` to `+0.0026998519897460938` using only the corrected prior;
+  the two decisive log-prior words are each one float32 ULP from native.
+- The three-iteration prefix passes signed FSC/FSC-AUC, GT-delta, topology,
+  and intermediate gates against both agreeing native runs. Merged iteration-3
+  FSC-AUC is `0.9999999931331159` against robust_ref and
+  `0.9999999930589739` against fulltraj_ref.
+- Artifacts are under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_direction_prune_it3_20260812T1240ET/`.
+  The next focused target is stack 232 at the iteration-3 support threshold;
+  stack 2739 is the secondary target for the largest remaining Pmax delta.
+  No full trajectory is scheduled yet. K=4 remains parked.

@@ -11814,6 +11814,19 @@ and `8b8731865d484e49f943b12b9b8dd4a812f3e980ea684a3548aa9fab21c94233`.
 This is a non-scoring diagnostic; fixed K=1 remains `28/34` strict,
 `32/34` topology, and `34/34` evaluated.
 
+## 2026-08-12 case-22 direction-mass causal propagation
+
+The iteration-3 causal gate is positive. Job `12294318` removes all four
+repeat-robust hard pose/translation mismatches. Pmax relative L2 improves
+`0.001479441 -> 0.000368926`, support-count mismatches improve `65 -> 5`, and
+the robust merged signed FSC-AUC is `0.9999999931331159`. A sealed stack-992
+counterfactual independently flips the old RECOVAR winner to the RELION winner
+when only the corrected prior is substituted. This promotes significant-
+pruned direction mass from a local implementation bug to a demonstrated K=1
+trajectory cause. The next experiment is a stack-232 support-boundary capture,
+not a full trajectory. The fixed scorecard remains unchanged until a complete
+case passes.
+
 ## 2026-07-28 native RELION C++ FSC rules out scheduler emulation
 
 A new binding-only diagnostic routes already accumulated compact-half

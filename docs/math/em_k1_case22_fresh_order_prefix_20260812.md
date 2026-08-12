@@ -479,3 +479,39 @@ orientation-prior/winner split before any complete trajectory is attempted.
 
 The frozen scorecard remains `28/34` strict, `32/34` topology, and `34/34`
 evaluated until a full fixed case passes. K=4 remains parked.
+
+## Iteration-3 causal propagation
+
+Pinned same-H100 job `12294318` completed the three-iteration treatment in
+2,319 seconds. The direction-mass correction removes all four repeat-robust
+iteration-3 hard pose/translation mismatches (stack images 941, 992, 1514,
+and 1770). Identity-aligned Pmax relative L2 falls from
+`0.0014794409843944163` to `0.0003689264413191558`, a 75.1% reduction, and
+significant-support count mismatches fall from 65 to 5, a 92.3% reduction.
+The five remaining support-count residuals are stack images 232, 262, 1241,
+2233, and 2828; each differs by exactly one candidate and none changes the
+hard pose or translation.
+
+The sealed stack-992 counterfactual predicted this result before the live
+iteration completed. Replacing only the old learned prior with the corrected
+iteration-2 prior changes its native-winner-minus-old-winner margin from
+`-0.000732421875` to `+0.0026998519897460938`. The two decisive corrected
+orientation log priors are each one float32 ULP from the captured RELION
+values. The live result therefore demonstrates both the operand-level cause
+and its next-iteration consequence.
+
+All numbered map and topology gates remain passing. Iteration-3 merged signed
+FSC-AUC is `0.9999999931331159` against `robust_ref` and
+`0.9999999930589739` against `fulltraj_ref`; merged GT FSC-AUC deltas are
+positive `3.726083386335066e-6` and `3.820017639766249e-6`. The complete
+artifact root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_direction_prune_it3_20260812T1240ET/`.
+
+The next boundary is not a complete trajectory. Capture stack 232, the
+largest remaining support-boundary residual with a one-candidate support
+difference, through tuple identity, raw `diff2`, priors, normalized posterior,
+threshold margin, and significant support. Stack 2739 is the separate largest
+Pmax residual (`0.010401692754745506`) and remains a secondary target if stack
+232 does not explain the remaining soft-posterior tail. The frozen full-case
+scorecard remains `28/34` strict, `32/34` topology, and `34/34` evaluated
+until a full fixed case is rerun. K=4 remains parked.
