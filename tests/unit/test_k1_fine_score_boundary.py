@@ -14,6 +14,7 @@ from scripts.analyze_k1_fine_score_boundary import (
     _reduce_relion_fine_lanes,
     _rotation_map,
     _stable_top_n_mask,
+    _winner_counterfactuals,
 )
 
 
@@ -185,3 +186,30 @@ def test_reduce_relion_fine_lanes_matches_fixed_tree():
     reduced, levels = _reduce_relion_fine_lanes(lanes)
     assert [level.size for level in levels] == [128, 64, 32, 16, 8, 4, 2, 1]
     assert reduced.view(np.uint32) == np.sum(lanes, dtype=np.float32).view(np.uint32)
+
+
+@pytest.mark.unit
+def test_winner_counterfactuals_localizes_coupled_raw_and_orientation_prior_flip():
+    report = _winner_counterfactuals(
+        native_raw_diff2=np.asarray([0.0, 1.0]),
+        recovar_raw_diff2=np.asarray([0.4, 1.0]),
+        native_orientation_log_prior=np.asarray([0.0, 0.0]),
+        recovar_orientation_log_prior=np.asarray([0.0, 0.7]),
+        native_translation_log_prior=np.asarray([0.0, 0.0]),
+        recovar_translation_log_prior=np.asarray([0.0, 0.0]),
+        native_rotation_local=np.asarray([10, 11]),
+        native_translation_local=np.asarray([20, 21]),
+        recovar_tuple_keys=np.asarray([[30, 40], [31, 41]]),
+    )
+
+    assert report["arms"]["native_all"]["winner"]["active_candidate_row"] == 0
+    assert report["arms"]["recovar_raw_native_priors"]["winner"]["active_candidate_row"] == 0
+    assert report["arms"]["native_raw_recovar_priors"]["winner"]["active_candidate_row"] == 0
+    assert report["arms"]["recovar_all"]["winner"]["active_candidate_row"] == 1
+    margins = report["native_winner_minus_recovar_winner_log_margin"]
+    assert margins["native_all"] == pytest.approx(1.0)
+    assert margins["raw_diff2_substitution_contribution"] == pytest.approx(-0.4)
+    assert margins["orientation_log_prior_substitution_contribution"] == pytest.approx(-0.7)
+    assert margins["translation_log_prior_substitution_contribution"] == 0.0
+    assert margins["recovar_all"] == pytest.approx(-0.1)
+    assert margins["additive_residual"] == pytest.approx(0.0)

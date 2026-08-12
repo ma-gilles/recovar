@@ -1,7 +1,7 @@
 {
   "schema": "recovar.em_k1_case22_fresh_order_prefix_scorecard.v1",
   "case_id": 22,
-  "scope": "fresh K=1 numbered iterations 1-3 only",
+  "scope": "fresh K=1 numbered iterations 1-4 only",
   "scorecard_change_admissible": false,
   "quality_metric_policy": "signed shellwise FSC and normalized non-DC FSC-AUC; correlation is not computed",
   "fixed_k1_scorecard": {
@@ -56,6 +56,24 @@
       "topology_exact": true,
       "current_size": 80,
       "healpix_order": 3
+    },
+    {
+      "relion_iteration": 4,
+      "repeat_consensus_cross_engine_fsc_auc": {
+        "robust_ref_merged": 0.9999867024772974,
+        "fulltraj_ref_merged": 0.9999867017948157
+      },
+      "repeat_consensus_merged_gt_fsc_auc_delta_recovar_minus_relion": {
+        "robust_ref": 1.3077524260995954e-05,
+        "fulltraj_ref": 1.3056468526173592e-05
+      },
+      "repeat_consensus_pmax_relative_l2": [
+        0.007488295178750001,
+        0.007488434214457923
+      ],
+      "topology_exact": true,
+      "current_size": 70,
+      "healpix_order": 4
     }
   ],
   "historical_comparison": {
@@ -134,7 +152,7 @@
     "classification": "RELION CUDA Gaussian coarse reduction is sufficient; native sincosf and special FFT/CTF/noise operand rebuild are not required"
   },
   "next_gate": {
-    "description": "repeat-aware iteration-4 fresh-order prefix comparison against all three existing native RELION trajectories",
+    "description": "iteration-2 per-particle posterior-to-direction-bin operand comparison at the first actionable learned-prior divergence",
     "diagnostic_exact_prefix_slurm_job_id": 12281298,
     "minimal_prefix_slurm_job_id": 12281662,
     "minimal_prefix_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_fresh_minimal_gaussian_it2_prefix_20260812T0410ET",
@@ -145,7 +163,10 @@
     "preprocess_stage_analysis_slurm_job_id": 12283200,
     "live_preprocess_operand_capture_slurm_job_id": 12283431,
     "fine_image_input_capture_slurm_job_id": 12283990,
-    "trajectory_scope": "numbered iterations 1-4; iteration 4 is the next unmeasured boundary"
+    "repeat_aware_iteration_4_slurm_job_id": 12284182,
+    "recovar_stack_992_iteration_3_dump_slurm_job_id": 12284649,
+    "native_stack_992_iteration_3_capture_slurm_job_id": 12284675,
+    "trajectory_scope": "complete numbered iterations 1-4; stack-992 iteration-3 candidate and winner attribution complete"
   },
   "minimal_coarse_prefix": {
     "slurm_job_id": 12281662,
@@ -260,6 +281,77 @@
         0.9999997942982827
       ],
       "classification": "the selected RELION reference is a native trajectory outlier; fresh-order RECOVAR iteration 3 is closer to the two-run native consensus"
+    },
+    "iteration_4": {
+      "agreeing_native_repeat_pmax_relative_l2": 3.6932298114069344e-05,
+      "recovar_vs_agreeing_native_pmax_relative_l2": [
+        0.007488295178750001,
+        0.007488434214457923
+      ],
+      "agreeing_native_repeat_merged_map_fsc_auc": 0.999999999987141,
+      "recovar_vs_agreeing_native_merged_map_fsc_auc": [
+        0.9999867024772974,
+        0.9999867017948157
+      ],
+      "topology_exact": true,
+      "classification": "strict numbered map and topology gates pass; a repeat-robust soft-posterior divergence remains"
+    }
+  },
+  "first_repeat_robust_hard_state_divergence": {
+    "relion_iteration": 3,
+    "iteration_1_pose_translation_mismatch_count": 0,
+    "iteration_2_pose_translation_mismatch_count": 0,
+    "iteration_3_pose_translation_mismatch_count": 4,
+    "iteration_3_stack_indices_one_based": [941, 992, 1514, 1770],
+    "iteration_4_pose_translation_mismatch_count": 3,
+    "iteration_4_stack_indices_one_based": [992, 1514, 1770],
+    "selected_target_stack_index_one_based": 992,
+    "classification": "first repeat-robust discrete particle-state mismatch occurs at iteration 3 while map and controller gates remain passing"
+  },
+  "stack_992_iteration_3_fine_boundary": {
+    "recovar_slurm_job_id": 12284649,
+    "native_slurm_job_id": 12284675,
+    "relion_iteration": 3,
+    "stack_index_one_based": 992,
+    "native_active_candidate_count": 1760,
+    "native_active_tuple_missing_from_recovar_count": 0,
+    "native_significant_count": 498,
+    "recovar_significant_count": 498,
+    "support_exact": true,
+    "raw_diff2_relative_l2": 0.00045128099714698,
+    "raw_diff2_centered_relative_l2": 0.00005955839123586985,
+    "orientation_log_prior_relative_l2": 0.0012879705658397763,
+    "translation_log_prior_relative_l2": 4.016911749389204e-8,
+    "combined_log_weight_centered_relative_l2": 0.000432386875939445,
+    "normalized_active_posterior_relative_l2": 0.0028178595838177596,
+    "native_winner_local_rotation_translation": [98, 87],
+    "recovar_winner_native_local_rotation_translation": [38, 59],
+    "native_winner_margin": 0.0039522647857666016,
+    "raw_diff2_substitution_margin_contribution": -0.001220703125,
+    "orientation_prior_substitution_margin_contribution": -0.0034341812133789062,
+    "translation_prior_substitution_margin_contribution": 1.1920928955078125e-7,
+    "recovar_complete_native_minus_recovar_winner_margin": -0.0007025003433227539,
+    "raw_only_preserves_native_winner": true,
+    "prior_only_preserves_native_winner": true,
+    "recovar_capture_sha256": "e001e7d693c8a50b29445114e481610496649ba0241f98c6cb56fe13ec52b360",
+    "analysis_sha256": "62212c07938b2984cfeba14591f476390331565cf8671be29384e0fa264050e5",
+    "analysis_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack992_it3_full_boundary_20260812T0720ET/analysis",
+    "classification": "candidate and significant-support sets close exactly; a coupled centered-raw and learned-orientation-prior drift flips a 0.00395-log-unit native margin"
+  },
+  "direction_prior_first_actionable_divergence": {
+    "iteration_1": {
+      "half1_relative_l2": 0.0000723594795226299,
+      "half2_relative_l2": 0.00007313690465450846,
+      "interpretation": "bounded by six-decimal model-STAR serialization; Pmax, significant count, and hard pose are exact"
+    },
+    "iteration_2": {
+      "recovar_vs_robust_half1_relative_l2": 0.0007249079945322864,
+      "recovar_vs_robust_half2_relative_l2": 0.0007352870539204525,
+      "native_repeat_half1_relative_l2": 1.0843961493125711e-8,
+      "native_repeat_half2_relative_l2": 8.187903520109005e-9,
+      "direction_support_mismatch_count_half1": 0,
+      "direction_support_mismatch_count_half2": 0,
+      "classification": "first actionable learned direction-prior mismatch; localize per-particle posterior-to-direction-bin operands before reduction"
     }
   }
 }

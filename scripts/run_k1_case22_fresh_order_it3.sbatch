@@ -31,12 +31,18 @@ GAUSSIAN_COARSE_STACK1204=${K1_CASE22_GAUSSIAN_COARSE_STACK1204:-0}
 GAUSSIAN_SINCOSF_STACK1204=${K1_CASE22_GAUSSIAN_SINCOSF_STACK1204:-${GAUSSIAN_COARSE_STACK1204}}
 EXACT_COARSE_STACK1204=${K1_CASE22_EXACT_COARSE_STACK1204:-0}
 TARGET_STACK_ONE_BASED=${K1_CASE22_TARGET_STACK_ONE_BASED:-1204}
+TARGET_ITERATION=${K1_CASE22_TARGET_ITERATION:-2}
+TARGET_CURRENT_SIZE=${K1_CASE22_TARGET_CURRENT_SIZE:-60}
 if (( TARGET_STACK_ONE_BASED < 1 )); then
     echo "K1_CASE22_TARGET_STACK_ONE_BASED must be positive" >&2
     exit 2
 fi
+if (( TARGET_ITERATION < 1 || TARGET_CURRENT_SIZE < 1 )); then
+    echo "K1_CASE22_TARGET_ITERATION and K1_CASE22_TARGET_CURRENT_SIZE must be positive" >&2
+    exit 2
+fi
 TARGET_ORIGINAL_INDEX=$((TARGET_STACK_ONE_BASED - 1))
-PASS2_ROTATION_ROWS=${K1_CASE22_PASS2_ROTATION_ROWS:-50293,50295}
+PASS2_ROTATION_ROWS=${K1_CASE22_PASS2_ROTATION_ROWS-50293,50295}
 PYTHON=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default/bin/python
 PIXI_ENV=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default
 LAUNCHER=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/scripts/run_k1_case22_fresh_order_it3.sbatch
@@ -113,14 +119,18 @@ if [[ "${COMPACT_STACK1204_DUMP}" = 1 && "${COARSE_STACK1204_DUMP}" = 1 ]]; then
 elif [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
     export RECOVAR_PASS2_DUMP_DIR=${ROOT}/pass2
     export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDEX}
-    export RECOVAR_PASS2_DUMP_CURRENT_SIZE=60
-    export RECOVAR_PASS2_DUMP_ITERATION=2
+    export RECOVAR_PASS2_DUMP_CURRENT_SIZE=${TARGET_CURRENT_SIZE}
+    export RECOVAR_PASS2_DUMP_ITERATION=${TARGET_ITERATION}
     # The compact analyzer reconstructs raw diff2 from the selected projection,
     # image, correction, and high-resolution-tail operands.  Enabling the full
     # raw dump materializes every large bucket and can require >17 GiB for a
     # single diagnostic batch.
     export RECOVAR_PASS2_DUMP_RAW_OPERANDS=0
-    export RECOVAR_PASS2_DUMP_ROTATION_ROWS=${PASS2_ROTATION_ROWS}
+    if [[ -n "${PASS2_ROTATION_ROWS}" ]]; then
+        export RECOVAR_PASS2_DUMP_ROTATION_ROWS=${PASS2_ROTATION_ROWS}
+    else
+        unset RECOVAR_PASS2_DUMP_ROTATION_ROWS
+    fi
     if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
         export RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET=1
     fi
@@ -185,13 +195,14 @@ wall_s=$(( $(date +%s) - start ))
 
 if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
     printf -v target_original_label '%06d' "${TARGET_ORIGINAL_INDEX}"
-    compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig${target_original_label}_cs060.npz
+    printf -v target_size_label '%03d' "${TARGET_CURRENT_SIZE}"
+    compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig${target_original_label}_cs${target_size_label}.npz
     test -s "${compact_dump}"
     rg -q 'pass-2 operand dump completed; stopping at the requested fine-score boundary' \
         "${OUTPUT}/run.log"
-    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":true,"target_stack_one_based":%d,"pass2_rotation_rows":"%s","stopped_after_dump":true}\n' \
+    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":true,"target_stack_one_based":%d,"target_iteration":%d,"target_current_size":%d,"pass2_rotation_rows":"%s","stopped_after_dump":true}\n' \
         "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${TARGET_STACK_ONE_BASED}" \
-        "${PASS2_ROTATION_ROWS}" \
+        "${TARGET_ITERATION}" "${TARGET_CURRENT_SIZE}" "${PASS2_ROTATION_ROWS}" \
         > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
     touch "${ROOT}/DUMP_SUCCESS_${SLURM_JOB_ID}"
     exit 0
@@ -215,9 +226,11 @@ test -s "${OUTPUT}/intermediates/it${last_label}_half1_reg.mrc"
 test -s "${OUTPUT}/intermediates/it${last_label}_half2_reg.mrc"
 if [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
     printf -v target_original_label '%06d' "${TARGET_ORIGINAL_INDEX}"
-    compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig${target_original_label}_cs060.npz
+    printf -v target_size_label '%03d' "${TARGET_CURRENT_SIZE}"
+    compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig${target_original_label}_cs${target_size_label}.npz
     test -s "${compact_dump}"
-    "${PYTHON}" - <<'PY' "${compact_dump}" "${PASS2_ROTATION_ROWS}"
+    if [[ -n "${PASS2_ROTATION_ROWS}" ]]; then
+        "${PYTHON}" - <<'PY' "${compact_dump}" "${PASS2_ROTATION_ROWS}"
 import numpy as np
 import sys
 
@@ -226,6 +239,19 @@ with np.load(sys.argv[1], allow_pickle=False) as payload:
     expected = np.asarray([int(value) for value in sys.argv[2].split(",")], dtype=np.int64)
     assert np.array_equal(payload["rotation_rows_global"], expected)
 PY
+    else
+        "${PYTHON}" - <<'PY' "${compact_dump}" "${TARGET_ITERATION}" "${TARGET_CURRENT_SIZE}"
+import numpy as np
+import sys
+
+with np.load(sys.argv[1], allow_pickle=False) as payload:
+    assert "schema" not in payload.files
+    assert int(payload["iteration"]) == int(sys.argv[2])
+    assert int(payload["current_size"]) == int(sys.argv[3])
+    assert payload["scores_with_prior"].shape == payload["probs"].shape
+    assert payload["candidate_mask"].shape == payload["probs"].shape
+PY
+    fi
 fi
 ! rg -q 'Traceback|RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' "${OUTPUT}/run.log"
 rg -q 'Applied RELION fresh paired AutoRefine particle order with effective seed 1723' "${OUTPUT}/run.log"

@@ -324,6 +324,113 @@ def _stable_top_n_mask(weights: np.ndarray, count: int) -> np.ndarray:
     return mask
 
 
+def _winner_counterfactuals(
+    *,
+    native_raw_diff2: np.ndarray,
+    recovar_raw_diff2: np.ndarray,
+    native_orientation_log_prior: np.ndarray,
+    recovar_orientation_log_prior: np.ndarray,
+    native_translation_log_prior: np.ndarray,
+    recovar_translation_log_prior: np.ndarray,
+    native_rotation_local: np.ndarray,
+    native_translation_local: np.ndarray,
+    recovar_tuple_keys: np.ndarray,
+) -> dict[str, Any]:
+    """Attribute a winner flip to raw-score and prior substitutions.
+
+    Each arm changes only the named operands while holding the active tuple
+    panel fixed.  The top-pair decomposition is additive in log-weight space,
+    so it distinguishes a single sufficient mismatch from coupled sub-margin
+    differences.
+    """
+
+    native_raw = np.asarray(native_raw_diff2, dtype=np.float64).reshape(-1)
+    recovar_raw = np.asarray(recovar_raw_diff2, dtype=np.float64).reshape(-1)
+    native_rot_prior = np.asarray(native_orientation_log_prior, dtype=np.float64).reshape(-1)
+    recovar_rot_prior = np.asarray(recovar_orientation_log_prior, dtype=np.float64).reshape(-1)
+    native_trans_prior = np.asarray(native_translation_log_prior, dtype=np.float64).reshape(-1)
+    recovar_trans_prior = np.asarray(recovar_translation_log_prior, dtype=np.float64).reshape(-1)
+    native_rot_local = np.asarray(native_rotation_local, dtype=np.int64).reshape(-1)
+    native_trans_local = np.asarray(native_translation_local, dtype=np.int64).reshape(-1)
+    tuple_keys = np.asarray(recovar_tuple_keys, dtype=np.int64).reshape(-1, 2)
+    arrays = (
+        native_raw,
+        recovar_raw,
+        native_rot_prior,
+        recovar_rot_prior,
+        native_trans_prior,
+        recovar_trans_prior,
+        native_rot_local,
+        native_trans_local,
+    )
+    _require(all(array.size == native_raw.size for array in arrays), "winner arrays changed size")
+    _require(tuple_keys.shape[0] == native_raw.size and native_raw.size > 1, "winner tuple panel changed")
+
+    variants = {
+        "native_all": -native_raw + native_rot_prior + native_trans_prior,
+        "recovar_raw_native_priors": -recovar_raw + native_rot_prior + native_trans_prior,
+        "native_raw_recovar_priors": -native_raw + recovar_rot_prior + recovar_trans_prior,
+        "recovar_all": -recovar_raw + recovar_rot_prior + recovar_trans_prior,
+    }
+
+    def candidate_record(index: int) -> dict[str, Any]:
+        return {
+            "active_candidate_row": int(index),
+            "native_rotation_local": int(native_rot_local[index]),
+            "native_translation_local": int(native_trans_local[index]),
+            "recovar_rotation_row": int(tuple_keys[index, 0]),
+            "recovar_translation_row": int(tuple_keys[index, 1]),
+            "native_raw_diff2": float(native_raw[index]),
+            "recovar_raw_diff2": float(recovar_raw[index]),
+            "native_orientation_log_prior": float(native_rot_prior[index]),
+            "recovar_orientation_log_prior": float(recovar_rot_prior[index]),
+            "native_translation_log_prior": float(native_trans_prior[index]),
+            "recovar_translation_log_prior": float(recovar_trans_prior[index]),
+        }
+
+    arm_reports = {}
+    for name, values in variants.items():
+        order = np.argsort(-values, kind="stable")[:2]
+        arm_reports[name] = {
+            "winner": candidate_record(int(order[0])),
+            "runner_up": candidate_record(int(order[1])),
+            "winner_log_weight_margin": float(values[order[0]] - values[order[1]]),
+        }
+
+    native_winner = int(np.argmax(variants["native_all"]))
+    recovar_winner = int(np.argmax(variants["recovar_all"]))
+    _require(native_winner != recovar_winner, "winner counterfactual requested without a winner change")
+
+    def margin(values: np.ndarray) -> float:
+        return float(values[native_winner] - values[recovar_winner])
+
+    native_margin = margin(variants["native_all"])
+    raw_contribution = margin(-recovar_raw) - margin(-native_raw)
+    orientation_prior_contribution = margin(recovar_rot_prior) - margin(native_rot_prior)
+    translation_prior_contribution = margin(recovar_trans_prior) - margin(native_trans_prior)
+    recovar_margin = margin(variants["recovar_all"])
+    additive_residual = recovar_margin - (
+        native_margin
+        + raw_contribution
+        + orientation_prior_contribution
+        + translation_prior_contribution
+    )
+    return {
+        "winner_changed": True,
+        "native_winner": candidate_record(native_winner),
+        "recovar_winner": candidate_record(recovar_winner),
+        "arms": arm_reports,
+        "native_winner_minus_recovar_winner_log_margin": {
+            "native_all": native_margin,
+            "raw_diff2_substitution_contribution": raw_contribution,
+            "orientation_log_prior_substitution_contribution": orientation_prior_contribution,
+            "translation_log_prior_substitution_contribution": translation_prior_contribution,
+            "recovar_all": recovar_margin,
+            "additive_residual": additive_residual,
+        },
+    }
+
+
 def _geometry_only_significant_count(factor) -> int:
     """Return the native BPref acceptance count retained in a geometry capture."""
 
@@ -680,6 +787,23 @@ def _compare_particle(
             full_to_compact=full_to_compact,
             highres_xi2_half=float(recovar["relion_highres_xi2_half"]),
         )
+    native_winner = int(np.argmax(-native_raw + native_rot_prior + native_trans_prior))
+    recovar_winner = int(np.argmax(-replay_raw + recovar_rot_prior + recovar_trans_prior))
+    winner_counterfactuals = (
+        None
+        if native_winner == recovar_winner
+        else _winner_counterfactuals(
+            native_raw_diff2=native_raw,
+            recovar_raw_diff2=replay_raw,
+            native_orientation_log_prior=native_rot_prior,
+            recovar_orientation_log_prior=recovar_rot_prior,
+            native_translation_log_prior=native_trans_prior,
+            recovar_translation_log_prior=recovar_trans_prior,
+            native_rotation_local=native_rotation[comparable],
+            native_translation_local=native_translation[comparable],
+            recovar_tuple_keys=comparable_keys,
+        )
+    )
     return {
         "original_index_zero_based": original,
         "stack_index_one_based": stack,
@@ -712,6 +836,7 @@ def _compare_particle(
         "first_exact_unequal_boundary": _first_exact_boundary(stage_exact),
         "first_mismatch_records": first_mismatches,
         "first_raw_diff2_recovar_operand_trace": raw_diff2_trace,
+        "winner_counterfactuals": winner_counterfactuals,
         "classification": classification,
     }
 

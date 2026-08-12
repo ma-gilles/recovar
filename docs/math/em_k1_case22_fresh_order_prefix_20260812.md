@@ -283,3 +283,92 @@ fresh-order RECOVAR prefix against all three existing native trajectories and
 use signed FSC/FSC-AUC plus controller topology as the primary decision; Pmax
 against one schedule-sensitive native run is no longer sufficient evidence of
 a code defect.
+
+## Repeat-aware iteration-4 gate
+
+Pinned H100 job `12284182` completed the four-iteration prefix in 2,398
+seconds. The output root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_fresh_order_it4_pinned_20260812T0625ET/`.
+All four numbered iterations pass the strict signed FSC/FSC-AUC and GT-delta
+gates against both agreeing native trajectories. At iteration 4, RECOVAR and
+RELION exactly agree on `current_size=70` and HEALPix order 4. The merged
+cross-engine FSC-AUC is `0.9999867024772974` against `robust_ref` and
+`0.9999867017948157` against `fulltraj_ref`; the corresponding merged GT
+FSC-AUC deltas are positive `1.3077524260995954e-5` and
+`1.3056468526173592e-5`.
+
+The first repeat-robust latent mismatch is now sharply bounded. RECOVAR has no
+hard pose or translation differences at iterations 1 or 2. At iteration 3,
+exactly four of 3,000 particles differ from the mutually agreeing robust and
+full-trajectory RELION runs: stack images 941, 992, 1514, and 1770. Three
+remain different at iteration 4: 992, 1514, and 1770. The iteration-3 Pmax
+relative L2 is about `0.00148`, versus a native repeat floor of
+`4.2091974026696356e-5`; it grows to about `0.007488` at iteration 4.
+
+Stack image 992 is the next bounded target because its different rotation and
+translation persist and become one of the two dominant iteration-4 posterior
+errors. RECOVAR job `12284649` dumps its complete iteration-3 candidate set,
+raw score, priors, posterior, support, and winner, then stops. Native RELION
+job `12284675` captures the corresponding complete fine-score boundary. The
+comparison order is tuple identity, raw `diff2`, priors, centered log weights,
+normalization, support cutoff, and winner.
+
+## Exact stack-992 iteration-3 winner attribution
+
+Job `12284649` completed the requested stop-after-target boundary in 4,496
+seconds. Its only scientific payload is the 10.1-MB stack-992 pass-2 dump at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack992_it3_full_boundary_20260812T0720ET/pass2/pass2_orig000991_cs080.npz`
+(SHA-256 `e001e7d693c8a50b29445114e481610496649ba0241f98c6cb56fe13ec52b360`).
+The native fine-score and BPref-geometry capture in job `12284675` validates
+all 1,760 active candidate records and native score/prior algebra exactly.
+
+The tuple and support boundaries close: all 1,760 native active tuples exist
+in RECOVAR, and both engines retain exactly the same 498 significant tuples.
+The unequal quantities are:
+
+| Quantity | Relative L2 | Maximum absolute difference |
+|---|---:|---:|
+| raw `diff2` | 0.00045128099714698 | 1.108642578125 |
+| centered raw score | 0.00005955839123586985 | 0.00390625 |
+| orientation log prior | 0.0012879705658397763 | 0.025127410888671875 |
+| translation log prior | 4.016911749389204e-8 | 2.384185791015625e-7 |
+| centered combined log weight | 0.000432386875939445 | 0.01806640625 |
+| normalized active posterior | 0.0028178595838177596 | 0.00042097882359871247 |
+
+The native winner is local rotation/translation `(98, 87)`, mapped to RECOVAR
+row `(194, 87)`. Its native margin over the RECOVAR winner `(38, 59)`, mapped
+to `(54, 59)`, is only `0.0039522647857666016` log units. Substituting only
+RECOVAR raw scores leaves the native winner ahead by `0.0027315616607666016`.
+Substituting only RECOVAR priors also leaves it ahead, by
+`0.0005182027816772461`. Applying both reverses the margin to
+`-0.0007025003433227539`. The exact additive attribution is:
+
+| Contribution to native-winner minus RECOVAR-winner margin | Log units |
+|---|---:|
+| Native complete margin | +0.0039522647857666016 |
+| Raw-`diff2` substitution | -0.001220703125 |
+| Orientation-prior substitution | -0.0034341812133789062 |
+| Translation-prior substitution | +1.1920928955078125e-7 |
+| RECOVAR complete margin | -0.0007025003433227539 |
+
+Thus there is no missing candidate, support-cutoff, tie-break, or translation-
+prior defect at this first repeat-robust hard split. It is a coupled
+sub-margin flip dominated by the learned orientation-prior state, with a
+smaller centered raw-score contribution.
+
+The complete learned direction-prior vector first differs materially after
+iteration 2. Against the two agreeing native trajectories, RECOVAR relative
+L2 is about `0.000724908`/`0.000735287` for halves 1/2, while native-repeat
+relative L2 is only `1.0844e-8`/`8.1879e-9`; zero support is identical. The
+apparent iteration-1 vector residual (`7.24e-5`/`7.31e-5`) is bounded by the
+six-decimal model-STAR serialization error: iteration-1 Pmax, support, and hard
+poses are exact, and those priors are integer winner counts. Therefore the
+first actionable learned-state mismatch remains the iteration-2 soft-posterior
+aggregation, not iteration 1.
+
+The machine-readable boundary report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack992_it3_full_boundary_20260812T0720ET/analysis/K1_FINE_SCORE_BOUNDARY_STACK992_IT3_WITH_WINNER_ATTRIBUTION.json`
+(SHA-256 to be recorded with the committed scorecard). The next focused gate
+is an iteration-2 posterior-aggregation panel: compare native and RECOVAR
+per-particle weights for a small set that spans the largest direction-prior
+residuals, then compare their direction-bin operands before global reduction.
