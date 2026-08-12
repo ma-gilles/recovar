@@ -15,9 +15,15 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
 )
 if __package__:
     from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
+    from scripts.validate_relion_preprocess_capture import (
+        load_artifact as load_preprocess_capture,
+    )
 else:
     from validate_relion_fine_operand_capture import (  # type: ignore[no-redef]
         load_fine_operand_capture,
+    )
+    from validate_relion_preprocess_capture import (  # type: ignore[no-redef]
+        load_artifact as load_preprocess_capture,
     )
 
 
@@ -60,6 +66,7 @@ def main() -> None:
     )
     parser.add_argument("--physical-image-size", type=int, default=128)
     parser.add_argument("--native-fine-capture", type=Path)
+    parser.add_argument("--native-preprocess-capture", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -164,6 +171,22 @@ def main() -> None:
             "capture_sha256": _sha256(args.native_fine_capture),
         }
 
+    native_preprocess_operands = None
+    if args.native_preprocess_capture is not None:
+        native_preprocess = load_preprocess_capture(args.native_preprocess_capture)
+        native_preprocess_operands = {
+            "normalization_factor": native_preprocess.norm_correction,
+            "integer_pre_shift": np.asarray(
+                native_preprocess.old_offset[:2], dtype=np.int32
+            ).tolist(),
+            "normalization_factor_float32_ulp_delta_live_minus_native": int(
+                np.float32(normalization_factor).view(np.uint32)
+            )
+            - int(np.float32(native_preprocess.norm_correction).view(np.uint32)),
+            "capture": str(args.native_preprocess_capture.resolve()),
+            "capture_sha256": _sha256(args.native_preprocess_capture),
+        }
+
     report = {
         "schema": "recovar.em.k1_preprocess_replay_to_live_input.v1",
         "status": "complete",
@@ -181,6 +204,7 @@ def main() -> None:
             "batch_scale_correction": batch_scale_correction,
         },
         "native_fine_metrics": native_fine_metrics,
+        "native_preprocess_operands": native_preprocess_operands,
         "modes": modes,
         "direct_dump": str(args.direct_dump.resolve()),
         "direct_dump_sha256": _sha256(args.direct_dump),

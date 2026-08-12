@@ -233,3 +233,53 @@ native atomic schedule. The default mask discrepancy is also smaller than the
 complete live unshifted-input discrepancy. Focused job `12283431` therefore
 dumps the live Fourier image and every scalar/pixelwise correction immediately
 before the score input to localize the remaining component.
+
+## Same-run fine-image input and native-repeat envelope
+
+Focused H100 job `12283990` completed in 8 minutes 21 seconds and passively
+captured, for stack image 1574 at iteration 2, every native windowed Fourier
+value, signed `local_Fctf`, `pixel_correction`, and corrected fine-score image.
+The capture root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1574_fine_image_input_capture_20260812T0645ET/`.
+
+The same-run boundary closes completely:
+
+| Boundary | Result |
+|---|---:|
+| Native preprocessing Fourier to native host scoring Fourier | 3,720 / 3,720 float32 components bit-exact |
+| Native host `Fourier * pixel_correction` product | 3,720 / 3,720 components bit-exact |
+| Native `pixel_correction` versus negative RECOVAR correction | 1,461 / 1,461 pixels bit-exact |
+
+The correction sign is the established RELION-versus-RECOVAR CTF convention,
+not a numerical defect. An independent host binary64 evaluation from the
+source STAR followed by RELION's float32 cast also matches RECOVAR's saved
+correction for all 1,461 pixels. CTF evaluation, reciprocal construction,
+multiplication, and the host-to-device input boundary are therefore closed.
+
+The remaining stack-1574 difference is smaller than native repeatability. Two
+independent RELION iteration-2 runs have Pmax relative L2
+`1.7975910502174958e-5`, while fresh-order RECOVAR versus the selected native
+run is `6.475004069871885e-6`. The two native runs differ in the captured
+normalization-plus-mask Fourier input by relative L2
+`2.5554650078131437e-6`; this is larger than RECOVAR's
+`8.364632316960114e-8` input difference from the selected native run. The
+stack-1574 two-ULP fine-score residual is consequently classified as inside
+the native repeat envelope, not as an actionable RECOVAR bug.
+
+Iteration 3 also requires a repeat-aware interpretation. The selected
+`currenthead_ref` RELION trajectory differs from two mutually agreeing RELION
+repeats in Pmax by relative L2 about `0.003532`; those two repeats agree with
+each other to `4.2091974026696356e-5`. Fresh-order RECOVAR differs from the
+selected outlier by `0.0038268203361925997`, but from each agreeing repeat by
+about `0.00148`. Map FSC is more decisive: the two agreeing native repeats
+have merged FSC-AUC `0.9999999999848632`; RECOVAR versus them is
+`0.9999997938157471` and `0.9999997942982827`, whereas the selected native
+outlier versus them is only about `0.9999988447`. Thus the fresh-order
+iteration-3 map is closer to the native consensus than the selected reference
+run itself.
+
+The next first-divergence gate moves to iteration 4. It must compare the same
+fresh-order RECOVAR prefix against all three existing native trajectories and
+use signed FSC/FSC-AUC plus controller topology as the primary decision; Pmax
+against one schedule-sensitive native run is no longer sufficient evidence of
+a code defect.

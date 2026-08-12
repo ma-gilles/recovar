@@ -134,7 +134,7 @@
     "classification": "RELION CUDA Gaussian coarse reduction is sufficient; native sincosf and special FFT/CTF/noise operand rebuild are not required"
   },
   "next_gate": {
-    "description": "native normalized-real, soft-mask, and FFT stage comparison for worst-Pmax stack image 1574",
+    "description": "repeat-aware iteration-4 fresh-order prefix comparison against all three existing native RELION trajectories",
     "diagnostic_exact_prefix_slurm_job_id": 12281298,
     "minimal_prefix_slurm_job_id": 12281662,
     "minimal_prefix_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_fresh_minimal_gaussian_it2_prefix_20260812T0410ET",
@@ -144,7 +144,8 @@
     "native_preprocess_capture_slurm_job_id": 12283196,
     "preprocess_stage_analysis_slurm_job_id": 12283200,
     "live_preprocess_operand_capture_slurm_job_id": 12283431,
-    "trajectory_scope": "single live particle at numbered iteration 2"
+    "fine_image_input_capture_slurm_job_id": 12283990,
+    "trajectory_scope": "numbered iterations 1-4; iteration 4 is the next unmeasured boundary"
   },
   "minimal_coarse_prefix": {
     "slurm_job_id": 12281662,
@@ -216,5 +217,49 @@
     "native_atomic_repeat_unique_background_bit_patterns": 7,
     "native_atomic_repeat_exact_native_hits": 0,
     "classification": "first preprocessing mismatch is RELION's schedule-dependent atomic soft-mask background reduction; normalization, integer shift, and FFT are closed"
+  },
+  "fine_image_input_boundary": {
+    "slurm_job_id": 12283990,
+    "wall_time": "00:08:21",
+    "relion_iteration": 2,
+    "stack_index_one_based": 1574,
+    "native_preprocess_to_host_fourier_bit_exact_components": 3720,
+    "native_preprocess_to_host_fourier_component_count": 3720,
+    "native_host_product_bit_exact_components": 3720,
+    "native_host_product_component_count": 3720,
+    "native_pixel_correction_vs_negative_recovar_bit_exact_pixels": 1461,
+    "native_pixel_correction_pixel_count": 1461,
+    "selected_native_device_vs_recovar_relative_l2": 8.364632316960114e-08,
+    "independent_native_host_vs_selected_native_device_relative_l2": 2.738225949843744e-06,
+    "capture_sha256": "cce2c5fcbad4dc304e2870b9cad61515dc6db119f05baa644ef1095402a1f41e",
+    "analysis_sha256": "52e5873bb54d30fa9b8a8170e24f782707091225191f4dd5e1109542d8eb5124",
+    "analysis_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1574_fine_image_input_capture_20260812T0645ET/analysis",
+    "classification": "CTF, correction multiplication, Fourier windowing, and host-to-device input construction close exactly; the selected two-ULP fine-score residual is below native repeat variation"
+  },
+  "native_repeat_aware_prefix": {
+    "iteration_2": {
+      "native_repeat_pmax_relative_l2": 1.7975910502174958e-05,
+      "recovar_vs_selected_native_pmax_relative_l2": 6.475004069871885e-06,
+      "native_repeat_merged_map_fsc_auc": 0.9999999999574989,
+      "classification": "RECOVAR residual is inside the observed native repeat envelope"
+    },
+    "iteration_3": {
+      "agreeing_native_repeat_pmax_relative_l2": 4.2091974026696356e-05,
+      "selected_native_vs_agreeing_native_pmax_relative_l2": 0.003531703953676116,
+      "recovar_vs_agreeing_native_pmax_relative_l2": [
+        0.00147926540979168,
+        0.0014800872538639368
+      ],
+      "agreeing_native_repeat_merged_map_fsc_auc": 0.9999999999848632,
+      "selected_native_vs_agreeing_native_merged_map_fsc_auc": [
+        0.9999988445314443,
+        0.999998844893818
+      ],
+      "recovar_vs_agreeing_native_merged_map_fsc_auc": [
+        0.9999997938157471,
+        0.9999997942982827
+      ],
+      "classification": "the selected RELION reference is a native trajectory outlier; fresh-order RECOVAR iteration 3 is closer to the two-run native consensus"
+    }
   }
 }
