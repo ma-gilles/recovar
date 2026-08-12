@@ -29,6 +29,7 @@ COMPACT_STACK1204_DUMP=${K1_CASE22_COMPACT_STACK1204_DUMP:-0}
 STOP_AFTER_COMPACT_DUMP=${K1_CASE22_STOP_AFTER_COMPACT_DUMP:-0}
 NORM_RESIDUAL_INPUTS=${K1_CASE22_NORM_RESIDUAL_INPUTS:-0}
 POWERCLASS_SPECTRUM_NORM=${K1_CASE22_POWERCLASS_SPECTRUM_NORM:-0}
+TRANSLATED_WAVG_NORM=${K1_CASE22_TRANSLATED_WAVG_NORM:-0}
 COARSE_STACK1204_DUMP=${K1_CASE22_COARSE_STACK1204_DUMP:-0}
 GAUSSIAN_COARSE_STACK1204=${K1_CASE22_GAUSSIAN_COARSE_STACK1204:-0}
 GAUSSIAN_SINCOSF_STACK1204=${K1_CASE22_GAUSSIAN_SINCOSF_STACK1204:-${GAUSSIAN_COARSE_STACK1204}}
@@ -51,6 +52,10 @@ esac
 case "${POWERCLASS_SPECTRUM_NORM}" in
     0|1) ;;
     *) echo "K1_CASE22_POWERCLASS_SPECTRUM_NORM must be 0 or 1" >&2; exit 2 ;;
+esac
+case "${TRANSLATED_WAVG_NORM}" in
+    0|1) ;;
+    *) echo "K1_CASE22_TRANSLATED_WAVG_NORM must be 0 or 1" >&2; exit 2 ;;
 esac
 TARGET_ORIGINAL_INDEX=$((TARGET_STACK_ONE_BASED - 1))
 PASS2_ROTATION_ROWS=${K1_CASE22_PASS2_ROTATION_ROWS-50293,50295}
@@ -126,6 +131,9 @@ unset RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 if [[ "${POWERCLASS_SPECTRUM_NORM}" = 1 ]]; then
     export RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=1
+fi
+if [[ "${TRANSLATED_WAVG_NORM}" = 1 ]]; then
+    export RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM=1
 fi
 if [[ "${PARITY_DUMP}" = 1 ]]; then
     export RECOVAR_PARITY_DUMP_DIR=${ROOT}/parity
@@ -294,8 +302,8 @@ if [[ "${PARITY_DUMP}" = 1 ]]; then
     test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
 fi
 
-printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"norm_residual_inputs":%s,"powerclass_spectrum_norm":%s,"parity_dump":%s}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${NORM_RESIDUAL_INPUTS}" "${POWERCLASS_SPECTRUM_NORM}" "${PARITY_DUMP}" \
+printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"norm_residual_inputs":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"parity_dump":%s}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${NORM_RESIDUAL_INPUTS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${PARITY_DUMP}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"

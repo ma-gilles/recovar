@@ -222,6 +222,8 @@ _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIO
 _RELION_FINE_DIFF2_FUSED_FFI_ENV = "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI"
 _RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV = "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH"
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
+_RELION_POWERCLASS_SPECTRUM_NORM_ENV = "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM"
+_RELION_TRANSLATED_WAVG_NORM_ENV = "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM"
 _BPREF_CONTRIBUTION_DUMP_CLASS_ENV = "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS"
 _BPREF_CONTRIBUTION_STOP_AFTER_TARGET_ENV = (
     "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET"
@@ -4341,7 +4343,7 @@ def _weighted_image_power_shells_and_per_image(
         high_shell_mass = full_mass if include_unweighted_high_shell else jnp.zeros_like(full_mass)
         norm_mass = jnp.where(unweighted_shell[None, :], high_shell_mass[:, None], norm_mass)
     source_faithful_spectrum_norm = _env_flag_enabled(
-        "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM",
+        _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
         default=False,
     )
     deterministic_norm_reduction = source_faithful_spectrum_norm or _env_flag_enabled(
@@ -4375,6 +4377,102 @@ def _weighted_image_power_shells_and_per_image(
         weighted_per_image = weighted_per_image + full_mass * (replacement_high - generic_high)
     output_dtype = norm_reduction_dtype if source_faithful_spectrum_norm else jnp.float32
     return weighted_shells, weighted_per_image.astype(output_dtype)
+
+
+@jax.jit
+def _translated_wavg_low_shell_power_pixels(
+    shifted_score,
+    translation_posterior,
+    shell_indices,
+    shell_cutoff,
+):
+    """Return RELION-Wavg-style low-shell image-power pixels per image.
+
+    RELION forms ``wdiff2`` after translating each image and preserves one
+    float32 accumulator per Fourier pixel until the host-side normalization
+    sum.  Computing image power from the untranslated image is algebraically
+    equivalent only in exact arithmetic; the CUDA translation phase makes the
+    distinction observable in float32.  Keep the per-pixel boundary here so
+    callers can reproduce RELION's host float64/RFLOAT summation order.
+    """
+
+    shifted_score = jnp.asarray(shifted_score, dtype=jnp.complex64)
+    translation_posterior = jnp.asarray(translation_posterior, dtype=jnp.float32)
+    shell_indices = jnp.asarray(shell_indices, dtype=jnp.int32)
+    if shifted_score.ndim != 3:
+        raise ValueError(f"translated Wavg images must have shape (B,T,P), got {shifted_score.shape}")
+    if translation_posterior.shape != shifted_score.shape[:2]:
+        raise ValueError(
+            "translation posterior must match translated Wavg batch/translation axes, got "
+            f"{translation_posterior.shape} for {shifted_score.shape}"
+        )
+    if shell_indices.shape != (shifted_score.shape[-1],):
+        raise ValueError(
+            "translated Wavg shell indices must match the pixel axis, got "
+            f"{shell_indices.shape} for {shifted_score.shape}"
+        )
+
+    pixel_power = shifted_score.real * shifted_score.real
+    pixel_power = jax.lax.optimization_barrier(pixel_power)
+    pixel_power = pixel_power + shifted_score.imag * shifted_score.imag
+    weighted_pixels = jnp.sum(
+        translation_posterior[:, :, None] * pixel_power,
+        axis=1,
+        dtype=jnp.float32,
+    )
+    valid_low_shell = (shell_indices >= 0) & (shell_indices <= jnp.asarray(shell_cutoff))
+    return jnp.where(valid_low_shell[None, :], weighted_pixels, 0.0).astype(jnp.float32)
+
+
+def _replace_untranslated_low_shell_norm_power(
+    weighted_img_per_image,
+    processed_score_half,
+    shifted_score,
+    translation_posterior,
+    shell_indices_half,
+    score_window_indices,
+    *,
+    shell_cutoff: int,
+):
+    """Replace RECOVAR's untranslated low-shell norm power with Wavg power."""
+
+    score_window_indices = jnp.asarray(score_window_indices, dtype=jnp.int32)
+    window_shell_indices = jnp.asarray(shell_indices_half, dtype=jnp.int32)[score_window_indices]
+    shifted_score = jnp.asarray(shifted_score, dtype=jnp.complex64)
+    translated_pixels = _translated_wavg_low_shell_power_pixels(
+        shifted_score,
+        translation_posterior,
+        window_shell_indices,
+        jnp.asarray(shell_cutoff, dtype=jnp.int32),
+    )
+
+    processed_window = jnp.asarray(processed_score_half, dtype=jnp.complex64)[:, score_window_indices]
+    untranslated_power = jnp.abs(processed_window) ** 2
+    support_mass = jnp.sum(
+        jnp.asarray(translation_posterior, dtype=jnp.float32),
+        axis=1,
+        dtype=jnp.float32,
+    )
+    valid_low_shell = (window_shell_indices >= 0) & (window_shell_indices <= int(shell_cutoff))
+    untranslated_pixels = jnp.where(
+        valid_low_shell[None, :],
+        untranslated_power * support_mass[:, None],
+        0.0,
+    ).astype(jnp.float32)
+
+    # RELION copies its per-pixel float32 Wavg accumulators to the host and
+    # adds them into an RFLOAT normalization scalar in pixel order.
+    translated_host = np.asarray(jax.block_until_ready(translated_pixels), dtype=np.float32)
+    untranslated_host = np.asarray(jax.block_until_ready(untranslated_pixels), dtype=np.float32)
+    adjustment = np.sum(translated_host, axis=-1, dtype=np.float64) - np.sum(
+        untranslated_host,
+        axis=-1,
+        dtype=np.float64,
+    )
+    return jnp.asarray(weighted_img_per_image, dtype=jnp.float64) + jnp.asarray(
+        adjustment,
+        dtype=jnp.float64,
+    )
 
 
 @partial(jax.jit, static_argnames=("batch_size",))
@@ -10641,7 +10739,7 @@ def compute_pass2_stats_sparse_bucketed(
             )
         if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
             if _env_flag_enabled(
-                "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM",
+                _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
                 default=False,
             ):
                 relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
@@ -10656,6 +10754,11 @@ def compute_pass2_stats_sparse_bucketed(
                 )
         else:
             relion_norm_high_shell = None
+        translated_wavg_norm = bool(
+            accumulate_noise
+            and current_size is not None
+            and _env_flag_enabled(_RELION_TRANSLATED_WAVG_NORM_ENV, default=False)
+        )
 
         # Window gather (if applicable)
         if use_window:
@@ -11140,7 +11243,7 @@ def compute_pass2_stats_sparse_bucketed(
                     offset += width
                 del score_chunks
             if accumulate_noise:
-                if translation_sqdist_ang is not None:
+                if translation_sqdist_ang is not None or translated_wavg_norm:
                     chunk_translation_posterior_total = np.zeros((batch, n_fine_trans), dtype=np.float64)
                 chunk_support_mass = np.zeros((batch,), dtype=np.float64)
                 shifted_noise_split = (
@@ -11356,7 +11459,7 @@ def compute_pass2_stats_sparse_bucketed(
 
                 if accumulate_noise:
                     noise_probs = mstep_probs if use_relion_fine_mstep_prune and not score_only else probs
-                    if translation_sqdist_ang is not None:
+                    if translation_sqdist_ang is not None or translated_wavg_norm:
                         chunk_translation_posterior_total += np.asarray(
                             jnp.sum(noise_probs, axis=1),
                             dtype=np.float64,
@@ -11655,6 +11758,16 @@ def compute_pass2_stats_sparse_bucketed(
                     norm_unweighted_high_shell=relion_norm_high_shell,
                     include_unweighted_high_shell=include_unweighted_norm_high_shell,
                 )
+                if translated_wavg_norm:
+                    weighted_img_per_image = _replace_untranslated_low_shell_norm_power(
+                        weighted_img_per_image,
+                        processed_score_half_for_noise,
+                        shifted_score.reshape(batch, n_fine_trans, -1),
+                        jnp.asarray(chunk_translation_posterior_total, dtype=jnp.float32),
+                        shell_indices_half,
+                        window_indices,
+                        shell_cutoff=int(current_size // 2),
+                    )
                 noise_img_power_total += np.asarray(weighted_img_shells, dtype=np.float64)
                 noise_norm_correction_total[image_indices] += np.asarray(
                     weighted_img_per_image,
@@ -12461,6 +12574,16 @@ def compute_pass2_stats_sparse_bucketed(
                 norm_unweighted_high_shell=relion_norm_high_shell,
                 include_unweighted_high_shell=include_unweighted_norm_high_shell,
             )
+            if translated_wavg_norm:
+                weighted_img_per_image = _replace_untranslated_low_shell_norm_power(
+                    weighted_img_per_image,
+                    processed_score_half_for_noise,
+                    shifted_score.reshape(batch, n_fine_trans, -1),
+                    jnp.sum(noise_probs, axis=1, dtype=jnp.float32),
+                    shell_indices_half,
+                    window_indices,
+                    shell_cutoff=int(current_size // 2),
+                )
             support_mass_np = np.asarray(support_mass, dtype=np.float64)
             noise_img_power_total += np.asarray(weighted_img_shells, dtype=np.float64)
             noise_norm_correction_total[image_indices] += np.asarray(
@@ -14199,7 +14322,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             )
         if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
             if _env_flag_enabled(
-                "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM",
+                _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
                 default=False,
             ):
                 relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(

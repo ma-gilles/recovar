@@ -8,8 +8,11 @@ import jax.numpy as jnp
 
 from recovar.em.dense_single_volume.helpers.half_spectrum import make_relion_noise_shell_indices_half
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _replace_untranslated_low_shell_norm_power,
     _relion_cuda_powerclass_highres_norm_units,
     _relion_cuda_powerclass_spectrum_highres_norm_units,
+    _translated_wavg_low_shell_power_pixels,
+    _weighted_image_power_shells_and_per_image,
 )
 from recovar.em.dense_single_volume.local_big_jit import (
     _norm_correction_image_power_mass,
@@ -172,4 +175,79 @@ def test_powerclass_spectrum_norm_sums_shell_bins_in_host_precision():
     expected *= np.float64((height * height) ** 2)
 
     assert np.asarray(actual).dtype == np.float64
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray([expected]))
+
+
+def test_translated_wavg_low_shell_power_preserves_per_pixel_boundary():
+    shifted = np.asarray(
+        [
+            [
+                [3 + 4j, 5 + 12j, 8 + 15j, 7 + 24j],
+                [6 + 8j, 9 + 12j, 20 + 21j, 10 + 24j],
+            ]
+        ],
+        dtype=np.complex64,
+    )
+    posterior = np.asarray([[0.25, 0.75]], dtype=np.float32)
+    shells = np.asarray([0, 1, 2, -1], dtype=np.int32)
+
+    actual = _translated_wavg_low_shell_power_pixels(
+        jnp.asarray(shifted),
+        jnp.asarray(posterior),
+        jnp.asarray(shells),
+        jnp.asarray(1, dtype=jnp.int32),
+    )
+
+    power = shifted.real * shifted.real
+    power = np.asarray(power + shifted.imag * shifted.imag, dtype=np.float32)
+    expected = np.sum(posterior[:, :, None] * power, axis=1, dtype=np.float32)
+    expected[:, 2:] = 0.0
+    np.testing.assert_array_equal(np.asarray(actual), expected)
+
+
+def test_translated_wavg_norm_replaces_only_untranslated_low_shell_power(monkeypatch):
+    monkeypatch.setenv("RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM", "1")
+    processed = np.asarray([[3 + 4j, 5 + 12j, 8 + 15j, 7 + 24j]], dtype=np.complex64)
+    shifted = np.asarray(
+        [
+            [
+                [3 + 4j, 5 + 12j, 8 + 15j, 7 + 24j],
+                [6 + 8j, 9 + 12j, 20 + 21j, 10 + 24j],
+            ]
+        ],
+        dtype=np.complex64,
+    )
+    posterior = np.asarray([[0.25, 0.75]], dtype=np.float32)
+    shells = np.asarray([0, 1, 2, -1], dtype=np.int32)
+    high_and_residual = np.float64(123.5)
+    _, baseline = _weighted_image_power_shells_and_per_image(
+        jnp.asarray(processed),
+        jnp.asarray(shells),
+        jnp.ones(1, dtype=jnp.float32),
+        shell_count=3,
+        norm_unweighted_shell_cutoff=1,
+        norm_unweighted_high_shell=jnp.asarray([high_and_residual], dtype=jnp.float64),
+    )
+
+    actual = _replace_untranslated_low_shell_norm_power(
+        baseline,
+        jnp.asarray(processed),
+        jnp.asarray(shifted),
+        jnp.asarray(posterior),
+        jnp.asarray(shells),
+        jnp.arange(4, dtype=jnp.int32),
+        shell_cutoff=1,
+    )
+
+    shifted_power = shifted.real * shifted.real
+    shifted_power = np.asarray(
+        shifted_power + shifted.imag * shifted.imag,
+        dtype=np.float32,
+    )
+    translated_low_pixels = np.sum(
+        posterior[:, :, None] * shifted_power,
+        axis=1,
+        dtype=np.float32,
+    )[:, :2]
+    expected = high_and_residual + np.sum(translated_low_pixels, dtype=np.float64)
     np.testing.assert_array_equal(np.asarray(actual), np.asarray([expected]))
