@@ -20,6 +20,10 @@ import starfile
 
 if __package__:
     from .validate_relion_bpref_factor_capture import fnv1a64, load_factor_capture
+    from .validate_relion_fine_operand_capture import (
+        _cuda_fine_half_squared_difference,
+        _fma_float32,
+    )
     from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 else:
     from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
@@ -29,6 +33,10 @@ else:
     from validate_relion_fine_score_capture import (  # type: ignore[no-redef]
         ACTIVE,
         load_fine_score_capture,
+    )
+    from validate_relion_fine_operand_capture import (  # type: ignore[no-redef]
+        _cuda_fine_half_squared_difference,
+        _fma_float32,
     )
 
 
@@ -94,6 +102,60 @@ def _float32_ulp_distance(reference: float, candidate: float) -> int | None:
         0x80000000 + bits,
     )
     return int(abs(ordered[1] - ordered[0]))
+
+
+def _float32_from_bits(value: int) -> float:
+    return float(np.asarray(np.uint32(value), dtype=np.uint32).view(np.float32))
+
+
+def _relion_f32_scan_scalars(
+    scores: np.ndarray,
+    *,
+    adaptive_fraction: float = 0.999,
+) -> dict[str, float | int]:
+    """Replay RELION's float32 exponent, ascending scan, and cutoff scalars."""
+
+    flat = np.asarray(scores, dtype=np.float32).reshape(-1)
+    finite = np.isfinite(flat)
+    _require(np.any(finite), "fine-score scan has no finite candidates")
+    best = np.max(flat[finite])
+    shifted = np.where(
+        finite,
+        flat - best + np.float32(50.0),
+        np.float32(-np.inf),
+    ).astype(np.float32, copy=False)
+    weights = np.where(
+        shifted < np.float32(-88.0),
+        np.float32(0.0),
+        np.exp(shifted, dtype=np.float32),
+    )
+    weights = np.where(
+        finite & np.isfinite(weights),
+        weights,
+        np.float32(0.0),
+    ).astype(np.float32, copy=False)
+    ordered = np.sort(weights)
+    cumulative = np.cumsum(ordered, dtype=np.float32)
+    sum_weight = np.float32(cumulative[-1])
+    _require(np.isfinite(sum_weight) and sum_weight > 0, "fine-score scan has invalid mass")
+    parsed_fraction = np.float32(adaptive_fraction)
+    tail_target = np.float32(
+        (np.float64(1.0) - np.float64(parsed_fraction)) * np.float64(sum_weight)
+    )
+    threshold_index = min(
+        int(np.searchsorted(cumulative, tail_target, side="right")),
+        ordered.size - 1,
+    )
+    threshold = np.float32(ordered[threshold_index])
+    return {
+        "best_log_weight": float(best),
+        "max_weight": float(np.max(weights)),
+        "sum_weight": float(sum_weight),
+        "tail_target": float(tail_target),
+        "threshold": float(threshold),
+        "threshold_index": threshold_index,
+        "significant_count": int(np.count_nonzero(weights >= threshold)),
+    }
 
 
 def _first_mismatch_record(
@@ -215,6 +277,7 @@ def _replay_raw_diff2(
     half_weights: np.ndarray,
     full_to_compact: np.ndarray,
     highres_xi2_half: float,
+    fused_weight_accumulation: bool = False,
 ) -> np.ndarray:
     rotations = np.asarray(rotations, dtype=np.int64).reshape(-1)
     translations = np.asarray(translations, dtype=np.int64).reshape(-1)
@@ -238,13 +301,32 @@ def _replay_raw_diff2(
             compact = padded[pass_index * block_size : (pass_index + 1) * block_size]
             valid = compact >= 0
             safe = np.where(valid, compact, 0)
-            terms = _raw_diff2_terms(
-                references[rotation, safe],
-                shifted[translation, safe],
-                weights[safe],
-            )
-            terms = np.where(valid, terms, np.float32(0.0)).astype(np.float32, copy=False)
-            lanes = np.add(lanes, terms, dtype=np.float32)
+            if fused_weight_accumulation:
+                diff_real = np.subtract(
+                    references[rotation, safe].real,
+                    shifted[translation, safe].real,
+                    dtype=np.float32,
+                )
+                diff_imag = np.subtract(
+                    references[rotation, safe].imag,
+                    shifted[translation, safe].imag,
+                    dtype=np.float32,
+                )
+                half_squared = _cuda_fine_half_squared_difference(diff_real, diff_imag)
+                pass_weights = np.where(
+                    valid,
+                    weights[safe],
+                    np.float32(0.0),
+                ).astype(np.float32, copy=False)
+                lanes = _fma_float32(half_squared, pass_weights, lanes)
+            else:
+                terms = _raw_diff2_terms(
+                    references[rotation, safe],
+                    shifted[translation, safe],
+                    weights[safe],
+                )
+                terms = np.where(valid, terms, np.float32(0.0)).astype(np.float32, copy=False)
+                lanes = np.add(lanes, terms, dtype=np.float32)
         reduced, _ = _reduce_relion_fine_lanes(lanes)
         output[candidate] = np.add(reduced, highres, dtype=np.float32)
     return output
@@ -322,6 +404,31 @@ def _stable_top_n_mask(weights: np.ndarray, count: int) -> np.ndarray:
     mask = np.zeros(values.size, dtype=bool)
     mask[order[:count]] = True
     return mask
+
+
+def _sum_direction_posterior(
+    orientation_class_keys: np.ndarray,
+    posterior_weights: np.ndarray,
+    *,
+    n_directions: int,
+    n_inplane_angles: int,
+) -> np.ndarray:
+    """Collapse a fixed candidate panel onto RELION direction-bin operands."""
+
+    keys = np.asarray(orientation_class_keys, dtype=np.int64).reshape(-1)
+    weights = np.asarray(posterior_weights, dtype=np.float64).reshape(-1)
+    _require(keys.shape == weights.shape and keys.size > 0, "direction operand panel changed")
+    _require(n_directions > 0 and n_inplane_angles > 0, "direction grid dimensions changed")
+    direction_ids = keys // int(n_inplane_angles)
+    _require(
+        np.all((0 <= direction_ids) & (direction_ids < int(n_directions))),
+        "orientation-class key falls outside the RELION direction grid",
+    )
+    return np.bincount(
+        direction_ids,
+        weights=weights,
+        minlength=int(n_directions),
+    ).astype(np.float64, copy=False)
 
 
 def _winner_counterfactuals(
@@ -589,6 +696,7 @@ def _compare_particle(
     scores_with_prior = np.asarray(recovar["scores_with_prior"], dtype=np.float64)
     recovar_probs = np.asarray(recovar["probs"], dtype=np.float64)
     reconstruction_mask = np.asarray(recovar["reconstruction_mask"], dtype=bool)
+    reconstruction_probs = np.asarray(recovar["reconstruction_probs"], dtype=np.float64)
     rotation_prior = np.asarray(recovar["rotation_log_prior"], dtype=np.float64)
     translation_prior = np.asarray(recovar["translation_log_prior"], dtype=np.float64)
     expected_shape = candidate_mask.shape
@@ -597,6 +705,7 @@ def _compare_particle(
         ("scores_with_prior", scores_with_prior),
         ("probs", recovar_probs),
         ("reconstruction_mask", reconstruction_mask),
+        ("reconstruction_probs", reconstruction_probs),
     ):
         _require(array.shape == expected_shape, f"stack {stack}: {name} shape changed")
 
@@ -629,6 +738,17 @@ def _compare_particle(
         full_to_compact=full_to_compact,
         highres_xi2_half=float(recovar["relion_highres_xi2_half"]),
     )
+    native_sass_replay_raw = _replay_raw_diff2(
+        rotations=rr,
+        translations=tt,
+        projected_references=recovar["proj_half"],
+        shifted_images=recovar["shifted_corrected"],
+        ctf2_over_nv=recovar["ctf2_over_nv_score"],
+        half_weights=recovar["half_weights"],
+        full_to_compact=full_to_compact,
+        highres_xi2_half=float(recovar["relion_highres_xi2_half"]),
+        fused_weight_accumulation=True,
+    )
     native_preprior = -native_raw
     recovar_preprior = -replay_raw
     dumped_preprior = scores_pre_prior[rr, tt]
@@ -640,11 +760,38 @@ def _compare_particle(
     recovar_log = scores_with_prior[rr, tt]
 
     native_weight = np.asarray(selected["post_exponent_weight"], dtype=np.float64)
-    native_weight_sum = float(np.sum(native_weight, dtype=np.float64))
+    native_weight_sum_float64 = float(np.sum(native_weight, dtype=np.float64))
+    native_scan_scalars_available = int(score.header[35]) == 1
+    native_weight_sum = (
+        _float32_from_bits(score.header[32])
+        if native_scan_scalars_available
+        else native_weight_sum_float64
+    )
     _require(native_weight_sum > 0 and np.isfinite(native_weight_sum), f"stack {stack}: invalid native weight sum")
     native_prob = native_weight / native_weight_sum
     recovar_prob = recovar_probs[mapped_rotation, mapped_translation]
     _require(np.all(np.isfinite(recovar_prob)), f"stack {stack}: RECOVAR posterior is non-finite")
+    recovar_scan_scalars = _relion_f32_scan_scalars(scores_with_prior)
+    cross_engine_scan_delta = recovar_scan_scalars["sum_weight"] - native_weight_sum
+    native_scan_rounding_delta = native_weight_sum - native_weight_sum_float64
+    n_directions = int(score.header[12])
+    n_inplane_angles = int(score.header[13])
+    native_orientation_keys = np.asarray(
+        factor.rotations["orientation_class_key"][native_rotation],
+        dtype=np.int64,
+    )
+    native_direction_posterior = _sum_direction_posterior(
+        native_orientation_keys,
+        native_prob,
+        n_directions=n_directions,
+        n_inplane_angles=n_inplane_angles,
+    )
+    recovar_direction_posterior = _sum_direction_posterior(
+        native_orientation_keys,
+        recovar_prob,
+        n_directions=n_directions,
+        n_inplane_angles=n_inplane_angles,
+    )
 
     if factor.geometry_only:
         # rlnNrOfSignificantSamples is not the number of pass-2 class-pose
@@ -677,9 +824,29 @@ def _compare_particle(
         for rotation, translation in np.argwhere(reconstruction_mask)
     }
     support_exact = native_support_keys == recovar_support_keys
+    native_support_mask = np.asarray(
+        [tuple(map(int, key)) in native_support_keys for key in mapped_keys],
+        dtype=bool,
+    )
+    native_direction_reconstruction_posterior = _sum_direction_posterior(
+        native_orientation_keys,
+        native_prob * native_support_mask,
+        n_directions=n_directions,
+        n_inplane_angles=n_inplane_angles,
+    )
+    recovar_direction_reconstruction_posterior = _sum_direction_posterior(
+        native_orientation_keys,
+        reconstruction_probs[mapped_rotation, mapped_translation],
+        n_directions=n_directions,
+        n_inplane_angles=n_inplane_angles,
+    )
 
     comparisons = {
         "raw_diff2": _metric(native_raw, replay_raw),
+        "raw_diff2_native_sass_on_recovar_operands": _metric(
+            native_raw,
+            native_sass_replay_raw,
+        ),
         "preprior_score_centered": _metric(_center(native_preprior), _center(recovar_preprior)),
         "dumped_preprior_score_centered": _metric(
             _center(recovar_preprior), _center(dumped_preprior)
@@ -688,6 +855,14 @@ def _compare_particle(
         "translation_log_prior": _metric(native_trans_prior, recovar_trans_prior),
         "combined_log_weight_centered": _metric(_center(native_log), _center(recovar_log)),
         "normalized_posterior_native_active": _metric(native_prob, recovar_prob),
+        "direction_bin_posterior_native_active": _metric(
+            native_direction_posterior,
+            recovar_direction_posterior,
+        ),
+        "direction_bin_reconstruction_posterior": _metric(
+            native_direction_reconstruction_posterior,
+            recovar_direction_reconstruction_posterior,
+        ),
     }
     if captured_raw_diff2 is not None:
         comparisons["captured_recovar_raw_diff2_to_replay"] = _metric(
@@ -787,6 +962,15 @@ def _compare_particle(
             full_to_compact=full_to_compact,
             highres_xi2_half=float(recovar["relion_highres_xi2_half"]),
         )
+    direction_delta = recovar_direction_posterior - native_direction_posterior
+    largest_direction_delta = int(np.argmax(np.abs(direction_delta)))
+    direction_reconstruction_delta = (
+        recovar_direction_reconstruction_posterior
+        - native_direction_reconstruction_posterior
+    )
+    largest_direction_reconstruction_delta = int(
+        np.argmax(np.abs(direction_reconstruction_delta))
+    )
     native_winner = int(np.argmax(-native_raw + native_rot_prior + native_trans_prior))
     recovar_winner = int(np.argmax(-replay_raw + recovar_rot_prior + recovar_trans_prior))
     winner_counterfactuals = (
@@ -827,6 +1011,78 @@ def _compare_particle(
         ),
         "native_active_posterior_mass": float(np.sum(native_prob)),
         "recovar_mass_on_native_active": float(np.sum(recovar_prob)),
+        "native_posterior_scan_scalars": {
+            "available": native_scan_scalars_available,
+            "sum_weight": native_weight_sum,
+            "sum_of_captured_weights_float64": native_weight_sum_float64,
+            "sum_weight_minus_float64_sum": native_weight_sum - native_weight_sum_float64,
+            "significant_weight": (
+                _float32_from_bits(score.header[33])
+                if native_scan_scalars_available
+                else None
+            ),
+            "max_weight": (
+                _float32_from_bits(score.header[34])
+                if native_scan_scalars_available
+                else None
+            ),
+        },
+        "recovar_posterior_scan_scalars": recovar_scan_scalars,
+        "posterior_scan_attribution": {
+            "recovar_minus_native_sum_weight": cross_engine_scan_delta,
+            "recovar_minus_native_sum_weight_relative": (
+                cross_engine_scan_delta / native_weight_sum
+            ),
+            "native_scan_minus_captured_weight_sum": native_scan_rounding_delta,
+            "native_scan_minus_captured_weight_sum_relative": (
+                native_scan_rounding_delta / native_weight_sum
+            ),
+            "cross_engine_gap_over_native_scan_rounding": (
+                abs(cross_engine_scan_delta) / abs(native_scan_rounding_delta)
+                if native_scan_rounding_delta != 0
+                else None
+            ),
+        },
+        "recovar_reconstruction_probability_sum": float(
+            np.sum(reconstruction_probs, dtype=np.float64)
+        ),
+        "direction_bin_count": n_directions,
+        "direction_bin_posterior_largest_residual": {
+            "direction_id": largest_direction_delta,
+            "native_value": float(native_direction_posterior[largest_direction_delta]),
+            "recovar_value": float(recovar_direction_posterior[largest_direction_delta]),
+            "recovar_minus_native": float(direction_delta[largest_direction_delta]),
+        },
+        "direction_bin_posterior_operands": {
+            "native_sha256": _array_sha256(native_direction_posterior),
+            "recovar_sha256": _array_sha256(recovar_direction_posterior),
+            "native": native_direction_posterior.tolist(),
+            "recovar": recovar_direction_posterior.tolist(),
+            "recovar_minus_native": direction_delta.tolist(),
+        },
+        "direction_bin_reconstruction_posterior_largest_residual": {
+            "direction_id": largest_direction_reconstruction_delta,
+            "native_value": float(
+                native_direction_reconstruction_posterior[
+                    largest_direction_reconstruction_delta
+                ]
+            ),
+            "recovar_value": float(
+                recovar_direction_reconstruction_posterior[
+                    largest_direction_reconstruction_delta
+                ]
+            ),
+            "recovar_minus_native": float(
+                direction_reconstruction_delta[largest_direction_reconstruction_delta]
+            ),
+        },
+        "direction_bin_reconstruction_posterior_operands": {
+            "native_sha256": _array_sha256(native_direction_reconstruction_posterior),
+            "recovar_sha256": _array_sha256(recovar_direction_reconstruction_posterior),
+            "native": native_direction_reconstruction_posterior.tolist(),
+            "recovar": recovar_direction_reconstruction_posterior.tolist(),
+            "recovar_minus_native": direction_reconstruction_delta.tolist(),
+        },
         "support_intersection_count": len(native_support_keys & recovar_support_keys),
         "support_union_count": len(native_support_keys | recovar_support_keys),
         "support_exact": support_exact,
@@ -836,6 +1092,18 @@ def _compare_particle(
         "first_exact_unequal_boundary": _first_exact_boundary(stage_exact),
         "first_mismatch_records": first_mismatches,
         "first_raw_diff2_recovar_operand_trace": raw_diff2_trace,
+        "raw_diff2_reduction_counterfactual": {
+            "recovar_default": comparisons["raw_diff2"],
+            "native_sass_on_recovar_operands": comparisons[
+                "raw_diff2_native_sass_on_recovar_operands"
+            ],
+            "native_sass_reduces_relative_l2": (
+                comparisons["raw_diff2_native_sass_on_recovar_operands"][
+                    "relative_l2_over_reference"
+                ]
+                < comparisons["raw_diff2"]["relative_l2_over_reference"]
+            ),
+        },
         "winner_counterfactuals": winner_counterfactuals,
         "classification": classification,
     }

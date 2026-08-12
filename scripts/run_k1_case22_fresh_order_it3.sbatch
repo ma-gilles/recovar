@@ -24,8 +24,10 @@ ROOT=${K1_CASE22_IT3_ROOT}
 RUNTIME=${K1_CASE22_IT3_RUNTIME}
 REPO=${K1_CASE22_IT3_REPO}
 MAX_ITER=${K1_CASE22_MAX_ITER:-3}
+PARITY_DUMP=${K1_CASE22_PARITY_DUMP:-0}
 COMPACT_STACK1204_DUMP=${K1_CASE22_COMPACT_STACK1204_DUMP:-0}
 STOP_AFTER_COMPACT_DUMP=${K1_CASE22_STOP_AFTER_COMPACT_DUMP:-0}
+NORM_RESIDUAL_INPUTS=${K1_CASE22_NORM_RESIDUAL_INPUTS:-0}
 COARSE_STACK1204_DUMP=${K1_CASE22_COARSE_STACK1204_DUMP:-0}
 GAUSSIAN_COARSE_STACK1204=${K1_CASE22_GAUSSIAN_COARSE_STACK1204:-0}
 GAUSSIAN_SINCOSF_STACK1204=${K1_CASE22_GAUSSIAN_SINCOSF_STACK1204:-${GAUSSIAN_COARSE_STACK1204}}
@@ -41,6 +43,10 @@ if (( TARGET_ITERATION < 1 || TARGET_CURRENT_SIZE < 1 )); then
     echo "K1_CASE22_TARGET_ITERATION and K1_CASE22_TARGET_CURRENT_SIZE must be positive" >&2
     exit 2
 fi
+case "${NORM_RESIDUAL_INPUTS}" in
+    0|1) ;;
+    *) echo "K1_CASE22_NORM_RESIDUAL_INPUTS must be 0 or 1" >&2; exit 2 ;;
+esac
 TARGET_ORIGINAL_INDEX=$((TARGET_STACK_ONE_BASED - 1))
 PASS2_ROTATION_ROWS=${K1_CASE22_PASS2_ROTATION_ROWS-50293,50295}
 PYTHON=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default/bin/python
@@ -113,6 +119,11 @@ if [[ "${EXACT_COARSE_STACK1204}" = 1 ]]; then
 fi
 unset RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
+if [[ "${PARITY_DUMP}" = 1 ]]; then
+    export RECOVAR_PARITY_DUMP_DIR=${ROOT}/parity
+    export RECOVAR_PARITY_DUMP_VOLUME_DOWNSAMPLE=8
+    mkdir -p "${RECOVAR_PARITY_DUMP_DIR}"
+fi
 if [[ "${COMPACT_STACK1204_DUMP}" = 1 && "${COARSE_STACK1204_DUMP}" = 1 ]]; then
     echo "compact pass-2 and coarse-significance dump modes are mutually exclusive" >&2
     exit 2
@@ -126,6 +137,9 @@ elif [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
     # raw dump materializes every large bucket and can require >17 GiB for a
     # single diagnostic batch.
     export RECOVAR_PASS2_DUMP_RAW_OPERANDS=0
+    if [[ "${NORM_RESIDUAL_INPUTS}" = 1 ]]; then
+        export RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS=1
+    fi
     if [[ -n "${PASS2_ROTATION_ROWS}" ]]; then
         export RECOVAR_PASS2_DUMP_ROTATION_ROWS=${PASS2_ROTATION_ROWS}
     else
@@ -200,8 +214,12 @@ if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
     test -s "${compact_dump}"
     rg -q 'pass-2 operand dump completed; stopping at the requested fine-score boundary' \
         "${OUTPUT}/run.log"
-    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":true,"target_stack_one_based":%d,"target_iteration":%d,"target_current_size":%d,"pass2_rotation_rows":"%s","stopped_after_dump":true}\n' \
-        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${TARGET_STACK_ONE_BASED}" \
+    if [[ "${NORM_RESIDUAL_INPUTS}" = 1 ]]; then
+        norm_residual_dump=${RECOVAR_PASS2_DUMP_DIR}/norm_residual_orig${target_original_label}_half1_cs${target_size_label}.npz
+        test -s "${norm_residual_dump}"
+    fi
+    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":true,"norm_residual_inputs":%s,"target_stack_one_based":%d,"target_iteration":%d,"target_current_size":%d,"pass2_rotation_rows":"%s","stopped_after_dump":true}\n' \
+        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${NORM_RESIDUAL_INPUTS}" "${TARGET_STACK_ONE_BASED}" \
         "${TARGET_ITERATION}" "${TARGET_CURRENT_SIZE}" "${PASS2_ROTATION_ROWS}" \
         > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
     touch "${ROOT}/DUMP_SUCCESS_${SLURM_JOB_ID}"
@@ -257,9 +275,12 @@ fi
 rg -q 'Applied RELION fresh paired AutoRefine particle order with effective seed 1723' "${OUTPUT}/run.log"
 rg -q 'preserving fresh RELION physical BPref particle order' "${OUTPUT}/run.log"
 rg -q 'expected accuracy consumes an explicit physical trial order' "${OUTPUT}/run.log"
+if [[ "${PARITY_DUMP}" = 1 ]]; then
+    test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
+fi
 
-printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" \
+printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"parity_dump":%s}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${PARITY_DUMP}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"

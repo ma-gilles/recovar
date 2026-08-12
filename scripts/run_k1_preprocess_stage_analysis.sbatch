@@ -32,7 +32,8 @@ PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
-test -s "${NATIVE_DIR}/part639_stack1574.preprocess-v1.bin" -a -s "${CUDA_LIB}"
+mapfile -t NATIVE_CAPTURES < <(find "${NATIVE_DIR}" -maxdepth 1 -type f -name '*.preprocess-v1.bin' | sort)
+test "${#NATIVE_CAPTURES[@]}" -eq 1 -a -s "${NATIVE_CAPTURES[0]}" -a -s "${CUDA_LIB}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(sha256sum "${ANALYZER}" | awk '{print $1}')" = "${EXPECTED_ANALYZER_SHA256}"
 test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
@@ -91,7 +92,7 @@ for mode in ("default", "native_lane", "native_atomic"):
     assert len(report["particles"]) == 1
 PY
 sha256sum "${LAUNCHER}" "${ANALYZER}" "${CUDA_LIB}" \
-    "${NATIVE_DIR}/part639_stack1574.preprocess-v1.bin" \
+    "${NATIVE_CAPTURES[0]}" \
     "${ROOT}"/analysis/K1_PREPROCESS_STAGE_*.json \
     "${ROOT}"/analysis/K1_PREPROCESS_STAGE_*.npz \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"

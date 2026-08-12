@@ -6,11 +6,33 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import starfile
+
+if __package__:
+    from .validate_relion_preprocess_capture import load_artifact as load_preprocess_capture
+else:
+    from validate_relion_preprocess_capture import (  # type: ignore[no-redef]
+        load_artifact as load_preprocess_capture,
+    )
+
+
+_NATIVE_EXPECTATION_PATTERN = re.compile(
+    r"RELION_P1_NORMALIZATION_OPERANDS_V1 part_id=(?P<part_id>\d+) "
+    r"avg_norm=(?P<avg_norm>\S+) particle_norm=(?P<particle_norm>\S+) "
+    r"quotient=(?P<quotient>\S+) quotient_f32_bits=(?P<quotient_bits>[0-9a-fA-F]{8})"
+)
+_NATIVE_UPDATE_PATTERN = re.compile(
+    r"RELION_P1_NORM_UPDATE_OPERANDS_V1 iter=(?P<iteration>\d+) "
+    r"part_id=(?P<part_id>\d+) previous_norm=(?P<previous_norm>\S+) "
+    r"previous_avg=(?P<previous_avg>\S+) old_norm_over_avg=(?P<old_norm_over_avg>\S+) "
+    r"wsum_norm=(?P<wsum_norm>\S+) sqrt_2_wsum=(?P<sqrt_2_wsum>\S+) "
+    r"new_norm=(?P<new_norm>\S+)"
+)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -55,6 +77,53 @@ def _particle_table(path: Path):
     return document["particles"] if isinstance(document, dict) else document
 
 
+def _parse_native_norm_operands(path: Path, *, part_id: int) -> dict[str, object]:
+    expectation_records: list[dict[str, object]] = []
+    update_records: list[dict[str, object]] = []
+    for line in path.read_text(errors="replace").splitlines():
+        expectation = _NATIVE_EXPECTATION_PATTERN.search(line)
+        if expectation is not None and int(expectation["part_id"]) == part_id:
+            expectation_records.append(
+                {
+                    "part_id": part_id,
+                    "avg_norm_float64": float.fromhex(expectation["avg_norm"]),
+                    "particle_norm_float64": float.fromhex(expectation["particle_norm"]),
+                    "quotient_float64": float.fromhex(expectation["quotient"]),
+                    "quotient_float32_bits": f"0x{expectation['quotient_bits'].lower()}",
+                }
+            )
+        update = _NATIVE_UPDATE_PATTERN.search(line)
+        if update is not None and int(update["part_id"]) == part_id:
+            update_records.append(
+                {
+                    "iteration": int(update["iteration"]),
+                    "part_id": part_id,
+                    **{
+                        name: float.fromhex(update[name])
+                        for name in (
+                            "previous_norm",
+                            "previous_avg",
+                            "old_norm_over_avg",
+                            "wsum_norm",
+                            "sqrt_2_wsum",
+                            "new_norm",
+                        )
+                    },
+                }
+            )
+    _require(
+        len(expectation_records) == 1,
+        f"expected exactly one native expectation operand record for part {part_id}, "
+        f"found {len(expectation_records)}",
+    )
+    return {
+        "expectation": expectation_records[0],
+        "updates": update_records,
+        "log": str(path.resolve()),
+        "log_sha256": _sha256(path),
+    }
+
+
 def _model_tables(path: Path) -> tuple[dict[str, Any], Any]:
     document = starfile.read(path)
     _require(isinstance(document, dict), "RELION model STAR must contain named tables")
@@ -69,8 +138,17 @@ def main() -> None:
     parser.add_argument("--relion-model-star", type=Path, required=True)
     parser.add_argument("--source-index", type=int, required=True)
     parser.add_argument("--operand-dump", type=Path)
+    parser.add_argument("--relion-native-preprocess-capture", type=Path)
+    parser.add_argument("--relion-native-operands-log", type=Path)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
+    if (args.relion_native_preprocess_capture is None) != (
+        args.relion_native_operands_log is None
+    ):
+        raise ValueError(
+            "--relion-native-preprocess-capture and --relion-native-operands-log "
+            "must be supplied together"
+        )
 
     stack_index = args.source_index + 1
     with np.load(args.recovar_results_npz, allow_pickle=False) as results:
@@ -147,6 +225,29 @@ def main() -> None:
                 operands["recovar_processed_image"],
             )
 
+    relion_native = None
+    if args.relion_native_preprocess_capture is not None:
+        native_capture = load_preprocess_capture(args.relion_native_preprocess_capture)
+        _require(native_capture.stack_index == stack_index, "native capture stack identity changed")
+        native_operands = _parse_native_norm_operands(
+            args.relion_native_operands_log,
+            part_id=native_capture.part_id,
+        )
+        native_factor = np.float32(native_capture.norm_correction)
+        expectation = native_operands["expectation"]
+        _require(
+            expectation["quotient_float32_bits"]
+            == f"0x{native_factor.view(np.uint32).item():08x}",
+            "native capture factor and logged quotient bits differ",
+        )
+        relion_native = {
+            "normalization_factor_float32": float(native_factor),
+            "normalization_factor_bits": f"0x{native_factor.view(np.uint32).item():08x}",
+            "preprocess_capture": str(args.relion_native_preprocess_capture.resolve()),
+            "preprocess_capture_sha256": native_capture.sha256,
+            "operands": native_operands,
+        }
+
     state_ratio = float(
         np.float64(relion_serialized_normalization)
         / np.float64(recovar_normalization_factor)
@@ -179,6 +280,7 @@ def main() -> None:
             "average_norm_correction_decimal": relion_average_norm,
             "norm_power_inferred_from_serialized_norm": relion_serialized_norm_power,
         },
+        "relion_native": relion_native,
         "comparison": {
             "serialized_relion_over_recovar_normalization": state_ratio,
             "normalization_float32_ulp_distance": _positive_float32_ulp_distance(
@@ -188,6 +290,14 @@ def main() -> None:
             "image_correction_float32_ulp_distance": _positive_float32_ulp_distance(
                 recovar_image_correction,
                 relion_serialized_image_correction,
+            ),
+            "native_normalization_float32_ulp_distance": (
+                None
+                if relion_native is None
+                else _positive_float32_ulp_distance(
+                    recovar_normalization_factor,
+                    relion_native["normalization_factor_float32"],
+                )
             ),
             "norm_correction_relion_units_delta": (
                 recovar_norm_correction_relion_units - relion_norm
@@ -216,10 +326,25 @@ def main() -> None:
             "relion_model_sha256": _sha256(args.relion_model_star),
             "operand_dump": None if args.operand_dump is None else str(args.operand_dump.resolve()),
             "operand_dump_sha256": None if args.operand_dump is None else _sha256(args.operand_dump),
+            "relion_native_preprocess_capture": (
+                None
+                if args.relion_native_preprocess_capture is None
+                else str(args.relion_native_preprocess_capture.resolve())
+            ),
+            "relion_native_operands_log": (
+                None
+                if args.relion_native_operands_log is None
+                else str(args.relion_native_operands_log.resolve())
+            ),
         },
         "interpretation_limit": (
-            "RELION norm and average-norm fields are decimal STAR serializations; "
-            "the comparison does not claim access to RELION's private in-memory norm state."
+            "Serialized RELION norm fields remain decimal STAR values. "
+            + (
+                "No native in-memory operand capture was supplied."
+                if relion_native is None
+                else "The optional selected-particle native section contains exact hex-float "
+                "in-memory operands and the captured float32 accelerator quotient."
+            )
         ),
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)

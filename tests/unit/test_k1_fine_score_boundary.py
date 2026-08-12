@@ -7,15 +7,38 @@ from scripts.analyze_k1_fine_score_boundary import (
     _classify_particle,
     _first_exact_boundary,
     _first_mismatch_record,
+    _float32_from_bits,
     _float32_ulp_distance,
     _geometry_only_significant_count,
     _metric,
     _raw_diff2_terms,
+    _replay_raw_diff2,
     _reduce_relion_fine_lanes,
+    _relion_f32_scan_scalars,
     _rotation_map,
     _stable_top_n_mask,
+    _sum_direction_posterior,
     _winner_counterfactuals,
 )
+
+
+@pytest.mark.unit
+def test_float32_from_bits_preserves_capture_scalar():
+    value = np.float32(123.25)
+    assert _float32_from_bits(int(value.view(np.uint32))) == float(value)
+
+
+@pytest.mark.unit
+def test_relion_f32_scan_scalars_preserve_float32_scan_and_ties():
+    scores = np.asarray([0.0, -1.0, -1.0, -np.inf], dtype=np.float64)
+    report = _relion_f32_scan_scalars(scores, adaptive_fraction=0.5)
+    shifted = np.asarray([50.0, 49.0, 49.0], dtype=np.float32)
+    weights = np.exp(shifted, dtype=np.float32)
+    expected_sum = np.cumsum(np.sort(weights), dtype=np.float32)[-1]
+
+    assert report["sum_weight"] == float(expected_sum)
+    assert report["max_weight"] == float(weights[0])
+    assert report["significant_count"] == 1
 
 
 @pytest.mark.unit
@@ -189,6 +212,25 @@ def test_reduce_relion_fine_lanes_matches_fixed_tree():
 
 
 @pytest.mark.unit
+def test_raw_diff2_replay_supports_native_fused_weight_accumulation():
+    kwargs = {
+        "rotations": np.asarray([0]),
+        "translations": np.asarray([0]),
+        "projected_references": np.asarray([[1.25 + 0.5j]], dtype=np.complex64),
+        "shifted_images": np.asarray([[-0.25 + 0.75j]], dtype=np.complex64),
+        "ctf2_over_nv": np.asarray([3.0], dtype=np.float32),
+        "half_weights": np.asarray([1.0], dtype=np.float32),
+        "full_to_compact": np.asarray([0], dtype=np.int32),
+        "highres_xi2_half": 0.125,
+    }
+    default = _replay_raw_diff2(**kwargs)
+    fused = _replay_raw_diff2(**kwargs, fused_weight_accumulation=True)
+
+    assert default.shape == fused.shape == (1,)
+    assert np.all(np.isfinite(default)) and np.all(np.isfinite(fused))
+
+
+@pytest.mark.unit
 def test_winner_counterfactuals_localizes_coupled_raw_and_orientation_prior_flip():
     report = _winner_counterfactuals(
         native_raw_diff2=np.asarray([0.0, 1.0]),
@@ -213,3 +255,15 @@ def test_winner_counterfactuals_localizes_coupled_raw_and_orientation_prior_flip
     assert margins["translation_log_prior_substitution_contribution"] == 0.0
     assert margins["recovar_all"] == pytest.approx(-0.1)
     assert margins["additive_residual"] == pytest.approx(0.0)
+
+
+@pytest.mark.unit
+def test_sum_direction_posterior_collapses_psi_and_oversampling_rows():
+    result = _sum_direction_posterior(
+        orientation_class_keys=np.asarray([0, 0, 1, 4, 5, 5]),
+        posterior_weights=np.asarray([0.1, 0.2, 0.3, 0.15, 0.05, 0.2]),
+        n_directions=3,
+        n_inplane_angles=2,
+    )
+
+    np.testing.assert_allclose(result, np.asarray([0.6, 0.0, 0.4]), rtol=0.0, atol=1e-15)
