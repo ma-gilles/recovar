@@ -35,6 +35,8 @@ GAUSSIAN_COARSE_STACK1204=${K1_CASE22_GAUSSIAN_COARSE_STACK1204:-0}
 GAUSSIAN_SINCOSF_STACK1204=${K1_CASE22_GAUSSIAN_SINCOSF_STACK1204:-${GAUSSIAN_COARSE_STACK1204}}
 EXACT_COARSE_STACK1204=${K1_CASE22_EXACT_COARSE_STACK1204:-0}
 TARGET_STACK_ONE_BASED=${K1_CASE22_TARGET_STACK_ONE_BASED:-1204}
+TARGET_STACKS_ONE_BASED=${K1_CASE22_TARGET_STACKS_ONE_BASED:-${TARGET_STACK_ONE_BASED}}
+TARGET_STACKS_ONE_BASED=${TARGET_STACKS_ONE_BASED//:/,}
 TARGET_ITERATION=${K1_CASE22_TARGET_ITERATION:-2}
 TARGET_CURRENT_SIZE=${K1_CASE22_TARGET_CURRENT_SIZE:-60}
 if (( TARGET_STACK_ONE_BASED < 1 )); then
@@ -43,6 +45,20 @@ if (( TARGET_STACK_ONE_BASED < 1 )); then
 fi
 if (( TARGET_ITERATION < 1 || TARGET_CURRENT_SIZE < 1 )); then
     echo "K1_CASE22_TARGET_ITERATION and K1_CASE22_TARGET_CURRENT_SIZE must be positive" >&2
+    exit 2
+fi
+TARGET_ORIGINAL_INDICES=
+IFS=',' read -r -a target_stack_values <<< "${TARGET_STACKS_ONE_BASED}"
+for target_stack in "${target_stack_values[@]}"; do
+    if [[ ! "${target_stack}" =~ ^[0-9]+$ ]] || (( target_stack < 1 )); then
+        echo "K1_CASE22_TARGET_STACKS_ONE_BASED must be comma-separated positive integers" >&2
+        exit 2
+    fi
+    target_original=$((target_stack - 1))
+    TARGET_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDICES:+${TARGET_ORIGINAL_INDICES},}${target_original}
+done
+if (( ${#target_stack_values[@]} != 1 )) && [[ "${COARSE_STACK1204_DUMP}" != 1 ]]; then
+    echo "multiple target stacks are supported only by coarse-significance dump mode" >&2
     exit 2
 fi
 case "${NORM_RESIDUAL_INPUTS}" in
@@ -59,6 +75,9 @@ case "${TRANSLATED_WAVG_NORM}" in
 esac
 TARGET_ORIGINAL_INDEX=$((TARGET_STACK_ONE_BASED - 1))
 PASS2_ROTATION_ROWS=${K1_CASE22_PASS2_ROTATION_ROWS-50293,50295}
+if [[ "${PASS2_ROTATION_ROWS}" = none ]]; then
+    PASS2_ROTATION_ROWS=
+fi
 PYTHON=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default/bin/python
 PIXI_ENV=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default
 LAUNCHER=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/scripts/run_k1_case22_fresh_order_it3.sbatch
@@ -173,9 +192,9 @@ elif [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
     exit 2
 elif [[ "${COARSE_STACK1204_DUMP}" = 1 ]]; then
     export RECOVAR_SIGNIFICANCE_DUMP_DIR=${ROOT}/coarse
-    export RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDEX}
-    export RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE=60
-    export RECOVAR_SIGNIFICANCE_DUMP_ITERATION=2
+    export RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDICES}
+    export RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE=${TARGET_CURRENT_SIZE}
+    export RECOVAR_SIGNIFICANCE_DUMP_ITERATION=${TARGET_ITERATION}
     export RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF=1
     export RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET=1
     mkdir -p "${RECOVAR_SIGNIFICANCE_DUMP_DIR}"
@@ -245,13 +264,17 @@ if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 && "${NORM_RESIDUAL_INPUTS}" != 1 ]]; the
     exit 0
 fi
 if [[ "${COARSE_STACK1204_DUMP}" = 1 ]]; then
-    printf -v target_original_label '%06d' "${TARGET_ORIGINAL_INDEX}"
-    coarse_dump=${RECOVAR_SIGNIFICANCE_DUMP_DIR}/significance_orig${target_original_label}_it002_cs060.npz
-    test -s "${coarse_dump}"
+    printf -v target_iteration_label '%03d' "${TARGET_ITERATION}"
+    printf -v target_size_label '%03d' "${TARGET_CURRENT_SIZE}"
+    for target_original in ${TARGET_ORIGINAL_INDICES//,/ }; do
+        printf -v target_original_label '%06d' "${target_original}"
+        coarse_dump=${RECOVAR_SIGNIFICANCE_DUMP_DIR}/significance_orig${target_original_label}_it${target_iteration_label}_cs${target_size_label}.npz
+        test -s "${coarse_dump}"
+    done
     rg -q 'coarse-significance dump completed; stopping before pass-2/M-step work' \
         "${OUTPUT}/run.log"
-    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","coarse_stack1204_dump":true,"target_stack_one_based":%d,"gaussian_coarse":%s,"gaussian_sincosf":%s,"exact_coarse":%s,"stopped_after_dump":true}\n' \
-        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${TARGET_STACK_ONE_BASED}" "${GAUSSIAN_COARSE_STACK1204}" "${GAUSSIAN_SINCOSF_STACK1204}" "${EXACT_COARSE_STACK1204}" \
+    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","coarse_stack1204_dump":true,"target_stacks_one_based":"%s","target_iteration":%d,"target_current_size":%d,"gaussian_coarse":%s,"gaussian_sincosf":%s,"exact_coarse":%s,"stopped_after_dump":true}\n' \
+        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${TARGET_STACKS_ONE_BASED}" "${TARGET_ITERATION}" "${TARGET_CURRENT_SIZE}" "${GAUSSIAN_COARSE_STACK1204}" "${GAUSSIAN_SINCOSF_STACK1204}" "${EXACT_COARSE_STACK1204}" \
         > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
     touch "${ROOT}/DUMP_SUCCESS_${SLURM_JOB_ID}"
     exit 0

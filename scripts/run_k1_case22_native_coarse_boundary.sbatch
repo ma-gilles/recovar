@@ -29,9 +29,14 @@ LAUNCHER=${REPO}/scripts/run_k1_case22_native_coarse_boundary.sbatch
 CAPTURE=${ROOT}/capture
 RELION_OUT=${ROOT}/relion
 TARGET_STACK_ONE_BASED=${K1_CASE22_TARGET_STACK_ONE_BASED:-1204}
+TARGET_ITERATION=${K1_CASE22_TARGET_ITERATION:-2}
 CAPTURE_FINE=${K1_CASE22_CAPTURE_FINE:-0}
 if (( TARGET_STACK_ONE_BASED < 1 )); then
     echo "K1_CASE22_TARGET_STACK_ONE_BASED must be positive" >&2
+    exit 2
+fi
+if (( TARGET_ITERATION < 1 )); then
+    echo "K1_CASE22_TARGET_ITERATION must be positive" >&2
     exit 2
 fi
 if [[ "${CAPTURE_FINE}" != 0 && "${CAPTURE_FINE}" != 1 ]]; then
@@ -77,14 +82,14 @@ case "${GPU_NAME}" in *H100*) ;; *) echo "Expected H100, got ${GPU_NAME}" >&2; e
 nvidia-smi -q > "${ROOT}/provenance/nvidia_smi_${SLURM_JOB_ID}.txt"
 
 export RELION_COARSE_CAPTURE_DIR=${CAPTURE}
-export RELION_COARSE_CAPTURE_ITER=2
+export RELION_COARSE_CAPTURE_ITER=${TARGET_ITERATION}
 export RELION_COARSE_CAPTURE_STACK=${TARGET_STACK_ONE_BASED}
 if [[ "${CAPTURE_FINE}" == 1 ]]; then
     # Fine-score capture is enabled through the particle-scoped BPref selector.
     # Geometry-only mode avoids retaining the large per-pixel factor payload.
     export RELION_BPRE_CAPTURE_DIR=${CAPTURE}
     export RELION_BPRE_CAPTURE_SCHEMA=2
-    export RELION_BPRE_CAPTURE_ITER=2
+    export RELION_BPRE_CAPTURE_ITER=${TARGET_ITERATION}
     export RELION_BPRE_CAPTURE_CLASS=1
     export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES=1
     export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=1
@@ -100,7 +105,7 @@ command=(
     --auto_refine --split_random_halves --particle_diameter 200 --ini_high 30
     --firstiter_cc --ctf --flatten_solvent --zero_mask --low_resol_join_halves 40
     --norm --scale --healpix_order 3 --offset_range 3.0 --offset_step 1.0
-    --oversampling 1 --pad 2 --random_seed 1722 --auto_iter_max 2
+    --oversampling 1 --pad 2 --random_seed 1722 --auto_iter_max "${TARGET_ITERATION}"
     --pool 3 --gpu 0:0:0 --j 4
 )
 printf '%q ' "${command[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
@@ -110,9 +115,9 @@ start=$(date +%s)
     cd "${DATA}"
     "${command[@]}"
 ) > "${RELION_OUT}/runner.stdout" 2> "${RELION_OUT}/runner.stderr"
-printf '{"job_id":"%s","wall_s":%d,"target_stack_one_based":%d,"capture_fine":%d}\n' \
+printf '{"job_id":"%s","wall_s":%d,"target_stack_one_based":%d,"target_iteration":%d,"capture_fine":%d}\n' \
     "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" "${TARGET_STACK_ONE_BASED}" \
-    "${CAPTURE_FINE}" \
+    "${TARGET_ITERATION}" "${CAPTURE_FINE}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 
 test "$(find "${CAPTURE}" -maxdepth 1 -name '*.coarse-v1.bin' | wc -l)" -eq 1
@@ -120,7 +125,8 @@ if [[ "${CAPTURE_FINE}" == 1 ]]; then
     test "$(find "${CAPTURE}" -maxdepth 1 -name '*.fine-score-v1.bin' | wc -l)" -eq 1
     test "$(find "${CAPTURE}" -maxdepth 1 -name '*.bpre-v2.bin' | wc -l)" -eq 1
 fi
-test -s "${RELION_OUT}/run_it002_data.star"
+printf -v target_iteration_label '%03d' "${TARGET_ITERATION}"
+test -s "${RELION_OUT}/run_it${target_iteration_label}_data.star"
 find "${CAPTURE}" "${RELION_OUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
 touch "${ROOT}/SUCCESS_${SLURM_JOB_ID}"

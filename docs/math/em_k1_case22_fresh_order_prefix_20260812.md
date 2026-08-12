@@ -515,3 +515,50 @@ Pmax residual (`0.010401692754745506`) and remains a secondary target if stack
 232 does not explain the remaining soft-posterior tail. The frozen full-case
 scorecard remains `28/34` strict, `32/34` topology, and `34/34` evaluated
 until a full fixed case is rerun. K=4 remains parked.
+
+## Focused residual localization
+
+The next stopped-boundary experiments refine the chronology. Stack 232 is
+exact through iteration 2: Pmax differs by only `1.0521820784439861e-10` and
+its retained coarse support is exactly `83095` in both engines. Its `53` versus
+`52` support split is therefore an iteration-3 amplifier, not the original
+iteration-2 seed.
+
+The production RECOVAR iteration-3 coarse dump and the locally stable target
+particle from native capture have identical candidate topology, prior support,
+and winning coarse candidate. They differ by exactly one retained candidate,
+at RECOVAR coordinates `(rotation=18202, translation=15)`. That candidate has
+native/RECOVAR posterior `8.26739197e-5`/`8.28443808e-5` and a centered
+preexponent residual of `+0.00205040`. The full centered raw-score residual has
+median absolute `0.00181198`, 95th percentile `0.00682068`, and maximum
+`0.0237503`; the orientation-prior residual is only `9.54e-7` at the 95th
+percentile and the translation-prior residual is `6.10e-6`. Removing a
+per-rotation median explains `84.4%` of raw residual sum of squares, while
+removing a per-translation median explains only `0.3%`. This localizes the
+observed stack-232 support split to rotation-dependent projection/reference
+scoring before posterior normalization, not translation phase or a support
+tie rule.
+
+This is a diagnostic localization, not yet a production-causality result. The
+native capture globally fails its all-particle inertness gate, although stack
+232 itself retains the same hard state and support as the robust native run.
+The decisive A/B is therefore a second stopped RECOVAR arm that changes only
+the coarse scorer to the exact RELION Gaussian operand/reduction path.
+
+A separate two-minute iteration-2 RECOVAR panel captured stacks 1462, 1569,
+2276, and 1574. Stack 1462 has matching coarse support `12`, the same winning
+candidate, exact orientation priors, zero support mismatch, and coarse
+posterior total variation only `8.61e-8`; its reported Pmax residual therefore
+belongs to fine pass 2, not coarse pass 1. Stacks 1569 and 2276 demonstrate a
+different cutoff-sensitive regime: their selected-minimum and
+excluded-maximum posterior weights are respectively
+`7.99773900e-8`/`7.99761679e-8` and
+`1.30199538e-7`/`1.30130033e-7`. Small upstream posterior changes can thus
+produce several reported support-count changes without changing a hard pose.
+
+Artifacts:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack232_coarse_it3_20260812T1342ET/analysis/K1_STACK232_IT3_COARSE_BOUNDARY_V2.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_coarse_panel_20260812T1404ET/coarse/significance_orig001461_it002_cs060.npz`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_coarse_panel_b_20260812T1407ET/coarse/`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1462_native_coarse_it2_20260812T1410ET/analysis/K1_STACK1462_IT2_COARSE_BOUNDARY.json`

@@ -4,7 +4,10 @@ import struct
 
 import numpy as np
 
-from scripts.analyze_k1_native_coarse_boundary import load_native_coarse_capture
+from scripts.analyze_k1_native_coarse_boundary import (
+    _raw_residual_structure,
+    load_native_coarse_capture,
+)
 
 
 def test_load_native_coarse_capture(tmp_path):
@@ -37,3 +40,19 @@ def test_load_native_coarse_capture(tmp_path):
 
 def test_float_header_layout_is_little_endian():
     assert struct.unpack("<f", struct.pack("<I", 0x3F800000))[0] == 1.0
+
+
+def test_raw_residual_structure_identifies_rotation_only_effect():
+    residual = np.asarray(
+        [
+            [1.0, 1.0, 1.0],
+            [-2.0, -2.0, -2.0],
+            [4.0, 4.0, 4.0],
+        ]
+    )
+    report = _raw_residual_structure(residual, np.ones_like(residual, dtype=bool))
+    after_rotation = report["after_rotation_median"]
+    after_translation = report["after_translation_median"]
+    assert after_rotation["rms"] == 0.0
+    assert after_rotation["sse_reduction_fraction"] == 1.0
+    assert after_translation["rms"] > 0.0

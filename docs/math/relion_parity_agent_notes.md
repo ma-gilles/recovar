@@ -11821,3 +11821,26 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   The next focused target is stack 232 at the iteration-3 support threshold;
   stack 2739 is the secondary target for the largest remaining Pmax delta.
   No full trajectory is scheduled yet. K=4 remains parked.
+
+## 2026-08-12 14:30 ET — K=1 stopped-boundary residual localization
+
+- Stack 232 is exact at iteration 2 (Pmax delta `1.05218e-10`, support
+  `83095/83095`), so its iteration-3 `53/52` split is an amplifier rather than
+  the original seed.
+- The stopped production coarse comparison finds identical candidate topology,
+  prior support, and winner, with exactly one support-mask mismatch. The
+  mismatching candidate has centered preexponent residual `+0.00205040`.
+- Centered raw-score residual dominates the priors: median absolute
+  `0.00181198`, p95 `0.00682068`, maximum `0.0237503`. A per-rotation median
+  removes `84.4%` of residual SSE; a per-translation median removes `0.3%`.
+  The immediate boundary is therefore rotation-dependent projection/reference
+  scoring before normalization.
+- The native observer is quarantined globally because its all-particle capture
+  inertness gate failed; stack 232 itself is locally stable. A stopped exact-
+  coarse RECOVAR A/B is running before any source change or full trajectory.
+- A two-minute iteration-2 RECOVAR panel covers stacks 1462, 1569, 2276, and
+  1574. Stack 1462 has exact coarse support/winner and posterior TV `8.61e-8`,
+  assigning its Pmax residual to fine pass 2. Stacks 1569 and 2276 have nearly
+  coincident cutoff weights and are support-threshold amplifiers.
+- Analyzer/launcher changes are diagnostic only. K=4 remains parked and the
+  fixed scorecard remains `28/34` strict, `32/34` topology, `34/34` evaluated.

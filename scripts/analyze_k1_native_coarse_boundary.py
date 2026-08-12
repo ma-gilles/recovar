@@ -46,6 +46,68 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _residual_metrics(values: np.ndarray) -> dict[str, float]:
+    absolute = np.abs(np.asarray(values, dtype=np.float64))
+    return {
+        "median_abs": float(np.median(absolute)),
+        "p95_abs": float(np.percentile(absolute, 95)),
+        "max_abs": float(np.max(absolute)),
+        "rms": float(np.sqrt(np.mean(np.square(absolute)))),
+    }
+
+
+def _raw_residual_structure(
+    residual: np.ndarray,
+    valid: np.ndarray,
+) -> dict[str, object]:
+    """Separate rotation-only and translation-only structure in a score residual."""
+
+    residual = np.asarray(residual, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    if residual.shape != valid.shape or residual.ndim != 2:
+        raise ValueError("raw residual and validity mask must be matching 2D arrays")
+    matrix = np.where(valid, residual, np.nan)
+    rotation_effect = np.full(matrix.shape[0], np.nan, dtype=np.float64)
+    for row in range(matrix.shape[0]):
+        row_values = matrix[row, valid[row]]
+        if row_values.size:
+            rotation_effect[row] = np.median(row_values)
+    translation_effect = np.full(matrix.shape[1], np.nan, dtype=np.float64)
+    for column in range(matrix.shape[1]):
+        column_values = matrix[valid[:, column], column]
+        if column_values.size:
+            translation_effect[column] = np.median(column_values)
+    after_rotation = matrix - rotation_effect[:, None]
+    after_translation = matrix - translation_effect[None, :]
+    translation_after_rotation = np.full(matrix.shape[1], np.nan, dtype=np.float64)
+    for column in range(matrix.shape[1]):
+        column_values = after_rotation[valid[:, column], column]
+        if column_values.size:
+            translation_after_rotation[column] = np.median(column_values)
+    after_both = after_rotation - translation_after_rotation[None, :]
+    total_sse = float(np.nansum(np.square(matrix)))
+
+    def summary(values: np.ndarray) -> dict[str, float]:
+        finite = np.asarray(values, dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        result = _residual_metrics(finite)
+        result["sse_reduction_fraction"] = (
+            0.0
+            if total_sse == 0.0
+            else float(1.0 - np.sum(np.square(finite)) / total_sse)
+        )
+        return result
+
+    finite_rotation_effect = rotation_effect[np.isfinite(rotation_effect)]
+    return {
+        "after_rotation_median": summary(after_rotation),
+        "after_translation_median": summary(after_translation),
+        "after_rotation_and_translation_medians": summary(after_both),
+        "rotation_effect": _residual_metrics(finite_rotation_effect),
+        "translation_effect_by_index": translation_effect.tolist(),
+    }
+
+
 def load_native_coarse_capture(path: Path) -> NativeCoarseCapture:
     data = path.read_bytes()
     if data[:16].rstrip(b"\0") != b"RLNCOARSEV1":
@@ -229,6 +291,11 @@ def analyze(
         recovar_raw[raw_valid].astype(np.float64)
         + native_raw[raw_valid].astype(np.float64)
     )
+    raw_residual_full = (
+        recovar_raw.astype(np.float64)
+        + native_raw.astype(np.float64)
+        - raw_offset
+    )
     raw_residual = (
         recovar_raw[raw_valid].astype(np.float64)
         + native_raw[raw_valid].astype(np.float64)
@@ -271,13 +338,25 @@ def analyze(
         -(native_raw[recovar_target] - native_raw[native_best])
     )
 
-    def residual_metrics(values: np.ndarray) -> dict[str, float]:
-        absolute = np.abs(np.asarray(values, dtype=np.float64))
-        return {
-            "median_abs": float(np.median(absolute)),
-            "p95_abs": float(np.percentile(absolute, 95)),
-            "max_abs": float(np.max(absolute)),
-        }
+    support_mismatch_records = []
+    for rotation, translation in mask_mismatches[:64]:
+        support_mismatch_records.append(
+            {
+                "rotation": int(rotation),
+                "translation": int(translation),
+                "raw_score_centered_residual": float(
+                    raw_residual_full[rotation, translation]
+                ),
+                "preexponent_centered_residual": float(
+                    (recovar_pre[rotation, translation] - recovar_pre_max)
+                    - (native_pre[rotation, translation] - native_pre_max)
+                ),
+                "native_probability": float(native_probability[rotation, translation]),
+                "recovar_probability": float(recovar_probability[rotation, translation]),
+                "native_selected": bool(native_mask[rotation, translation]),
+                "recovar_selected": bool(recovar_mask[rotation, translation]),
+            }
+        )
 
     return {
         "schema": "recovar.em.k1_native_coarse_boundary.v1",
@@ -310,19 +389,26 @@ def analyze(
         "full_boundary": {
             "candidate_topology_exact": bool(native_raw.shape == recovar_raw.shape),
             "raw_valid_count": int(np.count_nonzero(raw_valid)),
-            "raw_score_centered_residual": residual_metrics(raw_residual),
-            "preexponent_centered_residual": residual_metrics(pre_residual),
+            "raw_score_centered_residual": _residual_metrics(raw_residual),
+            "raw_score_residual_structure": _raw_residual_structure(
+                raw_residual_full,
+                raw_valid,
+            ),
+            "preexponent_centered_residual": _residual_metrics(pre_residual),
             "orientation_prior_support_exact": bool(
                 np.array_equal(native_rotation_zero, ~np.isfinite(recovar_rotation_prior))
             ),
-            "orientation_prior_residual": residual_metrics(orientation_prior_residual),
-            "translation_prior_residual": residual_metrics(translation_prior_residual),
-            "posterior_residual": residual_metrics(probability_residual),
+            "orientation_prior_residual": _residual_metrics(orientation_prior_residual),
+            "translation_prior_residual": _residual_metrics(translation_prior_residual),
+            "posterior_residual": _residual_metrics(probability_residual),
             "posterior_total_variation": float(
                 0.5 * np.sum(np.abs(probability_residual), dtype=np.float64)
             ),
             "support_mismatch_count": int(mask_mismatches.shape[0]),
             "support_mismatches_first": mask_mismatches[:64].astype(int).tolist(),
+            "support_mismatch_records_first": support_mismatch_records,
+            "native_selected_count": int(np.count_nonzero(native_mask)),
+            "recovar_selected_count": int(np.count_nonzero(recovar_mask)),
         },
         "shared_best": {
             "native_recovar_coordinates": [int(native_best[0]), int(native_best[1])],
