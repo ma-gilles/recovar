@@ -111,8 +111,20 @@ class LocalSearchOptions:
     """Local angular-search controls."""
 
     auto_local_healpix_order: int = LOCAL_SEARCH_HEALPIX_ORDER
-    local_search_profile_mode: str = "auto"
+    local_search_profile_mode: Literal["auto", "on", "off"] = "auto"
     local_search_translation_prior_mode: str = "coarse"
+
+    def __post_init__(self):
+        if self.local_search_profile_mode not in {
+            "auto",
+            "on",
+            "off"
+        }:
+            raise ValueError(
+                "local_search_profile_mode must be "
+                "'auto', 'on', or 'off', "
+                f"got {self.local_search_profile_mode!r}"
+            )    
 
 
 @dataclass(frozen=True)
