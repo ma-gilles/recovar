@@ -31,6 +31,12 @@ RELION_RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispa
 CASE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_current_pr_failure_gate_fd8e27b9_20260808T1515ET/scorecard_remaining5/cases/26_tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80
 DATA=${CASE}/data
 CONTROL=${CASE}/relion_ref
+DATA=${DATA_OVERRIDE:-${DATA}}
+CONTROL=${CONTROL_OVERRIDE:-${CONTROL}}
+RANDOM_SEED=${RANDOM_SEED_OVERRIDE:-1726}
+EXPECTED_DATA_STAR_SHA256=${EXPECTED_DATA_STAR_SHA256:-34016f7f367587125956de8f00895c27b14225511c8ef0f517179b890685e139}
+EXPECTED_PARTICLE_STACK_SHA256=${EXPECTED_PARTICLE_STACK_SHA256:-4cd77e4ddeb731f719adb0cfd661e4f00221e07d08e15e1a5dc229737d9c848c}
+EXPECTED_REFERENCE_SHA256=${EXPECTED_REFERENCE_SHA256:-7aafc4f04e482f7410ff37686ba46db14578334ca77909f04bff30dbba2789d1}
 CAPTURE_DIR=${ROOT}/capture
 BPREF_CAPTURE_DIR=${ROOT}/bpref_capture
 BPREF_ACCUM_DIR=${ROOT}/bpref_accum
@@ -53,9 +59,9 @@ require_sha "${EXPECTED_LAUNCHER_SHA256}" "${LAUNCHER}"
 require_sha "${EXPECTED_RELION_BINARY_SHA256}" "${RELION_BINARY}"
 test "$(git -C "${RELION_SOURCE}" rev-parse HEAD)" = ed53c60d83125902c456b7fc5461c78c3966b306
 test "$(git -C "${RELION_SOURCE}" diff --binary | sha256sum | awk '{print $1}')" = "${EXPECTED_RELION_SOURCE_DIFF_SHA256}"
-require_sha 34016f7f367587125956de8f00895c27b14225511c8ef0f517179b890685e139 "${DATA}/particles.star"
-require_sha 4cd77e4ddeb731f719adb0cfd661e4f00221e07d08e15e1a5dc229737d9c848c "${DATA}/particles.128.mrcs"
-require_sha 7aafc4f04e482f7410ff37686ba46db14578334ca77909f04bff30dbba2789d1 "${DATA}/reference_init_relion.mrc"
+require_sha "${EXPECTED_DATA_STAR_SHA256}" "${DATA}/particles.star"
+require_sha "${EXPECTED_PARTICLE_STACK_SHA256}" "${DATA}/particles.128.mrcs"
+require_sha "${EXPECTED_REFERENCE_SHA256}" "${DATA}/reference_init_relion.mrc"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${AUDIT_REPO}" rev-parse HEAD)" = 187a9f60cdea19363d49d46099b052f23288f05a
 test -z "$(git -C "${AUDIT_REPO}" status --porcelain=v1)"
@@ -156,6 +162,7 @@ case "${GPU_NAME}" in *H100*) ;; *) echo "Expected H100, got ${GPU_NAME}" >&2; e
     echo "capture_bpref_accum=${CAPTURE_BPREF_ACCUM}"
     echo "capture_ppref=${CAPTURE_PPREF}"
     echo "capture_wavg_reference=${CAPTURE_WAVG_REFERENCE}"
+    echo "random_seed=${RANDOM_SEED}"
     echo "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=unset"
     echo "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER=unset"
     sha256sum "${LAUNCHER}" "${RELION_BINARY}" \
@@ -171,7 +178,7 @@ COMMAND=(
     --auto_refine --split_random_halves --particle_diameter 200 --ini_high 30
     --firstiter_cc --ctf --flatten_solvent --zero_mask --low_resol_join_halves 40
     --norm --scale --healpix_order 3 --offset_range 3.0 --offset_step 1.0
-    --oversampling 1 --pad 2 --random_seed 1726 --auto_iter_max 2
+    --oversampling 1 --pad 2 --random_seed "${RANDOM_SEED}" --auto_iter_max 2
     --pool 3 --gpu 0:0:0 --j 4
 )
 printf '%q ' "${COMMAND[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"

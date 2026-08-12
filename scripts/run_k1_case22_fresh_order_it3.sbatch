@@ -145,7 +145,10 @@ elif [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
     else
         unset RECOVAR_PASS2_DUMP_ROTATION_ROWS
     fi
-    if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
+    # The ordinary pass-2 dump is emitted before the norm-residual operands.
+    # In residual-input mode, finish the single requested iteration so both
+    # artifacts are available rather than stopping at the earlier boundary.
+    if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 && "${NORM_RESIDUAL_INPUTS}" != 1 ]]; then
         export RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET=1
     fi
     mkdir -p "${RECOVAR_PASS2_DUMP_DIR}"
@@ -207,7 +210,7 @@ start=$(date +%s)
 "${COMMAND[@]}" > "${OUTPUT}/run.log" 2>&1
 wall_s=$(( $(date +%s) - start ))
 
-if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
+if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 && "${NORM_RESIDUAL_INPUTS}" != 1 ]]; then
     printf -v target_original_label '%06d' "${TARGET_ORIGINAL_INDEX}"
     printf -v target_size_label '%03d' "${TARGET_CURRENT_SIZE}"
     compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig${target_original_label}_cs${target_size_label}.npz
@@ -270,6 +273,10 @@ with np.load(sys.argv[1], allow_pickle=False) as payload:
     assert payload["candidate_mask"].shape == payload["probs"].shape
 PY
     fi
+    if [[ "${NORM_RESIDUAL_INPUTS}" = 1 ]]; then
+        norm_residual_dump=${RECOVAR_PASS2_DUMP_DIR}/norm_residual_orig${target_original_label}_half1_cs${target_size_label}.npz
+        test -s "${norm_residual_dump}"
+    fi
 fi
 ! rg -q 'Traceback|RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' "${OUTPUT}/run.log"
 rg -q 'Applied RELION fresh paired AutoRefine particle order with effective seed 1723' "${OUTPUT}/run.log"
@@ -279,8 +286,8 @@ if [[ "${PARITY_DUMP}" = 1 ]]; then
     test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
 fi
 
-printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"parity_dump":%s}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${PARITY_DUMP}" \
+printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"norm_residual_inputs":%s,"parity_dump":%s}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${NORM_RESIDUAL_INPUTS}" "${PARITY_DUMP}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
