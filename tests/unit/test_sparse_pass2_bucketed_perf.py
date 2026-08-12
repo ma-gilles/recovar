@@ -6971,6 +6971,9 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
         rtol=1e-6,
         atol=1e-6,
     )
+    assert np.sum(np.asarray(unchunked_pruned[6].rotation_posterior_sums)) < np.sum(
+        np.asarray(unchunked[6].rotation_posterior_sums)
+    )
 
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", str(1024**3))
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_WINDOWED_PREPARE", "0")
