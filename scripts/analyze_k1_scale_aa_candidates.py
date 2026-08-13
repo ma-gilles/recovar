@@ -298,8 +298,7 @@ def analyze(
     ]
 
     aa_weight_swap = None
-    if aa_feature_per_shell is not None:
-        _require(native_components is not None, "native components are required for AA weight swap")
+    if aa_feature_per_shell is not None and native_components is not None:
         _require(
             aa_feature_per_shell.shape == (recovar_rotations.shape[0], aa_feature_shell_ids.size),
             "candidate AA shell-feature topology changed",

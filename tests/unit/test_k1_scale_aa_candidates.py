@@ -37,7 +37,7 @@ def test_scale_aa_candidates_matches_rotation_and_translation_permutations(tmp_p
     )
     np.savez_compressed(
         recovar,
-        schema=np.asarray("recovar-k1-scale-aa-chunked-v1"),
+        schema=np.asarray("recovar-k1-scale-xa-aa-chunked-v3"),
         iteration=np.int64(2),
         half=np.int64(1),
         group_id=np.int64(109),
@@ -52,6 +52,9 @@ def test_scale_aa_candidates_matches_rotation_and_translation_permutations(tmp_p
             np.sum(probabilities, dtype=np.float64),
             dtype=np.float32,
         ),
+        scale_aa_per_shell=np.zeros(31, dtype=np.float64),
+        candidate_aa_feature_per_shell=np.zeros((2, 2), dtype=np.float32),
+        candidate_aa_feature_shell_ids=np.asarray([1, 2], dtype=np.int32),
     )
 
     native_rotation_order = np.asarray([1, 0])
@@ -85,3 +88,4 @@ def test_scale_aa_candidates_matches_rotation_and_translation_permutations(tmp_p
     assert report["translation_join"]["exact_phase_match_count"] == 2
     assert report["posterior"]["union_total_variation"] == 0.0
     assert report["posterior"]["common_candidate_metric"]["relative_l2"] == 0.0
+    assert report["aa_weight_swap"] is None
