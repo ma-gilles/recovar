@@ -5684,6 +5684,35 @@ same-device equivalence or numerical noise.
 - Frozen score remains 25/34 strict, 31/34 exact topology, and 34/34
   evaluated.
 
+## 2026-08-13 00:20 ET — direct residual exposed a mixed bucket path
+
+- Corrected stopped job `12313872` captures Wavg's `XA -> AA -> diff2`
+  triplet using raw translated images. On the exact-radius pixels, direct
+  residual shells 0--29 track native to the low `1e-6` scale.
+- Partial trajectory job `12314354` applies direct residuals only to
+  rotation-chunked buckets. It improves low-shell noise and leaves only one
+  support-count mismatch, but worsens iteration-3 Pmax relative L2 from
+  `1.29860e-4` to `3.19634e-4`, worsens merged FSC-AUC to
+  `0.999999996315`, and introduces one `3.692`-degree pose error.
+- The pose error is row 940 and the remaining support mismatch is row 1240;
+  they are not the same particle.
+- Code audit proves naturally unchunked buckets still used algebraic XA/AA
+  and residuals. Job `12316478` is the clean two-iteration A/B with the same
+  fused triplet in both paths. Job `12316256` failed before science on an
+  over-strict iteration-1 guard and is not evidence for or against parity.
+- The partial treatment also left per-particle norm correction algebraic.
+  Native source adds the same direct `wdiff2` pixels to noise and norm state;
+  the complete fix must replace both before appending the separate matched
+  high-resolution `powerClass` tail.
+- Native source and the 1,860-row pixel capture prove Wavg launches the full
+  `60 x 31` FFTW rectangle. Exactly 1,462 rows have valid rounded shell IDs;
+  1,411 are exact-radius projection rows and the 51-row rim has zero XA/AA
+  but nonzero translated-image residual. The reconstructed index plan matches
+  all native `j` positions and shell labels exactly.
+- If the unified bucket run closes shells 0--29, the next focused treatment
+  will use the full 1,860-pixel issue topology to close shell 30 and atomic
+  scheduling together. Do not run a longer trajectory before that boundary.
+
 # 2026-07-24: case 4 iteration-1 BPref localizes upstream of reconstruction
 
 - Same-H100 science `11559949` completed the RECOVAR native/pre-join/post-join
@@ -12040,6 +12069,25 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
 - The fixed scorecard remains 28/34 strict. Next compare XA/BPref at this exact
   boundary, then run a short iteration-3 discriminator rather than a full
   case-22 trajectory.
+
+## 2026-08-13 00:50 ET — unified direct residual confirms cutoff/norm boundary
+
+- Two-iteration H100 job `12316478` applied the exact-radius direct triplet in
+  both rotation-chunked and naturally unchunked sparse buckets. It completed
+  successfully in `00:34:45`, removing the mixed-treatment confound.
+- Iteration-2 active-shell raw-noise relative L2 is `5.76849e-6`/`5.31592e-6`.
+  The remaining exact-only path still omits the 51 valid shell-30 rim pixels
+  and does not use direct `diff2` for per-particle norm, so this is a clean
+  localization result rather than an accepted production treatment.
+- Full-rectangle branch `codex/k1-wavg-rect-20260813` commit `104af721`
+  implements the `60 x 31 = 1860` FFTW issue stream, with 1,462 host-valid,
+  1,411 exact-reference, 51 image-only rim, and 398 ignored pixels. Direct
+  current-size norm and high-shell `powerClass` are dumped separately by
+  immutable particle identity.
+- Eight focused noise/scale tests pass. H100 job `12317473` is the stopped
+  iteration-2 joint shell-noise/norm gate. Do not run iteration 3 until it
+  closes or falsifies this boundary. K=4 remains parked and the scorecard is
+  unchanged.
 
 ## 2026-08-12 21:20 ET — fused Wavg closes XA and AA
 

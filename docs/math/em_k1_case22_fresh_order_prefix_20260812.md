@@ -918,3 +918,78 @@ the signed FSC prefix audit SHA-256 is
 The next stopped target is the earliest of the six iteration-3 support
 boundaries, with numerator, denominator, normalized weight, cumulative mass,
 and exact threshold margin captured before another complete trajectory.
+
+## Direct Wavg residual and branch-consistency gate
+
+The fused Wavg capture was extended with the third native atomic lane,
+`diff2`. Corrected stopped job `12313872` shows that the direct residual uses
+the raw translated preprocessed image rather than RECOVAR's CTF/noise-weighted
+BPref numerator. On the exact-radius reconstruction pixels, atomic AA and XA
+match native at approximately `1.4e-6` and `1.8e-6` pixel relative L2, while
+their shell reductions match at approximately `4.3e-7` and `5.9e-7`.
+
+Three-iteration diagnostic job `12314354` replaced complete shells 0--29 with
+that direct fused residual, but only in rotation-chunked buckets. It improved
+the iteration-2 low-shell raw-noise relative L2 to `6.71e-6` and `5.51e-6`
+for halves 1 and 2 and reduced the iteration-3 support-count mismatch from six
+particles to one. The downstream result was mixed: iteration-3 Pmax relative
+L2 worsened from the accepted fused-XA/AA control's `1.29860e-4` to
+`3.19634e-4`, merged signed FSC-AUC worsened from `0.999999999099` to
+`0.999999996315`, and one hard pose changed by `3.692` degrees. The hard-pose
+outlier is identity row 940; the sole support-count mismatch is identity row
+1240, so they are distinct effects.
+
+The implementation audit found the confound: naturally unchunked sparse-pass
+buckets still used the algebraic XA/AA and noise residual. The direct run was
+therefore an internally mixed arithmetic treatment, not a clean Wavg A/B.
+It also left RECOVAR's per-particle normalization correction on the algebraic
+`A2 - 2*XA + image power` path, whereas RELION adds the same direct Wavg
+`wdiff2` pixels to both `thr_wsum_sigma2_noise` and
+`exp_wsum_norm_correction`. This is a second coupled inconsistency capable of
+moving the next iteration's normalized images even when the shellwise noise
+operand improves.
+Retry job `12316478` applies the same fused triplet to both bucket paths and is
+capped at two iterations with an exact noise-update dump. Failed predecessor
+`12316256` stopped before science because the centralized guard incorrectly
+rejected iteration 1's intentional absence of scale groups; the retry scopes
+the diagnostic to iterations where scale groups exist.
+
+The exact deployed Wavg source and native `scale_aa_pixels.tsv` also establish
+the complete pixel topology. At current size 60, the CUDA launch walks the
+full `60 x 31 = 1860` FFTW rectangle. The host later consumes 1,462 rounded
+support pixels: 1,411 exact-radius reference pixels plus 51 cutoff-rim pixels
+whose native XA and AA are exactly zero but whose translated-image residual is
+nonzero. A reconstructed FFTW gather matches all 1,860 native `j` positions
+and every native shell label bitwise. After the unified bucket gate, the next
+stopped treatment must reproduce this full launch topology; compactly adding
+only the 51 rim pixels would not reproduce the native CUDA issue schedule. It
+must use the resulting direct pixels for the shellwise noise numerator and the
+per-particle normalization correction, then add the independently matched
+high-resolution `powerClass` tail.
+
+The fixed complete-case scorecard remains `28/34` strict, `32/34` topology,
+and `34/34` evaluated. No threshold has changed, K=4 remains parked, and no
+complete case-22 trajectory is justified before the unified iteration-2
+operand result.
+
+Unified chunked/unchunked job `12316478` completed successfully in 34 minutes
+45 seconds. It removes the mixed-bucket confound, but remains restricted to
+the 1,411 exact-radius pixels and therefore leaves cutoff shell 30 on the
+algebraic path. The iteration-2 active-shell raw-noise relative L2 is
+`5.76849e-6` in half 1 and `5.31592e-6` in half 2. This modestly improves the
+partial half-1 result but does not close the boundary; its largest residual is
+at the omitted cutoff-rim treatment. The accepted reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_direct_unified_it2_retry_20260813T0022ET/analysis/noise_update_terms_components_half1.json`
+(SHA-256 `4c5b2594f0a8ff4050e4c50da34e165142efc2efab0b84bfd17c16ded6bb699c`)
+and the corresponding half-2 report (SHA-256
+`0d5e014041dff544ff0bec35e9ccfc2d74381a74e3dfff69a80dd061f86fd01d`).
+
+The next stopped boundary is job `12317473`. It emits the complete 1,860-pixel
+FFTW-ordered Wavg stream, consumes all 1,462 valid rounded-support pixels
+through shell 30, retains the 1,411 exact BPref pixels for XA/AA, and uses the
+same direct `diff2` pixels for per-particle normalization before adding the
+independently matched high-shell `powerClass` tail. It also writes an
+identity-aligned split of current-size and high-shell norm operands. Focused
+unit tests cover the exact `1860/1462/1411/51/398` topology and all eight
+noise/scale tests pass. No iteration-3 or complete trajectory is authorized
+until this joint shell-noise/norm gate is analyzed.
