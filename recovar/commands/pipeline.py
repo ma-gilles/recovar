@@ -449,6 +449,23 @@ def add_args(parser: argparse.ArgumentParser):
         ),
     )
     adv.add_argument(
+        "--ppca-mean-fsc-bandlimit",
+        dest="ppca_mean_fsc_bandlimit",
+        action="store_true",
+        help=(
+            "After PPCA EM, hard-bandlimit the exported PCs and loadings to the "
+            "global half-map mean FSC resolution, then recompute embeddings in "
+            "that bandlimited basis. Off by default."
+        ),
+    )
+    adv.add_argument(
+        "--ppca-mean-fsc-threshold",
+        dest="ppca_mean_fsc_threshold",
+        type=float,
+        default=1 / 7,
+        help="FSC cutoff used by --ppca-mean-fsc-bandlimit (default: 1/7).",
+    )
+    adv.add_argument(
         "--ppca-update-noise",
         dest="ppca_update_noise",
         action="store_true",
@@ -953,6 +970,42 @@ def _as_pipeline_basis_dtype(arr):
     return arr.astype(np.complex64 if np.iscomplexobj(arr) else np.float32)
 
 
+def _mean_fsc_pc_bandlimit(dataset, means, threshold=1 / 7):
+    """Return the current mean-FSC radial masks used by heterogeneous EM.
+
+    This intentionally mirrors :mod:`recovar.em.iterations`: compute the
+    global FSC from the two unregularized half maps, interpolate its threshold
+    crossing with ``locres.find_fsc_resol``, and use the dataset's hard radial
+    support mask at that radius.
+    """
+    threshold = float(threshold)
+    if not 0.0 < threshold < 1.0:
+        raise ValueError(f"--ppca-mean-fsc-threshold must be between 0 and 1, got {threshold}")
+
+    from recovar.heterogeneity import locres
+    from recovar.reconstruction import regularization
+
+    fsc = np.asarray(
+        regularization.get_fsc(
+            means.corrected0,
+            means.corrected1,
+            dataset.volume_shape,
+            substract_shell_mean=False,
+            frequency_shift=0,
+        )
+    )
+    radius = float(locres.find_fsc_resol(fsc, threshold=threshold))
+    full_mask = np.asarray(dataset.get_valid_frequency_indices(radius), dtype=np.float32).reshape(-1)
+    half_mask = np.asarray(
+        fourier_transform_utils.full_volume_to_half_volume(
+            full_mask.reshape(dataset.volume_shape),
+            dataset.volume_shape,
+        )
+    ).reshape(-1)
+    half_mask = np.asarray(half_mask.real, dtype=np.float32)
+    return full_mask, half_mask, radius, fsc
+
+
 def _run_ppca_refinement(
     dataset,
     means,
@@ -1105,6 +1158,22 @@ def _run_ppca_refinement(
     if U_full.shape[0] == half_vol_size:
         U_full = fourier_transform_utils.half_volume_to_full_volume(np.asarray(U_full).T, dataset.volume_shape).T
     U_full = _as_pipeline_basis_dtype(U_full)
+    mean_fsc_bandlimit = bool(getattr(args, "ppca_mean_fsc_bandlimit", False))
+    mean_fsc_radius = None
+    mean_fsc_threshold = float(getattr(args, "ppca_mean_fsc_threshold", 1 / 7))
+    if mean_fsc_bandlimit:
+        full_mask, half_mask, mean_fsc_radius, _ = _mean_fsc_pc_bandlimit(
+            dataset,
+            means,
+            threshold=mean_fsc_threshold,
+        )
+        U_full = U_full * full_mask[:, None]
+        W_ppca = np.asarray(W_ppca) * half_mask[:, None]
+        logger.info(
+            "PPCA: bandlimited PCs/loadings to mean FSC %.6g crossing at Fourier radius %.3f pixels",
+            mean_fsc_threshold,
+            mean_fsc_radius,
+        )
     u_rescaled = U_full
 
     use_em_contrasts = (
@@ -1112,7 +1181,13 @@ def _run_ppca_refinement(
         and contrast_mode == "marginalize"
         and posterior_info is not None
         and posterior_info.get("mean_c") is not None
+        and not mean_fsc_bandlimit
     )
+    if mean_fsc_bandlimit and bool(getattr(args, "ppca_embed_use_em_contrasts", False)):
+        logger.warning(
+            "PPCA: --ppca-mean-fsc-bandlimit changes the basis; recomputing embeddings and contrasts "
+            "instead of using the pre-bandlimit EM posteriors"
+        )
 
     if use_em_contrasts:
         # Use EM's marginalized posterior contrasts directly, bypassing the
@@ -1175,6 +1250,8 @@ def _run_ppca_refinement(
             embedding_source = "refitb"
         else:
             embedding_source = "compute_embeddings"
+        if mean_fsc_bandlimit:
+            embedding_source += "+mean_fsc_bandlimit"
 
     logger.info(
         "PPCA solve complete: q=%d iters=%d projcov_every=%d refitb_every=%d contrast_mode=%s",
@@ -1202,6 +1279,9 @@ def _run_ppca_refinement(
         "contrasts_noreg": contrasts_noreg,
         "em_mean_c": posterior_info.get("mean_c") if posterior_info else None,
         "posterior_count": posterior_count,
+        "mean_fsc_bandlimit": mean_fsc_bandlimit,
+        "mean_fsc_threshold": mean_fsc_threshold if mean_fsc_bandlimit else None,
+        "mean_fsc_radius": mean_fsc_radius,
     }
 
 
@@ -1692,6 +1772,9 @@ def standard_recovar_pipeline(args):
                 "ppca_effective_zdim": int(getattr(args, "ppca_effective_zdim", 0)),
                 "embedding_source": ppca_result["embedding_source"],
                 "posterior_count": int(ppca_result["posterior_count"]),
+                "mean_fsc_bandlimit": bool(ppca_result["mean_fsc_bandlimit"]),
+                "mean_fsc_threshold": ppca_result["mean_fsc_threshold"],
+                "mean_fsc_radius": ppca_result["mean_fsc_radius"],
             }
         else:
             for idx, focus_mask in enumerate(focus_masks):

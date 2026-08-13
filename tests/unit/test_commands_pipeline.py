@@ -62,6 +62,9 @@ def test_pipeline_registers_use_ppca():
     assert "--ppca-use-gridding-correction" in actions
     assert "--ppca-contrast-mode" in actions
     assert "--ppca-projected-covariance" in actions
+    assert "--ppca-mean-fsc-bandlimit" in actions
+    assert "--ppca-mean-fsc-threshold" in actions
+    assert actions["--ppca-mean-fsc-threshold"].default == pytest.approx(1 / 7)
 
 
 def test_pipeline_zdim_default_is_list():
@@ -433,12 +436,60 @@ def test_rescale_ppca_posteriors_matches_covariance_space_formula():
     np.testing.assert_allclose(covariances, expected_cov)
 
 
+def test_mean_fsc_pc_bandlimit_uses_current_heterogeneous_em_rule(monkeypatch):
+    volume_shape = (8, 8, 8)
+    dataset = SimpleNamespace(
+        volume_shape=volume_shape,
+        grid_size=8,
+        get_valid_frequency_indices=lambda radius: np.full(np.prod(volume_shape), radius, dtype=np.float32),
+    )
+    means = SimpleNamespace(
+        corrected0=np.ones(np.prod(volume_shape), dtype=np.complex64),
+        corrected1=np.ones(np.prod(volume_shape), dtype=np.complex64),
+    )
+    expected_fsc = np.array([1.0, 0.9, 0.5, 0.1, 0.0], dtype=np.float32)
+    observed = {}
+
+    from recovar.heterogeneity import locres
+    from recovar.reconstruction import regularization
+
+    monkeypatch.setattr(regularization, "get_fsc", lambda *args, **kwargs: expected_fsc)
+
+    def _fake_find_fsc_resol(fsc, threshold):
+        np.testing.assert_array_equal(fsc, expected_fsc)
+        observed["threshold"] = threshold
+        return 2.75
+
+    monkeypatch.setattr(locres, "find_fsc_resol", _fake_find_fsc_resol)
+
+    full_mask, half_mask, radius, fsc = pipeline_cmd._mean_fsc_pc_bandlimit(dataset, means, threshold=1 / 7)
+
+    assert observed["threshold"] == pytest.approx(1 / 7)
+    assert radius == 2.75
+    np.testing.assert_array_equal(fsc, expected_fsc)
+    np.testing.assert_array_equal(full_mask, np.full(np.prod(volume_shape), 2.75, dtype=np.float32))
+    assert half_mask.shape == (8 * 8 * 5,)
+    np.testing.assert_array_equal(half_mask, np.full(8 * 8 * 5, 2.75, dtype=np.float32))
+
+
+@pytest.mark.parametrize("threshold", [0.0, 1.0, -0.1, 1.1])
+def test_mean_fsc_pc_bandlimit_rejects_invalid_threshold(threshold):
+    with pytest.raises(ValueError, match="must be between 0 and 1"):
+        pipeline_cmd._mean_fsc_pc_bandlimit(SimpleNamespace(), SimpleNamespace(), threshold=threshold)
+
+
 @pytest.mark.parametrize(
-    ("tilt_series", "correct_contrast", "shared_contrast", "expected_contrast_mode"),
+    (
+        "tilt_series",
+        "correct_contrast",
+        "shared_contrast",
+        "expected_contrast_mode",
+        "mean_fsc_bandlimit",
+    ),
     [
-        (False, True, False, "marginalize"),
-        (True, True, True, "marginalize"),
-        (True, False, False, "none"),
+        (False, True, False, "marginalize", False),
+        (True, True, True, "marginalize", True),
+        (True, False, False, "none", False),
     ],
 )
 def test_run_ppca_refinement_uses_hybrid_shell_prior(
@@ -447,6 +498,7 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(
     correct_contrast,
     shared_contrast,
     expected_contrast_mode,
+    mean_fsc_bandlimit,
 ):
     fake_dataset = SimpleNamespace(
         volume_shape=(2, 2, 2),
@@ -466,10 +518,14 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(
         ppca_projected_covariance=False,
         tilt_series=tilt_series,
         shared_contrast_across_tilts=shared_contrast,
+        ppca_mean_fsc_bandlimit=mean_fsc_bandlimit,
     )
 
     prior_calls = {}
     em_calls = {}
+    embedding_calls = {}
+    full_mask = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=np.float32)
+    half_mask = np.array([1, 0, 1, 0, 1, 0, 1, 0], dtype=np.float32)
 
     def _fake_prior(dataset, mean_estimate, npc, volume_shape, batch_size):
         prior_calls["args"] = (dataset, mean_estimate, npc, volume_shape, batch_size)
@@ -503,6 +559,7 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(
         )
 
     def _fake_compute_embeddings(*args_, **kwargs_):
+        embedding_calls["u_rescaled"] = np.asarray(args_[1]["rescaled"])
         return (
             {4: np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32) * np.sqrt(np.arange(1, 5, dtype=np.float32))[None, :]},
             {4: np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32)},
@@ -519,6 +576,11 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(
     )
     monkeypatch.setattr(pipeline_cmd.ppca_module, "EM", _fake_em)
     monkeypatch.setattr(pipeline_cmd, "_compute_embeddings", _fake_compute_embeddings)
+    monkeypatch.setattr(
+        pipeline_cmd,
+        "_mean_fsc_pc_bandlimit",
+        lambda *args_, **kwargs_: (full_mask, half_mask, 2.5, np.ones(2, dtype=np.float32)),
+    )
 
     out = pipeline_cmd._run_ppca_refinement(
         fake_dataset,
@@ -554,6 +616,19 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(
     assert out["s_rescaled"].dtype == np.float32
     assert out["W"].dtype == np.complex64
     assert out["posterior_count"] == 1
+    assert out["mean_fsc_bandlimit"] is mean_fsc_bandlimit
+    if mean_fsc_bandlimit:
+        np.testing.assert_array_equal(out["u_rescaled"], full_mask[:, None] * np.ones((8, 4)))
+        np.testing.assert_array_equal(out["W"], half_mask[:, None] * np.full((8, 4), 5.0))
+        np.testing.assert_array_equal(embedding_calls["u_rescaled"], out["u_rescaled"])
+        assert out["mean_fsc_threshold"] == pytest.approx(1 / 7)
+        assert out["mean_fsc_radius"] == 2.5
+        assert out["embedding_source"].endswith("+mean_fsc_bandlimit")
+    else:
+        np.testing.assert_array_equal(out["u_rescaled"], np.ones((8, 4)))
+        np.testing.assert_array_equal(out["W"], np.full((8, 4), 5.0))
+        assert out["mean_fsc_threshold"] is None
+        assert out["mean_fsc_radius"] is None
     np.testing.assert_allclose(out["latent_coords"][4], np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32) * np.sqrt(np.arange(1, 5, dtype=np.float32))[None, :])
     np.testing.assert_allclose(out["contrasts"][4], np.array([1.25], dtype=np.float32))
 def test_run_ppca_refinement_rejects_unshared_cryoet_contrast():
