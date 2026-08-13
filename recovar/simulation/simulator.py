@@ -551,7 +551,6 @@ def generate_synthetic_dataset(
     relion_bg_radius_px=None,
     streaming_mmap=False,
     streaming_chunk_size=1000,
-    noise_rng_batch_size=None,
 ):
     """Generate a synthetic cryo-EM particle dataset.
 
@@ -597,11 +596,6 @@ def generate_synthetic_dataset(
         Chunk size for the streaming post-processing (RELION normalization
         and image offset). Memory peak per chunk is
         ``chunk_size * H * W * 8 bytes``.
-    noise_rng_batch_size : int, optional
-        Batch size used only to advance the random-noise stream. When omitted,
-        it matches the image processing batch size. Supplying a fixed value
-        keeps generated noise independent of GPU-memory-driven processing
-        batch changes.
     """
     from recovar.output import output
 
