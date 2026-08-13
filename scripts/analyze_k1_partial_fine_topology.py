@@ -22,6 +22,7 @@ from scripts.analyze_k1_fine_score_boundary import (
     _metric,
     _translation_map,
 )
+from scripts.analyze_k1_native_coarse_boundary import _raw_residual_structure
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
@@ -267,6 +268,15 @@ def analyze(
             - recovar_common_rot_prior
             - recovar_common_trans_prior
         ).astype(np.float32, copy=False)
+        preprior_residual = np.zeros(candidate_mask.shape, dtype=np.float64)
+        preprior_common = np.zeros(candidate_mask.shape, dtype=bool)
+        for row, (rotation, translation) in enumerate(ordered_common):
+            preprior_residual[rotation, translation] = (
+                float(recovar_common_preprior[row]) - float(native_common_preprior[row])
+            )
+            preprior_common[rotation, translation] = True
+        preprior_global_offset = float(np.median(preprior_residual[preprior_common]))
+        preprior_residual[preprior_common] -= preprior_global_offset
 
         native_significant_count = _native_significant_count(factor, candidates.size)
         native_significant_rows = np.argsort(-native_weights, kind="stable")[
@@ -289,6 +299,11 @@ def analyze(
             "preprior_score_centered": _metric(
                 _center(native_common_preprior),
                 _center(recovar_common_preprior),
+            ),
+            "preprior_score_global_offset_recovar_minus_native": preprior_global_offset,
+            "preprior_residual_structure": _raw_residual_structure(
+                preprior_residual,
+                preprior_common,
             ),
             "orientation_log_prior": _metric(
                 native_common_rot_prior,

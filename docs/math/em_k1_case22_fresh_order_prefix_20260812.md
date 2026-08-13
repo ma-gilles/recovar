@@ -1417,10 +1417,18 @@ native and production RECOVAR values are both near `0.48168`. Therefore this
 raw-score residual is recorded as a repeat-envelope diagnostic and does not
 authorize a scorer change.
 
+After removing the score convention's global offset
+(`2353.2583045959473`), a per-rotation median removes `74.4436%` of the
+pre-prior residual energy, while a translation-only median removes `10.2098%`.
+The residual after rotation and translation medians has RMS
+`0.0002211176118` and maximum absolute value `0.00128173828125`. This
+localizes the repeat-envelope residual mainly to rotation-dependent scoring,
+but does not make stack 232 a repeat-stable treatment target.
+
 The report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0232_production_capture_it3_20260813T063215ET/analysis/K1_STACK232_PRODUCTION_FINE_BOUNDARY.json`
 (SHA-256
-`b5bac528c6534b56dff6bb9c96c9cc9e221dd6a1e0e8456b23f2697169c9e421`).
+`65e2fdebe5e8e0207798b79830b7f0631ada829d097e8baa6f31bcd7754e0d59`).
 
 ## Iteration-3 continuation is not an exact live-state oracle
 
@@ -1440,6 +1448,11 @@ The uninterrupted fresh capture instead gives stack-262 Pmax/support
 drift, so stack 262 is removed from the actionable target set. Stacks 79,
 469, 2498, 2544, and 2659 retain the same one-count RECOVAR support excess
 against both independent native runs. Multi-particle native job `12326152`
-and production-preserving RECOVAR job `12326241` capture all five in one run;
-their staged tuple/score/prior/posterior/support comparison is the next
-first-divergence gate.
+received only stack 79 because commas in the `sbatch --export` value were
+interpreted as environment-variable separators. Its stack-79 state is locally
+admissible: the hard pose, shift, and native support count 47 match both
+reference runs, while Pmax is `0.358746` versus `0.358734` and `0.358731`.
+Corrected native job `12326366` passes the five targets with colon separators;
+production-preserving RECOVAR job `12326241` is unchanged. Their staged
+tuple/score/prior/posterior/support comparison is the next first-divergence
+gate.
