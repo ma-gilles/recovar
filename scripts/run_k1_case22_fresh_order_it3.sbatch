@@ -64,8 +64,9 @@ for target_stack in "${target_stack_values[@]}"; do
     target_original=$((target_stack - 1))
     TARGET_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDICES:+${TARGET_ORIGINAL_INDICES},}${target_original}
 done
-if (( ${#target_stack_values[@]} != 1 )) && [[ "${COARSE_STACK1204_DUMP}" != 1 ]]; then
-    echo "multiple target stacks are supported only by coarse-significance dump mode" >&2
+if (( ${#target_stack_values[@]} != 1 )) \
+    && [[ "${COARSE_STACK1204_DUMP}" != 1 && "${PRODUCTION_CANDIDATE_CAPTURE}" != 1 ]]; then
+    echo "multiple target stacks require coarse-significance or production-candidate capture mode" >&2
     exit 2
 fi
 case "${NORM_RESIDUAL_INPUTS}" in
@@ -227,7 +228,7 @@ if [[ "${PRODUCTION_CANDIDATE_CAPTURE}" = 1 ]]; then
     fi
     export RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR=${ROOT}/production_candidates
     export RECOVAR_COMPACT_CANDIDATE_CAPTURE_ITERATION=${TARGET_ITERATION}
-    export RECOVAR_COMPACT_CANDIDATE_CAPTURE_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDEX}
+    export RECOVAR_COMPACT_CANDIDATE_CAPTURE_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDICES}
     mkdir -p "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}"
 fi
 if [[ "${COMPACT_STACK1204_DUMP}" = 1 && "${COARSE_STACK1204_DUMP}" = 1 ]]; then
@@ -402,7 +403,7 @@ PY
     fi
 fi
 if [[ "${PRODUCTION_CANDIDATE_CAPTURE}" = 1 ]]; then
-    "${PYTHON}" - <<'PY' "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}" "${TARGET_ORIGINAL_INDEX}" "${TARGET_ITERATION}"
+    "${PYTHON}" - <<'PY' "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}" "${TARGET_ORIGINAL_INDICES}" "${TARGET_ITERATION}"
 from pathlib import Path
 import sys
 
@@ -413,14 +414,14 @@ from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
 )
 
 capture_dir = Path(sys.argv[1])
-target_original = int(sys.argv[2])
+target_originals = np.asarray([int(value) for value in sys.argv[2].split(",")], dtype=np.int64)
 target_iteration = int(sys.argv[3])
 paths = sorted(capture_dir.glob("raw_k1_*.npz"))
 assert paths, f"no production candidate shards in {capture_dir}"
 inventory = [validate_raw_capture_shard(path) for path in paths]
 assert {item["iteration"] for item in inventory} == {target_iteration}
 observed = np.concatenate([item["original_indices"] for item in inventory])
-assert np.array_equal(observed, np.asarray([target_original], dtype=np.int64)), observed
+assert np.array_equal(np.sort(observed), np.sort(target_originals)), observed
 PY
     find "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}" -type f -print0 | sort -z | xargs -0 sha256sum \
         > "${ROOT}/provenance/production_candidates_${SLURM_JOB_ID}.sha256"

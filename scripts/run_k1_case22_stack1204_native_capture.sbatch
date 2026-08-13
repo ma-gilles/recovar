@@ -21,11 +21,25 @@ set -euo pipefail
 ROOT=${K1_CASE22_STACK1204_ROOT}
 RUNTIME=${K1_CASE22_STACK1204_RUNTIME}
 TARGET_STACK_ONE_BASED=${K1_CASE22_TARGET_STACK_ONE_BASED:-1204}
+TARGET_STACKS_ONE_BASED=${K1_CASE22_TARGET_STACKS_ONE_BASED:-${TARGET_STACK_ONE_BASED}}
+TARGET_STACKS_ONE_BASED=${TARGET_STACKS_ONE_BASED//:/,}
 TARGET_ITERATION=${K1_CASE22_TARGET_ITERATION:-2}
 MAX_ITER=${K1_CASE22_MAX_ITER:-${TARGET_ITERATION}}
 GEOMETRY_ONLY=${K1_CASE22_BPRE_GEOMETRY_ONLY:-0}
 if (( TARGET_STACK_ONE_BASED < 1 || TARGET_ITERATION < 1 || MAX_ITER < TARGET_ITERATION )); then
     echo "target stack/iteration must be positive and max_iter must reach the target" >&2
+    exit 2
+fi
+IFS=',' read -r -a target_stack_values <<< "${TARGET_STACKS_ONE_BASED}"
+for target_stack in "${target_stack_values[@]}"; do
+    if [[ ! "${target_stack}" =~ ^[0-9]+$ ]] || (( target_stack < 1 )); then
+        echo "target stacks must be comma-separated positive integers" >&2
+        exit 2
+    fi
+done
+TARGET_COUNT=${#target_stack_values[@]}
+if (( TARGET_COUNT < 1 )) || [[ "$(printf '%s\n' "${target_stack_values[@]}" | sort -u | wc -l)" -ne "${TARGET_COUNT}" ]]; then
+    echo "target stacks must be nonempty and unique" >&2
     exit 2
 fi
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
@@ -83,11 +97,11 @@ export RELION_BPRE_CAPTURE_DIR=${CAPTURE}
 export RELION_BPRE_CAPTURE_SCHEMA=2
 export RELION_BPRE_CAPTURE_ITER=${TARGET_ITERATION}
 export RELION_BPRE_CAPTURE_CLASS=1
-export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES=1
-export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=1
+export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES=${TARGET_COUNT}
+export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=${TARGET_COUNT}
 export RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=2
 export RELION_BPRE_CAPTURE_MAX_BYTES=2000000000
-export RELION_BPRE_CAPTURE_STACKS=${TARGET_STACK_ONE_BASED}
+export RELION_BPRE_CAPTURE_STACKS=${TARGET_STACKS_ONE_BASED}
 if [[ "${GEOMETRY_ONLY}" = 1 ]]; then
     export RELION_BPRE_CAPTURE_GEOMETRY_ONLY=1
 fi
@@ -110,19 +124,47 @@ start=$(date +%s)
 ) > "${RELION_OUT}/runner.stdout" 2> "${RELION_OUT}/runner.stderr"
 printf '{"job_id":"%s","wall_s":%d}\n' "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" > "${ROOT}/native/provenance/walltime_${SLURM_JOB_ID}.json"
 
-test "$(find "${CAPTURE}" -maxdepth 1 -name '*.fine-score-v1.bin' | wc -l)" -eq 1
-test "$(find "${CAPTURE}" -maxdepth 1 -name '*.bpre-v2.bin' | wc -l)" -eq 1
+test "$(find "${CAPTURE}" -maxdepth 1 -name '*.fine-score-v1.bin' | wc -l)" -eq "${TARGET_COUNT}"
+test "$(find "${CAPTURE}" -maxdepth 1 -name '*.bpre-v2.bin' | wc -l)" -eq "${TARGET_COUNT}"
 printf -v target_iteration_label '%03d' "${TARGET_ITERATION}"
 test -s "${RELION_OUT}/run_it${target_iteration_label}_data.star"
 
+"${PYTHON}" - <<'PY' "${CAPTURE}" "${TARGET_STACKS_ONE_BASED}" "${TARGET_ITERATION}"
+from pathlib import Path
+import sys
+
+from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_score_capture import load_fine_score_capture
+
+capture = Path(sys.argv[1])
+expected_stacks = {int(value) for value in sys.argv[2].split(",")}
+expected_iteration = int(sys.argv[3])
+fine = [load_fine_score_capture(path) for path in sorted(capture.glob("*.fine-score-v1.bin"))]
+factor = [load_factor_capture(path) for path in sorted(capture.glob("*.bpre-v2.bin"))]
+assert {item.stack_index for item in fine} == expected_stacks
+assert {item.stack_index for item in factor} == expected_stacks
+assert {item.header[4] for item in fine} == {expected_iteration}
+assert {item.header[9] for item in factor} == {expected_iteration}
+PY
+
 cd "${AUDIT_REPO}"
+set +e
 "${PYTHON}" -m scripts.audit_relion_control_reproducibility \
     --control-dir "${CONTROL}" --candidate-dir "${RELION_OUT}" \
     --iterations $(seq 1 "${TARGET_ITERATION}") \
     --map-fsc-auc-threshold 0.999999 \
     --output-json "${ROOT}/native/analysis/RELION_CAPTURE_INERTNESS_FULL.json" \
     --output-markdown "${ROOT}/native/analysis/RELION_CAPTURE_INERTNESS_FULL.md"
+audit_status=$?
+set -e
+printf '{"audit_exit_status":%d,"capture_particle_count":%d,"target_stacks_one_based":"%s"}\n' \
+    "${audit_status}" "${TARGET_COUNT}" "${TARGET_STACKS_ONE_BASED}" \
+    > "${ROOT}/native/analysis/CAPTURE_AUDIT_STATUS.json"
 
 find "${CAPTURE}" "${RELION_OUT}" "${ROOT}/native/analysis" -type f -print0 \
     | sort -z | xargs -0 sha256sum > "${ROOT}/native/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
-touch "${ROOT}/native/SUCCESS_${SLURM_JOB_ID}"
+if (( audit_status == 0 )); then
+    touch "${ROOT}/native/SUCCESS_${SLURM_JOB_ID}"
+else
+    touch "${ROOT}/native/CAPTURE_COMPLETE_AUDIT_REJECTED_${SLURM_JOB_ID}"
+fi
