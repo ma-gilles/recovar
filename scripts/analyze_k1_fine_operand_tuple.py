@@ -43,28 +43,50 @@ def _largest_mismatches(
     relion: np.ndarray,
     recovar: np.ndarray,
     *,
+    flat_indices: np.ndarray | None = None,
     limit: int = 8,
 ) -> list[dict[str, Any]]:
     left = np.asarray(relion)
     right = np.asarray(recovar)
+    _require(left.shape == right.shape, "operand shapes differ")
+    if flat_indices is None:
+        selected_indices = np.arange(left.size, dtype=np.int64)
+    else:
+        selected_indices = np.asarray(flat_indices, dtype=np.int64).reshape(-1)
+        _require(
+            np.all((selected_indices >= 0) & (selected_indices < left.size)),
+            "mismatch indices are outside the flattened operand",
+        )
+    left_flat = left.reshape(-1)
+    right_flat = right.reshape(-1)
     delta = np.abs(
-        right.astype(np.complex128 if np.iscomplexobj(right) else np.float64)
-        - left.astype(np.complex128 if np.iscomplexobj(left) else np.float64)
-    ).reshape(-1)
+        right_flat[selected_indices].astype(
+            np.complex128 if np.iscomplexobj(right) else np.float64
+        )
+        - left_flat[selected_indices].astype(
+            np.complex128 if np.iscomplexobj(left) else np.float64
+        )
+    )
     order = np.argsort(delta, kind="stable")[::-1][:limit]
     return [
         {
-            "flat_index": int(index),
+            "flat_index": int(selected_indices[index]),
             "abs_delta": float(delta[index]),
             "relion": (
-                [float(left.reshape(-1)[index].real), float(left.reshape(-1)[index].imag)]
+                [
+                    float(left_flat[selected_indices[index]].real),
+                    float(left_flat[selected_indices[index]].imag),
+                ]
                 if np.iscomplexobj(left)
-                else float(left.reshape(-1)[index])
+                else float(left_flat[selected_indices[index]])
             ),
             "recovar": (
-                [float(right.reshape(-1)[index].real), float(right.reshape(-1)[index].imag)]
+                [
+                    float(right_flat[selected_indices[index]].real),
+                    float(right_flat[selected_indices[index]].imag),
+                ]
                 if np.iscomplexobj(right)
-                else float(right.reshape(-1)[index])
+                else float(right_flat[selected_indices[index]])
             ),
         }
         for index in order
@@ -225,11 +247,32 @@ def analyze(
         name: _metric(left, right)
         for name, (left, right) in stage_arrays.items()
     }
+    pixel_stage_names = (
+        "projected_reference",
+        "shifted_image",
+        "correction_weight",
+        "pixel_contribution",
+    )
+    score_active_stage_arrays = {
+        name: (
+            np.asarray(stage_arrays[name][0]).reshape(-1)[supported_full],
+            np.asarray(stage_arrays[name][1]).reshape(-1)[supported_full],
+        )
+        for name in pixel_stage_names
+    }
+    score_active_stage_metrics = {
+        name: _metric(left, right)
+        for name, (left, right) in score_active_stage_arrays.items()
+    }
+    causal_stage_metrics = {
+        name: score_active_stage_metrics.get(name, stage_metrics[name])
+        for name in stage_arrays
+    }
     first_unequal = next(
-        name for name, metric in stage_metrics.items() if not metric["exact_equal"]
+        name for name, metric in causal_stage_metrics.items() if not metric["exact_equal"]
     )
     return {
-        "schema": "recovar.em.k1_fine_operand_tuple.v1",
+        "schema": "recovar.em.k1_fine_operand_tuple.v2",
         "identity": {
             "stack_index_one_based": capture.stack_index,
             "original_index_zero_based": int(np.asarray(recovar["original_index"]).item()),
@@ -250,11 +293,27 @@ def analyze(
             "dc_present_in_compact_support": bool(np.any(dc_mask)),
         },
         "first_exact_unequal_boundary": first_unequal,
+        "first_exact_unequal_boundary_domain": (
+            "score-active pixels for pixel operands; complete arrays for reductions and scalars"
+        ),
         "stage_metrics": stage_metrics,
+        "stage_metrics_domain": "complete RELION current-size FFT rectangle",
+        "score_active_pixel_stage_metrics": score_active_stage_metrics,
+        "score_active_pixel_stage_metrics_domain": (
+            "RECOVAR compact support embedded in the RELION current-size FFT rectangle"
+        ),
         "largest_pixel_mismatches": {
             name: _largest_mismatches(left, right)
             for name, (left, right) in stage_arrays.items()
             if np.asarray(left).size > 1
+        },
+        "largest_score_active_pixel_mismatches": {
+            name: _largest_mismatches(
+                stage_arrays[name][0],
+                stage_arrays[name][1],
+                flat_indices=supported_full,
+            )
+            for name in pixel_stage_names
         },
         "raw_scores": {
             "native_production": float(native_production_raw),

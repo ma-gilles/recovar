@@ -15838,3 +15838,46 @@ receive a success marker. The matching native artifact exactly replays its own
 deployed kernel value, but its independent trajectory is not inert relative to
 the pinned robust RELION run, so any tuple result must retain that
 state-provenance caveat.
+
+Commit `096b6390` adds a faster fail-closed form of the same diagnostic. It
+preserves the complete first two iterations, moves only the requested
+iteration-3 support bucket to the front, and exits before the M-step after the
+target operand is written. Job `12329610` is running that priority capture in
+parallel with the original job; neither job has been cancelled or altered.
+
+A qualified host replay of the earlier pre-reduction stack-79 bundle already
+identifies the dominant fine-score operand. RECOVAR replays
+`2186.412841796875`, while the native capture produces and exactly replays
+`2186.461181640625`, a `-0.04833984375` gap. On the 2,578 score-active pixels,
+the projected-reference, shifted-image, and correction-weight relative L2
+values are `2.0790e-5`, `2.0060e-6`, and `1.6829e-5`, respectively. The
+apparently large full-rectangle reference and image metrics are invalid for
+causal attribution because RECOVAR deliberately omits 702 zero-weight FFT
+rectangle pixels. The comparison script now reports score-active metrics
+separately and preserves full indices in its mismatch panel.
+
+Operand substitution localizes `82.83%` of the raw-score gap to the correction
+weight and `18.18%` to the shifted image; the projected reference changes the
+score by only `-0.00048828125`. An independent shell-noise counterfactual is
+more specific: replacing only RECOVAR's iteration-2 shell noise with the
+direct-Wavg-noise arm moves the raw score to `2186.452880859375`, exactly the
+same word as the native-correction-weight substitution. It reduces
+correction-weight relative L2 from `1.6829e-5` to `4.3992e-7` and maximum
+absolute error from `0.615234375` to `0.0234375`. Thus direct Wavg noise closes
+the dominant iteration-3 fine-score operand for this tuple, subject to the
+native-trajectory caveat and confirmation from the explicit production raw
+dump.
+
+The remaining shifted-image discrepancy starts before translation and is
+almost entirely scalar. The unshifted score input has relative L2
+`2.0035e-6`; the translated input has `2.0060e-6`. A least-squares complex
+factor of `1.0000020049470661 - 5.69e-8 i` reduces the translated relative L2
+to `3.9745e-8`. This rules out the translation-phase kernel as the material
+residual and moves the next boundary to per-particle preprocessing
+normalization. The inferred real factor is 21 float32 ULPs above RECOVAR's
+stored `1.2500801086425781` normalization factor. No production normalization
+change is accepted from one particle; the next bounded check is the explicit
+raw dump followed by a native normalization-state join for this identity.
+
+These are prefix and operand results, so the immutable complete-case score is
+still `28/34` strict, `32/34` topology, and `34/34` evaluated.
