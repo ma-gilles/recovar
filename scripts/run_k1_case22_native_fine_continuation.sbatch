@@ -51,7 +51,11 @@ test -z "$(find "${CAPTURE}" "${RELION_OUT}" -mindepth 1 -print -quit)"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
 while IFS='=' read -r variable_name _; do
-    case "${variable_name}" in RECOVAR_*|RELION_BPRE_*|RELION_FINE_*) unset "${variable_name}" ;; esac
+    case "${variable_name}" in
+        RECOVAR_*|RELION_BPRE_*|RELION_FINE_*|RELION_PREITER_*|RELION_SAMPLING_PERTURBATION_*)
+            unset "${variable_name}"
+            ;;
+    esac
 done < <(env)
 export PYTHONNOUSERSITE=1 XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TMPDIR=${RUNTIME}/${SLURM_JOB_ID}/tmp
@@ -89,6 +93,15 @@ export RELION_BPRE_CAPTURE_MAX_BYTES=2000000000
 export RELION_BPRE_CAPTURE_STACKS=${TARGET_STACK_ONE_BASED}
 export RELION_BPRE_CAPTURE_GEOMETRY_ONLY=1
 
+# A new RELION process reconstructs canonical sorted_idx and resets its RNG.
+# Restore the uninterrupted fresh-run order and the exact iteration-3
+# perturbation before expectation so this continuation tests serialization,
+# rather than a different physical dispatch or sampling grid.
+export RELION_PREITER_PARTICLE_ORDER_SEED=1723
+export RELION_PREITER_PARTICLE_ORDER_ITER=${TARGET_ITERATION}
+export RELION_SAMPLING_PERTURBATION_OVERRIDE=-0.293744921684
+export RELION_SAMPLING_PERTURBATION_OVERRIDE_ITER=${TARGET_ITERATION}
+
 COMMAND=(
     srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
     --continue "${CONTINUE}" --o "${RELION_OUT}/run"
@@ -124,6 +137,10 @@ assert fine.stack_index == factor.stack_index == expected_stack
 assert fine.header[4] == factor.header[9] == 3
 assert factor.geometry_only
 PY
+rg -q '\[RELION_PREITER_PARTICLE_ORDER\] iteration 3 effective_seed 1723 particles 3000' \
+    "${RELION_OUT}/runner.stderr"
+rg -q '\[RELION_SAMPLING_PERTURBATION_OVERRIDE\] iter 3 requested -0.293744921684 applied' \
+    "${RELION_OUT}/runner.stdout"
 ! rg -qi 'Traceback|Out of memory|CUDA_ERROR_OUT_OF_MEMORY' "${RELION_OUT}/runner.stderr"
 printf '{"job_id":"%s","wall_s":%d,"physical_iteration":3,"stack_index_one_based":%d,"continued_from":"%s","geometry_only":true}\n' \
     "${SLURM_JOB_ID}" "${wall_s}" "${TARGET_STACK_ONE_BASED}" "${CONTINUE}" \
