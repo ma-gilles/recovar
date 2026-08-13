@@ -1453,6 +1453,18 @@ interpreted as environment-variable separators. Its stack-79 state is locally
 admissible: the hard pose, shift, and native support count 47 match both
 reference runs, while Pmax is `0.358746` versus `0.358734` and `0.358731`.
 Corrected native job `12326366` passes the five targets with colon separators;
-production-preserving RECOVAR job `12326241` is unchanged. Their staged
-tuple/score/prior/posterior/support comparison is the next first-divergence
-gate.
+it completed `0:0` in 8 minutes 39 seconds and wrote all ten expected fine-score
+and geometry sidecars. All five target hard poses, shifts, and native coarse
+support counts match both reference runs. The target Pmax values remain inside
+the native repeat envelope. Its outer audit exits 1 only because the selected
+control directory has no iteration-3 STAR, so target-local admissibility is
+used explicitly rather than claiming global capture inertness.
+
+The original production job `12326241` was likewise verified from its live
+environment to contain only stack 79. Corrected production job `12326426`
+uses colon-separated stack IDs and exposes original indices
+`78,468,2497,2543,2658` inside the running process. Both original jobs are
+allowed to finish naturally. `scripts/analyze_k1_partial_fine_panel.py` now
+turns the corrected artifacts into fixed-denominator exactness counts for
+rotation topology, active tuples, pre-prior score, both priors, posterior, and
+fine support, and records each particle's first unequal boundary.
