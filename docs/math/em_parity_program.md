@@ -15679,3 +15679,101 @@ pruned replay. Job `12294318` advances exactly one boundary to iteration 3 to
 test the known orientation-prior winner split. No full trajectory or K=4 run
 is justified before that result. The frozen K=1 score remains `28/34` strict,
 `32/34` topology, and `34/34` evaluated.
+
+## 2026-08-12 case-22 iteration-3 parent flip localized to pixel-weight state
+
+The direction-mass fix is causally positive at the next bounded boundary.
+Three-iteration job `12294318` reduces Pmax relative L2 by `75.1%`, support
+count mismatches by `92.3%` (`65 -> 5`), and hard-assignment mismatches from
+four to zero while preserving signed FSC and controller topology. The fixed
+scorecard remains unchanged because this is a prefix, not a frozen-case
+completion run.
+
+The largest repeat-stable residual is stack image 2739. Its complete fine
+table shows that all material Pmax error comes from one swapped coarse parent:
+32 native-only tuples carry `3.9727595%` native posterior mass, while common-
+tuple posterior TV is only `9.32283e-5`. The native-versus-RECOVAR raw parent
+margin gap is `0.001953125`. Native-reference and native-image substitutions
+are null; replacing pixel weights closes `0.001708984375`, leaving one
+float32 score word.
+
+At the preceding iteration-2 noise update, the active numerator discrepancy
+is split exactly. Image power accounts for `77.8001%` in half 1 and `75.1205%`
+in half 2; `AA - 2*XA` accounts for the remainder. The proposed explanation
+was that RECOVAR used untranslated image power while RELION forms float32 Wavg
+power after each translation and weights it by the translation posterior.
+
+Scale is independently localized: stack 2739 is clipped to raw scale `0.2`
+in both engines, and its scale difference comes entirely from the global
+normalization average. After the exact `128**4` unit conversion, RECOVAR AA
+is systematically higher than RELION by about `6.4e-5`--`7.2e-5`, versus
+about `0.9e-5`--`1.1e-5` for XA.
+
+Stopped two-iteration Slurm job `12304787` falsifies that translated-Wavg
+explanation at the shell accumulator boundary. The half-1 median active
+image-power ratio changes from `1.0000257599571096` to
+`1.0000258518141674`, and half 2 remains exactly
+`1.000022860207772`; neither approaches the preregistered `80%` reduction.
+The intervention was therefore removed rather than promoted, and no
+iteration-3 parent or full trajectory run was launched. The default
+high-shell fix remains independently supported: the all-shell noise relative
+L2 falls to `2.7736e-5` and `2.6419e-5`, and high-shell median ratios are
+approximately `1.000000256` and `1.000000215`.
+
+The active gate is now the stopped per-particle/per-shell `AA` boundary before
+global reduction. It will compare projected-reference values, squared
+projection power, CTF posterior factors, support weights, scale masks, and
+their per-pixel and shell sums for one strong unclipped scale group. Equality
+of operands with unequal group totals identifies reduction/order; an earlier
+inequality identifies the exact projection, CTF, posterior, or mask operand.
+No full trajectory or K=4 run is scheduled first. The immutable K=1 score
+remains `28/34` strict, `32/34` topology, and `34/34` evaluated.
+
+Focused H100 job `12305992` implements that gate for stack 1097 / group 109,
+iteration 2, half 1, current size 60. It is pinned to tracked-diff SHA-256
+`bdd4917f192be467e36ab78044b15aa27fa49cb756ea728d6214c2c0ff058d83`
+and stops after the operand bundle is written. Its disposable root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_scale_aa_orig1096_it2_20260812T1858ET/`.
+
+The `12305992` capture was not scientifically valid; corrected stopped job
+`12306304` localizes the group-109 scale-AA mismatch to the per-particle shell
+vector (`2.44323e-4` relative L2) while replaying RECOVAR's local reductions
+exactly. Native pixel job `12306654` localizes it further to all 333 joined
+pixel operands before shell reduction (`2.48306e-4` relative L2).
+
+The next three gates are causal nulls for the dominant residual. The full
+candidate join has 160,679 exact rotations, 116 translations, no unmatched
+mass, and posterior TV `1.97793e-6`; native-weight substitution closes
+`-0.049%` of the shell error. CTF-squared relative L2 is `9.79e-8`.
+`Projector::data` relative L2 is `7.49e-8`, and replacing RECOVAR's projector
+input with the native array in H100 job `12307952` closes `-0.012%` of the AA
+residual. The earliest remaining operation is therefore native CUDA texture
+projection / projected power / Wavg float32 accumulation. Compact native job
+`12308183` captures exactly that boundary at iteration 2; no trajectory is
+authorized before its projected-power replay is evaluated.
+
+Projection-panel job `12308183` resolves the ambiguity. Per-rotation shell
+power agrees at `1.43e-7` relative L2, but high-accuracy rotation reduction
+misses native Wavg by `2.485e-4`, matching RECOVAR. The 116-translation inner
+loop contributes only `9.06e-8`; forward float32 accumulation across the
+164,464 rotation rows reduces the native per-pixel residual to `1.37e-6`, a
+`99.45%` closure. The first material boundary is therefore RELION's Wavg
+float32 rotation atomic order. Artifact-only H100 job `12308654` tests the
+equivalent RECOVAR CUDA topology before any EM-path integration.
+
+The atomic-only live integration is not sufficient by itself. Stopped job
+`12308897` reduces per-pixel AA relative L2 only from `2.483e-4` to
+`1.123e-4`. Exact replay job `12309162` explains the remainder: identical
+native terms accumulated in RECOVAR's fine-rotation order give `1.124e-4`,
+while native order gives `1.48e-6`. Before correction, only 16 of 160,679
+active rotations share the same rank.
+
+The order difference is a parent-grid transpose, not a candidate-set defect.
+Every one of 20,558 selected fine-parent groups contains the same eight
+children in the same bitwise order. RECOVAR traverses the selected coarse
+parents psi-slow/direction-fast; RELION traverses them
+direction-slow/psi-fast. Guarded stopped job `12309318` applies the RELION
+parent key and the atomic reducer. Its full 164,464 real-rotation prefix is
+bitwise native; pixel and shell AA residuals fall to `1.504e-6` and
+`5.279e-7`. The first material K=1 boundary is therefore causally closed.
+XA/BPref instruction order remains to be checked before a short trajectory.

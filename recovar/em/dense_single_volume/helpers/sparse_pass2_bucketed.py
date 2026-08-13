@@ -133,6 +133,10 @@ from recovar.reconstruction import noise as noise_utils
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH = 1_000_000
+_RELION_WAVG_ATOMIC_SCALE_AA_ENV = "RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA"
+_RELION_FINE_ROTATION_EXECUTION_ORDER_ENV = (
+    "RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER"
+)
 _DEFAULT_SCORE_ONLY_MAX_HYPOTHESES_PER_MICROBATCH = 1_250_000
 _DEFAULT_MAX_TRANSLATION_TILE_BYTES = 384 * 1024**2
 # Scale sparse pass-2 bucket sizes from physical GPU memory and active score
@@ -239,6 +243,10 @@ _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV = (
 _PASS2_DUMP_DIR_ENV = "RECOVAR_PASS2_DUMP_DIR"
 _PASS2_DUMP_CONSERVATIVE_EXECUTION_ENV = "RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
+_NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV = (
+    "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET"
+)
+_NORM_RESIDUAL_DUMP_ONLY_ENV = "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_ONLY"
 _PASS2_DUMP_RAW_OPERANDS_ENV = "RECOVAR_PASS2_DUMP_RAW_OPERANDS"
 _PASS2_DUMP_ROTATION_ROWS_ENV = "RECOVAR_PASS2_DUMP_ROTATION_ROWS"
 _SPARSE_PASS2_PROJECTION_CACHE_ENV = "RECOVAR_SPARSE_PASS2_PROJECTION_CACHE"
@@ -1622,6 +1630,7 @@ def _prepare_per_image_pass2_inputs(
     fine_rotations_override=None,
     fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
+    relion_parent_execution_order=False,
 ):
     """Compute per-image oversampled rotations / parent maps / candidate masks.
 
@@ -1679,6 +1688,27 @@ def _prepare_per_image_pass2_inputs(
                 "fine_mstep_rotations_override must match fine_rotations_override shape: "
                 f"{fine_mstep_rotations_np.shape} vs {fine_rotations_np.shape}",
             )
+
+    def _reorder_children(rotations, parent_map, rotation_indices, parent_ids):
+        if not relion_parent_execution_order:
+            return rotations, parent_map, rotation_indices
+        parent_ids = np.asarray(parent_ids, dtype=np.int64).reshape(-1)
+        n_pixels = 12 * (2 ** int(nside_level)) ** 2
+        n_psi = 6 * 2 ** int(nside_level)
+        if parent_ids.shape != np.asarray(parent_map).shape:
+            raise ValueError("RELION parent execution keys must match fine rotations")
+        if parent_ids.size and (
+            int(parent_ids.min(initial=0)) < 0
+            or int(parent_ids.max(initial=-1)) >= int(n_pixels * n_psi)
+        ):
+            raise ValueError("RELION parent execution key is outside the coarse grid")
+        relion_parent_key = (parent_ids % n_pixels) * n_psi + parent_ids // n_pixels
+        order = np.argsort(relion_parent_key, kind="stable")
+        return (
+            np.asarray(rotations)[order],
+            np.asarray(parent_map)[order],
+            np.asarray(rotation_indices)[order],
+        )
 
     for image_idx, sig_samples in enumerate(significant_sample_indices):
         coarse_excluded = None
@@ -1741,6 +1771,10 @@ def _prepare_per_image_pass2_inputs(
                     )
                 else:
                     raise ValueError("fine_rotations_override and fine_rotation_parent_override must be provided together")
+                full_support_rotation_cache = _reorder_children(
+                    *full_support_rotation_cache,
+                    parent_ids=full_unique_rot[full_support_rotation_cache[1]],
+                )
             oversampled_rots, parent_map, oversampled_rot_indices = full_support_rotation_cache
         elif fine_rotations_override is None and fine_rotation_parent_override is None:
             oversampled_rots, parent_map, oversampled_rot_indices = get_oversampled_rotation_grid_from_samples(
@@ -1753,6 +1787,12 @@ def _prepare_per_image_pass2_inputs(
             oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
             parent_map = np.asarray(parent_map, dtype=np.int32)
             oversampled_rot_indices = np.asarray(oversampled_rot_indices, dtype=np.int64)
+            oversampled_rots, parent_map, oversampled_rot_indices = _reorder_children(
+                oversampled_rots,
+                parent_map,
+                oversampled_rot_indices,
+                unique_rot[parent_map],
+            )
         elif fine_rotations_np is not None and fine_parent_np is not None:
             selected_parent = np.zeros(n_coarse_rot, dtype=bool)
             selected_parent[unique_rot] = True
@@ -1760,6 +1800,12 @@ def _prepare_per_image_pass2_inputs(
             oversampled_rot_indices = np.flatnonzero(child_mask).astype(np.int64)
             oversampled_rots = fine_rotations_np[oversampled_rot_indices]
             parent_map = np.searchsorted(unique_rot, fine_parent_np[oversampled_rot_indices]).astype(np.int32)
+            oversampled_rots, parent_map, oversampled_rot_indices = _reorder_children(
+                oversampled_rots,
+                parent_map,
+                oversampled_rot_indices,
+                fine_parent_np[oversampled_rot_indices],
+            )
         else:
             raise ValueError("fine_rotations_override and fine_rotation_parent_override must be provided together")
 
@@ -2780,7 +2826,10 @@ def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
 
 
 def _pass2_dump_enabled() -> bool:
-    return bool(os.environ.get(_PASS2_DUMP_DIR_ENV))
+    return bool(os.environ.get(_PASS2_DUMP_DIR_ENV)) and not _env_flag_enabled(
+        _NORM_RESIDUAL_DUMP_ONLY_ENV,
+        default=False,
+    )
 
 
 def _pass2_conservative_dump_execution_enabled() -> bool:
@@ -4319,19 +4368,18 @@ def _weighted_image_power_shells_and_per_image(
 ):
     """Accumulate image power for noise shells and per-image norm correction.
 
-    Shell sums stay weighted by the same posterior support used for the A2/XA
-    residual terms.  RELION's per-image norm-correction residual additionally
-    receives unweighted image power for valid shells outside the current model
-    size. Fourier pixels assigned to the shell-binning sentinel are excluded.
+    Inside the current model size, shell sums use the same significant-support
+    mass as the A2/XA residual terms.  Above it, RELION adds ``power_img`` once
+    per particle outside the class/posterior loop, so both the noise spectrum
+    and norm-correction tail are unweighted.  Fourier pixels assigned to the
+    shell-binning sentinel are excluded.
     """
 
     pixel_power = jnp.abs(processed_half) ** 2
     mass = jnp.asarray(support_mass, dtype=pixel_power.dtype)
-    weighted_pixel_power = pixel_power * mass[:, None]
-    weighted_half = jnp.sum(weighted_pixel_power, axis=0).astype(jnp.float32)
-    weighted_shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
     shell_indices_half = jnp.asarray(shell_indices_half)
     valid_norm_shell = (shell_indices_half >= 0) & (shell_indices_half < int(shell_count))
+    shell_mass = jnp.where(valid_norm_shell[None, :], mass[:, None], 0.0)
     norm_mass = jnp.where(valid_norm_shell[None, :], mass[:, None], 0.0)
     if norm_unweighted_shell_cutoff is not None:
         full_mass = (
@@ -4341,7 +4389,11 @@ def _weighted_image_power_shells_and_per_image(
         )
         unweighted_shell = valid_norm_shell & (shell_indices_half > int(norm_unweighted_shell_cutoff))
         high_shell_mass = full_mass if include_unweighted_high_shell else jnp.zeros_like(full_mass)
+        shell_mass = jnp.where(unweighted_shell[None, :], high_shell_mass[:, None], shell_mass)
         norm_mass = jnp.where(unweighted_shell[None, :], high_shell_mass[:, None], norm_mass)
+    weighted_pixel_power = pixel_power * shell_mass
+    weighted_half = jnp.sum(weighted_pixel_power, axis=0).astype(jnp.float32)
+    weighted_shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
     source_faithful_spectrum_norm = _env_flag_enabled(
         _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
         default=False,
@@ -4370,8 +4422,8 @@ def _weighted_image_power_shells_and_per_image(
             ),
             axis=-1,
         )
-        # Preserve the existing support-weighted shell/noise reduction and the
-        # current-size norm path. Replace only the unweighted high-shell term
+        # Preserve the current-size norm path and the separate shell/noise
+        # reduction. Replace only the unweighted high-shell norm term
         # with RELION powerClass's divide-before-square float32 arithmetic.
         weighted_per_image = jax.lax.optimization_barrier(weighted_per_image)
         weighted_per_image = weighted_per_image + full_mass * (replacement_high - generic_high)
@@ -8366,6 +8418,8 @@ def _maybe_dump_norm_residual_inputs(
     proj_abs2_for_noise,
     summed_masked_noise,
     ctf_probs,
+    ctf2_over_nv_recon,
+    posterior_probs,
     noise_variance_for_noise,
     block_norm_residual,
     processed_score_half_for_noise,
@@ -8377,8 +8431,12 @@ def _maybe_dump_norm_residual_inputs(
     recon_window_indices,
     score_window_indices,
     image_shape,
+    bucket_scale_for_stats,
+    scale_correction_pixel_mask,
+    scale_shell_indices,
+    bucket_group_ids,
 ):
-    """Capture the exact inputs and output of the per-image norm reduction.
+    """Capture norm and group-scale AA inputs before any global reduction.
 
     This diagnostic is deliberately separate from the ordinary pass-2 dump:
     that dump records score-window projections, while the normalization update
@@ -8428,16 +8486,51 @@ def _maybe_dump_norm_residual_inputs(
             score_indices_jax,
             image_shape,
         ).reshape(target_rows.size, translation_angles_jax.shape[0], -1)
+    selected_proj_abs2 = jnp.asarray(proj_abs2_for_noise)[selected]
+    selected_ctf_probs = jnp.asarray(ctf_probs)[selected]
+    selected_posterior_probs = jnp.asarray(posterior_probs)[selected]
+    selected_ctf2_over_nv = jnp.asarray(ctf2_over_nv_recon)[selected]
+    selected_scale = jnp.asarray(bucket_scale_for_stats)[selected]
+    scale_mask = jnp.asarray(scale_correction_pixel_mask, dtype=bool).reshape(-1)
+    selected_noise = jnp.asarray(noise_variance_for_noise)
+    ctf_has_mass = (selected_ctf_probs != 0.0) & scale_mask[None, None, :]
+    ctf_probs_raw = jnp.where(
+        ctf_has_mass,
+        selected_ctf_probs * selected_noise[None, None, :],
+        0.0,
+    )
+    aa_terms_before_scale = jnp.where(
+        ctf_has_mass,
+        selected_proj_abs2 * ctf_probs_raw,
+        0.0,
+    )
+    safe_scale = jnp.maximum(
+        selected_scale.astype(selected_proj_abs2.real.dtype),
+        1e-30,
+    )
+    aa_terms = aa_terms_before_scale / (safe_scale[:, None, None] ** 2)
+    aa_per_pixel = jnp.sum(aa_terms, axis=1)
+    aa_per_image = jnp.sum(aa_terms, axis=(1, 2)).astype(jnp.float32)
+
     staged = jax.block_until_ready(
         (
             jnp.asarray(proj_for_noise)[selected],
-            jnp.asarray(proj_abs2_for_noise)[selected],
+            selected_proj_abs2,
             jnp.asarray(summed_masked_noise)[selected],
-            jnp.asarray(ctf_probs)[selected],
+            selected_ctf_probs,
+            selected_ctf2_over_nv,
+            selected_posterior_probs,
             jnp.asarray(block_norm_residual)[selected],
             jnp.asarray(processed_score_half_for_noise)[selected],
             jnp.asarray(support_mass)[selected],
             jnp.asarray(weighted_img_per_image)[selected],
+            selected_scale,
+            ctf_has_mass,
+            ctf_probs_raw,
+            aa_terms_before_scale,
+            aa_terms,
+            aa_per_pixel,
+            aa_per_image,
             (
                 jnp.empty((target_rows.size, 0, 0), dtype=jnp.complex64)
                 if raw_translated_recon is None
@@ -8455,21 +8548,36 @@ def _maybe_dump_norm_residual_inputs(
         proj_abs2_np,
         summed_np,
         ctf_probs_np,
+        ctf2_over_nv_np,
+        posterior_probs_np,
         residual_np,
         processed_image_np,
         support_mass_np,
         weighted_image_power_np,
+        scale_np,
+        ctf_has_mass_np,
+        ctf_probs_raw_np,
+        aa_terms_before_scale_np,
+        aa_terms_np,
+        aa_per_pixel_np,
+        aa_per_image_np,
         raw_translated_recon_np,
         raw_translated_wavg_np,
     ) = (np.asarray(value) for value in staged)
     noise_np = np.asarray(jax.block_until_ready(noise_variance_for_noise))
     shell_indices_np = np.asarray(jax.block_until_ready(shell_indices_half), dtype=np.int32)
+    scale_shell_indices_np = np.asarray(
+        jax.block_until_ready(scale_shell_indices),
+        dtype=np.int32,
+    )
+    scale_mask_np = np.asarray(jax.block_until_ready(scale_mask), dtype=bool)
     relion_high_shell_np = (
         np.empty((0,), dtype=np.float32)
         if relion_norm_high_shell is None
         else np.asarray(jax.block_until_ready(relion_norm_high_shell), dtype=np.float32)
     )
     local_indices = np.asarray(image_indices, dtype=np.int64)
+    group_ids_np = np.asarray(bucket_group_ids, dtype=np.int64)
     original_indices = _original_indices_for_local(experiment_dataset, local_indices)
     os.makedirs(dump_dir, exist_ok=True)
     context_half = int(_bpref_contribution_context["half"])
@@ -8480,9 +8588,20 @@ def _maybe_dump_norm_residual_inputs(
             dump_dir,
             f"norm_residual_orig{original_index:06d}_half{context_half}_cs{size_label:03d}.npz",
         )
+        aa_shells = np.zeros(int(np.max(scale_shell_indices_np, initial=-1)) + 1, dtype=np.float64)
+        valid_scale_shell = (
+            (scale_shell_indices_np >= 0)
+            & scale_mask_np
+            & (scale_shell_indices_np < aa_shells.size)
+        )
+        np.add.at(
+            aa_shells,
+            scale_shell_indices_np[valid_scale_shell],
+            aa_per_pixel_np[selected_row, valid_scale_shell].astype(np.float64),
+        )
         np.savez_compressed(
             out_path,
-            schema=np.asarray("recovar-k1-norm-residual-inputs-v1"),
+            schema=np.asarray("recovar-k1-norm-residual-inputs-v2"),
             iteration=np.int64(context_iteration),
             half=np.int64(context_half),
             original_index=np.int64(original_index),
@@ -8493,6 +8612,8 @@ def _maybe_dump_norm_residual_inputs(
             proj_abs2_for_noise=proj_abs2_np[selected_row],
             summed_masked_noise=summed_np[selected_row],
             ctf_probs=ctf_probs_np[selected_row],
+            ctf2_over_nv_recon=ctf2_over_nv_np[selected_row],
+            posterior_probs=posterior_probs_np[selected_row],
             noise_variance_for_noise=noise_np,
             block_norm_residual=np.asarray(residual_np[selected_row]),
             processed_score_half_for_noise=processed_image_np[selected_row],
@@ -8504,10 +8625,199 @@ def _maybe_dump_norm_residual_inputs(
                 else np.asarray(relion_high_shell_np[bucket_row])
             ),
             weighted_img_per_image=np.asarray(weighted_image_power_np[selected_row]),
+            group_id=np.int64(group_ids_np[bucket_row]),
+            scale_for_stats=np.asarray(scale_np[selected_row]),
+            scale_correction_pixel_mask=scale_mask_np,
+            scale_shell_indices=scale_shell_indices_np,
+            scale_ctf_has_mass=ctf_has_mass_np[selected_row],
+            scale_ctf_probs_raw=ctf_probs_raw_np[selected_row],
+            scale_aa_terms_before_scale=aa_terms_before_scale_np[selected_row],
+            scale_aa_terms=aa_terms_np[selected_row],
+            scale_aa_per_pixel=aa_per_pixel_np[selected_row],
+            scale_aa_per_shell=aa_shells,
+            scale_aa_per_image=np.asarray(aa_per_image_np[selected_row]),
             raw_translated_recon=raw_translated_recon_np[selected_row],
             raw_translated_wavg=raw_translated_wavg_np[selected_row],
             wavg_window_indices=np.asarray(score_window_indices, dtype=np.int32),
         )
+    return int(target_rows.size)
+
+
+def _write_chunked_scale_aa_dump(
+    *,
+    dump_dir,
+    experiment_dataset,
+    image_indices,
+    target_rows,
+    current_size,
+    bucket_group_ids,
+    bucket_scale_for_stats,
+    scale_correction_pixel_mask,
+    scale_shell_indices,
+    chunk_ranges,
+    posterior_mass_chunks,
+    proj_abs2_sum_chunks,
+    ctf_probs_raw_sum_chunks,
+    aa_before_scale_per_pixel_chunks,
+    aa_per_pixel_chunks,
+    aa_per_image_chunks,
+    posterior_probs_chunks=None,
+    rotation_matrix_chunks=None,
+    fine_translations=None,
+    aa_feature_per_shell_chunks=None,
+    aa_feature_shell_ids=None,
+    atomic_aa_per_pixel=None,
+):
+    """Write compact AA intermediates for a rotation-chunked target bucket."""
+
+    target_rows = np.asarray(target_rows, dtype=np.int64)
+    if target_rows.size == 0:
+        return 0
+    local_indices = np.asarray(image_indices, dtype=np.int64)
+    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    group_ids = np.asarray(bucket_group_ids, dtype=np.int64)[target_rows]
+    scales = np.asarray(bucket_scale_for_stats, dtype=np.float32)[target_rows]
+    mask = np.asarray(scale_correction_pixel_mask, dtype=bool).reshape(-1)
+    shells = np.asarray(scale_shell_indices, dtype=np.int32).reshape(-1)
+    chunk_ranges_np = np.asarray(chunk_ranges, dtype=np.int64)
+    posterior_mass = np.stack(posterior_mass_chunks, axis=1)
+    proj_abs2_sum = np.stack(proj_abs2_sum_chunks, axis=1)
+    ctf_probs_raw_sum = np.stack(ctf_probs_raw_sum_chunks, axis=1)
+    aa_before_scale = np.stack(aa_before_scale_per_pixel_chunks, axis=1)
+    aa_per_pixel_by_chunk = np.stack(aa_per_pixel_chunks, axis=1)
+    aa_per_image_by_chunk = np.stack(aa_per_image_chunks, axis=1)
+    atomic_aa_per_pixel_np = (
+        None
+        if atomic_aa_per_pixel is None
+        else np.asarray(atomic_aa_per_pixel, dtype=np.float32)
+    )
+    if atomic_aa_per_pixel_np is not None and atomic_aa_per_pixel_np.shape != (
+        local_indices.size,
+        mask.size,
+    ):
+        raise ValueError("chunked scale-AA atomic pixel topology changed")
+    candidate_arrays_present = posterior_probs_chunks is not None or rotation_matrix_chunks is not None
+    if candidate_arrays_present:
+        if posterior_probs_chunks is None or rotation_matrix_chunks is None or fine_translations is None:
+            raise ValueError("chunked scale-AA candidate capture is incomplete")
+        posterior_probs = np.concatenate(posterior_probs_chunks, axis=1)
+        rotation_matrices = np.concatenate(rotation_matrix_chunks, axis=1)
+        fine_translations_np = np.asarray(fine_translations, dtype=np.float32)
+        if posterior_probs.shape[:2] != rotation_matrices.shape[:2]:
+            raise ValueError("chunked scale-AA candidate rotation topology changed")
+        if posterior_probs.shape[2] != fine_translations_np.shape[0]:
+            raise ValueError("chunked scale-AA candidate translation topology changed")
+        if aa_feature_per_shell_chunks is None or aa_feature_shell_ids is None:
+            raise ValueError("chunked scale-AA candidate shell features are missing")
+        aa_feature_per_shell = np.concatenate(aa_feature_per_shell_chunks, axis=1)
+        aa_feature_shell_ids_np = np.asarray(aa_feature_shell_ids, dtype=np.int32)
+        if aa_feature_per_shell.shape[:2] != posterior_probs.shape[:2]:
+            raise ValueError("chunked scale-AA candidate shell-feature topology changed")
+        if aa_feature_per_shell.shape[2] != aa_feature_shell_ids_np.size:
+            raise ValueError("chunked scale-AA candidate shell labels changed")
+    if not (
+        posterior_mass.shape[:2]
+        == proj_abs2_sum.shape[:2]
+        == ctf_probs_raw_sum.shape[:2]
+        == aa_before_scale.shape[:2]
+        == aa_per_pixel_by_chunk.shape[:2]
+        == aa_per_image_by_chunk.shape[:2]
+        == (target_rows.size, chunk_ranges_np.shape[0])
+    ):
+        raise ValueError("chunked scale-AA capture topology changed")
+
+    os.makedirs(dump_dir, exist_ok=True)
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    context_half = int(_bpref_contribution_context["half"])
+    size_label = -1 if current_size is None else int(current_size)
+    shell_count = int(np.max(shells, initial=-1)) + 1
+    for selected_row, bucket_row in enumerate(target_rows.tolist()):
+        aa_per_pixel = np.zeros(mask.shape, dtype=np.float32)
+        aa_before_scale_per_pixel = np.zeros(mask.shape, dtype=np.float32)
+        ctf_probs_raw_per_pixel = np.zeros(mask.shape, dtype=np.float32)
+        proj_abs2_per_pixel = np.zeros(mask.shape, dtype=np.float32)
+        for chunk_index in range(chunk_ranges_np.shape[0]):
+            aa_per_pixel = (aa_per_pixel + aa_per_pixel_by_chunk[selected_row, chunk_index]).astype(np.float32)
+            aa_before_scale_per_pixel = (
+                aa_before_scale_per_pixel + aa_before_scale[selected_row, chunk_index]
+            ).astype(np.float32)
+            ctf_probs_raw_per_pixel = (
+                ctf_probs_raw_per_pixel + ctf_probs_raw_sum[selected_row, chunk_index]
+            ).astype(np.float32)
+            proj_abs2_per_pixel = (
+                proj_abs2_per_pixel + proj_abs2_sum[selected_row, chunk_index]
+            ).astype(np.float32)
+        aa_per_shell = np.zeros(shell_count, dtype=np.float64)
+        valid = mask & (shells >= 0) & (shells < shell_count)
+        np.add.at(
+            aa_per_shell,
+            shells[valid],
+            aa_per_pixel[valid].astype(np.float64),
+        )
+        production_aa_total = float(
+            np.sum(aa_per_image_by_chunk[selected_row], dtype=np.float64)
+        )
+        original_index = int(original_indices[bucket_row])
+        out_path = os.path.join(
+            dump_dir,
+            f"scale_aa_chunked_orig{original_index:06d}_half{context_half}_cs{size_label:03d}.npz",
+        )
+        payload = dict(
+            schema=np.asarray("recovar-k1-scale-aa-chunked-v1"),
+            iteration=np.int64(context_iteration),
+            half=np.int64(context_half),
+            original_index=np.int64(original_index),
+            local_index=np.int64(local_indices[bucket_row]),
+            bucket_row=np.int64(bucket_row),
+            current_size=np.int64(size_label),
+            group_id=np.int64(group_ids[selected_row]),
+            scale_for_stats=np.float32(scales[selected_row]),
+            chunk_ranges=chunk_ranges_np,
+            posterior_mass_per_chunk=posterior_mass[selected_row],
+            proj_abs2_sum_per_pixel_by_chunk=proj_abs2_sum[selected_row],
+            ctf_probs_raw_sum_per_pixel_by_chunk=ctf_probs_raw_sum[selected_row],
+            aa_before_scale_per_pixel_by_chunk=aa_before_scale[selected_row],
+            aa_per_pixel_by_chunk=aa_per_pixel_by_chunk[selected_row],
+            aa_per_image_by_chunk=aa_per_image_by_chunk[selected_row],
+            scale_correction_pixel_mask=mask,
+            scale_shell_indices=shells,
+            proj_abs2_sum_per_pixel=proj_abs2_per_pixel,
+            ctf_probs_raw_sum_per_pixel=ctf_probs_raw_per_pixel,
+            scale_aa_terms_before_scale_per_pixel=aa_before_scale_per_pixel,
+            scale_aa_per_pixel=aa_per_pixel,
+            scale_aa_per_shell=aa_per_shell,
+            scale_aa_per_image=np.float64(production_aa_total),
+            pixel_sum_minus_production_total=np.float64(
+                np.sum(aa_per_pixel, dtype=np.float64) - production_aa_total
+            ),
+        )
+        if atomic_aa_per_pixel_np is not None:
+            atomic_pixels = atomic_aa_per_pixel_np[bucket_row]
+            atomic_shells = np.zeros(shell_count, dtype=np.float64)
+            np.add.at(
+                atomic_shells,
+                shells[valid],
+                atomic_pixels[valid].astype(np.float64),
+            )
+            payload.update(
+                scale_aa_atomic_per_pixel=atomic_pixels,
+                scale_aa_atomic_per_shell=atomic_shells,
+                scale_aa_atomic_per_image=np.float64(
+                    np.sum(atomic_pixels, dtype=np.float64)
+                ),
+            )
+        if candidate_arrays_present:
+            payload.update(
+                candidate_posterior_probs=np.asarray(posterior_probs[selected_row], dtype=np.float32),
+                candidate_rotation_matrices=np.asarray(rotation_matrices[selected_row], dtype=np.float32),
+                fine_translations=fine_translations_np,
+                candidate_aa_feature_per_shell=np.asarray(
+                    aa_feature_per_shell[selected_row],
+                    dtype=np.float32,
+                ),
+                candidate_aa_feature_shell_ids=aa_feature_shell_ids_np,
+            )
+        np.savez_compressed(out_path, **payload)
     return int(target_rows.size)
 
 
@@ -9962,6 +10272,10 @@ def compute_pass2_stats_sparse_bucketed(
         fine_rotations_override=fine_rotations_override,
         fine_mstep_rotations_override=fine_mstep_rotations_override,
         fine_rotation_parent_override=fine_rotation_parent_override,
+        relion_parent_execution_order=_env_flag_enabled(
+            _RELION_FINE_ROTATION_EXECUTION_ORDER_ENV,
+            default=False,
+        ),
     )
     prep_s = time.time() - prep_t0
 
@@ -10530,10 +10844,13 @@ def compute_pass2_stats_sparse_bucketed(
         )
         image_indices = bucket_arrays["image_indices"]
         bucket_size = int(bucket_arrays["bucket_size"])
-        dump_this_bucket = _pass2_dump_requested_for_bucket(
-            experiment_dataset=experiment_dataset,
-            image_indices=image_indices,
-            current_size=current_size,
+        dump_this_bucket = bool(
+            dump_pass2_operands
+            and _pass2_dump_requested_for_bucket(
+                experiment_dataset=experiment_dataset,
+                image_indices=image_indices,
+                current_size=current_size,
+            )
         )
         if bucket_size != last_bucket_size_logged:
             if last_bucket_size_logged is not None and group_t0 is not None:
@@ -11281,6 +11598,19 @@ def compute_pass2_stats_sparse_bucketed(
                     offset += width
                 del score_chunks
             if accumulate_noise:
+                relion_wavg_atomic_scale_aa = bool(
+                    noise_scale_correction_aa_total is not None
+                    and _env_flag_enabled(
+                        _RELION_WAVG_ATOMIC_SCALE_AA_ENV,
+                        default=False,
+                    )
+                )
+                relion_wavg_atomic_scale_aa_pixels = (
+                    jnp.zeros((batch, n_recon_windowed), dtype=jnp.float32)
+                    if relion_wavg_atomic_scale_aa
+                    else None
+                )
+                relion_wavg_atomic_scale_aa_pixels_np = None
                 if translation_sqdist_ang is not None or translated_wavg_norm:
                     chunk_translation_posterior_total = np.zeros((batch, n_fine_trans), dtype=np.float64)
                 chunk_support_mass = np.zeros((batch,), dtype=np.float64)
@@ -11289,6 +11619,41 @@ def compute_pass2_stats_sparse_bucketed(
                     if half_spectrum_scoring
                     else shifted_score.reshape(batch, n_fine_trans, -1)
                 )
+                chunked_scale_aa_target_rows = (
+                    _pass2_dump_target_rows(
+                        experiment_dataset=experiment_dataset,
+                        image_indices=image_indices,
+                        current_size=current_size,
+                    )
+                    if _env_flag_enabled(
+                        "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS",
+                        default=False,
+                    )
+                    else np.empty((0,), dtype=np.int64)
+                )
+                if chunked_scale_aa_target_rows.size:
+                    chunked_scale_aa_posterior_mass = []
+                    chunked_scale_aa_proj_abs2_sum = []
+                    chunked_scale_aa_ctf_probs_raw_sum = []
+                    chunked_scale_aa_before_scale_per_pixel = []
+                    chunked_scale_aa_per_pixel = []
+                    chunked_scale_aa_per_image = []
+                    chunked_scale_aa_posterior_probs = []
+                    chunked_scale_aa_rotation_matrices = []
+                    chunked_scale_aa_feature_per_shell = []
+                    scale_shell_indices_np = np.asarray(
+                        shell_indices_noise,
+                        dtype=np.int32,
+                    ).reshape(-1)
+                    scale_mask_np = np.asarray(
+                        scale_correction_pixel_mask,
+                        dtype=bool,
+                    ).reshape(-1)
+                    chunked_scale_aa_feature_shell_ids = np.unique(
+                        scale_shell_indices_np[
+                            scale_mask_np & (scale_shell_indices_np >= 0)
+                        ]
+                    ).astype(np.int32)
             if not score_only:
                 shifted_recon_split = shifted_recon.reshape(batch, n_fine_trans, -1)
                 mstep_window_indices = relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
@@ -11536,16 +11901,156 @@ def compute_pass2_stats_sparse_bucketed(
                             bucket_scale_for_stats,
                             scale_correction_pixel_mask,
                         )
+                        if relion_wavg_atomic_scale_aa:
+                            from recovar.cuda_backproject import (
+                                relion_wavg_rotation_atomic_add_f32,
+                            )
+
+                            atomic_scale_mask = jnp.asarray(
+                                scale_correction_pixel_mask,
+                                dtype=bool,
+                            ).reshape(-1)
+                            atomic_ctf_has_mass = (
+                                (jnp.asarray(ctf_probs) != 0.0)
+                                & atomic_scale_mask[None, None, :]
+                            )
+                            atomic_ctf_probs_raw = jnp.where(
+                                atomic_ctf_has_mass,
+                                jnp.asarray(ctf_probs)
+                                * jnp.asarray(noise_variance_for_noise)[None, None, :],
+                                0.0,
+                            )
+                            atomic_safe_scale = jnp.maximum(
+                                jnp.asarray(bucket_scale_for_stats, dtype=jnp.float32),
+                                1e-30,
+                            )
+                            atomic_aa_terms = jnp.where(
+                                atomic_ctf_has_mass,
+                                jnp.asarray(proj_abs2_for_noise_chunk, dtype=jnp.float32)
+                                * atomic_ctf_probs_raw.astype(jnp.float32)
+                                / (atomic_safe_scale[:, None, None] ** 2),
+                                0.0,
+                            ).astype(jnp.float32)
+                            relion_wavg_atomic_scale_aa_pixels = (
+                                relion_wavg_rotation_atomic_add_f32(
+                                    atomic_aa_terms,
+                                    relion_wavg_atomic_scale_aa_pixels,
+                                )
+                            )
+                        if chunked_scale_aa_target_rows.size:
+                            selected = jnp.asarray(
+                                chunked_scale_aa_target_rows,
+                                dtype=jnp.int32,
+                            )
+                            selected_proj_abs2 = jnp.asarray(proj_abs2_for_noise_chunk)[selected]
+                            selected_ctf_probs = jnp.asarray(ctf_probs)[selected]
+                            selected_noise = jnp.asarray(noise_variance_for_noise)
+                            scale_mask = jnp.asarray(
+                                scale_correction_pixel_mask,
+                                dtype=bool,
+                            ).reshape(-1)
+                            ctf_has_mass = (
+                                (selected_ctf_probs != 0.0)
+                                & scale_mask[None, None, :]
+                            )
+                            selected_ctf_probs_raw = jnp.where(
+                                ctf_has_mass,
+                                selected_ctf_probs * selected_noise[None, None, :],
+                                0.0,
+                            )
+                            aa_before_scale = jnp.where(
+                                ctf_has_mass,
+                                selected_proj_abs2 * selected_ctf_probs_raw,
+                                0.0,
+                            )
+                            selected_scale = jnp.maximum(
+                                jnp.asarray(bucket_scale_for_stats)[selected].astype(
+                                    selected_proj_abs2.real.dtype
+                                ),
+                                1e-30,
+                            )
+                            aa_terms = aa_before_scale / (
+                                selected_scale[:, None, None] ** 2
+                            )
+                            selected_rotation_mass = jnp.sum(
+                                jnp.asarray(noise_probs)[selected],
+                                axis=2,
+                                dtype=jnp.float32,
+                            )
+                            aa_feature_per_pixel = jnp.where(
+                                selected_rotation_mass[:, :, None] > 0.0,
+                                aa_terms / selected_rotation_mass[:, :, None],
+                                0.0,
+                            )
+                            aa_feature_per_shell = jnp.stack(
+                                [
+                                    jnp.sum(
+                                        jnp.where(
+                                            scale_mask
+                                            & (
+                                                jnp.asarray(shell_indices_noise).reshape(-1)
+                                                == int(shell)
+                                            ),
+                                            aa_feature_per_pixel,
+                                            0.0,
+                                        ),
+                                        axis=2,
+                                        dtype=jnp.float32,
+                                    )
+                                    for shell in chunked_scale_aa_feature_shell_ids.tolist()
+                                ],
+                                axis=2,
+                            )
+                            staged_scale_aa = jax.block_until_ready(
+                                (
+                                    jnp.sum(
+                                        jnp.asarray(noise_probs)[selected],
+                                        axis=(1, 2),
+                                        dtype=jnp.float32,
+                                    ),
+                                    jnp.sum(selected_proj_abs2, axis=1, dtype=jnp.float32),
+                                    jnp.sum(selected_ctf_probs_raw, axis=1, dtype=jnp.float32),
+                                    jnp.sum(aa_before_scale, axis=1, dtype=jnp.float32),
+                                    jnp.sum(aa_terms, axis=1, dtype=jnp.float32),
+                                    jnp.asarray(scale_aa_per_image)[selected],
+                                    jnp.asarray(noise_probs)[selected],
+                                    jnp.asarray(mstep_rotations)[selected, start:stop],
+                                    aa_feature_per_shell,
+                                )
+                            )
+                            (
+                                staged_posterior_mass,
+                                staged_proj_abs2_sum,
+                                staged_ctf_probs_raw_sum,
+                                staged_aa_before_scale,
+                                staged_aa_per_pixel,
+                                staged_aa_per_image,
+                                staged_posterior_probs,
+                                staged_rotation_matrices,
+                                staged_aa_feature_per_shell,
+                            ) = (np.asarray(value) for value in staged_scale_aa)
+                            chunked_scale_aa_posterior_mass.append(staged_posterior_mass)
+                            chunked_scale_aa_proj_abs2_sum.append(staged_proj_abs2_sum)
+                            chunked_scale_aa_ctf_probs_raw_sum.append(staged_ctf_probs_raw_sum)
+                            chunked_scale_aa_before_scale_per_pixel.append(staged_aa_before_scale)
+                            chunked_scale_aa_per_pixel.append(staged_aa_per_pixel)
+                            chunked_scale_aa_per_image.append(staged_aa_per_image)
+                            chunked_scale_aa_posterior_probs.append(staged_posterior_probs)
+                            chunked_scale_aa_rotation_matrices.append(staged_rotation_matrices)
+                            chunked_scale_aa_feature_per_shell.append(
+                                staged_aa_feature_per_shell
+                            )
                         np.add.at(
                             noise_scale_correction_xa_total,
                             np.asarray(bucket_group_ids, dtype=np.int64),
                             np.asarray(scale_xa_per_image, dtype=np.float64),
                         )
-                        np.add.at(
-                            noise_scale_correction_aa_total,
-                            np.asarray(bucket_group_ids, dtype=np.int64),
-                            np.asarray(scale_aa_per_image, dtype=np.float64),
-                        )
+                        if not relion_wavg_atomic_scale_aa:
+                            np.add.at(
+                                noise_scale_correction_aa_total,
+                                np.asarray(bucket_group_ids, dtype=np.int64),
+                                np.asarray(scale_aa_per_image, dtype=np.float64),
+                            )
 
                 if return_stats and probs is not None:
                     # RELION's pdf_direction update is accumulated from the
@@ -11792,6 +12297,21 @@ def compute_pass2_stats_sparse_bucketed(
                 )
 
             if accumulate_noise:
+                if relion_wavg_atomic_scale_aa:
+                    relion_wavg_atomic_scale_aa_pixels_np = np.asarray(
+                        jax.block_until_ready(relion_wavg_atomic_scale_aa_pixels),
+                        dtype=np.float32,
+                    )
+                    atomic_aa_per_image = np.sum(
+                        relion_wavg_atomic_scale_aa_pixels_np,
+                        axis=1,
+                        dtype=np.float64,
+                    )
+                    np.add.at(
+                        noise_scale_correction_aa_total,
+                        np.asarray(bucket_group_ids, dtype=np.int64),
+                        atomic_aa_per_image,
+                    )
                 weighted_img_shells, weighted_img_per_image = _weighted_image_power_shells_and_per_image(
                     processed_score_half_for_noise,
                     shell_indices_half,
@@ -11817,6 +12337,52 @@ def compute_pass2_stats_sparse_bucketed(
                     dtype=np.float64,
                 )
                 noise_sumw_total += float(np.sum(chunk_support_mass, dtype=np.float64))
+
+                if chunked_scale_aa_target_rows.size:
+                    dump_dir = os.environ.get(_PASS2_DUMP_DIR_ENV)
+                    if not dump_dir:
+                        raise ValueError(
+                            "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS requires "
+                            "RECOVAR_PASS2_DUMP_DIR"
+                        )
+                    chunked_scale_aa_dump_count = _write_chunked_scale_aa_dump(
+                        dump_dir=dump_dir,
+                        experiment_dataset=experiment_dataset,
+                        image_indices=image_indices,
+                        target_rows=chunked_scale_aa_target_rows,
+                        current_size=current_size,
+                        bucket_group_ids=bucket_group_ids,
+                        bucket_scale_for_stats=bucket_scale_for_stats,
+                        scale_correction_pixel_mask=scale_correction_pixel_mask,
+                        scale_shell_indices=shell_indices_noise,
+                        chunk_ranges=chunk_ranges,
+                        posterior_mass_chunks=chunked_scale_aa_posterior_mass,
+                        proj_abs2_sum_chunks=chunked_scale_aa_proj_abs2_sum,
+                        ctf_probs_raw_sum_chunks=chunked_scale_aa_ctf_probs_raw_sum,
+                        aa_before_scale_per_pixel_chunks=chunked_scale_aa_before_scale_per_pixel,
+                        aa_per_pixel_chunks=chunked_scale_aa_per_pixel,
+                        aa_per_image_chunks=chunked_scale_aa_per_image,
+                        posterior_probs_chunks=chunked_scale_aa_posterior_probs,
+                        rotation_matrix_chunks=chunked_scale_aa_rotation_matrices,
+                        fine_translations=fine_translations,
+                        aa_feature_per_shell_chunks=chunked_scale_aa_feature_per_shell,
+                        aa_feature_shell_ids=chunked_scale_aa_feature_shell_ids,
+                        atomic_aa_per_pixel=relion_wavg_atomic_scale_aa_pixels_np,
+                    )
+                    if chunked_scale_aa_dump_count and _env_flag_enabled(
+                        _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV,
+                        default=False,
+                    ):
+                        logger.info(
+                            "Sparse K=1 chunked scale-AA stop-after-dump wrote %d "
+                            "requested file(s) at current_size=%s",
+                            int(chunked_scale_aa_dump_count),
+                            "None" if current_size is None else str(int(current_size)),
+                        )
+                        raise Pass2DumpComplete(
+                            dump_count=chunked_scale_aa_dump_count,
+                            current_size=current_size,
+                        )
 
             if accumulate_noise and translation_sqdist_ang is not None:
                 noise_sigma2_offset_total += float(
@@ -12605,8 +13171,8 @@ def compute_pass2_stats_sparse_bucketed(
                 noise_sigma2_offset_total += float(
                     np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
                 )
-            # RELION accumulates image power inside the same significant
-            # posterior support used for A2/XA residual terms.
+            # RELION support-weights image power inside current_size, while
+            # its power_img tail is unweighted above current_size.
             support_mass = jnp.sum(noise_probs, axis=(1, 2))
             weighted_img_shells, weighted_img_per_image = _weighted_image_power_shells_and_per_image(
                 processed_score_half_for_noise,
@@ -12658,7 +13224,7 @@ def compute_pass2_stats_sparse_bucketed(
                 ctf_probs,
                 noise_variance_for_noise,
             )
-            _maybe_dump_norm_residual_inputs(
+            norm_residual_dump_count = _maybe_dump_norm_residual_inputs(
                 experiment_dataset=experiment_dataset,
                 image_indices=image_indices,
                 current_size=current_size,
@@ -12666,6 +13232,8 @@ def compute_pass2_stats_sparse_bucketed(
                 proj_abs2_for_noise=proj_abs2_for_noise,
                 summed_masked_noise=summed_masked_noise,
                 ctf_probs=ctf_probs,
+                ctf2_over_nv_recon=ctf2_over_nv_recon,
+                posterior_probs=noise_probs,
                 noise_variance_for_noise=noise_variance_for_noise,
                 block_norm_residual=block_norm_residual,
                 processed_score_half_for_noise=processed_score_half_for_noise,
@@ -12677,7 +13245,26 @@ def compute_pass2_stats_sparse_bucketed(
                 recon_window_indices=recon_window_indices,
                 score_window_indices=window_indices,
                 image_shape=image_shape,
+                bucket_scale_for_stats=bucket_scale_for_stats,
+                scale_correction_pixel_mask=scale_correction_pixel_mask,
+                scale_shell_indices=shell_indices_noise,
+                bucket_group_ids=bucket_group_ids,
             )
+            if norm_residual_dump_count and _env_flag_enabled(
+                _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV,
+                default=False,
+            ):
+                logger.info(
+                    "Sparse K=1 norm/scale operand stop-after-dump requested via %s=1; "
+                    "wrote %d requested file(s) at current_size=%s",
+                    _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV,
+                    int(norm_residual_dump_count),
+                    "None" if current_size is None else str(int(current_size)),
+                )
+                raise Pass2DumpComplete(
+                    dump_count=norm_residual_dump_count,
+                    current_size=current_size,
+                )
             noise_norm_correction_total[image_indices] += np.asarray(
                 block_norm_residual,
                 dtype=np.float64,

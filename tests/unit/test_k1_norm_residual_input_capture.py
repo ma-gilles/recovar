@@ -6,6 +6,12 @@ import numpy as np
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
 
 
+def test_norm_residual_only_mode_does_not_enable_full_pass2_dump(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_ONLY", "1")
+    assert not sparse._pass2_dump_enabled()
+
+
 def test_norm_residual_input_capture_preserves_exact_target_arrays(tmp_path, monkeypatch):
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "66")
@@ -34,6 +40,8 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(tmp_path, mon
         proj_abs2_for_noise=proj_abs2,
         summed_masked_noise=summed,
         ctf_probs=ctf_probs,
+        ctf2_over_nv_recon=jnp.asarray([[29.0, 31.0]], dtype=jnp.float32),
+        posterior_probs=jnp.ones((1, 1, 1), dtype=jnp.float32),
         noise_variance_for_noise=noise,
         block_norm_residual=residual,
         processed_score_half_for_noise=processed,
@@ -45,12 +53,16 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(tmp_path, mon
         recon_window_indices=jnp.asarray([0, 1], dtype=jnp.int32),
         score_window_indices=jnp.asarray([0, 1], dtype=jnp.int32),
         image_shape=(2, 2),
+        bucket_scale_for_stats=jnp.asarray([2.0], dtype=jnp.float32),
+        scale_correction_pixel_mask=jnp.asarray([True, False]),
+        scale_shell_indices=jnp.asarray([0, 1], dtype=jnp.int32),
+        bucket_group_ids=jnp.asarray([9], dtype=jnp.int32),
     )
 
     assert count == 1
     path = Path(tmp_path) / "norm_residual_orig000066_half2_cs056.npz"
     with np.load(path, allow_pickle=False) as capture:
-        assert capture["schema"].item() == "recovar-k1-norm-residual-inputs-v1"
+        assert capture["schema"].item() == "recovar-k1-norm-residual-inputs-v2"
         np.testing.assert_array_equal(capture["proj_for_noise"], np.asarray(proj[0]))
         np.testing.assert_array_equal(capture["proj_abs2_for_noise"], np.asarray(proj_abs2[0]))
         np.testing.assert_array_equal(capture["summed_masked_noise"], np.asarray(summed[0]))
@@ -62,6 +74,12 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(tmp_path, mon
         assert float(capture["support_mass"]) == 1.0
         assert float(capture["relion_norm_high_shell"]) == 19.0
         assert float(capture["weighted_img_per_image"]) == 23.0
+        assert int(capture["group_id"]) == 9
+        assert float(capture["scale_for_stats"]) == 2.0
+        np.testing.assert_array_equal(capture["scale_correction_pixel_mask"], [True, False])
+        expected_aa = np.float32(proj_abs2[0, 0, 0]) * np.float32(22.0) / np.float32(4.0)
+        np.testing.assert_array_equal(capture["scale_aa_per_shell"], [expected_aa, 0.0])
+        assert float(capture["scale_aa_per_image"]) == float(expected_aa)
         assert capture["raw_translated_recon"].shape == (0, 0)
         assert capture["raw_translated_wavg"].shape == (0, 0)
 
@@ -129,6 +147,8 @@ def test_norm_capture_slices_and_reshapes_raw_translation_rows(tmp_path, monkeyp
         proj_abs2_for_noise=jnp.ones((1, 1, 2), dtype=jnp.float32),
         summed_masked_noise=jnp.ones((1, 1, 2), dtype=jnp.complex64),
         ctf_probs=jnp.ones((1, 1, 2), dtype=jnp.float32),
+        ctf2_over_nv_recon=jnp.ones((1, 2), dtype=jnp.float32),
+        posterior_probs=jnp.ones((1, 1, 2), dtype=jnp.float32),
         noise_variance_for_noise=jnp.ones(2, dtype=jnp.float32),
         block_norm_residual=jnp.ones(1, dtype=jnp.float32),
         processed_score_half_for_noise=jnp.arange(4, dtype=jnp.float32).astype(jnp.complex64)[None],
@@ -140,6 +160,10 @@ def test_norm_capture_slices_and_reshapes_raw_translation_rows(tmp_path, monkeyp
         recon_window_indices=jnp.asarray([0, 2], dtype=jnp.int32),
         score_window_indices=jnp.asarray([0, 1, 2, 3], dtype=jnp.int32),
         image_shape=(2, 2),
+        bucket_scale_for_stats=jnp.ones(1, dtype=jnp.float32),
+        scale_correction_pixel_mask=jnp.ones(2, dtype=bool),
+        scale_shell_indices=jnp.asarray([0, 1], dtype=jnp.int32),
+        bucket_group_ids=jnp.asarray([4], dtype=jnp.int32),
     )
 
     with np.load(

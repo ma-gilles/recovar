@@ -11881,3 +11881,162 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   pre-run diff-hash gate and wrote no science output. Production retry
   `12299447` and exact-coarse arm `12299506` test tuple-set propagation before
   score, prior, normalization, support, and Pmax.
+
+## 2026-08-12 16:35 ET — stack-2739 Pmax gap reduced to one coarse parent
+
+- Both stopped fine arms completed before M-step. Native has 232 fine
+  rotations and 1,280 active tuples; RECOVAR has 224 rotations and 1,280
+  active tuples, with 1,248 common, 32 native-only, and 32 RECOVAR-only
+  tuples.
+- The 32 missing native tuples are the eight rotation children times four
+  translations of the one native-only coarse parent. They carry
+  `3.9727595%` of native posterior mass. Renormalizing native on only the
+  common domain moves Pmax `0.250901568 -> 0.261281673`, matching RECOVAR
+  `0.261262804`; common-domain posterior TV is `9.32283e-5`.
+- Exact-coarse job `12299506` is null at this boundary: the same 32 native
+  tuples remain missing and Pmax is `0.261262573`. This rules out the exact
+  reduction/translation/image-operand intervention as the parent repair.
+- Native favors cutoff parent `(29447,7)` over `(15173,20)` by
+  `+0.000732422`; RECOVAR flips the margin to `-0.000828743`. Raw scoring
+  contributes `-0.00166512`; direction prior contributes `+9.54e-7` and the
+  translation prior contributes zero.
+- The next bounded gate captures native iteration-3 reference operands for
+  those two parents and re-scores them with RECOVAR's exact image/CTF
+  operands. Full trajectory work remains deferred. K=4 remains parked; the
+  fixed scorecard remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated.
+
+## 2026-08-12 18:10 ET — stack-2739 parent flip factorized to pixel weights
+
+- Native-reference substitution is a causal null and slightly worsens the raw
+  parent-margin residual. Common fine scoring remains closed; reference drift
+  is not the immediate parent-flip cause.
+- Direct native/RECOVAR noise sufficient statistics demonstrate an exact
+  shell-31 bug: RELION's high-shell image-power numerator is per-particle,
+  while RECOVAR support-weighted it. The high-shell ratio agrees with the
+  particle-count/retained-mass prediction in both halves.
+- A stopped high-shell-only score intervention moves the parent margin by one
+  float32 word (`0.0001220703125`) and is not the dominant cause.
+- Low-shell correction ratios imply RECOVAR/native target scale
+  `1.0000531839184625`; scale-only job `12304356` closes
+  `0.00048828125` of the `0.001953125` native-reference margin gap.
+- Shellwise noise plus scale job `12304482` reproduces the exact-native-weight
+  margin `-2.143798828125`, closing `0.001708984375` of the gap. Native-image
+  substitution adds no further margin movement at float32 score precision.
+- The next stopped boundary is the active-shell noise numerator split into
+  image power, `AA`, and `XA`; no long trajectory is scheduled. K=4 remains
+  parked and the fixed scorecard is unchanged.
+
+## 2026-08-12 18:25 ET — active noise numerator localized to translated image power
+
+- The iteration-2 active-shell raw-noise discrepancy is decomposed with the
+  native per-particle component capture. Image power accounts for `77.8001%`
+  in half 1 and `75.1205%` in half 2; `AA - 2*XA` accounts for the remaining
+  `22.2138%` and `24.8324%`.
+- The active image-power RECOVAR/RELION median ratios are
+  `1.0000257599571096` and `1.000022860207772`. Iteration-1 normalization
+  scalars predict power ratios within about `1.6e-6` of one, ruling out the
+  preceding amplitude normalization as the source of this discrepancy.
+- RELION accumulates active `power_img` after applying each translation in
+  float32 and weighting by the translation posterior. RECOVAR used the
+  algebraically equivalent untranslated image norm; CUDA `sincosf`/float32
+  makes those paths observably different.
+- A guarded source treatment tested whether the translated-Wavg pixel
+  calculation also supplies RELION's shellwise image-power numerator. Stopped
+  job `12304787` falsifies that hypothesis at its preregistered `80%` gate.
+  Half 1 changes from `1.0000257599571096` to `1.0000258518141674` (slightly
+  worse), while half 2 remains exactly `1.000022860207772`. The source
+  intervention is removed and no iteration-3 parent dump is submitted.
+- Scale-statistics job `12304130` completed successfully in `00:31:31`.
+  Stack 2739 is clipped to raw scale `0.2` in both engines, so its local terms
+  contribute none of the scale difference. The global normalization-average
+  ratio is `0.9999469120210713`, exactly accounting for the target's
+  `1.000053` scale inflation.
+- After converting RECOVAR XA/AA by `128**4`, population median XA ratios are
+  `1.00001073` and `1.00000910`, while AA ratios are `1.00007210` and
+  `1.00006413`. This is now the active stopped capture: compare per-pixel and
+  per-shell AA operands before reduction for one strong unclipped group. K=4
+  and full trajectories remain deferred; the fixed scorecard is unchanged.
+- The treatment's all-shell noise relative L2 still improves to `2.7736e-5`
+  and `2.6419e-5` because the independent default high-shell fix closes most
+  high-shell state. High-shell median ratios are approximately `1.000000256`
+  and `1.000000215`; this does not rescue the active image-power hypothesis.
+- Treatment reports are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_translated_wavg_noise_it2_20260812T2110ET/analysis/noise_update_terms_components_half1.json`
+  (SHA-256 `c1e62d561fefda6028da765e3dc1ba6ac3356b04475d304757a1daccbc99e967`)
+  and the corresponding half-2 report (SHA-256
+  `aa991ef26a6c66a15111771e481165fe3ffe7ed2a5325a1c659fc03f3dd965eb`).
+- Focused AA job `12305992` targets stack 1097 / zero-based group 109 at
+  iteration 2, half 1, current size 60. It is pinned to RECOVAR HEAD
+  `0ede69591fb1cd458df2c104fd5b365df661b3f2`, tracked-diff SHA-256
+  `bdd4917f192be467e36ab78044b15aa27fa49cb756ea728d6214c2c0ff058d83`,
+  launcher SHA-256
+  `5c2371df2884d10ece75b6185fd9a45c5ee9c1fb38369fd462a78e237582683f`,
+  and CUDA-library SHA-256
+  `d8d3c08e896cee7eb49d8b6afebada633e13f466c93a5f12e133a23fab00abd9`.
+  It writes the posterior, CTF/noise, projection, scale-mask, per-candidate,
+  per-pixel, per-shell, and per-image AA chain and stops before any global
+  group reduction or later iteration. Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_scale_aa_orig1096_it2_20260812T1858ET/`.
+
+## 2026-08-12 20:15 ET — AA residual reduced to one CUDA operation
+
+- Jobs `12305992` and `12306274` were instrumentation-invalid/OOM and have no
+  scientific interpretation. Corrected stopped job `12306304` proves exact
+  RECOVAR local replay and a `2.44323e-4` native shell-AA residual.
+- Native pixel job `12306654` joins all 333 active pixels exactly and observes
+  the mismatch before shell reduction (`2.48306e-4` relative L2).
+- Candidate jobs `12306994`, `12306995`, and `12307389` match all 160,679
+  active rotations and 116 translations. Posterior TV is `1.97793e-6`, but
+  swapping native weights onto RECOVAR projection features closes only
+  `-0.049%` of the AA residual. CTF-squared relative L2 is `9.79e-8`.
+- Projector job `12307739` measures complex `Projector::data` relative L2
+  `7.49e-8`. H100 replay `12307952` swaps native PPref into RECOVAR's texture
+  projector and closes `-0.012%` of the `2.4432e-4` residual. Incoming
+  reference state is not the cause.
+- The first remaining boundary is native texture interpolation/projected
+  complex values, projected power, or Wavg float32 accumulation. Job
+  `12308183` captures 160,679 rotations by the exact 333-pixel panel at
+  iteration 2. No later iteration, complete case, or K=4 run is scheduled
+  before this compact comparison.
+
+## 2026-08-12 20:30 ET — first material AA inequality is Wavg atomics
+
+- Projection-panel job `12308183` completed in 498 seconds. RECOVAR/native
+  per-rotation shell power relative L2 is `1.42976e-7`, so projection and
+  power formation are not the `2.48e-4` residual.
+- RELION's sequential 116-translation loop differs from a normal float32
+  marginal by only `9.06e-8` relative L2.
+- A high-accuracy rotation sum reproduces RECOVAR and differs from native
+  Wavg pixels by `2.48478e-4`. Forward float32 rotation accumulation differs
+  by only `1.37042e-6`, closing `99.45%`; reverse order differs by
+  `5.87178e-5`. The first material inequality is CUDA atomic accumulation
+  across rotation blocks.
+- Artifact-only H100 job `12308654` tests a new one-block-per-rotation,
+  per-pixel float32 atomic reducer against the saved native 333-pixel panel.
+  It must reproduce native Wavg before any stopped EM-path treatment is run.
+
+## 2026-08-12 21:00 ET — fine-parent order plus atomics closes AA
+
+- Chunked native-order atomic replay job `12308853` reaches `1.48e-6`
+  per-pixel relative L2, but atomic-only stopped EM job `12308897` reaches
+  only `1.123e-4` from the `2.483e-4` baseline.
+- Replay job `12309162` changes only the rotation permutation. Native terms in
+  RECOVAR order reproduce `1.12422e-4`; native order reaches `1.48e-6`.
+  Only 16/160,679 active rotations initially share their rank.
+- All 20,558 eight-child fine-parent groups match bitwise internally. The
+  mismatch is the legacy RECOVAR psi-slow/direction-fast parent traversal
+  versus RELION direction-slow/psi-fast traversal.
+- Guarded stopped job `12309318` applies the stable RELION parent-key order.
+  The active rotation sequence and full 164,464-row real prefix become
+  bitwise identical. Atomic pixel AA relative L2 is `1.50412e-6`; shell AA
+  relative L2 is `5.27891e-7`, closing 99.39% and 99.78%.
+- Immutable reports:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_relion_rotation_order_stopped_it2_20260812T2130ET/analysis/scale_aa_atomic_pixels.json`
+  (SHA-256 `633ae2a15b42cd6073fb169e46e9b4e8d37b71c050296934ebef584c59e09eb9`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_relion_rotation_order_stopped_it2_20260812T2130ET/analysis/rotation_order.json`
+  (SHA-256 `2836c2607d12defcc40527bbe9a7afa35d2599c673f855232321755bc2b42337`).
+- The fixed scorecard remains 28/34 strict. Next compare XA/BPref at this exact
+  boundary, then run a short iteration-3 discriminator rather than a full
+  case-22 trajectory.

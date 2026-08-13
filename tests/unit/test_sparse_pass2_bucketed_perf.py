@@ -4482,7 +4482,7 @@ def test_weighted_image_power_shells_uses_per_image_support_mass():
     np.testing.assert_allclose(np.asarray(shells), expected_shells, rtol=1e-6, atol=1e-6)
 
 
-def test_weighted_image_power_uses_unweighted_high_shells_for_normcorr_only():
+def test_weighted_image_power_uses_unweighted_high_shells_for_noise_and_normcorr():
     processed_half = jnp.asarray(
         [
             [1.0 + 1.0j, 2.0 + 0.0j, 3.0 + 0.0j],
@@ -4505,7 +4505,7 @@ def test_weighted_image_power_uses_unweighted_high_shells_for_normcorr_only():
     expected_shells = np.zeros(3, dtype=np.float32)
     expected_shells[0] = power[0, 0] * 0.25
     expected_shells[1] = power[0, 1] * 0.25
-    expected_shells[2] = power[0, 2] * 0.25
+    expected_shells[2] = power[0, 2] + power[1, 2]
     expected_per_image = np.array(
         [
             (power[0, 0] + power[0, 1]) * 0.25 + power[0, 2],
@@ -4543,7 +4543,7 @@ def test_weighted_image_power_replaces_only_unweighted_high_shell_normcorr():
     expected_shells = np.zeros(3, dtype=np.float32)
     expected_shells[0] = power[0, 0] * 0.25
     expected_shells[1] = power[0, 1] * 0.25
-    expected_shells[2] = power[0, 2] * 0.25
+    expected_shells[2] = power[0, 2] + power[1, 2]
     expected_per_image = np.asarray(
         [
             (power[0, 0] + power[0, 1]) * 0.25 + powerclass_high[0],
@@ -4590,7 +4590,11 @@ def test_weighted_image_power_assigns_shared_high_shell_once_across_classes():
     total_mass = support_mass_by_class.sum(axis=0)
     expected_norm = pixel_power[:, 0] * total_mass + np.asarray(powerclass_high)
     expected_shells = np.asarray(
-        [np.sum(pixel_power[:, shell] * total_mass) for shell in range(3)],
+        [
+            np.sum(pixel_power[:, 0] * total_mass),
+            np.sum(pixel_power[:, 1]),
+            np.sum(pixel_power[:, 2]),
+        ],
         dtype=np.float32,
     )
     np.testing.assert_allclose(np.sum(per_class_norm, axis=0), expected_norm, rtol=1e-7, atol=5e-5)
@@ -4637,11 +4641,11 @@ def test_weighted_image_power_excludes_sentinel_from_normcorr_but_keeps_valid_ou
         norm_unweighted_shell_cutoff=0,
     )
 
-    np.testing.assert_array_equal(np.asarray(shells), np.asarray([0.25, 1.0], dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(shells), np.asarray([0.25, 20.0], dtype=np.float32))
     np.testing.assert_array_equal(np.asarray(per_image), np.asarray([4.25, 16.0], dtype=np.float32))
 
 
-def test_k1_relion_fine_mstep_prune_weights_image_power_by_retained_mass(monkeypatch):
+def test_k1_relion_fine_mstep_prune_keeps_unweighted_high_shell_image_power(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -4698,7 +4702,9 @@ def test_k1_relion_fine_mstep_prune_weights_image_power_by_retained_mass(monkeyp
     assert pruned_noise.sumw == pytest.approx(0.0)
     assert pruned_noise.wsum_sigma2_offset == pytest.approx(0.0)
     np.testing.assert_allclose(np.asarray(pruned_noise.wsum_sigma2_noise), 0.0, rtol=0, atol=0)
-    np.testing.assert_allclose(np.asarray(pruned_noise.wsum_img_power), 0.0, rtol=0, atol=0)
+    image_power = np.asarray(pruned_noise.wsum_img_power)
+    np.testing.assert_allclose(image_power[:2], 0.0, rtol=0, atol=0)
+    assert np.any(image_power[2:] > 0.0)
     assert np.any(np.asarray(pruned_noise.wsum_norm_correction) > 0.0)
     assert np.all(np.asarray(pruned_noise.wsum_norm_correction) >= 0.0)
     np.testing.assert_allclose(np.asarray(pruned_noise.wsum_scale_correction_xa), 0.0, rtol=0, atol=0)
@@ -6145,6 +6151,36 @@ def test_fine_rotation_override_preserves_fine_grid_order_and_parent_map():
     np.testing.assert_array_equal(per_image["oversampled_rot_indices"][0], np.array([0, 2, 3, 5]))
     np.testing.assert_array_equal(per_image["parent_map"][0], np.array([0, 0, 1, 1], dtype=np.int32))
     np.testing.assert_array_equal(per_image["oversampled_rots"][0], fine_rotations[[0, 2, 3, 5]])
+
+
+def test_fine_rotation_override_can_follow_relion_parent_execution_order():
+    fine_rotations = np.arange(6 * 9, dtype=np.float32).reshape(6, 3, 3)
+    # Order-1 RECOVAR parent ids are psi-slow/direction-fast. Parent 48 is
+    # direction 0, psi 1, so RELION executes it before parent 1.
+    fine_parent = np.array([0, 0, 1, 1, 48, 48], dtype=np.int64)
+
+    per_image = _prepare_per_image_pass2_inputs(
+        [np.array([0, 1, 48], dtype=np.int32)],
+        n_coarse_rot=576,
+        n_coarse_trans=1,
+        nside_level=1,
+        oversampling_order=1,
+        n_fine_trans=1,
+        fine_translation_parent=np.array([0], dtype=np.int32),
+        rotation_log_prior=None,
+        random_perturbation=0.0,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+        relion_parent_execution_order=True,
+    )
+
+    expected_indices = np.array([0, 1, 4, 5, 2, 3], dtype=np.int64)
+    np.testing.assert_array_equal(per_image["oversampled_rot_indices"][0], expected_indices)
+    np.testing.assert_array_equal(
+        per_image["parent_map"][0],
+        np.array([0, 0, 2, 2, 1, 1], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(per_image["oversampled_rots"][0], fine_rotations[expected_indices])
 
 
 def test_full_support_fine_rotation_override_reuses_shared_arrays():

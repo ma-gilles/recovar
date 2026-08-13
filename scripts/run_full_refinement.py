@@ -5424,11 +5424,14 @@ if __name__ == "__main__":
             sys.exit(0)
         if (
             exc.__class__.__name__ == "Pass2DumpComplete"
-            and os.environ.get("RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET") == "1"
+            and (
+                os.environ.get("RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET") == "1"
+                or os.environ.get("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET") == "1"
+            )
         ):
             logger.info(
                 "RECOVAR pass-2 operand dump completed; stopping at the "
-                "requested fine-score boundary: %s",
+                "requested fine-score or norm/scale boundary: %s",
                 exc,
             )
             sys.exit(0)

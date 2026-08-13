@@ -8,10 +8,10 @@ import jax.numpy as jnp
 
 from recovar.em.dense_single_volume.helpers.half_spectrum import make_relion_noise_shell_indices_half
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _replace_untranslated_low_shell_norm_power,
-    _relion_cuda_translate_wavg_norm_images,
     _relion_cuda_powerclass_highres_norm_units,
     _relion_cuda_powerclass_spectrum_highres_norm_units,
+    _relion_cuda_translate_wavg_norm_images,
+    _replace_untranslated_low_shell_norm_power,
     _translated_wavg_low_shell_power_pixels,
     _weighted_image_power_shells_and_per_image,
 )

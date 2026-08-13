@@ -2024,6 +2024,67 @@ project_texture_kernel(
     img2[img_off] = make_float2(re, im);
 }
 
+/* Match RELION's Wavg A2 topology: one block per orientation, one thread per
+ * pixel lane, and a float32 atomic add over orientations. The input has
+ * already completed the per-translation accumulation for each orientation. */
+__global__ void __launch_bounds__(256)
+relion_wavg_rotation_atomic_f32_kernel(
+    const float* __restrict__ terms,
+    float* __restrict__ output,
+    int n_rotations,
+    int n_pixels)
+{
+    const int rotation = blockIdx.x;
+    const int batch = blockIdx.y;
+    for (int pixel = threadIdx.x; pixel < n_pixels; pixel += blockDim.x) {
+        const int64_t input_index =
+            (static_cast<int64_t>(batch) * n_rotations + rotation) * n_pixels + pixel;
+        atomicAdd(&output[static_cast<int64_t>(batch) * n_pixels + pixel], terms[input_index]);
+    }
+}
+
+cudaError_t launch_relion_wavg_rotation_atomic_f32(
+    cudaStream_t stream,
+    const float* terms,
+    float* output,
+    int64_t batch_size,
+    int64_t n_rotations,
+    int64_t n_pixels)
+{
+    cudaError_t err = cudaMemsetAsync(
+        output,
+        0,
+        static_cast<size_t>(batch_size * n_pixels) * sizeof(float),
+        stream);
+    if (err != cudaSuccess) return err;
+    dim3 grid(static_cast<unsigned>(n_rotations), static_cast<unsigned>(batch_size));
+    dim3 block(256);
+    relion_wavg_rotation_atomic_f32_kernel<<<grid, block, 0, stream>>>(
+        terms,
+        output,
+        static_cast<int>(n_rotations),
+        static_cast<int>(n_pixels));
+    return cudaGetLastError();
+}
+
+cudaError_t launch_relion_wavg_rotation_atomic_add_f32(
+    cudaStream_t stream,
+    const float* terms,
+    float* output,
+    int64_t batch_size,
+    int64_t n_rotations,
+    int64_t n_pixels)
+{
+    dim3 grid(static_cast<unsigned>(n_rotations), static_cast<unsigned>(batch_size));
+    dim3 block(256);
+    relion_wavg_rotation_atomic_f32_kernel<<<grid, block, 0, stream>>>(
+        terms,
+        output,
+        static_cast<int>(n_rotations),
+        static_cast<int>(n_pixels));
+    return cudaGetLastError();
+}
+
 template <bool HALF_IMG>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 project_texture_double_kernel(
@@ -6146,6 +6207,86 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()           /* rot     */
         .Ret<ffi::AnyBuffer>()           /* img_out */
 );
+
+ffi::Error RelionWavgRotationAtomicF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer terms,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (terms.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument("RelionWavgRotationAtomicF32: need F32 buffers");
+    const auto dims = terms.dimensions();
+    const auto output_dims = output->dimensions();
+    if (dims.size() != 3 || output_dims.size() != 2 ||
+        output_dims[0] != dims[0] || output_dims[1] != dims[2])
+        return ffi::Error::InvalidArgument(
+            "RelionWavgRotationAtomicF32: expected terms[B,R,P] and output[B,P]");
+    if (dims[0] <= 0 || dims[0] > 65535 || dims[1] <= 0 ||
+        dims[1] > std::numeric_limits<int>::max() || dims[2] <= 0 ||
+        dims[2] > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument("RelionWavgRotationAtomicF32: dimensions exceed CUDA grid bounds");
+    cudaError_t err = launch_relion_wavg_rotation_atomic_f32(
+        stream,
+        static_cast<const float*>(terms.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        dims[0],
+        dims[1],
+        dims[2]);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionWavgRotationAtomicF32, RelionWavgRotationAtomicF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
+ffi::Error RelionWavgRotationAtomicAddF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer terms,
+    ffi::AnyBuffer accumulator_in,
+    ffi::Result<ffi::AnyBuffer> accumulator_out)
+{
+    if (terms.element_type() != ffi::DataType::F32 ||
+        accumulator_in.element_type() != ffi::DataType::F32 ||
+        accumulator_out->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument("RelionWavgRotationAtomicAddF32: need F32 buffers");
+    const auto dims = terms.dimensions();
+    const auto accumulator_dims = accumulator_in.dimensions();
+    const auto output_dims = accumulator_out->dimensions();
+    if (dims.size() != 3 || accumulator_dims.size() != 2 || output_dims.size() != 2 ||
+        output_dims[0] != accumulator_dims[0] || output_dims[1] != accumulator_dims[1] ||
+        accumulator_dims[0] != dims[0] || accumulator_dims[1] != dims[2])
+        return ffi::Error::InvalidArgument(
+            "RelionWavgRotationAtomicAddF32: expected terms[B,R,P] and accumulator[B,P]");
+    if (dims[0] <= 0 || dims[0] > 65535 || dims[1] <= 0 ||
+        dims[1] > std::numeric_limits<int>::max() || dims[2] <= 0 ||
+        dims[2] > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument(
+            "RelionWavgRotationAtomicAddF32: dimensions exceed CUDA grid bounds");
+    cudaError_t err = launch_relion_wavg_rotation_atomic_add_f32(
+        stream,
+        static_cast<const float*>(terms.untyped_data()),
+        static_cast<float*>(accumulator_out->untyped_data()),
+        dims[0],
+        dims[1],
+        dims[2]);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionWavgRotationAtomicAddF32, RelionWavgRotationAtomicAddF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ProjectIndexed, ProjectIndexedImpl,

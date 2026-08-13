@@ -30,10 +30,14 @@ STOP_AFTER_COMPACT_DUMP=${K1_CASE22_STOP_AFTER_COMPACT_DUMP:-0}
 NORM_RESIDUAL_INPUTS=${K1_CASE22_NORM_RESIDUAL_INPUTS:-0}
 POWERCLASS_SPECTRUM_NORM=${K1_CASE22_POWERCLASS_SPECTRUM_NORM:-0}
 TRANSLATED_WAVG_NORM=${K1_CASE22_TRANSLATED_WAVG_NORM:-0}
+WAVG_ATOMIC_SCALE_AA=${K1_CASE22_WAVG_ATOMIC_SCALE_AA:-0}
+FINE_ROTATION_EXECUTION_ORDER=${K1_CASE22_FINE_ROTATION_EXECUTION_ORDER:-0}
 COARSE_STACK1204_DUMP=${K1_CASE22_COARSE_STACK1204_DUMP:-0}
 GAUSSIAN_COARSE_STACK1204=${K1_CASE22_GAUSSIAN_COARSE_STACK1204:-0}
 GAUSSIAN_SINCOSF_STACK1204=${K1_CASE22_GAUSSIAN_SINCOSF_STACK1204:-${GAUSSIAN_COARSE_STACK1204}}
 EXACT_COARSE_STACK1204=${K1_CASE22_EXACT_COARSE_STACK1204:-0}
+NOISE_UPDATE_DUMP=${K1_CASE22_NOISE_UPDATE_DUMP:-0}
+PROJECTOR_DUMP=${K1_CASE22_PROJECTOR_DUMP:-0}
 TARGET_STACK_ONE_BASED=${K1_CASE22_TARGET_STACK_ONE_BASED:-1204}
 TARGET_STACKS_ONE_BASED=${K1_CASE22_TARGET_STACKS_ONE_BASED:-${TARGET_STACK_ONE_BASED}}
 TARGET_STACKS_ONE_BASED=${TARGET_STACKS_ONE_BASED//:/,}
@@ -72,6 +76,22 @@ esac
 case "${TRANSLATED_WAVG_NORM}" in
     0|1) ;;
     *) echo "K1_CASE22_TRANSLATED_WAVG_NORM must be 0 or 1" >&2; exit 2 ;;
+esac
+case "${WAVG_ATOMIC_SCALE_AA}" in
+    0|1) ;;
+    *) echo "K1_CASE22_WAVG_ATOMIC_SCALE_AA must be 0 or 1" >&2; exit 2 ;;
+esac
+case "${FINE_ROTATION_EXECUTION_ORDER}" in
+    0|1) ;;
+    *) echo "K1_CASE22_FINE_ROTATION_EXECUTION_ORDER must be 0 or 1" >&2; exit 2 ;;
+esac
+case "${NOISE_UPDATE_DUMP}" in
+    0|1) ;;
+    *) echo "K1_CASE22_NOISE_UPDATE_DUMP must be 0 or 1" >&2; exit 2 ;;
+esac
+case "${PROJECTOR_DUMP}" in
+    0|1) ;;
+    *) echo "K1_CASE22_PROJECTOR_DUMP must be 0 or 1" >&2; exit 2 ;;
 esac
 TARGET_ORIGINAL_INDEX=$((TARGET_STACK_ONE_BASED - 1))
 PASS2_ROTATION_ROWS=${K1_CASE22_PASS2_ROTATION_ROWS-50293,50295}
@@ -154,10 +174,25 @@ fi
 if [[ "${TRANSLATED_WAVG_NORM}" = 1 ]]; then
     export RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM=1
 fi
+if [[ "${WAVG_ATOMIC_SCALE_AA}" = 1 ]]; then
+    export RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA=1
+fi
+if [[ "${FINE_ROTATION_EXECUTION_ORDER}" = 1 ]]; then
+    export RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER=1
+fi
 if [[ "${PARITY_DUMP}" = 1 ]]; then
     export RECOVAR_PARITY_DUMP_DIR=${ROOT}/parity
     export RECOVAR_PARITY_DUMP_VOLUME_DOWNSAMPLE=8
     mkdir -p "${RECOVAR_PARITY_DUMP_DIR}"
+fi
+if [[ "${NOISE_UPDATE_DUMP}" = 1 ]]; then
+    export RECOVAR_NOISE_DEBUG_DUMP_DIR=${ROOT}/noise
+    export RECOVAR_NOISE_DEBUG_DUMP_ITERATION=1
+    mkdir -p "${RECOVAR_NOISE_DEBUG_DUMP_DIR}"
+fi
+if [[ "${PROJECTOR_DUMP}" = 1 ]]; then
+    export RECOVAR_RELION_PROJECTOR_DUMP_DIR=${ROOT}/projector
+    mkdir -p "${RECOVAR_RELION_PROJECTOR_DUMP_DIR}"
 fi
 if [[ "${COMPACT_STACK1204_DUMP}" = 1 && "${COARSE_STACK1204_DUMP}" = 1 ]]; then
     echo "compact pass-2 and coarse-significance dump modes are mutually exclusive" >&2
@@ -174,15 +209,19 @@ elif [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
     export RECOVAR_PASS2_DUMP_RAW_OPERANDS=0
     if [[ "${NORM_RESIDUAL_INPUTS}" = 1 ]]; then
         export RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS=1
+        export RECOVAR_PASS2_DUMP_NORM_RESIDUAL_ONLY=1
+        if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
+            export RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET=1
+        fi
     fi
     if [[ -n "${PASS2_ROTATION_ROWS}" ]]; then
         export RECOVAR_PASS2_DUMP_ROTATION_ROWS=${PASS2_ROTATION_ROWS}
     else
         unset RECOVAR_PASS2_DUMP_ROTATION_ROWS
     fi
-    # The ordinary pass-2 dump is emitted before the norm-residual operands.
-    # In residual-input mode, finish the single requested iteration so both
-    # artifacts are available rather than stopping at the earlier boundary.
+    # The ordinary pass-2 dump is emitted before the norm/scale operands. Use
+    # a distinct stop flag in residual-input mode so both artifacts are written
+    # before the focused run exits.
     if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 && "${NORM_RESIDUAL_INPUTS}" != 1 ]]; then
         export RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET=1
     fi
@@ -245,19 +284,25 @@ start=$(date +%s)
 "${COMMAND[@]}" > "${OUTPUT}/run.log" 2>&1
 wall_s=$(( $(date +%s) - start ))
 
-if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 && "${NORM_RESIDUAL_INPUTS}" != 1 ]]; then
+if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
     printf -v target_original_label '%06d' "${TARGET_ORIGINAL_INDEX}"
     printf -v target_size_label '%03d' "${TARGET_CURRENT_SIZE}"
     compact_dump=${RECOVAR_PASS2_DUMP_DIR}/pass2_orig${target_original_label}_cs${target_size_label}.npz
-    test -s "${compact_dump}"
-    rg -q 'pass-2 operand dump completed; stopping at the requested fine-score boundary' \
-        "${OUTPUT}/run.log"
     if [[ "${NORM_RESIDUAL_INPUTS}" = 1 ]]; then
         norm_residual_dump=${RECOVAR_PASS2_DUMP_DIR}/norm_residual_orig${target_original_label}_half1_cs${target_size_label}.npz
-        test -s "${norm_residual_dump}"
+        chunked_scale_aa_dump=${RECOVAR_PASS2_DUMP_DIR}/scale_aa_chunked_orig${target_original_label}_half1_cs${target_size_label}.npz
+        test -s "${norm_residual_dump}" || test -s "${chunked_scale_aa_dump}"
+        rg -q 'requested fine-score or norm/scale boundary' "${OUTPUT}/run.log"
+    else
+        test -s "${compact_dump}"
+        rg -q 'pass-2 operand dump completed; stopping at the requested fine-score boundary' \
+            "${OUTPUT}/run.log"
     fi
-    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":true,"norm_residual_inputs":%s,"target_stack_one_based":%d,"target_iteration":%d,"target_current_size":%d,"pass2_rotation_rows":"%s","stopped_after_dump":true}\n' \
-        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${NORM_RESIDUAL_INPUTS}" "${TARGET_STACK_ONE_BASED}" \
+    if [[ "${PROJECTOR_DUMP}" = 1 ]]; then
+        test -s "${RECOVAR_RELION_PROJECTOR_DUMP_DIR}/iter001_half0_relion_projector_half.npz"
+    fi
+    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":true,"norm_residual_inputs":%s,"projector_dump":%s,"target_stack_one_based":%d,"target_iteration":%d,"target_current_size":%d,"pass2_rotation_rows":"%s","stopped_after_dump":true}\n' \
+        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${NORM_RESIDUAL_INPUTS}" "${PROJECTOR_DUMP}" "${TARGET_STACK_ONE_BASED}" \
         "${TARGET_ITERATION}" "${TARGET_CURRENT_SIZE}" "${PASS2_ROTATION_ROWS}" \
         > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
     touch "${ROOT}/DUMP_SUCCESS_${SLURM_JOB_ID}"
@@ -284,6 +329,9 @@ last_index=$((MAX_ITER - 1))
 printf -v last_label '%03d' "${last_index}"
 test -s "${OUTPUT}/intermediates/it${last_label}_half1_reg.mrc"
 test -s "${OUTPUT}/intermediates/it${last_label}_half2_reg.mrc"
+if [[ "${NOISE_UPDATE_DUMP}" = 1 ]]; then
+    test -s "${RECOVAR_NOISE_DEBUG_DUMP_DIR}/recovar_noise_update_it002.npz"
+fi
 if [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
     printf -v target_original_label '%06d' "${TARGET_ORIGINAL_INDEX}"
     printf -v target_size_label '%03d' "${TARGET_CURRENT_SIZE}"
@@ -325,8 +373,8 @@ if [[ "${PARITY_DUMP}" = 1 ]]; then
     test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
 fi
 
-printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"norm_residual_inputs":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"parity_dump":%s}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${NORM_RESIDUAL_INPUTS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${PARITY_DUMP}" \
+printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"norm_residual_inputs":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"parity_dump":%s,"noise_update_dump":%s}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${NORM_RESIDUAL_INPUTS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${PARITY_DUMP}" "${NOISE_UPDATE_DUMP}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
