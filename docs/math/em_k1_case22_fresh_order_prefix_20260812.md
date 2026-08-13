@@ -1532,6 +1532,17 @@ important case where the extra coarse tuple reuses a rotation whose other
 translation was already selected: rotation topology stays exact while active
 tuple topology changes.
 
+The probability-aware support audit separates direct and indirect
+propagation. In stack 469, one of the two extra BPref tuples is an extra-parent
+child with posterior `4.23666e-5`; the other is a common active tuple at the
+shifted cutoff. In stack 2659, two of four extras are extra-parent children
+(`2.55498e-5` and `1.81264e-5`) and two are common active tuples. In stack
+2544, all five extras are common active tuples: none of the 32 extra-parent
+children survives directly, but their probability mass changes the cumulative
+fine cutoff and admits five common tuples. This establishes the discrete
+causal chain `+1 coarse tuple -> +32 active fine tuples -> changed fine mass
+and cutoff -> +2/+5/+4 BPref tuples` for the three affected particles.
+
 The common-domain fine-score residual is small but systematic across all five:
 maximum centered pre-prior residual ranges from `0.00255585` to `0.00270081`,
 and common-domain posterior TV ranges from `3.26608e-5` to `1.14760e-4`.
@@ -1544,7 +1555,7 @@ the next gates.
 The report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_repeatstable5_production_retry_it3_20260813T0731ET/analysis/K1_REPEAT_STABLE5_PRODUCTION_FINE_PANEL.json`
 (SHA-256
-`ad355ec560307fc1815bc72851a7655a7845e2e97573066cdcb7229ea68f03bf`).
+`c1341d318ca727c9910b34371e11f7db35821bc286aad68386f4afeef9f840f6`).
 This fixed particle-panel denominator is separate from, and does not change,
 the complete-case scorecard of `28/34` strict, `32/34` topology, and `34/34`
 evaluated.

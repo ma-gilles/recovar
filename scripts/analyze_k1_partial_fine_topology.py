@@ -327,6 +327,27 @@ def analyze(
             tuple(map(int, row))
             for row in np.argwhere(recovar["production_significant"]).tolist()
         }
+        recovar_only_significant = recovar_significant_keys - native_significant_keys
+        native_only_significant = native_significant_keys - recovar_significant_keys
+        recovar_only_support_records = []
+        for rotation, translation in sorted(recovar_only_significant)[:64]:
+            key = (rotation, translation)
+            native_row = native_key_to_row.get(key)
+            recovar_only_support_records.append(
+                {
+                    "rotation": int(rotation),
+                    "translation": int(translation),
+                    "origin": (
+                        "common_active_tuple"
+                        if native_row is not None
+                        else "recovar_only_active_tuple"
+                    ),
+                    "native_probability": (
+                        None if native_row is None else float(native_probs[native_row])
+                    ),
+                    "recovar_probability": float(recovar_probs[rotation, translation]),
+                }
+            )
         production_boundary = {
             "combined_log_weight_centered": _metric(
                 _center(native_common_log),
@@ -363,10 +384,23 @@ def analyze(
                 "native_mapped_count": len(native_significant_keys),
                 "recovar_count": len(recovar_significant_keys),
                 "exact": native_significant_keys == recovar_significant_keys,
-                "native_only_count": len(native_significant_keys - recovar_significant_keys),
-                "recovar_only_count": len(recovar_significant_keys - native_significant_keys),
-                "native_only_first": _records(native_significant_keys - recovar_significant_keys),
-                "recovar_only_first": _records(recovar_significant_keys - native_significant_keys),
+                "native_probability_threshold": float(
+                    np.min(native_probs[native_significant_rows])
+                ),
+                "recovar_probability_threshold": float(
+                    np.min(recovar_probs[np.asarray(recovar["production_significant"], dtype=bool)])
+                ),
+                "native_only_count": len(native_only_significant),
+                "recovar_only_count": len(recovar_only_significant),
+                "recovar_only_common_active_count": sum(
+                    key in native_common_keys for key in recovar_only_significant
+                ),
+                "recovar_only_active_tuple_count": sum(
+                    key not in native_common_keys for key in recovar_only_significant
+                ),
+                "native_only_first": _records(native_only_significant),
+                "recovar_only_first": _records(recovar_only_significant),
+                "recovar_only_records_first": recovar_only_support_records,
             },
         }
 
