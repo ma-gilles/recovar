@@ -140,6 +140,9 @@ _RELION_WAVG_ATOMIC_SCALE_AA_ENV = "RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA"
 _RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV = (
     "RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL"
 )
+_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY_ENV = (
+    "RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY"
+)
 _RELION_FINE_ROTATION_EXECUTION_ORDER_ENV = (
     "RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER"
 )
@@ -2838,6 +2841,59 @@ def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
     if raw is None or raw.strip() == "":
         return bool(default)
     return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _relion_wavg_direct_modes(
+    *,
+    accumulate_noise: bool,
+    scale_groups_available: bool,
+    scale_aa_enabled: bool,
+) -> tuple[bool, bool]:
+    """Resolve the stopped direct-Wavg noise/norm factorial arms.
+
+    ``DIRECT_RESIDUAL`` preserves the existing coupled treatment: the native
+    Wavg ``diff2`` stream supplies both shell noise and per-particle norm.
+    ``DIRECT_NOISE_ONLY`` supplies only shell noise, leaving normalization on
+    the production algebraic path.  The latter isolates the already-localized
+    radial-noise boundary without silently changing a second state variable.
+    """
+
+    direct_residual_requested = bool(
+        accumulate_noise
+        and _env_flag_enabled(
+            _RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV,
+            default=False,
+        )
+    )
+    direct_noise_only_requested = bool(
+        accumulate_noise
+        and _env_flag_enabled(
+            _RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY_ENV,
+            default=False,
+        )
+    )
+    if direct_residual_requested and direct_noise_only_requested:
+        raise ValueError(
+            f"{_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV}=1 and "
+            f"{_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY_ENV}=1 are mutually exclusive"
+        )
+    direct_noise = direct_residual_requested or direct_noise_only_requested
+    # Fresh iteration 1 intentionally has no scale-group accumulator.  The
+    # established coupled diagnostic is dormant there and activates once the
+    # scale state exists; preserve that lifecycle for the isolated arm.
+    if direct_noise and not scale_groups_available:
+        return False, False
+    if direct_noise and not scale_aa_enabled:
+        requested_name = (
+            _RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV
+            if direct_residual_requested
+            else _RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY_ENV
+        )
+        raise ValueError(
+            f"{requested_name}=1 requires "
+            f"{_RELION_WAVG_ATOMIC_SCALE_AA_ENV}=1 and scale groups"
+        )
+    return direct_noise, direct_residual_requested
 
 
 def _pass2_dump_enabled() -> bool:
@@ -11531,28 +11587,15 @@ def compute_pass2_stats_sparse_bucketed(
             and noise_scale_correction_aa_total is not None
             and _env_flag_enabled(_RELION_WAVG_ATOMIC_SCALE_AA_ENV, default=False)
         )
-        relion_wavg_atomic_direct_residual_requested = bool(
-            accumulate_noise
-            and _env_flag_enabled(
-                _RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV,
-                default=False,
+        relion_wavg_atomic_direct_noise, relion_wavg_atomic_direct_norm = (
+            _relion_wavg_direct_modes(
+                accumulate_noise=bool(accumulate_noise),
+                scale_groups_available=noise_scale_correction_aa_total is not None,
+                scale_aa_enabled=bool(relion_wavg_atomic_scale_aa),
             )
         )
-        if (
-            relion_wavg_atomic_direct_residual_requested
-            and noise_scale_correction_aa_total is not None
-            and not relion_wavg_atomic_scale_aa
-        ):
-            raise ValueError(
-                f"{_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV}=1 requires "
-                f"{_RELION_WAVG_ATOMIC_SCALE_AA_ENV}=1 and scale groups"
-            )
-        relion_wavg_atomic_direct_residual = bool(
-            relion_wavg_atomic_direct_residual_requested
-            and relion_wavg_atomic_scale_aa
-        )
-        if relion_wavg_atomic_direct_residual and current_size is None:
-            raise ValueError("direct Wavg residual replacement requires current_size")
+        if relion_wavg_atomic_direct_noise and current_size is None:
+            raise ValueError("direct Wavg noise replacement requires current_size")
         if relion_wavg_atomic_scale_aa:
             if relion_score_translation_angles is None:
                 raise ValueError(
@@ -11574,16 +11617,18 @@ def compute_pass2_stats_sparse_bucketed(
             raw_translated_wavg_for_atomic = raw_translated_wavg_rectangle[
                 :, :, relion_wavg_rectangle.exact_positions
             ]
-        if relion_wavg_atomic_direct_residual:
+        if relion_wavg_atomic_direct_noise:
             direct_noise_log_key = int(current_size)
             if direct_noise_log_key not in _relion_wavg_direct_noise_log_keys:
                 _relion_wavg_direct_noise_log_keys.add(direct_noise_log_key)
                 logger.info(
                     "Sparse pass-2 RELION Wavg diagnostic: issuing the full "
                     "%d-pixel FFTW rectangle and replacing current-size noise "
-                    "shells [0, %d] plus per-particle norm with direct residual atomics",
+                    "shells [0, %d] with direct residual atomics; per-particle "
+                    "norm mode=%s",
                     int(relion_wavg_rectangle.centered_indices.size),
                     int(current_size // 2),
+                    "direct" if relion_wavg_atomic_direct_norm else "production-algebraic",
                 )
 
         # Window gather (if applicable)
@@ -12084,7 +12129,7 @@ def compute_pass2_stats_sparse_bucketed(
             if accumulate_noise:
                 bucket_block_noise_shells = (
                     np.zeros(n_shells, dtype=np.float64)
-                    if relion_wavg_atomic_direct_residual
+                    if relion_wavg_atomic_direct_noise
                     else None
                 )
                 relion_wavg_atomic_scale_triplet_pixels = (
@@ -12376,7 +12421,7 @@ def compute_pass2_stats_sparse_bucketed(
                         block_noise_shells,
                         dtype=np.float64,
                     )
-                    if relion_wavg_atomic_direct_residual:
+                    if relion_wavg_atomic_direct_noise:
                         bucket_block_noise_shells += block_noise_shells_np
                     else:
                         noise_wsum_total += block_noise_shells_np
@@ -12387,7 +12432,7 @@ def compute_pass2_stats_sparse_bucketed(
                         ctf_probs,
                         noise_variance_for_noise,
                     )
-                    if not relion_wavg_atomic_direct_residual:
+                    if not relion_wavg_atomic_direct_norm:
                         noise_norm_correction_total[image_indices] += np.asarray(
                             block_norm_residual,
                             dtype=np.float64,
@@ -12871,7 +12916,7 @@ def compute_pass2_stats_sparse_bucketed(
                     norm_unweighted_high_shell=relion_norm_high_shell,
                     include_unweighted_high_shell=include_unweighted_norm_high_shell,
                 )
-                if translated_wavg_norm and not relion_wavg_atomic_direct_residual:
+                if translated_wavg_norm and not relion_wavg_atomic_direct_norm:
                     weighted_img_per_image = _replace_untranslated_low_shell_norm_power(
                         weighted_img_per_image,
                         processed_score_half_for_noise,
@@ -12885,7 +12930,7 @@ def compute_pass2_stats_sparse_bucketed(
                     weighted_img_shells,
                     dtype=np.float64,
                 )
-                if relion_wavg_atomic_direct_residual:
+                if relion_wavg_atomic_direct_noise:
                     direct_residual_shells, direct_image_power_shells = (
                         _replace_low_shell_noise_with_relion_wavg_direct_residual(
                             bucket_block_noise_shells,
@@ -12899,7 +12944,7 @@ def compute_pass2_stats_sparse_bucketed(
                     noise_img_power_total += direct_image_power_shells
                 else:
                     noise_img_power_total += weighted_img_shells_np
-                if relion_wavg_atomic_direct_residual:
+                if relion_wavg_atomic_direct_norm:
                     direct_norm_current = _relion_wavg_direct_norm_per_image(
                         relion_wavg_atomic_diff2_pixels_np,
                         relion_wavg_rectangle.shell_indices,
@@ -13780,7 +13825,7 @@ def compute_pass2_stats_sparse_bucketed(
                 norm_unweighted_high_shell=relion_norm_high_shell,
                 include_unweighted_high_shell=include_unweighted_norm_high_shell,
             )
-            if translated_wavg_norm and not relion_wavg_atomic_direct_residual:
+            if translated_wavg_norm and not relion_wavg_atomic_direct_norm:
                 weighted_img_per_image = _replace_untranslated_low_shell_norm_power(
                     weighted_img_per_image,
                     processed_score_half_for_noise,
@@ -13792,7 +13837,7 @@ def compute_pass2_stats_sparse_bucketed(
                 )
             support_mass_np = np.asarray(support_mass, dtype=np.float64)
             weighted_img_shells_np = np.asarray(weighted_img_shells, dtype=np.float64)
-            if not relion_wavg_atomic_direct_residual:
+            if not relion_wavg_atomic_direct_norm:
                 noise_norm_correction_total[image_indices] += np.asarray(
                     weighted_img_per_image,
                     dtype=np.float64,
@@ -13854,7 +13899,7 @@ def compute_pass2_stats_sparse_bucketed(
                     ),
                     dtype=np.float32,
                 )
-            if relion_wavg_atomic_direct_residual:
+            if relion_wavg_atomic_direct_noise:
                 direct_residual_shells, direct_image_power_shells = (
                     _replace_low_shell_noise_with_relion_wavg_direct_residual(
                         block_noise_shells_np,
@@ -13866,6 +13911,10 @@ def compute_pass2_stats_sparse_bucketed(
                 )
                 noise_wsum_total += direct_residual_shells
                 noise_img_power_total += direct_image_power_shells
+            else:
+                noise_wsum_total += block_noise_shells_np
+                noise_img_power_total += weighted_img_shells_np
+            if relion_wavg_atomic_direct_norm:
                 direct_norm_current = _relion_wavg_direct_norm_per_image(
                     relion_wavg_atomic_scale_triplet_pixels_np[:, :, 2],
                     relion_wavg_rectangle.shell_indices,
@@ -13875,9 +13924,6 @@ def compute_pass2_stats_sparse_bucketed(
                 noise_wavg_direct_norm_current_total[image_indices] += direct_norm_current
                 noise_wavg_direct_norm_high_total[image_indices] += direct_norm_high
                 noise_norm_correction_total[image_indices] += direct_norm_current + direct_norm_high
-            else:
-                noise_wsum_total += block_noise_shells_np
-                noise_img_power_total += weighted_img_shells_np
             block_norm_residual = _compute_norm_residual_per_image(
                 proj_for_noise,
                 proj_abs2_for_noise,
@@ -13926,7 +13972,7 @@ def compute_pass2_stats_sparse_bucketed(
                     dump_count=norm_residual_dump_count,
                     current_size=current_size,
                 )
-            if not relion_wavg_atomic_direct_residual:
+            if not relion_wavg_atomic_direct_norm:
                 noise_norm_correction_total[image_indices] += np.asarray(
                     block_norm_residual,
                     dtype=np.float64,
@@ -14119,7 +14165,7 @@ def compute_pass2_stats_sparse_bucketed(
 
     merged_noise_stats = None
     if accumulate_noise:
-        if relion_wavg_atomic_direct_residual:
+        if relion_wavg_atomic_direct_norm:
             norm_dump_dir = os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
             if norm_dump_dir:
                 os.makedirs(norm_dump_dir, exist_ok=True)

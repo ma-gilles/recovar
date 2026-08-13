@@ -2,6 +2,7 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_indices_np,
@@ -10,11 +11,53 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _make_relion_wavg_rectangle,
     _relion_wavg_atomic_triplet_terms,
+    _relion_wavg_direct_modes,
     _relion_wavg_direct_norm_per_image,
     _relion_wavg_rectangle_triplet_terms,
     _replace_low_shell_noise_with_relion_wavg_direct_residual,
 )
 from scripts.analyze_k1_scale_aa_pixels import analyze
+
+
+def test_wavg_direct_noise_only_is_independent_from_direct_norm(monkeypatch):
+    monkeypatch.delenv("RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL", raising=False)
+    monkeypatch.setenv("RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY", "1")
+
+    assert _relion_wavg_direct_modes(
+        accumulate_noise=True,
+        scale_groups_available=True,
+        scale_aa_enabled=True,
+    ) == (True, False)
+    # Fresh iteration 1 has no scale-group accumulator, so the stopped arm is
+    # intentionally dormant rather than changing first-iteration behavior.
+    assert _relion_wavg_direct_modes(
+        accumulate_noise=True,
+        scale_groups_available=False,
+        scale_aa_enabled=False,
+    ) == (False, False)
+
+
+def test_wavg_direct_modes_reject_overlapping_factorial_arms(monkeypatch):
+    monkeypatch.setenv("RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL", "1")
+    monkeypatch.setenv("RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY", "1")
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _relion_wavg_direct_modes(
+            accumulate_noise=True,
+            scale_groups_available=True,
+            scale_aa_enabled=True,
+        )
+
+
+def test_wavg_direct_residual_preserves_coupled_noise_and_norm(monkeypatch):
+    monkeypatch.setenv("RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL", "1")
+    monkeypatch.delenv("RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY", raising=False)
+
+    assert _relion_wavg_direct_modes(
+        accumulate_noise=True,
+        scale_groups_available=True,
+        scale_aa_enabled=True,
+    ) == (True, True)
 
 
 def test_wavg_atomic_triplet_preserves_scale_units_and_forms_raw_diff2():
