@@ -10,6 +10,7 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _make_relion_wavg_rectangle,
+    _prioritize_stopped_pass2_dump_buckets,
     _relion_wavg_atomic_triplet_terms,
     _relion_wavg_direct_modes,
     _relion_wavg_direct_norm_per_image,
@@ -58,6 +59,51 @@ def test_wavg_direct_residual_preserves_coupled_noise_and_norm(monkeypatch):
         scale_groups_available=True,
         scale_aa_enabled=True,
     ) == (True, True)
+
+
+def test_stopped_pass2_dump_prioritizes_only_requested_bucket(monkeypatch):
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET", "1")
+    monkeypatch.setattr(
+        "recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed._pass2_dump_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed._pass2_dump_requested_for_bucket",
+        lambda **kwargs: int(np.asarray(kwargs["image_indices"])[0]) == 7,
+    )
+    buckets = [
+        {"image_indices": np.asarray([3])},
+        {"image_indices": np.asarray([7])},
+        {"image_indices": np.asarray([11])},
+    ]
+
+    prioritized = _prioritize_stopped_pass2_dump_buckets(
+        buckets,
+        experiment_dataset=object(),
+        current_size=80,
+    )
+
+    assert [int(bucket["image_indices"][0]) for bucket in prioritized] == [7, 3, 11]
+
+
+def test_nonstopped_pass2_dump_preserves_bucket_order(monkeypatch):
+    monkeypatch.delenv("RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET", raising=False)
+    monkeypatch.setattr(
+        "recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed._pass2_dump_enabled",
+        lambda: True,
+    )
+    buckets = [
+        {"image_indices": np.asarray([3])},
+        {"image_indices": np.asarray([7])},
+    ]
+
+    preserved = _prioritize_stopped_pass2_dump_buckets(
+        buckets,
+        experiment_dataset=object(),
+        current_size=80,
+    )
+
+    assert preserved is buckets
 
 
 def test_wavg_atomic_triplet_preserves_scale_units_and_forms_raw_diff2():

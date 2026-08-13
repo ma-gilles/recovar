@@ -9779,6 +9779,50 @@ def _pass2_dump_requested_for_bucket(
     )
 
 
+def _prioritize_stopped_pass2_dump_buckets(
+    buckets,
+    *,
+    experiment_dataset,
+    current_size,
+):
+    """Move explicitly requested dump buckets first in a stopped diagnostic.
+
+    A stop-after-target capture consumes no M-step result, so unrelated
+    particles cannot affect the requested particle's fine-score operands.
+    Normal refinement and non-stopped dumps retain their original physical
+    execution order.
+    """
+
+    if not _pass2_dump_enabled() or not _env_flag_enabled(
+        _PASS2_DUMP_STOP_AFTER_TARGET_ENV,
+        default=False,
+    ):
+        return buckets
+
+    requested = []
+    remaining = []
+    for bucket in buckets:
+        destination = (
+            requested
+            if _pass2_dump_requested_for_bucket(
+                experiment_dataset=experiment_dataset,
+                image_indices=bucket["image_indices"],
+                current_size=current_size,
+            )
+            else remaining
+        )
+        destination.append(bucket)
+    if not requested:
+        return buckets
+    logger.info(
+        "Sparse K=1 pass-2 stopped diagnostic: moving %d requested dump "
+        "bucket(s) before %d unrelated bucket(s)",
+        len(requested),
+        len(remaining),
+    )
+    return requested + remaining
+
+
 _RELION_EXACT_CTF_SOURCE_CACHE: dict[tuple[str, tuple[int, int]], dict] = {}
 
 
@@ -10839,6 +10883,11 @@ def compute_pass2_stats_sparse_bucketed(
         processing_order_batch_consecutive_bucket_sizes=(
             processing_order_batch_consecutive_bucket_sizes
         ),
+    )
+    buckets = _prioritize_stopped_pass2_dump_buckets(
+        buckets,
+        experiment_dataset=experiment_dataset,
+        current_size=current_size,
     )
     bucket_s = time.time() - bucket_t0
 
