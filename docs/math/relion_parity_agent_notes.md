@@ -12192,7 +12192,7 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   operand diagnostic only. K=4 remains parked and the frozen scorecard stays
   `28/34` strict, `32/34` topology, `34/34` evaluated.
 
-## 2026-08-13 06:00 ET — native stack-232 scan hypothesis falsified
+## 2026-08-13 06:00 ET — native stack-232 fine BPref scan is exact
 
 - Native job `12323968` captured all 1,664 active iteration-3 fine candidates
   for stack 232 and RELION's production scan scalars. The science output is
@@ -12204,9 +12204,14 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
 - Canonical report SHA-256 is
   `34485c75464910c24c9a458868cb06bce3771a0a2b8f1187f6a3c5b89b503f70` at
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0232_native_it3_20260813T0523ET/native/analysis/K1_STACK0232_NATIVE_FINE_SIGNIFICANCE.json`.
-- Do not implement a speculative CUB scan substitution. The first unequal
-  boundary must be sought before the scan in tuple identity, raw score,
-  priors, or exponentiated weights.
+- RELION's `229` accepted fine hypotheses are distinct from the pass-1 coarse
+  count written to `_rlnNrOfSignificantSamples` (`52`; RECOVAR `53`). This
+  replay clears fine BPref significance arithmetic only; it does not clear or
+  explain the coarse-parent count residual.
+- Do not implement a speculative CUB scan substitution. A fine comparison
+  must seek the Pmax/common-tuple residual before the scan in tuple identity,
+  raw score, priors, or exponentiated weights. The coarse count remains at its
+  previously localized rotation-dependent raw-score boundary.
 
 ## 2026-08-13 06:10 ET — matched focused dumps must preserve the projection cache
 

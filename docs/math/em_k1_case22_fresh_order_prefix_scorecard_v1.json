@@ -611,10 +611,13 @@
     "native_sum_weight_bits": 1678890944,
     "native_threshold_bits": 1541859727,
     "native_accepted_count": 229,
+    "relion_star_coarse_significant_count": 52,
+    "recovar_star_semantic_coarse_significant_count": 53,
+    "star_and_fine_counts_are_distinct": true,
     "production_fine_helper_exact": true,
     "jax_xla_exact": true,
     "relion_cub_exact": true,
     "analysis_sha256": "34485c75464910c24c9a458868cb06bce3771a0a2b8f1187f6a3c5b89b503f70",
-    "classification": "fine sort/scan is falsified as the cause when given identical weights; compare candidate keys, raw scores, priors, and exponentiated weights before scan"
+    "classification": "fine BPref sort/scan is exact when given identical fine weights; it is distinct from and does not explain the pass-1 coarse count written to rlnNrOfSignificantSamples"
   }
 }
