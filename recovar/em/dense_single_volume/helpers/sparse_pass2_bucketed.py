@@ -4727,6 +4727,95 @@ def _relion_wavg_atomic_triplet_terms(
     return jnp.stack((xa, aa, diff2), axis=-1)
 
 
+@jax.jit
+def _relion_wavg_sequential_triplet_terms(
+    proj,
+    raw_ctf,
+    scale,
+    raw_shifted_images,
+    posterior,
+):
+    """Reproduce RELION Wavg's translation-loop float32 accumulators.
+
+    RELION forms the CTF-and-scale-corrected reference once per rotation and
+    pixel, then visits translations in storage order.  It accumulates squared
+    residual, XA, and AA separately in float32 before issuing the three
+    rotation-level atomics.  Forming ``image_power + AA - 2 * XA`` after three
+    independent reductions is algebraically equivalent but not numerically
+    equivalent at this boundary.
+
+    XA and AA are returned in RELION's host scale-correction units.  The
+    residual remains in the raw units consumed by ``wsum_sigma2_noise``.
+    """
+
+    proj = jnp.asarray(proj, dtype=jnp.complex64)
+    raw_ctf = jnp.asarray(raw_ctf, dtype=jnp.float32)
+    scale = jnp.asarray(scale, dtype=jnp.float32).reshape(-1)
+    raw_shifted_images = jnp.asarray(raw_shifted_images, dtype=jnp.complex64)
+    posterior = jnp.asarray(posterior, dtype=jnp.float32)
+    if proj.ndim != 3:
+        raise ValueError(f"Wavg projections must have shape (B,R,P), got {proj.shape}")
+    if raw_ctf.shape != (proj.shape[0], proj.shape[2]):
+        raise ValueError(
+            "Wavg raw CTF must match projection batch/pixel axes, got "
+            f"{raw_ctf.shape} for {proj.shape}"
+        )
+    if raw_shifted_images.ndim != 3:
+        raise ValueError(
+            "Wavg shifted images must have shape (B,T,P), got "
+            f"{raw_shifted_images.shape}"
+        )
+    if raw_shifted_images.shape[0] != proj.shape[0] or raw_shifted_images.shape[2] != proj.shape[2]:
+        raise ValueError(
+            "Wavg shifted-image batch/pixel axes must match projections, got "
+            f"{raw_shifted_images.shape} for {proj.shape}"
+        )
+    if posterior.shape != proj.shape[:2] + (raw_shifted_images.shape[1],):
+        raise ValueError(
+            "Wavg posterior must match projection rotations and image translations, got "
+            f"{posterior.shape} for proj={proj.shape}, shifted={raw_shifted_images.shape}"
+        )
+
+    ctf_with_scale = (raw_ctf * scale[:, None]).astype(jnp.float32)
+    ref_real = (proj.real * ctf_with_scale[:, None, :]).astype(jnp.float32)
+    ref_imag = (proj.imag * ctf_with_scale[:, None, :]).astype(jnp.float32)
+    zeros = jnp.zeros_like(ref_real, dtype=jnp.float32)
+
+    def add_translation(translation_index, accumulators):
+        xa_acc, aa_acc, diff2_acc = accumulators
+        weight = posterior[:, :, translation_index]
+        trans_real = raw_shifted_images[:, translation_index, :].real
+        trans_imag = raw_shifted_images[:, translation_index, :].imag
+        diff_real = (ref_real - trans_real[:, None, :]).astype(jnp.float32)
+        diff_imag = (ref_imag - trans_imag[:, None, :]).astype(jnp.float32)
+        diff_abs2 = (diff_real * diff_real).astype(jnp.float32)
+        diff_abs2 = jax.lax.optimization_barrier(diff_abs2)
+        diff_abs2 = (diff_abs2 + diff_imag * diff_imag).astype(jnp.float32)
+        cross = (ref_real * trans_real[:, None, :]).astype(jnp.float32)
+        cross = jax.lax.optimization_barrier(cross)
+        cross = (cross + ref_imag * trans_imag[:, None, :]).astype(jnp.float32)
+        ref_abs2 = (ref_real * ref_real).astype(jnp.float32)
+        ref_abs2 = jax.lax.optimization_barrier(ref_abs2)
+        ref_abs2 = (ref_abs2 + ref_imag * ref_imag).astype(jnp.float32)
+        weighted = weight[:, :, None]
+        return (
+            (xa_acc + weighted * cross).astype(jnp.float32),
+            (aa_acc + weighted * ref_abs2).astype(jnp.float32),
+            (diff2_acc + weighted * diff_abs2).astype(jnp.float32),
+        )
+
+    xa_raw, aa_raw, diff2 = jax.lax.fori_loop(
+        0,
+        raw_shifted_images.shape[1],
+        add_translation,
+        (zeros, zeros, zeros),
+    )
+    safe_scale = jnp.maximum(scale, jnp.asarray(1e-30, dtype=jnp.float32))
+    xa = (xa_raw / safe_scale[:, None, None]).astype(jnp.float32)
+    aa = (aa_raw / (safe_scale[:, None, None] ** 2)).astype(jnp.float32)
+    return jnp.stack((xa, aa, diff2), axis=-1)
+
+
 def _replace_low_shell_noise_with_relion_wavg_direct_residual(
     residual_shells,
     image_power_shells,
@@ -11738,9 +11827,17 @@ def compute_pass2_stats_sparse_bucketed(
                 if direct_ctf_rfloat_half is None
                 else direct_ctf_rfloat_half[:, jnp.asarray(window_indices, dtype=jnp.int32)]
             )
+            direct_ctf_rfloat_recon = (
+                None
+                if direct_ctf_rfloat_half is None
+                else direct_ctf_rfloat_half[
+                    :, jnp.asarray(recon_window_indices, dtype=jnp.int32)
+                ]
+            )
         else:
             direct_inverse_noise_score = direct_inverse_noise_half
             direct_ctf_rfloat_score = direct_ctf_rfloat_half
+            direct_ctf_rfloat_recon = direct_ctf_rfloat_half
         relion_highres_xi2_half = None
         if (
             use_exact_relion_gaussian
@@ -12662,16 +12759,25 @@ def compute_pass2_stats_sparse_bucketed(
                                 relion_wavg_rotation_atomic_triplet_add_f32,
                             )
 
-                            atomic_triplet_terms = _relion_wavg_atomic_triplet_terms(
-                                proj_for_noise_chunk,
-                                proj_abs2_for_noise_chunk,
-                                summed_masked_noise,
-                                ctf_probs,
-                                noise_variance_for_noise,
-                                bucket_scale_for_stats,
-                                raw_translated_wavg_for_atomic,
-                                noise_probs,
-                            )
+                            if direct_ctf_rfloat_recon is None:
+                                atomic_triplet_terms = _relion_wavg_atomic_triplet_terms(
+                                    proj_for_noise_chunk,
+                                    proj_abs2_for_noise_chunk,
+                                    summed_masked_noise,
+                                    ctf_probs,
+                                    noise_variance_for_noise,
+                                    bucket_scale_for_stats,
+                                    raw_translated_wavg_for_atomic,
+                                    noise_probs,
+                                )
+                            else:
+                                atomic_triplet_terms = _relion_wavg_sequential_triplet_terms(
+                                    proj_for_noise_chunk,
+                                    direct_ctf_rfloat_recon,
+                                    bucket_scale_for_stats,
+                                    raw_translated_wavg_for_atomic,
+                                    noise_probs,
+                                )
                             atomic_triplet_terms = _relion_wavg_rectangle_triplet_terms(
                                 atomic_triplet_terms,
                                 raw_translated_wavg_rectangle,
@@ -14127,16 +14233,25 @@ def compute_pass2_stats_sparse_bucketed(
                     relion_wavg_rotation_atomic_triplet_add_f32,
                 )
 
-                atomic_triplet_terms = _relion_wavg_atomic_triplet_terms(
-                    proj_for_noise,
-                    proj_abs2_for_noise,
-                    summed_masked_noise,
-                    ctf_probs,
-                    noise_variance_for_noise,
-                    bucket_scale_for_stats,
-                    raw_translated_wavg_for_atomic,
-                    noise_probs,
-                )
+                if direct_ctf_rfloat_recon is None:
+                    atomic_triplet_terms = _relion_wavg_atomic_triplet_terms(
+                        proj_for_noise,
+                        proj_abs2_for_noise,
+                        summed_masked_noise,
+                        ctf_probs,
+                        noise_variance_for_noise,
+                        bucket_scale_for_stats,
+                        raw_translated_wavg_for_atomic,
+                        noise_probs,
+                    )
+                else:
+                    atomic_triplet_terms = _relion_wavg_sequential_triplet_terms(
+                        proj_for_noise,
+                        direct_ctf_rfloat_recon,
+                        bucket_scale_for_stats,
+                        raw_translated_wavg_for_atomic,
+                        noise_probs,
+                    )
                 atomic_triplet_terms = _relion_wavg_rectangle_triplet_terms(
                     atomic_triplet_terms,
                     raw_translated_wavg_rectangle,
