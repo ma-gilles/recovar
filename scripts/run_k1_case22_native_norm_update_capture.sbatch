@@ -29,6 +29,8 @@ AUTO_ITER_MAX=${K1_NATIVE_NORM_AUTO_ITER_MAX:-${CAPTURE_ITERATION}}
 UPDATE_ITERATION=$((CAPTURE_ITERATION - 1))
 CAPTURE_BPREF=${K1_NATIVE_NORM_CAPTURE_BPREF:-0}
 BPREF_ITERATION=${K1_NATIVE_NORM_BPREF_ITERATION:-${UPDATE_ITERATION}}
+BPREF_MAX_BYTES=${K1_NATIVE_NORM_BPREF_MAX_BYTES:-2000000000}
+BPREF_DEVICE_BYTES=${K1_NATIVE_NORM_BPREF_DEVICE_BYTES:-33554432}
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
 AUDIT_REPO=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_factor_recovar_187a9f60_20260808T1100ET/checkout
 SOURCE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_native_components_source_b571275_20260812/source
@@ -57,10 +59,13 @@ if (( AUTO_ITER_MAX < CAPTURE_ITERATION )); then
     exit 2
 fi
 if (( CAPTURE_BPREF == 1 )); then
-    if [[ ! ${BPREF_ITERATION} =~ ^[1-9][0-9]*$ ]]; then
-        echo "K1_NATIVE_NORM_BPREF_ITERATION must be a positive integer" >&2
-        exit 2
-    fi
+    for value_name in BPREF_ITERATION BPREF_MAX_BYTES BPREF_DEVICE_BYTES; do
+        value=${!value_name}
+        if [[ ! ${value} =~ ^[1-9][0-9]*$ ]]; then
+            echo "${value_name} must be a positive integer" >&2
+            exit 2
+        fi
+    done
     if (( BPREF_ITERATION < 1 || BPREF_ITERATION > AUTO_ITER_MAX )); then
         echo "K1_NATIVE_NORM_BPREF_ITERATION must be within the executed trajectory" >&2
         exit 2
@@ -108,8 +113,8 @@ if (( CAPTURE_BPREF == 1 )); then
     export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES=1
     export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=1
     export RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=1
-    export RELION_BPRE_CAPTURE_MAX_BYTES=200000000
-    export RELION_BPRE_CAPTURE_DEVICE_BYTES=33554432
+    export RELION_BPRE_CAPTURE_MAX_BYTES=${BPREF_MAX_BYTES}
+    export RELION_BPRE_CAPTURE_DEVICE_BYTES=${BPREF_DEVICE_BYTES}
     export RELION_BPRE_CAPTURE_PART_IDS=${PART_ID}
 fi
 

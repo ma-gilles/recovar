@@ -8790,6 +8790,7 @@ def _maybe_dump_norm_residual_inputs(
     ctf_probs,
     ctf2_over_nv_recon,
     posterior_probs,
+    rotations_for_noise,
     noise_variance_for_noise,
     block_norm_residual,
     processed_score_half_for_noise,
@@ -8861,8 +8862,29 @@ def _maybe_dump_norm_residual_inputs(
     selected_posterior_probs = jnp.asarray(posterior_probs)[selected]
     selected_ctf2_over_nv = jnp.asarray(ctf2_over_nv_recon)[selected]
     selected_scale = jnp.asarray(bucket_scale_for_stats)[selected]
+    selected_rotations = jnp.asarray(rotations_for_noise)[selected]
     scale_mask = jnp.asarray(scale_correction_pixel_mask, dtype=bool).reshape(-1)
     selected_noise = jnp.asarray(noise_variance_for_noise)
+    norm_ctf_has_mass = selected_ctf_probs != 0.0
+    norm_ctf_probs_raw = jnp.where(
+        norm_ctf_has_mass,
+        selected_ctf_probs * selected_noise[None, None, :],
+        0.0,
+    )
+    norm_a2_terms = jnp.where(
+        norm_ctf_has_mass,
+        selected_proj_abs2 * norm_ctf_probs_raw,
+        0.0,
+    )
+    selected_summed = jnp.asarray(summed_masked_noise)[selected]
+    norm_cross_terms = jnp.where(
+        selected_summed != 0.0,
+        jnp.asarray(proj_for_noise)[selected] * jnp.conj(selected_summed),
+        0.0,
+    )
+    norm_xa_terms = selected_noise[None, None, :] * norm_cross_terms.real
+    norm_a2_per_image = jnp.sum(norm_a2_terms, axis=(1, 2)).astype(jnp.float32)
+    norm_xa_per_image = jnp.sum(norm_xa_terms, axis=(1, 2)).astype(jnp.float32)
     ctf_has_mass = (selected_ctf_probs != 0.0) & scale_mask[None, None, :]
     ctf_probs_raw = jnp.where(
         ctf_has_mass,
@@ -8890,6 +8912,7 @@ def _maybe_dump_norm_residual_inputs(
             selected_ctf_probs,
             selected_ctf2_over_nv,
             selected_posterior_probs,
+            selected_rotations,
             jnp.asarray(block_norm_residual)[selected],
             jnp.asarray(processed_score_half_for_noise)[selected],
             jnp.asarray(support_mass)[selected],
@@ -8901,6 +8924,13 @@ def _maybe_dump_norm_residual_inputs(
             aa_terms,
             aa_per_pixel,
             aa_per_image,
+            norm_ctf_has_mass,
+            norm_ctf_probs_raw,
+            norm_a2_terms,
+            norm_cross_terms,
+            norm_xa_terms,
+            norm_a2_per_image,
+            norm_xa_per_image,
             (
                 jnp.empty((target_rows.size, 0, 0), dtype=jnp.complex64)
                 if raw_translated_recon is None
@@ -8920,6 +8950,7 @@ def _maybe_dump_norm_residual_inputs(
         ctf_probs_np,
         ctf2_over_nv_np,
         posterior_probs_np,
+        rotations_np,
         residual_np,
         processed_image_np,
         support_mass_np,
@@ -8931,6 +8962,13 @@ def _maybe_dump_norm_residual_inputs(
         aa_terms_np,
         aa_per_pixel_np,
         aa_per_image_np,
+        norm_ctf_has_mass_np,
+        norm_ctf_probs_raw_np,
+        norm_a2_terms_np,
+        norm_cross_terms_np,
+        norm_xa_terms_np,
+        norm_a2_per_image_np,
+        norm_xa_per_image_np,
         raw_translated_recon_np,
         raw_translated_wavg_np,
     ) = (np.asarray(value) for value in staged)
@@ -8945,6 +8983,14 @@ def _maybe_dump_norm_residual_inputs(
         np.empty((0,), dtype=np.float32)
         if relion_norm_high_shell is None
         else np.asarray(jax.block_until_ready(relion_norm_high_shell), dtype=np.float32)
+    )
+    translation_angles_np = (
+        np.empty((0, 2), dtype=np.float32)
+        if relion_score_translation_angles is None
+        else np.asarray(
+            jax.block_until_ready(relion_score_translation_angles),
+            dtype=np.float32,
+        )
     )
     local_indices = np.asarray(image_indices, dtype=np.int64)
     group_ids_np = np.asarray(bucket_group_ids, dtype=np.int64)
@@ -8971,7 +9017,7 @@ def _maybe_dump_norm_residual_inputs(
         )
         np.savez_compressed(
             out_path,
-            schema=np.asarray("recovar-k1-norm-residual-inputs-v2"),
+            schema=np.asarray("recovar-k1-norm-residual-inputs-v3"),
             iteration=np.int64(context_iteration),
             half=np.int64(context_half),
             original_index=np.int64(original_index),
@@ -8984,6 +9030,8 @@ def _maybe_dump_norm_residual_inputs(
             ctf_probs=ctf_probs_np[selected_row],
             ctf2_over_nv_recon=ctf2_over_nv_np[selected_row],
             posterior_probs=posterior_probs_np[selected_row],
+            rotations_for_noise=rotations_np[selected_row],
+            relion_score_translation_angles=translation_angles_np,
             noise_variance_for_noise=noise_np,
             block_norm_residual=np.asarray(residual_np[selected_row]),
             processed_score_half_for_noise=processed_image_np[selected_row],
@@ -9006,8 +9054,16 @@ def _maybe_dump_norm_residual_inputs(
             scale_aa_per_pixel=aa_per_pixel_np[selected_row],
             scale_aa_per_shell=aa_shells,
             scale_aa_per_image=np.asarray(aa_per_image_np[selected_row]),
+            norm_ctf_has_mass=norm_ctf_has_mass_np[selected_row],
+            norm_ctf_probs_raw=norm_ctf_probs_raw_np[selected_row],
+            norm_a2_terms=norm_a2_terms_np[selected_row],
+            norm_cross_terms=norm_cross_terms_np[selected_row],
+            norm_xa_terms=norm_xa_terms_np[selected_row],
+            norm_a2_per_image=np.asarray(norm_a2_per_image_np[selected_row]),
+            norm_xa_per_image=np.asarray(norm_xa_per_image_np[selected_row]),
             raw_translated_recon=raw_translated_recon_np[selected_row],
             raw_translated_wavg=raw_translated_wavg_np[selected_row],
+            recon_window_indices=np.asarray(recon_window_indices, dtype=np.int32),
             wavg_window_indices=np.asarray(score_window_indices, dtype=np.int32),
         )
     return int(target_rows.size)
@@ -13990,6 +14046,7 @@ def compute_pass2_stats_sparse_bucketed(
                 ctf_probs=ctf_probs,
                 ctf2_over_nv_recon=ctf2_over_nv_recon,
                 posterior_probs=noise_probs,
+                rotations_for_noise=mstep_rotations,
                 noise_variance_for_noise=noise_variance_for_noise,
                 block_norm_residual=block_norm_residual,
                 processed_score_half_for_noise=processed_score_half_for_noise,

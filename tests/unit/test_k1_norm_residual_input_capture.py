@@ -42,6 +42,7 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(tmp_path, mon
         ctf_probs=ctf_probs,
         ctf2_over_nv_recon=jnp.asarray([[29.0, 31.0]], dtype=jnp.float32),
         posterior_probs=jnp.ones((1, 1, 1), dtype=jnp.float32),
+        rotations_for_noise=jnp.eye(3, dtype=jnp.float32)[None, None],
         noise_variance_for_noise=noise,
         block_norm_residual=residual,
         processed_score_half_for_noise=processed,
@@ -62,12 +63,28 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(tmp_path, mon
     assert count == 1
     path = Path(tmp_path) / "norm_residual_orig000066_half2_cs056.npz"
     with np.load(path, allow_pickle=False) as capture:
-        assert capture["schema"].item() == "recovar-k1-norm-residual-inputs-v2"
+        assert capture["schema"].item() == "recovar-k1-norm-residual-inputs-v3"
         np.testing.assert_array_equal(capture["proj_for_noise"], np.asarray(proj[0]))
         np.testing.assert_array_equal(capture["proj_abs2_for_noise"], np.asarray(proj_abs2[0]))
         np.testing.assert_array_equal(capture["summed_masked_noise"], np.asarray(summed[0]))
         np.testing.assert_array_equal(capture["ctf_probs"], np.asarray(ctf_probs[0]))
         np.testing.assert_array_equal(capture["noise_variance_for_noise"], np.asarray(noise))
+        np.testing.assert_array_equal(
+            capture["rotations_for_noise"],
+            np.eye(3, dtype=np.float32)[None],
+        )
+        np.testing.assert_array_equal(
+            capture["relion_score_translation_angles"],
+            np.empty((0, 2), dtype=np.float32),
+        )
+        expected_a2 = np.asarray(proj_abs2[0]) * np.asarray(ctf_probs[0]) * np.asarray(noise)[None]
+        expected_cross = np.asarray(proj[0]) * np.conj(np.asarray(summed[0]))
+        expected_xa = expected_cross.real * np.asarray(noise)[None]
+        np.testing.assert_array_equal(capture["norm_a2_terms"], expected_a2)
+        np.testing.assert_array_equal(capture["norm_cross_terms"], expected_cross)
+        np.testing.assert_array_equal(capture["norm_xa_terms"], expected_xa)
+        assert float(capture["norm_a2_per_image"]) == float(np.sum(expected_a2, dtype=np.float32))
+        assert float(capture["norm_xa_per_image"]) == float(np.sum(expected_xa, dtype=np.float32))
         assert float(capture["block_norm_residual"]) == 17.0
         np.testing.assert_array_equal(capture["processed_score_half_for_noise"], np.asarray(processed[0]))
         np.testing.assert_array_equal(capture["shell_indices_half"], np.asarray(shells))
@@ -149,6 +166,7 @@ def test_norm_capture_slices_and_reshapes_raw_translation_rows(tmp_path, monkeyp
         ctf_probs=jnp.ones((1, 1, 2), dtype=jnp.float32),
         ctf2_over_nv_recon=jnp.ones((1, 2), dtype=jnp.float32),
         posterior_probs=jnp.ones((1, 1, 2), dtype=jnp.float32),
+        rotations_for_noise=jnp.eye(3, dtype=jnp.float32)[None, None],
         noise_variance_for_noise=jnp.ones(2, dtype=jnp.float32),
         block_norm_residual=jnp.ones(1, dtype=jnp.float32),
         processed_score_half_for_noise=jnp.arange(4, dtype=jnp.float32).astype(jnp.complex64)[None],
@@ -181,4 +199,12 @@ def test_norm_capture_slices_and_reshapes_raw_translation_rows(tmp_path, monkeyp
         np.testing.assert_array_equal(
             capture["wavg_window_indices"],
             np.asarray([0, 1, 2, 3], dtype=np.int32),
+        )
+        np.testing.assert_array_equal(
+            capture["recon_window_indices"],
+            np.asarray([0, 2], dtype=np.int32),
+        )
+        np.testing.assert_array_equal(
+            capture["relion_score_translation_angles"],
+            np.zeros((2, 2), dtype=np.float32),
         )
