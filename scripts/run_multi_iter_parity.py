@@ -489,6 +489,24 @@ def load_initial_noise_variance(path: str | Path, image_shape: tuple[int, int]) 
     return variance.reshape(-1)
 
 
+def load_initial_direction_prior(path: str | Path, expected_size: int) -> np.ndarray:
+    """Load one sealed direction-probability vector without STAR rounding."""
+
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise ValueError(f"initial direction prior does not exist: {source}")
+    prior = np.asarray(np.load(source, allow_pickle=False))
+    if prior.size != expected_size:
+        raise ValueError(
+            f"initial direction prior {source} has {prior.size} elements, expected {expected_size}"
+        )
+    if np.iscomplexobj(prior) or not np.isfinite(prior).all() or np.any(prior < 0):
+        raise ValueError(f"initial direction prior {source} must be finite, real, and nonnegative")
+    if not float(np.sum(prior, dtype=np.float64)) > 0.0:
+        raise ValueError(f"initial direction prior {source} must have positive total mass")
+    return prior.reshape(-1)
+
+
 def validate_final_only_replay_args(
     *,
     max_iter: int,
@@ -499,6 +517,8 @@ def validate_final_only_replay_args(
     initial_half2_ft_npz: str | None = None,
     initial_noise_half1_npy: str | None = None,
     initial_noise_half2_npy: str | None = None,
+    initial_direction_prior_half1_npy: str | None = None,
+    initial_direction_prior_half2_npy: str | None = None,
 ) -> None:
     """Validate the diagnostic that enters finalization from saved half maps."""
 
@@ -512,6 +532,11 @@ def validate_final_only_replay_args(
         raise ValueError("initial MRC and Fourier-NPZ reference inputs are mutually exclusive")
     if (initial_noise_half1_npy is None) != (initial_noise_half2_npy is None):
         raise ValueError("--initial-noise-half1-npy and --initial-noise-half2-npy must be provided together")
+    if (initial_direction_prior_half1_npy is None) != (initial_direction_prior_half2_npy is None):
+        raise ValueError(
+            "--initial-direction-prior-half1-npy and --initial-direction-prior-half2-npy "
+            "must be provided together"
+        )
 
 
 def initial_scoring_noise_pair(noise_half1, noise_half2, *, continuous_relion_noise_state: bool):
@@ -607,6 +632,18 @@ def main():
         type=str,
         default=None,
         help="Diagnostic full-pixel internal half-2 noise variance replacing STAR-derived noise.",
+    )
+    parser.add_argument(
+        "--initial-direction-prior-half1-npy",
+        type=str,
+        default=None,
+        help="Diagnostic internal half-1 direction prior replacing the serialized model-STAR vector.",
+    )
+    parser.add_argument(
+        "--initial-direction-prior-half2-npy",
+        type=str,
+        default=None,
+        help="Diagnostic internal half-2 direction prior replacing the serialized model-STAR vector.",
     )
     parser.add_argument(
         "--force-final-after-zero-iterations",
@@ -818,6 +855,8 @@ def main():
         initial_half2_ft_npz=args.initial_half2_ft_npz,
         initial_noise_half1_npy=args.initial_noise_half1_npy,
         initial_noise_half2_npy=args.initial_noise_half2_npy,
+        initial_direction_prior_half1_npy=args.initial_direction_prior_half1_npy,
+        initial_direction_prior_half2_npy=args.initial_direction_prior_half2_npy,
     )
 
     _print_provenance_banner_and_assert_parity_ancestors()
@@ -1330,6 +1369,27 @@ def main():
         direction_prior = None
         print("  direction_prior: None (not found in model star)")
 
+    diagnostic_direction_prior_override = None
+    if args.initial_direction_prior_half1_npy is not None:
+        if direction_prior is None:
+            raise ValueError("diagnostic direction-prior override requires model-STAR direction priors")
+        diagnostic_direction_prior_override = [
+            load_initial_direction_prior(
+                args.initial_direction_prior_half1_npy,
+                direction_prior[0].size,
+            ),
+            load_initial_direction_prior(
+                args.initial_direction_prior_half2_npy,
+                direction_prior[1].size,
+            ),
+        ]
+        direction_prior = diagnostic_direction_prior_override
+        print(
+            "  Diagnostic initial internal direction prior: "
+            f"half1={args.initial_direction_prior_half1_npy}, "
+            f"half2={args.initial_direction_prior_half2_npy}"
+        )
+
     def _load_relion_iteration_override(
         previous_relion_iteration,
         control_relion_iteration,
@@ -1496,6 +1556,8 @@ def main():
             relion_control_iter,
         )
         override = replay_iteration_overrides[recovar_iter]
+        if recovar_iter == 0 and diagnostic_direction_prior_override is not None:
+            override["direction_prior"] = diagnostic_direction_prior_override
         trans_msg = "none"
         if override["previous_best_translations"][0] is not None:
             trans_msg = (

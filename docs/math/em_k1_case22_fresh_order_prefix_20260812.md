@@ -1095,3 +1095,65 @@ another complete trajectory is not the next experiment.
 
 The fixed complete-case scorecard remains `28/34` strict, `32/34` topology,
 and `34/34` evaluated until a complete case-22 run crosses its frozen gates.
+
+## Lossless direction state and exact stack-1204 topology
+
+The model STAR is also a lossy boundary for the learned direction prior. The
+lossless iteration-1 half priors have 768 float32 entries and exactly unit
+mass. Against those arrays, the serialized half-1 and half-2 STAR vectors have
+relative L2 `7.23599e-5` and `7.31304e-5`. For stack 1204, the maximum staged
+orientation-log-prior error, `0.00021028518676757812`, is exactly the maximum
+error predicted by taking the logarithm of the serialized half-1 STAR vector.
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_rect_it1_state_retry2_20260813T0218ET/analysis/K1_CASE22_DIRECTION_PRIOR_SERIALIZATION.json`
+(SHA-256 `cbc0ddccb31d817898082b0efaac7bfa553ae247cdb4317d1d0793c425418723`).
+
+Focused job `12321216` restored the lossless half priors together with the
+lossless references, noise, and normalization scalar. It completed `0:0` in
+2 minutes 28 seconds. All 64 formerly missing native fine tuples return, the
+orientation prior becomes bit-exact, and the RELION winner remains exact.
+RECOVAR still carries 32 additional tuples: eight oversampled rotations and
+four translations from one extra coarse parent. The centered pre-prior score
+relative L2 is `1.33802e-6`, and the first non-topological boundary is the raw
+fine score. The version-2 report, which checks candidate-set equality in both
+directions, is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1204_live_state_ref_it2_20260813T0259ET/analysis/K1_CASE22_STACK1204_FINE_SCORE_STAGES_LIVE_STATE_REF_V2.json`
+(SHA-256 `ece91f665baf0247914066bc032b70403a099726a71b579de561014b29111b33`).
+
+Exact-operand analysis job `12321365` then compared both top candidates. Their
+native and RECOVAR raw `diff2`, orientation prior, translation prior, combined
+pre-exponent, and pairwise winner margin are bit-exact. The projected
+reference, translated image, correction, and high-resolution tail retain tiny
+pixel-level differences, but they quantize to the exact production raw score
+for both candidates. The first unequal top-candidate scalar is therefore the
+normalized posterior, not the scorer. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1204_live_state_exact_operand_20260813T0305ET/analysis/K1_CASE22_STACK1204_EXACT_OPERAND_PAIR.json`.
+
+Job `12321624` added only RELION-style float32 coarse support composition to
+that lossless-state replay. It completed `0:0` in 2 minutes 24 seconds and
+closed every discrete boundary for stack 1204:
+
+| Boundary | Native | RECOVAR | Result |
+|---|---:|---:|---|
+| Active fine tuples | 2,349,792 | 2,349,792 | exact |
+| Significant fine tuples | 1,931,199 | 1,931,199 | exact set |
+| Hard winner | `(145623, 82)` | `(145623, 82)` | exact |
+| Missing or extra tuples | 0 | 0 | exact |
+
+Its report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1204_live_state_f32support_ref_it2_20260813T0317ET/analysis/K1_CASE22_STACK1204_FINE_SCORE_STAGES_LIVE_STATE_F32SUPPORT_REF.json`
+(SHA-256 `0b179e6bcc70c77a144445be8156d88ab5be63c75557e9c44c5f999d0a5956f7`).
+The pass-2 artifact SHA-256 is
+`68c79bb980cef5d53b927d5a63e29648b103c575f115f4244aac7066dba35ec8`.
+
+The remaining posterior relative L2 is `6.75397e-6`, with exact topology and
+support. A normalization counterfactual rules out softmax arithmetic as its
+cause: native production probabilities versus a float64 mathematical softmax
+of the native score field differ by only `3.85615e-8` relative, RECOVAR's
+production probabilities versus the same mathematical operation differ by
+`8.67414e-16`, and applying mathematical softmax to the two respective score
+fields reproduces `6.75252e-6` relative error. The remaining continuous error
+is therefore inherited from the aggregate raw fine-score field. The next
+compact target is the shared tuple with the largest absolute posterior error,
+native local rotation 69630 and translation 82; no complete trajectory is
+needed to localize that operand.

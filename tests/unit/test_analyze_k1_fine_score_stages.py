@@ -84,3 +84,46 @@ def test_complete_stage_comparison_closes_on_additively_shifted_scores(tmp_path:
     assert report["recovar_dense_winner"] == [0, 0]
     assert report["native_active_missing_candidate_rotation_count"] == 0
     assert report["native_active_missing_candidate_groups"] == []
+    assert report["recovar_only_candidate_tuple_count"] == 0
+    assert report["recovar_only_candidate_groups"] == []
+
+    candidate_mask[0, 1] = True
+    scores_pre_prior[0, 1] = 88.0
+    scores_with_prior[0, 1] = 88.0
+    probs[0, 1] = 0.01
+    np.savez(
+        capture,
+        rotations=recovar_rotations,
+        fine_translations=recovar_translations,
+        candidate_mask=candidate_mask,
+        scores_pre_prior=scores_pre_prior,
+        rotation_log_prior=np.zeros(2, dtype=np.float32),
+        translation_log_prior=np.zeros(2, dtype=np.float32),
+        scores_with_prior=scores_with_prior,
+        probs=probs,
+        reconstruction_mask=reconstruction_mask,
+        oversampled_rot_indices=np.asarray([10, 11], dtype=np.int64),
+        parent_map=np.asarray([4, 5], dtype=np.int32),
+    )
+
+    extra_report = analyzer.analyze(
+        native_factor=tmp_path / "factor.bin",
+        native_fine_score=tmp_path / "score.bin",
+        recovar_capture=capture,
+        physical_image_size=128,
+        top_count=2,
+    )
+
+    assert extra_report["first_exact_unequal_boundary"] == "candidate_tuple_presence"
+    assert extra_report["stage_exact"]["candidate_tuple_presence"] is False
+    assert extra_report["recovar_active_candidate_count"] == 3
+    assert extra_report["recovar_only_candidate_tuple_count"] == 1
+    assert extra_report["recovar_only_candidate_groups"] == [
+        {
+            "recovar_rotation_row": 0,
+            "recovar_global_rotation_id": 10,
+            "recovar_parent_row": 4,
+            "extra_translation_count": 1,
+            "extra_translation_rows_recovar": [1],
+        }
+    ]

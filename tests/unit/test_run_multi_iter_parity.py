@@ -14,6 +14,7 @@ from scripts.run_multi_iter_parity import (
     final_only_replay_override,
     final_output_fourier_volumes,
     initial_scoring_noise_pair,
+    load_initial_direction_prior,
     load_initial_fourier_volume,
     load_initial_noise_variance,
     map_pose_arrays_to_particle_order,
@@ -237,6 +238,18 @@ def test_initial_noise_override_requires_paired_halves():
         )
 
 
+def test_initial_direction_prior_override_requires_paired_halves():
+    with pytest.raises(ValueError, match="must be provided together"):
+        validate_final_only_replay_args(
+            max_iter=1,
+            force_final_after_zero_iterations=False,
+            initial_half1_mrc=None,
+            initial_half2_mrc=None,
+            initial_direction_prior_half1_npy="half1.npy",
+            initial_direction_prior_half2_npy=None,
+        )
+
+
 def test_final_only_replay_rejects_mixed_mrc_and_fourier_references():
     with pytest.raises(ValueError, match="mutually exclusive"):
         validate_final_only_replay_args(
@@ -285,6 +298,26 @@ def test_load_initial_noise_variance_rejects_nonpositive_values(tmp_path):
 
     with pytest.raises(ValueError, match="finite, real, and positive"):
         load_initial_noise_variance(source, (2, 2))
+
+
+def test_load_initial_direction_prior_preserves_zeros_and_values(tmp_path):
+    source = tmp_path / "direction.npy"
+    expected = np.asarray([0.0, 0.25, 0.0, 0.75], dtype=np.float32)
+    np.save(source, expected)
+
+    actual = load_initial_direction_prior(source, expected.size)
+
+    assert actual.dtype == expected.dtype
+    np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("bad", [[0.0, 0.0], [0.5, -0.5], [0.5, np.nan]])
+def test_load_initial_direction_prior_rejects_invalid_values(tmp_path, bad):
+    source = tmp_path / "direction.npy"
+    np.save(source, np.asarray(bad, dtype=np.float32))
+
+    with pytest.raises(ValueError, match="nonnegative|positive total mass"):
+        load_initial_direction_prior(source, 2)
 
 
 def test_stack_index_from_image_name_is_zero_based():

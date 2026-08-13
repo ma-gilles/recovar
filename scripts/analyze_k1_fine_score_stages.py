@@ -100,6 +100,50 @@ def _candidate_record(
     }
 
 
+def _recovar_only_candidate_groups(
+    *,
+    recovar_active_mask: np.ndarray,
+    mapped_rotation: np.ndarray,
+    mapped_translation: np.ndarray,
+    oversampled_rotation_ids: np.ndarray,
+    parent_map: np.ndarray,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Describe finite RECOVAR tuples absent from native RELION's active set."""
+
+    native_active_mask = np.zeros(recovar_active_mask.shape, dtype=bool)
+    native_active_mask[mapped_rotation, mapped_translation] = True
+    recovar_only_rows = np.argwhere(recovar_active_mask & ~native_active_mask)
+    groups = []
+    for rotation_row in np.unique(recovar_only_rows[:, 0]):
+        rows = recovar_only_rows[recovar_only_rows[:, 0] == rotation_row]
+        groups.append(
+            {
+                "recovar_rotation_row": int(rotation_row),
+                "recovar_global_rotation_id": int(oversampled_rotation_ids[rotation_row]),
+                "recovar_parent_row": int(parent_map[rotation_row]),
+                "extra_translation_count": int(rows.shape[0]),
+                "extra_translation_rows_recovar": [int(value) for value in rows[:, 1]],
+            }
+        )
+    return int(recovar_only_rows.shape[0]), groups
+
+
+def _logsumexp_float64(values: np.ndarray) -> float:
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    _require(finite.size > 0, "cannot normalize an empty score table")
+    maximum = np.max(finite)
+    return float(maximum + np.log(np.sum(np.exp(finite - maximum), dtype=np.float64)))
+
+
+def _softmax_float64(values: np.ndarray) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64)
+    _require(array.size > 0 and np.all(np.isfinite(array)), "cannot normalize non-finite scores")
+    shifted = array - np.max(array)
+    weights = np.exp(shifted)
+    return weights / np.sum(weights, dtype=np.float64)
+
+
 def analyze(
     *,
     native_factor: Path,
@@ -149,14 +193,12 @@ def analyze(
     with np.load(recovar_capture, allow_pickle=False) as archive:
         candidate_mask = np.asarray(archive["candidate_mask"], dtype=bool)
     tuple_present = candidate_mask[mapped_rotation, mapped_translation]
-    del candidate_mask
 
     with np.load(recovar_capture, allow_pickle=False) as archive:
         dense_preprior = archive["scores_pre_prior"]
         recovar_preprior = np.asarray(dense_preprior[mapped_rotation, mapped_translation], dtype=np.float32)
         del dense_preprior
     finite_score = np.isfinite(recovar_preprior)
-    candidate_tuple_equal = bool(np.all(tuple_present))
     preprior_finite_equal = bool(np.all(finite_score))
     native_raw = np.asarray(native["raw_diff2"], dtype=np.float32)
     native_preprior = np.negative(native_raw, dtype=np.float32)
@@ -171,12 +213,24 @@ def analyze(
 
     with np.load(recovar_capture, allow_pickle=False) as archive:
         dense_combined = archive["scores_with_prior"]
+        dense_combined_float64 = np.asarray(dense_combined, dtype=np.float64)
+        recovar_combined_float64 = dense_combined_float64[mapped_rotation, mapped_translation]
         recovar_combined = np.asarray(dense_combined[mapped_rotation, mapped_translation], dtype=np.float32)
         recovar_dense_winner_flat = int(np.nanargmax(dense_combined))
         recovar_dense_winner = tuple(
             int(value) for value in np.unravel_index(recovar_dense_winner_flat, dense_combined.shape)
         )
         del dense_combined
+    recovar_active_mask = candidate_mask & np.isfinite(dense_combined_float64)
+    recovar_only_candidate_count, recovar_only_candidate_groups = _recovar_only_candidate_groups(
+        recovar_active_mask=recovar_active_mask,
+        mapped_rotation=mapped_rotation,
+        mapped_translation=mapped_translation,
+        oversampled_rotation_ids=oversampled_rotation_ids,
+        parent_map=parent_map,
+    )
+    recovar_active_candidate_count = int(np.count_nonzero(recovar_active_mask))
+    candidate_set_equal = bool(np.all(tuple_present) and recovar_only_candidate_count == 0)
     native_combined = np.asarray(native["combined_preexponent"], dtype=np.float32)
     comparable = tuple_present & finite_score & np.isfinite(recovar_combined)
     _require(np.any(comparable), "native and RECOVAR tables have no comparable active tuple")
@@ -191,8 +245,53 @@ def analyze(
     native_posterior = native_weight / native_sum_weight
     with np.load(recovar_capture, allow_pickle=False) as archive:
         dense_posterior = archive["probs"]
+        dense_posterior_float64 = np.asarray(dense_posterior, dtype=np.float64)
         recovar_posterior = np.asarray(dense_posterior[mapped_rotation, mapped_translation], dtype=np.float64)
         del dense_posterior
+
+    native_exponent_shift = float(
+        np.asarray(np.uint32(score.header[20]), dtype=np.uint32).view(np.float32)
+    )
+    native_log_z = float(np.log(native_sum_weight) - native_exponent_shift)
+    recovar_log_z = _logsumexp_float64(dense_combined_float64[recovar_active_mask])
+    common_log_z = _logsumexp_float64(recovar_combined_float64[comparable])
+    native_active_in_recovar = np.zeros(recovar_active_mask.shape, dtype=bool)
+    native_active_in_recovar[mapped_rotation, mapped_translation] = True
+    recovar_only_probability_mass = float(
+        np.sum(
+            dense_posterior_float64[recovar_active_mask & ~native_active_in_recovar],
+            dtype=np.float64,
+        )
+    )
+    recovar_total_probability_mass = float(
+        np.sum(dense_posterior_float64[recovar_active_mask], dtype=np.float64)
+    )
+    posterior_algorithm_decomposition = None
+    if candidate_set_equal and bool(np.all(comparable)):
+        native_mathematical_posterior = _softmax_float64(native_combined)
+        recovar_mathematical_posterior = _softmax_float64(recovar_combined_float64)
+        posterior_algorithm_decomposition = {
+            "qualified_candidate_set_exact": True,
+            "native_production_vs_native_float64_softmax": _metric(
+                native_posterior,
+                native_mathematical_posterior,
+            ),
+            "native_float64_softmax_vs_recovar_float64_softmax": _metric(
+                native_mathematical_posterior,
+                recovar_mathematical_posterior,
+            ),
+            "recovar_float64_softmax_vs_recovar_production": _metric(
+                recovar_mathematical_posterior,
+                recovar_posterior,
+            ),
+        }
+    del (
+        candidate_mask,
+        dense_combined_float64,
+        dense_posterior_float64,
+        recovar_active_mask,
+        recovar_combined_float64,
+    )
 
     significant_count = _geometry_only_significant_count(factor)
     native_support_order = np.argsort(-native_weight, kind="stable")[:significant_count]
@@ -231,7 +330,7 @@ def analyze(
         "normalized_posterior": _metric(native_posterior[comparable], recovar_posterior[comparable]),
     }
     stage_exact = {
-        "candidate_tuple_presence": candidate_tuple_equal,
+        "candidate_tuple_presence": candidate_set_equal,
         "preprior_score_finite": preprior_finite_equal,
         "preprior_score_centered": comparisons["preprior_score_centered"]["exact_equal"],
         "orientation_log_prior": comparisons["orientation_log_prior"]["exact_equal"],
@@ -292,6 +391,10 @@ def analyze(
         "native_active_missing_candidate_tuple_count": int(missing_tuple.size),
         "native_active_missing_candidate_rotation_count": len(missing_tuple_groups),
         "native_active_missing_candidate_groups": missing_tuple_groups,
+        "recovar_active_candidate_count": recovar_active_candidate_count,
+        "recovar_only_candidate_tuple_count": recovar_only_candidate_count,
+        "recovar_only_candidate_rotation_count": len(recovar_only_candidate_groups),
+        "recovar_only_candidate_groups": recovar_only_candidate_groups,
         "native_active_nonfinite_preprior_count": int(nonfinite_preprior.size),
         "native_significant_count": significant_count,
         "recovar_significant_count": recovar_significant_count,
@@ -301,6 +404,17 @@ def analyze(
         "first_support_native_only_key": list(native_only[0]) if native_only else None,
         "first_support_recovar_only_key": list(recovar_only[0]) if recovar_only else None,
         "comparisons": comparisons,
+        "normalization_decomposition": {
+            "native_log_z_from_captured_exp_weights": native_log_z,
+            "recovar_log_z_all_finite_candidates": recovar_log_z,
+            "recovar_log_z_native_common_candidates": common_log_z,
+            "recovar_minus_native_log_z": recovar_log_z - native_log_z,
+            "common_score_log_z_delta": common_log_z - native_log_z,
+            "recovar_only_candidate_log_z_increment": recovar_log_z - common_log_z,
+            "recovar_only_candidate_probability_mass": recovar_only_probability_mass,
+            "recovar_total_probability_mass": recovar_total_probability_mass,
+            "posterior_algorithm_decomposition": posterior_algorithm_decomposition,
+        },
         "stage_order": list(STAGES),
         "stage_exact": stage_exact,
         "first_exact_unequal_boundary": first_unequal,
