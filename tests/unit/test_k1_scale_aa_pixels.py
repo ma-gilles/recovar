@@ -9,6 +9,7 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_frequency_coords_half_np,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    RelionWavgRectangle,
     _make_relion_wavg_rectangle,
     _prioritize_stopped_pass2_dump_buckets,
     _relion_wavg_atomic_triplet_terms,
@@ -16,6 +17,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_wavg_direct_norm_per_image,
     _relion_wavg_rectangle_triplet_terms,
     _replace_low_shell_noise_with_relion_wavg_direct_residual,
+    _select_optional_wavg_exact_pixels,
 )
 from scripts.analyze_k1_scale_aa_pixels import analyze
 
@@ -298,6 +300,22 @@ def test_relion_wavg_direct_norm_uses_valid_pixels_then_high_shell_power():
     )
 
     np.testing.assert_array_equal(result, [16.0, 35.0])
+
+
+def test_optional_wavg_exact_pixel_selection_is_inert_without_atomic_capture():
+    rectangle = RelionWavgRectangle(
+        centered_indices=np.asarray([8, 9, 10], dtype=np.int32),
+        exact_positions=np.asarray([2, 0], dtype=np.int32),
+        shell_indices=np.asarray([0, 1, 2], dtype=np.int32),
+    )
+    values = np.asarray([[1.0, 2.0, 3.0]], dtype=np.float32)
+
+    assert _select_optional_wavg_exact_pixels(None, rectangle) is None
+    assert _select_optional_wavg_exact_pixels(values, None) is None
+    np.testing.assert_array_equal(
+        _select_optional_wavg_exact_pixels(values, rectangle),
+        [[3.0, 1.0]],
+    )
 
 
 def test_scale_aa_pixels_joins_fourier_coordinates_and_localizes_operand_delta(tmp_path: Path):

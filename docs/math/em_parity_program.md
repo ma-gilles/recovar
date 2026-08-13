@@ -15842,9 +15842,13 @@ RELION run, so any later tuple result must retain that state-provenance caveat.
 Commit `096b6390` adds a faster fail-closed form of the same diagnostic. It
 preserves the complete first two iterations, moves only the requested
 iteration-3 support bucket to the front, and exits before the M-step after the
-target operand is written. Job `12329610` is running that priority capture in
-parallel and remains the authoritative raw capture; it has not been cancelled
-or altered.
+target operand is written. Job `12329610` reached that boundary after 1h21 but
+failed its final closed-schema check: the ordinary selected-rotation artifact
+still lacked the eight required raw fields. Inspection localized this to the
+capture hook being present only in the fused K-class route while this fresh
+K=1 run uses the single-class sparse route. The artifact establishes no scorer
+result. Another full two-iteration run is not justified until the single-class
+hook is covered by a stopped-path unit test.
 
 A qualified host replay of the earlier pre-reduction stack-79 bundle already
 identifies the dominant fine-score operand. RECOVAR replays

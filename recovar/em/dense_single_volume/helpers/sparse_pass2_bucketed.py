@@ -4581,6 +4581,14 @@ def _make_relion_wavg_rectangle(
     )
 
 
+def _select_optional_wavg_exact_pixels(values, rectangle):
+    """Select exact-radius Wavg pixels when the atomic diagnostic is active."""
+
+    if values is None or rectangle is None:
+        return None
+    return values[:, rectangle.exact_positions]
+
+
 @jax.jit
 def _relion_wavg_rectangle_triplet_terms(
     exact_triplet_terms,
@@ -13178,15 +13186,18 @@ def compute_pass2_stats_sparse_bucketed(
                         fine_translations=fine_translations,
                         aa_feature_per_shell_chunks=chunked_scale_aa_feature_per_shell,
                         aa_feature_shell_ids=chunked_scale_aa_feature_shell_ids,
-                        atomic_xa_per_pixel=relion_wavg_atomic_scale_xa_pixels_np[
-                            :, relion_wavg_rectangle.exact_positions
-                        ],
-                        atomic_aa_per_pixel=relion_wavg_atomic_scale_aa_pixels_np[
-                            :, relion_wavg_rectangle.exact_positions
-                        ],
-                        atomic_diff2_per_pixel=relion_wavg_atomic_diff2_pixels_np[
-                            :, relion_wavg_rectangle.exact_positions
-                        ],
+                        atomic_xa_per_pixel=_select_optional_wavg_exact_pixels(
+                            relion_wavg_atomic_scale_xa_pixels_np,
+                            relion_wavg_rectangle,
+                        ),
+                        atomic_aa_per_pixel=_select_optional_wavg_exact_pixels(
+                            relion_wavg_atomic_scale_aa_pixels_np,
+                            relion_wavg_rectangle,
+                        ),
+                        atomic_diff2_per_pixel=_select_optional_wavg_exact_pixels(
+                            relion_wavg_atomic_diff2_pixels_np,
+                            relion_wavg_rectangle,
+                        ),
                         noise_variance_for_noise=noise_variance_for_noise,
                         weighted_img_per_image=weighted_img_per_image,
                         relion_norm_high_shell=relion_norm_high_shell,
