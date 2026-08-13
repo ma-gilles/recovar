@@ -12166,3 +12166,28 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   capture before any iteration-3 propagation run. K=4 remains parked and the
   fixed scorecard remains `28/34` strict, `32/34` topology, `34/34`
   evaluated.
+
+## 2026-08-13 05:55 ET — three-iteration factorial rejects the full direct-residual composition
+
+- Job `12323552` completed `0:0` in `00:46:29` with the full power-class,
+  translated-Wavg, and direct-residual treatment but without fine-parent
+  order. Iteration-3 Pmax relative L2 is `0.0035337733`, maximum absolute
+  error is `0.12444288`, four support counts differ, one hard
+  pose/translation differs, and merged signed FSC-AUC is `0.999998836850`.
+- Job `12323640` completed `0:0` in `00:45:53` after adding fine-parent order
+  to that full treatment. It is slightly worse: Pmax relative L2
+  `0.0036552940`, maximum absolute error `0.12439862`, seven support-count
+  differences, one hard mismatch, and merged FSC-AUC `0.999998725866`.
+- This is a composition failure, not a failure of fine-parent order. Positive
+  job `12310265` explicitly had power-class spectrum norm, translated-Wavg
+  norm, and direct residual disabled. Its fine-order + fused-XA/AA + coarse
+  Gaussian composition achieved Pmax relative L2 `0.0001298604`, maximum
+  error `0.002313416`, zero hard mismatches, and merged FSC-AUC
+  `0.999999999099`.
+- The external validation candidate must use
+  `RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA=1` and explicitly unset
+  `RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM`,
+  `RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM`, and
+  `RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL`. The full rectangle remains an
+  operand diagnostic only. K=4 remains parked and the frozen scorecard stays
+  `28/34` strict, `32/34` topology, `34/34` evaluated.

@@ -167,19 +167,20 @@ initial resolution, iteration count, and stopping policy. Do not guess any of
 them. If these inputs are unavailable, mark section B `not run: missing
 RELION-compatible fixture` rather than fabricating a command.
 
-For a fresh K=1 run only, enable the checkpoint treatment:
+For a fresh K=1 run only, enable the demonstrated trajectory-improving
+composition:
 
 ```bash
 export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=1
-export RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=1
-export RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM=1
-export RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL=1
 export RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER=1
+export RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA=1
+unset RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM
+unset RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM
+unset RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 ```
 
-The current combined scientific candidate may also be tested as a separate
-arm with the demonstrated coarse Gaussian reduction:
+Add the demonstrated coarse Gaussian reduction to this candidate:
 
 ```bash
 export RECOVAR_K1_COARSE_GAUSSIAN_FFI=1
@@ -187,9 +188,21 @@ export RECOVAR_K1_RELION_F32_COARSE_SUPPORT=1
 unset RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF
 ```
 
-Keep the base checkpoint arm and the coarse-Gaussian composition arm in
-separate output directories. Never silently add the coarse arm to the base
-result.
+The locally positive three-iteration composition includes fine-parent order,
+the fused RELION-order XA/AA Wavg schedule, and this coarse-Gaussian arm. If a
+factorial control is desired, keep it in a separate output directory and
+change only one group of variables at a time.
+
+Do **not** enable the power-class spectrum normalization, translated-Wavg
+normalization, or atomic direct-residual variables above. That later full
+rectangle/direct-residual composition was tested in two controlled
+three-iteration runs and regressed the trajectory: iteration-3 Pmax relative
+L2 was `0.00353377` without fine-parent order and `0.00365529` with it, with a
+hard pose/translation mismatch in both runs. The earlier demonstrated
+fine-order + fused XA/AA + coarse-Gaussian composition achieved
+`0.000129860` Pmax relative L2, no hard mismatch, and merged signed FSC-AUC
+`0.999999999099`. The direct-residual variables therefore remain a diagnostic
+ablation, not part of the external candidate.
 
 Start with a bounded two- or three-iteration prefix, not a 12-hour/full
 trajectory. Save per-iteration intermediates and parity dumps. The command
@@ -230,9 +243,10 @@ RELION run; do not run the template literally. Confirm the log contains:
 - fresh paired RELION particle order;
 - explicit physical expected-accuracy trial order;
 - physical BPref particle order preservation;
-- full Wavg/direct-residual activation;
+- fused RELION-order XA/AA Wavg activation;
 - fine-parent RELION execution order;
-- and, only in the separate coarse arm, CUDA-built coarse scoring.
+- and CUDA-built coarse scoring in the positive composition (or only in its
+  explicitly labeled factorial arm).
 
 Compare each numbered half/merged map to the matching RELION iteration using
 signed shellwise FSC and normalized non-DC FSC-AUC. Join particles by immutable

@@ -1301,3 +1301,33 @@ and
 The native-envelope reports are in the same analysis directory. The frozen
 complete-case scorecard remains `28/34` strict, `32/34` topology, and `34/34`
 evaluated; a two-iteration prefix is not a case-22 closure.
+
+## Full-rectangle/direct-residual composition is a negative K=1 A/B
+
+Two fixed three-iteration jobs isolate the later full-rectangle treatment
+from the earlier fused-XA/AA trajectory improvement. Job `12323552` used the
+full power-class spectrum norm, translated-Wavg norm, and direct residual
+without fine-parent order. At iteration 3 it had Pmax relative L2
+`0.0035337733`, maximum absolute Pmax error `0.12444288`, four support-count
+mismatches, one hard pose/translation mismatch, and merged signed FSC-AUC
+`0.999998836850`.
+
+Job `12323640` added exact fine-parent execution order to that same treatment.
+It did not rescue the composition: iteration-3 Pmax relative L2 was
+`0.0036552940`, maximum absolute error was `0.12439862`, seven support-count
+mismatches remained, one hard pose/translation mismatch remained, and merged
+signed FSC-AUC was `0.999998725866`.
+
+The positive job `12310265` used a different and smaller composition: exact
+fine-parent execution order, the fused RELION-order XA/AA Wavg atomic schedule,
+and coarse Gaussian scoring. It explicitly did not enable the power-class
+spectrum norm, translated-Wavg norm, or direct residual. Its iteration-3 Pmax
+relative L2 was `0.0001298604`, its maximum absolute error was `0.002313416`,
+all hard poses/translations matched, and merged signed FSC-AUC was
+`0.999999999099`.
+
+Therefore the full-rectangle/direct-residual treatment is rejected as a
+candidate composition even though it improves isolated operand comparisons.
+It remains diagnostic-only. The production candidate and external validation
+prompt explicitly unset its three environment variables. This negative result
+does not change the frozen complete-case scorecard.

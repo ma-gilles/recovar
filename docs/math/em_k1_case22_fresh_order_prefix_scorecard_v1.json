@@ -578,5 +578,25 @@
     "iteration_3_intermediate_analysis_sha256": "2f16a99ee063194aa91135857602777291b3c8339332083895ab24d13423f1c9",
     "iteration_3_fsc_prefix_analysis_sha256": "9051699cd3a9351b7bd9934ec52afb1b5e0df1cefc12d1328a5b286cb2189feb",
     "classification": "demonstrated trajectory cause: the coupled RELION fine-parent order and XA-AA-diff2 Wavg float32 atomic schedule closes the same-day native group-scale boundary to STAR precision, reduces iteration-3 Pmax relative L2 by 64.8 percent and the merged FSC deficit by 86.9 percent, preserves zero hard-pose mismatches, but leaves six one-count support residuals"
+  },
+  "full_direct_residual_composition_ab": {
+    "without_fine_order_slurm_job_id": 12323552,
+    "without_fine_order_iteration_3_pmax_relative_l2": 0.0035337733172893173,
+    "without_fine_order_iteration_3_pmax_max_abs": 0.12444288077735899,
+    "without_fine_order_iteration_3_support_mismatch_count": 4,
+    "without_fine_order_iteration_3_hard_mismatch_count": 1,
+    "without_fine_order_iteration_3_merged_fsc_auc": 0.9999988368500059,
+    "with_fine_order_slurm_job_id": 12323640,
+    "with_fine_order_iteration_3_pmax_relative_l2": 0.0036552939541958564,
+    "with_fine_order_iteration_3_pmax_max_abs": 0.12439862432861326,
+    "with_fine_order_iteration_3_support_mismatch_count": 7,
+    "with_fine_order_iteration_3_hard_mismatch_count": 1,
+    "with_fine_order_iteration_3_merged_fsc_auc": 0.9999987258664775,
+    "diagnostic_variables_to_disable": [
+      "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM",
+      "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM",
+      "RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL"
+    ],
+    "classification": "negative composition A/B: isolated operand closure does not improve the trajectory and introduces a hard pose/translation mismatch; retain only as a diagnostic ablation"
   }
 }
