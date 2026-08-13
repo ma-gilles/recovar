@@ -155,6 +155,8 @@ def _compare(
     components_path: Path,
     operand_path: Path,
     recovar_path: Path,
+    *,
+    physical_iteration: int,
 ) -> dict[str, Any]:
     components = load_components(components_path)
     operand = load_operand(operand_path)
@@ -162,7 +164,14 @@ def _compare(
     _require(components.stack_index == operand.stack_index, "native stack mismatch")
     _require(components.part_id == operand.part_id, "native part mismatch")
     _require(components.stack_index - 1 == recovar["original_index"], "cross-engine identity mismatch")
-    _require(components.header[5] == 2, "native physical iteration mismatch")
+    _require(
+        components.header[5] == int(physical_iteration),
+        "native component physical iteration mismatch",
+    )
+    _require(
+        operand.header[5] == int(physical_iteration),
+        "native operand physical iteration mismatch",
+    )
     _require(components.header[27] == recovar["current_size"], "component/RECOVAR current-size mismatch")
     _require(operand.header[12] == recovar["current_size"], "operand/RECOVAR current-size mismatch")
     n_directions, n_psi, _ = components.header[10:13]
@@ -383,6 +392,7 @@ def main() -> None:
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     selection = json.loads(args.selection_json.read_text())
+    physical_iteration = int(selection["physical_iteration"])
     rows = []
     for target in selection["targets"]:
         stack = int(target["stack_index_one_based"])
@@ -391,12 +401,46 @@ def main() -> None:
         operand_paths = list(args.native_directory.glob(f"part*_stack{stack}.p1-op-v2.bin"))
         recovar_paths = list(args.recovar_directory.glob(f"significance_orig{original:06d}*_cs*.npz"))
         _require(len(component_paths) == len(operand_paths) == len(recovar_paths) == 1, f"artifact lookup failed for stack {stack}")
-        rows.append(_compare(component_paths[0], operand_paths[0], recovar_paths[0]))
+        rows.append(
+            _compare(
+                component_paths[0],
+                operand_paths[0],
+                recovar_paths[0],
+                physical_iteration=physical_iteration,
+            )
+        )
+    validation_dir = args.native_directory.resolve().parent / "analysis"
+    validation_paths = {
+        "components": validation_dir / "components_validation.json",
+        "operands": validation_dir / "operand_validation.json",
+    }
+    capture_validation: dict[str, Any] = {}
+    classification_ready = True
+    for label, path in validation_paths.items():
+        if path.is_file():
+            payload = json.loads(path.read_text())
+            ready = bool(payload.get("classification_ready", False))
+            capture_validation[label] = {
+                "path": str(path),
+                "sha256": _sha256(path),
+                "status": payload.get("status"),
+                "classification_ready": ready,
+            }
+            classification_ready = classification_ready and ready
+        else:
+            capture_validation[label] = {
+                "path": str(path),
+                "status": "missing",
+                "classification_ready": False,
+            }
+            classification_ready = False
     report = {
         "schema": "recovar.em.k1_coarse_operand_boundary.v3",
         "case_id": int(selection["case_id"]),
-        "physical_iteration": int(selection["physical_iteration"]),
+        "physical_iteration": physical_iteration,
         "metric_policy": "scale-sensitive relative-L2 and centered residual energy; no correlation",
+        "classification_ready": classification_ready,
+        "capture_validation": capture_validation,
         "particles": rows,
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
