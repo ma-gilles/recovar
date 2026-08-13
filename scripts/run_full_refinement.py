@@ -5431,7 +5431,7 @@ if __name__ == "__main__":
         ):
             logger.info(
                 "RECOVAR pass-2 operand dump completed; stopping at the "
-                "requested fine-score or norm/scale boundary: %s",
+                "requested fine-score boundary or norm/scale boundary: %s",
                 exc,
             )
             sys.exit(0)

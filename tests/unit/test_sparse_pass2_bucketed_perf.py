@@ -7007,9 +7007,18 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
         rtol=1e-6,
         atol=1e-6,
     )
-    assert np.sum(np.asarray(unchunked_pruned[6].rotation_posterior_sums)) < np.sum(
+    pruned_rotation_mass = np.sum(
+        np.asarray(unchunked_pruned[6].rotation_posterior_sums)
+    )
+    unpruned_rotation_mass = np.sum(
         np.asarray(unchunked[6].rotation_posterior_sums)
     )
+    if winner_take_all:
+        # Winner-take-all leaves one unit-weight candidate per image, so
+        # subsequent significant-weight pruning cannot reduce total mass.
+        assert pruned_rotation_mass == pytest.approx(unpruned_rotation_mass)
+    else:
+        assert pruned_rotation_mass < unpruned_rotation_mass
 
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", str(1024**3))
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_WINDOWED_PREPARE", "0")
