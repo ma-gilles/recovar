@@ -25,8 +25,9 @@ RUNTIME=${K1_CASE22_OPERAND_RUNTIME}
 ROTATION_LOCAL=${K1_CASE22_OPERAND_ROTATION_LOCAL}
 TRANSLATION=${K1_CASE22_OPERAND_TRANSLATION}
 TARGET_STACK_ONE_BASED=${K1_CASE22_TARGET_STACK_ONE_BASED:-1204}
-if (( TARGET_STACK_ONE_BASED < 1 )); then
-    echo "K1_CASE22_TARGET_STACK_ONE_BASED must be positive" >&2
+TARGET_ITERATION=${K1_CASE22_TARGET_ITERATION:-2}
+if (( TARGET_STACK_ONE_BASED < 1 || (TARGET_ITERATION != 2 && TARGET_ITERATION != 3) )); then
+    echo "target stack must be positive and target iteration must be 2 or 3" >&2
     exit 2
 fi
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
@@ -37,7 +38,7 @@ RELION_SOURCE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_relion_k1_preiter_
 RELION_BINARY=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_relion_k1_preiter_order_replay_6982c77_20260803T0215ET/build/bin/relion_refine_mpi
 RELION_RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispatchv2_20260717
 DATA=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_currenthead_25ab6e68_20260728T011020ET/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/data
-CONTROL=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/native_capture/relion
+CONTROL=${K1_CASE22_OPERAND_CONTROL:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/native_capture/relion}
 CAPTURE=${ROOT}/capture
 RELION_OUT=${ROOT}/relion
 
@@ -86,7 +87,7 @@ nvidia-smi -q > "${ROOT}/provenance/nvidia_smi_${SLURM_JOB_ID}.txt"
 # earlier broad capture to fail after the fine-score artifact was complete.
 export RELION_BPRE_CAPTURE_DIR=${CAPTURE}
 export RELION_BPRE_CAPTURE_SCHEMA=2
-export RELION_BPRE_CAPTURE_ITER=2
+export RELION_BPRE_CAPTURE_ITER=${TARGET_ITERATION}
 export RELION_BPRE_CAPTURE_CLASS=1
 export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES=1
 export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=1
@@ -100,7 +101,7 @@ export RELION_FINE_OPERAND_CAPTURE_TRANSLATIONS=${TRANSLATION}
 export RELION_FINE_OPERAND_CAPTURE_EXPECTED_CANDIDATES=1
 export RELION_FINE_OPERAND_CAPTURE_MAX_BYTES=1000000
 export RELION_PPREF_CAPTURE_DIR=${CAPTURE}
-export RELION_PPREF_CAPTURE_ITER=2
+export RELION_PPREF_CAPTURE_ITER=${TARGET_ITERATION}
 
 command=(
     srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
@@ -108,7 +109,7 @@ command=(
     --auto_refine --split_random_halves --particle_diameter 200 --ini_high 30
     --firstiter_cc --ctf --flatten_solvent --zero_mask --low_resol_join_halves 40
     --norm --scale --healpix_order 3 --offset_range 3.0 --offset_step 1.0
-    --oversampling 1 --pad 2 --random_seed 1722 --auto_iter_max 2
+    --oversampling 1 --pad 2 --random_seed 1722 --auto_iter_max "${TARGET_ITERATION}"
     --pool 3 --gpu 0:0:0 --j 4
 )
 printf '%q ' "${command[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
@@ -118,16 +119,16 @@ start=$(date +%s)
     cd "${DATA}"
     "${command[@]}"
 ) > "${RELION_OUT}/runner.stdout" 2> "${RELION_OUT}/runner.stderr"
-printf '{"job_id":"%s","wall_s":%d,"stack_index_one_based":%d,"rotation_local":%d,"translation":%d}\n' \
-    "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" "${TARGET_STACK_ONE_BASED}" \
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"stack_index_one_based":%d,"rotation_local":%d,"translation":%d}\n' \
+    "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" "${TARGET_ITERATION}" "${TARGET_STACK_ONE_BASED}" \
     "${ROTATION_LOCAL}" "${TRANSLATION}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 
 test "$(find "${CAPTURE}" -maxdepth 1 -name '*.fine-operand-v1.bin' | wc -l)" -eq 1
 test "$(find "${CAPTURE}" -maxdepth 1 -name '*.fine-score-v1.bin' | wc -l)" -eq 1
 test "$(find "${CAPTURE}" -maxdepth 1 -name '*.bpre-v2.bin' | wc -l)" -eq 1
-test "$(find "${CAPTURE}" -maxdepth 1 -name 'ppref_iter002_*.bin' | wc -l)" -eq 2
-test -s "${RELION_OUT}/run_it002_data.star"
+test "$(find "${CAPTURE}" -maxdepth 1 -name "ppref_iter$(printf '%03d' "${TARGET_ITERATION}")_*.bin" | wc -l)" -eq 2
+test -s "${RELION_OUT}/run_it$(printf '%03d' "${TARGET_ITERATION}")_data.star"
 
 fine_operand=$(find "${CAPTURE}" -maxdepth 1 -name "*_stack${TARGET_STACK_ONE_BASED}_class1.fine-operand-v1.bin")
 "${PYTHON}" "${REPO}/scripts/validate_relion_fine_operand_capture.py" \
@@ -137,8 +138,12 @@ fine_operand=$(find "${CAPTURE}" -maxdepth 1 -name "*_stack${TARGET_STACK_ONE_BA
     --output "${ROOT}/analysis/FINE_OPERAND_VALIDATION.json"
 
 cd "${AUDIT_REPO}"
+audit_iterations=(1 2)
+if (( TARGET_ITERATION == 3 )); then
+    audit_iterations+=(3)
+fi
 "${PYTHON}" -m scripts.audit_relion_control_reproducibility \
-    --control-dir "${CONTROL}" --candidate-dir "${RELION_OUT}" --iterations 1 2 \
+    --control-dir "${CONTROL}" --candidate-dir "${RELION_OUT}" --iterations "${audit_iterations[@]}" \
     --map-fsc-auc-threshold 0.999999 \
     --output-json "${ROOT}/analysis/RELION_CAPTURE_INERTNESS.json" \
     --output-markdown "${ROOT}/analysis/RELION_CAPTURE_INERTNESS.md"

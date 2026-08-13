@@ -1468,3 +1468,42 @@ allowed to finish naturally. `scripts/analyze_k1_partial_fine_panel.py` now
 turns the corrected artifacts into fixed-denominator exactness counts for
 rotation topology, active tuples, pre-prior score, both priors, posterior, and
 fine support, and records each particle's first unequal boundary.
+
+## Repeat-stable stack-79 fine boundary
+
+The original single-target production job `12326241` completed normally and
+wrote stack 79 from the exact cache-on, chunked positive composition. Native
+RELION has 248 fine rotations and 1,504 active tuples. RECOVAR has those exact
+rotations and tuples plus the eight children and 32 tuples of its one extra
+coarse parent. None of the 32 extra tuples survives fine significance: native
+and RECOVAR both retain the same 251 fine/BPref tuples with zero identity
+mismatches. For stack 79, the one-count coarse STAR residual therefore changes
+evaluated work but not the M-step operand set.
+
+On the 1,504 common tuples the first numerical boundary is the centered fine
+pre-prior score, with maximum absolute residual `0.0026378631591796875` and
+common-domain posterior total variation `7.009615608681395e-5`. The native
+Pmax is `0.3587464629` and the production RECOVAR Pmax is `0.3586772378`.
+Rotation medians remove `66.4028%` of the global-offset-removed residual
+energy; translation medians remove only `5.6087%`. The production winner is
+RECOVAR local rotation 239, global fine rotation 262871, parent 32858, and
+translation 62, matching native local rotation 231. This is now the bounded
+pixel/operand target.
+
+The full 1,069,056-candidate native coarse score table was also replayed
+through RECOVAR's float32 support selector. It reproduced all 47 native tuple
+identities and the exact threshold bits. The CPU replay total differed by one
+float32 ULP, without moving the cutoff; the production GPU route uses the same
+CUB sort/scan primitive as RELION. This rules out the cutoff rule itself for
+stack 79 and places any coarse support difference upstream in score/prior
+operands.
+
+The fine-panel report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_repeatstable5_production_capture_it3_20260813T071338ET/analysis/K1_STACK79_PRODUCTION_FINE_PANEL.json`
+(SHA-256
+`a3ead6be90c74ceee7d890f7c6f924e9f32943c66bd2f21480d44634feb82faa`).
+Native tuple job `12327217` and matching stopped RECOVAR operand job
+`12327237` capture exactly the winning tuple in iteration 3. Their staged
+comparison proceeds through projected reference, shifted image, correction
+weight, high-resolution sum, pixel contributions, 256 lane partials, and raw
+`diff2`; no complete trajectory is needed for this discriminator.

@@ -277,6 +277,42 @@ def analyze(
             preprior_common[rotation, translation] = True
         preprior_global_offset = float(np.median(preprior_residual[preprior_common]))
         preprior_residual[preprior_common] -= preprior_global_offset
+        centered_preprior_residual = (
+            recovar_common_preprior.astype(np.float64)
+            - native_common_preprior.astype(np.float64)
+            - preprior_global_offset
+        )
+        best_centered_preprior_residual = (
+            _center(recovar_common_preprior) - _center(native_common_preprior)
+        )
+        worst_preprior_rows = np.argsort(
+            -np.abs(best_centered_preprior_residual),
+            kind="stable",
+        )[:16]
+        worst_preprior_records = []
+        for common_row in worst_preprior_rows:
+            rotation, translation = ordered_common[int(common_row)]
+            native_row = int(native_common_rows[int(common_row)])
+            worst_preprior_records.append(
+                {
+                    "recovar_rotation_local": int(rotation),
+                    "recovar_rotation_global": int(recovar["rotation_global_index"][rotation]),
+                    "recovar_rotation_parent_global": int(
+                        recovar["rotation_parent_global"][rotation]
+                    ),
+                    "recovar_translation": int(translation),
+                    "native_rotation_local": int(native_rotation_rows[native_row]),
+                    "native_translation": int(native_translation_rows[native_row]),
+                    "native_preprior_score": float(native_common_preprior[common_row]),
+                    "recovar_preprior_score": float(recovar_common_preprior[common_row]),
+                    "best_centered_residual_recovar_minus_native": float(
+                        best_centered_preprior_residual[common_row]
+                    ),
+                    "global_offset_removed_residual_recovar_minus_native": float(
+                        centered_preprior_residual[common_row]
+                    ),
+                }
+            )
 
         native_significant_count = _native_significant_count(factor, candidates.size)
         native_significant_rows = np.argsort(-native_weights, kind="stable")[
@@ -301,6 +337,7 @@ def analyze(
                 _center(recovar_common_preprior),
             ),
             "preprior_score_global_offset_recovar_minus_native": preprior_global_offset,
+            "preprior_score_worst_centered_records": worst_preprior_records,
             "preprior_residual_structure": _raw_residual_structure(
                 preprior_residual,
                 preprior_common,

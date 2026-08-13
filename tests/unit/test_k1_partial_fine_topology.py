@@ -88,6 +88,8 @@ def test_production_shard_normalizes_to_dense_partial_topology(tmp_path, monkeyp
     normalized = load_recovar_candidate_table(next(tmp_path.glob("raw_k1_*.npz")))
     assert int(normalized["original_index"]) == 231
     np.testing.assert_array_equal(normalized["rotations"], rotations)
+    np.testing.assert_array_equal(normalized["rotation_global_index"], [20, 21])
+    np.testing.assert_array_equal(normalized["rotation_parent_global"], [100, 101])
     np.testing.assert_array_equal(normalized["candidate_mask"], np.ones((2, 2), dtype=bool))
     np.testing.assert_array_equal(normalized["probs"], probs[0])
     np.testing.assert_array_equal(normalized["production_combined_score"], scores[0])
