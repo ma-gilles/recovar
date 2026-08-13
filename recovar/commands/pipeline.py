@@ -239,7 +239,10 @@ def add_args(parser: argparse.ArgumentParser):
         "--ntilts",
         default=None,
         type=int,
-        help="Number of tilts per tilt series. Default = all",
+        help=(
+            "Use only acquisition ranks 0 through N-1. For RELION 5 these are global pre-exposure ranks, "
+            "so particles missing an early tilt contribute fewer than N images. Default = all"
+        ),
     )
     tilt.add_argument(
         "--shared_contrast_across_tilts",
