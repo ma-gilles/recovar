@@ -253,6 +253,226 @@ def _exact_rotation_map(native: np.ndarray, recovar: np.ndarray) -> tuple[np.nda
     }
 
 
+def _load_native_posterior_aligned(
+    directory: Path,
+    prefix: str,
+    *,
+    recovar_rotations: np.ndarray,
+    recovar_translations: np.ndarray,
+    physical_image_size: int,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Load one RELION Wavg posterior and gather it into RECOVAR coordinates."""
+
+    root = Path(directory) / prefix
+    paths = {
+        name: Path(f"{root}{name}.bin")
+        for name in (
+            "orientation_num",
+            "translation_num",
+            "sum_weight",
+            "significant_weight",
+            "sorted_weights",
+            "eulers",
+            "trans_xyz",
+        )
+    }
+    _require(all(path.is_file() for path in paths.values()), "native posterior capture is incomplete")
+
+    def scalar(name: str) -> float:
+        payload = paths[name].read_bytes()
+        _require(len(payload) == 8, f"native posterior scalar changed: {name}")
+        return float(struct.unpack("<d", payload)[0])
+
+    orientation_count = int(round(scalar("orientation_num")))
+    translation_count = int(round(scalar("translation_num")))
+    native_sum_weight = np.float32(scalar("sum_weight"))
+    native_threshold = np.float32(scalar("significant_weight"))
+    _require(np.isfinite(native_sum_weight) and native_sum_weight > 0.0, "invalid native posterior sum")
+    native_raw = _load_flat_array(paths["sorted_weights"], np.dtype("<f8")).astype(np.float32)
+    native_raw = native_raw.reshape(orientation_count, translation_count)
+    native_probabilities = np.where(
+        native_raw >= native_threshold,
+        native_raw / native_sum_weight,
+        np.float32(0.0),
+    ).astype(np.float32)
+    native_rotations = _load_flat_array(paths["eulers"], np.dtype("<f8")).astype(np.float32)
+    native_rotations = native_rotations.reshape(orientation_count, 3, 3).transpose(0, 2, 1)
+    recovar_rotations = np.asarray(recovar_rotations, dtype=np.float32).reshape(-1, 3, 3)
+    rotation_lookup: dict[bytes, int] = {}
+    for row, matrix in enumerate(recovar_rotations):
+        rotation_lookup.setdefault(matrix.tobytes(), row)
+    native_to_recovar_rotation = np.asarray(
+        [rotation_lookup.get(matrix.tobytes(), -1) for matrix in native_rotations],
+        dtype=np.int64,
+    )
+    _require(np.all(native_to_recovar_rotation >= 0), "native posterior rotation is absent from RECOVAR")
+    _require(
+        np.unique(native_to_recovar_rotation).size == orientation_count,
+        "native posterior rotation mapping is not one-to-one",
+    )
+
+    native_trans_xyz = _load_flat_array(paths["trans_xyz"], np.dtype("<f8")).astype(np.float32)
+    _require(native_trans_xyz.size == 3 * translation_count, "native posterior translations changed")
+    native_translation_angles = np.stack(
+        (
+            native_trans_xyz[:translation_count],
+            native_trans_xyz[translation_count : 2 * translation_count],
+        ),
+        axis=1,
+    )
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_translation_angles_f32,
+    )
+
+    recovar_translation_angles = np.asarray(
+        _relion_translation_angles_f32(
+            np.asarray(recovar_translations, dtype=np.float32),
+            (physical_image_size, physical_image_size),
+        ),
+        dtype=np.float32,
+    )
+    _require(
+        recovar_translation_angles.shape == native_translation_angles.shape,
+        "native/RECOVAR translation topology changed",
+    )
+    phase_distance = np.max(
+        np.abs(
+            native_translation_angles[:, None, :].astype(np.float64)
+            - recovar_translation_angles[None, :, :].astype(np.float64)
+        ),
+        axis=2,
+    )
+    native_to_recovar_translation = np.argmin(phase_distance, axis=1).astype(np.int64)
+    nearest_phase_error = phase_distance[
+        np.arange(translation_count),
+        native_to_recovar_translation,
+    ]
+    _require(
+        np.unique(native_to_recovar_translation).size == translation_count,
+        "native posterior translation mapping is not one-to-one",
+    )
+    _require(
+        float(np.max(nearest_phase_error, initial=0.0)) <= 2.0e-8,
+        "native posterior translation phase exceeds the fixed bound",
+    )
+    aligned = np.zeros(
+        (recovar_rotations.shape[0], recovar_translation_angles.shape[0]),
+        dtype=np.float32,
+    )
+    aligned[np.ix_(native_to_recovar_rotation, native_to_recovar_translation)] = native_probabilities
+    return aligned, {
+        "native_orientation_count": orientation_count,
+        "native_translation_count": translation_count,
+        "native_positive_candidate_count": int(np.count_nonzero(native_probabilities)),
+        "native_retained_mass": float(np.sum(native_probabilities, dtype=np.float64)),
+        "rotation_exact_match_count": int(native_to_recovar_rotation.size),
+        "translation_matched_count": int(native_to_recovar_translation.size),
+        "translation_exact_match_count": int(
+            np.count_nonzero(
+                np.all(
+                    native_translation_angles
+                    == recovar_translation_angles[native_to_recovar_translation],
+                    axis=1,
+                )
+            )
+        ),
+        "translation_max_abs": float(np.max(nearest_phase_error, initial=0.0)),
+        "native_sum_weight_float32": float(native_sum_weight),
+        "native_significant_weight_float32": float(native_threshold),
+        "sha256": {name: _sha256(path) for name, path in paths.items()},
+    }
+
+
+def _replay_chunked_xa_with_posterior(
+    *,
+    ppref: np.ndarray,
+    rotations: np.ndarray,
+    chunk_ranges: np.ndarray,
+    recovar_probabilities: np.ndarray,
+    native_probabilities: np.ndarray,
+    shifted_images: np.ndarray,
+    noise_variance: np.ndarray,
+    reconstruction_indices: np.ndarray,
+    current_size: int,
+    physical_image_size: int,
+) -> dict[str, object]:
+    """Replay RECOVAR's exact chunked XA contraction with two posterior tables."""
+
+    import jax
+    import jax.numpy as jnp
+
+    from recovar.em.dense_single_volume.helpers.projection import (
+        compute_relion_projector_projections_block,
+    )
+
+    rotations = np.asarray(rotations, dtype=np.float32)
+    recovar_probabilities = np.asarray(recovar_probabilities, dtype=np.float32)
+    native_probabilities = np.asarray(native_probabilities, dtype=np.float32)
+    shifted_images = np.asarray(shifted_images, dtype=np.complex64)
+    noise_variance = np.asarray(noise_variance, dtype=np.float32).reshape(-1)
+    _require(
+        recovar_probabilities.shape == native_probabilities.shape,
+        "posterior weight-swap topology changed",
+    )
+    _require(
+        recovar_probabilities.shape[0] == rotations.shape[0],
+        "posterior/rotation topology changed",
+    )
+    _require(
+        shifted_images.shape == (recovar_probabilities.shape[1], noise_variance.size),
+        "posterior/shifted-image topology changed",
+    )
+    recovar_chunks: list[float] = []
+    native_chunks: list[float] = []
+    shifted_device = jnp.asarray(shifted_images, dtype=jnp.complex64)
+    noise_device = jnp.asarray(noise_variance, dtype=jnp.float32)
+    for start, stop in np.asarray(chunk_ranges, dtype=np.int64):
+        projection, _ = compute_relion_projector_projections_block(
+            jnp.asarray(ppref),
+            jnp.asarray(rotations[int(start) : int(stop)], dtype=jnp.float32),
+            (physical_image_size, physical_image_size),
+            r_max=current_size // 2,
+            padding_factor=2,
+            return_abs2=False,
+            centered_rows=True,
+            dense_scale=True,
+            projector_output_size=current_size,
+            pixel_indices=jnp.asarray(reconstruction_indices, dtype=jnp.int32),
+            relion_texture_interp=True,
+        )
+
+        def xa_total(probabilities: np.ndarray) -> jax.Array:
+            summed = jnp.matmul(
+                jnp.asarray(probabilities, dtype=jnp.float32),
+                shifted_device,
+                precision=jax.lax.Precision.HIGHEST,
+            )
+            cross = jnp.where(
+                summed != 0.0,
+                projection * jnp.conj(summed),
+                jnp.complex64(0.0),
+            )
+            return jnp.sum(noise_device[None, :] * cross.real, dtype=jnp.float32)
+
+        recovar_value, native_value = jax.block_until_ready(
+            (
+                xa_total(recovar_probabilities[int(start) : int(stop)]),
+                xa_total(native_probabilities[int(start) : int(stop)]),
+            )
+        )
+        recovar_chunks.append(float(np.asarray(recovar_value, dtype=np.float32)))
+        native_chunks.append(float(np.asarray(native_value, dtype=np.float32)))
+    recovar_total = float(np.sum(recovar_chunks, dtype=np.float64))
+    native_total = float(np.sum(native_chunks, dtype=np.float64))
+    return {
+        "recovar_xa_per_chunk": recovar_chunks,
+        "native_weight_xa_per_chunk": native_chunks,
+        "recovar_xa_total": recovar_total,
+        "native_weight_xa_total": native_total,
+        "native_weight_minus_recovar": native_total - recovar_total,
+    }
+
+
 def _rectangle_to_reconstruction_pixels(
     *,
     rectangle_xdim: int,
@@ -414,6 +634,8 @@ def _analyze_chunked(
     recovar_projector: Path,
     native_projector_directory: Path | None,
     native_projector_prefix: str,
+    native_posterior_directory: Path | None,
+    native_posterior_prefix: str,
     physical_image_size: int,
     native_norm_panel: Path | None,
     rotation_block_size: int,
@@ -481,6 +703,21 @@ def _analyze_chunked(
         )
     _require(projector_r_max == current_size // 2, "projector radius changed")
 
+    native_posterior = None
+    native_posterior_identity = None
+    if native_posterior_directory is not None:
+        _require(
+            "norm_shifted_images" in recovar,
+            "native posterior replay requires a v4 RECOVAR shifted-image capture",
+        )
+        native_posterior, native_posterior_identity = _load_native_posterior_aligned(
+            native_posterior_directory,
+            native_posterior_prefix,
+            recovar_rotations=recovar_rotations,
+            recovar_translations=recovar["fine_translations"],
+            physical_image_size=physical_image_size,
+        )
+
     native_a2 = 0.0
     native_xa = 0.0
     processed_rows = 0
@@ -532,6 +769,40 @@ def _analyze_chunked(
         np.isclose(np.sum(recovar_xa_chunks), recovar_xa, rtol=0.0, atol=1.0e-10),
         "captured RECOVAR XA chunks do not close",
     )
+    xa_posterior_swap = None
+    if native_posterior is not None:
+        replay = _replay_chunked_xa_with_posterior(
+            ppref=ppref,
+            rotations=recovar_rotations,
+            chunk_ranges=recovar["chunk_ranges"],
+            recovar_probabilities=recovar["candidate_posterior_probs"],
+            native_probabilities=native_posterior,
+            shifted_images=recovar["norm_shifted_images"],
+            noise_variance=noise,
+            reconstruction_indices=reconstruction_indices,
+            current_size=current_size,
+            physical_image_size=physical_image_size,
+        )
+        replay_delta = float(replay["native_weight_minus_recovar"])
+        counterfactual_xa = recovar_xa + replay_delta
+        baseline_gap = abs(recovar_xa - native_xa)
+        counterfactual_gap = abs(counterfactual_xa - native_xa)
+        xa_posterior_swap = {
+            **replay,
+            "native_posterior_identity": native_posterior_identity,
+            "captured_recovar_xa_per_chunk": recovar_xa_chunks.tolist(),
+            "recovar_replay_vs_capture": _metric(
+                recovar_xa_chunks,
+                np.asarray(replay["recovar_xa_per_chunk"], dtype=np.float64),
+            ),
+            "counterfactual_xa_from_captured_baseline": counterfactual_xa,
+            "native_bpref_xa": native_xa,
+            "absolute_gap_closure_fraction": (
+                (baseline_gap - counterfactual_gap) / baseline_gap
+                if baseline_gap
+                else 0.0
+            ),
+        }
     weighted_image = float(recovar["weighted_img_per_image"])
     totals = _counterfactual_totals(
         weighted_image=weighted_image,
@@ -582,6 +853,7 @@ def _analyze_chunked(
             "recovar_weighted_image_held_fixed": weighted_image,
             "counterfactual_totals": totals,
         },
+        "native_posterior_xa_swap": xa_posterior_swap,
         "artifacts": {
             "recovar_projector_sha256": _sha256(recovar_projector),
         },
@@ -622,12 +894,17 @@ def analyze(
     recovar_projector: Path | None = None,
     native_projector_directory: Path | None = None,
     native_projector_prefix: str = "img0_part109_storeWavg_wavg_ppref_",
+    native_posterior_directory: Path | None = None,
+    native_posterior_prefix: str = "img0_part109_storeWavg_",
     rotation_block_size: int = 512,
 ) -> dict[str, object]:
     with np.load(recovar_path, allow_pickle=False) as capture:
         schema = capture["schema"].item()
         recovar = {name: np.asarray(capture[name]) for name in capture.files}
-    if schema == "recovar-k1-scale-xa-aa-chunked-v3":
+    if schema in {
+        "recovar-k1-scale-xa-aa-chunked-v3",
+        "recovar-k1-scale-xa-aa-chunked-v4",
+    }:
         _require(recovar_projector is not None, "chunked RECOVAR capture requires --recovar-projector")
         return _analyze_chunked(
             native_path,
@@ -636,6 +913,8 @@ def analyze(
             recovar_projector=recovar_projector,
             native_projector_directory=native_projector_directory,
             native_projector_prefix=native_projector_prefix,
+            native_posterior_directory=native_posterior_directory,
+            native_posterior_prefix=native_posterior_prefix,
             physical_image_size=physical_image_size,
             native_norm_panel=native_norm_panel,
             rotation_block_size=rotation_block_size,
@@ -749,6 +1028,11 @@ def main() -> None:
         "--native-projector-prefix",
         default="img0_part109_storeWavg_wavg_ppref_",
     )
+    parser.add_argument("--native-posterior-directory", type=Path)
+    parser.add_argument(
+        "--native-posterior-prefix",
+        default="img0_part109_storeWavg_",
+    )
     parser.add_argument("--rotation-block-size", type=int, default=512)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -760,6 +1044,8 @@ def main() -> None:
         recovar_projector=args.recovar_projector,
         native_projector_directory=args.native_projector_directory,
         native_projector_prefix=args.native_projector_prefix,
+        native_posterior_directory=args.native_posterior_directory,
+        native_posterior_prefix=args.native_posterior_prefix,
         rotation_block_size=args.rotation_block_size,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

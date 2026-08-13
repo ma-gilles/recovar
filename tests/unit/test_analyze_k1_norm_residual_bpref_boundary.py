@@ -2,6 +2,9 @@ import struct
 
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_translation_angles_f32,
+)
 from scripts import analyze_k1_norm_residual_bpref_boundary as analyzer
 from scripts.validate_relion_bpref_prescatter import ROTATION_DTYPE, ROW_DTYPE
 
@@ -38,6 +41,54 @@ def test_load_native_ppref_preserves_shape_origin_and_float32_values(tmp_path) -
     assert identity["origin_xyz"] == [0, -1, 0]
     assert identity["r_max"] == 1
     assert identity["padding_factor"] == 2.0
+
+
+def test_load_native_posterior_aligns_rotation_and_translation_permutations(tmp_path) -> None:
+    prefix = "posterior_"
+    rotations = np.asarray(
+        [
+            np.eye(3, dtype=np.float32),
+            np.diag([-1.0, -1.0, 1.0]).astype(np.float32),
+        ]
+    )
+    translations = np.asarray([[0.0, 0.0], [1.0, -1.0]], dtype=np.float32)
+    probabilities = np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+    rotation_order = np.asarray([1, 0])
+    translation_order = np.asarray([1, 0])
+    for name, value in {
+        "orientation_num": 2.0,
+        "translation_num": 2.0,
+        "sum_weight": 1.0,
+        "significant_weight": 0.0,
+    }.items():
+        (tmp_path / f"{prefix}{name}.bin").write_bytes(struct.pack("<d", value))
+    _write_flat(
+        tmp_path / f"{prefix}sorted_weights.bin",
+        probabilities[rotation_order][:, translation_order].astype("<f8"),
+    )
+    _write_flat(
+        tmp_path / f"{prefix}eulers.bin",
+        rotations[rotation_order].transpose(0, 2, 1).astype("<f8"),
+    )
+    phases = np.asarray(_relion_translation_angles_f32(translations, (128, 128)))
+    native_phases = phases[translation_order]
+    _write_flat(
+        tmp_path / f"{prefix}trans_xyz.bin",
+        np.concatenate((native_phases[:, 0], native_phases[:, 1], np.zeros(2))).astype("<f8"),
+    )
+
+    aligned, identity = analyzer._load_native_posterior_aligned(
+        tmp_path,
+        prefix,
+        recovar_rotations=rotations,
+        recovar_translations=translations,
+        physical_image_size=128,
+    )
+
+    np.testing.assert_array_equal(aligned, probabilities)
+    assert identity["rotation_exact_match_count"] == 2
+    assert identity["translation_matched_count"] == 2
+    assert identity["native_positive_candidate_count"] == 4
 
 
 def test_dense_native_operands_align_rotations_pixels_and_units() -> None:

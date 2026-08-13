@@ -129,11 +129,15 @@ def test_chunked_scale_aa_writer_preserves_float32_chunk_order(tmp_path: Path, m
         noise_variance_for_noise=np.asarray([2.0, 3.0], dtype=np.float32),
         weighted_img_per_image=np.asarray([31.0], dtype=np.float64),
         relion_norm_high_shell=np.asarray([17.0], dtype=np.float64),
+        norm_shifted_images=np.asarray(
+            [[[1.0 + 2.0j, 3.0 + 4.0j], [5.0 + 6.0j, 7.0 + 8.0j]]],
+            dtype=np.complex64,
+        ),
     )
     assert count == 1
     capture_path = tmp_path / "scale_aa_chunked_orig001096_half1_cs060.npz"
     with np.load(capture_path, allow_pickle=False) as capture:
-        assert capture["schema"].item() == "recovar-k1-scale-xa-aa-chunked-v3"
+        assert capture["schema"].item() == "recovar-k1-scale-xa-aa-chunked-v4"
         np.testing.assert_array_equal(capture["scale_xa_per_pixel"], [2.0, 3.0])
         assert float(capture["scale_xa_per_image"]) == 5.0
         np.testing.assert_array_equal(capture["scale_xa_atomic_per_pixel"], [9.0, 10.0])
@@ -157,6 +161,10 @@ def test_chunked_scale_aa_writer_preserves_float32_chunk_order(tmp_path: Path, m
         np.testing.assert_array_equal(capture["noise_variance_for_noise"], [2.0, 3.0])
         assert float(capture["weighted_img_per_image"]) == 31.0
         assert float(capture["relion_norm_high_shell"]) == 17.0
+        np.testing.assert_array_equal(
+            capture["norm_shifted_images"],
+            [[1.0 + 2.0j, 3.0 + 4.0j], [5.0 + 6.0j, 7.0 + 8.0j]],
+        )
 
     native = tmp_path / "native_chunked.tsv"
     native.write_text(

@@ -9112,6 +9112,7 @@ def _write_chunked_scale_aa_dump(
     noise_variance_for_noise=None,
     weighted_img_per_image=None,
     relion_norm_high_shell=None,
+    norm_shifted_images=None,
 ):
     """Write compact Wavg XA/AA/diff2 intermediates for a target bucket."""
 
@@ -9186,6 +9187,13 @@ def _write_chunked_scale_aa_dump(
             raise ValueError("chunked scale-AA candidate shell-feature topology changed")
         if aa_feature_per_shell.shape[2] != aa_feature_shell_ids_np.size:
             raise ValueError("chunked scale-AA candidate shell labels changed")
+        norm_shifted_images_np = np.asarray(norm_shifted_images, dtype=np.complex64)
+        if norm_shifted_images_np.shape != (
+            target_rows.size,
+            fine_translations_np.shape[0],
+            mask.size,
+        ):
+            raise ValueError("chunked norm shifted-image topology changed")
     if not (
         posterior_mass.shape[:2]
         == proj_abs2_sum.shape[:2]
@@ -9253,7 +9261,7 @@ def _write_chunked_scale_aa_dump(
             f"scale_aa_chunked_orig{original_index:06d}_half{context_half}_cs{size_label:03d}.npz",
         )
         payload = dict(
-            schema=np.asarray("recovar-k1-scale-xa-aa-chunked-v3"),
+            schema=np.asarray("recovar-k1-scale-xa-aa-chunked-v4"),
             iteration=np.int64(context_iteration),
             half=np.int64(context_half),
             original_index=np.int64(original_index),
@@ -9360,6 +9368,10 @@ def _write_chunked_scale_aa_dump(
                     dtype=np.float32,
                 ),
                 candidate_aa_feature_shell_ids=aa_feature_shell_ids_np,
+                norm_shifted_images=np.asarray(
+                    norm_shifted_images_np[selected_row],
+                    dtype=np.complex64,
+                ),
             )
         np.savez_compressed(out_path, **payload)
     return int(target_rows.size)
@@ -13201,6 +13213,14 @@ def compute_pass2_stats_sparse_bucketed(
                         noise_variance_for_noise=noise_variance_for_noise,
                         weighted_img_per_image=weighted_img_per_image,
                         relion_norm_high_shell=relion_norm_high_shell,
+                        norm_shifted_images=np.asarray(
+                            jax.block_until_ready(
+                                jnp.asarray(shifted_noise_split)[
+                                    chunked_scale_aa_target_rows
+                                ]
+                            ),
+                            dtype=np.complex64,
+                        ),
                     )
                     if chunked_scale_aa_dump_count and _env_flag_enabled(
                         _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV,

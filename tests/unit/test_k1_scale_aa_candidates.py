@@ -37,7 +37,7 @@ def test_scale_aa_candidates_matches_rotation_and_translation_permutations(tmp_p
     )
     np.savez_compressed(
         recovar,
-        schema=np.asarray("recovar-k1-scale-xa-aa-chunked-v3"),
+        schema=np.asarray("recovar-k1-scale-xa-aa-chunked-v4"),
         iteration=np.int64(2),
         half=np.int64(1),
         group_id=np.int64(109),

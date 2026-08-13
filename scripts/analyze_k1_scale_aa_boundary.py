@@ -102,6 +102,7 @@ def analyze(
             "recovar-k1-scale-aa-chunked-v1",
             "recovar-k1-scale-xa-aa-chunked-v2",
             "recovar-k1-scale-xa-aa-chunked-v3",
+            "recovar-k1-scale-xa-aa-chunked-v4",
         }:
             proj_abs2 = np.asarray(payload["proj_abs2_sum_per_pixel_by_chunk"], dtype=np.float32)
             ctf_probs = None
