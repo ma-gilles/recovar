@@ -16,7 +16,7 @@ Repository: `https://github.com/ma-gilles/recovar.git`
 Remote branch: `codex/em-parity-checkpoint-20260711`
 
 Minimum required checkpoint commit:
-`e41c78addcaada9921f4d4c365af60956d38ddaa`
+`dd2e264196a6f82b01080f42024df6d541f4586a`
 
 PR: `https://github.com/ma-gilles/recovar/pull/158`
 
@@ -29,7 +29,7 @@ git clone https://github.com/ma-gilles/recovar.git recovar-k1-parity
 cd recovar-k1-parity
 git fetch origin codex/em-parity-checkpoint-20260711
 git switch --detach origin/codex/em-parity-checkpoint-20260711
-git merge-base --is-ancestor e41c78addcaada9921f4d4c365af60956d38ddaa HEAD
+git merge-base --is-ancestor dd2e264196a6f82b01080f42024df6d541f4586a HEAD
 git rev-parse HEAD
 git status --short
 ```
@@ -198,10 +198,13 @@ normalization, or atomic direct-residual variables above. That later full
 rectangle/direct-residual composition was tested in two controlled
 three-iteration runs and regressed the trajectory: iteration-3 Pmax relative
 L2 was `0.00353377` without fine-parent order and `0.00365529` with it, with a
-hard pose/translation mismatch in both runs. The earlier demonstrated
-fine-order + fused XA/AA + coarse-Gaussian composition achieved
-`0.000129860` Pmax relative L2, no hard mismatch, and merged signed FSC-AUC
-`0.999999999099`. The direct-residual variables therefore remain a diagnostic
+hard pose/translation mismatch in both runs. The demonstrated fine-order +
+fused XA/AA + coarse-Gaussian composition, with the RFLOAT scoring-noise fix
+in the requested checkpoint, achieved `0.0001119701484` iteration-3 Pmax
+relative L2, maximum absolute Pmax error `0.0009019981`, no hard mismatch,
+exact size/HEALPix topology, and merged signed FSC-AUC
+`0.9999999993275085`. Six particles retained one-count coarse-support
+residuals. The direct-residual variables therefore remain a diagnostic
 ablation, not part of the external candidate.
 
 Start with a bounded two- or three-iteration prefix, not a 12-hour/full
