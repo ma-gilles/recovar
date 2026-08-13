@@ -574,8 +574,43 @@ def test_tiltseries_dataset_getitem_deterministic_selection(monkeypatch):
     assert pidx == 0
     assert imgs.shape == (2, 8, 8)
     assert selected.shape == (2,)
-    # Deterministic order induced by _compute_tilt_ordering implementation.
+    # The first two global dose ranks are 1.0 and 2.0.
     np.testing.assert_array_equal(selected, np.array([0, 2]))
+
+
+def test_tiltseries_dataset_num_tilts_does_not_backfill_missing_global_tilts(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 6
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["complete", "complete", "complete", "missing", "missing", "missing"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 3.0, 2.0, 3.0, 4.0],
+            "_rlnCtfScalefactor": np.ones(6),
+            "_rlnCtfBfactor": -np.arange(1, 7, dtype=np.float32),
+        }
+    )
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(image_backends.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
+
+    ds = image_backends.TiltSeriesDataset(
+        "dummy.star", num_tilts=2, random_tilts=False, tilt_file_option="relion5"
+    )
+
+    np.testing.assert_array_equal(ds.tilt_numbers, np.array([0, 1, 2, 1, 2, 3], dtype=np.int32))
+    np.testing.assert_array_equal(ds[0][2], np.array([0, 1], dtype=np.int32))
+    # Global rank 0 is absent, so this particle contributes only rank 1. Ranks
+    # 2 and 3 must not be pulled in as replacements.
+    np.testing.assert_array_equal(ds[1][2], np.array([3], dtype=np.int32))
 
 
 def test_tiltseries_dataset_random_selection_clamps_when_num_tilts_exceeds_available(monkeypatch):
@@ -1283,11 +1318,12 @@ def test_tiltseries_dataset_ind_subset_preserves_image_tilt_alignment(monkeypatc
     assert int(tidx0) == 0
     np.testing.assert_array_equal(img0[0], ds.source._store[0])
 
-    # For g3 in subset (locals 0 and 2), relion5 ordering picks lower dose first -> local 2.
+    # For g3, the subset contains only global acquisition ranks 4 and 5.
+    # num_tilts=1 must not renumber either one to rank 0.
     imgs, particle_idx, selected = ds[2]  # canonical order: g1, g2, g3
     assert int(particle_idx) == 2
-    np.testing.assert_array_equal(selected, np.array([2], dtype=np.int32))
-    np.testing.assert_array_equal(imgs[0], ds.source._store[2])
+    assert selected.size == 0
+    assert imgs.shape == (0, 8, 8)
 
 
 def test_parse_particle_tilt_real_tiny_star_preserves_original_indices_with_subset(tmp_path):
