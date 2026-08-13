@@ -9849,10 +9849,15 @@ def _prioritize_stopped_pass2_dump_buckets(
     execution order.
     """
 
-    if not _pass2_dump_enabled() or not _env_flag_enabled(
-        _PASS2_DUMP_STOP_AFTER_TARGET_ENV,
-        default=False,
-    ):
+    stopped_pass2_dump = _pass2_dump_enabled() and _env_flag_enabled(
+        _PASS2_DUMP_STOP_AFTER_TARGET_ENV, default=False
+    )
+    stopped_norm_dump = _env_flag_enabled(
+        "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS", default=False
+    ) and _env_flag_enabled(
+        _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV, default=False
+    )
+    if not (stopped_pass2_dump or stopped_norm_dump):
         return buckets
 
     requested = []

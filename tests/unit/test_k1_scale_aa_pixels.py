@@ -106,6 +106,32 @@ def test_nonstopped_pass2_dump_preserves_bucket_order(monkeypatch):
     assert preserved is buckets
 
 
+def test_stopped_norm_residual_dump_prioritizes_requested_bucket(monkeypatch):
+    monkeypatch.setattr(
+        "recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed._pass2_dump_enabled",
+        lambda: False,
+    )
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS", "1")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET", "1")
+    monkeypatch.setattr(
+        "recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed._pass2_dump_requested_for_bucket",
+        lambda **kwargs: int(np.asarray(kwargs["image_indices"])[0]) == 7,
+    )
+    buckets = [
+        {"image_indices": np.asarray([3])},
+        {"image_indices": np.asarray([7])},
+        {"image_indices": np.asarray([11])},
+    ]
+
+    prioritized = _prioritize_stopped_pass2_dump_buckets(
+        buckets,
+        experiment_dataset=object(),
+        current_size=60,
+    )
+
+    assert [int(bucket["image_indices"][0]) for bucket in prioritized] == [7, 3, 11]
+
+
 def test_wavg_atomic_triplet_preserves_scale_units_and_forms_raw_diff2():
     proj = jnp.asarray([[[2.0 + 1.0j, 3.0 - 2.0j]]], dtype=jnp.complex64)
     shifted = jnp.asarray(
