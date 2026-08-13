@@ -29,6 +29,7 @@ COMPACT_STACK1204_DUMP=${K1_CASE22_COMPACT_STACK1204_DUMP:-0}
 PRODUCTION_CANDIDATE_CAPTURE=${K1_CASE22_PRODUCTION_CANDIDATE_CAPTURE:-0}
 STOP_AFTER_COMPACT_DUMP=${K1_CASE22_STOP_AFTER_COMPACT_DUMP:-0}
 NORM_RESIDUAL_INPUTS=${K1_CASE22_NORM_RESIDUAL_INPUTS:-0}
+PASS2_DUMP_RAW_OPERANDS=${K1_CASE22_PASS2_DUMP_RAW_OPERANDS:-0}
 POWERCLASS_SPECTRUM_NORM=${K1_CASE22_POWERCLASS_SPECTRUM_NORM:-0}
 TRANSLATED_WAVG_NORM=${K1_CASE22_TRANSLATED_WAVG_NORM:-0}
 WAVG_ATOMIC_SCALE_AA=${K1_CASE22_WAVG_ATOMIC_SCALE_AA:-0}
@@ -74,6 +75,10 @@ fi
 case "${NORM_RESIDUAL_INPUTS}" in
     0|1) ;;
     *) echo "K1_CASE22_NORM_RESIDUAL_INPUTS must be 0 or 1" >&2; exit 2 ;;
+esac
+case "${PASS2_DUMP_RAW_OPERANDS}" in
+    0|1) ;;
+    *) echo "K1_CASE22_PASS2_DUMP_RAW_OPERANDS must be 0 or 1" >&2; exit 2 ;;
 esac
 case "${POWERCLASS_SPECTRUM_NORM}" in
     0|1) ;;
@@ -253,11 +258,10 @@ elif [[ "${COMPACT_STACK1204_DUMP}" = 1 ]]; then
     export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDEX}
     export RECOVAR_PASS2_DUMP_CURRENT_SIZE=${TARGET_CURRENT_SIZE}
     export RECOVAR_PASS2_DUMP_ITERATION=${TARGET_ITERATION}
-    # The compact analyzer reconstructs raw diff2 from the selected projection,
-    # image, correction, and high-resolution-tail operands.  Enabling the full
-    # raw dump materializes every large bucket and can require >17 GiB for a
-    # single diagnostic batch.
-    export RECOVAR_PASS2_DUMP_RAW_OPERANDS=0
+    # Keep the large raw bundle opt-in.  A focused rotation-row selection makes
+    # this tractable when the native raw scorer operand itself is the boundary
+    # under test; ordinary compact captures reconstruct from the smaller bundle.
+    export RECOVAR_PASS2_DUMP_RAW_OPERANDS=${PASS2_DUMP_RAW_OPERANDS}
     if [[ "${NORM_RESIDUAL_INPUTS}" = 1 ]]; then
         export RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS=1
         export RECOVAR_PASS2_DUMP_NORM_RESIDUAL_ONLY=1
@@ -414,6 +418,26 @@ with np.load(sys.argv[1], allow_pickle=False) as payload:
     assert payload["candidate_mask"].shape == payload["probs"].shape
 PY
     fi
+    if [[ "${PASS2_DUMP_RAW_OPERANDS}" = 1 ]]; then
+        "${PYTHON}" - <<'PY' "${compact_dump}"
+import numpy as np
+import sys
+
+required = {
+    "raw_operand_actual_rotation_count",
+    "raw_operand_corr_img_score",
+    "raw_operand_half_weights",
+    "raw_operand_highres_xi2_half",
+    "raw_operand_proj_half",
+    "raw_operand_relion_full_to_compact",
+    "raw_operand_shifted_corrected",
+    "relion_raw_diff2",
+}
+with np.load(sys.argv[1], allow_pickle=False) as payload:
+    missing = required - set(payload.files)
+assert not missing, f"raw pass-2 dump misses {sorted(missing)}"
+PY
+    fi
     if [[ "${NORM_RESIDUAL_INPUTS}" = 1 ]]; then
         norm_residual_dump=${RECOVAR_PASS2_DUMP_DIR}/norm_residual_orig${target_original_label}_half1_cs${target_size_label}.npz
         test -s "${norm_residual_dump}"
@@ -451,8 +475,8 @@ if [[ "${PARITY_DUMP}" = 1 ]]; then
     test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
 fi
 
-printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"production_candidate_capture":%s,"target_stack_one_based":%d,"target_iteration":%d,"norm_residual_inputs":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_residual":%s,"wavg_atomic_direct_noise_only":%s,"projection_cache_mode":"%s","parity_dump":%s,"noise_update_dump":%s}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${PRODUCTION_CANDIDATE_CAPTURE}" "${TARGET_STACK_ONE_BASED}" "${TARGET_ITERATION}" "${NORM_RESIDUAL_INPUTS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${WAVG_ATOMIC_SCALE_AA}" "${WAVG_ATOMIC_DIRECT_RESIDUAL}" "${WAVG_ATOMIC_DIRECT_NOISE_ONLY}" "${PROJECTION_CACHE_MODE}" "${PARITY_DUMP}" "${NOISE_UPDATE_DUMP}" \
+printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"production_candidate_capture":%s,"target_stack_one_based":%d,"target_iteration":%d,"norm_residual_inputs":%s,"pass2_dump_raw_operands":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_residual":%s,"wavg_atomic_direct_noise_only":%s,"projection_cache_mode":"%s","parity_dump":%s,"noise_update_dump":%s}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${PRODUCTION_CANDIDATE_CAPTURE}" "${TARGET_STACK_ONE_BASED}" "${TARGET_ITERATION}" "${NORM_RESIDUAL_INPUTS}" "${PASS2_DUMP_RAW_OPERANDS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${WAVG_ATOMIC_SCALE_AA}" "${WAVG_ATOMIC_DIRECT_RESIDUAL}" "${WAVG_ATOMIC_DIRECT_NOISE_ONLY}" "${PROJECTION_CACHE_MODE}" "${PARITY_DUMP}" "${NOISE_UPDATE_DUMP}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
