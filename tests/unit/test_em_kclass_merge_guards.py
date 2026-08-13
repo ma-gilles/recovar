@@ -1019,6 +1019,11 @@ def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, t
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ROTATION_ROWS", "1,3")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_RAW_OPERANDS", "1")
+    raw_diff2 = np.arange(n_rot * n_trans, dtype=np.float32).reshape(
+        1, n_rot, n_trans
+    ) + np.float32(100)
+    full_to_compact = np.asarray([-1, 0, 1, 2, 3, 4], dtype=np.int32)
 
     sparse_pass2_mod._maybe_dump_pass2_bucket(
         experiment_dataset=experiment_dataset,
@@ -1046,6 +1051,9 @@ def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, t
         direct_integer_pre_shifts=np.asarray([[1, 2]], dtype=np.int32),
         direct_batch_image_corrections=np.asarray([0.5], dtype=np.float32),
         direct_batch_scale_corrections=np.asarray([2.0], dtype=np.float32),
+        relion_highres_xi2_half=np.asarray([17.5], dtype=np.float32),
+        relion_raw_diff2=raw_diff2,
+        relion_full_to_compact=full_to_compact,
     )
 
     with np.load(dump_dir / "pass2_orig000042_cs014.npz", allow_pickle=False) as payload:
@@ -1075,6 +1083,79 @@ def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, t
         np.testing.assert_array_equal(payload["direct_pixel_correction"], 3)
         assert float(payload["relion_preprocess_normalization_factor"]) == 0.25
         np.testing.assert_array_equal(payload["relion_integer_pre_shift"], [1, 2])
+        assert (
+            str(payload["raw_operand_schema"])
+            == "recovar-k1-pass2-selected-raw-operands-v1"
+        )
+        assert int(payload["raw_operand_actual_rotation_count"]) == 2
+        np.testing.assert_array_equal(
+            payload["relion_raw_diff2"], raw_diff2[0, [1, 3]]
+        )
+        np.testing.assert_array_equal(
+            payload["raw_operand_raw_diff2"], raw_diff2[0, [1, 3]]
+        )
+        np.testing.assert_array_equal(
+            payload["raw_operand_shifted_corrected"],
+            np.ones((n_trans, n_pix), dtype=np.complex64),
+        )
+        np.testing.assert_array_equal(
+            payload["raw_operand_corr_img_score"],
+            np.ones(n_pix, dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            payload["raw_operand_proj_half"],
+            np.arange(n_rot * n_pix, dtype=np.float32)
+            .reshape(n_rot, n_pix)[[1, 3]]
+            .astype(np.complex64),
+        )
+        np.testing.assert_array_equal(
+            payload["raw_operand_half_weights"],
+            np.ones(n_pix, dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            payload["raw_operand_relion_full_to_compact"], full_to_compact
+        )
+        assert float(payload["raw_operand_highres_xi2_half"]) == 17.5
+
+
+def test_sparse_pass2_raw_operand_dump_fails_closed_without_raw_diff2(
+    monkeypatch,
+    tmp_path,
+):
+    experiment_dataset = SimpleNamespace(
+        dataset_indices=np.asarray([42], dtype=np.int64)
+    )
+    per_image_inputs = {
+        "oversampled_rots": [np.eye(3, dtype=np.float32)[None]],
+        "oversampled_rot_indices": [np.asarray([7], dtype=np.int64)],
+        "parent_map": [np.asarray([0], dtype=np.int32)],
+    }
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ROTATION_ROWS", "0")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_RAW_OPERANDS", "1")
+
+    with pytest.raises(ValueError, match="requires the production K=1 RELION raw-diff2"):
+        sparse_pass2_mod._maybe_dump_pass2_bucket(
+            experiment_dataset=experiment_dataset,
+            image_indices=np.asarray([0], dtype=np.int64),
+            per_image_inputs=per_image_inputs,
+            current_size=14,
+            n_fine_trans=1,
+            fine_translations=np.zeros((1, 2), dtype=np.float32),
+            scores=np.zeros((1, 1, 1), dtype=np.float32),
+            probs=np.ones((1, 1, 1), dtype=np.float32),
+            rotation_log_prior=np.zeros((1, 1), dtype=np.float32),
+            translation_log_prior=np.zeros((1, 1), dtype=np.float32),
+            candidate_mask=np.ones((1, 1, 1), dtype=bool),
+            ctf2_over_nv_score=np.ones((1, 2), dtype=np.float32),
+            proj_half=np.ones((1, 1, 2), dtype=np.complex64),
+            half_weights_used=np.ones(2, dtype=np.float32),
+            window_indices=np.arange(2, dtype=np.int32),
+            shifted_corrected_score_split=np.ones(
+                (1, 1, 2), dtype=np.complex64
+            ),
+        )
 
 
 def test_sparse_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_path):

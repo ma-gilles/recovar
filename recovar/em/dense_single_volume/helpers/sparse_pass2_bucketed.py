@@ -8499,6 +8499,8 @@ def _maybe_dump_pass2_bucket(
     reconstruction_n_significant=None,
     relion_highres_xi2_half=None,
     relion_min_diff2=None,
+    relion_raw_diff2=None,
+    relion_full_to_compact=None,
 ):
     """Env-gated sparse pass-2 dump for RELION operand parity debugging."""
     dump_dir = os.environ.get("RECOVAR_PASS2_DUMP_DIR")
@@ -8524,6 +8526,51 @@ def _maybe_dump_pass2_bucket(
     wanted_rows = [i for i, original_idx in enumerate(original_indices) if int(original_idx) in target_original_indices]
     if not wanted_rows:
         return 0
+
+    raw_operands_requested = _env_flag_enabled(
+        _PASS2_DUMP_RAW_OPERANDS_ENV,
+        default=False,
+    )
+    raw_diff2_np = None
+    raw_full_to_compact_np = None
+    raw_highres_np = None
+    if raw_operands_requested:
+        if relion_raw_diff2 is None:
+            raise ValueError(
+                f"{_PASS2_DUMP_RAW_OPERANDS_ENV}=1 requires the production "
+                "K=1 RELION raw-diff2 tensor"
+            )
+        if shifted_corrected_score_split is None:
+            raise ValueError(
+                f"{_PASS2_DUMP_RAW_OPERANDS_ENV}=1 requires the effective "
+                "shifted score image"
+            )
+        raw_diff2_np = np.asarray(
+            jax.block_until_ready(relion_raw_diff2),
+            dtype=np.float32,
+        )
+        expected_raw_shape = tuple(np.shape(scores))
+        if raw_diff2_np.shape != expected_raw_shape:
+            raise ValueError(
+                "K=1 raw diff2 shape differs from scores: "
+                f"{raw_diff2_np.shape} != {expected_raw_shape}"
+            )
+        raw_pixel_count = int(np.shape(proj_half)[-1])
+        raw_full_to_compact_np = (
+            np.arange(raw_pixel_count, dtype=np.int32)
+            if relion_full_to_compact is None
+            else np.asarray(relion_full_to_compact, dtype=np.int32)
+        )
+        raw_highres_np = (
+            np.zeros(local_indices.size, dtype=np.float32)
+            if relion_highres_xi2_half is None
+            else np.asarray(relion_highres_xi2_half, dtype=np.float32)
+        )
+        if raw_highres_np.shape != local_indices.shape:
+            raise ValueError(
+                "K=1 high-resolution raw operand shape differs from the dump batch: "
+                f"{raw_highres_np.shape} != {local_indices.shape}"
+            )
 
     requested_rotation_rows = parse_env_int_set(_PASS2_DUMP_ROTATION_ROWS_ENV)
     if requested_rotation_rows:
@@ -8590,6 +8637,37 @@ def _maybe_dump_pass2_bucket(
                 selected_reconstruction_fields["relion_min_diff2"] = np.float32(
                     np.asarray(relion_min_diff2, dtype=np.float32)[row]
                 )
+            raw_operand_fields = {}
+            if raw_operands_requested:
+                selected_raw_diff2 = raw_diff2_np[row, rotation_rows, :]
+                raw_operand_fields = {
+                    "raw_operand_schema": np.asarray(
+                        "recovar-k1-pass2-selected-raw-operands-v1"
+                    ),
+                    "raw_operand_actual_rotation_count": np.int64(
+                        rotation_rows.size
+                    ),
+                    "raw_operand_raw_diff2": selected_raw_diff2,
+                    "raw_operand_shifted_corrected": np.asarray(
+                        shifted_corrected_score_split[row],
+                        dtype=np.complex64,
+                    ),
+                    "raw_operand_corr_img_score": np.asarray(
+                        ctf2_over_nv_score[row],
+                        dtype=np.float32,
+                    ),
+                    "raw_operand_proj_half": np.asarray(
+                        proj_half[row, rotation_rows, :],
+                        dtype=np.complex64,
+                    ),
+                    "raw_operand_half_weights": np.asarray(
+                        half_weights_used,
+                        dtype=np.float32,
+                    ),
+                    "raw_operand_relion_full_to_compact": raw_full_to_compact_np,
+                    "raw_operand_highres_xi2_half": np.float32(raw_highres_np[row]),
+                    "relion_raw_diff2": selected_raw_diff2,
+                }
             out_path = os.path.join(
                 dump_dir,
                 f"pass2_orig{original_idx:06d}_cs{(-1 if current_size is None else int(current_size)):03d}.npz",
@@ -8716,6 +8794,7 @@ def _maybe_dump_pass2_bucket(
                     else np.empty((0,), dtype=np.int32)
                 ),
                 **selected_reconstruction_fields,
+                **raw_operand_fields,
             )
             dump_count += 1
         return dump_count
@@ -8789,6 +8868,35 @@ def _maybe_dump_pass2_bucket(
             reconstruction_fields["relion_highres_xi2_half"] = np.float32(highres_np[row])
         if min_diff2_np is not None:
             reconstruction_fields["relion_min_diff2"] = np.float32(min_diff2_np[row])
+        raw_operand_fields = {}
+        if raw_operands_requested:
+            selected_raw_diff2 = raw_diff2_np[row, :cnt, :]
+            raw_operand_fields = {
+                "raw_operand_schema": np.asarray(
+                    "recovar-k1-pass2-effective-raw-operands-v1"
+                ),
+                "raw_operand_actual_rotation_count": np.int64(cnt),
+                "raw_operand_raw_diff2": selected_raw_diff2,
+                "raw_operand_shifted_corrected": np.asarray(
+                    shifted_corrected_np[row],
+                    dtype=np.complex64,
+                ),
+                "raw_operand_corr_img_score": np.asarray(
+                    ctf2_np[row],
+                    dtype=np.float32,
+                ),
+                "raw_operand_proj_half": np.asarray(
+                    proj_np[row, :cnt, :],
+                    dtype=np.complex64,
+                ),
+                "raw_operand_half_weights": np.asarray(
+                    half_weights_used,
+                    dtype=np.float32,
+                ),
+                "raw_operand_relion_full_to_compact": raw_full_to_compact_np,
+                "raw_operand_highres_xi2_half": np.float32(raw_highres_np[row]),
+                "relion_raw_diff2": selected_raw_diff2,
+            }
         np.savez_compressed(
             out_path,
             iteration=np.int64(context_iteration),
@@ -8871,6 +8979,7 @@ def _maybe_dump_pass2_bucket(
                 recon_window_indices_np if recon_window_indices_np is not None else np.empty((0,), dtype=np.int32)
             ),
             **reconstruction_fields,
+            **raw_operand_fields,
         )
         dump_count += 1
     return dump_count
@@ -13512,6 +13621,7 @@ def compute_pass2_stats_sparse_bucketed(
         shifted_corrected_score_split = shifted_corrected_score.reshape(batch, n_fine_trans, -1)
         direct_half_weights = half_weights_windowed if use_window else half_weights
         shadow_score_bitwise_equal = False
+        raw_diff2 = None
         if relion_firstiter_score_mode == "normalized_cc":
             min_diff2 = None
             score_args = (
@@ -13833,6 +13943,8 @@ def compute_pass2_stats_sparse_bucketed(
                 recon_window_indices=recon_window_indices_for_dump,
                 relion_highres_xi2_half=relion_highres_xi2_half,
                 relion_min_diff2=min_diff2,
+                relion_raw_diff2=raw_diff2,
+                relion_full_to_compact=relion_score_full_to_compact,
             )
             if pass2_dump_count and _env_flag_enabled(
                 _PASS2_DUMP_STOP_AFTER_TARGET_ENV,
