@@ -1331,3 +1331,28 @@ candidate composition even though it improves isolated operand comparisons.
 It remains diagnostic-only. The production candidate and external validation
 prompt explicitly unset its three environment variables. This negative result
 does not change the frozen complete-case scorecard.
+
+## Native stack-232 fine scan is exact in both RECOVAR scan paths
+
+Native iteration-3 capture job `12323968` recorded all 1,664 active fine
+candidates for stack 232 together with RELION's production significance
+scalars. Its EM science completed; the outer wrapper alone exited nonzero
+because its capture-inertness comparison used a stricter map-repeat threshold
+than this diagnostic requires.
+
+Replaying the exact captured float32 weights through both JAX/XLA and
+RECOVAR's RELION-compatible CUB primitive reproduces RELION exactly:
+
+- weight-sum bits: `1678890944` (`0x6411d7c0`);
+- threshold bits: `1541859727` (`0x5be6e98f`);
+- accepted hypotheses: `229` in native RELION, the production fine helper,
+  XLA, and CUB.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0232_native_it3_20260813T0523ET/native/analysis/K1_STACK0232_NATIVE_FINE_SIGNIFICANCE.json`
+with SHA-256
+`34485c75464910c24c9a458868cb06bce3771a0a2b8f1187f6a3c5b89b503f70`.
+Therefore fine-pass sort/scan arithmetic is falsified as the cause of the
+stack-232 support residual when given identical weights. The next comparison
+must be before the scan: candidate keys, raw scores, priors, and exponentiated
+weights.

@@ -12191,3 +12191,19 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   `RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL`. The full rectangle remains an
   operand diagnostic only. K=4 remains parked and the frozen scorecard stays
   `28/34` strict, `32/34` topology, `34/34` evaluated.
+
+## 2026-08-13 06:00 ET — native stack-232 scan hypothesis falsified
+
+- Native job `12323968` captured all 1,664 active iteration-3 fine candidates
+  for stack 232 and RELION's production scan scalars. The science output is
+  complete; only the outer capture-inertness wrapper failed its overly strict
+  map-repeat postcondition.
+- On an A100, both JAX/XLA and RECOVAR's CUB replay exactly match native
+  weight-sum bits `1678890944`, threshold bits `1541859727`, and accepted
+  count `229`. The production fine helper also returns `229`.
+- Canonical report SHA-256 is
+  `34485c75464910c24c9a458868cb06bce3771a0a2b8f1187f6a3c5b89b503f70` at
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0232_native_it3_20260813T0523ET/native/analysis/K1_STACK0232_NATIVE_FINE_SIGNIFICANCE.json`.
+- Do not implement a speculative CUB scan substitution. The first unequal
+  boundary must be sought before the scan in tuple identity, raw score,
+  priors, or exponentiated weights.

@@ -586,17 +586,35 @@
     "without_fine_order_iteration_3_support_mismatch_count": 4,
     "without_fine_order_iteration_3_hard_mismatch_count": 1,
     "without_fine_order_iteration_3_merged_fsc_auc": 0.9999988368500059,
+    "without_fine_order_particle_analysis_sha256": "ff891b61bbbc8ee5e6ebb23722c3d878889f999e8222cc7c4e36eadda9d1b1f9",
+    "without_fine_order_fsc_analysis_sha256": "8870e148253d69cac14aa3bcb667eb28f52a0d958a61d7e4d0d665e3b9ac4883",
+    "without_fine_order_intermediate_analysis_sha256": "c79c73f97133f23d30453a325304b5a5270081cf9c05cc0080d6df6ec38dd439",
     "with_fine_order_slurm_job_id": 12323640,
     "with_fine_order_iteration_3_pmax_relative_l2": 0.0036552939541958564,
     "with_fine_order_iteration_3_pmax_max_abs": 0.12439862432861326,
     "with_fine_order_iteration_3_support_mismatch_count": 7,
     "with_fine_order_iteration_3_hard_mismatch_count": 1,
     "with_fine_order_iteration_3_merged_fsc_auc": 0.9999987258664775,
+    "with_fine_order_particle_analysis_sha256": "cb786281e6842e23e9d82458fe331e4f1cf6abe534305aa3df7ffb85bb12c53d",
+    "with_fine_order_fsc_analysis_sha256": "00e7fb4c265afcbab8f7a7ab3d8b3b2e404af189a408d980a71b7adf3c496c13",
+    "with_fine_order_intermediate_analysis_sha256": "b6921000cb86ae8652ba95467182f99c0c0aded29ded26120f8942375e4a7657",
     "diagnostic_variables_to_disable": [
       "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM",
       "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM",
       "RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL"
     ],
     "classification": "negative composition A/B: isolated operand closure does not improve the trajectory and introduces a hard pose/translation mismatch; retain only as a diagnostic ablation"
+  },
+  "native_stack232_fine_significance_scan": {
+    "native_capture_slurm_job_id": 12323968,
+    "active_candidate_count": 1664,
+    "native_sum_weight_bits": 1678890944,
+    "native_threshold_bits": 1541859727,
+    "native_accepted_count": 229,
+    "production_fine_helper_exact": true,
+    "jax_xla_exact": true,
+    "relion_cub_exact": true,
+    "analysis_sha256": "34485c75464910c24c9a458868cb06bce3771a0a2b8f1187f6a3c5b89b503f70",
+    "classification": "fine sort/scan is falsified as the cause when given identical weights; compare candidate keys, raw scores, priors, and exponentiated weights before scan"
   }
 }
