@@ -12207,3 +12207,26 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
 - Do not implement a speculative CUB scan substitution. The first unequal
   boundary must be sought before the scan in tuple identity, raw score,
   priors, or exponentiated weights.
+
+## 2026-08-13 06:10 ET — matched focused dumps must preserve the projection cache
+
+- `RECOVAR_PASS2_DUMP_DIR` disables the production projection cache in its
+  default `auto` mode. Because the dump directory exists for the entire run,
+  an iteration-3 capture otherwise changes pass-2 execution in iterations 1
+  and 2 before reaching the target.
+- This makes cache-off jobs `12324013` and `12324927` useful implementation
+  diagnostics but confounded for causal first-divergence attribution. They
+  will finish and will not be canceled.
+- Commit `4af64d67` exposes the existing matched-dump override as
+  `K1_CASE22_PROJECTION_CACHE_MODE=on|off|auto` and records it in wall-time
+  provenance. `bash -n` passes, and all targeted projection-cache units pass
+  (`7 passed, 159 deselected`).
+- Authoritative job `12325024` uses the positive composition with cache mode
+  `on`, complete stack-232 iteration-3 tuples, and stop-after-target. It is the
+  only focused RECOVAR capture that may be joined to the native stack-232
+  boundary for causal attribution.
+- Its completed iteration-1 maps are inert against simultaneous production
+  job `12324725`: signed non-DC FSC-AUC is
+  `0.999999999999904`/`0.999999999999903` for halves 1/2 and
+  `0.999999999999950` merged; relative L2 is
+  `3.768e-9`/`3.670e-9` and `2.636e-9` merged.
