@@ -15961,6 +15961,20 @@ captures those unmasked operands, their exact chunk reductions, weighted-image
 power, high-shell power, and noise array as schema v3. Its comparator streams
 the 7.2 GB native artifact in bounded rotation blocks and substitutes native A2
 and XA separately using the same RECOVAR projector. The focused test slice
-passes 23/23. The stopped v3 rerun plus projector dump will classify the first residual as
-posterior/BPref data (`XA`), CTF-squared/posterior weight (`A2`), or reduction
-order before any production fix or full frozen-case run is attempted.
+passes 25/25.
+
+The completed stack-79 split rules out A2 as the material residual at this
+boundary. Both 512- and 4096-rotation streams joined all 135,416 native
+rotations and 180,225,779 supported rows and returned the same totals (the XA
+totals differ only at about `1e-10` from host reduction grouping). RECOVAR A2 is
+`1208708.125`; the native-BPref A2 under the same RECOVAR projector is
+`1208707.6271796734`, a native-minus-RECOVAR delta of only `-0.4978203266`, or
+`-1.8545e-9` after the required `128^4` normalization. This closes only about
+`0.138%` of the native norm gap. Native-BPref XA instead differs by
+`-3467.134354`, or `-1.29161e-5` in native units, and its substitution makes
+the total norm error about 20.25 times the baseline error. Thus the remaining
+iteration-2 norm defect is not a missing CTF-squared/posterior-weight A2 term.
+The live alternatives are the image/XA side and the fact that native soft
+posterior operands already encode the slightly different native state. The
+next same-boundary discriminator is native PPref plus native BPref, which will
+decompose RELION's exact current-size target without mixing projector state.

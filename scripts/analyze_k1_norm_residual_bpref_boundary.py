@@ -347,6 +347,27 @@ def _counterfactual_totals(
     }
 
 
+def _native_unit_target_comparison(
+    totals: dict[str, float],
+    *,
+    target: float,
+    physical_image_size: int,
+) -> dict[str, object]:
+    divisor = float(physical_image_size**4)
+    native_units = {name: value / divisor for name, value in totals.items()}
+    errors = {name: abs(value - target) for name, value in native_units.items()}
+    baseline_error = errors["recovar"]
+    return {
+        "recovar_to_native_divisor": divisor,
+        "counterfactual_totals_native_units": native_units,
+        "absolute_errors": errors,
+        "absolute_gap_closure_fraction": {
+            name: (baseline_error - error) / baseline_error if baseline_error else 0.0
+            for name, error in errors.items()
+        },
+    }
+
+
 def _analyze_chunked(
     native_path: Path,
     recovar: dict[str, np.ndarray],
@@ -507,16 +528,13 @@ def _analyze_chunked(
     }
     if native_norm_panel is not None:
         native_norm = _load_native_norm_panel(native_norm_panel, original_index)
-        target = native_norm["total"]
-        errors = {name: abs(value - target) for name, value in totals.items()}
-        baseline_error = errors["recovar"]
         report["native_norm_target"] = {
             **native_norm,
-            "absolute_errors": errors,
-            "absolute_gap_closure_fraction": {
-                name: (baseline_error - error) / baseline_error if baseline_error else 0.0
-                for name, error in errors.items()
-            },
+            **_native_unit_target_comparison(
+                totals,
+                target=native_norm["total"],
+                physical_image_size=physical_image_size,
+            ),
         }
     return report
 

@@ -117,3 +117,19 @@ def test_counterfactual_totals_split_a2_and_xa() -> None:
         "native_xa_only": 106.0,
         "native_a2_and_xa": 104.0,
     }
+
+
+def test_native_unit_target_comparison_applies_fourier_n4_divisor() -> None:
+    report = analyzer._native_unit_target_comparison(
+        {"recovar": 32.0, "native_a2_only": 16.0},
+        target=0.5,
+        physical_image_size=2,
+    )
+
+    assert report["recovar_to_native_divisor"] == 16.0
+    assert report["counterfactual_totals_native_units"] == {
+        "recovar": 2.0,
+        "native_a2_only": 1.0,
+    }
+    assert report["absolute_errors"] == {"recovar": 1.5, "native_a2_only": 0.5}
+    assert report["absolute_gap_closure_fraction"]["native_a2_only"] == 2.0 / 3.0
