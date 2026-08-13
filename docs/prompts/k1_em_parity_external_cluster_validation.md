@@ -16,7 +16,7 @@ Repository: `https://github.com/ma-gilles/recovar.git`
 Remote branch: `codex/em-parity-checkpoint-20260711`
 
 Minimum required checkpoint commit:
-`84b4203975d43727f51ee815546cb7b52151a515`
+`e41c78addcaada9921f4d4c365af60956d38ddaa`
 
 PR: `https://github.com/ma-gilles/recovar/pull/158`
 
@@ -29,10 +29,20 @@ git clone https://github.com/ma-gilles/recovar.git recovar-k1-parity
 cd recovar-k1-parity
 git fetch origin codex/em-parity-checkpoint-20260711
 git switch --detach origin/codex/em-parity-checkpoint-20260711
-git merge-base --is-ancestor 84b4203975d43727f51ee815546cb7b52151a515 HEAD
+git merge-base --is-ancestor e41c78addcaada9921f4d4c365af60956d38ddaa HEAD
 git rev-parse HEAD
 git status --short
 ```
+
+This checkpoint contains the focused K=1 scoring-noise correction. RECOVAR
+previously converted RELION's binary64 `sigma2_noise` image to float32 before
+taking its reciprocal. RELION keeps `sigma2_noise` in RFLOAT and casts the
+reciprocal to XFLOAT. At the captured case-22 iteration-2 score boundary, the
+fix made all 1,461 inverse-noise/correction-weight words exact and reduced the
+target raw-score discrepancy from two float32 ULP to one. The remaining
+projected-reference difference is below RELION's own CUDA-atomic repeat
+envelope, so this validation must not introduce a double-precision BPref or
+reconstruction intervention.
 
 Use the repository's supported isolated environment (prefer pixi when
 available), never a random system/conda installation. Bind imports to this

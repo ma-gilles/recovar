@@ -1224,3 +1224,80 @@ Two-iteration composition job `12322851` is the causal full-dataset gate for
 this change. Until that job is analyzed against the fixed native envelope,
 the frozen complete-case scorecard remains `28/34` strict, `32/34` topology,
 and `34/34` evaluated.
+
+## Iteration-1 BPref repeat envelope
+
+The remaining one-ULP projected-reference contribution is not currently a
+cross-engine defect. Native first-iteration raw-accumulator repeat job
+`12323251` completed the RELION iteration and wrote both BPref halves and both
+numbered maps, but its wrapper exited after science because this capture
+binary did not emit the optional downsampled text files required by the
+launcher. The raw artifacts were therefore validated separately by their
+headers, exact expected `(58, 115, 115)` half-grid shape, finite values, and
+completed numbered output before comparison.
+
+RELION's own original-versus-repeat downsampled-average relative L2 is
+`1.97976e-7` in half 1 and `2.01006e-7` in half 2. By contrast, the current
+RECOVAR iteration-1 accumulator is only `5.13104e-8` and `5.21303e-8` from
+the new native repeat. Its numerator/denominator relative L2 values against
+that repeat are `1.29312e-8`/`6.93128e-9` and
+`1.37403e-8`/`6.58710e-9` for halves 1 and 2. RECOVAR already uses one
+particle-owned BPref launch per particle in physical RELION order at this
+boundary. The observed `4.28503e-8` projected-reference residual is therefore
+inside native RELION's CUDA atomic repeat envelope; promoting the accumulator
+or changing reconstruction arithmetic is not justified by this evidence.
+
+The structured repeat report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_native_it1_repeat_20260813T0430ET/analysis/NATIVE_IT1_RAW_REPEAT.json`
+(SHA-256 `d9adfef735ab076ddef968f6d7769c896312663b95309a1f3decbf382bd7972f`).
+This closes the incoming-reference branch at native-repeat precision and
+leaves the RFLOAT scoring-noise fix as the first demonstrated actionable
+iteration-2 operand difference.
+
+The pre-fix three-iteration propagation job `12322049` also completed before
+that scorer correction. Its iteration-2 result landed on the less favorable
+atomic branch seen in the earlier complete-Wavg control: Pmax RMSE
+`8.48175e-7`, 579 support-count differences, and one hard pose/translation
+difference. By iteration 3, one sensitive particle has Pmax error `0.12442`,
+a `3.69209` degree pose difference, and a 12-count support difference; merged
+signed FSC-AUC is still `0.999998722835`. This run is a pre-fix stability
+baseline, not evidence against the RFLOAT correction. Its particle and FSC
+reports are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_rect_coarse_gaussian_it3_20260813T0342ET/analysis/`.
+
+## RFLOAT-noise two-iteration causal gate
+
+Fixed full-dataset job `12322851` completed `0:0` in 35 minutes 51 seconds on
+`della-h19g1`. It used the same complete-Wavg, CUDA coarse-Gaussian, and
+float32 coarse-support composition as the preceding two-iteration control,
+with only the process-start RFLOAT-noise correction added. Against the same
+paired native reference, iteration-2 Pmax RMSE is `2.37473e-7`, its maximum
+absolute error is `4.08752e-6`, and 128 particles differ in significant
+support by exactly one candidate. All hard poses and translations remain
+matched to output precision, current size and HEALPix order are exact, and
+merged signed FSC-AUC is `0.999999999966664`.
+
+The corresponding pre-fix composition values were Pmax RMSE `2.37753e-7`,
+118 one-candidate support differences, and merged signed FSC-AUC
+`0.999999999967500`. The full-distribution change is therefore neutral at
+this boundary: the focused RFLOAT fix is operand-correct, but it does not
+materially move the aggregate iteration-2 trajectory by itself.
+
+This paired result is already inside the wider native CUDA-atomic envelope.
+The paired native reference differs from two independently archived RELION
+runs by Pmax RMSE `8.47412e-7` and `8.57384e-7`, with 596 and 604 support-count
+differences and maximum support difference 5. RECOVAR versus the paired
+native reference is smaller on every reported distribution bound. That does
+not prove later-iteration parity: it means the remaining iteration-2
+one-candidate support differences are not an actionable cross-engine defect
+without a tighter same-operand discriminator.
+
+The primary particle-state and signed-FSC reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_rfloat_noise_it2_20260813T0417ET/analysis/K1_PARTICLE_STATE_IT1_IT2_NATIVE_CONTROL.json`
+(SHA-256 `68048ac42c439121922395d48ad327aef1e772869e4e89ea0c8bf7b5f828eba5`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_rfloat_noise_it2_20260813T0417ET/analysis/K1_FSC_IT1_IT2_NATIVE_CONTROL_PREFIX.json`
+(SHA-256 `c6f502be63f134ab0217ab8df9eaa92b97320e7d37e0a19928bd117418f018b1`).
+The native-envelope reports are in the same analysis directory. The frozen
+complete-case scorecard remains `28/34` strict, `32/34` topology, and `34/34`
+evaluated; a two-iteration prefix is not a case-22 closure.
