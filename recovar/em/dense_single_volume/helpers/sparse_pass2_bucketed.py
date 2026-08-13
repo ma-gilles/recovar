@@ -4738,11 +4738,11 @@ def _replace_low_shell_noise_with_relion_wavg_direct_residual(
     """Replace complete low shells with fused Wavg ``diff2`` atomics.
 
     The fused value already contains image power, A2, and -2*XA.  Therefore
-    its covered shells replace both RECOVAR noise-stat components.  The
-    exclusive boundary is intentional: the exact-radius reconstruction window
-    only contains part of RELION's cutoff shell, so that shell must remain on
-    the existing algebraic path until the full rectangular Wavg window is
-    reproduced.
+    its covered shells replace both RECOVAR noise-stat components.
+    ``exclusive_shell_stop`` is expressed in shell-number coordinates. The
+    caller supplies RELION's complete rectangular Wavg buffer, so the rounded
+    cutoff shell is replaced in full even though the reconstruction window
+    contains only its exact-radius subset.
     """
 
     residual = np.asarray(residual_shells, dtype=np.float64).copy()
