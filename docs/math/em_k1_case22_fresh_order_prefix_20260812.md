@@ -1507,3 +1507,44 @@ Native tuple job `12327217` and matching stopped RECOVAR operand job
 comparison proceeds through projected reference, shifted image, correction
 weight, high-resolution sum, pixel contributions, 256 lane partials, and raw
 `diff2`; no complete trajectory is needed for this discriminator.
+
+## Fixed five-particle production fine panel
+
+The corrected production capture emitted all five repeat-stable targets from
+the same ordinary cache-on, chunked positive composition. The fixed panel
+shows fine-rotation topology exact for `2/5`, active fine-tuple topology exact
+for `0/5`, and final fine/BPref support exact for `2/5`:
+
+| stack | native/RECOVAR fine rotations | native/RECOVAR active tuples | native/RECOVAR fine support | support identity |
+|---:|---:|---:|---:|---|
+| 79 | 248 / 256 | 1,504 / 1,536 | 251 / 251 | exact |
+| 469 | 584 / 592 | 3,392 / 3,424 | 169 / 171 | RECOVAR +2 |
+| 2498 | 176 / 184 | 864 / 896 | 102 / 102 | exact |
+| 2544 | 6,096 / 6,096 | 40,160 / 40,192 | 8,045 / 8,050 | RECOVAR +5 |
+| 2659 | 168 / 168 | 928 / 960 | 259 / 263 | RECOVAR +4 |
+
+There are no native-only rotations, active tuples, or fine-support tuples in
+the panel. The coarse support excess therefore produces a RECOVAR superset.
+For stacks 79 and 2498 its 32 extra children die before BPref. For stacks 469,
+2544, and 2659, two to five extra tuples cross the fine reconstruction cutoff
+and change the actual M-step operand set. Stacks 2544 and 2659 demonstrate the
+important case where the extra coarse tuple reuses a rotation whose other
+translation was already selected: rotation topology stays exact while active
+tuple topology changes.
+
+The common-domain fine-score residual is small but systematic across all five:
+maximum centered pre-prior residual ranges from `0.00255585` to `0.00270081`,
+and common-domain posterior TV ranges from `3.26608e-5` to `1.14760e-4`.
+Rotation medians remove between `54.20%` and `80.76%` of residual energy. This
+panel proves that the residual is not only a serialized coarse-count field,
+but it does not yet identify a source-faithful formula change. The bounded
+stack-79 pixel/operand comparison and the full coarse raw/prior capture are
+the next gates.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_repeatstable5_production_retry_it3_20260813T0731ET/analysis/K1_REPEAT_STABLE5_PRODUCTION_FINE_PANEL.json`
+(SHA-256
+`ad355ec560307fc1815bc72851a7655a7845e2e97573066cdcb7229ea68f03bf`).
+This fixed particle-panel denominator is separate from, and does not change,
+the complete-case scorecard of `28/34` strict, `32/34` topology, and `34/34`
+evaluated.
