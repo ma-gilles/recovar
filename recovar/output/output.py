@@ -381,6 +381,17 @@ def build_params_dict(
         'ub_noise_var_by_var_est': np.asarray(ub_noise_var_by_var_est),
         'image_PS': np.asarray(noise_result['image_PS']),
         'masked_image_PS': np.asarray(noise_result['masked_image_PS']),
+        'noise_group_image_PS': (
+            None
+            if noise_result.get('noise_group_image_PS') is None
+            else np.asarray(noise_result['noise_group_image_PS'])
+        ),
+        'noise_group_masked_image_PS': (
+            None
+            if noise_result.get('noise_group_masked_image_PS') is None
+            else np.asarray(noise_result['noise_group_masked_image_PS'])
+        ),
+        'noise_group_metadata': noise_result.get('noise_group_metadata'),
         # Variance and covariance
         'variance_est': variance_est,
         'variance_fsc': variance_fsc,
@@ -1349,6 +1360,18 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
     ax = plot_utils.plot_mean_fsc(po,None)
     plt.savefig(os.path.join(output_folder, 'mean_fsc.png'), bbox_inches='tight')
     plt.close()
+
+    # Covariance and noise diagnostics are part of every complete pipeline.
+    for plotter, filename, description in (
+        (plot_utils.plot_covariance_column_fscs, "covariance_column_fscs.png", "covariance-column FSC"),
+        (plot_utils.plot_noise_group_summary, "noise_power_by_tilt.png", "noise/power-by-tilt"),
+    ):
+        try:
+            figure, _ = plotter(po, os.path.join(output_folder, filename))
+            plt.close(figure)
+            logger.info("Saved %s plot to %s", description, os.path.join(output_folder, filename))
+        except (KeyError, ValueError, TypeError, AttributeError) as exc:
+            logger.warning("Could not generate %s plot: %s", description, exc)
 
 
 

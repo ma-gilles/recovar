@@ -258,6 +258,12 @@ def add_args(parser: argparse.ArgumentParser):
         action="store_true",
         help="Use premultiplied CTF (images already multiplied by CTF)",
     )
+    tilt.add_argument(
+        "--tilt-diagnostics",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Reconstruct one unit-contrast, no-dose-weight mean per pre-exposure group and save compact tilt summaries",
+    )
 
     # ── Performance / GPU ──────────────────────────────────────────────────
     perf = parser.add_argument_group("Performance")
@@ -675,6 +681,8 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
     logger.info("Using new noise estimation function?: %s", use_new_noise_fn)
 
     noise_time = time.time()
+    grouped_masked_image_PS = None
+    grouped_image_PS = None
     if use_new_noise_fn:
         masked_image_PS, image_PS = noise.fit_noise_model_to_images(
             dataset,
@@ -685,6 +693,8 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
             invert_mask=True,
             disc_type="linear_interp",
         )
+        grouped_masked_image_PS = np.atleast_2d(np.asarray(masked_image_PS))
+        grouped_image_PS = np.atleast_2d(np.asarray(image_PS))
         logger.info("Using new noise estimation with linear_interp discretization")
     elif args.mask.endswith(".mrc"):
         masked_image_PS, _, _ = noise.estimate_noise_variance_from_outside_mask_v2(
@@ -693,12 +703,26 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
         white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(
             dataset, dilated_volume_mask, batch_size
         )
-        _, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
-            dataset, dilated_volume_mask, batch_size
+        (
+            _,
+            _,
+            image_PS,
+            _,
+            grouped_masked_image_PS,
+            grouped_image_PS,
+        ) = noise.estimate_radial_noise_statistic_from_outside_mask(
+            dataset, dilated_volume_mask, batch_size, return_grouped=True
         )
     else:
-        masked_image_PS, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
-            dataset, dilated_volume_mask, batch_size
+        (
+            masked_image_PS,
+            _,
+            image_PS,
+            _,
+            grouped_masked_image_PS,
+            grouped_image_PS,
+        ) = noise.estimate_radial_noise_statistic_from_outside_mask(
+            dataset, dilated_volume_mask, batch_size, return_grouped=True
         )
 
     radial_noise_var_outside_mask = masked_image_PS
@@ -758,7 +782,57 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
         "white_noise_var_outside_mask": white_noise_var_outside_mask_val,
         "image_PS": image_PS,
         "masked_image_PS": masked_image_PS,
+        "noise_group_image_PS": grouped_image_PS,
+        "noise_group_masked_image_PS": grouped_masked_image_PS,
     }
+
+
+def _noise_group_metadata(dataset):
+    """Describe the rows used by radial-per-tilt noise diagnostics."""
+
+    from recovar.core import CTFParamIndex
+    from recovar.reconstruction.noise import VariableRadialNoiseModel
+
+    ctf_params = np.asarray(dataset.CTF_params)
+    if isinstance(dataset.noise, VariableRadialNoiseModel):
+        group_indices = np.asarray(dataset.noise.dose_indices, dtype=np.int32)
+        n_groups = int(np.max(group_indices)) + 1
+    else:
+        group_indices = np.zeros(dataset.n_images, dtype=np.int32)
+        n_groups = 1
+
+    records = []
+    for group_idx in range(n_groups):
+        selected = group_indices == group_idx
+        dose = (
+            float(np.median(ctf_params[selected, CTFParamIndex.DOSE]))
+            if ctf_params.shape[1] > CTFParamIndex.DOSE
+            else None
+        )
+        scale = float(np.median(ctf_params[selected, CTFParamIndex.CONTRAST]))
+        angle = (
+            float(np.median(ctf_params[selected, CTFParamIndex.TILT_ANGLE]))
+            if ctf_params.shape[1] > CTFParamIndex.TILT_ANGLE
+            else None
+        )
+        angle_source = "ctf_tilt_angle"
+        if dataset.tilt_series_flag and (angle is None or np.isclose(angle, 0.0)) and 0 < abs(scale) <= 1:
+            angle = float(np.degrees(np.arccos(np.clip(abs(scale), 0.0, 1.0))))
+            angle_source = "inferred_abs_from_ctf_scale"
+        if not dataset.tilt_series_flag:
+            angle = None
+            angle_source = None
+        records.append(
+            {
+                "group_index": group_idx,
+                "n_images": int(np.count_nonzero(selected)),
+                "pre_exposure": dose,
+                "median_tilt_angle_deg": angle,
+                "tilt_angle_source": angle_source,
+                "median_input_ctf_scale": scale,
+            }
+        )
+    return records
 
 
 ## TODO perhaps should move, and complement mask should be better documented in the parse args/documentation
@@ -1473,6 +1547,13 @@ def standard_recovar_pipeline(args):
     ## Could we instead store 'one' dataset and the indices instead of two different objects, then do a clevery use of iterators
     ## The current way to just have two of these objects around which is not great.
     ds = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split, lazy=args.lazy)
+    source_ctf_params_for_tilt_diagnostics = None
+    source_ctf_evaluator_for_tilt_diagnostics = None
+    if getattr(args, "tilt_diagnostics", False):
+        if not ds.tilt_series_flag:
+            raise ValueError("--tilt-diagnostics requires --tilt-series")
+        source_ctf_params_for_tilt_diagnostics = ds.get_ctf_params_copy()
+        source_ctf_evaluator_for_tilt_diagnostics = ds.ctf_evaluator
 
     # --- Build the centralized memory plan ---
     from recovar.utils.cuda_env import log_backend
@@ -1541,6 +1622,7 @@ def standard_recovar_pipeline(args):
         logger.info("Setting noise model to radial_per_tilt")
     else:
         raise ValueError(f"noise model {noise_model} not recognized")
+    noise_group_records = _noise_group_metadata(ds)
 
     contrasts_for_second = None
     est_contrasts = None
@@ -1651,11 +1733,22 @@ def standard_recovar_pipeline(args):
         noise_result = _estimate_noise(ds, means, dilated_volume_mask, batch_size, args, noise_model, gpu_memory)
         noise_var_used = noise_result["noise_var_used"]
         noise.update_noise_variance(noise_var_used, ds)
+        if isinstance(ds.noise, noise.VariableRadialNoiseModel):
+            # Work on independent rows during the per-group upper-bound pass.
+            # Passing the pre-broadcast 1-D array would let one group's
+            # in-place refinement leak into the next group.
+            noise_var_used = np.asarray(ds.noise.noise_variance_radials).copy()
 
         # Upper bound noise using variance estimate
         variance_est, ub_noise_var_by_var_est = noise.upper_bound_noise_by_signal_p_noise_dispatched(
             noise_var_used, ds, means, batch_size, dilated_volume_mask
         )
+        if isinstance(ds.noise, noise.VariableRadialNoiseModel):
+            # The per-group upper-bound pass updates the dataset noise model
+            # row by row. Persist and plot that final model, not the initial
+            # one-dimensional profile that was broadcast before refinement.
+            noise_var_used = np.asarray(ds.noise.noise_variance_radials).copy()
+        noise_result["noise_group_metadata"] = noise_group_records
 
         # Compute variance with regularization
         # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
@@ -1844,7 +1937,8 @@ def standard_recovar_pipeline(args):
                 "ignore_zero_frequency is ON — inflating DC noise by 1e16. "
                 "This is experimental and may degrade mean/variance estimates."
             )
-            noise_var_used[0] *= 1e16
+            noise_var_used[..., 0] *= 1e16
+            noise.update_noise_variance(noise_var_used, ds)
 
         if not args.keep_intermediate:
             del u["real"]
@@ -2088,6 +2182,18 @@ def standard_recovar_pipeline(args):
         logger.info("Saved pipeline summary to output/plots/summary.png")
     except Exception as e:
         logger.warning("Could not generate summary plot: %s", e)
+
+    if getattr(args, "tilt_diagnostics", False):
+        from recovar.output.tilt_diagnostics import run_tilt_diagnostics
+
+        run_tilt_diagnostics(
+            ds,
+            source_ctf_params=source_ctf_params_for_tilt_diagnostics,
+            source_ctf_evaluator=source_ctf_evaluator_for_tilt_diagnostics,
+            output_dir=paths.output_dir,
+            plots_dir=paths.plots_dir,
+            batch_size=batch_size,
+        )
 
     return means, u, s, volume_mask, dilated_volume_mask, noise_var_used
 
