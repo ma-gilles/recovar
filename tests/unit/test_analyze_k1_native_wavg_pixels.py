@@ -3,16 +3,34 @@ from __future__ import annotations
 import struct
 
 import numpy as np
+import pandas as pd
+import pytest
 
 from scripts.analyze_k1_native_wavg_pixels import (
     _comparison,
     _load_counted,
     _native_standard_half_indices,
     _normalise_native_weights,
+    _particle_row_for_stack,
     _recovar_rows_in_native_order,
     _replace_window_with_native_preprocess,
     _wavg_components,
 )
+
+
+@pytest.mark.parametrize("identity_column", ("rlnImageName", "_rlnImageName"))
+def test_particle_row_lookup_uses_stack_identity_not_star_row_order(identity_column):
+    particles = pd.DataFrame(
+        {
+            identity_column: ["1204@particles.mrcs", "2081@particles.mrcs"],
+            "rlnDefocusU": [17421.9, 14270.1],
+        }
+    )
+
+    row = _particle_row_for_stack(particles, 2081)
+
+    assert row[identity_column] == "2081@particles.mrcs"
+    assert row["rlnDefocusU"] == 14270.1
 
 
 def test_load_counted_round_trip(tmp_path):

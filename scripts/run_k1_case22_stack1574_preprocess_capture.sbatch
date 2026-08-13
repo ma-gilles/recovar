@@ -31,6 +31,8 @@ DATA=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_currenthead_25ab6
 CONTROL=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/native_capture/relion
 CAPTURE=${ROOT}/capture
 RELION_OUT=${ROOT}/relion
+TARGET_PART_ID=${K1_CASE22_PREPROCESS_PART_ID:-639}
+TARGET_STACK_INDEX=${K1_CASE22_PREPROCESS_STACK_INDEX:-1574}
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -81,7 +83,7 @@ export RELION_P1_PREPROCESS_CAPTURE_EXPECTED_PARTICLES=1
 export RELION_P1_PREPROCESS_CAPTURE_MAX_PARTICLES_PER_RANK=1
 export RELION_P1_PREPROCESS_CAPTURE_EXPECTED_FOLLOWERS=2
 export RELION_P1_PREPROCESS_CAPTURE_MAX_BYTES=2000000
-export RELION_P1_PREPROCESS_CAPTURE_PART_IDS=639
+export RELION_P1_PREPROCESS_CAPTURE_PART_IDS=${TARGET_PART_ID}
 
 COMMAND=(
     srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
@@ -99,17 +101,17 @@ start=$(date +%s)
     cd "${DATA}"
     "${COMMAND[@]}"
 ) > "${RELION_OUT}/runner.stdout" 2> "${RELION_OUT}/runner.stderr"
-printf '{"job_id":"%s","wall_s":%d,"iteration":2,"part_id":639,"stack_index_one_based":1574}\n' \
-    "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" \
+printf '{"job_id":"%s","wall_s":%d,"iteration":2,"part_id":%d,"stack_index_one_based":%d}\n' \
+    "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" "${TARGET_PART_ID}" "${TARGET_STACK_INDEX}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 
 test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.preprocess-v1.bin' | wc -l)" -eq 1
-test -s "${CAPTURE}/part639_stack1574.preprocess-v1.bin"
+test -s "${CAPTURE}/part${TARGET_PART_ID}_stack${TARGET_STACK_INDEX}.preprocess-v1.bin"
 test -z "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.tmp.*' -print -quit)"
 test -s "${RELION_OUT}/run_it002_data.star"
 "${PYTHON}" "${REPO}/scripts/validate_relion_preprocess_capture.py" \
-    "${CAPTURE}" --expected-particles 1 --expected-part-ids 639 \
-    --expected-stack-indices 1574 --expected-iteration 2 \
+    "${CAPTURE}" --expected-particles 1 --expected-part-ids "${TARGET_PART_ID}" \
+    --expected-stack-indices "${TARGET_STACK_INDEX}" --expected-iteration 2 \
     --output "${ROOT}/analysis/RELION_PREPROCESS_CAPTURE_V1.json"
 
 cd "${AUDIT_REPO}"

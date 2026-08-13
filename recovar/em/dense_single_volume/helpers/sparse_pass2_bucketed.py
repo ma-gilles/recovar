@@ -9199,7 +9199,11 @@ def _maybe_dump_norm_residual_inputs(
         )
     )
     local_indices = np.asarray(image_indices, dtype=np.int64)
-    group_ids_np = np.asarray(bucket_group_ids, dtype=np.int64)
+    group_ids_np = (
+        np.zeros(local_indices.shape, dtype=np.int64)
+        if bucket_group_ids is None
+        else np.asarray(bucket_group_ids, dtype=np.int64)
+    )
     original_indices = _original_indices_for_local(experiment_dataset, local_indices)
     os.makedirs(dump_dir, exist_ok=True)
     context_half = int(_bpref_contribution_context["half"])

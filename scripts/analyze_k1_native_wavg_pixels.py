@@ -33,6 +33,25 @@ _WDIFF_RE = re.compile(r"img(?P<img>\d+)_part(?P<part>\d+)_storeWavg_wdiff2_pixe
 _PREPROCESS_RE = re.compile(r"part(?P<part>\d+)_stack(?P<stack>\d+)\.preprocess-v1\.bin")
 
 
+def _particle_row_for_stack(particles, stack_index_one_based: int):
+    """Return one STAR row by immutable stack identity, independent of row order."""
+
+    identity_column = (
+        "rlnImageName" if "rlnImageName" in particles else "_rlnImageName"
+    )
+    identities = particles[identity_column].astype(str).to_numpy()
+    stack_indices = np.asarray(
+        [int(identity.split("@", maxsplit=1)[0]) for identity in identities],
+        dtype=np.int64,
+    )
+    rows = np.flatnonzero(stack_indices == int(stack_index_one_based))
+    if rows.size != 1:
+        raise ValueError(
+            f"stack {stack_index_one_based}: expected one RELION particle row, found {rows.size}"
+        )
+    return particles.iloc[int(rows[0])]
+
+
 def _load_counted(path: Path, dtype: np.dtype | type) -> np.ndarray:
     """Load the diagnostic format: uint64 count followed by a flat native array."""
 
@@ -482,7 +501,7 @@ def main() -> None:
         if not np.array_equal(window_indices, captured_indices):
             raise ValueError(f"RECOVAR Wavg windows disagree for source {source_index}")
 
-        particle = particles.iloc[source_index]
+        particle = _particle_row_for_stack(particles, source_index + 1)
         optics_group = int(
             particle["rlnOpticsGroup"]
             if "rlnOpticsGroup" in particle

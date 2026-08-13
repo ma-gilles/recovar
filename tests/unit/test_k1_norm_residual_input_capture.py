@@ -2,6 +2,7 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
 
@@ -12,7 +13,16 @@ def test_norm_residual_only_mode_does_not_enable_full_pass2_dump(tmp_path, monke
     assert not sparse._pass2_dump_enabled()
 
 
-def test_norm_residual_input_capture_preserves_exact_target_arrays(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("bucket_group_ids", "expected_group_id"),
+    ((jnp.asarray([9], dtype=jnp.int32), 9), (None, 0)),
+)
+def test_norm_residual_input_capture_preserves_exact_target_arrays(
+    tmp_path,
+    monkeypatch,
+    bucket_group_ids,
+    expected_group_id,
+):
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "66")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_CURRENT_SIZE", "56")
@@ -57,7 +67,7 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(tmp_path, mon
         bucket_scale_for_stats=jnp.asarray([2.0], dtype=jnp.float32),
         scale_correction_pixel_mask=jnp.asarray([True, False]),
         scale_shell_indices=jnp.asarray([0, 1], dtype=jnp.int32),
-        bucket_group_ids=jnp.asarray([9], dtype=jnp.int32),
+        bucket_group_ids=bucket_group_ids,
     )
 
     assert count == 1
@@ -91,7 +101,7 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(tmp_path, mon
         assert float(capture["support_mass"]) == 1.0
         assert float(capture["relion_norm_high_shell"]) == 19.0
         assert float(capture["weighted_img_per_image"]) == 23.0
-        assert int(capture["group_id"]) == 9
+        assert int(capture["group_id"]) == expected_group_id
         assert float(capture["scale_for_stats"]) == 2.0
         np.testing.assert_array_equal(capture["scale_correction_pixel_mask"], [True, False])
         expected_aa = np.float32(proj_abs2[0, 0, 0]) * np.float32(22.0) / np.float32(4.0)
