@@ -1,7 +1,46 @@
+import struct
+
 import numpy as np
 
 from scripts import analyze_k1_norm_residual_bpref_boundary as analyzer
 from scripts.validate_relion_bpref_prescatter import ROTATION_DTYPE, ROW_DTYPE
+
+
+def _write_flat(path, values: np.ndarray) -> None:
+    array = np.asarray(values)
+    path.write_bytes(struct.pack("<i", array.size) + array.tobytes())
+
+
+def test_load_native_ppref_preserves_shape_origin_and_float32_values(tmp_path) -> None:
+    prefix = "panel_"
+    _write_flat(
+        tmp_path / f"{prefix}dims.bin",
+        np.asarray([2, 2, 1, 0, -1, 0, 1], dtype="<i4"),
+    )
+    _write_flat(
+        tmp_path / f"{prefix}real.bin",
+        np.asarray([1.0, 2.0, 3.0, 4.0], dtype="<f8"),
+    )
+    _write_flat(
+        tmp_path / f"{prefix}imag.bin",
+        np.asarray([0.5, 0.0, -0.5, 1.0], dtype="<f8"),
+    )
+    _write_flat(
+        tmp_path / f"{prefix}padding_factor.bin",
+        np.asarray([2.0], dtype="<f4"),
+    )
+
+    ppref, identity = analyzer._load_native_ppref(tmp_path, prefix)
+
+    assert ppref.shape == (1, 2, 2)
+    assert ppref.dtype == np.complex64
+    np.testing.assert_array_equal(
+        ppref.reshape(-1),
+        np.asarray([1.0 + 0.5j, 2.0, 3.0 - 0.5j, 4.0 + 1.0j], dtype=np.complex64),
+    )
+    assert identity["origin_xyz"] == [0, -1, 0]
+    assert identity["r_max"] == 1
+    assert identity["padding_factor"] == 2.0
 
 
 def test_dense_native_operands_align_rotations_pixels_and_units() -> None:

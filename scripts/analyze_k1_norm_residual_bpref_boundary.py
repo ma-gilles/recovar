@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import struct
 from pathlib import Path
 
 import numpy as np
@@ -46,6 +47,44 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(8 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _load_flat_array(path: Path, dtype: np.dtype) -> np.ndarray:
+    payload = Path(path).read_bytes()
+    count = struct.unpack_from("<i", payload)[0]
+    values = np.frombuffer(payload, dtype=dtype, offset=4).copy()
+    _require(values.size == count, f"flat-array size mismatch: {path}")
+    return values
+
+
+def _load_native_ppref(directory: Path, prefix: str) -> tuple[np.ndarray, dict[str, object]]:
+    root = Path(directory) / prefix
+    paths = {
+        "dims": Path(f"{root}dims.bin"),
+        "real": Path(f"{root}real.bin"),
+        "imag": Path(f"{root}imag.bin"),
+        "padding_factor": Path(f"{root}padding_factor.bin"),
+    }
+    _require(all(path.is_file() for path in paths.values()), "native PPref capture is incomplete")
+    dims = _load_flat_array(paths["dims"], np.dtype("<i4"))
+    _require(dims.size == 7, "native PPref dimensions changed")
+    xdim, ydim, zdim, xinit, yinit, zinit, r_max = (int(value) for value in dims)
+    real = _load_flat_array(paths["real"], np.dtype("<f8"))
+    imag = _load_flat_array(paths["imag"], np.dtype("<f8"))
+    _require(real.size == imag.size == xdim * ydim * zdim, "native PPref payload size changed")
+    padding = _load_flat_array(paths["padding_factor"], np.dtype("<f4"))
+    _require(padding.size == 1, "native PPref padding capture changed")
+    ppref = (real + 1j * imag).astype(np.complex64).reshape(zdim, ydim, xdim)
+    return ppref, {
+        "kind": "native_relion_binary",
+        "directory": str(Path(directory).resolve()),
+        "prefix": prefix,
+        "shape_zyx": list(ppref.shape),
+        "origin_xyz": [xinit, yinit, zinit],
+        "r_max": r_max,
+        "padding_factor": float(padding[0]),
+        "sha256": {name: _sha256(path) for name, path in paths.items()},
+    }
 
 
 def _open_native_memmap(path: Path) -> tuple[tuple[int, ...], np.ndarray, np.ndarray]:
@@ -362,8 +401,7 @@ def _native_unit_target_comparison(
         "counterfactual_totals_native_units": native_units,
         "absolute_errors": errors,
         "absolute_gap_closure_fraction": {
-            name: (baseline_error - error) / baseline_error if baseline_error else 0.0
-            for name, error in errors.items()
+            name: (baseline_error - error) / baseline_error if baseline_error else 0.0 for name, error in errors.items()
         },
     }
 
@@ -374,6 +412,8 @@ def _analyze_chunked(
     *,
     recovar_path: Path,
     recovar_projector: Path,
+    native_projector_directory: Path | None,
+    native_projector_prefix: str,
     physical_image_size: int,
     native_norm_panel: Path | None,
     rotation_block_size: int,
@@ -416,11 +456,30 @@ def _analyze_chunked(
         reconstruction_indices=reconstruction_indices,
         physical_image_size=physical_image_size,
     )
-    with np.load(recovar_projector, allow_pickle=False) as projector:
-        ppref = np.asarray(projector["projector_half"], dtype=np.complex64)
-        if ppref.ndim == 4:
-            ppref = ppref[0]
-        _require(int(projector["projector_r_max"]) == current_size // 2, "RECOVAR projector radius changed")
+    if native_projector_directory is None:
+        with np.load(recovar_projector, allow_pickle=False) as projector:
+            ppref = np.asarray(projector["projector_half"], dtype=np.complex64)
+            if ppref.ndim == 4:
+                ppref = ppref[0]
+            projector_r_max = int(projector["projector_r_max"])
+        projector_identity: dict[str, object] = {
+            "kind": "recovar_npz",
+            "path": str(Path(recovar_projector).resolve()),
+            "sha256": _sha256(recovar_projector),
+            "shape_zyx": list(ppref.shape),
+            "r_max": projector_r_max,
+        }
+    else:
+        ppref, projector_identity = _load_native_ppref(
+            native_projector_directory,
+            native_projector_prefix,
+        )
+        projector_r_max = int(projector_identity["r_max"])
+        _require(
+            float(projector_identity["padding_factor"]) == 2.0,
+            "native PPref padding factor changed",
+        )
+    _require(projector_r_max == current_size // 2, "projector radius changed")
 
     native_a2 = 0.0
     native_xa = 0.0
@@ -487,6 +546,7 @@ def _analyze_chunked(
             "native_capture": str(Path(native_path).resolve()),
             "recovar_capture": str(Path(recovar_path).resolve()),
             "recovar_projector": str(Path(recovar_projector).resolve()),
+            "projector_source": projector_identity,
             "original_index_zero_based": original_index,
             "stack_index_one_based": header[8],
             "iteration": int(recovar["iteration"]),
@@ -528,6 +588,12 @@ def _analyze_chunked(
     }
     if native_norm_panel is not None:
         native_norm = _load_native_norm_panel(native_norm_panel, original_index)
+        native_divisor = float(physical_image_size**4)
+        recovar_high_shell = float(recovar["relion_norm_high_shell"])
+        recovar_weighted_image_current = weighted_image - recovar_high_shell
+        native_implied_weighted_image_current = (
+            native_norm["direct_current_size"] * native_divisor - native_a2 + 2.0 * native_xa
+        )
         report["native_norm_target"] = {
             **native_norm,
             **_native_unit_target_comparison(
@@ -535,6 +601,14 @@ def _analyze_chunked(
                 target=native_norm["total"],
                 physical_image_size=physical_image_size,
             ),
+            "current_size_decomposition_internal_units": {
+                "recovar_high_shell": recovar_high_shell,
+                "recovar_weighted_image_current": recovar_weighted_image_current,
+                "native_implied_weighted_image_current": native_implied_weighted_image_current,
+                "native_implied_minus_recovar_weighted_image_current": (
+                    native_implied_weighted_image_current - recovar_weighted_image_current
+                ),
+            },
         }
     return report
 
@@ -546,6 +620,8 @@ def analyze(
     physical_image_size: int,
     native_norm_panel: Path | None = None,
     recovar_projector: Path | None = None,
+    native_projector_directory: Path | None = None,
+    native_projector_prefix: str = "img0_part109_storeWavg_wavg_ppref_",
     rotation_block_size: int = 512,
 ) -> dict[str, object]:
     with np.load(recovar_path, allow_pickle=False) as capture:
@@ -558,6 +634,8 @@ def analyze(
             recovar,
             recovar_path=recovar_path,
             recovar_projector=recovar_projector,
+            native_projector_directory=native_projector_directory,
+            native_projector_prefix=native_projector_prefix,
             physical_image_size=physical_image_size,
             native_norm_panel=native_norm_panel,
             rotation_block_size=rotation_block_size,
@@ -666,6 +744,11 @@ def main() -> None:
     parser.add_argument("--physical-image-size", type=int, default=128)
     parser.add_argument("--native-norm-panel", type=Path)
     parser.add_argument("--recovar-projector", type=Path)
+    parser.add_argument("--native-projector-directory", type=Path)
+    parser.add_argument(
+        "--native-projector-prefix",
+        default="img0_part109_storeWavg_wavg_ppref_",
+    )
     parser.add_argument("--rotation-block-size", type=int, default=512)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -675,6 +758,8 @@ def main() -> None:
         physical_image_size=args.physical_image_size,
         native_norm_panel=args.native_norm_panel,
         recovar_projector=args.recovar_projector,
+        native_projector_directory=args.native_projector_directory,
+        native_projector_prefix=args.native_projector_prefix,
         rotation_block_size=args.rotation_block_size,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
