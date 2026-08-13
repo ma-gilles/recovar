@@ -1394,3 +1394,52 @@ next discriminator is the exact production candidate table for stack 232,
 captured without disabling projection caching or forcing its bucket
 unchunked. That experiment tests whether the one extra coarse parent is the
 sole source of the remaining fine-table and Pmax difference.
+
+## Production-preserving stack-232 fine boundary
+
+Job `12325540` emitted the requested stack-232 shard during the ordinary
+cache-on, chunked iteration-3 production path. The comparison is complete
+even though the rest of that full diagnostic run is still allowed to finish.
+The production and native tables have exactly the same 248 rotations, 1,664
+active fine tuples, and 229 fine BPref-significant tuples. There are no
+native-only or RECOVAR-only tuples. This closes the formerly observed extra
+fine-parent topology as an artifact of the earlier pre-RFLOAT/control path,
+not a residual in the current positive composition.
+
+The first unequal current boundary is the centered fine score before priors:
+maximum absolute residual `0.0024957656860351562` and relative L2
+`2.732477875007952e-5`. Orientation and translation priors differ only at
+float32-rounding scale (`9.5367431640625e-7` maximum). Fine significant
+support is exact. The selected native capture's Pmax is
+`0.4817918629430238`, versus RECOVAR `0.48166962572426897`, but that native
+capture is not a repeat-stable soft-posterior reference: the pinned robust
+native and production RECOVAR values are both near `0.48168`. Therefore this
+raw-score residual is recorded as a repeat-envelope diagnostic and does not
+authorize a scorer change.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0232_production_capture_it3_20260813T063215ET/analysis/K1_STACK232_PRODUCTION_FINE_BOUNDARY.json`
+(SHA-256
+`b5bac528c6534b56dff6bb9c96c9cc9e221dd6a1e0e8456b23f2697169c9e421`).
+
+## Iteration-3 continuation is not an exact live-state oracle
+
+Job `12325969` showed that an ordinary continuation from the serialized
+iteration-2 optimiser is invalid: process-local order and sampling RNG state
+are reset, changing all 3,000 hard poses. Job `12326034` restored the exact
+fresh order (`1723`) and uninterrupted perturbation
+`-0.293744921684`. This recovers stack 262's hard pose and shift and improves
+half-map FSC-AUC to `0.9997891214`/`0.9995387243`, but its Pmax/support remain
+`0.115130`/`32`, versus uninterrupted robust RELION `0.122029`/`18`.
+Serialized continuation therefore remains a controlled serialization arm,
+not the native operand authority.
+
+The uninterrupted fresh capture instead gives stack-262 Pmax/support
+`0.121111`/`19`, nearly matching RECOVAR `0.1211270019`/`19`. Its apparent
+`0.0009019981` error against the pinned robust run is mainly native repeat
+drift, so stack 262 is removed from the actionable target set. Stacks 79,
+469, 2498, 2544, and 2659 retain the same one-count RECOVAR support excess
+against both independent native runs. Multi-particle native job `12326152`
+and production-preserving RECOVAR job `12326241` capture all five in one run;
+their staged tuple/score/prior/posterior/support comparison is the next
+first-divergence gate.

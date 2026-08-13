@@ -85,6 +85,17 @@ def _records(keys: set[tuple[int, int]], limit: int = 64) -> list[list[int]]:
     return [[int(rotation), int(translation)] for rotation, translation in sorted(keys)[:limit]]
 
 
+def _native_significant_count(factor, candidate_count: int) -> int:
+    """Validate the native fine-support count for full or geometry-only captures."""
+
+    count = int(factor.header[45])
+    _require(
+        0 < count <= int(candidate_count),
+        "native BPref significant count is outside the active fine table",
+    )
+    return count
+
+
 def load_recovar_candidate_table(path: Path) -> dict[str, np.ndarray]:
     """Normalize either the legacy pass-2 dump or one production raw shard."""
 
@@ -257,11 +268,7 @@ def analyze(
             - recovar_common_trans_prior
         ).astype(np.float32, copy=False)
 
-        native_significant_count = int(factor.header[45])
-        _require(
-            factor.geometry_only and 0 < native_significant_count <= candidates.size,
-            "production comparison requires a geometry-only native BPref capture",
-        )
+        native_significant_count = _native_significant_count(factor, candidates.size)
         native_significant_rows = np.argsort(-native_weights, kind="stable")[
             :native_significant_count
         ]

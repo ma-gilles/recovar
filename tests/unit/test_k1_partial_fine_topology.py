@@ -1,8 +1,11 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume.helpers import compact_candidate_capture as capture
 from scripts.analyze_k1_partial_fine_topology import (
+    _native_significant_count,
     load_recovar_candidate_table,
     partial_rotation_map,
 )
@@ -32,6 +35,15 @@ def test_partial_rotation_map_reports_exact_overlap_and_unmatched_rows():
     np.testing.assert_array_equal(mapping, np.asarray([2, -1, 0]))
     np.testing.assert_array_equal(native_only, np.asarray([1]))
     np.testing.assert_array_equal(recovar_only, np.asarray([1]))
+
+
+@pytest.mark.unit
+def test_native_significant_count_accepts_full_operand_capture():
+    header = [0] * 64
+    header[45] = 229
+    factor = SimpleNamespace(header=tuple(header), geometry_only=False)
+
+    assert _native_significant_count(factor, 1664) == 229
 
 
 @pytest.mark.unit
