@@ -72,7 +72,7 @@ def _load_native_ppref(directory: Path, prefix: str) -> tuple[np.ndarray, dict[s
     real = _load_flat_array(paths["real"], np.dtype("<f8"))
     imag = _load_flat_array(paths["imag"], np.dtype("<f8"))
     _require(real.size == imag.size == xdim * ydim * zdim, "native PPref payload size changed")
-    padding = _load_flat_array(paths["padding_factor"], np.dtype("<f4"))
+    padding = np.frombuffer(paths["padding_factor"].read_bytes(), dtype=np.dtype("<f8")).copy()
     _require(padding.size == 1, "native PPref padding capture changed")
     ppref = (real + 1j * imag).astype(np.complex64).reshape(zdim, ydim, xdim)
     return ppref, {

@@ -25,10 +25,7 @@ def test_load_native_ppref_preserves_shape_origin_and_float32_values(tmp_path) -
         tmp_path / f"{prefix}imag.bin",
         np.asarray([0.5, 0.0, -0.5, 1.0], dtype="<f8"),
     )
-    _write_flat(
-        tmp_path / f"{prefix}padding_factor.bin",
-        np.asarray([2.0], dtype="<f4"),
-    )
+    (tmp_path / f"{prefix}padding_factor.bin").write_bytes(struct.pack("<d", 2.0))
 
     ppref, identity = analyzer._load_native_ppref(tmp_path, prefix)
 
