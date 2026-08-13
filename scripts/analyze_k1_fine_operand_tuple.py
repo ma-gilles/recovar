@@ -12,10 +12,8 @@ from typing import Any
 import numpy as np
 
 from scripts.compare_k4_relion_recovar_fine_operands import (
-    _compact_indices_from_full_lookup,
     _infer_current_size,
     _metric,
-    _metric_up_to_global_sign,
     _translation_alignment,
     _tree_raw_diff2,
     _zero_dc_compact_score_weight,
@@ -94,6 +92,57 @@ def _largest_mismatches(
     ]
 
 
+def _score_window_rows_from_relion_full(
+    *,
+    supported_full: np.ndarray,
+    window_indices: np.ndarray,
+    image_shape: tuple[int, int],
+    current_size: int,
+) -> np.ndarray:
+    """Map native current-size FFT rows to RECOVAR score-window rows.
+
+    Projection operands use the compact lookup stored in
+    ``raw_operand_relion_full_to_compact``.  Shifted-image and correction
+    operands instead use ``window_indices`` order.  Those coordinate systems
+    contain the same Fourier pixels but are not the same gather.  In
+    particular, the even-size y-Nyquist row is represented as ``+N/2`` by the
+    score window and ``-N/2`` by the projector lookup.
+    """
+
+    supported_full = np.asarray(supported_full, dtype=np.int64).reshape(-1)
+    window_indices = np.asarray(window_indices, dtype=np.int64).reshape(-1)
+    current_half_width = int(current_size) // 2 + 1
+    fftw_rows = supported_full // current_half_width
+    columns = supported_full % current_half_width
+    ky = np.where(
+        fftw_rows <= int(current_size) // 2,
+        fftw_rows,
+        fftw_rows - int(current_size),
+    )
+    physical_half_width = int(image_shape[1]) // 2 + 1
+    physical_indices = (
+        (ky + int(image_shape[0]) // 2) * physical_half_width + columns
+    ).astype(np.int64)
+    _require(
+        np.unique(window_indices).size == window_indices.size,
+        "RECOVAR score window contains duplicate physical pixels",
+    )
+    window_order = np.argsort(window_indices, kind="stable")
+    sorted_window = window_indices[window_order]
+    positions = np.searchsorted(sorted_window, physical_indices)
+    _require(
+        np.all(positions < sorted_window.size)
+        and np.array_equal(sorted_window[positions], physical_indices),
+        "native score pixels and RECOVAR score window differ",
+    )
+    rows = window_order[positions]
+    _require(
+        np.unique(rows).size == rows.size,
+        "native score pixels do not map one-to-one to RECOVAR score rows",
+    )
+    return rows.astype(np.int64, copy=False)
+
+
 def analyze(
     capture_path: Path,
     pass2_path: Path,
@@ -132,9 +181,15 @@ def analyze(
     _require(int(np.asarray(recovar["current_size"]).item()) == current_size, "current size differs")
     image_shape = (physical_image_size, physical_image_size)
     lookup = np.asarray(recovar["raw_operand_relion_full_to_compact"], dtype=np.int32)
-    compact_indices = _compact_indices_from_full_lookup(image_shape, current_size, lookup)
     supported_full = np.flatnonzero(lookup >= 0)
     supported_compact = lookup[supported_full]
+    _require("window_indices" in recovar, "pass-2 dump misses score-window indices")
+    supported_score_rows = _score_window_rows_from_relion_full(
+        supported_full=supported_full,
+        window_indices=recovar["window_indices"],
+        image_shape=image_shape,
+        current_size=current_size,
+    )
 
     rotation_rows = np.flatnonzero(
         np.asarray(recovar["oversampled_rot_indices"], dtype=np.int64)
@@ -165,7 +220,7 @@ def analyze(
     )
     recovar_weight, dc_mask = _zero_dc_compact_score_weight(
         recovar_weight,
-        compact_indices,
+        recovar["window_indices"],
         image_shape,
     )
     n2 = np.float32(physical_image_size**2)
@@ -178,10 +233,10 @@ def analyze(
         dtype=np.complex64,
     ) / n2
     recovar_shifted[supported_full] = -np.asarray(
-        recovar["raw_operand_shifted_corrected"][translation_row, supported_compact],
+        recovar["raw_operand_shifted_corrected"][translation_row, supported_score_rows],
         dtype=np.complex64,
     ) / n2
-    recovar_corr[supported_full] = recovar_weight[supported_compact] * n4
+    recovar_corr[supported_full] = recovar_weight[supported_score_rows] * n4
 
     relion_reference = (
         np.asarray(pixels["reference_real"], dtype=np.float32)
