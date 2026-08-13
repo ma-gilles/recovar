@@ -31,6 +31,7 @@ NORM_RESIDUAL_INPUTS=${K1_CASE22_NORM_RESIDUAL_INPUTS:-0}
 POWERCLASS_SPECTRUM_NORM=${K1_CASE22_POWERCLASS_SPECTRUM_NORM:-0}
 TRANSLATED_WAVG_NORM=${K1_CASE22_TRANSLATED_WAVG_NORM:-0}
 WAVG_ATOMIC_SCALE_AA=${K1_CASE22_WAVG_ATOMIC_SCALE_AA:-0}
+WAVG_ATOMIC_DIRECT_RESIDUAL=${K1_CASE22_WAVG_ATOMIC_DIRECT_RESIDUAL:-0}
 FINE_ROTATION_EXECUTION_ORDER=${K1_CASE22_FINE_ROTATION_EXECUTION_ORDER:-0}
 COARSE_STACK1204_DUMP=${K1_CASE22_COARSE_STACK1204_DUMP:-0}
 GAUSSIAN_COARSE_STACK1204=${K1_CASE22_GAUSSIAN_COARSE_STACK1204:-0}
@@ -81,6 +82,10 @@ case "${WAVG_ATOMIC_SCALE_AA}" in
     0|1) ;;
     *) echo "K1_CASE22_WAVG_ATOMIC_SCALE_AA must be 0 or 1" >&2; exit 2 ;;
 esac
+case "${WAVG_ATOMIC_DIRECT_RESIDUAL}" in
+    0|1) ;;
+    *) echo "K1_CASE22_WAVG_ATOMIC_DIRECT_RESIDUAL must be 0 or 1" >&2; exit 2 ;;
+esac
 case "${FINE_ROTATION_EXECUTION_ORDER}" in
     0|1) ;;
     *) echo "K1_CASE22_FINE_ROTATION_EXECUTION_ORDER must be 0 or 1" >&2; exit 2 ;;
@@ -98,9 +103,9 @@ PASS2_ROTATION_ROWS=${K1_CASE22_PASS2_ROTATION_ROWS-50293,50295}
 if [[ "${PASS2_ROTATION_ROWS}" = none ]]; then
     PASS2_ROTATION_ROWS=
 fi
-PYTHON=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default/bin/python
-PIXI_ENV=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default
-LAUNCHER=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/scripts/run_k1_case22_fresh_order_it3.sbatch
+PYTHON=${K1_CASE22_PYTHON:-/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default/bin/python}
+PIXI_ENV=${K1_CASE22_PIXI_ENV:-/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810/.pixi/envs/default}
+LAUNCHER=${REPO}/scripts/run_k1_case22_fresh_order_it3.sbatch
 DATA=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_currenthead_25ab6e68_20260728T011020ET/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/data
 SEALED_CONTROL=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/native_control/relion
 CUDA_LIB=${K1_CASE22_CUDA_LIB:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/cuda/libcuda_backproject.so}
@@ -176,6 +181,10 @@ if [[ "${TRANSLATED_WAVG_NORM}" = 1 ]]; then
 fi
 if [[ "${WAVG_ATOMIC_SCALE_AA}" = 1 ]]; then
     export RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA=1
+fi
+if [[ "${WAVG_ATOMIC_DIRECT_RESIDUAL}" = 1 ]]; then
+    export RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA=1
+    export RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL=1
 fi
 if [[ "${FINE_ROTATION_EXECUTION_ORDER}" = 1 ]]; then
     export RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER=1
@@ -373,8 +382,8 @@ if [[ "${PARITY_DUMP}" = 1 ]]; then
     test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
 fi
 
-printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"norm_residual_inputs":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"parity_dump":%s,"noise_update_dump":%s}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${NORM_RESIDUAL_INPUTS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${PARITY_DUMP}" "${NOISE_UPDATE_DUMP}" \
+printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"norm_residual_inputs":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_residual":%s,"parity_dump":%s,"noise_update_dump":%s}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${NORM_RESIDUAL_INPUTS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${WAVG_ATOMIC_SCALE_AA}" "${WAVG_ATOMIC_DIRECT_RESIDUAL}" "${PARITY_DUMP}" "${NOISE_UPDATE_DUMP}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"

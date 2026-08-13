@@ -134,6 +134,9 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH = 1_000_000
 _RELION_WAVG_ATOMIC_SCALE_AA_ENV = "RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA"
+_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV = (
+    "RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL"
+)
 _RELION_FINE_ROTATION_EXECUTION_ORDER_ENV = (
     "RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER"
 )
@@ -306,6 +309,7 @@ _active_noise_gather_chunk_log_keys: set[tuple[int, int, int, int]] = set()
 _active_flat_gather_chunk_log_keys: set[tuple[str, int, int, int, int]] = set()
 _adjoint_block_chunk_log_keys: set[tuple[str, int, int, int, int]] = set()
 _cached_score_chunk_log_keys: set[tuple[str, int, int, int]] = set()
+_relion_wavg_direct_noise_log_keys: set[int] = set()
 
 
 class Pass2DumpComplete(RuntimeError):
@@ -4429,6 +4433,121 @@ def _weighted_image_power_shells_and_per_image(
         weighted_per_image = weighted_per_image + full_mass * (replacement_high - generic_high)
     output_dtype = norm_reduction_dtype if source_faithful_spectrum_norm else jnp.float32
     return weighted_shells, weighted_per_image.astype(output_dtype)
+
+
+def _relion_wavg_atomic_triplet_terms(
+    proj,
+    proj_abs2,
+    summed_shifted,
+    ctf_posterior,
+    noise_variance,
+    scale,
+    raw_shifted_images,
+    posterior,
+):
+    """Form per-rotation Wavg ``[XA, AA, diff2]`` float32 atomic operands.
+
+    RELION accumulates all three quantities in one CUDA thread after its
+    translation loop. XA and AA are returned in scale-correction units;
+    diff2 stays in the raw residual units used by ``wsum_sigma2_noise``.
+    """
+
+    proj = jnp.asarray(proj, dtype=jnp.complex64)
+    proj_abs2 = jnp.asarray(proj_abs2, dtype=jnp.float32)
+    summed_shifted = jnp.asarray(summed_shifted, dtype=jnp.complex64)
+    ctf_posterior = jnp.asarray(ctf_posterior, dtype=jnp.float32)
+    noise_variance = jnp.asarray(noise_variance, dtype=jnp.float32).reshape(-1)
+    scale = jnp.asarray(scale, dtype=jnp.float32).reshape(-1)
+    raw_shifted_images = jnp.asarray(raw_shifted_images, dtype=jnp.complex64)
+    posterior = jnp.asarray(posterior, dtype=jnp.float32)
+
+    ctf_has_mass = ctf_posterior != 0.0
+    ctf_posterior_raw = jnp.where(
+        ctf_has_mass,
+        ctf_posterior * noise_variance[None, None, :],
+        0.0,
+    )
+    aa_raw = jnp.where(ctf_has_mass, proj_abs2 * ctf_posterior_raw, 0.0).astype(
+        jnp.float32
+    )
+    cross_has_mass = summed_shifted != 0.0
+    cross = jnp.where(cross_has_mass, proj * jnp.conj(summed_shifted), 0.0)
+    xa_raw = (noise_variance[None, None, :] * cross.real).astype(jnp.float32)
+    safe_scale = jnp.maximum(scale, jnp.asarray(1e-30, dtype=jnp.float32))
+    # Wavg emits all three atomics at every pixel inside current_size. RELION
+    # applies its lower-resolution scale-correction cutoff only when the host
+    # later consumes XA/AA; masking here changes the CUDA issue stream.
+    xa = (xa_raw / safe_scale[:, None, None]).astype(jnp.float32)
+    aa = (aa_raw / (safe_scale[:, None, None] ** 2)).astype(jnp.float32)
+
+    # RELION's g_img input is the raw translated preprocessed image, not the
+    # CTF/noise-weighted BPref numerator used by RECOVAR's adjoint path.
+    shifted_power = (raw_shifted_images.real * raw_shifted_images.real).astype(jnp.float32)
+    shifted_power = jax.lax.optimization_barrier(shifted_power)
+    shifted_power = (
+        shifted_power + raw_shifted_images.imag * raw_shifted_images.imag
+    ).astype(jnp.float32)
+    image_power = jnp.einsum(
+        "brt,btp->brp",
+        posterior,
+        shifted_power,
+        preferred_element_type=jnp.float32,
+    ).astype(jnp.float32)
+    diff2 = (
+        (image_power + aa_raw)
+        - jnp.asarray(2.0, dtype=jnp.float32) * xa_raw
+    ).astype(jnp.float32)
+    return jnp.stack((xa, aa, diff2), axis=-1)
+
+
+def _replace_low_shell_noise_with_relion_wavg_direct_residual(
+    residual_shells,
+    image_power_shells,
+    atomic_diff2_per_pixel,
+    shell_indices,
+    *,
+    exclusive_shell_stop: int,
+):
+    """Replace complete low shells with fused Wavg ``diff2`` atomics.
+
+    The fused value already contains image power, A2, and -2*XA.  Therefore
+    its covered shells replace both RECOVAR noise-stat components.  The
+    exclusive boundary is intentional: the exact-radius reconstruction window
+    only contains part of RELION's cutoff shell, so that shell must remain on
+    the existing algebraic path until the full rectangular Wavg window is
+    reproduced.
+    """
+
+    residual = np.asarray(residual_shells, dtype=np.float64).copy()
+    image_power = np.asarray(image_power_shells, dtype=np.float64).copy()
+    atomic_diff2 = np.asarray(atomic_diff2_per_pixel, dtype=np.float32)
+    shells = np.asarray(shell_indices, dtype=np.int32).reshape(-1)
+    if residual.ndim != 1 or image_power.shape != residual.shape:
+        raise ValueError(
+            "noise residual and image-power shells must be matching vectors, got "
+            f"{residual.shape} and {image_power.shape}"
+        )
+    if atomic_diff2.ndim != 2 or atomic_diff2.shape[1] != shells.size:
+        raise ValueError(
+            "atomic Wavg diff2 must have shape (images, pixels) matching shell indices, got "
+            f"{atomic_diff2.shape} and {shells.shape}"
+        )
+    shell_stop = min(max(0, int(exclusive_shell_stop)), residual.size)
+    valid = (shells >= 0) & (shells < shell_stop)
+    direct_shells = np.zeros_like(residual)
+    if np.any(valid):
+        # Preserve physical particle order, then reconstruction-window pixel
+        # order.  The per-pixel values have already undergone RELION-style
+        # float32 rotation atomics on device.
+        for image_row in range(atomic_diff2.shape[0]):
+            np.add.at(
+                direct_shells,
+                shells[valid],
+                atomic_diff2[image_row, valid].astype(np.float64),
+            )
+    residual[:shell_stop] = direct_shells[:shell_stop]
+    image_power[:shell_stop] = 0.0
+    return residual, image_power
 
 
 @jax.jit
@@ -8670,8 +8789,9 @@ def _write_chunked_scale_aa_dump(
     aa_feature_shell_ids=None,
     atomic_xa_per_pixel=None,
     atomic_aa_per_pixel=None,
+    atomic_diff2_per_pixel=None,
 ):
-    """Write compact XA/AA intermediates for a rotation-chunked target bucket."""
+    """Write compact Wavg XA/AA/diff2 intermediates for a target bucket."""
 
     target_rows = np.asarray(target_rows, dtype=np.int64)
     if target_rows.size == 0:
@@ -8696,6 +8816,11 @@ def _write_chunked_scale_aa_dump(
         if atomic_aa_per_pixel is None
         else np.asarray(atomic_aa_per_pixel, dtype=np.float32)
     )
+    atomic_diff2_per_pixel_np = (
+        None
+        if atomic_diff2_per_pixel is None
+        else np.asarray(atomic_diff2_per_pixel, dtype=np.float32)
+    )
     atomic_xa_per_pixel_np = (
         None
         if atomic_xa_per_pixel is None
@@ -8711,6 +8836,11 @@ def _write_chunked_scale_aa_dump(
         mask.size,
     ):
         raise ValueError("chunked scale-AA atomic pixel topology changed")
+    if atomic_diff2_per_pixel_np is not None and atomic_diff2_per_pixel_np.shape != (
+        local_indices.size,
+        mask.size,
+    ):
+        raise ValueError("chunked Wavg diff2 atomic pixel topology changed")
     candidate_arrays_present = posterior_probs_chunks is not None or rotation_matrix_chunks is not None
     if candidate_arrays_present:
         if posterior_probs_chunks is None or rotation_matrix_chunks is None or fine_translations is None:
@@ -8850,6 +8980,22 @@ def _write_chunked_scale_aa_dump(
                 scale_aa_atomic_per_shell=atomic_shells,
                 scale_aa_atomic_per_image=np.float64(
                     np.sum(atomic_pixels, dtype=np.float64)
+                ),
+            )
+        if atomic_diff2_per_pixel_np is not None:
+            atomic_diff2_pixels = atomic_diff2_per_pixel_np[bucket_row]
+            atomic_diff2_shells = np.zeros(shell_count, dtype=np.float64)
+            valid_current_size = (shells >= 0) & (shells < shell_count)
+            np.add.at(
+                atomic_diff2_shells,
+                shells[valid_current_size],
+                atomic_diff2_pixels[valid_current_size].astype(np.float64),
+            )
+            payload.update(
+                wavg_diff2_atomic_per_pixel=atomic_diff2_pixels,
+                wavg_diff2_atomic_per_shell=atomic_diff2_shells,
+                wavg_diff2_atomic_per_image=np.float64(
+                    np.sum(atomic_diff2_pixels, dtype=np.float64)
                 ),
             )
         if candidate_arrays_present:
@@ -11160,6 +11306,55 @@ def compute_pass2_stats_sparse_bucketed(
                 window_indices,
                 image_shape,
             )
+        raw_translated_wavg_for_atomic = None
+        relion_wavg_atomic_scale_aa = bool(
+            accumulate_noise
+            and noise_scale_correction_aa_total is not None
+            and _env_flag_enabled(_RELION_WAVG_ATOMIC_SCALE_AA_ENV, default=False)
+        )
+        relion_wavg_atomic_direct_residual_requested = bool(
+            accumulate_noise
+            and _env_flag_enabled(
+                _RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV,
+                default=False,
+            )
+        )
+        if (
+            relion_wavg_atomic_direct_residual_requested
+            and noise_scale_correction_aa_total is not None
+            and not relion_wavg_atomic_scale_aa
+        ):
+            raise ValueError(
+                f"{_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV}=1 requires "
+                f"{_RELION_WAVG_ATOMIC_SCALE_AA_ENV}=1 and scale groups"
+            )
+        relion_wavg_atomic_direct_residual = bool(
+            relion_wavg_atomic_direct_residual_requested
+            and relion_wavg_atomic_scale_aa
+        )
+        if relion_wavg_atomic_direct_residual and current_size is None:
+            raise ValueError("direct Wavg residual replacement requires current_size")
+        if relion_wavg_atomic_scale_aa:
+            if relion_score_translation_angles is None:
+                raise ValueError(
+                    "Wavg atomic parity requires RELION translation angles"
+                )
+            raw_translated_wavg_for_atomic = _relion_cuda_translate_wavg_norm_images(
+                processed_score_half_for_noise,
+                relion_score_translation_angles,
+                recon_window_indices,
+                image_shape,
+            )
+        if relion_wavg_atomic_direct_residual:
+            direct_noise_log_key = int(current_size)
+            if direct_noise_log_key not in _relion_wavg_direct_noise_log_keys:
+                _relion_wavg_direct_noise_log_keys.add(direct_noise_log_key)
+                logger.info(
+                    "Sparse pass-2 RELION Wavg diagnostic: replacing complete "
+                    "noise shells [0, %d) with fused direct residual atomics; "
+                    "cutoff shell stays algebraic",
+                    int(current_size // 2),
+                )
 
         # Window gather (if applicable)
         if use_window:
@@ -11644,12 +11839,10 @@ def compute_pass2_stats_sparse_bucketed(
                     offset += width
                 del score_chunks
             if accumulate_noise:
-                relion_wavg_atomic_scale_aa = bool(
-                    noise_scale_correction_aa_total is not None
-                    and _env_flag_enabled(
-                        _RELION_WAVG_ATOMIC_SCALE_AA_ENV,
-                        default=False,
-                    )
+                bucket_block_noise_shells = (
+                    np.zeros(n_shells, dtype=np.float64)
+                    if relion_wavg_atomic_direct_residual
+                    else None
                 )
                 relion_wavg_atomic_scale_triplet_pixels = (
                     jnp.zeros((batch, n_recon_windowed, 3), dtype=jnp.float32)
@@ -11658,6 +11851,7 @@ def compute_pass2_stats_sparse_bucketed(
                 )
                 relion_wavg_atomic_scale_xa_pixels_np = None
                 relion_wavg_atomic_scale_aa_pixels_np = None
+                relion_wavg_atomic_diff2_pixels_np = None
                 if translation_sqdist_ang is not None or translated_wavg_norm:
                     chunk_translation_posterior_total = np.zeros((batch, n_fine_trans), dtype=np.float64)
                 chunk_support_mass = np.zeros((batch,), dtype=np.float64)
@@ -11928,7 +12122,14 @@ def compute_pass2_stats_sparse_bucketed(
                         n_shells,
                         max_block_bytes=max_noise_block_bytes,
                     )
-                    noise_wsum_total += np.asarray(block_noise_shells, dtype=np.float64)
+                    block_noise_shells_np = np.asarray(
+                        block_noise_shells,
+                        dtype=np.float64,
+                    )
+                    if relion_wavg_atomic_direct_residual:
+                        bucket_block_noise_shells += block_noise_shells_np
+                    else:
+                        noise_wsum_total += block_noise_shells_np
                     block_norm_residual = _compute_norm_residual_per_image(
                         proj_for_noise_chunk,
                         proj_abs2_for_noise_chunk,
@@ -11955,53 +12156,15 @@ def compute_pass2_stats_sparse_bucketed(
                                 relion_wavg_rotation_atomic_triplet_add_f32,
                             )
 
-                            atomic_scale_mask = jnp.asarray(
-                                scale_correction_pixel_mask,
-                                dtype=bool,
-                            ).reshape(-1)
-                            atomic_ctf_has_mass = (
-                                (jnp.asarray(ctf_probs) != 0.0)
-                                & atomic_scale_mask[None, None, :]
-                            )
-                            atomic_ctf_probs_raw = jnp.where(
-                                atomic_ctf_has_mass,
-                                jnp.asarray(ctf_probs)
-                                * jnp.asarray(noise_variance_for_noise)[None, None, :],
-                                0.0,
-                            )
-                            atomic_safe_scale = jnp.maximum(
-                                jnp.asarray(bucket_scale_for_stats, dtype=jnp.float32),
-                                1e-30,
-                            )
-                            atomic_aa_terms = jnp.where(
-                                atomic_ctf_has_mass,
-                                jnp.asarray(proj_abs2_for_noise_chunk, dtype=jnp.float32)
-                                * atomic_ctf_probs_raw.astype(jnp.float32)
-                                / (atomic_safe_scale[:, None, None] ** 2),
-                                0.0,
-                            ).astype(jnp.float32)
-                            atomic_cross_has_mass = (
-                                (jnp.asarray(summed_masked_noise) != 0.0)
-                                & atomic_scale_mask[None, None, :]
-                            )
-                            atomic_cross_terms = jnp.where(
-                                atomic_cross_has_mass,
-                                jnp.asarray(proj_for_noise_chunk)
-                                * jnp.conj(jnp.asarray(summed_masked_noise)),
-                                0.0,
-                            )
-                            atomic_xa_terms = (
-                                jnp.asarray(noise_variance_for_noise)[None, None, :]
-                                * atomic_cross_terms.real
-                                / atomic_safe_scale[:, None, None]
-                            ).astype(jnp.float32)
-                            atomic_triplet_terms = jnp.stack(
-                                (
-                                    atomic_xa_terms,
-                                    atomic_aa_terms,
-                                    jnp.zeros_like(atomic_aa_terms),
-                                ),
-                                axis=-1,
+                            atomic_triplet_terms = _relion_wavg_atomic_triplet_terms(
+                                proj_for_noise_chunk,
+                                proj_abs2_for_noise_chunk,
+                                summed_masked_noise,
+                                ctf_probs,
+                                noise_variance_for_noise,
+                                bucket_scale_for_stats,
+                                raw_translated_wavg_for_atomic,
+                                noise_probs,
                             )
                             relion_wavg_atomic_scale_triplet_pixels = (
                                 relion_wavg_rotation_atomic_triplet_add_f32(
@@ -12402,13 +12565,28 @@ def compute_pass2_stats_sparse_bucketed(
                     relion_wavg_atomic_scale_aa_pixels_np = (
                         relion_wavg_atomic_scale_triplet_pixels_np[:, :, 1]
                     )
+                    relion_wavg_atomic_diff2_pixels_np = (
+                        relion_wavg_atomic_scale_triplet_pixels_np[:, :, 2]
+                    )
+                    scale_pixel_mask_np = np.asarray(
+                        scale_correction_pixel_mask,
+                        dtype=bool,
+                    ).reshape(1, -1)
                     atomic_xa_per_image = np.sum(
-                        relion_wavg_atomic_scale_xa_pixels_np,
+                        np.where(
+                            scale_pixel_mask_np,
+                            relion_wavg_atomic_scale_xa_pixels_np,
+                            np.float32(0.0),
+                        ),
                         axis=1,
                         dtype=np.float64,
                     )
                     atomic_aa_per_image = np.sum(
-                        relion_wavg_atomic_scale_aa_pixels_np,
+                        np.where(
+                            scale_pixel_mask_np,
+                            relion_wavg_atomic_scale_aa_pixels_np,
+                            np.float32(0.0),
+                        ),
                         axis=1,
                         dtype=np.float64,
                     )
@@ -12441,7 +12619,24 @@ def compute_pass2_stats_sparse_bucketed(
                         window_indices,
                         shell_cutoff=int(current_size // 2),
                     )
-                noise_img_power_total += np.asarray(weighted_img_shells, dtype=np.float64)
+                weighted_img_shells_np = np.asarray(
+                    weighted_img_shells,
+                    dtype=np.float64,
+                )
+                if relion_wavg_atomic_direct_residual:
+                    direct_residual_shells, direct_image_power_shells = (
+                        _replace_low_shell_noise_with_relion_wavg_direct_residual(
+                            bucket_block_noise_shells,
+                            weighted_img_shells_np,
+                            relion_wavg_atomic_diff2_pixels_np,
+                            shell_indices_noise,
+                            exclusive_shell_stop=int(current_size // 2),
+                        )
+                    )
+                    noise_wsum_total += direct_residual_shells
+                    noise_img_power_total += direct_image_power_shells
+                else:
+                    noise_img_power_total += weighted_img_shells_np
                 noise_norm_correction_total[image_indices] += np.asarray(
                     weighted_img_per_image,
                     dtype=np.float64,
@@ -12481,6 +12676,7 @@ def compute_pass2_stats_sparse_bucketed(
                         aa_feature_shell_ids=chunked_scale_aa_feature_shell_ids,
                         atomic_xa_per_pixel=relion_wavg_atomic_scale_xa_pixels_np,
                         atomic_aa_per_pixel=relion_wavg_atomic_scale_aa_pixels_np,
+                        atomic_diff2_per_pixel=relion_wavg_atomic_diff2_pixels_np,
                     )
                     if chunked_scale_aa_dump_count and _env_flag_enabled(
                         _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV,
@@ -13307,7 +13503,7 @@ def compute_pass2_stats_sparse_bucketed(
                     shell_cutoff=int(current_size // 2),
                 )
             support_mass_np = np.asarray(support_mass, dtype=np.float64)
-            noise_img_power_total += np.asarray(weighted_img_shells, dtype=np.float64)
+            weighted_img_shells_np = np.asarray(weighted_img_shells, dtype=np.float64)
             noise_norm_correction_total[image_indices] += np.asarray(
                 weighted_img_per_image,
                 dtype=np.float64,
@@ -13329,7 +13525,51 @@ def compute_pass2_stats_sparse_bucketed(
                 n_shells,
                 max_block_bytes=max_noise_block_bytes,
             )
-            noise_wsum_total += np.asarray(block_noise_shells, dtype=np.float64)
+            block_noise_shells_np = np.asarray(block_noise_shells, dtype=np.float64)
+            relion_wavg_atomic_scale_triplet_pixels_np = None
+            if relion_wavg_atomic_scale_aa:
+                from recovar.cuda_backproject import (
+                    relion_wavg_rotation_atomic_triplet_add_f32,
+                )
+
+                atomic_triplet_terms = _relion_wavg_atomic_triplet_terms(
+                    proj_for_noise,
+                    proj_abs2_for_noise,
+                    summed_masked_noise,
+                    ctf_probs,
+                    noise_variance_for_noise,
+                    bucket_scale_for_stats,
+                    raw_translated_wavg_for_atomic,
+                    noise_probs,
+                )
+                atomic_triplet_pixels = jnp.zeros(
+                    (batch, int(proj_for_noise.shape[-1]), 3),
+                    dtype=jnp.float32,
+                )
+                relion_wavg_atomic_scale_triplet_pixels_np = np.asarray(
+                    jax.block_until_ready(
+                        relion_wavg_rotation_atomic_triplet_add_f32(
+                            atomic_triplet_terms,
+                            atomic_triplet_pixels,
+                        )
+                    ),
+                    dtype=np.float32,
+                )
+            if relion_wavg_atomic_direct_residual:
+                direct_residual_shells, direct_image_power_shells = (
+                    _replace_low_shell_noise_with_relion_wavg_direct_residual(
+                        block_noise_shells_np,
+                        weighted_img_shells_np,
+                        relion_wavg_atomic_scale_triplet_pixels_np[:, :, 2],
+                        shell_indices_noise,
+                        exclusive_shell_stop=int(current_size // 2),
+                    )
+                )
+                noise_wsum_total += direct_residual_shells
+                noise_img_power_total += direct_image_power_shells
+            else:
+                noise_wsum_total += block_noise_shells_np
+                noise_img_power_total += weighted_img_shells_np
             block_norm_residual = _compute_norm_residual_per_image(
                 proj_for_noise,
                 proj_abs2_for_noise,
@@ -13392,6 +13632,29 @@ def compute_pass2_stats_sparse_bucketed(
                     bucket_scale_for_stats,
                     scale_correction_pixel_mask,
                 )
+                if relion_wavg_atomic_scale_aa:
+                    scale_pixel_mask_np = np.asarray(
+                        scale_correction_pixel_mask,
+                        dtype=bool,
+                    ).reshape(1, -1)
+                    scale_xa_per_image = np.sum(
+                        np.where(
+                            scale_pixel_mask_np,
+                            relion_wavg_atomic_scale_triplet_pixels_np[:, :, 0],
+                            np.float32(0.0),
+                        ),
+                        axis=1,
+                        dtype=np.float64,
+                    )
+                    scale_aa_per_image = np.sum(
+                        np.where(
+                            scale_pixel_mask_np,
+                            relion_wavg_atomic_scale_triplet_pixels_np[:, :, 1],
+                            np.float32(0.0),
+                        ),
+                        axis=1,
+                        dtype=np.float64,
+                    )
                 np.add.at(
                     noise_scale_correction_xa_total,
                     np.asarray(bucket_group_ids, dtype=np.int64),

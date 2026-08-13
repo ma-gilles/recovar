@@ -68,10 +68,35 @@ def _native_pixels(
     return rows
 
 
+def _native_direct_residual_shells(
+    path: Path,
+    *,
+    iteration: int,
+    half: int,
+    part_id: int,
+) -> dict[int, float]:
+    rows: dict[int, float] = {}
+    prefix = f"acc_components\titer={iteration}\tpart_id={part_id}\thalfset={half}\t"
+    with path.open() as stream:
+        for line in stream:
+            if not line.startswith(prefix):
+                continue
+            fields = {
+                key: value
+                for key, value in (item.split("=", 1) for item in line.rstrip().split("\t")[1:])
+            }
+            shell = int(fields["shell"])
+            _require(shell not in rows, f"duplicate native direct-residual shell {shell}")
+            rows[shell] = float(fields["direct_residual"])
+    _require(rows, "native direct-residual target selection is empty")
+    return rows
+
+
 def analyze(
     recovar_capture: Path,
     native_pixels: Path,
     *,
+    native_noise_components: Path | None = None,
     expected_iteration: int,
     expected_half: int,
     expected_part_id: int,
@@ -113,6 +138,11 @@ def analyze(
         atomic_xa_per_pixel = (
             np.asarray(payload["scale_xa_atomic_per_pixel"], dtype=np.float64)
             if "scale_xa_atomic_per_pixel" in payload
+            else None
+        )
+        atomic_diff2_per_shell = (
+            np.asarray(payload["wavg_diff2_atomic_per_shell"], dtype=np.float64)
+            if "wavg_diff2_atomic_per_shell" in payload
             else None
         )
     _require(iteration == expected_iteration and half == expected_half, "iteration/half identity changed")
@@ -223,6 +253,41 @@ def analyze(
                 ),
             }
 
+    direct_residual_report = None
+    if native_noise_components is not None:
+        _require(
+            atomic_diff2_per_shell is not None,
+            "native noise components require captured Wavg diff2 atomics",
+        )
+        native_direct = _native_direct_residual_shells(
+            native_noise_components,
+            iteration=expected_iteration,
+            half=expected_half,
+            part_id=expected_part_id,
+        )
+        compared_shells = np.asarray(
+            sorted(
+                shell
+                for shell in native_direct
+                if 0 <= shell < atomic_diff2_per_shell.size
+            ),
+            dtype=np.int32,
+        )
+        _require(compared_shells.size > 0, "no common Wavg direct-residual shells")
+        recovar_direct = (
+            atomic_diff2_per_shell[compared_shells] / float(recovar_term_divisor)
+        )
+        native_direct_values = np.asarray(
+            [native_direct[int(shell)] for shell in compared_shells],
+            dtype=np.float64,
+        )
+        direct_residual_report = {
+            **_metric(recovar_direct, native_direct_values),
+            "shells": compared_shells.tolist(),
+            "recovar_native_units": recovar_direct.tolist(),
+            "native": native_direct_values.tolist(),
+        }
+
     return {
         "schema": "recovar.em.k1_scale_aa_pixels.v1",
         "identity": {
@@ -269,11 +334,22 @@ def analyze(
         },
         "atomic_aa": atomic_report,
         "xa": xa_report,
+        "wavg_direct_residual": direct_residual_report,
         "artifacts": {
             "recovar_capture": str(recovar_capture.resolve()),
             "recovar_capture_sha256": _sha256(recovar_capture),
             "native_pixels": str(native_pixels.resolve()),
             "native_pixels_sha256": _sha256(native_pixels),
+            "native_noise_components": (
+                None
+                if native_noise_components is None
+                else str(native_noise_components.resolve())
+            ),
+            "native_noise_components_sha256": (
+                None
+                if native_noise_components is None
+                else _sha256(native_noise_components)
+            ),
         },
         "classification": (
             "atomic Wavg XA/AA treatment captured"
@@ -291,6 +367,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recovar-capture", type=Path, required=True)
     parser.add_argument("--native-pixels", type=Path, required=True)
+    parser.add_argument("--native-noise-components", type=Path)
     parser.add_argument("--iteration", type=int, default=2)
     parser.add_argument("--half", type=int, default=1)
     parser.add_argument("--part-id", type=int, required=True)
@@ -304,6 +381,7 @@ def main() -> None:
     report = analyze(
         args.recovar_capture,
         args.native_pixels,
+        native_noise_components=args.native_noise_components,
         expected_iteration=args.iteration,
         expected_half=args.half,
         expected_part_id=args.part_id,
