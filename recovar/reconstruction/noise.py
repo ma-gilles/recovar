@@ -1069,15 +1069,53 @@ def estimate_radial_noise_upper_bound_from_inside_mask_v2(experiment_dataset, me
 
 
 # Assume noise constant across images and within frequency bands. Estimate the noise by the outside of the mask, and report some statistics
-def estimate_radial_noise_statistic_from_outside_mask(experiment_dataset, volume_mask, batch_size):
+def _average_profiles_by_noise_group(profiles, experiment_dataset):
+    """Average per-image radial profiles using the dataset noise groups.
+
+    A radial-per-tilt model indexes profiles by the sorted unique dose values
+    stored in ``VariableRadialNoiseModel.dose_indices``.  Reusing those exact
+    indices keeps diagnostic power spectra aligned with the noise rows used by
+    the forward model.  Ordinary SPA/radial datasets have one group.
+    """
+
+    profiles = np.asarray(profiles)
+    if isinstance(experiment_dataset.noise, VariableRadialNoiseModel):
+        group_indices = np.asarray(experiment_dataset.noise.dose_indices, dtype=np.int32)
+        n_groups = int(np.max(group_indices)) + 1
+    else:
+        group_indices = np.zeros(experiment_dataset.n_images, dtype=np.int32)
+        n_groups = 1
+
+    grouped = []
+    for group_idx in range(n_groups):
+        selected = profiles[group_indices == group_idx]
+        if selected.size == 0:
+            raise ValueError(f"noise group {group_idx} contains no image power spectra")
+        grouped.append(mean_fn(selected, axis=0))
+    return np.asarray(grouped, dtype=experiment_dataset.dtype_real)
+
+
+def estimate_radial_noise_statistic_from_outside_mask(
+    experiment_dataset,
+    volume_mask,
+    batch_size,
+    *,
+    return_grouped=False,
+):
     masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask(
         experiment_dataset, volume_mask, batch_size, disc_type="linear_interp"
     )
-    return (
+    summary = (
         mean_fn(masked_image_PS, axis=0),
         np.std(masked_image_PS, axis=0),
         mean_fn(image_PS, axis=0),
         np.std(image_PS, axis=0),
+    )
+    if not return_grouped:
+        return summary
+    return summary + (
+        _average_profiles_by_noise_group(masked_image_PS, experiment_dataset),
+        _average_profiles_by_noise_group(image_PS, experiment_dataset),
     )
 
 

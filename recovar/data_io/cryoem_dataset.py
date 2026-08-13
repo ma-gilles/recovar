@@ -365,6 +365,11 @@ class CryoEMDataset:
         """Replace all CTF parameters."""
         self._metadata.set_ctf(ctf_params)
 
+    def update_ctf_evaluator(self, ctf_evaluator):
+        """Replace the CTF evaluator and invalidate materialized halfsets."""
+        self._ctf_evaluator = core.as_ctf_evaluator(ctf_evaluator)
+        self._invalidate_halfset_cache()
+
     def __repr__(self) -> str:
         return (
             f"CryoEMDataset(n_images={self.n_images}, grid_size={self.grid_size}, "

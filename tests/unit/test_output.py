@@ -1,5 +1,6 @@
 import os
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
@@ -298,6 +299,16 @@ def test_standard_pipeline_plots_uses_embedding_component_api(monkeypatch, tmp_p
     monkeypatch.setattr(plot_utils, "plot_eigenvalues", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(plot_utils, "plot_mean_fsc", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(plot_utils, "plot_pipeline_summary", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        plot_utils,
+        "plot_covariance_column_fscs",
+        lambda *_args, **_kwargs: (plt.figure(), None),
+    )
+    monkeypatch.setattr(
+        plot_utils,
+        "plot_noise_group_summary",
+        lambda *_args, **_kwargs: (plt.figure(), None),
+    )
 
     output.standard_pipeline_plots(_PO(), 4, str(tmp_path))
 

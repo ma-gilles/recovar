@@ -14,6 +14,186 @@ from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
 
+
+def _pipeline_value(pipeline_output, key, default=None):
+    try:
+        return pipeline_output.get(key)
+    except (KeyError, AttributeError, FileNotFoundError):
+        return default
+
+
+def _radial_frequency_axis(pipeline_output, n_shells):
+    voxel_size = float(_pipeline_value(pipeline_output, "voxel_size", 1.0))
+    volume_shape = _pipeline_value(pipeline_output, "volume_shape", None)
+    grid_size = int(volume_shape[0]) if volume_shape is not None else max(2, 2 * (n_shells + 1))
+    return np.arange(n_shells, dtype=np.float64) / (grid_size * voxel_size)
+
+
+def plot_covariance_column_fscs(pipeline_output, output_path=None):
+    """Plot all covariance-column FSCs as a heatmap and representative curves."""
+
+    column_fscs = np.asarray(_pipeline_value(pipeline_output, "column_fscs"))
+    if column_fscs.ndim == 1:
+        column_fscs = column_fscs[None, :]
+    if column_fscs.ndim != 2 or column_fscs.size == 0:
+        raise ValueError(f"column_fscs must have shape (columns, shells), got {column_fscs.shape}")
+
+    frequencies = _radial_frequency_axis(pipeline_output, column_fscs.shape[1])
+    representative = np.unique(
+        np.linspace(0, column_fscs.shape[0] - 1, min(8, column_fscs.shape[0]), dtype=int)
+    )
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6), gridspec_kw={"width_ratios": [1.05, 1.4]})
+    image = axes[0].imshow(
+        column_fscs,
+        aspect="auto",
+        origin="lower",
+        extent=(frequencies[0], frequencies[-1], -0.5, column_fscs.shape[0] - 0.5),
+        cmap="coolwarm",
+        vmin=-0.2,
+        vmax=1.0,
+    )
+    axes[0].set_xlabel("spatial frequency (1/Å)")
+    axes[0].set_ylabel("sampled covariance column")
+    axes[0].set_title("Covariance-column FSCs")
+    fig.colorbar(image, ax=axes[0], label="FSC")
+
+    colors = plt.cm.viridis(np.linspace(0.05, 0.95, representative.size))
+    for index, color in zip(representative, colors):
+        axes[1].plot(frequencies, column_fscs[index], color=color, linewidth=1.5, label=f"column {index}")
+    axes[1].plot(frequencies, np.nanmedian(column_fscs, axis=0), color="black", linewidth=2.5, label="median")
+    axes[1].fill_between(
+        frequencies,
+        np.nanpercentile(column_fscs, 10, axis=0),
+        np.nanpercentile(column_fscs, 90, axis=0),
+        color="black",
+        alpha=0.12,
+        label="10–90%",
+    )
+    axes[1].axhline(1 / 7, color="#D55E00", linestyle="--", linewidth=1.3, label="FSC 0.143")
+    axes[1].set_ylim(-0.2, 1.02)
+    axes[1].set_xlabel("spatial frequency (1/Å)")
+    axes[1].set_ylabel("FSC")
+    axes[1].set_title("Representative columns and distribution")
+    axes[1].grid(alpha=0.25)
+    axes[1].legend(fontsize=8, ncol=2)
+    fig.tight_layout()
+    if output_path is not None:
+        fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    return fig, axes
+
+
+def _noise_group_labels(metadata, n_groups):
+    labels = []
+    for group_idx in range(n_groups):
+        record = metadata[group_idx] if metadata and group_idx < len(metadata) else {}
+        parts = [f"{group_idx}"]
+        dose = record.get("pre_exposure")
+        angle = record.get("median_tilt_angle_deg")
+        if dose is not None and np.isfinite(dose):
+            parts.append(f"dose {dose:.1f}")
+        if angle is not None and np.isfinite(angle):
+            prefix = "|tilt|≈" if record.get("tilt_angle_source") == "inferred_abs_from_ctf_scale" else "tilt "
+            parts.append(f"{prefix}{angle:.1f}°")
+        labels.append(" | ".join(parts))
+    return labels
+
+
+def plot_noise_group_summary(pipeline_output, output_path=None):
+    """Compare final noise profiles with matched image power spectra by tilt/dose group."""
+
+    noise_profiles = np.asarray(_pipeline_value(pipeline_output, "noise_var_used"))
+    if noise_profiles.ndim == 1:
+        noise_profiles = noise_profiles[None, :]
+    if noise_profiles.ndim != 2 or noise_profiles.size == 0:
+        raise ValueError(f"noise_var_used must be one- or two-dimensional, got {noise_profiles.shape}")
+
+    image_profiles = _pipeline_value(pipeline_output, "noise_group_image_PS")
+    if image_profiles is None:
+        image_profiles = _pipeline_value(pipeline_output, "image_PS")
+    image_profiles = np.asarray(image_profiles)
+    if image_profiles.ndim == 1:
+        image_profiles = image_profiles[None, :]
+    if image_profiles.shape[0] == 1 and noise_profiles.shape[0] > 1:
+        image_profiles = np.repeat(image_profiles, noise_profiles.shape[0], axis=0)
+    if image_profiles.ndim != 2 or image_profiles.shape[0] != noise_profiles.shape[0]:
+        raise ValueError(
+            "matched image power spectra must have one row per noise group: "
+            f"noise={noise_profiles.shape}, image_PS={image_profiles.shape}"
+        )
+
+    n_shells = min(noise_profiles.shape[1], image_profiles.shape[1])
+    noise_profiles = noise_profiles[:, :n_shells]
+    image_profiles = image_profiles[:, :n_shells]
+    frequencies = _radial_frequency_axis(pipeline_output, n_shells)
+    metadata = _pipeline_value(pipeline_output, "noise_group_metadata", None)
+    labels = _noise_group_labels(metadata, noise_profiles.shape[0])
+    eps = np.finfo(np.float32).tiny
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 11))
+    heatmap_extent = (frequencies[0], frequencies[-1], -0.5, noise_profiles.shape[0] - 0.5)
+    noise_image = axes[0, 0].imshow(
+        np.log10(np.maximum(noise_profiles, eps)), aspect="auto", origin="lower", extent=heatmap_extent, cmap="magma"
+    )
+    axes[0, 0].set_title("Estimated noise power by tilt/dose group")
+    fig.colorbar(noise_image, ax=axes[0, 0], label="log10 power")
+    power_image = axes[0, 1].imshow(
+        np.log10(np.maximum(image_profiles, eps)), aspect="auto", origin="lower", extent=heatmap_extent, cmap="viridis"
+    )
+    axes[0, 1].set_title("Matched image power spectra")
+    fig.colorbar(power_image, ax=axes[0, 1], label="log10 power")
+    for ax in axes[0]:
+        ax.set_xlabel("spatial frequency (1/Å)")
+        ax.set_ylabel("noise group")
+
+    representative = np.unique(
+        np.linspace(0, noise_profiles.shape[0] - 1, min(7, noise_profiles.shape[0]), dtype=int)
+    )
+    colors = plt.cm.plasma(np.linspace(0.05, 0.95, representative.size))
+    for group_idx, color in zip(representative, colors):
+        axes[1, 0].plot(
+            frequencies,
+            noise_profiles[group_idx],
+            color=color,
+            linewidth=1.8,
+            label=f"{labels[group_idx]} noise",
+        )
+        axes[1, 0].plot(
+            frequencies,
+            image_profiles[group_idx],
+            color=color,
+            linewidth=1.4,
+            linestyle="--",
+            label=f"{labels[group_idx]} image",
+        )
+    axes[1, 0].set_yscale("log")
+    axes[1, 0].set_xlabel("spatial frequency (1/Å)")
+    axes[1, 0].set_ylabel("power")
+    axes[1, 0].set_title("Matched profiles (solid noise; dashed image)")
+    axes[1, 0].grid(alpha=0.25)
+    axes[1, 0].legend(fontsize=7, ncol=2)
+
+    shell_start = max(1, n_shells // 4)
+    shell_stop = max(shell_start + 1, 3 * n_shells // 4)
+    noise_band = np.nanmedian(noise_profiles[:, shell_start:shell_stop], axis=1)
+    image_band = np.nanmedian(image_profiles[:, shell_start:shell_stop], axis=1)
+    group_axis = np.arange(noise_profiles.shape[0])
+    axes[1, 1].plot(group_axis, noise_band, "o-", color="#D55E00", label="noise")
+    axes[1, 1].plot(group_axis, image_band, "o-", color="#0072B2", label="image")
+    axes[1, 1].set_yscale("log")
+    axes[1, 1].set_xlabel("noise group (ordered by pre-exposure)")
+    axes[1, 1].set_ylabel("median mid-frequency power")
+    axes[1, 1].set_title("Power change across tilt/dose groups")
+    axes[1, 1].grid(alpha=0.25)
+    axes[1, 1].legend()
+    if len(labels) <= 16:
+        axes[1, 1].set_xticks(group_axis, labels, rotation=60, ha="right", fontsize=7)
+
+    fig.suptitle("Noise and image power diagnostics", fontsize=15)
+    fig.tight_layout()
+    if output_path is not None:
+        fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    return fig, axes
+
 def plot_noise_profile(pipeline_output, yscale='linear', ax=None):
     """Plot noise power spectrum profiles from pipeline output.
 
