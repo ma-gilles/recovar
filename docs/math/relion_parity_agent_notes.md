@@ -12235,3 +12235,54 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   `0.999999999999904`/`0.999999999999903` for halves 1/2 and
   `0.999999999999950` merged; relative L2 is
   `3.768e-9`/`3.670e-9` and `2.636e-9` merged.
+
+## 2026-08-13 19:25 ET — clean shell-spectrum A/B is positive at iteration 2 but rejected at iteration 3
+
+- Control job `12348743` completed naturally `0:0` in `01:04:30`; the
+  shellwise PowerClass spectrum candidate `12349735` completed its science
+  path naturally in about `01:05`. Both used the same H100 policy, fresh K=1
+  physical order, fine-parent order, coarse Gaussian scoring, and fused
+  XA/AA Wavg schedule. The only candidate intervention was
+  `RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=1`.
+- Against the same iteration-2 native control, Pmax relative L2 improves
+  `5.7926536e-6 -> 5.0776828e-6` (12.3 percent), and RMSE improves
+  `2.7383403e-7 -> 2.4003547e-7`. Absolute Pmax error improves for 777
+  particles, worsens for 477, and is unchanged for 1,746.
+- Exactly one iteration-2 hard state changes, source row `1203` / stack
+  `1204`. Against that native control, its error changes from `3.829990`
+  degrees and `2.124998` Angstrom to `5.45e-6` degrees and `2.13e-6`
+  Angstrom. Across all 3,000 particles, material pose and translation errors
+  therefore change from one to zero.
+- Significant-support count mismatches remain `120/3000`. Twenty particles
+  cross the boundary: 10 prior mismatches close and 10 new mismatches appear.
+  The iteration-2 merged signed FSC-AUC remains effectively neutral:
+  `0.9999999999259125` control and `0.9999999999258178` candidate against
+  the robust RELION reference.
+- The intervention is rejected as a production default by the next numbered
+  boundary. At iteration 3, control has merged signed FSC-AUC
+  `0.9999999973374888`, Pmax RMSE `0.0002026928`, six support-count
+  mismatches, and no material pose or translation error. The spectrum arm
+  falls to FSC-AUC `0.9999988431342605`, Pmax RMSE `0.0022727722`, eight
+  support-count mismatches, and one `3.692087`-degree / `2.125004`-Angstrom
+  hard error. Its merged GT FSC-AUC delta is `-3.14088e-5`, versus control
+  `+2.28727e-6`.
+- The proposed fresh-K1 default was therefore reverted before commit. The
+  pre-existing explicit environment switch remains diagnostic-only. Targeted
+  K1 ordering, normalization-capture, and continuation/replay tests remain
+  clean (`137 passed`). Fixed complete-case metrics remain `28/34` strict,
+  `32/34` topology, and `34/34` evaluated.
+- Focused native-atomic jobs `12351017` and `12351171` confirm the same image
+  preprocessing boundary but reject a schedule-dependent implementation. The
+  first run matched all `1,931,199` native significant entries for stack
+  1204; its repeat missed four, while both retained the native winner. The
+  raw captures have different SHA-256 values and materially different masked
+  Fourier operands, so native atomics remain diagnostic-only.
+- Native panel job `12352028` is the next bounded discriminator. It captures
+  complete iteration-2 fine tables for stacks `117,2690,1810,2176,1790,1126,
+  2139,185`, selected from the fixed control's support mismatches. The staged
+  comparison is tuple set, raw pre-prior score, priors, normalized posterior,
+  and exact support threshold; it does not wait for another long trajectory.
+- Evidence roots:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_production_sequential_wavg_it3_0ab17ce7_20260813T1820ET`,
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_production_spectrum_wavg_it3_retry1_591a54e8_20260813T1825ET`, and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_support_panel8_native_it2_591a54e8_20260813T1925ET`.
