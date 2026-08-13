@@ -181,6 +181,11 @@ def _maybe_dump_noise_update_debug(
         payload[f"{prefix}_wsum_img_power"] = img_power
         payload[f"{prefix}_wsum_total"] = wsum_sigma2 + img_power
         payload[f"{prefix}_sumw"] = np.array([float(stats_k.sumw)], dtype=np.float64)
+        if getattr(stats_k, "wsum_norm_correction", None) is not None:
+            payload[f"{prefix}_wsum_norm_correction"] = np.asarray(
+                stats_k.wsum_norm_correction,
+                dtype=np.float64,
+            )
         payload[f"{prefix}_sigma2_noise"] = np.asarray(noise_from_res_per_half[half_id - 1], dtype=np.float64)
         payload[f"{prefix}_previous_sigma2_noise"] = np.asarray(
             previous_noise_radial_per_half[half_id - 1],

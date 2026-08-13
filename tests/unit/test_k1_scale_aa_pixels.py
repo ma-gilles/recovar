@@ -8,7 +8,10 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_frequency_coords_half_np,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _make_relion_wavg_rectangle,
     _relion_wavg_atomic_triplet_terms,
+    _relion_wavg_direct_norm_per_image,
+    _relion_wavg_rectangle_triplet_terms,
     _replace_low_shell_noise_with_relion_wavg_direct_residual,
 )
 from scripts.analyze_k1_scale_aa_pixels import analyze
@@ -90,6 +93,96 @@ def test_direct_wavg_residual_replaces_only_complete_low_shells():
     # on the original algebraic path despite large direct diagnostic values.
     np.testing.assert_array_equal(residual, [100.0, 200.0, 300.0, 400.0])
     np.testing.assert_array_equal(image_power, [10.0, 20.0, 30.0, 40.0])
+
+
+def test_relion_wavg_rectangle_matches_native_size60_topology_and_order():
+    image_shape = (256, 256)
+    current_size = 60
+    exact_indices, _ = make_fourier_window_indices_np(
+        image_shape,
+        current_size,
+        include_dc=True,
+        exact_radius=True,
+    )
+
+    layout = _make_relion_wavg_rectangle(
+        image_shape,
+        current_size,
+        exact_indices,
+    )
+
+    assert layout.centered_indices.size == 60 * 31 == 1860
+    assert layout.exact_positions.size == 1411
+    assert np.count_nonzero(layout.shell_indices >= 0) == 1462
+    assert np.count_nonzero(layout.shell_indices < 0) == 398
+    assert np.count_nonzero(
+        (layout.shell_indices >= 0)
+        & ~np.isin(np.arange(layout.shell_indices.size), layout.exact_positions)
+    ) == 51
+    # Native FFTW row-major order starts at ky=0 and walks kx=0..N/2.
+    half_width = image_shape[1] // 2 + 1
+    expected_first_row = image_shape[0] // 2 * half_width + np.arange(31)
+    np.testing.assert_array_equal(layout.centered_indices[:31], expected_first_row)
+    np.testing.assert_array_equal(
+        layout.centered_indices[layout.exact_positions],
+        exact_indices,
+    )
+
+
+def test_relion_wavg_rectangle_terms_keep_image_only_pixels_in_issue_stream():
+    exact_terms = jnp.asarray(
+        [
+            [
+                [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+                [[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]],
+            ]
+        ],
+        dtype=jnp.float32,
+    )
+    shifted = jnp.asarray(
+        [
+            [
+                [1.0 + 0.0j, 2.0 + 0.0j, 3.0 + 0.0j, 4.0 + 0.0j, 5.0 + 0.0j],
+                [0.0 + 1.0j, 0.0 + 2.0j, 0.0 + 3.0j, 0.0 + 4.0j, 0.0 + 5.0j],
+            ]
+        ],
+        dtype=jnp.complex64,
+    )
+    posterior = jnp.asarray([[[0.25, 0.75], [0.5, 0.5]]], dtype=jnp.float32)
+    exact_positions = jnp.asarray([1, 3], dtype=jnp.int32)
+
+    result = np.asarray(
+        _relion_wavg_rectangle_triplet_terms(
+            exact_terms,
+            shifted,
+            posterior,
+            exact_positions,
+        )
+    )
+
+    np.testing.assert_array_equal(result[:, :, exact_positions, :], np.asarray(exact_terms))
+    image_only = np.asarray([0, 2, 4])
+    np.testing.assert_array_equal(result[:, :, image_only, :2], 0.0)
+    shifted_power = np.abs(np.asarray(shifted)) ** 2
+    expected_power = np.einsum("brt,btp->brp", np.asarray(posterior), shifted_power)
+    np.testing.assert_allclose(result[:, :, image_only, 2], expected_power[:, :, image_only])
+
+
+def test_relion_wavg_direct_norm_uses_valid_pixels_then_high_shell_power():
+    atomic_diff2 = np.asarray(
+        [[1.0, 1000.0, 2.0, 3.0], [4.0, 2000.0, 5.0, 6.0]],
+        dtype=np.float32,
+    )
+    shells = np.asarray([0, -1, 2, 1], dtype=np.int32)
+    high_shell = np.asarray([10.0, 20.0], dtype=np.float64)
+
+    result = _relion_wavg_direct_norm_per_image(
+        atomic_diff2,
+        shells,
+        high_shell,
+    )
+
+    np.testing.assert_array_equal(result, [16.0, 35.0])
 
 
 def test_scale_aa_pixels_joins_fourier_coordinates_and_localizes_operand_delta(tmp_path: Path):
