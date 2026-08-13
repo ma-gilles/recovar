@@ -993,3 +993,105 @@ identity-aligned split of current-size and high-shell norm operands. Focused
 unit tests cover the exact `1860/1462/1411/51/398` topology and all eight
 noise/scale tests pass. No iteration-3 or complete trajectory is authorized
 until this joint shell-noise/norm gate is analyzed.
+
+## Full Wavg rectangle and iteration-2 first-divergence gate
+
+Job `12317473` completed `0:0` in 39 minutes 22 seconds. The complete
+rectangle closes the active current-size direct residual to relative L2
+`1.48730e-6` and `2.31445e-6` in halves 1 and 2. The identity-aligned total
+normalization operand has relative L2 `1.32125e-5`; the prior algebraic direct
+normalization operand was `3.16660e-5`. The independently matched high-shell
+tail remains at `3.27909e-7` relative L2.
+
+The downstream iteration-2 state is close but not closed: Pmax RMSE is
+`8.47805e-7`, 581 particles differ in significant-support count, and stack
+image 1204 has the only hard pose difference. The merged signed FSC-AUC is
+`0.9999999999255613`. This is a bounded two-iteration result, not a complete
+case-22 acceptance result, so the fixed scorecard remains `28/34` strict,
+`32/34` topology, and `34/34` evaluated.
+
+The exact reports are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_rect_norm_it2_20260813T0042ET/analysis/`.
+The full Wavg comparison is `wavg_norm_comparison.json`; the identity-aligned
+particle report is `K1_PARTICLE_STATE_IT1_IT2_ROBUST.json`; and the signed FSC
+report is `K1_FSC_IT1_IT2_ROBUST_PREFIX.json`.
+
+The iteration-1 correction state feeding stack 1204's iteration-2 score was
+then captured independently in job `12319723`. The EM computation and all
+requested state artifacts completed in 81.8 seconds; the Slurm wrapper exited
+1 only because its generic post-run check requested an iteration-2 noise dump
+from a one-iteration run, while RELION intentionally skips the iteration-1
+noise update. At the operational boundary, RECOVAR and serialized RELION both
+produce float32 image/normalization factor `1.274451732635498` with zero ULP
+difference. This rules out the incoming normalization scalar as the stack-1204
+winner-flip cause. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_rect_it1_state_retry2_20260813T0218ET/analysis/K1_CASE22_STACK1204_ITER1_NORM_STATE.json`
+(SHA-256 `92a0b4c03acd8c6db79599a82ca23f3ca01e30599ffd6a142d9d27d64c82d390`).
+
+Job `12318935` attempted the corresponding stop-after-target iteration-2
+fine-table capture. It reached stack 1204 after traversing the full physical
+half order, then failed before writing the target artifact because the dump
+path requested one 17.05 GiB raw-score allocation. This is a capture-memory
+failure rather than a scientific result. The replacement experiment replays
+only stack 1204 from the lossless iteration-1 internal Fourier references
+saved by job `12319723`, avoiding the full-half traversal and oversized
+capture allocation.
+Job `12319987` is a separate two-iteration composition gate that adds only the
+already demonstrated CUDA coarse-Gaussian reduction to the complete Wavg
+treatment; native `sincosf` remains disabled. Neither job authorizes a full
+trajectory before its first-divergence report is complete.
+
+## Coarse-boundary composition and lossless-noise replay
+
+Job `12319987` completed `0:0` in 36 minutes 29 seconds. Its composition of
+the complete Wavg treatment, CUDA Gaussian coarse scoring, and RELION-style
+float32 coarse support is a strong positive iteration-2 result. Relative to
+the complete-Wavg control, Pmax RMSE falls from `8.47805e-7` to
+`2.37753e-7`, the Pmax maximum absolute error falls from `1.13457e-5` to
+`4.08752e-6`, and significant-support-count mismatches fall from 581 to 118.
+All remaining support discrepancies are one count. The only hard pose and
+translation mismatch is removed, and merged signed cross-engine FSC-AUC
+improves from `0.9999999999255613` to `0.9999999999675001`. The bounded
+controller topology remains matched. This identifies the coarse score/support
+boundary as the dominant mediator of the remaining iteration-2 posterior
+drift; it does not yet establish a complete case-22 trajectory.
+
+The accepted reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_rect_coarse_gaussian_it2_20260813T0210ET/analysis/K1_PARTICLE_STATE_IT1_IT2_ROBUST.json`
+(SHA-256 `b74521fb093515f131ebc8b2a553e8024e2782017a119227bd551ca82d83b1bd`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_rect_coarse_gaussian_it2_20260813T0210ET/analysis/K1_FSC_IT1_IT2_ROBUST_PREFIX.json`
+(SHA-256 `15831312c2ce93a1df4a04ac547995b47d597afe24fba378c95e294e7be946b4`).
+
+The one-particle coarse-Gaussian/float32-support replay in job `12320501`
+produced an artifact byte-identical to the map-and-normalization replay
+control. That replay begins after its coarse parent/support set has already
+been inherited, so it is a null intervention for the missing 64 fine tuples
+and is not evidence against the positive fresh two-iteration composition.
+
+Job `12320925` then replayed stack 1204 from the exact iteration-1 internal
+Fourier references, exact float32 normalization factor
+`1.274451732635498`, and lossless full-pixel iteration-1 noise arrays instead
+of fixed-decimal STAR shells. It completed `0:0` in 2 minutes 28 seconds.
+The centered pre-prior score relative L2 falls from `7.37616e-6` to
+`1.27489e-6`, and its maximum absolute error falls from `1.54972e-4` to
+`3.52859e-5`. Most importantly, RECOVAR now selects RELION's exact winner,
+local fine rotation 145623 and translation 82. This causally confirms that
+initial-noise serialization was sufficient to trigger the previous
+stack-1204 winner flip when combined with the small reference residual.
+
+The lossless-noise report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1204_live_noise_ref_it2_20260813T0247ET/analysis/K1_CASE22_STACK1204_FINE_SCORE_STAGES_LIVE_NOISE_REF.json`
+(SHA-256 `6730b691e6c9880bb7c119381395b602aeecd3219303706af288f9cf5d0e3fff`).
+Its pass-2 artifact SHA-256 is
+`d32beaa106df1c4b07c79c54eb501cf7542a55f44eb51b52478d51c7cfef48b7`.
+The first remaining discrete mismatch is still candidate-tuple presence: 64
+native tuples from two coarse parent/translation groups are absent. Across
+the common 2,349,728 tuples, the next largest staged discrepancy is the
+orientation log prior (`2.22372e-5` relative L2), followed by centered
+combined score (`1.42819e-5`). The next compact discriminator therefore
+compares coarse tuple generation and direction-prior operands at iteration 2;
+another complete trajectory is not the next experiment.
+
+The fixed complete-case scorecard remains `28/34` strict, `32/34` topology,
+and `34/34` evaluated until a complete case-22 run crosses its frozen gates.

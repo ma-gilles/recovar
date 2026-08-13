@@ -472,6 +472,23 @@ def load_initial_fourier_volume(path: str | Path, volume_shape: tuple[int, int, 
     return volume.reshape(-1)
 
 
+def load_initial_noise_variance(path: str | Path, image_shape: tuple[int, int]) -> np.ndarray:
+    """Load one sealed full-pixel noise-variance state without STAR rounding."""
+
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise ValueError(f"initial noise variance does not exist: {source}")
+    variance = np.asarray(np.load(source, allow_pickle=False))
+    expected_size = int(np.prod(image_shape))
+    if variance.size != expected_size:
+        raise ValueError(
+            f"initial noise variance {source} has {variance.size} elements, expected {expected_size}"
+        )
+    if np.iscomplexobj(variance) or not np.isfinite(variance).all() or np.any(variance <= 0):
+        raise ValueError(f"initial noise variance {source} must be finite, real, and positive")
+    return variance.reshape(-1)
+
+
 def validate_final_only_replay_args(
     *,
     max_iter: int,
@@ -480,6 +497,8 @@ def validate_final_only_replay_args(
     initial_half2_mrc: str | None,
     initial_half1_ft_npz: str | None = None,
     initial_half2_ft_npz: str | None = None,
+    initial_noise_half1_npy: str | None = None,
+    initial_noise_half2_npy: str | None = None,
 ) -> None:
     """Validate the diagnostic that enters finalization from saved half maps."""
 
@@ -491,6 +510,8 @@ def validate_final_only_replay_args(
         raise ValueError("--initial-half1-ft-npz and --initial-half2-ft-npz must be provided together")
     if initial_half1_mrc is not None and initial_half1_ft_npz is not None:
         raise ValueError("initial MRC and Fourier-NPZ reference inputs are mutually exclusive")
+    if (initial_noise_half1_npy is None) != (initial_noise_half2_npy is None):
+        raise ValueError("--initial-noise-half1-npy and --initial-noise-half2-npy must be provided together")
 
 
 def initial_scoring_noise_pair(noise_half1, noise_half2, *, continuous_relion_noise_state: bool):
@@ -574,6 +595,18 @@ def main():
             "Diagnostic internal Fourier half-2 reference. The NPZ must contain "
             "mean_vol_ft; bypasses the lossy MRC import round-trip."
         ),
+    )
+    parser.add_argument(
+        "--initial-noise-half1-npy",
+        type=str,
+        default=None,
+        help="Diagnostic full-pixel internal half-1 noise variance replacing STAR-derived noise.",
+    )
+    parser.add_argument(
+        "--initial-noise-half2-npy",
+        type=str,
+        default=None,
+        help="Diagnostic full-pixel internal half-2 noise variance replacing STAR-derived noise.",
     )
     parser.add_argument(
         "--force-final-after-zero-iterations",
@@ -783,6 +816,8 @@ def main():
         initial_half2_mrc=args.initial_half2_mrc,
         initial_half1_ft_npz=args.initial_half1_ft_npz,
         initial_half2_ft_npz=args.initial_half2_ft_npz,
+        initial_noise_half1_npy=args.initial_noise_half1_npy,
+        initial_noise_half2_npy=args.initial_noise_half2_npy,
     )
 
     _print_provenance_banner_and_assert_parity_ancestors()
@@ -1038,6 +1073,17 @@ def main():
     n4 = N**4
     noise_variance_h1 = jnp.asarray(recon_noise.make_radial_noise(sigma2_h1 * n4, (N, N)))
     noise_variance_h2 = jnp.asarray(recon_noise.make_radial_noise(sigma2_h2 * n4, (N, N)))
+    if args.initial_noise_half1_npy is not None:
+        noise_variance_h1 = jnp.asarray(
+            load_initial_noise_variance(args.initial_noise_half1_npy, (N, N))
+        )
+        noise_variance_h2 = jnp.asarray(
+            load_initial_noise_variance(args.initial_noise_half2_npy, (N, N))
+        )
+        print(
+            "  Diagnostic initial internal noise variance: "
+            f"half1={args.initial_noise_half1_npy}, half2={args.initial_noise_half2_npy}"
+        )
     process_start_noise = initial_scoring_noise_pair(
         noise_variance_h1.reshape(-1),
         noise_variance_h2.reshape(-1),

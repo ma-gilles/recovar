@@ -1,5 +1,5 @@
-import sys
 import inspect
+import sys
 
 import numpy as np
 import pytest
@@ -11,10 +11,11 @@ from scripts.run_multi_iter_parity import (
     _read_relion_scheduling_average_pmax,
     add_significant_count_artifacts,
     build_gt_postprocess_command,
+    final_only_replay_override,
     final_output_fourier_volumes,
     initial_scoring_noise_pair,
-    final_only_replay_override,
     load_initial_fourier_volume,
+    load_initial_noise_variance,
     map_pose_arrays_to_particle_order,
     parse_relion_optimiser_cli_flags,
     particle_half_indices,
@@ -224,6 +225,18 @@ def test_final_only_replay_requires_paired_initial_fourier_references():
         )
 
 
+def test_initial_noise_override_requires_paired_halves():
+    with pytest.raises(ValueError, match="must be provided together"):
+        validate_final_only_replay_args(
+            max_iter=1,
+            force_final_after_zero_iterations=False,
+            initial_half1_mrc=None,
+            initial_half2_mrc=None,
+            initial_noise_half1_npy="half1.npy",
+            initial_noise_half2_npy=None,
+        )
+
+
 def test_final_only_replay_rejects_mixed_mrc_and_fourier_references():
     with pytest.raises(ValueError, match="mutually exclusive"):
         validate_final_only_replay_args(
@@ -253,6 +266,25 @@ def test_load_initial_fourier_volume_rejects_wrong_size(tmp_path):
 
     with pytest.raises(ValueError, match="7 elements, expected 8"):
         load_initial_fourier_volume(source, (2, 2, 2))
+
+
+def test_load_initial_noise_variance_preserves_values(tmp_path):
+    source = tmp_path / "noise.npy"
+    expected = np.arange(1, 17, dtype=np.float64)
+    np.save(source, expected)
+
+    actual = load_initial_noise_variance(source, (4, 4))
+
+    assert actual.dtype == expected.dtype
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_load_initial_noise_variance_rejects_nonpositive_values(tmp_path):
+    source = tmp_path / "noise.npy"
+    np.save(source, np.asarray([1.0, 2.0, 0.0, 4.0]))
+
+    with pytest.raises(ValueError, match="finite, real, and positive"):
+        load_initial_noise_variance(source, (2, 2))
 
 
 def test_stack_index_from_image_name_is_zero_based():

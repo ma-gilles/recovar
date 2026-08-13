@@ -32,9 +32,20 @@ OUTPUT=${ROOT}/recovar/output
 PASS2=${ROOT}/recovar/pass2
 TARGET_STACK_ONE_BASED=${K1_CASE22_TARGET_STACK_ONE_BASED:-1204}
 TARGET_ORIGINAL_INDEX=$(( TARGET_STACK_ONE_BASED - 1 ))
+INITIAL_HALF1_FT_NPZ=${K1_CASE22_INITIAL_HALF1_FT_NPZ:-}
+INITIAL_HALF2_FT_NPZ=${K1_CASE22_INITIAL_HALF2_FT_NPZ:-}
+INITIAL_NOISE_HALF1_NPY=${K1_CASE22_INITIAL_NOISE_HALF1_NPY:-}
+INITIAL_NOISE_HALF2_NPY=${K1_CASE22_INITIAL_NOISE_HALF2_NPY:-}
+NORMALIZATION_FACTOR_OVERRIDE=${K1_CASE22_NORMALIZATION_FACTOR_OVERRIDE:-}
 if (( TARGET_STACK_ONE_BASED < 1 )); then
     echo "K1_CASE22_TARGET_STACK_ONE_BASED must be positive" >&2
     exit 2
+fi
+if [[ -n "${INITIAL_HALF1_FT_NPZ}" || -n "${INITIAL_HALF2_FT_NPZ}" ]]; then
+    test -f "${INITIAL_HALF1_FT_NPZ}" -a -f "${INITIAL_HALF2_FT_NPZ}"
+fi
+if [[ -n "${INITIAL_NOISE_HALF1_NPY}" || -n "${INITIAL_NOISE_HALF2_NPY}" ]]; then
+    test -f "${INITIAL_NOISE_HALF1_NPY}" -a -f "${INITIAL_NOISE_HALF2_NPY}"
 fi
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
@@ -83,8 +94,9 @@ export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=1
 export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
-export RECOVAR_K1_COARSE_GAUSSIAN_FFI=1
-export RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF=1
+export RECOVAR_K1_COARSE_GAUSSIAN_FFI=${K1_CASE22_COARSE_GAUSSIAN_FFI:-1}
+export RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF=${K1_CASE22_COARSE_GAUSSIAN_SINCOSF:-1}
+export RECOVAR_K1_RELION_F32_COARSE_SUPPORT=${K1_CASE22_RELION_F32_COARSE_SUPPORT:-0}
 export RECOVAR_PASS2_DUMP_DIR=${PASS2}
 export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDEX}
 export RECOVAR_PASS2_DUMP_CURRENT_SIZE=60
@@ -103,6 +115,24 @@ command=(
     --image-fourier-backend relion_cuda --keep_stack_indices "${TARGET_ORIGINAL_INDEX}"
     --output_dir "${OUTPUT}" --save_intermediates_dir "${OUTPUT}/intermediates"
 )
+if [[ -n "${INITIAL_HALF1_FT_NPZ}" ]]; then
+    command+=(
+        --initial-half1-ft-npz "${INITIAL_HALF1_FT_NPZ}"
+        --initial-half2-ft-npz "${INITIAL_HALF2_FT_NPZ}"
+    )
+fi
+if [[ -n "${INITIAL_NOISE_HALF1_NPY}" ]]; then
+    command+=(
+        --initial-noise-half1-npy "${INITIAL_NOISE_HALF1_NPY}"
+        --initial-noise-half2-npy "${INITIAL_NOISE_HALF2_NPY}"
+    )
+fi
+if [[ -n "${NORMALIZATION_FACTOR_OVERRIDE}" ]]; then
+    command+=(
+        --normalization-factor-override
+        "${TARGET_ORIGINAL_INDEX}:${NORMALIZATION_FACTOR_OVERRIDE}"
+    )
+fi
 printf '%q ' "${command[@]}" > "${ROOT}/recovar/provenance/command_${SLURM_JOB_ID}.sh"
 printf '\n' >> "${ROOT}/recovar/provenance/command_${SLURM_JOB_ID}.sh"
 cd "${REPO}"
