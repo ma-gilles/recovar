@@ -202,6 +202,47 @@ def test_unpack_tri_to_full_roundtrip():
     np.testing.assert_allclose(recovered, A, atol=1e-6)
 
 
+def test_group_ppca_sufficient_statistics_and_posterior_match_manual_particle_sums():
+    """Cryo-ET E-step sums tilts before solving one posterior per particle."""
+    from recovar.ppca import ppca as ppca_mod
+
+    H = jnp.asarray([[[1.0]], [[2.0]], [[3.0]], [[4.0]], [[5.0]]], dtype=jnp.float32)
+    g = jnp.asarray([[2.0], [4.0], [3.0], [6.0], [9.0]], dtype=jnp.float32)
+    h = jnp.asarray([[0.5], [1.0], [0.25], [0.5], [0.75]], dtype=jnp.float32)
+    t = jnp.arange(5, dtype=jnp.float32)
+    nu = jnp.arange(5, dtype=jnp.float32) + 1.0
+    y_norm_sq = jnp.arange(5, dtype=jnp.float32) + 10.0
+    particle_ids = np.asarray([9, 9, 3, 3, 3], dtype=np.int32)
+
+    centered_norm_sq = y_norm_sq - 2.0 * t + nu
+    H_g, g_g, h_g, _t_g, _nu_g, _yn_g, centered_g, image_to_group, counts = ppca_mod._group_ppca_sufficient_statistics(
+        H, g, h, t, nu, y_norm_sq, centered_norm_sq, particle_ids
+    )
+
+    # np.unique orders particle 3 before particle 9.
+    np.testing.assert_array_equal(np.asarray(image_to_group), [1, 1, 0, 0, 0])
+    np.testing.assert_array_equal(np.asarray(counts), [3.0, 2.0])
+    np.testing.assert_allclose(np.asarray(H_g[:, 0, 0]), [12.0, 3.0])
+    np.testing.assert_allclose(np.asarray(g_g[:, 0]), [18.0, 6.0])
+    np.testing.assert_allclose(np.asarray(h_g[:, 0]), [1.5, 1.5])
+
+    ez, smz, ll = ppca_mod._solve_grouped_no_contrast_posterior(
+        H_g,
+        g_g,
+        h_g,
+        centered_g,
+        jnp.ones(1, dtype=jnp.float32),
+        (2, 2),
+        counts,
+        compute_ll=True,
+    )
+    expected_ez = np.asarray([(18.0 - 1.5) / 13.0, (6.0 - 1.5) / 4.0], dtype=np.float32)
+    expected_var = np.asarray([1.0 / 13.0, 1.0 / 4.0], dtype=np.float32)
+    np.testing.assert_allclose(np.asarray(ez[:, 0]), expected_ez, rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(smz[:, 0, 0]), expected_var + expected_ez**2, rtol=1e-6)
+    assert np.isfinite(float(ll))
+
+
 def test_E_M_step_batch_half_shapes():
     """Verify E_M_step_batch_half returns correct shapes."""
     from recovar.ppca.ppca import E_M_step_batch_half, _tri_size
@@ -392,6 +433,40 @@ def test_E_M_step_batch_half_no_stats():
     # But E-step should still produce non-trivial results
     assert np.any(np.asarray(ez) != 0)
     assert np.isfinite(float(ll.real))
+
+
+def test_E_M_step_batch_half_returns_one_posterior_per_cryoet_particle():
+    from recovar.ppca.ppca import E_M_step_batch_half, _tri_size
+
+    rng = np.random.default_rng(56)
+    d = _make_em_step_test_data(rng, grid_size=8, n_images=4, basis_size=2)
+    tri_sz = _tri_size(d["basis_size"])
+
+    _, _, ez, smz, ll, _, mean_c, _, _, n_images = E_M_step_batch_half(
+        d["images_half"],
+        jnp.zeros((d["half_volume_size"], tri_sz), dtype=np.float32),
+        jnp.zeros((d["half_volume_size"], d["basis_size"]), dtype=np.complex64),
+        d["mean_full"],
+        d["W_half"],
+        d["CTF_params"],
+        d["rotation_matrices"],
+        d["translations"],
+        d["image_shape"],
+        d["volume_shape"],
+        d["grid_size"],
+        d["voxel_size"],
+        d["noise_variance_half"],
+        d["ctf_evaluator"],
+        compute_ll=True,
+        compute_stats=False,
+        particle_indices=np.asarray([11, 11, 29, 29], dtype=np.int32),
+    )
+
+    assert ez.shape == (2, d["basis_size"])
+    assert smz.shape == (2, d["basis_size"], d["basis_size"])
+    assert mean_c.shape == (2,)
+    assert n_images == 4
+    assert np.isfinite(float(ll))
 
 
 def test_em_return_posterior_info_exposes_mean_c(monkeypatch):
