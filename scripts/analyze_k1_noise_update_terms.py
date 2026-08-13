@@ -67,12 +67,20 @@ def _metric(candidate: np.ndarray, reference: np.ndarray) -> dict[str, float | i
     }
 
 
-def _positive_ratio(candidate: np.ndarray, reference: np.ndarray) -> dict[str, float | int]:
+def _positive_ratio(candidate: np.ndarray, reference: np.ndarray) -> dict[str, float | int | None]:
     candidate = np.asarray(candidate, dtype=np.float64)
     reference = np.asarray(reference, dtype=np.float64)
     _require(candidate.shape == reference.shape, "ratio topology mismatch")
     valid = np.isfinite(candidate) & np.isfinite(reference) & (candidate > 0.0) & (reference > 0.0)
-    _require(np.any(valid), "ratio has no positive finite entries")
+    if not np.any(valid):
+        return {
+            "count": 0,
+            "median": None,
+            "p05": None,
+            "p95": None,
+            "min": None,
+            "max": None,
+        }
     ratio = candidate[valid] / reference[valid]
     return {
         "count": int(ratio.size),

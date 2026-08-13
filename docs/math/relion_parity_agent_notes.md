@@ -12127,3 +12127,42 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   Do not launch a complete case-22 trajectory yet. K=4 remains parked and
   the frozen score remains `28/34` strict, `32/34` topology, `34/34`
   evaluated.
+
+## 2026-08-13 01:30 ET — full Wavg rectangle closes shell 30; stack 1204 is the first discrete regression
+
+- H100 job `12317473` completed `0:0` in `00:39:22` with `25,370,788 KiB`
+  MaxRSS. Its source is the clean full-rectangle commit `104af721`; the same
+  source changes are published on PR #158 at `39b944e2`.
+- The treatment issues RELION's full `60 x 31 = 1,860` FFTW Wavg rectangle,
+  uses the 1,462 host-valid rounded-shell pixels for direct noise and
+  current-size norm, and appends the independent high-shell `powerClass`
+  tail. Shell 30 now has zero separate image-power state and direct residual
+  totals `1.6633247137069702`/`1.5352630615234375`, versus native
+  `1.6633246200000005`/`1.5352631689` for halves 1/2.
+- Active-shell raw-noise relative L2 improves from
+  `5.7684915e-6 -> 1.4872997e-6` in half 1 and
+  `5.3159209e-6 -> 2.3144479e-6` in half 2. The all-shell noise-update
+  relative L2 remains `8.4724848e-6`/`1.0026671e-5` because the much larger
+  high-shell state is unchanged by this boundary.
+- The complete identity-aligned 3,000-particle norm comparison gives relative
+  L2 `3.1666034e-5` for the direct current-size term, `3.2790860e-7` for the
+  high-shell tail, and `1.3212477e-5` for their total. Native and RECOVAR
+  direct-plus-high closure are exact. The canonical report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_rect_norm_it2_20260813T0042ET/analysis/wavg_norm_comparison.json`
+  with SHA-256
+  `4bc241a9cd84949e1f64b98c71b7ce4f4e6196b5514ad4aa6fa1a35bb6969835`.
+- Iteration-2 Pmax RMSE improves slightly from `8.5443910e-7` to
+  `8.4780523e-7`, support-count mismatches improve `583 -> 581`, and merged
+  signed non-DC FSC-AUC is effectively unchanged at
+  `0.9999999999255613`. However, stack 1204 switches to a different hard pose
+  (`3.829992` degrees and `2.125002` Angstrom from native), while the prior
+  fused-Wavg treatment matched the native pose. Its Pmax error actually
+  improves `1.51570e-9 -> 4.97066e-10`, and its support remains the known
+  one-count `73432/73431` boundary, identifying an argmax tie amplifier rather
+  than a broad posterior regression.
+- Focused job `12318935` stops at stack 1204's complete iteration-2 fine table
+  under the full treatment. It will compare candidate topology, raw scores,
+  priors, normalized weights, support, and winner against the existing native
+  capture before any iteration-3 propagation run. K=4 remains parked and the
+  fixed scorecard remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated.

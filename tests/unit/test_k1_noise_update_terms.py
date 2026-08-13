@@ -1,7 +1,21 @@
 import numpy as np
 import pytest
 
-from scripts.analyze_k1_noise_update_terms import analyze
+from scripts.analyze_k1_noise_update_terms import _positive_ratio, analyze
+
+
+@pytest.mark.unit
+def test_positive_ratio_records_empty_zero_component():
+    report = _positive_ratio(np.zeros(3), np.zeros(3))
+
+    assert report == {
+        "count": 0,
+        "median": None,
+        "p05": None,
+        "p95": None,
+        "min": None,
+        "max": None,
+    }
 
 
 @pytest.mark.unit
