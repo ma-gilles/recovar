@@ -1559,3 +1559,33 @@ The report is
 This fixed particle-panel denominator is separate from, and does not change,
 the complete-case scorecard of `28/34` strict, `32/34` topology, and `34/34`
 evaluated.
+
+## Stack-79 coarse first-divergence boundary
+
+The complete 1,069,056-candidate native/RECOVAR coarse join is now available.
+Candidate topology, finite-prior support, and the hard best tuple are exact.
+Native retains 47 coarse tuples while RECOVAR retains 48; the sole mismatch is
+RECOVAR rotation 33997 / translation 15, corresponding to native rotation
+9884 / translation 15. Its native descending rank is 47 (zero-based), exactly
+one below the 47-tuple retained set.
+
+The mismatch is already present before posterior normalization. Relative to
+the shared best, the tuple's raw score is `0.000244140625` higher in RECOVAR;
+its orientation prior differs by `9.53674e-7` and translation prior by
+`2.38419e-7`. Across all 631,968 common valid tuples, centered raw-score
+median/p95/max absolute residuals are `0.000732422`, `0.00219727`, and
+`0.00756836`; removing a per-rotation median removes `52.9831%` of residual
+energy, while translation medians remove only `2.1981%`. The native cutoff
+tuple itself has exactly matched relative raw and combined scores, so the
+extra count arises when the distributed rotation-dependent raw-score residual
+changes the lower-tail mass boundary, not from a different comparison or tie
+rule.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_repeatstable5_coarse_production_it3_20260813T0741ET/analysis/K1_STACK79_NATIVE_COARSE_BOUNDARY.json`
+(SHA-256
+`4b262d980353fc5bc7bd3149cedea1ea9979a7f5da080e2dd9f3adc36177bd7a`).
+This establishes raw coarse scoring as the first unequal computed variable for
+stack 79. The next bounded capture requests only the mismatching rotation and
+the shared-best rotation, then compares reference norm, cross term, projected
+reference, shifted image, correction weight, and native-reduction replay.

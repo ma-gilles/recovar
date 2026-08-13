@@ -41,6 +41,7 @@ GAUSSIAN_SINCOSF_STACK1204=${K1_CASE22_GAUSSIAN_SINCOSF_STACK1204:-${GAUSSIAN_CO
 EXACT_COARSE_STACK1204=${K1_CASE22_EXACT_COARSE_STACK1204:-0}
 NOISE_UPDATE_DUMP=${K1_CASE22_NOISE_UPDATE_DUMP:-0}
 PROJECTOR_DUMP=${K1_CASE22_PROJECTOR_DUMP:-0}
+COARSE_PROJECTION_ROTATIONS=${K1_CASE22_COARSE_PROJECTION_ROTATIONS-}
 TARGET_STACK_ONE_BASED=${K1_CASE22_TARGET_STACK_ONE_BASED:-1204}
 TARGET_STACKS_ONE_BASED=${K1_CASE22_TARGET_STACKS_ONE_BASED:-${TARGET_STACK_ONE_BASED}}
 TARGET_STACKS_ONE_BASED=${TARGET_STACKS_ONE_BASED//:/,}
@@ -273,6 +274,9 @@ elif [[ "${COARSE_STACK1204_DUMP}" = 1 ]]; then
     export RECOVAR_SIGNIFICANCE_DUMP_ITERATION=${TARGET_ITERATION}
     export RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF=1
     export RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET=1
+    if [[ -n "${COARSE_PROJECTION_ROTATIONS}" ]]; then
+        export RECOVAR_SIGNIFICANCE_DUMP_PROJECTION_ROTATIONS=${COARSE_PROJECTION_ROTATIONS}
+    fi
     mkdir -p "${RECOVAR_SIGNIFICANCE_DUMP_DIR}"
 fi
 
@@ -355,8 +359,8 @@ if [[ "${COARSE_STACK1204_DUMP}" = 1 ]]; then
     done
     rg -q 'coarse-significance dump completed; stopping before pass-2/M-step work' \
         "${OUTPUT}/run.log"
-    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","coarse_stack1204_dump":true,"target_stacks_one_based":"%s","target_iteration":%d,"target_current_size":%d,"gaussian_coarse":%s,"gaussian_sincosf":%s,"exact_coarse":%s,"stopped_after_dump":true}\n' \
-        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${TARGET_STACKS_ONE_BASED}" "${TARGET_ITERATION}" "${TARGET_CURRENT_SIZE}" "${GAUSSIAN_COARSE_STACK1204}" "${GAUSSIAN_SINCOSF_STACK1204}" "${EXACT_COARSE_STACK1204}" \
+    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","coarse_stack1204_dump":true,"target_stacks_one_based":"%s","target_iteration":%d,"target_current_size":%d,"gaussian_coarse":%s,"gaussian_sincosf":%s,"exact_coarse":%s,"coarse_projection_rotations":"%s","stopped_after_dump":true}\n' \
+        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${TARGET_STACKS_ONE_BASED}" "${TARGET_ITERATION}" "${TARGET_CURRENT_SIZE}" "${GAUSSIAN_COARSE_STACK1204}" "${GAUSSIAN_SINCOSF_STACK1204}" "${EXACT_COARSE_STACK1204}" "${COARSE_PROJECTION_ROTATIONS}" \
         > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
     touch "${ROOT}/DUMP_SUCCESS_${SLURM_JOB_ID}"
     exit 0
