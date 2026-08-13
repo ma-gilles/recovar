@@ -63,3 +63,57 @@ def test_norm_terms_preserve_split_formula() -> None:
     np.testing.assert_array_equal(terms["xa"], [[119.0, 0.0]])
     summary = analyzer._float64_scalar_summary(terms)
     assert summary == {"a2": 70.0, "xa": 119.0, "residual_a2_minus_2xa": -168.0}
+
+
+def test_native_norm_block_terms_stream_rows_in_native_units() -> None:
+    projection = np.asarray(
+        [[1.0 + 2.0j, 3.0 + 4.0j], [5.0 + 6.0j, 7.0 + 8.0j]],
+        dtype=np.complex64,
+    )
+    rows = np.zeros(3, dtype=ROW_DTYPE)
+    rows["state"] = 1
+    rows["flags"] = 3
+    rows["orientation_local"] = [4, 4, 5]
+    rows["pixel"] = [0, 1, 1]
+    rows["source_re"] = [-64.0, -128.0, -192.0]
+    rows["source_im"] = [0.0, -64.0, 0.0]
+    rows["source_weight"] = [4096.0, 8192.0, 12288.0]
+
+    result = analyzer._native_norm_block_terms(
+        projection,
+        np.abs(projection) ** 2,
+        rows,
+        orientation_start=4,
+        rectangle_to_reconstruction=np.asarray([0, 1], dtype=np.int32),
+        noise_variance=np.asarray([2.0, 3.0], dtype=np.float32),
+        physical_image_size=8,
+    )
+
+    source = np.asarray([[1.0 + 0.0j, 2.0 + 1.0j], [0.0, 3.0 + 0.0j]], dtype=np.complex64)
+    weight = np.asarray([[1.0, 2.0], [0.0, 3.0]], dtype=np.float32)
+    expected = analyzer._norm_terms(
+        projection,
+        np.abs(projection) ** 2,
+        source,
+        weight,
+        np.asarray([2.0, 3.0], dtype=np.float32),
+    )
+    assert result["a2"] == float(np.sum(expected["a2"], dtype=np.float64))
+    assert result["xa"] == float(np.sum(expected["xa"], dtype=np.float64))
+    assert result["row_count"] == 3
+    assert result["active_rotation_count"] == 2
+
+
+def test_counterfactual_totals_split_a2_and_xa() -> None:
+    assert analyzer._counterfactual_totals(
+        weighted_image=100.0,
+        recovar_a2=20.0,
+        recovar_xa=5.0,
+        native_a2=18.0,
+        native_xa=7.0,
+    ) == {
+        "recovar": 110.0,
+        "native_a2_only": 108.0,
+        "native_xa_only": 106.0,
+        "native_a2_and_xa": 104.0,
+    }

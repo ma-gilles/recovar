@@ -15830,20 +15830,21 @@ The next discriminator is the exact stack-79 fine raw operand at iteration 3.
 The first RECOVAR attempt correctly failed analysis because its launcher had
 disabled the required raw arrays; it produced no scorer conclusion. Commit
 `bf1f3d4b` makes raw capture an explicit, provenance-recorded opt-in and fails
-closed when any required field is absent. Corrected stopped H100 job
-`12328920` is running the one-selected-rotation capture and will exit at the
-requested tuple. The launcher's stopped-dump path now validates the same raw
-field set as its normal completion path, so a field-incomplete artifact cannot
-receive a success marker. The matching native artifact exactly replays its own
-deployed kernel value, but its independent trajectory is not inert relative to
-the pinned robust RELION run, so any tuple result must retain that
-state-provenance caveat.
+closed when any required field is absent. H100 job `12328920` completed its
+stopped ordinary pass-2 bundle, but its submission omitted that raw opt-in:
+the wall-time manifest records no raw flag and the artifact lacks all eight
+required `raw_operand_*`/`relion_raw_diff2` fields. The current analyzer rejects
+it with that exact missing-field list, so it establishes no scorer conclusion.
+The matching native artifact exactly replays its own deployed kernel value,
+but its independent trajectory is not inert relative to the pinned robust
+RELION run, so any later tuple result must retain that state-provenance caveat.
 
 Commit `096b6390` adds a faster fail-closed form of the same diagnostic. It
 preserves the complete first two iterations, moves only the requested
 iteration-3 support bucket to the front, and exits before the M-step after the
 target operand is written. Job `12329610` is running that priority capture in
-parallel with the original job; neither job has been cancelled or altered.
+parallel and remains the authoritative raw capture; it has not been cancelled
+or altered.
 
 A qualified host replay of the earlier pre-reduction stack-79 bundle already
 identifies the dominant fine-score operand. RECOVAR replays
@@ -15925,3 +15926,37 @@ norm residual, joined in order through candidate tuples, posterior weights,
 per-candidate `diff2`, and its particle reduction; high-shell power is already
 within `3.3e-7` relative L2. No controller or translation change is justified
 at this boundary.
+
+Commit `f9e57887` implements that gate without changing production math. The
+RECOVAR norm-residual artifact v3 records exact rotation and pixel identities,
+CTF/noise weights, complex cross terms, `A2`, `XA`, and their per-particle
+reductions. A fail-closed comparator maps those rows to RELION's passive
+iteration-2 BPref pre-scatter capture before permitting operand substitution.
+Commit `b495b2f2` extends the stopped-dump bucket-priority rule to this
+norm-only diagnostic, while leaving normal refinement and non-stopped dumps
+in their original order. The focused unit slice passes 19/19.
+
+Native RELION job `12331442` completed with one classification-ready iteration-2
+stack-79 artifact: 180,225,779 supported pre-scatter rows, 186,951,788 positive
+`Fweight` candidates, and exact excluded-radius accounting. The artifact SHA-256
+is `68f63e475c976394855f7ad24fda750174b2428f73752402445ef92fa7798cbf`.
+The native artifact gate uses a 30 GB *ceiling* because
+RELION validates the dense worst case (`294912 * 1860 * 40`, about 22 GB)
+before writing only significant sparse rows; actual device staging remains
+explicitly limited to 32 MiB. Earlier attempts `12330821` and `12331210`
+failed at the 200 MB and 2 GB ceilings before emitting an artifact and carry
+no scientific result.
+
+Stopped RECOVAR job `12331391` exposed an important production-routing fact:
+stack 79's large support uses the contribution-chunked pass-2 path, so the
+dense norm-residual v3 hook is not its active computation. The resulting v2
+chunk artifact preserves the complete rotation, posterior, translation, and
+scale-XA/AA topology, but it does not contain the unmasked normalization A2/XA
+terms and therefore cannot answer the split. The production chunked writer now
+captures those unmasked operands, their exact chunk reductions, weighted-image
+power, high-shell power, and noise array as schema v3. Its comparator streams
+the 7.2 GB native artifact in bounded rotation blocks and substitutes native A2
+and XA separately using the same RECOVAR projector. The focused test slice
+passes 23/23. The stopped v3 rerun plus projector dump will classify the first residual as
+posterior/BPref data (`XA`), CTF-squared/posterior weight (`A2`), or reduction
+order before any production fix or full frozen-case run is attempted.

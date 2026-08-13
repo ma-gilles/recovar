@@ -9086,6 +9086,10 @@ def _write_chunked_scale_aa_dump(
     ctf_probs_raw_sum_chunks,
     xa_per_pixel_chunks,
     xa_per_image_chunks,
+    norm_a2_per_pixel_chunks,
+    norm_a2_per_image_chunks,
+    norm_xa_per_pixel_chunks,
+    norm_xa_per_image_chunks,
     aa_before_scale_per_pixel_chunks,
     aa_per_pixel_chunks,
     aa_per_image_chunks,
@@ -9097,6 +9101,9 @@ def _write_chunked_scale_aa_dump(
     atomic_xa_per_pixel=None,
     atomic_aa_per_pixel=None,
     atomic_diff2_per_pixel=None,
+    noise_variance_for_noise=None,
+    weighted_img_per_image=None,
+    relion_norm_high_shell=None,
 ):
     """Write compact Wavg XA/AA/diff2 intermediates for a target bucket."""
 
@@ -9115,6 +9122,10 @@ def _write_chunked_scale_aa_dump(
     ctf_probs_raw_sum = np.stack(ctf_probs_raw_sum_chunks, axis=1)
     xa_per_pixel_by_chunk = np.stack(xa_per_pixel_chunks, axis=1)
     xa_per_image_by_chunk = np.stack(xa_per_image_chunks, axis=1)
+    norm_a2_per_pixel_by_chunk = np.stack(norm_a2_per_pixel_chunks, axis=1)
+    norm_a2_per_image_by_chunk = np.stack(norm_a2_per_image_chunks, axis=1)
+    norm_xa_per_pixel_by_chunk = np.stack(norm_xa_per_pixel_chunks, axis=1)
+    norm_xa_per_image_by_chunk = np.stack(norm_xa_per_image_chunks, axis=1)
     aa_before_scale = np.stack(aa_before_scale_per_pixel_chunks, axis=1)
     aa_per_pixel_by_chunk = np.stack(aa_per_pixel_chunks, axis=1)
     aa_per_image_by_chunk = np.stack(aa_per_image_chunks, axis=1)
@@ -9173,6 +9184,10 @@ def _write_chunked_scale_aa_dump(
         == ctf_probs_raw_sum.shape[:2]
         == xa_per_pixel_by_chunk.shape[:2]
         == xa_per_image_by_chunk.shape[:2]
+        == norm_a2_per_pixel_by_chunk.shape[:2]
+        == norm_a2_per_image_by_chunk.shape[:2]
+        == norm_xa_per_pixel_by_chunk.shape[:2]
+        == norm_xa_per_image_by_chunk.shape[:2]
         == aa_before_scale.shape[:2]
         == aa_per_pixel_by_chunk.shape[:2]
         == aa_per_image_by_chunk.shape[:2]
@@ -9218,13 +9233,19 @@ def _write_chunked_scale_aa_dump(
         production_xa_total = float(
             np.sum(xa_per_image_by_chunk[selected_row], dtype=np.float64)
         )
+        production_norm_a2_total = float(
+            np.sum(norm_a2_per_image_by_chunk[selected_row], dtype=np.float64)
+        )
+        production_norm_xa_total = float(
+            np.sum(norm_xa_per_image_by_chunk[selected_row], dtype=np.float64)
+        )
         original_index = int(original_indices[bucket_row])
         out_path = os.path.join(
             dump_dir,
             f"scale_aa_chunked_orig{original_index:06d}_half{context_half}_cs{size_label:03d}.npz",
         )
         payload = dict(
-            schema=np.asarray("recovar-k1-scale-xa-aa-chunked-v2"),
+            schema=np.asarray("recovar-k1-scale-xa-aa-chunked-v3"),
             iteration=np.int64(context_iteration),
             half=np.int64(context_half),
             original_index=np.int64(original_index),
@@ -9257,6 +9278,22 @@ def _write_chunked_scale_aa_dump(
             scale_aa_per_image=np.float64(production_aa_total),
             pixel_sum_minus_production_total=np.float64(
                 np.sum(aa_per_pixel, dtype=np.float64) - production_aa_total
+            ),
+            norm_a2_per_pixel_by_chunk=norm_a2_per_pixel_by_chunk[selected_row],
+            norm_a2_per_image_by_chunk=norm_a2_per_image_by_chunk[selected_row],
+            norm_a2_per_image=np.float64(production_norm_a2_total),
+            norm_xa_per_pixel_by_chunk=norm_xa_per_pixel_by_chunk[selected_row],
+            norm_xa_per_image_by_chunk=norm_xa_per_image_by_chunk[selected_row],
+            norm_xa_per_image=np.float64(production_norm_xa_total),
+            norm_residual_per_image=np.float64(
+                production_norm_a2_total - 2.0 * production_norm_xa_total
+            ),
+            noise_variance_for_noise=np.asarray(noise_variance_for_noise, dtype=np.float32),
+            weighted_img_per_image=np.float64(
+                np.asarray(weighted_img_per_image, dtype=np.float64)[bucket_row]
+            ),
+            relion_norm_high_shell=np.float64(
+                np.asarray(relion_norm_high_shell, dtype=np.float64)[bucket_row]
             ),
         )
         if atomic_xa_per_pixel_np is not None:
@@ -12283,6 +12320,10 @@ def compute_pass2_stats_sparse_bucketed(
                     chunked_scale_aa_ctf_probs_raw_sum = []
                     chunked_scale_xa_per_pixel = []
                     chunked_scale_xa_per_image = []
+                    chunked_norm_a2_per_pixel = []
+                    chunked_norm_a2_per_image = []
+                    chunked_norm_xa_per_pixel = []
+                    chunked_norm_xa_per_image = []
                     chunked_scale_aa_before_scale_per_pixel = []
                     chunked_scale_aa_per_pixel = []
                     chunked_scale_aa_per_image = []
@@ -12594,6 +12635,25 @@ def compute_pass2_stats_sparse_bucketed(
                             selected_summed_masked = jnp.asarray(summed_masked_noise)[selected]
                             selected_ctf_probs = jnp.asarray(ctf_probs)[selected]
                             selected_noise = jnp.asarray(noise_variance_for_noise)
+                            norm_ctf_has_mass = selected_ctf_probs != 0.0
+                            norm_ctf_probs_raw = jnp.where(
+                                norm_ctf_has_mass,
+                                selected_ctf_probs * selected_noise[None, None, :],
+                                0.0,
+                            )
+                            norm_a2_terms = jnp.where(
+                                norm_ctf_has_mass,
+                                selected_proj_abs2 * norm_ctf_probs_raw,
+                                0.0,
+                            )
+                            norm_cross_terms = jnp.where(
+                                selected_summed_masked != 0.0,
+                                selected_proj * jnp.conj(selected_summed_masked),
+                                0.0,
+                            )
+                            norm_xa_terms = (
+                                selected_noise[None, None, :] * norm_cross_terms.real
+                            )
                             scale_mask = jnp.asarray(
                                 scale_correction_pixel_mask,
                                 dtype=bool,
@@ -12675,6 +12735,10 @@ def compute_pass2_stats_sparse_bucketed(
                                     jnp.sum(selected_ctf_probs_raw, axis=1, dtype=jnp.float32),
                                     jnp.sum(xa_terms, axis=1, dtype=jnp.float32),
                                     jnp.asarray(scale_xa_per_image)[selected],
+                                    jnp.sum(norm_a2_terms, axis=1, dtype=jnp.float32),
+                                    jnp.sum(norm_a2_terms, axis=(1, 2), dtype=jnp.float32),
+                                    jnp.sum(norm_xa_terms, axis=1, dtype=jnp.float32),
+                                    jnp.sum(norm_xa_terms, axis=(1, 2), dtype=jnp.float32),
                                     jnp.sum(aa_before_scale, axis=1, dtype=jnp.float32),
                                     jnp.sum(aa_terms, axis=1, dtype=jnp.float32),
                                     jnp.asarray(scale_aa_per_image)[selected],
@@ -12689,6 +12753,10 @@ def compute_pass2_stats_sparse_bucketed(
                                 staged_ctf_probs_raw_sum,
                                 staged_xa_per_pixel,
                                 staged_xa_per_image,
+                                staged_norm_a2_per_pixel,
+                                staged_norm_a2_per_image,
+                                staged_norm_xa_per_pixel,
+                                staged_norm_xa_per_image,
                                 staged_aa_before_scale,
                                 staged_aa_per_pixel,
                                 staged_aa_per_image,
@@ -12701,6 +12769,10 @@ def compute_pass2_stats_sparse_bucketed(
                             chunked_scale_aa_ctf_probs_raw_sum.append(staged_ctf_probs_raw_sum)
                             chunked_scale_xa_per_pixel.append(staged_xa_per_pixel)
                             chunked_scale_xa_per_image.append(staged_xa_per_image)
+                            chunked_norm_a2_per_pixel.append(staged_norm_a2_per_pixel)
+                            chunked_norm_a2_per_image.append(staged_norm_a2_per_image)
+                            chunked_norm_xa_per_pixel.append(staged_norm_xa_per_pixel)
+                            chunked_norm_xa_per_image.append(staged_norm_xa_per_image)
                             chunked_scale_aa_before_scale_per_pixel.append(staged_aa_before_scale)
                             chunked_scale_aa_per_pixel.append(staged_aa_per_pixel)
                             chunked_scale_aa_per_image.append(staged_aa_per_image)
@@ -13094,6 +13166,10 @@ def compute_pass2_stats_sparse_bucketed(
                         ctf_probs_raw_sum_chunks=chunked_scale_aa_ctf_probs_raw_sum,
                         xa_per_pixel_chunks=chunked_scale_xa_per_pixel,
                         xa_per_image_chunks=chunked_scale_xa_per_image,
+                        norm_a2_per_pixel_chunks=chunked_norm_a2_per_pixel,
+                        norm_a2_per_image_chunks=chunked_norm_a2_per_image,
+                        norm_xa_per_pixel_chunks=chunked_norm_xa_per_pixel,
+                        norm_xa_per_image_chunks=chunked_norm_xa_per_image,
                         aa_before_scale_per_pixel_chunks=chunked_scale_aa_before_scale_per_pixel,
                         aa_per_pixel_chunks=chunked_scale_aa_per_pixel,
                         aa_per_image_chunks=chunked_scale_aa_per_image,
@@ -13111,6 +13187,9 @@ def compute_pass2_stats_sparse_bucketed(
                         atomic_diff2_per_pixel=relion_wavg_atomic_diff2_pixels_np[
                             :, relion_wavg_rectangle.exact_positions
                         ],
+                        noise_variance_for_noise=noise_variance_for_noise,
+                        weighted_img_per_image=weighted_img_per_image,
+                        relion_norm_high_shell=relion_norm_high_shell,
                     )
                     if chunked_scale_aa_dump_count and _env_flag_enabled(
                         _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV,
