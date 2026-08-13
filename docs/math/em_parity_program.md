@@ -15963,18 +15963,62 @@ the 7.2 GB native artifact in bounded rotation blocks and substitutes native A2
 and XA separately using the same RECOVAR projector. The focused test slice
 passes 25/25.
 
-The completed stack-79 split rules out A2 as the material residual at this
-boundary. Both 512- and 4096-rotation streams joined all 135,416 native
-rotations and 180,225,779 supported rows and returned the same totals (the XA
-totals differ only at about `1e-10` from host reduction grouping). RECOVAR A2 is
-`1208708.125`; the native-BPref A2 under the same RECOVAR projector is
+The completed stack-79 BPref split rules out A2 as the material residual at
+this boundary. Both 512- and 4096-rotation streams joined all 135,416 native
+rotations and 180,225,779 supported rows and returned the same totals. RECOVAR
+A2 is `1208708.125`; native-BPref A2 under the same RECOVAR projector is
 `1208707.6271796734`, a native-minus-RECOVAR delta of only `-0.4978203266`, or
-`-1.8545e-9` after the required `128^4` normalization. This closes only about
-`0.138%` of the native norm gap. Native-BPref XA instead differs by
-`-3467.134354`, or `-1.29161e-5` in native units, and its substitution makes
-the total norm error about 20.25 times the baseline error. Thus the remaining
-iteration-2 norm defect is not a missing CTF-squared/posterior-weight A2 term.
-The live alternatives are the image/XA side and the fact that native soft
-posterior operands already encode the slightly different native state. The
-next same-boundary discriminator is native PPref plus native BPref, which will
-decompose RELION's exact current-size target without mixing projector state.
+`-1.8545e-9` after the required `128^4` normalization. Native PPref moves that
+A2 by only `+0.0284166`. The projector and CTF-squared posterior operand are
+therefore not the dominant A2 boundary.
+
+The XA result from that experiment is not a normalization counterfactual.
+RELION's Wavg normalization and noise update uses the masked image
+`Fimg_shift`, whereas BPref deliberately stores the unmasked image
+`Fimg_shift_nomask` for backprojection. The previously reported BPref-XA delta
+of about `-3467` and the inferred weighted-image cancellation consequently
+compare different physical operands. They do not identify a RECOVAR norm
+error and must not be used to rank fixes. The analyzer now labels BPref XA as
+non-causal for normalization. A direct native masked-Wavg AA/XA pixel capture
+is required for this boundary.
+
+Focused native job `12333445` then captured the complete iteration-2 Wavg
+posterior for stack 79 / RELION particle 2767. The run completed in 490 s and
+the capture was joined to the stopped production RECOVAR v3 artifact by exact
+float32 rotation matrices and bounded translation phases. All 127,874 active
+rotations match, both programs retain exactly 1,726,772 candidates, and there
+is no unmatched posterior mass. The retained masses are
+`0.9990000728935851` and `0.999000002372302`; union total variation is
+`1.5871249936516563e-6`, common-candidate relative L2 is
+`6.847032887089811e-6`, and the maximum absolute candidate-probability error
+is `6.170012056827545e-9`. CTF-squared relative L2 is
+`8.798105669953362e-8`.
+
+The native diagnostic executable is newer than the sealed BPref executable,
+so the comparison is qualified rather than silently revision-mixed. Initial
+maps are byte-identical; iteration-1 half-map repeat FSC-AUC is
+`0.9999999999953`/`0.9999999999950`; iteration-2 repeat FSC-AUC is
+`0.9999998651714`/`0.9999998503190`. Stack 79's hard pose, shift, support
+count (`64799`), and normalization state agree at the printed STAR precision.
+This is adequate for the candidate-topology and posterior-scale localization,
+but not a claim of bitwise full-trajectory identity.
+
+The posterior report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0079_native_posterior_it2_20260813T1215ET/analysis/K1_STACK79_POSTERIOR_IT2.json`
+(SHA-256
+`5d1fec24c441b63fc426d25b89be41146b72284ed0739bf21bf03f1b6d5f1f8a`).
+Replaying the identical RECOVAR projector, masked translated images, and chunk
+reduction with only the posterior table changed confirms that the posterior is
+not the dominant remaining term. The RECOVAR replay closes its captured XA to
+`1.16e-8` relative error; replacing its posterior by the aligned native table
+changes XA by only `-0.041015625` out of about `150534.54`. No native masked-XA
+target was supplied in that replay, so no closure fraction against BPref XA is
+scientifically meaningful.
+
+The next causal gate is now exact and narrow: capture RELION's native masked
+Wavg AA and XA for stack 79 at iteration 2, join all current-size Fourier
+coordinates to RECOVAR's chunked `norm_a2_per_pixel_by_chunk` and
+`norm_xa_per_pixel_by_chunk`, and compare pixel, shell, and scalar reductions.
+This directly separates a masked-image/projector operand mismatch from a
+reduction-order mismatch without another long trajectory. The complete-case
+score remains `28/34` strict, `32/34` topology, and `34/34` evaluated.

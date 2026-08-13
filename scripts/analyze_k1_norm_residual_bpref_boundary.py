@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Localize a K=1 norm-residual mismatch at the BPref operand boundary."""
+"""Inspect BPref operands near a K=1 norm-residual mismatch.
+
+RELION BPref stores the unmasked image, while its Wavg normalization and noise
+updates use the masked image.  BPref-derived A2 remains useful because it does
+not depend on the source image.  BPref-derived XA is an explicitly non-causal
+diagnostic for normalization and must not be treated as a normalization oracle.
+"""
 
 from __future__ import annotations
 
@@ -502,7 +508,11 @@ def _native_norm_block_terms(
     noise_variance: np.ndarray,
     physical_image_size: int,
 ) -> dict[str, object]:
-    """Form high-precision A2/XA totals from one canonical native row block."""
+    """Form A2 and unmasked-BPref XA totals from one native row block.
+
+    Only A2 has normalization semantics.  The XA source is RELION's unmasked
+    BPref image, not the masked Wavg image used for normalization.
+    """
 
     proj = np.asarray(projection, dtype=np.complex64)
     proj_abs2 = np.asarray(projection_abs2, dtype=np.float32)
@@ -785,8 +795,6 @@ def _analyze_chunked(
         )
         replay_delta = float(replay["native_weight_minus_recovar"])
         counterfactual_xa = recovar_xa + replay_delta
-        baseline_gap = abs(recovar_xa - native_xa)
-        counterfactual_gap = abs(counterfactual_xa - native_xa)
         xa_posterior_swap = {
             **replay,
             "native_posterior_identity": native_posterior_identity,
@@ -796,11 +804,10 @@ def _analyze_chunked(
                 np.asarray(replay["recovar_xa_per_chunk"], dtype=np.float64),
             ),
             "counterfactual_xa_from_captured_baseline": counterfactual_xa,
-            "native_bpref_xa": native_xa,
-            "absolute_gap_closure_fraction": (
-                (baseline_gap - counterfactual_gap) / baseline_gap
-                if baseline_gap
-                else 0.0
+            "posterior_only_delta": replay_delta,
+            "semantic_scope": (
+                "RECOVAR masked-image XA with native versus RECOVAR posterior; "
+                "no native masked-image XA target is supplied"
             ),
         }
     weighted_image = float(recovar["weighted_img_per_image"])
@@ -844,6 +851,13 @@ def _analyze_chunked(
             "recomputed_residual": recovar_a2 - 2.0 * recovar_xa,
         },
         "native_bpref_substitution": {
+            "semantic_warning": (
+                "RELION BPref stores the unmasked image, while normalization uses "
+                "the masked Wavg image; native XA and XA counterfactual totals below "
+                "are not normalization oracles"
+            ),
+            "a2_valid_for_normalization": True,
+            "xa_valid_for_normalization": False,
             "recovar_a2": recovar_a2,
             "recovar_xa": recovar_xa,
             "native_a2": native_a2,
@@ -866,8 +880,12 @@ def _analyze_chunked(
         native_implied_weighted_image_current = (
             native_norm["direct_current_size"] * native_divisor - native_a2 + 2.0 * native_xa
         )
-        report["native_norm_target"] = {
+        report["unmasked_bpref_vs_native_norm_noncausal"] = {
             **native_norm,
+            "semantic_warning": (
+                "Only the native-BPref A2 comparison is causal for normalization; "
+                "BPref XA and any totals containing it use the wrong image semantics"
+            ),
             **_native_unit_target_comparison(
                 totals,
                 target=native_norm["total"],
@@ -993,6 +1011,12 @@ def analyze(
             "host_float64": recovar_scalar,
         },
         "native_bpref_substitution": {
+            "semantic_warning": (
+                "RELION BPref stores the unmasked image, while normalization uses "
+                "the masked Wavg image; XA substitution is not a normalization oracle"
+            ),
+            "a2_valid_for_normalization": True,
+            "xa_valid_for_normalization": False,
             "host_float64": native_operand_scalar,
             "recovar_weighted_image_held_fixed": weighted_image,
             "counterfactual_total": weighted_image + native_operand_scalar["residual_a2_minus_2xa"],
@@ -1005,8 +1029,12 @@ def analyze(
         counterfactual_total = weighted_image + native_operand_scalar["residual_a2_minus_2xa"]
         original_gap = abs(recovar_total - native_norm["total"])
         counterfactual_gap = abs(counterfactual_total - native_norm["total"])
-        report["native_norm_target"] = {
+        report["unmasked_bpref_vs_native_norm_noncausal"] = {
             **native_norm,
+            "semantic_warning": (
+                "Only BPref-derived A2 is causal for normalization; the BPref-source "
+                "XA counterfactual uses an unmasked image"
+            ),
             "recovar_total_abs_error": original_gap,
             "native_bpref_substitution_abs_error": counterfactual_gap,
             "absolute_gap_closure_fraction": (

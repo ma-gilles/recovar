@@ -405,3 +405,68 @@ def test_scale_aa_pixels_joins_fourier_coordinates_and_localizes_operand_delta(t
     assert report["pixel_aa"]["largest_abs_residual_pixels"][0]["x"] == int(
         coordinates[np.flatnonzero(mask)[-1], 0]
     )
+
+
+def test_norm_pixels_sum_chunked_v4_operands_before_native_join(tmp_path: Path):
+    image_size = 8
+    current_size = 4
+    divisor = 16.0
+    window_indices, _ = make_fourier_window_indices_np(
+        (image_size, image_size),
+        current_size,
+        square=False,
+        include_dc=True,
+        exact_radius=True,
+    )
+    coordinates = np.rint(make_frequency_coords_half_np((image_size, image_size))).astype(np.int32)[
+        window_indices
+    ]
+    shells = np.rint(np.linalg.norm(coordinates, axis=1)).astype(np.int32)
+    aa_native = np.arange(1, window_indices.size + 1, dtype=np.float32) / 100.0
+    xa_native = np.arange(2, window_indices.size + 2, dtype=np.float32) / 200.0
+    aa_chunks = np.stack((aa_native * divisor * 0.25, aa_native * divisor * 0.75))
+    xa_chunks = np.stack((xa_native * divisor * 0.5, xa_native * divisor * 0.5))
+
+    capture = tmp_path / "norm_capture.npz"
+    np.savez_compressed(
+        capture,
+        schema=np.asarray("recovar-k1-scale-xa-aa-chunked-v4"),
+        iteration=np.int64(2),
+        half=np.int64(1),
+        original_index=np.int64(78),
+        group_id=np.int64(2767),
+        current_size=np.int64(current_size),
+        scale_shell_indices=shells,
+        norm_a2_per_pixel_by_chunk=aa_chunks,
+        norm_xa_per_pixel_by_chunk=xa_chunks,
+        norm_a2_per_image=np.float64(np.sum(aa_chunks, dtype=np.float64)),
+        norm_xa_per_image=np.float64(np.sum(xa_chunks, dtype=np.float64)),
+    )
+    native = tmp_path / "native.tsv"
+    native.write_text(
+        "".join(
+            "acc_scale_pixel\titer=2\tpart_id=2767\thalfset=1"
+            f"\tj={row}\tx={x}\ty={y}\tshell={shells[row]}"
+            f"\taa={aa_native[row]:.17g}\txa={xa_native[row]:.17g}\n"
+            for row, (x, y) in enumerate(coordinates)
+        )
+    )
+
+    report = analyze(
+        capture,
+        native,
+        expected_iteration=2,
+        expected_half=1,
+        expected_part_id=2767,
+        expected_original_index=78,
+        image_size=image_size,
+        recovar_term_divisor=divisor,
+        term_source="norm",
+    )
+
+    assert report["identity"]["term_source"] == "norm"
+    assert report["identity"]["active_pixel_count"] == window_indices.size
+    assert report["pixel_aa"]["relative_l2"] < 1e-7
+    assert report["xa"]["pixel"]["relative_l2"] < 1e-7
+    assert abs(report["recovar_pixel_sum_vs_captured_scalar"]["a2_signed_delta"]) < 1e-5
+    assert abs(report["recovar_pixel_sum_vs_captured_scalar"]["xa_signed_delta"]) < 1e-5

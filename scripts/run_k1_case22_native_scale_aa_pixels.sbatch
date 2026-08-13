@@ -18,6 +18,7 @@ set -euo pipefail
 : "${EXPECTED_RELION_HEAD:?pin the diagnostic RELION commit}"
 : "${EXPECTED_RELION_DIFF_SHA256:?pin the diagnostic RELION diff}"
 : "${EXPECTED_RELION_BINARY_SHA256:?pin the diagnostic executable}"
+: "${K1_CASE22_NATIVE_AA_PART_ID:=109}"
 
 ROOT=${K1_CASE22_NATIVE_AA_ROOT}
 RUNTIME=${K1_CASE22_NATIVE_AA_RUNTIME}
@@ -29,6 +30,7 @@ RELION_RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispa
 DATA=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_currenthead_25ab6e68_20260728T011020ET/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/data
 RELION_OUT=${ROOT}/relion
 CAPTURE=${ROOT}/capture
+PART_ID=${K1_CASE22_NATIVE_AA_PART_ID}
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -63,7 +65,7 @@ export OMPI_MCA_orte_tmpdir_base=${TMPDIR}
 export OMPI_MCA_shmem_mmap_enable_nfs_warning=0
 export CUDA_VISIBLE_DEVICES=0
 export RELION_DUMP_SIGMA2_NOISE_DIR=${CAPTURE}
-export RELION_DUMP_SIGMA2_AA_PART_ID=109
+export RELION_DUMP_SIGMA2_AA_PART_ID=${PART_ID}
 export RELION_DUMP_SIGMA2_AA_ITER=2
 
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | xargs)
@@ -86,18 +88,18 @@ start=$(date +%s)
     cd "${DATA}"
     "${command[@]}"
 ) > "${RELION_OUT}/runner.stdout" 2> "${RELION_OUT}/runner.stderr"
-printf '{"job_id":"%s","wall_s":%d,"max_iter":2,"part_id":109}\n' \
-    "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" \
+printf '{"job_id":"%s","wall_s":%d,"max_iter":2,"part_id":%d}\n' \
+    "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" "${PART_ID}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 
 test -s "${RELION_OUT}/run_it002_data.star"
 test -s "${CAPTURE}/scale_aa_pixels.tsv"
-awk -F'\t' '
+awk -F'\t' -v part_id="${PART_ID}" '
     $1 != "acc_scale_pixel" { exit 1 }
     $2 != "iter=2" { exit 1 }
-    $3 != "part_id=109" { exit 1 }
+    $3 != "part_id=" part_id { exit 1 }
     $4 != "halfset=1" { exit 1 }
-    END { if (NR == 0) exit 1 }
+    END { if (NR != 1860) exit 1 }
 ' "${CAPTURE}/scale_aa_pixels.tsv"
 sha256sum "${LAUNCHER}" "${RELION_BINARY}" "${CAPTURE}/scale_aa_pixels.tsv" \
     > "${ROOT}/provenance/static_and_capture_${SLURM_JOB_ID}.sha256"

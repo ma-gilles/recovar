@@ -103,36 +103,60 @@ def analyze(
     expected_original_index: int,
     image_size: int,
     recovar_term_divisor: float,
+    term_source: str = "scale",
 ) -> dict[str, object]:
     _require(image_size > 0 and image_size % 2 == 0, "image size must be positive and even")
     _require(np.isfinite(recovar_term_divisor) and recovar_term_divisor > 0.0, "invalid divisor")
     with np.load(recovar_capture, allow_pickle=False) as payload:
         schema = str(payload["schema"].item())
-        _require(
-            schema
-            in {
-                "recovar-k1-scale-aa-chunked-v1",
-                "recovar-k1-scale-xa-aa-chunked-v2",
-            },
-            f"unsupported schema {schema}",
-        )
+        _require(term_source in {"scale", "norm"}, f"unsupported term source {term_source}")
+        supported_schemas = {
+            "recovar-k1-scale-aa-chunked-v1",
+            "recovar-k1-scale-xa-aa-chunked-v2",
+            "recovar-k1-scale-xa-aa-chunked-v3",
+            "recovar-k1-scale-xa-aa-chunked-v4",
+        }
+        _require(schema in supported_schemas, f"unsupported schema {schema}")
         iteration = int(payload["iteration"])
         half = int(payload["half"])
         original_index = int(payload["original_index"])
         part_id = int(payload["group_id"])
         current_size = int(payload["current_size"])
-        mask = np.asarray(payload["scale_correction_pixel_mask"], dtype=bool)
         shell_indices = np.asarray(payload["scale_shell_indices"], dtype=np.int32)
-        aa_per_pixel = np.asarray(payload["scale_aa_per_pixel"], dtype=np.float64)
-        aa_per_shell = np.asarray(payload["scale_aa_per_shell"], dtype=np.float64)
+        if term_source == "norm":
+            _require(
+                "norm_a2_per_pixel_by_chunk" in payload
+                and "norm_xa_per_pixel_by_chunk" in payload,
+                "normalization pixel chunks are absent",
+            )
+            mask = np.ones(shell_indices.shape, dtype=bool)
+            aa_chunks = np.asarray(payload["norm_a2_per_pixel_by_chunk"], dtype=np.float32)
+            xa_chunks = np.asarray(payload["norm_xa_per_pixel_by_chunk"], dtype=np.float32)
+            aa_per_pixel = np.sum(aa_chunks, axis=0, dtype=np.float32).astype(np.float64)
+            xa_per_pixel = np.sum(xa_chunks, axis=0, dtype=np.float32).astype(np.float64)
+            aa_per_shell = np.asarray(
+                [
+                    np.sum(aa_per_pixel[shell_indices == shell], dtype=np.float64)
+                    for shell in range(current_size // 2 + 1)
+                ],
+                dtype=np.float64,
+            )
+            captured_a2_scalar = float(payload["norm_a2_per_image"])
+            captured_xa_scalar = float(payload["norm_xa_per_image"])
+        else:
+            mask = np.asarray(payload["scale_correction_pixel_mask"], dtype=bool)
+            aa_per_pixel = np.asarray(payload["scale_aa_per_pixel"], dtype=np.float64)
+            aa_per_shell = np.asarray(payload["scale_aa_per_shell"], dtype=np.float64)
+            xa_per_pixel = (
+                np.asarray(payload["scale_xa_per_pixel"], dtype=np.float64)
+                if "scale_xa_per_pixel" in payload
+                else None
+            )
+            captured_a2_scalar = None
+            captured_xa_scalar = None
         atomic_aa_per_pixel = (
             np.asarray(payload["scale_aa_atomic_per_pixel"], dtype=np.float64)
             if "scale_aa_atomic_per_pixel" in payload
-            else None
-        )
-        xa_per_pixel = (
-            np.asarray(payload["scale_xa_per_pixel"], dtype=np.float64)
-            if "scale_xa_per_pixel" in payload
             else None
         )
         atomic_xa_per_pixel = (
@@ -302,6 +326,7 @@ def analyze(
             "active_pixel_count": int(active_rows.size),
             "active_shells": active_shells.tolist(),
             "recovar_term_divisor": float(recovar_term_divisor),
+            "term_source": term_source,
         },
         "coordinate_join": {
             "missing_active_recovar_coordinates": len(missing),
@@ -332,6 +357,18 @@ def analyze(
                 captured_shell_reference,
             ),
         },
+        "recovar_pixel_sum_vs_captured_scalar": (
+            None
+            if captured_a2_scalar is None
+            else {
+                "a2_pixel_sum": float(np.sum(aa_per_pixel, dtype=np.float64)),
+                "a2_captured_scalar": captured_a2_scalar,
+                "a2_signed_delta": float(np.sum(aa_per_pixel, dtype=np.float64) - captured_a2_scalar),
+                "xa_pixel_sum": float(np.sum(xa_per_pixel, dtype=np.float64)),
+                "xa_captured_scalar": captured_xa_scalar,
+                "xa_signed_delta": float(np.sum(xa_per_pixel, dtype=np.float64) - captured_xa_scalar),
+            }
+        ),
         "atomic_aa": atomic_report,
         "xa": xa_report,
         "wavg_direct_residual": direct_residual_report,
@@ -374,6 +411,7 @@ def main() -> None:
     parser.add_argument("--original-index", type=int, required=True)
     parser.add_argument("--image-size", type=int, default=128)
     parser.add_argument("--recovar-term-divisor", type=float, default=float(128**4))
+    parser.add_argument("--term-source", choices=("scale", "norm"), default="scale")
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     if args.output_json.exists():
@@ -388,6 +426,7 @@ def main() -> None:
         expected_original_index=args.original_index,
         image_size=args.image_size,
         recovar_term_divisor=args.recovar_term_divisor,
+        term_source=args.term_source,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
