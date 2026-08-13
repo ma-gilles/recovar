@@ -155,7 +155,7 @@ export PATH=${CUDA_HOME}/bin:${PATH}
 NVIDIA_ROOT=$(find "${PIXI_ENV}/lib" -maxdepth 3 -type d -path '*/site-packages/nvidia' -print -quit)
 NVIDIA_LIBS=$(find "${NVIDIA_ROOT}" -type d -name lib | paste -sd: -)
 export LD_LIBRARY_PATH=${NVIDIA_LIBS}:${CUDA_HOME}/targets/x86_64-linux/lib:${PIXI_ENV}/lib
-export CUDA_VISIBLE_DEVICES=0
+: "${CUDA_VISIBLE_DEVICES:?Slurm must assign exactly one visible GPU}"
 
 export RECOVAR_CUDA_LIB=${CUDA_LIB}
 export RECOVAR_RELION_BIND_BUILD_DIR=${RELION_BIND}

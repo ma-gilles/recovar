@@ -86,7 +86,7 @@ export PATH=${CUDA_HOME}/bin:${PATH}
 export LD_LIBRARY_PATH=${RELION_RUNTIME}/system_dev_overlay/lib:${MPI_ROOT}/lib64:${CUDA_HOME}/lib64
 export OMPI_MCA_orte_tmpdir_base=${TMPDIR}
 export OMPI_MCA_shmem_mmap_enable_nfs_warning=0
-export CUDA_VISIBLE_DEVICES=0
+: "${CUDA_VISIBLE_DEVICES:?Slurm must assign exactly one visible GPU}"
 
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | xargs)
 case "${GPU_NAME}" in *H100*) ;; *) echo "Expected H100, got ${GPU_NAME}" >&2; exit 2 ;; esac
