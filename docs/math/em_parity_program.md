@@ -15881,3 +15881,47 @@ raw dump followed by a native normalization-state join for this identity.
 
 These are prefix and operand results, so the immutable complete-case score is
 still `28/34` strict, `32/34` topology, and `34/34` evaluated.
+
+The same native fine-score run contains sealed rank-specific scoring-noise
+arrays. A new fail-closed validator replays every captured float32 inverse
+noise word exactly; the accepted two-rank manifest is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0079_native_fine_operand_it3_20260813T0806ET/analysis/SCORING_NOISE_VALIDATION.json`
+(SHA-256 `10968b8e471c271058eeb0bba7b72d6c036ba8b99c94f780e4a22a1cf3125468`).
+Substituting the same-run native half-1 `sigma2_noise`, rather than the
+separate direct-noise arm, moves the stack-79 raw replay to
+`2186.452392578125`, closes `81.82%` of the native raw gap, and reduces the
+correction-weight relative L2 from `1.6829e-5` to `2.2075e-7` (`76x`), with
+maximum absolute error falling from `0.615234375` to `0.0078125`. This makes
+incoming shell-noise state a demonstrated dominant operand for the matched
+native tuple even after the separate-run caveat is removed.
+
+Native normalization job `12330142` completed in `00:08:39` and passed its
+three-iteration passive-capture gate: selected topology and schedule are
+exact, and minimum map FSC-AUC is `0.999999999929`. The exact iteration-3
+stack-79 normalization quotient is `0x3fa002b6`
+(`1.2500827312469482`), while RECOVAR uses `0x3fa002a0`
+(`1.2500801086425781`), a 22-ULP deficit. The exact native update records
+`avg_norm=0.40754429106919543`, `particle_norm=0.3260138452280748`, and
+iteration-2 `wsum_norm=0.08558926171936809`. RECOVAR is high by
+`2.31925e-6`, `2.55106e-6`, and `1.33925e-6`, respectively, in RELION units.
+The ratio error is therefore the difference between two upstream continuous
+state errors, not float32 division itself.
+
+The preceding iteration-1 quotient is bit-exact (`0x3fa2712d`) despite tiny
+residual, norm, and average differences. The first normalization factor
+defect is consequently created by the iteration-2 weighted norm residual,
+not inherited from initial normalization. The rejected coupled direct-
+residual treatment improves the stack-79 average and particle norm in
+absolute terms but changes the quotient to `0x3fa0029d`, 25 ULPs from native,
+and its complete iteration-3 trajectory was already materially worse. It
+must not be recombined with the direct-noise-only correction.
+
+The native host fine-image product closes bit-exactly and its CTF/noise pixel
+correction agrees with RECOVAR up to sign at `8.2801e-8` relative L2 and at
+most two ULP. Native Fourier preprocessing versus RECOVAR is instead
+`2.1021e-6` relative L2, consistent with the captured 22-ULP quotient. The
+next normalization gate is thus the iteration-2 per-particle current-size
+norm residual, joined in order through candidate tuples, posterior weights,
+per-candidate `diff2`, and its particle reduction; high-shell power is already
+within `3.3e-7` relative L2. No controller or translation change is justified
+at this boundary.
