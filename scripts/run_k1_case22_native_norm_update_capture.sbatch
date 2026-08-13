@@ -27,6 +27,8 @@ STACK_ONE_BASED=${K1_NATIVE_NORM_STACK_ONE_BASED:-1462}
 CAPTURE_ITERATION=${K1_NATIVE_NORM_CAPTURE_ITERATION:-2}
 AUTO_ITER_MAX=${K1_NATIVE_NORM_AUTO_ITER_MAX:-${CAPTURE_ITERATION}}
 UPDATE_ITERATION=$((CAPTURE_ITERATION - 1))
+CAPTURE_BPREF=${K1_NATIVE_NORM_CAPTURE_BPREF:-0}
+BPREF_ITERATION=${K1_NATIVE_NORM_BPREF_ITERATION:-${UPDATE_ITERATION}}
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
 AUDIT_REPO=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_factor_recovar_187a9f60_20260808T1100ET/checkout
 SOURCE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_native_components_source_b571275_20260812/source
@@ -46,9 +48,23 @@ for value_name in PART_ID STACK_ONE_BASED CAPTURE_ITERATION AUTO_ITER_MAX; do
         exit 2
     fi
 done
+case "${CAPTURE_BPREF}" in
+    0|1) ;;
+    *) echo "K1_NATIVE_NORM_CAPTURE_BPREF must be 0 or 1" >&2; exit 2 ;;
+esac
 if (( AUTO_ITER_MAX < CAPTURE_ITERATION )); then
     echo "K1_NATIVE_NORM_AUTO_ITER_MAX must reach the capture iteration" >&2
     exit 2
+fi
+if (( CAPTURE_BPREF == 1 )); then
+    if [[ ! ${BPREF_ITERATION} =~ ^[1-9][0-9]*$ ]]; then
+        echo "K1_NATIVE_NORM_BPREF_ITERATION must be a positive integer" >&2
+        exit 2
+    fi
+    if (( BPREF_ITERATION < 1 || BPREF_ITERATION > AUTO_ITER_MAX )); then
+        echo "K1_NATIVE_NORM_BPREF_ITERATION must be within the executed trajectory" >&2
+        exit 2
+    fi
 fi
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
@@ -84,6 +100,18 @@ export RELION_P1_PREPROCESS_CAPTURE_MAX_PARTICLES_PER_RANK=1
 export RELION_P1_PREPROCESS_CAPTURE_EXPECTED_FOLLOWERS=2
 export RELION_P1_PREPROCESS_CAPTURE_MAX_BYTES=1073741824
 export RELION_P1_PREPROCESS_CAPTURE_PART_IDS=${PART_ID}
+if (( CAPTURE_BPREF == 1 )); then
+    export RELION_BPRE_CAPTURE_DIR=${CAPTURE_DIR}
+    export RELION_BPRE_CAPTURE_SCHEMA=1
+    export RELION_BPRE_CAPTURE_ITER=${BPREF_ITERATION}
+    export RELION_BPRE_CAPTURE_CLASS=1
+    export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES=1
+    export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=1
+    export RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=1
+    export RELION_BPRE_CAPTURE_MAX_BYTES=200000000
+    export RELION_BPRE_CAPTURE_DEVICE_BYTES=33554432
+    export RELION_BPRE_CAPTURE_PART_IDS=${PART_ID}
+fi
 
 nvidia-smi --query-gpu=timestamp,index,name,uuid,memory.total,driver_version --format=csv \
     > "${ROOT}/provenance/nvidia_smi_${SLURM_JOB_ID}.txt"
@@ -108,6 +136,12 @@ printf -v final_optimiser '%s/run_it%03d_optimiser.star' "${RELION_OUT}" "${AUTO
 test -s "${final_optimiser}"
 test "$(rg -c "RELION_P1_NORMALIZATION_OPERANDS_V1 part_id=${PART_ID} " "${RELION_OUT}/runner_${SLURM_JOB_ID}.stderr")" -eq 1
 test "$(rg -c "RELION_P1_NORM_UPDATE_OPERANDS_V1 iter=${UPDATE_ITERATION} part_id=${PART_ID} " "${RELION_OUT}/runner_${SLURM_JOB_ID}.stderr")" -eq 1
+if (( CAPTURE_BPREF == 1 )); then
+    test "$(find "${CAPTURE_DIR}" -maxdepth 1 -type f -name '*.bpre-v1.bin' | wc -l)" -eq 1
+    "${PYTHON}" "${REPO}/scripts/validate_relion_bpref_prescatter.py" \
+        "${CAPTURE_DIR}" --expected-particles 1 \
+        --output-json "${ROOT}/analysis/RELION_BPREF_PRESCATTER_VALIDATION.json"
+fi
 
 cd "${AUDIT_REPO}"
 audit_iterations=()
