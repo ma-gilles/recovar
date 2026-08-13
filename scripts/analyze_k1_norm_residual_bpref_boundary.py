@@ -263,7 +263,7 @@ def _native_norm_block_terms(
     _require(np.all((local_rotation >= 0) & (local_rotation < proj.shape[0])), "native row left rotation block")
     _require(np.all(pixels >= 0), "native BPref row left exact-radius support")
     keys = local_rotation * proj.shape[1] + pixels
-    _require(np.all(np.diff(keys) > 0), "native BPref block is duplicated or not canonical")
+    _require(np.unique(keys).size == keys.size, "native BPref block contains duplicate remapped rows")
     source = (
         block_rows["source_re"].astype(np.float32) + np.complex64(1j) * block_rows["source_im"].astype(np.float32)
     ).astype(np.complex64)

@@ -84,13 +84,13 @@ def test_native_norm_block_terms_stream_rows_in_native_units() -> None:
         np.abs(projection) ** 2,
         rows,
         orientation_start=4,
-        rectangle_to_reconstruction=np.asarray([0, 1], dtype=np.int32),
+        rectangle_to_reconstruction=np.asarray([1, 0], dtype=np.int32),
         noise_variance=np.asarray([2.0, 3.0], dtype=np.float32),
         physical_image_size=8,
     )
 
-    source = np.asarray([[1.0 + 0.0j, 2.0 + 1.0j], [0.0, 3.0 + 0.0j]], dtype=np.complex64)
-    weight = np.asarray([[1.0, 2.0], [0.0, 3.0]], dtype=np.float32)
+    source = np.asarray([[2.0 + 1.0j, 1.0 + 0.0j], [3.0 + 0.0j, 0.0]], dtype=np.complex64)
+    weight = np.asarray([[2.0, 1.0], [3.0, 0.0]], dtype=np.float32)
     expected = analyzer._norm_terms(
         projection,
         np.abs(projection) ** 2,

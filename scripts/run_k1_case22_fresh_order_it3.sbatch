@@ -350,7 +350,7 @@ if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
         norm_residual_dump=${RECOVAR_PASS2_DUMP_DIR}/norm_residual_orig${target_original_label}_half1_cs${target_size_label}.npz
         chunked_scale_aa_dump=${RECOVAR_PASS2_DUMP_DIR}/scale_aa_chunked_orig${target_original_label}_half1_cs${target_size_label}.npz
         test -s "${norm_residual_dump}" || test -s "${chunked_scale_aa_dump}"
-        rg -q 'requested fine-score or norm/scale boundary' "${OUTPUT}/run.log"
+        rg -q 'requested fine-score boundary or norm/scale boundary' "${OUTPUT}/run.log"
     else
         test -s "${compact_dump}"
         rg -q 'pass-2 operand dump completed; stopping at the requested fine-score boundary' \
