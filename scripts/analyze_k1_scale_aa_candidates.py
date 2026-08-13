@@ -94,6 +94,7 @@ def analyze(
             in {
                 "recovar-k1-scale-aa-chunked-v1",
                 "recovar-k1-scale-xa-aa-chunked-v2",
+                "recovar-k1-scale-xa-aa-chunked-v3",
             },
             "unsupported RECOVAR capture schema",
         )

@@ -21,6 +21,11 @@ set -euo pipefail
 
 ROOT=${K1_CASE22_NATIVE_AA_CANDIDATES_ROOT}
 RUNTIME=${K1_CASE22_NATIVE_AA_CANDIDATES_RUNTIME}
+PART_ID=${K1_CASE22_NATIVE_AA_PART_ID:-109}
+if [[ ! "${PART_ID}" =~ ^[0-9]+$ ]]; then
+    echo "K1_CASE22_NATIVE_AA_PART_ID must be a nonnegative integer" >&2
+    exit 2
+fi
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
 LAUNCHER=${REPO}/scripts/run_k1_case22_native_scale_aa_candidates.sbatch
 RELION_SOURCE=/scratch/gpfs/GILLES/mg6942/relion
@@ -63,7 +68,7 @@ export OMPI_MCA_orte_tmpdir_base=${TMPDIR}
 export OMPI_MCA_shmem_mmap_enable_nfs_warning=0
 export CUDA_VISIBLE_DEVICES=0
 export RELION_ACC_DUMP_DIR=${CAPTURE}
-export RELION_ACC_DUMP_PART_ID=109
+export RELION_ACC_DUMP_PART_ID=${PART_ID}
 export RELION_ACC_DUMP_ITER=2
 export RELION_ACC_DUMP_WAVG_PROJECT_PANEL=1
 
@@ -87,11 +92,11 @@ start=$(date +%s)
     cd "${DATA}"
     "${command[@]}"
 ) > "${RELION_OUT}/runner.stdout" 2> "${RELION_OUT}/runner.stderr"
-printf '{"job_id":"%s","wall_s":%d,"max_iter":2,"part_id":109}\n' \
-    "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" \
+printf '{"job_id":"%s","wall_s":%d,"max_iter":2,"part_id":%d}\n' \
+    "${SLURM_JOB_ID}" "$(( $(date +%s) - start ))" "${PART_ID}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 
-PREFIX=${CAPTURE}/img0_part109_storeWavg_
+PREFIX=${CAPTURE}/img0_part${PART_ID}_storeWavg_
 test -s "${RELION_OUT}/run_it002_data.star"
 for suffix in sorted_weights orientation_num translation_num sum_weight significant_weight \
     eulers trans_xyz ctfs wavg_ppref_dims wavg_ppref_padding_factor wavg_ppref_real wavg_ppref_imag \
