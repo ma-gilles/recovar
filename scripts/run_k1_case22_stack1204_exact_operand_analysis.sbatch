@@ -28,6 +28,10 @@ ANALYZER=${REPO}/scripts/analyze_k1_exact_ppref_operand_tuple.py
 RECOVAR=${K1_CASE22_RECOVAR_DUMP}
 CAPTURE_A=${K1_CASE22_OPERAND_CAPTURE_A}
 CAPTURE_B=${K1_CASE22_OPERAND_CAPTURE_B}
+RECOVAR_ROW_A=${K1_CASE22_OPERAND_RECOVAR_ROW_A:-50293}
+RECOVAR_ROW_B=${K1_CASE22_OPERAND_RECOVAR_ROW_B:-50295}
+LABEL_A=${K1_CASE22_OPERAND_LABEL_A:-rank1_native_r145621_t80_recovar_r50293_t80}
+LABEL_B=${K1_CASE22_OPERAND_LABEL_B:-rank2_native_r145623_t82_recovar_r50295_t82}
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -73,8 +77,8 @@ run_one() {
         > "${ROOT}/analysis/${label}.stdout"
 }
 
-run_one "${CAPTURE_A}" 50293 rank1_native_r145621_t80_recovar_r50293_t80
-run_one "${CAPTURE_B}" 50295 rank2_native_r145623_t82_recovar_r50295_t82
+run_one "${CAPTURE_A}" "${RECOVAR_ROW_A}" "${LABEL_A}"
+run_one "${CAPTURE_B}" "${RECOVAR_ROW_B}" "${LABEL_B}"
 
 "${PYTHON}" - <<'PY' "${ROOT}/analysis"
 import json

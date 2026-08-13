@@ -271,6 +271,24 @@ def analyze(
             recovar_corr,
             recovar_sum,
         ),
+        "recovar_with_exact_ppref_and_native_corr": (
+            exact_reference,
+            recovar_shifted,
+            native_corr,
+            recovar_sum,
+        ),
+        "recovar_with_exact_ppref_and_native_corr_shells_1_through_4": (
+            exact_reference,
+            recovar_shifted,
+            recovar_corr_with_native_low,
+            recovar_sum,
+        ),
+        "recovar_with_exact_ppref_and_native_corr_shells_5_plus": (
+            exact_reference,
+            recovar_shifted,
+            recovar_corr_with_native_high,
+            recovar_sum,
+        ),
         "recovar_with_native_shifted_only": (
             recovar_reference,
             native_shifted,
@@ -452,6 +470,18 @@ def analyze(
             == native_production_raw,
             "exact_ppref_with_recovar_other_operands_rescues_native_raw": raw[
                 "exact_ppref_with_recovar_other_operands"
+            ]
+            == native_production_raw,
+            "exact_ppref_and_native_corr_rescue_recovar_raw": raw[
+                "recovar_with_exact_ppref_and_native_corr"
+            ]
+            == native_production_raw,
+            "exact_ppref_and_native_corr_shells_1_through_4_rescue_recovar_raw": raw[
+                "recovar_with_exact_ppref_and_native_corr_shells_1_through_4"
+            ]
+            == native_production_raw,
+            "exact_ppref_and_native_corr_shells_5_plus_rescue_recovar_raw": raw[
+                "recovar_with_exact_ppref_and_native_corr_shells_5_plus"
             ]
             == native_production_raw,
             "native_corr_shells_1_through_4_rescue_recovar_raw": raw[

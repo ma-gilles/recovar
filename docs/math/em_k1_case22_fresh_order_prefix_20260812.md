@@ -1141,8 +1141,8 @@ closed every discrete boundary for stack 1204:
 | Missing or extra tuples | 0 | 0 | exact |
 
 Its report is
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1204_live_state_f32support_ref_it2_20260813T0317ET/analysis/K1_CASE22_STACK1204_FINE_SCORE_STAGES_LIVE_STATE_F32SUPPORT_REF.json`
-(SHA-256 `0b179e6bcc70c77a144445be8156d88ab5be63c75557e9c44c5f999d0a5956f7`).
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1204_live_state_f32support_ref_it2_20260813T0317ET/analysis/K1_CASE22_STACK1204_FINE_SCORE_STAGES_LIVE_STATE_F32SUPPORT_REF_V2.json`
+(SHA-256 `73a0ee789c88217bb9c79dac58b0343880a5abac18f30a908d48cf2783f8bcf6`).
 The pass-2 artifact SHA-256 is
 `68c79bb980cef5d53b927d5a63e29648b103c575f115f4244aac7066dba35ec8`.
 
@@ -1157,3 +1157,21 @@ is therefore inherited from the aggregate raw fine-score field. The next
 compact target is the shared tuple with the largest absolute posterior error,
 native local rotation 69630 and translation 82; no complete trajectory is
 needed to localize that operand.
+
+Native operand capture job `12321720` and GPU analysis job `12321911` close
+that target. RECOVAR's raw `diff2` is exactly two float32 ULP high
+(`130.71279907226562` versus `130.7127685546875`). Replacing only RECOVAR's
+projected reference with the exact native `PPref` removes one ULP. Replacing
+only its correction weights with the native weights also removes one ULP.
+Replacing both makes the production raw score bit-exact. The correction
+effect comes from shells 5 and above; replacing only shells 1--4 does not
+change the RECOVAR production value. The translated image and high-resolution
+tail do not change the quantized raw score.
+
+The combined report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1204_impact_operand_combined_20260813T0342ET/analysis/K1_CASE22_STACK1204_EXACT_OPERAND_PAIR.json`
+(SHA-256 `c5235164494c1fb02904b293c2cf1d0dd088dc54a3c6be3b39dedb7b35ab9463`).
+Both unequal operands are iteration-start state derived from the preceding
+map/noise update. This rejects a new fine-score formula, exponentiation, or
+normalization defect at this boundary and returns the first-cause search to
+the remaining Wavg/reference and noise-update residuals.

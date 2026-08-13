@@ -16,7 +16,7 @@ Repository: `https://github.com/ma-gilles/recovar.git`
 Remote branch: `codex/em-parity-checkpoint-20260711`
 
 Minimum required checkpoint commit:
-`42179f212aad4c81dca17311b2dc0547f375ade7`
+`84b4203975d43727f51ee815546cb7b52151a515`
 
 PR: `https://github.com/ma-gilles/recovar/pull/158`
 
@@ -29,7 +29,7 @@ git clone https://github.com/ma-gilles/recovar.git recovar-k1-parity
 cd recovar-k1-parity
 git fetch origin codex/em-parity-checkpoint-20260711
 git switch --detach origin/codex/em-parity-checkpoint-20260711
-git merge-base --is-ancestor 42179f212aad4c81dca17311b2dc0547f375ade7 HEAD
+git merge-base --is-ancestor 84b4203975d43727f51ee815546cb7b52151a515 HEAD
 git rev-parse HEAD
 git status --short
 ```
