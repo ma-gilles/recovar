@@ -26,6 +26,7 @@ REPO=${K1_CASE22_IT3_REPO}
 MAX_ITER=${K1_CASE22_MAX_ITER:-3}
 PARITY_DUMP=${K1_CASE22_PARITY_DUMP:-0}
 COMPACT_STACK1204_DUMP=${K1_CASE22_COMPACT_STACK1204_DUMP:-0}
+PRODUCTION_CANDIDATE_CAPTURE=${K1_CASE22_PRODUCTION_CANDIDATE_CAPTURE:-0}
 STOP_AFTER_COMPACT_DUMP=${K1_CASE22_STOP_AFTER_COMPACT_DUMP:-0}
 NORM_RESIDUAL_INPUTS=${K1_CASE22_NORM_RESIDUAL_INPUTS:-0}
 POWERCLASS_SPECTRUM_NORM=${K1_CASE22_POWERCLASS_SPECTRUM_NORM:-0}
@@ -94,6 +95,10 @@ esac
 case "${PROJECTION_CACHE_MODE}" in
     auto|on|off) ;;
     *) echo "K1_CASE22_PROJECTION_CACHE_MODE must be auto, on, or off" >&2; exit 2 ;;
+esac
+case "${PRODUCTION_CANDIDATE_CAPTURE}" in
+    0|1) ;;
+    *) echo "K1_CASE22_PRODUCTION_CANDIDATE_CAPTURE must be 0 or 1" >&2; exit 2 ;;
 esac
 case "${NOISE_UPDATE_DUMP}" in
     0|1) ;;
@@ -210,6 +215,20 @@ fi
 if [[ "${PROJECTOR_DUMP}" = 1 ]]; then
     export RECOVAR_RELION_PROJECTOR_DUMP_DIR=${ROOT}/projector
     mkdir -p "${RECOVAR_RELION_PROJECTOR_DUMP_DIR}"
+fi
+if [[ "${PRODUCTION_CANDIDATE_CAPTURE}" = 1 ]]; then
+    if [[ "${COMPACT_STACK1204_DUMP}" = 1 || "${COARSE_STACK1204_DUMP}" = 1 ]]; then
+        echo "production candidate capture and pass-2/coarse dump modes are mutually exclusive" >&2
+        exit 2
+    fi
+    if (( TARGET_ITERATION > MAX_ITER )); then
+        echo "production candidate capture iteration exceeds K1_CASE22_MAX_ITER" >&2
+        exit 2
+    fi
+    export RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR=${ROOT}/production_candidates
+    export RECOVAR_COMPACT_CANDIDATE_CAPTURE_ITERATION=${TARGET_ITERATION}
+    export RECOVAR_COMPACT_CANDIDATE_CAPTURE_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDEX}
+    mkdir -p "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}"
 fi
 if [[ "${COMPACT_STACK1204_DUMP}" = 1 && "${COARSE_STACK1204_DUMP}" = 1 ]]; then
     echo "compact pass-2 and coarse-significance dump modes are mutually exclusive" >&2
@@ -382,6 +401,30 @@ PY
         test -s "${norm_residual_dump}"
     fi
 fi
+if [[ "${PRODUCTION_CANDIDATE_CAPTURE}" = 1 ]]; then
+    "${PYTHON}" - <<'PY' "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}" "${TARGET_ORIGINAL_INDEX}" "${TARGET_ITERATION}"
+from pathlib import Path
+import sys
+
+import numpy as np
+
+from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
+    validate_raw_capture_shard,
+)
+
+capture_dir = Path(sys.argv[1])
+target_original = int(sys.argv[2])
+target_iteration = int(sys.argv[3])
+paths = sorted(capture_dir.glob("raw_k1_*.npz"))
+assert paths, f"no production candidate shards in {capture_dir}"
+inventory = [validate_raw_capture_shard(path) for path in paths]
+assert {item["iteration"] for item in inventory} == {target_iteration}
+observed = np.concatenate([item["original_indices"] for item in inventory])
+assert np.array_equal(observed, np.asarray([target_original], dtype=np.int64)), observed
+PY
+    find "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}" -type f -print0 | sort -z | xargs -0 sha256sum \
+        > "${ROOT}/provenance/production_candidates_${SLURM_JOB_ID}.sha256"
+fi
 ! rg -q 'Traceback|RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' "${OUTPUT}/run.log"
 rg -q 'Applied RELION fresh paired AutoRefine particle order with effective seed 1723' "${OUTPUT}/run.log"
 rg -q 'preserving fresh RELION physical BPref particle order' "${OUTPUT}/run.log"
@@ -390,8 +433,8 @@ if [[ "${PARITY_DUMP}" = 1 ]]; then
     test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
 fi
 
-printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"norm_residual_inputs":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_residual":%s,"projection_cache_mode":"%s","parity_dump":%s,"noise_update_dump":%s}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${NORM_RESIDUAL_INPUTS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${WAVG_ATOMIC_SCALE_AA}" "${WAVG_ATOMIC_DIRECT_RESIDUAL}" "${PROJECTION_CACHE_MODE}" "${PARITY_DUMP}" "${NOISE_UPDATE_DUMP}" \
+printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"production_candidate_capture":%s,"target_stack_one_based":%d,"target_iteration":%d,"norm_residual_inputs":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_residual":%s,"projection_cache_mode":"%s","parity_dump":%s,"noise_update_dump":%s}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${PRODUCTION_CANDIDATE_CAPTURE}" "${TARGET_STACK_ONE_BASED}" "${TARGET_ITERATION}" "${NORM_RESIDUAL_INPUTS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${WAVG_ATOMIC_SCALE_AA}" "${WAVG_ATOMIC_DIRECT_RESIDUAL}" "${PROJECTION_CACHE_MODE}" "${PARITY_DUMP}" "${NOISE_UPDATE_DUMP}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"

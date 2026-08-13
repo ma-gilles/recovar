@@ -17,6 +17,7 @@ import numpy as np
 SCHEMA = "recovar-k1-production-candidate-bucket-v2"
 CAPTURE_DIR_ENV = "RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR"
 CAPTURE_ITERATION_ENV = "RECOVAR_COMPACT_CANDIDATE_CAPTURE_ITERATION"
+CAPTURE_ORIGINAL_INDICES_ENV = "RECOVAR_COMPACT_CANDIDATE_CAPTURE_ORIGINAL_INDICES"
 MAX_PARTICLES_PER_RAW_SHARD = 256
 MAX_CANDIDATES_PER_RAW_SHARD = 1_000_000
 MAX_CHUNKED_CAPTURE_INPUT_BYTES = 256 * 1024**2
@@ -494,6 +495,45 @@ def compact_capture_requested(iteration: int) -> bool:
     return _capture_requested(int(iteration)) is not None
 
 
+def _target_rows(original_indices: np.ndarray) -> np.ndarray:
+    """Return rows selected by the optional immutable-original-ID filter."""
+
+    original = np.asarray(original_indices, dtype=np.int64)
+    if original.ndim != 1 or np.unique(original).size != original.size:
+        raise CompactCaptureError("compact capture original identities must be a unique vector")
+    raw = os.environ.get(CAPTURE_ORIGINAL_INDICES_ENV, "").strip()
+    if not raw:
+        return np.arange(original.size, dtype=np.int64)
+    try:
+        targets = np.asarray(
+            sorted({int(token.strip()) for token in raw.split(",") if token.strip()}),
+            dtype=np.int64,
+        )
+    except ValueError as exc:
+        raise CompactCaptureError(
+            f"{CAPTURE_ORIGINAL_INDICES_ENV} must be comma-separated integers"
+        ) from exc
+    if targets.size == 0 or np.any(targets < 0):
+        raise CompactCaptureError(
+            f"{CAPTURE_ORIGINAL_INDICES_ENV} must contain nonnegative integers"
+        )
+    return np.flatnonzero(np.isin(original, targets)).astype(np.int64, copy=False)
+
+
+def compact_capture_requested_for_original_indices(iteration: int, original_indices) -> bool:
+    """Return whether this production bucket contains a requested identity."""
+
+    return compact_capture_requested_particle_count(iteration, original_indices) > 0
+
+
+def compact_capture_requested_particle_count(iteration: int, original_indices) -> int:
+    """Return the number of requested particles in this production bucket."""
+
+    if _capture_requested(int(iteration)) is None:
+        return 0
+    return int(_target_rows(np.asarray(original_indices, dtype=np.int64)).size)
+
+
 def require_chunked_capture_capacity(batch: int, rotations: int, translations: int) -> int:
     """Fail before retention when worst-case host chunk assembly exceeds its cap."""
 
@@ -600,18 +640,23 @@ def maybe_capture_k1_production_bucket(
     if reconstruction_mask is None:
         raise CompactCaptureError("targeted compact capture requires the production significant mask")
 
-    local_indices = np.asarray(image_indices, dtype=np.int64)
-    original_indices = np.asarray(original_indices, dtype=np.int64)
-    score = np.asarray(scores)
-    posterior = np.asarray(probs)
-    mask = np.asarray(candidate_mask, dtype=bool)
-    significant = np.asarray(reconstruction_mask, dtype=bool)
-    rot_prior = np.asarray(rotation_log_prior)
-    trans_prior = np.asarray(translation_log_prior)
-    log_z_np = np.asarray(log_z)
-    best_np = np.asarray(best_log_score)
-    argmax_np = np.asarray(best_argmax, dtype=np.int64)
-    pmax_np = np.asarray(max_posterior)
+    all_local_indices = np.asarray(image_indices, dtype=np.int64)
+    all_original_indices = np.asarray(original_indices, dtype=np.int64)
+    rows = _target_rows(all_original_indices)
+    if rows.size == 0:
+        return 0
+    local_indices = all_local_indices[rows]
+    original_indices = all_original_indices[rows]
+    score = np.asarray(scores[rows])
+    posterior = np.asarray(probs[rows])
+    mask = np.asarray(candidate_mask[rows], dtype=bool)
+    significant = np.asarray(reconstruction_mask[rows], dtype=bool)
+    rot_prior = np.asarray(rotation_log_prior[rows])
+    trans_prior = np.asarray(translation_log_prior[rows])
+    log_z_np = np.asarray(log_z[rows])
+    best_np = np.asarray(best_log_score[rows])
+    argmax_np = np.asarray(best_argmax[rows], dtype=np.int64)
+    pmax_np = np.asarray(max_posterior[rows])
     translations = np.asarray(fine_translations, dtype=np.float32)
     translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
 
@@ -886,10 +931,14 @@ def maybe_capture_k1_production_bucket_chunked(
 
     if not compact_capture_requested(int(iteration)):
         return 0
-    score_arrays = tuple(np.asarray(chunk) for chunk in score_chunks)
-    prob_arrays = tuple(np.asarray(chunk) for chunk in prob_chunks)
+    all_original_indices = np.asarray(original_indices, dtype=np.int64)
+    rows = _target_rows(all_original_indices)
+    if rows.size == 0:
+        return 0
+    score_arrays = tuple(np.asarray(chunk[rows]) for chunk in score_chunks)
+    prob_arrays = tuple(np.asarray(chunk[rows]) for chunk in prob_chunks)
     reconstruction_arrays = tuple(
-        np.asarray(chunk, dtype=bool) for chunk in reconstruction_mask_chunks
+        np.asarray(chunk[rows], dtype=bool) for chunk in reconstruction_mask_chunks
     )
     if not score_arrays or not (
         len(score_arrays) == len(prob_arrays) == len(reconstruction_arrays)
@@ -919,25 +968,26 @@ def maybe_capture_k1_production_bucket_chunked(
     scores = np.concatenate(score_arrays, axis=1)
     probs = np.concatenate(prob_arrays, axis=1)
     reconstruction_mask = np.concatenate(reconstruction_arrays, axis=1)
-    if scores.shape != np.asarray(candidate_mask).shape:
+    filtered_candidate_mask = candidate_mask[rows]
+    if scores.shape != np.shape(filtered_candidate_mask):
         raise CompactCaptureError("chunked capture does not cover the complete candidate topology")
     return maybe_capture_k1_production_bucket(
         iteration=iteration,
         half=half,
-        image_indices=image_indices,
-        original_indices=original_indices,
+        image_indices=np.asarray(image_indices, dtype=np.int64)[rows],
+        original_indices=all_original_indices[rows],
         per_image_inputs=per_image_inputs,
         current_size=current_size,
         fine_translations=fine_translations,
         fine_translation_parent=fine_translation_parent,
         scores=scores,
         probs=probs,
-        rotation_log_prior=rotation_log_prior,
-        translation_log_prior=translation_log_prior,
-        candidate_mask=candidate_mask,
+        rotation_log_prior=rotation_log_prior[rows],
+        translation_log_prior=translation_log_prior[rows],
+        candidate_mask=filtered_candidate_mask,
         reconstruction_mask=reconstruction_mask,
-        log_z=log_z,
-        best_log_score=best_log_score,
-        best_argmax=best_argmax,
-        max_posterior=max_posterior,
+        log_z=log_z[rows],
+        best_log_score=best_log_score[rows],
+        best_argmax=best_argmax[rows],
+        max_posterior=max_posterior[rows],
     )

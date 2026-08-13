@@ -147,6 +147,96 @@ def test_enabled_capture_preserves_native_arrays_and_reopens_atomically(tmp_path
 
 
 @pytest.mark.unit
+def test_original_identity_filter_captures_only_requested_particle(tmp_path, monkeypatch):
+    monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(capture.CAPTURE_ITERATION_ENV, "3")
+    monkeypatch.setenv(capture.CAPTURE_ORIGINAL_INDICES_ENV, "1001")
+    monkeypatch.setattr(capture, "_capture_counter", 0)
+    kwargs = _capture_inputs()
+
+    assert capture.compact_capture_requested_for_original_indices(3, [1000, 1001])
+    assert not capture.compact_capture_requested_for_original_indices(3, [1000, 1002])
+    assert capture.maybe_capture_k1_production_bucket(**kwargs) == 1
+
+    paths = list(tmp_path.glob("*.npz"))
+    assert len(paths) == 1
+    with np.load(paths[0], allow_pickle=False) as shard:
+        np.testing.assert_array_equal(shard["local_indices"], [1])
+        np.testing.assert_array_equal(shard["original_indices"], [1001])
+        np.testing.assert_array_equal(shard["candidate_offset"], [0, 4])
+        np.testing.assert_array_equal(shard["raw_combined_score"], kwargs["scores"][1].reshape(-1))
+
+
+@pytest.mark.unit
+def test_unmatched_chunked_identity_filter_returns_before_score_conversion(tmp_path, monkeypatch):
+    monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(capture.CAPTURE_ITERATION_ENV, "3")
+    monkeypatch.setenv(capture.CAPTURE_ORIGINAL_INDICES_ENV, "999")
+    blocked = _ArrayConversionForbidden()
+
+    assert capture.maybe_capture_k1_production_bucket_chunked(
+        iteration=3,
+        half=1,
+        image_indices=np.asarray([0], dtype=np.int64),
+        original_indices=np.asarray([1000], dtype=np.int64),
+        per_image_inputs=blocked,
+        current_size=64,
+        fine_translations=blocked,
+        fine_translation_parent=blocked,
+        score_chunks=(blocked,),
+        prob_chunks=(blocked,),
+        rotation_log_prior=blocked,
+        translation_log_prior=blocked,
+        candidate_mask=blocked,
+        reconstruction_mask_chunks=(blocked,),
+        log_z=blocked,
+        best_log_score=blocked,
+        best_argmax=blocked,
+        max_posterior=blocked,
+    ) == 0
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.unit
+def test_chunked_identity_filter_preserves_requested_production_table(tmp_path, monkeypatch):
+    monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(capture.CAPTURE_ITERATION_ENV, "3")
+    monkeypatch.setenv(capture.CAPTURE_ORIGINAL_INDICES_ENV, "1001")
+    monkeypatch.setattr(capture, "_capture_counter", 0)
+    kwargs = _capture_inputs()
+
+    assert capture.maybe_capture_k1_production_bucket_chunked(
+        iteration=kwargs["iteration"],
+        half=kwargs["half"],
+        image_indices=kwargs["image_indices"],
+        original_indices=kwargs["original_indices"],
+        per_image_inputs=kwargs["per_image_inputs"],
+        current_size=kwargs["current_size"],
+        fine_translations=kwargs["fine_translations"],
+        fine_translation_parent=kwargs["fine_translation_parent"],
+        score_chunks=(kwargs["scores"][:, :1], kwargs["scores"][:, 1:]),
+        prob_chunks=(kwargs["probs"][:, :1], kwargs["probs"][:, 1:]),
+        rotation_log_prior=kwargs["rotation_log_prior"],
+        translation_log_prior=kwargs["translation_log_prior"],
+        candidate_mask=kwargs["candidate_mask"],
+        reconstruction_mask_chunks=(
+            kwargs["reconstruction_mask"][:, :1],
+            kwargs["reconstruction_mask"][:, 1:],
+        ),
+        log_z=kwargs["log_z"],
+        best_log_score=kwargs["best_log_score"],
+        best_argmax=kwargs["best_argmax"],
+        max_posterior=kwargs["max_posterior"],
+    ) == 1
+
+    path = next(tmp_path.glob("*.npz"))
+    with np.load(path, allow_pickle=False) as shard:
+        np.testing.assert_array_equal(shard["original_indices"], [1001])
+        np.testing.assert_array_equal(shard["raw_combined_score"], kwargs["scores"][1].reshape(-1))
+        np.testing.assert_array_equal(shard["posterior"], kwargs["probs"][1].reshape(-1))
+
+
+@pytest.mark.unit
 def test_capture_splits_raw_shards_at_particle_bound(tmp_path, monkeypatch):
     monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
     monkeypatch.setattr(capture, "_capture_counter", 0)

@@ -49,7 +49,8 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
-    compact_capture_requested,
+    compact_capture_requested_for_original_indices,
+    compact_capture_requested_particle_count,
     maybe_capture_k1_production_bucket,
     maybe_capture_k1_production_bucket_chunked,
     require_chunked_capture_capacity,
@@ -11943,10 +11944,19 @@ def compute_pass2_stats_sparse_bucketed(
                     jnp.ones_like(global_max_posterior),
                     jnp.zeros_like(global_max_posterior),
                 )
-            capture_chunked_bucket = bool(
-                not score_only
-                and compact_capture_requested(int(_bpref_contribution_context["iteration"]))
+            bucket_original_indices = _original_indices_for_local(
+                experiment_dataset,
+                image_indices,
             )
+            capture_chunked_particle_count = (
+                compact_capture_requested_particle_count(
+                    int(_bpref_contribution_context["iteration"]),
+                    bucket_original_indices,
+                )
+                if not score_only
+                else 0
+            )
+            capture_chunked_bucket = capture_chunked_particle_count > 0
             contribution_chunked_bucket = bool(
                 not score_only and bucket_contribution_diagnostics_active
             )
@@ -11954,7 +11964,11 @@ def compute_pass2_stats_sparse_bucketed(
                 not score_only and membership_diagnostics_active
             )
             if capture_chunked_bucket:
-                require_chunked_capture_capacity(batch, bucket_size, n_fine_trans)
+                require_chunked_capture_capacity(
+                    capture_chunked_particle_count,
+                    bucket_size,
+                    n_fine_trans,
+                )
             capture_score_chunks = [] if capture_chunked_bucket else None
             capture_prob_chunks = [] if capture_chunked_bucket else None
             capture_reconstruction_mask_chunks = [] if capture_chunked_bucket else None
@@ -12779,7 +12793,7 @@ def compute_pass2_stats_sparse_bucketed(
                     iteration=int(_bpref_contribution_context["iteration"]),
                     half=int(_bpref_contribution_context["half"]),
                     image_indices=image_indices,
-                    original_indices=_original_indices_for_local(experiment_dataset, image_indices),
+                    original_indices=bucket_original_indices,
                     per_image_inputs=per_image_inputs,
                     current_size=current_size,
                     fine_translations=fine_translations,
@@ -13333,12 +13347,19 @@ def compute_pass2_stats_sparse_bucketed(
             elif use_relion_x_half_mstep:
                 recon_window_indices_for_dump = jnp.arange(int(n_half), dtype=jnp.int32)
         if probs is not None:
-            if compact_capture_requested(int(_bpref_contribution_context["iteration"])):
+            bucket_original_indices = _original_indices_for_local(
+                experiment_dataset,
+                image_indices,
+            )
+            if compact_capture_requested_for_original_indices(
+                int(_bpref_contribution_context["iteration"]),
+                bucket_original_indices,
+            ):
                 maybe_capture_k1_production_bucket(
                     iteration=int(_bpref_contribution_context["iteration"]),
                     half=int(_bpref_contribution_context["half"]),
                     image_indices=image_indices,
-                    original_indices=_original_indices_for_local(experiment_dataset, image_indices),
+                    original_indices=bucket_original_indices,
                     per_image_inputs=per_image_inputs,
                     current_size=current_size,
                     fine_translations=fine_translations,
