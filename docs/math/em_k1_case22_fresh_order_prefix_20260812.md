@@ -1175,3 +1175,52 @@ Both unequal operands are iteration-start state derived from the preceding
 map/noise update. This rejects a new fine-score formula, exponentiation, or
 normalization defect at this boundary and returns the first-cause search to
 the remaining Wavg/reference and noise-update residuals.
+
+## Process-start RFLOAT noise boundary
+
+The correction residual is now localized to a premature dtype conversion,
+not to the CTF formula or noise-state values. The radial-state comparison in
+`K1_CASE22_STACK1204_SCORING_NOISE_BOUNDARY.json` showed all 65
+RECOVAR-derived native-unit inverse-noise shells equal to the live RELION
+float32 words. That comparison was necessary but incomplete: it reconstructed
+the reciprocal directly from the saved binary64 radial spectrum and therefore
+bypassed RECOVAR's MPI process-start helper.
+
+The direct pre-fix report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1204_live_operands_20260813T0410ET/analysis/K1_CASE22_STACK1204_LIVE_PASS2_NOISE_PREFIX.json`
+(SHA-256 `b7a4d71ff2729d10c92d9281237b5e4ea33076e27189b4ef46cc1660814563bb`).
+
+Focused telemetry job `12322645` recorded the operands actually delivered to
+the fine-score correction operation. The source-precision binary64 CTF is
+bit-exact, and replaying the recorded operands reproduces RECOVAR's stored
+correction exactly. The live inverse-noise operand, however, differs by one
+float32 ULP at 304 score pixels on shells 3, 7, 8, 14, 18, 24, and 27. The
+process-start helper was unconditionally converting the full binary64 noise
+image to float32 before the scorer took its reciprocal. RELION retains
+`sigma2_noise` as RFLOAT and casts only the reciprocal to XFLOAT.
+
+Preserving the incoming noise dtype fixes the demonstrated boundary. Focused
+job `12322770` records zero correction-weight mismatches across all 1,461
+supported pixels for stack 1204. Its raw `diff2` residual falls from two
+float32 ULP to one: `130.71278381347656` versus native
+`130.7127685546875`. With exact `PPref`, RECOVAR's remaining operands now
+quantize to the native raw score, so the sole demonstrated scalar residual for
+this tuple is the already localized incoming projected-reference state.
+
+The fixed direct-noise report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1204_rfloat_noise_fix_20260813T0411ET/analysis/K1_CASE22_STACK1204_LIVE_PASS2_NOISE_FIXED.json`
+(SHA-256 `23ffa43d8dacace928069bb8922e4d069a6b96f5ec03f72875dad1371779ded7`);
+all 1,461 live score-window inverse-noise words are exact.
+
+The fixed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack1204_rfloat_noise_fix_20260813T0411ET/analysis/K1_CASE22_STACK1204_RFLOAT_NOISE_FIX.json`
+(SHA-256 `9caf772dd4ebeedd468ade63da9386cd304118d0f5e09de31ebc862644da30bc`).
+The pre-fix and fixed pass-2 artifact SHA-256 values are respectively
+`e1b17489b29428d58d71d2f8e036687a646045bea1ddf8809398c6da0cb3ec08`
+and
+`92a3cb48fbc8039595e491fca3bfd197436a5bff9e83f206fe437108cd28f8d3`.
+
+Two-iteration composition job `12322851` is the causal full-dataset gate for
+this change. Until that job is analyzed against the fixed native envelope,
+the frozen complete-case scorecard remains `28/34` strict, `32/34` topology,
+and `34/34` evaluated.

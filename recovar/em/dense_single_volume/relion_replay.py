@@ -202,8 +202,11 @@ def relion_mpi_process_start_scoring_noise_pair(noise_half1, noise_half2, *, spl
     one shared model and does not need this emulation.
     """
 
-    first = np.asarray(noise_half1, dtype=np.float32)
-    second = np.asarray(noise_half2, dtype=np.float32)
+    # RELION keeps sigma2_noise in RFLOAT and casts only its reciprocal to
+    # XFLOAT when constructing Minvsigma2.  Preserve the caller's dtype here:
+    # an early float32 cast changes that reciprocal by one ULP on some shells.
+    first = np.asarray(noise_half1)
+    second = np.asarray(noise_half2)
     if split_random_halves:
         second = first.copy()
     return [first, second]

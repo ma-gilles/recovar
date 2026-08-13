@@ -161,6 +161,22 @@ def test_initial_scoring_noise_pair_can_preserve_uninterrupted_half_state():
     np.testing.assert_array_equal(got[1], half2)
 
 
+def test_initial_scoring_noise_pair_preserves_binary64_state():
+    half1 = np.asarray([0.3, 0.7], dtype=np.float64)
+    half2 = np.asarray([1.1, 2.3], dtype=np.float64)
+
+    got = initial_scoring_noise_pair(
+        half1,
+        half2,
+        continuous_relion_noise_state=True,
+    )
+
+    assert got[0].dtype == np.float64
+    assert got[1].dtype == np.float64
+    np.testing.assert_array_equal(got[0], half1)
+    np.testing.assert_array_equal(got[1], half2)
+
+
 def test_final_output_uses_joined_reconstruction_not_average_of_regularized_halves():
     result = {
         "mean": np.asarray([7.0 + 2.0j, 8.0 + 3.0j], dtype=np.complex64),

@@ -863,6 +863,23 @@ def test_relion_mpi_shared_model_scoring_noise_preserves_second_input():
     np.testing.assert_array_equal(got[1], half2)
 
 
+def test_relion_mpi_scoring_noise_preserves_rfloat_reciprocal_boundary():
+    half1 = np.asarray([0.3, 0.7], dtype=np.float64)
+    half2 = np.asarray([1.1, 2.3], dtype=np.float64)
+
+    got = _relion_mpi_process_start_scoring_noise_pair(
+        half1,
+        half2,
+        split_random_halves=False,
+    )
+
+    assert got[0].dtype == np.float64
+    assert got[1].dtype == np.float64
+    np.testing.assert_array_equal(got[0], half1)
+    np.testing.assert_array_equal(got[1], half2)
+    assert np.any(got[0] != got[0].astype(np.float32).astype(np.float64))
+
+
 def test_relion_strict_replay_rejects_multiple_optics_noise_tables():
     import pandas as pd
 

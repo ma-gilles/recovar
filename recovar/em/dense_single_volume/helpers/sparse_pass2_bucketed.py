@@ -8331,6 +8331,8 @@ def _maybe_dump_pass2_bucket(
     direct_score_input=None,
     direct_preprocessed_score_input=None,
     direct_pixel_correction=None,
+    direct_inverse_noise_score=None,
+    direct_ctf_rfloat_score=None,
     direct_preprocess_normalization_factors=None,
     direct_integer_pre_shifts=None,
     direct_batch_image_corrections=None,
@@ -8504,6 +8506,16 @@ def _maybe_dump_pass2_bucket(
                     if direct_pixel_correction is not None
                     else np.empty((0,), dtype=np.float32)
                 ),
+                direct_inverse_noise_score=(
+                    np.asarray(direct_inverse_noise_score, dtype=np.float32)
+                    if direct_inverse_noise_score is not None
+                    else np.empty((0,), dtype=np.float32)
+                ),
+                direct_ctf_rfloat_score=(
+                    np.asarray(direct_ctf_rfloat_score[row], dtype=np.float64)
+                    if direct_ctf_rfloat_score is not None
+                    else np.empty((0,), dtype=np.float64)
+                ),
                 relion_preprocess_normalization_factor=(
                     np.float32(np.asarray(direct_preprocess_normalization_factors)[row])
                     if direct_preprocess_normalization_factors is not None
@@ -8581,6 +8593,16 @@ def _maybe_dump_pass2_bucket(
     direct_pixel_correction_np = (
         None if direct_pixel_correction is None else np.asarray(direct_pixel_correction)
     )
+    direct_inverse_noise_score_np = (
+        None
+        if direct_inverse_noise_score is None
+        else np.asarray(direct_inverse_noise_score, dtype=np.float32)
+    )
+    direct_ctf_rfloat_score_np = (
+        None
+        if direct_ctf_rfloat_score is None
+        else np.asarray(direct_ctf_rfloat_score, dtype=np.float64)
+    )
     shifted_recon_np = None if shifted_recon_split is None else np.asarray(shifted_recon_split)
     ctf2_recon_np = None if ctf2_over_nv_recon is None else np.asarray(ctf2_over_nv_recon, dtype=np.float64)
     recon_window_indices_np = None if recon_window_indices is None else np.asarray(recon_window_indices, dtype=np.int32)
@@ -8648,6 +8670,16 @@ def _maybe_dump_pass2_bucket(
                 direct_pixel_correction_np[row]
                 if direct_pixel_correction_np is not None
                 else np.empty((0,), dtype=np.float32)
+            ),
+            direct_inverse_noise_score=(
+                direct_inverse_noise_score_np
+                if direct_inverse_noise_score_np is not None
+                else np.empty((0,), dtype=np.float32)
+            ),
+            direct_ctf_rfloat_score=(
+                direct_ctf_rfloat_score_np[row]
+                if direct_ctf_rfloat_score_np is not None
+                else np.empty((0,), dtype=np.float64)
             ),
             relion_preprocess_normalization_factor=(
                 np.float32(np.asarray(direct_preprocess_normalization_factors)[row])
@@ -10253,6 +10285,8 @@ def _prepare_bucket_io(
         integer_pre_shifts,
         batch_corr_np,
         batch_scale_np,
+        inverse_noise_half,
+        ctf_half_rfloat,
     )
 
 
@@ -11402,6 +11436,8 @@ def compute_pass2_stats_sparse_bucketed(
             direct_integer_pre_shifts,
             direct_batch_image_corrections,
             direct_batch_scale_corrections,
+            direct_inverse_noise_half,
+            direct_ctf_rfloat_half,
         ) = _prepare_bucket_io(
             experiment_dataset,
             batch_data,
@@ -11428,6 +11464,20 @@ def compute_pass2_stats_sparse_bucketed(
             relion_exact_normalized_cc_operands=relion_exact_fine_normalized_cc,
             relion_exact_bpref_operands=relion_exact_bpref_operands,
         )
+        if use_window:
+            direct_inverse_noise_score = (
+                None
+                if direct_inverse_noise_half is None
+                else direct_inverse_noise_half[jnp.asarray(window_indices, dtype=jnp.int32)]
+            )
+            direct_ctf_rfloat_score = (
+                None
+                if direct_ctf_rfloat_half is None
+                else direct_ctf_rfloat_half[:, jnp.asarray(window_indices, dtype=jnp.int32)]
+            )
+        else:
+            direct_inverse_noise_score = direct_inverse_noise_half
+            direct_ctf_rfloat_score = direct_ctf_rfloat_half
         relion_highres_xi2_half = None
         if (
             use_exact_relion_gaussian
@@ -13337,6 +13387,8 @@ def compute_pass2_stats_sparse_bucketed(
                 direct_score_input=direct_score_input,
                 direct_preprocessed_score_input=direct_preprocessed_score_input,
                 direct_pixel_correction=direct_pixel_correction,
+                direct_inverse_noise_score=direct_inverse_noise_score,
+                direct_ctf_rfloat_score=direct_ctf_rfloat_score,
                 direct_preprocess_normalization_factors=(
                     direct_preprocess_normalization_factors
                 ),
@@ -15564,6 +15616,8 @@ def compute_k_class_pass2_stats_sparse_fused(
             _direct_integer_pre_shifts,
             _direct_batch_image_corrections,
             _direct_batch_scale_corrections,
+            _direct_inverse_noise_half,
+            _direct_ctf_rfloat_half,
         ) = _prepare_bucket_io(
             experiment_dataset,
             batch_data,

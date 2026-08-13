@@ -6,12 +6,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import struct
 from pathlib import Path
 
 import numpy as np
 import starfile
-
 
 MAGIC = b"RLNSIGMAV1"
 HEADER_WORDS = 16
@@ -90,6 +88,59 @@ def _ulp_summary(distance: np.ndarray) -> dict[str, int]:
     }
 
 
+def _live_pass2_inverse_noise_report(
+    pass2_path: Path,
+    live_minvsigma2: np.ndarray,
+    *,
+    image_size: int,
+) -> dict[str, object]:
+    """Compare the inverse-noise words actually delivered to sparse pass 2."""
+
+    from recovar.em.dense_single_volume.helpers.half_spectrum import (
+        make_shell_indices_half,
+    )
+
+    with np.load(pass2_path, allow_pickle=False) as archive:
+        required = {"window_indices", "direct_inverse_noise_score"}
+        _require(required <= set(archive.files), f"pass-2 dump misses {sorted(required - set(archive.files))}")
+        window_indices = np.asarray(archive["window_indices"], dtype=np.int64)
+        direct_inverse = np.asarray(
+            archive["direct_inverse_noise_score"],
+            dtype=np.float32,
+        )
+    shell_indices = np.asarray(
+        make_shell_indices_half((image_size, image_size)),
+        dtype=np.int64,
+    )
+    _require(
+        window_indices.ndim == 1
+        and direct_inverse.shape == window_indices.shape
+        and np.all((window_indices >= 0) & (window_indices < shell_indices.size)),
+        "pass-2 inverse-noise topology changed",
+    )
+    selected_shells = shell_indices[window_indices]
+    _require(
+        np.all((selected_shells >= 0) & (selected_shells < live_minvsigma2.size)),
+        "pass-2 window contains a shell outside the live capture",
+    )
+    n4 = np.float32(image_size**4)
+    expected = np.asarray(live_minvsigma2[selected_shells] / n4, dtype=np.float32)
+    distance = _ulp_distance(expected, direct_inverse)
+    unequal = distance != 0
+    shells, counts = np.unique(selected_shells[unequal], return_counts=True)
+    return {
+        "comparison": _metrics(expected, direct_inverse),
+        "ulp": _ulp_summary(distance),
+        "mismatch_pixel_count": int(np.count_nonzero(unequal)),
+        "mismatch_shell_counts": {
+            str(int(shell)): int(count) for shell, count in zip(shells, counts, strict=True)
+        },
+        "window_pixel_count": int(window_indices.size),
+        "pass2": str(pass2_path.resolve()),
+        "pass2_sha256": _sha256(pass2_path),
+    }
+
+
 def analyze(
     capture_path: Path,
     recovar_results: Path,
@@ -97,6 +148,7 @@ def analyze(
     *,
     recovar_iteration: int,
     half: int,
+    recovar_pass2: Path | None = None,
 ) -> dict[str, object]:
     header, live_sigma2, live_minvsigma2 = _load_capture(capture_path)
     _require(int(header[1]) == recovar_iteration + 2, "capture iteration is not the requested scoring boundary")
@@ -143,7 +195,7 @@ def analyze(
                 "serialized_minvsigma2_ulp": int(live_vs_star_ulp[shell]),
             }
         )
-    return {
+    report = {
         "schema": "recovar.em.k1_scoring_noise_boundary.v1",
         "status": "complete",
         "identity": {
@@ -179,6 +231,13 @@ def analyze(
             "relion_model_sha256": _sha256(relion_model),
         },
     }
+    if recovar_pass2 is not None:
+        report["live_pass2_inverse_noise"] = _live_pass2_inverse_noise_report(
+            recovar_pass2,
+            live_minvsigma2,
+            image_size=int(volume_shape[0]),
+        )
+    return report
 
 
 def main() -> None:
@@ -188,6 +247,7 @@ def main() -> None:
     parser.add_argument("--relion-model", type=Path, required=True)
     parser.add_argument("--recovar-iteration", type=int, default=0)
     parser.add_argument("--half", type=int, choices=(1, 2), required=True)
+    parser.add_argument("--recovar-pass2", type=Path)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     _require(not args.output_json.exists(), f"refusing to overwrite {args.output_json}")
@@ -197,6 +257,7 @@ def main() -> None:
         args.relion_model,
         recovar_iteration=args.recovar_iteration,
         half=args.half,
+        recovar_pass2=args.recovar_pass2,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

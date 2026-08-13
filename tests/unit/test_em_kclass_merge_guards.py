@@ -909,6 +909,8 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
     direct_score_input = np.ones((1, n_score_pix), dtype=np.complex64) * (5.0 + 6.0j)
     direct_preprocessed = np.ones((1, n_score_pix), dtype=np.complex64) * (2.0 + 1.0j)
     direct_pixel_correction = np.linspace(0.5, 1.5, n_score_pix, dtype=np.float32)[None, :]
+    direct_inverse_noise = np.linspace(2.0, 3.0, n_score_pix, dtype=np.float32)
+    direct_ctf_rfloat = np.linspace(0.1, 0.9, n_score_pix, dtype=np.float64)[None, :]
     shifted_recon = np.ones((1, n_trans, n_recon_pix), dtype=np.complex64) * (2.0 + 3.0j)
     ctf_score = np.ones((1, n_score_pix), dtype=np.float64)
     ctf_recon = np.ones((1, n_recon_pix), dtype=np.float64) * 4.0
@@ -939,6 +941,8 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
         direct_score_input=direct_score_input,
         direct_preprocessed_score_input=direct_preprocessed,
         direct_pixel_correction=direct_pixel_correction,
+        direct_inverse_noise_score=direct_inverse_noise,
+        direct_ctf_rfloat_score=direct_ctf_rfloat,
         direct_preprocess_normalization_factors=np.asarray([0.75], dtype=np.float32),
         direct_integer_pre_shifts=np.asarray([[2, -1]], dtype=np.int32),
         direct_batch_image_corrections=np.asarray([1.5], dtype=np.float32),
@@ -959,6 +963,8 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
         "direct_score_input",
         "direct_preprocessed_score_input",
         "direct_pixel_correction",
+        "direct_inverse_noise_score",
+        "direct_ctf_rfloat_score",
         "relion_preprocess_normalization_factor",
         "relion_integer_pre_shift",
         "batch_image_correction",
@@ -978,6 +984,8 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
     np.testing.assert_array_equal(
         payload["direct_pixel_correction"], direct_pixel_correction[0]
     )
+    np.testing.assert_array_equal(payload["direct_inverse_noise_score"], direct_inverse_noise)
+    np.testing.assert_array_equal(payload["direct_ctf_rfloat_score"], direct_ctf_rfloat[0])
     assert float(payload["relion_preprocess_normalization_factor"]) == 0.75
     np.testing.assert_array_equal(payload["relion_integer_pre_shift"], [2, -1])
     assert float(payload["batch_image_correction"]) == 1.5
