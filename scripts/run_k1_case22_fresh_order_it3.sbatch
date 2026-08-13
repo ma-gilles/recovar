@@ -355,6 +355,26 @@ if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
         test -s "${compact_dump}"
         rg -q 'pass-2 operand dump completed; stopping at the requested fine-score boundary' \
             "${OUTPUT}/run.log"
+        if [[ "${PASS2_DUMP_RAW_OPERANDS}" = 1 ]]; then
+            "${PYTHON}" - <<'PY' "${compact_dump}"
+import numpy as np
+import sys
+
+required = {
+    "raw_operand_actual_rotation_count",
+    "raw_operand_corr_img_score",
+    "raw_operand_half_weights",
+    "raw_operand_highres_xi2_half",
+    "raw_operand_proj_half",
+    "raw_operand_relion_full_to_compact",
+    "raw_operand_shifted_corrected",
+    "relion_raw_diff2",
+}
+with np.load(sys.argv[1], allow_pickle=False) as payload:
+    missing = required - set(payload.files)
+assert not missing, f"raw pass-2 dump misses {sorted(missing)}"
+PY
+        fi
     fi
     if [[ "${PROJECTOR_DUMP}" = 1 ]]; then
         test -s "${RECOVAR_RELION_PROJECTOR_DUMP_DIR}/iter001_half0_relion_projector_half.npz"

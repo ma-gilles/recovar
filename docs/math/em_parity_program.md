@@ -15799,3 +15799,42 @@ the controller schedule is unchanged. Six one-count support residuals remain
 support-threshold capture rather than a complete case-22 run. The frozen
 complete-case score remains `28/34` strict, `32/34` topology, `34/34`
 evaluated; K=4 remains parked.
+
+## 2026-08-13 case-22 direct Wavg noise factorial
+
+The first post-Wavg residual is now separated from particle normalization.
+Commit `31d8feb3` adds a default-off direct-noise-only arm: RELION-style
+full-rectangle Wavg `diff2` supplies only the shell-noise update, while the
+existing production algebra supplies per-particle normalization. Two-iteration
+H100 job `12328133` closes the targeted low-shell raw-noise boundary to
+`1.493e-6` and `2.274e-6` relative L2 for halves 1/2. Its float32 rotation
+atomics vary across H100 executions at roughly the same scale, so byte equality
+with the older coupled arm is not expected or claimed.
+
+Three-iteration H100 job `12328139` demonstrates a small causal improvement at
+the next posterior boundary. Pmax relative L2 improves from
+`1.119701e-4` to `1.042278e-4` and RMSE from `7.205835e-5` to
+`6.707580e-5`. Hard rotations and translations remain exact. Support-count
+mismatches fall from six to four, but this is not a monotone identity-wise
+closure: stacks `79`, `469`, `2498`, and `2659` are resolved; stacks `249`
+and `258` become new one-count deficits; stacks `262` and `2544` remain
+one-count excesses. Iteration-3 merged signed FSC-AUC changes only from
+`0.9999999993275085` to `0.9999999992660482`.
+
+Direct Wavg noise arithmetic is therefore causal for part of the residual but
+is not yet promoted as the production or external-validation configuration.
+The fixed complete-case score remains `28/34` strict, `32/34` topology, and
+`34/34` evaluated.
+
+The next discriminator is the exact stack-79 fine raw operand at iteration 3.
+The first RECOVAR attempt correctly failed analysis because its launcher had
+disabled the required raw arrays; it produced no scorer conclusion. Commit
+`bf1f3d4b` makes raw capture an explicit, provenance-recorded opt-in and fails
+closed when any required field is absent. Corrected stopped H100 job
+`12328920` is running the one-selected-rotation capture and will exit at the
+requested tuple. The launcher's stopped-dump path now validates the same raw
+field set as its normal completion path, so a field-incomplete artifact cannot
+receive a success marker. The matching native artifact exactly replays its own
+deployed kernel value, but its independent trajectory is not inert relative to
+the pinned robust RELION run, so any tuple result must retain that
+state-provenance caveat.

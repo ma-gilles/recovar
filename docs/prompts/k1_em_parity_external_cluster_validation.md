@@ -16,7 +16,7 @@ Repository: `https://github.com/ma-gilles/recovar.git`
 Remote branch: `codex/em-parity-checkpoint-20260711`
 
 Minimum required checkpoint commit:
-`dd2e264196a6f82b01080f42024df6d541f4586a`
+`bf1f3d4b6f656979344123bb1bac7baa8b86184e`
 
 PR: `https://github.com/ma-gilles/recovar/pull/158`
 
@@ -29,7 +29,7 @@ git clone https://github.com/ma-gilles/recovar.git recovar-k1-parity
 cd recovar-k1-parity
 git fetch origin codex/em-parity-checkpoint-20260711
 git switch --detach origin/codex/em-parity-checkpoint-20260711
-git merge-base --is-ancestor dd2e264196a6f82b01080f42024df6d541f4586a HEAD
+git merge-base --is-ancestor bf1f3d4b6f656979344123bb1bac7baa8b86184e HEAD
 git rev-parse HEAD
 git status --short
 ```
@@ -174,6 +174,7 @@ composition:
 export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=1
 export RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER=1
 export RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA=1
+export RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY=1
 unset RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM
 unset RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM
 unset RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL
@@ -188,14 +189,17 @@ export RECOVAR_K1_RELION_F32_COARSE_SUPPORT=1
 unset RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF
 ```
 
-The locally positive three-iteration composition includes fine-parent order,
-the fused RELION-order XA/AA Wavg schedule, and this coarse-Gaussian arm. If a
-factorial control is desired, keep it in a separate output directory and
-change only one group of variables at a time.
+The external candidate adds the isolated direct-noise update to fine-parent
+order, the fused RELION-order XA/AA Wavg schedule, and this coarse-Gaussian
+arm. If resources permit, run a one-variable factorial control in a separate
+output directory by unsetting only
+`RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY`; keep every other input and
+option identical.
 
 Do **not** enable the power-class spectrum normalization, translated-Wavg
-normalization, or atomic direct-residual variables above. That later full
-rectangle/direct-residual composition was tested in two controlled
+normalization, or the coupled atomic direct-residual variable above. That
+full rectangle/direct-residual composition changed both shell noise and
+per-particle normalization and was tested in two controlled
 three-iteration runs and regressed the trajectory: iteration-3 Pmax relative
 L2 was `0.00353377` without fine-parent order and `0.00365529` with it, with a
 hard pose/translation mismatch in both runs. The demonstrated fine-order +
@@ -203,9 +207,17 @@ fused XA/AA + coarse-Gaussian composition, with the RFLOAT scoring-noise fix
 in the requested checkpoint, achieved `0.0001119701484` iteration-3 Pmax
 relative L2, maximum absolute Pmax error `0.0009019981`, no hard mismatch,
 exact size/HEALPix topology, and merged signed FSC-AUC
-`0.9999999993275085`. Six particles retained one-count coarse-support
-residuals. The direct-residual variables therefore remain a diagnostic
-ablation, not part of the external candidate.
+`0.9999999993275085`. Six particles retained one-count support residuals.
+
+The isolated direct-noise-only arm keeps production per-particle
+normalization. In bounded case-22 job `12328139`, it improved iteration-3
+Pmax relative L2 from `0.0001119701484` to `0.0001042278472` and reduced the
+number of one-count support mismatches from six to four, with no hard
+pose/translation mismatch. Merged signed FSC-AUC changed only from
+`0.9999999993275085` to `0.9999999992660482`. The identity-level support
+result was mixed (four prior mismatches resolved, two new one-count deficits),
+so this external run is a generalization test, not a claim that the synthetic
+gap is closed.
 
 Start with a bounded two- or three-iteration prefix, not a 12-hour/full
 trajectory. Save per-iteration intermediates and parity dumps. The command
@@ -247,6 +259,7 @@ RELION run; do not run the template literally. Confirm the log contains:
 - explicit physical expected-accuracy trial order;
 - physical BPref particle order preservation;
 - fused RELION-order XA/AA Wavg activation;
+- direct Wavg shell-noise replacement with `per-particle norm mode=production-algebraic`;
 - fine-parent RELION execution order;
 - and CUDA-built coarse scoring in the positive composition (or only in its
   explicitly labeled factorial arm).
