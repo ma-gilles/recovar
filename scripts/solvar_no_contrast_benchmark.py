@@ -93,12 +93,10 @@ def _pipeline_command(args, method: str, sim_dir: str, halfsets_path: str, resul
         cmd.extend(["--gpu-budget-gb", str(args.gpu_gb)])
     if args.lazy:
         cmd.append("--lazy")
-    if method == "solvar-ls":
+    if "solvar" in method:
         cmd.extend(
             [
                 "--use-solvar",
-                "--solvar-objective",
-                "ls",
                 "--solvar-zdim",
                 str(args.zdim),
                 "--solvar-iters",
@@ -111,28 +109,14 @@ def _pipeline_command(args, method: str, sim_dir: str, halfsets_path: str, resul
                 str(args.solvar_warm_start_n_pcs),
                 "--solvar-batch-size",
                 str(args.solvar_batch_size),
+                "--solvar-gt-data",
+                str(Path(sim_dir) / "simulation_info.pkl"),
             ]
         )
-    elif method == "solvar-mle":
-        cmd.extend(
-            [
-                "--use-solvar",
-                "--solvar-objective",
-                "mle",
-                "--solvar-zdim",
-                str(args.zdim),
-                "--solvar-iters",
-                str(args.solvar_iters),
-                "--solvar-learning-rate",
-                str(args.solvar_learning_rate),
-                "--solvar-init",
-                args.solvar_init,
-                "--solvar-warm-start-n-pcs",
-                str(args.solvar_warm_start_n_pcs),
-                "--solvar-batch-size",
-                str(args.solvar_batch_size),
-            ]
-        )
+        if method == "solvar-mle":
+            cmd.extend(["--solvar-objective","mle"])
+        elif method == "solvar-ls":
+            cmd.extend(["--solvar-objective","ls"])
     elif method != "covariance":
         raise ValueError(f"unknown method {method}")
     return cmd
@@ -323,10 +307,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu-gb", type=float, default=None)
     parser.add_argument("--lazy", action="store_true")
     parser.add_argument("--solvar-iters", type=int, default=40)
-    parser.add_argument("--solvar-learning-rate", type=float, default=1e-6)
-    parser.add_argument("--solvar-init", choices=("covariance", "random"), default="covariance")
+    parser.add_argument("--solvar-learning-rate", type=float, default=1e-4)
+    parser.add_argument("--solvar-init", choices=("covariance", "random"), default="random")
     parser.add_argument("--solvar-warm-start-n-pcs", type=int, default=0)
-    parser.add_argument("--solvar-batch-size", type=int, default=200)
+    parser.add_argument("--solvar-batch-size", type=int, default=1024)
     parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
     parser.add_argument(
         "--continue-on-method-error",

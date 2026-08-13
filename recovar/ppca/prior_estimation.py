@@ -311,3 +311,44 @@ def estimate_hybrid_shell_prior_from_data(dataset, mean_estimate, npc, volume_sh
         }
     )
     return gaussian
+
+
+def estimate_covariance_fsc_prior_from_halfsets(U1, s1, U2, s2,dataset, mean_estimate, batch_size, volume_mask=None):
+    """Compute the prior from two halfset estimates of the covariance.
+
+    The prior is computed as the average of the two halfset estimates of the
+    covariance. The prior is then used to regularize the SOLVAR optimization.
+    """
+    volume_shape = dataset.volume_shape
+    ctf_w = []
+    for halfset_dataset in dataset.materialize_halfset_datasets():
+        fw, _, _, _ = covariance_estimation.variance_relion_style_triangular_kernel(
+            halfset_dataset,
+            mean_estimate,
+            batch_size,
+            image_subset=None,
+            volume_mask=volume_mask,
+            disc_type="linear_interp",
+        )
+        ctf_w.append(
+            np.asarray(
+                relion_functions.adjust_regularization_relion_style(
+                    fw, volume_shape
+                )
+            )
+        )
+
+    cov_fsc = regularization.covariance_fsc(U1, s1, U2, s2, volume_shape)
+    fsc_clipped = np.clip(cov_fsc.diagonal(), 0.01, 0.999)
+
+    ctf_4 = (ctf_w[0] + ctf_w[1]) / 2
+    #CTF should be normalized by sqrt(noise_variance) -> CTF^4 normalized by noise_variance^2
+    #TODO: implement this within `variance_relion_style_triangular_kernel`?
+    # the current approach won't work with a different noise model (which isn't a global radial model)
+    ctf_4 /= make_radial_image(dataset.noise.noise_variance_radial**2, volume_shape).reshape(-1)
+    ctf4_inv = np.where(ctf_4 > 1e-20, 1/ctf_4, 0.0)
+    shell_prior = fsc_clipped / (1.0 - fsc_clipped) * regularization.average_over_shells(ctf4_inv, volume_shape)
+
+    radial_prior = make_radial_image(jnp.array(shell_prior), volume_shape).reshape(-1,1)
+
+    return (radial_prior)**0.5 /len(s1)

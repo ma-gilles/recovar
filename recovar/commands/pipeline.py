@@ -21,6 +21,7 @@ from recovar.reconstruction import homogeneous, noise
 from recovar.solvar import solvar as solvar_module
 from recovar.utils.helpers import RobustFileHandler as _RobustFileHandler
 from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
+from recovar.utils.metrics_logger import CometMLMetricsLogger, NullMetricsLogger
 
 logger = logging.getLogger(__name__)
 
@@ -490,10 +491,16 @@ def add_args(parser: argparse.ArgumentParser):
         help="Single latent dimension to use when --use-solvar is enabled. Defaults to the first --zdim value.",
     )
     adv.add_argument(
+        "--solvar-split-halfsets",
+        dest="solvar_split_halfsets",
+        action="store_true",
+        help="Split half-sets for SOLVAR training.",
+    )    
+    adv.add_argument(
         "--solvar-learning-rate",
         dest="solvar_learning_rate",
         type=float,
-        default=1e-6,
+        default=1e-4,
         help="Adam learning rate for SOLVAR.",
     )
     adv.add_argument(
@@ -547,7 +554,14 @@ def add_args(parser: argparse.ArgumentParser):
         type=os.path.abspath,
         default=None,
         help="Path to pickle file containing simulation info for SOLVAR evaluation (synthetic dataset only).",
-    )    
+    )
+    adv.add_argument(
+        "--solvar-comet-project",
+        dest="solvar_comet_project",
+        type=str,
+        default=None,
+        help="Comet ML project name for SOLVAR training metrics. Unset disables Comet logging.",
+    )
     adv.add_argument(
         "--test-covar-options",
         dest="test_covar_options",
@@ -1281,7 +1295,6 @@ def _run_solvar_refinement(
     focus_masks,
     zdim_for_rest,
     W_initial=None,
-    init_mode="random",
     warm_start_n_pcs=None,
     gt_data_info=None,
 ):
@@ -1297,17 +1310,7 @@ def _run_solvar_refinement(
     logger.warning("SOLVAR pipeline mode is fixed-pose/no-contrast and uses the provisional PPCA hybrid-shell W prior.")
 
     objective = str(getattr(args, "solvar_objective", "mle")).lower()
-    if W_initial is None:
-        W_init = solvar_module.make_random_loading(
-            dataset.volume_shape,
-            basis_size,
-            seed=0,
-            init_scale=float(getattr(args, "solvar_init_scale", 0.01)),
-        )
-        init_mode = "random"
-    else:
-        W_init = np.asarray(W_initial, dtype=np.complex64)
-    logger.info("SOLVAR initialization: %s", init_mode)
+
     prior_info = ppca_prior_estimation.estimate_hybrid_shell_prior_from_data(
         dataset,
         means.combined,
@@ -1322,15 +1325,25 @@ def _run_solvar_refinement(
     if gt_data_info is not None:
         from recovar.simulation.synthetic_dataset import load_heterogeneous_reconstruction
         gt_data = load_heterogeneous_reconstruction(gt_data_info)
-    
+
+    comet_project = getattr(args, "solvar_comet_project", None)
+    metrics_logger = (
+        CometMLMetricsLogger(project_name=comet_project)
+        if comet_project
+        else NullMetricsLogger()
+    )
+
     result = solvar_module.fit(
         dataset,
         means.combined,
-        W_init,
-        prior_info["W_prior"],
+        rank=basis_size,
+        W_prior=prior_info["W_prior"],
+        W_initial=W_initial,
         objective=objective,
+        split_halfsets=bool(getattr(args, "solvar_split_halfsets", False)),
         n_epochs=int(getattr(args, "solvar_iters", 40)),
         batch_size=solvar_batch_size,
+        metrics_logger=metrics_logger,
         learning_rate=float(getattr(args, "solvar_learning_rate", 1e-6)),
         gradient_clip_norm=float(getattr(args, "solvar_gradient_clip_norm", 0.0)),
         volume_mask=np.asarray(focus_mask, dtype=np.float32),
@@ -1381,7 +1394,6 @@ def _run_solvar_refinement(
         "prior_info": prior_info,
         "basis_size": basis_size,
         "objective": objective,
-        "init_mode": init_mode,
         "warm_start_n_pcs": None if warm_start_n_pcs is None else int(warm_start_n_pcs),
         "prior_mode": "hybrid_shell",
         "embedding_source": "compute_embeddings",
@@ -1945,7 +1957,6 @@ def standard_recovar_pipeline(args):
                 focus_masks,
                 zdim_for_rest,
                 W_initial=solvar_W_initial,
-                init_mode=solvar_init_mode,
                 warm_start_n_pcs=warm_start_n_pcs,
                 gt_data_info=args.solvar_gt_data
             )
@@ -1965,7 +1976,7 @@ def standard_recovar_pipeline(args):
             solvar_info = {
                 "basis_size": int(solvar_result["basis_size"]),
                 "objective": solvar_result["objective"],
-                "init_mode": solvar_result["init_mode"],
+                "init_mode": solvar_init_mode,
                 "prior_mode": solvar_result["prior_mode"],
                 "iters": int(getattr(args, "solvar_iters", 40)),
                 "learning_rate": float(getattr(args, "solvar_learning_rate", 1e-6)),

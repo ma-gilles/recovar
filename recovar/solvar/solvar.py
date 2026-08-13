@@ -21,10 +21,11 @@ import optax
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core import linalg
-from recovar.ppca import ppca
+from recovar.ppca import ppca, prior_estimation
 from recovar.ppca.w_regularization import w_prior_quadratic
 from recovar.simulation.synthetic_dataset import HeterogeneousVolumeDistribution
 from recovar.solvar import gt_metrics
+from recovar.utils.metrics_logger import MetricsLogger, NullMetricsLogger
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ def _train_step(params: WHalfParametrization, opt_state: optax.OptState, batch: 
     def loss_for_params(params):
         masked_params = params.apply_masking(config.volume_shape, tensor_data.volume_mask) if config.project_mask else params
         return _batch_total_loss(
-            loadings_from_state(params),
+            loadings_from_state(masked_params),
             tensor_data.W_prior_half,
             batch.images_half,
             tensor_data.mean_for_slicing,
@@ -404,13 +405,120 @@ def _branch_optimizer(branch_learning_rate, gradient_clip_norm: float = 0.0, sch
     return optax.chain(*transformations)
 
 
+class Trainer():
+    """Trainer for SOLVAR fixed-pose loadings."""
+
+    def __init__(self, config, tensor_data, gt_data=None, data_scale = 1.0, metrics_logger: MetricsLogger | None = None):
+        self.config = config
+        self.tensor_data = tensor_data
+        self.gt_data = gt_data
+        self.data_scale = data_scale
+        self.iteration_data = []
+        self.volume_shape = self.config.volume_shape
+        self.metrics_logger = metrics_logger or NullMetricsLogger()
+
+
+    def train(self, params, n_epochs, dataset, batch_size):
+        opt_state = self.config.optimizer.init(params)
+        for epoch in range(int(n_epochs)):
+            epoch_loss = 0.0
+            epoch_grad_norm = 0.0
+            epoch_batches = 0
+            for batch_half, ctf_params, rotation_matrices, translations, batch_image_ind in ppca._iter_processed_batches_half(
+                dataset, int(batch_size)
+            ):
+                batch_n = int(batch_half.shape[0])
+                batch = BatchStruct(
+                    images_half=batch_half,
+                    ctf_params=ctf_params,
+                    rotation_matrices=rotation_matrices,
+                    translations=translations,
+                    noise_variance_half=dataset.noise.get_half(batch_image_ind),
+                    voxel_size=dataset.voxel_size,
+                    data_scale=self.data_scale,
+                )
+
+                params, opt_state, loss, grad_norm = _train_step(
+                    params,
+                    opt_state,
+                    batch,
+                    self.tensor_data,
+                    self.config,
+                )
+
+                epoch_loss += float(loss)
+                epoch_grad_norm += float(grad_norm)
+                epoch_batches += 1
+
+            W_current = loadings_from_state(params)
+            prior_loss = float(w_prior_quadratic(W_current, self.tensor_data.W_prior_half))
+            row = {
+                "epoch": float(epoch),
+                "loss_mean_batch_estimate": epoch_loss / max(epoch_batches, 1),
+                "prior_loss": prior_loss,
+                "grad_norm_mean": epoch_grad_norm / max(epoch_batches, 1),
+                "W_norm": float(jnp.linalg.norm(W_current)),
+                "step_scaling": float(opt_state[-1]['U'].inner_state[-1].scale.real),
+            }
+            if self.gt_data is not None:
+                row.update(gt_metrics.compute_eigenvector_metrics(W_current, self.gt_data, self.volume_shape))
+            self.iteration_data.append(row)
+            self.metrics_logger.log_metrics({k : v for k, v in row.items() if np.isscalar(v)}, step=epoch)
+            logger.info(
+                "SOLVAR epoch %d/%d loss=%.6e prior=%.6e grad_norm=%.6e step scaling=%.2e",
+                epoch + 1,
+                int(n_epochs),
+                row["loss_mean_batch_estimate"],
+                row["prior_loss"],
+                row["grad_norm_mean"],
+                row["step_scaling"],
+            )
+            if self.gt_data is not None:
+                logger.info(
+                    "SOLVAR epoch %d/%d gt_relative_variance=%.4f gt_cosine_similarity=%.4f gt_fro_relative_error=%.4f",
+                    epoch + 1,
+                    int(n_epochs),
+                    row["gt_relative_variance"],
+                    row["gt_cosine_similarity"],
+                    row["gt_fro_relative_error"],
+                )
+
+
+            if row["step_scaling"] < 1e-4:
+                logger.info("SOLVAR epoch %d/%d step scaling below threshold, stopping early", epoch + 1, int(n_epochs))
+                break  
+        
+        return params
+
+
+def update_prior_from_halfsets(param_halfsets, dataset, mean_estimate, batch_size, volume_mask):
+    volume_shape = dataset.volume_shape
+    params = param_halfsets[0].apply_masking(volume_shape, volume_mask) if volume_mask is not None else param_halfsets[0]
+    W = loadings_from_state(params)
+    U_real, eigenvalues1, _ = ppca._orthonormalize_W_to_basis(W, volume_shape)
+    rank = U_real.shape[0]
+    U1 = ftu.get_dft3(jnp.asarray(U_real)).reshape(rank, -1).T
+
+    params = param_halfsets[1].apply_masking(volume_shape, volume_mask) if volume_mask is not None else param_halfsets[1]
+    W = loadings_from_state(params)
+    U_real, eigenvalues2, _ = ppca._orthonormalize_W_to_basis(W, volume_shape)
+    rank = U_real.shape[0]
+    U2 = ftu.get_dft3(jnp.asarray(U_real)).reshape(rank, -1).T
+
+    return prior_estimation.estimate_covariance_fsc_prior_from_halfsets(
+        U1, eigenvalues1, U2, eigenvalues2, dataset, mean_estimate, batch_size, volume_mask
+    )
+
+
 def fit(
     experiment_dataset,
     mean_estimate,
-    W_initial,
+    rank,
     W_prior,
-    *,
+    *,    
     objective: str = "mle",
+    split_halfsets: bool = False,
+    W_initial : np.ndarray | None = None,    
     n_epochs: int = 40,
     batch_size: int = 200,
     learning_rate: float = 1e-6,
@@ -423,6 +531,7 @@ def fit(
     seed: int | None = None,
     gt_data: HeterogeneousVolumeDistribution | None = None,
     return_iteration_data: bool = False,
+    metrics_logger: MetricsLogger | None = None,
 ):
     """Fit SOLVAR fixed-pose loadings with the LS or MLE objective.
 
@@ -443,10 +552,17 @@ def fit(
 
     halfset_datasets = ppca._materialize_halfsets(experiment_dataset)
     volume_shape = tuple(int(s) for s in experiment_dataset.volume_shape)
-    W = jnp.asarray(W_initial, dtype=jnp.complex64)
-    W = project_loading_to_mask(W, volume_shape, volume_mask if project_mask else None)
-    W_prior_half = _as_half_volume_prior(W_prior, W.shape, volume_shape)
-    W_prior_half = jnp.asarray(W_prior_half, dtype=W.real.dtype)
+    param_shape = (int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape))), int(rank))
+
+    optimizer = optax.multi_transform(
+        {
+            "U": _branch_optimizer(learning_rate, gradient_clip_norm),
+            "log_sqrt_eigenvalues": _branch_optimizer(learning_rate * log_eigenvalue_lr_factor, gradient_clip_norm),
+        },
+        param_labels=WHalfParametrization("U", "log_sqrt_eigenvalues"),
+    )
+    W_prior_half = _as_half_volume_prior(W_prior, param_shape, volume_shape)
+    W_prior_half = jnp.asarray(W_prior_half, dtype=jnp.float32)
 
     mean_for_slicing = ppca._prepare_mean_estimate_for_slicing(
         mean_estimate,
@@ -456,15 +572,6 @@ def fit(
     )
     mean_for_slicing = jnp.asarray(mean_for_slicing)
 
-    optimizer = optax.multi_transform(
-        {
-            "U": _branch_optimizer(learning_rate, gradient_clip_norm),
-            "log_sqrt_eigenvalues": _branch_optimizer(learning_rate * log_eigenvalue_lr_factor, gradient_clip_norm),
-        },
-        param_labels=WHalfParametrization("U", "log_sqrt_eigenvalues"),
-    )
-    params = _state_from_loadings(W, volume_shape)
-    opt_state = optimizer.init(params)
     tensor_data = TrainArrs(W_prior_half=W_prior_half, mean_for_slicing=mean_for_slicing, volume_mask=volume_mask)
     # image_shape/volume_shape/ctf_evaluator are assumed identical across halfsets (only the
     # image subset differs), so one config covers every batch of both.
@@ -480,81 +587,68 @@ def fit(
     )
 
     n_total = int(experiment_dataset.n_images)
-    iteration_data: list[dict] = []
 
     logger.info(
         "SOLVAR fit: objective=%s epochs=%d rank=%d batch_size=%d learning_rate=%.3e log_eigenvalue_lr_factor=%.1f",
         objective,
         int(n_epochs),
-        int(params.U.shape[1]),
+        int(rank),
         int(batch_size),
         float(learning_rate),
         float(log_eigenvalue_lr_factor),
     )
 
-    for epoch in range(int(n_epochs)):
-        epoch_loss = 0.0
-        epoch_grad_norm = 0.0
-        epoch_batches = 0
-        for ds in halfset_datasets:
-            for batch_half, ctf_params, rotation_matrices, translations, batch_image_ind in ppca._iter_processed_batches_half(
-                ds, int(batch_size)
-            ):
-                batch_n = int(batch_half.shape[0])
-                batch = BatchStruct(
-                    images_half=batch_half,
-                    ctf_params=ctf_params,
-                    rotation_matrices=rotation_matrices,
-                    translations=translations,
-                    noise_variance_half=ds.noise.get_half(batch_image_ind),
-                    voxel_size=ds.voxel_size,
-                    data_scale=float(n_total) / float(batch_n),
+    param_halfsets = []
+    trainer_halfsets = []
+    #TODO: this is wasteful memory wise because we keep the two halfsets estimate on the gpu
+    # while only using one at a time.
+    for i, ds in enumerate(halfset_datasets):
+        if W_initial is not None:
+            if split_halfsets:
+                logger.warning(
+                    'split_halfsets was set to True but W_initial was provided - '
+                    'initializing both estimates from the same value can lead to '
+                    'overestimation of the prior'
                 )
+            W = jnp.asarray(W_initial, dtype=jnp.complex64)
+        else:
+            W = jnp.asarray(make_random_loading(volume_shape, rank))
+        W = project_loading_to_mask(W, volume_shape, volume_mask if project_mask else None)
+        params = _state_from_loadings(W, volume_shape)
 
-                params, opt_state, loss, grad_norm = _train_step(params, opt_state, batch, tensor_data, config)
-
-                epoch_loss += float(loss)
-                epoch_grad_norm += float(grad_norm)
-                epoch_batches += 1
-
-        W_current = loadings_from_state(params)
-        prior_loss = float(w_prior_quadratic(W_current, W_prior_half))
-        row = {
-            "epoch": float(epoch),
-            "loss_mean_batch_estimate": epoch_loss / max(epoch_batches, 1),
-            "prior_loss": prior_loss,
-            "grad_norm_mean": epoch_grad_norm / max(epoch_batches, 1),
-            "W_norm": float(jnp.linalg.norm(W_current)),
-            "step_scaling": float(opt_state[-1]['U'].inner_state[-1].scale.real),
-        }
-        if gt_data is not None:
-            row.update(gt_metrics.compute_eigenvector_metrics(W_current, gt_data, volume_shape))
-        iteration_data.append(row)
-        logger.info(
-            "SOLVAR epoch %d/%d loss=%.6e prior=%.6e grad_norm=%.6e step scaling=%.2e",
-            epoch + 1,
-            int(n_epochs),
-            row["loss_mean_batch_estimate"],
-            row["prior_loss"],
-            row["grad_norm_mean"],
-            row["step_scaling"],
-        )
-        if gt_data is not None:
-            logger.info(
-                "SOLVAR epoch %d/%d gt_relative_variance=%.4f gt_cosine_similarity=%.4f gt_fro_relative_error=%.4f",
-                epoch + 1,
-                int(n_epochs),
-                row["gt_relative_variance"],
-                row["gt_cosine_similarity"],
-                row["gt_fro_relative_error"],
+        param_halfsets.append(_state_from_loadings(W, volume_shape))
+        trainer_halfsets.append(
+            Trainer(
+                config=config,
+                tensor_data=tensor_data,
+                gt_data=gt_data,
+                data_scale=n_total / batch_size,
+                metrics_logger=metrics_logger if i ==0 else None,
             )
+        )
 
-
-        if row["step_scaling"] < 1e-4:
-            logger.info("SOLVAR epoch %d/%d step scaling below threshold, stopping early", epoch + 1, int(n_epochs))
+        if (not split_halfsets) and (i == 0):
+            #When not using split_halfsets estimates are shared between dataset halfsets
             break
 
-    params = params.apply_masking(config.volume_shape, tensor_data.volume_mask) if config.project_mask else params
+    if split_halfsets:
+        for i, (params, trainer, ds) in enumerate(zip(param_halfsets, trainer_halfsets, halfset_datasets)):
+            logger.info("SOLVAR halfset %d/%d: starting training", i + 1, len(halfset_datasets))
+            param_halfsets[i] = trainer.train(params, n_epochs, ds, batch_size)
+
+        trainer = trainer_halfsets[0]
+        new_prior = update_prior_from_halfsets(param_halfsets, experiment_dataset, mean_estimate, batch_size, volume_mask)
+        tensor_data = tensor_data._replace(W_prior_half=_as_half_volume_prior(new_prior, param_shape, volume_shape))
+        trainer.tensor_data = tensor_data
+
+        param_halfsets[0] = trainer.train(param_halfsets[0], n_epochs, experiment_dataset, batch_size)
+
+    else:
+        trainer = trainer_halfsets[0]
+        logger.info("SOLVAR: starting training")
+        param_halfsets[0] = trainer.train(param_halfsets[0], n_epochs, experiment_dataset, batch_size)
+
+    params = param_halfsets[0].apply_masking(config.volume_shape, tensor_data.volume_mask) if config.project_mask else param_halfsets[0]
     W = loadings_from_state(params)
     U_real, eigenvalues, _ = ppca._orthonormalize_W_to_basis(W, volume_shape)
     rank = U_real.shape[0]
@@ -563,8 +657,9 @@ def fit(
         U=U_half,
         S=jnp.asarray(np.maximum(eigenvalues, 0.0).astype(np.float32)),
         W=W,
-        iteration_data=iteration_data,
+        iteration_data=trainer.iteration_data,
     )
     if return_iteration_data:
         return result
     return result.U, result.S, result.W
+

@@ -838,7 +838,7 @@ def generate_synthetic_dataset(
 def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name=False, normalize=True):
 
     if trailing_zero_format_in_vol_name:
-        num_trailing_zeros = trailing_zero_format_in_vol_name if isinstance(trailing_zero_format_in_vol_name, int) else 4
+        num_trailing_zeros = 4 if isinstance(trailing_zero_format_in_vol_name, bool) else trailing_zero_format_in_vol_name
         def make_file(k):
             return volumes_path_root + format(k, f"0{num_trailing_zeros}d") + ".mrc"
     else:
