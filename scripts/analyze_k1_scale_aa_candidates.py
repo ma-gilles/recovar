@@ -90,7 +90,11 @@ def analyze(
     _require(image_size > 0 and image_size % 2 == 0, "image size must be positive and even")
     with np.load(recovar_capture, allow_pickle=False) as payload:
         _require(
-            str(payload["schema"].item()) == "recovar-k1-scale-aa-chunked-v1",
+            str(payload["schema"].item())
+            in {
+                "recovar-k1-scale-aa-chunked-v1",
+                "recovar-k1-scale-xa-aa-chunked-v2",
+            },
             "unsupported RECOVAR capture schema",
         )
         recovar_probabilities = np.asarray(payload["candidate_posterior_probs"], dtype=np.float32)

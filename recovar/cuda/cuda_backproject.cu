@@ -2085,6 +2085,48 @@ cudaError_t launch_relion_wavg_rotation_atomic_add_f32(
     return cudaGetLastError();
 }
 
+/* Diagnostic reproduction of the complete per-pixel atomic issue order in
+ * RELION's Wavg kernel.  The final axis is [XA, AA, diff2].  Keeping all three
+ * atomics in one thread is important: the diff2 atomic after AA delays the
+ * second pixel lane (pixel + blockDim.x) exactly as the native kernel does. */
+__global__ void __launch_bounds__(256)
+relion_wavg_rotation_atomic_triplet_f32_kernel(
+    const float* __restrict__ terms,
+    float* __restrict__ output,
+    int n_rotations,
+    int n_pixels)
+{
+    const int rotation = blockIdx.x;
+    const int batch = blockIdx.y;
+    for (int pixel = threadIdx.x; pixel < n_pixels; pixel += blockDim.x) {
+        const int64_t input_index =
+            ((static_cast<int64_t>(batch) * n_rotations + rotation) * n_pixels + pixel) * 3;
+        const int64_t output_index =
+            (static_cast<int64_t>(batch) * n_pixels + pixel) * 3;
+        atomicAdd(&output[output_index], terms[input_index]);
+        atomicAdd(&output[output_index + 1], terms[input_index + 1]);
+        atomicAdd(&output[output_index + 2], terms[input_index + 2]);
+    }
+}
+
+cudaError_t launch_relion_wavg_rotation_atomic_triplet_add_f32(
+    cudaStream_t stream,
+    const float* terms,
+    float* output,
+    int64_t batch_size,
+    int64_t n_rotations,
+    int64_t n_pixels)
+{
+    dim3 grid(static_cast<unsigned>(n_rotations), static_cast<unsigned>(batch_size));
+    dim3 block(256);
+    relion_wavg_rotation_atomic_triplet_f32_kernel<<<grid, block, 0, stream>>>(
+        terms,
+        output,
+        static_cast<int>(n_rotations),
+        static_cast<int>(n_pixels));
+    return cudaGetLastError();
+}
+
 template <bool HALF_IMG>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 project_texture_double_kernel(
@@ -6282,6 +6324,55 @@ ffi::Error RelionWavgRotationAtomicAddF32Impl(
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     RelionWavgRotationAtomicAddF32, RelionWavgRotationAtomicAddF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
+ffi::Error RelionWavgRotationAtomicTripletAddF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer terms,
+    ffi::AnyBuffer accumulator_in,
+    ffi::Result<ffi::AnyBuffer> accumulator_out)
+{
+    if (terms.element_type() != ffi::DataType::F32 ||
+        accumulator_in.element_type() != ffi::DataType::F32 ||
+        accumulator_out->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgRotationAtomicTripletAddF32: need F32 buffers");
+    const auto dims = terms.dimensions();
+    const auto accumulator_dims = accumulator_in.dimensions();
+    const auto output_dims = accumulator_out->dimensions();
+    if (dims.size() != 4 || accumulator_dims.size() != 3 || output_dims.size() != 3 ||
+        dims[3] != 3 || accumulator_dims[2] != 3 ||
+        output_dims[0] != accumulator_dims[0] ||
+        output_dims[1] != accumulator_dims[1] ||
+        output_dims[2] != accumulator_dims[2] ||
+        accumulator_dims[0] != dims[0] || accumulator_dims[1] != dims[2])
+        return ffi::Error::InvalidArgument(
+            "RelionWavgRotationAtomicTripletAddF32: expected terms[B,R,P,3] "
+            "and accumulator[B,P,3]");
+    if (dims[0] <= 0 || dims[0] > 65535 || dims[1] <= 0 ||
+        dims[1] > std::numeric_limits<int>::max() || dims[2] <= 0 ||
+        dims[2] > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument(
+            "RelionWavgRotationAtomicTripletAddF32: dimensions exceed CUDA grid bounds");
+    cudaError_t err = launch_relion_wavg_rotation_atomic_triplet_add_f32(
+        stream,
+        static_cast<const float*>(terms.untyped_data()),
+        static_cast<float*>(accumulator_out->untyped_data()),
+        dims[0],
+        dims[1],
+        dims[2]);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionWavgRotationAtomicTripletAddF32,
+    RelionWavgRotationAtomicTripletAddF32Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::AnyBuffer>()

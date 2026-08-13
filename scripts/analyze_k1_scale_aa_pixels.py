@@ -83,7 +83,14 @@ def analyze(
     _require(np.isfinite(recovar_term_divisor) and recovar_term_divisor > 0.0, "invalid divisor")
     with np.load(recovar_capture, allow_pickle=False) as payload:
         schema = str(payload["schema"].item())
-        _require(schema == "recovar-k1-scale-aa-chunked-v1", f"unsupported schema {schema}")
+        _require(
+            schema
+            in {
+                "recovar-k1-scale-aa-chunked-v1",
+                "recovar-k1-scale-xa-aa-chunked-v2",
+            },
+            f"unsupported schema {schema}",
+        )
         iteration = int(payload["iteration"])
         half = int(payload["half"])
         original_index = int(payload["original_index"])
@@ -96,6 +103,16 @@ def analyze(
         atomic_aa_per_pixel = (
             np.asarray(payload["scale_aa_atomic_per_pixel"], dtype=np.float64)
             if "scale_aa_atomic_per_pixel" in payload
+            else None
+        )
+        xa_per_pixel = (
+            np.asarray(payload["scale_xa_per_pixel"], dtype=np.float64)
+            if "scale_xa_per_pixel" in payload
+            else None
+        )
+        atomic_xa_per_pixel = (
+            np.asarray(payload["scale_xa_atomic_per_pixel"], dtype=np.float64)
+            if "scale_xa_atomic_per_pixel" in payload
             else None
         )
     _require(iteration == expected_iteration and half == expected_half, "iteration/half identity changed")
@@ -165,6 +182,46 @@ def analyze(
                 native_shell_reduced,
             ),
         }
+    xa_report = None
+    if xa_per_pixel is not None:
+        _require(xa_per_pixel.shape == mask.shape, "XA pixel topology changed")
+        xa_active = xa_per_pixel[active_rows] / float(recovar_term_divisor)
+        xa_shell_reduced = np.asarray(
+            [
+                np.sum(xa_active[recovar_shell == shell], dtype=np.float64)
+                for shell in active_shells
+            ]
+        )
+        native_xa_shell_reduced = np.asarray(
+            [
+                np.sum(native_xa[native_shell == shell], dtype=np.float64)
+                for shell in active_shells
+            ]
+        )
+        xa_report = {
+            "pixel": _metric(xa_active, native_xa),
+            "fixed_order_shell_reduction": _metric(
+                xa_shell_reduced,
+                native_xa_shell_reduced,
+            ),
+            "atomic": None,
+        }
+        if atomic_xa_per_pixel is not None:
+            _require(atomic_xa_per_pixel.shape == mask.shape, "atomic XA pixel topology changed")
+            atomic_xa_active = atomic_xa_per_pixel[active_rows] / float(recovar_term_divisor)
+            atomic_xa_shell_reduced = np.asarray(
+                [
+                    np.sum(atomic_xa_active[recovar_shell == shell], dtype=np.float64)
+                    for shell in active_shells
+                ]
+            )
+            xa_report["atomic"] = {
+                "pixel": _metric(atomic_xa_active, native_xa),
+                "fixed_order_shell_reduction": _metric(
+                    atomic_xa_shell_reduced,
+                    native_xa_shell_reduced,
+                ),
+            }
 
     return {
         "schema": "recovar.em.k1_scale_aa_pixels.v1",
@@ -211,6 +268,7 @@ def analyze(
             ),
         },
         "atomic_aa": atomic_report,
+        "xa": xa_report,
         "artifacts": {
             "recovar_capture": str(recovar_capture.resolve()),
             "recovar_capture_sha256": _sha256(recovar_capture),
@@ -218,7 +276,9 @@ def analyze(
             "native_pixels_sha256": _sha256(native_pixels),
         },
         "classification": (
-            "atomic Wavg AA treatment captured"
+            "atomic Wavg XA/AA treatment captured"
+            if atomic_report is not None and xa_report is not None and xa_report["atomic"] is not None
+            else "atomic Wavg AA treatment captured"
             if atomic_report is not None
             else "AA differs before shell reduction"
             if pixel_metric["relative_l2"] > 1e-6

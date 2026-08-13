@@ -15777,3 +15777,25 @@ parent key and the atomic reducer. Its full 164,464 real-rotation prefix is
 bitwise native; pixel and shell AA residuals fall to `1.504e-6` and
 `5.279e-7`. The first material K=1 boundary is therefore causally closed.
 XA/BPref instruction order remains to be checked before a short trajectory.
+
+Stopped H100 job `12310062` closes that remaining scale-statistic check. A
+single fused diagnostic kernel issues `XA`, `AA`, and dummy `diff2` atomics in
+RELION source order after the exact parent permutation. XA pixel/shell
+relative L2 falls from `7.715e-5`/`4.725e-5` to
+`1.835e-6`/`6.709e-7`; AA falls from `2.483e-4`/`2.447e-4` to
+`1.473e-6`/`5.503e-7`. Both operands are therefore closed to native capture
+precision at the first material iteration-2 boundary. Short three-iteration
+job `12310265` is the only downstream propagation gate; the fixed scorecard
+remains `28/34` until that result is audited.
+
+Job `12310265` is positive. The fused native-order Wavg treatment matches the
+same-day native iteration-2 group scales at `3.57e-7`/`4.70e-7` relative L2
+for halves 1/2. At iteration 3 it reduces identity-aligned Pmax relative L2
+from `3.689e-4` to `1.299e-4`, reduces maximum absolute Pmax error from
+`0.01040` to `0.002313`, and improves merged signed FSC-AUC from
+`0.999999993133` to `0.999999999099`. Hard-pose mismatches remain zero and
+the controller schedule is unchanged. Six one-count support residuals remain
+(`79`, `232`, `262`, `2110`, `2544`, `2659`), so the next gate is a stopped
+support-threshold capture rather than a complete case-22 run. The frozen
+complete-case score remains `28/34` strict, `32/34` topology, `34/34`
+evaluated; K=4 remains parked.

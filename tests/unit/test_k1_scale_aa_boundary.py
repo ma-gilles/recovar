@@ -90,6 +90,11 @@ def test_chunked_scale_aa_writer_preserves_float32_chunk_order(tmp_path: Path, m
         posterior_mass_chunks=[np.asarray([0.4], dtype=np.float32), np.asarray([0.6], dtype=np.float32)],
         proj_abs2_sum_chunks=[np.asarray([[2.0, 3.0]], dtype=np.float32)] * 2,
         ctf_probs_raw_sum_chunks=[np.asarray([[4.0, 5.0]], dtype=np.float32)] * 2,
+        xa_per_pixel_chunks=[
+            np.asarray([[0.5, 1.0]], dtype=np.float32),
+            np.asarray([[1.5, 2.0]], dtype=np.float32),
+        ],
+        xa_per_image_chunks=[np.asarray([1.5], dtype=np.float32), np.asarray([3.5], dtype=np.float32)],
         aa_before_scale_per_pixel_chunks=[value * np.float32(4.0) for value in aa_chunks],
         aa_per_pixel_chunks=aa_chunks,
         aa_per_image_chunks=[np.asarray([3.0], dtype=np.float32), np.asarray([7.0], dtype=np.float32)],
@@ -107,11 +112,17 @@ def test_chunked_scale_aa_writer_preserves_float32_chunk_order(tmp_path: Path, m
             np.asarray([[[5.0, 6.0], [7.0, 8.0]]], dtype=np.float32),
         ],
         aa_feature_shell_ids=np.asarray([0, 1], dtype=np.int32),
+        atomic_xa_per_pixel=np.asarray([[9.0, 10.0]], dtype=np.float32),
+        atomic_aa_per_pixel=np.asarray([[11.0, 12.0]], dtype=np.float32),
     )
     assert count == 1
     capture_path = tmp_path / "scale_aa_chunked_orig001096_half1_cs060.npz"
     with np.load(capture_path, allow_pickle=False) as capture:
-        assert capture["schema"].item() == "recovar-k1-scale-aa-chunked-v1"
+        assert capture["schema"].item() == "recovar-k1-scale-xa-aa-chunked-v2"
+        np.testing.assert_array_equal(capture["scale_xa_per_pixel"], [2.0, 3.0])
+        assert float(capture["scale_xa_per_image"]) == 5.0
+        np.testing.assert_array_equal(capture["scale_xa_atomic_per_pixel"], [9.0, 10.0])
+        np.testing.assert_array_equal(capture["scale_aa_atomic_per_pixel"], [11.0, 12.0])
         np.testing.assert_array_equal(capture["scale_aa_per_pixel"], [4.0, 6.0])
         np.testing.assert_array_equal(capture["scale_aa_per_shell"], [4.0, 6.0])
         assert capture["candidate_posterior_probs"].shape == (4, 2)

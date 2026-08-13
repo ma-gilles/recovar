@@ -848,3 +848,73 @@ shell relative L2 falls from `2.44742e-4` to `5.27891e-7`. This closes 99.39%
 and 99.78% respectively at the stopped boundary. The fixed complete-case
 scorecard remains `28/34`; the next gate is the corresponding XA/BPref
 accumulation boundary before a short iteration-3 trajectory test.
+
+## Fused XA/AA Wavg boundary
+
+Stopped H100 job `12310062` reproduces RELION's complete per-pixel atomic
+issue order (`XA`, then `AA`, then `diff2`) after applying the exact fine-parent
+execution order.  It stops at the same iteration-2, half-1, stack-1097
+boundary; no later EM state contributes to the comparison.
+
+Both scale sufficient statistics close to the precision of the native text
+capture.  Ordinary RECOVAR XA has pixel relative L2 `7.71488e-5` and
+fixed-order shell relative L2 `4.72518e-5`; the fused native-order result gives
+`1.83539e-6` and `6.70922e-7`.  Ordinary AA remains `2.48300e-4` pixelwise and
+`2.44743e-4` shellwise, while the fused result gives `1.47309e-6` and
+`5.50279e-7`.  This rules out a separate XA operand defect at the captured
+boundary and confirms the coupled fine-parent order/Wavg float32 atomic
+schedule as the complete material scale-statistic cause there.
+
+The accepted capture is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_triplet_order_stopped_it2_20260812T2120ET_retry/pass2/scale_aa_chunked_orig001096_half1_cs060.npz`
+(SHA-256 `bfd01259ca085c5fd1d5919b9cf4a2173b3ac56802c6eddd99c15d7663761ec0`).
+The analysis is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_wavg_triplet_order_stopped_it2_20260812T2120ET_retry/analysis/scale_xa_aa_triplet_pixels.json`
+(SHA-256 `611b44efc5c355044a3d01e123a9fd2fcb658b8d523ead692ee00524f855cbb2`).
+Failed job `12309946` exited before iteration 1 because its diagnostic CUDA
+artifact contained only `sm_80`; it has no scientific result.  The accepted
+job used the pinned `sm_90` artifact with SHA-256
+`871bc03e399bdd55fdcf07d0d42c430976d82e3850d7ae5e8bcc7b04c3aead9a`.
+
+The fixed complete-case scorecard remains `28/34`.  Short job `12310265` is
+the next and only authorized downstream gate: three numbered iterations with
+the native fine-parent order and fused Wavg scale accumulators, followed by
+the same identity-aligned Pmax/support/hard-pose and signed FSC audits used by
+the previous iteration-3 discriminator.
+
+## Fused Wavg iteration-3 propagation
+
+Pinned H100 job `12310265` completed `0:0` in 42 minutes 25 seconds. The
+iteration-2 group-scale relative L2 against the contemporaneous instrumented
+native control is `3.57417e-7` in half 1 and `4.70333e-7` in half 2, near the
+six-decimal model-STAR output floor. Comparisons to the older robust and
+full-trajectory references are approximately `9.1e-6`; those two older
+references agree with each other at about `2e-7` but differ from the same-day
+instrumented native Wavg run. The exact same-day comparison is therefore the
+appropriate operand-boundary acceptance result, while both older runs remain
+the trajectory references.
+
+The downstream discriminator is positive. At iteration 3, identity-aligned
+Pmax relative L2 improves from `3.6892644e-4` to `1.2986044e-4`, a `64.8%`
+reduction, and maximum absolute Pmax error improves from `0.0104017` to
+`0.00231342`. All 3,000 hard poses and translations remain within the strict
+`0.01` degree/Angstrom identity gate. Support-count mismatches change from
+five to six rather than improving monotonically; the remaining one-count
+residuals are stacks `79`, `232`, `262`, `2110`, `2544`, and `2659`.
+
+Merged iteration-3 signed FSC-AUC improves from `0.9999999931331159` to
+`0.9999999990985996`, closing `86.9%` of the previous FSC deficit. The exact
+size/order schedule remains unchanged. This establishes the coupled
+fine-parent/Wavg schedule as a real K=1 trajectory cause, not just a stopped
+arithmetic match. It is not yet a complete-case score increase: the frozen
+scorecard remains `28/34` strict, `32/34` topology, and `34/34` evaluated.
+
+The accepted run is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_order_wavg_triplet_it3_20260812T2125ET/`.
+The particle audit SHA-256 is
+`a4ddbcca26befbfaf178adbf02c59b62331015ac4373c7e8ffd2fcf917309b03`;
+the signed FSC prefix audit SHA-256 is
+`9051699cd3a9351b7bd9934ec52afb1b5e0df1cefc12d1328a5b286cb2189feb`.
+The next stopped target is the earliest of the six iteration-3 support
+boundaries, with numerator, denominator, normalized weight, cumulative mass,
+and exact threshold margin captured before another complete trajectory.

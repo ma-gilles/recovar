@@ -98,7 +98,10 @@ def analyze(
             pixel_sum_minus_production_total = float(
                 np.sum(aa_per_pixel, dtype=np.float64) - aa_per_image
             )
-        elif schema == "recovar-k1-scale-aa-chunked-v1":
+        elif schema in {
+            "recovar-k1-scale-aa-chunked-v1",
+            "recovar-k1-scale-xa-aa-chunked-v2",
+        }:
             proj_abs2 = np.asarray(payload["proj_abs2_sum_per_pixel_by_chunk"], dtype=np.float32)
             ctf_probs = None
             noise = None

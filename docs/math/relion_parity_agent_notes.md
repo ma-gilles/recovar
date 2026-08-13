@@ -12040,3 +12040,42 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
 - The fixed scorecard remains 28/34 strict. Next compare XA/BPref at this exact
   boundary, then run a short iteration-3 discriminator rather than a full
   case-22 trajectory.
+
+## 2026-08-12 21:20 ET — fused Wavg closes XA and AA
+
+- Stopped H100 job `12310062` issues per-pixel `XA -> AA -> diff2` atomics in
+  one kernel after the exact RELION fine-parent permutation.
+- XA pixel/shell relative L2 changes from `7.71488e-5`/`4.72518e-5` to
+  `1.83539e-6`/`6.70922e-7`. AA changes from
+  `2.48300e-4`/`2.44743e-4` to `1.47309e-6`/`5.50279e-7`.
+- Capture SHA-256 is
+  `bfd01259ca085c5fd1d5919b9cf4a2173b3ac56802c6eddd99c15d7663761ec0`;
+  analysis SHA-256 is
+  `611b44efc5c355044a3d01e123a9fd2fcb658b8d523ead692ee00524f855cbb2`.
+- Failed job `12309946` exited before iteration 1 because its diagnostic
+  artifact contained only `sm_80`; it has no scientific result.
+- Short three-iteration job `12310265` is running the only downstream gate.
+  The fixed complete-case score remains 28/34 and K=4 remains parked.
+
+## 2026-08-12 22:05 ET — fused Wavg propagation gate positive
+
+- H100 job `12310265` completed `0:0` in `00:42:25`; its run root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_order_wavg_triplet_it3_20260812T2125ET/`.
+- Iteration-2 group-scale relative L2 is `3.57417e-7`/`4.70333e-7` against
+  the same-day instrumented native control. The older two native references
+  differ from that control by about `9.1e-6`, while agreeing with each other
+  near `2e-7`; retain them as trajectory references, not the stopped operand
+  acceptance source.
+- Iteration-3 Pmax relative L2 improves `3.68926e-4 -> 1.29860e-4` (`64.8%`),
+  maximum absolute error improves `0.0104017 -> 0.00231342`, and merged signed
+  FSC-AUC improves `0.999999993133 -> 0.999999999099`.
+- All hard poses/translations still match. Support mismatches are six
+  one-count boundaries at stacks `79`, `232`, `262`, `2110`, `2544`, and
+  `2659`; this count is one worse than the prior treatment despite the large
+  Pmax and FSC improvement.
+- The causal change is accepted as a real K=1 trajectory improvement, not a
+  complete-case score increase. Next stop at the first residual support
+  boundary and capture the complete ordered posterior/threshold calculation.
+  Do not launch a complete case-22 trajectory yet. K=4 remains parked and
+  the frozen score remains `28/34` strict, `32/34` topology, `34/34`
+  evaluated.

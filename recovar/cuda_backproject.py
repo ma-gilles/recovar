@@ -531,6 +531,9 @@ _TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
 _TARGET_RELION_CUB_SORT_SCAN_F32 = "cuda_relion_cub_sort_scan_f32"
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_F32 = "cuda_relion_wavg_rotation_atomic_f32"
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32 = "cuda_relion_wavg_rotation_atomic_add_f32"
+_TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32 = (
+    "cuda_relion_wavg_rotation_atomic_triplet_add_f32"
+)
 
 # Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
 # Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
@@ -586,6 +589,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32,
         "RelionWavgRotationAtomicAddF32",
+    ),
+    (
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32,
+        "RelionWavgRotationAtomicTripletAddF32",
     ),
 )
 
@@ -2383,6 +2390,39 @@ def relion_wavg_rotation_atomic_add_f32(
     output_type = jax.ShapeDtypeStruct(accumulator.shape, jnp.float32)
     return jax.ffi.ffi_call(
         _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32,
+        output_type,
+        input_output_aliases={1: 0},
+        vmap_method="sequential",
+    )(terms, accumulator)
+
+
+@jax.jit
+def relion_wavg_rotation_atomic_triplet_add_f32(
+    terms: jax.Array,
+    accumulator: jax.Array,
+) -> jax.Array:
+    """Atomically add Wavg ``[XA, AA, diff2]`` terms in RELION source order."""
+
+    _ensure_ffi()
+    terms = jnp.asarray(terms)
+    accumulator = jnp.asarray(accumulator)
+    if terms.dtype != jnp.float32 or terms.ndim != 4 or terms.shape[-1] != 3:
+        raise ValueError(
+            "relion_wavg_rotation_atomic_triplet_add_f32 expects float32 "
+            "[batch, rotation, pixel, 3] terms"
+        )
+    if accumulator.dtype != jnp.float32 or accumulator.shape != (
+        terms.shape[0],
+        terms.shape[2],
+        3,
+    ):
+        raise ValueError(
+            "relion_wavg_rotation_atomic_triplet_add_f32 expects a matching "
+            "float32 [batch, pixel, 3] accumulator"
+        )
+    output_type = jax.ShapeDtypeStruct(accumulator.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32,
         output_type,
         input_output_aliases={1: 0},
         vmap_method="sequential",
