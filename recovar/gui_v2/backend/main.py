@@ -179,7 +179,7 @@ async def lifespan(app: FastAPI):
         "/tmp",
     ]
     # Add common HPC scratch paths if they exist
-    for candidate in ["/scratch", "/gpfs", "/projects", "/data"]:
+    for candidate in ["/scratch", "/gpfs", "/projects", "/data", "/hpc"]:
         if os.path.isdir(candidate):
             default_roots.append(candidate)
     configure_allowed_roots(default_roots)
