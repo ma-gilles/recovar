@@ -33,6 +33,7 @@ TRANSLATED_WAVG_NORM=${K1_CASE22_TRANSLATED_WAVG_NORM:-0}
 WAVG_ATOMIC_SCALE_AA=${K1_CASE22_WAVG_ATOMIC_SCALE_AA:-0}
 WAVG_ATOMIC_DIRECT_RESIDUAL=${K1_CASE22_WAVG_ATOMIC_DIRECT_RESIDUAL:-0}
 FINE_ROTATION_EXECUTION_ORDER=${K1_CASE22_FINE_ROTATION_EXECUTION_ORDER:-0}
+PROJECTION_CACHE_MODE=${K1_CASE22_PROJECTION_CACHE_MODE:-auto}
 COARSE_STACK1204_DUMP=${K1_CASE22_COARSE_STACK1204_DUMP:-0}
 GAUSSIAN_COARSE_STACK1204=${K1_CASE22_GAUSSIAN_COARSE_STACK1204:-0}
 GAUSSIAN_SINCOSF_STACK1204=${K1_CASE22_GAUSSIAN_SINCOSF_STACK1204:-${GAUSSIAN_COARSE_STACK1204}}
@@ -89,6 +90,10 @@ esac
 case "${FINE_ROTATION_EXECUTION_ORDER}" in
     0|1) ;;
     *) echo "K1_CASE22_FINE_ROTATION_EXECUTION_ORDER must be 0 or 1" >&2; exit 2 ;;
+esac
+case "${PROJECTION_CACHE_MODE}" in
+    auto|on|off) ;;
+    *) echo "K1_CASE22_PROJECTION_CACHE_MODE must be auto, on, or off" >&2; exit 2 ;;
 esac
 case "${NOISE_UPDATE_DUMP}" in
     0|1) ;;
@@ -188,6 +193,9 @@ if [[ "${WAVG_ATOMIC_DIRECT_RESIDUAL}" = 1 ]]; then
 fi
 if [[ "${FINE_ROTATION_EXECUTION_ORDER}" = 1 ]]; then
     export RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER=1
+fi
+if [[ "${PROJECTION_CACHE_MODE}" != auto ]]; then
+    export RECOVAR_SPARSE_PASS2_PROJECTION_CACHE=${PROJECTION_CACHE_MODE}
 fi
 if [[ "${PARITY_DUMP}" = 1 ]]; then
     export RECOVAR_PARITY_DUMP_DIR=${ROOT}/parity
@@ -310,8 +318,8 @@ if [[ "${STOP_AFTER_COMPACT_DUMP}" = 1 ]]; then
     if [[ "${PROJECTOR_DUMP}" = 1 ]]; then
         test -s "${RECOVAR_RELION_PROJECTOR_DUMP_DIR}/iter001_half0_relion_projector_half.npz"
     fi
-    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":true,"norm_residual_inputs":%s,"projector_dump":%s,"target_stack_one_based":%d,"target_iteration":%d,"target_current_size":%d,"pass2_rotation_rows":"%s","stopped_after_dump":true}\n' \
-        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${NORM_RESIDUAL_INPUTS}" "${PROJECTOR_DUMP}" "${TARGET_STACK_ONE_BASED}" \
+    printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":true,"norm_residual_inputs":%s,"projector_dump":%s,"projection_cache_mode":"%s","target_stack_one_based":%d,"target_iteration":%d,"target_current_size":%d,"pass2_rotation_rows":"%s","stopped_after_dump":true}\n' \
+        "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${NORM_RESIDUAL_INPUTS}" "${PROJECTOR_DUMP}" "${PROJECTION_CACHE_MODE}" "${TARGET_STACK_ONE_BASED}" \
         "${TARGET_ITERATION}" "${TARGET_CURRENT_SIZE}" "${PASS2_ROTATION_ROWS}" \
         > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
     touch "${ROOT}/DUMP_SUCCESS_${SLURM_JOB_ID}"
@@ -382,8 +390,8 @@ if [[ "${PARITY_DUMP}" = 1 ]]; then
     test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
 fi
 
-printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"norm_residual_inputs":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_residual":%s,"parity_dump":%s,"noise_update_dump":%s}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${NORM_RESIDUAL_INPUTS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${WAVG_ATOMIC_SCALE_AA}" "${WAVG_ATOMIC_DIRECT_RESIDUAL}" "${PARITY_DUMP}" "${NOISE_UPDATE_DUMP}" \
+printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"norm_residual_inputs":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_residual":%s,"projection_cache_mode":"%s","parity_dump":%s,"noise_update_dump":%s}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${NORM_RESIDUAL_INPUTS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${WAVG_ATOMIC_SCALE_AA}" "${WAVG_ATOMIC_DIRECT_RESIDUAL}" "${PROJECTION_CACHE_MODE}" "${PARITY_DUMP}" "${NOISE_UPDATE_DUMP}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
