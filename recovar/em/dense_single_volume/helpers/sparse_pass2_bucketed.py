@@ -9109,6 +9109,8 @@ def _write_chunked_scale_aa_dump(
     atomic_xa_per_pixel=None,
     atomic_aa_per_pixel=None,
     atomic_diff2_per_pixel=None,
+    atomic_diff2_rectangle=None,
+    atomic_diff2_rectangle_shell_indices=None,
     noise_variance_for_noise=None,
     weighted_img_per_image=None,
     relion_norm_high_shell=None,
@@ -9153,6 +9155,16 @@ def _write_chunked_scale_aa_dump(
         if atomic_xa_per_pixel is None
         else np.asarray(atomic_xa_per_pixel, dtype=np.float32)
     )
+    atomic_diff2_rectangle_np = (
+        None
+        if atomic_diff2_rectangle is None
+        else np.asarray(atomic_diff2_rectangle, dtype=np.float32)
+    )
+    atomic_diff2_rectangle_shells_np = (
+        None
+        if atomic_diff2_rectangle_shell_indices is None
+        else np.asarray(atomic_diff2_rectangle_shell_indices, dtype=np.int32).reshape(-1)
+    )
     if atomic_xa_per_pixel_np is not None and atomic_xa_per_pixel_np.shape != (
         local_indices.size,
         mask.size,
@@ -9168,6 +9180,13 @@ def _write_chunked_scale_aa_dump(
         mask.size,
     ):
         raise ValueError("chunked Wavg diff2 atomic pixel topology changed")
+    if (atomic_diff2_rectangle_np is None) != (atomic_diff2_rectangle_shells_np is None):
+        raise ValueError("chunked Wavg rectangle values and shell labels must be supplied together")
+    if atomic_diff2_rectangle_np is not None and atomic_diff2_rectangle_np.shape != (
+        local_indices.size,
+        atomic_diff2_rectangle_shells_np.size,
+    ):
+        raise ValueError("chunked Wavg rectangle diff2 topology changed")
     candidate_arrays_present = posterior_probs_chunks is not None or rotation_matrix_chunks is not None
     if candidate_arrays_present:
         if posterior_probs_chunks is None or rotation_matrix_chunks is None or fine_translations is None:
@@ -9356,6 +9375,26 @@ def _write_chunked_scale_aa_dump(
                 wavg_diff2_atomic_per_shell=atomic_diff2_shells,
                 wavg_diff2_atomic_per_image=np.float64(
                     np.sum(atomic_diff2_pixels, dtype=np.float64)
+                ),
+            )
+        if atomic_diff2_rectangle_np is not None:
+            rectangle_pixels = atomic_diff2_rectangle_np[bucket_row]
+            rectangle_shells = np.zeros(shell_count, dtype=np.float64)
+            valid_rectangle = (
+                (atomic_diff2_rectangle_shells_np >= 0)
+                & (atomic_diff2_rectangle_shells_np < shell_count)
+            )
+            np.add.at(
+                rectangle_shells,
+                atomic_diff2_rectangle_shells_np[valid_rectangle],
+                rectangle_pixels[valid_rectangle].astype(np.float64),
+            )
+            payload.update(
+                wavg_diff2_atomic_rectangle_per_pixel=rectangle_pixels,
+                wavg_diff2_atomic_rectangle_shell_indices=atomic_diff2_rectangle_shells_np,
+                wavg_diff2_atomic_rectangle_per_shell=rectangle_shells,
+                wavg_diff2_atomic_rectangle_per_image=np.float64(
+                    np.sum(rectangle_pixels[valid_rectangle], dtype=np.float64)
                 ),
             )
         if candidate_arrays_present:
@@ -13210,6 +13249,8 @@ def compute_pass2_stats_sparse_bucketed(
                             relion_wavg_atomic_diff2_pixels_np,
                             relion_wavg_rectangle,
                         ),
+                        atomic_diff2_rectangle=relion_wavg_atomic_diff2_pixels_np,
+                        atomic_diff2_rectangle_shell_indices=relion_wavg_rectangle.shell_indices,
                         noise_variance_for_noise=noise_variance_for_noise,
                         weighted_img_per_image=weighted_img_per_image,
                         relion_norm_high_shell=relion_norm_high_shell,

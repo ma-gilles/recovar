@@ -126,6 +126,9 @@ def test_chunked_scale_aa_writer_preserves_float32_chunk_order(tmp_path: Path, m
         aa_feature_shell_ids=np.asarray([0, 1], dtype=np.int32),
         atomic_xa_per_pixel=np.asarray([[9.0, 10.0]], dtype=np.float32),
         atomic_aa_per_pixel=np.asarray([[11.0, 12.0]], dtype=np.float32),
+        atomic_diff2_per_pixel=np.asarray([[13.0, 14.0]], dtype=np.float32),
+        atomic_diff2_rectangle=np.asarray([[13.0, 14.0, 15.0]], dtype=np.float32),
+        atomic_diff2_rectangle_shell_indices=np.asarray([0, 1, 1], dtype=np.int32),
         noise_variance_for_noise=np.asarray([2.0, 3.0], dtype=np.float32),
         weighted_img_per_image=np.asarray([31.0], dtype=np.float64),
         relion_norm_high_shell=np.asarray([17.0], dtype=np.float64),
@@ -142,6 +145,14 @@ def test_chunked_scale_aa_writer_preserves_float32_chunk_order(tmp_path: Path, m
         assert float(capture["scale_xa_per_image"]) == 5.0
         np.testing.assert_array_equal(capture["scale_xa_atomic_per_pixel"], [9.0, 10.0])
         np.testing.assert_array_equal(capture["scale_aa_atomic_per_pixel"], [11.0, 12.0])
+        np.testing.assert_array_equal(capture["wavg_diff2_atomic_per_pixel"], [13.0, 14.0])
+        np.testing.assert_array_equal(
+            capture["wavg_diff2_atomic_rectangle_per_pixel"], [13.0, 14.0, 15.0]
+        )
+        np.testing.assert_array_equal(
+            capture["wavg_diff2_atomic_rectangle_shell_indices"], [0, 1, 1]
+        )
+        np.testing.assert_array_equal(capture["wavg_diff2_atomic_rectangle_per_shell"], [13.0, 29.0])
         np.testing.assert_array_equal(capture["scale_aa_per_pixel"], [4.0, 6.0])
         np.testing.assert_array_equal(capture["scale_aa_per_shell"], [4.0, 6.0])
         assert capture["candidate_posterior_probs"].shape == (4, 2)

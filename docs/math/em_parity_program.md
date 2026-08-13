@@ -16022,3 +16022,67 @@ coordinates to RECOVAR's chunked `norm_a2_per_pixel_by_chunk` and
 This directly separates a masked-image/projector operand mismatch from a
 reduction-order mismatch without another long trajectory. The complete-case
 score remains `28/34` strict, `32/34` topology, and `34/34` evaluated.
+
+## 2026-08-13 masked-Wavg first-divergence closure
+
+Native job `12334799` completed in `00:08:21` and emitted the complete
+1,860-pixel masked Wavg rectangle for iteration-2 stack 79 / RELION particle
+2767. The exact-radius 1,411-pixel join has exact shell labels. Against the
+ordinary RECOVAR algebraic path, AA relative L2 is `7.88318e-5`, XA relative
+L2 is `2.62549e-5`, and the native-minus-RECOVAR `AA - 2 XA` total is
+`-3.53297e-7` in native units. The direct masked boundary therefore replaces
+the invalid unmasked-BPref inference and identifies AA as the larger immediate
+operand discrepancy.
+
+The projected-reference and posterior interventions rule out an operand
+formula or candidate-support cause for this discrepancy. All 135,416 projected
+orientations match native shell power at `1.49328e-7` relative L2. Replacing
+RECOVAR posterior weights by the aligned native table changes the AA total by
+only `-0.0003955` in accumulator units. Replaying the native projected values
+and posterior still leaves `7.7648e-5` relative L2 against native Wavg AA.
+
+The remaining boundary is RELION's float32 orientation-atomic issue order.
+Offline CUDA replay job `12335297` completed in 9 s. (The preceding submission
+`12335279` failed its launcher-hash provenance gate before computation and has
+no scientific result.) A high-accuracy sum differs from native by
+`7.91045e-5`; issuing the identical terms through the custom float32 atomic in
+native order reduces that to `5.86772e-7`, closing `99.2582%`. Issuing the
+same terms in historical RECOVAR rotation order reaches only `1.73607e-5`.
+
+The full orientation mapping is exact and simple. RELION preserves the eight
+oversampled children inside every parent and changes only the 16,927-parent
+order. For `n_pixels=768` and `n_psi=48`, sorting RECOVAR's psi-major parent
+ID by
+
+```text
+(parent_id % n_pixels) * n_psi + parent_id // n_pixels
+```
+
+reproduces every native parent position. The existing guarded
+`RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER=1` path implements that order.
+Stopped production job `12335541` completed in `00:02:47` and validates the
+implemented path, rather than only the offline replay: masked AA and XA pixel
+relative L2 values are `5.03278e-7` and `5.52641e-7`; their fixed shell
+reductions are `9.89203e-8` and `3.15647e-7`.
+
+The first direct-residual report incorrectly compared RECOVAR's 1,411
+exact-radius capture with RELION's full 1,860-pixel rectangle. Job `12336394`
+completed in `00:02:48` after the diagnostic retained the full rectangle.
+The corrected shell residual relative L2 is `3.39578e-5`, with maximum
+absolute shell error `1.11050e-7`; the native component file is printed to
+only six significant digits. The complete particle norm is
+`0.08558964535` versus printed native `0.085589248`, a signed difference of
+`3.97350e-7`. This is about 70% smaller than the previously measured
+`1.33925e-6` iteration-2 norm gap and falsifies the apparent cutoff-shell
+failure.
+
+The full-rectangle report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0079_fullrect_atomic_capture_it2_20260813T1335ET/analysis/K1_STACK79_FULLRECT_WAVG_NORM_IT2.json`
+(SHA-256
+`ba11d02a820a674e2de3f7a495c35133c8094deb5aef391a622c947aea1b8979`).
+Both its run and runtime roots contain `SAFE_TO_DELETE`. The next bounded
+scientific gate is a three-iteration case-22 trajectory combining native
+parent order, atomic Wavg AA/XA/diff2, and coupled direct normalization. No
+default is promoted from the one-particle capture alone, and the fixed
+complete-case score remains `28/34` strict, `32/34` topology, and `34/34`
+evaluated.

@@ -68,14 +68,15 @@ def _native_pixels(
     return rows
 
 
-def _native_direct_residual_shells(
+def _native_noise_component_shells(
     path: Path,
     *,
     iteration: int,
     half: int,
     part_id: int,
-) -> dict[int, float]:
-    rows: dict[int, float] = {}
+) -> tuple[dict[int, float], dict[int, float]]:
+    direct_rows: dict[int, float] = {}
+    high_rows: dict[int, float] = {}
     prefix = f"acc_components\titer={iteration}\tpart_id={part_id}\thalfset={half}\t"
     with path.open() as stream:
         for line in stream:
@@ -86,10 +87,12 @@ def _native_direct_residual_shells(
                 for key, value in (item.split("=", 1) for item in line.rstrip().split("\t")[1:])
             }
             shell = int(fields["shell"])
-            _require(shell not in rows, f"duplicate native direct-residual shell {shell}")
-            rows[shell] = float(fields["direct_residual"])
-    _require(rows, "native direct-residual target selection is empty")
-    return rows
+            _require(shell not in direct_rows, f"duplicate native direct-residual shell {shell}")
+            direct_rows[shell] = float(fields["direct_residual"])
+            if "highres_image_power" in fields:
+                high_rows[shell] = float(fields["highres_image_power"])
+    _require(direct_rows, "native direct-residual target selection is empty")
+    return direct_rows, high_rows
 
 
 def analyze(
@@ -165,8 +168,20 @@ def analyze(
             else None
         )
         atomic_diff2_per_shell = (
-            np.asarray(payload["wavg_diff2_atomic_per_shell"], dtype=np.float64)
+            np.asarray(payload["wavg_diff2_atomic_rectangle_per_shell"], dtype=np.float64)
+            if "wavg_diff2_atomic_rectangle_per_shell" in payload
+            else np.asarray(payload["wavg_diff2_atomic_per_shell"], dtype=np.float64)
             if "wavg_diff2_atomic_per_shell" in payload
+            else None
+        )
+        atomic_diff2_source = (
+            "full_relion_wavg_rectangle"
+            if "wavg_diff2_atomic_rectangle_per_shell" in payload
+            else "exact_radius_window"
+        )
+        relion_norm_high_shell = (
+            float(payload["relion_norm_high_shell"])
+            if "relion_norm_high_shell" in payload
             else None
         )
     _require(iteration == expected_iteration and half == expected_half, "iteration/half identity changed")
@@ -283,7 +298,7 @@ def analyze(
             atomic_diff2_per_shell is not None,
             "native noise components require captured Wavg diff2 atomics",
         )
-        native_direct = _native_direct_residual_shells(
+        native_direct, native_high = _native_noise_component_shells(
             native_noise_components,
             iteration=expected_iteration,
             half=expected_half,
@@ -307,10 +322,44 @@ def analyze(
         )
         direct_residual_report = {
             **_metric(recovar_direct, native_direct_values),
+            "recovar_source": atomic_diff2_source,
             "shells": compared_shells.tolist(),
             "recovar_native_units": recovar_direct.tolist(),
             "native": native_direct_values.tolist(),
         }
+        if relion_norm_high_shell is not None and native_high:
+            recovar_current = float(np.sum(recovar_direct, dtype=np.float64))
+            recovar_high = relion_norm_high_shell / float(recovar_term_divisor)
+            native_current = float(np.sum(native_direct_values, dtype=np.float64))
+            native_high_total = float(np.sum(list(native_high.values()), dtype=np.float64))
+            recovar_full = recovar_current + recovar_high
+            native_full = native_current + native_high_total
+            direct_residual_report["full_particle_norm"] = {
+                "recovar_current_size": recovar_current,
+                "native_current_size": native_current,
+                "recovar_high_shell": recovar_high,
+                "native_high_shell": native_high_total,
+                "recovar_total": recovar_full,
+                "native_total": native_full,
+                "native_minus_recovar": native_full - recovar_full,
+                "relative_abs_error": abs(native_full - recovar_full)
+                / max(abs(native_full), float(np.finfo(np.float64).tiny)),
+            }
+
+    recovar_a2_total = float(np.sum(recovar_aa, dtype=np.float64))
+    native_a2_total = float(np.sum(native_aa, dtype=np.float64))
+    recovar_xa_total = (
+        None
+        if xa_per_pixel is None
+        else float(np.sum(xa_per_pixel[active_rows], dtype=np.float64) / recovar_term_divisor)
+    )
+    native_xa_total = None if xa_per_pixel is None else float(np.sum(native_xa, dtype=np.float64))
+    recovar_residual_total = (
+        None if recovar_xa_total is None else recovar_a2_total - 2.0 * recovar_xa_total
+    )
+    native_residual_total = (
+        None if native_xa_total is None else native_a2_total - 2.0 * native_xa_total
+    )
 
     return {
         "schema": "recovar.em.k1_scale_aa_pixels.v1",
@@ -369,6 +418,25 @@ def analyze(
                 "xa_signed_delta": float(np.sum(xa_per_pixel, dtype=np.float64) - captured_xa_scalar),
             }
         ),
+        "term_totals_native_units": {
+            "recovar_a2": recovar_a2_total,
+            "native_a2": native_a2_total,
+            "a2_native_minus_recovar": native_a2_total - recovar_a2_total,
+            "recovar_xa": recovar_xa_total,
+            "native_xa": native_xa_total,
+            "xa_native_minus_recovar": (
+                None
+                if native_xa_total is None or recovar_xa_total is None
+                else native_xa_total - recovar_xa_total
+            ),
+            "recovar_a2_minus_2xa": recovar_residual_total,
+            "native_a2_minus_2xa": native_residual_total,
+            "residual_native_minus_recovar": (
+                None
+                if native_residual_total is None or recovar_residual_total is None
+                else native_residual_total - recovar_residual_total
+            ),
+        },
         "atomic_aa": atomic_report,
         "xa": xa_report,
         "wavg_direct_residual": direct_residual_report,

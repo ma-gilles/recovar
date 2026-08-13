@@ -360,6 +360,8 @@ def test_scale_aa_pixels_joins_fourier_coordinates_and_localizes_operand_delta(t
         scale_xa_per_pixel=(xa_native * divisor * 1.02).astype(np.float32),
         scale_xa_atomic_per_pixel=(xa_native * divisor).astype(np.float32),
         wavg_diff2_atomic_per_shell=(native_direct * divisor).astype(np.float32),
+        wavg_diff2_atomic_rectangle_per_shell=(native_direct * divisor).astype(np.float32),
+        relion_norm_high_shell=np.float64(0.75 * divisor),
     )
 
     native = tmp_path / "native.tsv"
@@ -376,7 +378,8 @@ def test_scale_aa_pixels_joins_fourier_coordinates_and_localizes_operand_delta(t
     native_components.write_text(
         "".join(
             "acc_components\titer=2\tpart_id=109\thalfset=1"
-            f"\tshell={shell}\tdirect_residual={value:.17g}\n"
+            f"\tshell={shell}\tdirect_residual={value:.17g}"
+            f"\thighres_image_power={0.25 * shell:.17g}\n"
             for shell, value in enumerate(native_direct)
         )
     )
@@ -401,6 +404,8 @@ def test_scale_aa_pixels_joins_fourier_coordinates_and_localizes_operand_delta(t
     assert report["xa"]["atomic"]["pixel"]["relative_l2"] < 1e-7
     assert report["xa"]["atomic"]["fixed_order_shell_reduction"]["relative_l2"] < 1e-7
     assert report["wavg_direct_residual"]["relative_l2"] < 1e-7
+    assert report["wavg_direct_residual"]["recovar_source"] == "full_relion_wavg_rectangle"
+    assert report["wavg_direct_residual"]["full_particle_norm"]["relative_abs_error"] < 1e-7
     assert report["classification"] == "atomic Wavg XA/AA treatment captured"
     assert report["pixel_aa"]["largest_abs_residual_pixels"][0]["x"] == int(
         coordinates[np.flatnonzero(mask)[-1], 0]
@@ -468,5 +473,8 @@ def test_norm_pixels_sum_chunked_v4_operands_before_native_join(tmp_path: Path):
     assert report["identity"]["active_pixel_count"] == window_indices.size
     assert report["pixel_aa"]["relative_l2"] < 1e-7
     assert report["xa"]["pixel"]["relative_l2"] < 1e-7
+    assert abs(report["term_totals_native_units"]["a2_native_minus_recovar"]) < 1e-7
+    assert abs(report["term_totals_native_units"]["xa_native_minus_recovar"]) < 1e-7
+    assert abs(report["term_totals_native_units"]["residual_native_minus_recovar"]) < 1e-7
     assert abs(report["recovar_pixel_sum_vs_captured_scalar"]["a2_signed_delta"]) < 1e-5
     assert abs(report["recovar_pixel_sum_vs_captured_scalar"]["xa_signed_delta"]) < 1e-5
