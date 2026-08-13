@@ -10,8 +10,16 @@ from pathlib import Path
 
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
+    SCHEMA as PRODUCTION_CAPTURE_SCHEMA,
+)
+from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
+    validate_raw_capture_shard,
+)
 from scripts.analyze_k1_fine_score_boundary import (
+    _center,
     _float32_from_bits,
+    _metric,
     _translation_map,
 )
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
@@ -77,6 +85,56 @@ def _records(keys: set[tuple[int, int]], limit: int = 64) -> list[list[int]]:
     return [[int(rotation), int(translation)] for rotation, translation in sorted(keys)[:limit]]
 
 
+def load_recovar_candidate_table(path: Path) -> dict[str, np.ndarray]:
+    """Normalize either the legacy pass-2 dump or one production raw shard."""
+
+    path = Path(path)
+    with np.load(path, allow_pickle=False) as archive:
+        recovar = {name: np.asarray(archive[name]) for name in archive.files}
+    schema = str(recovar.get("schema", ""))
+    if schema != PRODUCTION_CAPTURE_SCHEMA:
+        return recovar
+
+    inventory = validate_raw_capture_shard(path)
+    _require(inventory["particle_count"] == 1, "production shard must contain one particle")
+    _require(len(inventory["fragments"]) == 1, "production shard must contain one fragment")
+    fragment = inventory["fragments"][0]
+    _require(fragment["fragment_count"] == 1, "production particle must be complete in one shard")
+    candidate_count = int(recovar["candidate_offset"][-1])
+    rotation_count = int(recovar["rotation_offset"][-1])
+    translation_count = int(recovar["fine_translations"].shape[0])
+    rotation = np.asarray(recovar["candidate_local_rotation"], dtype=np.int64)
+    translation = np.asarray(recovar["candidate_translation"], dtype=np.int64)
+    _require(rotation.shape == translation.shape == (candidate_count,), "candidate keys changed")
+    _require(
+        np.unique(np.column_stack((rotation, translation)), axis=0).shape[0] == candidate_count,
+        "production candidate keys are duplicated",
+    )
+    shape = (rotation_count, translation_count)
+    candidate_mask = np.zeros(shape, dtype=bool)
+    candidate_mask[rotation, translation] = True
+
+    def dense(name: str, *, fill, dtype=None) -> np.ndarray:
+        values = np.asarray(recovar[name], dtype=dtype)
+        _require(values.shape == (candidate_count,), f"{name} candidate topology changed")
+        output = np.full(shape, fill, dtype=values.dtype)
+        output[rotation, translation] = values
+        return output
+
+    return {
+        **recovar,
+        "original_index": np.asarray(recovar["original_indices"][0], dtype=np.int64),
+        "rotations": np.asarray(recovar["rotation_matrix"], dtype=np.float32),
+        "candidate_mask": candidate_mask,
+        "probs": dense("posterior", fill=0.0),
+        "production_combined_score": dense("raw_combined_score", fill=-np.inf),
+        "production_rotation_log_prior": dense("rotation_log_prior", fill=np.nan),
+        "production_translation_log_prior": dense("translation_log_prior", fill=np.nan),
+        "production_significant": dense("significant", fill=0, dtype=bool),
+        "capture_schema": np.asarray(schema),
+    }
+
+
 def analyze(
     *,
     factor_path: Path,
@@ -87,8 +145,7 @@ def analyze(
     factor = load_factor_capture(factor_path)
     score = load_fine_score_capture(fine_score_path)
     _require(factor.stack_index == score.stack_index, "native capture identities differ")
-    with np.load(recovar_path, allow_pickle=False) as archive:
-        recovar = {name: np.asarray(archive[name]) for name in archive.files}
+    recovar = load_recovar_candidate_table(recovar_path)
     _require(
         int(recovar["original_index"]) == factor.stack_index - 1,
         "cross-engine particle identity differs",
@@ -164,6 +221,96 @@ def analyze(
     native_common_normalized = native_common_values / native_common_scan_mass
     recovar_common_normalized = recovar_common_values / recovar_common_scan_mass
 
+    production_boundary = None
+    if "production_combined_score" in recovar:
+        native_common_log = np.asarray(
+            candidates["combined_preexponent"][native_common_rows],
+            dtype=np.float32,
+        )
+        native_common_rot_prior = np.asarray(
+            candidates["orientation_log_prior"][native_common_rows],
+            dtype=np.float32,
+        )
+        native_common_trans_prior = np.asarray(
+            candidates["translation_log_prior"][native_common_rows],
+            dtype=np.float32,
+        )
+        recovar_common_log = np.asarray(
+            [recovar["production_combined_score"][key] for key in ordered_common],
+            dtype=np.float32,
+        )
+        recovar_common_rot_prior = np.asarray(
+            [recovar["production_rotation_log_prior"][key] for key in ordered_common],
+            dtype=np.float32,
+        )
+        recovar_common_trans_prior = np.asarray(
+            [recovar["production_translation_log_prior"][key] for key in ordered_common],
+            dtype=np.float32,
+        )
+        native_common_preprior = -np.asarray(
+            candidates["raw_diff2"][native_common_rows],
+            dtype=np.float32,
+        )
+        recovar_common_preprior = (
+            recovar_common_log
+            - recovar_common_rot_prior
+            - recovar_common_trans_prior
+        ).astype(np.float32, copy=False)
+
+        native_significant_count = int(factor.header[45])
+        _require(
+            factor.geometry_only and 0 < native_significant_count <= candidates.size,
+            "production comparison requires a geometry-only native BPref capture",
+        )
+        native_significant_rows = np.argsort(-native_weights, kind="stable")[
+            :native_significant_count
+        ]
+        native_significant_keys = {
+            (int(mapped_rotations[row]), int(mapped_translations[row]))
+            for row in native_significant_rows
+            if mapped_rotations[row] >= 0
+        }
+        recovar_significant_keys = {
+            tuple(map(int, row))
+            for row in np.argwhere(recovar["production_significant"]).tolist()
+        }
+        production_boundary = {
+            "combined_log_weight_centered": _metric(
+                _center(native_common_log),
+                _center(recovar_common_log),
+            ),
+            "preprior_score_centered": _metric(
+                _center(native_common_preprior),
+                _center(recovar_common_preprior),
+            ),
+            "orientation_log_prior": _metric(
+                native_common_rot_prior,
+                recovar_common_rot_prior,
+            ),
+            "translation_log_prior": _metric(
+                native_common_trans_prior,
+                recovar_common_trans_prior,
+            ),
+            "posterior_on_common_native_normalization": _metric(
+                native_common_values,
+                recovar_common_values,
+            ),
+            "posterior_common_domain_renormalized": _metric(
+                native_common_normalized,
+                recovar_common_normalized,
+            ),
+            "fine_significant_support": {
+                "native_count": native_significant_count,
+                "native_mapped_count": len(native_significant_keys),
+                "recovar_count": len(recovar_significant_keys),
+                "exact": native_significant_keys == recovar_significant_keys,
+                "native_only_count": len(native_significant_keys - recovar_significant_keys),
+                "recovar_only_count": len(recovar_significant_keys - native_significant_keys),
+                "native_only_first": _records(native_significant_keys - recovar_significant_keys),
+                "recovar_only_first": _records(recovar_significant_keys - native_significant_keys),
+            },
+        }
+
     return {
         "schema": "recovar.em.k1_partial_fine_topology.v1",
         "status": "complete",
@@ -207,6 +354,7 @@ def analyze(
                 0.5 * np.sum(np.abs(recovar_common_normalized - native_common_normalized))
             ),
         },
+        "production_boundary": production_boundary,
         "translation_map_max_abs": translation_error,
         "artifacts": {
             "factor": str(factor_path.resolve()),

@@ -619,5 +619,21 @@
     "relion_cub_exact": true,
     "analysis_sha256": "34485c75464910c24c9a458868cb06bce3771a0a2b8f1187f6a3c5b89b503f70",
     "classification": "fine BPref sort/scan is exact when given identical fine weights; it is distinct from and does not explain the pass-1 coarse count written to rlnNrOfSignificantSamples"
+  },
+  "positive_composition_with_rfloat_noise_iteration_3": {
+    "slurm_job_id": 12324725,
+    "iteration_3_pmax_relative_l2": 0.00011197014837326447,
+    "iteration_3_pmax_max_abs": 0.0009019980587959275,
+    "iteration_3_pmax_rmse": 0.00007205835057769674,
+    "iteration_3_support_mismatch_count": 6,
+    "iteration_3_support_max_abs": 1,
+    "iteration_3_hard_mismatch_count": 0,
+    "iteration_3_current_size_exact": true,
+    "iteration_3_healpix_order_exact": true,
+    "iteration_3_merged_fsc_auc": 0.9999999993275085,
+    "particle_analysis_sha256": "77ada261dfabaee3a9c97fa9a2dbafc4a027ce9f8a15419f93679a2e8b32dc07",
+    "intermediate_analysis_sha256": "20aa153e7031138a42154db9abf5b24d0b26fe5c915fd8ad7a54b2b5662af177",
+    "fsc_analysis_sha256": "ce424a445cd3b9d2ad29ab096ce355a0da1cc833886af44a766d423cbd577649",
+    "classification": "the demonstrated RFLOAT scoring-noise fix improves the already-positive narrow composition through iteration 3 while preserving zero hard mismatches; six one-count coarse-support residuals remain"
   }
 }

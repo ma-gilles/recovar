@@ -1360,3 +1360,37 @@ falsify the `53` versus `52` coarse-parent residual, which was already
 localized to one rotation-dependent coarse raw-score boundary. Any new fine
 capture addresses the separate Pmax and common-fine-tuple residual, not the
 STAR significant-sample count.
+
+## Positive composition with RFLOAT noise through iteration 3
+
+Full three-iteration job `12324725` combines the previously positive narrow
+composition with the demonstrated process-start RFLOAT scoring-noise fix. It
+uses exact fine-parent execution order, the fused RELION-order XA/AA Wavg
+atomic schedule, CUDA coarse-Gaussian scoring, and float32 coarse support. It
+does not enable the rejected power-class spectrum norm, translated-Wavg norm,
+or direct-residual paths.
+
+The result improves the previous best iteration-3 trajectory. Pmax relative
+L2 decreases from `0.0001298604424` to `0.0001119701484`, and maximum absolute
+Pmax error decreases from `0.0023134160` to `0.0009019981`. The same six
+particles retain one-count coarse-support residuals, while every hard pose and
+translation remains matched and current size/HEALPix topology is exact. The
+iteration-3 merged signed FSC-AUC increases from `0.9999999990985996` to
+`0.9999999993275085`.
+
+The primary reports are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_rfloat_noise_order_wavg_it3_20260813T0554ET/analysis/PARTICLE_STATE.json`
+  (SHA-256 `77ada261dfabaee3a9c97fa9a2dbafc4a027ce9f8a15419f93679a2e8b32dc07`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_rfloat_noise_order_wavg_it3_20260813T0554ET/analysis/INTERMEDIATE_TRAJECTORY.json`
+  (SHA-256 `20aa153e7031138a42154db9abf5b24d0b26fe5c915fd8ad7a54b2b5662af177`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_rfloat_noise_order_wavg_it3_20260813T0554ET/analysis/FSC_TRAJECTORY.json`
+  (SHA-256 `ce424a445cd3b9d2ad29ab096ce355a0da1cc833886af44a766d423cbd577649`).
+
+This confirms that the narrow candidate continues to close the trajectory
+without a hard-state regression. It does not close case 22: the complete-case
+scorecard remains `28/34` strict, `32/34` topology, and `34/34` evaluated. The
+next discriminator is the exact production candidate table for stack 232,
+captured without disabling projection caching or forcing its bucket
+unchunked. That experiment tests whether the one extra coarse parent is the
+sole source of the remaining fine-table and Pmax difference.
