@@ -49,3 +49,6 @@ def test_preservation_case_can_override_source_seed_and_report_stem():
     assert "REPORT_STEM=${K1_CASE26_REPORT_STEM}" in text
     assert '--seed "${RUN_SEED}" --perturb_seed "${RUN_SEED}"' in text
     assert '\"source_case\":\"%s\",\"run_seed\":%d' in text
+    assert "EFFECTIVE_ORDER_SEED=$((RUN_SEED + 1))" in text
+    assert "effective seed ${EFFECTIVE_ORDER_SEED}" in text
+    assert "effective seed 1727" not in text

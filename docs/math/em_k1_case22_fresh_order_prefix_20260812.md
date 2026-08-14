@@ -1773,6 +1773,47 @@ that preservation gate completes, the repository default and published fixed
 scorecard remain deliberately unchanged at `28/34` strict, `32/34` topology,
 and `34/34` evaluated.
 
+## Passing-case preservation and guarded promotion
+
+Case-25 preservation job `12372874` completed all scientific work on the same
+H100 UUID as the case-26 gate.  It preserved the exact eight-iteration
+current-size schedule `56, 56, 52, 50, 50, 50, 52, 52` and HEALPix schedule
+`3, 3, 3, 3, 3, 4, 4, 4`, then ran the authentic final all-data pass with
+both final overrides unset.  The final result is repeat-level stable:
+
+| Metric | Frozen case 25 | Direct-noise candidate | Change |
+| --- | ---: | ---: | ---: |
+| final merged cross-engine signed FSC-AUC | `0.998192576` | `0.998192307` | `-2.69e-7` |
+| final half-1 cross-engine signed FSC-AUC | `0.999992125` | `0.999992129` | `+3.93e-9` |
+| final half-2 cross-engine signed FSC-AUC | `0.999997340` | `0.999997341` | `+1.25e-9` |
+| final merged RECOVAR-minus-RELION GT FSC-AUC | not gated historically | `+0.009182130` | passes `>= -0.002` |
+
+Every numbered merged FSC-AUC is at least `0.999999999914046`.  The accepted
+FSC and state reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case25_direct_noise_preservation_7f0e2348_20260814T0645ET/analysis/case25_direct_noise_preservation_full_fsc.json`
+(SHA-256
+`eae4cd9ab938c6c0761013402ec29bd635014311f10bbeb966e46dc50dba658a`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case25_direct_noise_preservation_7f0e2348_20260814T0645ET/analysis/case25_direct_noise_preservation_full_state.json`
+(SHA-256
+`7fb31a48ab98e17056857479018ae35ea00efb6634a2098b2508da25f093af96`).
+
+Slurm records job `12372874` as exit `1:0` only because the generalized
+launcher still asserted case 26's literal effective order seed `1727` after
+case 25 correctly used `1726`.  The refinement, final pass, and artifacts had
+already completed; the two manual auditors both return pass.  The launcher
+now derives this assertion as `run_seed + 1`.
+
+The direct-noise-only path is therefore promoted as the default only when
+both existing guards are active: fresh K=1 RELION physical particle order and
+exact RELION BPref operands.  It remains dormant for iteration 1 before scale
+groups exist.  Explicit environment value `0` disables it, and continuation,
+frozen-boundary replay, perturbation replay, and K>1 remain unchanged because
+they do not set the fresh K=1 order guard.  This evidence-backed promotion
+moves the fixed K=1 scorecard to `29/34` strict, `32/34` topology, and `34/34`
+evaluated.  Remaining strict failures are cases 4, 5, 7, 10, and 22; cases 7
+and 22 remain the two topology failures.
+
 ## Uninterrupted iteration-3 BPref boundary
 
 The first iteration-3 native accumulator attempt was rejected before causal

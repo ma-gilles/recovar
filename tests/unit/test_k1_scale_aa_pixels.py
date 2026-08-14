@@ -10,6 +10,7 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     RelionWavgRectangle,
+    _fresh_k1_direct_noise_default,
     _make_relion_wavg_rectangle,
     _prioritize_stopped_pass2_dump_buckets,
     _relion_wavg_atomic_triplet_terms,
@@ -39,6 +40,45 @@ def test_wavg_direct_noise_only_is_independent_from_direct_norm(monkeypatch):
         scale_groups_available=False,
         scale_aa_enabled=False,
     ) == (False, False)
+
+
+def test_fresh_k1_default_enables_direct_noise_but_explicit_zero_disables(monkeypatch):
+    monkeypatch.delenv("RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL", raising=False)
+    monkeypatch.delenv("RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY", raising=False)
+
+    kwargs = dict(
+        accumulate_noise=True,
+        scale_groups_available=True,
+        scale_aa_enabled=True,
+        direct_noise_only_default=True,
+    )
+    assert _relion_wavg_direct_modes(**kwargs) == (True, False)
+
+    monkeypatch.setenv("RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY", "0")
+    assert _relion_wavg_direct_modes(**kwargs) == (False, False)
+
+
+@pytest.mark.parametrize(
+    ("preserve_order", "exact_operands", "expected"),
+    [
+        (True, True, True),
+        (True, False, False),
+        (False, True, False),
+        (False, False, False),
+    ],
+)
+def test_direct_noise_default_is_limited_to_fresh_k1_exact_bpref_guard(
+    preserve_order,
+    exact_operands,
+    expected,
+):
+    assert (
+        _fresh_k1_direct_noise_default(
+            preserve_bpref_particle_order=preserve_order,
+            relion_exact_bpref_operands=exact_operands,
+        )
+        is expected
+    )
 
 
 def test_wavg_direct_modes_reject_overlapping_factorial_arms(monkeypatch):

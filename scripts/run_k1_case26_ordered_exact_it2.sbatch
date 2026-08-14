@@ -30,6 +30,7 @@ esac
 case "${RUN_SEED}" in
     ''|*[!0-9]*) echo "K1_CASE26_SEED must be a non-negative integer" >&2; exit 2 ;;
 esac
+EFFECTIVE_ORDER_SEED=$((RUN_SEED + 1))
 if [[ -n "${K1_CASE26_REPORT_STEM:-}" ]]; then
     REPORT_STEM=${K1_CASE26_REPORT_STEM}
 elif [[ "${MAX_ITER}" = 999 ]]; then
@@ -212,7 +213,7 @@ test -s "${PREJOIN}/recovar_bpref_prejoin_it002.npz"
 if [[ -n "${STATE_SWAP_VARIANT}" ]]; then
     rg -q "STATE-SWAP diagnostic: iteration=2 variant=${STATE_SWAP_VARIANT}" "${OUTPUT}/run.log"
 else
-    rg -q 'Applied RELION fresh paired AutoRefine particle order with effective seed 1727' "${OUTPUT}/run.log"
+    rg -q "Applied RELION fresh paired AutoRefine particle order with effective seed ${EFFECTIVE_ORDER_SEED}" "${OUTPUT}/run.log"
     rg -q 'global; batching only consecutive equal-size supports' "${OUTPUT}/run.log"
     rg -q 'one adjoint launch per particle' "${OUTPUT}/run.log"
 fi

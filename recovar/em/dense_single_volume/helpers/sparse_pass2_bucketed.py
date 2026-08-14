@@ -2843,11 +2843,22 @@ def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _fresh_k1_direct_noise_default(
+    *,
+    preserve_bpref_particle_order: bool,
+    relion_exact_bpref_operands: bool,
+) -> bool:
+    """Enable the accepted noise path only inside the fresh K=1 guard."""
+
+    return bool(preserve_bpref_particle_order and relion_exact_bpref_operands)
+
+
 def _relion_wavg_direct_modes(
     *,
     accumulate_noise: bool,
     scale_groups_available: bool,
     scale_aa_enabled: bool,
+    direct_noise_only_default: bool = False,
 ) -> tuple[bool, bool]:
     """Resolve the stopped direct-Wavg noise/norm factorial arms.
 
@@ -2869,7 +2880,7 @@ def _relion_wavg_direct_modes(
         accumulate_noise
         and _env_flag_enabled(
             _RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY_ENV,
-            default=False,
+            default=direct_noise_only_default,
         )
     )
     if direct_residual_requested and direct_noise_only_requested:
@@ -12091,13 +12102,23 @@ def compute_pass2_stats_sparse_bucketed(
         relion_wavg_atomic_scale_aa = bool(
             accumulate_noise
             and noise_scale_correction_aa_total is not None
-            and _env_flag_enabled(_RELION_WAVG_ATOMIC_SCALE_AA_ENV, default=False)
+            and _env_flag_enabled(
+                _RELION_WAVG_ATOMIC_SCALE_AA_ENV,
+                default=_fresh_k1_direct_noise_default(
+                    preserve_bpref_particle_order=preserve_bpref_particle_order,
+                    relion_exact_bpref_operands=relion_exact_bpref_operands,
+                ),
+            )
         )
         relion_wavg_atomic_direct_noise, relion_wavg_atomic_direct_norm = (
             _relion_wavg_direct_modes(
                 accumulate_noise=bool(accumulate_noise),
                 scale_groups_available=noise_scale_correction_aa_total is not None,
                 scale_aa_enabled=bool(relion_wavg_atomic_scale_aa),
+                direct_noise_only_default=_fresh_k1_direct_noise_default(
+                    preserve_bpref_particle_order=preserve_bpref_particle_order,
+                    relion_exact_bpref_operands=relion_exact_bpref_operands,
+                ),
             )
         )
         if relion_wavg_atomic_direct_noise and current_size is None:
@@ -12128,7 +12149,7 @@ def compute_pass2_stats_sparse_bucketed(
             if direct_noise_log_key not in _relion_wavg_direct_noise_log_keys:
                 _relion_wavg_direct_noise_log_keys.add(direct_noise_log_key)
                 logger.info(
-                    "Sparse pass-2 RELION Wavg diagnostic: issuing the full "
+                    "Sparse pass-2 RELION Wavg parity: issuing the full "
                     "%d-pixel FFTW rectangle and replacing current-size noise "
                     "shells [0, %d] with direct residual atomics; per-particle "
                     "norm mode=%s",
