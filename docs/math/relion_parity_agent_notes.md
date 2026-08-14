@@ -12286,3 +12286,50 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_production_sequential_wavg_it3_0ab17ce7_20260813T1820ET`,
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_production_spectrum_wavg_it3_retry1_591a54e8_20260813T1825ET`, and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_support_panel8_native_it2_591a54e8_20260813T1925ET`.
+
+## 2026-08-13 20:45 ET — stack-117 first divergence is raw fine scoring, but capture provenance must be same-process
+
+- Native panel job `12352608` and the earlier stack-117 capture qualify all
+  eight fixed support-mismatch particles with complete iteration-2 candidate
+  geometry and fine-score tables. The focused stack-117 control `12352609`
+  joins all `730,976` active tuples exactly. Orientation and translation
+  priors are bit-exact and the hard winner is exact; the first unequal stage
+  is the centered raw pre-prior score. Its relative L2 is
+  `1.1372934e-6`, posterior relative L2 is `9.3201651e-6`, and RECOVAR's
+  log-normalizer is `4.0661441e-6` above the captured native value. Native
+  significant support has `493,009` tuples versus RECOVAR's `493,006`.
+- Native preprocessing job `12352772` localizes a contributing operand
+  discrepancy. Across the `1,461` active score pixels, only 30 complex values
+  are bit-exact; relative L2 is `1.5735803e-7`. RECOVAR's normalization factor
+  `1.0502870083` is one float32 ULP below native `1.0502871275`.
+  Changing only that scalar (`12353044`) does not repair support. Replacing
+  the complete score-window image with captured native bytes (`12353299`)
+  improves combined-score relative L2 to `4.195e-7`, posterior relative L2
+  to `8.0218e-6`, and the absolute log-normalizer error by 82 percent, but
+  still leaves four native-only support tuples.
+- The selected native winner operand job `12353532` and the corrected SASS
+  replay show that RECOVAR's existing fused CUDA diff2 kernel reproduces the
+  captured per-pixel fused multiply-add and 256-lane reduction sequence. The
+  default JAX path does not. Focused fused-FFI jobs `12354065` and `12354066`
+  therefore tested the complete score table rather than one tuple. With live
+  preprocessing, fused FFI improves posterior relative L2 to `6.8902187e-6`
+  and log-normalizer error to `3.2375280e-6`, but worsens the support deficit
+  from three to four. With captured preprocessing, it improves centered raw
+  score relative L2 to `6.7958325e-7` but still leaves four native-only
+  tuples. This mixed result does not authorize enabling the FFI default.
+- The experiment also exposes a provenance confound: autonomous native runs
+  with shellwise-indistinguishable but non-byte-exact maps differ by one
+  float32 ULP at the same winner. The focused comparison currently combines
+  factor/fine-score, projector, and preprocessing artifacts from independent
+  native runs. Same-process bundle job `12354311` is capturing the stack-117
+  factor table, complete fine scores, selected operand, scoring noise, and
+  both half projectors in one iteration-2 RELION process. The next focused
+  replay must consume only that bundle before another code default is tested.
+- Focused analysis tests pass `18/18`. Fixed complete-case metrics remain
+  `28/34` strict, `32/34` topology, and `34/34` evaluated; no threshold,
+  topology, controller, finalization, or K=4 behavior changed.
+- Evidence roots:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_focused_control_it2_1a6ce905_20260813T1940ET`,
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_native_preprocess_retry1_it2_1a6ce905_20260813T2005ET`,
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_fused_ffi_live_it2_1a6ce905_20260813T2030ET`, and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_fused_ffi_nativepre_it2_1a6ce905_20260813T2030ET`.

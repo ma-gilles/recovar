@@ -79,6 +79,53 @@ def _center(values: np.ndarray) -> np.ndarray:
     return array - np.max(array)
 
 
+def _support_boundary_window(
+    *,
+    order: np.ndarray,
+    selected_count: int,
+    tuple_keys: np.ndarray,
+    native_weight: np.ndarray,
+    native_posterior: np.ndarray,
+    recovar_posterior: np.ndarray,
+    native_support: np.ndarray,
+    recovar_support: np.ndarray,
+    radius: int = 3,
+) -> dict[str, Any]:
+    """Describe the exact ranked neighborhood around a support cutoff."""
+
+    ranked = np.asarray(order, dtype=np.int64).reshape(-1)
+    _require(ranked.size == tuple_keys.shape[0], "support rank is incomplete")
+    _require(0 <= selected_count <= ranked.size, "support count is outside the ranked table")
+    cumulative_native = np.cumsum(native_posterior[ranked], dtype=np.float64)
+    cumulative_recovar = np.cumsum(recovar_posterior[ranked], dtype=np.float64)
+    start = max(0, selected_count - radius)
+    stop = min(ranked.size, selected_count + radius)
+    records = []
+    for rank_zero_based in range(start, stop):
+        index = int(ranked[rank_zero_based])
+        native_weight_f32 = np.float32(native_weight[index])
+        records.append(
+            {
+                "rank_one_based": rank_zero_based + 1,
+                "tuple_key": [int(value) for value in tuple_keys[index]],
+                "native_weight_float32": float(native_weight_f32),
+                "native_weight_float32_bits": int(native_weight_f32.view(np.uint32)),
+                "native_posterior": float(native_posterior[index]),
+                "recovar_posterior": float(recovar_posterior[index]),
+                "native_cumulative_mass": float(cumulative_native[rank_zero_based]),
+                "recovar_cumulative_mass": float(cumulative_recovar[rank_zero_based]),
+                "native_selected": bool(native_support[index]),
+                "recovar_selected": bool(recovar_support[index]),
+            }
+        )
+    return {
+        "selected_count": int(selected_count),
+        "table_count": int(ranked.size),
+        "window_radius": int(radius),
+        "records": records,
+    }
+
+
 def _candidate_record(
     index: int,
     *,
@@ -307,6 +354,30 @@ def analyze(
         (int(rotation), int(translation)) for rotation, translation in tuple_keys[recovar_support_on_native]
     }
     support_exact = significant_count == recovar_significant_count and native_support_keys == recovar_support_keys
+    recovar_support_order = np.argsort(-recovar_posterior, kind="stable")
+    recovar_common_significant_count = int(np.count_nonzero(recovar_support_on_native))
+    support_boundary = {
+        "native_ranked": _support_boundary_window(
+            order=np.argsort(-native_weight, kind="stable"),
+            selected_count=significant_count,
+            tuple_keys=tuple_keys,
+            native_weight=native_weight,
+            native_posterior=native_posterior,
+            recovar_posterior=recovar_posterior,
+            native_support=native_support,
+            recovar_support=recovar_support_on_native,
+        ),
+        "recovar_ranked": _support_boundary_window(
+            order=recovar_support_order,
+            selected_count=recovar_common_significant_count,
+            tuple_keys=tuple_keys,
+            native_weight=native_weight,
+            native_posterior=native_posterior,
+            recovar_posterior=recovar_posterior,
+            native_support=native_support,
+            recovar_support=recovar_support_on_native,
+        ),
+    }
 
     native_winner = int(np.argmax(native_combined))
     recovar_winner_on_native = int(np.nanargmax(recovar_combined))
@@ -403,6 +474,7 @@ def analyze(
         "support_recovar_only_count": len(recovar_only),
         "first_support_native_only_key": list(native_only[0]) if native_only else None,
         "first_support_recovar_only_key": list(recovar_only[0]) if recovar_only else None,
+        "support_boundary": support_boundary,
         "comparisons": comparisons,
         "normalization_decomposition": {
             "native_log_z_from_captured_exp_weights": native_log_z,

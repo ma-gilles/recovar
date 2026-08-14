@@ -15,10 +15,13 @@ from scripts.compare_k4_relion_recovar_fine_operands import (
     _infer_current_size,
     _metric,
     _translation_alignment,
-    _tree_raw_diff2,
     _zero_dc_compact_score_weight,
 )
 from scripts.validate_relion_fine_operand_capture import (
+    _cuda_fine_contribution,
+    _cuda_fine_production_lanes,
+    _replay_lanes,
+    _reduce_lanes,
     load_fine_operand_capture,
     validate_capture,
 )
@@ -35,6 +38,25 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(8 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _sass_tree_raw_diff2(
+    reference: np.ndarray,
+    shifted: np.ndarray,
+    correction: np.ndarray,
+    sum_init: np.float32,
+) -> tuple[np.float32, np.ndarray, np.ndarray]:
+    """Replay the demonstrated native SM80/SM90 fine-score arithmetic."""
+
+    reference = np.asarray(reference, dtype=np.complex64)
+    shifted = np.asarray(shifted, dtype=np.complex64)
+    correction = np.asarray(correction, dtype=np.float32)
+    diff_real = np.subtract(reference.real, shifted.real, dtype=np.float32)
+    diff_imag = np.subtract(reference.imag, shifted.imag, dtype=np.float32)
+    contribution = _cuda_fine_contribution(diff_real, diff_imag, correction)
+    lanes = _cuda_fine_production_lanes(diff_real, diff_imag, correction)
+    raw_diff2 = np.float32(_reduce_lanes(lanes) + np.float32(sum_init))
+    return raw_diff2, contribution, lanes
 
 
 def _largest_mismatches(
@@ -251,13 +273,13 @@ def analyze(
     relion_sum = np.float32(candidate["sum_init"])
     recovar_sum = np.float32(np.asarray(recovar["raw_operand_highres_xi2_half"]).item())
 
-    recovar_raw_replay, recovar_contribution, recovar_lanes = _tree_raw_diff2(
+    recovar_raw_replay, recovar_contribution, recovar_lanes = _sass_tree_raw_diff2(
         recovar_reference,
         recovar_shifted,
         recovar_corr,
         recovar_sum,
     )
-    native_raw_replay, native_contribution, native_lanes = _tree_raw_diff2(
+    native_raw_replay, native_contribution, native_lanes = _sass_tree_raw_diff2(
         relion_reference,
         relion_shifted,
         relion_corr,
@@ -269,7 +291,12 @@ def analyze(
     )
     _require(native_raw_replay == native_production_raw, "native host replay differs from production")
     _require(np.array_equal(native_contribution, relion_contribution), "native contribution replay differs")
-    _require(np.array_equal(native_lanes, candidate["lane_partials"]), "native lanes replay differs")
+    native_captured_lanes = _replay_lanes(relion_contribution)
+    recovar_captured_lanes = _replay_lanes(recovar_contribution)
+    _require(
+        np.array_equal(native_captured_lanes, candidate["lane_partials"]),
+        "native captured lanes replay differs",
+    )
 
     substitutions = {}
     for name, operands in {
@@ -280,7 +307,7 @@ def analyze(
         "native_corr_only": (recovar_reference, recovar_shifted, relion_corr, recovar_sum),
         "native_highres_only": (recovar_reference, recovar_shifted, recovar_corr, relion_sum),
     }.items():
-        substitutions[name] = float(_tree_raw_diff2(*operands)[0])
+        substitutions[name] = float(_sass_tree_raw_diff2(*operands)[0])
 
     stage_arrays = {
         "projected_reference": (relion_reference, recovar_reference),
@@ -288,7 +315,8 @@ def analyze(
         "correction_weight": (relion_corr, recovar_corr),
         "highres_sum": (np.asarray([relion_sum]), np.asarray([recovar_sum])),
         "pixel_contribution": (relion_contribution, recovar_contribution),
-        "lane_partial": (candidate["lane_partials"], recovar_lanes),
+        "lane_partial": (candidate["lane_partials"], recovar_captured_lanes),
+        "production_lane_partial": (native_lanes, recovar_lanes),
         "raw_diff2_replay": (
             np.asarray([native_raw_replay]),
             np.asarray([recovar_raw_replay]),

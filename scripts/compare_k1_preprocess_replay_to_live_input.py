@@ -61,7 +61,7 @@ def main() -> None:
         "--stage-npz",
         metavar="MODE=PATH",
         action="append",
-        required=True,
+        default=[],
         help="stage replay archive, for example default=/path/to/report.npz",
     )
     parser.add_argument("--physical-image-size", type=int, default=128)
@@ -116,8 +116,36 @@ def main() -> None:
         live_preprocessed[supported_compact] / np.float32(args.physical_image_size**2)
     ).astype(np.complex64)
 
-    modes: dict[str, object] = {}
+    native_preprocess_operands = None
     native_reference = None
+    if args.native_preprocess_capture is not None:
+        native_preprocess = load_preprocess_capture(args.native_preprocess_capture)
+        native_full = np.asarray(
+            native_preprocess.masked_fourier_post_optics, dtype=np.complex64
+        ).reshape(-1)
+        if native_full.size != lookup.size:
+            raise ValueError(
+                "native preprocessing/current-size topology mismatch: "
+                f"{native_full.size} != {lookup.size}"
+            )
+        native_reference = native_full[supported_full]
+        native_preprocess_operands = {
+            "normalization_factor": native_preprocess.norm_correction,
+            "integer_pre_shift": np.asarray(
+                native_preprocess.old_offset[:2], dtype=np.int32
+            ).tolist(),
+            "normalization_factor_float32_ulp_delta_live_minus_native": int(
+                np.float32(normalization_factor).view(np.uint32)
+            )
+            - int(np.float32(native_preprocess.norm_correction).view(np.uint32)),
+            "native_vs_live_preprocessed": _metric(
+                native_reference, live_preprocessed_relion_scale
+            ),
+            "capture": str(args.native_preprocess_capture.resolve()),
+            "capture_sha256": _sha256(args.native_preprocess_capture),
+        }
+
+    modes: dict[str, object] = {}
     for mode, path in stage_paths.items():
         with np.load(path, allow_pickle=False) as archive:
             native = np.asarray(
@@ -129,7 +157,10 @@ def main() -> None:
         if native_reference is None:
             native_reference = native
         elif not np.array_equal(native_reference, native):
-            raise ValueError("stage archives do not contain the same native operand")
+            raise ValueError(
+                "stage archive and preprocessing capture do not contain the same "
+                "native operand"
+            )
         modes[mode] = {
             "native_vs_replay": _metric(native, replay),
             "native_vs_live_preprocessed": _metric(
@@ -171,21 +202,10 @@ def main() -> None:
             "capture_sha256": _sha256(args.native_fine_capture),
         }
 
-    native_preprocess_operands = None
-    if args.native_preprocess_capture is not None:
-        native_preprocess = load_preprocess_capture(args.native_preprocess_capture)
-        native_preprocess_operands = {
-            "normalization_factor": native_preprocess.norm_correction,
-            "integer_pre_shift": np.asarray(
-                native_preprocess.old_offset[:2], dtype=np.int32
-            ).tolist(),
-            "normalization_factor_float32_ulp_delta_live_minus_native": int(
-                np.float32(normalization_factor).view(np.uint32)
-            )
-            - int(np.float32(native_preprocess.norm_correction).view(np.uint32)),
-            "capture": str(args.native_preprocess_capture.resolve()),
-            "capture_sha256": _sha256(args.native_preprocess_capture),
-        }
+    if native_reference is None:
+        raise ValueError(
+            "at least one --stage-npz or --native-preprocess-capture is required"
+        )
 
     report = {
         "schema": "recovar.em.k1_preprocess_replay_to_live_input.v1",

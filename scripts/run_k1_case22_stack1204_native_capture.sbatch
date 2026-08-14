@@ -26,6 +26,9 @@ TARGET_STACKS_ONE_BASED=${TARGET_STACKS_ONE_BASED//:/,}
 TARGET_ITERATION=${K1_CASE22_TARGET_ITERATION:-2}
 MAX_ITER=${K1_CASE22_MAX_ITER:-${TARGET_ITERATION}}
 GEOMETRY_ONLY=${K1_CASE22_BPRE_GEOMETRY_ONLY:-0}
+CAPTURE_FINE_OPERAND=${K1_CASE22_CAPTURE_FINE_OPERAND:-0}
+FINE_OPERAND_ROTATION_LOCAL=${K1_CASE22_FINE_OPERAND_ROTATION_LOCAL:-0}
+FINE_OPERAND_TRANSLATION=${K1_CASE22_FINE_OPERAND_TRANSLATION:-0}
 if (( TARGET_STACK_ONE_BASED < 1 || TARGET_ITERATION < 1 || MAX_ITER < TARGET_ITERATION )); then
     echo "target stack/iteration must be positive and max_iter must reach the target" >&2
     exit 2
@@ -105,6 +108,13 @@ export RELION_BPRE_CAPTURE_STACKS=${TARGET_STACKS_ONE_BASED}
 if [[ "${GEOMETRY_ONLY}" = 1 ]]; then
     export RELION_BPRE_CAPTURE_GEOMETRY_ONLY=1
 fi
+if [[ "${CAPTURE_FINE_OPERAND}" = 1 ]]; then
+    export RELION_FINE_OPERAND_CAPTURE=1
+    export RELION_FINE_OPERAND_CAPTURE_ROTATION_LOCAL=${FINE_OPERAND_ROTATION_LOCAL}
+    export RELION_FINE_OPERAND_CAPTURE_TRANSLATIONS=${FINE_OPERAND_TRANSLATION}
+    export RELION_FINE_OPERAND_CAPTURE_EXPECTED_CANDIDATES=1
+    export RELION_FINE_OPERAND_CAPTURE_MAX_BYTES=1000000
+fi
 
 command=(
     mpirun -n 3 "${RELION_BINARY}"
@@ -126,6 +136,9 @@ printf '{"job_id":"%s","wall_s":%d}\n' "${SLURM_JOB_ID}" "$(( $(date +%s) - star
 
 test "$(find "${CAPTURE}" -maxdepth 1 -name '*.fine-score-v1.bin' | wc -l)" -eq "${TARGET_COUNT}"
 test "$(find "${CAPTURE}" -maxdepth 1 -name '*.bpre-v2.bin' | wc -l)" -eq "${TARGET_COUNT}"
+if [[ "${CAPTURE_FINE_OPERAND}" = 1 ]]; then
+    test "$(find "${CAPTURE}" -maxdepth 1 -name '*.fine-operand-v1.bin' | wc -l)" -eq "${TARGET_COUNT}"
+fi
 printf -v target_iteration_label '%03d' "${TARGET_ITERATION}"
 test -s "${RELION_OUT}/run_it${target_iteration_label}_data.star"
 

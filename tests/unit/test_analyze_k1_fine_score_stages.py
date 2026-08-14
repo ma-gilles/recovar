@@ -86,6 +86,33 @@ def test_complete_stage_comparison_closes_on_additively_shifted_scores(tmp_path:
     assert report["native_active_missing_candidate_groups"] == []
     assert report["recovar_only_candidate_tuple_count"] == 0
     assert report["recovar_only_candidate_groups"] == []
+    assert report["support_boundary"]["native_ranked"]["selected_count"] == 1
+    assert report["support_boundary"]["native_ranked"]["records"] == [
+        {
+            "rank_one_based": 1,
+            "tuple_key": [0, 0],
+            "native_weight_float32": 2.0,
+            "native_weight_float32_bits": int(np.float32(2.0).view(np.uint32)),
+            "native_posterior": 2.0 / 3.0,
+            "recovar_posterior": 2.0 / 3.0,
+            "native_cumulative_mass": 2.0 / 3.0,
+            "recovar_cumulative_mass": 2.0 / 3.0,
+            "native_selected": True,
+            "recovar_selected": True,
+        },
+        {
+            "rank_one_based": 2,
+            "tuple_key": [1, 1],
+            "native_weight_float32": 1.0,
+            "native_weight_float32_bits": int(np.float32(1.0).view(np.uint32)),
+            "native_posterior": 1.0 / 3.0,
+            "recovar_posterior": 1.0 / 3.0,
+            "native_cumulative_mass": 1.0,
+            "recovar_cumulative_mass": 1.0,
+            "native_selected": False,
+            "recovar_selected": False,
+        },
+    ]
 
     candidate_mask[0, 1] = True
     scores_pre_prior[0, 1] = 88.0
