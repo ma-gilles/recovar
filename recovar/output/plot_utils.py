@@ -1,6 +1,7 @@
 """Visualization helpers: FSC plots, volume slices, embedding scatter."""
 
 import logging
+import os
 
 import matplotlib
 import matplotlib.patheffects as pe
@@ -145,30 +146,28 @@ def plot_noise_group_summary(pipeline_output, output_path=None):
         ax.set_xlabel("spatial frequency (1/Å)")
         ax.set_ylabel("noise group")
 
-    representative = np.unique(
-        np.linspace(0, noise_profiles.shape[0] - 1, min(7, noise_profiles.shape[0]), dtype=int)
-    )
-    colors = plt.cm.plasma(np.linspace(0.05, 0.95, representative.size))
-    for group_idx, color in zip(representative, colors):
-        axes[1, 0].plot(
-            frequencies,
-            noise_profiles[group_idx],
-            color=color,
-            linewidth=1.8,
-            label=f"{labels[group_idx]} noise",
-        )
+    group_indices = np.arange(noise_profiles.shape[0])
+    colors = plt.cm.plasma(np.linspace(0.05, 0.95, group_indices.size))
+    for group_idx, color in zip(group_indices, colors):
         axes[1, 0].plot(
             frequencies,
             image_profiles[group_idx],
             color=color,
+            linewidth=1.8,
+            label=f"{labels[group_idx]} image",
+        )
+        axes[1, 0].plot(
+            frequencies,
+            noise_profiles[group_idx],
+            color=color,
             linewidth=1.4,
             linestyle="--",
-            label=f"{labels[group_idx]} image",
+            label=f"{labels[group_idx]} noise",
         )
     axes[1, 0].set_yscale("log")
     axes[1, 0].set_xlabel("spatial frequency (1/Å)")
     axes[1, 0].set_ylabel("power")
-    axes[1, 0].set_title("Matched profiles (solid noise; dashed image)")
+    axes[1, 0].set_title("All groups (solid image power; dashed inferred noise)")
     axes[1, 0].grid(alpha=0.25)
     axes[1, 0].legend(fontsize=7, ncol=2)
 
@@ -192,7 +191,84 @@ def plot_noise_group_summary(pipeline_output, output_path=None):
     fig.tight_layout()
     if output_path is not None:
         fig.savefig(output_path, dpi=180, bbox_inches="tight")
+        _plot_noise_group_details(
+            frequencies,
+            image_profiles,
+            noise_profiles,
+            labels,
+            os.path.splitext(output_path)[0] + "_individual",
+        )
     return fig, axes
+
+
+def _plot_noise_group_details(frequencies, image_profiles, noise_profiles, labels, output_dir):
+    """Write one image/noise comparison per group, always including group zero."""
+
+    os.makedirs(output_dir, exist_ok=True)
+    eps = np.finfo(np.float32).tiny
+    reference_image = np.maximum(image_profiles[0], eps)
+    reference_noise = np.maximum(noise_profiles[0], eps)
+    for group_idx in range(image_profiles.shape[0]):
+        color = plt.cm.plasma(0.05 + 0.9 * group_idx / max(1, image_profiles.shape[0] - 1))
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5.2))
+        axes[0].plot(frequencies, reference_image, color="black", linewidth=2.0, label="rank 0 image")
+        axes[0].plot(
+            frequencies,
+            reference_noise,
+            color="black",
+            linestyle="--",
+            linewidth=1.7,
+            label="rank 0 noise",
+        )
+        if group_idx != 0:
+            axes[0].plot(
+                frequencies,
+                image_profiles[group_idx],
+                color=color,
+                linewidth=2.0,
+                label=f"rank {group_idx} image",
+            )
+            axes[0].plot(
+                frequencies,
+                noise_profiles[group_idx],
+                color=color,
+                linestyle="--",
+                linewidth=1.7,
+                label=f"rank {group_idx} noise",
+            )
+        axes[0].set_yscale("log")
+        axes[0].set_xlabel("spatial frequency (1/Å)")
+        axes[0].set_ylabel("power")
+        axes[0].set_title("Radially averaged image power and inferred noise")
+        axes[0].grid(alpha=0.25)
+        axes[0].legend(fontsize=8)
+
+        axes[1].plot(
+            frequencies,
+            np.maximum(image_profiles[group_idx], eps) / reference_image,
+            color=color,
+            linewidth=2.0,
+            label="image power / rank 0",
+        )
+        axes[1].plot(
+            frequencies,
+            np.maximum(noise_profiles[group_idx], eps) / reference_noise,
+            color=color,
+            linestyle="--",
+            linewidth=1.7,
+            label="noise variance / rank 0",
+        )
+        axes[1].axhline(1.0, color="black", linewidth=1.0)
+        axes[1].set_yscale("log")
+        axes[1].set_xlabel("spatial frequency (1/Å)")
+        axes[1].set_ylabel("power ratio")
+        axes[1].set_title("Change relative to acquisition rank 0")
+        axes[1].grid(alpha=0.25)
+        axes[1].legend(fontsize=8)
+        fig.suptitle(f"Noise diagnostic: {labels[group_idx]}", fontsize=13)
+        fig.tight_layout()
+        fig.savefig(os.path.join(output_dir, f"tilt_{group_idx:03d}_vs_000.png"), dpi=180, bbox_inches="tight")
+        plt.close(fig)
 
 def plot_noise_profile(pipeline_output, yscale='linear', ax=None):
     """Plot noise power spectrum profiles from pipeline output.

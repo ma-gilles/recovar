@@ -7,7 +7,12 @@ import pytest
 from recovar.data_io.cryoem_dataset import CryoEMDataset
 from recovar.data_io.image_metadata import ImageMetadata
 from recovar.output import plot_utils
-from recovar.output.tilt_diagnostics import _neutralized_group_dataset, group_preexposures
+from recovar.output.tilt_diagnostics import (
+    _neutralized_group_dataset,
+    _plot_reconstruction_power_comparisons,
+    _plot_six_view_rows,
+    group_preexposures,
+)
 from recovar.reconstruction import noise
 
 pytestmark = pytest.mark.unit
@@ -75,7 +80,55 @@ def test_plot_noise_group_summary_matches_each_group_power_spectrum(tmp_path):
     assert destination.is_file()
     assert np.asarray(axes).shape == (2, 2)
     assert len(axes[1, 0].lines) == 2 * n_groups
+    detail_dir = tmp_path / "noise_power_by_tilt_individual"
+    assert sorted(path.name for path in detail_dir.glob("*.png")) == [
+        "tilt_000_vs_000.png",
+        "tilt_001_vs_000.png",
+        "tilt_002_vs_000.png",
+    ]
     plt.close(figure)
+
+
+def test_tilt_reconstruction_plots_write_six_views_and_rank_zero_comparisons(tmp_path):
+    rng = np.random.default_rng(4)
+    volumes = [rng.standard_normal((8, 8, 8)).astype(np.float32) for _ in range(3)]
+    records = [
+        {
+            "group_index": index,
+            "pre_exposure": float(index * 3),
+            "n_images": 20 - index,
+            "tilt_angle_deg": float(index * 10),
+            "tilt_angle_inferred": False,
+        }
+        for index in range(3)
+    ]
+    six_view = tmp_path / "six_view.png"
+    _plot_six_view_rows(volumes, records, six_view)
+    assert six_view.is_file()
+
+    frequencies = np.arange(6, dtype=np.float64) / 16.0
+    power = np.arange(18, dtype=np.float64).reshape(3, 6) + 1
+    predicted_amplitudes = np.asarray([[1.0] * 6, [0.9] * 6, [0.8] * 6])
+    observed_amplitudes = np.sqrt(power / power[0])
+    predicted_power = power[0] * predicted_amplitudes**2
+    overview = tmp_path / "reconstruction_power.png"
+    details = tmp_path / "reconstruction_power_individual"
+    _plot_reconstruction_power_comparisons(
+        power,
+        predicted_power,
+        observed_amplitudes,
+        predicted_amplitudes,
+        records,
+        frequencies,
+        overview,
+        details,
+    )
+    assert overview.is_file()
+    assert sorted(path.name for path in details.glob("*.png")) == [
+        "tilt_000_vs_000.png",
+        "tilt_001_vs_000.png",
+        "tilt_002_vs_000.png",
+    ]
 
 
 def test_neutralized_group_dataset_removes_contrast_dose_and_tilt_envelope():
