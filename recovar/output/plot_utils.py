@@ -156,7 +156,7 @@ def _plot_noise_group_summary(pipeline_output, output_path=None):
     power_image = axes[0, 1].imshow(
         np.log10(np.maximum(image_profiles, eps)), aspect="auto", origin="lower", extent=heatmap_extent, cmap="viridis"
     )
-    axes[0, 1].set_title("Matched image power spectra")
+    axes[0, 1].set_title("Image power by the same tilt/dose groups (absolute scale)")
     fig.colorbar(power_image, ax=axes[0, 1], label="log10 power")
     for ax in axes[0]:
         ax.set_xlabel("spatial frequency (1/Å)")
@@ -183,7 +183,7 @@ def _plot_noise_group_summary(pipeline_output, output_path=None):
     axes[1, 0].set_yscale("log")
     axes[1, 0].set_xlabel("spatial frequency (1/Å)")
     axes[1, 0].set_ylabel("power")
-    axes[1, 0].set_title("All groups (solid image power; dashed inferred noise)")
+    axes[1, 0].set_title("Absolute power: solid image; dashed inferred noise (no per-group rescaling)")
     axes[1, 0].grid(alpha=0.25)
     axes[1, 0].legend(fontsize=7, ncol=2)
 

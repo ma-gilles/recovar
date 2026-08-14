@@ -116,37 +116,6 @@ def _shared_limits(images):
     return float(lo), float(hi)
 
 
-def _plot_volume_montage(volumes, records, output_path, *, projection):
-    n_volumes = len(volumes)
-    ncols = min(6, n_volumes)
-    nrows = int(np.ceil(n_volumes / ncols))
-    panels = [np.mean(volume, axis=0) if projection else volume[volume.shape[0] // 2] for volume in volumes]
-    lo, hi = _shared_limits(panels)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(3.0 * ncols, 3.0 * nrows), squeeze=False)
-    for ax, panel, record in zip(axes.flat, panels, records):
-        ax.imshow(panel.T, cmap="gray", origin="lower", vmin=lo, vmax=hi)
-        angle_label = (
-            f"|tilt|≈{record['tilt_angle_deg']:.1f}°"
-            if record["tilt_angle_inferred"]
-            else f"tilt {record['tilt_angle_deg']:.1f}°"
-        )
-        ax.set_title(
-            f"{record['group_index']:02d} | dose {record['pre_exposure']:.1f}\n"
-            f"{angle_label} | n={record['n_images']}",
-            fontsize=8,
-        )
-        ax.axis("off")
-    for ax in axes.flat[n_volumes:]:
-        ax.axis("off")
-    kind = "mean density projections" if projection else "central slices"
-    fig.suptitle(
-        f"Per-tilt means with unit contrast, no dose envelope ({kind}; one shared scale)", fontsize=14
-    )
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=180, bbox_inches="tight")
-    plt.close(fig)
-
-
 def _six_volume_views(volume):
     center = tuple(size // 2 for size in volume.shape)
     projections = [np.mean(volume, axis=axis) for axis in range(3)]
@@ -479,18 +448,6 @@ def run_tilt_diagnostics(
             record["median_input_ctf_scale"] / reference_scale if reference_scale != 0 else np.nan
         )
 
-    _plot_volume_montage(
-        volumes,
-        records,
-        os.path.join(plots_dir, "tilt_diagnostics_slices.png"),
-        projection=False,
-    )
-    _plot_volume_montage(
-        volumes,
-        records,
-        os.path.join(plots_dir, "tilt_diagnostics_projections.png"),
-        projection=True,
-    )
     _plot_six_view_rows(
         volumes,
         records,
