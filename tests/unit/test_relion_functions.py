@@ -365,6 +365,26 @@ def test_post_process_large_grid_guard_avoids_complex128_padded_volume(monkeypat
         clear_cache()
 
 
+def test_zero_tau_fallback_respects_relion_filter_normalization():
+    shape = (4, 4, 4)
+    filt = jnp.ones(np.prod(shape), dtype=jnp.float32)
+    tau = jnp.zeros(np.prod(shape), dtype=jnp.float64)
+    scale = 16.0
+
+    regularized = np.asarray(
+        rf.adjust_regularization_relion_style(
+            filt,
+            volume_shape=shape,
+            tau=tau,
+            padding_factor=1,
+            relion_filter_scale=scale,
+        )
+    )
+
+    expected_fallback = 1.0 / (0.001 * scale * scale)
+    np.testing.assert_allclose(regularized, 1.0 + expected_fallback, rtol=0, atol=1e-12)
+
+
 def test_post_process_can_preserve_double_reconstruction_output():
     volume_shape = (6, 6, 6)
     n_voxels = int(np.prod(volume_shape))

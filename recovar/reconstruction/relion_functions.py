@@ -865,6 +865,7 @@ def adjust_regularization_relion_style(
     relion_native_shell_floor=False,
     native_volume_shape=None,
     tau_is_1d=False,
+    relion_filter_scale=None,
 ):
     """Adjust the RELION-style regularization filter.
 
@@ -891,6 +892,22 @@ def adjust_regularization_relion_style(
     )
     filter_flat, input_is_grid = _as_flat_single_volume(filter, packed_shape)
 
+    def zero_tau_inverse(current_filter):
+        if relion_filter_scale is None:
+            has_weight = current_filter > 1e-20
+            safe_weight = jnp.where(has_weight, current_filter, 1.0)
+            return jnp.where(has_weight, 1.0 / (0.001 * safe_weight), 0.0)
+        # RELION evaluates this nonlinear fallback after converting the BPref
+        # denominator to its native N^4 normalization. Convert the reciprocal
+        # back as well; applying the formula directly in RECOVAR units is off
+        # by scale^2.
+        scale = jnp.asarray(relion_filter_scale, dtype=jnp.float64)
+        native_weight = current_filter.astype(jnp.float64) * scale
+        has_weight = native_weight > 1e-20
+        safe_native_weight = jnp.where(has_weight, native_weight, 1.0)
+        native_inverse = 1.0 / (0.001 * safe_native_weight)
+        return jnp.where(has_weight, native_inverse / scale, 0.0)
+
     # Exact half-volume behavior: reuse full-volume implementation and repack.
     if half_volume:
         if tau is not None:
@@ -905,8 +922,7 @@ def adjust_regularization_relion_style(
             )
             safe_tau = jnp.where(tau > 1e-20, tau, jnp.float32(1.0))
             inv_tau = 1 / (oversampling_factor * tau2_fudge * safe_tau)
-            inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1.0 / (0.001 * filter_flat), inv_tau)
-            inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
+            inv_tau = jnp.where(tau < 1e-20, zero_tau_inverse(filter_flat), inv_tau)
             if relion_native_shell_floor and max_res_shell is not None:
                 radial = fourier_transform_utils.get_grid_of_radial_distances_real(
                     volume_shape,
@@ -963,8 +979,7 @@ def adjust_regularization_relion_style(
         )
         safe_tau = jnp.where(tau > 1e-20, tau, jnp.float32(1.0))
         inv_tau = 1 / (oversampling_factor * tau2_fudge * safe_tau)
-        inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1.0 / (0.001 * filter_flat), inv_tau)
-        inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
+        inv_tau = jnp.where(tau < 1e-20, zero_tau_inverse(filter_flat), inv_tau)
         if relion_native_shell_floor and max_res_shell is not None:
             pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(
                 np.array(volume_shape),
@@ -1177,7 +1192,7 @@ def post_process_from_filter(
     )
 
 
-@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17, 18, 19, 20, 21])
+@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17, 18, 19, 20, 21, 22])
 def post_process_from_filter_v2(
     Ft_ctf,
     F_ty,
@@ -1201,6 +1216,7 @@ def post_process_from_filter_v2(
     accumulator_volume_shape=None,
     tau_is_1d=False,
     preserve_output_precision=False,
+    relion_filter_scale=None,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -1291,6 +1307,7 @@ def post_process_from_filter_v2(
         relion_native_shell_floor=current_size_limited,
         native_volume_shape=og_volume_shape,
         tau_is_1d=tau_is_1d,
+        relion_filter_scale=relion_filter_scale,
     )
     vol = (F_ty_flat * valid_indices) / Ft_ctf2
 
