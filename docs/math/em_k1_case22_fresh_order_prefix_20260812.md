@@ -1819,3 +1819,73 @@ for another full trajectory.
 The fixed complete-case scorecard remains deliberately unchanged at `28/34`
 strict, `32/34` topology, and `34/34` evaluated.  These experiments eliminate
 a coarse reduction-order hypothesis; they do not yet add a passing case.
+
+## Physical-iteration-1 BPref closure and diagnostic stage correction
+
+Fresh native BPref replicas `12365573` and `12365686` and fresh RECOVAR
+replicas `12365651` and `12365687` initially appeared to expose a large
+iteration-1 accumulator difference.  Comparing the RECOVAR pre-join buffer to
+RELION's `BackProjector::getDownsampledAverage` raw buffer gave half-1/half-2
+numerator relative L2 `0.1119287/0.1254246`.  Shellwise inspection showed that
+the difference was confined to shells 1--15 and was nearly identical between
+halves; shells 16--28 already agreed at approximately `1e-8`.
+
+This was a diagnostic stage mismatch.  RELION calls
+`BackProjector::getDownsampledAverage` during reconstruction, after
+`MlOptimiserMpi::joinTwoHalvesAtLowResolution` has replaced both halves' low
+shells.  The RECOVAR archive was explicitly
+`recovar-bpref-prejoin-v2`.  Comparing the native raw buffer to RECOVAR's
+`recovar-bpref-accum-v2` post-join archive closes the aggregate boundary:
+
+| Half | Numerator rel-L2 | Denominator rel-L2 | Native repeat numerator | Native repeat denominator |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | `1.2428771e-8` | `7.3257757e-9` | `1.1391068e-8` | `6.1481220e-9` |
+| 2 | `1.4007627e-8` | `6.3395368e-9` | `1.1348108e-8` | `5.8959598e-9` |
+
+The RECOVAR repeat residual is smaller still: half-1/half-2 numerator
+`1.3573186e-9/1.4721324e-9` and denominator
+`8.3289025e-10/1.0289959e-9`.  The accepted reports are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_recovar_it1_prejoin_20260814T0240ET/analysis/K1_CASE22_IT1_POSTJOIN_RAW_ACCUM_HALF1_V4.json`
+  (SHA-256
+  `ea67275969a5a483d554d75093343819cd1dec3dcff08ebe897c608831dd0101`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_recovar_it1_prejoin_20260814T0240ET/analysis/K1_CASE22_IT1_POSTJOIN_RAW_ACCUM_HALF2_V4.json`
+  (SHA-256
+  `20048a82da712b5277f0cbe17e8f0dbf15794c4914517851f853b7aefada19e7`).
+
+Independent particle-state audit at this same boundary has exact Pmax and
+significant-support values for all `3000/3000` particles.  Hard-pose residuals
+are limited to STAR metadata precision (angular p95 `9.24145e-6` degrees and
+translation p95 `2.68214e-6` Angstrom).  Focused scatter replay `12366092`
+also closes rotation matrices, Fourier coordinates, Hermitian folding, all
+eight neighbor indices, and interpolation coefficients exactly for all three
+fixed particles.  Its classification is
+`fixed_panel_scatter_geometry_closes` in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_scatter_geometry_replay_20260814T0250ET/analysis/CASE22_IT2_SCATTER_GEOMETRY.json`.
+
+Physical iteration 1 therefore closes through particle state, captured
+pre-scatter operands, scatter geometry, post-join BPref accumulation, and the
+regularized map at the measured repeat envelope.  The deterministic coarse
+replicas' tiny iteration-1 differences are ordinary engine repeat variation,
+not a demonstrated parity root; native raw BPref itself varies by about
+`1e-8` between repeats.
+
+The analyzer now treats BPref stage as a mandatory identity field.  Raw
+`getDownsampledAverage` captures default to `post_lowres_join`; explicit MPI
+state captures declare `pre_lowres_join` or `post_lowres_join`.  Cross-stage
+comparisons fail closed.  The fresh case-22 launcher now compares post-join
+to post-join, while the case-26 MPI state launcher explicitly declares its
+pre-join capture.
+
+The first material K=1 target remains physical iteration 2.  Existing
+same-input evidence localizes it before reconstruction: the fixed 64-particle
+cohort has exact candidate sets for `54/64`, exact positive rotation sets for
+`30/64`, and exact significant-sample counts for only `5/64`, even though all
+`64/64` normalized reconstruction-mass comparisons pass the fixed `1e-3`
+gate.  The next focused discriminator is therefore the normal production
+candidate grid and cumulative-support boundary, joined by immutable particle
+and candidate identity; reconstruction reduction is downstream until those
+inputs agree.
+
+The complete-case scorecard remains `28/34` strict, `32/34` topology, and
+`34/34` evaluated.

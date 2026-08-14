@@ -3,7 +3,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from scripts.analyze_k1_half1_raw_accumulator import _load_native_bpref, _load_recovar
+from scripts.analyze_k1_half1_raw_accumulator import (
+    _load_native_bpref,
+    _load_recovar,
+    _metric,
+    _require_matching_bpref_stage,
+)
 
 
 def _write_bpref(path: Path, *, schema: str = "recovar-bpref-prejoin-v2") -> None:
@@ -74,3 +79,22 @@ def test_load_native_bpref_state_v1(tmp_path: Path) -> None:
 
     assert np.array_equal(loaded_shape, shape)
     assert np.array_equal(loaded_values, values)
+
+
+def test_metric_reports_exact_first_mismatch_telemetry() -> None:
+    source = np.asarray([1.0, 2.0, 4.0], dtype=np.float32)
+    target = np.asarray([1.0, 2.5, 4.0], dtype=np.float32)
+
+    result = _metric(source, target, allow_sign=False)
+
+    assert result["exact_equal"] is False
+    assert result["mismatch_count"] == 1
+    assert result["first_mismatch_flat_index"] == 1
+    assert result["max_absolute"] == pytest.approx(0.5)
+
+
+def test_require_matching_bpref_stage_rejects_cross_stage_comparison() -> None:
+    _require_matching_bpref_stage("post_lowres_join", "post_lowres_join")
+
+    with pytest.raises(ValueError, match="BPref stage mismatch"):
+        _require_matching_bpref_stage("pre_lowres_join", "post_lowres_join")

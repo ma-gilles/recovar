@@ -114,6 +114,7 @@ for half_rank in 1:1 2:2; do
         --recovar-prejoin "${RECOVAR_PREJOIN}" \
         --native-data "${prefix}_data.bin" \
         --native-weight "${prefix}_weight.bin" \
+        --native-stage pre_lowres_join \
         --half "${half}" --expected-local-iteration 2 --physical-iteration 2 \
         --output-json "${ROOT}/analysis/CASE26_IT2_RAW_ACCUM_HALF${half}.json"
 done

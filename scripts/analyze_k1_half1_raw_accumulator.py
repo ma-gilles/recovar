@@ -63,11 +63,19 @@ def _metric(source: np.ndarray, target: np.ndarray, *, allow_sign: bool) -> dict
     if allow_sign and np.linalg.norm(-source - target) < np.linalg.norm(source - target):
         sign = -1
     source = sign * source
+    mismatch_indices = np.flatnonzero(source != target)
+    absolute_residual = np.abs(source - target)
     relative_l2 = float(np.linalg.norm(source - target) / target_norm)
     scale = float(np.vdot(source, target).real / source_energy)
     scaled_relative_l2 = float(np.linalg.norm(scale * source - target) / target_norm)
     return {
         "sign_applied_to_source": sign,
+        "exact_equal": bool(mismatch_indices.size == 0),
+        "mismatch_count": int(mismatch_indices.size),
+        "first_mismatch_flat_index": (
+            None if mismatch_indices.size == 0 else int(mismatch_indices[0])
+        ),
+        "absolute_residual_p95": float(np.percentile(absolute_residual, 95)),
         "relative_l2": relative_l2,
         "source_to_target_least_squares_scale": scale,
         "relative_l2_after_scale": scaled_relative_l2,
@@ -98,6 +106,14 @@ def _load_recovar(path: Path, *, half: int = 1) -> dict[str, Any]:
             "numerator": np.asarray(archive[f"Ft_y_{half_index}"]),
             "weight": np.asarray(archive[f"Ft_ctf_{half_index}"]),
         }
+
+
+def _require_matching_bpref_stage(recovar_stage: str, native_stage: str) -> None:
+    _require(
+        recovar_stage == native_stage,
+        "BPref stage mismatch: RECOVAR is "
+        f"{recovar_stage!r}, while the native capture is {native_stage!r}",
+    )
 
 
 def _downsample(
@@ -182,12 +198,31 @@ def _comparison(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--recovar-prejoin", type=Path, required=True)
+    parser.add_argument(
+        "--recovar-bpref",
+        "--recovar-prejoin",
+        dest="recovar_bpref",
+        type=Path,
+        required=True,
+        help=(
+            "RECOVAR BPref dump. --recovar-prejoin remains as a compatibility alias; "
+            "the archive schema determines the actual stage."
+        ),
+    )
     parser.add_argument("--recovar-repeat", type=Path)
     parser.add_argument("--native-data", type=Path, required=True)
     parser.add_argument("--native-weight", type=Path, required=True)
     parser.add_argument("--native-repeat-data", type=Path)
     parser.add_argument("--native-repeat-weight", type=Path)
+    parser.add_argument(
+        "--native-stage",
+        choices=("pre_lowres_join", "post_lowres_join"),
+        default="post_lowres_join",
+        help=(
+            "Stage of the native buffer. BackProjector::getDownsampledAverage raw "
+            "captures are post_lowres_join; the MPI state hook labels both stages."
+        ),
+    )
     parser.add_argument("--half", type=int, choices=(1, 2), default=1)
     parser.add_argument("--expected-local-iteration", type=int, default=2)
     parser.add_argument("--physical-iteration", type=int, default=2)
@@ -195,7 +230,8 @@ def main() -> None:
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
 
-    recovar = _load_recovar(args.recovar_prejoin, half=args.half)
+    recovar = _load_recovar(args.recovar_bpref, half=args.half)
+    _require_matching_bpref_stage(recovar["stage"], args.native_stage)
     _require(
         recovar["iteration"] == args.expected_local_iteration,
         "RECOVAR dump local-iteration label differs",
@@ -228,6 +264,11 @@ def main() -> None:
         "schema": "recovar.em.k1_half1_raw_accumulator.v1",
         "metric_policy": "scale-sensitive relative-L2 on matched BPref intermediates; no correlation",
         "bpref_stage": recovar["stage"],
+        "stage_gate": {
+            "recovar": recovar["stage"],
+            "native": args.native_stage,
+            "exact": True,
+        },
         "physical_iteration": args.physical_iteration,
         "recovar_local_iteration_label": recovar["iteration"],
         "half": recovar["half"],
@@ -251,7 +292,7 @@ def main() -> None:
         ),
         "artifacts": {
             str(path.resolve()): _sha256(path)
-            for path in (args.recovar_prejoin, args.native_data, args.native_weight)
+            for path in (args.recovar_bpref, args.native_data, args.native_weight)
         },
     }
     if args.recovar_repeat is not None:

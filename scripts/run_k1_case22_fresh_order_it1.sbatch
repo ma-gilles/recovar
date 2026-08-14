@@ -141,7 +141,7 @@ rg -q 'preserving fresh RELION physical BPref particle order' "${OUTPUT}/run.log
 rg -q 'expected accuracy consumes an explicit physical trial order' "${OUTPUT}/run.log"
 
 "${PYTHON}" -m scripts.analyze_k1_half1_raw_accumulator \
-    --recovar-prejoin "${PREJOIN_FILE}" \
+    --recovar-bpref "${ACCUM_FILE}" \
     --native-data "${NATIVE_ROOT}/raw_bpref_data_rank01_call0001.bin" \
     --native-weight "${NATIVE_ROOT}/raw_bpref_weight_rank01_call0001.bin" \
     --expected-local-iteration 2 --physical-iteration 2 --first-shell 16 \
