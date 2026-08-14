@@ -107,10 +107,13 @@ def _k1_coarse_gaussian_ffi_enabled(*, default: bool = False) -> bool:
     raise ValueError(f"Unsupported {_K1_COARSE_GAUSSIAN_FFI_ENV}={token!r}")
 
 
-def _k1_coarse_gaussian_sincosf_enabled() -> bool:
+def _k1_coarse_gaussian_sincosf_enabled(*, default: bool = False) -> bool:
     """Return whether exact RELION coarse score translation is active."""
 
-    token = os.environ.get(_K1_COARSE_GAUSSIAN_SINCOSF_ENV, "0").strip().lower()
+    token = os.environ.get(
+        _K1_COARSE_GAUSSIAN_SINCOSF_ENV,
+        "1" if default else "0",
+    ).strip().lower()
     if token in {"0", "false", "no", "off"}:
         return False
     if token in {"1", "true", "yes", "on"}:
@@ -120,10 +123,13 @@ def _k1_coarse_gaussian_sincosf_enabled() -> bool:
     )
 
 
-def _k1_relion_exact_coarse_operands_enabled() -> bool:
+def _k1_relion_exact_coarse_operands_enabled(*, default: bool = False) -> bool:
     """Return whether coarse Gaussian scoring uses native RFLOAT CTF operands."""
 
-    token = os.environ.get(_K1_RELION_EXACT_COARSE_OPERANDS_ENV, "0").strip().lower()
+    token = os.environ.get(
+        _K1_RELION_EXACT_COARSE_OPERANDS_ENV,
+        "1" if default else "0",
+    ).strip().lower()
     if token in {"0", "false", "no", "off"}:
         return False
     if token in {"1", "true", "yes", "on"}:
@@ -1936,7 +1942,9 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_ffi_enabled = (
         coarse_gaussian_ffi_requested and score_mode == "gaussian"
     )
-    coarse_gaussian_sincosf_requested = _k1_coarse_gaussian_sincosf_enabled()
+    coarse_gaussian_sincosf_requested = _k1_coarse_gaussian_sincosf_enabled(
+        default=relion_coarse_gaussian_default and coarse_gaussian_ffi_enabled,
+    )
     coarse_gaussian_sincosf_enabled = (
         coarse_gaussian_sincosf_requested and score_mode == "gaussian"
     )
@@ -1945,7 +1953,13 @@ def _compute_k_class_significance_batched(
             f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV} requires "
             f"{_K1_COARSE_GAUSSIAN_FFI_ENV}=1",
         )
-    exact_coarse_operands_requested = _k1_relion_exact_coarse_operands_enabled()
+    exact_coarse_operands_requested = _k1_relion_exact_coarse_operands_enabled(
+        default=(
+            relion_coarse_gaussian_default
+            and coarse_gaussian_ffi_enabled
+            and coarse_gaussian_sincosf_enabled
+        ),
+    )
     exact_coarse_operands_enabled = (
         exact_coarse_operands_requested and score_mode == "gaussian"
     )
@@ -2070,16 +2084,28 @@ def _compute_k_class_significance_batched(
         )
         if coarse_gaussian_sincosf_enabled:
             logger.warning(
-                "Opt-in K=1 RELION coarse CUDA sincosf translation enabled: "
+                "K=1 RELION coarse CUDA sincosf translation enabled (%s): "
                 "current_size=%d square_pixels=%d translations=%d",
+                (
+                    "guarded fresh-K=1 default"
+                    if relion_coarse_gaussian_default
+                    and _K1_COARSE_GAUSSIAN_SINCOSF_ENV not in os.environ
+                    else "environment override"
+                ),
                 score_size,
                 square_score_count,
                 n_trans,
             )
         if exact_coarse_operands_enabled:
             logger.warning(
-                "Opt-in K=1 RELION exact coarse operands enabled: per-image FFT, "
+                "K=1 RELION exact coarse operands enabled (%s): per-image FFT, "
                 "RFLOAT CTF division/square, and binary64-to-XFLOAT inverse noise",
+                (
+                    "guarded fresh-K=1 default"
+                    if relion_coarse_gaussian_default
+                    and _K1_RELION_EXACT_COARSE_OPERANDS_ENV not in os.environ
+                    else "environment override"
+                ),
             )
     tree_rescore_fftw_order = None
     if tree_rescore_enabled:

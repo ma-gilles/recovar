@@ -181,17 +181,53 @@ def test_k1_coarse_gaussian_flag_honors_scoped_default_and_explicit_opt_out(monk
     assert "relion_coarse_gaussian_default=" in k_class_source
 
 
-def test_k1_coarse_gaussian_sincosf_flag_is_off_and_requires_ffi(monkeypatch):
+def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkeypatch):
     from recovar.em.dense_single_volume.helpers import significance
 
     monkeypatch.delenv("RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF", raising=False)
     assert not significance._k1_coarse_gaussian_sincosf_enabled()
+    assert significance._k1_coarse_gaussian_sincosf_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF", "0")
+    assert not significance._k1_coarse_gaussian_sincosf_enabled(default=True)
     monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF", "1")
     assert significance._k1_coarse_gaussian_sincosf_enabled()
 
+    monkeypatch.delenv("RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS", raising=False)
+    assert not significance._k1_relion_exact_coarse_operands_enabled()
+    assert significance._k1_relion_exact_coarse_operands_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS", "0")
+    assert not significance._k1_relion_exact_coarse_operands_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS", "1")
+    assert significance._k1_relion_exact_coarse_operands_enabled()
+
     source = Path(significance.__file__).read_text()
     assert "coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled" in source
+    assert "relion_coarse_gaussian_default and coarse_gaussian_ffi_enabled" in source
     assert "production half-image preprocessing path" in source
+
+
+def test_exact_relion_ctf_source_defaults_to_dataset_star(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_exact_ctf_source_star,
+    )
+
+    dataset_star = tmp_path / "particles.star"
+    explicit_star = tmp_path / "override.star"
+    monkeypatch.delenv("RECOVAR_K1_RELION_EXACT_CTF_STAR", raising=False)
+    assert _relion_exact_ctf_source_star(
+        SimpleNamespace(particles_file=str(dataset_star)),
+    ) == dataset_star.resolve()
+
+    monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_CTF_STAR", str(explicit_star))
+    assert _relion_exact_ctf_source_star(
+        SimpleNamespace(particles_file=str(dataset_star)),
+    ) == explicit_star.resolve()
+
+    monkeypatch.delenv("RECOVAR_K1_RELION_EXACT_CTF_STAR", raising=False)
+    with pytest.raises(ValueError, match="STAR-backed dataset"):
+        _relion_exact_ctf_source_star(SimpleNamespace(particles_file="particles.mrcs"))
 
 
 def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():

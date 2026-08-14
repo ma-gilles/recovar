@@ -2273,3 +2273,56 @@ and CUDA 12.8 sm90 reproduce the same stack-1204 winner/support result.  The
 observed library difference is therefore source-version arithmetic, not the
 compiler or PTX route.  It is retained as a preservation diagnostic and is
 not required for the accepted default case-22 closure.
+
+## Case-7 iteration-2 exact coarse-operand discriminator
+
+The first material case-7 particle-state failure is now localized before the
+fine pass.  Source row 79,452 (one-based stack image 79,453) has identical
+coarse candidates, priors, and winner in the control and treatment, but the
+normal batch FFT/CTF operand path drops coarse parent 813580.  The control
+retains `[813522, 813523, 813586]`; native RELION and the corrected path retain
+`[813522, 813523, 813580, 813586]`.
+
+The correction uses RELION's per-image Fourier transform, source-precision
+RFLOAT CTF division/square, binary64-to-XFLOAT inverse noise, and CUDA
+`sincosf` translation.  `sincosf` alone does not repair the parent set.  In an
+exact source-order 187-particle batch, and independently in the complete
+100,000-particle context, the correction restores the same 128-candidate fine
+mask.  Every captured downstream fine operand and output is bitwise equal
+between those two contexts and the isolated-particle positive control:
+
+| Boundary | Control | Exact operands / RELION-consistent |
+| --- | ---: | ---: |
+| coarse retained parents | 3 | 4 |
+| fine candidate count | 96 | 128 |
+| fine winner `(rotation row, translation row)` | `(10, 80)` | `(10, 58)` |
+| fine Pmax | `0.2709765636368803` | `0.8402810643916939` |
+| reconstruction support | 19 | 14 |
+
+The full source-ID-aligned iteration-2 audit is positive but not globally
+exact.  Pmax relative L2 and RMSE both improve by 77.48%, support-count
+mismatches fall from 14 to 12 of 100,000, and translation RMSE improves by
+18.35%.  The treatment changes only seven Pmax values and four support counts.
+It repairs the dominant row-79,452 Pmax error and its 1.0625-pixel translation
+error, while introducing one support mismatch at row 61,603 and a smaller
+Pmax residual at row 90,263.  Angular assignments are unchanged.  Merged
+iteration-2 cross-engine FSC-AUC changes from `1.0000066317890846` to
+`1.000006695297722`; map acceptance remains based on the fixed signed
+FSC/FSC-AUC trajectory gates, not this tiny one-step movement.
+
+The complete treatment audit is Slurm job `12388214`, root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_current_it2_exact_operands_full_audit_7fbab176_20260814T1345ET`, particle-report SHA-256
+`f9675b0163034552868213c2a54702afb2daa2a6153cab47c8b047ed854631f2`,
+and particle-array SHA-256
+`2296e2971c3862fb2ec633e34be6079226a55c868a56ee525200c957a8d7790a`.
+The independent stopped full-context target is Slurm job `12387924`; its
+pass-1/pass-2 capture SHA-256 values are
+`c9bc66cb34e8d47ca612cdd6d75a4c5a200a29cb29831037e815ba79443da0f4`
+and
+`bc223f298becb154e71d31e16185944be02ecbaff628b213b0af5c72734809e2`.
+
+This authorizes the exact coarse operands only under the existing fresh-K=1
+physical-order guard, with explicit environment opt-outs retained.  It does
+not promote case 7 or change the fixed `30/34` score.  The next causal gate is
+a short autonomous trajectory; a complete case-7 rerun is warranted only if
+the early Pmax/support and FSC trajectory remain closer to RELION.

@@ -10287,6 +10287,22 @@ def _star_column(table, name: str):
     raise ValueError(f"RELION source STAR column {name} is missing")
 
 
+def _relion_exact_ctf_source_star(experiment_dataset) -> Path:
+    """Resolve the immutable source STAR for exact RELION CTF evaluation."""
+
+    source_star = os.environ.get("RECOVAR_K1_RELION_EXACT_CTF_STAR", "").strip()
+    if not source_star:
+        dataset_source = getattr(experiment_dataset, "particles_file", None)
+        if dataset_source and Path(dataset_source).suffix.lower() == ".star":
+            source_star = str(dataset_source)
+    if not source_star:
+        raise ValueError(
+            "exact RELION operands require a STAR-backed dataset or "
+            "RECOVAR_K1_RELION_EXACT_CTF_STAR"
+        )
+    return Path(source_star).expanduser().resolve()
+
+
 def _relion_exact_ctf_half_from_source_star(
     experiment_dataset,
     image_indices,
@@ -10299,12 +10315,7 @@ def _relion_exact_ctf_half_from_source_star(
     already been rounded to float32 before pass 2.
     """
 
-    source_star = os.environ.get("RECOVAR_K1_RELION_EXACT_CTF_STAR", "").strip()
-    if not source_star:
-        raise ValueError(
-            "exact RELION BPref operands require RECOVAR_K1_RELION_EXACT_CTF_STAR"
-        )
-    source_path = Path(source_star).expanduser().resolve()
+    source_path = _relion_exact_ctf_source_star(experiment_dataset)
     cache_key = (str(source_path), tuple(int(size) for size in image_shape))
     cache = _RELION_EXACT_CTF_SOURCE_CACHE.get(cache_key)
     if cache is None:

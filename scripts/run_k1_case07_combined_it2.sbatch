@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=k1c07-combined-it2
-#SBATCH --output=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_combined_it2_20260810T1920ET/logs/run-%j.out
-#SBATCH --error=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_combined_it2_20260810T1920ET/logs/run-%j.err
+#SBATCH --output=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/slurm/k1c07-combined-it2-%j.out
+#SBATCH --error=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/slurm/k1c07-combined-it2-%j.err
 #SBATCH --partition=cryoem
 #SBATCH --account=gilles
 #SBATCH --qos=della-cryoem
@@ -17,18 +17,22 @@ set -euo pipefail
 : "${EXPECTED_LAUNCHER_SHA256:?submission must pin launcher hash}"
 : "${EXPECTED_REPO_HEAD:?submission must pin repository head}"
 : "${EXPECTED_REPO_DIFF_SHA256:?submission must pin repository diff}"
+: "${EXPECTED_RELION_BIND_SHA256:?submission must pin RELION binding hash}"
+: "${EXPECTED_CUDA_SHA256:?submission must pin CUDA library hash}"
+: "${EXPERIMENT_ROOT:?submission must set EXPERIMENT_ROOT}"
+: "${EXPERIMENT_RUNTIME:?submission must set EXPERIMENT_RUNTIME}"
 
-ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_combined_it2_20260810T1920ET
-RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case07_combined_it2_20260810T1920ET
+ROOT=${EXPERIMENT_ROOT}
+RUNTIME=${EXPERIMENT_RUNTIME}
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
 LAUNCHER=${REPO}/scripts/run_k1_case07_combined_it2.sbatch
-SOURCE_CASE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_coarseffi_autonomous_dd6acb5e_20260810T0701ET/cases/7_anisotropic_100k_g256_white_noise1_bf80
+SOURCE_CASE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fixedsuite_case07_tree_c74beea4_20260724T110500Z/cases/7_anisotropic_100k_g256_white_noise1_bf80
 DATA=${SOURCE_CASE}/data
 RELION=${SOURCE_CASE}/relion_ref
-CUDA_LIB=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/cuda/libcuda_backproject.so
-RELION_BIND=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_bpref_order_fix_20260810/relion_bind
+CUDA_LIB=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_cuda126_compute80_ptx_e791e875_20260814T0948ET/cuda128_sm90_control/build/libcuda_backproject_cuda128_sm90.so
+RELION_BIND=${REPO}/recovar/relion_bind/build
 OUTPUT=${ROOT}/output
 ANALYSIS=${ROOT}/analysis
 ACCUM=${ROOT}/accum
@@ -38,12 +42,12 @@ test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO}" diff --binary | sha256sum | awk '{print $1}')" = "${EXPECTED_REPO_DIFF_SHA256}"
-test "$(sha256sum "${RELION_BIND}"/_relion_bind_core*.so | awk '{print $1}')" = 793919bdb09875304d630727f9930ca729e1d261f6a354cecce7221af728dced
-test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = 50a0b3b86478a31bd64e8202ed71a6bf70e28429262a957231cf19c50ceab569
+test "$(sha256sum "${RELION_BIND}"/_relion_bind_core*.so | awk '{print $1}')" = "${EXPECTED_RELION_BIND_SHA256}"
+test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test -s "${RELION}/run_it000_data.star" -a -s "${RELION}/run_it002_optimiser.star"
 test -s "${DATA}/particles.star"
 test ! -e "${OUTPUT}"
-mkdir -p "${OUTPUT}" "${ANALYSIS}" "${ACCUM}" "${PREJOIN}"
+mkdir -p "${ROOT}/provenance" "${OUTPUT}" "${ANALYSIS}" "${ACCUM}" "${PREJOIN}"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
@@ -80,15 +84,17 @@ export RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0
 export RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE=1
 export RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN=4e-6
 export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0
-export RECOVAR_K1_COARSE_GAUSSIAN_FFI=1
 export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=1
 export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
-export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
 export RECOVAR_BPREF_ACCUM_DUMP_DIR=${ACCUM}
 export RECOVAR_BPREF_PREJOIN_DUMP_DIR=${PREJOIN}
 export RECOVAR_BPREF_BOUNDARY_DUMP_ITERATION=2
 export RECOVAR_BPREF_BOUNDARY_DUMP_RUN_ID=case07_combined_physical_it2
+unset RECOVAR_K1_COARSE_GAUSSIAN_FFI
+unset RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF
+unset RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS
+unset RECOVAR_K1_RELION_EXACT_CTF_STAR
 unset RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 
@@ -143,6 +149,9 @@ test -s "${ACCUM}/recovar_bpref_accum_it002.npz"
 test -s "${PREJOIN}/recovar_bpref_prejoin_it002.npz"
 ! rg -q 'Traceback|RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' "${OUTPUT}/run.log"
 rg -q 'Applied RELION fresh paired AutoRefine particle order with effective seed 1708' "${OUTPUT}/run.log"
+rg -q 'K=1 RELION coarse Gaussian FFI enabled (guarded fresh-K=1 default)' "${OUTPUT}/run.log"
+rg -q 'K=1 RELION coarse CUDA sincosf translation enabled (guarded fresh-K=1 default)' "${OUTPUT}/run.log"
+rg -q 'K=1 RELION exact coarse operands enabled (guarded fresh-K=1 default)' "${OUTPUT}/run.log"
 rg -q 'global; batching only consecutive equal-size supports' "${OUTPUT}/run.log"
 rg -q 'one adjoint launch per particle' "${OUTPUT}/run.log"
 
