@@ -154,11 +154,14 @@ def test_relion_coarse_diff2_cuda_source_pins_production_topology():
     assert "atomicAdd(" in block
 
 
-def test_k1_coarse_gaussian_flag_is_off_by_default_and_k1_only(monkeypatch):
+def test_k1_coarse_gaussian_flag_honors_scoped_default_and_explicit_opt_out(monkeypatch):
     from recovar.em.dense_single_volume.helpers import significance
 
     monkeypatch.delenv("RECOVAR_K1_COARSE_GAUSSIAN_FFI", raising=False)
     assert not significance._k1_coarse_gaussian_ffi_enabled()
+    assert significance._k1_coarse_gaussian_ffi_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_FFI", "0")
+    assert not significance._k1_coarse_gaussian_ffi_enabled(default=True)
     monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_FFI", "1")
     assert significance._k1_coarse_gaussian_ffi_enabled()
 
@@ -170,6 +173,12 @@ def test_k1_coarse_gaussian_flag_is_off_by_default_and_k1_only(monkeypatch):
     assert "square_score_indices_np" in guard
     assert "square=True" in guard
     assert "include_dc=True" in guard
+
+    k_class_source = (
+        Path(significance.__file__).resolve().parent.parent / "k_class.py"
+    ).read_text()
+    assert 'engine_kwargs.get("preserve_bpref_particle_order", False)' in k_class_source
+    assert "relion_coarse_gaussian_default=" in k_class_source
 
 
 def test_k1_coarse_gaussian_sincosf_flag_is_off_and_requires_ffi(monkeypatch):

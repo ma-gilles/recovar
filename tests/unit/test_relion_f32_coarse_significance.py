@@ -105,8 +105,11 @@ def test_relion_cuda_f32_tail_target_preserves_text_to_float_semantics():
     np.testing.assert_array_equal(target.view(np.uint32), [1606715186])
 
 
-def test_relion_f32_coarse_support_gate_defaults_off(monkeypatch):
+def test_relion_f32_coarse_support_gate_honors_scoped_default(monkeypatch):
     monkeypatch.delenv(_K1_RELION_F32_COARSE_SUPPORT_ENV, raising=False)
     assert not _k1_relion_f32_coarse_support_enabled()
+    assert _k1_relion_f32_coarse_support_enabled(default=True)
+    monkeypatch.setenv(_K1_RELION_F32_COARSE_SUPPORT_ENV, "0")
+    assert not _k1_relion_f32_coarse_support_enabled(default=True)
     monkeypatch.setenv(_K1_RELION_F32_COARSE_SUPPORT_ENV, "1")
     assert _k1_relion_f32_coarse_support_enabled()

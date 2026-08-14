@@ -3098,6 +3098,9 @@ def run_dense_k_class_em_adaptive(
             relion_projector_texture_interp=coarse_relion_projector_texture_interp,
             debug_iteration=debug_iteration,
             translation_phase_source=coarse_translation_phase_source,
+            relion_coarse_gaussian_default=bool(
+                engine_kwargs.get("preserve_bpref_particle_order", False)
+            ),
         )
 
         with nvtx.annotate("kclass.adaptive.significance", color="orange", domain=NVTX_DOMAIN_EM):

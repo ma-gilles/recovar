@@ -1651,6 +1651,44 @@ boundary; its run root is
 The complete-case scorecard remains `28/34` strict, `32/34` topology, and
 `34/34` evaluated.
 
+## Guarded fresh-K=1 default checkpoint (2026-08-14)
+
+The direct RFLOAT scoring-noise update is now active by default only in the
+guarded fresh-K=1 physical-order route.  Case-26 job `12371765` supplied the
+causal full-run result: final signed cross-engine FSC-AUC improved from
+`0.954914` to `0.997747`, with exact numbered topology.  Passing-case-25 job
+`12372874` preserved its result within `2.69e-7` FSC-AUC.  Job `12373695`
+then verified direct activation with both launcher diagnostic flags set to
+zero.  These results promote case 26 and move the fixed complete-case
+scorecard to `29/34` strict and `32/34` topology.
+
+The next bounded case-22 capture tests the earliest remaining ordinary
+Gaussian coarse boundary, not another full trajectory.  Job `12374036`
+captured the frozen 14-particle mismatch/control panel at physical iteration
+2 with the native CUDA Gaussian reduction and float32 support calculation.
+All `14/14` parent sets, winners, and prior-support sets agree with RELION;
+all posterior total-variation values pass the fixed `1e-4` gate.  Individual
+candidate masks are exact for `12/14`.  Stack indices 2322 and 2994 retain
+one fewer translation candidate each, with zero parent-set mismatch.  The
+historical 13 parent-side discrepancies have therefore closed; the analyzer's
+`expected_side_reproduced=0/13` wording records that none of those old
+RELION-only/RECOVAR-only sides still exists.  It is not evidence that the
+current parent sets disagree.  The accepted report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_coarse14_gaussian_db76b99e_20260814T0745ET_retry1/analysis/K1_IT2_COARSE14_GAUSSIAN_BOUNDARY.json`
+(SHA-256
+`f2a84d4f5ccd5a80851365930958365826b75226db37ded9ace1d7e782087fdf`).
+
+A deliberately zero-Gaussian case-26 prefix, job `12373948`, also completes
+with exact topology through iteration 3 and merged cross-engine FSC-AUC
+`0.9999999999288698` at iteration 3.  This shows that Gaussian coarse is not
+needed to rescue the already-closed case-26 prefix, while the case-22 raw
+capture shows that it is the component that removes the first known
+candidate-parent discrepancy.  The implementation consequently defaults the
+Gaussian FFI and float32 coarse-support calculation only when the existing
+fresh-K=1 physical-order guard is active.  Explicit environment values still
+override that default; continuation, frozen-boundary replay, perturbation
+replay, and K>1 remain unchanged.
+
 ## Exact iteration-3 fine-score operand split and direct-noise gate
 
 Focused positive-control job `12368430` completed naturally with exit code
@@ -2132,5 +2170,8 @@ candidate grid and cumulative-support boundary, joined by immutable particle
 and candidate identity; reconstruction reduction is downstream until those
 inputs agree.
 
-The complete-case scorecard remains `28/34` strict, `32/34` topology, and
-`34/34` evaluated.
+The later guarded direct-noise checkpoint promotes case 26.  The current
+complete-case scorecard is `29/34` strict, `32/34` topology, and `34/34`
+evaluated.  Job `12374036` is the first focused follow-up at this boundary:
+its Gaussian/F32 coarse capture closes all 14 parent sets and winners, leaving
+only two one-translation candidate-mask differences.

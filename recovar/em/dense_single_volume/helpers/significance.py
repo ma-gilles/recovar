@@ -93,10 +93,13 @@ def _maybe_stop_after_significance_dump(
     raise SignificanceDumpComplete(dump_path=dump_path)
 
 
-def _k1_coarse_gaussian_ffi_enabled() -> bool:
-    """Return whether the diagnostic RELION coarse Gaussian FFI is active."""
+def _k1_coarse_gaussian_ffi_enabled(*, default: bool = False) -> bool:
+    """Return whether the RELION coarse Gaussian FFI is active."""
 
-    token = os.environ.get(_K1_COARSE_GAUSSIAN_FFI_ENV, "0").strip().lower()
+    token = os.environ.get(
+        _K1_COARSE_GAUSSIAN_FFI_ENV,
+        "1" if default else "0",
+    ).strip().lower()
     if token in {"0", "false", "no", "off"}:
         return False
     if token in {"1", "true", "yes", "on"}:
@@ -130,10 +133,13 @@ def _k1_relion_exact_coarse_operands_enabled() -> bool:
     )
 
 
-def _k1_relion_f32_coarse_support_enabled() -> bool:
-    """Return whether the diagnostic RELION CUDA coarse support is active."""
+def _k1_relion_f32_coarse_support_enabled(*, default: bool = False) -> bool:
+    """Return whether the RELION CUDA float32 coarse support is active."""
 
-    token = os.environ.get(_K1_RELION_F32_COARSE_SUPPORT_ENV, "0").strip().lower()
+    token = os.environ.get(
+        _K1_RELION_F32_COARSE_SUPPORT_ENV,
+        "1" if default else "0",
+    ).strip().lower()
     if token in {"0", "false", "no", "off"}:
         return False
     if token in {"1", "true", "yes", "on"}:
@@ -1766,6 +1772,7 @@ def _compute_k_class_significance_batched(
     coarse_healpix_order: int | None = None,
     coarse_rotation_ids=None,
     translation_phase_source=None,
+    relion_coarse_gaussian_default: bool = False,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
 
@@ -1923,7 +1930,9 @@ def _compute_k_class_significance_batched(
     # may use normalized CC, while this intervention applies only to later
     # Gaussian coarse passes. Keep the flag dormant for the CC call instead of
     # rejecting the process before it reaches the intended boundary.
-    coarse_gaussian_ffi_requested = _k1_coarse_gaussian_ffi_enabled()
+    coarse_gaussian_ffi_requested = _k1_coarse_gaussian_ffi_enabled(
+        default=relion_coarse_gaussian_default,
+    )
     coarse_gaussian_ffi_enabled = (
         coarse_gaussian_ffi_requested and score_mode == "gaussian"
     )
@@ -1946,7 +1955,9 @@ def _compute_k_class_significance_batched(
             f"{_K1_COARSE_GAUSSIAN_FFI_ENV}=1 and "
             f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV}=1",
         )
-    relion_f32_coarse_support_requested = _k1_relion_f32_coarse_support_enabled()
+    relion_f32_coarse_support_requested = _k1_relion_f32_coarse_support_enabled(
+        default=relion_coarse_gaussian_default and coarse_gaussian_ffi_enabled,
+    )
     relion_f32_coarse_support_enabled = (
         relion_f32_coarse_support_requested and score_mode == "gaussian"
     )
@@ -1960,7 +1971,13 @@ def _compute_k_class_significance_batched(
                 f"{_K1_RELION_F32_COARSE_SUPPORT_ENV} requires production float32 scoring",
             )
         logger.warning(
-            "Opt-in RELION CUDA float32 coarse support enabled: current_size=%d",
+            "RELION CUDA float32 coarse support enabled (%s): current_size=%d",
+            (
+                "guarded fresh-K=1 default"
+                if relion_coarse_gaussian_default
+                and _K1_RELION_F32_COARSE_SUPPORT_ENV not in os.environ
+                else "environment override"
+            ),
             int(image_shape[0]) if current_size is None else int(current_size),
         )
     coarse_gaussian_full_to_compact = None
@@ -2039,8 +2056,14 @@ def _compute_k_class_significance_batched(
         )
         coarse_gaussian_powerclass = _relion_cuda_powerclass_highres_xi2_half
         logger.warning(
-            "Opt-in K=1 RELION coarse Gaussian FFI enabled: "
+            "K=1 RELION coarse Gaussian FFI enabled (%s): "
             "current_size=%d square_pixels=%d translations=%d",
+            (
+                "guarded fresh-K=1 default"
+                if relion_coarse_gaussian_default
+                and _K1_COARSE_GAUSSIAN_FFI_ENV not in os.environ
+                else "environment override"
+            ),
             score_size,
             square_score_count,
             n_trans,
