@@ -871,6 +871,11 @@ def _run_sparse_k_class_adaptive_pass2(
     base_engine_kwargs = dict(engine_kwargs)
     relion_projector_half_by_class = base_engine_kwargs.get("relion_projector_half")
     relion_projector_r_max = base_engine_kwargs.get("relion_projector_r_max")
+    use_k1_fine_diff2_ffi = False
+    if n_classes == 1:
+        from recovar import cuda_backproject
+
+        use_k1_fine_diff2_ffi = cuda_backproject.cuda_available()
 
     def _class_rotation_prior(class_index: int):
         class_prior = base_engine_kwargs.get("class_rotation_log_prior")
@@ -921,7 +926,7 @@ def _run_sparse_k_class_adaptive_pass2(
         # The exact rectangular/pair CUDA reduction is qualified for K=1.
         # Preserve the existing K>1 scorer until its independent boundary is
         # localized.
-        relion_fine_diff2_fused_ffi=n_classes == 1,
+        relion_fine_diff2_fused_ffi=use_k1_fine_diff2_ffi,
         # RELION's float32 exp/sort/scan significance path is now qualified
         # for K=1.  Keep K>1 byte-preserving until its separate posterior
         # boundary is diagnosed.
