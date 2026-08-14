@@ -181,16 +181,30 @@ def test_k1_coarse_gaussian_flag_honors_scoped_default_and_explicit_opt_out(monk
     assert "relion_coarse_gaussian_default=" in k_class_source
 
 
-def test_k1_coarse_gaussian_sincosf_flag_is_off_and_requires_ffi(monkeypatch):
+def test_k1_coarse_gaussian_fft_flags_honor_defaults_and_require_ffi(monkeypatch):
     from recovar.em.dense_single_volume.helpers import significance
 
     monkeypatch.delenv("RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF", raising=False)
     assert not significance._k1_coarse_gaussian_sincosf_enabled()
+    assert significance._k1_coarse_gaussian_sincosf_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF", "0")
+    assert not significance._k1_coarse_gaussian_sincosf_enabled(default=True)
     monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF", "1")
     assert significance._k1_coarse_gaussian_sincosf_enabled()
 
+    monkeypatch.delenv("RECOVAR_K1_RELION_PER_IMAGE_COARSE_FFT", raising=False)
+    assert not significance._k1_relion_per_image_coarse_fft_enabled()
+    assert significance._k1_relion_per_image_coarse_fft_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_RELION_PER_IMAGE_COARSE_FFT", "0")
+    assert not significance._k1_relion_per_image_coarse_fft_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_RELION_PER_IMAGE_COARSE_FFT", "1")
+    assert significance._k1_relion_per_image_coarse_fft_enabled()
+
     source = Path(significance.__file__).read_text()
     assert "coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled" in source
+    assert "per_image_coarse_fft_enabled and not coarse_gaussian_sincosf_enabled" in source
+    assert 'coarse_preprocess_kwargs["relion_fft_per_image"] = True' in source
+    assert "per_image_score_weighted" in source
     assert "production half-image preprocessing path" in source
 
 
