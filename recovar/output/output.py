@@ -1304,6 +1304,11 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
     for plotter, filename, description in (
         (plot_utils.plot_covariance_column_fscs, "covariance_column_fscs.png", "covariance-column FSC"),
         (plot_utils.plot_noise_group_summary, "noise_power_by_tilt.png", "noise/power-by-tilt"),
+        (
+            plot_utils.plot_volume_variance_prior_summary,
+            "volume_variance_prior.png",
+            "volume variance/prior",
+        ),
     ):
         try:
             figure, _ = plotter(po, os.path.join(output_folder, filename))

@@ -187,21 +187,20 @@ def _plot_noise_group_summary(pipeline_output, output_path=None):
     axes[1, 0].grid(alpha=0.25)
     axes[1, 0].legend(fontsize=7, ncol=2)
 
-    shell_start = max(1, n_shells // 4)
-    shell_stop = max(shell_start + 1, 3 * n_shells // 4)
-    noise_band = np.nanmedian(noise_profiles[:, shell_start:shell_stop], axis=1)
-    image_band = np.nanmedian(image_profiles[:, shell_start:shell_stop], axis=1)
-    group_axis = np.arange(noise_profiles.shape[0])
-    axes[1, 1].plot(group_axis, noise_band, "o-", color="#D55E00", label="noise")
-    axes[1, 1].plot(group_axis, image_band, "o-", color="#0072B2", label="image")
+    for group_idx, color in zip(group_indices, colors):
+        axes[1, 1].plot(
+            frequencies,
+            noise_profiles[group_idx],
+            color=color,
+            linewidth=1.8,
+            label=labels[group_idx],
+        )
     axes[1, 1].set_yscale("log")
-    axes[1, 1].set_xlabel("noise group (ordered by pre-exposure)")
-    axes[1, 1].set_ylabel("median mid-frequency power")
-    axes[1, 1].set_title("Power change across tilt/dose groups")
+    axes[1, 1].set_xlabel("spatial frequency (1/Å)")
+    axes[1, 1].set_ylabel("noise power")
+    axes[1, 1].set_title("Inferred noise spectra only (absolute scale; no rescaling)")
     axes[1, 1].grid(alpha=0.25)
-    axes[1, 1].legend()
-    if len(labels) <= 16:
-        axes[1, 1].set_xticks(group_axis, labels, rotation=60, ha="right", fontsize=7)
+    axes[1, 1].legend(fontsize=7, ncol=2)
 
     fig.suptitle("Noise and image power diagnostics", fontsize=15)
     fig.tight_layout()
@@ -214,6 +213,111 @@ def _plot_noise_group_summary(pipeline_output, output_path=None):
             labels,
             os.path.splitext(output_path)[0] + "_individual",
         )
+    return fig, axes
+
+
+def _radial_average_volume(values, volume_shape):
+    values = np.asarray(values)
+    if values.size != int(np.prod(volume_shape)):
+        raise ValueError(f"Expected {np.prod(volume_shape)} volume samples, got {values.size}")
+    return np.asarray(regularization.average_over_shells(values.reshape(volume_shape), volume_shape)).real
+
+
+def plot_volume_variance_prior_summary(pipeline_output, output_path=None):
+    """Plot the exact volume variance estimate and prior stored by the pipeline.
+
+    No curves are normalized or fitted. ``variance_est['prior']`` is the
+    FSC-derived signal-variance prior (tau) supplied to the regularized
+    variance solve, while ``variance_est['combined']`` is the resulting
+    variance estimate passed to the default PCA column-selection path.
+    """
+
+    volume_shape = tuple(int(value) for value in _pipeline_value(pipeline_output, "volume_shape"))
+    variance_est = _pipeline_value(pipeline_output, "variance_est")
+    if not isinstance(variance_est, dict):
+        raise ValueError("variance_est must be a dictionary of pipeline variance arrays")
+
+    required = ("corrected0", "corrected1", "combined", "prior")
+    missing = [key for key in required if key not in variance_est]
+    if missing:
+        raise ValueError(f"variance_est is missing required entries: {missing}")
+
+    mean_fourier = np.asarray(_pipeline_value(pipeline_output, "mean"))
+    mean_power = _radial_average_volume(np.abs(mean_fourier) ** 2, volume_shape)
+    variance_radial = {
+        key: _radial_average_volume(variance_est[key], volume_shape)
+        for key in required
+    }
+    covariance_options = _pipeline_value(pipeline_output, "covariance_options", {})
+    sampling_scheme = covariance_options.get("column_sampling_scheme") if isinstance(covariance_options, dict) else None
+    combined_label = "combined estimated variance"
+    if sampling_scheme == "high_snr_from_var_est":
+        combined_label += " used by PCA column sampling"
+    n_shells = min(mean_power.size, *(profile.size for profile in variance_radial.values()))
+    frequencies = _radial_frequency_axis(pipeline_output, n_shells)
+    eps = np.finfo(np.float32).tiny
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6.2))
+    axes[0].plot(
+        frequencies,
+        np.maximum(mean_power[:n_shells], eps),
+        color="black",
+        linewidth=2.2,
+        label="mean-volume power |mean(k)|²",
+    )
+    axes[0].plot(
+        frequencies,
+        np.maximum(variance_radial["combined"][:n_shells], eps),
+        color="#0072B2",
+        linewidth=2.2,
+        label="estimated heterogeneity variance (combined)",
+    )
+    axes[0].set_title("Absolute Fourier power and estimated variance")
+    axes[0].set_ylabel("power / variance per Fourier voxel")
+
+    axes[1].plot(
+        frequencies,
+        np.maximum(variance_radial["corrected0"][:n_shells], eps),
+        color="#56B4E9",
+        linewidth=1.5,
+        alpha=0.85,
+        label="regularized variance half 1",
+    )
+    axes[1].plot(
+        frequencies,
+        np.maximum(variance_radial["corrected1"][:n_shells], eps),
+        color="#009E73",
+        linewidth=1.5,
+        alpha=0.85,
+        label="regularized variance half 2",
+    )
+    axes[1].plot(
+        frequencies,
+        np.maximum(variance_radial["combined"][:n_shells], eps),
+        color="#0072B2",
+        linewidth=2.2,
+        label=combined_label,
+    )
+    axes[1].plot(
+        frequencies,
+        np.maximum(variance_radial["prior"][:n_shells], eps),
+        color="#D55E00",
+        linewidth=2.2,
+        linestyle="--",
+        label="FSC-derived variance prior τ actually used",
+    )
+    axes[1].set_title("Variance estimate and its actual regularization prior")
+    axes[1].set_ylabel("variance per Fourier voxel")
+
+    for axis in axes:
+        axis.set_yscale("log")
+        axis.set_xlabel("spatial frequency (1/Å)")
+        axis.grid(alpha=0.25)
+        axis.legend(fontsize=8)
+    fig.suptitle("Pipeline volume variance diagnostics (absolute scale; no curve rescaling)", fontsize=14)
+    fig.tight_layout()
+    if output_path is not None:
+        fig.savefig(output_path, dpi=180, bbox_inches="tight")
     return fig, axes
 
 

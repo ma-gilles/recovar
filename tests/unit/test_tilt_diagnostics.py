@@ -11,6 +11,7 @@ from recovar.output.tilt_diagnostics import (
     _neutralized_group_dataset,
     _plot_reconstruction_power_comparisons,
     _plot_six_view_rows,
+    _remove_scale_dose_from_power,
     group_preexposures,
 )
 from recovar.reconstruction import noise
@@ -80,12 +81,47 @@ def test_plot_noise_group_summary_matches_each_group_power_spectrum(tmp_path):
     assert destination.is_file()
     assert np.asarray(axes).shape == (2, 2)
     assert len(axes[1, 0].lines) == 2 * n_groups
+    assert len(axes[1, 1].lines) == n_groups
     detail_dir = tmp_path / "noise_power_by_tilt_individual"
     assert sorted(path.name for path in detail_dir.glob("*.png")) == [
         "tilt_000_vs_000.png",
         "tilt_001_vs_000.png",
         "tilt_002_vs_000.png",
     ]
+    plt.close(figure)
+
+
+def test_plot_volume_variance_prior_uses_saved_pipeline_arrays_without_rescaling(tmp_path, monkeypatch):
+    volume_shape = (4, 4, 4)
+    n_voxels = int(np.prod(volume_shape))
+    variance_est = {
+        "corrected0": np.full(n_voxels, 2.0, dtype=np.float32),
+        "corrected1": np.full(n_voxels, 4.0, dtype=np.float32),
+        "combined": np.full(n_voxels, 3.0, dtype=np.float32),
+        "prior": np.full(n_voxels, 7.0, dtype=np.float32),
+    }
+    po = _PipelineOutput(
+        {
+            "volume_shape": volume_shape,
+            "voxel_size": 2.0,
+            "mean": np.full(n_voxels, 2.0 + 0.0j, dtype=np.complex64),
+            "variance_est": variance_est,
+            "covariance_options": {"column_sampling_scheme": "high_snr_from_var_est"},
+        }
+    )
+    monkeypatch.setattr(
+        plot_utils.regularization,
+        "average_over_shells",
+        lambda values, _shape: np.asarray(values).reshape(-1)[:3],
+    )
+    destination = tmp_path / "volume_variance_prior.png"
+
+    figure, axes = plot_utils.plot_volume_variance_prior_summary(po, destination)
+
+    assert destination.is_file()
+    np.testing.assert_allclose(axes[0].lines[0].get_ydata(), 4.0)
+    np.testing.assert_allclose(axes[0].lines[1].get_ydata(), 3.0)
+    np.testing.assert_allclose(axes[1].lines[-1].get_ydata(), 7.0)
     plt.close(figure)
 
 
@@ -109,15 +145,12 @@ def test_tilt_reconstruction_plots_write_six_views_and_rank_zero_comparisons(tmp
     frequencies = np.arange(6, dtype=np.float64) / 16.0
     power = np.arange(18, dtype=np.float64).reshape(3, 6) + 1
     predicted_amplitudes = np.asarray([[1.0] * 6, [0.9] * 6, [0.8] * 6])
-    observed_amplitudes = np.sqrt(power / power[0])
-    predicted_power = power[0] * predicted_amplitudes**2
+    corrected_power = _remove_scale_dose_from_power(power, predicted_amplitudes)
     overview = tmp_path / "reconstruction_power.png"
     details = tmp_path / "reconstruction_power_individual"
     _plot_reconstruction_power_comparisons(
         power,
-        predicted_power,
-        observed_amplitudes,
-        predicted_amplitudes,
+        corrected_power,
         records,
         frequencies,
         overview,
@@ -129,6 +162,16 @@ def test_tilt_reconstruction_plots_write_six_views_and_rank_zero_comparisons(tmp
         "tilt_001_vs_000.png",
         "tilt_002_vs_000.png",
     ]
+
+
+def test_remove_scale_dose_from_power_collapses_forward_attenuated_power():
+    reference = np.asarray([4.0, 9.0, 16.0])
+    envelope = np.asarray([[1.0, 1.0, 1.0], [0.8, 0.6, 0.5]])
+    observed = reference[None, :] * envelope**2
+
+    corrected = _remove_scale_dose_from_power(observed, envelope)
+
+    np.testing.assert_allclose(corrected, np.broadcast_to(reference, corrected.shape))
 
 
 def test_neutralized_group_dataset_removes_contrast_dose_and_tilt_envelope():

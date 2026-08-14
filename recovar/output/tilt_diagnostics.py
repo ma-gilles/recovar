@@ -69,6 +69,15 @@ def _safe_relative_amplitude(power, reference_power):
     return np.sqrt(np.maximum(power, floor) / np.maximum(reference_power, floor))
 
 
+def _remove_scale_dose_from_power(power, relative_scale_dose_amplitude):
+    """Undo a forward amplitude envelope on a power spectrum."""
+
+    power = np.asarray(power, dtype=np.float64)
+    envelope = np.asarray(relative_scale_dose_amplitude, dtype=np.float64)
+    floor = np.finfo(np.float32).tiny
+    return power / np.maximum(envelope**2, floor)
+
+
 def _neutralized_group_dataset(dataset, group, source_ctf_params):
     group_dataset = dataset.subset(group.image_indices)
     ctf_params = np.asarray(source_ctf_params[group.image_indices]).copy()
@@ -166,15 +175,13 @@ def _plot_six_view_rows(volumes, records, output_path):
 
 def _plot_reconstruction_power_comparisons(
     volume_powers,
-    predicted_powers,
-    observed_amplitudes,
-    predicted_amplitudes,
+    corrected_powers,
     records,
     frequencies,
     output_path,
     detail_dir,
 ):
-    """Plot all reconstruction spectra and one rank-zero comparison per tilt."""
+    """Plot raw spectra and the scale/dose-corrected collapse."""
 
     eps = np.finfo(np.float32).tiny
     group_indices = np.arange(len(records))
@@ -188,29 +195,25 @@ def _plot_reconstruction_power_comparisons(
             linewidth=1.8,
             label=f"rank {group_idx}",
         )
-        axes[1].plot(frequencies, observed_amplitudes[group_idx], color=color, linewidth=1.8)
         axes[1].plot(
             frequencies,
-            predicted_amplitudes[group_idx],
+            np.maximum(corrected_powers[group_idx], eps),
             color=color,
-            linestyle="--",
-            linewidth=1.4,
+            linewidth=1.8,
+            label=f"rank {group_idx}",
         )
     axes[0].set_yscale("log")
     axes[0].set_title("Spherically averaged reconstruction power — all tilts")
     axes[0].set_ylabel("power")
     axes[0].legend(fontsize=8, ncol=2)
-    axes[1].axhline(1.0, color="black", linewidth=1.0)
     axes[1].set_yscale("log")
-    axes[1].set_title("Observed (solid) vs predicted CTF scale×dose (dashed)")
-    axes[1].set_ylabel("amplitude relative to rank 0")
-    axes[1].plot([], [], color="black", linewidth=1.8, label="observed")
-    axes[1].plot([], [], color="black", linestyle="--", linewidth=1.4, label="predicted")
-    axes[1].legend(fontsize=8)
+    axes[1].set_title("Observed power × inverse(scale×dose)² — collapse test")
+    axes[1].set_ylabel("scale/dose-corrected power")
+    axes[1].legend(fontsize=8, ncol=2)
     for ax in axes:
         ax.set_xlabel("spatial frequency (1/Å)")
         ax.grid(alpha=0.25)
-    fig.suptitle("Per-tilt reconstruction power and predicted transfer", fontsize=14)
+    fig.suptitle("Per-tilt reconstruction power before and after scale/dose correction", fontsize=14)
     fig.tight_layout()
     fig.savefig(output_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
@@ -228,38 +231,28 @@ def _plot_reconstruction_power_comparisons(
                 linewidth=2.0,
                 label=f"rank {group_idx} observed",
             )
-        axes[0].plot(
-            frequencies,
-            np.maximum(predicted_powers[group_idx], eps),
-            color=color,
-            linestyle="--",
-            linewidth=1.7,
-            label="rank 0 × predicted transfer²",
-        )
         axes[0].set_yscale("log")
-        axes[0].set_title("Observed and CTF-predicted reconstruction power")
+        axes[0].set_title("Raw observed reconstruction power")
         axes[0].set_ylabel("power")
         axes[0].legend(fontsize=8)
 
         axes[1].plot(
             frequencies,
-            observed_amplitudes[group_idx],
-            color=color,
+            reference_power,
+            color="black",
             linewidth=2.0,
-            label="observed amplitude ratio",
+            label="rank 0 observed",
         )
         axes[1].plot(
             frequencies,
-            predicted_amplitudes[group_idx],
+            np.maximum(corrected_powers[group_idx], eps),
             color=color,
-            linestyle="--",
-            linewidth=1.7,
-            label="predicted scale×dose ratio",
+            linewidth=2.0,
+            label=f"rank {group_idx} × inverse(scale×dose)²",
         )
-        axes[1].axhline(1.0, color="black", linewidth=1.0)
         axes[1].set_yscale("log")
-        axes[1].set_title("Fit relative to acquisition rank 0")
-        axes[1].set_ylabel("amplitude ratio")
+        axes[1].set_title("Scale/dose-corrected collapse onto rank 0")
+        axes[1].set_ylabel("corrected power")
         axes[1].legend(fontsize=8)
         for ax in axes:
             ax.set_xlabel("spatial frequency (1/Å)")
@@ -273,7 +266,9 @@ def _plot_reconstruction_power_comparisons(
         plt.close(fig)
 
 
-def _plot_spectral_summary(volume_powers, transfer_profiles, records, voxel_size, grid_size, output_path):
+def _compute_spectral_diagnostics(volume_powers, transfer_profiles, voxel_size, grid_size):
+    """Return raw-relative and scale/dose-corrected reconstruction spectra."""
+
     volume_powers = np.asarray(volume_powers)
     full_transfer = np.asarray([profile["full"] for profile in transfer_profiles])
     dose_transfer = np.asarray([profile["dose"] for profile in transfer_profiles])
@@ -292,68 +287,8 @@ def _plot_spectral_summary(volume_powers, transfer_profiles, records, voxel_size
     )
     dose_envelope /= np.maximum(dose_envelope[0], np.finfo(np.float32).tiny)
 
-    fig, axes = plt.subplots(2, 2, figsize=(16, 11))
-    extent = (frequencies[0], frequencies[-1], -0.5, len(records) - 0.5)
-    image = axes[0, 0].imshow(
-        np.log10(np.maximum(volume_powers[:, :n_shells], np.finfo(np.float32).tiny)),
-        aspect="auto",
-        origin="lower",
-        extent=extent,
-        cmap="viridis",
-    )
-    axes[0, 0].set_title("Reconstruction radial power spectra")
-    fig.colorbar(image, ax=axes[0, 0], label="log10 power")
-    image = axes[0, 1].imshow(
-        np.log2(np.maximum(observed, np.finfo(np.float32).tiny)),
-        aspect="auto",
-        origin="lower",
-        extent=extent,
-        cmap="coolwarm",
-        vmin=-1.0,
-        vmax=1.0,
-    )
-    axes[0, 1].set_title("Observed amplitude ratio to first exposure")
-    fig.colorbar(image, ax=axes[0, 1], label="log2 amplitude ratio")
-    for ax in axes[0]:
-        ax.set_xlabel("spatial frequency (1/Å)")
-        ax.set_ylabel("tilt/dose group")
-
-    group_indices = np.arange(len(records))
-    colors = plt.cm.plasma(np.linspace(0.05, 0.95, group_indices.size))
-    for group_idx, color in zip(group_indices, colors):
-        axes[1, 0].plot(frequencies, observed[group_idx], color=color, linewidth=1.8, label=f"group {group_idx}")
-        axes[1, 0].plot(frequencies, total_envelope[group_idx], color=color, linestyle="--", linewidth=1.4)
-    axes[1, 0].axhline(1.0, color="black", linewidth=1)
-    axes[1, 0].set_yscale("log")
-    axes[1, 0].set_title("Observed (solid) vs predicted scale×dose envelope (dashed)")
-    axes[1, 0].set_xlabel("spatial frequency (1/Å)")
-    axes[1, 0].set_ylabel("amplitude relative to first exposure")
-    axes[1, 0].grid(alpha=0.25)
-    axes[1, 0].legend(fontsize=8, ncol=2)
-
-    mid = slice(max(1, n_shells // 4), max(2, 3 * n_shells // 4))
-    group_axis = np.arange(len(records))
-    axes[1, 1].plot(group_axis, np.nanmedian(observed[:, mid], axis=1), "o-", label="observed")
-    axes[1, 1].plot(group_axis, np.nanmedian(total_envelope[:, mid], axis=1), "o-", label="scale × dose")
-    axes[1, 1].plot(group_axis, np.nanmedian(dose_envelope[:, mid], axis=1), "o-", label="dose only")
-    axes[1, 1].plot(
-        group_axis,
-        np.asarray([abs(record["input_ctf_scale_relative"]) for record in records]),
-        "o-",
-        label="input scale only",
-    )
-    axes[1, 1].set_title("Mid-frequency attenuation across acquisition")
-    axes[1, 1].set_yscale("log")
-    axes[1, 1].set_xlabel("tilt/dose group")
-    axes[1, 1].set_ylabel("amplitude relative to first exposure")
-    axes[1, 1].grid(alpha=0.25)
-    axes[1, 1].legend()
-    fig.suptitle("Per-tilt reconstruction transfer diagnostics", fontsize=15)
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=180, bbox_inches="tight")
-    plt.close(fig)
-    predicted_powers = volume_powers[0, :n_shells] * total_envelope**2
-    return observed, total_envelope, dose_envelope, predicted_powers, frequencies
+    corrected_powers = _remove_scale_dose_from_power(volume_powers[:, :n_shells], total_envelope)
+    return observed, total_envelope, dose_envelope, corrected_powers, frequencies
 
 
 def run_tilt_diagnostics(
@@ -453,20 +388,17 @@ def run_tilt_diagnostics(
         records,
         os.path.join(plots_dir, "tilt_diagnostics_six_view_shared_scale.png"),
     )
-    observed, total_envelope, dose_envelope, predicted_powers, frequencies = _plot_spectral_summary(
+    observed, total_envelope, dose_envelope, corrected_powers, frequencies = _compute_spectral_diagnostics(
         volume_powers,
         transfer_profiles,
-        records,
         float(dataset.voxel_size),
         int(dataset.grid_size),
-        os.path.join(plots_dir, "tilt_diagnostics_summary.png"),
     )
     n_shells = observed.shape[1]
+    inverse_scale_dose = 1.0 / np.maximum(total_envelope, np.finfo(np.float32).tiny)
     _plot_reconstruction_power_comparisons(
         np.asarray(volume_powers)[:, :n_shells],
-        predicted_powers,
-        observed,
-        total_envelope,
+        corrected_powers,
         records,
         frequencies,
         os.path.join(plots_dir, "tilt_reconstruction_power.png"),
@@ -476,9 +408,10 @@ def run_tilt_diagnostics(
         os.path.join(diagnostics_dir, "spectra.npz"),
         reconstruction_power=np.asarray(volume_powers),
         observed_relative_amplitude=observed,
-        predicted_scale_dose_relative_amplitude=total_envelope,
-        predicted_dose_relative_amplitude=dose_envelope,
-        predicted_reconstruction_power=predicted_powers,
+        forward_scale_dose_relative_amplitude=total_envelope,
+        forward_dose_relative_amplitude=dose_envelope,
+        inverse_scale_dose_correction_amplitude=inverse_scale_dose,
+        scale_dose_corrected_reconstruction_power=corrected_powers,
         ctf_full_power=np.asarray([profile["full"] for profile in transfer_profiles]),
         ctf_dose_power=np.asarray([profile["dose"] for profile in transfer_profiles]),
         ctf_base_power=np.asarray([profile["base"] for profile in transfer_profiles]),
@@ -494,7 +427,10 @@ def run_tilt_diagnostics(
                     "reconstruction_ctf_bfactor_envelope": "disabled",
                     "reconstruction_noise_weighting": "unit radial variance",
                     "physical_ctf": "retained",
-                    "prediction": "source RECOVAR CTF evaluator; amplitude relative to first exposure",
+                    "scale_dose_correction": (
+                        "inverse of the source RECOVAR forward scale/dose amplitude envelope, "
+                        "relative to the first exposure"
+                    ),
                 },
                 "groups": records,
             },

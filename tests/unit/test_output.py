@@ -309,6 +309,11 @@ def test_standard_pipeline_plots_uses_embedding_component_api(monkeypatch, tmp_p
         "plot_noise_group_summary",
         lambda *_args, **_kwargs: (plt.figure(), None),
     )
+    monkeypatch.setattr(
+        plot_utils,
+        "plot_volume_variance_prior_summary",
+        lambda *_args, **_kwargs: (plt.figure(), None),
+    )
 
     output.standard_pipeline_plots(_PO(), 4, str(tmp_path))
 
