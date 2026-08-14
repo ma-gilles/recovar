@@ -11,7 +11,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=256G
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 
 set -euo pipefail
 : "${EXPECTED_LAUNCHER_SHA256:?submission must pin launcher hash}"
@@ -23,10 +23,14 @@ ROOT=${K1_CASE26_RUN_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_ca
 RUNTIME=${K1_CASE26_RUNTIME_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_ordered_exact_it2_20260810T1925ET}
 MAX_ITER=${K1_CASE26_MAX_ITER:-2}
 case "${MAX_ITER}" in
-    2|3) ;;
-    *) echo "K1_CASE26_MAX_ITER must be 2 or 3" >&2; exit 2 ;;
+    2|3|999) ;;
+    *) echo "K1_CASE26_MAX_ITER must be 2, 3, or 999" >&2; exit 2 ;;
 esac
-REPORT_STEM=case26_ordered_exact_it${MAX_ITER}
+if [[ "${MAX_ITER}" = 999 ]]; then
+    REPORT_STEM=case26_ordered_exact_full
+else
+    REPORT_STEM=case26_ordered_exact_it${MAX_ITER}
+fi
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
@@ -161,7 +165,7 @@ PY
 
 COMMAND=(
     "${PYTHON}" -m scripts.run_full_refinement
-    --data_dir "${DATA}" --output "${OUTPUT}" --max_iter "${MAX_ITER}" --skip_final_iteration
+    --data_dir "${DATA}" --output "${OUTPUT}" --max_iter "${MAX_ITER}"
     --healpix_order 3 --auto_local_healpix_order 4 --offset_range 3.0 --offset_step 1.0
     --adaptive_oversampling 1 --init_resolution 30.0 --image-fourier-backend relion_cuda
     --image_batch_size 187 --rotation_block_size 8192 --seed 1726 --perturb_seed 1726
@@ -175,6 +179,9 @@ COMMAND=(
     --relion_optimiser "${RELION}/run_it000_optimiser.star"
     --relion_init_dir "${RELION}"
 )
+if [[ "${MAX_ITER}" != 999 ]]; then
+    COMMAND+=(--skip_final_iteration)
+fi
 if [[ -n "${STATE_SWAP_VARIANT}" ]]; then
     COMMAND+=(
         --perturb_replay_relion_dir "${RELION}"
@@ -208,17 +215,33 @@ if [[ -n "${PASS2_DUMP_DIR}" ]]; then
 fi
 
 fsc_audit_status=0
+FSC_SCOPE_ARGS=(--numbered-only)
+if [[ "${MAX_ITER}" = 999 ]]; then
+    FSC_SCOPE_ARGS=()
+fi
 "${PYTHON}" -m scripts.audit_k1_fsc_trajectory \
     --case-root "${SOURCE_CASE}" --recovar-dir "${OUTPUT}" --relion-dir "${RELION}" \
-    --numbered-only \
+    "${FSC_SCOPE_ARGS[@]}" \
     --output-json "${ANALYSIS}/${REPORT_STEM}_fsc.json" \
     --output-markdown "${ANALYSIS}/${REPORT_STEM}_fsc.md" \
     --output-shellwise-npz "${ANALYSIS}/${REPORT_STEM}_fsc_shellwise.npz" \
     --min-cross-merged-fsc-auc 0 --min-merged-gt-delta -1 || fsc_audit_status=$?
-# This is deliberately a short prefix discriminator against an 11-iteration
-# reference.  The trajectory auditor returns 2 for that expected topology
-# mismatch after writing the requested scientific comparison.
-test "${fsc_audit_status}" -eq 0 -o "${fsc_audit_status}" -eq 2
+if [[ "${MAX_ITER}" = 999 ]]; then
+    test "${fsc_audit_status}" -eq 0
+    "${PYTHON}" - "${OUTPUT}/refinement_results.npz" <<'PY'
+import sys
+
+import numpy as np
+
+with np.load(sys.argv[1], allow_pickle=True) as result:
+    assert bool(np.asarray(result["final_all_data_ran"]).item())
+    assert not bool(np.asarray(result["final_all_data_grid_correct"]).item())
+PY
+else
+    # Prefix discriminators intentionally stop before the 11-iteration
+    # reference. The trajectory auditor returns 2 after writing its report.
+    test "${fsc_audit_status}" -eq 0 -o "${fsc_audit_status}" -eq 2
+fi
 "${PYTHON}" -m scripts.audit_k1_intermediate_trajectory \
     --case-root "${SOURCE_CASE}" --recovar-dir "${OUTPUT}" --relion-dir "${RELION}" \
     --output-json "${ANALYSIS}/${REPORT_STEM}_state.json" \

@@ -30,3 +30,13 @@ def test_candidate_flags_fail_closed_for_state_swap_replay():
     text = _launcher_text()
     assert '[[ "${GAUSSIAN_COARSE}${FINE_ROTATION_EXECUTION_ORDER}${WAVG_ATOMIC_SCALE_AA}" != 000 ]]' in text
     assert "fresh K=1 candidate flags cannot be combined with state-swap replay" in text
+
+
+def test_full_case_mode_runs_final_without_grid_correction():
+    text = _launcher_text()
+    assert "2|3|999" in text
+    assert 'if [[ "${MAX_ITER}" != 999 ]]; then\n    COMMAND+=(--skip_final_iteration)\nfi' in text
+    assert 'assert bool(np.asarray(result["final_all_data_ran"]).item())' in text
+    assert 'assert not bool(np.asarray(result["final_all_data_grid_correct"]).item())' in text
+    assert 'if [[ "${MAX_ITER}" = 999 ]]; then\n    FSC_SCOPE_ARGS=()\nfi' in text
+    assert "unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER" in text
