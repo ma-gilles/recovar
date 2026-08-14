@@ -102,6 +102,22 @@ def _noise_group_labels(metadata, n_groups):
 def plot_noise_group_summary(pipeline_output, output_path=None):
     """Compare final noise profiles with matched image power spectra by tilt/dose group."""
 
+    with plt.rc_context(
+        {
+            "font.size": 10,
+            "axes.titlesize": 12,
+            "axes.labelsize": 10,
+            "xtick.labelsize": 9,
+            "ytick.labelsize": 9,
+            "legend.fontsize": 8,
+        }
+    ):
+        return _plot_noise_group_summary(pipeline_output, output_path)
+
+
+def _plot_noise_group_summary(pipeline_output, output_path=None):
+    """Implementation under an isolated plotting style."""
+
     noise_profiles = np.asarray(_pipeline_value(pipeline_output, "noise_var_used"))
     if noise_profiles.ndim == 1:
         noise_profiles = noise_profiles[None, :]
