@@ -1651,6 +1651,88 @@ boundary; its run root is
 The complete-case scorecard remains `28/34` strict, `32/34` topology, and
 `34/34` evaluated.
 
+## Uninterrupted iteration-3 BPref boundary
+
+The first iteration-3 native accumulator attempt was rejected before causal
+classification.  Jobs `12366689` and `12366711` continued from a serialized
+`run_it002_optimiser.star`, so their process-local particle order and sampling
+RNG state were reset.  The existing continuation audit already demonstrates
+that this changes all 3,000 hard poses.  Those dumps are valid continuation
+controls, but they are not an oracle for RELION's uninterrupted physical
+iteration 3.  The same limitation applies to reconstruction-stage job
+`12366854`.
+
+Fresh uninterrupted native jobs `12367256` and `12367339` instead ran physical
+iterations 1--3 from the original inputs and captured all three raw BPref
+calls.  Physical iteration 3 is explicitly `call0002`.  Independent
+reconstruction-stage job `12367257` also ran fresh and captured only call 2.
+Its instrumentation is inert against `12367256`: all three numbered
+iterations retain exact selected topology, every half-map FSC-AUC is at least
+`0.9999999999030741`, and no pose or shift differs.  The inertness report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_native_fresh_it3_reconstruct_stage_20260814T0332ET/analysis/RELION_FRESH_CAPTURE_INERTNESS.json`
+(SHA-256
+`f38c99494dcd2a09895e5da800ee3bd97f9b1502bc0b6d9e19b5145f5e2f4595`).
+
+The positive narrow candidate from job `12324725` had already saved its
+post-low-resolution-join iteration-3 accumulators losslessly.  They were
+wrapped in the stage-identified archive
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_rfloat_noise_order_wavg_it3_20260813T0554ET/analysis/recovar_bpref_accum_it003_from_saved_intermediates.npz`
+(SHA-256
+`6705dab4ef34c51f2bcd6a23fcf481821d6c799d7220e26e74f810fbadbaaa85`)
+and compared to both uninterrupted native call-2 captures:
+
+| Half | Quantity | RECOVAR/native A rel-L2 | RECOVAR/native B rel-L2 | Native A/B rel-L2 |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | numerator | `9.7378619e-3` | `9.7376086e-3` | `1.7747644e-5` |
+| 1 | denominator | `1.0991199e-3` | `1.0991362e-3` | `3.1480538e-6` |
+| 1 | downsampled average | `7.2921677e-3` | `7.2917311e-3` | `3.1927836e-5` |
+| 2 | numerator | `3.9458379e-4` | `3.9525465e-4` | `2.3472742e-5` |
+| 2 | denominator | `3.0620719e-5` | `3.1605459e-5` | `2.9545365e-6` |
+| 2 | downsampled average | `6.5895098e-4` | `6.6124531e-4` | `5.9721500e-5` |
+
+Current-head boundary job `12366688` completed independently with the same
+fresh physical order and explicit post-join archive.  Relative to native A,
+its half-1 numerator/denominator/average errors are
+`9.7439534e-3`/`1.1063982e-3`/`7.3087027e-3`; half 2 is
+`4.0332047e-4`/`5.0522523e-5`/`6.6643738e-4`.  The positive narrow candidate
+therefore improves every reported edge, most visibly the half-2 denominator,
+but leaves the dominant half-1 boundary essentially unchanged.  The baseline
+reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it3_postjoin_boundary_20260814T0310ET/analysis/K1_CASE22_BASELINE_FRESH_IT3_POSTJOIN_RAW_ACCUM_HALF1_V5.json`
+(SHA-256
+`a75e3560eab55c631c00eb63e6661168ee2e89790dbf02f2a31654d8c121a3e2`)
+and the corresponding half-2 report (SHA-256
+`226f5af7728f4fd77ae49f307a3870f389f25b8f5d3c18c3dfcd3e4814fa5102`).
+
+The accepted three-edge reports are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_rfloat_noise_order_wavg_it3_20260813T0554ET/analysis/K1_CASE22_POSITIVE_FRESH_IT3_POSTJOIN_RAW_ACCUM_HALF1_V5.json`
+  (SHA-256
+  `ee5bd29467a10d874d8d8b8f0bfbb7f83a10c991d73e1cb6bb49ce84ed7c7a6b`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_rfloat_noise_order_wavg_it3_20260813T0554ET/analysis/K1_CASE22_POSITIVE_FRESH_IT3_POSTJOIN_RAW_ACCUM_HALF2_V5.json`
+  (SHA-256
+  `c8e951eb071168c2c27d7c2ddd1be8d9c9fdd8ec5441a847f267bbc912eca2da`).
+
+This is the first repeat-stable material iteration-3 boundary.  It is already
+present in post-join BPref numerators and denominators, is strongly dominated
+by half 1, and is hundreds of native-repeat units in the half-1 numerator.
+Tau2 regularization, Wiener division, inverse FFT, and gridding are downstream
+and are not the next fix target.
+
+The next bounded discriminator stays at physical iteration 3 and half 1.  It
+must join the ordinary production path to fresh native RELION by immutable
+particle and class-pose tuple identity, then compare normalized posterior
+mass, significant BPref tuple membership, per-tuple numerator and denominator
+operands, destination indices, and particle-owned partial sums.  Start with
+the largest identity-aligned Pmax residual and the previously repeat-stable
+five-particle panel, but retain full-half hashes and mass totals so a sparse
+panel cannot hide a distributed scale error.
+
+The fixed complete-case scorecard remains deliberately unchanged at `28/34`
+strict, `32/34` topology, and `34/34` evaluated.  This focused boundary
+localizes the remaining trajectory input error; it does not yet add a passing
+complete case.
+
 ## Physical-iteration-2 candidate order and the first missing parent
 
 Focused H100 retry `12362864` completed in 3 minutes 16 seconds and captured

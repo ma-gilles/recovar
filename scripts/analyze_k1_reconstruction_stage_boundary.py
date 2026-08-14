@@ -25,10 +25,16 @@ def _load(path: Path, dtype: np.dtype) -> np.ndarray:
     return values.reshape(shape)
 
 
-def _stage_path(root: Path, half: int, stage: str) -> Path:
-    paths = sorted(root.glob(f"reconstruct_rank{half:02d}_pid*_call0000_{stage}.bin"))
+def _stage_path(root: Path, half: int, stage: str, call_index: int = 0) -> Path:
+    paths = sorted(
+        root.glob(
+            f"reconstruct_rank{half:02d}_pid*_call{call_index:04d}_{stage}.bin"
+        )
+    )
     if len(paths) != 1:
-        raise ValueError(f"expected one half-{half} {stage} dump, found {paths}")
+        raise ValueError(
+            f"expected one half-{half} call-{call_index} {stage} dump, found {paths}"
+        )
     return paths[0]
 
 
@@ -66,8 +72,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recovar-accumulator", type=Path, required=True)
     parser.add_argument("--native-stage-dir", type=Path, required=True)
+    parser.add_argument("--native-call-index", type=int, default=0)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
+    if args.native_call_index < 0:
+        raise ValueError("native call index must be non-negative")
 
     with np.load(args.recovar_accumulator, allow_pickle=False) as archive:
         grid_size = int(archive["grid_size"])
@@ -93,25 +102,70 @@ def main() -> None:
 
     halves: dict[str, object] = {}
     for half in (1, 2):
-        native_tau = _load(_stage_path(args.native_stage_dir, half, "tau2"), np.dtype("<f8")).reshape(-1)
+        native_tau = _load(
+            _stage_path(
+                args.native_stage_dir, half, "tau2", args.native_call_index
+            ),
+            np.dtype("<f8"),
+        ).reshape(-1)
         native_weight = _load(
-            _stage_path(args.native_stage_dir, half, "fweight_decentered"), np.dtype("<f8")
+            _stage_path(
+                args.native_stage_dir,
+                half,
+                "fweight_decentered",
+                args.native_call_index,
+            ),
+            np.dtype("<f8"),
         )
         native_regularized = _load(
-            _stage_path(args.native_stage_dir, half, "fweight_regularized"), np.dtype("<f8")
+            _stage_path(
+                args.native_stage_dir,
+                half,
+                "fweight_regularized",
+                args.native_call_index,
+            ),
+            np.dtype("<f8"),
         )
         native_radial_floor = _load(
-            _stage_path(args.native_stage_dir, half, "radavg_weight"), np.dtype("<f8")
+            _stage_path(
+                args.native_stage_dir,
+                half,
+                "radavg_weight",
+                args.native_call_index,
+            ),
+            np.dtype("<f8"),
         ).reshape(-1)
         native_denominator = _native_floor(native_regularized, native_radial_floor, padding_factor)
         native_divided = _load(
-            _stage_path(args.native_stage_dir, half, "fconv_divided"), np.dtype("<c16")
+            _stage_path(
+                args.native_stage_dir,
+                half,
+                "fconv_divided",
+                args.native_call_index,
+            ),
+            np.dtype("<c16"),
         )
         native_before = helpers.relion_volume_to_recovar(
-            _load(_stage_path(args.native_stage_dir, half, "volume_before_gridding"), np.dtype("<f8"))
+            _load(
+                _stage_path(
+                    args.native_stage_dir,
+                    half,
+                    "volume_before_gridding",
+                    args.native_call_index,
+                ),
+                np.dtype("<f8"),
+            )
         )
         native_after = helpers.relion_volume_to_recovar(
-            _load(_stage_path(args.native_stage_dir, half, "volume_after_gridding"), np.dtype("<f8"))
+            _load(
+                _stage_path(
+                    args.native_stage_dir,
+                    half,
+                    "volume_after_gridding",
+                    args.native_call_index,
+                ),
+                np.dtype("<f8"),
+            )
         )
 
         weight = jnp.asarray(weights[half - 1])
@@ -199,6 +253,7 @@ def main() -> None:
         "schema": "recovar.em.k1_reconstruction_stage_boundary.v1",
         "recovar_accumulator": str(args.recovar_accumulator.resolve()),
         "native_stage_dir": str(args.native_stage_dir.resolve()),
+        "native_call_index": args.native_call_index,
         "metric_policy": "scale-sensitive relative-L2; no fitted rescaling",
         "halves": halves,
     }
