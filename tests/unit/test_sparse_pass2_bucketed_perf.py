@@ -6183,6 +6183,23 @@ def test_fine_rotation_override_can_follow_relion_parent_execution_order():
     np.testing.assert_array_equal(per_image["oversampled_rots"][0], fine_rotations[expected_indices])
 
 
+def test_exact_relion_fine_posterior_implies_relion_parent_execution_order(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.delenv("RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER", raising=False)
+    assert not bucketed_mod._relion_fine_parent_execution_order_enabled(
+        use_relion_f32_fine_posterior=False,
+    )
+    assert bucketed_mod._relion_fine_parent_execution_order_enabled(
+        use_relion_f32_fine_posterior=True,
+    )
+
+    monkeypatch.setenv("RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER", "1")
+    assert bucketed_mod._relion_fine_parent_execution_order_enabled(
+        use_relion_f32_fine_posterior=False,
+    )
+
+
 def test_full_support_fine_rotation_override_reuses_shared_arrays():
     fine_rotations = np.arange(6 * 9, dtype=np.float32).reshape(6, 3, 3)
     fine_parent = np.array([0, 1, 0, 2, 1, 2], dtype=np.int64)

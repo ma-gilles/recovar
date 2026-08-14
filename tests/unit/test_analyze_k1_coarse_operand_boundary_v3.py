@@ -6,6 +6,8 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+
 from scripts import analyze_k1_coarse_operand_boundary_v3 as analyzer
 
 
@@ -113,3 +115,19 @@ def test_report_rejects_missing_capture_validations(tmp_path: Path, monkeypatch)
     assert report["classification_ready"] is False
     assert report["capture_validation"]["components"]["status"] == "missing"
     assert report["capture_validation"]["operands"]["status"] == "missing"
+
+
+def test_operand_panel_uses_active_overlap_in_requested_order():
+    selected, positions, operand_order, recovar_only, native_only = (
+        analyzer._matched_operand_rotation_panel(
+            np.asarray([534, 27288, 9], dtype=np.int64),
+            np.asarray([19000, 534, 9], dtype=np.int64),
+            np.asarray([True, True, False]),
+        )
+    )
+
+    np.testing.assert_array_equal(selected, [534])
+    np.testing.assert_array_equal(positions, [0])
+    np.testing.assert_array_equal(operand_order, [1])
+    assert recovar_only == [27288]
+    assert native_only == [19000]

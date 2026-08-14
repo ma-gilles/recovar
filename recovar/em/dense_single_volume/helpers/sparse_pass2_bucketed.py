@@ -8234,6 +8234,18 @@ def relion_x_half_f32_fine_posterior_enabled() -> bool:
     return _env_flag_enabled(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, default=False)
 
 
+def _relion_fine_parent_execution_order_enabled(
+    *,
+    use_relion_f32_fine_posterior: bool,
+) -> bool:
+    """Keep exact fine-posterior diagnostics in RELION's candidate order."""
+
+    return bool(use_relion_f32_fine_posterior) or _env_flag_enabled(
+        _RELION_FINE_ROTATION_EXECUTION_ORDER_ENV,
+        default=False,
+    )
+
+
 def _relion_pass2_reconstruction_probs_for_mstep(
     scores,
     probs,
@@ -11199,9 +11211,8 @@ def compute_pass2_stats_sparse_bucketed(
         fine_rotations_override=fine_rotations_override,
         fine_mstep_rotations_override=fine_mstep_rotations_override,
         fine_rotation_parent_override=fine_rotation_parent_override,
-        relion_parent_execution_order=_env_flag_enabled(
-            _RELION_FINE_ROTATION_EXECUTION_ORDER_ENV,
-            default=False,
+        relion_parent_execution_order=_relion_fine_parent_execution_order_enabled(
+            use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
         ),
     )
     prep_s = time.time() - prep_t0

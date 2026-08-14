@@ -108,6 +108,37 @@ def _rotation_key_to_recovar(rotation_key: int, n_directions: int, n_psi: int) -
     return int(psi * n_directions + direction)
 
 
+def _matched_operand_rotation_panel(
+    rotation_ids: np.ndarray,
+    mapped_operand_ids: np.ndarray,
+    active: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[int], list[int]]:
+    """Join a requested RECOVAR panel to the available native operand rows."""
+
+    requested = np.asarray(rotation_ids, dtype=np.int64).reshape(-1)
+    captured = np.asarray(mapped_operand_ids, dtype=np.int64).reshape(-1)
+    active = np.asarray(active, dtype=bool).reshape(-1)
+    _require(requested.shape == active.shape, "requested/active rotation topology mismatch")
+    _require(np.unique(requested).size == requested.size, "duplicate requested rotations")
+    _require(np.unique(captured).size == captured.size, "duplicate operand rotations")
+    operand_index = {int(key): index for index, key in enumerate(captured)}
+    matched = np.isin(requested, captured) & active
+    _require(np.any(matched), "no common active requested operand rotations")
+    request_positions = np.flatnonzero(matched)
+    selected_ids = requested[request_positions]
+    operand_order = np.asarray(
+        [operand_index[int(key)] for key in selected_ids],
+        dtype=np.int64,
+    )
+    return (
+        selected_ids,
+        request_positions,
+        operand_order,
+        sorted(set(requested.tolist()) - set(captured.tolist())),
+        sorted(set(captured.tolist()) - set(requested.tolist())),
+    )
+
+
 def _load_recovar(path: Path) -> dict[str, Any]:
     with np.load(path, allow_pickle=False) as payload:
         required = {
@@ -258,17 +289,6 @@ def _compare(
     first_unequal = next((name for name, equal in stage_exact.items() if not equal), "coarse_boundary_exact")
     rotation_ids = recovar["rotation_ids"]
     active = np.all(mapped_raw[rotation_ids] != RELION_INVALID_DIFF2, axis=1)
-    _require(np.any(active), "no active requested rotations")
-    selected_ids = rotation_ids[active]
-    recovar_norm = recovar["norms"][active]
-    recovar_cross = recovar["crosses"][active]
-    recovar_total = recovar["scores"][selected_ids]
-    decomposition = _component_decomposition(
-        recovar_total + mapped_raw[selected_ids],
-        recovar_norm + mapped_norm[selected_ids],
-        recovar_cross + mapped_cross[selected_ids],
-    )
-
     mapped_operand_ids = np.asarray(
         [
             _rotation_key_to_recovar(key, n_directions, n_psi)
@@ -276,9 +296,22 @@ def _compare(
         ],
         dtype=np.int64,
     )
-    operand_index = {int(key): index for index, key in enumerate(mapped_operand_ids)}
-    _require(set(rotation_ids.tolist()) == set(operand_index), "captured rotation sets differ")
-    operand_order = np.asarray([operand_index[int(key)] for key in rotation_ids], dtype=np.int64)
+    (
+        selected_ids,
+        selected_request_positions,
+        operand_order,
+        recovar_only_rotation_ids,
+        native_only_rotation_ids,
+    ) = _matched_operand_rotation_panel(rotation_ids, mapped_operand_ids, active)
+    recovar_norm = recovar["norms"][selected_request_positions]
+    recovar_cross = recovar["crosses"][selected_request_positions]
+    recovar_references = recovar["references"][selected_request_positions]
+    recovar_total = recovar["scores"][selected_ids]
+    decomposition = _component_decomposition(
+        recovar_total + mapped_raw[selected_ids],
+        recovar_norm + mapped_norm[selected_ids],
+        recovar_cross + mapped_cross[selected_ids],
+    )
     native_reference = relion_reference_on_recovar_window(
         (
             operand.reference_real.astype(np.float64)
@@ -314,25 +347,30 @@ def _compare(
     )
     configurations = {
         "projected_reference": (native_reference, recovar["shifted"], recovar["ctf2"]),
-        "weighted_shifted_image": (recovar["references"], native_weighted_shifted, recovar["ctf2"]),
-        "correction": (recovar["references"], recovar["shifted"], native_ctf2),
+        "weighted_shifted_image": (recovar_references, native_weighted_shifted, recovar["ctf2"]),
+        "correction": (recovar_references, recovar["shifted"], native_ctf2),
         "all_native": (native_reference, native_weighted_shifted, native_ctf2),
     }
-    total_residual = recovar_total + mapped_raw[rotation_ids]
-    counterfactuals = {}
-    for label, (reference, shifted, ctf2) in configurations.items():
-        norm, cross = recovar_score_components(
-            reference,
-            shifted,
-            ctf2,
-            recovar["half_weights"],
-        )
-        counterfactuals[label] = reference_swap_counterfactual(
-            total_residual,
-            norm + cross + mapped_raw[rotation_ids],
+    total_residual = recovar_total + mapped_raw[selected_ids]
+    counterfactuals: dict[str, Any] = {}
+    if selected_ids.size > 1:
+        for label, (reference, shifted, ctf2) in configurations.items():
+            norm, cross = recovar_score_components(
+                reference,
+                shifted,
+                ctf2,
+                recovar["half_weights"],
+            )
+            counterfactuals[label] = reference_swap_counterfactual(
+                total_residual,
+                norm + cross + mapped_raw[selected_ids],
+            )
+    else:
+        counterfactuals["status"] = (
+            "not computed: at least two common captured rotations are required"
         )
     replay_norm, replay_cross = recovar_score_components(
-        recovar["references"],
+        recovar_references,
         recovar["shifted"],
         recovar["ctf2"],
         recovar["half_weights"],
@@ -344,6 +382,10 @@ def _compare(
         "relion_part_id": components.part_id,
         "active_requested_rotation_count": int(np.count_nonzero(active)),
         "requested_rotation_count": int(rotation_ids.size),
+        "matched_active_operand_rotation_count": int(selected_ids.size),
+        "matched_recovar_rotation_ids": selected_ids.tolist(),
+        "recovar_only_requested_rotation_ids": recovar_only_rotation_ids,
+        "native_only_captured_rotation_ids": native_only_rotation_ids,
         "complete_coarse_boundary": {
             "first_unequal_stage": first_unequal,
             "stage_exact": stage_exact,
@@ -367,7 +409,7 @@ def _compare(
             "max_abs": float(np.max(np.abs(replay_error))),
         },
         "operand_relative_l2": {
-            "projected_reference": _relative_l2(native_reference, recovar["references"]),
+            "projected_reference": _relative_l2(native_reference, recovar_references),
             "weighted_shifted_image": _relative_l2(native_weighted_shifted, recovar["shifted"]),
             "correction": _relative_l2(native_ctf2, recovar["ctf2"]),
         },

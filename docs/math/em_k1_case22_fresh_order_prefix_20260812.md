@@ -1650,3 +1650,107 @@ boundary; its run root is
 
 The complete-case scorecard remains `28/34` strict, `32/34` topology, and
 `34/34` evaluated.
+
+## Physical-iteration-2 candidate order and the first missing parent
+
+Focused H100 retry `12362864` completed in 3 minutes 16 seconds and captured
+the ordinary, non-oracle stack-2690 fine table at physical iteration 2.  The
+native and RECOVAR tables have the same `115,224` fine rotations.  Native has
+`913,792` active tuples and RECOVAR has `913,760`: the only set difference is
+one native coarse parent and its 32 fine children.  On the `913,760` common
+tuples, the ordinary RECOVAR traversal order is not RELION's order; only 128
+positions agree after removing the missing block.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2690_normal_candidates_it2_20260814T0345ET_retry1/analysis/K1_STACK2690_NORMAL_CANDIDATE_TOPOLOGY.json`
+(SHA-256
+`86af51227b1529e6a98466162352fb6e7f6a2405dd6e14de6f19261eac33ea64`).
+
+Job `12363117` repeated the same table with the existing RELION parent-order
+diagnostic.  After restricting both tables to their common tuples, all
+`913,760` positions are exactly ordered and both byte sequences have SHA-256
+`43bb8d91e14dcb044d139e4252fd90869bb67d53defe84d73f39e833d737e12d`.
+The full sequences first differ only where the native-only 32-tuple block is
+inserted.  This proves that `RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER=1`
+reproduces the required fine-candidate traversal rather than merely applying
+a different arbitrary permutation.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2690_relion_candidate_order_it2_20260814T0110ET/analysis/K1_STACK2690_RELION_CANDIDATE_ORDER_V2.json`
+(SHA-256
+`0afdc2330ea06066e548841f4c8c81094da0c820941aacdcef2027fbebc3ac56`).
+
+The missing block comes from native coarse rotation 25632 / translation 13,
+which maps to RECOVAR rotation 534 / translation 13.  The complete coarse
+join has exact candidate topology, finite-prior support, orientation prior,
+and shared hard winner.  Native retains 28,556 tuples while RECOVAR retains
+28,555; this target is the only support mismatch.  Its raw score relative to
+the shared best is lower in RECOVAR by `2.384185791015625e-5`, before
+posterior normalization or the cumulative cutoff.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2690_native_coarse_it2_20260814T0100ET/analysis/K1_STACK2690_NATIVE_COARSE_BOUNDARY.json`
+(SHA-256
+`a300cdc4b9680c2a56aff4163b893e583845ebc186ad360e49ce2f18950ad170`).
+
+The RELION-float32 coarse scorer in job `12363128` reduces the broad centered
+raw-score RMS from `2.95865e-5` to `1.57258e-5` and posterior total variation
+from `1.10784e-5` to `5.30878e-6`, but it still retains 28,555 tuples and
+drops the same target.  Float32 cutoff arithmetic is therefore not the root;
+the next unequal boundary is inside the target/best raw score operands or
+their reduction.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2690_relion_f32_coarse_it2_20260814T0115ET/analysis/K1_STACK2690_RELION_F32_COARSE_BOUNDARY.json`
+(SHA-256
+`1053e4d815fd2be78b80e6a6aff40d0b466acf72f5d2ab17dda724d4eff7b715`).
+
+The fixed complete-case scorecard is deliberately unchanged at `28/34`
+strict, `32/34` topology, and `34/34` evaluated.  These focused experiments
+localize two implementation boundaries; they do not yet claim an autonomous
+case-level pass.
+
+## Same-input RELION fine-order A/B
+
+Job `12363443` completed the physical-iteration-2 half-1 boundary in 832
+seconds with exact fine-posterior arithmetic, exact BPref operands, native
+particle order, one particle-owned accumulator launch per particle, and the
+verified RELION fine-parent traversal.  Fine traversal order has no effect on
+the posterior boundary: all 1,490 Pmax values and all 1,490 significant-count
+values are bitwise identical to the exact-posterior arm without the traversal
+change.  Both arms retain 276 support-count mismatches and Pmax relative L2
+`6.472474761705944e-6`, versus 47 mismatches and `5.5612638434996375e-6` in
+the non-exact-posterior baseline.  This falsifies fine traversal order as the
+posterior/support root.  The fixed-denominator report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_sameinput_exact_posterior_relion_rotation_order_20260814T0130ET/analysis/K1_CASE22_IT2_SAMEINPUT_PARTICLE_STATE_ORDER_AB.json`
+(SHA-256
+`10b5f6df30bee95dc0442494a09e9b31ef7fa784261fcfa7dd23058da9837cce`).
+
+The traversal does have the expected small BPref reduction-order effect.  In
+shells 16--30, RECOVAR-to-matching-native numerator, denominator, and
+reconstructed-average relative L2 improve from
+`3.2196618e-6`/`4.3990191e-6`/`9.3779787e-6` to
+`3.1672351e-6`/`4.2640364e-6`/`9.2098410e-6`.  This is a mediator-level
+improvement, not closure; the posterior and raw coarse-score mismatch remains
+upstream.  The accumulator report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_sameinput_exact_posterior_relion_rotation_order_20260814T0130ET/analysis/K1_CASE22_IT2_HALF1_RELION_ROTATION_ORDER_MATCHED_NATIVE.json`
+(SHA-256
+`37ea3689bb18fbdaa5121e6b89859a65854d213a6fa49b5652a1972021a4198a`).
+
+## Bounded coarse operand panel
+
+Native job `12363432` captured stack 2690's complete coarse component table
+and two projected-reference operand rows.  Matching RECOVAR job `12363923`
+completed in 120 seconds and captured those same mapped rows, 534 and 19000.
+The target inputs are already close: projected-reference, weighted-shifted-
+image, and correction relative L2 are `6.9157e-8`, `3.61485e-7`, and
+`4.33019e-7`.  Substituting the captured native operands does not reduce the
+centered two-rotation score residual; each individual and joint substitution
+increases its energy by approximately `5.86x`.  This disfavors a large
+projected-reference, shifted-image, or correction operand error and raises
+the native CUDA lane/reduction order as the next boundary.
+
+This result is not yet classification-ready.  The exact native operand replay
+passes all fixed gates, including production-diff2 centered p95 and maximum
+`1.52587890625e-5`.  The broader component replay has centered p95
+`6.103515625e-5`, just above its fixed `5e-5` gate, so the report remains
+explicitly rejected for causal classification.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2690_native_components_it2_20260814T0120ET/analysis/K1_STACK2690_COARSE_OPERAND_BOUNDARY_V3_NATIVE_PAIR.json`
+(SHA-256
+`b285a898626df551b1a3bf45d59dea4a1b77561dfca1e977a19adb94f40da55c`).
+The next decisive capture must pair the missing target with the true shared
+best rotation under the same validated operand schema, then compare exact
+per-lane partials and their reduction sequence rather than weakening the
+component gate.

@@ -25,12 +25,17 @@ ROOT=${RECOVAR_K1_BPREF_RUN_ROOT:-${ROOT}}
 RUNTIME=${RECOVAR_K1_BPREF_RUNTIME_ROOT:-${RUNTIME}}
 ORDER_MODE=${RECOVAR_K1_BPREF_EXECUTION_ORDER_MODE:-native}
 ORDER_CHUNK_SIZE=${RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE:-1}
+FINE_ROTATION_EXECUTION_ORDER=${RECOVAR_K1_FINE_ROTATION_EXECUTION_ORDER:-0}
 if [[ ${ORDER_MODE} != native && ${ORDER_MODE} != native_grouped && ${ORDER_MODE} != default_single && ${ORDER_MODE} != standard_double ]]; then
   echo "RECOVAR_K1_BPREF_EXECUTION_ORDER_MODE must be native, native_grouped, default_single, or standard_double" >&2
   exit 2
 fi
 if ! [[ ${ORDER_CHUNK_SIZE} =~ ^[1-9][0-9]*$ ]]; then
   echo "RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE must be a positive integer" >&2
+  exit 2
+fi
+if [[ ${FINE_ROTATION_EXECUTION_ORDER} != 0 && ${FINE_ROTATION_EXECUTION_ORDER} != 1 ]]; then
+  echo "RECOVAR_K1_FINE_ROTATION_EXECUTION_ORDER must be 0 or 1" >&2
   exit 2
 fi
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
@@ -79,6 +84,11 @@ export RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE=1
 export RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN=4e-6
 export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0
 export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
+if [[ ${FINE_ROTATION_EXECUTION_ORDER} == 1 ]]; then
+  export RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER=1
+else
+  unset RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER
+fi
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
 if [[ ${ORDER_MODE} == standard_double ]]; then
@@ -222,6 +232,6 @@ if [[ ${ORDER_MODE} == standard_double ]]; then
 else
   rg -q 'STRICT-PARITY diagnostic: executing K=1 BPref particles in the explicit local order' "${ROOT}/output/run.log"
 fi
-printf '{"job_id":"%s","wall_s":%d,"physical_iteration":2,"half":1,"particles":1490,"exact_bpref_operands":true,"execution_order_mode":"%s","particles_per_bucket_call":%d,"rotation_chunk_size":8192}\n' "${SLURM_JOB_ID}" "${wall_s}" "${ORDER_MODE}" "${ORDER_CHUNK_SIZE}" > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
+printf '{"job_id":"%s","wall_s":%d,"physical_iteration":2,"half":1,"particles":1490,"exact_bpref_operands":true,"execution_order_mode":"%s","particles_per_bucket_call":%d,"fine_rotation_execution_order":%s,"rotation_chunk_size":8192}\n' "${SLURM_JOB_ID}" "${wall_s}" "${ORDER_MODE}" "${ORDER_CHUNK_SIZE}" "${FINE_ROTATION_EXECUTION_ORDER}" > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 sha256sum "${ACCUM}" "${PREJOIN}" > "${ROOT}/provenance/accum_${SLURM_JOB_ID}.sha256"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"

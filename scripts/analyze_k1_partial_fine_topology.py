@@ -86,6 +86,39 @@ def _records(keys: set[tuple[int, int]], limit: int = 64) -> list[list[int]]:
     return [[int(rotation), int(translation)] for rotation, translation in sorted(keys)[:limit]]
 
 
+def _tuple_sequence_report(native: np.ndarray, recovar: np.ndarray) -> dict[str, object]:
+    """Compare exact class-pose traversal order without constructing dense pairs."""
+
+    left = np.ascontiguousarray(np.asarray(native, dtype=np.int64).reshape(-1, 2))
+    right = np.ascontiguousarray(np.asarray(recovar, dtype=np.int64).reshape(-1, 2))
+    common = min(left.shape[0], right.shape[0])
+    equal_positions = np.all(left[:common] == right[:common], axis=1)
+    mismatch = np.flatnonzero(~equal_positions)
+    first = None
+    if mismatch.size:
+        row = int(mismatch[0])
+        first = {
+            "position": row,
+            "native_key": left[row].tolist(),
+            "recovar_key": right[row].tolist(),
+        }
+    elif left.shape[0] != right.shape[0]:
+        first = {
+            "position": common,
+            "native_key": None if common == left.shape[0] else left[common].tolist(),
+            "recovar_key": None if common == right.shape[0] else right[common].tolist(),
+        }
+    return {
+        "native_count": int(left.shape[0]),
+        "recovar_count": int(right.shape[0]),
+        "exact": bool(left.shape == right.shape and np.array_equal(left, right)),
+        "equal_position_count": int(np.count_nonzero(equal_positions)),
+        "native_sha256": hashlib.sha256(left.tobytes()).hexdigest(),
+        "recovar_sha256": hashlib.sha256(right.tobytes()).hexdigest(),
+        "first_mismatch": first,
+    }
+
+
 def _native_significant_count(factor, candidate_count: int) -> int:
     """Validate the native fine-support count for full or geometry-only captures."""
 
@@ -102,10 +135,34 @@ def load_recovar_candidate_table(path: Path) -> dict[str, np.ndarray]:
 
     path = Path(path)
     with np.load(path, allow_pickle=False) as archive:
-        recovar = {name: np.asarray(archive[name]) for name in archive.files}
-    schema = str(recovar.get("schema", ""))
+        schema = str(np.asarray(archive["schema"]).item()) if "schema" in archive.files else ""
+        if schema == PRODUCTION_CAPTURE_SCHEMA:
+            required = {
+                "schema", "original_indices", "candidate_offset", "rotation_offset",
+                "candidate_local_rotation", "candidate_translation", "raw_combined_score",
+                "posterior", "significant", "rotation_log_prior", "translation_log_prior",
+                "rotation_matrix", "rotation_global_index", "rotation_parent_global",
+                "fine_translations",
+            }
+        else:
+            required = {
+                "original_index", "rotations", "fine_translations", "candidate_mask", "probs",
+            }
+            if "reconstruction_mask" in archive.files:
+                required.add("reconstruction_mask")
+        missing = required - set(archive.files)
+        _require(not missing, f"RECOVAR capture is missing {sorted(missing)}")
+        # Full pass-2 diagnostics can contain multi-gigabyte projected-reference
+        # and pixel-operand arrays.  Candidate topology analysis must not load
+        # fields it never reads.
+        recovar = {name: np.asarray(archive[name]) for name in required}
     if schema != PRODUCTION_CAPTURE_SCHEMA:
-        return recovar
+        candidate_mask = np.asarray(recovar["candidate_mask"], dtype=bool)
+        return {
+            **recovar,
+            "candidate_sequence": np.argwhere(candidate_mask).astype(np.int64, copy=False),
+            "capture_schema": np.asarray(schema),
+        }
 
     inventory = validate_raw_capture_shard(path)
     _require(inventory["particle_count"] == 1, "production shard must contain one particle")
@@ -138,6 +195,7 @@ def load_recovar_candidate_table(path: Path) -> dict[str, np.ndarray]:
         "original_index": np.asarray(recovar["original_indices"][0], dtype=np.int64),
         "rotations": np.asarray(recovar["rotation_matrix"], dtype=np.float32),
         "candidate_mask": candidate_mask,
+        "candidate_sequence": np.column_stack((rotation, translation)),
         "probs": dense("posterior", fill=0.0),
         "production_combined_score": dense("raw_combined_score", fill=-np.inf),
         "production_rotation_log_prior": dense("rotation_log_prior", fill=np.nan),
@@ -185,6 +243,9 @@ def analyze(
     )
     native_common_keys = {tuple(map(int, row)) for row in native_common_keys_array.tolist()}
     native_unmapped_tuple_count = int(np.count_nonzero(~native_has_rotation))
+    native_mapped_sequence = np.column_stack(
+        (mapped_rotations[native_has_rotation], mapped_translations[native_has_rotation])
+    )
 
     candidate_mask = np.asarray(recovar["candidate_mask"], dtype=bool)
     recovar_keys = {
@@ -193,6 +254,29 @@ def analyze(
     common_keys = native_common_keys & recovar_keys
     native_only_common_rotation = native_common_keys - recovar_keys
     recovar_only = recovar_keys - native_common_keys
+    recovar_sequence = np.asarray(recovar["candidate_sequence"], dtype=np.int64).reshape(-1, 2)
+    translation_stride = int(
+        max(
+            native_mapped_sequence[:, 1].max(initial=-1),
+            recovar_sequence[:, 1].max(initial=-1),
+        )
+        + 1
+    )
+    native_sequence_codes = (
+        native_mapped_sequence[:, 0] * translation_stride + native_mapped_sequence[:, 1]
+    )
+    recovar_sequence_codes = recovar_sequence[:, 0] * translation_stride + recovar_sequence[:, 1]
+    common_codes = np.intersect1d(
+        native_sequence_codes,
+        recovar_sequence_codes,
+        assume_unique=True,
+    )
+    native_common_sequence = native_mapped_sequence[
+        np.isin(native_sequence_codes, common_codes, assume_unique=True)
+    ]
+    recovar_common_sequence = recovar_sequence[
+        np.isin(recovar_sequence_codes, common_codes, assume_unique=True)
+    ]
 
     native_weights = np.asarray(candidates["post_exponent_weight"], dtype=np.float64)
     native_sum = (
@@ -431,6 +515,14 @@ def analyze(
             "native_only_on_common_rotations_first": _records(native_only_common_rotation),
             "recovar_only_first": _records(recovar_only),
         },
+        "active_tuple_sequence": _tuple_sequence_report(
+            native_mapped_sequence,
+            recovar_sequence,
+        ),
+        "common_active_tuple_sequence": _tuple_sequence_report(
+            native_common_sequence,
+            recovar_common_sequence,
+        ),
         "posterior": {
             "native_full_pmax": float(np.max(native_probs)),
             "recovar_full_pmax": float(np.max(recovar_probs[candidate_mask])),
