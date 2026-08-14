@@ -40,3 +40,12 @@ def test_full_case_mode_runs_final_without_grid_correction():
     assert 'assert not bool(np.asarray(result["final_all_data_grid_correct"]).item())' in text
     assert 'if [[ "${MAX_ITER}" = 999 ]]; then\n    FSC_SCOPE_ARGS=()\nfi' in text
     assert "unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER" in text
+
+
+def test_preservation_case_can_override_source_seed_and_report_stem():
+    text = _launcher_text()
+    assert "SOURCE_CASE=${K1_CASE26_SOURCE_CASE:-" in text
+    assert "RUN_SEED=${K1_CASE26_SEED:-1726}" in text
+    assert "REPORT_STEM=${K1_CASE26_REPORT_STEM}" in text
+    assert '--seed "${RUN_SEED}" --perturb_seed "${RUN_SEED}"' in text
+    assert '\"source_case\":\"%s\",\"run_seed\":%d' in text

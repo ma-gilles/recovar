@@ -22,11 +22,17 @@ set -euo pipefail
 ROOT=${K1_CASE26_RUN_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_ordered_exact_it2_20260810T1925ET}
 RUNTIME=${K1_CASE26_RUNTIME_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_ordered_exact_it2_20260810T1925ET}
 MAX_ITER=${K1_CASE26_MAX_ITER:-2}
+RUN_SEED=${K1_CASE26_SEED:-1726}
 case "${MAX_ITER}" in
     2|3|999) ;;
     *) echo "K1_CASE26_MAX_ITER must be 2, 3, or 999" >&2; exit 2 ;;
 esac
-if [[ "${MAX_ITER}" = 999 ]]; then
+case "${RUN_SEED}" in
+    ''|*[!0-9]*) echo "K1_CASE26_SEED must be a non-negative integer" >&2; exit 2 ;;
+esac
+if [[ -n "${K1_CASE26_REPORT_STEM:-}" ]]; then
+    REPORT_STEM=${K1_CASE26_REPORT_STEM}
+elif [[ "${MAX_ITER}" = 999 ]]; then
     REPORT_STEM=case26_ordered_exact_full
 else
     REPORT_STEM=case26_ordered_exact_it${MAX_ITER}
@@ -35,7 +41,7 @@ REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
 LAUNCHER=${REPO}/scripts/run_k1_case26_ordered_exact_it2.sbatch
-SOURCE_CASE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_current_pr_failure_gate_fd8e27b9_20260808T1515ET/scorecard_remaining5/cases/26_tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80
+SOURCE_CASE=${K1_CASE26_SOURCE_CASE:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_current_pr_failure_gate_fd8e27b9_20260808T1515ET/scorecard_remaining5/cases/26_tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80}
 DATA=${SOURCE_CASE}/data
 RELION=${SOURCE_CASE}/relion_ref
 CUDA_LIB=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/cuda/libcuda_backproject.so
@@ -168,7 +174,7 @@ COMMAND=(
     --data_dir "${DATA}" --output "${OUTPUT}" --max_iter "${MAX_ITER}"
     --healpix_order 3 --auto_local_healpix_order 4 --offset_range 3.0 --offset_step 1.0
     --adaptive_oversampling 1 --init_resolution 30.0 --image-fourier-backend relion_cuda
-    --image_batch_size 187 --rotation_block_size 8192 --seed 1726 --perturb_seed 1726
+    --image_batch_size 187 --rotation_block_size 8192 --seed "${RUN_SEED}" --perturb_seed "${RUN_SEED}"
     --particle_diameter_ang 200 --tau2_fudge 1.0 --max_significants -1
     --firstiter_cc --apply-initial-lowpass
     --benchmark_ledger_json "${OUTPUT}/benchmark_ledger.json"
@@ -247,8 +253,8 @@ fi
     --output-json "${ANALYSIS}/${REPORT_STEM}_state.json" \
     --output-markdown "${ANALYSIS}/${REPORT_STEM}_state.md"
 
-printf '{"job_id":"%s","wall_s":%d,"max_physical_iteration":%d,"intervention":"live_noise_plus_exact_bpref_operands_plus_global_relion_particle_accumulation","state_swap_variant":"%s","gaussian_coarse":%s,"fine_rotation_execution_order":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_noise_only":%s}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${STATE_SWAP_VARIANT}" \
+printf '{"job_id":"%s","wall_s":%d,"max_physical_iteration":%d,"source_case":"%s","run_seed":%d,"intervention":"live_noise_plus_exact_bpref_operands_plus_global_relion_particle_accumulation","state_swap_variant":"%s","gaussian_coarse":%s,"fine_rotation_execution_order":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_noise_only":%s}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${SOURCE_CASE}" "${RUN_SEED}" "${STATE_SWAP_VARIANT}" \
     "${GAUSSIAN_COARSE}" "${FINE_ROTATION_EXECUTION_ORDER}" \
     "${WAVG_ATOMIC_SCALE_AA}" "${WAVG_ATOMIC_DIRECT_NOISE_ONLY}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"

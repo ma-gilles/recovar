@@ -1729,6 +1729,50 @@ promote the diagnostic to default behavior or change a frozen score. The
 complete-case scorecard therefore remains `28/34` strict, `32/34` topology,
 and `34/34` evaluated.
 
+## Complete case-26 direct-noise gate
+
+Pinned full-trajectory job `12371765` completed naturally with exit code zero
+in 31 minutes 29 seconds on the same H100 UUID used by the accepted prefix
+factorial.  It ran from commit `36dac0171859b09bb57358ff0a86ed8a03615975`
+with an empty tracked diff, `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` unset, and
+the forced-after-maximum final override unset.  All eleven numbered
+iterations preserve RELION's exact current-size and HEALPix schedule:
+`56, 56, 66, 60, 60, 60, 60, 60, 60, 60, 60` and
+`3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4`.
+
+The authentic final all-data pass clears both fixed scientific gates:
+
+| Metric | Frozen case 26 | Direct-noise candidate | Fixed gate |
+| --- | ---: | ---: | ---: |
+| final merged cross-engine signed FSC-AUC | `0.954914` | `0.997747377` | `>= 0.995` |
+| final merged RECOVAR-minus-RELION GT FSC-AUC | not promoted | `+0.008697039` | `>= -0.002` |
+
+The final half-map cross-engine FSC-AUC values are `0.999991562` and
+`0.999995803`.  Every numbered merged FSC-AUC rounds to `1.0`; iteration-11
+Pmax relative L2 is `3.328973e-4`.  An independent immutable-particle audit
+also passes the exact schedule gate.  Its final pose residuals are limited to
+STAR precision: angular p95 `9.0934264e-6` degrees and translation p95
+`1.3020949e-6` Angstrom.  Final Pmax absolute p95 is `2.7954081e-4`.
+
+The accepted artifacts are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_direct_noise_full_36dac017_20260814T0610ET/analysis/case26_ordered_exact_full_fsc.json`
+  (SHA-256
+  `587913505160261847b7fcc7db01fc03f50ddafc9ccc3de23d4fbf3f5448416c`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_direct_noise_full_36dac017_20260814T0610ET/analysis/case26_ordered_exact_full_state.json`
+  (SHA-256
+  `846b1d6fc0870f4640308bb25f662d891b6849685b6408113398fc757629cf25`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_direct_noise_full_36dac017_20260814T0610ET/analysis/case26_ordered_exact_full_particle_state.json`
+  (SHA-256
+  `88e3bad8d36a4909e9dc509ae60a5163160906379e530755149f686485a5f02e`).
+
+This closes case 26 scientifically for the direct-noise candidate and would
+move the fixed denominator to `29/34` strict if a passing-case preservation
+run confirms that the opt-in intervention can be promoted safely.  Until
+that preservation gate completes, the repository default and published fixed
+scorecard remain deliberately unchanged at `28/34` strict, `32/34` topology,
+and `34/34` evaluated.
+
 ## Uninterrupted iteration-3 BPref boundary
 
 The first iteration-3 native accumulator attempt was rejected before causal
