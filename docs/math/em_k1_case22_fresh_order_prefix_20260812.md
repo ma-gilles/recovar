@@ -2175,3 +2175,61 @@ complete-case scorecard is `29/34` strict, `32/34` topology, and `34/34`
 evaluated.  Job `12374036` is the first focused follow-up at this boundary:
 its Gaussian/F32 coarse capture closes all 14 parent sets and winners, leaving
 only two one-translation candidate-mask differences.
+
+## Gaussian coarse cutoff and production-lane localization
+
+The two residual job-`12374036` support differences were stacks 2322 and
+2994. Replaying native RELION raw `diff2` with the current RECOVAR priors
+through RECOVAR's exact CUDA CUB normalization and cutoff closes both
+particles exactly. The replay reproduces native `sum_weight`, significant
+threshold, significant count, and the complete significant mask for both
+particles. This rules out the current priors, normalization domain, CUB sum,
+threshold comparison, and tie handling at this boundary. The accepted report
+is `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_native_raw_gpu_replay_178966c2_20260814T0815ET/NATIVE_RAW_RECOVAR_PRIOR_CUB_REPLAY.json`
+(SHA-256
+`37545ca414c64f984c40f9c5d41d96e70deec27d02999cf75ca75207ddc9461e`).
+
+The bounded translation-arithmetic A/B does not supply a universal fix. The
+CUDA `sincosf` arm closes stack 2322 but leaves stack 2994 unchanged; the
+exact-operand arm moves stack 2322's mismatch to a different candidate and
+also leaves stack 2994 unchanged. Neither opt-in is promoted. A later default
+operand-panel replay happened to close the complete support mask for both
+particles while preserving centered raw-score residuals of at most
+`6.103515625e-5` and `4.57763671875e-5`. This demonstrates that the
+one-candidate support result can move within the scorer's float32 execution
+envelope and is not, by itself, a stable scientific regression metric.
+
+Native production-lane jobs `12375426` and `12375427` then captured the
+actual four coarse CUDA lane partials for three rotations and all 29
+translations per particle. All `87/87` production scores for each particle
+are exactly reachable by a legal ordering of the four native partials. The
+passive operand replay is not exact: `285/348` and `286/348` active lane
+values are bitwise equal, with maximum absolute discrepancies
+`3.814697265625e-6` and `7.62939453125e-6`. Each particle has three
+production candidates that cannot be reached from the passive operand replay
+even though every candidate is reachable from the captured active lanes. The
+first unresolved raw-scorer boundary is therefore the active kernel's
+per-pixel operands or arithmetic, followed by atomic arrival order; it is not
+the posterior cutoff implementation. The accepted lane reports are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2322_native_coarse_lanes_it2_20260814T0820ET_retry1/analysis/RELION_LANE_VALIDATION.json`
+  (SHA-256
+  `321468c252a8525a21320c1267f778716bb7decc0e9f98a1a1b9617da713fe43`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2994_native_coarse_lanes_it2_20260814T0820ET_retry1/analysis/RELION_LANE_VALIDATION.json`
+  (SHA-256
+  `07458556b8051648596a6cbfe9768352232f3af67f24b47c9343a62e5c593075`).
+
+The active-lane atomic envelopes explain `71/87` and `63/87` of RECOVAR's
+captured centered panel scores exactly. The remaining distances are only one
+float32 ULP at p95 and at most two ULPs. There is no single fixed order of the
+four lane atomics that reproduces all native candidates, so replacing the
+scorer with one arbitrary deterministic lane order would overfit the panel.
+Operand comparisons remain small: projected-reference relative L2 is
+`5.06e-8`/`5.96e-8`, weighted shifted-image relative L2 is
+`4.02e-7`/`3.10e-7`, and correction relative L2 is
+`5.26e-7`/`2.29e-7` for stacks 2322/2994. Because passive RELION operands do
+not reproduce RELION's own active lanes, these substitutions are diagnostic
+only; the next exact scorer experiment must capture per-pixel values from
+inside the active production kernel or compare its generated instruction
+sequence. Scientific acceptance remains the fixed trajectory and FSC-AUC,
+not bitwise overfitting of one cutoff candidate.
