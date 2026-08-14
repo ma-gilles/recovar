@@ -1651,6 +1651,56 @@ boundary; its run root is
 The complete-case scorecard remains `28/34` strict, `32/34` topology, and
 `34/34` evaluated.
 
+## Exact iteration-3 fine-score operand split and direct-noise gate
+
+Focused positive-control job `12368430` completed naturally with exit code
+zero and captured one immutable stack-79 tuple at physical iteration 3. Native
+production and the native SASS-tree replay are bit-exact at
+`2186.461181640625`; RECOVAR production and its replay are bit-exact at
+`2186.413330078125`. The complete four-operand factorial localizes the gap:
+
+| Substitution into RECOVAR operands | Raw `diff2` |
+| --- | ---: |
+| none | `2186.413330078125` |
+| native correction weight | `2186.453369140625` |
+| native shifted image | `2186.421630859375` |
+| native projected reference | `2186.412841796875` |
+| all native operands | `2186.461181640625` |
+
+The correction substitution closes about `83.7%` of the raw gap. The
+score-active correction, shifted-image, and reference relative-L2 values are
+`1.6828434e-5`, `1.9396349e-6`, and `2.0788233e-5`. The shifted-image error is
+almost a pure preprocessing scalar: fitting real scale
+`1.000001939344767` reduces its residual to `3.3763e-8`. Translation
+arithmetic is therefore not the material image boundary. The accepted report
+is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0079_positive_raw_operand_it3_20260814T040817ET/analysis/K1_STACK79_FINE_OPERAND_POSITIVE.json`
+(SHA-256
+`058953dfbbfaa7e6b5961088e0525b381e3d187d05aab1f34cf2b41003579d88`).
+
+Direct-noise-only production job `12368908` also completed naturally with exit
+code zero, but the pre-recorded immutable-tuple gate rejects a row-wise operand
+comparison. The intervention changes the iteration-3 candidate table: compact
+row 239 is global rotation `262871` in the positive control and `269047` in
+the direct-noise arm, while candidate rotation count changes from `256` to
+`248`. The two row-239 raw scores are consequently different tuples and must
+not be compared. This is captured in the fail-closed report
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0079_direct_noise_raw_operand_it3_20260814T0426ET/analysis/K1_STACK79_DIRECT_NOISE_IDENTITY_GATE.json`
+(SHA-256
+`b1c4c13e75dfd3b9623d83f8ee7508423b3c636fc39182aba1041faf40c1bf9c`).
+The treatment does leave the stored float32 preprocessing normalization factor
+unchanged at `1.2500802278518677`, so it isolates shell noise rather than
+silently applying the rejected coupled normalization treatment.
+
+The case-level causal gate is the same-physical-H100 case-26 control/treatment
+pair. Its first wrapper submission `12369782` failed before either arm started
+because it pinned an incorrect empty-diff hash. That audit also found that the
+tracked launcher exported and then unset the Gaussian-coarse override. Commit
+`059beba9` fixes the ordering and adds a static regression. Corrected job
+`12370338` runs control and direct-noise-only sequentially inside one H100
+allocation. No fixed score is changed until that case-level gate completes;
+the scorecard remains `28/34` strict, `32/34` topology, and `34/34` evaluated.
+
 ## Uninterrupted iteration-3 BPref boundary
 
 The first iteration-3 native accumulator attempt was rejected before causal
