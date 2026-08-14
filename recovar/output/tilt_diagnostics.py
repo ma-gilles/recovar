@@ -105,25 +105,25 @@ def _group_transfer_profiles(dataset, group, source_ctf_params, source_ctf_evalu
     }
 
 
-def _normalize_panel(image):
-    image = np.asarray(image, dtype=np.float32)
-    finite = image[np.isfinite(image)]
+def _shared_limits(images):
+    finite = np.concatenate([np.asarray(image, dtype=np.float32).ravel() for image in images])
+    finite = finite[np.isfinite(finite)]
     if finite.size == 0:
-        return image, -1.0, 1.0
+        return -1.0, 1.0
     lo, hi = np.percentile(finite, [1.0, 99.5])
     if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
         lo, hi = float(np.min(finite)), float(np.max(finite) + 1e-6)
-    return image, float(lo), float(hi)
+    return float(lo), float(hi)
 
 
 def _plot_volume_montage(volumes, records, output_path, *, projection):
     n_volumes = len(volumes)
     ncols = min(6, n_volumes)
     nrows = int(np.ceil(n_volumes / ncols))
+    panels = [np.mean(volume, axis=0) if projection else volume[volume.shape[0] // 2] for volume in volumes]
+    lo, hi = _shared_limits(panels)
     fig, axes = plt.subplots(nrows, ncols, figsize=(3.0 * ncols, 3.0 * nrows), squeeze=False)
-    for ax, volume, record in zip(axes.flat, volumes, records):
-        panel = np.sum(volume, axis=0) if projection else volume[volume.shape[0] // 2]
-        panel, lo, hi = _normalize_panel(panel)
+    for ax, panel, record in zip(axes.flat, panels, records):
         ax.imshow(panel.T, cmap="gray", origin="lower", vmin=lo, vmax=hi)
         angle_label = (
             f"|tilt|≈{record['tilt_angle_deg']:.1f}°"
@@ -138,11 +138,170 @@ def _plot_volume_montage(volumes, records, output_path, *, projection):
         ax.axis("off")
     for ax in axes.flat[n_volumes:]:
         ax.axis("off")
-    kind = "density projections" if projection else "central slices"
-    fig.suptitle(f"Per-tilt means with unit contrast, no dose envelope ({kind})", fontsize=14)
+    kind = "mean density projections" if projection else "central slices"
+    fig.suptitle(
+        f"Per-tilt means with unit contrast, no dose envelope ({kind}; one shared scale)", fontsize=14
+    )
     fig.tight_layout()
     fig.savefig(output_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
+
+
+def _six_volume_views(volume):
+    center = tuple(size // 2 for size in volume.shape)
+    projections = [np.mean(volume, axis=axis) for axis in range(3)]
+    slices = [
+        volume[center[0], :, :],
+        volume[:, center[1], :],
+        volume[:, :, center[2]],
+    ]
+    return projections + slices
+
+
+def _plot_six_view_rows(volumes, records, output_path):
+    """Match the pipeline six-view layout with one row per acquisition rank."""
+
+    rows = [_six_volume_views(volume) for volume in volumes]
+    # Mean projections preserve density units closely enough that a single
+    # global display range remains useful for both projections and slices.
+    lo, hi = _shared_limits([panel for row in rows for panel in row])
+    fig, axes = plt.subplots(len(rows), 6, figsize=(17, max(3.0, 2.65 * len(rows))), squeeze=False)
+    column_titles = ["mean projection 0", "mean projection 1", "mean projection 2", "slice 0", "slice 1", "slice 2"]
+    for col, title in enumerate(column_titles):
+        axes[0, col].set_title(title, fontsize=10)
+    last_image = None
+    for row_idx, (panels, record) in enumerate(zip(rows, records)):
+        for col_idx, panel in enumerate(panels):
+            last_image = axes[row_idx, col_idx].imshow(
+                panel.T,
+                cmap="gray",
+                origin="lower",
+                vmin=lo,
+                vmax=hi,
+            )
+            axes[row_idx, col_idx].set_xticks([])
+            axes[row_idx, col_idx].set_yticks([])
+        angle_prefix = "|tilt|≈" if record["tilt_angle_inferred"] else "tilt "
+        axes[row_idx, 0].set_ylabel(
+            f"rank {record['group_index']}\ndose {record['pre_exposure']:.1f}\n"
+            f"{angle_prefix}{record['tilt_angle_deg']:.1f}°\nn={record['n_images']}",
+            fontsize=8,
+        )
+    colorbar_axis = fig.add_axes([0.925, 0.36, 0.012, 0.28])
+    fig.colorbar(last_image, cax=colorbar_axis, label="density (shared scale)")
+    fig.suptitle("Per-tilt homogeneous means: six views, identical display scale", fontsize=14, y=0.995)
+    fig.subplots_adjust(left=0.08, right=0.90, top=0.94, bottom=0.02, hspace=0.08, wspace=0.04)
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_reconstruction_power_comparisons(
+    volume_powers,
+    predicted_powers,
+    observed_amplitudes,
+    predicted_amplitudes,
+    records,
+    frequencies,
+    output_path,
+    detail_dir,
+):
+    """Plot all reconstruction spectra and one rank-zero comparison per tilt."""
+
+    eps = np.finfo(np.float32).tiny
+    group_indices = np.arange(len(records))
+    colors = plt.cm.plasma(np.linspace(0.05, 0.95, len(records)))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    for group_idx, color in zip(group_indices, colors):
+        axes[0].plot(
+            frequencies,
+            np.maximum(volume_powers[group_idx], eps),
+            color=color,
+            linewidth=1.8,
+            label=f"rank {group_idx}",
+        )
+        axes[1].plot(frequencies, observed_amplitudes[group_idx], color=color, linewidth=1.8)
+        axes[1].plot(
+            frequencies,
+            predicted_amplitudes[group_idx],
+            color=color,
+            linestyle="--",
+            linewidth=1.4,
+        )
+    axes[0].set_yscale("log")
+    axes[0].set_title("Spherically averaged reconstruction power — all tilts")
+    axes[0].set_ylabel("power")
+    axes[0].legend(fontsize=8, ncol=2)
+    axes[1].axhline(1.0, color="black", linewidth=1.0)
+    axes[1].set_yscale("log")
+    axes[1].set_title("Observed (solid) vs predicted CTF scale×dose (dashed)")
+    axes[1].set_ylabel("amplitude relative to rank 0")
+    axes[1].plot([], [], color="black", linewidth=1.8, label="observed")
+    axes[1].plot([], [], color="black", linestyle="--", linewidth=1.4, label="predicted")
+    axes[1].legend(fontsize=8)
+    for ax in axes:
+        ax.set_xlabel("spatial frequency (1/Å)")
+        ax.grid(alpha=0.25)
+    fig.suptitle("Per-tilt reconstruction power and predicted transfer", fontsize=14)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+    os.makedirs(detail_dir, exist_ok=True)
+    reference_power = np.maximum(volume_powers[0], eps)
+    for group_idx, color in zip(group_indices, colors):
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5.2))
+        axes[0].plot(frequencies, reference_power, color="black", linewidth=2.0, label="rank 0 observed")
+        if group_idx != 0:
+            axes[0].plot(
+                frequencies,
+                np.maximum(volume_powers[group_idx], eps),
+                color=color,
+                linewidth=2.0,
+                label=f"rank {group_idx} observed",
+            )
+        axes[0].plot(
+            frequencies,
+            np.maximum(predicted_powers[group_idx], eps),
+            color=color,
+            linestyle="--",
+            linewidth=1.7,
+            label="rank 0 × predicted transfer²",
+        )
+        axes[0].set_yscale("log")
+        axes[0].set_title("Observed and CTF-predicted reconstruction power")
+        axes[0].set_ylabel("power")
+        axes[0].legend(fontsize=8)
+
+        axes[1].plot(
+            frequencies,
+            observed_amplitudes[group_idx],
+            color=color,
+            linewidth=2.0,
+            label="observed amplitude ratio",
+        )
+        axes[1].plot(
+            frequencies,
+            predicted_amplitudes[group_idx],
+            color=color,
+            linestyle="--",
+            linewidth=1.7,
+            label="predicted scale×dose ratio",
+        )
+        axes[1].axhline(1.0, color="black", linewidth=1.0)
+        axes[1].set_yscale("log")
+        axes[1].set_title("Fit relative to acquisition rank 0")
+        axes[1].set_ylabel("amplitude ratio")
+        axes[1].legend(fontsize=8)
+        for ax in axes:
+            ax.set_xlabel("spatial frequency (1/Å)")
+            ax.grid(alpha=0.25)
+        fig.suptitle(
+            f"Reconstruction spectrum: rank {group_idx} vs 0 | dose {records[group_idx]['pre_exposure']:.1f}",
+            fontsize=13,
+        )
+        fig.tight_layout()
+        fig.savefig(os.path.join(detail_dir, f"tilt_{group_idx:03d}_vs_000.png"), dpi=180, bbox_inches="tight")
+        plt.close(fig)
 
 
 def _plot_spectral_summary(volume_powers, transfer_profiles, records, voxel_size, grid_size, output_path):
@@ -190,9 +349,9 @@ def _plot_spectral_summary(volume_powers, transfer_profiles, records, voxel_size
         ax.set_xlabel("spatial frequency (1/Å)")
         ax.set_ylabel("tilt/dose group")
 
-    representative = np.unique(np.linspace(0, len(records) - 1, min(7, len(records)), dtype=int))
-    colors = plt.cm.plasma(np.linspace(0.05, 0.95, representative.size))
-    for group_idx, color in zip(representative, colors):
+    group_indices = np.arange(len(records))
+    colors = plt.cm.plasma(np.linspace(0.05, 0.95, group_indices.size))
+    for group_idx, color in zip(group_indices, colors):
         axes[1, 0].plot(frequencies, observed[group_idx], color=color, linewidth=1.8, label=f"group {group_idx}")
         axes[1, 0].plot(frequencies, total_envelope[group_idx], color=color, linestyle="--", linewidth=1.4)
     axes[1, 0].axhline(1.0, color="black", linewidth=1)
@@ -224,7 +383,8 @@ def _plot_spectral_summary(volume_powers, transfer_profiles, records, voxel_size
     fig.tight_layout()
     fig.savefig(output_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
-    return observed, total_envelope, dose_envelope
+    predicted_powers = volume_powers[0, :n_shells] * total_envelope**2
+    return observed, total_envelope, dose_envelope, predicted_powers, frequencies
 
 
 def run_tilt_diagnostics(
@@ -331,7 +491,12 @@ def run_tilt_diagnostics(
         os.path.join(plots_dir, "tilt_diagnostics_projections.png"),
         projection=True,
     )
-    observed, total_envelope, dose_envelope = _plot_spectral_summary(
+    _plot_six_view_rows(
+        volumes,
+        records,
+        os.path.join(plots_dir, "tilt_diagnostics_six_view_shared_scale.png"),
+    )
+    observed, total_envelope, dose_envelope, predicted_powers, frequencies = _plot_spectral_summary(
         volume_powers,
         transfer_profiles,
         records,
@@ -339,12 +504,24 @@ def run_tilt_diagnostics(
         int(dataset.grid_size),
         os.path.join(plots_dir, "tilt_diagnostics_summary.png"),
     )
+    n_shells = observed.shape[1]
+    _plot_reconstruction_power_comparisons(
+        np.asarray(volume_powers)[:, :n_shells],
+        predicted_powers,
+        observed,
+        total_envelope,
+        records,
+        frequencies,
+        os.path.join(plots_dir, "tilt_reconstruction_power.png"),
+        os.path.join(plots_dir, "tilt_reconstruction_power_individual"),
+    )
     np.savez_compressed(
         os.path.join(diagnostics_dir, "spectra.npz"),
         reconstruction_power=np.asarray(volume_powers),
         observed_relative_amplitude=observed,
         predicted_scale_dose_relative_amplitude=total_envelope,
         predicted_dose_relative_amplitude=dose_envelope,
+        predicted_reconstruction_power=predicted_powers,
         ctf_full_power=np.asarray([profile["full"] for profile in transfer_profiles]),
         ctf_dose_power=np.asarray([profile["dose"] for profile in transfer_profiles]),
         ctf_base_power=np.asarray([profile["base"] for profile in transfer_profiles]),
