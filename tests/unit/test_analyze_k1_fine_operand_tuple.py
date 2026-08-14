@@ -2,7 +2,9 @@ import numpy as np
 import pytest
 
 from scripts.analyze_k1_fine_operand_tuple import (
+    _factorial_operand_substitutions,
     _largest_mismatches,
+    _optimal_scalar_fit,
     _score_window_rows_from_relion_full,
 )
 
@@ -70,3 +72,42 @@ def test_score_window_mapping_rejects_missing_or_duplicate_pixels():
             image_shape=(8, 8),
             current_size=4,
         )
+
+
+@pytest.mark.unit
+def test_factorial_operand_substitutions_covers_all_combinations():
+    relion_reference = np.asarray([1.0 + 2.0j], dtype=np.complex64)
+    recovar_reference = np.asarray([3.0 + 4.0j], dtype=np.complex64)
+    relion_shifted = np.asarray([0.5 + 0.25j], dtype=np.complex64)
+    recovar_shifted = np.asarray([0.75 + 0.125j], dtype=np.complex64)
+    relion_correction = np.asarray([2.0], dtype=np.float32)
+    recovar_correction = np.asarray([1.0], dtype=np.float32)
+
+    results = _factorial_operand_substitutions(
+        relion_reference=relion_reference,
+        relion_shifted=relion_shifted,
+        relion_correction=relion_correction,
+        relion_highres=np.float32(7.0),
+        recovar_reference=recovar_reference,
+        recovar_shifted=recovar_shifted,
+        recovar_correction=recovar_correction,
+        recovar_highres=np.float32(5.0),
+    )
+
+    assert len(results) == 16
+    assert "recovar" in results
+    assert "native_reference_shifted_correction_highres" in results
+    assert results["recovar"] != results["native_reference_shifted_correction_highres"]
+
+
+@pytest.mark.unit
+def test_optimal_scalar_fit_separates_scale_from_pixel_residual():
+    recovar = np.asarray([1.0 + 2.0j, 3.0 - 4.0j], dtype=np.complex64)
+    native = np.complex64(1.25 - 0.5j) * recovar
+
+    fit = _optimal_scalar_fit(native, recovar)
+
+    assert np.isclose(fit["native_over_recovar_complex_scale_real"], 1.25)
+    assert np.isclose(fit["native_over_recovar_complex_scale_imag"], -0.5)
+    assert fit["complex_scaled_relative_l2"] < 1e-15
+    assert fit["real_scaled_relative_l2"] > 0.0

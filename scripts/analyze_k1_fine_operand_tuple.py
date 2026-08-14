@@ -59,6 +59,50 @@ def _sass_tree_raw_diff2(
     return raw_diff2, contribution, lanes
 
 
+def _factorial_operand_substitutions(
+    *,
+    relion_reference: np.ndarray,
+    relion_shifted: np.ndarray,
+    relion_correction: np.ndarray,
+    relion_highres: np.float32,
+    recovar_reference: np.ndarray,
+    recovar_shifted: np.ndarray,
+    recovar_correction: np.ndarray,
+    recovar_highres: np.float32,
+) -> dict[str, float]:
+    """Replay every native/RECOVAR combination of the four score operands."""
+
+    relion_operands = (
+        relion_reference,
+        relion_shifted,
+        relion_correction,
+        relion_highres,
+    )
+    recovar_operands = (
+        recovar_reference,
+        recovar_shifted,
+        recovar_correction,
+        recovar_highres,
+    )
+    operand_names = ("reference", "shifted", "correction", "highres")
+    results: dict[str, float] = {}
+    for native_mask in range(1 << len(operand_names)):
+        selected = tuple(
+            name
+            for index, name in enumerate(operand_names)
+            if native_mask & (1 << index)
+        )
+        key = "recovar" if not selected else "native_" + "_".join(selected)
+        operands = tuple(
+            relion_operands[index]
+            if native_mask & (1 << index)
+            else recovar_operands[index]
+            for index in range(len(operand_names))
+        )
+        results[key] = float(_sass_tree_raw_diff2(*operands)[0])
+    return results
+
+
 def _largest_mismatches(
     relion: np.ndarray,
     recovar: np.ndarray,
@@ -112,6 +156,34 @@ def _largest_mismatches(
         for index in order
         if delta[index] != 0
     ]
+
+
+def _optimal_scalar_fit(
+    relion: np.ndarray,
+    recovar: np.ndarray,
+) -> dict[str, float]:
+    """Measure the residual after one global RECOVAR-to-RELION scale."""
+
+    left = np.asarray(relion, dtype=np.complex128).reshape(-1)
+    right = np.asarray(recovar, dtype=np.complex128).reshape(-1)
+    _require(left.shape == right.shape, "scalar-fit operand shapes differ")
+    denominator = np.vdot(right, right)
+    _require(denominator.real > 0.0, "scalar-fit RECOVAR operand has zero norm")
+    complex_scale = np.vdot(right, left) / denominator
+    real_scale = float(np.vdot(right, left).real / denominator.real)
+    native_norm = float(np.linalg.norm(left))
+    _require(native_norm > 0.0, "scalar-fit native operand has zero norm")
+    return {
+        "native_over_recovar_complex_scale_real": float(complex_scale.real),
+        "native_over_recovar_complex_scale_imag": float(complex_scale.imag),
+        "complex_scaled_relative_l2": float(
+            np.linalg.norm(complex_scale * right - left) / native_norm
+        ),
+        "native_over_recovar_real_scale": real_scale,
+        "real_scaled_relative_l2": float(
+            np.linalg.norm(real_scale * right - left) / native_norm
+        ),
+    }
 
 
 def _score_window_rows_from_relion_full(
@@ -334,6 +406,27 @@ def analyze(
         "native_highres_only": (recovar_reference, recovar_shifted, recovar_corr, relion_sum),
     }.items():
         substitutions[name] = float(_sass_tree_raw_diff2(*operands)[0])
+    factorial_substitutions = _factorial_operand_substitutions(
+        relion_reference=relion_reference,
+        relion_shifted=relion_shifted,
+        relion_correction=relion_corr,
+        relion_highres=relion_sum,
+        recovar_reference=recovar_reference,
+        recovar_shifted=recovar_shifted,
+        recovar_correction=recovar_corr,
+        recovar_highres=recovar_sum,
+    )
+    _require(
+        factorial_substitutions["recovar"] == float(recovar_raw_replay),
+        "factorial RECOVAR replay differs from the direct replay",
+    )
+    _require(
+        factorial_substitutions[
+            "native_reference_shifted_correction_highres"
+        ]
+        == float(native_raw_replay),
+        "factorial native replay differs from the direct replay",
+    )
 
     stage_arrays = {
         "projected_reference": (relion_reference, recovar_reference),
@@ -375,6 +468,11 @@ def analyze(
         name: _metric(left, right)
         for name, (left, right) in score_active_stage_arrays.items()
     }
+    score_active_scalar_fits = {
+        name: _optimal_scalar_fit(left, right)
+        for name, (left, right) in score_active_stage_arrays.items()
+        if name in {"unshifted_image", "shifted_image"}
+    }
     causal_stage_metrics = {
         name: score_active_stage_metrics.get(name, stage_metrics[name])
         for name in stage_arrays
@@ -411,6 +509,7 @@ def analyze(
         "stage_metrics": stage_metrics,
         "stage_metrics_domain": "complete RELION current-size FFT rectangle",
         "score_active_pixel_stage_metrics": score_active_stage_metrics,
+        "score_active_image_scalar_fits": score_active_scalar_fits,
         "score_active_pixel_stage_metrics_domain": (
             "RECOVAR compact support embedded in the RELION current-size FFT rectangle"
         ),
@@ -433,6 +532,7 @@ def analyze(
             "recovar_production": float(recovar_production_raw),
             "recovar_host_replay": float(recovar_raw_replay),
             "substitutions": substitutions,
+            "factorial_substitutions": factorial_substitutions,
         },
         "native_capture_validation": validation,
         "artifacts": {
