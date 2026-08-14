@@ -1,6 +1,6 @@
 # RECOVAR / RELION EM Parity Scorecard
 
-**K=1 fixed-suite score: 28 / 34 passing (34 / 34 evaluated; 32 / 34 intermediate-topology passes).**
+**K=1 fixed-suite score: 30 / 34 passing (34 / 34 evaluated; 33 / 34 intermediate-topology passes).**
 
 **K=4 fixed-trajectory score: 41 / 60 direct class checks passing (9 / 15 iterations pass all classes).**
 
@@ -13,9 +13,9 @@ The artifact-pinned fixture manifest is checked into the repository and binds al
 
 Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like finalization. Correlation is not computed or gated.
 
-Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v9`, generated `2026-07-27T07:29:46+00:00`, JSON SHA-256 `9cedb043dded9e5a2020cf53c413c4e1da366f4a6a2c54127347f8572a9ed7b3`.
+Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v11`, generated `2026-08-14T14:46:03+00:00`, JSON SHA-256 `ea466f54e32a7d29043bda06e56ebff7a781b193e76dedbf6c36dc93813260e7`.
 K=4 evidence snapshot: `k4-relion-cuda-4181d340-20260725`, JSON SHA-256 `bc10d0555488b22f0bc8d54afe5afc5288064ddb4708bd1c75f3b55dd4c0060a`.
-Progress: +8 passing cases since the first frozen snapshot; +1 since the previous snapshot.
+Progress: +10 passing cases since the first frozen snapshot; +1 since the previous snapshot.
 
 ## K=1 fixed cases
 
@@ -42,11 +42,11 @@ Progress: +8 passing cases since the first frozen snapshot; +1 since the previou
 | [x] | `k1-19` | `small_image_offset_3k_g128_noise1_bf80` | pass | pass | 0.998259358 | +0.020106905 | science 11385537; trajectory 11385569; intermediate 11385570 |
 | [x] | `k1-20` | `small_high_res_radial_3k_g256_noise3_bf0` | pass | pass | 0.998129368 | +0.001149427 | science 11498687; trajectory 11498738; intermediate 11498738 |
 | [x] | `k1-21` | `small_kent_angles_3k_g128_white_noise3_bf80` | pass | pass | 0.998345537 | +0.010110173 | science 11385539; trajectory 11385573; intermediate 11385574 |
-| [ ] | `k1-22` | `small_severe_outliers_3k_g128_radial_noise5_bf80` | fail | fail | 0.825938890 | -0.000351848 | science 11385540; trajectory 11385575; intermediate 11385576 |
+| [x] | `k1-22` | `small_severe_outliers_3k_g128_radial_noise5_bf80` | pass | pass | 0.997767346 | +0.009642596 | science 12377247; trajectory 12377829; intermediate 12377829 |
 | [x] | `k1-23` | `small_noctf_radial_3k_g128_noise3_bf80` | pass | pass | 0.998342408 | +0.012298496 | science 11501524; trajectory 11501622; intermediate 11501622 |
 | [x] | `k1-24` | `small_kent_outliers_3k_g128_pct20_noise3_bf80` | pass | pass | 0.998090087 | +0.008280115 | science 11655858; trajectory 11655936; intermediate 11655936 |
 | [x] | `k1-25` | `tiny_baseline_1k_g128_white_noise3_bf80` | pass | pass | 0.998192576 | +0.009181804 | science 11385543; trajectory 11385581; intermediate 11385582 |
-| [ ] | `k1-26` | `tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80` | fail | pass | 0.954913646 | +0.010098947 | science 11385544; trajectory 11385583; intermediate 11385585 |
+| [x] | `k1-26` | `tiny_severe_1k_g128_radial_noise5_nonuniform_pct30_bf80` | pass | pass | 0.997747377 | +0.008697039 | science 12371765; trajectory 12371765; intermediate 12371765 |
 | [x] | `k1-27` | `small_extreme_outliers_3k_g128_pct70_noise1_bf80` | pass | pass | 0.998332271 | +0.010086417 | science 11385545; trajectory 11385587; intermediate 11385588 |
 | [x] | `k1-28` | `small_kent_extra_offset_3k_g128_noise3_bf80` | pass | pass | 0.998534963 | +0.016603039 | science 11384203; trajectory 11384427; intermediate 11384428 |
 | [x] | `k1-29` | `small_low_noise_3k_g128_white_noise0p2_bf80` | pass | pass | 0.998867525 | +0.014987020 | science 11384204; trajectory 11384429; intermediate 11384430 |
@@ -90,6 +90,8 @@ Each row contains four class-level FSC-AUC checks at the frozen `0.995` gate. A 
 | `strict-k1-v7-20260726` | 2026-07-26T15:48:00+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08`, `4c8b043a9b80` | 26 | +1 | 8 | 0 |
 | `strict-k1-v8-20260726` | 2026-07-26T20:50:08+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08`, `4c8b043a9b80`, `916ab17a4c80` | 27 | +1 | 7 | 0 |
 | `strict-k1-v9-20260727` | 2026-07-27T07:29:46+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08`, `4c8b043a9b80`, `916ab17a4c80`, `31c4a0ca203b` | 28 | +1 | 6 | 0 |
+| `strict-k1-v10-20260814` | 2026-08-14T10:59:00+00:00 | `36dac0171859`, `7f0e2348dbee` | 29 | +1 | 5 | 0 |
+| `strict-k1-v11-20260814` | 2026-08-14T14:46:03+00:00 | `e791e87502b5` | 30 | +1 | 4 | 0 |
 
 <!-- BEGIN MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 ## Post-snapshot fixed-fixture intervention diagnostics
@@ -2332,7 +2334,7 @@ hashes. It never mutates the checked scorecard. For example:
 ```bash
 pixi run python scripts/summarize_em_relion_parity_scorecard.py \
   --proposal-previous-ledger /absolute/path/to/current-ledger.json \
-  --proposal-ledger-schema em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v10 \
+  --proposal-ledger-schema em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v12 \
   --proposal-generated-utc 2026-07-26T21:00:00+00:00 \
   --proposal-status-note "Case k1-NN passed immutable strict evidence." \
   --proposal-evidence 'k1-NN|/absolute/path/to/case-root|SCIENCE_JOB|AUDIT_JOB' \

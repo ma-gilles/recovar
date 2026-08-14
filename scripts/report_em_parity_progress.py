@@ -169,7 +169,7 @@ from scripts.summarize_em_relion_parity_scorecard import (  # noqa: E402
     sha256_file,
 )
 
-SCHEMA = "recovar.em_parity_progress.v24"
+SCHEMA = "recovar.em_parity_progress.v25"
 
 
 def _panel(

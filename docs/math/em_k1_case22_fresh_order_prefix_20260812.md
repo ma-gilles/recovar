@@ -2233,3 +2233,43 @@ only; the next exact scorer experiment must capture per-pixel values from
 inside the active production kernel or compare its generated instruction
 sequence. Scientific acceptance remains the fixed trajectory and FSC-AUC,
 not bitwise overfitting of one cutoff candidate.
+
+## Full guarded-default case-22 closure
+
+The autonomous guarded-default trajectory resolves the scientific question
+without overfitting the remaining one-ULP scorer envelope.  Science job
+`12377247` and audit job `12377829` completed with exit code zero from clean
+commit `e791e87502b51fee8b8c2ba9c7de80ee922421ec`.  RECOVAR converged at
+physical iteration 11 and exactly matched RELION's full current-size schedule
+`56, 60, 80, 70, 76, 70, 72, 70, 70, 70, 70` and HEALPix schedule.
+
+Every numbered merged signed FSC-AUC passes; the minimum is
+`0.9999968583440365` at iteration 10.  The authentic final all-data result is:
+
+| Metric | Result | Frozen gate |
+| --- | ---: | ---: |
+| final merged cross-engine signed FSC-AUC | `0.9977673455104741` | `>= 0.995` |
+| final half-1 signed FSC-AUC | `0.9989153794653891` | diagnostic |
+| final half-2 signed FSC-AUC | `0.999237320197774` | diagnostic |
+| final RECOVAR-minus-RELION merged GT FSC-AUC | `+0.009642596478529442` | `>= -0.002` |
+
+The strict report set `completion_claim=true` and has no failures:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_default_full_e791e875_20260814T0922ET/analysis/case22_default_full_strict_fsc.json`
+(SHA-256
+`f9e7ae42c4ef1dfd3778392bbd0ba6f808fe6bb7930f0b2e26c06605a4f71a60`).
+The immutable superseding ledger is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_default_full_e791e875_20260814T0922ET/analysis/em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v11.json`
+(SHA-256
+`ea466f54e32a7d29043bda06e56ebff7a781b193e76dedbf6c36dc93813260e7`).
+
+This promotes fixed case `k1-22` and moves the frozen-denominator metric to
+`30/34` strict, `33/34` exact topology, and `34/34` evaluated.  The remaining
+K=1 strict failures are cases `4`, `5`, `7`, and `10`; only case `7` still
+fails topology.
+
+Separate stopped-boundary controls also rule out CUDA 12.6-versus-12.8 and
+compute-80 PTX JIT as causes: current-source CUDA 12.6 PTX, CUDA 12.6 sm90,
+and CUDA 12.8 sm90 reproduce the same stack-1204 winner/support result.  The
+observed library difference is therefore source-version arithmetic, not the
+compiler or PTX route.  It is retained as a preservation diagnostic and is
+not required for the accepted default case-22 closure.

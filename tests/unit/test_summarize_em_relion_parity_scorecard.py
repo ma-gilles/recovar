@@ -29,13 +29,13 @@ def test_frozen_v1_scorecard_is_valid_and_renders_fixed_denominator():
 
     assert scorecard["frozen_denominator"] == 34
     assert scorecard["frozen_case_definitions_sha256"] == MODULE.frozen_case_definitions_sha256(scorecard["cases"])
-    assert scorecard["current_snapshot"]["counts"] == {"pass": 28, "fail": 6, "not_run": 0}
-    assert "K=1 fixed-suite score: 28 / 34 passing" in rendered
+    assert scorecard["current_snapshot"]["counts"] == {"pass": 30, "fail": 4, "not_run": 0}
+    assert "K=1 fixed-suite score: 30 / 34 passing" in rendered
     assert "K=4 fixed-trajectory score: 41 / 60 direct class checks passing" in rendered
     assert "(9 / 15 iterations pass all classes)" in rendered
-    assert rendered.count("| [x] |") == 28 + 9
-    assert rendered.count("| [ ] |") == 6 + 6
-    assert "Progress: +8 passing cases since the first frozen snapshot; +1 since the previous snapshot." in rendered
+    assert rendered.count("| [x] |") == 30 + 9
+    assert rendered.count("| [ ] |") == 4 + 6
+    assert "Progress: +10 passing cases since the first frozen snapshot; +1 since the previous snapshot." in rendered
     assert "34 cases (470,170,958,467 bytes)" in rendered
     assert "| `strict-k1-v1-old-head-20260721`" in rendered
     assert "| 20 | — | 12 | 2 |" in rendered
@@ -53,9 +53,13 @@ def test_frozen_v1_scorecard_is_valid_and_renders_fixed_denominator():
     assert "| 27 | +1 | 7 | 0 |" in rendered
     assert "| `strict-k1-v9-20260727`" in rendered
     assert "| 28 | +1 | 6 | 0 |" in rendered
+    assert "| `strict-k1-v10-20260814`" in rendered
+    assert "| 29 | +1 | 5 | 0 |" in rendered
+    assert "| `strict-k1-v11-20260814`" in rendered
+    assert "| 30 | +1 | 4 | 0 |" in rendered
     assert (
         "--proposal-ledger-schema "
-        "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v10"
+        "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v12"
     ) in rendered
     assert "Non-scoring regenerated-data diagnostics" in rendered
     assert "| `k1-23` | pass | pass | 0.997483478 |" in rendered
@@ -354,7 +358,7 @@ def test_superseding_ledger_proposal_preserves_denominator_and_topology_counts(
     scorecard = MODULE.load_and_validate(MODULE.DEFAULT_SCORECARD)
     manifest = MODULE.load_and_validate_fixture_manifest(MODULE.DEFAULT_FIXTURE_MANIFEST, scorecard)
     previous = tmp_path / "previous.json"
-    previous_schema = "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v9"
+    previous_schema = "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v11"
     previous.write_text(json.dumps({"schema": previous_schema}) + "\n")
     scorecard["current_snapshot"]["source_ledger"] = {
         "schema": previous_schema,
@@ -380,14 +384,14 @@ def test_superseding_ledger_proposal_preserves_denominator_and_topology_counts(
         manifest,
         MODULE.sha256_file(MODULE.DEFAULT_FIXTURE_MANIFEST),
         previous,
-        "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v10",
+        "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v12",
         "2026-07-27T08:00:00+00:00",
         [evidence],
         "Case k1-04 passed immutable strict evidence.",
     )
 
-    assert ledger["counts"]["strict"] == {"pass": 29, "fail": 5, "not_run": 0}
-    assert ledger["counts"]["topology"] == {"pass": 32, "fail": 2, "not_run": 0}
+    assert ledger["counts"]["strict"] == {"pass": 31, "fail": 3, "not_run": 0}
+    assert ledger["counts"]["topology"] == {"pass": 33, "fail": 1, "not_run": 0}
     assert sum(ledger["counts"]["strict"].values()) == 34
     assert ledger["updates"] == [update]
     assert ledger["supersedes"]["sha256"] == MODULE.sha256_file(previous)
@@ -406,7 +410,7 @@ def test_superseding_ledger_rejects_unpinned_previous_evidence(tmp_path):
             manifest,
             MODULE.sha256_file(MODULE.DEFAULT_FIXTURE_MANIFEST),
             previous,
-            "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v10",
+            "em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v12",
             "2026-07-27T08:00:00+00:00",
             [
                 MODULE.ProposalEvidence(
