@@ -1754,3 +1754,68 @@ The next decisive capture must pair the missing target with the true shared
 best rotation under the same validated operand schema, then compare exact
 per-lane partials and their reduction sequence rather than weakening the
 component gate.
+
+## Native coarse lanes and the earlier iteration-1 M-step boundary
+
+Native RELION lane-capture job `12364438` completed the scientific step and
+wrote all three requested artifacts for half-1 particle 1879 / one-based
+stack index 2690.  The Slurm batch ended nonzero only in the post-run Python
+validator because it invoked a repository module by file path.  Manual module
+validation passes the fixed schema and completeness gates.  The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2690_native_coarse_lanes_it2_20260814T1435ET/`, with a `SAFE_TO_DELETE` marker and
+Slurm logs under its `logs/` directory.  The earlier capture attempt's empty
+output was an infrastructure error: `sbatch --export=NONE` also set
+`SLURM_EXPORT_ENV=NONE`, preventing the nested `srun` from receiving the
+capture variables.  The corrected launcher exports `SLURM_EXPORT_ENV=ALL`
+after sanitizing the environment.
+
+The native production output is attainable from its captured four lane
+partials for all `58/58` target/best translation values.  Enumerating all 24
+legal lane orders proves that lane ordering cannot explain the missing
+target: the target rotation 25632 / translation 13 relative to anchor rotation
+19619 / translation 14 is invariant across every order.  The best single
+fixed order matches `50/58` production values, but no fixed order is required
+for the target/anchor conclusion.  Passive operand replay still differs from
+the active kernel (`192/232` lane values exact, maximum absolute difference
+`7.62939453125e-6`), so the first unresolved native coarse boundary is now
+inside the production lane operands or their in-kernel arithmetic, not the
+atomic lane reduction order.  The exact analyzer output is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2690_native_coarse_lanes_it2_20260814T1435ET/analysis/K1_STACK2690_NATIVE_LANE_ORDER_V2.json`.
+
+The corrected RECOVAR operand-pair job `12364551` used rotations 534 and
+27288, the actual mappings of native rotations 25632 and 19619.  It happened
+to reproduce the sealed native target/anchor relative raw score exactly,
+`-9.772491455078125`, and retained the target with `28,556` tuples.  Earlier
+otherwise identical H100 runs produced `-9.772506713867188` and `28,555`
+tuples.  This one-ULP boundary is real, but a deterministic coarse-reduction
+A/B falsifies coarse atomic scheduling as the trajectory fix.
+
+Deterministic coarse replicas `12365071` and `12365072` completed on separate
+H100s.  Both reproduce the native target/anchor delta, both retain `28,555`
+tuples, and their significant masks and indices are bitwise identical.  Their
+iteration-2 score tables nevertheless differ in 458 pre-prior entries and 260
+post-prior/weight entries.  More importantly, their incoming iteration-1
+hard-assignment, FSC, noise, rotation, translation, and tau2 artifacts are
+bitwise identical, while the iteration-1 M-step accumulators already differ:
+
+- half-1 `Ft_y`: 3,352 unequal values, relative L2 `2.15166e-9`, maximum
+  absolute difference `3.72529e-9`;
+- half-2 `Ft_y`: 3,632 unequal values, relative L2 `2.90811e-9`, maximum
+  absolute difference `3.72529e-9`;
+- half-1 `Ft_ctf`: 630 unequal values, relative L2 `2.21240e-9`, maximum
+  absolute difference `1.45519e-11`;
+- half-2 `Ft_ctf`: 740 unequal values, relative L2 `2.64693e-9`, maximum
+  absolute difference `2.91038e-11`.
+
+The regularized half maps then differ and feed the later coarse-score split.
+The opt-in deterministic coarse reducer is therefore not retained as a code
+fix.  The next bounded discriminator moves earlier, to physical iteration 1:
+join identical particles and retained candidates, then compare normalized
+weights, per-particle BPref numerator/denominator operands, destination
+indices, microbatch partials, and the first unequal global accumulator.  This
+tests the demonstrated earliest varying boundary directly and does not wait
+for another full trajectory.
+
+The fixed complete-case scorecard remains deliberately unchanged at `28/34`
+strict, `32/34` topology, and `34/34` evaluated.  These experiments eliminate
+a coarse reduction-order hypothesis; they do not yet add a passing case.

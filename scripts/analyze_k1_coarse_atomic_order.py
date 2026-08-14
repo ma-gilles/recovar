@@ -13,6 +13,10 @@ import numpy as np
 
 from scripts.validate_relion_coarse_operand_capture import load_artifact as load_operands
 from scripts.validate_relion_coarse_pass1_components import load_artifact as load_components
+from scripts.validate_relion_coarse_lane_capture import (
+    _float32_from_bits,
+    load_artifact as load_lanes,
+)
 
 
 def _sha256(path: Path) -> str:
@@ -67,6 +71,26 @@ def _lane_partials(operands) -> np.ndarray:
     return partials
 
 
+def _captured_lane_partials(lanes) -> np.ndarray:
+    """Reshape native thread partials into rotation/translation/lane-group order."""
+
+    translation_count = int(lanes.header[14])
+    block_size = int(lanes.header[17])
+    active_lanes = block_size // translation_count
+    thread_ids = (
+        np.arange(translation_count, dtype=np.int64)[:, None]
+        + np.arange(active_lanes, dtype=np.int64)[None, :] * translation_count
+    )
+    return np.asarray(lanes.lane_partials[:, thread_ids], dtype=np.float32)
+
+
+def _rotation_key_to_recovar(rotation_key: int, n_directions: int, n_psi: int) -> int:
+    direction, psi = divmod(int(rotation_key), int(n_psi))
+    if direction >= n_directions:
+        raise ValueError("native rotation key is out of range")
+    return int(psi * n_directions + direction)
+
+
 def _summed_scores(partials: np.ndarray, initial_diff2: np.float32) -> tuple[list[tuple[int, ...]], np.ndarray]:
     permutations = list(itertools.permutations(range(partials.shape[-1])))
     scores = np.empty((len(permutations), *partials.shape[:2]), dtype=np.float32)
@@ -84,6 +108,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--components", type=Path, required=True)
     parser.add_argument("--operands", type=Path, required=True)
+    parser.add_argument("--lanes", type=Path, required=True)
     parser.add_argument("--recovar", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
@@ -92,18 +117,41 @@ def main() -> None:
 
     components = load_components(args.components)
     operands = load_operands(args.operands)
-    if components.part_id != operands.part_id or components.stack_index != operands.stack_index:
-        raise ValueError("native component and operand captures identify different particles")
+    lanes = load_lanes(args.lanes)
+    if not (
+        components.part_id == operands.part_id == lanes.part_id
+        and components.stack_index == operands.stack_index == lanes.stack_index
+    ):
+        raise ValueError("native component, operand, and lane captures identify different particles")
+    if not np.array_equal(operands.rotation_keys, lanes.rotation_keys):
+        raise ValueError("native operand and lane rotation keys differ")
     with np.load(args.recovar, allow_pickle=False) as payload:
-        initial_diff2 = np.asarray(payload["coarse_gaussian_initial_diff2"], dtype=np.float32).item()
+        recovar_initial_diff2 = np.asarray(
+            payload["coarse_gaussian_initial_diff2"], dtype=np.float32
+        ).item()
+        recovar_scores = np.asarray(
+            payload["scores_pre_prior_per_class"][0], dtype=np.float32
+        )
 
-    lane_partials = _lane_partials(operands)
-    permutations, scores = _summed_scores(lane_partials, np.float32(initial_diff2))
+    lane_partials = _captured_lane_partials(lanes)
+    initial_diff2 = _float32_from_bits(int(lanes.header[20]))
+    permutations, scores = _summed_scores(lane_partials, initial_diff2)
     native = np.asarray(components.raw_diff2, dtype=np.float32)[
         np.asarray(operands.rotation_keys, dtype=np.int64)
     ]
     exact = scores.view(np.uint32) == native[None, ...].view(np.uint32)
     attainable = np.any(exact, axis=0)
+    n_directions, n_psi = map(int, components.header[10:12])
+    recovar_rotation_ids = np.asarray(
+        [
+            _rotation_key_to_recovar(key, n_directions, n_psi)
+            for key in operands.rotation_keys
+        ],
+        dtype=np.int64,
+    )
+    recovar_diff2 = -recovar_scores[recovar_rotation_ids]
+    recovar_exact = scores.view(np.uint32) == recovar_diff2[None, ...].view(np.uint32)
+    recovar_attainable = np.any(recovar_exact, axis=0)
 
     fixed_rows = []
     for permutation_index, permutation in enumerate(permutations):
@@ -117,6 +165,11 @@ def main() -> None:
             }
         )
     fixed_rows.sort(key=lambda row: (-row["bitwise_equal_count"], row["p95_abs"], row["lane_order"]))
+
+    anchor = np.unravel_index(np.argmin(native), native.shape)
+    native_relative_score = -(native - native[anchor])
+    recovar_relative_score = -(recovar_diff2 - recovar_diff2[anchor])
+    relative_residual = recovar_relative_score.astype(np.float64) - native_relative_score.astype(np.float64)
 
     compatible_by_translation = []
     for translation in range(native.shape[1]):
@@ -133,7 +186,7 @@ def main() -> None:
         )
 
     report = {
-        "schema": "recovar.em.k1_coarse_atomic_order.v1",
+        "schema": "recovar.em.k1_coarse_atomic_order.v2",
         "metric_policy": "exact float32 bits and absolute residuals; no correlation",
         "kernel": {
             "block_size": 128,
@@ -147,9 +200,21 @@ def main() -> None:
         },
         "candidate_panel": {
             "rotation_keys": np.asarray(operands.rotation_keys, dtype=np.int64).tolist(),
+            "recovar_rotation_ids": recovar_rotation_ids.tolist(),
             "score_count": int(native.size),
             "bitwise_attainable_by_some_lane_order": int(np.count_nonzero(attainable)),
             "unattainable_indices": np.argwhere(~attainable).tolist(),
+            "recovar_output_bitwise_attainable_by_native_lane_order": int(
+                np.count_nonzero(recovar_attainable)
+            ),
+            "recovar_output_unattainable_indices": np.argwhere(
+                ~recovar_attainable
+            ).tolist(),
+            "native_panel_anchor": [int(anchor[0]), int(anchor[1])],
+            "relative_score_residual": {
+                "p95_abs": float(np.percentile(np.abs(relative_residual), 95)),
+                "max_abs": float(np.max(np.abs(relative_residual))),
+            },
         },
         "best_fixed_lane_orders": fixed_rows[:8],
         "compatible_orders_by_translation": compatible_by_translation,
@@ -158,8 +223,14 @@ def main() -> None:
             "components_sha256": _sha256(args.components),
             "operands": str(args.operands.resolve()),
             "operands_sha256": _sha256(args.operands),
+            "lanes": str(args.lanes.resolve()),
+            "lanes_sha256": _sha256(args.lanes),
             "recovar": str(args.recovar.resolve()),
             "recovar_sha256": _sha256(args.recovar),
+        },
+        "initial_diff2": {
+            "native": float(initial_diff2),
+            "recovar": float(recovar_initial_diff2),
         },
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
