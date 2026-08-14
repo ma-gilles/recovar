@@ -17,6 +17,7 @@ set -euo pipefail
 : "${EXPECTED_LAUNCHER_SHA256:?submission must pin launcher hash}"
 : "${EXPECTED_REPO_HEAD:?submission must pin repository head}"
 : "${EXPECTED_REPO_DIFF_SHA256:?submission must pin repository diff}"
+: "${EXPECTED_CUDA_SHA256:?submission must pin CUDA library hash}"
 
 ROOT=${K1_CASE26_RUN_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_ordered_exact_it2_20260810T1925ET}
 RUNTIME=${K1_CASE26_RUNTIME_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case26_ordered_exact_it2_20260810T1925ET}
@@ -43,13 +44,33 @@ PASS2_DUMP_DIR=${K1_CASE26_PASS2_DUMP_DIR:-}
 PASS2_DUMP_IDS=${K1_CASE26_PASS2_DUMP_IDS:-23,66,305,459,497}
 PASS2_DUMP_CURRENT_SIZE=${K1_CASE26_PASS2_DUMP_CURRENT_SIZE:-56}
 STATE_SWAP_VARIANT=${K1_CASE26_STATE_SWAP_VARIANT:-}
+GAUSSIAN_COARSE=${K1_CASE26_GAUSSIAN_COARSE:-0}
+FINE_ROTATION_EXECUTION_ORDER=${K1_CASE26_FINE_ROTATION_EXECUTION_ORDER:-0}
+WAVG_ATOMIC_SCALE_AA=${K1_CASE26_WAVG_ATOMIC_SCALE_AA:-0}
+WAVG_ATOMIC_DIRECT_NOISE_ONLY=${K1_CASE26_WAVG_ATOMIC_DIRECT_NOISE_ONLY:-0}
+for flag_name in GAUSSIAN_COARSE FINE_ROTATION_EXECUTION_ORDER \
+    WAVG_ATOMIC_SCALE_AA WAVG_ATOMIC_DIRECT_NOISE_ONLY; do
+    flag_value=${!flag_name}
+    case "${flag_value}" in
+        0|1) ;;
+        *) echo "${flag_name} must be 0 or 1" >&2; exit 2 ;;
+    esac
+done
+if [[ "${WAVG_ATOMIC_DIRECT_NOISE_ONLY}" = 1 ]]; then
+    WAVG_ATOMIC_SCALE_AA=1
+fi
+if [[ -n "${STATE_SWAP_VARIANT}" ]] \
+    && [[ "${GAUSSIAN_COARSE}${FINE_ROTATION_EXECUTION_ORDER}${WAVG_ATOMIC_SCALE_AA}" != 000 ]]; then
+    echo "fresh K=1 candidate flags cannot be combined with state-swap replay" >&2
+    exit 2
+fi
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO}" diff --binary | sha256sum | awk '{print $1}')" = "${EXPECTED_REPO_DIFF_SHA256}"
 test "$(sha256sum "${RELION_BIND}"/_relion_bind_core*.so | awk '{print $1}')" = 793919bdb09875304d630727f9930ca729e1d261f6a354cecce7221af728dced
-test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = 50a0b3b86478a31bd64e8202ed71a6bf70e28429262a957231cf19c50ceab569
+test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test -s "${RELION}/run_it000_data.star" -a -s "${RELION}/run_it002_optimiser.star"
 test -s "${DATA}/particles.star"
 test ! -e "${OUTPUT}"
@@ -95,6 +116,19 @@ fi
 export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
+if [[ "${GAUSSIAN_COARSE}" = 1 ]]; then
+    export RECOVAR_K1_COARSE_GAUSSIAN_FFI=1
+    export RECOVAR_K1_RELION_F32_COARSE_SUPPORT=1
+fi
+if [[ "${FINE_ROTATION_EXECUTION_ORDER}" = 1 ]]; then
+    export RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER=1
+fi
+if [[ "${WAVG_ATOMIC_SCALE_AA}" = 1 ]]; then
+    export RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA=1
+fi
+if [[ "${WAVG_ATOMIC_DIRECT_NOISE_ONLY}" = 1 ]]; then
+    export RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY=1
+fi
 export RECOVAR_BPREF_ACCUM_DUMP_DIR=${ACCUM}
 export RECOVAR_BPREF_PREJOIN_DUMP_DIR=${PREJOIN}
 export RECOVAR_BPREF_BOUNDARY_DUMP_ITERATION=2
@@ -190,8 +224,10 @@ test "${fsc_audit_status}" -eq 0 -o "${fsc_audit_status}" -eq 2
     --output-json "${ANALYSIS}/${REPORT_STEM}_state.json" \
     --output-markdown "${ANALYSIS}/${REPORT_STEM}_state.md"
 
-printf '{"job_id":"%s","wall_s":%d,"max_physical_iteration":%d,"intervention":"live_noise_plus_exact_bpref_operands_plus_global_relion_particle_accumulation","state_swap_variant":"%s"}\n' \
+printf '{"job_id":"%s","wall_s":%d,"max_physical_iteration":%d,"intervention":"live_noise_plus_exact_bpref_operands_plus_global_relion_particle_accumulation","state_swap_variant":"%s","gaussian_coarse":%s,"fine_rotation_execution_order":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_noise_only":%s}\n' \
     "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${STATE_SWAP_VARIANT}" \
+    "${GAUSSIAN_COARSE}" "${FINE_ROTATION_EXECUTION_ORDER}" \
+    "${WAVG_ATOMIC_SCALE_AA}" "${WAVG_ATOMIC_DIRECT_NOISE_ONLY}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 sha256sum "${ANALYSIS}/${REPORT_STEM}_fsc.json" \
     "${ANALYSIS}/${REPORT_STEM}_fsc_shellwise.npz" \
