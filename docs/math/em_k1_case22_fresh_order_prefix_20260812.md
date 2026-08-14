@@ -1701,6 +1701,34 @@ tracked launcher exported and then unset the Gaussian-coarse override. Commit
 allocation. No fixed score is changed until that case-level gate completes;
 the scorecard remains `28/34` strict, `32/34` topology, and `34/34` evaluated.
 
+Job `12370338` completed naturally with exit code zero in 33 minutes 31
+seconds. Both arms used H100 UUID
+`GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a` and preserve the exact
+iteration-1--3 size/HEALPix topology (`56, 56, 66` and `3, 3, 3`). The
+direct-noise-only arm passes every predeclared causal gate:
+
+| Metric | Control | Direct noise only | Change |
+| --- | ---: | ---: | ---: |
+| iteration-2 half-1 shell 0--28 noise rel-L2 | `1.3556491e-5` | `1.2426626e-7` | `109.1x` closer |
+| iteration-2 half-2 shell 0--28 noise rel-L2 | `9.1033654e-6` | `2.4863711e-7` | `36.6x` closer |
+| iteration-3 Pmax rel-L2 | `4.1614107e-5` | `3.8456602e-5` | `7.59%` lower |
+| iteration-3 support-count mismatches | `10/1000` | `4/1000` | `60%` fewer |
+| iteration-3 merged signed FSC-AUC | `0.999999999971256` | `0.9999999999758163` | `+4.56e-12` |
+
+The iteration-3 maximum hard-pose and translation errors remain unchanged at
+`1.3511150e-5` degrees and `4.4172941e-6` Angstrom. Thus source-faithful
+direct low-shell residual accumulation is causal for the early case-26 latent
+state rather than merely changing a downstream final map. The accepted report
+is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_direct_noise_pair_it3_ddfe8dbd_20260814T0503ET/analysis/K1_CASE26_DIRECT_NOISE_PAIR_GATE.json`
+(SHA-256
+`58ae699e1f3e8f0ab81e3d9688ce6210ed7a7a30dd1fc94e0b6eb8fd6112e071`).
+
+This result authorizes a complete case-26 treatment run, but does not yet
+promote the diagnostic to default behavior or change a frozen score. The
+complete-case scorecard therefore remains `28/34` strict, `32/34` topology,
+and `34/34` evaluated.
+
 ## Uninterrupted iteration-3 BPref boundary
 
 The first iteration-3 native accumulator attempt was rejected before causal
