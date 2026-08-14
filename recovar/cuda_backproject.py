@@ -527,7 +527,12 @@ _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
 _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_rectangular_f32"
 )
+_TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
+    "cuda_relion_fine_diff2_fused_translate_rectangular_f32"
+)
 _TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
+_TARGET_RELION_EXPONENTIATE_F32 = "cuda_relion_exponentiate_f32"
+_TARGET_RELION_DIVIDE_F32 = "cuda_relion_divide_f32"
 _TARGET_RELION_CUB_SORT_SCAN_F32 = "cuda_relion_cub_sort_scan_f32"
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_F32 = "cuda_relion_wavg_rotation_atomic_f32"
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32 = "cuda_relion_wavg_rotation_atomic_add_f32"
@@ -580,7 +585,13 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32,
         "RelionFineDiff2RectangularF32",
     ),
+    (
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32,
+        "RelionFineDiff2FusedTranslateRectangularF32",
+    ),
     (_TARGET_RELION_FINE_DIFF2_PAIRS_F32, "RelionFineDiff2PairsF32"),
+    (_TARGET_RELION_EXPONENTIATE_F32, "RelionExponentiateF32"),
+    (_TARGET_RELION_DIVIDE_F32, "RelionDivideF32"),
     (_TARGET_RELION_CUB_SORT_SCAN_F32, "RelionCubSortScanF32"),
     (
         _TARGET_RELION_WAVG_ROTATION_ATOMIC_F32,
@@ -1229,6 +1240,56 @@ def relion_translate_score_f32(
 
 
 @jax.jit
+def relion_exponentiate_f32(values: jax.Array, add: jax.Array) -> jax.Array:
+    """Apply RELION's fine-weight ``expf(value + add)`` CUDA kernel."""
+
+    if values.dtype != jnp.float32:
+        raise TypeError(f"values must be float32, got {values.dtype}")
+    if values.ndim != 1 or values.shape[0] < 1:
+        raise ValueError(f"values must be a nonempty 1-D array, got {values.shape}")
+    if add.dtype != jnp.float32 or add.ndim != 0:
+        raise TypeError(f"add must be a float32 scalar, got {add.dtype} {add.shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION float32 exponentiation requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("RELION float32 exponentiation was requested but custom CUDA is disabled")
+    _ensure_ffi()
+
+    output_type = jax.ShapeDtypeStruct(values.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_EXPONENTIATE_F32,
+        output_type,
+        vmap_method="sequential",
+    )(values, add)
+
+
+@jax.jit
+def relion_divide_f32(values: jax.Array, divisor: jax.Array) -> jax.Array:
+    """Apply RELION's CUDA ``float / float`` posterior normalization."""
+
+    if values.dtype != jnp.float32:
+        raise TypeError(f"values must be float32, got {values.dtype}")
+    if values.ndim != 1 or values.shape[0] < 1:
+        raise ValueError(f"values must be a nonempty 1-D array, got {values.shape}")
+    if divisor.dtype != jnp.float32 or divisor.ndim != 0:
+        raise TypeError(
+            f"divisor must be a float32 scalar, got {divisor.dtype} {divisor.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION float32 division requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("RELION float32 division was requested but custom CUDA is disabled")
+    _ensure_ffi()
+
+    output_type = jax.ShapeDtypeStruct(values.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_DIVIDE_F32,
+        output_type,
+        vmap_method="sequential",
+    )(values, divisor)
+
+
+@jax.jit
 def relion_cub_sort_scan_f32(values: jax.Array) -> tuple[jax.Array, jax.Array]:
     """Sort and inclusively scan one float32 vector with RELION's CUB calls.
 
@@ -1556,6 +1617,103 @@ def relion_fine_diff2_rectangular_f32(
         out_type,
         vmap_method="sequential",
     )(reference, shifted_image, weight, full_to_compact)
+
+
+@functools.partial(jax.jit, static_argnames=("current_size",))
+def relion_fine_diff2_fused_translate_rectangular_f32(
+    reference: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+    *,
+    current_size: int,
+) -> jax.Array:
+    """Evaluate RELION fine diff2 with translation inside the score kernel.
+
+    Shapes are ``reference=(B,R,N)``, ``image=(B,N)``,
+    ``translation_angles=(T,2)``, ``weight=(B,N)``, and
+    ``full_to_compact=(F,)``. The CUDA kernel follows RELION's 256-lane
+    REF3D topology: seven shared-memory translation slots, with the deployed
+    job builder filling at most four. It returns ``(B,R,T)``.
+
+    This entry point is intentionally separate from the production scorer
+    while the fused translation boundary is being qualified against native
+    RELION operand captures.
+    """
+
+    reference = jnp.asarray(reference)
+    image = jnp.asarray(image)
+    translation_angles = jnp.asarray(translation_angles)
+    weight = jnp.asarray(weight)
+    full_to_compact = jnp.asarray(full_to_compact)
+    if reference.dtype != jnp.complex64 or image.dtype != jnp.complex64:
+        raise TypeError(
+            "fused RELION fine diff2 reference/image must be complex64, got "
+            f"{reference.dtype} and {image.dtype}"
+        )
+    if translation_angles.dtype != jnp.float32 or weight.dtype != jnp.float32:
+        raise TypeError(
+            "fused RELION fine diff2 angles/weight must be float32, got "
+            f"{translation_angles.dtype} and {weight.dtype}"
+        )
+    if full_to_compact.dtype != jnp.int32:
+        raise TypeError(
+            "fused RELION fine diff2 lookup must be int32, got "
+            f"{full_to_compact.dtype}"
+        )
+    if (
+        reference.ndim != 3
+        or image.ndim != 2
+        or translation_angles.ndim != 2
+        or translation_angles.shape[1] != 2
+        or weight.ndim != 2
+        or full_to_compact.ndim != 1
+        or reference.shape[0] != image.shape[0]
+        or reference.shape[0] != weight.shape[0]
+        or reference.shape[2] != image.shape[1]
+        or reference.shape[2] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or reference.shape[2] <= 0
+        or translation_angles.shape[0] <= 0
+    ):
+        raise ValueError(
+            "fused RELION fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {image.shape}, {translation_angles.shape}, "
+            f"{weight.shape}, {full_to_compact.shape}"
+        )
+    current_size = int(current_size)
+    expected_full_pixels = current_size * (current_size // 2 + 1)
+    if current_size <= 0 or full_to_compact.shape != (expected_full_pixels,):
+        raise ValueError(
+            "fused RELION fine diff2 lookup does not match current_size: "
+            f"current_size={current_size}, lookup={full_to_compact.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("fused RELION fine diff2 requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "fused RELION fine diff2 was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    out_type = jax.ShapeDtypeStruct(
+        (reference.shape[0], reference.shape[1], translation_angles.shape[0]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        reference,
+        image,
+        translation_angles,
+        weight,
+        full_to_compact,
+        current_size=current_size,
+    )
 
 
 @jax.jit

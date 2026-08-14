@@ -42,8 +42,13 @@ from scripts.validate_relion_fine_score_capture import (
     ACTIVE,
     load_fine_score_capture,
 )
+from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
 from scripts.validate_relion_preprocess_capture import (
     load_artifact as load_preprocess_capture,
+)
+from scripts.validate_relion_scoring_noise_capture import (
+    ScoringNoiseCapture,
+    load_capture as load_scoring_noise_capture,
 )
 
 
@@ -106,6 +111,31 @@ def _constant_by_key(
         )
         result[int(key)] = selected[0]
     return result
+
+
+def native_scoring_noise_radial(
+    capture: ScoringNoiseCapture,
+    *,
+    consumer_iteration: int,
+    half: int,
+    image_shape: tuple[int, int],
+) -> np.ndarray:
+    """Convert a native RELION scoring-noise capture to RECOVAR units."""
+
+    _require(capture.iteration == consumer_iteration, "native scoring-noise iteration changed")
+    _require(capture.rank == half, "native scoring-noise MPI rank differs from the requested half")
+    _require(capture.optics_group_zero_based == 0, "focused replay supports one optics group")
+    _require(image_shape[0] == image_shape[1], "focused replay requires square images")
+    _require(
+        capture.sigma2.size == image_shape[0] // 2 + 1,
+        "native scoring-noise shell count differs from the image grid",
+    )
+    return np.asarray(
+        capture.sigma2
+        * np.float64(capture.sigma2_fudge)
+        * np.float64(image_shape[0] ** 4),
+        dtype=np.float64,
+    )
 
 
 def native_support_geometry(
@@ -257,6 +287,22 @@ def main() -> None:
             "operand with an exact native RELION preprocessing capture."
         ),
     )
+    parser.add_argument(
+        "--native-scoring-noise",
+        type=Path,
+        help=(
+            "Optional exact live RELION sigma2-noise capture for the same "
+            "consumer iteration and half."
+        ),
+    )
+    parser.add_argument(
+        "--native-fine-image-capture",
+        type=Path,
+        help=(
+            "Diagnostic-only replacement of the post-correction fine-kernel "
+            "image with the exact native unshifted operand."
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--particle-diameter-ang", type=float, default=200.0)
     parser.add_argument(
@@ -277,6 +323,13 @@ def main() -> None:
             and args.native_atomic_softmask_reduction
         ),
         "native-lane and native-atomic soft-mask reductions are mutually exclusive",
+    )
+    _require(
+        not (
+            args.native_preprocess_capture is not None
+            and args.native_fine_image_capture is not None
+        ),
+        "native preprocessing and native fine-image overrides are mutually exclusive",
     )
 
     _require(args.consumer_iteration == args.boundary_index + 1, "consumer must follow boundary")
@@ -329,6 +382,8 @@ def main() -> None:
     )
 
     native_preprocess_source = None
+    native_fine_image_source = None
+    native_fine_image_override = False
     if args.native_preprocess_capture is not None:
         native_preprocess = load_preprocess_capture(args.native_preprocess_capture)
         _require(
@@ -367,6 +422,50 @@ def main() -> None:
             native_window_internal,
         )
         native_preprocess_source = str(args.native_preprocess_capture.resolve())
+    if args.native_fine_image_capture is not None:
+        native_fine_image = load_fine_operand_capture(args.native_fine_image_capture)
+        _require(
+            native_fine_image.stack_index == args.source_index + 1,
+            "fine-image capture identity changed",
+        )
+        _require(
+            native_fine_image.iteration == args.consumer_iteration,
+            "fine-image capture iteration changed",
+        )
+        _require(
+            native_fine_image.candidates.size == 1,
+            "fine-image override requires exactly one captured tuple",
+        )
+        pixels = native_fine_image.pixels.reshape(1, native_fine_image.image_size)[0]
+        native_image_full = (
+            np.asarray(pixels["image_real"], dtype=np.float32)
+            + np.complex64(1j) * np.asarray(pixels["image_imag"], dtype=np.float32)
+        ).astype(np.complex64)[None]
+        n_half = int(ds.image_shape[0] * (ds.image_shape[1] // 2 + 1))
+        window_spec = make_fourier_window_spec(
+            ds.image_shape,
+            args.current_size,
+            n_half,
+            square=False,
+            include_recon_window=True,
+        )
+        score_indices = np.asarray(window_spec.score_indices_np, dtype=np.int32)
+        native_image_window = relion_values_on_recovar_window(
+            native_image_full,
+            score_indices,
+            full_image_size=int(ds.image_shape[0]),
+            current_size=args.current_size,
+        )[0]
+        subset = _NativeScoreWindowDataset(
+            subset,
+            score_indices,
+            np.asarray(
+                -native_image_window * np.float32(int(ds.image_shape[0]) ** 2),
+                dtype=np.complex64,
+            ),
+        )
+        native_fine_image_source = str(args.native_fine_image_capture.resolve())
+        native_fine_image_override = True
 
     coarse_rotations = np.load(intermediate_dir / f"it{args.consumer_iteration - 1:03d}_rotations.npy")
     coarse_translations = np.load(intermediate_dir / f"it{args.consumer_iteration - 1:03d}_translations.npy")
@@ -429,9 +528,22 @@ def main() -> None:
         _require(noise_key in results.files, f"refinement results miss {noise_key}")
         noise_radial = np.asarray(results[noise_key], dtype=np.float64)
     _require(noise_radial.shape[0] == 2, "post-update noise must contain two halves")
+    noise_radial_for_scoring = noise_radial[args.half - 1]
+    noise_source = f"refinement_results.npz:{noise_key}:half{args.half}"
+    noise_sigma2_fudge = None
+    if args.native_scoring_noise is not None:
+        native_scoring_noise = load_scoring_noise_capture(args.native_scoring_noise)
+        noise_radial_for_scoring = native_scoring_noise_radial(
+            native_scoring_noise,
+            consumer_iteration=args.consumer_iteration,
+            half=args.half,
+            image_shape=tuple(int(value) for value in ds.image_shape),
+        )
+        noise_source = str(args.native_scoring_noise.resolve())
+        noise_sigma2_fudge = float(native_scoring_noise.sigma2_fudge)
     noise_variance = np.asarray(
         reconstruction_noise.make_radial_noise(
-            noise_radial[args.half - 1],
+            noise_radial_for_scoring,
             ds.image_shape,
         ),
         dtype=np.float64,
@@ -499,6 +611,17 @@ def main() -> None:
         iteration=args.consumer_iteration,
         half=args.half,
     )
+    original_pixel_correction = (
+        sparse_pass2_bucketed._relion_cuda_pixel_correction_from_rfloat_ctf
+    )
+    if native_fine_image_override:
+        def unit_pixel_correction(scale, ctf_rfloat):
+            del scale
+            return jax.numpy.ones_like(ctf_rfloat, dtype=jax.numpy.float32)
+
+        sparse_pass2_bucketed._relion_cuda_pixel_correction_from_rfloat_ctf = (
+            unit_pixel_correction
+        )
     try:
         compute_pass2_stats_sparse(
             subset,
@@ -537,11 +660,16 @@ def main() -> None:
             relion_firstiter_score_mode="gaussian",
             relion_firstiter_winner_take_all=False,
             relion_exact_fine_gaussian=True,
+            relion_fine_diff2_fused_ffi=True,
+            relion_f32_fine_posterior=True,
             relion_projector_half=projector,
             relion_projector_r_max=projector_rmax,
             adaptive_fraction=0.999,
         )
     finally:
+        sparse_pass2_bucketed._relion_cuda_pixel_correction_from_rfloat_ctf = (
+            original_pixel_correction
+        )
         sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
 
     dump_path = args.output_dir / (f"pass2_orig{args.source_index:06d}_cs{args.current_size:03d}.npz")
@@ -566,7 +694,9 @@ def main() -> None:
             args.native_atomic_softmask_reduction
         ),
         "native_preprocess_score_window_source": native_preprocess_source,
-        "noise_source": f"refinement_results.npz:{noise_key}:half{args.half}",
+        "native_fine_image_source": native_fine_image_source,
+        "noise_source": noise_source,
+        "noise_sigma2_fudge": noise_sigma2_fudge,
         "image_pre_shift_source": f"parity/iter_{args.consumer_iteration:03d}.npz",
         "image_correction": float(image_corrections[0]),
         "image_correction_source": image_correction_source,

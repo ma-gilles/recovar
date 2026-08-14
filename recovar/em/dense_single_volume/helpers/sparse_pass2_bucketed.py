@@ -6021,6 +6021,8 @@ def _relion_cuda_fine_diff2_sum(
     shifted_image,
     pixel_weight,
     relion_full_to_compact=None,
+    *,
+    use_fused_ffi=False,
 ):
     """Accumulate direct Gaussian diff2 without materializing ``(..., N)``.
 
@@ -6057,7 +6059,10 @@ def _relion_cuda_fine_diff2_sum(
                 "RELION full-to-compact lookup must be one-dimensional, got "
                 f"{relion_full_to_compact.shape}"
             )
-    if _env_flag_enabled(_RELION_FINE_DIFF2_FUSED_FFI_ENV, default=False):
+    if bool(use_fused_ffi) or _env_flag_enabled(
+        _RELION_FINE_DIFF2_FUSED_FFI_ENV,
+        default=False,
+    ):
         from recovar import cuda_backproject
 
         if reference.ndim == 4:
@@ -6581,7 +6586,7 @@ def _relion_cuda_fine_diff2_to_scores(
     return scores
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("use_fused_ffi",))
 def _score_pass2_bucket_relion_gpu_diff2_raw(
     shifted_corrected,  # (B, T, N) complex, image operand divided by score weight factors
     corr_img_score,  # (B, N) real, Gaussian projection-norm score weight
@@ -6589,6 +6594,8 @@ def _score_pass2_bucket_relion_gpu_diff2_raw(
     half_weights,  # (N,) real
     relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
     highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
+    *,
+    use_fused_ffi=False,
 ):
     """Return positive float32 RELION fine-pass costs without priors or centering."""
 
@@ -6600,6 +6607,7 @@ def _score_pass2_bucket_relion_gpu_diff2_raw(
         shifted_corrected[:, None, :, :],
         weights[:, None, None, :],
         relion_full_to_compact,
+        use_fused_ffi=use_fused_ffi,
     )
     if highres_xi2_half is not None:
         diff2 = diff2 + jnp.asarray(highres_xi2_half, dtype=jnp.float32)[:, None, None]
@@ -6625,7 +6633,7 @@ def _score_pass2_bucket_relion_gpu_diff2_from_raw(
     )
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("use_fused_ffi",))
 def _score_pass2_bucket_relion_gpu_diff2(
     shifted_corrected,  # (B, T, N) complex, image operand divided by score weight factors
     corr_img_score,  # (B, N) real, Gaussian projection-norm score weight
@@ -6637,6 +6645,8 @@ def _score_pass2_bucket_relion_gpu_diff2(
     relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
     min_diff2=None,  # (B,) optional external common minimum across chunks/classes
     highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
+    *,
+    use_fused_ffi=False,
 ):
     """RELION GPU-style direct ``diff2`` scoring for pass-2 diagnostics.
 
@@ -6661,6 +6671,7 @@ def _score_pass2_bucket_relion_gpu_diff2(
         half_weights,
         relion_full_to_compact,
         highres_xi2_half,
+        use_fused_ffi=use_fused_ffi,
     )
     return _relion_cuda_fine_diff2_to_scores(
         diff2,
@@ -6671,7 +6682,7 @@ def _score_pass2_bucket_relion_gpu_diff2(
     )
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("use_fused_ffi",))
 def _score_pass2_bucket_relion_gpu_diff2_single_cached_raw(
     shifted_corrected,  # (T, N) complex
     corr_img_score,  # (N,) real
@@ -6679,6 +6690,8 @@ def _score_pass2_bucket_relion_gpu_diff2_single_cached_raw(
     half_weights,  # (N,) real
     relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
     highres_xi2_half=None,  # scalar float32 powerClass tail already divided by two
+    *,
+    use_fused_ffi=False,
 ):
     """Single-image cached positive-cost variant without priors or centering."""
 
@@ -6688,13 +6701,14 @@ def _score_pass2_bucket_relion_gpu_diff2_single_cached_raw(
         shifted_corrected[None, :, :],
         weights[None, None, :],
         relion_full_to_compact,
+        use_fused_ffi=use_fused_ffi,
     )
     if highres_xi2_half is not None:
         diff2 = diff2 + jnp.asarray(highres_xi2_half, dtype=jnp.float32)
     return diff2
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("use_fused_ffi",))
 def _score_pass2_bucket_relion_gpu_diff2_single_cached(
     shifted_corrected,  # (T, N) complex
     corr_img_score,  # (N,) real
@@ -6706,6 +6720,8 @@ def _score_pass2_bucket_relion_gpu_diff2_single_cached(
     relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
     min_diff2=None,  # scalar or (1,) optional external common minimum
     highres_xi2_half=None,  # scalar float32 powerClass tail already divided by two
+    *,
+    use_fused_ffi=False,
 ):
     """Single-image cached-projection variant that avoids a ``(1, R, N)`` copy."""
 
@@ -6718,6 +6734,7 @@ def _score_pass2_bucket_relion_gpu_diff2_single_cached(
         half_weights,
         relion_full_to_compact,
         highres_xi2_half,
+        use_fused_ffi=use_fused_ffi,
     )
     return _relion_cuda_fine_diff2_to_scores(
         diff2[jnp.newaxis, :, :],
@@ -6873,7 +6890,7 @@ def _score_pass2_pairs_gaussian_algebraic(
     return jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("use_fused_ffi",))
 def _score_pass2_pairs_relion_gpu_diff2_raw(
     shifted_corrected,  # (B, T, N) complex, image / (CTF * scale)
     corr_img_score,  # (B, N) real, Minvsigma2 * CTF^2 * scale^2
@@ -6884,6 +6901,8 @@ def _score_pass2_pairs_relion_gpu_diff2_raw(
     pair_mask,  # (B, P) bool
     relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
     highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
+    *,
+    use_fused_ffi=False,
 ):
     """Return positive float32 RELION costs for compact candidate pairs."""
 
@@ -6902,13 +6921,14 @@ def _score_pass2_pairs_relion_gpu_diff2_raw(
         shifted_pair,
         weights[:, None, :],
         relion_full_to_compact,
+        use_fused_ffi=use_fused_ffi,
     )
     if highres_xi2_half is not None:
         diff2 = diff2 + jnp.asarray(highres_xi2_half, dtype=jnp.float32)[:, None]
     return diff2
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("use_fused_ffi",))
 def _score_pass2_pairs_relion_gpu_diff2(
     shifted_corrected,  # (B, T, N) complex, image / (CTF * scale)
     corr_img_score,  # (B, N) real, Minvsigma2 * CTF^2 * scale^2
@@ -6922,6 +6942,8 @@ def _score_pass2_pairs_relion_gpu_diff2(
     relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
     min_diff2=None,  # (B,) optional external common minimum across classes
     highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
+    *,
+    use_fused_ffi=False,
 ):
     """RELION GPU-style Gaussian scoring for compact pass-2 pairs."""
 
@@ -6943,6 +6965,7 @@ def _score_pass2_pairs_relion_gpu_diff2(
         pair_mask,
         relion_full_to_compact,
         highres_xi2_half,
+        use_fused_ffi=use_fused_ffi,
     )
     return _relion_cuda_fine_diff2_to_scores(
         diff2,
@@ -8133,12 +8156,44 @@ def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
     best = jnp.max(jnp.where(finite, flat_scores, -jnp.inf), axis=1)
     has_finite = jnp.isfinite(best)
     safe_best = jnp.where(has_finite, best, jnp.float32(0.0))
-    shifted = jnp.where(finite, flat_scores - safe_best[:, None] + jnp.float32(50.0), -jnp.inf)
-    raw_weights = jnp.where(shifted < jnp.float32(-88.0), jnp.float32(0.0), jnp.exp(shifted))
-    raw_weights = jnp.where(finite & jnp.isfinite(raw_weights), raw_weights, jnp.float32(0.0))
+    exponent_add = jnp.float32(50.0) - safe_best
+    use_native_cuda = False
+    if jax.default_backend() == "gpu":
+        from recovar import cuda_backproject
 
-    sorted_weights = jnp.sort(raw_weights, axis=1)
-    cumulative = jnp.cumsum(sorted_weights, axis=1, dtype=jnp.float32)
+        use_native_cuda = cuda_backproject.custom_cuda_requested()
+    if use_native_cuda:
+        # RELION computes ``50 - weights_max`` once in XFLOAT, then its CUDA
+        # kernel evaluates ``expf(score + add)``.  Reassociating this as
+        # ``exp(score - best + 50)`` changes hundreds of thousands of raw
+        # weights at the iteration-2 case-22 boundary.  Its deployed sm_80
+        # scan policy also remains observable when the same binary is JITed
+        # on Hopper, so the CUDA primitive pins that policy explicitly.
+        raw_weights = jax.vmap(cuda_backproject.relion_exponentiate_f32)(
+            jnp.where(finite, flat_scores, -jnp.inf),
+            exponent_add,
+        )
+        sorted_weights, cumulative = jax.vmap(
+            cuda_backproject.relion_cub_sort_scan_f32,
+        )(raw_weights)
+    else:
+        shifted = jnp.where(
+            finite,
+            flat_scores + exponent_add[:, None],
+            -jnp.inf,
+        )
+        raw_weights = jnp.where(
+            shifted < jnp.float32(-88.0),
+            jnp.float32(0.0),
+            jnp.exp(shifted),
+        )
+        raw_weights = jnp.where(
+            finite & jnp.isfinite(raw_weights),
+            raw_weights,
+            jnp.float32(0.0),
+        )
+        sorted_weights = jnp.sort(raw_weights, axis=1)
+        cumulative = jnp.cumsum(sorted_weights, axis=1, dtype=jnp.float32)
     sum_weight = cumulative[:, -1]
     has_mass = has_finite & jnp.isfinite(sum_weight) & (sum_weight > jnp.float32(0.0))
     tail_target = _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction)
@@ -8150,7 +8205,18 @@ def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
     threshold = sorted_weights[jnp.arange(flat_scores.shape[0]), threshold_idx]
     mask_flat = has_mass[:, None] & finite & (raw_weights >= threshold[:, None])
     safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
-    reconstruction_probs_flat = jnp.where(mask_flat, raw_weights / safe_sum_weight[:, None], jnp.float32(0.0))
+    if use_native_cuda:
+        normalized_weights = jax.vmap(cuda_backproject.relion_divide_f32)(
+            raw_weights,
+            safe_sum_weight,
+        )
+    else:
+        normalized_weights = raw_weights / safe_sum_weight[:, None]
+    reconstruction_probs_flat = jnp.where(
+        mask_flat,
+        normalized_weights,
+        jnp.float32(0.0),
+    )
     n_significant = jnp.sum(mask_flat, axis=1).astype(jnp.int32)
     output_shape = scores_f32.shape
     return (
@@ -8174,6 +8240,7 @@ def _relion_pass2_reconstruction_probs_for_mstep(
     *,
     adaptive_fraction: float,
     use_relion_x_half_mstep: bool,
+    use_relion_f32_fine_posterior: bool = False,
     winner_take_all: bool = False,
     return_diagnostics: bool = False,
 ):
@@ -8182,7 +8249,10 @@ def _relion_pass2_reconstruction_probs_for_mstep(
     if (
         use_relion_x_half_mstep
         and not winner_take_all
-        and relion_x_half_f32_fine_posterior_enabled()
+        and (
+            bool(use_relion_f32_fine_posterior)
+            or relion_x_half_f32_fine_posterior_enabled()
+        )
     ):
         reconstruction_probs, mask, n_significant, sum_weight, threshold = (
             _relion_f32_fine_reconstruction_probs(
@@ -10801,6 +10871,8 @@ def compute_pass2_stats_sparse_bucketed(
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
     relion_exact_fine_gaussian=True,
+    relion_fine_diff2_fused_ffi=False,
+    relion_f32_fine_posterior=False,
     relion_exact_fine_normalized_cc=False,
     relion_projector_half=None,
     relion_projector_r_max=None,
@@ -10881,6 +10953,10 @@ def compute_pass2_stats_sparse_bucketed(
         relion_exact_fine_gaussian
         and relion_firstiter_score_mode == "gaussian"
         and not use_float64_scoring
+    )
+    use_relion_fine_diff2_fused_ffi = bool(
+        relion_fine_diff2_fused_ffi
+        or _env_flag_enabled(_RELION_FINE_DIFF2_FUSED_FFI_ENV, default=False)
     )
     winner_take_all = bool(relion_firstiter_winner_take_all)
     if bool(disable_adjoint_y) != bool(disable_adjoint_ctf):
@@ -10992,7 +11068,10 @@ def compute_pass2_stats_sparse_bucketed(
     use_relion_f32_fine_posterior = (
         use_relion_x_half_mstep
         and not winner_take_all
-        and relion_x_half_f32_fine_posterior_enabled()
+        and (
+            bool(relion_f32_fine_posterior)
+            or relion_x_half_f32_fine_posterior_enabled()
+        )
     )
     use_half_volume_mstep = bool(relion_half_volume_mstep) or use_relion_x_half_mstep
     compact_pair_mstep_mode_requested = _compact_pair_mstep_mode_for_pass()
@@ -11310,7 +11389,7 @@ def compute_pass2_stats_sparse_bucketed(
         )
     if use_relion_f32_fine_posterior:
         logger.info(
-            "Sparse pass-2 RELION x-half M-step diagnostic: using float32 fine-posterior "
+            "Sparse pass-2 RELION x-half M-step: using float32 fine-posterior "
             "normalization and significance pruning"
         )
     if use_relion_fine_mstep_prune and not use_relion_x_half_mstep:
@@ -12220,6 +12299,7 @@ def compute_pass2_stats_sparse_bucketed(
                             direct_half_weights,
                             relion_score_full_to_compact,
                             relion_highres_xi2_half,
+                            use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                         )
                     else:
                         score_chunk = _score_pass2_bucket_relion_gpu_diff2(
@@ -12233,6 +12313,7 @@ def compute_pass2_stats_sparse_bucketed(
                             relion_score_full_to_compact,
                             min_diff2,
                             relion_highres_xi2_half,
+                            use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                         )
                 else:
                     if raw_diff2:
@@ -12649,6 +12730,7 @@ def compute_pass2_stats_sparse_bucketed(
                             direct_half_weights,
                             relion_score_full_to_compact,
                             relion_highres_xi2_half,
+                            use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                         )
                         contribution_preprior_score_chunks.append(
                             _relion_cuda_fine_diff2_to_scores(
@@ -13661,6 +13743,7 @@ def compute_pass2_stats_sparse_bucketed(
                 direct_half_weights,
                 relion_score_full_to_compact,
                 relion_highres_xi2_half,
+                use_fused_ffi=use_relion_fine_diff2_fused_ffi,
             )
             min_diff2 = _relion_cuda_fine_diff2_min(
                 raw_diff2,
@@ -13695,6 +13778,7 @@ def compute_pass2_stats_sparse_bucketed(
                     relion_score_full_to_compact,
                     min_diff2,
                     relion_highres_xi2_half,
+                    use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                 )
                 _require_bpref_shadow_exact("exact Gaussian score", scores, shadow_scores)
                 shadow_score_bitwise_equal = True
@@ -13829,9 +13913,19 @@ def compute_pass2_stats_sparse_bucketed(
                     probs,
                     adaptive_fraction=float(adaptive_fraction),
                     use_relion_x_half_mstep=use_relion_x_half_mstep,
+                    use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
                     winner_take_all=winner_take_all,
                 )
             )
+            if use_relion_f32_fine_posterior:
+                # RELION reports Pmax from the same float32 exponentiation,
+                # scan sum, and CUDA division used by its M-step weights.
+                # The generic log-sum-exp posterior is only a mathematical
+                # equivalent and differs at this observable controller input.
+                max_posterior_bucket = jnp.max(
+                    reconstruction_probs.reshape(reconstruction_probs.shape[0], -1),
+                    axis=1,
+                )
             if bucket_contribution_diagnostics_active:
                 (
                     shadow_reconstruction_probs,
@@ -13844,6 +13938,7 @@ def compute_pass2_stats_sparse_bucketed(
                     probs,
                     adaptive_fraction=float(adaptive_fraction),
                     use_relion_x_half_mstep=use_relion_x_half_mstep,
+                    use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
                     winner_take_all=winner_take_all,
                     return_diagnostics=True,
                 )
@@ -14838,7 +14933,6 @@ def compute_k_class_pass2_stats_sparse_fused(
         and relion_firstiter_score_mode == "gaussian"
         and not use_float64_scoring
     )
-
     volumes = jnp.asarray(volumes)
     n_classes = int(volumes.shape[0])
     if device_signature_requested and not any(

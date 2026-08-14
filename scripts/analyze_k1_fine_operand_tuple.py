@@ -171,23 +171,33 @@ def analyze(
     *,
     recovar_global_rotation: int,
     physical_image_size: int,
+    candidate_index: int | None = None,
 ) -> dict[str, Any]:
     capture_path = capture_path.resolve()
     pass2_path = pass2_path.resolve()
     capture = load_fine_operand_capture(capture_path)
     validation = validate_capture(capture)
-    _require(capture.candidates.size == 1, "capture must contain exactly one tuple")
-    candidate = capture.candidates[0]
-    pixels = capture.pixels.reshape(1, capture.image_size)[0]
+    if candidate_index is None:
+        _require(capture.candidates.size == 1, "capture must contain exactly one tuple")
+        candidate_index = 0
+    _require(
+        0 <= int(candidate_index) < capture.candidates.size,
+        "candidate index is outside the native capture",
+    )
+    candidate_index = int(candidate_index)
+    candidate = capture.candidates[candidate_index]
+    pixels = capture.pixels.reshape(capture.candidates.size, capture.image_size)[
+        candidate_index
+    ]
 
-    with np.load(pass2_path, allow_pickle=False) as archive:
-        recovar = {name: np.asarray(archive[name]) for name in archive.files}
     required = {
         "current_size",
+        "original_index",
         "fine_translations",
         "oversampled_rot_indices",
         "rotations",
         "candidate_mask",
+        "direct_score_input",
         "relion_raw_diff2",
         "raw_operand_actual_rotation_count",
         "raw_operand_proj_half",
@@ -196,8 +206,16 @@ def analyze(
         "raw_operand_half_weights",
         "raw_operand_relion_full_to_compact",
         "raw_operand_highres_xi2_half",
+        "window_indices",
     }
-    _require(required <= set(recovar), f"pass-2 dump misses {sorted(required - set(recovar))}")
+    with np.load(pass2_path, allow_pickle=False) as archive:
+        _require(
+            required <= set(archive.files),
+            f"pass-2 dump misses {sorted(required - set(archive.files))}",
+        )
+        # Focused dumps can exceed 2 GiB because they also contain complete
+        # score/posterior tables. Load only the operand arrays needed here.
+        recovar = {name: np.asarray(archive[name]) for name in required}
 
     current_size = _infer_current_size(capture.image_size)
     _require(int(np.asarray(recovar["current_size"]).item()) == current_size, "current size differs")
@@ -205,7 +223,6 @@ def analyze(
     lookup = np.asarray(recovar["raw_operand_relion_full_to_compact"], dtype=np.int32)
     supported_full = np.flatnonzero(lookup >= 0)
     supported_compact = lookup[supported_full]
-    _require("window_indices" in recovar, "pass-2 dump misses score-window indices")
     supported_score_rows = _score_window_rows_from_relion_full(
         supported_full=supported_full,
         window_indices=recovar["window_indices"],
@@ -248,10 +265,15 @@ def analyze(
     n2 = np.float32(physical_image_size**2)
     n4 = np.float32(physical_image_size**4)
     recovar_reference = np.zeros(capture.image_size, dtype=np.complex64)
+    recovar_unshifted = np.zeros(capture.image_size, dtype=np.complex64)
     recovar_shifted = np.zeros(capture.image_size, dtype=np.complex64)
     recovar_corr = np.zeros(capture.image_size, dtype=np.float32)
     recovar_reference[supported_full] = -np.asarray(
         recovar["raw_operand_proj_half"][rotation_row, supported_compact],
+        dtype=np.complex64,
+    ) / n2
+    recovar_unshifted[supported_full] = -np.asarray(
+        recovar["direct_score_input"][supported_score_rows],
         dtype=np.complex64,
     ) / n2
     recovar_shifted[supported_full] = -np.asarray(
@@ -263,6 +285,10 @@ def analyze(
     relion_reference = (
         np.asarray(pixels["reference_real"], dtype=np.float32)
         + np.complex64(1j) * np.asarray(pixels["reference_imag"], dtype=np.float32)
+    ).astype(np.complex64)
+    relion_unshifted = (
+        np.asarray(pixels["image_real"], dtype=np.float32)
+        + np.complex64(1j) * np.asarray(pixels["image_imag"], dtype=np.float32)
     ).astype(np.complex64)
     relion_shifted = (
         np.asarray(pixels["shifted_real"], dtype=np.float32)
@@ -311,6 +337,7 @@ def analyze(
 
     stage_arrays = {
         "projected_reference": (relion_reference, recovar_reference),
+        "unshifted_image": (relion_unshifted, recovar_unshifted),
         "shifted_image": (relion_shifted, recovar_shifted),
         "correction_weight": (relion_corr, recovar_corr),
         "highres_sum": (np.asarray([relion_sum]), np.asarray([recovar_sum])),
@@ -332,6 +359,7 @@ def analyze(
     }
     pixel_stage_names = (
         "projected_reference",
+        "unshifted_image",
         "shifted_image",
         "correction_weight",
         "pixel_contribution",
@@ -357,6 +385,7 @@ def analyze(
     return {
         "schema": "recovar.em.k1_fine_operand_tuple.v2",
         "identity": {
+            "native_candidate_index": candidate_index,
             "stack_index_one_based": capture.stack_index,
             "original_index_zero_based": int(np.asarray(recovar["original_index"]).item()),
             "native_particle_id": capture.particle_id,
@@ -421,6 +450,7 @@ def main() -> None:
     parser.add_argument("--pass2", type=Path, required=True)
     parser.add_argument("--recovar-global-rotation", type=int, required=True)
     parser.add_argument("--physical-image-size", type=int, required=True)
+    parser.add_argument("--candidate-index", type=int)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     report = analyze(
@@ -428,6 +458,7 @@ def main() -> None:
         args.pass2,
         recovar_global_rotation=args.recovar_global_rotation,
         physical_image_size=args.physical_image_size,
+        candidate_index=args.candidate_index,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"

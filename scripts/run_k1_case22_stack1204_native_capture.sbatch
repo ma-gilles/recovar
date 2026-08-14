@@ -29,6 +29,8 @@ GEOMETRY_ONLY=${K1_CASE22_BPRE_GEOMETRY_ONLY:-0}
 CAPTURE_FINE_OPERAND=${K1_CASE22_CAPTURE_FINE_OPERAND:-0}
 FINE_OPERAND_ROTATION_LOCAL=${K1_CASE22_FINE_OPERAND_ROTATION_LOCAL:-0}
 FINE_OPERAND_TRANSLATION=${K1_CASE22_FINE_OPERAND_TRANSLATION:-0}
+FINE_OPERAND_EXPECTED_CANDIDATES=${K1_CASE22_FINE_OPERAND_EXPECTED_CANDIDATES:-1}
+FINE_OPERAND_MAX_BYTES=${K1_CASE22_FINE_OPERAND_MAX_BYTES:-1000000}
 if (( TARGET_STACK_ONE_BASED < 1 || TARGET_ITERATION < 1 || MAX_ITER < TARGET_ITERATION )); then
     echo "target stack/iteration must be positive and max_iter must reach the target" >&2
     exit 2
@@ -112,8 +114,8 @@ if [[ "${CAPTURE_FINE_OPERAND}" = 1 ]]; then
     export RELION_FINE_OPERAND_CAPTURE=1
     export RELION_FINE_OPERAND_CAPTURE_ROTATION_LOCAL=${FINE_OPERAND_ROTATION_LOCAL}
     export RELION_FINE_OPERAND_CAPTURE_TRANSLATIONS=${FINE_OPERAND_TRANSLATION}
-    export RELION_FINE_OPERAND_CAPTURE_EXPECTED_CANDIDATES=1
-    export RELION_FINE_OPERAND_CAPTURE_MAX_BYTES=1000000
+    export RELION_FINE_OPERAND_CAPTURE_EXPECTED_CANDIDATES=${FINE_OPERAND_EXPECTED_CANDIDATES}
+    export RELION_FINE_OPERAND_CAPTURE_MAX_BYTES=${FINE_OPERAND_MAX_BYTES}
 fi
 
 command=(
@@ -147,6 +149,7 @@ from pathlib import Path
 import sys
 
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
 from scripts.validate_relion_fine_score_capture import load_fine_score_capture
 
 capture = Path(sys.argv[1])
@@ -158,6 +161,10 @@ assert {item.stack_index for item in fine} == expected_stacks
 assert {item.stack_index for item in factor} == expected_stacks
 assert {item.header[4] for item in fine} == {expected_iteration}
 assert {item.header[9] for item in factor} == {expected_iteration}
+operands = [load_fine_operand_capture(path) for path in sorted(capture.glob("*.fine-operand-v1.bin"))]
+if operands:
+    assert {item.stack_index for item in operands} == expected_stacks
+    assert {item.iteration for item in operands} == {expected_iteration}
 PY
 
 cd "${AUDIT_REPO}"

@@ -119,6 +119,22 @@ def test_relion_fine_diff2_cuda_source_pins_production_rounding_order():
     assert "__fmaf_rn(half_square_sum, weight, lane_sum)" in block
 
 
+def test_relion_fused_translate_cuda_source_pins_native_block_topology():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+
+    assert "constexpr int kRelionFineDiff2TranslationCapacity = 7;" in source
+    assert "constexpr int kRelionFineDiff2Ref3dJobChunk = 4;" in source
+    assert "relion_fine_diff2_fused_translate_rectangular_f32_kernel" in source
+    assert "relion_score_translate_f32(" in source
+    assert "translation_offset * kRelionFineDiff2BlockSize" in source
+    assert "lane_sums[lane_index] = relion_fine_diff2_update_f32(" in source
+
+
 def test_relion_coarse_diff2_cuda_source_pins_production_topology():
     source = (
         Path(__file__).resolve().parents[2]
@@ -489,6 +505,21 @@ def test_relion_fine_diff2_fails_closed_without_gpu(monkeypatch, function_name):
             jnp.zeros((1, 1, 2), dtype=jnp.complex64),
             jnp.ones((1, 2), dtype=jnp.float32),
             jnp.asarray([0, 1], dtype=jnp.int32),
+        )
+
+
+def test_relion_fused_translate_fine_diff2_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32.__wrapped__(
+            jnp.zeros((1, 1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            current_size=1,
         )
 
 

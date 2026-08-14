@@ -46,9 +46,14 @@ def test_relion_translation_cuda_source_preserves_explicit_arithmetic():
         / "cuda_backproject.cu"
     ).read_text()
 
-    assert "sincosf(x * tx + y * ty, &sine, &cosine);" in source
-    assert "cosine * value.x - sine * value.y" in source
-    assert "cosine * value.y + sine * value.x" in source
+    assert "relion_score_translate_f32" in source
+    assert "__fmaf_rn(" in source
+    assert "__fmul_rn(static_cast<float>(y), ty)" in source
+    assert "const float translated_real = __fmaf_rn(" in source
+    assert "cosine, value.x" in source
+    assert "__fmul_rn(sine, value.y)" in source
+    assert "const float translated_imag = __fmaf_rn(" in source
+    assert "__fmul_rn(cosine, value.y)" in source
     assert "float translated_real = cosine * value.x - sine * value.y;" in source
     assert "translated_real * factor" in source
     assert "translated_imag * factor" in source

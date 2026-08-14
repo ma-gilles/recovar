@@ -918,6 +918,14 @@ def _run_sparse_k_class_adaptive_pass2(
         relion_exact_fine_gaussian=bool(
             base_engine_kwargs.get("relion_exact_fine_gaussian", True)
         ),
+        # The exact rectangular/pair CUDA reduction is qualified for K=1.
+        # Preserve the existing K>1 scorer until its independent boundary is
+        # localized.
+        relion_fine_diff2_fused_ffi=n_classes == 1,
+        # RELION's float32 exp/sort/scan significance path is now qualified
+        # for K=1.  Keep K>1 byte-preserving until its separate posterior
+        # boundary is diagnosed.
+        relion_f32_fine_posterior=n_classes == 1,
         # The exact normalized-CC tree is a deliberately K=1-scoped parity
         # candidate. Keep the K>1 route byte-preserving until K=1 closes.
         relion_exact_fine_normalized_cc=n_classes == 1,
@@ -988,6 +996,8 @@ def _run_sparse_k_class_adaptive_pass2(
         fused_common = dict(common)
         fused_common.pop("relion_fine_mstep_prune", None)
         fused_common.pop("relion_exact_fine_normalized_cc", None)
+        fused_common.pop("relion_fine_diff2_fused_ffi", None)
+        fused_common.pop("relion_f32_fine_posterior", None)
         fused_common["relion_projector_half"] = relion_projector_half_by_class
         fused_common["relion_projector_r_max"] = relion_projector_r_max
         try:

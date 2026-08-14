@@ -98,6 +98,12 @@ fi
 if [[ -n "${K1_FOCUSED_NATIVE_PREPROCESS_CAPTURE:-}" ]]; then
     COMMAND+=(--native-preprocess-capture "${K1_FOCUSED_NATIVE_PREPROCESS_CAPTURE}")
 fi
+if [[ -n "${K1_FOCUSED_NATIVE_SCORING_NOISE:-}" ]]; then
+    COMMAND+=(--native-scoring-noise "${K1_FOCUSED_NATIVE_SCORING_NOISE}")
+fi
+if [[ -n "${K1_FOCUSED_NATIVE_FINE_IMAGE_CAPTURE:-}" ]]; then
+    COMMAND+=(--native-fine-image-capture "${K1_FOCUSED_NATIVE_FINE_IMAGE_CAPTURE}")
+fi
 if [[ -n "${K1_FOCUSED_NORMALIZATION_FACTOR_OVERRIDE:-}" ]]; then
     COMMAND+=(--normalization-factor-override "${K1_FOCUSED_NORMALIZATION_FACTOR_OVERRIDE}")
 fi
@@ -110,7 +116,27 @@ fi
 printf '%q ' "${COMMAND[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 nvidia-smi -q > "${ROOT}/provenance/nvidia_smi_${SLURM_JOB_ID}.txt"
-sha256sum "${LAUNCHER}" "${DRIVER}" "${CUDA_LIB}" "${RELION_BIND}"/_relion_bind_core*.so \
+STATIC_INPUTS=(
+    "${LAUNCHER}"
+    "${DRIVER}"
+    "${CUDA_LIB}"
+    "${K1_FOCUSED_NATIVE_FACTOR}"
+    "${K1_FOCUSED_NATIVE_FINE_SCORE}"
+    "${RELION_BIND}"/_relion_bind_core*.so
+)
+if [[ -n "${K1_FOCUSED_NATIVE_PPREF:-}" ]]; then
+    STATIC_INPUTS+=("${K1_FOCUSED_NATIVE_PPREF}")
+fi
+if [[ -n "${K1_FOCUSED_NATIVE_PREPROCESS_CAPTURE:-}" ]]; then
+    STATIC_INPUTS+=("${K1_FOCUSED_NATIVE_PREPROCESS_CAPTURE}")
+fi
+if [[ -n "${K1_FOCUSED_NATIVE_SCORING_NOISE:-}" ]]; then
+    STATIC_INPUTS+=("${K1_FOCUSED_NATIVE_SCORING_NOISE}")
+fi
+if [[ -n "${K1_FOCUSED_NATIVE_FINE_IMAGE_CAPTURE:-}" ]]; then
+    STATIC_INPUTS+=("${K1_FOCUSED_NATIVE_FINE_IMAGE_CAPTURE}")
+fi
+sha256sum "${STATIC_INPUTS[@]}" \
     > "${ROOT}/provenance/static_inputs_${SLURM_JOB_ID}.sha256"
 
 start=$(date +%s)
