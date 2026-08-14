@@ -15,7 +15,9 @@
 
 set -euo pipefail
 : "${EXPECTED_LAUNCHER_SHA256:?submission must pin launcher hash}"
+: "${EXPECTED_REPO_HEAD:?submission must pin repository head}"
 : "${EXPECTED_REPO_DIFF_SHA256:?submission must pin repository diff hash}"
+: "${EXPECTED_CUDA_SHA256:?submission must pin CUDA library hash}"
 
 ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_half1_native_exec_order_20260810T1745ET
 RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_half1_native_exec_order_20260810T1745ET
@@ -36,15 +38,15 @@ PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
 DATA=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_currenthead_25ab6e68_20260728T011020ET/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/data
 RELION=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/native_capture/relion
-CUDA_LIB=${REPO}/recovar/cuda/libcuda_backproject.so
+CUDA_LIB=${RECOVAR_K1_BPREF_CUDA_LIB:-${REPO}/recovar/cuda/libcuda_backproject.so}
 LAUNCHER=${REPO}/scripts/run_k1_case22_half1_exact_accum.sbatch
 ORDER_FILE=${ROOT}/provenance/native_half1_local_execution_order.txt
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
-test "$(git -C "${REPO}" rev-parse HEAD)" = fa60832431c638e969a0e08ef9de5b83191eca51
+test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO}" diff --binary | sha256sum | awk '{print $1}')" = "${EXPECTED_REPO_DIFF_SHA256}"
-test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = edaad0aab3d96b09ba111def1b2a3bb1c89d1179221187df267755c575ac9ffc
+test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test -z "$(find "${ROOT}/accum" "${ROOT}/prejoin" "${ROOT}/output" -mindepth 1 -print -quit)"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV

@@ -1589,3 +1589,64 @@ This establishes raw coarse scoring as the first unequal computed variable for
 stack 79. The next bounded capture requests only the mismatching rotation and
 the shared-best rotation, then compares reference norm, cross term, projected
 reference, shifted image, correction weight, and native-reduction replay.
+
+## Exact fine-posterior arithmetic: local closure, trajectory falsification
+
+Commit `503092461d132a913af381a198ab77fca554b3ca` adds an opt-in
+`RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1` route that reproduces the native
+CUDA fine-posterior boundary on the fixed stack-117 table. Candidate count
+`730,976`, raw `diff2`, raw weights, CUB scan-sum bits `1701728133`, cutoff
+bits `1474915410`, significant count `493,009`, hard winner, and float32
+division all close exactly. The route remains diagnostic and is not the
+default.
+
+The three-iteration case-22 experiment `12359936` does not convert that local
+closure into a better trajectory. Iteration-3 merged signed FSC-AUC changes
+from `0.999999997337489` in the prior arm to `0.999999992973701` with exact
+posterior arithmetic. Iteration-2 Pmax RMSE improves slightly from
+`8.5775e-7` to `8.4822e-7`, while the aggregate map result is neutral to
+slightly worse. The apparent stack-941 hard-pose regression is a native
+near-tie: the sealed native run chooses one pose, while two independent
+instrumented native runs choose the other. On the matching instrumented
+capture, the exact route reduces stack-941 posterior relative L2 from
+`4.882857e-4` to `1.220748e-4` and selects the same native winner.
+
+The primary trajectory artifacts are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_fine_posterior_it3_50309246_20260813T2321ET/analysis/`.
+
+## Matching-repeat BPref correction and physical-iteration-2 gate
+
+The earlier physical-iteration-2 accumulator report mixed two native repeats.
+Against the matching native repeat, the old RECOVAR half-1 shell-16--30
+relative L2 values are `3.1737151e-6` for the numerator, `4.3954929e-6` for
+the denominator, and `9.3618347e-6` for the reconstructed average. The
+corrected three-edge report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_half1_native_exec_order_20260810T1745ET/analysis/K1_CASE22_IT2_HALF1_NATIVE_EXEC_ORDER_CORRECTED_EDGES.json`
+(SHA-256
+`6d7287dadecd7431f9dcbdc2a0817c23b47d084a07179159b8ac0ce2681ced94`).
+The accumulator analyzer now records RECOVAR against both native captures so
+this provenance error cannot recur silently.
+
+Job `12362186` repeated that same-input physical-iteration-2 boundary with
+exact posterior arithmetic, native particle execution order, and one
+particle-owned accumulator launch per particle. It is neutral to slightly
+worse: numerator `3.2196618e-6`, denominator `4.3990191e-6`, and average
+`9.3779787e-6`. More decisively, particle support-count mismatches increase
+from `47/1490` to `276/1490`, all by one count, while Pmax relative L2
+increases from `5.561264e-6` to `6.472475e-6`. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_sameinput_exact_posterior_native_order_20260814T0200ET/analysis/K1_CASE22_IT2_SAMEINPUT_PARTICLE_STATE.json`
+(SHA-256
+`3445ef46fea2e894bdc2ed887af6c7dfd2d1ab051e96236a81677886c7d9b5a2`).
+
+This falsifies posterior arithmetic as the remaining aggregate iteration-2
+root. Exact arithmetic closes when the local candidate table is fixed, but
+the normal production path supplies a different candidate sequence or set for
+many particles. The next gate is therefore the normal, non-oracle production
+candidate table itself. Submission `12362830` failed before science work
+because the submit-side root variable name was wrong. Focused H100 retry
+`12362864` captures stack 2690 at physical iteration 2 and stops at that
+boundary; its run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2690_normal_candidates_it2_20260814T0345ET_retry1/`.
+
+The complete-case scorecard remains `28/34` strict, `32/34` topology, and
+`34/34` evaluated.

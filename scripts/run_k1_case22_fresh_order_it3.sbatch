@@ -25,6 +25,8 @@ RUNTIME=${K1_CASE22_IT3_RUNTIME}
 REPO=${K1_CASE22_IT3_REPO}
 MAX_ITER=${K1_CASE22_MAX_ITER:-3}
 PARITY_DUMP=${K1_CASE22_PARITY_DUMP:-0}
+BPREF_BOUNDARY_DUMP=${K1_CASE22_BPREF_BOUNDARY_DUMP:-0}
+BPREF_BOUNDARY_ITERATION=${K1_CASE22_BPREF_BOUNDARY_ITERATION:-1}
 COMPACT_STACK1204_DUMP=${K1_CASE22_COMPACT_STACK1204_DUMP:-0}
 PRODUCTION_CANDIDATE_CAPTURE=${K1_CASE22_PRODUCTION_CANDIDATE_CAPTURE:-0}
 STOP_AFTER_COMPACT_DUMP=${K1_CASE22_STOP_AFTER_COMPACT_DUMP:-0}
@@ -124,6 +126,15 @@ case "${PROJECTOR_DUMP}" in
     0|1) ;;
     *) echo "K1_CASE22_PROJECTOR_DUMP must be 0 or 1" >&2; exit 2 ;;
 esac
+case "${BPREF_BOUNDARY_DUMP}" in
+    0|1) ;;
+    *) echo "K1_CASE22_BPREF_BOUNDARY_DUMP must be 0 or 1" >&2; exit 2 ;;
+esac
+if [[ "${BPREF_BOUNDARY_DUMP}" = 1 ]] \
+    && (( BPREF_BOUNDARY_ITERATION < 1 || BPREF_BOUNDARY_ITERATION > MAX_ITER )); then
+    echo "K1_CASE22_BPREF_BOUNDARY_ITERATION must be between 1 and K1_CASE22_MAX_ITER" >&2
+    exit 2
+fi
 TARGET_ORIGINAL_INDEX=$((TARGET_STACK_ONE_BASED - 1))
 PASS2_ROTATION_ROWS=${K1_CASE22_PASS2_ROTATION_ROWS-50293,50295}
 if [[ "${PASS2_ROTATION_ROWS}" = none ]]; then
@@ -226,6 +237,13 @@ if [[ "${PARITY_DUMP}" = 1 ]]; then
     export RECOVAR_PARITY_DUMP_DIR=${ROOT}/parity
     export RECOVAR_PARITY_DUMP_VOLUME_DOWNSAMPLE=8
     mkdir -p "${RECOVAR_PARITY_DUMP_DIR}"
+fi
+if [[ "${BPREF_BOUNDARY_DUMP}" = 1 ]]; then
+    export RECOVAR_BPREF_ACCUM_DUMP_DIR=${ROOT}/accum
+    export RECOVAR_BPREF_PREJOIN_DUMP_DIR=${ROOT}/prejoin
+    export RECOVAR_BPREF_BOUNDARY_DUMP_ITERATION=${BPREF_BOUNDARY_ITERATION}
+    export RECOVAR_BPREF_BOUNDARY_DUMP_RUN_ID=case22_exact_posterior_it${BPREF_BOUNDARY_ITERATION}
+    mkdir -p "${RECOVAR_BPREF_ACCUM_DUMP_DIR}" "${RECOVAR_BPREF_PREJOIN_DUMP_DIR}"
 fi
 if [[ "${NOISE_UPDATE_DUMP}" = 1 ]]; then
     export RECOVAR_NOISE_DEBUG_DUMP_DIR=${ROOT}/noise
@@ -494,9 +512,14 @@ rg -q 'expected accuracy consumes an explicit physical trial order' "${OUTPUT}/r
 if [[ "${PARITY_DUMP}" = 1 ]]; then
     test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
 fi
+if [[ "${BPREF_BOUNDARY_DUMP}" = 1 ]]; then
+    printf -v bpref_iteration_label '%03d' "${BPREF_BOUNDARY_ITERATION}"
+    test -s "${RECOVAR_BPREF_PREJOIN_DUMP_DIR}/recovar_bpref_prejoin_it${bpref_iteration_label}.npz"
+    test -s "${RECOVAR_BPREF_ACCUM_DUMP_DIR}/recovar_bpref_accum_it${bpref_iteration_label}.npz"
+fi
 
-printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"production_candidate_capture":%s,"target_stack_one_based":%d,"target_iteration":%d,"norm_residual_inputs":%s,"pass2_dump_raw_operands":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_residual":%s,"wavg_atomic_direct_noise_only":%s,"projection_cache_mode":"%s","parity_dump":%s,"noise_update_dump":%s}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${PRODUCTION_CANDIDATE_CAPTURE}" "${TARGET_STACK_ONE_BASED}" "${TARGET_ITERATION}" "${NORM_RESIDUAL_INPUTS}" "${PASS2_DUMP_RAW_OPERANDS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${WAVG_ATOMIC_SCALE_AA}" "${WAVG_ATOMIC_DIRECT_RESIDUAL}" "${WAVG_ATOMIC_DIRECT_NOISE_ONLY}" "${PROJECTION_CACHE_MODE}" "${PARITY_DUMP}" "${NOISE_UPDATE_DUMP}" \
+printf '{"job_id":"%s","wall_s":%d,"max_iter":%d,"guard":"fresh_k1_only","compact_stack1204_dump":%s,"production_candidate_capture":%s,"target_stack_one_based":%d,"target_iteration":%d,"norm_residual_inputs":%s,"pass2_dump_raw_operands":%s,"powerclass_spectrum_norm":%s,"translated_wavg_norm":%s,"wavg_atomic_scale_aa":%s,"wavg_atomic_direct_residual":%s,"wavg_atomic_direct_noise_only":%s,"projection_cache_mode":"%s","parity_dump":%s,"noise_update_dump":%s,"bpref_boundary_dump":%s,"bpref_boundary_iteration":%d}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${COMPACT_STACK1204_DUMP}" "${PRODUCTION_CANDIDATE_CAPTURE}" "${TARGET_STACK_ONE_BASED}" "${TARGET_ITERATION}" "${NORM_RESIDUAL_INPUTS}" "${PASS2_DUMP_RAW_OPERANDS}" "${POWERCLASS_SPECTRUM_NORM}" "${TRANSLATED_WAVG_NORM}" "${WAVG_ATOMIC_SCALE_AA}" "${WAVG_ATOMIC_DIRECT_RESIDUAL}" "${WAVG_ATOMIC_DIRECT_NOISE_ONLY}" "${PROJECTION_CACHE_MODE}" "${PARITY_DUMP}" "${NOISE_UPDATE_DUMP}" "${BPREF_BOUNDARY_DUMP}" "${BPREF_BOUNDARY_ITERATION}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"

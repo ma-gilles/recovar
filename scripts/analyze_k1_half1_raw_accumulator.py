@@ -331,6 +331,15 @@ def main() -> None:
             }
         )
         _require(radius == repeat_radius, "repeat downsample radius differs")
+        report["recovar_vs_native_repeat"] = _comparison(
+            rec_average,
+            rec_weight,
+            repeat_average,
+            repeat_down_weight,
+            radius=radius,
+            first_shell=args.first_shell,
+            max_shell=max_shell,
+        )
         report["native_vs_native_repeat"] = _comparison(
             repeat_average,
             repeat_down_weight,
