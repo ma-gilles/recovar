@@ -16086,3 +16086,357 @@ parent order, atomic Wavg AA/XA/diff2, and coupled direct normalization. No
 default is promoted from the one-particle capture alone, and the fixed
 complete-case score remains `28/34` strict, `32/34` topology, and `34/34`
 evaluated.
+
+## 2026-08-14 case-7 iteration-1 raw BPref localization
+
+The current fixed scorecard is `30/34` strict, `33/34` topology, and `34/34`
+evaluated. The remaining K=1 strict FSC-AUC failures are case 4
+(`0.991556309`), case 5 (`0.985743479`), case 7 (`0.843316945`), and case 10
+(`0.983006504`). K=4 work remains parked until these K=1 gaps close.
+
+Native raw-accumulator job `12401556` completed in `01:02:56`. After exact
+support alignment, the first case-7 iteration-1 mismatch is already present
+in the BPref weighted-image numerator: relative L2 is
+`7.169609675392887e-05` for half 1 and `4.327810130089318e-05` for half 2.
+The corresponding CTF-squared denominator errors are only
+`4.105430922518219e-08` and `4.126596170511417e-08`, and the support mismatch
+count is zero. Numerator error grows with Fourier shell. The paired report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_native_it1_raw_full_20260814T1900ET/analysis/CASE07_NATIVE_RECOVAR_RAW_BPREF.json`
+(SHA-256
+`d13913bb25e5ab23fb771c49ffd34d61579bf39e9f9c51c49a8494d1a8cb7eff`).
+The half-2 report SHA-256 is
+`4594fcf4d9c09c9ba0f9767ad73ca8e7f712f4b7662ab231fb625d3e5c446913`.
+
+Native reconstruction-stage job `12401555` completed in `01:04:04` and
+falsifies tau precision as the source of that gap. RECOVAR live tau versus
+native is about `2.97e-08` relative L2; reconstructing the float64 live tau
+from the same FSC reduces that to about `7.02e-09`. Substituting native exact
+tau nevertheless leaves divided-Fourier relative L2 values of
+`2.4837050226032422e-05` and `2.534102173866455e-05`; live and float64-live
+tau give the same result at the `1e-9` scale. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_native_it1_reconstruct_full_20260814T1900ET/analysis/CASE07_NATIVE_RECOVAR_RECONSTRUCTION_STAGE.json`
+(SHA-256
+`daebb21920512be6a1dca38a8ef2167920ad6239f0aa9d23840c032b1366c4fb`).
+Earlier premask capture also rules out the initial lowpass and solvent mask.
+
+The current first-divergence branch is therefore only:
+
+1. a per-particle weighted-image operand difference (translated/corrected
+   image, normalization, or complex arithmetic); or
+2. identical operands accumulated in a different float32 atomic order.
+
+Production already applies RELION's paired physical particle order, one
+adjoint launch per particle, and the fused real/imaginary/weight atomics for
+fresh K=1 first-iteration CC. Native job `12403243` and RECOVAR jobs
+`12404151`, `12404152`, and `12404684` capture the same six pre-scatter
+particles, joined by immutable one-based stack identity and with device
+support geometry retained. Job `12404151` provides stack 1, job `12404152`
+provides stack 77462, and job `12404684` provides the remaining four half-1
+stacks; this split avoids treating Slurm's comma-separated export syntax as
+part of the particle-ID value.
+RECOVAR diagnostic jobs `12403449` and `12403450` failed closed because their
+requested IDs mixed RELION row coordinates with RECOVAR source coordinates.
+Jobs `12403888` and `12403889` then failed closed because the device-signature
+arm lacked its four explicit execution-mode declarations; all four failed
+jobs carry no operand-comparison result. The corrected mapping is derived
+directly from `run_it000_data.star`, and the final arm explicitly pins the
+per-particle, sequential-translation, fused-atomic, and block-topology modes.
+No production change will be proposed until the operand comparison separates
+generation from reduction.
+
+### Same-day qualification: the sampled pre-scatter path closes exactly
+
+The six-particle comparison now closes the complete per-particle path through
+scatter. Capture inertness first passes the fixed signed-FSC gate: capture-on
+versus the independent RELION control has non-DC FSC-AUC
+`0.9999999957058465`, `0.999999996634654`, and `0.9999999962941133` for half
+1, half 2, and merged maps. The inertness report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_prescatter_compare_20260814T2100ET/analysis/RELION_CAPTURE_INERTNESS.json`
+(SHA-256
+`554fc21675e24afc0b91a4df3ec955e73c9add449d02ed65cfc88a78f908d0e4`).
+
+After immutable stack alignment, all `7,359` supported source rows have exact
+complex data and exact real weights. The corrected half-1 and half-2 reports
+are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_prescatter_compare_20260814T2100ET/analysis/CASE07_PRESCATTER_HALF1_FORMAL_V2.json`
+(SHA-256
+`9f39b8f430eb757960665aa67161f2a15cb5773d0852ca2edd1f444b1860f2b7`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_prescatter_compare_20260814T2100ET/analysis/CASE07_PRESCATTER_HALF2_FORMAL_V2.json`
+(SHA-256
+`f0ccc0709f57acd7651391db945fb289a6a96bf4e394071f267186c3f8d561da`).
+The comparator previously mislabeled exact operands as a generation
+difference merely because its geometry gate passed; that classifier is now
+fixed and covered by a unit test.
+
+The new independent scatter replay then evaluates RELION's compiled float32
+coordinate order, physical-x Hermitian fold, odd x-half origin, eight
+trilinear destinations, coefficients, and neighbor flags. All fields are
+bitwise exact for every supported row of stacks 1, 32461, 54927, 54928,
+77462, and 99999. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_prescatter_compare_20260814T2100ET/analysis/CASE07_PRESCATTER_SCATTER_GEOMETRY_V1.json`
+(SHA-256
+`ad047114f50ae1e99d2457711ad7d86d81733c78f372f60ab5f51b83bb218054`).
+This falsifies a sampled-particle mismatch in scoring, posterior weight,
+support, source operand, rotated coordinate, fold, interpolation coefficient,
+or accumulator destination.
+
+Two execution-order interventions are also negative. Grouping essentially all
+particles into RELION-sized pools of three changes RECOVAR's accumulators by
+only about `5.5e-8` (numerator) and `3.6e-8` (denominator) relative L2 and does
+not reduce the native gap. Reversing all physical particle contributions
+changes RECOVAR's numerator by about `1.8e-6`, but the native half-1 numerator
+gap remains `7.171991007892994e-05` versus the baseline
+`7.169609675392887e-05`; half 2 similarly changes from
+`4.327810130089318e-05` to `4.331435588129233e-05`. Meanwhile, reversal
+worsens denominator error from about `4.1e-8` to `1.83e-6`--`1.87e-6`.
+The formal reversal reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_it1_reverse_bpref_20260814T2130ET/analysis/CASE07_REVERSE_RAW_BPREF_HALF1.json`
+(SHA-256
+`c91871043cfdcd1f6a9118c7295ee067cf2da91ba232dfbb17459dc8bf433ed3`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_it1_reverse_bpref_20260814T2130ET/analysis/CASE07_REVERSE_RAW_BPREF_HALF2.json`
+(SHA-256
+`7a457ac214f4617a28791c825e07a727b1aeea9c2af8e5ca6e96da47aad14683`).
+Slurm job `12406173` produced the qualified accumulator and maps, then exited
+the wrapper with code 2 because the intentionally one-iteration run was fed to
+a complete-trajectory topology check; the manual raw-accumulator analyses are
+the scientific result.
+
+Most importantly, the iteration-1 numerator relative-L2 must no longer be
+called the first causal defect. Independent RELION control/capture maps differ
+by `7.4402173e-5` and `6.9023132e-5` relative L2 for the two halves, the same
+scale as the RECOVAR/native raw-numerator residual, while their FSC-AUC remains
+above `0.999999995`. The raw residual is therefore inside demonstrated
+same-engine scheduling variability at this boundary. The earliest material
+boundary remains the iteration-2 posterior/candidate comparison, where an
+exact incoming RELION iteration-1 state still leaves broad Pmax p95 error near
+`9.65e-5`, 12--14 support-count differences, and a rare coarse-parent outlier.
+
+The next population gate is a systematic 200-particle passive panel, not a
+long trajectory. Native Slurm job `12406885` samples every 500th RELION
+physical particle under the same inert capture. Its run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_native_it1_prescatter_panel200_20260814T2200ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case07_native_it1_prescatter_panel200_20260814T2200ET`;
+both contain `SAFE_TO_DELETE`. If that panel closes, further iteration-1
+capture expansion is lower priority than decomposing the exact-state
+iteration-2 coarse raw score into reference norm, cross term, priors,
+normalization, and significance cutoff.
+
+## 2026-08-15 case-7 exact-perturbation population and first score boundary
+
+Replacing the six-decimal STAR perturbation by RELION's exact binary value
+`0.097258180379867554` reduces the iteration-2 population support mismatch
+from 18 particles to 7 out of 100,000. The residual zero-based source rows are
+`30591`, `37582`, `56518`, `60746`, `61603`, `68674`, and `79452`. The fixed
+population report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exactperturb_population_audit_20260814T2315ET/analysis/particle.json`
+(SHA-256
+`a52f703b510f2c2e1f3bc074f5fe565bd60db7812cdcd3964b2dfd8ebbe227b8`).
+This is a fixed-denominator diagnostic improvement, not a new complete-case
+score: K=1 remains `30/34` strict, `33/34` exact topology, and `34/34`
+evaluated.
+
+The exact native fine panel first established that all 12 original residual
+particles have exact native/RECOVAR support and winners after the exact
+perturbation, with 11 of 12 exact fine candidate sets. Its report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_native_fine_residual12_exactperturb_20260814T2250ET/analysis/CASE07_RESIDUAL12_FINE_PANEL.json`
+(SHA-256
+`3b9ed957f487722a0c65b88e245626658479cd95be198592dd05368f4f94ea71`).
+A second native capture covering the seven population residuals separates
+four exact candidate sets from three candidate-set mismatches. Rows `37582`,
+`56518`, `60746`, and `68674` have exact candidate sets, support counts, and
+winners. Rows `30591` and `61603` have different candidate sets but the same
+winner; row `79452` has a different candidate set, support count, and winner.
+All seven reports are retained under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_native_fine_exactperturb_residual7_20260814T2340ET/analysis/`.
+
+The first exact unequal score operand is now demonstrated on a repeated
+native tuple. For stack `33814`, fine rotation `8`, translation `53`, native
+raw `diff2` is `3935.830322265625` and RECOVAR is
+`3935.83056640625`. Substituting only the native projected reference makes
+the RECOVAR replay exactly equal to native. Over the 4,003 score-active
+pixels, the projected-reference relative L2 is
+`1.8282812889653592e-7`; the maximum complex absolute error is
+`7.60273163544745e-9`. The result repeats exactly and is recorded in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_native_fine_operand_stack33814_r8t53_20260814T2326ET/analysis/FINE_OPERAND_r8t53.json`
+(SHA-256
+`7820bac52979fd017d52c28384c1e0dd39985f502d645e90e1be41f227e9a7ea`).
+This localizes a small independent discrepancy to the projected-reference
+input/path rather than image translation, correction weights, priors, or the
+fine reduction.
+
+The projector kernel itself is not yet the leading interpretation of that
+boundary. An earlier same-H100 native-PPref intervention for case 22 projects
+all 2,578 pixels bitwise equal to native when RECOVAR is given RELION's exact
+in-memory `PPref`; the ordinary RECOVAR-constructed `PPref` projection has
+relative L2 `2.356015636358102e-5`. That report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack2049_exact_ppref_operand_it3_67716bcb_20260813T1830ET/analysis/K1_EXACT_PPREF_OPERAND.json`
+(SHA-256
+`354f17170eedfca0763e5cb4605819df0506be494310610015bfe533f4c86f5a`).
+The next case-7 projector discriminator is therefore the same exact native
+`PPref` substitution at iteration 2. Exact closure would move the first
+unequal boundary upstream to map-to-`PPref` construction; persistence would
+justify a case-7 coordinate and texture-staging capture.
+
+For the three half-1 residuals, a full-population versus isolated-particle A/B
+then closes every declared incoming coarse operand bitwise: score indices,
+unshifted corrected image, pixel weights, initial `diff2`, rotations,
+translations, and translation-phase source. Nevertheless, centered coarse
+scores differ by as much as `0.001220703125`. All declared fine arrays are
+bitwise exact between the two RECOVAR execution contexts, including candidate
+masks, parent maps, raw `diff2`, priors, posteriors, and reconstruction
+weights. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exactperturb_residual7_half1_fullpopulation_v3_20260815T0007ET/analysis/FULL_VS_ISOLATED.json`
+(SHA-256
+`24f3431d04e503a29f923b6b16ee14d111191c11938652ee936f0ada651d4605`).
+
+The corresponding four-particle half-2 A/B is the positive context control.
+Again every declared incoming coarse operand is bitwise exact. Rows `61603`
+and `68674` retain exact support and every declared fine array. Rows `60746`
+and `79452` each change coarse support by one; each support flip changes 32
+fine candidate-mask entries. All common fine raw-`diff2` operands remain
+bitwise exact. The maximum centered coarse-score delta is
+`0.00146484375`, and the maximum coarse posterior total variation is only
+`6.938431073070214e-6`. This directly demonstrates the chain
+identical operands -> float32 reduction-order score delta -> coarse support
+flip -> different fine candidate set. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exactperturb_residual7_half2_fullpopulation_v2_20260815T0008ET/analysis/FULL_VS_ISOLATED.json`
+(SHA-256
+`616d5b96ca88ed28ad4e4d0293f61f834bd5932c3266c0d7346df34810696037`).
+
+A direct same-device kernel probe identifies the execution-context source.
+Batch size 1 repeats bitwise, whereas two calls at batch size 187 change 141
+score words. Moving an identical particle between positions in a batch of 187
+changes 70 score words, and changing batch size 1 to 187 changes 59 score
+words; every change is at most two float32 ULP. The kernel has identical per-thread pixel
+and FMA arithmetic but ends each score with four atomic additions. Existing
+passive native RELION lane captures prove that all 24 legal four-lane orders
+occur as an exact score envelope and that no one fixed order reproduces every
+native score.
+
+The increasing-lane diagnostic is deterministically invariant across repeat,
+batch-size, and particle-position A/Bs, but it is not a parity fix. Its full
+100,000-particle exact-state run is Slurm job `12413933`, under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exactperturb_deterministic_coarse_20260815T0020ET`.
+Support mismatches worsen from `7` to `13`, Pmax absolute p95 worsens from
+`6.291881008146368e-5` to `9.653185577387364e-5`, and mean absolute Pmax
+worsens from `2.893915434286342e-5` to `3.166487361477605e-5`. The maximum
+Pmax error does improve from `0.5693044267711639` to
+`0.12522185980987544`, and angular RMSE improves from
+`0.019084569723530617` to `0.011666896787273609`, showing that a fixed order
+selects a different threshold branch rather than reproducing native. The
+candidate population report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exactperturb_deterministic_coarse_20260815T0020ET/analysis/particle.json`
+(SHA-256
+`2d2d59965feb40ca1155dcb2abd7153f2baffffe8e81452a5b6fffafc5bca2e1`).
+
+The exact deployed RELION source supplies the missing topology detail:
+`diff2_coarse` launches one orientation grid for one particle, and particle
+dispatch invokes it again for the next particle. RECOVAR instead flattened
+all particles in a microbatch into one larger CUDA grid. That explains both
+the measured batch-position dependence and why choosing one artificial lane
+order fails. A second compile-time diagnostic preserves native atomics but
+launches the same grid sequentially once per particle on the same stream. It
+is bitwise invariant across local repeat, batch-size 1 versus 187, and
+particle-position 0 versus 100 controls. Its SM80 audit root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_coarse_perparticle_sm80_20260815T0045ET`.
+Submission `12415305` failed closed in two seconds because the wrapper's
+required root variable names were not exported; it produced no scientific
+result. Submission `12415349` also failed closed during its repository-diff
+preflight and produced no scientific result. The valid H100 population gate
+is Slurm job `12415362`, under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exactperturb_perparticle_coarse_v2_20260815T0052ET`.
+
+The valid gate rejects one-particle launches as a parity fix. Support-count
+mismatches worsen from `7/100000` to `16/100000`; the mismatched source rows
+are `3722`, `5013`, `5764`, `13562`, `15176`, `30591`, `33813`, `41631`,
+`49299`, `55742`, `60746`, `61603`, `68674`, `79452`, `92096`, and `98901`.
+Pmax RMSE improves only from `0.002262674643739852` to
+`0.0018524038017909126`, while Pmax absolute p95 worsens from
+`6.291881008146368e-5` to `9.656312580112454e-5`. Angular and translation
+RMSE improve to `0.011666896787273609` degrees and
+`0.005819566589761978` Angstrom, respectively, but the fixed policy rejects
+any support regression. The run takes `01:34:53`; half-1 coarse pass 1 grows
+from `798.3` seconds in the fixed-lane diagnostic to `2576.9` seconds. The
+fixed-denominator A/B report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_exactperturb_perparticle_coarse_v2_20260815T0052ET/analysis/K1_CASE07_FIXED_POPULATION_AB.json`
+(SHA-256
+`7568efcc2786c57814409e2d93b3c94e4a93162559e05d9a1edadf9683009501`).
+The underlying particle report has SHA-256
+`bfa6b4b7b6869c6ebfab949edbc751feb7bb7e56b36819560a2c17028831857d`.
+Both rejected compile-time diagnostics have been removed from the production
+working diff.
+
+A one-launch 2-D grid with particle identity in `blockIdx.y` is also rejected
+by the local A100 execution-context gate. Two batch-187 repeats change `6074`
+float32 words, and batch-1 versus batch-187 particle position zero changes
+`137` words. Resetting the visible rotation coordinate therefore does not
+reproduce the kernel-launch scheduling boundary.
+
+The direct native stack-30592 capture identifies the exact cutoff crossing.
+RELION and RECOVAR have the same `246384` active coarse candidates and the
+same winner, but RELION keeps two significant candidates while RECOVAR keeps
+one. At the recorded float32 adaptive fraction `0.9990000128746033`, native
+winner probability is `0.9989999545329048` and RECOVAR winner probability is
+`0.9990001906701099`. The native target-versus-winner raw score is
+`-1.8408203125`; RECOVAR gives `-1.841064453125`. Replaying the captured
+native projected reference, shifted image, and correction gives
+`-1.8408203125` bitwise exactly. The broader passive component validator
+remains fail-closed, so this is a bounded pair result rather than a complete
+operand-panel qualification. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_native_coarse_stack30592_v2_20260814T2355ET/analysis/K1_STACK30592_COARSE_COMPONENT_BOUNDARY.json`
+(SHA-256
+`cd6c3af1df3c5e5f0331b9e25ca62ddece53443af5446f4a74ab3d6545149368`).
+
+The next gate is consequently the native four-lane partials for precisely
+that target/winner pair, not another trajectory. Slurm job `12418262` is
+capturing native rotation key `20197` and all 29 translations under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_stack30592_native_coarse_lanes_it2_20260815T0235ET`.
+It will decide whether the active native result is one of the legal folds of
+the captured partials and which fold constraints are needed for a selective,
+cutoff-near rescore. The ordinary batched path remains the only production
+path; no rejected scheduling candidate is promoted.
+
+### Coarse-kernel execution topology, not one fixed lane order
+
+A read-only audit of the pinned native and RECOVAR CUDA binaries identifies a
+structural reason that one-particle RECOVAR launches do not recover native
+scores. RELION's active coarse specialization is
+`block128/eulers16/prefetch4`. In the pinned SM80 cubin it uses `95`
+registers per thread and `6,208` bytes of shared memory. The exact source
+stages Euler matrices, projected references, image values, and correction
+weights in shared memory, executes synchronization barriers, translates each
+pixel inside the scorer, retains 16 rotation accumulators per thread, and
+then issues the four contending atomics for each score. The H100 run consumes
+RELION's SM80 PTX through driver JIT, so the runtime register allocation is
+not claimed from the static SM80 cubin; the source-level shared-memory and
+barrier topology is unchanged.
+
+The pinned RECOVAR H100 library
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_cuda126_compute80_ptx_e791e875_20260814T0948ET/cuda128_sm90_control/build/libcuda_backproject_cuda128_sm90.so`
+(SHA-256
+`18709433280ded2c9ec543671ebf7d791418b1e9c2c9556f687c1881f2d01a5e`)
+instead compiles the SM90 rectangular coarse kernel with `80` registers and
+zero shared memory. It consumes precomputed projected references and shifted
+images. Its pixel-to-lane mapping and per-lane FMA arithmetic can therefore
+be exact while its warp issue and atomic arrival schedule remains different.
+Resetting the particle grid coordinate cannot repair this resource and
+instruction-topology difference.
+
+The existing case-4 native lane panel independently rejects selecting a
+single supposedly better fold. Every one of its `348` captured scores is
+reachable by at least one of the 24 legal four-lane arrival orders, but no
+single order reproduces the panel. There are `159` candidates with one
+unique legal float32 outcome, `176` with two, and `13` with three. Among the
+`189` ambiguous candidates, native selects the lower and upper legal outcome
+at comparable rates; neither minimum, maximum, median, nor one fixed
+permutation is a source-faithful rule.
+
+This strengthens the next decision gate for job `12418262`: if stack 30592's
+target and winner are both reachable but require schedule-specific orders,
+the next candidate must reproduce RELION's actual coarse-kernel execution
+topology (or invoke that scorer). Another global fixed fold, another
+particle-grid reshaping, or a threshold adjustment is not justified. This
+is diagnostic evidence only and does not change the fixed K=1 score.

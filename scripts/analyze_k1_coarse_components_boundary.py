@@ -15,6 +15,12 @@ from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _map_relion_table,
     _translation_permutation,
 )
+from scripts.validate_relion_coarse_operand_capture import (
+    load_artifact as load_operand_artifact,
+)
+from scripts.validate_relion_coarse_operand_capture import (
+    replay_production_diff2,
+)
 from scripts.validate_relion_coarse_pass1_components import (
     RELION_INVALID_DIFF2,
     load_artifact,
@@ -66,6 +72,7 @@ def _load_recovar(path: Path) -> dict[str, Any]:
             "original_index": int(payload["original_index"]),
             "iteration": int(payload["debug_iteration"]),
             "current_size": int(payload["current_size"]),
+            "adaptive_fraction": float(payload["adaptive_fraction"]),
             "scores_pre": scores_pre[0],
             "scores_with": scores_with[0],
             "weights": weights,
@@ -76,6 +83,163 @@ def _load_recovar(path: Path) -> dict[str, Any]:
             ),
             "hard_assignment": int(payload["hard_assignment"]),
         }
+
+
+def _cutoff_boundary(
+    *,
+    native_probability: np.ndarray,
+    recovar_probability: np.ndarray,
+    native_significant: np.ndarray,
+    recovar_significant: np.ndarray,
+    native_raw: np.ndarray,
+    recovar_scores_pre: np.ndarray,
+    recovar_scores_with: np.ndarray,
+    adaptive_fraction: float,
+) -> dict[str, Any]:
+    """Describe the exact probability boundary for every support mismatch."""
+
+    native_flat = np.asarray(native_probability, dtype=np.float64).reshape(-1)
+    recovar_flat = np.asarray(recovar_probability, dtype=np.float64).reshape(-1)
+    native_mask = np.asarray(native_significant, dtype=bool).reshape(-1)
+    recovar_mask = np.asarray(recovar_significant, dtype=bool).reshape(-1)
+    native_raw_flat = np.asarray(native_raw, dtype=np.float32).reshape(-1)
+    recovar_pre_flat = np.asarray(recovar_scores_pre, dtype=np.float64).reshape(-1)
+    recovar_with_flat = np.asarray(recovar_scores_with, dtype=np.float64).reshape(-1)
+    _require(
+        native_flat.shape
+        == recovar_flat.shape
+        == native_mask.shape
+        == recovar_mask.shape
+        == native_raw_flat.shape
+        == recovar_pre_flat.shape
+        == recovar_with_flat.shape,
+        "cutoff-boundary topology mismatch",
+    )
+    native_winner = int(np.argmax(native_flat))
+    recovar_winner = int(np.argmax(recovar_flat))
+    mismatch_indices = np.flatnonzero(native_mask != recovar_mask)
+    n_trans = int(native_probability.shape[1])
+    rows = []
+    for flat_index in mismatch_indices:
+        index = int(flat_index)
+        native_with_prior_delta = float(
+            np.log(native_flat[index] / native_flat[native_winner])
+        )
+        rows.append(
+            {
+                "flat_recovar": index,
+                "rotation_recovar_psi_major": index // n_trans,
+                "translation_recovar": index % n_trans,
+                "relion_significant": bool(native_mask[index]),
+                "recovar_significant": bool(recovar_mask[index]),
+                "relion_probability": float(native_flat[index]),
+                "recovar_probability": float(recovar_flat[index]),
+                "relion_raw_score_delta_from_winner": float(
+                    -native_raw_flat[index] + native_raw_flat[native_winner]
+                ),
+                "recovar_raw_score_delta_from_winner": float(
+                    recovar_pre_flat[index] - recovar_pre_flat[recovar_winner]
+                ),
+                "relion_with_prior_score_delta_from_winner": native_with_prior_delta,
+                "recovar_with_prior_score_delta_from_winner": float(
+                    recovar_with_flat[index] - recovar_with_flat[recovar_winner]
+                ),
+            }
+        )
+    return {
+        "adaptive_fraction": float(adaptive_fraction),
+        "relion_winner_flat_recovar": native_winner,
+        "recovar_winner_flat": recovar_winner,
+        "relion_winner_probability": float(native_flat[native_winner]),
+        "recovar_winner_probability": float(recovar_flat[recovar_winner]),
+        "relion_winner_margin_above_cutoff": float(
+            native_flat[native_winner] - adaptive_fraction
+        ),
+        "recovar_winner_margin_above_cutoff": float(
+            recovar_flat[recovar_winner] - adaptive_fraction
+        ),
+        "mismatch_candidates": rows,
+    }
+
+
+def _operand_pair_replay(
+    *,
+    native_path: Path,
+    native_raw: np.ndarray,
+    native_probability: np.ndarray,
+    recovar_scores_pre: np.ndarray,
+    native_significant: np.ndarray,
+    recovar_significant: np.ndarray,
+    translation_permutation: np.ndarray,
+    n_directions: int,
+    n_psi: int,
+) -> dict[str, Any]:
+    """Replay captured native operands for mismatched candidate/winner pairs."""
+
+    operand_path = native_path.with_name(
+        native_path.name.replace(".p1-v2.bin", ".p1-op-v2.bin")
+    )
+    if not operand_path.is_file():
+        return {"status": "not_captured"}
+    operand = load_operand_artifact(operand_path)
+    replay_native_order = replay_production_diff2(operand)
+    replay_recovar_order = np.empty_like(replay_native_order)
+    replay_recovar_order[:, translation_permutation] = replay_native_order
+    mapped_rotation_ids = []
+    for rotation_key in operand.rotation_keys:
+        direction, psi = divmod(int(rotation_key), int(n_psi))
+        _require(direction < n_directions, "captured operand rotation is out of range")
+        mapped_rotation_ids.append(int(psi * n_directions + direction))
+    replay_by_rotation = {
+        rotation_id: replay_recovar_order[index]
+        for index, rotation_id in enumerate(mapped_rotation_ids)
+    }
+    native_mask = np.asarray(native_significant, dtype=bool).reshape(-1)
+    recovar_mask = np.asarray(recovar_significant, dtype=bool).reshape(-1)
+    mismatch_indices = np.flatnonzero(native_mask != recovar_mask)
+    native_raw_flat = np.asarray(native_raw, dtype=np.float32).reshape(-1)
+    recovar_score_flat = np.asarray(recovar_scores_pre, dtype=np.float32).reshape(-1)
+    winner = int(np.argmax(np.asarray(native_probability, dtype=np.float64)))
+    n_trans = int(native_raw.shape[1])
+    winner_rotation, winner_translation = divmod(winner, n_trans)
+    rows = []
+    for flat_index in mismatch_indices:
+        target = int(flat_index)
+        target_rotation, target_translation = divmod(target, n_trans)
+        if target_rotation not in replay_by_rotation or winner_rotation not in replay_by_rotation:
+            continue
+        passive_delta = np.float32(
+            -replay_by_rotation[target_rotation][target_translation]
+            + replay_by_rotation[winner_rotation][winner_translation]
+        )
+        native_delta = np.float32(
+            -native_raw_flat[target] + native_raw_flat[winner]
+        )
+        recovar_delta = np.float32(
+            recovar_score_flat[target] - recovar_score_flat[winner]
+        )
+        rows.append(
+            {
+                "target_flat_recovar": target,
+                "winner_flat_recovar": winner,
+                "native_active_relative_score": float(native_delta),
+                "captured_operand_replay_relative_score": float(passive_delta),
+                "recovar_relative_score": float(recovar_delta),
+                "captured_operand_replay_matches_native_bits": bool(
+                    passive_delta.view(np.uint32) == native_delta.view(np.uint32)
+                ),
+                "recovar_matches_native_bits": bool(
+                    recovar_delta.view(np.uint32) == native_delta.view(np.uint32)
+                ),
+            }
+        )
+    return {
+        "status": "complete",
+        "operand_path": str(operand_path.resolve()),
+        "operand_sha256": operand.sha256,
+        "captured_recovar_rotation_ids": mapped_rotation_ids,
+        "mismatch_candidate_pairs": rows,
+    }
 
 
 def _candidate_keys(mask: np.ndarray, n_trans: int) -> list[dict[str, int]]:
@@ -244,6 +408,27 @@ def _compare(native_path: Path, recovar_path: Path) -> dict[str, Any]:
         recovar_scores_pre=recovar["scores_pre"],
         recovar_translation_log_prior=recovar["translation_log_prior"],
     )
+    cutoff_boundary = _cutoff_boundary(
+        native_probability=native_probability,
+        recovar_probability=recovar_probability,
+        native_significant=native_significant,
+        recovar_significant=recovar["significant"],
+        native_raw=native_raw,
+        recovar_scores_pre=recovar["scores_pre"],
+        recovar_scores_with=recovar["scores_with"],
+        adaptive_fraction=recovar["adaptive_fraction"],
+    )
+    operand_pair_replay = _operand_pair_replay(
+        native_path=native_path,
+        native_raw=native_raw,
+        native_probability=native_probability,
+        recovar_scores_pre=recovar["scores_pre"],
+        native_significant=native_significant,
+        recovar_significant=recovar["significant"],
+        translation_permutation=permutation,
+        n_directions=n_directions,
+        n_psi=n_psi,
+    )
 
     return {
         "stack_index_one_based": native.stack_index,
@@ -277,6 +462,8 @@ def _compare(native_path: Path, recovar_path: Path) -> dict[str, Any]:
             "relion_only": _candidate_keys(relion_only, n_trans),
             "recovar_only": _candidate_keys(recovar_only, n_trans),
         },
+        "cutoff_boundary": cutoff_boundary,
+        "captured_operand_pair_replay": operand_pair_replay,
         "native_direction_prior_counterfactual": direction_prior_counterfactual,
         "native_component_closure_after_constant": _stats(component_closure),
         "translation_mapping": translation_mapping,

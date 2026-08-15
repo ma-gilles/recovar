@@ -11,12 +11,15 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.validate_relion_coarse_operand_capture import load_artifact as load_operands
-from scripts.validate_relion_coarse_pass1_components import load_artifact as load_components
+from scripts.analyze_em_k1_coarse_pass1_boundary import _translation_permutation
 from scripts.validate_relion_coarse_lane_capture import (
     _float32_from_bits,
+)
+from scripts.validate_relion_coarse_lane_capture import (
     load_artifact as load_lanes,
 )
+from scripts.validate_relion_coarse_operand_capture import load_artifact as load_operands
+from scripts.validate_relion_coarse_pass1_components import load_artifact as load_components
 
 
 def _sha256(path: Path) -> str:
@@ -104,6 +107,85 @@ def _summed_scores(partials: np.ndarray, initial_diff2: np.float32) -> tuple[lis
     return permutations, scores
 
 
+def _same_bits(left: np.float32, right: np.float32) -> bool:
+    left_bits = np.asarray(left, dtype=np.float32).view(np.uint32)
+    right_bits = np.asarray(right, dtype=np.float32).view(np.uint32)
+    return bool(left_bits == right_bits)
+
+
+def _pair_order_audit(
+    *,
+    permutations: list[tuple[int, ...]],
+    scores: np.ndarray,
+    native: np.ndarray,
+    recovar: np.ndarray,
+    target: tuple[int, int],
+    winner: tuple[int, int],
+) -> dict[str, object]:
+    """Audit all legal target/winner atomic arrival-order combinations."""
+
+    target_values = scores[:, target[0], target[1]]
+    winner_values = scores[:, winner[0], winner[1]]
+    native_target = np.float32(native[target])
+    native_winner = np.float32(native[winner])
+    recovar_target = np.float32(recovar[target])
+    recovar_winner = np.float32(recovar[winner])
+    native_target_orders = [
+        index for index, value in enumerate(target_values) if _same_bits(value, native_target)
+    ]
+    native_winner_orders = [
+        index for index, value in enumerate(winner_values) if _same_bits(value, native_winner)
+    ]
+    native_relative = np.float32(-native_target + native_winner)
+    recovar_relative = np.float32(-recovar_target + recovar_winner)
+    native_relative_pairs = []
+    recovar_relative_pairs = []
+    for target_order, target_value in enumerate(target_values):
+        for winner_order, winner_value in enumerate(winner_values):
+            relative = np.float32(-target_value + winner_value)
+            if _same_bits(relative, native_relative):
+                native_relative_pairs.append(
+                    [
+                        list(permutations[target_order]),
+                        list(permutations[winner_order]),
+                    ]
+                )
+            if _same_bits(relative, recovar_relative):
+                recovar_relative_pairs.append(
+                    [
+                        list(permutations[target_order]),
+                        list(permutations[winner_order]),
+                    ]
+                )
+    same_order_native = [
+        list(permutations[index])
+        for index in range(len(permutations))
+        if _same_bits(
+            np.float32(-target_values[index] + winner_values[index]),
+            native_relative,
+        )
+    ]
+    return {
+        "native_target_diff2": float(native_target),
+        "native_winner_diff2": float(native_winner),
+        "recovar_target_diff2": float(recovar_target),
+        "recovar_winner_diff2": float(recovar_winner),
+        "native_relative_score": float(native_relative),
+        "recovar_relative_score": float(recovar_relative),
+        "native_target_exact_orders": [list(permutations[index]) for index in native_target_orders],
+        "native_winner_exact_orders": [list(permutations[index]) for index in native_winner_orders],
+        "native_both_scores_independently_attainable": bool(
+            native_target_orders and native_winner_orders
+        ),
+        "native_relative_independent_order_pair_count": len(native_relative_pairs),
+        "native_relative_independent_lane_order_pairs": native_relative_pairs,
+        "native_relative_same_order_count": len(same_order_native),
+        "native_relative_same_orders": same_order_native,
+        "recovar_relative_independent_order_pair_count": len(recovar_relative_pairs),
+        "recovar_relative_independent_lane_order_pairs": recovar_relative_pairs,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--components", type=Path, required=True)
@@ -132,6 +214,10 @@ def main() -> None:
         recovar_scores = np.asarray(
             payload["scores_pre_prior_per_class"][0], dtype=np.float32
         )
+        recovar_translations = np.asarray(payload["translations"], dtype=np.float64)
+        recovar_significant = np.asarray(payload["significant_mask"], dtype=bool).reshape(
+            recovar_scores.shape
+        )
 
     lane_partials = _captured_lane_partials(lanes)
     initial_diff2 = _float32_from_bits(int(lanes.header[20]))
@@ -149,7 +235,15 @@ def main() -> None:
         ],
         dtype=np.int64,
     )
-    recovar_diff2 = -recovar_scores[recovar_rotation_ids]
+    translation_permutation, translation_mapping = _translation_permutation(
+        components.translations,
+        recovar_translations,
+    )
+    recovar_diff2 = -recovar_scores[recovar_rotation_ids][:, translation_permutation]
+    recovar_significant_panel = recovar_significant[recovar_rotation_ids][
+        :, translation_permutation
+    ]
+    native_significant_panel = components.significant_mask[lanes.rotation_keys]
     recovar_exact = scores.view(np.uint32) == recovar_diff2[None, ...].view(np.uint32)
     recovar_attainable = np.any(recovar_exact, axis=0)
 
@@ -185,8 +279,55 @@ def main() -> None:
             }
         )
 
+    native_winner_rotation, native_winner_translation = divmod(
+        int(components.header[15]),
+        int(components.header[12]),
+    )
+    panel_by_rotation_key = {
+        int(rotation_key): index
+        for index, rotation_key in enumerate(lanes.rotation_keys)
+    }
+    winner_panel_rotation = panel_by_rotation_key.get(native_winner_rotation)
+    boundary_rows = []
+    for target_rotation, target_translation in np.argwhere(
+        native_significant_panel != recovar_significant_panel
+    ):
+        row = {
+            "target_native_rotation_key": int(lanes.rotation_keys[target_rotation]),
+            "target_native_translation": int(target_translation),
+            "target_recovar_rotation": int(recovar_rotation_ids[target_rotation]),
+            "target_recovar_translation": int(translation_permutation[target_translation]),
+            "native_significant": bool(
+                native_significant_panel[target_rotation, target_translation]
+            ),
+            "recovar_significant": bool(
+                recovar_significant_panel[target_rotation, target_translation]
+            ),
+        }
+        if winner_panel_rotation is None:
+            row["winner_captured"] = False
+        else:
+            row["winner_captured"] = True
+            row["winner_native_rotation_key"] = native_winner_rotation
+            row["winner_native_translation"] = native_winner_translation
+            row["winner_recovar_rotation"] = int(
+                recovar_rotation_ids[winner_panel_rotation]
+            )
+            row["winner_recovar_translation"] = int(
+                translation_permutation[native_winner_translation]
+            )
+            row["order_audit"] = _pair_order_audit(
+                permutations=permutations,
+                scores=scores,
+                native=native,
+                recovar=recovar_diff2,
+                target=(int(target_rotation), int(target_translation)),
+                winner=(int(winner_panel_rotation), native_winner_translation),
+            )
+        boundary_rows.append(row)
+
     report = {
-        "schema": "recovar.em.k1_coarse_atomic_order.v2",
+        "schema": "recovar.em.k1_coarse_atomic_order.v3",
         "metric_policy": "exact float32 bits and absolute residuals; no correlation",
         "kernel": {
             "block_size": 128,
@@ -218,6 +359,14 @@ def main() -> None:
         },
         "best_fixed_lane_orders": fixed_rows[:8],
         "compatible_orders_by_translation": compatible_by_translation,
+        "support_boundary": {
+            "native_winner_rotation_key": native_winner_rotation,
+            "native_winner_translation": native_winner_translation,
+            "native_winner_captured": winner_panel_rotation is not None,
+            "mismatch_count_in_captured_panel": len(boundary_rows),
+            "mismatches": boundary_rows,
+        },
+        "translation_mapping": translation_mapping,
         "artifacts": {
             "components": str(args.components.resolve()),
             "components_sha256": _sha256(args.components),
