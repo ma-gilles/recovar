@@ -89,7 +89,7 @@ recovar gui
 
 RECOVAR estimates a regularized 3D covariance from your particle images, extracts principal components to build a low-dimensional latent space, and uses kernel regression to generate volumes at any point in that space.
 
-For the full method, see the [paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122) or [recorded talk](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s).
+For the full method, see the [paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122).
 
 ---
 
