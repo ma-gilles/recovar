@@ -4,7 +4,6 @@ RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. I
 
 **[Full Documentation](https://ma-gilles.github.io/recovar)** | **[Paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122)**
 
-> **Looking for the older release?** Active development happens on the `dev` branch. If you want the previous stable release (`0.4.5`, possibly more stable but missing recent features like `.cs`/`.star` auto-extraction), install with `pip install recovar==0.4.5` or check out the [`legacy-0.4.5`](https://github.com/ma-gilles/recovar/tree/legacy-0.4.5) branch.
 
 **License**: RECOVAR is licensed under the MIT License. See [LICENSE](LICENSE).
 
