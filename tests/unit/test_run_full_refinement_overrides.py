@@ -97,6 +97,23 @@ ITERATION_LOOP = (
 )
 
 
+def _sole_call_keywords(tree: ast.Module, func_name: str) -> dict[str, ast.expr]:
+    """Keyword args of the single top-level call to ``func_name`` in ``tree``.
+
+    refine_single_volume() takes one ``options=RefinementOptions(...)``;
+    most CLI-forwarding knobs now live as keywords on the nested
+    RefinementSchedule/RelionParityOptions/EngineDebugOptions/etc.
+    constructor calls instead of directly on refine_single_volume.
+    """
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == func_name
+    ]
+    assert len(calls) == 1, f"expected exactly one {func_name}(...) call, found {len(calls)}"
+    return {keyword.arg: keyword.value for keyword in calls[0].keywords}
+
+
 def test_complete_initial_particle_state_is_autorefine_only():
     assert _replay_complete_initial_particle_state(1, 0)
     assert not _replay_complete_initial_particle_state(4, 0)
@@ -626,15 +643,9 @@ def test_frozen_boundary_source_hashes_bind_live_stars(tmp_path):
 
 def test_frozen_boundary_schedule_is_threaded_exactly_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {keyword.arg: keyword.value for keyword in calls[0].keywords}
+    # init_current_size / init_relion_incr_size are forwarded via the
+    # RefinementSchedule group of refine_single_volume's options= bundle.
+    keywords = _sole_call_keywords(tree, "RefinementSchedule")
     assert isinstance(keywords["init_current_size"], ast.Name)
     assert keywords["init_current_size"].id == "init_current_size"
     relion_incr = keywords["init_relion_incr_size"]
@@ -924,13 +935,8 @@ def test_firstiter_cc_passes_relion_cli_ini_high_to_refinement_loop():
     """
 
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    # relion_firstiter_ini_high_angstrom is forwarded via RelionParityOptions.
+    keywords = _sole_call_keywords(tree, "RelionParityOptions")
     assert "relion_firstiter_ini_high_angstrom" in keywords
     value = keywords["relion_firstiter_ini_high_angstrom"]
     assert isinstance(value, ast.IfExp)
@@ -1001,13 +1007,8 @@ def test_runner_requires_and_persists_perturbation_restart_provenance():
 
 def test_save_intermediates_skip_unregularized_passes_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    # save_intermediates_skip_unregularized is forwarded via EngineDebugOptions.
+    keywords = _sole_call_keywords(tree, "EngineDebugOptions")
     value = keywords["save_intermediates_skip_unregularized"]
     assert isinstance(value, ast.Call)
     assert isinstance(value.func, ast.Name)
@@ -1019,13 +1020,8 @@ def test_save_intermediates_skip_unregularized_passes_to_refinement_loop():
 def test_stop_after_local_search_passes_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
     assert "--stop_after_local_search" in RUN_FULL_REFINEMENT.read_text()
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    # stop_after_local_search is forwarded via EngineDebugOptions.
+    keywords = _sole_call_keywords(tree, "EngineDebugOptions")
     value = keywords["stop_after_local_search"]
     assert isinstance(value, ast.Call)
     assert isinstance(value.func, ast.Name)
@@ -1037,13 +1033,8 @@ def test_stop_after_local_search_passes_to_refinement_loop():
 def test_stop_after_local_search_score_only_passes_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
     assert "--stop_after_local_search_score_only" in RUN_FULL_REFINEMENT.read_text()
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    # stop_after_local_search_score_only is forwarded via EngineDebugOptions.
+    keywords = _sole_call_keywords(tree, "EngineDebugOptions")
     value = keywords["stop_after_local_search_score_only"]
     assert isinstance(value, ast.Call)
     assert isinstance(value.func, ast.Name)
@@ -1054,11 +1045,14 @@ def test_stop_after_local_search_score_only_passes_to_refinement_loop():
 
 def test_stop_after_local_search_score_only_is_diagnostic_score_only_path():
     source = ITERATION_LOOP.read_text()
-    assert "if stop_after_local_search_score_only:\n        stop_after_local_search = True" in source
-    assert "diagnostic_score_only=bool(stop_after_local_search_score_only)" in source
+    # stop_after_local_search{,_score_only} are read off the EngineDebugOptions
+    # bundle (`debug.*`) inside the iteration loop now, rather than being bare
+    # locals bound from flat refine_single_volume kwargs.
+    assert "if debug.stop_after_local_search_score_only:\n        stop_after_local_search = True" in source
+    assert "diagnostic_score_only=bool(debug.stop_after_local_search_score_only)" in source
     assert "score_only=diagnostic_score_only" in source
     assert "accumulate_noise=local_accumulate_noise" in source
-    assert '"stop_after_local_search_score_only": bool(stop_after_local_search_score_only)' in source
+    assert '"stop_after_local_search_score_only": bool(debug.stop_after_local_search_score_only)' in source
 
 
 def test_diagnostic_single_half_is_guarded_to_local_search_stops():

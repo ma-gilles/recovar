@@ -1,11 +1,7 @@
 """Config dataclasses for ``refine_single_volume``.
 
-These typed structs group the ~60 kwargs of ``refine_single_volume`` by
-concern. Today they sit alongside the existing kwargs surface as
-documentation + reusable holders; future callers can populate one of these
-instead of memorising the kwarg name set. A follow-up migration step can
-switch ``refine_single_volume`` to accept these directly and drop the long
-kwarg list.
+These typed structs group the ~90 kwargs that ``refine_single_volume`` and
+``_run_relion_iteration_loop`` need.
 
 Each dataclass is ``frozen=True`` so it hashes by value and can be reused
 across iterations without copy-on-write surprises.
@@ -38,6 +34,7 @@ class RefinementSchedule:
     init_has_high_fsc_at_limit: bool | None = None
     force_max_iter_after_convergence: bool = False
     skip_final_iteration: bool = False
+    init_relion_incr_size: int = 10
 
 
 @dataclass(frozen=True)
@@ -71,6 +68,42 @@ class RelionParityOptions:
     first_iteration_score_mode: str = "gaussian"
     first_iteration_reconstruction_mode: str = "soft"
     image_fourier_backend: Literal["host_numpy", "jax_gpu", "relion_cuda"] = "host_numpy"
+    optimizer_random_seed: int | None = None
+    use_per_half_mean_variance: bool = False
+    preserve_bpref_particle_order: bool = False
+
+    def __post_init__(self):
+        if self.image_fourier_backend not in {
+            "host_numpy",
+            "jax_gpu",
+            "relion_cuda",
+        }:
+            raise ValueError(
+                "image_fourier_backend must be "
+                "'host_numpy', 'jax_gpu', or 'relion_cuda', "
+                f"got {self.image_fourier_backend!r}"
+            )
+
+        iterations = tuple(
+            sorted({int(value) for value in self.perturb_replay_restart_state_iterations})
+        )
+
+        if any(value < 0 for value in iterations):
+            raise ValueError(
+                "perturbation replay restart-state iterations must be non-negative"
+            )
+
+        if iterations and self.perturb_replay_relion_dir is None:
+            raise ValueError(
+                "perturbation replay restart-state iterations require "
+                "perturb_replay_relion_dir"
+            )
+
+        object.__setattr__(
+            self,
+            "perturb_replay_restart_state_iterations",
+            iterations,
+        )
 
 
 @dataclass(frozen=True)
@@ -78,17 +111,50 @@ class LocalSearchOptions:
     """Local angular-search controls."""
 
     auto_local_healpix_order: int = LOCAL_SEARCH_HEALPIX_ORDER
-    local_search_profile_mode: str = "auto"
+    local_search_profile_mode: Literal["auto", "on", "off"] = "auto"
     local_search_translation_prior_mode: str = "coarse"
+
+    def __post_init__(self):
+        if self.local_search_profile_mode not in {
+            "auto",
+            "on",
+            "off"
+        }:
+            raise ValueError(
+                "local_search_profile_mode must be "
+                "'auto', 'on', or 'off', "
+                f"got {self.local_search_profile_mode!r}"
+            )    
+
+
+@dataclass(frozen=True)
+class ExpectedAccuracyOptions:
+    """Half1 oracle inputs for RELION's expected-accuracy calculation."""
+
+    half1_base_order_local: Any | None = None
+    half1_trial_order_local: Any | None = None
+    half1_optics_group_ids: Any | None = None
+    half1_particle_ids: Any | None = None
+    half1_ctf_params: Any | None = None
+    do_ctf_correction: bool | None = None
 
 
 @dataclass(frozen=True)
 class EngineDebugOptions:
-    """Adjoint ablation + intermediate-dump controls."""
+    """Adjoint ablation, intermediate-dump, and test-harness controls."""
 
     disable_adjoint_y: bool = False
     disable_adjoint_ctf: bool = False
     save_intermediates_dir: str | None = None
+    save_intermediates_skip_unregularized: bool = False
+    state_swap_probe: str | None = None
+    assert_initial_scoring_state_immutable: bool = False
+    stop_after_local_search_profile: bool = False
+    stop_after_local_search: bool = False
+    stop_after_local_search_score_only: bool = False
+    sealed_sampling_state: Any | None = None
+    sealed_scoring_context: Any | None = None
+    expected_accuracy: ExpectedAccuracyOptions = field(default_factory=ExpectedAccuracyOptions)
 
 
 @dataclass(frozen=True)
@@ -115,10 +181,19 @@ class ReplayState:
     init_direction_prior: Any | None = None
     init_previous_best_translations: Any | None = None
     init_previous_best_rotation_eulers: Any | None = None
+    preserve_initial_direction_prior: bool = False
     replay_iteration_overrides: Any | None = None
     final_replay_override: Any | None = None
     final_replay_reference_maps: Any | None = None
     final_replay_source_iteration: int | None = None
+    init_reference_real: Any | None = None
+    init_refinement_state_fields: Any | None = None
+    init_relion_particle_ids: Any | None = None
+    init_relion_optics_group_ids: Any | None = None
+    init_relion_optics_group_count: Any | None = None
+    relion_scale_follower_count: int = 0
+    relion_scale_follower_owners_by_iteration: Any | None = None
+    relion_follower_scale_replay: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -133,11 +208,8 @@ class RefinementBatching:
 class RefinementOptions:
     """Top-level container for all configuration groups.
 
-    Future shape of ``refine_single_volume(experiment_datasets, init_volume,
-    init_noise_variance, init_mean_variance, rotations, translations,
-    *, schedule, adaptive, parity, local_search, k_class, replay, debug,
-    batching, disc_type="linear_interp")``. Today this exists only as a
-    typed grouping; the public signature still uses individual kwargs.
+    Passed as the ``options`` argument of ``refine_single_volume`` and
+    ``_run_relion_iteration_loop``.
     """
 
     schedule: RefinementSchedule = field(default_factory=RefinementSchedule)
@@ -156,6 +228,7 @@ __all__ = [
     "AdaptiveOptions",
     "RelionParityOptions",
     "LocalSearchOptions",
+    "ExpectedAccuracyOptions",
     "EngineDebugOptions",
     "KClassOptions",
     "ReplayState",

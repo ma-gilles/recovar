@@ -234,6 +234,14 @@ def test_full_runner_propagates_and_serializes_state_swap_probe():
         for node in calls
         if isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
     ]
+    # state_swap_probe is forwarded via the EngineDebugOptions group of
+    # refine_single_volume's options= bundle (commit cd6661f2), not as a
+    # top-level refine_single_volume keyword.
+    debug_option_calls = [
+        node
+        for node in calls
+        if isinstance(node.func, ast.Name) and node.func.id == "EngineDebugOptions"
+    ]
 
     assert {
         "add_state_swap_probe_arguments",
@@ -242,8 +250,9 @@ def test_full_runner_propagates_and_serializes_state_swap_probe():
         "validate_state_swap_probe_application",
     } <= called_names
     assert len(refinement_calls) == 1
+    assert len(debug_option_calls) == 1
     state_swap_keywords = [
-        keyword for keyword in refinement_calls[0].keywords if keyword.arg == "state_swap_probe"
+        keyword for keyword in debug_option_calls[0].keywords if keyword.arg == "state_swap_probe"
     ]
     assert len(state_swap_keywords) == 1
     assert isinstance(state_swap_keywords[0].value, ast.Name)
