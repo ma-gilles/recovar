@@ -8,6 +8,7 @@ import argparse
 import sys
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 pytest.importorskip("jax")  # pipeline.py imports jax at module level
@@ -74,6 +75,37 @@ def test_noise_upper_bound_batch_size_scales_with_grid_and_budget():
 
     assert 1 <= grid_512_large_budget < grid_256_large_budget < requested
     assert 1 <= grid_256_small_budget < grid_256_large_budget
+
+
+@pytest.mark.parametrize("noise_model", ["radial_per_tilt", "radial-per-tilt"])
+def test_radial_per_tilt_automatically_uses_new_noise_estimator(monkeypatch, noise_model):
+    calls = []
+
+    def fake_fit(*args, invert_mask, **kwargs):
+        calls.append(invert_mask)
+        if invert_mask:
+            return np.full((3, 4), 2.0), np.full((3, 4), 10.0)
+        return np.full((3, 4), 3.0), np.full((3, 4), 1.0)
+
+    monkeypatch.setattr(pipeline_cmd.noise, "fit_noise_model_to_images", fake_fit)
+    monkeypatch.setattr(
+        pipeline_cmd.noise,
+        "estimate_radial_noise_statistic_from_outside_mask",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy estimator used")),
+    )
+    monkeypatch.setattr(pipeline_cmd.utils, "report_memory_device", lambda logger=None: None)
+
+    result = pipeline_cmd._estimate_noise(
+        SimpleNamespace(),
+        SimpleNamespace(combined=object()),
+        object(),
+        8,
+        SimpleNamespace(new_noise_est=False, premultiplied_ctf=False, mask="from_halfmaps"),
+        noise_model,
+    )
+
+    assert calls == [True, False]
+    assert result["noise_var_used"].shape == (3, 4)
 
 
 def test_pipeline_registers_poses():
