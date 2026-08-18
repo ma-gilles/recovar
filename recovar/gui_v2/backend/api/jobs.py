@@ -47,6 +47,7 @@ from recovar.gui_v2.backend.services.executor import (
     Executor,
     LocalExecutor,
     SlurmExecutor,
+    disk_completion_time,
     slurm_available,
 )
 from recovar.gui_v2.backend.services.executor import (
@@ -1153,11 +1154,21 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
                 changed=False,
             )
 
-        # No executor handle — cannot query the executor
+        # No executor handle to query (the job was imported by a scan, or
+        # submitted outside the GUI) — judge it by its outputs instead.
         if not job.executor_handle:
-            job.status = JobStatus.FAILED.value
-            job.error = "No executor handle — cannot check status."
-            job.completed_at = datetime.datetime.utcnow()
+            finished = disk_completion_time(job.output_dir, job.created_at)
+            if finished is not None:
+                job.status = JobStatus.COMPLETED.value
+                job.error = None
+                job.completed_at = finished
+            else:
+                job.status = JobStatus.FAILED.value
+                job.error = (
+                    "No executor handle, and no completed output in the job "
+                    "directory — cannot check status."
+                )
+                job.completed_at = datetime.datetime.utcnow()
             await session.commit()
             return ReconcileResponse(
                 id=job_id,
