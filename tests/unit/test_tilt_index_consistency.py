@@ -274,9 +274,10 @@ def test_random_tilt_selection_respects_num_tilts_and_membership(tmp_path):
     )
     for pidx in range(len(ds)):
         _, _, selected = ds[pidx]
-        assert selected.size == 1
+        assert selected.size <= 1
         all_group_tilts = list(ds.particle_groups.values())[pidx]
-        assert int(selected[0]) in set(all_group_tilts.tolist())
+        assert set(selected.tolist()).issubset(set(all_group_tilts.tolist()))
+        assert np.all(ds.tilt_numbers[selected] < 1)
 
 
 def test_get_split_tilt_indices_random_split_has_disjoint_complete_coverage(tmp_path):
@@ -295,23 +296,17 @@ def test_get_split_tilt_indices_random_split_has_disjoint_complete_coverage(tmp_
     np.testing.assert_array_equal(np.sort(np.concatenate(split)), np.arange(8, dtype=np.int32))
 
 
-def test_get_split_tilt_indices_with_ntilts_filters_per_particle(tmp_path):
+def test_get_split_tilt_indices_with_ntilts_uses_global_acquisition_rank(tmp_path):
     star_path = _make_tilt_fixture(tmp_path)
-    # Canonical particles:
-    # gA -> [1,4], gB -> [0,3,6], gC -> [2,5,7]
-    # RELION5 ordering in fixture (higher dose first):
-    # gA keeps tilt-order ranks [4,1] => with ntilts=1 keep one per particle in get_split_tilt_indices by tilt_numbers < 1.
     split = halfsets.get_split_tilt_indices(
         particles_file=str(star_path),
         ntilts=1,
         datadir=str(tmp_path),
     )
-    # exactly one tilt per particle in whichever halfset each particle is assigned.
+    # The only global rank-0 exposure is row 1 (dose 1.0). Particles missing
+    # that acquisition contribute no replacement image from a later exposure.
     kept = np.sort(np.concatenate(split))
-    assert kept.size == 3
-    p2t, _ = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(str(star_path))
-    for particle_tilts in p2t:
-        assert np.intersect1d(kept, particle_tilts).size == 1
+    np.testing.assert_array_equal(kept, np.array([1], dtype=np.int32))
 
 
 def test_particle_subset_max_tilts_matches_parent_counts(tmp_path):
@@ -324,5 +319,6 @@ def test_particle_subset_max_tilts_matches_parent_counts(tmp_path):
         tilt_file_option="relion5",
     )
     subset = cryo_dataset._SimpleSubset(ds, np.array([1, 2], dtype=np.int32))
-    # both chosen particles have >=2 tilts; max should be 2 due to num_tilts cap.
-    assert cryo_dataset._max_tilts_per_dataset_view(subset) == 2
+    # Of these particles, only gB has one image among global ranks 0 and 1;
+    # later available images are not used as replacements.
+    assert cryo_dataset._max_tilts_per_dataset_view(subset) == 1

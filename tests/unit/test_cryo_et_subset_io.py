@@ -342,28 +342,22 @@ def test_get_split_tilt_indices_combined_out_of_range_particle_ids_ignored(tilt_
 
 
 # ---------------------------------------------------------------------------
-# 8. get_split_tilt_indices – ntilts per-particle cap
+# 8. get_split_tilt_indices – global acquisition cutoff
 # ---------------------------------------------------------------------------
 
 
-def test_get_split_tilt_indices_ntilts_caps_per_particle(tilt_files):
-    """ntilts=1 keeps at most one tilt per particle in each halfset."""
+def test_get_split_tilt_indices_ntilts_uses_global_acquisition_cutoff(tilt_files):
+    """ntilts=1 keeps only images with global acquisition rank zero."""
     star = tilt_files["particles_star"]
-    p2t, _ = _parse_p2t(tilt_files)
 
     half0, half1 = halfsets.get_split_tilt_indices(
         particles_file=star,
         ntilts=1,
     )
-    half0 = np.asarray(half0, dtype=np.int32)
-    half1 = np.asarray(half1, dtype=np.int32)
-
-    for pidx, tilts in enumerate(p2t):
-        particle_tilts = set(np.asarray(tilts, dtype=np.int32).tolist())
-        in_half0 = particle_tilts & set(half0.tolist())
-        in_half1 = particle_tilts & set(half1.tolist())
-        assert len(in_half0) <= 1, f"particle {pidx} has {len(in_half0)} tilts in half0"
-        assert len(in_half1) <= 1, f"particle {pidx} has {len(in_half1)} tilts in half1"
+    tilt_ds = cryo_dataset.TiltSeriesDataset(star, lazy=True, tilt_file_option="relion5")
+    for half in (half0, half1):
+        half = np.asarray(half, dtype=np.int32)
+        assert np.all(tilt_ds.tilt_numbers[half] < 1)
 
 
 # ---------------------------------------------------------------------------
