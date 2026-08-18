@@ -25,6 +25,7 @@ _NOISE_UB_GB_PER_IMAGE_AT_GRID_256 = 0.117
 _NOISE_UB_WORKING_FRACTION = 0.15
 _NOISE_UB_MIN_WORKING_GB = 1.0
 _NOISE_UB_MAX_WORKING_GB = 12.0
+_RADIAL_PER_TILT_NOISE_MODELS = ("radial_per_tilt", "radial-per-tilt")
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -291,7 +292,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--noise-model",
         dest="noise_model",
         default="radial",
-        help="Noise model: radial (default) or white",
+        help="Noise model: radial (default) or radial_per_tilt",
     )
     adv.add_argument(
         "--mean-fn",
@@ -323,7 +324,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--new-noise-est",
         dest="new_noise_est",
         action="store_true",
-        help="Use new noise estimation",
+        help="Use new noise estimation (automatic for premultiplied CTF and radial_per_tilt)",
     )
     adv.add_argument(
         "--use_reg_mean_in_contrast",
@@ -517,7 +518,10 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
 
     Returns a dict with all noise-related quantities needed by the pipeline.
     """
-    use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf
+    radial_per_tilt = noise_model in _RADIAL_PER_TILT_NOISE_MODELS
+    use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf or radial_per_tilt
+    if radial_per_tilt and not (args.new_noise_est or args.premultiplied_ctf):
+        logger.info("Enabling new noise estimation automatically for radial_per_tilt")
     logger.info("Using new noise estimation function?: %s", use_new_noise_fn)
 
     noise_time = time.time()
@@ -550,7 +554,7 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
     radial_noise_var_outside_mask = masked_image_PS
     white_noise_var_outside_mask_val = np.median(masked_image_PS)
 
-    if use_new_noise_fn and noise_model not in ("radial", "radial_per_tilt"):
+    if use_new_noise_fn and noise_model != "radial" and not radial_per_tilt:
         raise ValueError(f"new noise fn only works with radial noise model, got {noise_model}")
 
     logger.info("time to estimate noise is %s", time.time() - noise_time)
@@ -923,7 +927,7 @@ def standard_recovar_pipeline(args):
     if noise_model == "radial":
         ds.set_radial_noise_model(None)
         logger.info("Setting noise model to radial")
-    elif noise_model in ("radial_per_tilt", "radial-per-tilt"):
+    elif noise_model in _RADIAL_PER_TILT_NOISE_MODELS:
         ds.set_variable_radial_noise_model(None)
         logger.info("Setting noise model to radial_per_tilt")
     else:
