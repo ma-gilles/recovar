@@ -102,7 +102,10 @@ def make_volumes_kernel_estimate_from_results(
             metric_used=metric_used,
         )
 
-
+# TODO
+#<< Here we still pass on the differences to the next function.
+# We have to be careful that we split the differences into the 
+# corresponding halfsets.
 @nvtx.annotate("make_volumes_kernel_estimate_local", color="yellow")
 def make_volumes_kernel_estimate_local(
     heterogeneity_distances,
@@ -124,7 +127,8 @@ def make_volumes_kernel_estimate_local(
     save_all_estimates=False,
     heterogeneity_kernel="parabola",
     use_fast_rfft=False,
-):
+    my_distances = None, #<<LH 001
+    my_cov = None):
     """Reconstruct volumes along a heterogeneity path using kernel regression.
 
     For each bin along the heterogeneity axis, selects nearby images
@@ -152,9 +156,16 @@ def make_volumes_kernel_estimate_local(
         kernel_rad: Radius of the heterogeneity kernel.
         save_all_estimates: Save all intermediate estimates.
         heterogeneity_kernel: Kernel shape (``'parabola'`` or ``'flat'``).
+        my_distances: List containing two numpy array each of shape (n_images_half, d)
+        my_cov: List containing two numpy array each of shape (n_images_half, d, d)
     """
     vol_paths.ensure_dirs()
     ds = dataset
+
+    if my_distances is None:
+        my_distances = [None, None]
+    if my_cov is None:
+        my_cov = [None, None]
 
     if isinstance(bins, int):
         logger.warning("Picking bins based on number of particles only. n_min_particles = %s", n_min_particles)
@@ -185,7 +196,9 @@ def make_volumes_kernel_estimate_local(
             upsampling_factor=upsampling_for_ests,
             return_real_space=True,
             use_fast_rfft=use_fast_rfft,
-        )
+            my_distances = my_distances[k],
+            my_cov = my_cov[k],
+        ) #<<LH 001
         estimates[k] = estimates[k].reshape(-1, *ds.volume_shape).astype(np.float32)
         logger.info("Computing estimates done")
 
@@ -203,8 +216,10 @@ def make_volumes_kernel_estimate_local(
                 upsampling_factor=1,
                 return_real_space=True,
                 use_fast_rfft=use_fast_rfft,
+                my_distances = my_distances[k],
+                my_cov = my_cov[k],
             )
-        )
+        ) #<<LH 001
 
         lhs[k] = fourier_transform_utils.half_volume_to_full_volume(
             lhs[k][0],
@@ -264,6 +279,8 @@ def make_volumes_kernel_estimate_local(
             upsampling_factor=2,
             return_real_space=True,
             use_fast_rfft=use_fast_rfft,
+            my_distances = my_distances[k],
+            my_cov = my_cov[k], #<<LH 001
         )
         estimates[k] = estimates[k].reshape(-1, *ds.volume_shape).astype(np.float32)
 
