@@ -32,6 +32,12 @@ def add_args(parser: argparse.ArgumentParser):
     def list_of_ints(arg):
         return list(map(int, arg.split(",")))
 
+    def positive_int(arg):
+        value = int(arg)
+        if value <= 0:
+            raise argparse.ArgumentTypeError("value must be a positive integer")
+        return value
+
     # ── Required / positional ──────────────────────────────────────────────
     parser.add_argument(
         "particles",
@@ -235,11 +241,22 @@ def add_args(parser: argparse.ArgumentParser):
         dest="angle_per_tilt",
         help="Angle per tilt (default: estimated from starfile)",
     )
-    tilt.add_argument(
+    tilt_count = tilt.add_mutually_exclusive_group()
+    tilt_count.add_argument(
         "--ntilts",
         default=None,
         type=int,
         help="Number of tilts per tilt series. Default = all",
+    )
+    tilt_count.add_argument(
+        "--central-tilts",
+        default=None,
+        type=positive_int,
+        help=(
+            "Keep only particles containing the same N nominally central physical tilt positions. "
+            "Positions are chosen per tilt series by smallest absolute nominal stage angle when available, "
+            "otherwise by lowest dose; later available views are never substituted."
+        ),
     )
     tilt.add_argument(
         "--shared_contrast_across_tilts",
@@ -694,6 +711,20 @@ def _compute_embeddings(means, u, s, dataset, volume_mask, options, gpu_memory, 
 # ---------------------------------------------------------------------------
 
 
+def _validate_tilt_selection_args(args):
+    central_tilts = getattr(args, "central_tilts", None)
+    if central_tilts is None:
+        return
+    if not isinstance(central_tilts, (int, np.integer)) or isinstance(central_tilts, (bool, np.bool_)):
+        raise TypeError("central_tilts must be a positive integer")
+    if int(central_tilts) <= 0:
+        raise ValueError("central_tilts must be a positive integer")
+    if not getattr(args, "tilt_series", False):
+        raise ValueError("--central-tilts requires --tilt-series")
+    if getattr(args, "ntilts", None) is not None:
+        raise ValueError("--central-tilts and --ntilts are mutually exclusive")
+
+
 def standard_recovar_pipeline(args):
     st_time = time.time()
 
@@ -713,6 +744,7 @@ def standard_recovar_pipeline(args):
         args.particles = converted_star
         logger.info("Conversion complete. Proceeding with pipeline.")
 
+    _validate_tilt_selection_args(args)
     # --- Validate poses/ctf availability ---
     if args.poses is None or args.ctf is None:
         ext = args.particles.rsplit(".", 1)[-1].lower()

@@ -8,8 +8,8 @@ particle-level splitting.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -174,6 +174,262 @@ def get_split_indices(
 # ---------------------------------------------------------------------------
 
 
+def _select_complete_central_tilts(
+    index_map,
+    particles_file,
+    n_central,
+    candidate_particles,
+    allowed_images,
+):
+    """Select identical nominal positions per tilt series and drop incomplete particles."""
+    if not isinstance(n_central, (int, np.integer)) or isinstance(n_central, (bool, np.bool_)):
+        raise TypeError("central_tilts must be a positive integer")
+    n_central = int(n_central)
+    if n_central <= 0:
+        raise ValueError("central_tilts must be a positive integer")
+
+    from recovar.data_io import starfile
+
+    particles = starfile.StarFile.load(particles_file).df
+    if "_rlnTiltName" in particles.columns:
+        tilt_identity_column = "_rlnTiltName"
+    elif "_rlnMicrographName" in particles.columns:
+        tilt_identity_column = "_rlnMicrographName"
+    else:
+        raise ValueError("--central-tilts requires _rlnTiltName or _rlnMicrographName in the particles STAR file")
+
+    tilt_names = np.asarray(particles[tilt_identity_column], dtype=str)
+    if tilt_names.shape != (index_map.n_images,):
+        raise ValueError(
+            "Particles STAR row count does not match the tilt-series image index map: "
+            f"{tilt_names.size} rows versus {index_map.n_images} images"
+        )
+
+    # Build tilt-series components. A RELION N@stack name whose stack is
+    # shared by all images of a particle supplies an explicit tomogram key.
+    # Per-tilt files legitimately have different stack suffixes, so those
+    # fall back to joining particles through shared physical-tilt names.
+    parents = np.arange(index_map.n_particles, dtype=np.int32)
+
+    def find(particle_idx):
+        particle_idx = int(particle_idx)
+        while parents[particle_idx] != particle_idx:
+            parents[particle_idx] = parents[parents[particle_idx]]
+            particle_idx = int(parents[particle_idx])
+        return particle_idx
+
+    def union(first, second):
+        first_root = find(first)
+        second_root = find(second)
+        if first_root != second_root:
+            parents[second_root] = first_root
+
+    tomo_names = None
+    if "_rlnTomoName" in particles.columns:
+        tomo_names = np.asarray(particles["_rlnTomoName"], dtype=str)
+        if tomo_names.shape != (index_map.n_images,):
+            raise ValueError("_rlnTomoName row count does not match the particles STAR file")
+
+    component_owner = {}
+    for particle_idx, particle_images in enumerate(index_map.particle_to_images):
+        names = tilt_names[particle_images]
+        if tomo_names is not None:
+            particle_tomos = np.unique(tomo_names[particle_images])
+            if particle_tomos.size != 1:
+                raise ValueError("A particle contains images assigned to multiple _rlnTomoName values")
+            merge_keys = [("tomo", str(particle_tomos[0]))]
+        else:
+            parsed_stacks = []
+            for name in names:
+                image_number, separator, stack_name = name.partition("@")
+                if separator and image_number.isdigit() and stack_name:
+                    parsed_stacks.append(stack_name)
+            if len(parsed_stacks) == len(names) and len(set(parsed_stacks)) == 1:
+                merge_keys = [("stack", parsed_stacks[0])]
+            else:
+                merge_keys = [("tilt", str(name)) for name in np.unique(names)]
+        for merge_key in merge_keys:
+            if merge_key in component_owner:
+                union(particle_idx, component_owner[merge_key])
+            else:
+                component_owner[merge_key] = particle_idx
+
+    component_particles = {}
+    for particle_idx in range(index_map.n_particles):
+        component_particles.setdefault(find(particle_idx), []).append(particle_idx)
+
+    # Include the tilt-series component in the physical identity. This keeps
+    # generic names such as tilt_001 distinct across tomograms.
+    image_components = np.full(index_map.n_images, -1, dtype=np.int32)
+    for particle_idx, particle_images in enumerate(index_map.particle_to_images):
+        image_components[particle_images] = find(particle_idx)
+    if np.any(image_components < 0):
+        raise ValueError("Could not assign every particles STAR row to a tilt series")
+
+    physical_tilt_ids = {}
+    image_to_tilt = np.empty(index_map.n_images, dtype=np.int32)
+    for image_idx, (component, tilt_name) in enumerate(zip(image_components, tilt_names, strict=True)):
+        key = (int(component), str(tilt_name))
+        tilt_idx = physical_tilt_ids.setdefault(key, len(physical_tilt_ids))
+        image_to_tilt[image_idx] = tilt_idx
+
+    n_physical_tilts = len(physical_tilt_ids)
+    tilt_counts = np.bincount(image_to_tilt, minlength=n_physical_tilts)
+
+    def aggregate_metadata(column, *, require_consistent=False):
+        if column not in particles.columns:
+            return None
+        values = np.asarray(particles[column], dtype=np.float64)
+        if values.shape != (index_map.n_images,):
+            raise ValueError(f"{column} row count does not match the particles STAR file")
+        finite = np.isfinite(values)
+        finite_counts = np.bincount(image_to_tilt[finite], minlength=n_physical_tilts)
+        sums = np.bincount(
+            image_to_tilt[finite],
+            weights=values[finite],
+            minlength=n_physical_tilts,
+        )
+        result = np.full(n_physical_tilts, np.nan, dtype=np.float64)
+        valid = finite_counts == tilt_counts
+        result[valid] = sums[valid] / finite_counts[valid]
+        if require_consistent:
+            minima = np.full(n_physical_tilts, np.inf, dtype=np.float64)
+            maxima = np.full(n_physical_tilts, -np.inf, dtype=np.float64)
+            np.minimum.at(minima, image_to_tilt[finite], values[finite])
+            np.maximum.at(maxima, image_to_tilt[finite], values[finite])
+            inconsistent = valid & ~np.isclose(minima, maxima, rtol=1e-6, atol=1e-6)
+            if np.any(inconsistent):
+                raise ValueError(f"A physical tilt identity has inconsistent {column} values")
+        return result
+
+    dose_column = "_rlnMicrographPreExposure"
+    tilt_doses = aggregate_metadata(dose_column, require_consistent=True)
+    angle_column = "_rlnTomoNominalStageTiltAngle"
+    tilt_angles = aggregate_metadata(angle_column)
+
+    def expected_angle_offsets(count):
+        offsets = [0]
+        radius = 1
+        while len(offsets) < count:
+            offsets.append(-radius)
+            if len(offsets) < count:
+                offsets.append(radius)
+            radius += 1
+        return np.asarray(offsets, dtype=np.float64)
+
+    def match_regular_positions(values, expected_offsets, *, use_closest_to_zero):
+        """Match a complete central lattice without replacing a missing position."""
+        values = np.asarray(values, dtype=np.float64)
+        if values.size < expected_offsets.size or not np.all(np.isfinite(values)):
+            return None
+
+        spacings = np.diff(np.sort(values))
+        spacings = spacings[spacings > 1e-6]
+        if spacings.size == 0:
+            if expected_offsets.size == 1:
+                candidate = int(np.argmin(np.abs(values)))
+                return np.array([candidate], dtype=np.int32)
+            return None
+
+        step = float(np.median(spacings))
+        tolerance = max(0.35 * step, 1e-3)
+        origin_idx = int(np.argmin(np.abs(values))) if use_closest_to_zero else int(np.argmin(values))
+        origin = float(values[origin_idx])
+        # Nominal angles and RELION pre-exposure both have a zero-origin
+        # central position. If it is absent, do not promote the next view.
+        if abs(origin) > tolerance:
+            return None
+
+        targets = origin + expected_offsets * step
+        matched = []
+        for target in targets:
+            candidate = int(np.argmin(np.abs(values - target)))
+            if abs(float(values[candidate]) - float(target)) > tolerance or candidate in matched:
+                return None
+            matched.append(candidate)
+        return np.asarray(matched, dtype=np.int32)
+
+    target_tilts_by_component = {}
+    angle_selected_components = 0
+    dose_selected_components = 0
+    incomplete_components = 0
+    for root, particle_indices in component_particles.items():
+        component_images = np.concatenate(
+            [index_map.particle_to_images[int(particle_idx)] for particle_idx in particle_indices]
+        )
+        component_tilts = np.unique(image_to_tilt[component_images])
+        if component_tilts.size < n_central:
+            incomplete_components += 1
+            continue
+
+        component_angles = None if tilt_angles is None else tilt_angles[component_tilts]
+        angles_are_informative = (
+            component_angles is not None and np.all(np.isfinite(component_angles)) and np.ptp(component_angles) > 1e-3
+        )
+        if angles_are_informative:
+            matched = match_regular_positions(
+                component_angles,
+                expected_angle_offsets(n_central),
+                use_closest_to_zero=True,
+            )
+            method = "angle"
+        else:
+            component_doses = None if tilt_doses is None else tilt_doses[component_tilts]
+            matched = match_regular_positions(
+                component_doses if component_doses is not None else np.array([], dtype=np.float64),
+                np.arange(n_central, dtype=np.float64),
+                use_closest_to_zero=False,
+            )
+            method = "dose"
+
+        if matched is None:
+            incomplete_components += 1
+            continue
+        if method == "angle":
+            angle_selected_components += 1
+        else:
+            dose_selected_components += 1
+        target_tilts_by_component[root] = component_tilts[matched]
+
+    allowed_mask = np.zeros(index_map.n_images, dtype=bool)
+    allowed_mask[np.asarray(allowed_images, dtype=np.int64)] = True
+
+    complete_particles = []
+    complete_images = []
+    for particle_idx in np.asarray(candidate_particles, dtype=np.int32):
+        target_tilts = target_tilts_by_component.get(find(particle_idx))
+        if target_tilts is None:
+            continue
+        particle_images = index_map.particle_to_images[int(particle_idx)]
+        selected = particle_images[
+            np.isin(image_to_tilt[particle_images], target_tilts) & allowed_mask[particle_images]
+        ]
+        if selected.size != n_central:
+            continue
+        if np.unique(image_to_tilt[selected]).size != n_central:
+            continue
+        complete_particles.append(int(particle_idx))
+        complete_images.extend(selected.tolist())
+
+    if not complete_particles:
+        raise ValueError(f"No particles contain all central_tilts={n_central} nominal positions after applying filters")
+
+    complete_particles = np.asarray(complete_particles, dtype=np.int32)
+    complete_images = np.asarray(complete_images, dtype=np.int32)
+    logger.info(
+        "Central-tilt selection: %d positions per tilt series; %d series selected by angle, %d by dose, "
+        "and %d lacked a complete central lattice; retained %d/%d particles and %d images",
+        n_central,
+        angle_selected_components,
+        dose_selected_components,
+        incomplete_components,
+        complete_particles.size,
+        np.asarray(candidate_particles).size,
+        complete_images.size,
+    )
+    return complete_particles, complete_images
+
+
 def get_split_tilt_indices(
     particles_file,
     ind_file=None,
@@ -181,11 +437,17 @@ def get_split_tilt_indices(
     ntilts=None,
     datadir=None,
     particle_halfset_indices_file=None,
+    central_tilts=None,
 ):
     """Split a tilt-series dataset into two halfsets (image indices).
 
     Supports optional filtering by image/particle indices and precomputed splits.
+    ``central_tilts`` keeps only particles containing the same nominally central
+    physical tilt identities within each tilt series and never substitutes a later view.
     """
+    if central_tilts is not None and ntilts is not None:
+        raise ValueError("central_tilts and ntilts are mutually exclusive")
+
     index_map = TiltSeriesOriginalIndexMap.from_particles_file(
         particles_file,
         datadir=datadir,
@@ -238,6 +500,15 @@ def get_split_tilt_indices(
     if allowed_image_indices.size == 0:
         empty = np.array([], dtype=np.int32)
         return [empty, empty]
+
+    if central_tilts is not None:
+        particle_ind, allowed_image_indices = _select_complete_central_tilts(
+            index_map,
+            particles_file,
+            central_tilts,
+            particle_ind,
+            allowed_image_indices,
+        )
 
     valid_particles = index_map.particle_indices_from_images(allowed_image_indices)
     if valid_particles.size == 0:
@@ -389,7 +660,16 @@ def resolve_halfset_indices(args):
     ind_file = getattr(args, "ind", None)
     tilt_ind_file = getattr(args, "tilt_ind", None)
     ntilts = getattr(args, "ntilts", None)
+    central_tilts = getattr(args, "central_tilts", None)
     n_images = getattr(args, "n_images", None) or -1
+
+    if central_tilts is not None:
+        if not getattr(args, "tilt_series", False):
+            raise ValueError("--central-tilts requires tilt-series data")
+        if ntilts is not None:
+            raise ValueError("--central-tilts and --ntilts are mutually exclusive")
+        if n_images > 0:
+            raise ValueError("--n-images cannot be combined with --central-tilts")
 
     if args.halfsets is None:
         n_total_from_star = None
@@ -413,6 +693,7 @@ def resolve_halfset_indices(args):
                 ind_file=ind_file,
                 tilt_ind_file=tilt_ind_file,
                 ntilts=ntilts,
+                central_tilts=central_tilts,
                 datadir=datadir,
             )
         else:
@@ -432,6 +713,7 @@ def resolve_halfset_indices(args):
                 ind_file=ind_file,
                 tilt_ind_file=tilt_ind_file,
                 ntilts=ntilts,
+                central_tilts=central_tilts,
                 datadir=datadir,
                 particle_halfset_indices_file=args.halfsets,
             )
