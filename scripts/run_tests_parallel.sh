@@ -150,14 +150,15 @@ mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 
 # Della may leave every device on an exclusive node visible even when this
-# job requested --gres=gpu:1.  Bind both JAX and subprocess memory telemetry
-# to the first Slurm-assigned GPU so the test contract and perf baselines are
-# genuinely single-device.
-SLURM_VISIBLE_GPUS="\${SLURM_STEP_GPUS:-\${SLURM_JOB_GPUS:-}}"
-CUDA_FIRST_GPU="\${SLURM_VISIBLE_GPUS%%,*}"
+# job requested --gres=gpu:1.  Non-exclusive jobs may instead cgroup-remap the
+# assigned physical GPU to logical device zero.  Preserve Slurm's existing
+# CUDA_VISIBLE_DEVICES mapping when present, and use its physical assignment
+# only as a fallback, so JAX and perf telemetry remain genuinely single-GPU.
+CUDA_FIRST_GPU="\${CUDA_VISIBLE_DEVICES:-}"
+CUDA_FIRST_GPU="\${CUDA_FIRST_GPU%%,*}"
 if [[ -z "\${CUDA_FIRST_GPU}" ]]; then
-    CUDA_FIRST_GPU="\${CUDA_VISIBLE_DEVICES:-}"
-    CUDA_FIRST_GPU="\${CUDA_FIRST_GPU%%,*}"
+    SLURM_VISIBLE_GPUS="\${SLURM_STEP_GPUS:-\${SLURM_JOB_GPUS:-}}"
+    CUDA_FIRST_GPU="\${SLURM_VISIBLE_GPUS%%,*}"
 fi
 if [[ -n "\${CUDA_FIRST_GPU}" ]]; then
     export CUDA_VISIBLE_DEVICES="\${CUDA_FIRST_GPU}"
@@ -181,8 +182,9 @@ import pathlib, recovar, jax
 repo = pathlib.Path.cwd().resolve()
 assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo)+'/'), 'WRONG recovar'
 assert '.pixi/envs/default/' in str(pathlib.Path(jax.__file__).resolve()), 'WRONG jax'
-assert len(jax.devices()) == 1, f'EXPECTED ONE GPU, GOT {jax.devices()}'
-print('ENV_OK — devices:', jax.devices())
+devices = jax.devices()
+assert len(devices) == 1 and devices[0].platform == 'gpu', f'EXPECTED ONE GPU, GOT {devices}'
+print('ENV_OK — devices:', devices)
 "
 
 "\$PIXI_PY" -m pytest ${pytest_args} --junitxml=${XML_OUT}
