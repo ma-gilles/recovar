@@ -20,7 +20,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch")
 
@@ -64,9 +63,15 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
                         "scripts/evaluate_ab_initio_gt.py",
                         "scripts/run_vdam_abinitio_k2_smoke.py",
                         "scripts/run_vdam_abinitio_merge_guard.py",
+                        "scripts/audit_vdam_fsc_trajectory.py",
+                        "scripts/run_vdam_relion_parity_case.py",
+                        "scripts/summarize_vdam_relion_parity_scorecard.py",
+                        "tests/unit/initial_model/test_audit_vdam_fsc_trajectory.py",
                         "tests/unit/initial_model/test_evaluate_ab_initio_gt.py",
                         "tests/unit/initial_model/test_gt_metrics.py",
+                        "tests/unit/initial_model/test_run_vdam_relion_parity_case.py",
                         "tests/unit/initial_model/test_vdam_abinitio_merge_guard.py",
+                        "tests/unit/initial_model/test_vdam_relion_parity_scorecard.py",
                     ),
                 ),
                 GuardCommand(
@@ -76,9 +81,20 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
                         "-m",
                         "pytest",
                         "-v",
+                        "tests/unit/initial_model/test_audit_vdam_fsc_trajectory.py",
                         "tests/unit/initial_model/test_vdam_abinitio_merge_guard.py",
                         "tests/unit/initial_model/test_gt_metrics.py",
                         "tests/unit/initial_model/test_evaluate_ab_initio_gt.py",
+                        "tests/unit/initial_model/test_run_vdam_relion_parity_case.py",
+                        "tests/unit/initial_model/test_vdam_relion_parity_scorecard.py",
+                    ),
+                ),
+                GuardCommand(
+                    "vdam_frozen_scorecard",
+                    (
+                        _python(),
+                        "scripts/summarize_vdam_relion_parity_scorecard.py",
+                        "--check",
                     ),
                 ),
                 GuardCommand(

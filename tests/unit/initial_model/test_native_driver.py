@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1002,6 +1003,46 @@ def test_model_star_uses_relion_model_blocks(tmp_path):
     assert "1 0.125 8 9 0 0.8 0.2 2" in text
     assert "1 0.125 8 2 0 0.2 0.4 4" in text
     assert "_rlnOrientationDistribution" in text
+
+
+def test_iteration_zero_artifacts_use_the_normal_iteration_writer(monkeypatch, tmp_path):
+    state = initialise_denovo_state(ori_size=8, pixel_size=1.5, K=1, nr_iter=8, n_directions=12)
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnMicrographName": ["1", "2"],
+            "_rlnOpticsGroup": ["1", "1"],
+        }
+    )
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((2, 2), dtype=np.float32),
+        class_assignments=np.zeros(2, dtype=np.int32),
+        max_posterior=np.zeros(2, dtype=np.float32),
+    )
+
+    def fake_write_mrc(path, volume, *, voxel_size):
+        assert np.asarray(volume).shape == (8, 8, 8)
+        assert voxel_size == 1.5
+        Path(path).write_bytes(b"iteration-zero-map")
+
+    monkeypatch.setattr(driver, "write_relion_mrc", fake_write_mrc)
+    prefix = str(tmp_path / "run")
+    driver._write_iteration_artifacts(
+        prefix,
+        state,
+        0,
+        {"checkpoint_iteration": 0, "phase": "bootstrap"},
+        main_star=main,
+        optics_star=None,
+        dataset=SimpleNamespace(voxel_size=1.5, n_images=2),
+        particle_state=particle_state,
+    )
+
+    assert (tmp_path / "run_it000_class001.mrc").read_bytes() == b"iteration-zero-map"
+    assert (tmp_path / "run_it000_model.star").is_file()
+    assert (tmp_path / "run_it000_data.star").is_file()
+    meta = json.loads((tmp_path / "run_it000_recovar_meta.json").read_text())
+    assert meta == {"checkpoint_iteration": 0, "phase": "bootstrap"}
 
 
 def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):

@@ -1,0 +1,141 @@
+{
+  "schema": "recovar.vdam_relion_parity_scorecard.v1",
+  "suite_id": "vdam-k1-gui-grid0-fixed12",
+  "suite_version": 1,
+  "frozen_denominator": 12,
+  "frozen_case_definitions_sha256": "1a37a1b360b022d60eefdd0481eb0784d4a0e98a4d92066199625ceaf6d11dd1",
+  "source_fixture_manifest": {
+    "path": "docs/math/em_relion_parity_fixture_manifest_v2.json",
+    "sha256": "422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee"
+  },
+  "metric_policy": "Signed shellwise FSC and normalized non-DC FSC-AUC for maps; exact or distributional comparisons for state. Correlation is not computed or gated.",
+  "acceptance_contract": {
+    "cross_engine_fsc_auc_min": 0.999,
+    "recovar_minus_relion_gt_fsc_auc_min": -0.002,
+    "required_checkpoints": [0, 1, 2, 4, 8],
+    "exact_schedule": true,
+    "exact_artifact_topology": true,
+    "same_physical_gpu_per_pair": true,
+    "correlation_used": false
+  },
+  "current_snapshot": {
+    "id": "vdam-k1-fixed12-initial",
+    "counts": {
+      "pass": 0,
+      "fail": 0,
+      "not_run": 12
+    },
+    "evidence": null
+  },
+  "history": [
+    {
+      "id": "vdam-k1-fixed12-initial",
+      "recorded_utc": "2026-08-20T00:00:00Z",
+      "counts": {
+        "pass": 0,
+        "fail": 0,
+        "not_run": 12
+      },
+      "evidence": null,
+      "status_note": "Suite definition only. Historical correlation results are non-scoring under the FSC/FSC-AUC contract."
+    }
+  ],
+  "cases": [
+    {
+      "id": "vdam-01",
+      "name": "small_baseline",
+      "definition": {"source_em_case_id": "k1-11", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    },
+    {
+      "id": "vdam-02",
+      "name": "small_very_high_noise",
+      "definition": {"source_em_case_id": "k1-12", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    },
+    {
+      "id": "vdam-03",
+      "name": "small_anisotropic",
+      "definition": {"source_em_case_id": "k1-13", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    },
+    {
+      "id": "vdam-04",
+      "name": "small_noctf",
+      "definition": {"source_em_case_id": "k1-14", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    },
+    {
+      "id": "vdam-05",
+      "name": "small_contrast_noise_scale",
+      "definition": {"source_em_case_id": "k1-18", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    },
+    {
+      "id": "vdam-06",
+      "name": "small_image_offset",
+      "definition": {"source_em_case_id": "k1-19", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    },
+    {
+      "id": "vdam-07",
+      "name": "small_severe_outliers",
+      "definition": {"source_em_case_id": "k1-22", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    },
+    {
+      "id": "vdam-08",
+      "name": "tiny_baseline",
+      "definition": {"source_em_case_id": "k1-25", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    },
+    {
+      "id": "vdam-09",
+      "name": "small_high_res_radial",
+      "definition": {"source_em_case_id": "k1-20", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    },
+    {
+      "id": "vdam-10",
+      "name": "mid_baseline",
+      "definition": {"source_em_case_id": "k1-31", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    },
+    {
+      "id": "vdam-11",
+      "name": "production_baseline",
+      "definition": {"source_em_case_id": "k1-01", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    },
+    {
+      "id": "vdam-12",
+      "name": "production_near_nyquist",
+      "definition": {"source_em_case_id": "k1-09", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4.0, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6.0, "offset_step_px": 2.0, "padding_factor": 1},
+      "result": "not_run",
+      "checkpoint_results": {},
+      "evidence": null
+    }
+  ]
+}

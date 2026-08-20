@@ -1653,6 +1653,16 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         config_path = f"{opts.outputname}_native_options.json"
         with open(config_path, "w") as f:
             json.dump(asdict(opts), f, indent=2, sort_keys=True)
+        _write_iteration_artifacts(
+            opts.outputname,
+            state,
+            0,
+            {"checkpoint_iteration": 0, "phase": "bootstrap"},
+            main_star=main_star,
+            optics_star=optics_star,
+            dataset=dataset,
+            particle_state=particle_state,
+        )
 
     if opts.write_iter_artifacts:
 

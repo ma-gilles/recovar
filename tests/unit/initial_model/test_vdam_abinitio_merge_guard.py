@@ -12,7 +12,6 @@ from recovar.em.initial_model.gt_metrics import (
 )
 from scripts.run_vdam_abinitio_merge_guard import _default_output_root, build_guard_commands, run_guard
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -74,6 +73,7 @@ def test_merge_guard_plan_contains_cpu_and_gpu_gates():
     assert cpu_names == [
         "py_compile",
         "vdam_abinitio_contracts",
+        "vdam_frozen_scorecard",
         "initial_model_vdam_unit_slice",
         "initial_model_unit_suite",
         "em_fast_guard",
@@ -189,6 +189,45 @@ def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
     haystack = "\n".join([driver, iteration_loop, run_ab_initio])
     missing = [token for token in expected_tokens if token not in haystack]
     assert not missing, f"native InitialModel lost RELION --flatten_solvent post-M-step wiring: {missing}"
+
+
+def test_native_vdam_writes_auditable_iteration_zero_checkpoint():
+    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    tests = (REPO_ROOT / "tests/unit/initial_model/test_native_driver.py").read_text()
+    expected_tokens = [
+        '{"checkpoint_iteration": 0, "phase": "bootstrap"}',
+        "test_iteration_zero_artifacts_use_the_normal_iteration_writer",
+        'run_it000_class001.mrc',
+        'run_it000_model.star',
+        'run_it000_data.star',
+        'run_it000_recovar_meta.json',
+    ]
+    missing = [token for token in expected_tokens if token not in driver + tests]
+    assert not missing, f"native InitialModel lost iteration-zero checkpoint wiring: {missing}"
+
+
+def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
+    guard = (REPO_ROOT / "scripts/run_vdam_abinitio_merge_guard.py").read_text()
+    runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.py").read_text()
+    auditor = (REPO_ROOT / "scripts/audit_vdam_fsc_trajectory.py").read_text()
+    sbatch = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+    expected_tokens = [
+        "test_audit_vdam_fsc_trajectory.py",
+        "test_run_vdam_relion_parity_case.py",
+        "build_relion_command",
+        "build_recovar_command",
+        "materialize(",
+        "paired_gpu_uuid.json",
+        "signed shellwise FSC and normalized non-DC FSC-AUC only",
+        "CHECKPOINTS = (0, 1, 2, 4, 8)",
+        "artifact_topology_exact",
+        "correlation_used",
+        "--gres=gpu:1",
+        "VDAM parity provenance/GPU gate passed",
+    ]
+    haystack = "\n".join([guard, runner, auditor, sbatch])
+    missing = [token for token in expected_tokens if token not in haystack]
+    assert not missing, f"VDAM trajectory runner/auditor lost required wiring: {missing}"
 
 
 def test_native_vdam_tau2_refresh_and_ssnr_diagnostics_are_merge_guarded():
@@ -380,6 +419,7 @@ def test_merge_guard_dry_run_writes_reproducibility_ledger(tmp_path):
     assert [command["name"] for command in ledger["commands"]] == [
         "py_compile",
         "vdam_abinitio_contracts",
+        "vdam_frozen_scorecard",
         "initial_model_vdam_unit_slice",
         "em_fast_guard",
     ]
