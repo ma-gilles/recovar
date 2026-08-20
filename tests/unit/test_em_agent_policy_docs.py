@@ -6,6 +6,7 @@ EM_DIR = ROOT / "recovar" / "em"
 CLAUDE = EM_DIR / "CLAUDE.md"
 AGENTS = EM_DIR / "AGENTS.md"
 LEDGER = ROOT / "docs" / "math" / "em_parity_best_metrics.md"
+PARALLEL_TEST_RUNNER = ROOT / "scripts" / "run_tests_parallel.sh"
 
 
 def test_em_agent_guides_stay_in_sync():
@@ -61,3 +62,11 @@ def test_em_best_metrics_ledger_has_quality_and_perf_contract():
         assert text in ledger
     assert "Correlation values in legacy" in ledger
     assert "cannot accept or reject" in ledger
+
+
+def test_parallel_test_runner_accepts_external_runtime_root():
+    runner = PARALLEL_TEST_RUNNER.read_text()
+    assert 'RUNTIME_ROOT="${RECOVAR_TEST_RUNTIME_ROOT:-${WORKDIR}/.tmp}"' in runner
+    assert runner.count('${RUNTIME_ROOT}/slurm_\\${SLURM_JOB_ID}') == 2
+    assert runner.count('${RUNTIME_ROOT}/pixi_home_\\${SLURM_JOB_ID}') == 2
+    assert runner.count('${RUNTIME_ROOT}/rattler_cache_\\${SLURM_JOB_ID}') == 2

@@ -17,7 +17,8 @@ MODE="${1:-full}"
 WORKDIR="$(cd "$(dirname "$0")/.." && pwd)"
 SLURMO_DIR="${SLURMO_DIR:-${WORKDIR}/logs}"
 RESULTS_DIR="${WORKDIR}/.test_results"
-mkdir -p "$SLURMO_DIR" "$RESULTS_DIR"
+RUNTIME_ROOT="${RECOVAR_TEST_RUNTIME_ROOT:-${WORKDIR}/.tmp}"
+mkdir -p "$SLURMO_DIR" "$RESULTS_DIR" "$RUNTIME_ROOT"
 
 TAG="parallel_$(date +%Y%m%d_%H%M%S)_${RANDOM}"
 
@@ -141,9 +142,9 @@ export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=.90
 export RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1
-export TMPDIR="${WORKDIR}/.tmp/slurm_\${SLURM_JOB_ID}"
-export PIXI_HOME="${WORKDIR}/.tmp/pixi_home_\${SLURM_JOB_ID}"
-export RATTLER_CACHE_DIR="${WORKDIR}/.tmp/rattler_cache_\${SLURM_JOB_ID}"
+export TMPDIR="${RUNTIME_ROOT}/slurm_\${SLURM_JOB_ID}"
+export PIXI_HOME="${RUNTIME_ROOT}/pixi_home_\${SLURM_JOB_ID}"
+export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/rattler_cache_\${SLURM_JOB_ID}"
 mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
@@ -200,9 +201,9 @@ set -euo pipefail
 cd ${WORKDIR}
 
 export PYTHONNOUSERSITE=1
-export TMPDIR="${WORKDIR}/.tmp/slurm_\${SLURM_JOB_ID}"
-export PIXI_HOME="${WORKDIR}/.tmp/pixi_home_\${SLURM_JOB_ID}"
-export RATTLER_CACHE_DIR="${WORKDIR}/.tmp/rattler_cache_\${SLURM_JOB_ID}"
+export TMPDIR="${RUNTIME_ROOT}/slurm_\${SLURM_JOB_ID}"
+export PIXI_HOME="${RUNTIME_ROOT}/pixi_home_\${SLURM_JOB_ID}"
+export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/rattler_cache_\${SLURM_JOB_ID}"
 mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 
