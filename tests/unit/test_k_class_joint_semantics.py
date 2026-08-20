@@ -881,6 +881,10 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
     monkeypatch.setattr(significance_module, "_compute_k_class_significance_batched", fake_compute_significance)
     monkeypatch.setattr(k_class_module, "run_em", fail_run_em)
 
+    phase_source = np.asarray(
+        [[0.0, 0.0], [1.0 + 2.0**-30, 0.0], [2.0, 0.0]],
+        dtype=np.float64,
+    )
     result = k_class_module._run_dense_k_class_score_probe(
         TinyDataset(),
         jnp.zeros((2, 4), dtype=jnp.complex64),
@@ -898,6 +902,7 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
         image_batch_size=7,
         rotation_block_size=5,
         coarse_relion_projector_texture_interp=True,
+        translation_phase_source=phase_source,
     )
 
     assert len(calls) == 1
@@ -909,6 +914,7 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
     np.testing.assert_allclose(calls[0]["class_log_priors"], np.zeros(2, dtype=np.float64))
     assert calls[0]["rotation_log_prior"] is None
     assert calls[0]["translation_log_prior"] is None
+    assert calls[0]["translation_phase_source"] is phase_source
     np.testing.assert_array_equal(result.class_assignments, np.asarray([1, 0, 1], dtype=np.int32))
     np.testing.assert_array_equal(result.per_class_hard_assignments, np.asarray([[4, 5, 6], [7, 8, 9]], dtype=np.int32))
 

@@ -367,6 +367,7 @@ def test_kclass_dump_helper_accepts_operand_kwargs():
         "projected_reference_per_class",
         "projected_reference_norm_score_per_class",
         "projected_cross_score_per_class",
+        "coarse_gaussian_shifted_corrected",
     }
     missing = required - set(sig.parameters)
     assert not missing, (
@@ -396,6 +397,7 @@ def test_kclass_dump_call_site_passes_operand_kwargs():
         "projected_reference_per_class=projected_reference_per_class",
         "projected_reference_norm_score_per_class=",
         "projected_cross_score_per_class=projected_cross_score_per_class",
+        "coarse_gaussian_shifted_corrected=coarse_gaussian_shifted_corrected",
     ):
         assert needle in window, f"K-class dump call site lost kwarg: {needle!r}"
     # The half_weights_used branch must distinguish windowed vs
@@ -430,6 +432,21 @@ def test_kclass_significance_dump_threads_one_based_iteration():
         k_class_mod._run_dense_k_class_joint_firstiter_score_probe
     )
     assert "collect_significance=_significance_debug_dump_matches(" in firstiter_probe_source
+
+
+def test_k1_firstiter_threads_host_precision_translation_phase_source():
+    adaptive_source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
+    joint_probe_source = inspect.getsource(
+        k_class_mod._run_dense_k_class_joint_firstiter_score_probe
+    )
+    assert "if n_classes == 1 and coarse_translation_phase_source is not None:" in adaptive_source
+    assert (
+        'coarse_probe_kwargs["translation_phase_source"]' in adaptive_source
+    )
+    assert (
+        'translation_phase_source=engine_kwargs.get("translation_phase_source")'
+        in joint_probe_source
+    )
 
 
 def test_significance_dump_work_is_gated_before_scoring(monkeypatch, tmp_path):
@@ -501,6 +518,10 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     ctf2_data = np.zeros((n_images, n_pix), dtype=np.float64)
     window_indices = np.arange(n_pix, dtype=np.int32)
     half_weights_used = np.ones(n_pix, dtype=np.float64)
+    coarse_gaussian_shifted_corrected = np.arange(
+        n_images * n_trans * n_pix,
+        dtype=np.float32,
+    ).reshape(n_images, n_trans, n_pix).astype(np.complex64)
     projected_reference_rotation_ids = np.asarray([0, 2], dtype=np.int32)
     projected_reference_per_class = np.arange(
         n_classes * projected_reference_rotation_ids.size * n_pix,
@@ -549,6 +570,7 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
         ctf2_data=ctf2_data,
         window_indices=window_indices,
         half_weights_used=half_weights_used,
+        coarse_gaussian_shifted_corrected=coarse_gaussian_shifted_corrected,
         projected_reference_rotation_ids=projected_reference_rotation_ids,
         projected_reference_per_class=projected_reference_per_class,
         projected_reference_norm_score_per_class=(
@@ -560,18 +582,26 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     files = sorted(os.listdir(dump_dir))
     assert files == ["significance_orig000042_it002_cs014.npz"]
     payload = np.load(dump_dir / files[0])
-    for name in ("shifted_data", "ctf2_data", "window_indices", "half_weights"):
+    for name in (
+        "shifted_data",
+        "ctf2_data",
+        "window_indices",
+        "half_weights",
+        "coarse_gaussian_shifted_corrected",
+    ):
         assert name in payload.files, f"Dump npz is missing schema field {name!r}"
     assert payload["shifted_data"].dtype == np.complex128
     assert payload["ctf2_data"].dtype == np.float64
     assert payload["window_indices"].dtype == np.int32
     assert payload["half_weights"].dtype == np.float64
+    assert payload["coarse_gaussian_shifted_corrected"].dtype == np.complex64
     assert payload["projected_reference_rotation_ids"].dtype == np.int32
     assert payload["projected_reference_per_class"].dtype == np.complex128
     assert payload["projected_reference_norm_score_per_class"].dtype == np.float64
     assert payload["projected_cross_score_per_class"].dtype == np.float64
     assert payload["window_indices"].shape == (n_pix,)
     assert payload["half_weights"].shape == (n_pix,)
+    assert payload["coarse_gaussian_shifted_corrected"].shape == (n_trans, n_pix)
     assert payload["projected_reference_rotation_ids"].shape == (2,)
     assert payload["projected_reference_per_class"].shape == (n_classes, 2, n_pix)
     assert payload["projected_reference_norm_score_per_class"].shape == (
@@ -679,6 +709,26 @@ def test_kclass_significance_dump_can_stop_after_durable_target(monkeypatch, tmp
     assert exc_info.value.dump_path == str(dump_path)
 
 
+def test_kclass_significance_stop_without_iteration_uses_unsuffixed_path(monkeypatch, tmp_path):
+    """The stop gate must use the same optional suffix as the dump writer."""
+
+    dump_dir = tmp_path / "dump"
+    dump_dir.mkdir()
+    dump_path = dump_dir / "significance_orig000042_cs014.npz"
+    dump_path.write_bytes(b"durable")
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET", "1")
+    monkeypatch.delenv("RECOVAR_SIGNIFICANCE_DUMP_ITERATION", raising=False)
+
+    with pytest.raises(sig_mod.SignificanceDumpComplete):
+        sig_mod._maybe_stop_after_significance_dump(
+            str(dump_path),
+            dump_dir=str(dump_dir),
+            target_original_indices={42},
+            current_size=14,
+            debug_iteration=1,
+        )
+
+
 def test_kclass_significance_stop_respects_iteration_gate(monkeypatch, tmp_path):
     """A future target must not stop the current scoring boundary."""
 
@@ -719,6 +769,7 @@ def test_significance_stop_waits_for_complete_target_set(monkeypatch, tmp_path):
     dump_dir = tmp_path / "dump"
     dump_dir.mkdir()
     monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET", "1")
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ITERATION", "2")
     first_path = dump_dir / "significance_orig000042_it002_cs014.npz"
     second_path = dump_dir / "significance_orig000043_it002_cs014.npz"
     first_path.touch()

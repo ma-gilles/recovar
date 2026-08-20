@@ -156,6 +156,7 @@ def test_em_parity_fast_k1_replay(tmp_path):
         "3",
         "--max_iter",
         "1",
+        "--skip_final_iteration",
         "--gt_volume",
         str(K1_GT_VOLUME),
         "--output_dir",

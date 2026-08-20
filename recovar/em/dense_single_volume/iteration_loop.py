@@ -680,6 +680,32 @@ def _has_numbered_replay_iteration_overrides(replay_iteration_overrides) -> bool
     return any(override is not None for override in replay_iteration_overrides[1:])
 
 
+def _validate_bpref_particle_order_scope(
+    *,
+    preserve_bpref_particle_order: bool,
+    n_classes: int,
+    init_relion_iteration: int,
+    perturb_replay_relion_dir,
+    replay_iteration_overrides,
+    sealed_sampling_state,
+    sealed_scoring_context,
+) -> None:
+    """Fail closed unless RELION physical order starts an unsealed fresh K=1 run."""
+
+    if not preserve_bpref_particle_order:
+        return
+    if int(n_classes) != 1:
+        raise ValueError("RELION BPref particle-order preservation is K=1-only")
+    if int(init_relion_iteration) != 0:
+        raise ValueError("RELION BPref particle-order preservation requires a fresh iteration-0 run")
+    if perturb_replay_relion_dir is not None:
+        raise ValueError("RELION BPref particle-order preservation cannot be used in perturbation replay")
+    if _has_numbered_replay_iteration_overrides(replay_iteration_overrides):
+        raise ValueError("RELION BPref particle-order preservation cannot be used in numbered replay")
+    if sealed_sampling_state is not None or sealed_scoring_context is not None:
+        raise ValueError("RELION BPref particle-order preservation cannot be applied to a sealed boundary")
+
+
 def _should_run_final_all_data_iteration(
     *,
     has_converged: bool,
@@ -4911,6 +4937,15 @@ def _run_relion_iteration_loop(
     grid_size = cryo.image_shape[0]  # ori_size in RELION terms
     n_classes = int(n_classes)
     k_class_enabled = n_classes > 1
+    _validate_bpref_particle_order_scope(
+        preserve_bpref_particle_order=preserve_bpref_particle_order,
+        n_classes=n_classes,
+        init_relion_iteration=init_relion_iteration,
+        perturb_replay_relion_dir=perturb_replay_relion_dir,
+        replay_iteration_overrides=replay_iteration_overrides,
+        sealed_sampling_state=sealed_sampling_state,
+        sealed_scoring_context=sealed_scoring_context,
+    )
     class_log_priors = _normalize_class_log_priors(n_classes, init_class_log_priors)
     class_weights = np.exp(class_log_priors)
     if k_class_enabled and init_class_log_priors is None and init_direction_prior is not None:

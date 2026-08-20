@@ -199,6 +199,7 @@ def preprocess_batch_firstiter_cc(
     score_real_dtype=None,
     norm_real_dtype=None,
     relion_preprocess_kwargs=None,
+    return_unshifted_score_weighted=False,
 ):
     """Preprocess one dense image batch for RELION's iter-1 normalized CC scoring.
 
@@ -240,8 +241,9 @@ def preprocess_batch_firstiter_cc(
         score_complex_dtype=score_complex_dtype,
         score_real_dtype=score_real_dtype,
     )
+    unshifted_score_weighted = shift_processed_half * shift_ctf_half
     shifted_half = apply_half_translation_phases(
-        shift_processed_half * shift_ctf_half,
+        unshifted_score_weighted,
         shift_phases_half,
     )
     norm_processed_half, _, _ = _norm_inputs(
@@ -260,7 +262,10 @@ def preprocess_batch_firstiter_cc(
     )
     ctf2_half = weight_ctf_half**2
     ctf2_over_nv_half = ctf2_half / weight_noise_half
-    return shifted_half, image_power, ctf2_half, ctf2_over_nv_half
+    result = shifted_half, image_power, ctf2_half, ctf2_over_nv_half
+    if return_unshifted_score_weighted:
+        return result + (unshifted_score_weighted,)
+    return result
 
 
 def half_translation_phase_table(translations, image_shape):

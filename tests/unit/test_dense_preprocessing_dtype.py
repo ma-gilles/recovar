@@ -96,6 +96,33 @@ def test_firstiter_cc_preprocessing_tiles_score_dtype_before_translation_expansi
     assert ctf2_over_noise.dtype == jnp.float32
 
 
+def test_firstiter_cc_preprocessing_can_return_unshifted_weighted_operand():
+    batch = jnp.zeros((2, 64), dtype=jnp.float32)
+    ctf_params = jnp.ones((2, 9), dtype=jnp.float64)
+    noise = np.ones(40, dtype=np.float64)
+    translations = np.zeros((3, 2), dtype=np.float64)
+
+    shifted, _, _, _, unshifted_weighted = preprocess_batch_firstiter_cc(
+        _Complex64HalfDataset(),
+        batch,
+        ctf_params,
+        noise,
+        translations,
+        _Float64CtfConfig(),
+        score_complex_dtype=jnp.complex64,
+        score_real_dtype=jnp.float32,
+        norm_real_dtype=jnp.float64,
+        return_unshifted_score_weighted=True,
+    )
+
+    assert unshifted_weighted.shape == (2, 40)
+    assert unshifted_weighted.dtype == jnp.complex64
+    np.testing.assert_array_equal(
+        np.asarray(shifted).reshape(2, 3, 40),
+        np.repeat(np.asarray(unshifted_weighted)[:, None, :], 3, axis=1),
+    )
+
+
 def test_firstiter_cc_inverse_power_stays_in_score_dtype_before_tile_multiply():
     batch_norm = jnp.ones((2, 1), dtype=jnp.float64)
 

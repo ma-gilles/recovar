@@ -259,6 +259,29 @@ def test_k_class_pass2_dump_stop_is_env_gated_diagnostic_only():
     assert "raise Pass2DumpComplete" in source
 
 
+def test_k1_pass2_dump_progress_requires_complete_target_set(tmp_path):
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _k1_pass2_dump_progress,
+    )
+
+    targets = {7, 42, 105}
+    first = tmp_path / "pass2_orig000007_cs100.npz"
+    first.touch()
+    assert _k1_pass2_dump_progress(
+        dump_dir=tmp_path,
+        target_original_indices=targets,
+        current_size=100,
+    ) == (1, 3)
+
+    (tmp_path / "pass2_orig000042_cs100.npz").touch()
+    (tmp_path / "pass2_orig000105_cs100.npz").touch()
+    assert _k1_pass2_dump_progress(
+        dump_dir=tmp_path,
+        target_original_indices=targets,
+        current_size=100,
+    ) == (3, 3)
+
+
 def test_pass2_dump_does_not_change_planner_without_conservative_opt_in(monkeypatch):
     monkeypatch.delenv("RECOVAR_PASS2_DUMP_DIR", raising=False)
     monkeypatch.delenv("RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION", raising=False)
@@ -2284,6 +2307,92 @@ def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(m
     expected_ctf = 10.0 + np.asarray(ctf_values[0, :2]).sum() + np.asarray(ctf_values[1, :1]).sum()
     np.testing.assert_allclose(np.asarray(y_volume), expected_y)
     np.testing.assert_allclose(np.asarray(ctf_volume), expected_ctf)
+
+
+def test_fresh_k1_particle_pool_preserves_consecutive_particle_order(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    values = jnp.arange(2 * 3 * 2, dtype=jnp.float32).reshape(2, 3, 2).astype(jnp.complex64)
+    ctf_values = (100.0 + jnp.arange(2 * 3 * 2, dtype=jnp.float32)).reshape(2, 3, 2)
+    rotations = jnp.arange(2 * 3 * 9, dtype=jnp.float32).reshape(2, 3, 3, 3)
+    actual_counts = np.asarray([2, 1], dtype=np.int32)
+    calls = []
+
+    def fake_fused(
+        y_volume,
+        ctf_volume,
+        particle_values,
+        particle_ctf_values,
+        window_indices,
+        particle_rotations,
+        **kwargs,
+    ):
+        calls.append(
+            (
+                np.asarray(particle_values).copy(),
+                np.asarray(particle_ctf_values).copy(),
+                np.asarray(particle_rotations).copy(),
+            )
+        )
+        return y_volume, ctf_volume
+
+    monkeypatch.setenv("RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE", "2")
+    monkeypatch.setattr(cuda_backproject, "relion_fused_x_half_backproject_indexed", fake_fused)
+
+    bucketed_mod._accumulate_relion_x_half_per_particle_launches(
+        values,
+        ctf_values,
+        rotations,
+        actual_counts,
+        jnp.asarray(0.0, dtype=jnp.float32),
+        jnp.asarray(10.0, dtype=jnp.float32),
+        window_indices=jnp.arange(2, dtype=jnp.int32),
+        image_shape=(8, 8),
+        volume_shape=(8, 8, 8),
+        disc_type="linear_interp",
+        half_volume=True,
+        max_r=2.0,
+        log_label_prefix="test-pool",
+        winner_take_all=True,
+        strict_particle_order=True,
+    )
+
+    assert len(calls) == 1
+    np.testing.assert_array_equal(
+        calls[0][0],
+        np.concatenate((np.asarray(values[0, :2]), np.asarray(values[1, :1])), axis=0),
+    )
+    np.testing.assert_array_equal(
+        calls[0][1],
+        np.concatenate((np.asarray(ctf_values[0, :2]), np.asarray(ctf_values[1, :1])), axis=0),
+    )
+    np.testing.assert_array_equal(
+        calls[0][2],
+        np.concatenate((np.asarray(rotations[0, :2]), np.asarray(rotations[1, :1])), axis=0),
+    )
+
+
+def test_particle_pool_rejects_non_fresh_k1_path(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.setenv("RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE", "3")
+    with pytest.raises(RuntimeError, match="fresh K=1 winner-take-all"):
+        bucketed_mod._accumulate_relion_x_half_per_particle_launches(
+            jnp.ones((1, 1, 1), dtype=jnp.complex64),
+            jnp.ones((1, 1, 1), dtype=jnp.float32),
+            jnp.eye(3, dtype=jnp.float32).reshape(1, 1, 3, 3),
+            np.asarray([1], dtype=np.int32),
+            jnp.zeros(1, dtype=jnp.complex64),
+            jnp.zeros(1, dtype=jnp.float32),
+            window_indices=jnp.asarray([0], dtype=jnp.int32),
+            image_shape=(8, 8),
+            volume_shape=(7, 7, 7),
+            disc_type="linear_interp",
+            half_volume=True,
+            max_r=2.0,
+            log_label_prefix="test-invalid-pool",
+        )
 
 
 def test_fresh_k1_firstiter_cc_uses_fused_atomics_without_diagnostic_env(monkeypatch):

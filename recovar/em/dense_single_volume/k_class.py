@@ -1611,6 +1611,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         debug_iteration=engine_kwargs.get("debug_iteration"),
         coarse_healpix_order=engine_kwargs.get("coarse_healpix_order"),
         coarse_rotation_ids=engine_kwargs.get("coarse_rotation_ids"),
+        translation_phase_source=engine_kwargs.get("translation_phase_source"),
     )[-1]
 
     from recovar.em.global_winner_summary import maybe_dump_global_winner_summary
@@ -3036,6 +3037,13 @@ def run_dense_k_class_em_adaptive(
         coarse_probe_kwargs["debug_iteration"] = debug_iteration
         coarse_probe_kwargs["coarse_healpix_order"] = _resolved_coarse_healpix_order()
         coarse_probe_kwargs["coarse_rotation_ids"] = coarse_rotation_ids
+        if n_classes == 1 and coarse_translation_phase_source is not None:
+            # RELION builds CUDA translation phases from host RFLOAT
+            # coordinates. Keep the established float32 pose/prior grid, but
+            # do not derive strict K=1 score phases from that rounded copy.
+            coarse_probe_kwargs["translation_phase_source"] = (
+                coarse_translation_phase_source
+            )
         with _DenseScoreDumpPhaseLabel("coarse"):
             with nvtx.annotate("kclass.adaptive.coarse_probe", color="yellow", domain=NVTX_DOMAIN_EM):
                 coarse_result = _run_dense_k_class_score_probe(

@@ -235,6 +235,9 @@ _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIO
 _RELION_FINE_DIFF2_FUSED_FFI_ENV = "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI"
 _RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV = "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH"
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
+_RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
+    "RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE"
+)
 _RELION_POWERCLASS_SPECTRUM_NORM_ENV = "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM"
 _RELION_TRANSLATED_WAVG_NORM_ENV = "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM"
 _BPREF_CONTRIBUTION_DUMP_CLASS_ENV = "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS"
@@ -245,10 +248,15 @@ _BPREF_MEMBERSHIP_DUMP_DIR_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR"
 _BPREF_MEMBERSHIP_DUMP_ITERATION_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_ITERATION"
 _BPREF_MEMBERSHIP_DUMP_HALF_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_HALF"
 _BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV = "RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE"
+_BPREF_REVERSE_PHYSICAL_ORDER_ENV = "RECOVAR_K1_BPREF_REVERSE_PHYSICAL_ORDER"
 _BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV = "RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE"
+_BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV = (
+    "RECOVAR_K1_BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT"
+)
 _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV = (
     "RECOVAR_K1_BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE"
 )
+_DEFAULT_FRESH_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE = 220
 _PASS2_DUMP_DIR_ENV = "RECOVAR_PASS2_DUMP_DIR"
 _PASS2_DUMP_CONSERVATIVE_EXECUTION_ENV = "RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
@@ -415,6 +423,26 @@ def _k_class_pass2_dump_progress(
         root / f"pass2_orig{original_index:06d}_class{class_one_based:03d}_cs{size_label:03d}.npz"
         for original_index in sorted(target_indices)
         for class_one_based in sorted(target_classes)
+    ]
+    return sum(path.is_file() for path in expected_paths), len(expected_paths)
+
+
+def _k1_pass2_dump_progress(
+    *,
+    dump_dir: str | Path,
+    target_original_indices,
+    current_size: int | None,
+) -> tuple[int, int]:
+    """Return written and expected file counts for a K=1 dump target set."""
+
+    target_indices = {int(value) for value in target_original_indices}
+    if not target_indices:
+        raise ValueError("K=1 pass-2 dump completion requires at least one target particle")
+    size_label = -1 if current_size is None else int(current_size)
+    root = Path(dump_dir)
+    expected_paths = [
+        root / f"pass2_orig{original_index:06d}_cs{size_label:03d}.npz"
+        for original_index in sorted(target_indices)
     ]
     return sum(path.is_file() for path in expected_paths), len(expected_paths)
 
@@ -2629,14 +2657,40 @@ def _bucket_pass2_inputs(
             ordered_chunk_size = int(processing_order_chunk_size)
             if ordered_chunk_size <= 0:
                 raise ValueError("processing_order_chunk_size must be positive")
-            return [
-                {
-                    "bucket_size": int(np.max(bucket_sizes[chunk])),
-                    "image_indices": np.asarray(chunk, dtype=np.int64),
-                }
-                for start in range(0, n_images, ordered_chunk_size)
-                for chunk in (processing_order[start : start + ordered_chunk_size],)
-            ]
+            requested_max_images = max(
+                1,
+                min(ordered_chunk_size, int(max_images_per_microbatch)),
+            )
+            buckets = []
+            start = 0
+            while start < n_images:
+                stop = start
+                chunk_bucket_size = 0
+                while stop < n_images and stop - start < requested_max_images:
+                    next_bucket_size = max(
+                        chunk_bucket_size,
+                        int(bucket_sizes[processing_order[stop]]),
+                    )
+                    next_image_count = stop - start + 1
+                    next_hypothesis_count = (
+                        next_image_count * next_bucket_size * int(n_fine_trans)
+                    )
+                    if (
+                        stop > start
+                        and next_hypothesis_count > int(max_hypotheses_per_microbatch)
+                    ):
+                        break
+                    chunk_bucket_size = next_bucket_size
+                    stop += 1
+                chunk = processing_order[start:stop]
+                buckets.append(
+                    {
+                        "bucket_size": int(chunk_bucket_size),
+                        "image_indices": np.asarray(chunk, dtype=np.int64),
+                    }
+                )
+                start = stop
+            return buckets
     else:
         # Group by bucket size, smaller buckets first. The secondary rotation
         # count key is historical RECOVAR behavior; an explicit order keeps
@@ -2696,13 +2750,28 @@ def _resolve_bpref_processing_order(
     """Resolve production or diagnostic K=1 BPref execution ordering."""
 
     diagnostic_order = _load_bpref_execution_order_local_override(n_images)
+    reverse_physical_order = _env_flag_enabled(
+        _BPREF_REVERSE_PHYSICAL_ORDER_ENV,
+        default=False,
+    )
+    if reverse_physical_order and not preserve_bpref_particle_order:
+        raise ValueError(
+            f"{_BPREF_REVERSE_PHYSICAL_ORDER_ENV}=1 requires the guarded fresh "
+            "K=1 physical-order path"
+        )
+    if reverse_physical_order and diagnostic_order is not None:
+        raise ValueError(
+            f"{_BPREF_REVERSE_PHYSICAL_ORDER_ENV}=1 cannot be combined with "
+            f"{_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV}"
+        )
     if preserve_bpref_particle_order and diagnostic_order is not None:
         raise ValueError(
             "preserve_bpref_particle_order cannot be combined with "
             f"{_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV}"
         )
     if preserve_bpref_particle_order:
-        return np.arange(int(n_images), dtype=np.int64)
+        order = np.arange(int(n_images), dtype=np.int64)
+        return order[::-1].copy() if reverse_physical_order else order
     return diagnostic_order
 
 
@@ -2808,6 +2877,56 @@ def _optional_positive_int_env(name: str) -> int | None:
     if value <= 0:
         raise ValueError(f"{name} must be a positive integer, got {raw!r}")
     return value
+
+
+def _resolve_bpref_execution_bucket_policy(
+    *,
+    preserve_bpref_particle_order: bool,
+    processing_order_group_by_bucket_size: bool,
+) -> tuple[int, bool]:
+    """Resolve strict-order batching for the fresh-K=1 physical sequence.
+
+    The production default pads consecutive mixed-support particles in bounded
+    chunks.  An explicit chunk size overrides that bound.  The older adjacent
+    equal-support batching remains available only as an explicit diagnostic.
+    Every mode in this helper retains the exact particle sequence.
+    """
+
+    explicit_chunk_size = _optional_positive_int_env(
+        _BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV,
+    )
+    batch_consecutive_requested = _env_flag_enabled(
+        _BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV,
+        default=False,
+    )
+    if batch_consecutive_requested and explicit_chunk_size is not None:
+        raise ValueError(
+            f"{_BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV} cannot be "
+            f"combined with {_BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV}"
+        )
+    if batch_consecutive_requested and not preserve_bpref_particle_order:
+        raise ValueError(
+            f"{_BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV} requires "
+            "the guarded fresh K=1 physical particle order"
+        )
+    if batch_consecutive_requested and processing_order_group_by_bucket_size:
+        raise ValueError(
+            f"{_BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV} cannot be "
+            f"combined with {_BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV}"
+        )
+    batch_consecutive_bucket_sizes = bool(
+        batch_consecutive_requested
+        and preserve_bpref_particle_order
+        and not processing_order_group_by_bucket_size
+    )
+    processing_order_chunk_size = explicit_chunk_size or (
+        _DEFAULT_FRESH_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE
+        if preserve_bpref_particle_order
+        and not processing_order_group_by_bucket_size
+        and not batch_consecutive_bucket_sizes
+        else 1
+    )
+    return processing_order_chunk_size, batch_consecutive_bucket_sizes
 
 
 def _optional_nonnegative_int_env(name: str) -> int | None:
@@ -5227,9 +5346,10 @@ def _accumulate_relion_x_half_per_particle_launches(
 
     diagnostic_fused_atomics = relion_x_half_bp_fused_atomics_enabled()
     # Fresh K=1 --firstiter_cc contributes exactly one winning hypothesis per
-    # particle.  At this boundary the native RELION data/weight atomic stream
-    # is reproduced exactly by the fused target; unlike later soft-posterior
-    # iterations, no translation reduction changes the contributor stream.
+    # particle. Unlike later soft-posterior iterations, no translation
+    # reduction changes the contributor stream. RELION still dispatches each
+    # MPI pool concurrently through per-thread CUDA streams, so the optional
+    # pool diagnostic below changes only that outer launch grouping.
     production_firstiter_fused_atomics = bool(winner_take_all and strict_particle_order)
     use_fused_atomics = bool(
         diagnostic_fused_atomics or production_firstiter_fused_atomics
@@ -5281,22 +5401,56 @@ def _accumulate_relion_x_half_per_particle_launches(
         raise ValueError(
             f"per-particle x-half actual_counts shape mismatch: {actual_counts.shape} vs {(int(values.shape[0]),)}"
         )
-    logger.info(
-        "RELION x-half diagnostic: one adjoint launch per particle "
-        "(particles=%d, rotations min/median/max=%d/%d/%d, label=%s)",
-        int(values.shape[0]),
-        int(actual_counts.min()) if actual_counts.size else 0,
-        int(np.median(actual_counts)) if actual_counts.size else 0,
-        int(actual_counts.max()) if actual_counts.size else 0,
-        log_label_prefix,
+    particle_pool_size = (
+        _optional_positive_int_env(_RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV) or 1
     )
-    for particle_index, count in enumerate(actual_counts.tolist()):
-        if count <= 0:
+    if particle_pool_size > 1:
+        if not (winner_take_all and strict_particle_order and use_fused_atomics):
+            raise RuntimeError(
+                "RELION particle-pool diagnostic requires fresh K=1 winner-take-all, "
+                "strict particle order, and fused atomics"
+            )
+        logger.info(
+            "STRICT-PARITY diagnostic: grouping consecutive fresh K=1 BPref "
+            "particles into RELION-sized launch pools (pool_size=%d, particles=%d, "
+            "label=%s)",
+            particle_pool_size,
+            int(values.shape[0]),
+            log_label_prefix,
+        )
+    else:
+        logger.info(
+            "RELION x-half diagnostic: one adjoint launch per particle "
+            "(particles=%d, rotations min/median/max=%d/%d/%d, label=%s)",
+            int(values.shape[0]),
+            int(actual_counts.min()) if actual_counts.size else 0,
+            int(np.median(actual_counts)) if actual_counts.size else 0,
+            int(actual_counts.max()) if actual_counts.size else 0,
+            log_label_prefix,
+        )
+    for pool_start in range(0, actual_counts.size, particle_pool_size):
+        pool_stop = min(pool_start + particle_pool_size, actual_counts.size)
+        value_rows = []
+        ctf_rows = []
+        rotation_rows = []
+        for particle_index in range(pool_start, pool_stop):
+            count = int(actual_counts[particle_index])
+            if count <= 0:
+                continue
+            particle_slice = (
+                slice(particle_index, particle_index + 1),
+                slice(0, count),
+            )
+            value_rows.append(values[particle_slice].reshape(count, values.shape[-1]))
+            ctf_rows.append(
+                ctf_values[particle_slice].reshape(count, ctf_values.shape[-1])
+            )
+            rotation_rows.append(rotations[particle_slice].reshape(count, 3, 3))
+        if not value_rows:
             continue
-        particle_slice = (slice(particle_index, particle_index + 1), slice(0, int(count)))
-        particle_values = values[particle_slice].reshape(int(count), values.shape[-1])
-        particle_ctf_values = ctf_values[particle_slice].reshape(int(count), ctf_values.shape[-1])
-        particle_rotations = rotations[particle_slice].reshape(int(count), 3, 3)
+        particle_values = jnp.concatenate(value_rows, axis=0)
+        particle_ctf_values = jnp.concatenate(ctf_rows, axis=0)
+        particle_rotations = jnp.concatenate(rotation_rows, axis=0)
         if use_fused_atomics:
             if disc_type != "linear_interp" or not half_volume:
                 raise RuntimeError(
@@ -11309,24 +11463,36 @@ def compute_pass2_stats_sparse_bucketed(
     processing_order_group_by_bucket_size = False
     processing_order_batch_consecutive_bucket_sizes = False
     if processing_order_override is not None:
-        processing_order_chunk_size = _optional_positive_int_env(
-            _BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV,
-        ) or 1
         processing_order_group_by_bucket_size = _env_flag_enabled(
             _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
             default=False,
         )
-        processing_order_batch_consecutive_bucket_sizes = bool(
-            preserve_bpref_particle_order and not processing_order_group_by_bucket_size
+        (
+            processing_order_chunk_size,
+            processing_order_batch_consecutive_bucket_sizes,
+        ) = _resolve_bpref_execution_bucket_policy(
+            preserve_bpref_particle_order=preserve_bpref_particle_order,
+            processing_order_group_by_bucket_size=processing_order_group_by_bucket_size,
         )
         if preserve_bpref_particle_order:
-            logger.info(
-                "STRICT-PARITY: preserving fresh RELION physical BPref particle "
-                "order (%s)",
-                "stable within support-size buckets"
-                if processing_order_group_by_bucket_size
-                else "global; batching only consecutive equal-size supports",
-            )
+            if _env_flag_enabled(_BPREF_REVERSE_PHYSICAL_ORDER_ENV, default=False):
+                logger.warning(
+                    "STRICT-PARITY diagnostic: reversing fresh RELION physical "
+                    "BPref particle order; scoring inputs and output identities remain aligned"
+                )
+            else:
+                logger.info(
+                    "STRICT-PARITY: preserving fresh RELION physical BPref particle "
+                    "order (%s)",
+                    "stable within support-size buckets"
+                    if processing_order_group_by_bucket_size
+                    else (
+                        "global; batching only consecutive equal-size supports"
+                        if processing_order_batch_consecutive_bucket_sizes
+                        else f"global; {processing_order_chunk_size} consecutive "
+                        "mixed-support particles per diagnostic bucket"
+                    ),
+                )
         else:
             logger.info(
                 "STRICT-PARITY diagnostic: executing K=1 BPref particles in the "
@@ -14092,17 +14258,31 @@ def compute_pass2_stats_sparse_bucketed(
                 _PASS2_DUMP_STOP_AFTER_TARGET_ENV,
                 default=False,
             ):
-                logger.info(
-                    "Sparse K=1 pass-2 stop-after-dump requested via %s=1; "
-                    "wrote %d requested file(s) at current_size=%s",
-                    _PASS2_DUMP_STOP_AFTER_TARGET_ENV,
-                    int(pass2_dump_count),
-                    "None" if current_size is None else str(int(current_size)),
+                target_original_indices = parse_env_int_set(
+                    "RECOVAR_PASS2_DUMP_ORIGINAL_INDICES"
                 )
-                raise Pass2DumpComplete(
-                    dump_count=pass2_dump_count,
+                if not target_original_indices:
+                    target_original_indices = parse_env_int_set(
+                        "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES"
+                    )
+                completed_dump_count, expected_dump_count = _k1_pass2_dump_progress(
+                    dump_dir=os.environ[_PASS2_DUMP_DIR_ENV],
+                    target_original_indices=target_original_indices,
                     current_size=current_size,
                 )
+                logger.info(
+                    "Sparse K=1 pass-2 stop-after-dump requested via %s=1; "
+                    "target-set progress %d/%d file(s) at current_size=%s",
+                    _PASS2_DUMP_STOP_AFTER_TARGET_ENV,
+                    int(completed_dump_count),
+                    int(expected_dump_count),
+                    "None" if current_size is None else str(int(current_size)),
+                )
+                if completed_dump_count == expected_dump_count:
+                    raise Pass2DumpComplete(
+                        dump_count=completed_dump_count,
+                        current_size=current_size,
+                    )
 
         if not score_only:
             # M-step accumulation: posterior-weighted sums per (image, rot).

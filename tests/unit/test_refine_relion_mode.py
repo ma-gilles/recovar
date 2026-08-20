@@ -11463,23 +11463,58 @@ class TestRelionModeSmokeTest:
             offset_free_second,
         )
 
-    def test_k1_firstiter_cc_tree_top2_rescore_replaces_near_tie_winner(
+    @pytest.mark.parametrize(
+        "original_scores, rescored_scores, expected_pose, expected_ties, expected_changes",
+        [
+            ((1.0 - 2e-7, 1.0), (0.75, 0.75), 0, "all", "all"),
+            ((1.0, 1.0 - 2e-7), (0.5, 0.75), 1, 0, "all"),
+        ],
+    )
+    def test_k1_firstiter_cc_tree_top2_rescore_replaces_bounded_winner(
         self,
         half_datasets,
         init_volume,
         monkeypatch,
+        original_scores,
+        rescored_scores,
+        expected_pose,
+        expected_ties,
+        expected_changes,
     ):
-        """The opt-in tree replay changes only bounded near-tie K=1 winners."""
+        """The direct-texture replay replaces every bounded native winner."""
 
+        import recovar.cuda_backproject as cuda_backproject
         import recovar.em.dense_single_volume.helpers.projection as projection_module
         import recovar.em.dense_single_volume.helpers.scoring as scoring_module
+        import recovar.em.dense_single_volume.helpers.significance as significance_module
+        import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_module
 
         dataset = half_datasets[0]
+        dataset.image_source.backend.relion_fourier_backend = "relion_cuda"
+
+        def fake_relion_process_half(batch, apply_image_mask=False, **_kwargs):
+            return _raw_real_process_half(batch, apply_image_mask=apply_image_mask)
+
+        dataset.process_images_half = fake_relion_process_half
         rotations = _make_rotations(2, seed=6322)
         translations = jnp.zeros((1, 2), dtype=jnp.float32)
         monkeypatch.setenv(
             "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN",
             "4e-6",
+        )
+        monkeypatch.setattr(significance_module.jax, "default_backend", lambda: "gpu")
+        monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+        monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
+        monkeypatch.setattr(
+            sparse_module,
+            "_relion_exact_ctf_half_from_source_star",
+            lambda _dataset, indices, image_shape: jnp.ones(
+                (
+                    len(indices),
+                    int(image_shape[0]) * (int(image_shape[1]) // 2 + 1),
+                ),
+                dtype=jnp.float64,
+            ),
         )
 
         def fake_projector(_ppref, rots, image_shape, **_kwargs):
@@ -11502,7 +11537,7 @@ class TestRelionModeSmokeTest:
         ):
             assert int(projections.shape[0]) == 2
             assert int(n_trans) == 1
-            scores = jnp.asarray([1.0, 1.0 - 2e-7], dtype=jnp.float32)
+            scores = jnp.asarray(original_scores, dtype=jnp.float32)
             return jnp.broadcast_to(scores[None, :, None], (int(n_images), 2, 1))
 
         def fake_tree_rescore(
@@ -11511,8 +11546,11 @@ class TestRelionModeSmokeTest:
             _projection_candidates,
             _half_weights,
             _fftw_order,
+            **kwargs,
         ):
-            scores = jnp.asarray([0.5, 0.75], dtype=jnp.float32)
+            assert kwargs["projector_full"] is not None
+            assert kwargs["rotation_matrices"].shape[-2:] == (3, 3)
+            scores = jnp.asarray(rescored_scores, dtype=jnp.float32)
             return jnp.broadcast_to(scores, shifted_candidates.shape[:2])
 
         monkeypatch.setattr(
@@ -11555,15 +11593,19 @@ class TestRelionModeSmokeTest:
 
         np.testing.assert_array_equal(
             np.asarray(full_stats["class_hard_assignments"]),
-            np.ones((1, dataset.n_units), dtype=np.int32),
+            np.full((1, dataset.n_units), expected_pose, dtype=np.int32),
         )
         assert "class_second_hard_assignments" not in full_stats
+        if expected_ties == "all":
+            expected_ties = dataset.n_units
+        if expected_changes == "all":
+            expected_changes = dataset.n_units
         assert full_stats["firstiter_cc_tree_top2_rescore"] == {
             "max_margin": 4e-6,
             "examined_images": dataset.n_units,
             "ambiguous_images": dataset.n_units,
-            "exact_score_ties": 0,
-            "winner_changes": dataset.n_units,
+            "exact_score_ties": expected_ties,
+            "winner_changes": expected_changes,
         }
 
     @pytest.mark.parametrize(

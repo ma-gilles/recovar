@@ -154,6 +154,80 @@ def test_relion_coarse_diff2_cuda_source_pins_production_topology():
     assert "atomicAdd(" in block
 
 
+def test_relion_coarse_normalized_cc_source_pins_native_tree_and_atomics():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+
+    start = source.index("relion_coarse_normalized_cc_pairs_f32_kernel")
+    block = source[start : source.index("cudaError_t", start)]
+    assert "packed_pixel += kRelionCoarseDiff2BlockSize" in block
+    assert "reference_value.x * image_value.x" in block
+    assert "reference_value.y * image_value.y" in block
+    assert "reference_value.x * reference_value.x" in block
+    assert "reference_value.y * reference_value.y" in block
+    assert "for (int width = kRelionCoarseDiff2BlockSize / 2" in block
+    assert "sqrtf(" in block
+    assert "atomicAdd(&output[candidate], contribution)" in block
+
+    texture_start = source.index(
+        "relion_coarse_normalized_cc_native_texture_pairs_f32_kernel"
+    )
+    texture_block = source[texture_start : source.index("cudaError_t", texture_start)]
+    assert "relion_coarse_project_texture_f32(" in texture_block
+    assert "relion_coarse_score_translate_f32(" in texture_block
+    assert "translation_angles[candidate * 2]" in texture_block
+    assert "numerator_weight[operand_index]" in texture_block
+    assert "half_weights[compact_pixel]" not in texture_block
+    assert "packed_pixel += kRelionCoarseDiff2BlockSize" in texture_block
+    assert "for (int width = kRelionCoarseDiff2BlockSize / 2" in texture_block
+    assert "sqrtf(" in texture_block
+    assert "candidate_output[1] = numerator_lanes[0]" in texture_block
+    assert "candidate_output[2] = norm_lanes[0]" in texture_block
+    assert "atomicAdd(&candidate_output[0], contribution)" in texture_block
+    assert "launch_relion_coarse_normalized_cc_native_texture_pairs_f32" in source
+    assert "RelionCoarseNormalizedCcNativeTexturePairsF32" in source
+
+
+def test_relion_coarse_native_texture_source_pins_fused_projection_topology():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+
+    start = source.index(
+        "relion_coarse_diff2_native_texture_rectangular_f32_kernel"
+    )
+    block = source[start : source.index("cudaError_t", start)]
+    assert "shared_eulers[kRelionCoarseEulersPerBlock * 9]" in block
+    assert "relion_coarse_project_texture_f32(" in block
+    assert "relion_coarse_score_translate_f32(" in block
+    assert "pixel_in_chunk += active_lanes" in block
+    assert "atomicAdd(" in block
+    assert "const int padded_max_r" in source
+    assert "projector_max_r * padding_factor" in source
+    assert "for (int64_t batch = 0; batch < batch_size; ++batch)" in source
+    assert "image + batch * compact_pixel_count" in source
+    assert "weight + batch * compact_pixel_count" in source
+    assert "output + batch * hypotheses_per_batch" in source
+    assert "static_cast<unsigned int>(rotation_blocks)" in source
+
+    from recovar.em.dense_single_volume.helpers import significance
+
+    significance_source = Path(significance.__file__).read_text()
+    # Only the guarded K=1/K-class significance implementation owns this
+    # native-texture route.  The legacy helper must not reference its local
+    # enable flag (that stale duplicate raised NameError on ordinary callers).
+    assert significance_source.count("rotation_block_size = n_rot") == 1
+    assert "one particle per " in significance_source
+    assert "full orientation grid (%d rotations)" in significance_source
+
+
 def test_k1_coarse_gaussian_flag_honors_scoped_default_and_explicit_opt_out(monkeypatch):
     from recovar.em.dense_single_volume.helpers import significance
 
@@ -179,6 +253,21 @@ def test_k1_coarse_gaussian_flag_honors_scoped_default_and_explicit_opt_out(monk
     ).read_text()
     assert 'engine_kwargs.get("preserve_bpref_particle_order", False)' in k_class_source
     assert "relion_coarse_gaussian_default=" in k_class_source
+
+
+def test_k1_coarse_native_texture_flag_honors_default_and_opt_out(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import significance
+
+    monkeypatch.delenv(
+        "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE",
+        raising=False,
+    )
+    assert not significance._k1_coarse_gaussian_native_texture_enabled()
+    assert significance._k1_coarse_gaussian_native_texture_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE", "1")
+    assert significance._k1_coarse_gaussian_native_texture_enabled()
+    monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE", "0")
+    assert not significance._k1_coarse_gaussian_native_texture_enabled(default=True)
 
 
 def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkeypatch):
@@ -579,6 +668,59 @@ def test_relion_coarse_diff2_fails_closed_without_gpu(monkeypatch):
             jnp.ones((1, 2), dtype=jnp.float32),
             jnp.zeros((1,), dtype=jnp.float32),
             jnp.asarray([0, 1], dtype=jnp.int32),
+        )
+
+
+def test_relion_coarse_normalized_cc_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="require a JAX GPU backend"):
+        cuda_backproject.relion_coarse_normalized_cc_pairs_f32.__wrapped__(
+            jnp.zeros((1, 2, 3), dtype=jnp.complex64),
+            jnp.ones((1, 2, 3), dtype=jnp.float32),
+            jnp.zeros((1, 2, 3), dtype=jnp.complex64),
+            jnp.ones((3,), dtype=jnp.float32),
+            jnp.arange(3, dtype=jnp.int32),
+        )
+
+
+def test_relion_coarse_normalized_cc_native_texture_fails_closed_without_gpu(
+    monkeypatch,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="require a JAX GPU backend"):
+        cuda_backproject.relion_coarse_normalized_cc_native_texture_pairs_f32.__wrapped__(
+            jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+            jnp.eye(3, dtype=jnp.float32)[None, :, :],
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.ones((1,), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            1,
+            1,
+            1,
+        )
+
+
+def test_relion_coarse_native_texture_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_coarse_diff2_native_texture_rectangular_f32.__wrapped__(
+            jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+            jnp.eye(3, dtype=jnp.float32)[None, :, :],
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.zeros((1,), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            1,
+            1,
+            1,
         )
 
 

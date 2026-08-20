@@ -3,6 +3,9 @@
 import numpy as np
 import pytest
 
+from recovar.em.dense_single_volume.helpers.significance import (
+    _relion_cc_inverse_power_from_processed,
+)
 from recovar.em.normalized_cc_replay import (
     RELION_COARSE_REDUCTION_LANES,
     RELION_FINE_REDUCTION_LANES,
@@ -123,15 +126,14 @@ def test_relion_128lane_coarse_reduction_matches_hand_reference():
     assert actual.view(np.uint32) == lanes[0].view(np.uint32)
 
 
-def test_jax_relion_coarse_rescore_matches_numpy_replay():
+def test_relion_coarse_rescore_matches_numpy_replay():
     pytest.importorskip("jax")
-    import jax
     import jax.numpy as jnp
 
     from recovar.em.dense_single_volume.helpers.scoring import (
         _relion_coarse_128lane_float32_reduce,
         _relion_coarse_cc_atomic_score_from_components,
-        _relion_coarse_normalized_cc_rescore,
+        _relion_coarse_normalized_cc_rescore_jax,
     )
 
     rng = np.random.default_rng(6322)
@@ -154,7 +156,7 @@ def test_jax_relion_coarse_rescore_matches_numpy_replay():
     np.testing.assert_array_equal(reduced.view(np.uint32), expected_reduced.view(np.uint32))
 
     actual = np.asarray(
-        _relion_coarse_normalized_cc_rescore(
+        _relion_coarse_normalized_cc_rescore_jax(
             jnp.asarray(shifted),
             jnp.asarray(score_weight),
             jnp.asarray(projections),
@@ -174,18 +176,7 @@ def test_jax_relion_coarse_rescore_matches_numpy_replay():
         norm = relion_128lane_float32_reduce(contributions.norm)
         expected.append(_relion_coarse_atomic_score(numerator, norm))
     expected = np.asarray(expected, dtype=np.float32)
-    score_ulp_error = np.abs(
-        actual.view(np.uint32).astype(np.int64) - expected.view(np.uint32).astype(np.int64)
-    )
-    if jax.default_backend() == "gpu":
-        # CUDA matches the target RELION device arithmetic, including operand
-        # contraction, and may differ only in the final division/sqrt ULP.
-        assert np.max(score_ulp_error) <= 1
-    else:
-        # The pure NumPy replay intentionally forms logical float32 operands;
-        # CPU XLA may contract those operations differently. The explicit
-        # 128-lane reducer above remains bit-exact on every backend.
-        np.testing.assert_allclose(actual, expected, rtol=3e-6, atol=3e-7)
+    np.testing.assert_allclose(actual, expected, rtol=3e-6, atol=3e-7)
 
     # Frozen case-4 cross-winner components: direct division differs by up
     # to six ULPs, while RELION's 128 atomic additions collapse both scores
@@ -209,6 +200,106 @@ def test_jax_relion_coarse_rescore_matches_numpy_replay():
         frozen_actual.view(np.uint32),
         np.asarray([1049531574, 1049531574], dtype=np.uint32),
     )
+
+
+def test_relion_coarse_native_rescore_matches_exact_uniform_operands():
+    pytest.importorskip("jax")
+    import jax
+    import jax.numpy as jnp
+
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers.scoring import (
+        _relion_coarse_normalized_cc_rescore,
+        _relion_coarse_normalized_cc_rescore_jax,
+    )
+
+    if jax.default_backend() != "gpu" or not cuda_backproject.custom_cuda_requested():
+        pytest.skip("native RELION coarse rescore requires the custom CUDA GPU path")
+
+    n_pixels = 56 * 29
+    shifted = jnp.ones((2, n_pixels), dtype=jnp.complex64)
+    score_weight = jnp.ones((2, n_pixels), dtype=jnp.float32)
+    projection = jnp.ones((2, n_pixels), dtype=jnp.complex64)
+    half_weights = jnp.ones(n_pixels, dtype=jnp.float32)
+    fftw_order = jnp.arange(n_pixels, dtype=jnp.int32)
+
+    actual = np.asarray(
+        _relion_coarse_normalized_cc_rescore(
+            shifted,
+            score_weight,
+            projection,
+            half_weights,
+            fftw_order,
+        ),
+        dtype=np.float32,
+    )
+    expected = np.asarray(
+        _relion_coarse_normalized_cc_rescore_jax(
+            shifted,
+            score_weight,
+            projection,
+            half_weights,
+            fftw_order,
+        ),
+        dtype=np.float32,
+    )
+    np.testing.assert_array_equal(actual.view(np.uint32), expected.view(np.uint32))
+
+
+def test_relion_coarse_native_texture_rescore_exposes_reduced_components():
+    pytest.importorskip("jax")
+    import jax
+    import jax.numpy as jnp
+
+    from recovar import cuda_backproject
+
+    if jax.default_backend() != "gpu" or not cuda_backproject.custom_cuda_requested():
+        pytest.skip("native RELION texture rescore requires the custom CUDA GPU path")
+
+    projector = jnp.ones((5, 5, 5), dtype=jnp.complex64) * (1.0 + 1.0j)
+    rotations = jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (2, 3, 3))
+    shifted = jnp.ones((2, 4), dtype=jnp.complex64)
+    score_weight = jnp.ones((2, 4), dtype=jnp.float32)
+    half_weights = jnp.ones((4,), dtype=jnp.float32)
+    packed_to_compact = jnp.arange(4, dtype=jnp.int32)
+
+    components = np.asarray(
+        cuda_backproject.relion_coarse_normalized_cc_native_texture_pairs_f32(
+            projector,
+            rotations,
+            shifted,
+            score_weight,
+            half_weights,
+            packed_to_compact,
+            2,
+            1,
+            1,
+            True,
+        ),
+        dtype=np.float32,
+    )
+
+    assert components.shape == (2, 3)
+    np.testing.assert_array_equal(components[0].view(np.uint32), components[1].view(np.uint32))
+    assert np.all(components[:, 1:] > 0.0)
+
+    translated = np.asarray(
+        cuda_backproject.relion_coarse_normalized_cc_native_texture_pairs_f32(
+            projector,
+            rotations,
+            shifted,
+            score_weight,
+            half_weights,
+            packed_to_compact,
+            2,
+            1,
+            1,
+            True,
+            translation_angles=jnp.asarray([[0.0, 0.0], [0.2, 0.0]], dtype=jnp.float32),
+        ),
+        dtype=np.float32,
+    )
+    assert translated[0, 0].view(np.uint32) != translated[1, 0].view(np.uint32)
 
 
 def test_relion_coarse_exact_tie_uses_direction_major_flat_order():
@@ -417,3 +508,28 @@ def test_candidate_replay_classifies_geometry_before_scores():
     )
     report = classify_normalized_cc_candidate_replays(rec, rel, geometry_equal=False)
     assert report.classification == "geometry"
+
+
+def test_relion_cc_inverse_power_uses_selected_per_image_fourier_array():
+    pytest.importorskip("jax")
+    import jax.numpy as jnp
+
+    processed = np.asarray(
+        [[1.0 + 2.0j, 3.0 - 4.0j, 5.0 + 6.0j]],
+        dtype=np.complex64,
+    )
+    selected = np.asarray([2, 0], dtype=np.int32)
+    observed = np.asarray(
+        _relion_cc_inverse_power_from_processed(
+            jnp.asarray(processed),
+            selected,
+        )
+    )
+    expected_power = sum(
+        float(processed[0, index].real) ** 2
+        + float(processed[0, index].imag) ** 2
+        for index in selected
+    )
+
+    assert observed.dtype == np.float64
+    np.testing.assert_array_equal(observed, np.asarray([[1.0 / expected_power]]))

@@ -60,21 +60,14 @@ def _relion_coarse_cc_atomic_score_from_components(numerator, norm):
 
 
 @jax.jit
-def _relion_coarse_normalized_cc_rescore(
+def _relion_coarse_normalized_cc_rescore_jax(
     shifted_candidates,
     score_weight_candidates,
     projection_candidates,
     half_weights,
     fftw_order,
 ):
-    """Rescore coarse candidates with RELION's float32 lane tree.
-
-    Inputs have shape ``(..., n_pixels)`` in RECOVAR compact centered-row
-    order.  ``fftw_order`` maps that last axis to RELION's packed current-size
-    FFTW order.  Operand formation intentionally remains float32/complex64 so
-    this changes only the bounded candidate reduction, not the projector or
-    preprocessing arithmetic.
-    """
+    """Portable JAX replay of RELION's float32 coarse lane tree."""
 
     shifted = jnp.asarray(shifted_candidates, dtype=jnp.complex64)[..., fftw_order]
     score_weight = jnp.asarray(score_weight_candidates, dtype=jnp.float32)[..., fftw_order]
@@ -85,6 +78,143 @@ def _relion_coarse_normalized_cc_rescore(
     numerator = _relion_coarse_128lane_float32_reduce(numerator_pixels)
     norm = _relion_coarse_128lane_float32_reduce(norm_pixels)
     return _relion_coarse_cc_atomic_score_from_components(numerator, norm)
+
+
+def _relion_coarse_normalized_cc_rescore(
+    shifted_candidates,
+    score_weight_candidates,
+    projection_candidates,
+    half_weights,
+    fftw_order,
+    *,
+    projector_full=None,
+    rotation_matrices=None,
+    current_size=None,
+    padding_factor=None,
+    projector_max_r=None,
+    translation_angles=None,
+    numerator_weight_candidates=None,
+):
+    """Rescore bounded candidates with RELION's native coarse CUDA tree.
+
+    Inputs have shape ``(..., n_pixels)`` in RECOVAR compact centered-row
+    order.  ``fftw_order`` maps that last axis to RELION's packed current-size
+    FFTW order. On GPU the custom kernel preserves CUDA operand contraction,
+    the 128-lane tree, ``sqrtf``, and RELION's repeated atomic additions. The
+    JAX implementation remains a portable CPU fallback for structural tests.
+    """
+
+    shifted = jnp.asarray(shifted_candidates, dtype=jnp.complex64)
+    score_weight = jnp.asarray(score_weight_candidates, dtype=jnp.float32)
+    if shifted.shape != score_weight.shape or shifted.ndim < 2:
+        raise ValueError(
+            "shifted and score-weight candidates must have one common "
+            f"rank-2-or-higher shape, got {shifted.shape} and "
+            f"{score_weight.shape}",
+        )
+    native_texture_requested = projector_full is not None
+    native_texture_args = (
+        rotation_matrices,
+        current_size,
+        padding_factor,
+        projector_max_r,
+    )
+    if native_texture_requested and any(value is None for value in native_texture_args):
+        raise ValueError(
+            "native texture normalized-CC replay requires rotations, current "
+            "size, padding factor, and projector maximum radius",
+        )
+    projection = None
+    if projection_candidates is not None:
+        projection = jnp.asarray(projection_candidates, dtype=jnp.complex64)
+        if projection.shape != shifted.shape:
+            raise ValueError(
+                "projection candidates must match shifted candidates, got "
+                f"{projection.shape} and {shifted.shape}",
+            )
+    if jax.default_backend() == "gpu":
+        from recovar import cuda_backproject
+
+        if cuda_backproject.custom_cuda_requested():
+            n_pixels = int(shifted.shape[-1])
+            leading_shape = shifted.shape[:-1]
+            if native_texture_requested:
+                rotations = jnp.asarray(rotation_matrices, dtype=jnp.float32)
+                if rotations.shape != leading_shape + (3, 3):
+                    raise ValueError(
+                        "candidate rotations must match candidate leading shape, "
+                        f"got {rotations.shape} for {leading_shape}",
+                    )
+                candidate_translation_angles = None
+                if translation_angles is not None:
+                    candidate_translation_angles = jnp.asarray(
+                        translation_angles,
+                        dtype=jnp.float32,
+                    )
+                    if candidate_translation_angles.shape != leading_shape + (2,):
+                        raise ValueError(
+                            "translation angles must match candidate leading shape, "
+                            f"got {candidate_translation_angles.shape} for {leading_shape}",
+                        )
+                    candidate_translation_angles = candidate_translation_angles.reshape(
+                        -1, 2
+                    )
+                native_numerator_weight = None
+                if numerator_weight_candidates is not None:
+                    native_numerator_weight = jnp.asarray(
+                        numerator_weight_candidates,
+                        dtype=jnp.float32,
+                    )
+                    if native_numerator_weight.shape != shifted.shape:
+                        raise ValueError(
+                            "numerator weights must match image candidates, got "
+                            f"{native_numerator_weight.shape} and {shifted.shape}",
+                        )
+                    native_numerator_weight = native_numerator_weight.reshape(
+                        -1, n_pixels
+                    )
+                native_scores = (
+                    cuda_backproject.relion_coarse_normalized_cc_native_texture_pairs_f32(
+                        jnp.asarray(projector_full, dtype=jnp.complex64),
+                        rotations.reshape(-1, 3, 3),
+                        shifted.reshape(-1, n_pixels),
+                        score_weight.reshape(-1, n_pixels),
+                        jnp.asarray(half_weights, dtype=jnp.float32),
+                        jnp.asarray(fftw_order, dtype=jnp.int32),
+                        int(current_size),
+                        int(padding_factor),
+                        int(projector_max_r),
+                        translation_angles=candidate_translation_angles,
+                        numerator_weight=native_numerator_weight,
+                    )
+                )
+                return native_scores.reshape(leading_shape)
+            if projection is None:
+                raise ValueError(
+                    "preprojected normalized-CC replay requires projection candidates"
+                )
+            native_shape = (1, int(shifted.size // n_pixels), n_pixels)
+            native_scores = cuda_backproject.relion_coarse_normalized_cc_pairs_f32(
+                shifted.reshape(native_shape),
+                score_weight.reshape(native_shape),
+                projection.reshape(native_shape),
+                jnp.asarray(half_weights, dtype=jnp.float32),
+                jnp.asarray(fftw_order, dtype=jnp.int32),
+            )
+            return native_scores.reshape(leading_shape)
+    if native_texture_requested:
+        raise RuntimeError(
+            "native texture normalized-CC replay requires custom CUDA on a JAX GPU"
+        )
+    if projection is None:
+        raise ValueError("portable normalized-CC replay requires projection candidates")
+    return _relion_coarse_normalized_cc_rescore_jax(
+        shifted,
+        score_weight,
+        projection,
+        jnp.asarray(half_weights, dtype=jnp.float32),
+        jnp.asarray(fftw_order, dtype=jnp.int32),
+    )
 
 
 def _score_rotation_block(
