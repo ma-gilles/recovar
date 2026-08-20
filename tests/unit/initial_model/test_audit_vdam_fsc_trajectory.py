@@ -63,6 +63,10 @@ def _fixture(tmp_path: Path) -> dict[str, Path]:
         },
     )
     (fixture_dir / "reference_gt_relion.mrc").touch()
+    write_star(
+        str(fixture_dir / "particles.star"),
+        pd.DataFrame({"_rlnImageName": [f"image-{idx}@stack.mrcs" for idx in range(6)]}),
+    )
     _write_json(
         recovar_dir / "run_native_options.json",
         {
@@ -120,7 +124,12 @@ def _fixture(tmp_path: Path) -> dict[str, Path]:
     )
     write_star(
         str(relion_dir / "run_it001_data.star"),
-        pd.DataFrame({"_rlnMaxValueProbDistribution": [0.5, 0.4, 0.3, 0.2, 0.0, 0.0]}),
+        pd.DataFrame(
+            {
+                "_rlnImageName": [f"image-{idx}@stack.mrcs" for idx in range(6)],
+                "_rlnMaxValueProbDistribution": [0.5, 0.4, 0.3, 0.2, 0.0, 0.0],
+            }
+        ),
     )
     gpu_report = tmp_path / "paired_gpu_uuid.json"
     _write_json(
@@ -162,11 +171,10 @@ def test_identical_fixed_checkpoint_maps_pass_without_correlation(tmp_path, monk
     assert [row["iteration"] for row in report["checkpoints"]] == list(audit_module.CHECKPOINTS)
     assert report["iteration_one_particle_subset"] == {
         "exact": True,
+        "identity": "_rlnImageName",
         "particle_count": 4,
-        "first_particle_id": 0,
-        "last_particle_id": 3,
-        "even_particle_count": 2,
-        "odd_particle_count": 2,
+        "first_image_name": "image-0@stack.mrcs",
+        "last_image_name": "image-3@stack.mrcs",
     }
     assert len(shellwise) == 3 * len(audit_module.CHECKPOINTS)
 

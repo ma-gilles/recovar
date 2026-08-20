@@ -15,7 +15,6 @@ import recovar.em.initial_model.driver as driver
 from recovar.data_io.starfile import read_star
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.dense_adapter import DenseInitialModelEstepResult
-from recovar.em.initial_model.iteration_loop import select_subset_for_iter
 from recovar.em.initial_model.m_step import VdamAccumulator
 
 SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_ab_initio.py"
@@ -37,7 +36,7 @@ def _load_run_ab_initio():
     return module
 
 
-def test_micrograph_sort_order_preserves_relion_particle_table_order():
+def test_micrograph_sort_order_matches_relion_experiment_order():
     main = pd.DataFrame(
         {
             "_rlnMicrographName": ["1", "2", "10", "100", "11"],
@@ -45,10 +44,10 @@ def test_micrograph_sort_order_preserves_relion_particle_table_order():
         }
     )
 
-    assert driver._micrograph_sort_order(main).tolist() == [0, 1, 2, 3, 4]
+    assert driver._micrograph_sort_order(main).tolist() == [0, 2, 3, 4, 1]
 
 
-def test_experiment_read_order_does_not_sort_lexicographic_micrograph_labels():
+def test_experiment_read_order_uses_micrograph_lexicographic_order():
     main = pd.DataFrame(
         {
             "_rlnMicrographName": ["1", "2", "10", "100", "11"],
@@ -56,44 +55,7 @@ def test_experiment_read_order_does_not_sort_lexicographic_micrograph_labels():
         }
     )
 
-    assert driver._experiment_read_order(main).tolist() == [0, 1, 2, 3, 4]
-
-
-def test_seed_zero_initial_subset_matches_relion_table_rows_and_halfsets():
-    nr_particles = 400
-    main = pd.DataFrame(
-        {
-            # These labels would put row 100 before row 2 under lexical sorting.
-            "_rlnMicrographName": [f"micrograph_{idx}" for idx in range(nr_particles)],
-            "_rlnImageName": [f"{idx + 1}@s.mrcs" for idx in range(nr_particles)],
-        }
-    )
-    state = initialise_denovo_state(
-        ori_size=8,
-        pixel_size=1.0,
-        K=1,
-        nr_iter=8,
-        n_directions=3,
-        pseudo_halfsets=True,
-    )
-    state.subset_size = 200
-
-    def fail_if_called(seed):
-        raise AssertionError(f"unexpected randomization for seed {seed}")
-
-    out = select_subset_for_iter(
-        state,
-        iter=1,
-        nr_particles=nr_particles,
-        optics_group_by_particle=np.zeros(nr_particles, dtype=np.int64),
-        rnd_unif_factory=fail_if_called,
-        random_seed=0,
-        do_grad=True,
-        particle_order=driver._experiment_read_order(main),
-    )
-
-    np.testing.assert_array_equal(out.subset_particle_ids, np.arange(200, dtype=np.int64))
-    np.testing.assert_array_equal(out.subset_halfset_ids, (np.arange(200) % 2).astype(np.int8))
+    assert driver._experiment_read_order(main).tolist() == [0, 2, 3, 4, 1]
 
 
 def test_translation_log_prior_matches_relion_pdf_offset_scaling():
@@ -373,7 +335,7 @@ def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch):
         return np.zeros((8, 8), dtype=np.float64), np.ones((1, 5), dtype=np.float64)
 
     def fake_load_raw_images(dataset, particle_ids, *, batch_size):
-        np.testing.assert_array_equal(particle_ids, np.asarray([0, 1], dtype=np.int64))
+        np.testing.assert_array_equal(particle_ids, np.asarray([1, 0], dtype=np.int64))
         return np.zeros((2, 8, 8), dtype=np.float64)
 
     def fake_bootstrap(**kwargs):
@@ -1114,13 +1076,13 @@ def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):
     data, data_optics = read_star(str(out))
     assert data_optics is not None
     assert data_optics["_rlnImageSize"].tolist() == ["8"]
-    assert data["_rlnImageName"].tolist() == ["2@stack.mrcs", "1@stack.mrcs"]
-    np.testing.assert_allclose(data["_rlnOriginXAngst"].astype(float).to_numpy(), [3.0, 0.75])
-    np.testing.assert_allclose(data["_rlnOriginYAngst"].astype(float).to_numpy(), [-1.5, 1.875])
-    np.testing.assert_allclose(data["_rlnOriginX"].astype(float).to_numpy(), [2.0, 0.5])
-    np.testing.assert_allclose(data["_rlnOriginY"].astype(float).to_numpy(), [-1.0, 1.25])
-    np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [2, 1])
-    np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.875, 0.25])
+    assert data["_rlnImageName"].tolist() == ["1@stack.mrcs", "2@stack.mrcs"]
+    np.testing.assert_allclose(data["_rlnOriginXAngst"].astype(float).to_numpy(), [0.75, 3.0])
+    np.testing.assert_allclose(data["_rlnOriginYAngst"].astype(float).to_numpy(), [1.875, -1.5])
+    np.testing.assert_allclose(data["_rlnOriginX"].astype(float).to_numpy(), [0.5, 2.0])
+    np.testing.assert_allclose(data["_rlnOriginY"].astype(float).to_numpy(), [1.25, -1.0])
+    np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [1, 2])
+    np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.25, 0.875])
 
 
 def test_data_star_zeros_unvisited_rows_and_writes_best_pose_eulers(tmp_path):
@@ -1158,15 +1120,15 @@ def test_data_star_zeros_unvisited_rows_and_writes_best_pose_eulers(tmp_path):
 
     data, _ = read_star(str(out))
     expected_eulers = driver.sampling.get_relion_rotation_grid_eulers(1, rotation_index_order="relion")
-    assert data["_rlnImageName"].tolist() == ["3@stack.mrcs", "1@stack.mrcs", "2@stack.mrcs"]
-    np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [1, 0, 1])
-    np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.75, 0.0, 0.625])
-    np.testing.assert_allclose(data["_rlnAngleRot"].astype(float).to_numpy()[[0, 2]], expected_eulers[[5, 9], 0])
-    np.testing.assert_allclose(data["_rlnAngleTilt"].astype(float).to_numpy()[[0, 2]], expected_eulers[[5, 9], 1])
-    np.testing.assert_allclose(data["_rlnAnglePsi"].astype(float).to_numpy()[[0, 2]], expected_eulers[[5, 9], 2])
-    np.testing.assert_allclose(data["_rlnAngleRot"].astype(float).to_numpy()[1], 20.0)
-    np.testing.assert_allclose(data["_rlnAngleTilt"].astype(float).to_numpy()[1], 21.0)
-    np.testing.assert_allclose(data["_rlnAnglePsi"].astype(float).to_numpy()[1], 22.0)
+    assert data["_rlnImageName"].tolist() == ["1@stack.mrcs", "2@stack.mrcs", "3@stack.mrcs"]
+    np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [0, 1, 1])
+    np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.0, 0.625, 0.75])
+    np.testing.assert_allclose(data["_rlnAngleRot"].astype(float).to_numpy()[[1, 2]], expected_eulers[[9, 5], 0])
+    np.testing.assert_allclose(data["_rlnAngleTilt"].astype(float).to_numpy()[[1, 2]], expected_eulers[[9, 5], 1])
+    np.testing.assert_allclose(data["_rlnAnglePsi"].astype(float).to_numpy()[[1, 2]], expected_eulers[[9, 5], 2])
+    np.testing.assert_allclose(data["_rlnAngleRot"].astype(float).to_numpy()[0], 20.0)
+    np.testing.assert_allclose(data["_rlnAngleTilt"].astype(float).to_numpy()[0], 21.0)
+    np.testing.assert_allclose(data["_rlnAnglePsi"].astype(float).to_numpy()[0], 22.0)
 
 
 def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):

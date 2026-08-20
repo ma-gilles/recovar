@@ -16,13 +16,10 @@ as the next product milestone rather than mixing it into the first closure.
 
 The native InitialModel/VDAM parity worktree is at
 `b7279597e6156f4dea3c08eb5b91b9d1bb9b4ddc`, on top of PR #158 head
-`b10412ca`.  Iteration-0 bootstrap state is exact, but the frozen tiny
-trajectory still misses the map gates (iteration-1 cross FSC-AUC `0.8274473`,
-GT delta `-0.0140749`).  The earlier aggregate claim that iteration-1
-particle pose/translation state was effectively exact was indexed against
-different particle subsets and is withdrawn.  Particle 0 remains an exact
-matched control, but the common-identity Pmax comparison has relative L2
-about `0.928`.
+`b10412ca`.  Iteration-0 bootstrap state is exact, and identity-aligned
+iteration-1 particle pose/translation state is effectively exact, but the
+frozen tiny trajectory still misses the map gates (iteration-1 cross FSC-AUC
+`0.8274473`, GT delta `-0.0140749`).
 
 The particle-0 projected-reference hypothesis is now rejected as the dominant
 iteration-1 cause.  Against the current native RELION StoreWavg project panel,
@@ -37,20 +34,20 @@ iteration-1 divergence is in aggregate subset/pseudo-halfset routing or the
 VDAM moment/reconstruction update, not the shared fine posterior, image/CTF
 operands, projected-reference subtraction, or scatter arithmetic.
 
-That routing hypothesis is now localized to the first material input
-boundary.  RELION seed-0 iteration 1 visits particle-table rows `0..199`, with
-`100/100` even/odd pseudo-halfsets.  RECOVAR instead visited 200 rows after
-lexicographically sorting `_rlnMicrographName`, beginning
-`[0, 100, 102, 104, ...]`, with `99/101` halfsets; 79 particle identities
-differed in each direction.  RELION source initializes
-`Experiment::sorted_idx` in particle-table order and skips randomization when
-the seed is zero.  The current fix therefore makes
-`_experiment_read_order` preserve input table order for bootstrap reads,
-iteration subsets, and written data STARs.  A focused 400-particle regression
-now pins the first 200 identities and alternating global-particle halfsets,
-and the frozen trajectory auditor now rejects any iteration-1 identity-set
-mismatch before scoring maps.  The next experiment is the clean seed-0
-`vdam-08` trajectory with this single routing correction.
+The apparent subset-routing mismatch was a row-coordinate mistake and is
+rejected.  RELION writes its data STAR in lexicographic Experiment order, so
+RELION output row `0..199` is not input particle-table row `0..199`.
+Comparing stable `_rlnImageName` identities proves that the existing RECOVAR
+and RELION iteration-1 subsets are exactly equal.  A table-order
+counterfactual (Slurm job `12669580`, stopped after the result was known)
+makes 79 identities differ in each direction and moves iteration-1
+cross-engine FSC-AUC only from `0.8274473` to `0.8313125`, while worsening the
+GT delta slightly to about `-0.0143244`.  The lexicographic Experiment-order
+implementation is retained.  The frozen trajectory auditor now compares
+iteration-1 subsets by `_rlnImageName`, preventing either input-row/output-row
+coordinate system from passing accidentally.  The next measurable boundary
+remains aggregate VDAM moment/reconstruction input after the already exact
+particle-identity, posterior/scatter, and bootstrap controls.
 
 ## Mode Contract
 

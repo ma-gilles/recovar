@@ -136,7 +136,16 @@ def _validate_gpu(report: dict[str, Any]) -> str:
     return values[0]
 
 
-def _validate_iteration_one_particle_subset(recovar_dir: Path, relion_dir: Path) -> dict[str, Any]:
+def _star_column(table, names: tuple[str, ...], *, label: str) -> str:
+    column = next((name for name in names if name in table.columns), None)
+    if column is None:
+        raise AuditError(f"{label} has none of the required columns {names}")
+    return column
+
+
+def _validate_iteration_one_particle_subset(
+    fixture_dir: Path, recovar_dir: Path, relion_dir: Path
+) -> dict[str, Any]:
     recovar_meta = _load_json(
         recovar_dir / "run_it001_recovar_meta.json",
         label="RECOVAR iteration-1 metadata",
@@ -148,42 +157,61 @@ def _validate_iteration_one_particle_subset(recovar_dir: Path, relion_dir: Path)
     if np.unique(recovar_ids).size != recovar_ids.size or np.any(recovar_ids < 0):
         raise AuditError("RECOVAR iteration-1 selected_particle_ids must be unique nonnegative rows")
 
+    fixture_star_path = fixture_dir / "particles.star"
+    try:
+        fixture_table, _ = read_star(str(fixture_star_path))
+    except Exception as exc:
+        raise AuditError(f"cannot read frozen particle STAR at {fixture_star_path}: {exc}") from exc
+    if np.any(recovar_ids >= len(fixture_table)):
+        raise AuditError("RECOVAR iteration-1 selected_particle_ids exceed the frozen particle table")
+    fixture_image_column = _star_column(
+        fixture_table,
+        ("_rlnImageName", "rlnImageName"),
+        label="frozen particle STAR",
+    )
+    recovar_images = fixture_table.iloc[recovar_ids][fixture_image_column].astype(str).to_numpy()
+    if np.unique(recovar_images).size != recovar_images.size:
+        raise AuditError("RECOVAR iteration-1 selected particles do not have unique image identities")
+
     relion_star_path = relion_dir / "run_it001_data.star"
     try:
         relion_table, _ = read_star(str(relion_star_path))
     except Exception as exc:
         raise AuditError(f"cannot read RELION iteration-1 data STAR at {relion_star_path}: {exc}") from exc
-    posterior_column = next(
-        (
-            key
-            for key in ("_rlnMaxValueProbDistribution", "rlnMaxValueProbDistribution")
-            if key in relion_table.columns
-        ),
-        None,
+    posterior_column = _star_column(
+        relion_table,
+        ("_rlnMaxValueProbDistribution", "rlnMaxValueProbDistribution"),
+        label="RELION iteration-1 data STAR",
     )
-    if posterior_column is None:
-        raise AuditError("RELION iteration-1 data STAR has no maximum-posterior column")
+    relion_image_column = _star_column(
+        relion_table,
+        ("_rlnImageName", "rlnImageName"),
+        label="RELION iteration-1 data STAR",
+    )
     posterior = relion_table[posterior_column].astype(float).to_numpy()
     relion_ids = np.flatnonzero(np.isfinite(posterior) & (posterior > 0.0)).astype(np.int64)
     if relion_ids.size == 0:
         raise AuditError("RELION iteration-1 data STAR records no visited particles")
+    relion_images = relion_table.iloc[relion_ids][relion_image_column].astype(str).to_numpy()
+    if np.unique(relion_images).size != relion_images.size:
+        raise AuditError("RELION iteration-1 visited particles do not have unique image identities")
 
-    recovar_sorted = np.sort(recovar_ids)
-    if not np.array_equal(recovar_sorted, relion_ids):
-        recovar_only = np.setdiff1d(recovar_sorted, relion_ids)
-        relion_only = np.setdiff1d(relion_ids, recovar_sorted)
+    recovar_sorted = np.sort(recovar_images)
+    relion_sorted = np.sort(relion_images)
+    if not np.array_equal(recovar_sorted, relion_sorted):
+        recovar_only = np.setdiff1d(recovar_sorted, relion_sorted)
+        relion_only = np.setdiff1d(relion_sorted, recovar_sorted)
         raise AuditError(
             "iteration-1 particle subsets differ: "
-            f"RECOVAR count={recovar_ids.size}, RELION count={relion_ids.size}, "
+            f"RECOVAR count={recovar_images.size}, RELION count={relion_images.size}, "
             f"RECOVAR-only={recovar_only[:10].tolist()}, RELION-only={relion_only[:10].tolist()}"
         )
     return {
         "exact": True,
-        "particle_count": int(relion_ids.size),
-        "first_particle_id": int(relion_ids[0]),
-        "last_particle_id": int(relion_ids[-1]),
-        "even_particle_count": int(np.count_nonzero((relion_ids % 2) == 0)),
-        "odd_particle_count": int(np.count_nonzero((relion_ids % 2) == 1)),
+        "identity": "_rlnImageName",
+        "particle_count": int(relion_images.size),
+        "first_image_name": str(relion_sorted[0]),
+        "last_image_name": str(relion_sorted[-1]),
     }
 
 
@@ -238,7 +266,7 @@ def audit(
         _load_json(relion_dir / "relion_command.json", label="RELION command"),
     )
     physical_gpu_uuid = _validate_gpu(_load_json(paired_gpu_report_path, label="paired GPU report"))
-    iteration_one_particle_subset = _validate_iteration_one_particle_subset(recovar_dir, relion_dir)
+    iteration_one_particle_subset = _validate_iteration_one_particle_subset(fixture_dir, recovar_dir, relion_dir)
 
     gt_path = fixture_dir / "reference_gt_relion.mrc"
     if not gt_path.is_file():

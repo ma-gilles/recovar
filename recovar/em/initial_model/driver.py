@@ -219,20 +219,19 @@ def _initial_model_mrc_from_prefix(outputname: str) -> str:
 
 
 def _micrograph_sort_order(main_star) -> np.ndarray:
-    """Compatibility alias for RELION's InitialModel particle-table order."""
+    """RELION's InitialModel ``sorted_idx`` follows Experiment::read order."""
 
     return _experiment_read_order(main_star)
 
 
 def _experiment_read_order(main_star) -> np.ndarray:
-    """RELION ``Experiment::read`` order used to initialise ``sorted_idx``.
+    """RELION Experiment::read order used by bootstrap/noise initialisation."""
 
-    InitialModel starts with particles in their input particle-table order.
-    ``randomiseParticlesOrder`` may shuffle that list later, but it does not
-    group or lexicographically sort particles by micrograph name.
-    """
-
-    return np.arange(len(main_star), dtype=np.int64)
+    mic_col = _star_column(main_star, "_rlnMicrographName")
+    if mic_col is None:
+        return np.arange(len(main_star), dtype=np.int64)
+    mic_names = mic_col.astype(str).to_numpy()
+    return np.asarray(sorted(range(len(mic_names)), key=lambda i: mic_names[i]), dtype=np.int64)
 
 
 def _optics_group_indices(main_star) -> np.ndarray:
