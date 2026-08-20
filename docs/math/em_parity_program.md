@@ -155,11 +155,14 @@ E-step exhausted the 40 GB GPU at the default 500-image batch.  `vdam-11`
 completed and misses only the fixed cross-engine gate (minimum FSC-AUC
 `0.99691967`) while retaining acceptable GT quality (minimum delta
 `-0.00018535`).  `vdam-12` independently exhausted the same 40 GB GPU boundary
-at the default batch.  The runner records an explicit resource-only image
-batch and the matrix pins both high-memory cases, `vdam-09` and `vdam-12`, to
-200; their scientific commands and frozen acceptance contracts are otherwise
-unchanged.  The next bounded run is only those two cases in a fresh output
-root.
+at the default batch.  Batch 200 closes the resource boundary for `vdam-09`,
+which then completes with minimum cross-engine FSC-AUC `0.99734426` and no
+negative GT delta.  For `vdam-12`, batch 200 reduces the failed allocation from
+`37.54` GiB to `29.33` GiB but still exhausts the device once resident buffers
+are included.  The runner records an explicit resource-only image batch; the
+matrix pins `vdam-09` to 200 and `vdam-12` to 100.  Their scientific commands
+and frozen acceptance contracts are otherwise unchanged.  The next bounded
+run is `vdam-12` alone in a fresh output root.
 
 ## Mode Contract
 

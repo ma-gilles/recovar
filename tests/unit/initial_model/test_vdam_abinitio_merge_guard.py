@@ -245,7 +245,8 @@ def test_vdam_fixed12_matrix_maps_array_tasks_to_frozen_case_ids():
         "printf 'vdam-%02d'",
         "run_vdam_relion_parity_case.sbatch",
         "OUTPUT_ROOT",
-        '[[ "${CASE_ID}" =~ ^vdam-(09|12)$',
+        "vdam-09) export RECOVAR_VDAM_IMAGE_BATCH_SIZE=200",
+        "vdam-12) export RECOVAR_VDAM_IMAGE_BATCH_SIZE=100",
         "RECOVAR_VDAM_IMAGE_BATCH_SIZE=200",
     ]
     missing = [token for token in expected_tokens if token not in matrix]
