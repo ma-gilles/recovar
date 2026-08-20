@@ -707,47 +707,59 @@ def _run_sparse_pass2_initial_model_estep(
         local_layout = tuple(local_layouts)
 
         t0 = time.time()
-        result = run_local_k_class_em(
-            group_dataset,
-            means,
-            mean_variance,
-            config.noise_variance,
-            local_layout,
-            config.disc_type,
-            class_log_priors=class_log_priors,
-            image_batch_size=config.image_batch_size,
-            rotation_block_size=config.rotation_block_size,
-            current_size=group_kwargs.get("current_size"),
-            accumulate_noise=True,
-            projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
-            reconstruction_padding_factor=int(group_kwargs.get("reconstruction_padding_factor", 1)),
-            score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
-            half_spectrum_scoring=bool(group_kwargs.get("half_spectrum_scoring", False)),
-            use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
-            use_float64_normalization=True,
-            use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
-            do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
-            square_window=bool(group_kwargs.get("square_window", False)),
-            image_corrections=group_kwargs.get("image_corrections"),
-            scale_corrections=group_kwargs.get("scale_corrections"),
-            image_pre_shifts=group_kwargs.get("image_pre_shifts"),
-            mstep_subtract_ctf_projection=bool(group_kwargs.get("reconstruction_subtract_projected_reference", False)),
-            mstep_relion_x_half=bool(config.relion_bpref_frame),
-            reconstruct_significant_only=True,
-            adaptive_fraction=adaptive_fraction,
-            # RELION's gradient InitialModel cap defines the coarse pass-1
-            # support only. Fine pass-2 reconstruction uses adaptive_fraction
-            # without reapplying maximum_significants.
-            max_significants=-1,
-            unify_local_bucket_sizes=True,
-            stats_use_reconstruction_probs=True,
-            class_posterior_sums_from_noise=False,
-            return_profile=return_profile,
-            return_best_pose_details=True,
-            translation_prior_centers=group_kwargs.get("translation_prior_centers"),
-            relion_projector_half=relion_projector_half_by_class,
-            relion_projector_r_max=relion_projector_r_max,
+        from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_diagnostics
+
+        sparse_diagnostics.set_bpref_contribution_dump_context(
+            iteration=int(group_kwargs.get("debug_iteration", -1)),
+            half=int(halfset_idx) + 1,
         )
+        try:
+            result = run_local_k_class_em(
+                group_dataset,
+                means,
+                mean_variance,
+                config.noise_variance,
+                local_layout,
+                config.disc_type,
+                class_log_priors=class_log_priors,
+                image_batch_size=config.image_batch_size,
+                rotation_block_size=config.rotation_block_size,
+                current_size=group_kwargs.get("current_size"),
+                accumulate_noise=True,
+                projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
+                reconstruction_padding_factor=int(group_kwargs.get("reconstruction_padding_factor", 1)),
+                score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
+                half_spectrum_scoring=bool(group_kwargs.get("half_spectrum_scoring", False)),
+                use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
+                use_float64_normalization=True,
+                use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
+                do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
+                square_window=bool(group_kwargs.get("square_window", False)),
+                image_corrections=group_kwargs.get("image_corrections"),
+                scale_corrections=group_kwargs.get("scale_corrections"),
+                image_pre_shifts=group_kwargs.get("image_pre_shifts"),
+                mstep_subtract_ctf_projection=bool(
+                    group_kwargs.get("reconstruction_subtract_projected_reference", False)
+                ),
+                mstep_relion_x_half=bool(config.relion_bpref_frame),
+                reconstruct_significant_only=True,
+                adaptive_fraction=adaptive_fraction,
+                debug_iteration=int(group_kwargs.get("debug_iteration", -1)),
+                # RELION's gradient InitialModel cap defines the coarse pass-1
+                # support only. Fine pass-2 reconstruction uses adaptive_fraction
+                # without reapplying maximum_significants.
+                max_significants=-1,
+                unify_local_bucket_sizes=True,
+                stats_use_reconstruction_probs=True,
+                class_posterior_sums_from_noise=False,
+                return_profile=return_profile,
+                return_best_pose_details=True,
+                translation_prior_centers=group_kwargs.get("translation_prior_centers"),
+                relion_projector_half=relion_projector_half_by_class,
+                relion_projector_r_max=relion_projector_r_max,
+            )
+        finally:
+            sparse_diagnostics.clear_bpref_contribution_dump_context()
         pass2_time_s += time.time() - t0
         halfset_results[int(halfset_idx)] = result
         accumulators.extend(

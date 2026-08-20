@@ -647,6 +647,19 @@ def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
 def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeypatch):
     calls = {}
 
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_diagnostics
+
+    monkeypatch.setattr(
+        sparse_diagnostics,
+        "set_bpref_contribution_dump_context",
+        lambda **kwargs: calls.setdefault("diagnostic_context", []).append(kwargs),
+    )
+    monkeypatch.setattr(
+        sparse_diagnostics,
+        "clear_bpref_contribution_dump_context",
+        lambda: calls.setdefault("diagnostic_context", []).append("clear"),
+    )
+
     def fake_significance(dataset, means, noise_variance, rotations, translations, disc_type, **kwargs):
         del means, noise_variance, disc_type
         calls["pass1_rotations"] = np.asarray(rotations, dtype=np.float32).copy()
@@ -700,6 +713,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["local_mstep_subtract_ctf_projection"] = kwargs["mstep_subtract_ctf_projection"]
         calls["local_mstep_relion_x_half"] = kwargs["mstep_relion_x_half"]
         calls["local_max_significants"] = kwargs["max_significants"]
+        calls["local_debug_iteration"] = kwargs["debug_iteration"]
         calls["local_use_float64_scoring"] = kwargs["use_float64_scoring"]
         calls["local_use_float64_normalization"] = kwargs["use_float64_normalization"]
         calls["local_unify_bucket_sizes"] = kwargs["unify_local_bucket_sizes"]
@@ -759,6 +773,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
             "translation_log_prior": fine_prior,
             "coarse_translation_log_prior": coarse_prior,
             "max_significants": 100,
+            "debug_iteration": 7,
             "image_pre_shifts": pre_shifts,
             "reconstruct_with_masked_images": True,
             "reconstruction_subtract_projected_reference": True,
@@ -791,11 +806,13 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_mstep_subtract_ctf_projection"] is True
     assert calls["local_mstep_relion_x_half"] is False
     assert calls["local_max_significants"] == -1
+    assert calls["local_debug_iteration"] == 7
     assert calls["local_use_float64_scoring"] is False
     assert calls["local_use_float64_normalization"] is True
     assert calls["local_unify_bucket_sizes"] is True
     assert calls["local_stats_use_reconstruction_probs"] is True
     assert calls["local_class_posterior_sums_from_noise"] is False
+    assert calls["diagnostic_context"] == [{"iteration": 7, "half": 1}, "clear"]
     assert result.meta["sparse_pass2"] is True
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
