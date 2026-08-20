@@ -11,13 +11,22 @@ import json
 from pathlib import Path
 import subprocess
 
-from scripts.summarize_vdam_relion_parity_scorecard import (
-    DEFAULT_OUTPUT,
-    DEFAULT_SCORECARD,
-    REQUIRED_CHECKPOINTS,
-    load_and_validate,
-    render_markdown,
-)
+if __package__:
+    from scripts.summarize_vdam_relion_parity_scorecard import (
+        DEFAULT_OUTPUT,
+        DEFAULT_SCORECARD,
+        REQUIRED_CHECKPOINTS,
+        load_and_validate,
+        render_markdown,
+    )
+else:
+    from summarize_vdam_relion_parity_scorecard import (
+        DEFAULT_OUTPUT,
+        DEFAULT_SCORECARD,
+        REQUIRED_CHECKPOINTS,
+        load_and_validate,
+        render_markdown,
+    )
 
 AUDIT_SCHEMA = "recovar.vdam_relion_fsc_trajectory_audit.v1"
 LEDGER_SCHEMA = "recovar.vdam_relion_parity_evidence_ledger.v1"

@@ -143,8 +143,8 @@ trajectory (source EM case `k1-25`) passes unchanged gates in Slurm job
 and `0.99900277` at iterations 1/2/4/8, respectively.  The worst RECOVAR-minus-
 RELION GT FSC-AUC is `-8.23e-6`, compared with the fixed `-0.002` gate.  This
 is the first accepted end-to-end VDAM checkpoint.  The active validation is
-the remaining eleven cases in the frozen fixed-12 matrix, using the same
-per-case runner and at most four simultaneous one-GPU Slurm tasks.
+the frozen fixed-12 matrix, using the same per-case runner and at most four
+simultaneous one-GPU Slurm tasks.
 
 The first fixed-12 matrix round is Slurm array `12672742`.  The early cases
 confirm the intended late-trajectory sensitivity: `vdam-03`, `vdam-04`,
@@ -165,9 +165,15 @@ The runner records its resource/execution overrides; the matrix pins `vdam-09`
 to batch 200 and routes `vdam-12` through the shared exact deferred packed-
 M-step fallback by setting the sparse big-JIT tensor cap to zero.  The first
 deferred attempt reaches a later batch-dependent shifted-reconstruction
-tile and exhausts memory at 6.40 GiB with batch 100.  The next bounded run pins
-only `vdam-12` to batch 25 while retaining the deferred path; its scientific
-command and frozen acceptance contract are unchanged.
+tile and exhausts memory at 6.40 GiB with batch 100.  Pinning only `vdam-12`
+to batch 25 while retaining the deferred path completes in Slurm job
+`12673810` and passes every unchanged checkpoint: minimum cross-engine FSC-AUC
+`0.99931708`, minimum GT delta `-1.60e-7`.  The complete SHA-bound scorecard is
+now 6/12 passing with 12/12 evaluated.  Passing cases are `vdam-03`,
+`vdam-04`, `vdam-05`, `vdam-07`, `vdam-08`, and `vdam-12`; all six failures
+retain acceptable GT quality and fail only the strict cross-engine FSC-AUC
+gate.  Evidence is recorded in
+`docs/math/vdam_relion_parity_evidence_ledger_20260820_layoutfix.json`.
 
 The first remaining autonomous divergence is now identity-localized rather
 than inferred from maps.  The reusable STAR-to-STAR diagnostic

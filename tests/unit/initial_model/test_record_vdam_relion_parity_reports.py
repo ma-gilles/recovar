@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from scripts.record_vdam_relion_parity_reports import discover_reports, record_reports
 from scripts.summarize_vdam_relion_parity_scorecard import DEFAULT_SCORECARD, load_and_validate
+
+
+def test_record_reports_script_help_is_directly_executable():
+    script = Path(__file__).resolve().parents[3] / "scripts/record_vdam_relion_parity_reports.py"
+    proc = subprocess.run([sys.executable, str(script), "--help"], text=True, capture_output=True)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "--report-root" in proc.stdout
 
 
 def _write_report(root: Path, *, case_id: str = "vdam-01", source_id: str = "k1-11") -> Path:
@@ -44,7 +54,16 @@ def test_record_reports_updates_case_counts_and_writes_hash_bound_ledger(tmp_pat
     report_root = tmp_path / "reports"
     report = _write_report(report_root)
     scorecard_path = tmp_path / "scorecard.json"
-    scorecard_path.write_text(DEFAULT_SCORECARD.read_text())
+    scorecard = json.loads(DEFAULT_SCORECARD.read_text())
+    for case in scorecard["cases"]:
+        case.update(result="not_run", checkpoint_results={}, evidence=None)
+    scorecard["history"] = [scorecard["history"][0]]
+    scorecard["current_snapshot"] = {
+        "id": scorecard["history"][0]["id"],
+        "counts": {"pass": 0, "fail": 0, "not_run": 12},
+        "evidence": None,
+    }
+    scorecard_path.write_text(json.dumps(scorecard))
     ledger = tmp_path / "ledger.json"
 
     updated = record_reports(
