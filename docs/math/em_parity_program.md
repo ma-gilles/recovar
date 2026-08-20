@@ -146,6 +146,17 @@ is the first accepted end-to-end VDAM checkpoint.  The active validation is
 the remaining eleven cases in the frozen fixed-12 matrix, using the same
 per-case runner and at most four simultaneous one-GPU Slurm tasks.
 
+The first fixed-12 matrix round is Slurm array `12672742`.  The early cases
+confirm the intended late-trajectory sensitivity: `vdam-03`, `vdam-04`,
+`vdam-05`, and `vdam-07` pass; `vdam-01`, `vdam-02`, `vdam-06`, and `vdam-10`
+miss only the fixed cross-engine FSC-AUC gate while retaining acceptable GT
+quality.  `vdam-09` did not reach an audit because its high-resolution local
+E-step exhausted the 40 GB GPU at the default 500-image batch.  The runner now
+records an explicit resource-only image batch and the matrix pins `vdam-09` to
+200; its scientific command and frozen acceptance contract are unchanged.
+The next bounded run is that case alone in a fresh output root, after the two
+production-size array tasks finish.
+
 ## Mode Contract
 
 - **Strict oracle:** the default during parity closure; pinned RELION GUI

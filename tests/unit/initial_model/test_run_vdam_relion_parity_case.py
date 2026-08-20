@@ -74,8 +74,31 @@ def test_recovar_command_maps_the_same_frozen_definition(monkeypatch):
     assert _value(argv, "--offset_range") == "6.0"
     assert _value(argv, "--offset_step") == "2.0"
     assert _value(argv, "--padding_factor") == "1"
+    assert _value(argv, "--image_batch_size") == "500"
     assert _value(argv, "--gpu") == "0"
     assert "--require_custom_cuda" in argv
+
+
+def test_recovar_command_accepts_resource_only_batch_override(monkeypatch):
+    monkeypatch.setattr(runner.sys, "executable", "/env/python")
+
+    argv = runner.build_recovar_command(
+        input_star=Path("/data/particles.star"),
+        output_prefix=Path("/out/recovar/run"),
+        fixture_dir=Path("/data"),
+        definition=DEFINITION,
+        image_batch_size=200,
+    )
+
+    assert _value(argv, "--image_batch_size") == "200"
+    with pytest.raises(ValueError, match="must be positive"):
+        runner.build_recovar_command(
+            input_star=Path("/data/particles.star"),
+            output_prefix=Path("/out/recovar/run"),
+            fixture_dir=Path("/data"),
+            definition=DEFINITION,
+            image_batch_size=0,
+        )
 
 
 def test_gpu_capture_requires_exactly_one_visible_uuid(monkeypatch):

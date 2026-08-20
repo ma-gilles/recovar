@@ -109,8 +109,15 @@ def build_relion_command(
 
 
 def build_recovar_command(
-    *, input_star: Path, output_prefix: Path, fixture_dir: Path, definition: dict[str, Any]
+    *,
+    input_star: Path,
+    output_prefix: Path,
+    fixture_dir: Path,
+    definition: dict[str, Any],
+    image_batch_size: int = 500,
 ) -> list[str]:
+    if int(image_batch_size) <= 0:
+        raise ValueError("image_batch_size must be positive")
     return [
         sys.executable,
         "scripts/run_ab_initio.py",
@@ -140,6 +147,8 @@ def build_recovar_command(
         str(definition["offset_step_px"]),
         "--padding_factor",
         str(definition["padding_factor"]),
+        "--image_batch_size",
+        str(int(image_batch_size)),
         "--datadir",
         str(fixture_dir),
         "--gpu",
@@ -221,11 +230,13 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         relion_refine=args.relion_refine,
         threads=args.threads,
     )
+    image_batch_size = int(os.environ.get("RECOVAR_VDAM_IMAGE_BATCH_SIZE", "500"))
     recovar_argv = build_recovar_command(
         input_star=input_star,
         output_prefix=recovar_dir / "run",
         fixture_dir=fixture_dir,
         definition=definition,
+        image_batch_size=image_batch_size,
     )
     (relion_dir / "relion_command.json").write_text(
         json.dumps({"argv": relion_argv}, indent=2, sort_keys=True) + "\n"
@@ -241,6 +252,7 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "repo": str(repo),
         "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "recovar_image_batch_size": image_batch_size,
     }
     (case_root / "run_provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
 
