@@ -14,8 +14,8 @@ as the next product milestone rather than mixing it into the first closure.
 
 ## VDAM active experiment — 2026-08-20
 
-The native InitialModel/VDAM parity worktree is at
-`9e56c399f22a6f5725ca3d177d765a12a8787c8f`, on top of PR #158 head
+The native InitialModel/VDAM implementation checkpoint is
+`5a4c57839e50a46e47b2d25efb8d55744db04871`, on top of PR #158 head
 `b10412ca`.  Iteration-0 bootstrap state is exact, and identity-aligned
 iteration-1 particle pose/translation state is effectively exact, but the
 frozen tiny trajectory still misses the map gates (iteration-1 cross FSC-AUC
@@ -136,7 +136,11 @@ full aggregate mismatch.  Transposing the public cube back to `(z,y,x)` before
 extracting the positive-x slab is exact (`0.0` relative L2).  The active
 bounded fix is an explicit RELION-x-half-public-to-BPref inverse in the VDAM
 adapter, with a lossless round-trip unit test; the unrelated generic dense
-converter remains unchanged.
+converter remains unchanged.  That fix is now implemented at `5a4c5783` and
+the focused layout/adapter tests are exact.  The active validation is the
+frozen `vdam-08` autonomous trajectory (source EM case `k1-25`) on one Slurm GPU; its first accepted
+decision boundary is iteration-1 BPref/map FSC-AUC, followed by the existing
+full eight-iteration scorecard without changing any gate.
 
 ## Mode Contract
 
