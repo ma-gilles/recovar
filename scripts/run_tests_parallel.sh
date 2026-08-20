@@ -18,6 +18,7 @@ WORKDIR="$(cd "$(dirname "$0")/.." && pwd)"
 SLURMO_DIR="${SLURMO_DIR:-${WORKDIR}/logs}"
 RESULTS_DIR="${WORKDIR}/.test_results"
 RUNTIME_ROOT="${RECOVAR_TEST_RUNTIME_ROOT:-${WORKDIR}/.tmp}"
+RELION_BIND_BUILD_DIR="${RECOVAR_TEST_RELION_BIND_BUILD_DIR:-}"
 mkdir -p "$SLURMO_DIR" "$RESULTS_DIR" "$RUNTIME_ROOT"
 
 TAG="parallel_$(date +%Y%m%d_%H%M%S)_${RANDOM}"
@@ -145,6 +146,7 @@ export RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1
 export TMPDIR="${RUNTIME_ROOT}/slurm_\${SLURM_JOB_ID}"
 export PIXI_HOME="${RUNTIME_ROOT}/pixi_home_\${SLURM_JOB_ID}"
 export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/rattler_cache_\${SLURM_JOB_ID}"
+export RECOVAR_RELION_BIND_BUILD_DIR="${RELION_BIND_BUILD_DIR}"
 mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
@@ -178,13 +180,16 @@ export PATH="\$(dirname "\$PIXI_PY"):\$PATH"
 
 # Provenance gate
 "\$PIXI_PY" -c "
-import pathlib, recovar, jax
+import os, pathlib, recovar, jax
 repo = pathlib.Path.cwd().resolve()
 assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo)+'/'), 'WRONG recovar'
 assert '.pixi/envs/default/' in str(pathlib.Path(jax.__file__).resolve()), 'WRONG jax'
 devices = jax.devices()
 assert len(devices) == 1 and devices[0].platform == 'gpu', f'EXPECTED ONE GPU, GOT {devices}'
 print('ENV_OK — devices:', devices)
+if os.environ.get('RECOVAR_RELION_BIND_BUILD_DIR'):
+    from recovar.relion_bind import _relion_bind_core
+    print('RELION_BIND_OK —', _relion_bind_core.__file__)
 "
 
 "\$PIXI_PY" -m pytest ${pytest_args} --junitxml=${XML_OUT}

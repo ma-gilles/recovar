@@ -81,3 +81,11 @@ def test_parallel_test_runner_binds_workers_to_one_slurm_gpu():
     assert 'CUDA_FIRST_GPU="\\${SLURM_VISIBLE_GPUS%%,*}"' in runner
     assert 'export CUDA_VISIBLE_DEVICES="\\${CUDA_FIRST_GPU}"' in runner
     assert "len(devices) == 1 and devices[0].platform == 'gpu'" in runner
+
+
+def test_parallel_test_runner_supports_external_relion_binding():
+    runner = PARALLEL_TEST_RUNNER.read_text()
+    assert 'RELION_BIND_BUILD_DIR="${RECOVAR_TEST_RELION_BIND_BUILD_DIR:-}"' in runner
+    assert 'export RECOVAR_RELION_BIND_BUILD_DIR="${RELION_BIND_BUILD_DIR}"' in runner
+    assert "if os.environ.get('RECOVAR_RELION_BIND_BUILD_DIR')" in runner
+    assert "from recovar.relion_bind import _relion_bind_core" in runner
