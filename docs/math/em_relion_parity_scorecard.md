@@ -2736,6 +2736,40 @@ Clean autonomous cases 4, 5, and 10 at `ddc9d5f54` remain the required
 FSC/FSC-AUC promotion gate.  K=1 therefore remains a candidate `31/34` strict,
 `34/34` topology result until a fail-closed superseding ledger accepts their
 terminal evidence.
+
+### Case-7 row-8410 continuation-capture rejection
+
+The largest remaining panel residual (`0.00023258735937214947` Pmax at source
+row `8410`) was followed to a one-tuple native fine-score operand capture.  A
+naive comparison appeared to localize a raw-`diff2` difference of
+`0.8251953125` to the per-pixel correction weights.  That capture is invalid
+for cross-engine attribution: the particle is random subset 2, but every
+captured inverse-noise shell equals the serialized iteration-2 half-1 model
+exactly.  RECOVAR equals the serialized half-2 model exactly.  Native versus
+half 2 has relative L2 `0.0012248210877083348` and maximum absolute error
+`4035.8125`; RECOVAR versus half 2 has zero error.  The scaled CTF is also
+byte-identical, so the apparent correction mismatch is entirely the capture's
+wrong-half noise routing.
+
+The same continuation route changes source-ID-aligned output state broadly:
+`124/100000` support counts differ from the sealed run, mean absolute Pmax
+error is `0.00048033677999999996`, and the target's Pmax differs by
+`0.002677999999999958`, more than ten times the RECOVAR panel residual.  Half
+2 accounts for the broad drift (`0.0009242191980510401` mean absolute Pmax)
+while half 1 remains much tighter (`0.000035067284964544815`).  Consequently,
+neither the continuation fine table nor its raw operand capture authorizes a
+production scorer or noise change.
+
+The fail-closed rejection report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_row8410_fine_operand_compare_20260820T1716ET/analysis/CAPTURE_REJECTION.json`
+with SHA-256
+`304fe6286a41c0c4985a3c337b250fc59fe6c5fa9f1b1d70d16f2bc7d9e19183`.
+The underlying operand report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_row8410_fine_operand_compare_20260820T1716ET/analysis/fine_operand_boundary_with_ctf.json`
+with SHA-256
+`f271562b7f4e48644a8fa403cd91c8cd417c406898529830cef1fe4b4adbb828`.
+Jobs `12692397`, `12693085`, and `12693176` all completed `0:0`; their
+successful execution does not override the scientific qualification failure.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
