@@ -167,6 +167,13 @@ def _run_logged(argv: list[str], *, cwd: Path, log_path: Path, env: dict[str, st
     return timing
 
 
+def _recovar_gpu_env(base: dict[str, str]) -> dict[str, str]:
+    env = dict(base)
+    env.pop("JAX_PLATFORM_NAME", None)
+    env["JAX_PLATFORMS"] = "cuda"
+    return env
+
+
 def run_case(args: argparse.Namespace) -> dict[str, Any]:
     repo = args.repo.resolve()
     scorecard_path = args.scorecard.resolve()
@@ -250,7 +257,19 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
     relion_gpu_uuid = _physical_gpu_uuid()
     if relion_gpu_uuid != gpu_uuid:
         raise RunError("physical GPU changed during RELION execution")
-    _run_logged(recovar_argv, cwd=repo, log_path=recovar_dir / "recovar.log", env=env)
+    recovar_env = _recovar_gpu_env(env)
+    recorded_env_keys = (
+        "CUDA_VISIBLE_DEVICES",
+        "JAX_PLATFORMS",
+        "JAX_PLATFORM_NAME",
+        "RECOVAR_CUDA_LIB",
+        "RECOVAR_DISABLE_CUDA",
+        "SLURM_JOB_GPUS",
+    )
+    (recovar_dir / "runtime_environment.json").write_text(
+        json.dumps({key: recovar_env.get(key) for key in recorded_env_keys}, indent=2, sort_keys=True) + "\n"
+    )
+    _run_logged(recovar_argv, cwd=repo, log_path=recovar_dir / "recovar.log", env=recovar_env)
     recovar_gpu_uuid = _physical_gpu_uuid()
     paired_gpu_report = case_root / "paired_gpu_uuid.json"
     paired_gpu_report.write_text(

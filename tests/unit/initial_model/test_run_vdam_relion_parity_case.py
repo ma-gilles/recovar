@@ -102,6 +102,14 @@ def test_gpu_capture_rejects_slurm_uuid_mismatch(monkeypatch):
         runner._physical_gpu_uuid()
 
 
+def test_recovar_child_environment_requires_cuda_without_legacy_platform_override():
+    env = runner._recovar_gpu_env({"JAX_PLATFORMS": "cpu", "JAX_PLATFORM_NAME": "cpu", "KEEP": "yes"})
+
+    assert env["JAX_PLATFORMS"] == "cuda"
+    assert "JAX_PLATFORM_NAME" not in env
+    assert env["KEEP"] == "yes"
+
+
 def test_native_cli_custom_cuda_gate_primes_shared_slicing_dispatch(monkeypatch):
     import jax
 
