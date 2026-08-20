@@ -237,7 +237,9 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
     env = dict(os.environ)
     env.update({"PYTHONNOUSERSITE": "1", "XLA_PYTHON_CLIENT_PREALLOCATE": "false"})
     gpu_uuid = _physical_gpu_uuid()
-    _run_logged(relion_argv, cwd=repo, log_path=relion_dir / "relion.log", env=env)
+    # RELION resolves stack paths recorded in the STAR relative to its process
+    # working directory, not relative to the STAR path itself.
+    _run_logged(relion_argv, cwd=fixture_dir, log_path=relion_dir / "relion.log", env=env)
     relion_gpu_uuid = _physical_gpu_uuid()
     if relion_gpu_uuid != gpu_uuid:
         raise RunError("physical GPU changed during RELION execution")

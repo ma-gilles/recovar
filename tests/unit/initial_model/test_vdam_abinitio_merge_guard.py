@@ -217,6 +217,7 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "build_relion_command",
         "build_recovar_command",
         "materialize(",
+        "cwd=fixture_dir",
         "paired_gpu_uuid.json",
         "signed shellwise FSC and normalized non-DC FSC-AUC only",
         "CHECKPOINTS = (0, 1, 2, 4, 8)",
