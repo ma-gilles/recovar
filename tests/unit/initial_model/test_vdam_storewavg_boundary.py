@@ -10,6 +10,7 @@ from scripts.analyze_vdam_storewavg_boundary import (
     _match_rotations,
     _metric,
     _native_gradient_rows,
+    _scatter_relion_rows,
     _select_recovar_particle_rows,
 )
 
@@ -112,3 +113,39 @@ def test_select_recovar_particle_rows_requires_identity_for_panel():
 
     with pytest.raises(ValueError, match="required for a panel"):
         _select_recovar_particle_rows(capture, None)
+
+
+def test_scatter_relion_rows_expands_fftw_half_images_and_pins_geometry():
+    calls = []
+
+    def fake_backprojector(images, rotations, weights, **kwargs):
+        calls.append((images, rotations, weights, kwargs))
+        return images.sum(axis=0), weights.sum(axis=0)
+
+    data, weight = _scatter_relion_rows(
+        np.asarray([[1.0 + 2.0j, 3.0 + 4.0j]], dtype=np.complex64),
+        np.asarray([[5.0, 6.0]], dtype=np.float32),
+        np.eye(3, dtype=np.float32)[None],
+        np.asarray([0, 7], dtype=np.int32),
+        physical_image_size=8,
+        current_size=6,
+        padding_factor=1,
+        get_backprojector_data=fake_backprojector,
+    )
+
+    images, rotations, weights, kwargs = calls[0]
+    assert images.shape == (1, 8, 5)
+    assert weights.shape == (1, 8, 5)
+    assert images.dtype == np.complex128
+    assert weights.dtype == np.float64
+    np.testing.assert_array_equal(images.reshape(1, -1)[0, [0, 7]], [1 + 2j, 3 + 4j])
+    np.testing.assert_array_equal(weights.reshape(1, -1)[0, [0, 7]], [5.0, 6.0])
+    np.testing.assert_array_equal(rotations, np.eye(3, dtype=np.float64)[None])
+    assert kwargs == {
+        "ori_size": 8,
+        "padding_factor": 1,
+        "interpolator": 1,
+        "current_size": 6,
+    }
+    np.testing.assert_array_equal(data, images[0])
+    np.testing.assert_array_equal(weight, weights[0])

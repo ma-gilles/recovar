@@ -190,6 +190,46 @@ def _native_gradient_rows(
     return data, weight
 
 
+def _scatter_relion_rows(
+    data_rows: np.ndarray,
+    weight_rows: np.ndarray,
+    rotations: np.ndarray,
+    window_indices: np.ndarray,
+    *,
+    physical_image_size: int,
+    current_size: int,
+    padding_factor: int,
+    get_backprojector_data,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Scatter pre-StoreWavg rows through RELION's CPU BackProjector binding."""
+
+    from recovar.em.bpref_contribution_replay import dense_fftw_half_rows
+
+    image_shape = (physical_image_size, physical_image_size)
+    dense_data = dense_fftw_half_rows(
+        np.asarray(data_rows),
+        np.asarray(window_indices, dtype=np.int32),
+        image_shape,
+        dtype=np.complex128,
+    )
+    dense_weight = dense_fftw_half_rows(
+        np.asarray(weight_rows),
+        np.asarray(window_indices, dtype=np.int32),
+        image_shape,
+        dtype=np.float64,
+    )
+    data, weight = get_backprojector_data(
+        dense_data,
+        np.asarray(rotations, dtype=np.float64),
+        dense_weight,
+        ori_size=physical_image_size,
+        padding_factor=padding_factor,
+        interpolator=1,
+        current_size=current_size,
+    )
+    return np.asarray(data), np.asarray(weight)
+
+
 def _load_native(native_directory: Path, prefix: str) -> dict[str, np.ndarray | float | int]:
     root = native_directory / prefix
     orientation_count = int(round(_scalar(Path(f"{root}orientation_num.bin"))))
@@ -247,6 +287,7 @@ def analyze(
     from recovar.em.dense_single_volume.helpers.projection import (
         compute_relion_projector_projections_block,
     )
+    from recovar.relion_bind._relion_bind_core import get_backprojector_data
 
     _require(jax.default_backend() == "gpu", "VDAM StoreWavg replay requires a GPU")
     native = _load_native(native_directory, native_prefix)
@@ -300,6 +341,27 @@ def analyze(
     recovar_weight = np.asarray(recovar["active_ctf_probs"], dtype=np.float32)[recovar_row_mask][rotation_map]
     data_scale = -float(physical_image_size) ** -2
     weight_scale = float(physical_image_size) ** -4
+    padding_factor = int(recovar["reconstruction_padding_factor"])
+    native_bpref_data, native_bpref_weight = _scatter_relion_rows(
+        native_data * data_scale,
+        native_weight * weight_scale,
+        rotations,
+        recovar["window_indices"],
+        physical_image_size=physical_image_size,
+        current_size=current_size,
+        padding_factor=padding_factor,
+        get_backprojector_data=get_backprojector_data,
+    )
+    recovar_bpref_data, recovar_bpref_weight = _scatter_relion_rows(
+        recovar_data,
+        recovar_weight,
+        rotations,
+        recovar["window_indices"],
+        physical_image_size=physical_image_size,
+        current_size=current_size,
+        padding_factor=padding_factor,
+        get_backprojector_data=get_backprojector_data,
+    )
     return {
         "schema": SCHEMA,
         "identity": {
@@ -312,6 +374,7 @@ def analyze(
             "orientation_count": int(native["orientation_count"]),
             "translation_count": int(native["translation_count"]),
             "retained_mass": float(native["retained_mass"]),
+            "reconstruction_padding_factor": padding_factor,
         },
         "frame_scales": {
             "native_data_to_recovar": data_scale,
@@ -320,6 +383,8 @@ def analyze(
         "comparisons": {
             "gradient_numerator": _metric(native_data * data_scale, recovar_data),
             "gradient_denominator": _metric(native_weight * weight_scale, recovar_weight),
+            "bpref_data_after_relion_scatter": _metric(native_bpref_data, recovar_bpref_data),
+            "bpref_weight_after_relion_scatter": _metric(native_bpref_weight, recovar_bpref_weight),
         },
         "artifacts": {
             "native_directory": str(native_directory.resolve()),

@@ -15,7 +15,7 @@ as the next product milestone rather than mixing it into the first closure.
 ## VDAM active experiment — 2026-08-20
 
 The native InitialModel/VDAM parity worktree is at
-`3c50286cc7906f4c29cf4d39006d241875087637`, on top of PR #158 head
+`9e56c399f22a6f5725ca3d177d765a12a8787c8f`, on top of PR #158 head
 `b10412ca`.  Iteration-0 bootstrap state is exact, and identity-aligned
 iteration-1 particle pose/translation state is effectively exact, but the
 frozen tiny trajectory still misses the map gates (iteration-1 cross FSC-AUC
@@ -110,6 +110,33 @@ position-parity trajectory (`12669867`) remains evidence that this necessary
 semantic correction does not by itself close aggregate or map parity; after
 the focused validation ladder, the next boundary is native-vs-RECOVAR partial
 accumulator sums in identical Experiment particle order.
+
+A direct replay rejects missing x=0 Hermitian enforcement as the aggregate
+cause.  Applying the existing shared RELION half-volume Hermitian helper to the
+corrected-position RECOVAR accumulator worsens relative error and leaves data
+cosines at only `0.1441`/`0.1136` and weight cosines at `0.6769`/`0.6530`.
+Exhaustive simple axis swaps, flips, conjugation, and circular y/z shifts also
+fail (best weight cosine below `0.717`; data below `0.17`).  No production
+Hermitian or layout change is justified by that evidence.
+
+The one-particle post-scatter boundary is also closed.  Slurm job `12672415`
+moved the already matched particle-99/native-part-ID-2 rows through RELION's
+CPU BackProjector in the same native layout.  Data relative L2 is `0.003511`
+with cosine `0.9999940`; weight relative L2 is `0.001431` with cosine
+`0.9999992`.  The scatter primitive and its native BPref layout are therefore
+not the aggregate cause.
+
+That closure exposed a separate adapter boundary.  The shared RELION x-half
+M-step returns a public full cube by expanding native `(z,y,xhalf)` storage and
+transposing it to RECOVAR `(x,y,z)`.  InitialModel then feeds that public cube
+to the generic centered-slab converter without undoing the transpose and also
+applies a projector-frame z flip.  A synthetic valid-Hermitian round trip has
+relative L2 `1.3923` and cosine `0.02118`, which is the same signature as the
+full aggregate mismatch.  Transposing the public cube back to `(z,y,x)` before
+extracting the positive-x slab is exact (`0.0` relative L2).  The active
+bounded fix is an explicit RELION-x-half-public-to-BPref inverse in the VDAM
+adapter, with a lossless round-trip unit test; the unrelated generic dense
+converter remains unchanged.
 
 ## Mode Contract
 
