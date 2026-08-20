@@ -4,8 +4,10 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
+from recovar.data_io.starfile import write_star
 from scripts import audit_vdam_fsc_trajectory as audit_module
 
 pytestmark = pytest.mark.unit
@@ -112,6 +114,14 @@ def _fixture(tmp_path: Path) -> dict[str, Path]:
         for directory in (recovar_dir, relion_dir):
             for path in audit_module._artifact_paths(directory, iteration).values():
                 path.touch()
+    _write_json(
+        recovar_dir / "run_it001_recovar_meta.json",
+        {"selected_particle_ids": [0, 2, 1, 3]},
+    )
+    write_star(
+        str(relion_dir / "run_it001_data.star"),
+        pd.DataFrame({"_rlnMaxValueProbDistribution": [0.5, 0.4, 0.3, 0.2, 0.0, 0.0]}),
+    )
     gpu_report = tmp_path / "paired_gpu_uuid.json"
     _write_json(
         gpu_report,
@@ -150,7 +160,31 @@ def test_identical_fixed_checkpoint_maps_pass_without_correlation(tmp_path, monk
             for key in checkpoint[metric]
         )
     assert [row["iteration"] for row in report["checkpoints"]] == list(audit_module.CHECKPOINTS)
+    assert report["iteration_one_particle_subset"] == {
+        "exact": True,
+        "particle_count": 4,
+        "first_particle_id": 0,
+        "last_particle_id": 3,
+        "even_particle_count": 2,
+        "odd_particle_count": 2,
+    }
     assert len(shellwise) == 3 * len(audit_module.CHECKPOINTS)
+
+
+def test_iteration_one_particle_identity_mismatch_is_rejected(tmp_path, monkeypatch):
+    paths = _fixture(tmp_path)
+    _write_json(
+        paths["recovar_dir"] / "run_it001_recovar_meta.json",
+        {"selected_particle_ids": [0, 2, 4, 1]},
+    )
+    monkeypatch.setattr(
+        audit_module,
+        "_load_relion_volume",
+        lambda _path: np.random.default_rng(6).normal(size=(8, 8, 8)),
+    )
+
+    with pytest.raises(audit_module.AuditError, match="iteration-1 particle subsets differ"):
+        _audit(paths)
 
 
 def test_one_failed_checkpoint_fails_the_whole_trajectory(tmp_path, monkeypatch):

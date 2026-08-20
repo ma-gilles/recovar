@@ -12,6 +12,46 @@ auto-refine and K=4 3D classification. Then optimize to near RELION speed while
 holding the accepted quality checkpoint. Treat native InitialModel/VDAM parity
 as the next product milestone rather than mixing it into the first closure.
 
+## VDAM active experiment — 2026-08-20
+
+The native InitialModel/VDAM parity worktree is at
+`b7279597e6156f4dea3c08eb5b91b9d1bb9b4ddc`, on top of PR #158 head
+`b10412ca`.  Iteration-0 bootstrap state is exact, but the frozen tiny
+trajectory still misses the map gates (iteration-1 cross FSC-AUC `0.8274473`,
+GT delta `-0.0140749`).  The earlier aggregate claim that iteration-1
+particle pose/translation state was effectively exact was indexed against
+different particle subsets and is withdrawn.  Particle 0 remains an exact
+matched control, but the common-identity Pmax comparison has relative L2
+about `0.928`.
+
+The particle-0 projected-reference hypothesis is now rejected as the dominant
+iteration-1 cause.  Against the current native RELION StoreWavg project panel,
+VDAM's reference has the expected `-N^2` frame/normalization conversion.  The
+converted reference differs by relative L2 `1.0028e-3`, but substituting the
+native reference changes the actual gradient numerator by only `5.6474e-5`.
+Replaying RELION's sequential translation accumulation with the current VDAM
+reference changes that numerator by only `7.5372e-8`.  The previously isolated
+scatter boundary remains machine precision (`4.78e-15` data, `2.87e-15`
+weight).  Therefore the next measurable hypothesis is that the first material
+iteration-1 divergence is in aggregate subset/pseudo-halfset routing or the
+VDAM moment/reconstruction update, not the shared fine posterior, image/CTF
+operands, projected-reference subtraction, or scatter arithmetic.
+
+That routing hypothesis is now localized to the first material input
+boundary.  RELION seed-0 iteration 1 visits particle-table rows `0..199`, with
+`100/100` even/odd pseudo-halfsets.  RECOVAR instead visited 200 rows after
+lexicographically sorting `_rlnMicrographName`, beginning
+`[0, 100, 102, 104, ...]`, with `99/101` halfsets; 79 particle identities
+differed in each direction.  RELION source initializes
+`Experiment::sorted_idx` in particle-table order and skips randomization when
+the seed is zero.  The current fix therefore makes
+`_experiment_read_order` preserve input table order for bootstrap reads,
+iteration subsets, and written data STARs.  A focused 400-particle regression
+now pins the first 200 identities and alternating global-particle halfsets,
+and the frozen trajectory auditor now rejects any iteration-1 identity-set
+mismatch before scoring maps.  The next experiment is the clean seed-0
+`vdam-08` trajectory with this single routing correction.
+
 ## Mode Contract
 
 - **Strict oracle:** the default during parity closure; pinned RELION GUI

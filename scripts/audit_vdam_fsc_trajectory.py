@@ -17,6 +17,8 @@ from typing import Any
 
 import numpy as np
 
+from recovar.data_io.starfile import read_star
+
 if __package__:
     from scripts.summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
 else:
@@ -134,6 +136,57 @@ def _validate_gpu(report: dict[str, Any]) -> str:
     return values[0]
 
 
+def _validate_iteration_one_particle_subset(recovar_dir: Path, relion_dir: Path) -> dict[str, Any]:
+    recovar_meta = _load_json(
+        recovar_dir / "run_it001_recovar_meta.json",
+        label="RECOVAR iteration-1 metadata",
+    )
+    raw_recovar_ids = recovar_meta.get("selected_particle_ids")
+    if not isinstance(raw_recovar_ids, list) or not raw_recovar_ids:
+        raise AuditError("RECOVAR iteration-1 metadata contains no selected_particle_ids")
+    recovar_ids = np.asarray(raw_recovar_ids, dtype=np.int64)
+    if np.unique(recovar_ids).size != recovar_ids.size or np.any(recovar_ids < 0):
+        raise AuditError("RECOVAR iteration-1 selected_particle_ids must be unique nonnegative rows")
+
+    relion_star_path = relion_dir / "run_it001_data.star"
+    try:
+        relion_table, _ = read_star(str(relion_star_path))
+    except Exception as exc:
+        raise AuditError(f"cannot read RELION iteration-1 data STAR at {relion_star_path}: {exc}") from exc
+    posterior_column = next(
+        (
+            key
+            for key in ("_rlnMaxValueProbDistribution", "rlnMaxValueProbDistribution")
+            if key in relion_table.columns
+        ),
+        None,
+    )
+    if posterior_column is None:
+        raise AuditError("RELION iteration-1 data STAR has no maximum-posterior column")
+    posterior = relion_table[posterior_column].astype(float).to_numpy()
+    relion_ids = np.flatnonzero(np.isfinite(posterior) & (posterior > 0.0)).astype(np.int64)
+    if relion_ids.size == 0:
+        raise AuditError("RELION iteration-1 data STAR records no visited particles")
+
+    recovar_sorted = np.sort(recovar_ids)
+    if not np.array_equal(recovar_sorted, relion_ids):
+        recovar_only = np.setdiff1d(recovar_sorted, relion_ids)
+        relion_only = np.setdiff1d(relion_ids, recovar_sorted)
+        raise AuditError(
+            "iteration-1 particle subsets differ: "
+            f"RECOVAR count={recovar_ids.size}, RELION count={relion_ids.size}, "
+            f"RECOVAR-only={recovar_only[:10].tolist()}, RELION-only={relion_only[:10].tolist()}"
+        )
+    return {
+        "exact": True,
+        "particle_count": int(relion_ids.size),
+        "first_particle_id": int(relion_ids[0]),
+        "last_particle_id": int(relion_ids[-1]),
+        "even_particle_count": int(np.count_nonzero((relion_ids % 2) == 0)),
+        "odd_particle_count": int(np.count_nonzero((relion_ids % 2) == 1)),
+    }
+
+
 def _artifact_paths(directory: Path, iteration: int) -> dict[str, Path]:
     prefix = f"run_it{iteration:03d}_"
     return {suffix: directory / f"{prefix}{suffix}" for suffix in COMMON_ARTIFACT_SUFFIXES}
@@ -185,6 +238,7 @@ def audit(
         _load_json(relion_dir / "relion_command.json", label="RELION command"),
     )
     physical_gpu_uuid = _validate_gpu(_load_json(paired_gpu_report_path, label="paired GPU report"))
+    iteration_one_particle_subset = _validate_iteration_one_particle_subset(recovar_dir, relion_dir)
 
     gt_path = fixture_dir / "reference_gt_relion.mrc"
     if not gt_path.is_file():
@@ -241,6 +295,7 @@ def audit(
         "artifact_topology_exact": True,
         "same_physical_gpu": True,
         "physical_gpu_uuid": physical_gpu_uuid,
+        "iteration_one_particle_subset": iteration_one_particle_subset,
         "checkpoints": checkpoints,
         "minimum_cross_engine_fsc_auc": min(row["cross_engine"]["fsc_auc"] for row in checkpoints),
         "minimum_recovar_minus_relion_gt_fsc_auc": min(
