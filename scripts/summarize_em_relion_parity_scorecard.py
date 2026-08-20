@@ -723,6 +723,28 @@ def _validate_runtime_contract(run_root: Path, case_root: Path, case_id: str) ->
     )
 
 
+def _validate_autonomous_fsc_audit_schema(fsc: dict, case_id: str) -> None:
+    """Accept complete FSC audits while preserving the fixed-suite boundary.
+
+    Audit v3 adds an explicit physical RELION start iteration for continuation
+    runs.  Fixed-suite scorecard evidence is autonomous, so v3 is admissible
+    only for the original iteration-one boundary.  Audit v2 predates the field
+    and therefore has the same boundary implicitly.
+    """
+
+    schema = fsc.get("schema")
+    _require(
+        schema in {"em_k1_fsc_trajectory_audit_v2", "em_k1_fsc_trajectory_audit_v3"},
+        f"{case_id}: wrong FSC audit schema",
+    )
+    if schema == "em_k1_fsc_trajectory_audit_v3":
+        start_iteration = fsc.get("relion_start_iteration")
+        _require(
+            type(start_iteration) is int and start_iteration == 1,
+            f"{case_id}: fixed-suite FSC audit did not start at physical RELION iteration 1",
+        )
+
+
 def build_proposal_update(
     scorecard: dict,
     fixture_manifest: dict,
@@ -765,7 +787,7 @@ def build_proposal_update(
     shellwise_path = analysis / "k1_fsc_trajectory_shellwise.npz"
     fsc = _json_file(fsc_path)
     topology = _json_file(topology_path)
-    _require(fsc.get("schema") == "em_k1_fsc_trajectory_audit_v2", f"{evidence.case_id}: wrong FSC audit schema")
+    _validate_autonomous_fsc_audit_schema(fsc, evidence.case_id)
     _require(fsc.get("status") == "pass", f"{evidence.case_id}: FSC trajectory did not pass")
     _require(fsc.get("failures") == [], f"{evidence.case_id}: FSC audit reports failures")
     _require(fsc.get("topology_failures") == [], f"{evidence.case_id}: FSC audit reports topology failures")

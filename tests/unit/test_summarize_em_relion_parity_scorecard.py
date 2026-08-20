@@ -351,6 +351,41 @@ def test_proposal_evidence_parser_requires_absolute_fixed_suite_identity():
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "report",
+    [
+        {"schema": "em_k1_fsc_trajectory_audit_v2"},
+        {
+            "schema": "em_k1_fsc_trajectory_audit_v3",
+            "relion_start_iteration": 1,
+        },
+    ],
+)
+def test_fixed_suite_accepts_complete_autonomous_fsc_audit_schemas(report):
+    MODULE._validate_autonomous_fsc_audit_schema(report, "k1-04")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("start_iteration", [None, True, 0, 2, 13])
+def test_fixed_suite_rejects_nonautonomous_v3_fsc_audit(start_iteration):
+    report = {
+        "schema": "em_k1_fsc_trajectory_audit_v3",
+        "relion_start_iteration": start_iteration,
+    }
+    with pytest.raises(ValueError, match="physical RELION iteration 1"):
+        MODULE._validate_autonomous_fsc_audit_schema(report, "k1-04")
+
+
+@pytest.mark.unit
+def test_fixed_suite_rejects_unknown_fsc_audit_schema():
+    with pytest.raises(ValueError, match="wrong FSC audit schema"):
+        MODULE._validate_autonomous_fsc_audit_schema(
+            {"schema": "em_k1_fsc_trajectory_audit_v4"},
+            "k1-04",
+        )
+
+
+@pytest.mark.unit
 def test_superseding_ledger_proposal_preserves_denominator_and_topology_counts(
     tmp_path,
     monkeypatch,
