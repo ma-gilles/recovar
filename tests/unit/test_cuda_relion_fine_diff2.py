@@ -269,6 +269,12 @@ def test_k1_coarse_native_texture_flag_honors_default_and_opt_out(monkeypatch):
     monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE", "0")
     assert not significance._k1_coarse_gaussian_native_texture_enabled(default=True)
 
+    source = Path(significance.__file__).read_text()
+    start = source.index("coarse_gaussian_native_texture_requested =")
+    selection = source[start : source.index("relion_f32_coarse_support_requested", start)]
+    assert "_k1_coarse_gaussian_native_texture_enabled(" in selection
+    assert "default=False" in selection
+
 
 def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkeypatch):
     from recovar.em.dense_single_volume.helpers import significance

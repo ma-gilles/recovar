@@ -2118,10 +2118,12 @@ def _compute_k_class_significance_batched(
         )
     coarse_gaussian_native_texture_requested = (
         _k1_coarse_gaussian_native_texture_enabled(
-            default=(
-                relion_coarse_gaussian_default
-                and exact_coarse_operands_enabled
-            ),
+            # Keep the fused texture scorer as an explicit diagnostic.  The
+            # preprojected rectangular FFI consumes the same exact image/CTF
+            # operands but matches RELION's coarse support boundary more
+            # closely; the fused scorer can move marginal parents across the
+            # adaptive-significance cutoff.
+            default=False,
         )
     )
     coarse_gaussian_native_texture_enabled = (
