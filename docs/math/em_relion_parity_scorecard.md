@@ -2699,6 +2699,43 @@ Case 4 passes through iteration 3 at merged cross-engine FSC-AUC
 SHA-256 is
 `91aee94cd53d685203e19f244242a260d2ee57a918b05e535b5853ada0c8ac86`.
 These prefixes do not change the frozen score.
+
+### Case-7 iteration-3 fused-coarse first-divergence correction
+
+The exact-state source-row `9710` comparison localizes its first material
+discrepancy to the fused native-texture coarse scorer.  Native RELION retains
+five coarse parents, while the fused scorer retains four and omits parent
+rotation `27776`, translation `21`.  That omission removes 32 fine tuples and
+moves Pmax from RELION's `0.6083686` to `0.9867408`.  With the same images,
+CTFs, priors, grids, state, and fine scorer, the preprojected rectangular FFI
+restores the fifth parent and all fine candidates; its row-9710 Pmax is
+`0.6083974`.
+
+The fixed source-ID panel independently tests the 30 iteration-3 particles
+whose old fused coarse support missed RELION by one.  The preprojected scorer
+restores exact coarse support from `0/30` to `30/30`.  Absolute Pmax error
+improves for `30/30`, worsens for `0/30`, and is unchanged for `0/30`.  Mean
+absolute error decreases from `0.4257344879756152` to
+`2.7988201494631253e-5` (`15211.21x`), and maximum absolute error decreases
+from `0.513825898418518` to `0.00023258735937214947`.
+
+The immutable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case07_it3_tail30_prefetched_fix_20260820T1540ET/analysis/K1_CASE07_IT3_COARSE_SCORER_TAIL30.json`
+with SHA-256
+`82f82bdd68cc558d2e5cdd4c26ab330e6d1738e71e2a8d5d5638033839cdc014`.
+It hashes every pass-1 and pass-2 particle artifact plus the sealed RELION
+reference.  Slurm job `12689778` wrote all `30+30` requested artifacts and
+then exited `1:0` because the one-off launcher did not catch the intentional
+`Pass2DumpComplete` stop exception; the report records this as capture-complete
+rather than a successful end-to-end trajectory.  Commit `ddc9d5f54` makes the
+preprojected route the K=1 production default and leaves the fused scorer as
+an explicit diagnostic override.  The targeted scorer module passes `25/25`.
+
+This panel is causal first-boundary evidence, not complete-case acceptance.
+Clean autonomous cases 4, 5, and 10 at `ddc9d5f54` remain the required
+FSC/FSC-AUC promotion gate.  K=1 therefore remains a candidate `31/34` strict,
+`34/34` topology result until a fail-closed superseding ledger accepts their
+terminal evidence.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
