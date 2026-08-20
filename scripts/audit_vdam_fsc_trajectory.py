@@ -206,12 +206,43 @@ def _validate_iteration_one_particle_subset(
             f"RECOVAR count={recovar_images.size}, RELION count={relion_images.size}, "
             f"RECOVAR-only={recovar_only[:10].tolist()}, RELION-only={relion_only[:10].tolist()}"
         )
+    recovar_half_counts = []
+    recovar_half_images = []
+    offset = 0
+    for halfset in (0, 1):
+        assignments = recovar_meta.get(f"halfset_{halfset}_class_assignments")
+        if not isinstance(assignments, list):
+            raise AuditError(f"RECOVAR iteration-1 metadata has no halfset_{halfset}_class_assignments")
+        count = len(assignments)
+        recovar_half_counts.append(count)
+        recovar_half_images.append(recovar_images[offset : offset + count])
+        offset += count
+    if offset != recovar_images.size:
+        raise AuditError(
+            "RECOVAR iteration-1 halfset counts do not partition selected_particle_ids: "
+            f"counts={recovar_half_counts}, selected={recovar_images.size}"
+        )
+    relion_half_images = [relion_images[(relion_ids % 2) == halfset] for halfset in (0, 1)]
+    for halfset in (0, 1):
+        rec_half = np.sort(recovar_half_images[halfset])
+        rel_half = np.sort(relion_half_images[halfset])
+        if not np.array_equal(rec_half, rel_half):
+            recovar_only = np.setdiff1d(rec_half, rel_half)
+            relion_only = np.setdiff1d(rel_half, rec_half)
+            raise AuditError(
+                f"iteration-1 pseudo-halfset {halfset} differs: "
+                f"RECOVAR count={rec_half.size}, RELION count={rel_half.size}, "
+                f"RECOVAR-only={recovar_only[:10].tolist()}, RELION-only={relion_only[:10].tolist()}"
+            )
     return {
         "exact": True,
         "identity": "_rlnImageName",
         "particle_count": int(relion_images.size),
         "first_image_name": str(relion_sorted[0]),
         "last_image_name": str(relion_sorted[-1]),
+        "pseudo_halfsets_exact": True,
+        "halfset_0_particle_count": int(relion_half_images[0].size),
+        "halfset_1_particle_count": int(relion_half_images[1].size),
     }
 
 

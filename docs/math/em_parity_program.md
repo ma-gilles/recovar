@@ -46,8 +46,22 @@ GT delta slightly to about `-0.0143244`.  The lexicographic Experiment-order
 implementation is retained.  The frozen trajectory auditor now compares
 iteration-1 subsets by `_rlnImageName`, preventing either input-row/output-row
 coordinate system from passing accidentally.  The next measurable boundary
-remains aggregate VDAM moment/reconstruction input after the already exact
-particle-identity, posterior/scatter, and bootstrap controls.
+is pseudo-halfset membership after the already exact particle-identity,
+posterior/scatter, and bootstrap controls.
+
+That boundary now has an exact failure and a bounded fix.  Although the 200
+selected image identities agree, RECOVAR routes `99/101` particles to its two
+gradient accumulators and RELION routes `100/100`.  More importantly, direct
+`_rlnImageName` membership comparison shows different images in both halves.
+RELION's StoreWavg expression `part_id % 2` uses the internal Experiment
+particle ID after lexicographic read ordering.  RECOVAR instead applied parity
+to the original input-table row stored in `particle_order`.  The fix keeps the
+existing Experiment-order image mapping but carries Experiment-position parity
+through subset shuffling and optics-group sorting.  Unit coverage pins this
+distinction with a permutation whose input-row and Experiment-position parity
+disagree, and the trajectory auditor now rejects exact-subset/wrong-halfset
+runs.  The next experiment is a clean frozen `vdam-08` trajectory with only
+this pseudo-halfset routing correction.
 
 ## Mode Contract
 
