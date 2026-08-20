@@ -164,6 +164,21 @@ matrix pins `vdam-09` to 200 and `vdam-12` to 100.  Their scientific commands
 and frozen acceptance contracts are otherwise unchanged.  The next bounded
 run is `vdam-12` alone in a fresh output root.
 
+The first remaining autonomous divergence is now identity-localized rather
+than inferred from maps.  The reusable STAR-to-STAR diagnostic
+`scripts/audit_vdam_particle_state_trajectory.py` aligns every row by exact
+`rlnImageName` and computes geodesic pose error, translation error, and
+absolute Pmax error without correlation or an acceptance gate.  For
+`vdam-01`, iteration 1 has exact pose/translation winners for all 3,000
+particles.  Iteration 2 has only six divergent identities:
+`1016@particles.128.mrcs`, `108@particles.128.mrcs`,
+`1085@particles.128.mrcs`, `1130@particles.128.mrcs`,
+`1137@particles.128.mrcs`, and `1171@particles.128.mrcs`.  The divergent count
+then grows to 104/182/359 at iterations 3/4/8, while Pmax MAE grows from
+`5.61e-5` at iteration 1 to `4.49e-4`, `0.01305`, `0.02358`, and `0.03399`.
+The next scientific boundary is the iteration-2 score/support decision for
+those six immutable original image identities; map tolerances remain frozen.
+
 ## Mode Contract
 
 - **Strict oracle:** the default during parity closure; pinned RELION GUI
