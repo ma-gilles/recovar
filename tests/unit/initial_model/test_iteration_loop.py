@@ -556,7 +556,7 @@ class TestRunVdamIterations:
         )
 
         np.testing.assert_array_equal(out.subset_particle_ids, np.array([0, 4, 2, 5, 3, 1]))
-        np.testing.assert_array_equal(out.subset_halfset_ids, np.array([1, 1, 1, 0, 0, 0], dtype=np.int8))
+        np.testing.assert_array_equal(out.subset_halfset_ids, np.array([0, 0, 0, 1, 1, 1], dtype=np.int8))
 
     def test_rejects_invalid_particle_order(self):
         state = initialise_denovo_state(

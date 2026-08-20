@@ -49,19 +49,25 @@ coordinate system from passing accidentally.  The next measurable boundary
 is pseudo-halfset membership after the already exact particle-identity,
 posterior/scatter, and bootstrap controls.
 
-That boundary now has an exact failure and a bounded fix.  Although the 200
-selected image identities agree, RECOVAR routes `99/101` particles to its two
-gradient accumulators and RELION routes `100/100`.  More importantly, direct
-`_rlnImageName` membership comparison shows different images in both halves.
-RELION's StoreWavg expression `part_id % 2` uses the internal Experiment
-particle ID after lexicographic read ordering.  RECOVAR instead applied parity
-to the original input-table row stored in `particle_order`.  The fix keeps the
-existing Experiment-order image mapping but carries Experiment-position parity
-through subset shuffling and optics-group sorting.  Unit coverage pins this
-distinction with a permutation whose input-row and Experiment-position parity
-disagree, and the trajectory auditor now rejects exact-subset/wrong-halfset
-runs.  The next experiment is a clean frozen `vdam-08` trajectory with only
-this pseudo-halfset routing correction.
+The apparent pseudo-halfset failure was another unsupported inference and is
+rejected.  A position-parity counterfactual made the nominal counts `100/100`,
+but direct native-vs-RECOVAR BPref errors remained essentially unchanged and
+the frozen trajectory did not improve.  Slurm job `12669867` produced
+iteration-1 cross-engine FSC-AUC `0.8247451` and GT delta `-0.0137202`; the
+minimum through iteration 8 was `0.6359682`.  The production global-particle
+parity routing is restored.
+
+The first direct aggregate boundary remains BPref.  Against native RELION's
+captured iteration-1 arrays, production RECOVAR half-0/half-1 BPref data have
+relative L2 `1.33211`/`1.33062` and cosine `0.10345`/`0.09585`; weights have
+relative L2 `0.78793`/`0.83375`.  The position-parity counterfactual changes
+these only marginally.  Downstream replay is not the cause: feeding RELION's
+native post-`applyMomenta` data, moment-noise power, reference, and exact
+parameters into the shared binding reproduces native `reconstructGrad` at
+`7.10e-8` relative L2.  Particle 0's complete pre-scatter contribution is
+already exact, so the next bounded experiment is a stable-identity panel of
+additional particles spanning both halves and the lexicographic read order,
+compared at the pre-scatter contribution boundary before another trajectory.
 
 ## Mode Contract
 

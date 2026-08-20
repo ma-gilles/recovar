@@ -15,7 +15,6 @@ import recovar.em.initial_model.driver as driver
 from recovar.data_io.starfile import read_star
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.dense_adapter import DenseInitialModelEstepResult
-from recovar.em.initial_model.iteration_loop import select_subset_for_iter
 from recovar.em.initial_model.m_step import VdamAccumulator
 
 SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_ab_initio.py"
@@ -57,41 +56,6 @@ def test_experiment_read_order_uses_micrograph_lexicographic_order():
     )
 
     assert driver._experiment_read_order(main).tolist() == [0, 2, 3, 4, 1]
-
-
-def test_seed_zero_halfsets_use_relion_experiment_position_parity():
-    main = pd.DataFrame(
-        {
-            "_rlnMicrographName": ["1", "2", "10", "100", "11"],
-            "_rlnImageName": ["1@s.mrcs", "2@s.mrcs", "3@s.mrcs", "4@s.mrcs", "5@s.mrcs"],
-        }
-    )
-    state = initialise_denovo_state(
-        ori_size=8,
-        pixel_size=1.0,
-        K=1,
-        nr_iter=1,
-        n_directions=3,
-        pseudo_halfsets=True,
-    )
-    state.subset_size = len(main)
-
-    def fail_if_called(seed):
-        raise AssertionError(f"unexpected randomization for seed {seed}")
-
-    out = select_subset_for_iter(
-        state,
-        iter=1,
-        nr_particles=len(main),
-        optics_group_by_particle=np.zeros(len(main), dtype=np.int64),
-        rnd_unif_factory=fail_if_called,
-        random_seed=0,
-        do_grad=True,
-        particle_order=driver._experiment_read_order(main),
-    )
-
-    np.testing.assert_array_equal(out.subset_particle_ids, [0, 2, 3, 4, 1])
-    np.testing.assert_array_equal(out.subset_halfset_ids, [0, 1, 0, 1, 0])
 
 
 def test_translation_log_prior_matches_relion_pdf_offset_scaling():

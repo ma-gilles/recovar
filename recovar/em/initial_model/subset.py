@@ -57,7 +57,7 @@ def assign_pseudo_halfsets(n: int) -> np.ndarray:
 
 
 def assign_pseudo_halfsets_for_particle_ids(particle_ids: np.ndarray) -> np.ndarray:
-    """RELION BPref pseudo-halfsets: internal Experiment ``part_id % 2``."""
+    """RELION BPref pseudo-halfset ids: ``global part_id % 2``."""
     return (np.asarray(particle_ids, dtype=np.int64) % 2).astype(np.int8, copy=False)
 
 
