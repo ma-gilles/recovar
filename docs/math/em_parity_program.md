@@ -17847,3 +17847,24 @@ topology failure.  Its report is
 `91aee94cd53d685203e19f244242a260d2ee57a918b05e535b5853ada0c8ac86`).
 These prefix results are trajectory evidence only and do not promote any
 terminal score.
+
+The same fused-native-texture matrix subsequently completed terminal cases 4,
+5, and 10.  Their natural final merged cross-engine FSC-AUC values are
+`0.9907496603461050`, `0.9799843256482103`, and `0.9792016644096699`,
+respectively, leaving gaps of `0.0042503396538950`, `0.0150156743517897`,
+and `0.0157983355903301` to the fixed `0.995` gate.  The corresponding merged
+GT deltas are all acceptable: `+0.0037921068570921`,
+`+0.0008577785255079`, and `+0.0001100263743967`.  Jobs `12671403`,
+`12671404`, and `12671408` completed naturally `0:0` in `08:52:11`,
+`08:02:37`, and `08:43:36`.  This terminal control is the A side for the
+clean `ddc9d5f54` preprojected-scorer jobs `12691035`, `12691058`, and
+`12691059`; it does not itself change the candidate `31/34` strict score.
+
+The complete control root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining4_native_a220_20260820T0700ET`,
+with worktree fingerprint
+`3421b14da47a9ca2cf3e352976583456f0955f99300a6758157f22a807a60c7f`.
+The case-summary SHA-256 values for cases 4, 5, and 10 are
+`c7c50f455b246b6a2300d129b5919027e8bb7baae21c1837fb00a1cc59af2244`,
+`64656d82365934380ad9d24ae0a1912b4237987ed0e911fcdb90173682dc6c8f`,
+and `1ae7e00f29aa1c2b1b1322ce01eb51519dac5095b2b0dec77b0b42d40ec51421`.

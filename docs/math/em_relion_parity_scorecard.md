@@ -2770,6 +2770,37 @@ with SHA-256
 `f271562b7f4e48644a8fa403cd91c8cd417c406898529830cef1fe4b4adbb828`.
 Jobs `12692397`, `12693085`, and `12693176` all completed `0:0`; their
 successful execution does not override the scientific qualification failure.
+
+### Remaining-three fused-scorer terminal control
+
+The earlier bounded-220 autonomous matrix has now produced terminal controls
+for cases 4, 5, and 10.  These arms used the fused native-texture coarse
+scorer, not the preprojected scorer promoted by `ddc9d5f54`, and therefore
+form the A side of the clean scorer A/B.  All three ran natural final all-data
+refinement.  At the summary-metric boundary, all three fail the fixed merged
+cross-engine FSC-AUC minimum of `0.995`, while their merged GT deltas remain
+above the fixed `-0.002` minimum.  This control does not add a terminal strict
+topology audit, so it makes no new terminal-topology claim.
+
+| Case | Job | State | Merged cross-engine FSC-AUC | Gap to 0.995 | Merged GT delta |
+|---|---:|---|---:|---:|---:|
+| `k1-04` | `12671403` | `COMPLETED 0:0` | `0.9907496603461050` | `0.0042503396538950` | `+0.0037921068570921` |
+| `k1-05` | `12671404` | `COMPLETED 0:0` | `0.9799843256482103` | `0.0150156743517897` | `+0.0008577785255079` |
+| `k1-10` | `12671408` | `COMPLETED 0:0` | `0.9792016644096699` | `0.0157983355903301` | `+0.0001100263743967` |
+
+The complete control root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining4_native_a220_20260820T0700ET`.
+Its source state is reconstructible from HEAD `ffc7e738d32d67ce6d19361548d9103ff7854b0e`,
+worktree fingerprint
+`3421b14da47a9ca2cf3e352976583456f0955f99300a6758157f22a807a60c7f`,
+and fixture-manifest SHA-256
+`422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee`.
+The case summary SHA-256 values are, respectively,
+`c7c50f455b246b6a2300d129b5919027e8bb7baae21c1837fb00a1cc59af2244`,
+`64656d82365934380ad9d24ae0a1912b4237987ed0e911fcdb90173682dc6c8f`,
+and `1ae7e00f29aa1c2b1b1322ce01eb51519dac5095b2b0dec77b0b42d40ec51421`.
+The clean preprojected candidate jobs `12691035`, `12691058`, and `12691059`
+must finish before any case is promoted.
 <!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
