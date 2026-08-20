@@ -75,7 +75,10 @@ def _cuda_max_r(max_r, image_shape, volume_shape):
 
 @functools.lru_cache(maxsize=None)
 def _on_gpu():
-    return jax.default_backend() == "gpu"
+    # JAX has used both ``gpu`` and backend-specific ``cuda`` platform names
+    # across releases. Device inspection is the stable signal and also
+    # respects JAX_PLATFORMS=cpu, which exposes CPU devices only.
+    return any(getattr(device, "platform", "") in {"gpu", "cuda"} for device in jax.devices())
 
 
 def _use_cuda(order):
