@@ -151,11 +151,15 @@ confirm the intended late-trajectory sensitivity: `vdam-03`, `vdam-04`,
 `vdam-05`, and `vdam-07` pass; `vdam-01`, `vdam-02`, `vdam-06`, and `vdam-10`
 miss only the fixed cross-engine FSC-AUC gate while retaining acceptable GT
 quality.  `vdam-09` did not reach an audit because its high-resolution local
-E-step exhausted the 40 GB GPU at the default 500-image batch.  The runner now
-records an explicit resource-only image batch and the matrix pins `vdam-09` to
-200; its scientific command and frozen acceptance contract are unchanged.
-The next bounded run is that case alone in a fresh output root, after the two
-production-size array tasks finish.
+E-step exhausted the 40 GB GPU at the default 500-image batch.  `vdam-11`
+completed and misses only the fixed cross-engine gate (minimum FSC-AUC
+`0.99691967`) while retaining acceptable GT quality (minimum delta
+`-0.00018535`).  `vdam-12` independently exhausted the same 40 GB GPU boundary
+at the default batch.  The runner records an explicit resource-only image
+batch and the matrix pins both high-memory cases, `vdam-09` and `vdam-12`, to
+200; their scientific commands and frozen acceptance contracts are otherwise
+unchanged.  The next bounded run is only those two cases in a fresh output
+root.
 
 ## Mode Contract
 

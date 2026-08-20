@@ -23,7 +23,7 @@ fi
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CASE_ID="$(printf 'vdam-%02d' "${SLURM_ARRAY_TASK_ID}")"
-if [[ "${CASE_ID}" == "vdam-09" && -z "${RECOVAR_VDAM_IMAGE_BATCH_SIZE:-}" ]]; then
+if [[ "${CASE_ID}" =~ ^vdam-(09|12)$ && -z "${RECOVAR_VDAM_IMAGE_BATCH_SIZE:-}" ]]; then
   export RECOVAR_VDAM_IMAGE_BATCH_SIZE=200
 fi
 export REPO_ROOT CASE_ID OUTPUT_ROOT
