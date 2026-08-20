@@ -77,6 +77,12 @@ def _summary(actual: np.ndarray, expected: np.ndarray, *, complex_values: bool) 
 
 
 def _active_mstep_rows(dump: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if "active_summed" in dump:
+        return (
+            np.asarray(dump["active_summed"]),
+            np.asarray(dump["active_ctf_probs"]),
+            np.asarray(dump["active_rotations"], dtype=np.float64),
+        )
     probs = np.asarray(
         dump["reconstruction_probs"] if "reconstruction_probs" in dump else dump["probs"],
         dtype=np.float64,
@@ -88,6 +94,25 @@ def _active_mstep_rows(dump: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     active = (np.sum(np.abs(summed), axis=1) > 0.0) | (np.sum(np.abs(ctf_probs), axis=1) > 0.0)
     rotations = np.asarray(dump["rotations"], dtype=np.float64)[active]
     return summed[active], ctf_probs[active], rotations
+
+
+def _fftw_indices(dump: Any, *, ori_size: int) -> np.ndarray:
+    """Resolve legacy centered dumps and contribution-row FFTW indices."""
+
+    if "active_summed" in dump:
+        return np.asarray(dump["window_indices"], dtype=np.int32)
+
+    from recovar.em.dense_single_volume.helpers.fourier_window import (
+        centered_half_indices_to_fftw_half_indices,
+    )
+
+    centered_indices = np.asarray(dump["recon_window_indices"], dtype=np.int32)
+    return np.asarray(
+        centered_half_indices_to_fftw_half_indices(
+            (ori_size, ori_size), centered_indices
+        ),
+        dtype=np.int32,
+    )
 
 
 def _dense_half_images(
@@ -109,22 +134,19 @@ def main() -> int:
 
     import jax
     import jax.numpy as jnp
+    from recovar.relion_bind._relion_bind_core import TRILINEAR, get_backprojector_data
 
     from recovar import cuda_backproject
     from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.dense_single_volume.helpers.fourier_window import centered_half_indices_to_fftw_half_indices
     from recovar.em.dense_single_volume.helpers.half_volume_mstep import relion_backprojector_volume_shape
-    from recovar.relion_bind._relion_bind_core import TRILINEAR, get_backprojector_data
 
     with np.load(args.pass2_dump, allow_pickle=True) as dump:
         current_size = int(np.asarray(dump["current_size"]).item())
-        centered_indices = np.asarray(dump["recon_window_indices"], dtype=np.int32)
+        contribution_rows = "active_summed" in dump
+        index_key = "window_indices" if contribution_rows else "recon_window_indices"
+        input_indices = np.asarray(dump[index_key], dtype=np.int32)
+        fftw_indices = _fftw_indices(dump, ori_size=args.ori_size)
         summed, ctf_probs, rotations = _active_mstep_rows(dump)
-
-    fftw_indices = np.asarray(
-        centered_half_indices_to_fftw_half_indices((args.ori_size, args.ori_size), centered_indices),
-        dtype=np.int32,
-    )
     real_dtype = np.float64 if args.dtype == "float64" else np.float32
     complex_dtype = np.complex128 if args.dtype == "float64" else np.complex64
     summed = summed.astype(complex_dtype, copy=False)
@@ -190,7 +212,7 @@ def main() -> int:
         "accumulator_shape": list(accum_shape),
         "half_shape": list(half_shape),
         "n_active_rows": int(summed.shape[0]),
-        "n_window_pixels": int(centered_indices.shape[0]),
+        "n_window_pixels": int(input_indices.shape[0]),
         "devices": [str(d) for d in jax.devices()],
         "data": _summary(recovar_data_np, relion_data_np, complex_values=True),
         "weight": _summary(recovar_weight_np, relion_weight_np, complex_values=False),

@@ -8,11 +8,14 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.local_big_jit import _score_normalize_mstep, _score_normalize_support
-from recovar.em.dense_single_volume.local_backprojection import compute_local_ctf_sums, compute_local_weighted_sums
-from recovar.em.dense_single_volume.local_score_pass import fused_score_normalize_mstep_abs2_on_demand
-from recovar.em.dense_single_volume.helpers.projection import compute_noise_block
 from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume.helpers.projection import compute_noise_block
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_f32_fine_reconstruction_probs,
+)
+from recovar.em.dense_single_volume.local_backprojection import compute_local_ctf_sums, compute_local_weighted_sums
+from recovar.em.dense_single_volume.local_big_jit import _score_normalize_mstep, _score_normalize_support
+from recovar.em.dense_single_volume.local_score_pass import fused_score_normalize_mstep_abs2_on_demand
 
 pytestmark = pytest.mark.unit
 
@@ -173,6 +176,45 @@ def test_score_normalize_support_deferred_mstep_matches_full_mstep():
     np.testing.assert_allclose(support_arrays[11], full["reconstruction_probs_sum_t"], rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(deferred_summed, full["summed"], rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(deferred_ctf, full["ctf_probs"], rtol=1e-6, atol=1e-6)
+
+
+def test_score_normalize_support_reuses_relion_f32_fine_posterior():
+    """VDAM local search must use the supplied-map RELION weight boundary."""
+
+    inputs = _base_inputs()
+    result = _score_normalize_support(
+        inputs["shifted_score_split"],
+        inputs["ctf2_over_nv_score"],
+        inputs["proj_weighted"],
+        inputs["half_weights"],
+        inputs["rotation_log_prior"],
+        inputs["translation_log_prior"],
+        inputs["rotation_mask"],
+        inputs["sample_mask"],
+        inputs["valid_image_mask"],
+        inputs["normalization_log_z"],
+        has_normalization_log_z=False,
+        half_spectrum_scoring=True,
+        use_float64_normalization=True,
+        reconstruct_significant_only=True,
+        use_relion_f32_fine_posterior=True,
+        adaptive_fraction=0.999,
+        max_significants=-1,
+    )
+    arrays = [np.asarray(value) for value in result]
+    expected = tuple(
+        np.asarray(value)
+        for value in _relion_f32_fine_reconstruction_probs(
+            result[1],
+            adaptive_fraction=0.999,
+        )
+    )
+
+    assert arrays[9].dtype == np.float32
+    np.testing.assert_array_equal(arrays[9], expected[0])
+    np.testing.assert_array_equal(arrays[6], expected[1])
+    np.testing.assert_array_equal(arrays[8], expected[2])
+    np.testing.assert_array_equal(arrays[5], np.max(expected[0], axis=(1, 2)))
 
 
 def test_local_em_engine_normcorr_full_box_current_size_guard():

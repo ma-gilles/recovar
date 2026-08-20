@@ -330,6 +330,10 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
             "class_bpref_weight_sums",
             "class_posterior_sums_override",
             "reconstruction_probs_sum_t if stats_use_reconstruction_probs else probs_sum_t",
+            "relion_f32_fine_posterior=bool(",
+            "sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled()",
+            "use_relion_f32_fine_posterior=use_relion_f32_fine_posterior",
+            "_relion_f32_fine_reconstruction_probs(",
         ],
         "relion_model_star_contract": [
             "data_model_pdf_orient_class_",

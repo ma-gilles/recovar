@@ -42,6 +42,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_powerclass_highres_norm_units,
+    _relion_f32_fine_reconstruction_probs,
 )
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_weighted_sums,
@@ -204,6 +205,7 @@ def _score_normalize_support(
     half_spectrum_scoring: bool,
     use_float64_normalization: bool,
     reconstruct_significant_only: bool,
+    use_relion_f32_fine_posterior: bool = False,
     adaptive_fraction: float,
     max_significants: int,
 ):
@@ -267,7 +269,45 @@ def _score_normalize_support(
     max_posterior = jnp.where(row_has_mass & jnp.isfinite(max_posterior), max_posterior, 0.0)
     reconstruction_image_mask = valid_image_mask & row_has_mass
 
-    if reconstruct_significant_only:
+    if reconstruct_significant_only and use_relion_f32_fine_posterior:
+        if has_reconstruction_probability_threshold:
+            raise ValueError(
+                "RELION float32 fine posterior does not accept an external "
+                "reconstruction threshold"
+            )
+        (
+            reconstruction_probs,
+            reconstruction_sample_mask,
+            n_significant_samples,
+            _relion_sum_weight,
+            _relion_significant_weight,
+        ) = _relion_f32_fine_reconstruction_probs(
+            scores,
+            adaptive_fraction=adaptive_fraction,
+        )
+        reconstruction_sample_mask = (
+            reconstruction_sample_mask
+            & reconstruction_image_mask[:, None, None]
+        )
+        reconstruction_probs = jnp.where(
+            reconstruction_sample_mask,
+            reconstruction_probs,
+            jnp.float32(0.0),
+        )
+        reconstruction_rotation_mask = jnp.any(
+            reconstruction_sample_mask,
+            axis=-1,
+        )
+        n_significant_samples = jnp.where(
+            reconstruction_image_mask,
+            n_significant_samples,
+            0,
+        )
+        max_posterior = jnp.max(
+            reconstruction_probs.reshape(reconstruction_probs.shape[0], -1),
+            axis=1,
+        )
+    elif reconstruct_significant_only:
         if has_reconstruction_probability_threshold:
             threshold = reconstruction_probability_threshold.astype(probs.dtype).reshape((probs.shape[0], 1, 1))
             reconstruction_sample_mask = (probs > 0.0) & (probs >= threshold)
@@ -337,6 +377,7 @@ def _score_normalize_mstep(
     half_spectrum_scoring: bool,
     use_float64_normalization: bool,
     reconstruct_significant_only: bool,
+    use_relion_f32_fine_posterior: bool = False,
     adaptive_fraction: float,
     max_significants: int,
 ):
@@ -372,6 +413,7 @@ def _score_normalize_mstep(
         half_spectrum_scoring=half_spectrum_scoring,
         use_float64_normalization=use_float64_normalization,
         reconstruct_significant_only=reconstruct_significant_only,
+        use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
     )
@@ -582,6 +624,7 @@ def _project_local_half_spectrum(
         "use_float64_normalization",
         "use_window",
         "reconstruct_significant_only",
+        "use_relion_f32_fine_posterior",
         "adaptive_fraction",
         "max_significants",
         "image_shape",
@@ -683,6 +726,7 @@ def run_local_bucket_big_jit(
     use_float64_normalization: bool,
     use_window: bool,
     reconstruct_significant_only: bool,
+    use_relion_f32_fine_posterior: bool = False,
     adaptive_fraction: float,
     max_significants: int,
     image_shape,
@@ -1072,6 +1116,7 @@ def run_local_bucket_big_jit(
             half_spectrum_scoring=half_spectrum_scoring,
             use_float64_normalization=use_float64_normalization,
             reconstruct_significant_only=reconstruct_significant_only,
+            use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
             adaptive_fraction=adaptive_fraction,
             max_significants=max_significants,
         )
@@ -1166,6 +1211,7 @@ def run_local_bucket_big_jit(
             half_spectrum_scoring=half_spectrum_scoring,
             use_float64_normalization=use_float64_normalization,
             reconstruct_significant_only=reconstruct_significant_only,
+            use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
             adaptive_fraction=adaptive_fraction,
             max_significants=max_significants,
         )
@@ -1250,6 +1296,7 @@ def run_local_bucket_big_jit(
         half_spectrum_scoring=half_spectrum_scoring,
         use_float64_normalization=use_float64_normalization,
         reconstruct_significant_only=reconstruct_significant_only,
+        use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
     )

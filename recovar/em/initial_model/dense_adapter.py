@@ -743,6 +743,11 @@ def _run_sparse_pass2_initial_model_estep(
                     group_kwargs.get("reconstruction_subtract_projected_reference", False)
                 ),
                 mstep_relion_x_half=bool(config.relion_bpref_frame),
+                relion_f32_fine_posterior=bool(
+                    state.K == 1
+                    and config.relion_bpref_frame
+                    and sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled()
+                ),
                 reconstruct_significant_only=True,
                 adaptive_fraction=adaptive_fraction,
                 debug_iteration=int(group_kwargs.get("debug_iteration", -1)),

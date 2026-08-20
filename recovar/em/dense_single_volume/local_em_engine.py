@@ -1891,6 +1891,7 @@ def run_local_em_exact(
     translation_prior_centers: np.ndarray | None = None,
     unify_local_bucket_sizes: bool | None = None,
     stats_use_reconstruction_probs: bool = False,
+    relion_f32_fine_posterior: bool = False,
     include_unweighted_norm_high_shell: bool = True,
     reconstruction_probability_threshold: np.ndarray | None = None,
     return_reconstruction_probability_values: bool = False,
@@ -1901,6 +1902,17 @@ def run_local_em_exact(
     """Run exact local EM over per-image local hypothesis sets."""
 
     score_only = bool(score_only)
+    use_relion_f32_fine_posterior = bool(
+        relion_f32_fine_posterior
+        and mstep_relion_x_half
+        and reconstruct_significant_only
+        and not score_only
+    )
+    if relion_f32_fine_posterior and not use_relion_f32_fine_posterior:
+        raise ValueError(
+            "RELION float32 fine posterior requires a significant-only "
+            "RELION x-half M-step"
+        )
     include_unweighted_norm_high_shell = bool(include_unweighted_norm_high_shell)
     relion_exact_score_translation = bool(relion_exact_score_translation)
     if relion_exact_score_translation and not half_spectrum_scoring:
@@ -3080,6 +3092,7 @@ def run_local_em_exact(
                 use_float64_normalization=use_float64_normalization,
                 use_window=use_window,
                 reconstruct_significant_only=reconstruct_significant_only,
+                use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
                 adaptive_fraction=adaptive_fraction,
                 max_significants=max_significants,
                 image_shape=image_shape,
@@ -4265,7 +4278,31 @@ def run_local_em_exact(
             timing.normalize_s += time.time() - normalize_t0
 
             significance_t0 = time.time()
-            if reconstruct_significant_only:
+            if reconstruct_significant_only and use_relion_f32_fine_posterior:
+                if threshold_for_bucket is not None:
+                    raise ValueError(
+                        "RELION float32 fine posterior does not accept an external "
+                        "reconstruction threshold"
+                    )
+                (
+                    reconstruction_probs,
+                    reconstruction_sample_mask,
+                    n_significant_samples,
+                    _relion_sum_weight,
+                    _relion_significant_weight,
+                ) = _sparse_pass2_diagnostics._relion_f32_fine_reconstruction_probs(
+                    scores,
+                    adaptive_fraction=adaptive_fraction,
+                )
+                reconstruction_rotation_mask = jnp.any(
+                    reconstruction_sample_mask,
+                    axis=-1,
+                )
+                max_posterior = jnp.max(
+                    reconstruction_probs.reshape(reconstruction_probs.shape[0], -1),
+                    axis=1,
+                )
+            elif reconstruct_significant_only:
                 if threshold_for_bucket is None:
                     reconstruction_sample_mask, reconstruction_rotation_mask, n_significant_samples = (
                         compute_reconstruction_support(
