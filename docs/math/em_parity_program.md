@@ -137,10 +137,14 @@ extracting the positive-x slab is exact (`0.0` relative L2).  The active
 bounded fix is an explicit RELION-x-half-public-to-BPref inverse in the VDAM
 adapter, with a lossless round-trip unit test; the unrelated generic dense
 converter remains unchanged.  That fix is now implemented at `5a4c5783` and
-the focused layout/adapter tests are exact.  The active validation is the
-frozen `vdam-08` autonomous trajectory (source EM case `k1-25`) on one Slurm GPU; its first accepted
-decision boundary is iteration-1 BPref/map FSC-AUC, followed by the existing
-full eight-iteration scorecard without changing any gate.
+the focused layout/adapter tests are exact.  The frozen `vdam-08` autonomous
+trajectory (source EM case `k1-25`) passes unchanged gates in Slurm job
+`12672666`: cross-engine FSC-AUC is `0.99999964`, `0.99999931`, `0.99918555`,
+and `0.99900277` at iterations 1/2/4/8, respectively.  The worst RECOVAR-minus-
+RELION GT FSC-AUC is `-8.23e-6`, compared with the fixed `-0.002` gate.  This
+is the first accepted end-to-end VDAM checkpoint.  The active validation is
+the remaining eleven cases in the frozen fixed-12 matrix, using the same
+per-case runner and at most four simultaneous one-GPU Slurm tasks.
 
 ## Mode Contract
 

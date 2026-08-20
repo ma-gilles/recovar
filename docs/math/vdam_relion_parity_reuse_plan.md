@@ -76,6 +76,14 @@ sbatch \
   scripts/run_vdam_relion_parity_case.sbatch
 ```
 
+Run the complete fixed suite with at most four simultaneous one-GPU cases:
+
+```bash
+sbatch \
+  --export=ALL,OUTPUT_ROOT="$OUTPUT_ROOT" \
+  scripts/run_vdam_relion_parity_matrix.sbatch
+```
+
 The case directory contains verified fixture symlinks, complete engine logs,
 exact argv JSON, timing/provenance records, `trajectory_audit.json`, and the
 shellwise curves in `trajectory_shellwise_fsc.npz`. A scientifically completed

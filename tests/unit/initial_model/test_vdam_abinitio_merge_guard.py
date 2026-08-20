@@ -236,6 +236,32 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
     assert not missing, f"VDAM trajectory runner/auditor lost required wiring: {missing}"
 
 
+def test_vdam_fixed12_matrix_maps_array_tasks_to_frozen_case_ids():
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_parity_matrix.sbatch").read_text()
+    expected_tokens = [
+        "#SBATCH --array=1-12%4",
+        "SLURM_ARRAY_TASK_ID < 1",
+        "SLURM_ARRAY_TASK_ID > 12",
+        "printf 'vdam-%02d'",
+        "run_vdam_relion_parity_case.sbatch",
+        "OUTPUT_ROOT",
+    ]
+    missing = [token for token in expected_tokens if token not in matrix]
+    assert not missing, f"VDAM fixed12 matrix lost task-to-case wiring: {missing}"
+
+
+def test_vdam_case_runner_uses_job_scoped_runtime_roots():
+    runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+    expected_tokens = [
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/",
+        'export TMPDIR="${RUNTIME_ROOT}/tmp"',
+        'export PIXI_HOME="${RUNTIME_ROOT}/pixi_home"',
+        'export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/rattler_cache"',
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM case runner lost job-scoped runtime roots: {missing}"
+
+
 def test_native_vdam_tau2_refresh_and_ssnr_diagnostics_are_merge_guarded():
     """Protect the K=1 current-size parity fix.
 

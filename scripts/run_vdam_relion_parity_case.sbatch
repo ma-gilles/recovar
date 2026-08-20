@@ -22,10 +22,14 @@ unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA RECOVAR_CUDA_DISABLE
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/vdam_relion_${SLURM_JOB_ID}"
+RUNTIME_ROOT="/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${SLURM_JOB_ID:-manual}"
+export TMPDIR="${RUNTIME_ROOT}/tmp"
+export PIXI_HOME="${RUNTIME_ROOT}/pixi_home"
+export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/rattler_cache"
 export JAX_COMPILATION_CACHE_DIR="${OUTPUT_ROOT}/jax_cache"
 export RECOVAR_CUDA_LIB="${REPO_ROOT}/recovar/cuda/libcuda_backproject.so"
-mkdir -p "${TMPDIR}" "${JAX_COMPILATION_CACHE_DIR}" /scratch/gpfs/GILLES/mg6942/slurmo
+mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}" \
+  /scratch/gpfs/GILLES/mg6942/slurmo
 
 PIXI_PY="${REPO_ROOT}/.pixi/envs/default/bin/python"
 test -x "${PIXI_PY}"
