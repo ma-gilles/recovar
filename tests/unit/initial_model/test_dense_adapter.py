@@ -667,6 +667,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["pass1_prior"] = np.asarray(kwargs["translation_log_prior"], dtype=np.float32).copy()
         calls["pass1_current_size"] = kwargs["current_size"]
         calls["pass1_max_significants"] = kwargs["max_significants"]
+        calls["pass1_debug_iteration"] = kwargs["debug_iteration"]
         n_images = int(dataset.n_images)
         n_rot = int(np.asarray(rotations).shape[0])
         significant = [[np.array([0], dtype=np.int32) for _ in range(n_images)]]
@@ -791,6 +792,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     np.testing.assert_allclose(calls["pass1_prior"], coarse_prior[[1, 3]])
     assert calls["pass1_current_size"] == 6
     assert calls["pass1_max_significants"] == 100
+    assert calls["pass1_debug_iteration"] == 7
     assert calls["local_current_size"] == state.current_size
     assert calls["rotation_perturbation"] == (0.25, 60.0)
     assert np.max(calls["pass1_rotations"]) > 6.0

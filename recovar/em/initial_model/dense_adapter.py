@@ -659,6 +659,7 @@ def _run_sparse_pass2_initial_model_estep(
             use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
             relion_projector_half=relion_projector_half_by_class,
             relion_projector_r_max=relion_projector_r_max,
+            debug_iteration=group_kwargs.get("debug_iteration"),
         )
         (
             _sig_rot_any,
