@@ -11,6 +11,7 @@ from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.dense_adapter import (
     DenseInitialModelEstepConfig,
+    _arrays_to_accumulators,
     _estep_meta,
     _initial_model_pass2_layout,
     _relion_projector_to_dense_volume,
@@ -70,6 +71,54 @@ def _fake_result_with_profile(n_classes: int, n: int, *, n_images: int = 2, n_gr
     result = _fake_result(n_classes, n, n_images=n_images, n_groups=n_groups)
     result.profile_summary = {"em_time_s": 1.25, "batches": 1}
     return result
+
+
+def test_arrays_to_accumulators_inverts_relion_x_public_layout_without_projector_flip():
+    from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+        relion_x_half_volume_to_full,
+    )
+    from recovar.em.dense_single_volume.local_backprojection import (
+        enforce_relion_half_volume_x0_hermitian_host,
+    )
+    from recovar.em.initial_model.layout import relion_bpref_frame_scales
+
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=1,
+        n_directions=4,
+    )
+    state.current_size = 4
+    compact_shape = (7, 7, 7)
+    half_shape = (7, 7, 4)
+    rng = np.random.default_rng(93)
+    bp_data = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    bp_weight = rng.uniform(1e-3, 2.0, size=half_shape).astype(np.float32)
+    bp_data = enforce_relion_half_volume_x0_hermitian_host(
+        bp_data.reshape(-1), compact_shape
+    ).reshape(half_shape)
+    bp_weight = enforce_relion_half_volume_x0_hermitian_host(
+        bp_weight.reshape(-1), compact_shape
+    ).reshape(half_shape)
+    public_data = relion_x_half_volume_to_full(bp_data.reshape(-1), compact_shape)
+    public_weight = relion_x_half_volume_to_full(bp_weight.reshape(-1), compact_shape)
+
+    actual = _arrays_to_accumulators(
+        [public_data],
+        [public_weight],
+        state,
+        halfset_idx=0,
+        relion_bpref_frame=True,
+        relion_projector_frame=True,
+        padding_factor=1,
+    )[0]
+
+    data_scale, weight_scale = relion_bpref_frame_scales(state.ori_size)
+    np.testing.assert_array_equal(actual.data, bp_data.astype(np.complex128) * data_scale)
+    np.testing.assert_array_equal(actual.weight, bp_weight.astype(np.float64) * weight_scale)
 
 
 def test_split_pseudo_halfset_particle_ids_uses_particle_id_parity():

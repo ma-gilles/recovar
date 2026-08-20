@@ -26,7 +26,11 @@ from recovar.em.sampling import (
     rotation_grid_size,
 )
 
-from .layout import relion_bpref_frame_scales, run_em_output_to_bpref
+from .layout import (
+    relion_bpref_frame_scales,
+    relion_x_public_output_to_bpref,
+    run_em_output_to_bpref,
+)
 from .m_step import VdamAccumulator
 from .state import InitialModelState
 
@@ -878,14 +882,15 @@ def _arrays_to_accumulators(
 
     accumulators: list[VdamAccumulator] = []
     for k in range(state.K):
-        bp_data, bp_weight = run_em_output_to_bpref(
+        converter = relion_x_public_output_to_bpref if relion_bpref_frame else run_em_output_to_bpref
+        bp_data, bp_weight = converter(
             np.asarray(Ft_y_by_class[k]),
             np.asarray(Ft_ctf_by_class[k]),
             state.ori_size,
             r_max,
             padding_factor=padding_factor,
         )
-        if relion_projector_frame:
+        if relion_projector_frame and not relion_bpref_frame:
             bp_data = bp_data[::-1, :, :]
             bp_weight = bp_weight[::-1, :, :]
         if dump_dir:

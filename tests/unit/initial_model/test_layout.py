@@ -14,6 +14,7 @@ import numpy as np
 
 from recovar.em.initial_model.layout import (
     bpref_to_run_em_output,
+    relion_x_public_output_to_bpref,
     run_em_output_to_bpref,
 )
 
@@ -189,6 +190,44 @@ def test_run_em_output_to_bpref_accepts_shared_compact_backprojector_cube():
     np.testing.assert_array_equal(bp_data, data_cube[:, :, center:])
     np.testing.assert_array_equal(bp_weight, weight_cube[:, :, center:].astype(np.float64))
     assert bp_data.shape == (compact_size, compact_size, r_max + 2)
+
+
+def test_relion_x_public_output_to_bpref_exactly_inverts_shared_public_layout():
+    from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+        relion_x_half_volume_to_full,
+    )
+    from recovar.em.dense_single_volume.local_backprojection import (
+        enforce_relion_half_volume_x0_hermitian_host,
+    )
+
+    ori_size = 128
+    r_max = 19
+    compact_size = 2 * (r_max + 1) + 1
+    half_shape = (compact_size, compact_size, compact_size // 2 + 1)
+    rng = np.random.default_rng(91)
+    bp_data = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    bp_weight = rng.uniform(1e-3, 2.0, size=half_shape).astype(np.float32)
+    bp_data = enforce_relion_half_volume_x0_hermitian_host(
+        bp_data.reshape(-1), (compact_size,) * 3
+    ).reshape(half_shape)
+    bp_weight = enforce_relion_half_volume_x0_hermitian_host(
+        bp_weight.reshape(-1), (compact_size,) * 3
+    ).reshape(half_shape)
+    public_data = relion_x_half_volume_to_full(bp_data.reshape(-1), (compact_size,) * 3)
+    public_weight = relion_x_half_volume_to_full(bp_weight.reshape(-1), (compact_size,) * 3)
+
+    actual_data, actual_weight = relion_x_public_output_to_bpref(
+        public_data,
+        public_weight,
+        ori_size,
+        r_max,
+        padding_factor=1,
+    )
+
+    np.testing.assert_array_equal(actual_data, bp_data.astype(np.complex128))
+    np.testing.assert_array_equal(actual_weight, bp_weight.astype(np.float64))
 
 
 def test_run_em_output_to_bpref_rejects_unknown_compact_accumulator_shape():
