@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from scripts.analyze_k1_bpref_factor_boundary import (
+    _capture_stack_indices,
     _classify_localization,
     _metric,
     _recovar_capture_path,
@@ -67,3 +68,20 @@ def test_recovar_capture_path_accepts_k1_filename_variants(tmp_path, filename):
     expected = tmp_path / filename
     expected.touch()
     assert _recovar_capture_path(tmp_path, original_index=192, current_size=60) == expected
+
+
+@pytest.mark.unit
+def test_capture_stack_indices_allow_qualified_target_subset():
+    assert _capture_stack_indices(
+        {"capture_stack_indices_one_based": [11, 13, 17]},
+        [11, 17],
+    ) == [11, 13, 17]
+
+
+@pytest.mark.unit
+def test_capture_stack_indices_reject_missing_target():
+    with pytest.raises(ValueError, match="not a subset"):
+        _capture_stack_indices(
+            {"capture_stack_indices_one_based": [11, 13]},
+            [11, 17],
+        )

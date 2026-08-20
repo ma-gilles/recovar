@@ -59,6 +59,8 @@ FLAT_REAL_FILES = {
     "pdf_orientation",
     "ppref_imag",
     "ppref_real",
+    "wavg_ppref_imag",
+    "wavg_ppref_real",
     "sorted_weights",
     "cc_component_weight",
     "cc_component_norm",
@@ -90,6 +92,7 @@ FLAT_INT_FILES = {
     "fine_iorientclasses",
     "fine_iover_rots",
     "ppref_dims",
+    "wavg_ppref_dims",
 }
 
 

@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 
+from recovar.reconstruction import regularization
 from scripts.analyze_em_k1_bpref_substitution import (
     load_relion_raw,
     relion_raw_to_recovar_full,
@@ -196,6 +197,49 @@ def _comparison(
     return report
 
 
+def _fsc_float64_from_downsampled_average(
+    average0: np.ndarray,
+    average1: np.ndarray,
+    *,
+    radius: int,
+    max_shell: int,
+    shell_count: int,
+) -> np.ndarray:
+    """Mirror RELION's signed FSC reduction without the production float32 cast."""
+
+    axis = np.arange(-radius, radius + 1, dtype=np.float64)
+    x_axis = np.arange(average0.shape[2], dtype=np.float64)
+    z, y, x = np.meshgrid(axis, axis, x_axis, indexing="ij")
+    radial = np.sqrt(x * x + y * y + z * z)
+    shell = np.floor(radial + 0.5).astype(np.int64)
+    selected = radial <= float(max_shell)
+    labels = shell[selected].reshape(-1)
+    values0 = average0[selected].reshape(-1)
+    values1 = average1[selected].reshape(-1)
+    numerator = np.bincount(
+        labels,
+        weights=(np.conj(values0) * values1).real,
+        minlength=shell_count,
+    )[:shell_count]
+    denominator0 = np.bincount(
+        labels,
+        weights=np.abs(values0) ** 2,
+        minlength=shell_count,
+    )[:shell_count]
+    denominator1 = np.bincount(
+        labels,
+        weights=np.abs(values1) ** 2,
+        minlength=shell_count,
+    )[:shell_count]
+    fsc = np.zeros(shell_count, dtype=np.float64)
+    nonzero = denominator0 * denominator1 > 0.0
+    fsc[nonzero] = numerator[nonzero] / np.sqrt(
+        denominator0[nonzero] * denominator1[nonzero]
+    )
+    fsc[0] = 1.0
+    return fsc
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -214,6 +258,21 @@ def main() -> None:
     parser.add_argument("--native-weight", type=Path, required=True)
     parser.add_argument("--native-repeat-data", type=Path)
     parser.add_argument("--native-repeat-weight", type=Path)
+    parser.add_argument(
+        "--native-data-half2",
+        type=Path,
+        help="Optional matching half-2 raw data dump for a two-half FSC comparison.",
+    )
+    parser.add_argument(
+        "--native-weight-half2",
+        type=Path,
+        help="Optional matching half-2 raw weight dump for a two-half FSC comparison.",
+    )
+    parser.add_argument(
+        "--recovar-fsc",
+        type=Path,
+        help="Optional production FSC array used to validate the paired accumulator replay.",
+    )
     parser.add_argument(
         "--native-stage",
         choices=("pre_lowres_join", "post_lowres_join"),
@@ -295,6 +354,132 @@ def main() -> None:
             for path in (args.recovar_bpref, args.native_data, args.native_weight)
         },
     }
+    if (args.native_data_half2 is None) != (args.native_weight_half2 is None):
+        raise ValueError("native half-2 data and weight must be supplied together")
+    if args.recovar_fsc is not None and args.native_data_half2 is None:
+        raise ValueError("--recovar-fsc requires the matching native half-2 data and weight")
+    if args.native_data_half2 is not None and args.native_weight_half2 is not None:
+        _require(args.half == 1, "the paired FSC comparison must be anchored by --half=1")
+        recovar_half2 = _load_recovar(args.recovar_bpref, half=2)
+        for key in (
+            "stage",
+            "iteration",
+            "current_size",
+            "padding_factor",
+            "grid_size",
+            "volume_shape",
+            "accumulator_shape",
+        ):
+            _require(recovar_half2[key] == recovar[key], f"RECOVAR half metadata differs for {key}")
+        native_data2_header, native_data2 = _load_native_bpref(
+            args.native_data_half2, value_dtype=np.complex128
+        )
+        native_weight2_header, native_weight2 = _load_native_bpref(
+            args.native_weight_half2, value_dtype=np.float64
+        )
+        _require(
+            np.array_equal(native_data2_header, native_weight2_header),
+            "native half-2 raw headers differ",
+        )
+        native_numerator2, native_denominator2 = relion_raw_to_recovar_full(
+            native_data2, native_weight2, grid_size=recovar["grid_size"]
+        )
+        rec_average2, _, rec_radius2 = _downsample(
+            recovar_half2["numerator"],
+            recovar_half2["weight"],
+            max_shell=max_shell,
+            **{
+                key: recovar_half2[key]
+                for key in ("grid_size", "volume_shape", "accumulator_shape", "padding_factor")
+            },
+        )
+        native_average2, _, native_radius2 = _downsample(
+            native_numerator2,
+            native_denominator2,
+            max_shell=max_shell,
+            **{
+                key: recovar[key]
+                for key in ("grid_size", "volume_shape", "accumulator_shape", "padding_factor")
+            },
+        )
+        _require(
+            radius == rec_radius2 == native_radius2,
+            "paired FSC downsample radii differ",
+        )
+        shell_count = recovar["grid_size"] // 2 + 1
+        recovar_fsc_float64 = _fsc_float64_from_downsampled_average(
+            rec_average,
+            rec_average2,
+            radius=radius,
+            max_shell=max_shell,
+            shell_count=shell_count,
+        )
+        native_fsc_float64 = _fsc_float64_from_downsampled_average(
+            native_average,
+            native_average2,
+            radius=radius,
+            max_shell=max_shell,
+            shell_count=shell_count,
+        )
+        recovar_fsc = np.asarray(
+            regularization.compute_relion_fsc_from_backprojector(
+                recovar["numerator"],
+                recovar_half2["numerator"],
+                recovar["weight"],
+                recovar_half2["weight"],
+                recovar["volume_shape"],
+                padding_factor=recovar["padding_factor"],
+                r_max=max_shell,
+                accumulator_volume_shape=recovar["accumulator_shape"],
+            ),
+            dtype=np.float64,
+        )
+        native_fsc = np.asarray(
+            regularization.compute_relion_fsc_from_backprojector(
+                native_numerator,
+                native_numerator2,
+                native_denominator,
+                native_denominator2,
+                recovar["volume_shape"],
+                padding_factor=recovar["padding_factor"],
+                r_max=max_shell,
+                accumulator_volume_shape=recovar["accumulator_shape"],
+            ),
+            dtype=np.float64,
+        )
+        report["two_half_fsc"] = {
+            "metrics": _metric(recovar_fsc, native_fsc, allow_sign=False),
+            "recovar": recovar_fsc.tolist(),
+            "native": native_fsc.tolist(),
+            "float64_metrics": _metric(
+                recovar_fsc_float64,
+                native_fsc_float64,
+                allow_sign=False,
+            ),
+            "recovar_float64": recovar_fsc_float64.tolist(),
+            "native_float64": native_fsc_float64.tolist(),
+            "recovar_float32_cast_effect": _metric(
+                recovar_fsc,
+                recovar_fsc_float64,
+                allow_sign=False,
+            ),
+            "native_float32_cast_effect": _metric(
+                native_fsc,
+                native_fsc_float64,
+                allow_sign=False,
+            ),
+        }
+        if args.recovar_fsc is not None:
+            production_fsc = np.asarray(
+                np.load(args.recovar_fsc, allow_pickle=False), dtype=np.float64
+            ).reshape(-1)
+            report["two_half_fsc"]["recovar_replay_vs_production"] = _metric(
+                recovar_fsc, production_fsc, allow_sign=False
+            )
+            report["two_half_fsc"]["production"] = production_fsc.tolist()
+            report["artifacts"][str(args.recovar_fsc.resolve())] = _sha256(args.recovar_fsc)
+        for path in (args.native_data_half2, args.native_weight_half2):
+            report["artifacts"][str(path.resolve())] = _sha256(path)
     if args.recovar_repeat is not None:
         repeat_recovar = _load_recovar(args.recovar_repeat, half=args.half)
         for key in (

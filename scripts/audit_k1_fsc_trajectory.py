@@ -2,10 +2,12 @@
 """Audit a complete K=1 RECOVAR/RELION map trajectory with FSC/FSC-AUC.
 
 RECOVAR numbered intermediates are zero-based (``it000``), while RELION
-numbered products are one-based (``run_it001``).  This tool validates that
-topology, computes matched half/merged cross-engine curves, and evaluates both
-engines' half/merged maps against the same ground truth.  Correlation is
-intentionally not computed.
+numbered products use physical one-based iteration numbers (``run_it001``).
+By default RECOVAR iteration zero is paired with RELION iteration one; a
+continuation can select a later physical RELION start iteration.  This tool
+validates that topology, computes matched half/merged cross-engine curves, and
+evaluates both engines' half/merged maps against the same ground truth.
+Correlation is intentionally not computed.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ else:
         shell_fsc,
     )
 
-SCHEMA = "em_k1_fsc_trajectory_audit_v2"
+SCHEMA = "em_k1_fsc_trajectory_audit_v3"
 RECOVAR_MAP_RE = re.compile(r"^it(\d{3})_half([12])_reg\.mrc$")
 RELION_MAP_RE = re.compile(r"^run_it(\d{3})_half([12])_class001\.mrc$")
 
@@ -114,6 +116,7 @@ def _validate_numbered_topology(
     refinement_results: Path,
     *,
     allow_incomplete: bool = False,
+    relion_start_iteration: int = 1,
 ) -> tuple[list[tuple[int, int]], list[str]]:
     if not recovar_maps:
         raise AuditError("no RECOVAR numbered regularized half maps found")
@@ -128,14 +131,17 @@ def _validate_numbered_topology(
     recovar_iterations = sorted(recovar_maps)
     relion_iterations = sorted(relion_maps)
     expected_recovar = list(range(len(recovar_iterations)))
-    expected_relion = list(range(1, len(relion_iterations) + 1))
+    expected_relion = list(
+        range(relion_start_iteration, relion_start_iteration + len(relion_iterations))
+    )
     if recovar_iterations != expected_recovar:
         raise AuditError(
             f"RECOVAR iterations are not contiguous zero-based: found {recovar_iterations}, expected {expected_recovar}"
         )
     if relion_iterations != expected_relion:
         raise AuditError(
-            f"RELION iterations are not contiguous one-based: found {relion_iterations}, expected {expected_relion}"
+            "RELION iterations are not contiguous from the selected physical start: "
+            f"found {relion_iterations}, expected {expected_relion}"
         )
     if refinement_results.is_file():
         with np.load(refinement_results, allow_pickle=False) as payload:
@@ -243,6 +249,7 @@ def _load_numbered_row(
     relion_paths: dict[int, Path],
     gt: np.ndarray,
     *,
+    recovar_index: int,
     relion_iteration: int,
     gt_sign_invariant: bool,
     shellwise: dict[str, np.ndarray],
@@ -262,7 +269,7 @@ def _load_numbered_row(
         shellwise=shellwise,
     )
     return {
-        "recovar_index": relion_iteration - 1,
+        "recovar_index": recovar_index,
         "relion_iteration": relion_iteration,
         **metrics,
     }
@@ -377,13 +384,21 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
     if args.allow_incomplete and not args.numbered_only:
         raise AuditError("--allow-incomplete requires --numbered-only")
 
+    if args.relion_start_iteration < 1:
+        raise AuditError("--relion-start-iteration must be at least 1")
     recovar_maps = _discover_maps(intermediates, RECOVAR_MAP_RE, engine="RECOVAR")
-    relion_maps = _discover_maps(relion_dir, RELION_MAP_RE, engine="RELION")
+    all_relion_maps = _discover_maps(relion_dir, RELION_MAP_RE, engine="RELION")
+    relion_maps = {
+        iteration: paths
+        for iteration, paths in all_relion_maps.items()
+        if iteration >= args.relion_start_iteration
+    }
     pairs, topology_failures = _validate_numbered_topology(
         recovar_maps,
         relion_maps,
         recovar_dir / "refinement_results.npz",
         allow_incomplete=bool(args.allow_incomplete),
+        relion_start_iteration=int(args.relion_start_iteration),
     )
     gt_sign_invariant, sign_reason = _gt_sign_invariant(case_root, args.gt_sign_mode)
     gt = _load_recovar_volume(gt_path)
@@ -393,6 +408,7 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
             recovar_maps[recovar_index],
             relion_maps[relion_iteration],
             gt,
+            recovar_index=recovar_index,
             relion_iteration=relion_iteration,
             gt_sign_invariant=gt_sign_invariant,
             shellwise=shellwise,
@@ -433,6 +449,7 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
             "merged_cross_engine_fsc_auc_min": float(args.min_cross_merged_fsc_auc),
             "recovar_minus_relion_merged_gt_fsc_auc_min": float(args.min_merged_gt_delta),
         },
+        "relion_start_iteration": int(args.relion_start_iteration),
         "numbered_iteration_count": len(rows),
         "recovar_numbered_iteration_count": len(recovar_maps),
         "relion_numbered_iteration_count": len(relion_maps),
@@ -507,6 +524,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--recovar-dir", type=Path)
     parser.add_argument("--relion-dir", type=Path)
     parser.add_argument("--gt-volume", type=Path)
+    parser.add_argument(
+        "--relion-start-iteration",
+        type=int,
+        default=1,
+        help=(
+            "Physical RELION iteration paired with RECOVAR it000. RELION maps "
+            "before this iteration are excluded from topology and metric checks."
+        ),
+    )
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-markdown", type=Path)
     parser.add_argument("--output-shellwise-npz", type=Path)

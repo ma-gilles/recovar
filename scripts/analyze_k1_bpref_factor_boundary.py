@@ -201,6 +201,22 @@ def _recovar_capture_path(directory: Path, original_index: int, current_size: in
     return matches[0]
 
 
+def _capture_stack_indices(selection: dict[str, Any], target_stacks: list[int]) -> list[int]:
+    """Return the full native capture set when analyzing a qualified subset."""
+    raw = selection.get("capture_stack_indices_one_based", target_stacks)
+    capture_stacks = [int(value) for value in raw]
+    _require(capture_stacks, "native capture stack set is empty")
+    _require(
+        len(capture_stacks) == len(set(capture_stacks)) and all(value > 0 for value in capture_stacks),
+        "native capture stack set must contain unique positive identities",
+    )
+    _require(
+        set(target_stacks).issubset(capture_stacks),
+        "analysis targets are not a subset of the native capture stack set",
+    )
+    return capture_stacks
+
+
 def _compare_particle(
     *,
     target: dict[str, Any],
@@ -430,6 +446,7 @@ def analyze(
     _require(isinstance(targets, list) and targets, "factor panel is empty")
     target_stacks = [int(target["stack_index_one_based"]) for target in targets]
     _require(len(set(target_stacks)) == len(target_stacks), "factor panel stack identities are duplicated")
+    capture_stacks = _capture_stack_indices(selection, target_stacks)
     _require(
         all(int(target["expected_mpi_rank"]) > 0 for target in targets),
         "factor panel is missing a positive expected follower rank",
@@ -447,11 +464,12 @@ def analyze(
     )
 
     factor_paths = sorted(factor_directory.glob("*.bpre-v2.bin"))
-    _require(len(factor_paths) == len(targets), "full factor artifact count changed")
+    _require(len(factor_paths) == len(capture_stacks), "full factor artifact count changed")
     factors = [load_factor_capture(path) for path in factor_paths]
     factors_by_stack = {factor.stack_index: factor for factor in factors}
-    _require(set(factors_by_stack) == set(target_stacks), "native factor stack identities changed")
-    selected_set_hash = fnv1a64(",".join(str(value) for value in target_stacks))
+    _require(set(factors_by_stack) == set(capture_stacks), "native factor stack identities changed")
+    selected_set_hash = fnv1a64(",".join(str(value) for value in capture_stacks))
+    target_set_hash = fnv1a64(",".join(str(value) for value in target_stacks))
     expected_rank_by_stack = {
         int(target["stack_index_one_based"]): int(target["expected_mpi_rank"])
         for target in targets
@@ -461,7 +479,10 @@ def analyze(
         "native factor selected-set hash changed",
     )
     _require(
-        all(factor.header[14] == expected_rank_by_stack[factor.stack_index] for factor in factors),
+        all(
+            factors_by_stack[stack].header[14] == expected_rank_by_stack[stack]
+            for stack in target_stacks
+        ),
         "native factor MPI rank changed",
     )
 
@@ -486,6 +507,12 @@ def analyze(
         )
 
     classifications = [particle["classification"] for particle in particles]
+    support_exact_count = sum(bool(particle["support_exact"]) for particle in particles)
+    posterior_close_count = sum(
+        float(particle["comparisons"]["posterior_common_support"]["relative_l2_over_reference"])
+        <= RELATIVE_L2_BOUND
+        for particle in particles
+    )
     if all(value == "particle_prescatter_boundary_closes" for value in classifications):
         aggregate = "fixed_panel_particle_prescatter_boundary_closes"
     else:
@@ -503,7 +530,9 @@ def analyze(
         "physical_image_size": physical_image_size,
         "current_size": current_size,
         "selected_stack_text": ",".join(str(value) for value in target_stacks),
-        "selected_stack_fnv1a64": selected_set_hash,
+        "capture_stack_text": ",".join(str(value) for value in capture_stacks),
+        "selected_stack_fnv1a64": target_set_hash,
+        "capture_stack_fnv1a64": selected_set_hash,
         "selection_json": str(selection_json.resolve()),
         "selection_sha256": _sha256(selection_json),
         "capture_inertness_json": str(capture_inertness_json.resolve()),
@@ -511,7 +540,8 @@ def analyze(
         "factor_directory": str(factor_directory.resolve()),
         "recovar_capture_directory": str(recovar_capture_directory.resolve()),
         "particle_count": len(particles),
-        "support_exact_count": sum(bool(particle["support_exact"]) for particle in particles),
+        "support_exact_count": support_exact_count,
+        "posterior_common_support_close_count": posterior_close_count,
         "particle_classification_counts": {
             value: classifications.count(value) for value in sorted(set(classifications))
         },
@@ -522,8 +552,13 @@ def analyze(
             ]
         ),
         "classification": aggregate,
+        "first_cross_engine_boundary": (
+            "posterior_or_support"
+            if support_exact_count != len(particles) or posterior_close_count != len(particles)
+            else "accumulator_destination_and_inter_particle_reduction"
+        ),
         "next_boundary": (
-            "accumulator_destination_and_inter_particle_reduction"
+            "conditional_on_matched_posterior__accumulator_destination_and_inter_particle_reduction"
             if aggregate == "fixed_panel_particle_prescatter_boundary_closes"
             else "resolve_reported_first_unequal_particle_boundary"
         ),

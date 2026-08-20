@@ -249,6 +249,7 @@ def validate_directory(
     expected_particles: int | None = None,
     expected_stack_indices: np.ndarray | None = None,
     expected_stack_mpi_rank: int | None = None,
+    allow_missing_mpi_rank: bool = False,
 ) -> tuple[tuple[CaptureArtifact, ...], dict[str, object]]:
     """Validate a complete capture directory before any scientific comparison."""
 
@@ -281,12 +282,26 @@ def validate_directory(
     _require(np.unique(stack_indices).size == stack_indices.size, "duplicate RELION stack identity")
     _require(np.unique(image_hashes).size == image_hashes.size, "duplicate RELION image identity hash")
 
-    ranks, counts = np.unique(
-        np.asarray([artifact.mpi_rank for artifact in artifacts], dtype=np.uint64), return_counts=True
+    rank_values = np.asarray(
+        [artifact.mpi_rank for artifact in artifacts], dtype=np.uint64
     )
-    _require(np.all(ranks != np.iinfo(np.uint64).max), "missing MPI rank identity")
-    _require(ranks.size == reference[27], f"follower-rank coverage mismatch: {ranks.size} != {reference[27]}")
-    _require(np.all(counts <= reference[26]), "per-rank particle cap exceeded")
+    missing_rank = rank_values == np.iinfo(np.uint64).max
+    if np.any(missing_rank):
+        _require(np.all(missing_rank), "mixed present/missing MPI rank identities")
+        _require(allow_missing_mpi_rank, "missing MPI rank identity")
+        _require(
+            expected_stack_mpi_rank is None,
+            "MPI-rank stack selection is invalid when rank identity is missing",
+        )
+        ranks = np.asarray([], dtype=np.uint64)
+        counts = np.asarray([], dtype=np.int64)
+    else:
+        ranks, counts = np.unique(rank_values, return_counts=True)
+        _require(
+            ranks.size == reference[27],
+            f"follower-rank coverage mismatch: {ranks.size} != {reference[27]}",
+        )
+        _require(np.all(counts <= reference[26]), "per-rank particle cap exceeded")
 
     if expected_stack_indices is not None:
         expected = np.asarray(expected_stack_indices, dtype=np.uint64)
@@ -316,7 +331,12 @@ def validate_directory(
         "particle_count": len(artifacts),
         "stack_index_min": int(stack_indices.min()),
         "stack_index_max": int(stack_indices.max()),
-        "mpi_rank_counts": {str(int(rank)): int(count) for rank, count in zip(ranks, counts)},
+        "mpi_rank_identity_complete": not bool(np.any(missing_rank)),
+        "mpi_rank_counts": (
+            {str(int(rank)): int(count) for rank, count in zip(ranks, counts)}
+            if ranks.size
+            else {"missing": len(artifacts)}
+        ),
         "emitted_supported_row_count": total_rows,
         "positive_fweight_candidate_count": total_positive,
         "radius_excluded_positive_fweight_count": total_excluded,
@@ -332,6 +352,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-particles", type=int)
     parser.add_argument("--recovar-shard", action="append", default=[], type=Path)
     parser.add_argument("--recovar-mpi-rank", type=int)
+    parser.add_argument("--allow-missing-mpi-rank", action="store_true")
     parser.add_argument("--output-json", type=Path)
     return parser
 
@@ -346,6 +367,7 @@ def main() -> None:
         expected_particles=args.expected_particles,
         expected_stack_indices=expected_stack_indices,
         expected_stack_mpi_rank=args.recovar_mpi_rank,
+        allow_missing_mpi_rank=args.allow_missing_mpi_rank,
     )
     encoded = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     if args.output_json is not None:

@@ -247,6 +247,18 @@ def test_parse_relion_dump_dir_classifies_projector_and_component_files(tmp_path
 
 def test_parse_relion_dump_dir_classifies_store_wavg_and_candidate_files(tmp_path):
     _write_flat_real(tmp_path / "img0_part2355_storeWavg_sorted_weights.bin", [0.9, 0.5, 0.1])
+    _write_flat_int(
+        tmp_path / "img0_part2355_storeWavg_wavg_ppref_dims.bin",
+        [58, 115, 115, 0, -57, -57, 28],
+    )
+    _write_flat_real(
+        tmp_path / "img0_part2355_storeWavg_wavg_ppref_real.bin",
+        [1.0, 2.0, 3.0],
+    )
+    _write_flat_real(
+        tmp_path / "img0_part2355_storeWavg_wavg_ppref_imag.bin",
+        [-1.0, -2.0, -3.0],
+    )
     _write_complex_2d(tmp_path / "store_candidate0_Fimg_store.bin", np.ones((2, 3), dtype=np.complex128))
     _write_complex_2d(tmp_path / "store_candidate0_Frefctf.bin", np.arange(6).reshape(2, 3) + 2j)
     _write_real_2d(tmp_path / "store_candidate0_Mctf.bin", np.arange(6).reshape(2, 3))
@@ -258,6 +270,18 @@ def test_parse_relion_dump_dir_classifies_store_wavg_and_candidate_files(tmp_pat
     np.testing.assert_array_equal(
         parsed["img0_part2355_storeWavg_sorted_weights"],
         np.array([0.9, 0.5, 0.1]),
+    )
+    np.testing.assert_array_equal(
+        parsed["img0_part2355_storeWavg_wavg_ppref_dims"],
+        np.array([58, 115, 115, 0, -57, -57, 28], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        parsed["img0_part2355_storeWavg_wavg_ppref_real"],
+        np.array([1.0, 2.0, 3.0]),
+    )
+    np.testing.assert_array_equal(
+        parsed["img0_part2355_storeWavg_wavg_ppref_imag"],
+        np.array([-1.0, -2.0, -3.0]),
     )
     np.testing.assert_array_equal(
         parsed["store_candidate0_Fimg_store"],

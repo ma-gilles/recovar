@@ -131,6 +131,38 @@ def test_complete_numbered_and_final_trajectory_outputs_all_fsc_series(tmp_path,
 
 
 @pytest.mark.unit
+def test_continuation_pairs_zero_based_recovar_with_selected_physical_relion_start(
+    tmp_path, monkeypatch
+):
+    case_root, _ = _make_case(
+        tmp_path,
+        monkeypatch,
+        recovar_indices=(0, 1, 2),
+        relion_iterations=tuple(range(1, 16)),
+    )
+
+    status, report, output_npz = _run(
+        case_root,
+        tmp_path,
+        "--numbered-only",
+        "--relion-start-iteration",
+        "13",
+    )
+
+    assert status == 0
+    assert report["status"] == "pass"
+    assert report["relion_start_iteration"] == 13
+    assert report["recovar_numbered_iteration_count"] == 3
+    assert report["relion_numbered_iteration_count"] == 3
+    assert [row["recovar_index"] for row in report["numbered_iterations"]] == [0, 1, 2]
+    assert [row["relion_iteration"] for row in report["numbered_iterations"]] == [13, 14, 15]
+    with np.load(output_npz, allow_pickle=False) as curves:
+        assert "it013_cross_merged" in curves.files
+        assert "it015_cross_merged" in curves.files
+        assert "it001_cross_merged" not in curves.files
+
+
+@pytest.mark.unit
 def test_noctf_auto_mode_uses_sign_invariant_gt_but_signed_cross_engine(tmp_path, monkeypatch):
     case_root, _ = _make_case(
         tmp_path,

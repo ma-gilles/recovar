@@ -94,6 +94,25 @@ def _per_particle_relative_l2(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
     return numerator / denominator
 
 
+def _complex_phase_metrics(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, object]:
+    left = np.asarray(lhs, dtype=np.complex128).reshape(-1)
+    right = np.asarray(rhs, dtype=np.complex128).reshape(-1)
+    _require(left.shape == right.shape, "complex phase arrays differ in shape")
+    scale = max(
+        float(np.max(np.abs(left), initial=0.0)),
+        float(np.max(np.abs(right), initial=0.0)),
+        np.finfo(np.float64).tiny,
+    )
+    keep = (np.abs(left) > scale * 1e-8) & (np.abs(right) > scale * 1e-8)
+    _require(np.any(keep), "complex phase comparison has no significant common support")
+    left_unit = left[keep] / np.abs(left[keep])
+    right_unit = right[keep] / np.abs(right[keep])
+    return {
+        "significant_common_count": int(np.count_nonzero(keep)),
+        **_array_metrics(left_unit, right_unit),
+    }
+
+
 def _shell_metrics(
     lhs: np.ndarray,
     rhs: np.ndarray,
@@ -116,29 +135,109 @@ def _load_device_support(
     geometry_directory: Path,
     stack_indices: np.ndarray,
     window_indices: np.ndarray,
-) -> np.ndarray:
+) -> tuple[np.ndarray, set[int]]:
     records: dict[int, np.ndarray] = {}
-    paths = sorted(Path(geometry_directory).glob("*.npz"))
+    qualified_shadow_stacks: set[int] = set()
+    paths = sorted(Path(geometry_directory).glob("*.device.npz"))
+    if not paths:
+        paths = sorted(Path(geometry_directory).glob("*.npz"))
     _require(bool(paths), f"no RECOVAR device geometry shards: {geometry_directory}")
     for path in paths:
         with np.load(path, allow_pickle=False) as geometry:
             companion = Path(str(geometry["companion_contribution_path"]))
-            particle_rows = np.asarray(geometry["signature_particle_rows"], dtype=np.int64)
-            pixels = np.asarray(geometry["signature_pixel_indices"], dtype=np.int32)
-            flags = np.asarray(geometry["signature_row_flags"], dtype=np.uint32)
+            legacy_schema = "signature_particle_rows" in geometry
+            if legacy_schema:
+                particle_rows = np.asarray(geometry["signature_particle_rows"], dtype=np.int64)
+                pixels = np.asarray(geometry["signature_pixel_indices"], dtype=np.int32)
+                flags = np.asarray(geometry["signature_row_flags"], dtype=np.uint32)
+            else:
+                _require(
+                    str(geometry["schema"]) == "recovar-device-scatter-signature-v1",
+                    f"unknown RECOVAR device signature schema: {path}",
+                )
+                for gate in (
+                    "signature_inertness_gate_passed",
+                    "signature_accumulator_shadow_bitwise_equal",
+                    "signature_prepared_operands_bitwise_equal",
+                ):
+                    _require(
+                        bool(geometry[gate]),
+                        f"RECOVAR device signature gate failed ({gate}): {path}",
+                    )
+                particle_rows = np.asarray(geometry["particle_local_row"], dtype=np.int64)
+                particle_original_indices = np.asarray(
+                    geometry["particle_original_indices"], dtype=np.int64
+                )
+                canonical_pixels = np.asarray(
+                    geometry["canonical_pixel_indices"], dtype=np.int32
+                )
+                image_shape = np.asarray(geometry["image_shape"], dtype=np.int64)
+                current_size = int(np.asarray(geometry["current_size"]).item())
+                _require(
+                    image_shape.shape == (2,)
+                    and image_shape[0] == image_shape[1]
+                    and current_size > 0,
+                    f"device signature image geometry changed: {path}",
+                )
+                current_half_width = current_size // 2 + 1
+                current_rows = canonical_pixels // current_half_width
+                columns = canonical_pixels % current_half_width
+                signed_rows = np.where(
+                    current_rows <= current_size // 2,
+                    current_rows,
+                    current_rows - current_size,
+                )
+                pixels = (
+                    np.mod(signed_rows, int(image_shape[0]))
+                    * (int(image_shape[1]) // 2 + 1)
+                    + columns
+                ).astype(np.int32)
+                flags = np.asarray(geometry["row_flags"], dtype=np.uint32)
         with np.load(companion, allow_pickle=False) as contribution:
             companion_stacks = np.asarray(contribution["stack_indices_1based"], dtype=np.int64)
-        selected_stacks = companion_stacks[particle_rows]
+            companion_original_indices = (
+                None
+                if legacy_schema
+                else np.asarray(contribution["original_indices"], dtype=np.int64)
+            )
+        if legacy_schema:
+            selected_stacks = companion_stacks[particle_rows]
+        else:
+            assert companion_original_indices is not None
+            _require(
+                np.array_equal(particle_original_indices, companion_original_indices),
+                f"device/contribution original identities differ: {path}",
+            )
+            selected_stacks = companion_stacks
+        if not legacy_schema:
+            qualified_shadow_stacks.update(int(stack) for stack in selected_stacks)
         _require(
-            np.array_equal(pixels, np.broadcast_to(window_indices, pixels.shape)),
-            f"device geometry pixel identities changed: {path}",
+            pixels.ndim == 2
+            and flags.shape == pixels.shape
+            and pixels.shape[0] == selected_stacks.size,
+            f"device geometry row shapes changed: {path}",
         )
         for row, stack in enumerate(selected_stacks):
             key = int(stack)
             _require(key not in records, f"duplicate device support for stack {key}")
-            records[key] = (flags[row] & np.uint32(64)) != 0
+            source_pixels = pixels[row]
+            _require(
+                np.unique(source_pixels).size == source_pixels.size,
+                f"device geometry pixel identities are duplicated: {path}",
+            )
+            order = np.argsort(source_pixels)
+            positions = np.searchsorted(source_pixels[order], window_indices)
+            _require(
+                np.all(positions < source_pixels.size)
+                and np.array_equal(source_pixels[order][positions], window_indices),
+                f"device geometry does not cover the RECOVAR source window: {path}",
+            )
+            records[key] = (flags[row][order][positions] & np.uint32(64)) != 0
     _require(set(records) == set(stack_indices.tolist()), "device support stack identities are incomplete")
-    return np.stack([records[int(stack)] for stack in stack_indices])
+    return (
+        np.stack([records[int(stack)] for stack in stack_indices]),
+        qualified_shadow_stacks,
+    )
 
 
 def _load_recovar(
@@ -155,10 +254,26 @@ def _load_recovar(
     image_shape_reference = None
     current_size_reference = None
     zero_valid_rows = 0
+    shadow_only_stacks: set[int] = set()
     for path in paths:
         with np.load(path, allow_pickle=False) as archive:
-            _require(not bool(archive["shadow_only_mode"]), f"shadow-only shard is inadmissible: {path}")
             stack = np.asarray(archive["stack_indices_1based"], dtype=np.int64)
+            if bool(archive["shadow_only_mode"]):
+                _require(
+                    bool(archive["shadow_score_bitwise_equal"]),
+                    f"shadow score is not bitwise inert: {path}",
+                )
+                for metric in (
+                    "shadow_reduction_data_rel_l1",
+                    "shadow_reduction_data_normalized_max",
+                    "shadow_reduction_weight_rel_l1",
+                    "shadow_reduction_weight_normalized_max",
+                ):
+                    _require(
+                        float(archive[metric]) == 0.0,
+                        f"shadow reduction differs ({metric}): {path}",
+                    )
+                shadow_only_stacks.update(int(value) for value in stack)
             particle_rows = np.asarray(archive["active_particle_rows"], dtype=np.int64)
             summed = np.asarray(archive["active_summed"], dtype=np.complex64)
             ctf = np.asarray(archive["active_ctf_probs"], dtype=np.float32)
@@ -226,7 +341,13 @@ def _load_recovar(
         "RECOVAR window_indices are invalid for physical image_shape",
     )
     sorted_stacks = stack_array[order]
-    support_mask = _load_device_support(geometry_directory, sorted_stacks, window_reference)
+    support_mask, qualified_shadow_stacks = _load_device_support(
+        geometry_directory, sorted_stacks, window_reference
+    )
+    _require(
+        shadow_only_stacks <= qualified_shadow_stacks,
+        "shadow-only contribution lacks a bitwise-inert current device signature",
+    )
     return {
         "stack_indices": sorted_stacks,
         "data": np.concatenate(data)[order],
@@ -238,6 +359,9 @@ def _load_recovar(
         "physical_box_size": np.asarray(physical_box_size, dtype=np.int64),
         "current_size": np.asarray(current_size_reference, dtype=np.int64),
         "exact_zero_nonwinner_rows": np.asarray(zero_valid_rows, dtype=np.int64),
+        "qualified_shadow_particle_count": np.asarray(
+            len(shadow_only_stacks), dtype=np.int64
+        ),
         "shard_count": np.asarray(len(paths), dtype=np.int64),
     }
 
@@ -246,12 +370,21 @@ def _align_relion(
     artifacts: tuple[CaptureArtifact, ...],
     recovar: dict[str, np.ndarray],
     *,
-    mpi_rank: int,
+    mpi_rank: int | None,
     physical_box_size: int,
     expected_current_size: int,
 ) -> dict[str, np.ndarray]:
+    expected_stacks = set(int(value) for value in recovar["stack_indices"])
     selected = sorted(
-        (artifact for artifact in artifacts if artifact.mpi_rank == mpi_rank),
+        (
+            artifact
+            for artifact in artifacts
+            if (
+                artifact.stack_index in expected_stacks
+                if mpi_rank is None
+                else artifact.mpi_rank == mpi_rank
+            )
+        ),
         key=lambda artifact: artifact.stack_index,
     )
     stacks = np.asarray([artifact.stack_index for artifact in selected], dtype=np.int64)
@@ -337,8 +470,13 @@ def compare(
     *,
     validation_json: Path,
     inertness_json: Path,
-    mpi_rank: int,
+    mpi_rank: int | None,
+    select_by_stack_identity: bool = False,
 ) -> tuple[dict[str, object], dict[str, np.ndarray]]:
+    _require(
+        select_by_stack_identity == (mpi_rank is None),
+        "choose exactly one RELION selection mode: MPI rank or exact stack identity",
+    )
     validation = _load_gate(validation_json, "classification_ready")
     inertness = _load_gate(inertness_json, "capture_inertness_qualified")
     recovar = _load_recovar(contribution_directory, geometry_directory)
@@ -346,8 +484,9 @@ def compare(
     artifacts, current_validation = validate_directory(
         capture_directory,
         expected_particles=int(validation["particle_count"]),
-        expected_stack_indices=expected,
+        expected_stack_indices=None if select_by_stack_identity else expected,
         expected_stack_mpi_rank=mpi_rank,
+        allow_missing_mpi_rank=select_by_stack_identity,
     )
     _require(current_validation["classification_ready"] is True, "fresh validation did not pass")
     relion = _align_relion(
@@ -366,6 +505,9 @@ def compare(
     recovar_data_active = np.where(recovar["support_mask"], recovar["data"], 0)
     recovar_weight_active = np.where(recovar["support_mask"], recovar["weight"], 0)
     data_particle = _per_particle_relative_l2(recovar_data_active, relion["data"])
+    data_magnitude_particle = _per_particle_relative_l2(
+        np.abs(recovar_data_active), np.abs(relion["data"])
+    )
     weight_particle = _per_particle_relative_l2(recovar_weight_active, relion["weight"])
     data_delta_l2 = np.linalg.norm(
         relion["data"].astype(np.complex128) - recovar_data_active.astype(np.complex128),
@@ -378,6 +520,13 @@ def compare(
     support_counts = np.count_nonzero(recovar["support_mask"], axis=1)
     support_exact = bool(np.array_equal(relion["supported_rows"], support_counts))
     geometry_aligned = bool(np.max(np.abs(transpose_delta)) <= 1e-6 and support_exact)
+    data_metrics = _array_metrics(recovar_data_active, relion["data"])
+    weight_metrics = _array_metrics(recovar_weight_active, relion["weight"])
+    operands_exact = bool(
+        geometry_aligned
+        and data_metrics["exact_equal"]
+        and weight_metrics["exact_equal"]
+    )
     report: dict[str, object] = {
         "schema": "relion-recovar-bpref-prescatter-comparison-v1",
         "metric_policy": "exact/array metrics for intermediate operands; no correlation",
@@ -388,6 +537,9 @@ def compare(
         },
         "scope": {
             "mpi_rank": mpi_rank,
+            "particle_selection": (
+                "exact_stack_identity" if select_by_stack_identity else "mpi_rank"
+            ),
             "particle_count": int(recovar["stack_indices"].size),
             "pixels_per_particle": int(recovar["window_indices"].size),
             "relion_current_size": int(relion["current_size"]),
@@ -407,13 +559,18 @@ def compare(
             "oversampled_rotation_identity_mismatch_count": int(np.count_nonzero(~oversampled_exact)),
         },
         "operands": {
-            "data_numerator_recovar_vs_scaled_negative_relion": _array_metrics(
+            "data_numerator_recovar_vs_scaled_negative_relion": data_metrics,
+            "real_weight_recovar_vs_scaled_relion": weight_metrics,
+            "data_per_particle_relative_l2": _quantiles(data_particle),
+            "data_magnitude_recovar_vs_relion": _array_metrics(
+                np.abs(recovar_data_active), np.abs(relion["data"])
+            ),
+            "data_magnitude_per_particle_relative_l2": _quantiles(
+                data_magnitude_particle
+            ),
+            "data_phase_recovar_vs_relion": _complex_phase_metrics(
                 recovar_data_active, relion["data"]
             ),
-            "real_weight_recovar_vs_scaled_relion": _array_metrics(
-                recovar_weight_active, relion["weight"]
-            ),
-            "data_per_particle_relative_l2": _quantiles(data_particle),
             "weight_per_particle_relative_l2": _quantiles(weight_particle),
             "largest_data_delta_particle": {
                 "stack_index_1based": int(recovar["stack_indices"][outlier_index]),
@@ -445,12 +602,18 @@ def compare(
             ),
         },
         "classification": (
-            "pre_scatter_operand_generation_difference"
+            "pre_scatter_operand_generation_exactly_closes"
+            if operands_exact
+            else "pre_scatter_operand_generation_difference"
             if geometry_aligned
             else "unresolved_geometry_or_support_difference"
         ),
         "qualification": (
-            "The classification localises the first aggregate difference at the captured pre-scatter "
+            "The fixed particle panel closes bit-for-bit at the aligned pre-scatter data and weight "
+            "operands after the known RELION-transpose rotation convention. This does not prove the "
+            "uncaptured particle population or the subsequent atomic accumulation schedule."
+            if operands_exact
+            else "The classification localises the first panel difference at the captured pre-scatter "
             "operands after exact stack/support alignment and the known RELION-transpose rotation "
             "convention. Precision versus formulation requires float64/order controls and controlled "
             "accumulator substitution; this report alone does not make that second classification."
@@ -480,7 +643,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("geometry_directory", type=Path)
     parser.add_argument("--validation-json", required=True, type=Path)
     parser.add_argument("--inertness-json", required=True, type=Path)
-    parser.add_argument("--mpi-rank", required=True, type=int)
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--mpi-rank", type=int)
+    selection.add_argument("--select-by-stack-identity", action="store_true")
     parser.add_argument("--output-json", required=True, type=Path)
     parser.add_argument("--output-arrays", required=True, type=Path)
     return parser
@@ -495,6 +660,7 @@ def main() -> None:
         validation_json=args.validation_json,
         inertness_json=args.inertness_json,
         mpi_rank=args.mpi_rank,
+        select_by_stack_identity=args.select_by_stack_identity,
     )
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     np.savez(args.output_arrays, **arrays)

@@ -108,8 +108,9 @@ def test_validate_directory_rejects_unsealed_temporary_file(tmp_path: Path):
 def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
     capture = tmp_path / "capture"
     capture.mkdir()
-    _write_artifact(capture, part=10, stack=101, rank=1)
-    _write_artifact(capture, part=11, stack=202, rank=2)
+    missing_rank = np.iinfo(np.uint64).max
+    _write_artifact(capture, part=10, stack=101, rank=missing_rank)
+    _write_artifact(capture, part=11, stack=202, rank=missing_rank)
 
     contributions = tmp_path / "contributions"
     contributions.mkdir()
@@ -156,16 +157,51 @@ def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
         geometry,
         validation_json=validation,
         inertness_json=inertness,
-        mpi_rank=2,
+        mpi_rank=None,
+        select_by_stack_identity=True,
     )
 
     assert report["gates"]["comparison_ready"] is True
     assert report["scope"]["relion_current_size"] == 48
     assert report["scope"]["physical_image_box_size"] == 256
-    assert report["classification"] == "pre_scatter_operand_generation_difference"
+    assert report["classification"] == "pre_scatter_operand_generation_exactly_closes"
     assert report["operands"]["data_numerator_recovar_vs_scaled_negative_relion"][
         "exact_equal"
     ] is True
     assert report["operands"]["real_weight_recovar_vs_scaled_relion"]["exact_equal"] is True
     assert np.array_equal(arrays["stack_indices_1based"], np.asarray([202]))
     assert np.array_equal(arrays["recovar_device_support_mask"], np.asarray([[True, False]]))
+
+
+def test_load_current_device_signature_support_in_source_window_order(tmp_path: Path):
+    contribution = tmp_path / "rows.npz"
+    np.savez(
+        contribution,
+        stack_indices_1based=np.asarray([202], dtype=np.int64),
+        original_indices=np.asarray([17], dtype=np.int64),
+    )
+    geometry = tmp_path / "geometry"
+    geometry.mkdir()
+    np.savez(
+        geometry / "rows.device.npz",
+        schema=np.asarray("recovar-device-scatter-signature-v1"),
+        companion_contribution_path=np.asarray(str(contribution)),
+        signature_inertness_gate_passed=np.asarray(True),
+        signature_accumulator_shadow_bitwise_equal=np.asarray(True),
+        signature_prepared_operands_bitwise_equal=np.asarray(True),
+        particle_local_row=np.asarray([0], dtype=np.int32),
+        particle_original_indices=np.asarray([17], dtype=np.int64),
+        image_shape=np.asarray([256, 256], dtype=np.int32),
+        current_size=np.asarray(48, dtype=np.int32),
+        canonical_pixel_indices=np.asarray([[2, 99, 47 * 25 + 1]], dtype=np.int32),
+        row_flags=np.asarray([[0, 64, 64]], dtype=np.uint32),
+    )
+
+    support, qualified_shadow_stacks = comparator._load_device_support(
+        geometry,
+        np.asarray([202], dtype=np.int64),
+        np.asarray([255 * 129 + 1, 2], dtype=np.int32),
+    )
+
+    assert np.array_equal(support, np.asarray([[True, False]]))
+    assert qualified_shadow_stacks == {202}

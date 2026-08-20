@@ -89,6 +89,44 @@ def test_legacy_loader_skips_unused_large_operand_fields(tmp_path):
 
 
 @pytest.mark.unit
+def test_legacy_loader_exposes_complete_production_boundary(tmp_path):
+    path = tmp_path / "pass2_orig000001_cs060.npz"
+    candidate_mask = np.asarray([[True, True], [True, False]], dtype=bool)
+    scores = np.asarray([[1.0, 2.0], [3.0, -np.inf]], dtype=np.float64)
+    np.savez(
+        path,
+        original_index=np.int64(1),
+        rotations=np.stack([np.eye(3, dtype=np.float32)] * 2),
+        fine_translations=np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
+        candidate_mask=candidate_mask,
+        probs=np.asarray([[0.1, 0.2], [0.7, 0.0]], dtype=np.float64),
+        scores_with_prior=scores,
+        rotation_log_prior=np.asarray([0.25, 0.5], dtype=np.float64),
+        translation_log_prior=np.asarray([0.75, 1.0], dtype=np.float64),
+        reconstruction_mask=np.asarray([[False, False], [True, False]], dtype=bool),
+        oversampled_rot_indices=np.asarray([20, 21], dtype=np.int64),
+        parent_map=np.asarray([100, 101], dtype=np.int32),
+    )
+
+    normalized = load_recovar_candidate_table(path)
+
+    np.testing.assert_array_equal(normalized["production_combined_score"], scores)
+    np.testing.assert_array_equal(
+        normalized["production_rotation_log_prior"],
+        [[0.25, 0.25], [0.5, 0.5]],
+    )
+    np.testing.assert_array_equal(
+        normalized["production_translation_log_prior"],
+        [[0.75, 1.0], [0.75, 1.0]],
+    )
+    np.testing.assert_array_equal(
+        normalized["production_significant"], [[False, False], [True, False]]
+    )
+    np.testing.assert_array_equal(normalized["rotation_global_index"], [20, 21])
+    np.testing.assert_array_equal(normalized["rotation_parent_global"], [100, 101])
+
+
+@pytest.mark.unit
 def test_production_shard_normalizes_to_dense_partial_topology(tmp_path, monkeypatch):
     rotations = np.stack(
         [np.eye(3, dtype=np.float32), np.diag([-1.0, -1.0, 1.0]).astype(np.float32)]

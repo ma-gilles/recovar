@@ -2,7 +2,21 @@ from __future__ import annotations
 
 import numpy as np
 
-from scripts.analyze_k1_coarse_components_boundary import _cutoff_boundary
+from scripts.analyze_k1_coarse_components_boundary import (
+    _cutoff_boundary,
+    _native_coarse_image_size,
+)
+
+
+def test_native_coarse_image_size_uses_operand_geometry() -> None:
+    component = [0] * 40
+    component[27] = 104
+    operand = [0] * 40
+    operand[12] = 104
+    operand[18] = 100
+
+    assert _native_coarse_image_size(tuple(component), tuple(operand)) == 100
+    assert _native_coarse_image_size(tuple(component), None) == 104
 
 
 def test_cutoff_boundary_reports_opposite_winner_threshold_margins() -> None:

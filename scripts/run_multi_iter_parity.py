@@ -140,6 +140,41 @@ def map_pose_arrays_to_particle_order(our_names, gt_rot_all, gt_trans_all=None):
     return gt_rotations_orig, gt_translations_orig
 
 
+def map_relion_scale_groups_to_half_order(
+    group_numbers,
+    relion_identity_to_position,
+    half_identities,
+):
+    """Map one-based RELION scale groups to zero-based half-local rows."""
+
+    group_numbers = np.asarray(group_numbers, dtype=np.int64).reshape(-1)
+    if group_numbers.size and int(np.min(group_numbers)) < 1:
+        raise ValueError("RELION rlnGroupNumber values must be 1-based positive integers")
+    try:
+        group_ids = np.asarray(
+            [group_numbers[relion_identity_to_position[identity]] - 1 for identity in half_identities],
+            dtype=np.int64,
+        )
+    except KeyError as exc:
+        raise ValueError(f"RELION scale-group table is missing particle identity {exc.args[0]!r}") from exc
+    group_count = int(np.max(group_numbers)) if group_numbers.size else 0
+    return group_ids, group_count
+
+
+def retain_group_scale_update_state(*, max_iter: int, skip_final_iteration: bool) -> bool:
+    """Whether a later score can consume group scales updated by this replay.
+
+    The legacy dense ``adaptive_oversampling=0`` engine does not accumulate
+    RELION XA/AA group-scale sufficient statistics. A single explicitly
+    terminal numbered pass may still use the loaded per-particle scale factors
+    for scoring because its newly estimated scale state has no downstream
+    consumer. All nonterminal replays retain group IDs and therefore keep the
+    engine's fail-closed protection against silently skipping an update.
+    """
+
+    return not (int(max_iter) == 1 and bool(skip_final_iteration))
+
+
 def add_significant_count_artifacts(save_dict, significant_counts, half_indices, n_images):
     """Save parity support counts in explicit half and source-image order."""
     half_order_indices = np.concatenate(
@@ -166,12 +201,55 @@ def add_significant_count_artifacts(save_dict, significant_counts, half_indices,
         save_dict[f"sig_counts_by_image_iter_{iteration:03d}"] = counts_by_image
 
 
-def particle_half_indices(random_subsets):
-    """Return source-order particle indices for the two RELION half sets."""
+def particle_half_indices(
+    random_subsets,
+    *,
+    fresh_order_seed: int | None = None,
+    optics_group_ids=None,
+    first_iteration: int = 1,
+):
+    """Return source-order or reconstructed fresh RELION half orders."""
+
     subsets = np.asarray(random_subsets)
+    if fresh_order_seed is not None:
+        from recovar.em.dense_single_volume.helpers.expected_accuracy import (
+            relion_auto_refine_half_orders,
+        )
+
+        return relion_auto_refine_half_orders(
+            subsets,
+            int(fresh_order_seed),
+            int(first_iteration),
+            optics_group_ids=optics_group_ids,
+        )
     return (
         np.flatnonzero(subsets == 1).astype(np.int64),
         np.flatnonzero(subsets == 2).astype(np.int64),
+    )
+
+
+def map_relion_half_orders_to_dataset_rows(
+    dataset_image_names,
+    relion_image_names,
+    relion_half_orders,
+):
+    """Map RELION source-row orders to dataset rows by immutable image identity."""
+
+    dataset_names = tuple(str(name) for name in dataset_image_names)
+    relion_names = tuple(str(name) for name in relion_image_names)
+    dataset_rows = {name: row for row, name in enumerate(dataset_names)}
+    if len(dataset_rows) != len(dataset_names):
+        raise ValueError("dataset rlnImageName identities are not unique")
+    if len(set(relion_names)) != len(relion_names):
+        raise ValueError("RELION rlnImageName identities are not unique")
+    if set(dataset_names) != set(relion_names):
+        raise ValueError("dataset and RELION rlnImageName identities differ")
+    return tuple(
+        np.asarray(
+            [dataset_rows[relion_names[int(row)]] for row in order],
+            dtype=np.int64,
+        )
+        for order in relion_half_orders
     )
 
 
@@ -472,6 +550,107 @@ def load_initial_fourier_volume(path: str | Path, volume_shape: tuple[int, int, 
     return volume.reshape(-1)
 
 
+def filter_fresh_initial_reference(
+    volume_real: np.ndarray,
+    *,
+    pixel_size: float,
+    ini_high_angstrom: float,
+) -> np.ndarray:
+    """Return RELION's in-memory startup reference before its first E-step.
+
+    ``run_it000_*_class001.mrc`` is a rounded serialization of this state.
+    Reloading that MRC changes borderline first-iteration CC winners.  A fresh
+    trajectory must instead repeat ``initialLowPassFilterReferences`` and pass
+    its binary64 real-space result directly to the initial projector.
+    """
+
+    from recovar.em.initial_model.bootstrap_iref import (
+        initial_low_pass_filter_references,
+    )
+
+    volume_real = np.asarray(volume_real, dtype=np.float64)
+    if volume_real.ndim != 3 or len(set(volume_real.shape)) != 1:
+        raise ValueError(
+            "fresh initial reference must be one cubic real-space volume, "
+            f"got {volume_real.shape}",
+        )
+    if not np.isfinite(volume_real).all():
+        raise ValueError("fresh initial reference must contain only finite values")
+    if not np.isfinite(pixel_size) or float(pixel_size) <= 0.0:
+        raise ValueError("fresh initial reference pixel size must be positive")
+    if not np.isfinite(ini_high_angstrom) or float(ini_high_angstrom) <= 0.0:
+        raise ValueError("fresh initial reference ini_high must be positive")
+    return np.asarray(
+        initial_low_pass_filter_references(
+            volume_real[None, ...],
+            ori_size=int(volume_real.shape[0]),
+            pixel_size=float(pixel_size),
+            ini_high_ang=float(ini_high_angstrom),
+            filter_edgewidth=2.0,
+        )[0],
+        dtype=np.float64,
+    )
+
+
+def validate_fresh_initial_reference_args(
+    *,
+    fresh_initial_reference_mrc: str | None,
+    start_iteration: int,
+    initial_half1_mrc: str | None,
+    initial_half1_ft_npz: str | None,
+) -> None:
+    """Keep the process-resident startup reference confined to fresh runs."""
+
+    if fresh_initial_reference_mrc is None:
+        return
+    if int(start_iteration) != 0:
+        raise ValueError("--fresh-initial-reference-mrc requires --iter 0")
+    if initial_half1_mrc is not None or initial_half1_ft_npz is not None:
+        raise ValueError(
+            "--fresh-initial-reference-mrc is mutually exclusive with initial half references",
+        )
+
+
+def validate_fresh_particle_order_args(
+    *,
+    fresh_particle_order_seed: int | None,
+    preserve_bpref_particle_order: bool,
+    start_iteration: int,
+    initial_half1_mrc: str | None,
+    initial_half2_mrc: str | None,
+    initial_half1_ft_npz: str | None,
+    initial_half2_ft_npz: str | None,
+    final_replay_fields: str | None,
+) -> None:
+    """Confine RELION's one-time physical order to an unsealed fresh K=1 run."""
+
+    if preserve_bpref_particle_order and fresh_particle_order_seed is None:
+        raise ValueError(
+            "--diagnostic-preserve-bpref-particle-order requires "
+            "--diagnostic-fresh-particle-order-seed",
+        )
+    if fresh_particle_order_seed is None:
+        return
+    if int(start_iteration) != 0:
+        raise ValueError("--diagnostic-fresh-particle-order-seed requires --iter 0")
+    if any(
+        value is not None
+        for value in (
+            initial_half1_mrc,
+            initial_half2_mrc,
+            initial_half1_ft_npz,
+            initial_half2_ft_npz,
+        )
+    ):
+        raise ValueError(
+            "--diagnostic-fresh-particle-order-seed cannot be applied to an initial half boundary",
+        )
+    if final_replay_fields:
+        raise ValueError(
+            "--diagnostic-fresh-particle-order-seed cannot be combined with --final-replay-fields",
+        )
+
+
 def load_initial_noise_variance(path: str | Path, image_shape: tuple[int, int]) -> np.ndarray:
     """Load one sealed full-pixel noise-variance state without STAR rounding."""
 
@@ -571,6 +750,146 @@ def final_only_replay_override(replay_iteration_overrides, *, enabled: bool):
     return replay_iteration_overrides[0]
 
 
+_FINAL_REPLAY_FIELD_GROUPS = {
+    "poses": frozenset(
+        {
+            "previous_best_translations",
+            "previous_best_rotations",
+            "previous_best_rotation_eulers",
+        }
+    ),
+    "sampling": frozenset(
+        {
+            "translation_sigma_angstrom",
+            "translation_sigma_angstrom_per_half",
+        }
+    ),
+    "normalization": frozenset({"image_corrections", "scale_corrections"}),
+    "noise": frozenset({"noise_variance"}),
+    "direction_prior": frozenset({"direction_prior"}),
+}
+_FINAL_REPLAY_FIELD_GROUPS["corrections"] = frozenset().union(
+    _FINAL_REPLAY_FIELD_GROUPS["normalization"],
+    _FINAL_REPLAY_FIELD_GROUPS["noise"],
+    _FINAL_REPLAY_FIELD_GROUPS["direction_prior"],
+)
+_FINAL_REPLAY_FIELD_GROUPS["all"] = frozenset().union(
+    *(_FINAL_REPLAY_FIELD_GROUPS[name] for name in (
+        "poses",
+        "sampling",
+        "normalization",
+        "noise",
+        "direction_prior",
+    ))
+)
+
+
+def select_final_replay_override(replay_iteration_overrides, field_groups: str | None):
+    """Select RELION fields substituted only at the final K=1 boundary.
+
+    The source is the last replay slot, which represents the last-numbered
+    RELION particle/model state for an ordinary continuation.  Keeping this
+    selector here makes the diagnostic independent of the production CLI's
+    differently named serialized correction fields.
+    """
+
+    requested_groups = [
+        item.strip().lower()
+        for item in str(field_groups or "").split(",")
+        if item.strip()
+    ]
+    if not requested_groups:
+        return None
+    unknown = sorted(set(requested_groups) - set(_FINAL_REPLAY_FIELD_GROUPS))
+    if unknown:
+        raise ValueError(
+            "unknown final replay field group(s): "
+            f"{','.join(unknown)}; expected one or more of "
+            f"{','.join(sorted(_FINAL_REPLAY_FIELD_GROUPS))}"
+        )
+    if not replay_iteration_overrides or replay_iteration_overrides[-1] is None:
+        raise ValueError("final replay field selection is missing the last-numbered RELION state")
+
+    selected_keys = frozenset().union(
+        *(_FINAL_REPLAY_FIELD_GROUPS[group] for group in requested_groups)
+    )
+    source = replay_iteration_overrides[-1]
+    missing = sorted(selected_keys - set(source))
+    if missing:
+        raise ValueError(f"last-numbered RELION state is missing selected fields: {missing}")
+    return {key: source[key] for key in sorted(selected_keys)}
+
+
+def parse_iteration_normalization_factor_overrides(specs):
+    """Parse diagnostic per-scoring-iteration normalization overrides."""
+    parsed = {}
+    for spec in specs:
+        try:
+            iteration_text, stack_text, factor_text = spec.split(":")
+            scoring_iteration = int(iteration_text)
+            stack_index = int(stack_text)
+            factor = np.float32(factor_text)
+        except (AttributeError, TypeError, ValueError) as error:
+            raise ValueError(
+                "iteration normalization override must be "
+                "SCORING_ITER:ZERO_BASED_STACK:FACTOR"
+            ) from error
+        if scoring_iteration < 1:
+            raise ValueError("normalization override scoring iteration must be positive")
+        if stack_index < 0:
+            raise ValueError("normalization override stack row must be nonnegative")
+        if not np.isfinite(factor) or factor <= 0:
+            raise ValueError("normalization override factor must be finite and positive")
+        key = (scoring_iteration, stack_index)
+        if key in parsed:
+            raise ValueError(
+                "duplicate iteration normalization override for "
+                f"scoring iteration {scoring_iteration}, stack row {stack_index}"
+            )
+        parsed[key] = factor
+    return parsed
+
+
+def apply_iteration_normalization_factor_overrides(
+    corrections,
+    scale_corrections,
+    *,
+    half_stack_indices,
+    scoring_iteration,
+    overrides,
+):
+    """Apply explicit diagnostic factors to copies of half-ordered corrections."""
+    corrected = [np.array(values, copy=True) for values in corrections]
+    stack_locations = {}
+    for half_index, stack_indices in enumerate(half_stack_indices):
+        for half_position, stack_index in enumerate(stack_indices):
+            stack_index = int(stack_index)
+            if stack_index in stack_locations:
+                raise ValueError(f"stack row occurs in both particle halves: {stack_index}")
+            stack_locations[stack_index] = (half_index, half_position)
+
+    applied = []
+    for (override_iteration, stack_index), factor in overrides.items():
+        if override_iteration != int(scoring_iteration):
+            continue
+        if stack_index not in stack_locations:
+            raise ValueError(f"normalization-factor override stack row is absent: {stack_index}")
+        half_index, half_position = stack_locations[stack_index]
+        corrected[half_index][half_position] = (
+            factor * np.asarray(scale_corrections[half_index])[half_position]
+        )
+        applied.append(
+            {
+                "scoring_iteration": int(scoring_iteration),
+                "stack_index": stack_index,
+                "half": half_index + 1,
+                "half_position": half_position,
+                "factor": float(factor),
+            }
+        )
+    return corrected, applied
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
@@ -592,6 +911,24 @@ def main():
         ),
     )
     parser.add_argument(
+        "--diagnostic-fresh-particle-order-seed",
+        type=int,
+        default=None,
+        help=(
+            "Diagnostic exact-state A/B only: reconstruct RELION's one-time fresh "
+            "paired half order using this optimizer seed. Ordinary continuation "
+            "preserves source order."
+        ),
+    )
+    parser.add_argument(
+        "--diagnostic-preserve-bpref-particle-order",
+        action="store_true",
+        help=(
+            "Diagnostic exact-state A/B only: preserve the selected physical "
+            "particle order through the K=1 sparse BPref accumulation."
+        ),
+    )
+    parser.add_argument(
         "--initial-half1-mrc",
         type=str,
         default=None,
@@ -602,6 +939,15 @@ def main():
         type=str,
         default=None,
         help="Diagnostic RECOVAR-frame half-2 map replacing the starting RELION map.",
+    )
+    parser.add_argument(
+        "--fresh-initial-reference-mrc",
+        type=str,
+        default=None,
+        help=(
+            "Diagnostic fresh-run RECOVAR-frame reference. Repeats RELION's "
+            "initial low-pass in memory and bypasses the lossy run_it000 MRC boundary."
+        ),
     )
     parser.add_argument(
         "--initial-half1-ft-npz",
@@ -653,6 +999,16 @@ def main():
             "from the supplied/current half maps and the pinned RELION state."
         ),
     )
+    parser.add_argument(
+        "--final-replay-fields",
+        default=None,
+        metavar="GROUP[,GROUP...]",
+        help=(
+            "Diagnostic K=1 final-boundary substitution from the last-numbered "
+            "RELION state. Groups: poses, sampling, normalization, noise, "
+            "direction_prior, corrections, all. Numbered iterations are unchanged."
+        ),
+    )
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument(
         "--save_intermediates_dir", type=str, default=None, help="Directory for manifest NPZ dumps (for replay)"
@@ -694,6 +1050,17 @@ def main():
         help=(
             "Diagnostic only: replace avg_norm/normcorr for one stack row. "
             "May be repeated; the factor is multiplied by the row's scale correction."
+        ),
+    )
+    parser.add_argument(
+        "--normalization-factor-override-at-iteration",
+        action="append",
+        default=[],
+        metavar="SCORING_ITER:ZERO_BASED_STACK:FACTOR",
+        help=(
+            "Diagnostic only: replace avg_norm/normcorr for one stack row at one "
+            "physical scoring iteration. May be repeated; the factor is multiplied "
+            "by the row's scale correction."
         ),
     )
     parser.add_argument("--max_healpix_order", type=int, default=8)
@@ -846,6 +1213,19 @@ def main():
         help="Optional persistent JAX compilation cache directory for cross-process warm starts.",
     )
     args = parser.parse_args()
+    iteration_normalization_overrides = parse_iteration_normalization_factor_overrides(
+        args.normalization_factor_override_at_iteration
+    )
+    validate_fresh_particle_order_args(
+        fresh_particle_order_seed=args.diagnostic_fresh_particle_order_seed,
+        preserve_bpref_particle_order=args.diagnostic_preserve_bpref_particle_order,
+        start_iteration=args.iter,
+        initial_half1_mrc=args.initial_half1_mrc,
+        initial_half2_mrc=args.initial_half2_mrc,
+        initial_half1_ft_npz=args.initial_half1_ft_npz,
+        initial_half2_ft_npz=args.initial_half2_ft_npz,
+        final_replay_fields=args.final_replay_fields,
+    )
     validate_final_only_replay_args(
         max_iter=args.max_iter,
         force_final_after_zero_iterations=args.force_final_after_zero_iterations,
@@ -857,6 +1237,12 @@ def main():
         initial_noise_half2_npy=args.initial_noise_half2_npy,
         initial_direction_prior_half1_npy=args.initial_direction_prior_half1_npy,
         initial_direction_prior_half2_npy=args.initial_direction_prior_half2_npy,
+    )
+    validate_fresh_initial_reference_args(
+        fresh_initial_reference_mrc=args.fresh_initial_reference_mrc,
+        start_iteration=args.iter,
+        initial_half1_mrc=args.initial_half1_mrc,
+        initial_half1_ft_npz=args.initial_half1_ft_npz,
     )
 
     _print_provenance_banner_and_assert_parity_ancestors()
@@ -1141,7 +1527,25 @@ def main():
 
     # Volume: get_dft3(vol_real) produces the unnormalized centered DFT.
     # This matches the internal convention expected by the refinement code.
-    if args.initial_half1_ft_npz is not None:
+    initial_reference_real_for_projector = None
+    if args.fresh_initial_reference_mrc is not None:
+        unfiltered_real = helpers.load_mrc(args.fresh_initial_reference_mrc)
+        filtered_real = filter_fresh_initial_reference(
+            unfiltered_real,
+            pixel_size=pixel_size,
+            ini_high_angstrom=relion_ini_high,
+        )
+        initial_reference_real_for_projector = [filtered_real, filtered_real]
+        filtered_for_fourier = filtered_real.astype(np.float32, copy=False)
+        vol_ft = np.asarray(ftu.get_dft3(jnp.asarray(filtered_for_fourier))).reshape(-1)
+        vol_ft_h1 = vol_ft
+        vol_ft_h2 = vol_ft
+        print(
+            "  Fresh process-resident initial reference: "
+            f"source={args.fresh_initial_reference_mrc}, ini_high={relion_ini_high:.2f} A, "
+            "fmask_edge=2 shells"
+        )
+    elif args.initial_half1_ft_npz is not None:
         vol_ft_h1 = load_initial_fourier_volume(args.initial_half1_ft_npz, (N, N, N))
         vol_ft_h2 = load_initial_fourier_volume(args.initial_half2_ft_npz, (N, N, N))
         print(
@@ -1187,6 +1591,34 @@ def main():
 
     relion_idx_map = {_idx(relion_names[i]): relion_subsets[i] for i in range(len(relion_names))}
     our_subsets = np.array([relion_idx_map.get(_idx(n), 0) for n in our_names])
+    if args.diagnostic_fresh_particle_order_seed is not None:
+        if args.keep_stack_indices or args.max_particles is not None:
+            raise ValueError(
+                "--diagnostic-fresh-particle-order-seed requires the complete particle table"
+            )
+        relion_optics = (
+            np.asarray(relion_df["rlnOpticsGroup"], dtype=np.int64)
+            if "rlnOpticsGroup" in relion_df.columns
+            else None
+        )
+        relion_half_orders = particle_half_indices(
+            relion_subsets,
+            fresh_order_seed=args.diagnostic_fresh_particle_order_seed,
+            optics_group_ids=relion_optics,
+        )
+        half1_indices, half2_indices = map_relion_half_orders_to_dataset_rows(
+            our_names,
+            relion_names,
+            relion_half_orders,
+        )
+        print(
+            "  Diagnostic reconstructed fresh particle order: "
+            f"optimizer_seed={args.diagnostic_fresh_particle_order_seed}, "
+            f"effective_seed={args.diagnostic_fresh_particle_order_seed + 1}"
+        )
+    else:
+        half1_indices = None
+        half2_indices = None
 
     # Keep exact known-bad particles when debugging per-image score parity.
     if args.keep_stack_indices:
@@ -1224,9 +1656,12 @@ def main():
             our_subsets[drop_h2] = 0
         print(f"  Subsampled to max_particles={args.max_particles}")
 
-    ds_half1 = ds.subset(np.where(our_subsets == 1)[0])
-    ds_half2 = ds.subset(np.where(our_subsets == 2)[0])
-    print(f"  Half-sets: {len(np.where(our_subsets == 1)[0])} + {len(np.where(our_subsets == 2)[0])}")
+    if half1_indices is None or half2_indices is None:
+        half1_indices, half2_indices = particle_half_indices(our_subsets)
+
+    ds_half1 = ds.subset(half1_indices)
+    ds_half2 = ds.subset(half2_indices)
+    print(f"  Half-sets: {len(half1_indices)} + {len(half2_indices)}")
 
     # ---- Image corrections (RELION parity: normcorr + scale) ----
     # RELION: img *= avg_norm_correction / normcorr  (ml_optimiser.cpp:6240)
@@ -1269,10 +1704,25 @@ def main():
 
     # Map to dataset ordering per half-set
     relion_idx_to_pos = {_idx(relion_names[i]): i for i in range(len(relion_names))}
-    half1_mask = our_subsets == 1
-    half2_mask = our_subsets == 2
-    half1_our_idx = [_idx(our_names[i]) for i in np.where(half1_mask)[0]]
-    half2_our_idx = [_idx(our_names[i]) for i in np.where(half2_mask)[0]]
+    half1_our_idx = [_idx(our_names[i]) for i in half1_indices]
+    half2_our_idx = [_idx(our_names[i]) for i in half2_indices]
+    group_ids_h1, group_count = map_relion_scale_groups_to_half_order(
+        group_numbers,
+        relion_idx_to_pos,
+        half1_our_idx,
+    )
+    group_ids_h2, group_count_h2 = map_relion_scale_groups_to_half_order(
+        group_numbers,
+        relion_idx_to_pos,
+        half2_our_idx,
+    )
+    if group_count_h2 != group_count:
+        raise RuntimeError("RELION scale-group axis differs between half mappings")
+    print(
+        "  RELION scale groups: "
+        f"full_axis={group_count}, half1_unique={np.unique(group_ids_h1).size}, "
+        f"half2_unique={np.unique(group_ids_h2).size}"
+    )
     corr_h1 = np.array([combined_h1[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
     corr_h2 = np.array([combined_h2[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
     scale_corr_h1 = np.array([pp_scale_h1[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
@@ -1476,6 +1926,22 @@ def main():
             [pp_scale_h2_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx],
             dtype=np.float32,
         )
+        (corr_h1_iter, corr_h2_iter), applied_normalization_overrides = (
+            apply_iteration_normalization_factor_overrides(
+                [corr_h1_iter, corr_h2_iter],
+                [scale_corr_h1_iter, scale_corr_h2_iter],
+                half_stack_indices=[half1_our_idx, half2_our_idx],
+                scoring_iteration=control_relion_iteration,
+                overrides=iteration_normalization_overrides,
+            )
+        )
+        for applied in applied_normalization_overrides:
+            print(
+                "  Diagnostic iteration normalization-factor override: "
+                f"scoring_iteration={applied['scoring_iteration']} "
+                f"stack={applied['stack_index']} half={applied['half']} "
+                f"factor={applied['factor']:.9g}"
+            )
 
         if "rlnOriginXAngst" in relion_iter_df.columns:
             offsets_x_iter = np.array(relion_iter_df["rlnOriginXAngst"], dtype=np.float64) / pixel_size
@@ -1587,6 +2053,20 @@ def main():
         replay_iteration_overrides,
         enabled=args.force_final_after_zero_iterations,
     )
+    selected_final_replay_override = select_final_replay_override(
+        replay_iteration_overrides,
+        args.final_replay_fields,
+    )
+    if selected_final_replay_override is not None:
+        if explicit_final_replay_override is not None:
+            raise ValueError(
+                "--final-replay-fields and --force-final-after-zero-iterations are mutually exclusive"
+            )
+        explicit_final_replay_override = selected_final_replay_override
+        print(
+            "  Diagnostic final-only RELION field substitution: "
+            + ",".join(sorted(explicit_final_replay_override))
+        )
 
     # ---- Output directory ----
     out_dir = args.output_dir or str(relion_dir.parent / "_agent_scratch" / f"{args.max_iter}iter_parity")
@@ -1638,9 +2118,19 @@ def main():
     # ---- Run ----
     print(f"\nRunning {args.max_iter} iterations...")
     t0 = time.time()
+    keep_group_scale_update_state = retain_group_scale_update_state(
+        max_iter=args.max_iter,
+        skip_final_iteration=args.skip_final_iteration,
+    )
+    if not keep_group_scale_update_state:
+        print(
+            "  Explicitly terminal one-iteration replay: loaded group scales are "
+            "used for scoring; no downstream XA/AA group-scale update is requested"
+        )
     result = refine_single_volume(
         experiment_datasets=[ds_half1, ds_half2],
         init_volume=[jnp.asarray(vol_ft_h1), jnp.asarray(vol_ft_h2)],
+        init_reference_real=initial_reference_real_for_projector,
         init_noise_variance=noise_variance,
         init_mean_variance=mean_variance.reshape(-1),
         rotations=None,
@@ -1669,6 +2159,12 @@ def main():
         init_has_high_fsc_at_limit=has_high_fsc_at_limit,
         init_image_corrections=[corr_h1, corr_h2],
         init_scale_corrections=[scale_corr_h1, scale_corr_h2],
+        init_group_ids=(
+            [group_ids_h1, group_ids_h2]
+            if keep_group_scale_update_state
+            else None
+        ),
+        init_group_count=(group_count if keep_group_scale_update_state else None),
         init_previous_best_translations=[trans_h1, trans_h2],
         init_previous_best_rotation_eulers=[euler_h1, euler_h2],
         init_direction_prior=direction_prior,
@@ -1686,6 +2182,7 @@ def main():
         first_iteration_reconstruction_mode=args.first_iteration_reconstruction_mode,
         force_max_iter_after_convergence=args.force_max_iter_after_convergence,
         image_fourier_backend=args.image_fourier_backend,
+        preserve_bpref_particle_order=args.diagnostic_preserve_bpref_particle_order,
     )
     elapsed = time.time() - t0
     completed_iters = len(result.get("current_sizes", []))
@@ -1736,7 +2233,6 @@ def main():
         return
 
     # ---- Save results ----
-    half1_indices, half2_indices = particle_half_indices(our_subsets)
     save_dict = {
         "volume_shape": np.array([N, N, N]),
         "voxel_size": np.float64(pixel_size),

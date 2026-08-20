@@ -1,5 +1,6 @@
 import inspect
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -10,7 +11,9 @@ from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
     _read_relion_scheduling_average_pmax,
     add_significant_count_artifacts,
+    apply_iteration_normalization_factor_overrides,
     build_gt_postprocess_command,
+    filter_fresh_initial_reference,
     final_only_replay_override,
     final_output_fourier_volumes,
     initial_scoring_noise_pair,
@@ -18,6 +21,9 @@ from scripts.run_multi_iter_parity import (
     load_initial_fourier_volume,
     load_initial_noise_variance,
     map_pose_arrays_to_particle_order,
+    map_relion_half_orders_to_dataset_rows,
+    map_relion_scale_groups_to_half_order,
+    parse_iteration_normalization_factor_overrides,
     parse_relion_optimiser_cli_flags,
     particle_half_indices,
     relion_final_gt_series,
@@ -26,9 +32,77 @@ from scripts.run_multi_iter_parity import (
     replay_previous_relion_iteration,
     resolve_firstiter_cc_mode,
     resolve_relion_final_oracle_paths,
+    retain_group_scale_update_state,
+    select_final_replay_override,
     stack_index_from_image_name,
     validate_final_only_replay_args,
+    validate_fresh_initial_reference_args,
+    validate_fresh_particle_order_args,
 )
+
+
+def test_iteration_normalization_override_applies_only_at_requested_boundary():
+    overrides = parse_iteration_normalization_factor_overrides(
+        ["2:79452:0.9788520932197571"]
+    )
+    corrections = [
+        np.asarray([1.0, 1.1], dtype=np.float32),
+        np.asarray([1.2, 1.3], dtype=np.float32),
+    ]
+    scales = [
+        np.asarray([1.0, 1.0], dtype=np.float32),
+        np.asarray([0.5, 2.0], dtype=np.float32),
+    ]
+
+    unchanged, applied_before = apply_iteration_normalization_factor_overrides(
+        corrections,
+        scales,
+        half_stack_indices=[[10, 11], [79452, 13]],
+        scoring_iteration=1,
+        overrides=overrides,
+    )
+    corrected, applied = apply_iteration_normalization_factor_overrides(
+        corrections,
+        scales,
+        half_stack_indices=[[10, 11], [79452, 13]],
+        scoring_iteration=2,
+        overrides=overrides,
+    )
+
+    np.testing.assert_array_equal(unchanged[0], corrections[0])
+    np.testing.assert_array_equal(unchanged[1], corrections[1])
+    assert applied_before == []
+    np.testing.assert_array_equal(corrected[0], corrections[0])
+    assert corrected[1][0] == np.float32(0.9788520932197571 * 0.5)
+    assert corrected[1][1] == corrections[1][1]
+    assert applied == [
+        {
+            "scoring_iteration": 2,
+            "stack_index": 79452,
+            "half": 2,
+            "half_position": 0,
+            "factor": float(np.float32(0.9788520932197571)),
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "spec,match",
+    [
+        ("2:79452", "SCORING_ITER"),
+        ("0:79452:1", "positive"),
+        ("2:-1:1", "nonnegative"),
+        ("2:79452:nan", "finite and positive"),
+    ],
+)
+def test_iteration_normalization_override_rejects_invalid_specs(spec, match):
+    with pytest.raises(ValueError, match=match):
+        parse_iteration_normalization_factor_overrides([spec])
+
+
+def test_iteration_normalization_override_rejects_duplicate_boundary():
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_iteration_normalization_factor_overrides(["2:4:1", "2:4:1.1"])
 
 
 def test_multi_iter_parity_supports_stop_after_coarse_significance_dump():
@@ -48,6 +122,55 @@ def test_particle_half_indices_preserve_source_order_and_int64_dtype():
     np.testing.assert_array_equal(half2, np.asarray([0, 2, 5], dtype=np.int64))
     assert half1.dtype == np.int64
     assert half2.dtype == np.int64
+
+
+def test_particle_half_indices_can_reconstruct_fresh_relion_order(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import expected_accuracy
+
+    observed = {}
+
+    def fake_orders(subsets, seed, first_iteration, *, optics_group_ids=None):
+        observed.update(
+            subsets=np.asarray(subsets),
+            seed=seed,
+            first_iteration=first_iteration,
+            optics=np.asarray(optics_group_ids),
+        )
+        return (
+            np.asarray([4, 1, 3], dtype=np.int64),
+            np.asarray([5, 2, 0], dtype=np.int64),
+        )
+
+    monkeypatch.setattr(expected_accuracy, "relion_auto_refine_half_orders", fake_orders)
+    subsets = np.asarray([2, 1, 2, 1, 1, 2])
+    optics = np.asarray([1, 2, 1, 2, 1, 1])
+
+    half1, half2 = particle_half_indices(
+        subsets,
+        fresh_order_seed=1707,
+        optics_group_ids=optics,
+    )
+
+    np.testing.assert_array_equal(half1, np.asarray([4, 1, 3]))
+    np.testing.assert_array_equal(half2, np.asarray([5, 2, 0]))
+    np.testing.assert_array_equal(observed["subsets"], subsets)
+    np.testing.assert_array_equal(observed["optics"], optics)
+    assert observed["seed"] == 1707
+    assert observed["first_iteration"] == 1
+
+
+def test_map_relion_half_orders_to_dataset_rows_uses_image_identity():
+    dataset_names = ["3@stack.mrcs", "1@stack.mrcs", "4@stack.mrcs", "2@stack.mrcs"]
+    relion_names = ["1@stack.mrcs", "2@stack.mrcs", "3@stack.mrcs", "4@stack.mrcs"]
+
+    half1, half2 = map_relion_half_orders_to_dataset_rows(
+        dataset_names,
+        relion_names,
+        (np.asarray([2, 0]), np.asarray([3, 1])),
+    )
+
+    np.testing.assert_array_equal(half1, np.asarray([0, 1]))
+    np.testing.assert_array_equal(half2, np.asarray([2, 3]))
 
 
 def test_significant_count_artifacts_expose_source_image_order():
@@ -278,6 +401,91 @@ def test_final_only_replay_rejects_mixed_mrc_and_fourier_references():
         )
 
 
+def test_fresh_initial_reference_is_confined_to_fresh_runs():
+    with pytest.raises(ValueError, match="requires --iter 0"):
+        validate_fresh_initial_reference_args(
+            fresh_initial_reference_mrc="reference.mrc",
+            start_iteration=1,
+            initial_half1_mrc=None,
+            initial_half1_ft_npz=None,
+        )
+
+
+def test_fresh_initial_reference_rejects_serialized_half_override():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        validate_fresh_initial_reference_args(
+            fresh_initial_reference_mrc="reference.mrc",
+            start_iteration=0,
+            initial_half1_mrc="half1.mrc",
+            initial_half1_ft_npz=None,
+        )
+
+
+def test_fresh_particle_order_requires_seed_when_bpref_order_is_preserved():
+    with pytest.raises(ValueError, match="requires.*fresh-particle-order-seed"):
+        validate_fresh_particle_order_args(
+            fresh_particle_order_seed=None,
+            preserve_bpref_particle_order=True,
+            start_iteration=0,
+            initial_half1_mrc=None,
+            initial_half2_mrc=None,
+            initial_half1_ft_npz=None,
+            initial_half2_ft_npz=None,
+            final_replay_fields=None,
+        )
+
+
+@pytest.mark.parametrize(
+    "overrides,match",
+    [
+        ({"start_iteration": 1}, "requires --iter 0"),
+        ({"initial_half1_mrc": "half1.mrc"}, "initial half boundary"),
+        ({"initial_half2_ft_npz": "half2.npz"}, "initial half boundary"),
+        ({"final_replay_fields": "all"}, "cannot be combined.*final-replay-fields"),
+    ],
+)
+def test_fresh_particle_order_rejects_continuation_and_replay_boundaries(overrides, match):
+    kwargs = {
+        "fresh_particle_order_seed": 1707,
+        "preserve_bpref_particle_order": True,
+        "start_iteration": 0,
+        "initial_half1_mrc": None,
+        "initial_half2_mrc": None,
+        "initial_half1_ft_npz": None,
+        "initial_half2_ft_npz": None,
+        "final_replay_fields": None,
+    }
+    kwargs.update(overrides)
+    with pytest.raises(ValueError, match=match):
+        validate_fresh_particle_order_args(**kwargs)
+
+
+def test_fresh_particle_order_accepts_unsealed_fresh_k1_boundary():
+    validate_fresh_particle_order_args(
+        fresh_particle_order_seed=1707,
+        preserve_bpref_particle_order=True,
+        start_iteration=0,
+        initial_half1_mrc=None,
+        initial_half2_mrc=None,
+        initial_half1_ft_npz=None,
+        initial_half2_ft_npz=None,
+        final_replay_fields=None,
+    )
+
+
+def test_filter_fresh_initial_reference_preserves_binary64_real_handoff():
+    volume = np.ones((8, 8, 8), dtype=np.float32)
+
+    filtered = filter_fresh_initial_reference(
+        volume,
+        pixel_size=2.0,
+        ini_high_angstrom=8.0,
+    )
+
+    assert filtered.dtype == np.float64
+    np.testing.assert_allclose(filtered, 1.0, rtol=0.0, atol=1e-12)
+
+
 def test_load_initial_fourier_volume_preserves_complex_dtype_and_values(tmp_path):
     expected = np.arange(8, dtype=np.float64).astype(np.complex128) * (1.0 + 2.0j)
     source = tmp_path / "half.npz"
@@ -369,6 +577,39 @@ def test_map_pose_arrays_to_particle_order_uses_exact_stack_row():
     assert np.isnan(mapped_trans[3]).all()
 
 
+def test_map_relion_scale_groups_to_half_order_preserves_full_group_axis():
+    group_ids, group_count = map_relion_scale_groups_to_half_order(
+        [4, 1, 7, 2],
+        {30: 0, 10: 1, 40: 2, 20: 3},
+        [20, 30, 10],
+    )
+
+    np.testing.assert_array_equal(group_ids, [1, 3, 0])
+    assert group_count == 7
+
+
+def test_map_relion_scale_groups_to_half_order_rejects_invalid_or_missing_rows():
+    with pytest.raises(ValueError, match="1-based positive"):
+        map_relion_scale_groups_to_half_order([0], {10: 0}, [10])
+    with pytest.raises(ValueError, match="missing particle identity"):
+        map_relion_scale_groups_to_half_order([1], {10: 0}, [20])
+
+
+def test_retain_group_scale_update_state_only_omits_terminal_one_step():
+    assert not retain_group_scale_update_state(
+        max_iter=1,
+        skip_final_iteration=True,
+    )
+    assert retain_group_scale_update_state(
+        max_iter=1,
+        skip_final_iteration=False,
+    )
+    assert retain_group_scale_update_state(
+        max_iter=2,
+        skip_final_iteration=True,
+    )
+
+
 def test_replay_iteration_helpers_split_previous_vs_control_state():
     assert replay_previous_relion_iteration(0, 0) == 0
     assert replay_control_relion_iteration(0, 0) == 1
@@ -384,6 +625,67 @@ def test_replay_override_pairs_include_last_numbered_state_for_final_all_data():
     assert len(pairs) == 10
     assert pairs[0] == (1, 1, 2)
     assert pairs[-1] == (10, 10, 11)
+
+
+def test_select_final_replay_override_uses_last_slot_and_requested_groups():
+    replay = [
+        {"image_corrections": "wrong-slot"},
+        {
+            "image_corrections": "images",
+            "scale_corrections": "scales",
+            "noise_variance": "noise",
+            "direction_prior": "directions",
+            "previous_best_translations": "translations",
+            "previous_best_rotations": "rotations",
+            "previous_best_rotation_eulers": "eulers",
+            "translation_sigma_angstrom": "sigma",
+            "translation_sigma_angstrom_per_half": "sigma-pair",
+        },
+    ]
+
+    selected = select_final_replay_override(replay, "normalization,noise")
+
+    assert selected == {
+        "image_corrections": "images",
+        "noise_variance": "noise",
+        "scale_corrections": "scales",
+    }
+
+
+def test_select_final_replay_override_all_is_complete_union():
+    source = {
+        "image_corrections": object(),
+        "scale_corrections": object(),
+        "noise_variance": object(),
+        "direction_prior": object(),
+        "previous_best_translations": object(),
+        "previous_best_rotations": object(),
+        "previous_best_rotation_eulers": object(),
+        "translation_sigma_angstrom": object(),
+        "translation_sigma_angstrom_per_half": object(),
+    }
+
+    assert set(select_final_replay_override([source], "all")) == set(source)
+    assert set(select_final_replay_override([source], "corrections")) == {
+        "image_corrections",
+        "scale_corrections",
+        "noise_variance",
+        "direction_prior",
+    }
+
+
+def test_select_final_replay_override_empty_is_disabled():
+    assert select_final_replay_override([], None) is None
+    assert select_final_replay_override([], "") is None
+
+
+def test_select_final_replay_override_rejects_unknown_or_missing_state():
+    with pytest.raises(ValueError, match="unknown final replay field"):
+        select_final_replay_override([{}], "references")
+    with pytest.raises(ValueError, match="missing the last-numbered"):
+        select_final_replay_override([None], "poses")
+    with pytest.raises(ValueError, match="missing selected fields"):
+        select_final_replay_override([{}], "noise")
 
 
 def test_parse_relion_optimiser_cli_flags_reads_ini_high_and_firstiter_cc():
@@ -483,3 +785,21 @@ def test_relion_final_gt_series_accepts_unnumbered_all_data_without_half_maps():
 
     assert set(series) == {"relion_merged"}
     np.testing.assert_array_equal(series["relion_merged"], merged)
+
+
+def test_case07_native_texture_trajectory_launcher_accepts_pinned_build_overrides():
+    launcher = (
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "run_k1_case07_native_texture_trajectory3.sbatch"
+    ).read_text()
+
+    assert "CUDA_LIB=${K1_CUDA_LIB:-" in launcher
+    assert "RELION_BIND=${K1_RELION_BIND_BUILD_DIR:-" in launcher
+    assert "RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE" in launcher
+    assert 'provenance/environment_${SLURM_JOB_ID}.txt' in launcher
+    assert 'provenance/repo_diff_${SLURM_JOB_ID}.patch' in launcher
+    assert "EXPECTED_REPO_DIFF_SHA256" in launcher
+    assert 'sha256sum "${CUDA_LIB}"' in launcher
+    assert 'sha256sum "${RELION_BIND}"/_relion_bind_core*.so' in launcher
+    assert "--numbered-only --allow-incomplete" in launcher

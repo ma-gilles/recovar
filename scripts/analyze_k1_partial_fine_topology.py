@@ -150,6 +150,16 @@ def load_recovar_candidate_table(path: Path) -> dict[str, np.ndarray]:
             }
             if "reconstruction_mask" in archive.files:
                 required.add("reconstruction_mask")
+            legacy_production = {
+                "scores_with_prior",
+                "rotation_log_prior",
+                "translation_log_prior",
+                "reconstruction_mask",
+                "oversampled_rot_indices",
+                "parent_map",
+            }
+            if legacy_production <= set(archive.files):
+                required.update(legacy_production)
         missing = required - set(archive.files)
         _require(not missing, f"RECOVAR capture is missing {sorted(missing)}")
         # Full pass-2 diagnostics can contain multi-gigabyte projected-reference
@@ -158,11 +168,36 @@ def load_recovar_candidate_table(path: Path) -> dict[str, np.ndarray]:
         recovar = {name: np.asarray(archive[name]) for name in required}
     if schema != PRODUCTION_CAPTURE_SCHEMA:
         candidate_mask = np.asarray(recovar["candidate_mask"], dtype=bool)
-        return {
+        normalized = {
             **recovar,
             "candidate_sequence": np.argwhere(candidate_mask).astype(np.int64, copy=False),
             "capture_schema": np.asarray(schema),
         }
+        if "scores_with_prior" in recovar:
+            shape = candidate_mask.shape
+            rotation_prior = np.broadcast_to(
+                np.asarray(recovar["rotation_log_prior"], dtype=np.float32)[:, None],
+                shape,
+            )
+            translation_prior = np.broadcast_to(
+                np.asarray(recovar["translation_log_prior"], dtype=np.float32)[None, :],
+                shape,
+            )
+            normalized.update(
+                production_combined_score=np.asarray(
+                    recovar["scores_with_prior"], dtype=np.float32
+                ),
+                production_rotation_log_prior=rotation_prior,
+                production_translation_log_prior=translation_prior,
+                production_significant=np.asarray(
+                    recovar["reconstruction_mask"], dtype=bool
+                ),
+                rotation_global_index=np.asarray(
+                    recovar["oversampled_rot_indices"], dtype=np.int64
+                ),
+                rotation_parent_global=np.asarray(recovar["parent_map"], dtype=np.int64),
+            )
+        return normalized
 
     inventory = validate_raw_capture_shard(path)
     _require(inventory["particle_count"] == 1, "production shard must contain one particle")

@@ -45,6 +45,29 @@ def _center(values: np.ndarray) -> np.ndarray:
     return values - np.max(values)
 
 
+def _native_coarse_image_size(
+    component_header: tuple[int, ...],
+    operand_header: tuple[int, ...] | None,
+) -> int:
+    """Return the actual pass-1 image size, not the model current size.
+
+    The component header records ``mymodel.current_size``.  During adaptive
+    oversampling RELION pass 1 can instead score at ``image_coarse_size``;
+    the operand header records that geometry as its Fourier image Y size.
+    """
+
+    model_current_size = int(component_header[27])
+    if operand_header is None:
+        return model_current_size
+    _require(
+        int(operand_header[12]) == model_current_size,
+        "native operand/component model current-size mismatch",
+    )
+    coarse_image_size = int(operand_header[18])
+    _require(coarse_image_size > 0, "native coarse image size must be positive")
+    return coarse_image_size
+
+
 def _stats(delta: np.ndarray) -> dict[str, Any]:
     delta = np.asarray(delta, dtype=np.float64).reshape(-1)
     absolute = np.abs(delta)
@@ -355,7 +378,18 @@ def _compare(native_path: Path, recovar_path: Path) -> dict[str, Any]:
     recovar = _load_recovar(recovar_path)
     _require(native.stack_index - 1 == recovar["original_index"], "particle identity mismatch")
     _require(native.header[5] == recovar["iteration"], "iteration mismatch")
-    _require(native.header[27] == recovar["current_size"], "current-size mismatch")
+    operand_path = native_path.with_name(
+        native_path.name.replace(".p1-v2.bin", ".p1-op-v2.bin")
+    )
+    operand = load_operand_artifact(operand_path) if operand_path.is_file() else None
+    native_coarse_image_size = _native_coarse_image_size(
+        native.header,
+        None if operand is None else operand.header,
+    )
+    _require(
+        native_coarse_image_size == recovar["current_size"],
+        "coarse scoring image-size mismatch",
+    )
     n_directions, n_psi, n_trans = native.header[10:13]
     permutation, translation_mapping = _translation_permutation(
         native.translations,
@@ -436,6 +470,8 @@ def _compare(native_path: Path, recovar_path: Path) -> dict[str, Any]:
         "relion_part_id": native.part_id,
         "physical_iteration": recovar["iteration"],
         "current_size": recovar["current_size"],
+        "native_model_current_size": int(native.header[27]),
+        "native_coarse_image_size": native_coarse_image_size,
         "topology": {
             "n_directions": int(n_directions),
             "n_psi": int(n_psi),

@@ -471,7 +471,7 @@ def analyze(
     score_active_scalar_fits = {
         name: _optimal_scalar_fit(left, right)
         for name, (left, right) in score_active_stage_arrays.items()
-        if name in {"unshifted_image", "shifted_image"}
+        if name in {"projected_reference", "unshifted_image", "shifted_image"}
     }
     causal_stage_metrics = {
         name: score_active_stage_metrics.get(name, stage_metrics[name])

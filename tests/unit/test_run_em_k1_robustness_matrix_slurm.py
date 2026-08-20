@@ -824,6 +824,41 @@ def test_k1_coarse_gaussian_ffi_env_is_forwarded(tmp_path):
     assert "RECOVAR_K1_COARSE_GAUSSIAN_FFI=1" in (scratch / "submission.env").read_text()
 
 
+def test_k1_coarse_gaussian_native_texture_env_is_forwarded(tmp_path):
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="7",
+        extra_env={"RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE": "1"},
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    scripts = list((scratch / "jobs").glob("em_k1_matrix_7_*.sh"))
+    assert len(scripts) == 1
+    text = scripts[0].read_text()
+    assert "export RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=1" in text
+    assert "--image-fourier-backend relion_cuda" in text
+    assert "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=1" in (
+        scratch / "submission.env"
+    ).read_text()
+
+
+def test_k1_bpref_execution_order_chunk_size_env_is_forwarded(tmp_path):
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="7",
+        extra_env={"RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE": "220"},
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    scripts = list((scratch / "jobs").glob("em_k1_matrix_7_*.sh"))
+    assert len(scripts) == 1
+    text = scripts[0].read_text()
+    assert "export RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE=220" in text
+    assert "RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE=220" in (
+        scratch / "submission.env"
+    ).read_text()
+
+
 def test_k1_legacy_translation_grid_diagnostic_env_is_forwarded(tmp_path):
     proc, scratch = _dry_run_launcher(
         tmp_path,
