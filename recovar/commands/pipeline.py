@@ -23,6 +23,11 @@ from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
 
 logger = logging.getLogger(__name__)
 
+_NOISE_UB_GB_PER_IMAGE_AT_GRID_256 = 0.117
+_NOISE_UB_WORKING_FRACTION = 0.15
+_NOISE_UB_MIN_WORKING_GB = 1.0
+_NOISE_UB_MAX_WORKING_GB = 12.0
+
 
 def add_args(parser: argparse.ArgumentParser):
 
@@ -141,10 +146,13 @@ def add_args(parser: argparse.ArgumentParser):
         help="Focus mask (.mrc)",
     )
     mk.add_argument(
+        "--dont-resmooth-mask",
         "--keep-input-mask",
         action="store_true",
-        dest="keep_input_mask",
-        help="Use input mask as-is (skip thresholding/softening)",
+        dest="dont_resmooth_mask",
+        help="Use the input mask verbatim, skipping recovar's threshold-at-0.5 and "
+        "cosine soft-edge. Only use this if your mask already has a soft edge; "
+        "otherwise recovar softens it for you. (--keep-input-mask is a deprecated alias.)",
     )
     mk.add_argument(
         "--use-complement-mask",
@@ -270,10 +278,11 @@ def add_args(parser: argparse.ArgumentParser):
         help="Accept running on CPU if no GPU is found",
     )
     # Memory planning flags: --gpu-budget-gb, --low-memory-option,
-    # --very-low-memory-option, --adaptive-memory / --adaptive-n-pcs,
+    # --very-low-memory-option, --adaptive-n-pcs,
     # --memory-profile, --fail-on-memory-exceed, --memory-safety-fraction.
-    # Diagnostics (memory_plan.json, memory_trace.jsonl, args.json,
-    # allocator_env.json) are always-on under <outdir>/_diagnostics/.
+    # memory_plan.json is always written under <outdir>/_diagnostics/;
+    # memory_trace.jsonl, args.json, and allocator_env.json are produced
+    # only when --memory-profile is set.
     from recovar.utils.parser_args import add_memory_planning_args as _add_mem_args
 
     _add_mem_args(parser)
@@ -620,7 +629,24 @@ def _check_uninvert_data(means, dataset, args):
 
 
 ## TODO I'd like to simplify the logic here in this function, seems confusing
-def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise_model):
+def _noise_upper_bound_batch_size(grid_size: int, batch_size: int, gpu_budget_gb: float | None) -> int:
+    """Cap the upper-bound-noise batch by a simple per-image memory model."""
+    batch_size = utils.safe_batch_size(batch_size)
+    if gpu_budget_gb is None:
+        return batch_size
+
+    per_image_gb = _NOISE_UB_GB_PER_IMAGE_AT_GRID_256 * (float(grid_size) / 256.0) ** 3
+    if per_image_gb <= 0:
+        return batch_size
+
+    working_gb = min(
+        _NOISE_UB_MAX_WORKING_GB,
+        max(_NOISE_UB_MIN_WORKING_GB, float(gpu_budget_gb) * _NOISE_UB_WORKING_FRACTION),
+    )
+    return utils.safe_batch_size(min(batch_size, int(working_gb / per_image_gb)))
+
+
+def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise_model, gpu_budget_gb=None):
     """Estimate radial noise variance from outside-mask and upper-bound methods.
 
     Returns a dict with all noise-related quantities needed by the pipeline.
@@ -676,8 +702,17 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
             disc_type="linear_interp",
         )
     else:
+        noise_batch = _noise_upper_bound_batch_size(dataset.grid_size, batch_size, gpu_budget_gb)
+        if noise_batch < batch_size:
+            logger.info(
+                "Capping upper-bound noise batch size from %d to %d for grid=%d and budget=%.2f GB",
+                batch_size,
+                noise_batch,
+                dataset.grid_size,
+                gpu_budget_gb,
+            )
         radial_ub_noise_var, _, _ = noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(
-            dataset, means.combined, dilated_volume_mask, batch_size
+            dataset, means.combined, dilated_volume_mask, noise_batch
         )
     logger.info("time to upper bound noise is %s", time.time() - noise_time)
 
@@ -713,7 +748,7 @@ def _build_focus_masks(args, means, volume_mask, volume_shape, dataset):
     """Build focus masks and optional complement mask."""
     if args.focus_mask is not None:
         focus_mask, _ = mask.masking_options(
-            args.focus_mask, means, volume_shape, dataset.dtype_real, args.mask_dilate_iter, args.keep_input_mask
+            args.focus_mask, means, volume_shape, dataset.dtype_real, args.mask_dilate_iter, args.dont_resmooth_mask
         )
     else:
         focus_mask = volume_mask
@@ -1240,8 +1275,9 @@ def standard_recovar_pipeline(args):
 
     # Push the soft budget into ``set_gpu_memory_limit`` early so any code
     # that runs before the dataset is loaded (notably ``downsample_to_disk``)
-    # uses the user's --gpu-budget-gb. The MemoryPlanner overwrites it later with
-    # the effective_budget once we know grid_size.
+    # uses the user's --gpu-budget-gb. Once the dataset is loaded, the
+    # MemoryPlanner returns the effective budget used by the main pipeline
+    # and only mutates the global legacy limit for backend-specific deflation.
     if args.gpu_memory is not None:
         utils.set_gpu_memory_limit(args.gpu_memory)
         logger.info(
@@ -1455,7 +1491,7 @@ def standard_recovar_pipeline(args):
             volume_shape,
             ds.dtype_real,
             args.mask_dilate_iter,
-            args.keep_input_mask,
+            args.dont_resmooth_mask,
             args.dilated_mask_dilation_iters,
         )
 
@@ -1506,7 +1542,7 @@ def standard_recovar_pipeline(args):
         focus_masks = _build_focus_masks(args, means, volume_mask, volume_shape, ds)
 
         # --- Estimate noise ---
-        noise_result = _estimate_noise(ds, means, dilated_volume_mask, batch_size, args, noise_model)
+        noise_result = _estimate_noise(ds, means, dilated_volume_mask, batch_size, args, noise_model, gpu_memory)
         noise_var_used = noise_result["noise_var_used"]
         noise.update_noise_variance(noise_var_used, ds)
 
@@ -1546,8 +1582,9 @@ def standard_recovar_pipeline(args):
                 plan.calibration_status,
             )
             covariance_options["n_pcs_to_compute"] = plan.n_pcs_to_compute
+        covariance_options["column_batch_size"] = plan.column_batch_size
 
-        # Sweep-only override: validate_memory_formulas.py sets this env
+        # Debug-only override: external sweep harnesses can set this env
         # var to force a specific n_pcs per cell. Not user-facing.
         _force_n_pcs = os.environ.get("RECOVAR_DEBUG_FORCE_N_PCS")
         if _force_n_pcs:
@@ -1650,6 +1687,7 @@ def standard_recovar_pipeline(args):
                         use_reg_mean_in_contrast=args.use_reg_mean_in_contrast,
                         use_multi_gpu=args.multi_gpu,
                         n_gpus=args.n_gpus,
+                        vol_batch_size=plan.volume_batch_size,
                     )
                 )
                 if idx == num_foc_masks - 1:

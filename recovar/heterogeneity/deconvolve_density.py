@@ -47,14 +47,19 @@ def get_raw_density(
     coords_entry = "latent_coords_noreg" if noreg else "latent_coords"
     precision_entry = "latent_precision_noreg" if noreg else "latent_precision"
 
-    zs = pipeline_output.get(coords_entry)[zdim]
-    cov_zs = pipeline_output.get(precision_entry)[zdim]
+    if hasattr(pipeline_output, "get_embedding_component"):
+        zs = pipeline_output.get_embedding_component(coords_entry, zdim)
+        cov_zs = pipeline_output.get_embedding_component(precision_entry, zdim)
+    else:
+        zs = pipeline_output.get(coords_entry)[zdim]
+        cov_zs = pipeline_output.get(precision_entry)[zdim]
 
+    zs = zs[:, :pca_dim_max]
+    cov_zs = cov_zs[:, :pca_dim_max, :pca_dim_max]
     cov_zs_norm = np.linalg.norm(cov_zs, axis=(-1, -2), ord=2)
     good_zs = cov_zs_norm > np.percentile(cov_zs_norm, percentile_reject)
-    zdim = pca_dim_max
-    zs = zs[good_zs][:, :zdim]
-    cov_zs = cov_zs[good_zs][:, :zdim, :zdim]
+    zs = zs[good_zs]
+    cov_zs = cov_zs[good_zs]
     gauss_kde = jax.scipy.stats.gaussian_kde(zs.T, "silverman")
     covar_data = np.mean(jnp.linalg.inv(cov_zs), axis=0)
     total_covar = covar_data + gauss_kde.covariance

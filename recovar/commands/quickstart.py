@@ -340,9 +340,7 @@ def main():
         print()
         _info("Launching RECOVAR pipeline...")
         print()
-        from recovar.utils.subprocess_helpers import recovar_subprocess_env
-
-        result = subprocess.run(cmd_parts, env=recovar_subprocess_env())
+        result = subprocess.run(cmd_parts)
         sys.exit(result.returncode)
     else:
         _info("Command printed above — copy and run when ready.")

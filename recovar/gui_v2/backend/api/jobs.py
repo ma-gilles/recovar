@@ -20,6 +20,7 @@ import glob
 import logging
 import os
 import pickle
+import re
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from recovar.gui_v2.backend.api.project import get_project_path
-from recovar.gui_v2.backend.config import get_db_path
+from recovar.gui_v2.backend.config import get_db_path, iso_utc
 from recovar.gui_v2.backend.db import init_db
 from recovar.gui_v2.backend.models.job import Job, JobStatus
 from recovar.gui_v2.backend.services.command_builder import (
@@ -264,11 +265,14 @@ async def _get_job(job_id: str) -> tuple[Job, Any]:
     raise HTTPException(status_code=404, detail="Job not found")
 
 
-def _categorize_volume(name: str, rel_path: str = "") -> str:
+def _categorize_volume(name: str, rel_path: str = "", job_type: str = "") -> str:
     """Assign a display category to an MRC filename.
 
     *rel_path* is the path relative to the job output directory,
     used to detect subfolder structure (e.g. kmeans/, trajectories/).
+    *job_type* is the recovar job type (e.g. ``ReconstructTrajectory``),
+    used so dedicated trajectory/state jobs categorize their state*.mrc
+    files correctly even when the files sit directly at the job root.
     """
     lower = name.lower()
     rel_lower = rel_path.lower()
@@ -278,7 +282,7 @@ def _categorize_volume(name: str, rel_path: str = "") -> str:
         return "locres"
 
     # Sampling maps are diagnostic, not standalone viewable volumes
-    if lower == "sampling.mrc" or "sampling" in lower:
+    if "sampling" in lower:
         return "sampling"
 
     if "mean" in lower:
@@ -287,7 +291,9 @@ def _categorize_volume(name: str, rel_path: str = "") -> str:
         return "eigen"
     if "variance" in lower:
         return "variance"
-    if "half" in lower and "unfil" in lower:
+    # Half-maps: unfiltered half-maps (e.g. half_unfil.mrc) or numbered
+    # half-maps (e.g. half1.mrc, half_map_2.mrc, halfmap_1.mrc).
+    if "half" in lower and ("unfil" in lower or re.search(r"half[_\-]?(?:map[_\-]?)?[12]\b", lower)):
         return "halfmap"
     if "mask" in lower:
         return "mask"
@@ -296,6 +302,10 @@ def _categorize_volume(name: str, rel_path: str = "") -> str:
     if "kmeans" in rel_lower or "center" in lower:
         return "kmeans_center"
     if "trajectory" in rel_lower or "traj" in rel_lower or "traj" in lower:
+        return "trajectory"
+
+    # Dedicated trajectory job: every state*.mrc at the job root is a frame.
+    if job_type in ("ReconstructTrajectory", "ComputeTrajectory") and "state" in lower:
         return "trajectory"
 
     if "state" in lower:
@@ -536,12 +546,20 @@ async def _validate_job_params(
             except Exception as exc:
                 warnings.append(f"Could not validate mask dimensions: {exc}")
 
+    elif job_type == "StableStates":
+        density = params.get("density", "")
+        if not density:
+            errors.append("Density file is required (e.g. deconv_density_knee.pkl).")
+        elif not os.path.isfile(density):
+            errors.append(f"Density file not found: {density}")
+        elif not density.endswith(".pkl"):
+            errors.append(f"Density file must be a .pkl file: {density}")
+
     elif job_type in (
         "Analyze",
         "ComputeState",
         "ComputeTrajectory",
         "Density",
-        "StableStates",
     ):
         result_dir = params.get("result_dir", "")
         if result_dir and not os.path.isdir(result_dir):
@@ -575,7 +593,10 @@ async def _validate_job_params(
         usage = os.statvfs(project_path)
         free_gb = (usage.f_frsize * usage.f_bavail) / (1024**3)
         if free_gb < 50:
-            warnings.append(f"Less than {free_gb:.0f} GB free on disk. Jobs may fail if space runs out.")
+            warnings.append(
+                f"Only {free_gb:.0f} GB free on disk (below the 50 GB recommended). "
+                "Jobs may fail if space runs out."
+            )
     except OSError:
         pass
 
@@ -700,7 +721,10 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         usage = os.statvfs(project_path)
         free_gb = (usage.f_frsize * usage.f_bavail) / (1024**3)
         if free_gb < 50:
-            warnings.append(f"Less than {free_gb:.0f} GB free on disk. Jobs may fail if space runs out.")
+            warnings.append(
+                f"Only {free_gb:.0f} GB free on disk (below the 50 GB recommended). "
+                "Jobs may fail if space runs out."
+            )
     except OSError:
         pass
 
@@ -753,7 +777,6 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
     executor = get_executor(chosen_mode)
     env = {
         "PYTHONNOUSERSITE": "1",
-        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
     }
 
     # Resolve effective slurm opts: built-in defaults ← user-global toml ←
@@ -773,6 +796,15 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
     form_local_opts = params.get("local_opts") or {}
     if isinstance(form_local_opts, dict):
         merged_local_opts.update(form_local_opts)
+
+    # Preallocate one contiguous JAX GPU arena by default. This avoids GPU-memory
+    # fragmentation OOMs on large jobs (the box-256 PCA basis is a single ~27 GB
+    # contiguous tensor; on-demand allocation fragments and fails to place it even
+    # with tens of GB free). Turn off (preallocate_gpu=False) only to share a GPU.
+    # An explicit XLA_PYTHON_CLIENT_PREALLOCATE in env_vars still wins (set later).
+    env["XLA_PYTHON_CLIENT_PREALLOCATE"] = (
+        "true" if merged_local_opts.get("preallocate_gpu", True) else "false"
+    )
 
     try:
         handle = await executor.submit(
@@ -814,7 +846,7 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         id=job_id,
         type=job_type,
         status=JobStatus.RUNNING.value,
-        created=job.created_at.isoformat(),
+        created=iso_utc(job.created_at),
         handle=handle,
         slurm_id=handle if isinstance(executor, SlurmExecutor) else None,
         warnings=warnings,
@@ -859,8 +891,8 @@ async def get_job(job_id: str) -> JobDetailResponse:
             type=job.type,
             status=job.status,
             params=job.params,
-            created=job.created_at.isoformat(),
-            completed=job.completed_at.isoformat() if job.completed_at else None,
+            created=iso_utc(job.created_at),
+            completed=iso_utc(job.completed_at),
             handle=job.executor_handle,
             slurm_id=job.slurm_id,
             error=job.error,
@@ -884,7 +916,7 @@ async def cancel_job(job_id: str) -> dict:
             )
 
         if job.executor_handle:
-            executor = get_executor()
+            executor = get_executor_for_job(job)
             await executor.cancel(job.executor_handle)
 
         job.status = JobStatus.CANCELLED.value
@@ -905,6 +937,23 @@ async def cancel_job(job_id: str) -> dict:
 async def delete_job(job_id: str) -> None:
     job, session = await _get_job(job_id)
     try:
+        # If the job is still active, cancel the underlying executor handle so
+        # we don't orphan a running process / SLURM allocation with no way to
+        # track it. Mirror cancel_job's executor selection.
+        is_active = job.status in (JobStatus.RUNNING.value, JobStatus.QUEUED.value)
+        if is_active and job.executor_handle:
+            try:
+                executor = get_executor_for_job(job)
+                await executor.cancel(job.executor_handle)
+            except Exception:
+                logger.exception("Failed to cancel executor for deleted job %s", job_id)
+
+        # Always cancel the background poller so it doesn't keep polling and
+        # try to update a row that no longer exists.
+        poll_task = _poll_tasks.pop(job_id, None)
+        if poll_task:
+            poll_task.cancel()
+
         await session.delete(job)
         await session.commit()
     finally:
@@ -929,7 +978,7 @@ async def list_volumes(job_id: str) -> list[VolumeEntry]:
                 continue
             full = os.path.join(dirpath, fname)
             rel_path = os.path.join(rel_dir, fname)
-            category = _categorize_volume(fname, rel_path)
+            category = _categorize_volume(fname, rel_path, job.type)
             # Skip diagnostic volumes (not standalone viewable)
             if category in ("locres", "sampling"):
                 continue
@@ -982,44 +1031,53 @@ async def suggested_next(job_id: str) -> list[SuggestedNext]:
         return suggestions
 
     if job.type == "Pipeline":
-        suggestions.append(
-            SuggestedNext(
-                type="Analyze",
-                label="Analyze this pipeline output",
-                prefilled_params={"result_dir": job.output_dir},
-            )
-        )
-        suggestions.append(
-            SuggestedNext(
-                type="Density",
-                label="Estimate conformational density",
-                prefilled_params={"result_dir": job.output_dir},
-            )
-        )
+        suggestions.append(SuggestedNext(
+            type="Analyze",
+            label="Analyze this pipeline output",
+            prefilled_params={"result_dir": job.output_dir},
+        ))
+        suggestions.append(SuggestedNext(
+            type="Density",
+            label="Estimate conformational density",
+            prefilled_params={"result_dir": job.output_dir},
+        ))
     elif job.type == "Analyze":
-        suggestions.append(
-            SuggestedNext(
-                type="ComputeState",
-                label="Compute volume at a latent point",
-                prefilled_params={"result_dir": (job.params or {}).get("result_dir", "")},
-            )
-        )
-        suggestions.append(
-            SuggestedNext(
-                type="ComputeTrajectory",
-                label="Compute trajectory between two points",
-                prefilled_params={"result_dir": (job.params or {}).get("result_dir", "")},
-            )
-        )
+        result_dir = (job.params or {}).get("result_dir", "")
+        suggestions.append(SuggestedNext(
+            type="ComputeState",
+            label="Compute volume at a latent point",
+            prefilled_params={"result_dir": result_dir},
+        ))
+        suggestions.append(SuggestedNext(
+            type="ComputeTrajectory",
+            label="Compute trajectory between two points",
+            prefilled_params={"result_dir": result_dir},
+        ))
+        suggestions.append(SuggestedNext(
+            type="Density",
+            label="Estimate conformational density (enables density-guided trajectories)",
+            prefilled_params={"result_dir": result_dir},
+        ))
     elif job.type == "Density":
-        density_pkl = os.path.join(job.output_dir, "data", "deconv_density_knee.pkl")
-        suggestions.append(
-            SuggestedNext(
-                type="StableStates",
-                label="Find stable states from density",
-                prefilled_params={"density": density_pkl},
-            )
+        density_pkl = os.path.join(
+            job.output_dir, "data", "deconv_density_knee.pkl"
         )
+        suggestions.append(SuggestedNext(
+            type="StableStates",
+            label="Find stable states from density",
+            prefilled_params={"density": density_pkl},
+        ))
+        # Density-guided trajectory: use this density file to follow the
+        # data manifold instead of straight-line interpolation in z-space.
+        suggestions.append(SuggestedNext(
+            type="ComputeTrajectory",
+            label="Compute density-guided trajectory using this density",
+            prefilled_params={
+                "result_dir": (job.params or {}).get("recovar_result_dir", "")
+                or (job.params or {}).get("result_dir", ""),
+                "density": density_pkl,
+            },
+        ))
 
     return suggestions
 
@@ -1037,7 +1095,7 @@ async def get_job_logs(job_id: str) -> LogResponse:
     await session.close()
 
     # Try executor log path first
-    executor = get_executor()
+    executor = get_executor_for_job(job)
     log_path = None
     if job.executor_handle:
         log_path = await executor.log_path(job.executor_handle)
@@ -1095,7 +1153,7 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
                 changed=False,
             )
 
-        # No executor handle — cannot query SLURM
+        # No executor handle — cannot query the executor
         if not job.executor_handle:
             job.status = JobStatus.FAILED.value
             job.error = "No executor handle — cannot check status."
@@ -1109,9 +1167,13 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
                 error=job.error,
             )
 
-        # Query the real executor status
-        executor = get_executor()
-        actual = await executor.status(job.executor_handle)
+        # Query the real executor status (using the job's own executor, not
+        # the server default — a local job must not be polled via SLURM).
+        executor = get_executor_for_job(job)
+        if job.output_dir and hasattr(executor, "status_with_dir"):
+            actual = await executor.status_with_dir(job.executor_handle, job.output_dir)
+        else:
+            actual = await executor.status(job.executor_handle)
 
         is_terminal = actual in (
             ExecJobStatus.COMPLETED,
@@ -1122,9 +1184,24 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
         error_msg: str | None = None
         if actual == ExecJobStatus.UNKNOWN:
             actual = ExecJobStatus.FAILED
-            error_msg = "Job status unknown — SLURM may have purged the record."
+            if job.slurm_id:
+                error_msg = "Job status unknown — SLURM may have purged the record."
+            else:
+                error_msg = "Job status unknown — the process is gone and no exit code was recorded."
         elif actual == ExecJobStatus.FAILED:
             error_msg = "Job failed (detected on manual reconcile)."
+
+        # The local executor only sees that the PID is gone, not its exit code,
+        # so it reports a dead process as COMPLETED. Read the run.exitcode the
+        # job wrapper wrote so an OOM'd/failed job is shown as failed, not green.
+        if actual == ExecJobStatus.COMPLETED and job.output_dir:
+            try:
+                code = int((Path(job.output_dir) / "run.exitcode").read_text().strip())
+                if code != 0:
+                    actual = ExecJobStatus.FAILED
+                    error_msg = f"Process exited with code {code}."
+            except (OSError, ValueError):
+                pass
 
         new_status = actual.value
         changed = new_status != previous_status
@@ -1152,7 +1229,16 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
 
                     project_path = _project_registry.get(job.project_id)
                     if project_path:
-                        task = asyncio.create_task(_poll_job_status(job_id, job.executor_handle, project_path))
+                        poll_mode = "slurm" if job.slurm_id else "local"
+                        task = asyncio.create_task(
+                            _poll_job_status(
+                                job_id,
+                                job.executor_handle,
+                                project_path,
+                                executor_mode=poll_mode,
+                                working_dir=job.output_dir,
+                            )
+                        )
                         _poll_tasks[job_id] = task
 
         return ReconcileResponse(
@@ -1206,7 +1292,13 @@ async def preview_sbatch_script(req: SbatchPreviewRequest) -> SbatchPreviewRespo
             "Account is blank — `#SBATCH --account` will be omitted; the cluster's default account will be used."
         )
     if opts.get("gpus", 1) == 0:
-        warnings.append("gpus=0 — `#SBATCH --gres=gpu:N` will be omitted (CPU-only job).")
+        # Name the directive from the effective gpu_resource_spec — sites may
+        # override the default --gres=gpu:{gpus} with --gpus={gpus} etc.
+        gpu_spec = opts.get("gpu_resource_spec") or "--gres=gpu:{gpus}"
+        gpu_directive = gpu_spec.split("=", 1)[0] if "=" in gpu_spec else gpu_spec
+        warnings.append(
+            f"gpus=0 — the GPU directive (`#SBATCH {gpu_directive}`) will be omitted (CPU-only job)."
+        )
 
     try:
         script = _render_sbatch_script(
@@ -1265,20 +1357,67 @@ async def get_sbatch_script(job_id: str) -> SbatchScriptResponse:
     )
 
 
+# Map the normalized internal job type to its real ``recovar`` CLI subcommand.
+# Mirrors the subcommands used by the command builders (command_builder.py).
+_JOB_TYPE_TO_SUBCOMMAND: dict[str, str] = {
+    "Pipeline": "pipeline",
+    "Analyze": "analyze",
+    "ComputeState": "compute_state",
+    "ComputeTrajectory": "compute_trajectory",
+    "Density": "estimate_conformational_density",
+    "StableStates": "estimate_stable_states",
+    "Postprocess": "postprocess",
+    "Downsample": "downsample",
+}
+
+# Params that are job metadata or are turned into coordinate files by the real
+# command — they must NOT be emitted verbatim as CLI flags (they would render
+# bogus flags like ``--latent-points 0.1,0.2`` or ``--executor local``).
+_NON_CLI_PARAM_KEYS = frozenset(
+    {"outdir", "slurm_opts", "local_opts", "executor", "latent_points", "z_start", "z_end"}
+)
+
+
 def _format_cli_command(job: Job) -> str:
     """Format a reconstructed CLI command from job params for display."""
     if not job.params:
         return f"# No parameters recorded for {job.type} job."
-    parts = [f"recovar {job.type.lower()}"]
+    subcommand = _JOB_TYPE_TO_SUBCOMMAND.get(job.type, job.type.lower())
+    parts = [f"recovar {subcommand}"]
     for key, val in job.params.items():
-        if key in ("outdir", "slurm_opts"):
+        if key in _NON_CLI_PARAM_KEYS:
+            continue
+        # Omit unset optionals so the command is runnable as shown. Skip only
+        # None and empty/blank strings — NOT meaningful falsy values: False
+        # booleans are emitted as bare flags below, and numeric 0 / -1 (e.g.
+        # `--n-images -1`) must be preserved.
+        if val is None or (isinstance(val, str) and val.strip() == ""):
+            continue
+        if isinstance(val, (list, tuple)) and len(val) == 0:
             continue
         flag = f"--{key.replace('_', '-')}"
         if isinstance(val, bool):
             if val:
                 parts.append(flag)
+        elif isinstance(val, (list, tuple)):
+            # e.g. zdim [1, 2, 4, 10, 20] -> "--zdim 1,2,4,10,20" (comma-joined,
+            # not the Python list repr "[1, 2, ...]" which isn't valid CLI input).
+            parts.append(f"{flag} {','.join(str(x) for x in val)}")
         else:
             parts.append(f"{flag} {val}")
+
+    # Coordinate lists are written to files by the real command, not passed
+    # inline. Reconstruct the file-based flags so the displayed command matches
+    # what actually ran (the coord files live in the job output directory).
+    if job.type == "ComputeState" and job.params.get("latent_points"):
+        coords_file = os.path.join(job.output_dir, "latent_points.txt")
+        parts.append(f"--latent-points {coords_file}")
+    elif job.type == "ComputeTrajectory":
+        if job.params.get("z_start"):
+            parts.append(f"--z_st {os.path.join(job.output_dir, 'z_start.txt')}")
+        if job.params.get("z_end"):
+            parts.append(f"--z_end {os.path.join(job.output_dir, 'z_end.txt')}")
+
     return " ".join(parts)
 
 

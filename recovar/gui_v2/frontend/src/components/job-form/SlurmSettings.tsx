@@ -141,8 +141,8 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
     account: serverDefaults?.account ?? "",
     gpus: serverDefaults?.gpus ?? 1,
     cpus: serverDefaults?.cpus ?? 4,
-    memory: serverDefaults?.memory ?? "300G",
-    time: serverDefaults?.time ?? "12:00:00",
+    memory: serverDefaults?.memory ?? "400G",
+    time: serverDefaults?.time ?? "08:00:00",
   };
 
   function update(field: keyof SlurmOpts, val: string | number): void {
@@ -219,7 +219,7 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
               <Input
                 value={current.memory}
                 onChange={(e) => update("memory", e.target.value)}
-                placeholder="300G"
+                placeholder="400G"
               />
             </div>
           </div>
@@ -232,7 +232,7 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
             <Input
               value={current.time}
               onChange={(e) => update("time", e.target.value)}
-              placeholder="12:00:00"
+              placeholder="08:00:00"
             />
           </div>
 

@@ -139,6 +139,7 @@ cd ${WORKDIR}
 
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_MEM_FRACTION=.90
 export RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1
 export TMPDIR="${WORKDIR}/.tmp/slurm_\${SLURM_JOB_ID}"
 export PIXI_HOME="${WORKDIR}/.tmp/pixi_home_\${SLURM_JOB_ID}"
@@ -168,7 +169,7 @@ assert '.pixi/envs/default/' in str(pathlib.Path(jax.__file__).resolve()), 'WRON
 print('ENV_OK — devices:', jax.devices())
 "
 
-"\$PIXI_PY" -m pytest ${pytest_args} --junitxml=${XML_OUT} || true
+"\$PIXI_PY" -m pytest ${pytest_args} --junitxml=${XML_OUT}
 EOF
 
     chmod +x "$SCRIPT"

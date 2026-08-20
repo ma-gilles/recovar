@@ -8,7 +8,7 @@
 
 # ── Environment ──
 export PYTHONNOUSERSITE=1
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_PREALLOCATE=true
 {{ extra_exports }}
 
 # ── Run the actual command ──

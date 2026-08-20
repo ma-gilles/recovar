@@ -1,18 +1,17 @@
-"""Pre-jax-init GPU memory probing via NVML or nvidia-smi.
+"""GPU memory probing via NVML or nvidia-smi.
 
 Used in two ways:
 
-1. Bootstrap parser in ``command_line.py`` — query physical GPU total
-   to convert ``--gpu-budget-gb`` into ``XLA_PYTHON_CLIENT_MEM_FRACTION`` for
-   the hard-limit path. Must work BEFORE jax is imported.
-
-2. Memory planner — sample ``physical_free_gb`` to detect conflicting
+1. Memory planner — sample ``physical_free_gb`` to detect conflicting
    processes and to pick a sensible effective budget.
+
+2. Error hints — include physical total/free memory and visible compute
+   processes in actionable OOM diagnostics.
 
 Both NVML and the ``nvidia-smi`` subprocess are best-effort: the helper
 returns ``None`` rather than raising when neither is available so the
 caller can degrade gracefully (planner runs without conflict detection,
-hard limit downgrades to soft).
+and hints omit physical-process details).
 """
 
 from __future__ import annotations

@@ -40,6 +40,7 @@ def estimate_principal_components(
     use_reg_mean_in_contrast=False,
     use_multi_gpu=False,
     n_gpus=None,
+    vol_batch_size=None,
 ):
     """Estimate principal components of the covariance operator.
 
@@ -74,7 +75,10 @@ def estimate_principal_components(
     )
 
     volume_shape = dataset.volume_shape
-    vol_batch_size = utils.get_vol_batch_size(dataset.grid_size, gpu_memory_to_use)
+    if vol_batch_size is None:
+        vol_batch_size = utils.get_vol_batch_size(dataset.grid_size, gpu_memory_to_use)
+    else:
+        vol_batch_size = utils.safe_batch_size(vol_batch_size)
 
     # Different way of sampling columns:
     # - from low to high frequencies
@@ -568,8 +572,7 @@ def right_matvec_with_spatial_Sigma(
     del C_F_t_2  # Free — result accumulated into C_F_t
     logger.info("AX 2: %s", time.time() - st_time)
 
-    F_C_F_t = linalg.batch_idft3(C_F_t, volume_shape, vol_batch_size)
-    del C_F_t  # Free — IDFT result replaces it
+    F_C_F_t = linalg.batch_idft3(C_F_t, volume_shape, vol_batch_size, overwrite=True)
     logger.info("IDFT: %s", time.time() - st_time)
 
     return F_C_F_t
@@ -638,6 +641,26 @@ def left_matvec_with_spatial_Sigma(
 report_memory = True
 
 
+def _randomized_svd_block_memory_to_use(gpu_memory_to_use, volume_shape):
+    """Return a conservative per-matmul budget for randomized SVD blocks.
+
+    At 256^3, the randomized-SVD left matvec can ask XLA for large
+    temporaries even when the input slices appear to fit. Keep those
+    per-call temporaries bounded while preserving existing 64^3/128^3
+    behavior and any explicitly smaller user budget.
+    """
+
+    memory_to_use = float(gpu_memory_to_use)
+    if max(volume_shape) >= 256:
+        return min(memory_to_use, 16.0)
+    return memory_to_use
+
+
+def _expanded_real_column_count(picked_frequency_indices, volume_shape):
+    picked_frequencies = np.asarray(core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape))
+    return int(picked_frequency_indices.size + np.count_nonzero(picked_frequencies[:, 0] > 0))
+
+
 @nvtx.annotate("randomized_real_svd_of_columns", color="red", domain=NVTX_DOMAIN_PCA)
 def randomized_real_svd_of_columns(
     columns,
@@ -654,7 +677,24 @@ def randomized_real_svd_of_columns(
 
     # memory_to_use = utils.get_gpu_memory_total() - 5
     utils.report_memory_device(logger=logger)
+    block_memory_to_use = _randomized_svd_block_memory_to_use(gpu_memory_to_use, volume_shape)
+    if block_memory_to_use < float(gpu_memory_to_use):
+        logger.info(
+            "Capping randomized SVD block matmul memory from %.1f GB to %.1f GB for volume_shape=%s",
+            float(gpu_memory_to_use),
+            block_memory_to_use,
+            volume_shape,
+        )
     picked_frequencies = core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape)
+    expanded_column_count = _expanded_real_column_count(picked_frequency_indices, volume_shape)
+    if test_size > expanded_column_count:
+        logger.info(
+            "Reducing randomized SVD sketch size from %s to %s to match expanded covariance columns",
+            test_size,
+            expanded_column_count,
+        )
+        test_size = expanded_column_count
+
     smaller_size = int(2 * (np.max(np.abs(picked_frequencies)) + 1))
     smaller_vol_shape = tuple(3 * [smaller_size])
 
@@ -672,7 +712,7 @@ def randomized_real_svd_of_columns(
         picked_frequency_indices,
         volume_shape,
         vol_batch_size,
-        memory_to_use=gpu_memory_to_use,
+        memory_to_use=block_memory_to_use,
     ).real.astype(np.float32)
     del test_mat
 
@@ -696,7 +736,7 @@ def randomized_real_svd_of_columns(
         picked_frequency_indices,
         volume_shape,
         vol_batch_size,
-        memory_to_use=gpu_memory_to_use,
+        memory_to_use=block_memory_to_use,
     ).real.astype(np.float32)
     utils.report_memory_device(logger=logger)
     logger.info("left matvec %s", time.time() - st_time)
@@ -708,7 +748,7 @@ def randomized_real_svd_of_columns(
     vol_size = np.prod(volume_shape)
     # To save some memory... Q = FQ
     Q = linalg.batch_dft3(Q, volume_shape, vol_batch_size)
-    Q = linalg.blockwise_A_X(Q, U, memory_to_use=gpu_memory_to_use) / np.float32(np.sqrt(vol_size))
+    Q = linalg.blockwise_A_X(Q, U, memory_to_use=block_memory_to_use) / np.float32(np.sqrt(vol_size))
     logger.info("FQU matvec %s", time.time() - st_time)
     utils.report_memory_device(logger=logger)
 

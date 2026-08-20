@@ -105,10 +105,8 @@ def bpref_device_signature_scope(active: bool):
 def custom_cuda_requested() -> bool:
     """Return True unless the user explicitly disables custom CUDA.
 
-    Routes through ``recovar.utils.cuda_env`` so the canonical
-    ``RECOVAR_DISABLE_CUDA`` env var and the common typo
-    ``RECOVAR_CUDA_DISABLE`` produce a single consistent signal (and a
-    one-time warning when only the typo is set).
+    Routes through ``recovar.utils.cuda_env`` so the codebase reads the
+    canonical ``RECOVAR_DISABLE_CUDA`` env var in one place.
     """
     from recovar.utils.cuda_env import custom_cuda_disabled_from_env
 

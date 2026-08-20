@@ -38,6 +38,11 @@ HIGHER_IS_BETTER_TOKENS = (
 )
 
 DEFAULT_OUTPUT_DIRNAME = "recovar_test_all_metrics"
+# Reference GPU size whose batch sizing pinned the simulator noise RNG
+# stream for this PR's baseline (76 GB physical → JAX bytes_limit
+# ≈ 72 GB). Used by generated_dataset_noise_rng_batch_size below so
+# the generated regression dataset is reproducible across hardware
+# (issue #148).
 GENERATED_DATASET_REFERENCE_GPU_MEMORY_GB = 76
 
 

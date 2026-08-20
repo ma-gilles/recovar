@@ -77,11 +77,12 @@ def main():
     if run_on_cpu:
         os.environ["JAX_PLATFORMS"] = "cpu"
 
-    # Base command is now "recovar" (which dispatches to the appropriate subcommand)
-    BASE_CMD = "python -m recovar.command_line"
+    base_argv = [sys.executable, "-m", "recovar.command_line"]
 
     passed_functions = []
     failed_functions = []
+    test_dataset_dir = os.path.join(dataset_dir, "outliers_test")
+    cpu_args = ["--accept-cpu"] if run_on_cpu else []
 
     def error_message():
         logger.error(
@@ -105,10 +106,59 @@ def main():
     if not run_on_cpu:
         check_gpu()
 
-    def run_command(command, description, function_name, should_fail=False):
+    def _p(*parts):
+        return os.path.join(test_dataset_dir, *parts)
+
+    def _recovar_argv(cmd, *tokens):
+        return [*base_argv, cmd, *tokens]
+
+    def _pipeline_with_outliers_argv(particle_file, outdir, *extra):
+        return _recovar_argv(
+            "pipeline_with_outliers",
+            _p("test_dataset", particle_file),
+            "--poses",
+            _p("test_dataset", "poses.pkl"),
+            "--ctf",
+            _p("test_dataset", "ctf.pkl"),
+            "--correct-contrast",
+            "-o",
+            _p("test_dataset", outdir),
+            "--mask=from_halfmaps",
+            "--lazy",
+            "--zdim",
+            "4",
+            *extra,
+            *cpu_args,
+        )
+
+    def _analyze_argv(pipeline_dir, outdir):
+        return _recovar_argv(
+            "analyze",
+            _p("test_dataset", pipeline_dir),
+            "--outdir",
+            _p("test_dataset", outdir),
+            "--zdim",
+            "4",
+            *cpu_args,
+        )
+
+    def _compute_trajectory_argv(pipeline_dir, outdir):
+        return _recovar_argv(
+            "compute_trajectory",
+            _p("test_dataset", pipeline_dir),
+            "--outdir",
+            _p("test_dataset", outdir),
+            "--zdim",
+            "4",
+            "--endpts",
+            _p("test_dataset", "analyze_chain_output", "kmeans", "centers.txt"),
+            *cpu_args,
+        )
+
+    def run_command(argv, description, function_name, should_fail=False):
         logger.info("Running: %s", description)
-        logger.info("Command: %s", command)
-        result = subprocess.run(command, shell=True)
+        logger.info("Command: %s", " ".join(argv))
+        result = subprocess.run(argv)
         if result.returncode == 0:
             logger.info("Success: %s", description)
             passed_functions.append(function_name)
@@ -119,11 +169,6 @@ def main():
             else:
                 logger.info("(Expected failure)")
 
-    cpu_string = " --accept-cpu" if run_on_cpu else ""
-
-    # Create a test dataset with outliers
-    test_dataset_dir = os.path.join(dataset_dir, "outliers_test")
-
     # Create an outlier volume
     outlier_volume_path = f"{test_dataset_dir}/test_dataset/outlier_volume.mrc"
     create_outlier_volume(outlier_volume_path, grid_size=64)
@@ -132,80 +177,133 @@ def main():
     if args.tilt_series:
         logger.info("Generating tilt series test dataset...")
         run_command(
-            f"{BASE_CMD} make_test_dataset {test_dataset_dir} --n-images {n_images} --tilt-series --outlier-file-input {outlier_volume_path} --percent-outliers {percent_outliers} --percent-tilt-series-outliers {percent_tilt_series_outliers}",
+            _recovar_argv(
+                "make_test_dataset",
+                test_dataset_dir,
+                "--n-images",
+                str(n_images),
+                "--tilt-series",
+                "--outlier-file-input",
+                outlier_volume_path,
+                "--percent-outliers",
+                str(percent_outliers),
+                "--percent-tilt-series-outliers",
+                str(percent_tilt_series_outliers),
+            ),
             "Generate a test dataset with tilt series for outlier testing",
             "make_test_dataset_tilt_outliers",
         )
     else:
         logger.info("Generating regular test dataset...")
         run_command(
-            f"{BASE_CMD} make_test_dataset {test_dataset_dir} --n-images {n_images} --outlier-file-input {outlier_volume_path} --percent-outliers {percent_outliers}",
+            _recovar_argv(
+                "make_test_dataset",
+                test_dataset_dir,
+                "--n-images",
+                str(n_images),
+                "--outlier-file-input",
+                outlier_volume_path,
+                "--percent-outliers",
+                str(percent_outliers),
+            ),
             "Generate a test dataset for outlier testing",
             "make_test_dataset_outliers",
         )
 
-    def run_basic_tests(test_dataset_dir, is_tilt_series, k_rounds, cpu_string):
+    def run_basic_tests(is_tilt_series, k_rounds):
         """Run basic outlier detection pipeline tests."""
         if is_tilt_series:
             run_command(
-                f"{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.star --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --tilt-series --tilt-series-ctf=relion5 --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {k_rounds} --use-contrast-detection --use-junk-detection --save-pipeline-indices {cpu_string}",
+                _pipeline_with_outliers_argv(
+                    "particles.star",
+                    "pipeline_outliers_output",
+                    "--tilt-series",
+                    "--tilt-series-ctf=relion5",
+                    "--k-rounds",
+                    str(k_rounds),
+                    "--use-contrast-detection",
+                    "--use-junk-detection",
+                    "--save-pipeline-indices",
+                ),
                 f"Run pipeline_with_outliers for {k_rounds} rounds with tilt series",
                 "pipeline_with_outliers_tilt",
             )
         else:
             run_command(
-                f"{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {k_rounds} --use-contrast-detection --use-junk-detection --save-pipeline-indices {cpu_string}",
+                _pipeline_with_outliers_argv(
+                    "particles.64.mrcs",
+                    "pipeline_outliers_output",
+                    "--k-rounds",
+                    str(k_rounds),
+                    "--use-contrast-detection",
+                    "--use-junk-detection",
+                    "--save-pipeline-indices",
+                ),
                 f"Run pipeline_with_outliers for {k_rounds} rounds",
                 "pipeline_with_outliers",
             )
 
-    def run_analyze_chain_tests(test_dataset_dir, cpu_string):
+    def run_analyze_chain_tests():
         """Test chaining pipeline with analyze command."""
         run_command(
-            f"{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_analyze_chain --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices {cpu_string}",
+            _pipeline_with_outliers_argv(
+                "particles.64.mrcs",
+                "pipeline_analyze_chain",
+                "--k-rounds",
+                "1",
+                "--use-contrast-detection",
+                "--save-pipeline-indices",
+            ),
             "Run pipeline for chaining with analyze",
             "pipeline_analyze_chain",
         )
 
         run_command(
-            f"{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output --zdim 4 {cpu_string}",
+            _analyze_argv("pipeline_analyze_chain/round_1", "analyze_chain_output"),
             "Run analyze command",
             "analyze_chain",
         )
 
         run_command(
-            f"{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output2 --zdim 4 {cpu_string}",
+            _analyze_argv("pipeline_analyze_chain/round_1", "analyze_chain_output2"),
             "Run second analyze command",
             "analyze_chain_final",
         )
 
-    def run_trajectory_chain_tests(test_dataset_dir, cpu_string):
+    def run_trajectory_chain_tests():
         """Test chaining pipeline with compute_trajectory command."""
         run_command(
-            f"{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_trajectory_chain --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices {cpu_string}",
+            _pipeline_with_outliers_argv(
+                "particles.64.mrcs",
+                "pipeline_trajectory_chain",
+                "--k-rounds",
+                "1",
+                "--use-contrast-detection",
+                "--save-pipeline-indices",
+            ),
             "Run pipeline for chaining with compute_trajectory",
             "pipeline_trajectory_chain",
         )
 
         run_command(
-            f"{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output --zdim 4 {cpu_string}",
+            _analyze_argv("pipeline_analyze_chain/round_1", "analyze_chain_output"),
             "Run analyze command",
             "analyze_chain",
         )
 
         run_command(
-            f"{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans/centers.txt {cpu_string}",
+            _compute_trajectory_argv("pipeline_trajectory_chain/round_1", "trajectory_chain_output"),
             "Run compute_trajectory command",
             "compute_trajectory_chain",
         )
 
         run_command(
-            f"{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output2 --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans/centers.txt {cpu_string}",
+            _compute_trajectory_argv("pipeline_trajectory_chain/round_1", "trajectory_chain_output2"),
             "Run second compute_trajectory command",
             "compute_trajectory_chain_final",
         )
 
-    def run_tilt_series_tests(test_dataset_dir, k_rounds, cpu_string):
+    def run_tilt_series_tests():
         """Test tilt series specific functionality."""
         # This function is called when --test-tilt-series is used
         # The basic tilt series tests are already covered in run_basic_tests
@@ -214,16 +312,16 @@ def main():
 
     # Run selected tests
     if args.run_all or args.test_basic:
-        run_basic_tests(test_dataset_dir, args.tilt_series, k_rounds, cpu_string)
+        run_basic_tests(args.tilt_series, k_rounds)
 
     if args.run_all or args.test_analyze_chain:
-        run_analyze_chain_tests(test_dataset_dir, cpu_string)
+        run_analyze_chain_tests()
 
     if args.run_all or args.test_trajectory_chain:
-        run_trajectory_chain_tests(test_dataset_dir, cpu_string)
+        run_trajectory_chain_tests()
 
     if args.run_all or args.test_tilt_series:
-        run_tilt_series_tests(test_dataset_dir, k_rounds, cpu_string)
+        run_tilt_series_tests()
 
     # Verify results and cleanup
     if args.run_all or args.test_basic:

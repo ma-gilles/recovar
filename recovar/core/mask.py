@@ -69,6 +69,12 @@ def masking_options(
 
         if keep_input_mask:
             volume_mask = input_mask
+            # Use a separate boolean base for dilation, keeping the (soft) input
+            # mask intact for soft masking. A mask loaded from an .mrc carries tiny
+            # (~1e-8) nonzero roundoff in almost every voxel, and binary_dilation
+            # treats any nonzero as foreground -- dilating the raw float directly
+            # blows the dilated mask up to all-ones.
+            dilation_base = input_mask > 0.5
         else:
             logger.info("Using input mask")
             if mask_dilation_iter > 0:
@@ -82,8 +88,9 @@ def masking_options(
             logger.info("Thresholding mask at 0.5 and softening with cosine kernel of radius %d pixels", kernel_size)
             input_mask = input_mask > 0.5
             volume_mask = soften_volume_mask(input_mask, kernel_size)
+            dilation_base = input_mask
 
-        dilated_volume_mask = binary_dilation(input_mask, iterations=dilated_mask_dilations_iter)
+        dilated_volume_mask = binary_dilation(dilation_base, iterations=dilated_mask_dilations_iter)
         dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
 
     elif volume_mask_option == "from_halfmaps":

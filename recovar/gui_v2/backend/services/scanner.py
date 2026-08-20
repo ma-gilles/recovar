@@ -152,8 +152,15 @@ def _is_analyze_output(job_dir: str) -> bool:
 def _detect_job_type_from_dir(type_dir_name: str, job_dir: str) -> str | None:
     """Infer the job type from the parent directory name and contents.
 
-    First checks job.json's ``command`` field (authoritative), then falls
-    back to matching the directory name against the registry.
+    Resolution order:
+    1. ``job.json``'s ``command`` field — authoritative when present.
+    2. Directory name against the registry / known list — handles the
+       canonical ``Pipeline``, ``Analyze``, etc. layout.
+    3. Structural fingerprint — if the directory has the markers of a
+       pipeline output (``model/metadata.json`` or ``model/params.pkl``)
+       or an analyze output (``data/`` + ``plots/`` or ``kmeans/``),
+       classify it accordingly. This catches ad-hoc CLI runs created
+       with arbitrary ``-o`` paths like ``pipeline_output_clean_main``.
     """
     try:
         from recovar.project.registry import JOB_TYPES, get_job_type
@@ -161,19 +168,17 @@ def _detect_job_type_from_dir(type_dir_name: str, job_dir: str) -> str | None:
         JOB_TYPES = {}
         get_job_type = lambda _: None  # noqa: E731
 
-    # Primary: read job.json and use the command field to look up type
+    # 1. job.json command field
     job_data = _read_job_json(job_dir)
     if job_data and job_data.get("command"):
         jt = get_job_type(job_data["command"])
         if jt is not None:
             return jt.name
 
-    # Fallback: match directory name against registry
+    # 2. Directory name match
     for jt in JOB_TYPES.values():
         if jt.dir_name == type_dir_name:
             return jt.name
-
-    # Last resort: hardcoded known names
     known_dirs = {
         "Pipeline": "Pipeline",
         "Analyze": "Analyze",
@@ -189,7 +194,15 @@ def _detect_job_type_from_dir(type_dir_name: str, job_dir: str) -> str | None:
         "PipelineWithOutliers": "PipelineWithOutliers",
         "ReconstructExternal": "ReconstructExternal",
     }
-    return known_dirs.get(type_dir_name)
+    if type_dir_name in known_dirs:
+        return known_dirs[type_dir_name]
+
+    # 3. Structural fingerprint
+    if _is_pipeline_output(job_dir):
+        return "Pipeline"
+    if _is_analyze_output(job_dir):
+        return "Analyze"
+    return None
 
 
 def _scan_job_dir(type_name: str, job_dir: str) -> ScannedJob:

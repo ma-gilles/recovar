@@ -685,7 +685,7 @@ def generate_synthetic_dataset(
         Batch size used only to advance the random-noise stream. When omitted,
         it matches the image processing batch size. Supplying a fixed value
         keeps generated noise independent of GPU-memory-driven processing
-        batch changes.
+        batch changes (issue #148 fix).
     """
     from recovar.output import output
 
@@ -1476,9 +1476,8 @@ def simulate_data(
                 ## AND THE MAGIC NUMBER IS... (to make things consistent with the non-premultiplied CTF case)
                 noise_image = noise_image * upsample_factor**2
 
-                # Make big noise. The RNG stream can be tied to a fixed
-                # reference chunk size so generated datasets do not change
-                # when GPU-memory-driven processing batches change.
+                # Make big noise from a fixed-chunk RNG stream so that
+                # processing-batch changes (GPU memory) don't perturb noise.
                 noise_batch = make_noise_batch_from_rng_stream(
                     noise_subkeys,
                     noise_rng_batch_size,
@@ -1593,8 +1592,6 @@ def _color_white_noise_batch(noise_batch, noise_image):
 def make_noise_batch(subkey, noise_image, images_batch_shape):
     noise_batch = jax.random.normal(subkey, images_batch_shape)
     return _color_white_noise_batch(noise_batch, noise_image)
-
-
 def make_noise_batch_from_rng_stream(
     noise_subkeys,
     noise_rng_batch_size,
@@ -1605,7 +1602,15 @@ def make_noise_batch_from_rng_stream(
     images_batch_shape,
     noise_transform_batch_size=None,
 ):
-    """Return noise for a processing batch from a fixed reference RNG stream."""
+    """Return noise for a processing batch from a fixed reference RNG stream.
+
+    The RNG stream is chunked by ``noise_rng_batch_size`` (independent
+    of the processing ``batch_size``). For a processing batch spanning
+    [batch_st, batch_end), pulls the corresponding pieces from one or
+    more RNG chunks and concatenates them. This decouples generated
+    noise from GPU-memory-driven processing-batch shape changes
+    (issue #148 fix).
+    """
     if batch_end <= batch_st:
         raise ValueError("batch_end must be greater than batch_st")
 
@@ -1622,7 +1627,6 @@ def make_noise_batch_from_rng_stream(
         rng_st = rng_batch_idx * noise_rng_batch_size
         rng_end = min((rng_batch_idx + 1) * noise_rng_batch_size, n_images)
         rng_shape = (rng_end - rng_st, *image_shape)
-
         slice_st = max(batch_st, rng_st) - rng_st
         slice_end = min(batch_end, rng_end) - rng_st
         if noise_transform_batch_size is not None:

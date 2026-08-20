@@ -10,6 +10,9 @@
 #
 # This is a manual one-shot whose output is checked into the repo;
 # CI does not need to re-run it.
+#
+# compute_state calibration is not wired yet; leave COMMANDS=pipeline
+# unless that branch is implemented in calibrate_memory_planner.py.
 
 set -euo pipefail
 
@@ -17,13 +20,16 @@ WORKDIR="${WORKDIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 RUNS_ROOT="${RUNS_ROOT:-/scratch/gpfs/GILLES/mg6942/calibration_runs}"
 DATASETS_ROOT="${DATASETS_ROOT:-/scratch/gpfs/GILLES/mg6942/calibration_datasets}"
 N_IMAGES="${N_IMAGES:-20000}"
+SLURM_ACCOUNT="${SLURM_ACCOUNT:-gilles}"
+SLURM_PARTITION="${SLURM_PARTITION:-cryoem}"
+TIME_LIMIT="${TIME_LIMIT:-2:00:00}"
 
 mkdir -p "$RUNS_ROOT/cells" "$RUNS_ROOT/logs" "$RUNS_ROOT/sbatch"
 
 GRIDS=(${GRIDS:-64 128 256})
 N_PCS_LIST=(${N_PCS_LIST:-4 20 50 200})
 BACKENDS=(${BACKENDS:-custom_cuda jax_fallback})
-COMMANDS=(${COMMANDS:-pipeline compute_state})
+COMMANDS=(${COMMANDS:-pipeline})
 
 submitted=0
 for cmd in "${COMMANDS[@]}"; do
@@ -40,13 +46,13 @@ for cmd in "${COMMANDS[@]}"; do
         cat > "$sbatch_script" <<EOF
 #!/usr/bin/env bash
 #SBATCH --job-name=recovar-cal-${cell_id}
-#SBATCH --account=amits
-#SBATCH --partition=cryoem
+#SBATCH --account=${SLURM_ACCOUNT}
+#SBATCH --partition=${SLURM_PARTITION}
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=200GB
-#SBATCH --time=2:00:00
+#SBATCH --time=${TIME_LIMIT}
 #SBATCH --output=$RUNS_ROOT/logs/${cell_id}-%j.out
 #SBATCH --exclusive
 
@@ -55,8 +61,26 @@ cd "${WORKDIR}"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_MEM_FRACTION=.90
 export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/calibrate_\${SLURM_JOB_ID}"
-mkdir -p "\$TMPDIR"
+export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/calibrate_\${SLURM_JOB_ID}"
+export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/calibrate_\${SLURM_JOB_ID}"
+export RECOVAR_CUDA_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/recovar_cuda_cache/calibrate_\${SLURM_JOB_ID}"
+mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR" "\$RECOVAR_CUDA_CACHE_DIR"
+if [ -x /usr/local/cuda-12.8/bin/nvcc ]; then
+  export CUDA_HOME=/usr/local/cuda-12.8
+  export CUDA_PATH=/usr/local/cuda-12.8
+  export NVCC=/usr/local/cuda-12.8/bin/nvcc
+  export CUDACXX="\$NVCC"
+  export PATH="/usr/local/cuda-12.8/bin:\$PATH"
+elif ! command -v nvcc >/dev/null 2>&1; then
+  echo "FAIL: nvcc not found; set NVCC/CUDACXX or install cudatoolkit/12.8"
+  exit 1
+fi
+
+if [ "${backend}" = "custom_cuda" ]; then
+  pixi run python -c "from recovar.cuda_backproject import cuda_available; raise SystemExit(0 if cuda_available() else 'custom CUDA unavailable')"
+fi
 
 pixi run python scripts/calibrate_memory_planner.py \\
     --command ${cmd} \\
