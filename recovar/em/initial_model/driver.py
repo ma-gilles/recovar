@@ -21,8 +21,10 @@ from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star, write_star
 from recovar.em import sampling
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
+    make_relion_translation_log_prior,
     relion_round_away_from_zero,
     relion_sigma_offset_prior_center,
+    relion_translation_prior_center,
 )
 from recovar.reconstruction.noise import make_radial_noise
 from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion, write_relion_mrc
@@ -874,24 +876,20 @@ def _translation_log_prior(
     sigma_angstrom: float | None,
     centers: np.ndarray | None = None,
 ) -> np.ndarray | None:
+    """Build InitialModel's RELION accelerated-path ``pdf_offset`` values."""
+
     if sigma_angstrom is None:
         return None
-    sigma_angstrom = float(sigma_angstrom)
-    if sigma_angstrom <= 0.0:
-        raise ValueError("translation_sigma_angstrom must be positive when provided")
     translations = np.asarray(translations, dtype=np.float32)
     shared = centers is None
-    if centers is not None:
-        centers_arr = np.asarray(centers, dtype=np.float32)
-        if centers_arr.ndim != 2 or centers_arr.shape[1] != 2:
-            raise ValueError(f"translation prior centers must have shape (N, 2), got {centers_arr.shape}")
-    else:
-        centers_arr = np.zeros((1, 2), dtype=np.float32)
-
-    diffs_angstrom = (translations[None, :, :2] - centers_arr[:, None, :2]) * float(voxel_size)
-    log_prior = -0.5 * np.sum(diffs_angstrom**2, axis=-1) / (sigma_angstrom**2)
-    log_prior = log_prior.astype(np.float32, copy=False)
-    return log_prior[0] if shared else log_prior
+    centers_arr = np.zeros(2, dtype=np.float32) if shared else np.asarray(centers, dtype=np.float32)
+    log_prior = make_relion_translation_log_prior(
+        translations,
+        voxel_size=float(voxel_size),
+        sigma_offset_angstrom=float(sigma_angstrom),
+        prior_centers=centers_arr,
+    )
+    return np.asarray(log_prior, dtype=np.float32)
 
 
 def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteration: int) -> float:
@@ -1014,10 +1012,13 @@ def _dense_estep_config(
         sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
     else:
         sigma_angstrom = float(sigma_offset_angstrom)
-    # InitialModel pre-applies rounded image shifts, so pdf_offset is centered
-    # on the remaining sub-pixel residual and scored in Angstrom units.
-    residual_offsets = np.asarray(translation_offsets, dtype=np.float32)[:, :2] - image_pre_shifts[:, :2]
-    translation_prior_centers = (residual_offsets / float(dataset.voxel_size)).astype(np.float32, copy=False)
+    # InitialModel uses the same accelerated ``pdf_offset`` convention as the
+    # supplied-map EM path: the sampling grid is represented in projection
+    # pixels, while RELION applies its source-faithful pixel_size**4 scale.
+    translation_prior_centers = relion_translation_prior_center(
+        translation_offsets,
+        float(dataset.voxel_size),
+    )
     _prior_kwargs = dict(
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=sigma_angstrom,
