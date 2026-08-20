@@ -15,7 +15,7 @@ as the next product milestone rather than mixing it into the first closure.
 ## VDAM active experiment — 2026-08-20
 
 The native InitialModel/VDAM parity worktree is at
-`b7279597e6156f4dea3c08eb5b91b9d1bb9b4ddc`, on top of PR #158 head
+`3c50286cc7906f4c29cf4d39006d241875087637`, on top of PR #158 head
 `b10412ca`.  Iteration-0 bootstrap state is exact, and identity-aligned
 iteration-1 particle pose/translation state is effectively exact, but the
 frozen tiny trajectory still misses the map gates (iteration-1 cross FSC-AUC
@@ -64,10 +64,52 @@ relative L2 `0.78793`/`0.83375`.  The position-parity counterfactual changes
 these only marginally.  Downstream replay is not the cause: feeding RELION's
 native post-`applyMomenta` data, moment-noise power, reference, and exact
 parameters into the shared binding reproduces native `reconstructGrad` at
-`7.10e-8` relative L2.  Particle 0's complete pre-scatter contribution is
-already exact, so the next bounded experiment is a stable-identity panel of
-additional particles spanning both halves and the lexicographic read order,
-compared at the pre-scatter contribution boundary before another trajectory.
+`7.10e-8` relative L2.
+
+The particle-0 StoreWavg boundary is now closed with the actual unmasked
+reconstruction image.  A first replay using RELION's masked scoring image was
+invalid and produced numerator cosine `0.48068`; the analyzer now rejects that
+operand by construction.  RELION's accelerated path does not expose the
+unmasked Fourier image in the shared binary, so Slurm job `12671650` captured
+the same pre-StoreWavg operand through the already compiled CPU hook.  Using
+that image with the authoritative GPU posterior/projector gives numerator
+relative L2 `0.0077293`, cosine `0.9999703`, and denominator relative L2
+`0.0074343`, cosine `0.9999725` (analysis job `12671684`).  This rejects
+per-particle image, posterior, CTF/noise, residual subtraction, and scatter
+arithmetic as the dominant particle-0 cause.
+
+The stable-identity StoreWavg panel also agrees.  For input rows `0`, `100`,
+`277`, and `999` (native part IDs `0`, `4`, `199`, and `3`), numerator relative
+L2 is `0.00774`, `0.00701`, `0.00449`, and `0.00987`, with cosines from
+`0.999955` to `0.999992`; denominator results are comparable.  Slurm jobs
+`12671889`--`12671892` used RECOVAR contribution captures from jobs `12671818`
+and `12671819` and unmasked-image capture `12671784`.
+
+That panel accidentally sampled only identities for which input-row parity and
+RELION internal `part_id` parity agree.  Directly decoding RELION's frozen
+iteration-1 `sorted_idx` and mapping through lexicographic Experiment order
+shows `101/200` selected identities have different parities.  RELION source is
+explicit that StoreWavg routes by internal `part_id % 2`; current RECOVAR routes
+by original input-row parity.  The earlier position-parity trajectory is still
+valid negative whole-run evidence, but it cannot override this demonstrated
+first-boundary semantic mismatch while other aggregate defects remain.  The
+active bounded experiment is therefore one deliberately mismatched identity:
+native part ID `2` / input row `99`.  Capture its unmasked StoreWavg rows and
+show both their arithmetic agreement and their opposite current half routing
+before restoring Experiment-position parity as an independently tested fix.
+
+That mismatched-identity experiment passed its arithmetic controls and failed
+the routing control exactly as predicted.  Native part ID `2` / input row `99`
+has numerator relative L2 `0.003556`, cosine `0.999994`, and denominator
+relative L2 `0.001540`, cosine `0.999999` (Slurm job `12672040`), but the
+production capture records it in RECOVAR half 2 while RELION routes even
+internal part ID `2` to half 1.  RECOVAR now carries Experiment-position parity
+alongside the lexicographic row mapping through shuffle, prefix selection, and
+optics stable-sort.  Unit coverage pins the distinction.  The earlier
+position-parity trajectory (`12669867`) remains evidence that this necessary
+semantic correction does not by itself close aggregate or map parity; after
+the focused validation ladder, the next boundary is native-vs-RECOVAR partial
+accumulator sums in identical Experiment particle order.
 
 ## Mode Contract
 
