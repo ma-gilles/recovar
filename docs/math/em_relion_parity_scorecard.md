@@ -2690,10 +2690,10 @@ currently complete boundary passes.  Case 5 passes through iteration 4 at
 merged cross-engine FSC-AUC `0.9999950850183613` and merged GT delta
 `+3.88046410651488e-6`; its report SHA-256 is
 `59391b5bbf5ef18449fc2306988e83f780467a4d92424806571b80ba9c428dbd`.
-Case 10 passes through iteration 4 at merged cross-engine FSC-AUC
-`0.9999902504679697` and merged GT delta `-6.135428342560201e-6`; its
+Case 10 passes through iteration 5 at merged cross-engine FSC-AUC
+`0.9999620838109679` and merged GT delta `+7.593986871751168e-6`; its
 report SHA-256 is
-`02d3dce2726e50cd5ab8b8bed5e0027722a1576258513bfe42451942f8676c7e`.
+`727adb064a60e73ddff829623d007c536b7725529793245f91cabe397dcf94da`.
 Case 4 passes through iteration 3 at merged cross-engine FSC-AUC
 `0.9999846418764194` and merged GT delta `-2.191627083283909e-5`; its report
 SHA-256 is

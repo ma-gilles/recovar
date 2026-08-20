@@ -17833,12 +17833,12 @@ merged cross-engine FSC-AUC `0.9999950850183613`, merged GT delta
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining4_native_a220_20260820T0700ET/cases/5_very_high_noise_100k_g256_white_noise10_bf80/analysis_live/prefix_it4_fsc.json`
 (SHA-256
 `59391b5bbf5ef18449fc2306988e83f780467a4d92424806571b80ba9c428dbd`).
-Case 10 passes through iteration 4 with merged cross-engine FSC-AUC
-`0.9999902504679697`, merged GT delta `-6.135428342560201e-6`, and no
+Case 10 passes through iteration 5 with merged cross-engine FSC-AUC
+`0.9999620838109679`, merged GT delta `+7.593986871751168e-6`, and no
 topology failure.  Its report is
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining4_native_a220_20260820T0700ET/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0/analysis_live/prefix_it4_fsc.json`
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining4_native_a220_20260820T0700ET/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0/analysis_live/prefix_it5_fsc.json`
 (SHA-256
-`02d3dce2726e50cd5ab8b8bed5e0027722a1576258513bfe42451942f8676c7e`).
+`727adb064a60e73ddff829623d007c536b7725529793245f91cabe397dcf94da`).
 Case 4 now passes through iteration 3 with merged cross-engine FSC-AUC
 `0.9999846418764194`, merged GT delta `-2.191627083283909e-5`, and no
 topology failure.  Its report is
