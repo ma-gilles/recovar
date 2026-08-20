@@ -159,10 +159,13 @@ at the default batch.  Batch 200 closes the resource boundary for `vdam-09`,
 which then completes with minimum cross-engine FSC-AUC `0.99734426` and no
 negative GT delta.  For `vdam-12`, batch 200 reduces the failed allocation from
 `37.54` GiB to `29.33` GiB but still exhausts the device once resident buffers
-are included.  The runner records an explicit resource-only image batch; the
-matrix pins `vdam-09` to 200 and `vdam-12` to 100.  Their scientific commands
-and frozen acceptance contracts are otherwise unchanged.  The next bounded
-run is `vdam-12` alone in a fresh output root.
+are included.  Batch 100 still requests `29.27` GiB, showing that the fused
+sparse-M-step tensor rather than the outer image batch controls this boundary.
+The runner records its resource/execution overrides; the matrix pins `vdam-09`
+to batch 200 and routes `vdam-12` through the shared exact deferred packed-
+M-step fallback by setting the sparse big-JIT tensor cap to zero.  Its
+scientific command and frozen acceptance contract are unchanged.  The next
+bounded run is `vdam-12` alone in a fresh output root.
 
 The first remaining autonomous divergence is now identity-localized rather
 than inferred from maps.  The reusable STAR-to-STAR diagnostic

@@ -253,6 +253,9 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "recovar_image_batch_size": image_batch_size,
+        "recovar_sparse_big_jit_mstep_max_gb": os.environ.get(
+            "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB"
+        ),
     }
     (case_root / "run_provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
 
@@ -278,6 +281,7 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "JAX_PLATFORM_NAME",
         "RECOVAR_CUDA_LIB",
         "RECOVAR_DISABLE_CUDA",
+        "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB",
         "SLURM_JOB_GPUS",
     )
     (recovar_dir / "runtime_environment.json").write_text(

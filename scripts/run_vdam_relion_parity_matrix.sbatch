@@ -26,7 +26,10 @@ CASE_ID="$(printf 'vdam-%02d' "${SLURM_ARRAY_TASK_ID}")"
 if [[ -z "${RECOVAR_VDAM_IMAGE_BATCH_SIZE:-}" ]]; then
   case "${CASE_ID}" in
     vdam-09) export RECOVAR_VDAM_IMAGE_BATCH_SIZE=200 ;;
-    vdam-12) export RECOVAR_VDAM_IMAGE_BATCH_SIZE=100 ;;
+    vdam-12)
+      export RECOVAR_VDAM_IMAGE_BATCH_SIZE=100
+      export RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB=0
+      ;;
   esac
 fi
 export REPO_ROOT CASE_ID OUTPUT_ROOT
