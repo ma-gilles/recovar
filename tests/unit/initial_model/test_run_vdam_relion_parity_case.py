@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import subprocess
+import types
 from pathlib import Path
 
 import pytest
 
+from scripts import run_ab_initio
 from scripts import run_vdam_relion_parity_case as runner
 
 pytestmark = pytest.mark.unit
@@ -73,6 +75,7 @@ def test_recovar_command_maps_the_same_frozen_definition(monkeypatch):
     assert _value(argv, "--offset_step") == "2.0"
     assert _value(argv, "--padding_factor") == "1"
     assert _value(argv, "--gpu") == "0"
+    assert "--require_custom_cuda" in argv
 
 
 def test_gpu_capture_requires_exactly_one_visible_uuid(monkeypatch):
@@ -97,3 +100,43 @@ def test_gpu_capture_rejects_slurm_uuid_mismatch(monkeypatch):
 
     with pytest.raises(runner.RunError, match="differs from visible UUID"):
         runner._physical_gpu_uuid()
+
+
+def test_native_cli_custom_cuda_gate_primes_shared_slicing_dispatch(monkeypatch):
+    import jax
+
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.core import slicing
+
+    monkeypatch.setattr(jax, "devices", lambda: [types.SimpleNamespace(platform="cuda")])
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+    monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
+
+    report = run_ab_initio._require_custom_cuda_runtime()
+
+    assert report == {
+        "default_backend": "gpu",
+        "device_platforms": ["cuda"],
+        "slicing_on_gpu": True,
+        "custom_cuda_requested": True,
+        "cuda_available": True,
+    }
+    assert slicing._on_gpu() is True
+    slicing._on_gpu.cache_clear()
+
+
+def test_native_cli_custom_cuda_gate_rejects_cpu_only_runtime(monkeypatch):
+    import jax
+
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.core import slicing
+
+    monkeypatch.setattr(jax, "devices", lambda: [types.SimpleNamespace(platform="cpu")])
+    monkeypatch.setattr(jax, "default_backend", lambda: "cpu")
+    monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+    monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: False)
+
+    with pytest.raises(RuntimeError, match="requires a visible GPU"):
+        run_ab_initio._require_custom_cuda_runtime()
+    slicing._on_gpu.cache_clear()

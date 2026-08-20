@@ -216,6 +216,7 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "test_run_vdam_relion_parity_case.py",
         "build_relion_command",
         "build_recovar_command",
+        "--require_custom_cuda",
         "materialize(",
         "cwd=fixture_dir",
         "paired_gpu_uuid.json",

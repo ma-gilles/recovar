@@ -144,6 +144,7 @@ def build_recovar_command(
         str(fixture_dir),
         "--gpu",
         "0",
+        "--require_custom_cuda",
     ]
 
 
@@ -235,7 +236,13 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
     (case_root / "run_provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
 
     env = dict(os.environ)
-    env.update({"PYTHONNOUSERSITE": "1", "XLA_PYTHON_CLIENT_PREALLOCATE": "false"})
+    env.update(
+        {
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONUNBUFFERED": "1",
+            "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        }
+    )
     gpu_uuid = _physical_gpu_uuid()
     # RELION resolves stack paths recorded in the STAR relative to its process
     # working directory, not relative to the STAR path itself.

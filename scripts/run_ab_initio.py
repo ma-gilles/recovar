@@ -23,6 +23,7 @@ with the VDAM iteration loop.
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -198,6 +199,11 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--translation_sigma_angstrom", type=float, default=None)
     p.add_argument("--eager_images", action="store_true", help="Load image stack eagerly instead of lazily")
     p.add_argument("--no_iter_artifacts", action="store_true", help="Only write final native output artifacts")
+    p.add_argument(
+        "--require_custom_cuda",
+        action="store_true",
+        help="Fail before InitialModel execution unless the GPU custom CUDA FFI path is ready",
+    )
     p.add_argument("--dry_run", action="store_true", help="Only print the assembled command(s)")
     p.add_argument(
         "--padding_factor",
@@ -206,6 +212,29 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="K-class M-step BPref padding factor. Use 2 to give the M-step the trilinear-interpolation margin RELION's BackProjector expects (closer parity for c2 CC).",
     )
     return p.parse_args(argv)
+
+
+def _require_custom_cuda_runtime() -> dict:
+    import jax
+
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.core import slicing
+
+    slicing._on_gpu.cache_clear()
+    devices = [getattr(device, "platform", "") for device in jax.devices()]
+    report = {
+        "default_backend": jax.default_backend(),
+        "device_platforms": devices,
+        "slicing_on_gpu": bool(slicing._on_gpu()),
+        "custom_cuda_requested": bool(cuda_backproject.custom_cuda_requested()),
+        "cuda_available": bool(cuda_backproject.cuda_available()),
+    }
+    print("RECOVAR InitialModel CUDA runtime gate: " + json.dumps(report, sort_keys=True), flush=True)
+    if not report["slicing_on_gpu"]:
+        raise RuntimeError(f"InitialModel requires a visible GPU for this run: {report}")
+    if not report["custom_cuda_requested"] or not report["cuda_available"]:
+        raise cuda_backproject.cuda_unavailable_error()
+    return report
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -233,6 +262,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(" ".join(cmd))
         print(" ".join(align_cmd))
         return 0
+
+    if args.require_custom_cuda:
+        _require_custom_cuda_runtime()
 
     from recovar.em.initial_model.driver import NativeInitialModelOptions, run_native_initial_model
 
