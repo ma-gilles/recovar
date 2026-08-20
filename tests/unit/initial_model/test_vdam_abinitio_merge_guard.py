@@ -217,7 +217,7 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "build_relion_command",
         "build_recovar_command",
         "--require_custom_cuda",
-        'env["JAX_PLATFORMS"] = "cuda"',
+        'env["JAX_PLATFORMS"] = "cuda,cpu"',
         "runtime_environment.json",
         "materialize(",
         "cwd=fixture_dir",

@@ -105,7 +105,7 @@ def test_gpu_capture_rejects_slurm_uuid_mismatch(monkeypatch):
 def test_recovar_child_environment_requires_cuda_without_legacy_platform_override():
     env = runner._recovar_gpu_env({"JAX_PLATFORMS": "cpu", "JAX_PLATFORM_NAME": "cpu", "KEEP": "yes"})
 
-    assert env["JAX_PLATFORMS"] == "cuda"
+    assert env["JAX_PLATFORMS"] == "cuda,cpu"
     assert "JAX_PLATFORM_NAME" not in env
     assert env["KEEP"] == "yes"
 

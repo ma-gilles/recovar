@@ -170,7 +170,9 @@ def _run_logged(argv: list[str], *, cwd: Path, log_path: Path, env: dict[str, st
 def _recovar_gpu_env(base: dict[str, str]) -> dict[str, str]:
     env = dict(base)
     env.pop("JAX_PLATFORM_NAME", None)
-    env["JAX_PLATFORMS"] = "cuda"
+    # RECOVAR's JAX configuration uses a CPU device for explicit host-side
+    # work, so keep CPU available while making CUDA the first/default backend.
+    env["JAX_PLATFORMS"] = "cuda,cpu"
     return env
 
 
