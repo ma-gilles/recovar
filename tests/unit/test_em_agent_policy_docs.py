@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 EM_DIR = ROOT / "recovar" / "em"
 CLAUDE = EM_DIR / "CLAUDE.md"
@@ -70,3 +69,11 @@ def test_parallel_test_runner_accepts_external_runtime_root():
     assert runner.count('${RUNTIME_ROOT}/slurm_\\${SLURM_JOB_ID}') == 2
     assert runner.count('${RUNTIME_ROOT}/pixi_home_\\${SLURM_JOB_ID}') == 2
     assert runner.count('${RUNTIME_ROOT}/rattler_cache_\\${SLURM_JOB_ID}') == 2
+
+
+def test_parallel_test_runner_binds_workers_to_one_slurm_gpu():
+    runner = PARALLEL_TEST_RUNNER.read_text()
+    assert 'SLURM_VISIBLE_GPUS="\\${SLURM_STEP_GPUS:-\\${SLURM_JOB_GPUS:-}}"' in runner
+    assert 'CUDA_FIRST_GPU="\\${SLURM_VISIBLE_GPUS%%,*}"' in runner
+    assert 'export CUDA_VISIBLE_DEVICES="\\${CUDA_FIRST_GPU}"' in runner
+    assert "assert len(jax.devices()) == 1" in runner
