@@ -14,9 +14,9 @@ import numpy as np
 
 from recovar.em.initial_model.layout import (
     bpref_to_run_em_output,
-    relion_x_public_output_to_bpref,
     run_em_output_to_bpref,
 )
+from recovar.em.initial_model.relion_layout import relion_x_public_output_to_bpref
 
 
 def _make_full_with_centered_slab(ori_size: int, r_max: int, slab: np.ndarray) -> np.ndarray:

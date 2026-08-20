@@ -164,8 +164,10 @@ sparse-M-step tensor rather than the outer image batch controls this boundary.
 The runner records its resource/execution overrides; the matrix pins `vdam-09`
 to batch 200 and routes `vdam-12` through the shared exact deferred packed-
 M-step fallback by setting the sparse big-JIT tensor cap to zero.  Its
-scientific command and frozen acceptance contract are unchanged.  The next
-bounded run is `vdam-12` alone in a fresh output root.
+first deferred attempt reaches a later batch-dependent shifted-reconstruction
+tile and exhausts memory at 6.40 GiB with batch 100.  The next bounded run pins
+only `vdam-12` to batch 25 while retaining the deferred path; its scientific
+command and frozen acceptance contract are unchanged.
 
 The first remaining autonomous divergence is now identity-localized rather
 than inferred from maps.  The reusable STAR-to-STAR diagnostic

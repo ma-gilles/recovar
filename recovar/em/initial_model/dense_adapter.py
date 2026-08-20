@@ -28,10 +28,10 @@ from recovar.em.sampling import (
 
 from .layout import (
     relion_bpref_frame_scales,
-    relion_x_public_output_to_bpref,
     run_em_output_to_bpref,
 )
 from .m_step import VdamAccumulator
+from .relion_layout import relion_x_public_output_to_bpref
 from .state import InitialModelState
 
 _ENGINE_DEFAULTS: dict[str, Any] = {

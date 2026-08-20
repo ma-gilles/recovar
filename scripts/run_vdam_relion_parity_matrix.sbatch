@@ -27,7 +27,7 @@ if [[ -z "${RECOVAR_VDAM_IMAGE_BATCH_SIZE:-}" ]]; then
   case "${CASE_ID}" in
     vdam-09) export RECOVAR_VDAM_IMAGE_BATCH_SIZE=200 ;;
     vdam-12)
-      export RECOVAR_VDAM_IMAGE_BATCH_SIZE=100
+      export RECOVAR_VDAM_IMAGE_BATCH_SIZE=25
       export RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB=0
       ;;
   esac
