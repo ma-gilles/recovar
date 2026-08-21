@@ -247,14 +247,11 @@ def test_vdam_fixed12_matrix_maps_array_tasks_to_frozen_case_ids():
         "printf 'vdam-%02d'",
         "run_vdam_relion_parity_case.sbatch",
         "OUTPUT_ROOT",
-        "vdam-09) export RECOVAR_VDAM_IMAGE_BATCH_SIZE=200",
-        "vdam-12)",
-        "export RECOVAR_VDAM_IMAGE_BATCH_SIZE=25",
-        "export RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB=0",
-        "RECOVAR_VDAM_IMAGE_BATCH_SIZE=200",
     ]
     missing = [token for token in expected_tokens if token not in matrix]
     assert not missing, f"VDAM fixed12 matrix lost task-to-case wiring: {missing}"
+    assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
+    assert "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB" not in matrix
 
 
 def test_vdam_case_runner_uses_job_scoped_runtime_roots():

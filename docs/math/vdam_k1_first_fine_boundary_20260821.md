@@ -395,3 +395,35 @@ Matrix and memory evidence:
 - Slurm job `12726759` (automatic default-policy `vdam-09` pass)
 - Slurm job `12726698` (explicit 25-image safety counterfactual pass)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam09_auto_batch_a100_20260823T162000Z/vdam-09/trajectory_audit.json`
+
+## InitialModel accumulator-finalization profile
+
+The K=1 profile showed another avoidable JAX cost after every local M-step.
+InitialModel's changing reconstruction grid caused device-side x=0 Hermitian
+enforcement and half-to-full layout expansion to compile new volume-shaped
+programs at most resolution steps.  On `vdam-01`, this finalization took about
+3.1--3.8 seconds for the first pseudo-halfset and only about 0.017 seconds for
+the second, demonstrating compilation rather than arithmetic as the dominant
+cost.
+
+InitialModel consumes both arrays on the host immediately, so its sparse local
+route now explicitly uses the existing source-equivalent host implementations
+for x=0 enforcement and public-layout expansion.  This is scoped to the
+InitialModel adapter; the shared EM engine retains its existing size-based
+default.  The explicit host counterfactuals preserve the closed trajectory:
+
+| Case | RECOVAR before | RECOVAR host finalize | RELION | Minimum FSC-AUC |
+| --- | ---: | ---: | ---: | ---: |
+| `vdam-01` (3k/128) | `175.81 s` profiled | `156.00 s` profiled | `22.52 s` | `0.999999999440` |
+| `vdam-09` (3k/256) | `228.21 s` | `176.00 s` | `29.68 s` | `0.999999998020` |
+
+This removes roughly 11 percent and 23 percent respectively without changing
+the scientific result.  It does not by itself meet the runtime objective: the
+remaining profile is dominated by changing-shape coarse and local score/M-step
+compilations.
+
+Performance evidence:
+
+- Slurm job `12726796` (device-finalization profile)
+- Slurm job `12727257` (`vdam-01` host-finalization counterfactual)
+- Slurm job `12727430` (`vdam-09` host-finalization counterfactual)

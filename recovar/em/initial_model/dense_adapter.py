@@ -804,6 +804,10 @@ def _run_sparse_pass2_initial_model_estep(
                     group_kwargs.get("reconstruction_subtract_projected_reference", False)
                 ),
                 mstep_relion_x_half=bool(config.relion_bpref_frame),
+                # InitialModel consumes these accumulators on the host.  Host
+                # x=0 enforcement and layout expansion avoid compiling two
+                # new volume-shaped JAX programs at every resolution step.
+                host_accumulator_finalize=True,
                 relion_f32_fine_posterior=bool(
                     state.K == 1
                     and config.relion_bpref_frame

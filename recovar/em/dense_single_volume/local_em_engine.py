@@ -1959,6 +1959,7 @@ def run_local_em_exact(
     image_pre_shifts: np.ndarray | None = None,
     mstep_subtract_ctf_projection: bool = False,
     mstep_relion_x_half: bool = False,
+    host_accumulator_finalize: bool = False,
     return_half_volume_accumulators: bool = False,
     return_profile: bool = False,
     disable_adjoint_y: bool = False,
@@ -5183,11 +5184,17 @@ def run_local_em_exact(
             recon_volume_shape,
             logger=logger,
             label="Exact local",
+            force_host=host_accumulator_finalize,
         )
         if return_half_volume_accumulators:
             logger.info("Exact local M-step: keeping native half-volume accumulators for downstream reconstruction")
         elif mstep_relion_x_half:
-            Ft_y, Ft_ctf = relion_x_half_accumulators_to_public_layout(Ft_y, Ft_ctf, recon_volume_shape)
+            Ft_y, Ft_ctf = relion_x_half_accumulators_to_public_layout(
+                Ft_y,
+                Ft_ctf,
+                recon_volume_shape,
+                force_host=host_accumulator_finalize,
+            )
         else:
             Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
 

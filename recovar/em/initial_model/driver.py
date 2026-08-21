@@ -1123,11 +1123,25 @@ def _dense_estep_config(
     if coarse_translation_log_prior is not None:
         engine_kwargs["coarse_translation_log_prior"] = coarse_translation_log_prior
 
-    effective_image_batch_size = _effective_initial_model_image_batch_size(
-        int(opts.image_batch_size),
-        grid_size=int(dataset.image_shape[0]),
-        gpu_memory_gb=float(get_gpu_memory_total()),
-    )
+    dataset_image_shape = getattr(dataset, "image_shape", None)
+    if dataset_image_shape is None:
+        # Lightweight test/adaptor datasets may intentionally expose only the
+        # metadata consumed by this function.  The cap is an execution-policy
+        # guard for real image stacks, so an unknown grid keeps the requested
+        # value rather than inventing a size or probing a device.
+        effective_image_batch_size = int(opts.image_batch_size)
+    else:
+        grid_size = int(dataset_image_shape[0])
+        gpu_memory_gb = (
+            float(get_gpu_memory_total())
+            if grid_size >= INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE
+            else 40.0
+        )
+        effective_image_batch_size = _effective_initial_model_image_batch_size(
+            int(opts.image_batch_size),
+            grid_size=grid_size,
+            gpu_memory_gb=gpu_memory_gb,
+        )
     return DenseInitialModelEstepConfig(
         noise_variance=noise_variance,
         rotations=sampling_plan.rotations,

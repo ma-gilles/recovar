@@ -286,7 +286,7 @@ def test_enforce_relion_x0_hermitian_uses_centered_odd_grid_partner():
     assert np.max(np.abs(unshifted_plane - expected_plane)) > 1e-3
 
 
-def test_enforce_half_volume_x0_uses_host_path_for_large_grids(monkeypatch):
+def test_enforce_half_volume_x0_can_force_host_path(monkeypatch):
     volume_shape = (6, 6, 6)
     half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
     Ft_y = _random_complex(half_shape, seed=91)
@@ -299,7 +299,7 @@ def test_enforce_half_volume_x0_uses_host_path_for_large_grids(monkeypatch):
         half_volume_mstep.enforce_relion_half_volume_x0_hermitian(jnp.asarray(Ft_ctf).reshape(-1), volume_shape)
     )
 
-    monkeypatch.setattr(half_volume_mstep, "_large_relion_x_half_host_x0_enabled", lambda full_voxels: True)
+    monkeypatch.setattr(half_volume_mstep, "_large_relion_x_half_host_x0_enabled", lambda full_voxels: False)
 
     def fail_device_enforcement(*args, **kwargs):
         raise AssertionError("device x0 enforcement should not run for large-grid host path")
@@ -312,6 +312,7 @@ def test_enforce_half_volume_x0_uses_host_path_for_large_grids(monkeypatch):
         volume_shape,
         logger=logging.getLogger(__name__),
         label="unit",
+        force_host=True,
     )
 
     assert isinstance(got_y, np.ndarray)
@@ -373,7 +374,7 @@ def test_relion_x_half_public_full_layout_uses_host_expand_when_forced(monkeypat
         raise AssertionError("JAX half-volume expansion should not be used")
 
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_TO_NATIVE_HALF", "0")
-    monkeypatch.setenv("RECOVAR_RELION_X_HALF_FULL_HOST", "1")
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_FULL_HOST", "0")
     monkeypatch.setattr(
         half_volume_mstep.fourier_transform_utils,
         "half_volume_to_full_volume",
@@ -383,6 +384,7 @@ def test_relion_x_half_public_full_layout_uses_host_expand_when_forced(monkeypat
     full = half_volume_mstep.relion_x_half_volume_to_public_layout(
         jnp.asarray(half_grid).reshape(-1),
         volume_shape,
+        force_host=True,
     )
 
     assert isinstance(full, np.ndarray)
