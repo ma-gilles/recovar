@@ -53,8 +53,13 @@ assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_erro
 print("VDAM parity provenance/GPU/CUDA-FFI gate passed", jax.default_backend(), jax.devices())
 PY
 
-"${PIXI_PY}" scripts/run_vdam_relion_parity_case.py \
-  --case-id "${CASE_ID}" \
-  --output-root "${OUTPUT_ROOT}" \
-  --repo "${REPO_ROOT}" \
+RUN_ARGS=(
+  --case-id "${CASE_ID}"
+  --output-root "${OUTPUT_ROOT}"
+  --repo "${REPO_ROOT}"
   --threads "${RELION_THREADS:-8}"
+)
+if [[ -n "${VDAM_SCORECARD:-}" ]]; then
+  RUN_ARGS+=(--scorecard "${VDAM_SCORECARD}")
+fi
+"${PIXI_PY}" scripts/run_vdam_relion_parity_case.py "${RUN_ARGS[@]}"

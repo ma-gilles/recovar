@@ -79,6 +79,8 @@ def _fixture(tmp_path: Path) -> dict[str, Path]:
             "offset_range_px": 6.0,
             "offset_step_px": 2.0,
             "padding_factor": 1,
+            "sym_name": "C1",
+            "particle_diameter": 200.0,
         },
     )
     _write_json(
@@ -93,6 +95,10 @@ def _fixture(tmp_path: Path) -> dict[str, Path]:
                 "--flatten_solvent",
                 "--zero_mask",
                 "--auto_sampling",
+                "--sym",
+                "C1",
+                "--particle_diameter",
+                "200.0",
                 "--K",
                 "1",
                 "--iter",
@@ -283,3 +289,32 @@ def test_fixture_manifest_digest_is_mandatory(tmp_path, monkeypatch):
 
     with pytest.raises(audit_module.AuditError, match="manifest digest"):
         _audit(paths)
+
+
+def test_extended_suite_can_freeze_a_longer_checkpoint_contract(tmp_path, monkeypatch):
+    paths = _fixture(tmp_path)
+    scorecard = json.loads(paths["scorecard_path"].read_text())
+    scorecard["schema"] = audit_module.SUITE_SCHEMA
+    scorecard["acceptance_contract"]["required_checkpoints"] = [0, 1, 3]
+    scorecard["cases"][0]["definition"]["nr_iter"] = 3
+    _write_json(paths["scorecard_path"], scorecard)
+
+    native_options_path = paths["recovar_dir"] / "run_native_options.json"
+    native_options = json.loads(native_options_path.read_text())
+    native_options["nr_iter"] = 3
+    _write_json(native_options_path, native_options)
+    relion_command_path = paths["relion_dir"] / "relion_command.json"
+    relion_command = json.loads(relion_command_path.read_text())
+    relion_command["argv"][relion_command["argv"].index("--iter") + 1] = "3"
+    _write_json(relion_command_path, relion_command)
+    for directory in (paths["recovar_dir"], paths["relion_dir"]):
+        for path in audit_module._artifact_paths(directory, 3).values():
+            path.touch()
+
+    volume = np.random.default_rng(7).normal(size=(8, 8, 8))
+    monkeypatch.setattr(audit_module, "_load_relion_volume", lambda _path: volume)
+
+    report, _shellwise = _audit(paths)
+
+    assert report["result"] == "pass"
+    assert [row["iteration"] for row in report["checkpoints"]] == [0, 1, 3]

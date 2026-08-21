@@ -27,6 +27,7 @@ else:
 
 SCHEMA = "recovar.vdam_relion_fsc_trajectory_audit.v1"
 SCORECARD_SCHEMA = "recovar.vdam_relion_parity_scorecard.v1"
+SUITE_SCHEMA = "recovar.vdam_relion_parity_suite.v1"
 CHECKPOINTS = (0, 1, 2, 4, 8)
 COMMON_ARTIFACT_SUFFIXES = ("class001.mrc", "model.star", "data.star")
 
@@ -46,12 +47,29 @@ def _load_json(path: Path, *, label: str) -> dict[str, Any]:
 
 
 def _case(scorecard: dict[str, Any], case_id: str) -> dict[str, Any]:
-    if scorecard.get("schema") != SCORECARD_SCHEMA:
+    if scorecard.get("schema") not in {SCORECARD_SCHEMA, SUITE_SCHEMA}:
         raise AuditError(f"unsupported scorecard schema: {scorecard.get('schema')!r}")
     matches = [row for row in scorecard.get("cases", []) if row.get("id") == case_id]
     if len(matches) != 1:
         raise AuditError(f"expected exactly one scorecard row for {case_id}, found {len(matches)}")
     return matches[0]
+
+
+def _required_checkpoints(acceptance: dict[str, Any], definition: dict[str, Any]) -> tuple[int, ...]:
+    raw = acceptance.get("required_checkpoints")
+    if not isinstance(raw, list) or not raw:
+        raise AuditError("scorecard must define a non-empty required_checkpoints list")
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in raw):
+        raise AuditError("required_checkpoints must contain only integers")
+    checkpoints = tuple(int(value) for value in raw)
+    nr_iter = int(definition["nr_iter"])
+    if tuple(sorted(set(checkpoints))) != checkpoints:
+        raise AuditError("required_checkpoints must be sorted and unique")
+    if checkpoints[0] != 0 or 1 not in checkpoints or checkpoints[-1] != nr_iter:
+        raise AuditError("required_checkpoints must include 0, 1, and the frozen nr_iter")
+    if any(value < 0 or value > nr_iter for value in checkpoints):
+        raise AuditError("required_checkpoints contains an iteration outside [0, nr_iter]")
+    return checkpoints
 
 
 def _flag_value(argv: list[str], flag: str) -> str:
@@ -106,6 +124,20 @@ def _validate_run_contract(
                 f"RELION {relion_flag}={relion_actual!r} does not match frozen {definition_key}={expected!r}"
             )
         checked[definition_key] = expected
+    symmetry = str(definition.get("symmetry", "C1"))
+    if str(native_options.get("sym_name")) != symmetry:
+        raise AuditError(
+            f"native option sym_name={native_options.get('sym_name')!r} does not match frozen symmetry={symmetry!r}"
+        )
+    if _flag_value(argv, "--sym") != symmetry:
+        raise AuditError(f"RELION --sym does not match frozen symmetry={symmetry!r}")
+    particle_diameter = float(definition.get("particle_diameter_angstrom", 200.0))
+    if not _float_equal(native_options.get("particle_diameter"), particle_diameter):
+        raise AuditError("native particle_diameter does not match the frozen particle diameter")
+    if not _float_equal(_flag_value(argv, "--particle_diameter"), particle_diameter):
+        raise AuditError("RELION --particle_diameter does not match the frozen particle diameter")
+    checked["symmetry"] = symmetry
+    checked["particle_diameter_angstrom"] = particle_diameter
     return checked
 
 
@@ -249,8 +281,7 @@ def audit(
     case = _case(scorecard, case_id)
     definition = case["definition"]
     acceptance = scorecard["acceptance_contract"]
-    if tuple(acceptance.get("required_checkpoints", ())) != CHECKPOINTS:
-        raise AuditError("scorecard checkpoint contract does not match this auditor")
+    required_checkpoints = _required_checkpoints(acceptance, definition)
     if acceptance.get("correlation_used") is not False:
         raise AuditError("scorecard must explicitly forbid correlation")
 
@@ -277,7 +308,7 @@ def audit(
     cross_min = float(acceptance["cross_engine_fsc_auc_min"])
     delta_min = float(acceptance["recovar_minus_relion_gt_fsc_auc_min"])
 
-    for iteration in CHECKPOINTS:
+    for iteration in required_checkpoints:
         rec_paths = _artifact_paths(recovar_dir, iteration)
         rel_paths = _artifact_paths(relion_dir, iteration)
         missing = [str(path) for path in (*rec_paths.values(), *rel_paths.values()) if not path.is_file()]

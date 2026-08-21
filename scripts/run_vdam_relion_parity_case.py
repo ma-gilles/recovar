@@ -62,6 +62,8 @@ def _physical_gpu_uuid() -> str:
 def build_relion_command(
     *, input_star: Path, output_prefix: Path, definition: dict[str, Any], relion_refine: Path, threads: int
 ) -> list[str]:
+    symmetry = str(definition.get("symmetry", "C1"))
+    particle_diameter = float(definition.get("particle_diameter_angstrom", 200.0))
     return [
         str(relion_refine),
         "--o",
@@ -78,7 +80,7 @@ def build_relion_command(
         "--K",
         str(definition["nr_classes"]),
         "--sym",
-        "C1",
+        symmetry,
         "--flatten_solvent",
         "--zero_mask",
         "--dont_combine_weights_via_disc",
@@ -87,7 +89,7 @@ def build_relion_command(
         "--pad",
         str(definition["padding_factor"]),
         "--particle_diameter",
-        "200",
+        str(particle_diameter),
         "--oversampling",
         str(definition["oversampling"]),
         "--healpix_order",
@@ -118,6 +120,8 @@ def build_recovar_command(
 ) -> list[str]:
     if int(image_batch_size) <= 0:
         raise ValueError("image_batch_size must be positive")
+    symmetry = str(definition.get("symmetry", "C1"))
+    particle_diameter = float(definition.get("particle_diameter_angstrom", 200.0))
     return [
         sys.executable,
         "scripts/run_ab_initio.py",
@@ -132,9 +136,9 @@ def build_recovar_command(
         "--tau2_fudge",
         str(definition["tau2_fudge"]),
         "--sym",
-        "C1",
+        symmetry,
         "--particle_diameter",
-        "200",
+        str(particle_diameter),
         "--random_seed",
         str(definition["random_seed"]),
         "--healpix_order",

@@ -254,6 +254,27 @@ def test_vdam_fixed12_matrix_maps_array_tasks_to_frozen_case_ids():
     assert "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB" not in matrix
 
 
+def test_vdam_parameter_suite_freezes_user_facing_variants_and_default_resources():
+    suite_path = REPO_ROOT / "docs/math/vdam_k1_parameter_suite_v1.json"
+    suite = json.loads(suite_path.read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_parameter_suite.sbatch").read_text()
+    case_runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-parameter-v1"
+    assert len(suite["cases"]) == 11
+    assert [case["id"] for case in suite["cases"]] == [f"vdam-p{index:02d}" for index in range(1, 12)]
+    definitions = [case["definition"] for case in suite["cases"]]
+    assert {definition["tau2_fudge"] for definition in definitions} >= {2, 4, 8}
+    assert {definition["healpix_order"] for definition in definitions} >= {0, 1, 2}
+    assert {definition["oversampling"] for definition in definitions} >= {0, 1, 2}
+    assert {definition["padding_factor"] for definition in definitions} >= {1, 2}
+    assert {definition["symmetry"] for definition in definitions} >= {"C1", "C2"}
+    assert "#SBATCH --array=1-11%4" in matrix
+    assert "VDAM_SCORECARD" in matrix and "VDAM_SCORECARD" in case_runner
+    assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
+
+
 def test_vdam_case_runner_uses_job_scoped_runtime_roots():
     runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
     expected_tokens = [

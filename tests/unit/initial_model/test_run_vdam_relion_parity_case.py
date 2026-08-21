@@ -44,6 +44,8 @@ def test_relion_command_is_the_frozen_gui_initialmodel_contract():
     assert _value(argv, "--iter") == "8"
     assert _value(argv, "--grad_write_iter") == "1"
     assert _value(argv, "--K") == "1"
+    assert _value(argv, "--sym") == "C1"
+    assert _value(argv, "--particle_diameter") == "200.0"
     assert _value(argv, "--random_seed") == "0"
     assert _value(argv, "--tau2_fudge") == "4.0"
     assert _value(argv, "--healpix_order") == "1"
@@ -67,6 +69,8 @@ def test_recovar_command_maps_the_same_frozen_definition(monkeypatch):
     assert argv[:2] == ["/env/python", "scripts/run_ab_initio.py"]
     assert _value(argv, "--nr_iter") == "8"
     assert _value(argv, "--K") == "1"
+    assert _value(argv, "--sym") == "C1"
+    assert _value(argv, "--particle_diameter") == "200.0"
     assert _value(argv, "--random_seed") == "0"
     assert _value(argv, "--tau2_fudge") == "4.0"
     assert _value(argv, "--healpix_order") == "1"
@@ -77,6 +81,33 @@ def test_recovar_command_maps_the_same_frozen_definition(monkeypatch):
     assert _value(argv, "--image_batch_size") == "500"
     assert _value(argv, "--gpu") == "0"
     assert "--require_custom_cuda" in argv
+
+
+def test_command_builders_map_configurable_symmetry_and_particle_diameter(monkeypatch):
+    monkeypatch.setattr(runner.sys, "executable", "/env/python")
+    definition = {
+        **DEFINITION,
+        "symmetry": "C2",
+        "particle_diameter_angstrom": 144.0,
+    }
+
+    relion = runner.build_relion_command(
+        input_star=Path("/data/particles.star"),
+        output_prefix=Path("/out/relion/run"),
+        definition=definition,
+        relion_refine=Path("/opt/relion_refine"),
+        threads=8,
+    )
+    recovar = runner.build_recovar_command(
+        input_star=Path("/data/particles.star"),
+        output_prefix=Path("/out/recovar/run"),
+        fixture_dir=Path("/data"),
+        definition=definition,
+    )
+
+    for argv in (relion, recovar):
+        assert _value(argv, "--sym") == "C2"
+        assert _value(argv, "--particle_diameter") == "144.0"
 
 
 def test_recovar_command_accepts_resource_only_batch_override(monkeypatch):
