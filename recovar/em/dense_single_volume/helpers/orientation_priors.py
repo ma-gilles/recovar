@@ -26,6 +26,7 @@ def make_relion_translation_log_prior(
     prior_centers=None,
     *,
     offset_range_pixels=None,
+    dtype: np.dtype = np.float32,
 ):
     """Return RELION's offset prior scores over a translation grid.
 
@@ -35,8 +36,12 @@ def make_relion_translation_log_prior(
     ``my_pixel_size**2`` factor.  RECOVAR translation grids are in projection
     pixels, so explicit prior centers intentionally use the source-equivalent
     ``pixel_size**4 / sigma_offset_A**2`` scale.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running a genuine double-precision comparison should pass
+    ``np.float64`` explicitly.
     """
-    translations = np.asarray(translations, dtype=np.float32)
+    translations = np.asarray(translations, dtype=dtype)
     if translations.ndim != 2:
         raise ValueError(
             f"translations must have shape (n_trans, dim), got {translations.shape}",
@@ -52,20 +57,20 @@ def make_relion_translation_log_prior(
     n_trans = translations.shape[0]
 
     if prior_centers is None:
-        return np.zeros(n_trans, dtype=np.float32)
+        return np.zeros(n_trans, dtype=dtype)
 
-    prior_centers = np.asarray(prior_centers, dtype=np.float32)
+    prior_centers = np.asarray(prior_centers, dtype=dtype)
     shared = prior_centers.ndim == 1
     centers = prior_centers.reshape(-1, translations.shape[1])
 
     if sigma2_offset <= 0.0:
-        zeros = np.zeros((centers.shape[0], n_trans), dtype=np.float32)
+        zeros = np.zeros((centers.shape[0], n_trans), dtype=dtype)
         return zeros[0] if shared else zeros
 
     diffs_px = translations[None, :, :] - centers[:, None, :]
     sqdist_px = np.sum(diffs_px**2, axis=-1)
     log_prior = -0.5 * sqdist_px * (voxel_size**4) / sigma2_offset
-    log_prior = log_prior.astype(np.float32)
+    log_prior = log_prior.astype(dtype)
     return log_prior[0] if shared else log_prior
 
 
