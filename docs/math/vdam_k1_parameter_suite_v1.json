@@ -68,8 +68,8 @@
     },
     {
       "id": "vdam-p11",
-      "name": "symmetry_c2",
-      "definition": {"source_em_case_id": "k1-25", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C2", "particle_diameter_angstrom": 200}
+      "name": "requested_symmetry_c2_default_c1_refinement",
+      "definition": {"source_em_case_id": "k1-25", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C2", "do_run_C1": true, "particle_diameter_angstrom": 200}
     }
   ]
 }

@@ -105,9 +105,34 @@ def test_command_builders_map_configurable_symmetry_and_particle_diameter(monkey
         definition=definition,
     )
 
+    assert _value(relion, "--sym") == "C1"
+    assert _value(recovar, "--sym") == "C2"
+    assert _value(recovar, "--do_run_C1") == "1"
     for argv in (relion, recovar):
-        assert _value(argv, "--sym") == "C2"
         assert _value(argv, "--particle_diameter") == "144.0"
+
+
+def test_command_builders_can_refine_directly_in_requested_symmetry(monkeypatch):
+    monkeypatch.setattr(runner.sys, "executable", "/env/python")
+    definition = {**DEFINITION, "symmetry": "C2", "do_run_C1": False}
+
+    relion = runner.build_relion_command(
+        input_star=Path("/data/particles.star"),
+        output_prefix=Path("/out/relion/run"),
+        definition=definition,
+        relion_refine=Path("/opt/relion_refine"),
+        threads=8,
+    )
+    recovar = runner.build_recovar_command(
+        input_star=Path("/data/particles.star"),
+        output_prefix=Path("/out/recovar/run"),
+        fixture_dir=Path("/data"),
+        definition=definition,
+    )
+
+    assert _value(relion, "--sym") == "C2"
+    assert _value(recovar, "--sym") == "C2"
+    assert _value(recovar, "--do_run_C1") == "0"
 
 
 def test_recovar_command_accepts_resource_only_batch_override(monkeypatch):

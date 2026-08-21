@@ -229,6 +229,17 @@ def test_sampling_plan_oversamples_relion_grid():
     assert plan.random_perturbation == 0.0
 
 
+def test_native_driver_rejects_unimplemented_direct_symmetry_before_io():
+    opts = driver.NativeInitialModelOptions(
+        fn_img="missing.star",
+        sym_name="C2",
+        do_run_C1=False,
+    )
+
+    with pytest.raises(NotImplementedError, match="direct refinement currently supports C1 only"):
+        driver.run_native_initial_model(opts)
+
+
 def test_configure_relion_image_mask_forwards_image_backend():
     calls = {}
 

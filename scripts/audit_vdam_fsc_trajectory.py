@@ -125,18 +125,30 @@ def _validate_run_contract(
             )
         checked[definition_key] = expected
     symmetry = str(definition.get("symmetry", "C1"))
+    do_run_c1 = bool(definition.get("do_run_C1", True))
+    refinement_symmetry = "C1" if do_run_c1 else symmetry
     if str(native_options.get("sym_name")) != symmetry:
         raise AuditError(
             f"native option sym_name={native_options.get('sym_name')!r} does not match frozen symmetry={symmetry!r}"
         )
-    if _flag_value(argv, "--sym") != symmetry:
-        raise AuditError(f"RELION --sym does not match frozen symmetry={symmetry!r}")
+    if bool(native_options.get("do_run_C1")) != do_run_c1:
+        raise AuditError(
+            "native do_run_C1 does not match the frozen GUI symmetry mode: "
+            f"{native_options.get('do_run_C1')!r} != {do_run_c1!r}"
+        )
+    if _flag_value(argv, "--sym") != refinement_symmetry:
+        raise AuditError(
+            "RELION --sym does not match the frozen refinement symmetry: "
+            f"{_flag_value(argv, '--sym')!r} != {refinement_symmetry!r}"
+        )
     particle_diameter = float(definition.get("particle_diameter_angstrom", 200.0))
     if not _float_equal(native_options.get("particle_diameter"), particle_diameter):
         raise AuditError("native particle_diameter does not match the frozen particle diameter")
     if not _float_equal(_flag_value(argv, "--particle_diameter"), particle_diameter):
         raise AuditError("RELION --particle_diameter does not match the frozen particle diameter")
     checked["symmetry"] = symmetry
+    checked["do_run_C1"] = do_run_c1
+    checked["refinement_symmetry"] = refinement_symmetry
     checked["particle_diameter_angstrom"] = particle_diameter
     return checked
 

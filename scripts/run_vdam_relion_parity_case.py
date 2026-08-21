@@ -63,6 +63,8 @@ def build_relion_command(
     *, input_star: Path, output_prefix: Path, definition: dict[str, Any], relion_refine: Path, threads: int
 ) -> list[str]:
     symmetry = str(definition.get("symmetry", "C1"))
+    do_run_c1 = bool(definition.get("do_run_C1", True))
+    refinement_symmetry = "C1" if do_run_c1 else symmetry
     particle_diameter = float(definition.get("particle_diameter_angstrom", 200.0))
     return [
         str(relion_refine),
@@ -80,7 +82,7 @@ def build_relion_command(
         "--K",
         str(definition["nr_classes"]),
         "--sym",
-        symmetry,
+        refinement_symmetry,
         "--flatten_solvent",
         "--zero_mask",
         "--dont_combine_weights_via_disc",
@@ -121,6 +123,7 @@ def build_recovar_command(
     if int(image_batch_size) <= 0:
         raise ValueError("image_batch_size must be positive")
     symmetry = str(definition.get("symmetry", "C1"))
+    do_run_c1 = bool(definition.get("do_run_C1", True))
     particle_diameter = float(definition.get("particle_diameter_angstrom", 200.0))
     return [
         sys.executable,
@@ -137,6 +140,8 @@ def build_recovar_command(
         str(definition["tau2_fudge"]),
         "--sym",
         symmetry,
+        "--do_run_C1",
+        "1" if do_run_c1 else "0",
         "--particle_diameter",
         str(particle_diameter),
         "--random_seed",

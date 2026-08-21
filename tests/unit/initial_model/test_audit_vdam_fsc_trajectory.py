@@ -80,6 +80,7 @@ def _fixture(tmp_path: Path) -> dict[str, Path]:
             "offset_step_px": 2.0,
             "padding_factor": 1,
             "sym_name": "C1",
+            "do_run_C1": True,
             "particle_diameter": 200.0,
         },
     )
