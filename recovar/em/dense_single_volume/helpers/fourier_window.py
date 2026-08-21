@@ -336,6 +336,7 @@ def make_fourier_window_spec(
     current_size,
     n_half: int,
     *,
+    reconstruction_current_size=None,
     square=False,
     score_square=None,
     score_include_dc=False,
@@ -343,7 +344,14 @@ def make_fourier_window_spec(
     include_recon_window=True,
     dtype=jnp.int32,
 ) -> FourierWindowSpec:
-    """Return shared score/reconstruction window metadata for EM engines."""
+    """Return shared score/reconstruction window metadata for EM engines.
+
+    ``current_size`` is the particle-image score window.  RELION may remap
+    that size per optics group while retaining ``mymodel.current_size`` for
+    the Projector/BackProjector support.  ``reconstruction_current_size``
+    represents that separate model-coordinate cutoff; omitting it preserves
+    the historical shared-size behavior.
+    """
 
     use_window = current_size is not None and current_size < image_shape[0]
     if not use_window:
@@ -368,7 +376,17 @@ def make_fourier_window_spec(
 
     if score_square is None:
         score_square = square
-    resolved_max_r = float(int(current_size) // 2)
+    resolved_reconstruction_current_size = (
+        int(current_size)
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
+    if resolved_reconstruction_current_size <= 0 or resolved_reconstruction_current_size > image_shape[0]:
+        raise ValueError(
+            "reconstruction_current_size must be positive and no larger than the image box, "
+            f"got {resolved_reconstruction_current_size}",
+        )
+    resolved_max_r = float(resolved_reconstruction_current_size // 2)
     if projection_max_r is _DEFAULT_PROJECTION_MAX_R:
         resolved_projection_max_r = resolved_max_r
     elif projection_max_r is None:
@@ -388,7 +406,7 @@ def make_fourier_window_spec(
     if include_recon_window:
         recon_indices_np, n_recon = make_fourier_window_indices_np(
             image_shape,
-            int(current_size),
+            resolved_reconstruction_current_size,
             square=square,
             include_dc=True,
             exact_radius=True,

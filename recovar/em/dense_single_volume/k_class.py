@@ -895,6 +895,7 @@ def _run_sparse_k_class_adaptive_pass2(
         disc_type=disc_type,
         oversampling_order=int(oversampling_order),
         current_size=base_engine_kwargs.get("current_size"),
+        reconstruction_current_size=base_engine_kwargs.get("reconstruction_current_size"),
         translation_step=None,
         score_with_masked_images=bool(base_engine_kwargs.get("score_with_masked_images", False)),
         return_stats=True,
@@ -956,7 +957,11 @@ def _run_sparse_k_class_adaptive_pass2(
         relion_backprojector_volume_shape(
             experiment_dataset.volume_shape,
             common["reconstruction_padding_factor"],
-            current_size=common["current_size"],
+            current_size=(
+                common["current_size"]
+                if common["reconstruction_current_size"] is None
+                else common["reconstruction_current_size"]
+            ),
         )
         if common["relion_x_half_mstep"]
         else None
@@ -2015,6 +2020,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         disc_type=disc_type,
         oversampling_order=int(oversampling_order),
         current_size=pass2_kwargs.get("current_size"),
+        reconstruction_current_size=pass2_kwargs.get("reconstruction_current_size"),
         translation_step=None,
         score_with_masked_images=bool(pass2_kwargs.get("score_with_masked_images", False)),
         return_stats=True,
@@ -2047,7 +2053,11 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         relion_backprojector_volume_shape(
             experiment_dataset.volume_shape,
             common["reconstruction_padding_factor"],
-            current_size=common["current_size"],
+            current_size=(
+                common["current_size"]
+                if common["reconstruction_current_size"] is None
+                else common["reconstruction_current_size"]
+            ),
         )
         if common["relion_x_half_mstep"]
         else None
@@ -3024,6 +3034,9 @@ def run_dense_k_class_em_adaptive(
         coarse_probe_kwargs = dict(engine_kwargs)
         coarse_probe_kwargs.pop("rotation_translation_mask", None)
         coarse_probe_kwargs.pop("class_rotation_translation_mask", None)
+        # The coarse probe is score-only.  RELION's separate model-coordinate
+        # cutoff is consumed by fine-pass BPref, not by this scorer wrapper.
+        coarse_probe_kwargs.pop("reconstruction_current_size", None)
         coarse_probe_kwargs["image_batch_size"] = sig_ibs
         coarse_probe_kwargs["rotation_block_size"] = sig_rbs
         coarse_probe_kwargs["relion_firstiter_score_mode"] = "normalized_cc"
@@ -3616,6 +3629,7 @@ def run_dense_k_class_em_adaptive(
     with _DenseScoreDumpPhaseLabel("fine"):
         with nvtx.annotate("kclass.adaptive.fine_dense_em", color="green", domain=NVTX_DOMAIN_EM):
             pass2_t0 = time.time()
+            pass2_kwargs.pop("reconstruction_current_size", None)
             result = run_dense_k_class_em(
                 experiment_dataset,
                 means_array,

@@ -621,6 +621,29 @@ class TestFourierWindowSpec:
         assert spec.dense_big_jit_backprojection_max_r() == 13.0
         assert set(np.asarray(spec.recon_indices_np)).issubset(set(np.asarray(spec.score_indices_np)))
 
+    def test_optics_remap_can_use_larger_score_window_than_model_reconstruction(self):
+        shape = (128, 128)
+        spec = make_fourier_window_spec(
+            shape,
+            current_size=58,
+            reconstruction_current_size=56,
+            n_half=shape[0] * (shape[1] // 2 + 1),
+            score_square=True,
+            score_include_dc=True,
+            include_recon_window=True,
+        )
+
+        assert spec.n_score == 58 * (58 // 2 + 1)
+        assert spec.max_r == 28.0
+        assert spec.projection_kwargs()["max_r"] == 28.0
+        model_spec = make_fourier_window_spec(
+            shape,
+            current_size=56,
+            n_half=shape[0] * (shape[1] // 2 + 1),
+            include_recon_window=True,
+        )
+        np.testing.assert_array_equal(spec.recon_indices_np, model_spec.recon_indices_np)
+
     def test_firstiter_cc_rectangular_score_keeps_both_x0_axis_sides(self):
         """CC keeps the full FFTW rectangle; Gaussian drops its redundant x0 side."""
         shape = (128, 128)

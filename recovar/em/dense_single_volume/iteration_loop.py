@@ -77,6 +77,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     bootstrap_current_size_from_ini_high_relion,
     clamp_relion_coarse_image_size,
     compute_coarse_image_size,
+    relion_optics_image_current_sizes,
     shell_index_to_resolution_angstrom,
 )
 
@@ -2300,6 +2301,7 @@ def _score_half_dense(
     firstiter_score_mode_this_iter: str,
     firstiter_winner_take_all_this_iter: bool,
     cs_for_engine,
+    model_current_size_for_engine=None,
     class_log_priors,
     k_class_enabled: bool,
     relion_firstiter_cc_this_iter: bool,
@@ -2385,6 +2387,8 @@ def _score_half_dense(
         "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
         "relion_firstiter_winner_take_all": firstiter_winner_take_all_this_iter,
     }
+    if model_current_size_for_engine is not None:
+        em_kwargs["reconstruction_current_size"] = model_current_size_for_engine
     if preserve_bpref_particle_order and k_class_enabled:
         raise ValueError("RELION BPref particle-order preservation is K=1-only")
     if preserve_bpref_particle_order:
@@ -2583,6 +2587,7 @@ def _score_half_dense(
             # Exact fine-Gaussian scoring is implemented only by sparse pass 2.
             # A non-adaptive dense iteration has no fine pass to select.
             dense_em_kwargs.pop("relion_exact_fine_gaussian", None)
+            dense_em_kwargs.pop("reconstruction_current_size", None)
             k_class_result = run_dense_k_class_em(
                 experiment_dataset,
                 means_k,
@@ -2860,6 +2865,7 @@ def _score_half_dense(
     # Exact fine-Gaussian scoring is implemented only by sparse pass 2.  This
     # branch is the single dense pass used when adaptive oversampling is off.
     direct_em_kwargs.pop("relion_exact_fine_gaussian", None)
+    direct_em_kwargs.pop("reconstruction_current_size", None)
     _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
         experiment_dataset,
         means_k,
@@ -4434,6 +4440,8 @@ def refine_single_volume(
     perturb_factor=0.0,
     perturb_seed=None,
     optimizer_random_seed=None,
+    relion_optics_image_sizes=None,
+    relion_optics_pixel_sizes=None,
     expected_accuracy_half1_base_order_local=None,
     expected_accuracy_half1_trial_order_local=None,
     expected_accuracy_half1_optics_group_ids=None,
@@ -4726,6 +4734,8 @@ def refine_single_volume(
         perturb_factor=perturb_factor,
         perturb_seed=perturb_seed,
         optimizer_random_seed=optimizer_random_seed,
+        relion_optics_image_sizes=relion_optics_image_sizes,
+        relion_optics_pixel_sizes=relion_optics_pixel_sizes,
         expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
         expected_accuracy_half1_trial_order_local=expected_accuracy_half1_trial_order_local,
         expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
@@ -4831,6 +4841,8 @@ def _run_relion_iteration_loop(
     perturb_factor=0.0,
     perturb_seed=None,
     optimizer_random_seed=None,
+    relion_optics_image_sizes=None,
+    relion_optics_pixel_sizes=None,
     expected_accuracy_half1_base_order_local=None,
     expected_accuracy_half1_trial_order_local=None,
     expected_accuracy_half1_optics_group_ids=None,
@@ -4937,6 +4949,17 @@ def _run_relion_iteration_loop(
     grid_size = cryo.image_shape[0]  # ori_size in RELION terms
     n_classes = int(n_classes)
     k_class_enabled = n_classes > 1
+    if (relion_optics_image_sizes is None) != (relion_optics_pixel_sizes is None):
+        raise ValueError(
+            "relion_optics_image_sizes and relion_optics_pixel_sizes must be supplied together",
+        )
+    optics_image_sizes = None
+    optics_pixel_sizes = None
+    if relion_optics_image_sizes is not None:
+        optics_image_sizes = np.asarray(relion_optics_image_sizes, dtype=np.int64).reshape(-1)
+        optics_pixel_sizes = np.asarray(relion_optics_pixel_sizes, dtype=np.float64).reshape(-1)
+        if optics_image_sizes.shape != optics_pixel_sizes.shape or optics_image_sizes.size == 0:
+            raise ValueError("RELION optics image geometry arrays must be non-empty and aligned")
     _validate_bpref_particle_order_scope(
         preserve_bpref_particle_order=preserve_bpref_particle_order,
         n_classes=n_classes,
@@ -6607,7 +6630,34 @@ def _run_relion_iteration_loop(
         local_search_rotations = None
         local_search_rotation_eulers = None
         local_search_mstep_rotations = None
-        cs_for_engine = current_size if current_size < cryo.image_shape[0] else None
+        model_current_size_for_engine = (
+            current_size if current_size < cryo.image_shape[0] else None
+        )
+        image_current_size = int(current_size)
+        if optics_image_sizes is not None:
+            remapped_image_sizes = relion_optics_image_current_sizes(
+                current_size,
+                model_ori_size=grid_size,
+                model_pixel_size=cryo.voxel_size,
+                optics_image_sizes=optics_image_sizes,
+                optics_pixel_sizes=optics_pixel_sizes,
+            )
+            unique_remapped_sizes = np.unique(remapped_image_sizes)
+            if unique_remapped_sizes.size != 1:
+                raise NotImplementedError(
+                    "K=1 parity currently requires all optics groups to share one remapped "
+                    f"image current size; got {remapped_image_sizes.tolist()}",
+                )
+            image_current_size = int(unique_remapped_sizes[0])
+        cs_for_engine = image_current_size if image_current_size < cryo.image_shape[0] else None
+        if image_current_size != int(current_size):
+            logger.info(
+                "RELION optics current-size remap: model_current_size=%d "
+                "image_current_size=%d model_pixel_size=%.9g",
+                int(current_size),
+                image_current_size,
+                float(cryo.voxel_size),
+            )
         sigma_rot = state.sigma_rot
         sigma_psi = state.sigma_psi if state.sigma_psi > 0 else sigma_rot
         if use_local and sigma_rot <= 0:
@@ -6661,7 +6711,7 @@ def _run_relion_iteration_loop(
                             pixel_size=cryo.voxel_size if cryo.voxel_size > 0 else 1.0,
                             ori_size=grid_size,
                             particle_diameter=particle_diameter_ang,
-                            current_size=cs if cs_for_engine is not None else None,
+                            current_size=image_current_size if cs_for_engine is not None else None,
                         )
                         logger.info(
                             "Local adaptive oversampling: pass 1 at coarse_size=%s, "
@@ -6801,13 +6851,21 @@ def _run_relion_iteration_loop(
             pixel_size = cryo.voxel_size if cryo.voxel_size > 0 else 1.0
             coarse_size = compute_coarse_image_size(
                 effective_step_deg,
-                pixel_size,
-                grid_size,
+                (
+                    float(optics_pixel_sizes[0])
+                    if optics_pixel_sizes is not None
+                    else pixel_size
+                ),
+                (
+                    int(optics_image_sizes[0])
+                    if optics_image_sizes is not None
+                    else grid_size
+                ),
                 particle_diameter=particle_diameter_ang,
             )
             coarse_size = clamp_relion_coarse_image_size(
                 coarse_size,
-                cs if cs_for_engine is not None else None,
+                image_current_size if cs_for_engine is not None else None,
                 grid_size,
             )
             if sealed_sampling_state is not None:
@@ -6853,7 +6911,7 @@ def _run_relion_iteration_loop(
                     relion_projector_r_max_by_half,
                 ) = _validate_captured_relion_projector_for_iteration(
                     captured_projector_state,
-                    current_size=cs_for_engine,
+                    current_size=model_current_size_for_engine,
                     volume_shape=volume_shape,
                     padding_factor=PROJECTION_PADDING_FACTOR,
                     n_classes=n_classes,
@@ -6861,7 +6919,7 @@ def _run_relion_iteration_loop(
                 logger.info(
                     "RELION mode: using captured exact Projector::data at current_size=%s "
                     "r_max=%s manifest=%s",
-                    cs_for_engine,
+                    model_current_size_for_engine,
                     relion_projector_r_max_by_half[0],
                     captured_projector_state.source_manifest_sha256,
                 )
@@ -6876,7 +6934,7 @@ def _run_relion_iteration_loop(
                     projector_half, projector_r_max = _relion_projector_half_maps_for_scoring(
                         means[_half_idx],
                         volume_shape=volume_shape,
-                        current_size=cs_for_engine,
+                        current_size=model_current_size_for_engine,
                         padding_factor=PROJECTION_PADDING_FACTOR,
                         n_classes=n_classes,
                         real_references=(
@@ -6890,7 +6948,7 @@ def _run_relion_iteration_loop(
                     relion_projector_r_max_by_half[_half_idx] = projector_r_max
                 logger.info(
                     "RELION mode: built exact Projector::data for scoring at current_size=%s r_max=%s in %.2fs",
-                    cs_for_engine,
+                    model_current_size_for_engine,
                     relion_projector_r_max_by_half[0],
                     time.time() - projector_t0,
                 )
@@ -7073,7 +7131,7 @@ def _run_relion_iteration_loop(
                     relion_backprojector_volume_shape(
                         experiment_datasets[k].volume_shape,
                         PADDING_FACTOR,
-                        current_size=cs_for_engine,
+                        current_size=model_current_size_for_engine,
                     )
                     if empty_k1_x_half_mstep
                     else None
@@ -7247,6 +7305,7 @@ def _run_relion_iteration_loop(
                     firstiter_score_mode_this_iter=firstiter_score_mode_this_iter,
                     firstiter_winner_take_all_this_iter=firstiter_winner_take_all_this_iter,
                     cs_for_engine=cs_for_engine,
+                    model_current_size_for_engine=model_current_size_for_engine,
                     class_log_priors=class_log_priors,
                     k_class_enabled=k_class_enabled,
                     relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
@@ -7322,6 +7381,7 @@ def _run_relion_iteration_loop(
                     firstiter_score_mode_this_iter=firstiter_score_mode_this_iter,
                     firstiter_winner_take_all_this_iter=firstiter_winner_take_all_this_iter,
                     cs_for_engine=cs_for_engine,
+                    model_current_size_for_engine=model_current_size_for_engine,
                     class_log_priors=class_log_priors,
                     k_class_enabled=k_class_enabled,
                     relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,

@@ -68,6 +68,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     bootstrap_current_size_from_ini_high_relion,
     clamp_relion_coarse_image_size,
     compute_coarse_image_size,
+    relion_optics_image_current_sizes,
     shell_index_to_resolution_angstrom,
     should_skip_adaptive_pass2,
 )
@@ -8881,6 +8882,40 @@ class TestRelionModeSmokeTest:
         )
         assert coarse_size == 14
         assert clamp_relion_coarse_image_size(coarse_size, current_size=44, ori_size=128) == 14
+
+    def test_relion_optics_image_current_size_preserves_upward_ceil_boundary(self):
+        """A rounded STAR angpix can add one even shell without changing model r_max."""
+        sizes = relion_optics_image_current_sizes(
+            56,
+            model_ori_size=384,
+            model_pixel_size=float(np.float32(544.0 / 384.0)),
+            optics_image_sizes=[384],
+            optics_pixel_sizes=[1.416667],
+        )
+        np.testing.assert_array_equal(sizes, np.array([58], dtype=np.int64))
+
+    def test_relion_optics_image_current_size_identity_and_full_box_clamp(self):
+        pixel_size = float(np.float32(544.0 / 384.0))
+        np.testing.assert_array_equal(
+            relion_optics_image_current_sizes(
+                56,
+                model_ori_size=384,
+                model_pixel_size=pixel_size,
+                optics_image_sizes=[384],
+                optics_pixel_sizes=[pixel_size],
+            ),
+            np.array([56], dtype=np.int64),
+        )
+        np.testing.assert_array_equal(
+            relion_optics_image_current_sizes(
+                384,
+                model_ori_size=384,
+                model_pixel_size=pixel_size,
+                optics_image_sizes=[384],
+                optics_pixel_sizes=[1.416667],
+            ),
+            np.array([384], dtype=np.int64),
+        )
 
     def test_local_order_transition_keeps_pre_update_coarse_size_and_updated_child_expansion(self):
         """RELION sizes pass 1 before updating order, but expands the new parent grid."""

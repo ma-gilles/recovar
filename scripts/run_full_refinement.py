@@ -3201,6 +3201,8 @@ def main():
     # RELION data STAR rows can be permuted relative to this table, so callers
     # must map by rlnImageName rather than assuming row positions coincide.
     our_names = np.asarray(our_particles["rlnImageName"])
+    relion_optics_image_sizes = None
+    relion_optics_pixel_sizes = None
     expected_accuracy_half1_base_order_local = None
     expected_accuracy_half1_trial_order_local = None
     expected_accuracy_half1_optics_group_ids = None
@@ -3226,6 +3228,30 @@ def main():
         logger.info("Loading RELION half-set assignments from %s", args.relion_half_sets)
         relion_data = _starfile.read(args.relion_half_sets)
         relion_particles = relion_data["particles"]
+        if args.n_classes == 1:
+            relion_optics = relion_data.get("optics") if isinstance(relion_data, dict) else None
+            if relion_optics is None:
+                raise SystemExit("K=1 RELION parity requires an optics table in --relion_half_sets")
+            required_optics_columns = {"rlnImageSize", "rlnImagePixelSize"}
+            missing_optics_columns = required_optics_columns.difference(relion_optics.columns)
+            if missing_optics_columns:
+                raise SystemExit(
+                    "K=1 RELION parity optics table is missing "
+                    + ", ".join(sorted(missing_optics_columns))
+                )
+            relion_optics_image_sizes = np.asarray(
+                relion_optics["rlnImageSize"],
+                dtype=np.int64,
+            )
+            relion_optics_pixel_sizes = np.asarray(
+                relion_optics["rlnImagePixelSize"],
+                dtype=np.float64,
+            )
+            logger.info(
+                "RELION per-optics image geometry: sizes=%s pixel_sizes=%s",
+                relion_optics_image_sizes.tolist(),
+                relion_optics_pixel_sizes.tolist(),
+            )
         use_fresh_auto_refine_order = _use_fresh_auto_refine_particle_order(
             args,
             frozen_boundary,
@@ -4515,6 +4541,8 @@ def main():
         perturb_factor=args.perturb_factor,
         perturb_seed=effective_perturb_seed,
         optimizer_random_seed=args.seed,
+        relion_optics_image_sizes=relion_optics_image_sizes,
+        relion_optics_pixel_sizes=relion_optics_pixel_sizes,
         expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
         expected_accuracy_half1_trial_order_local=expected_accuracy_half1_trial_order_local,
         expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,

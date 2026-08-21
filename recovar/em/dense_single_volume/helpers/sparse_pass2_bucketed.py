@@ -11020,6 +11020,7 @@ def compute_pass2_stats_sparse_bucketed(
     *,
     oversampling_order,
     current_size,
+    reconstruction_current_size=None,
     translation_step,
     rotation_log_prior,
     score_with_masked_images,
@@ -11210,6 +11211,11 @@ def compute_pass2_stats_sparse_bucketed(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     H, W = image_shape
+    mstep_current_size = (
+        current_size
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
     if (
         use_exact_relion_gaussian
         and current_size is not None
@@ -11231,6 +11237,7 @@ def compute_pass2_stats_sparse_bucketed(
         image_shape,
         current_size,
         n_half,
+        reconstruction_current_size=mstep_current_size,
         square=square_window,
         include_recon_window=True,
         **window_spec_kwargs,
@@ -11245,7 +11252,7 @@ def compute_pass2_stats_sparse_bucketed(
         recon_volume_shape = relion_backprojector_volume_shape(
             volume_shape,
             reconstruction_padding_factor,
-            current_size=current_size,
+            current_size=mstep_current_size,
         )
     elif reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
@@ -11281,9 +11288,10 @@ def compute_pass2_stats_sparse_bucketed(
     if use_relion_x_half_mstep:
         logger.info(
             "Sparse pass-2 RELION x-half current-size BPref accumulator shape: "
-            "volume_shape=%s current_size=%s padding_factor=%s recon_volume_shape=%s half_accum_shape=%s voxels=%d",
+            "volume_shape=%s score_current_size=%s model_current_size=%s padding_factor=%s recon_volume_shape=%s half_accum_shape=%s voxels=%d",
             tuple(volume_shape),
             current_size,
+            mstep_current_size,
             reconstruction_padding_factor,
             tuple(recon_volume_shape),
             tuple(recon_accum_shape),
@@ -11303,7 +11311,7 @@ def compute_pass2_stats_sparse_bucketed(
             volume_shape,
             projection_padding_factor,
             do_gridding_correction=do_gridding_correction,
-            current_size=current_size,
+            current_size=mstep_current_size,
         )
     else:
         mean_for_proj = volume
@@ -11670,6 +11678,7 @@ def compute_pass2_stats_sparse_bucketed(
         image_shape,
         current_size,
         n_half,
+        reconstruction_current_size=mstep_current_size,
         square=square_window,
         include_recon_window=True,
         **window_spec_kwargs,
@@ -13087,7 +13096,7 @@ def compute_pass2_stats_sparse_bucketed(
                             disc_type="linear_interp",
                             half_image=True,
                             half_volume=use_half_volume_mstep,
-                            max_r=float(current_size // 2),
+                            max_r=float(mstep_current_size // 2),
                             relion_x_half=use_relion_x_half_mstep,
                             max_block_bytes=max_adjoint_block_bytes,
                             log_label="single-y-window-chunk",
@@ -13103,7 +13112,7 @@ def compute_pass2_stats_sparse_bucketed(
                             disc_type="linear_interp",
                             half_image=True,
                             half_volume=use_half_volume_mstep,
-                            max_r=float(current_size // 2),
+                            max_r=float(mstep_current_size // 2),
                             relion_x_half=use_relion_x_half_mstep,
                             max_block_bytes=max_adjoint_block_bytes,
                             log_label="single-ctf-window-chunk",
@@ -13555,7 +13564,7 @@ def compute_pass2_stats_sparse_bucketed(
                     reconstruction_padding_factor=reconstruction_padding_factor,
                     use_relion_x_half_mstep=use_relion_x_half_mstep,
                     winner_take_all=winner_take_all,
-                    max_r=float(current_size // 2) if use_window else None,
+                    max_r=float(mstep_current_size // 2) if use_window else None,
                     window_indices=(
                         relion_x_half_recon_indices
                         if use_relion_x_half_mstep
@@ -14418,7 +14427,7 @@ def compute_pass2_stats_sparse_bucketed(
                 reconstruction_padding_factor=reconstruction_padding_factor,
                 use_relion_x_half_mstep=use_relion_x_half_mstep,
                 winner_take_all=winner_take_all,
-                max_r=float(current_size // 2) if use_window else None,
+                max_r=float(mstep_current_size // 2) if use_window else None,
                 window_indices=(
                     relion_x_half_recon_indices
                     if use_relion_x_half_mstep
@@ -14496,7 +14505,7 @@ def compute_pass2_stats_sparse_bucketed(
                     volume_shape=recon_volume_shape,
                     disc_type="linear_interp",
                     half_volume=use_half_volume_mstep,
-                    max_r=float(current_size // 2) if use_window else None,
+                    max_r=float(mstep_current_size // 2) if use_window else None,
                     winner_take_all=winner_take_all,
                     strict_particle_order=preserve_bpref_particle_order,
                     log_label_prefix="single-particle-xhalf",
@@ -14520,7 +14529,7 @@ def compute_pass2_stats_sparse_bucketed(
                     disc_type="linear_interp",
                     half_image=True,
                     half_volume=use_half_volume_mstep,
-                    max_r=float(current_size // 2),
+                    max_r=float(mstep_current_size // 2),
                     relion_x_half=use_relion_x_half_mstep,
                     max_block_bytes=max_adjoint_block_bytes,
                     log_label="single-y-window",
@@ -14536,7 +14545,7 @@ def compute_pass2_stats_sparse_bucketed(
                     disc_type="linear_interp",
                     half_image=True,
                     half_volume=use_half_volume_mstep,
-                    max_r=float(current_size // 2),
+                    max_r=float(mstep_current_size // 2),
                     relion_x_half=use_relion_x_half_mstep,
                     max_block_bytes=max_adjoint_block_bytes,
                     log_label="single-ctf-window",

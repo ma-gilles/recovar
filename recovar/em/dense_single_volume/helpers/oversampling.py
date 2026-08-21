@@ -724,6 +724,7 @@ def compute_pass2_stats_sparse(
     disc_type,
     oversampling_order=1,
     current_size=None,
+    reconstruction_current_size=None,
     translation_step=None,
     *,
     rotation_log_prior=None,
@@ -857,6 +858,7 @@ def compute_pass2_stats_sparse(
         and not relion_firstiter_winner_take_all
         and include_unweighted_norm_high_shell
         and not preserve_bpref_particle_order
+        and reconstruction_current_size is None
         and not (
             relion_exact_fine_gaussian
             and not use_float64_scoring
@@ -876,6 +878,7 @@ def compute_pass2_stats_sparse(
             disc_type,
             oversampling_order=oversampling_order,
             current_size=current_size,
+            reconstruction_current_size=reconstruction_current_size,
             translation_step=translation_step,
             rotation_log_prior=rotation_log_prior,
             score_with_masked_images=score_with_masked_images,
@@ -928,6 +931,10 @@ def compute_pass2_stats_sparse(
 
     if relion_projector_half is not None:
         raise NotImplementedError("RELION projector sparse pass-2 requires the bucketed implementation")
+    if reconstruction_current_size is not None:
+        raise NotImplementedError(
+            "separate score/reconstruction current sizes require the bucketed sparse pass-2 path",
+        )
 
     return _compute_pass2_stats_sparse_perimage_reference(
         experiment_dataset,
