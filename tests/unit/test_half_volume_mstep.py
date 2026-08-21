@@ -1034,6 +1034,71 @@ def test_relion_fused_x_half_signature_cuda_source_copies_before_read_only_kerne
 
 
 @pytest.mark.gpu
+def test_relion_fused_x_half_radius_uses_native_rotation_convention_at_exact_rim(
+    monkeypatch, custom_cuda_lib, gpu_device
+):
+    """Case-4 native captures pin the one-ulp outer-radius decision."""
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", raising=False)
+    image_shape = (256, 256)
+    volume_shape = (115, 115, 115)
+    volume_size = 115 * 115 * 58
+    pixel_indices = jnp.asarray([28], dtype=jnp.int32)  # (ky, kx) = (0, r_max)
+    data_rows = jnp.asarray([[1.0 + 2.0j]], dtype=jnp.complex64)
+    weight_rows = jnp.asarray([[3.0]], dtype=jnp.float32)
+    # These are the exact RECOVAR-coordinate (RELION-transposed) float32
+    # matrices captured for immutable case-4 stack identities 36560 and
+    # 59771. RELION includes the first rim pixel and excludes the second:
+    # their native physical r2 values are respectively 3135.999755859375
+    # and 3136.000244140625, while the old RECOVAR-coordinate predicate
+    # rounded both to 3136.0.
+    rotations = (
+        np.asarray(
+            [
+                [-0.1435004323720932, -0.7730202078819275, 0.6179379820823669],
+                [0.3455425798892975, 0.5459669232368469, 0.7632302641868591],
+                [-0.9273661375045776, 0.3230477571487427, 0.18876491487026215],
+            ],
+            dtype=np.float32,
+        ),
+        np.asarray(
+            [
+                [-0.23005904257297516, 0.9451428055763245, -0.23190070688724518],
+                [0.565037190914154, 0.32374024391174316, 0.7588973641395569],
+                [0.792341947555542, 0.04355867952108383, -0.6085202097892761],
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+    outputs = []
+    with cuda_backproject.jax.default_device(gpu_device):
+        for rotation in rotations:
+            outputs.append(
+                cuda_backproject.relion_fused_x_half_backproject_indexed(
+                    jnp.zeros(volume_size, dtype=jnp.complex64),
+                    jnp.zeros(volume_size, dtype=jnp.float32),
+                    data_rows,
+                    weight_rows,
+                    pixel_indices,
+                    jnp.asarray(rotation[None]),
+                    image_shape,
+                    volume_shape,
+                    28.0,
+                )
+            )
+
+    included_data, included_weight = (np.asarray(value) for value in outputs[0])
+    excluded_data, excluded_weight = (np.asarray(value) for value in outputs[1])
+    assert np.count_nonzero(included_data) > 0
+    assert np.count_nonzero(included_weight) > 0
+    np.testing.assert_array_equal(excluded_data, np.zeros_like(excluded_data))
+    np.testing.assert_array_equal(excluded_weight, np.zeros_like(excluded_weight))
+
+
+@pytest.mark.gpu
 def test_relion_fused_x_half_signature_matches_relion_fraction_before_origin_oracle(
     monkeypatch, custom_cuda_lib, gpu_device
 ):
