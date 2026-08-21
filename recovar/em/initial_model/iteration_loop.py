@@ -420,7 +420,19 @@ def select_subset_for_iter(
     particles if ``-1``), stable-sorts by optics group, and assigns pseudo-
     halfset ids.
     """
-    if particle_order is None:
+    stored_order = state.sorted_particle_ids
+    stored_part_ids = state.sorted_particle_part_ids
+    if stored_order is not None or stored_part_ids is not None:
+        if stored_order is None or stored_part_ids is None:
+            raise ValueError("stored RELION particle order is incomplete")
+        base_order = np.asarray(stored_order, dtype=np.int64)
+        base_halfset_ids = np.asarray(stored_part_ids, dtype=np.int64)
+        if base_order.shape != (int(nr_particles),) or base_halfset_ids.shape != base_order.shape:
+            raise ValueError(
+                "stored RELION particle order must match nr_particles: "
+                f"{base_order.shape}, {base_halfset_ids.shape} != ({int(nr_particles)},)",
+            )
+    elif particle_order is None:
         base_order = np.arange(int(nr_particles), dtype=np.int64)
         base_halfset_ids = np.arange(int(nr_particles), dtype=np.int64)
     else:
@@ -441,7 +453,10 @@ def select_subset_for_iter(
         # rows, so parity must travel with the positions through shuffling.
         base_halfset_ids = np.arange(int(nr_particles), dtype=np.int64)
 
-    if int(random_seed) == 0:
+    subset_size = state.subset_size if state.subset_size != -1 else nr_particles
+    doing_subset = 0 < int(subset_size) < int(nr_particles)
+    first_randomisation = stored_order is None
+    if int(random_seed) == 0 or (not first_randomisation and not doing_subset):
         shuffled = base_order.copy()
         shuffled_halfset_ids = base_halfset_ids.copy()
     else:
@@ -456,7 +471,19 @@ def select_subset_for_iter(
             permutation = randomise_particles_order(nr_particles, rnd_unif_factory(random_seed + iter))
         shuffled = base_order[permutation]
         shuffled_halfset_ids = base_halfset_ids[permutation]
-    subset_size = state.subset_size if state.subset_size != -1 else nr_particles
+
+    # randomiseParticlesOrder stable-sorts the selected prefix in place before
+    # the expectation step.  Persist that complete vector (including its
+    # untouched tail) because the next true-subset iteration shuffles it again.
+    if int(subset_size) > 0:
+        prefix = shuffled[: int(subset_size)]
+        keys = np.asarray(
+            [optics_group_by_particle[int(particle_id)] for particle_id in prefix],
+            dtype=np.int64,
+        )
+        stable_order = np.argsort(keys, kind="stable")
+        shuffled[: int(subset_size)] = prefix[stable_order]
+        shuffled_halfset_ids[: int(subset_size)] = shuffled_halfset_ids[: int(subset_size)][stable_order]
     # `-1` (all particles) still needs to be translated via select_vdam_subset
     pseudo = do_grad and pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=False)
     plan = select_vdam_subset(
@@ -469,6 +496,8 @@ def select_subset_for_iter(
     new_state = replace(state)
     new_state.subset_particle_ids = plan.particle_ids
     new_state.subset_halfset_ids = plan.halfset_ids
+    new_state.sorted_particle_ids = shuffled
+    new_state.sorted_particle_part_ids = shuffled_halfset_ids
     new_state.pseudo_halfsets = pseudo
     return new_state
 

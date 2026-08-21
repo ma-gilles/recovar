@@ -14,8 +14,8 @@ import pytest
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.iteration_loop import (
     refresh_tau2_from_projector_power,
-    relion_solvent_mask,
     relion_solvent_flatten_state,
+    relion_solvent_mask,
     run_vdam_iterations,
     select_subset_for_iter,
     update_current_resolution_from_data_vs_prior,
@@ -607,6 +607,89 @@ class TestRunVdamIterations:
                 do_grad=True,
                 particle_order=np.array([0, 1, 1, 3], dtype=np.int64),
             )
+
+    def test_nonzero_seed_full_dataset_randomises_only_once(self, bind):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=2,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.subset_size = 6
+        particle_order = np.array([5, 0, 3, 4, 1, 2], dtype=np.int64)
+
+        first = select_subset_for_iter(
+            state,
+            iter=1,
+            nr_particles=6,
+            optics_group_by_particle=[0, 1, 0, 1, 0, 1],
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            random_seed=7,
+            do_grad=True,
+            particle_order=particle_order,
+        )
+        second = select_subset_for_iter(
+            first,
+            iter=2,
+            nr_particles=6,
+            optics_group_by_particle=[0, 1, 0, 1, 0, 1],
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            random_seed=7,
+            do_grad=True,
+            particle_order=particle_order,
+        )
+
+        np.testing.assert_array_equal(second.subset_particle_ids, first.subset_particle_ids)
+        np.testing.assert_array_equal(second.subset_halfset_ids, first.subset_halfset_ids)
+        np.testing.assert_array_equal(second.sorted_particle_ids, first.sorted_particle_ids)
+        np.testing.assert_array_equal(second.sorted_particle_part_ids, first.sorted_particle_part_ids)
+
+    def test_nonzero_seed_true_subset_reshuffles_previous_sorted_idx(self, bind):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=2,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.subset_size = 4
+        particle_order = np.array([5, 0, 3, 4, 1, 2], dtype=np.int64)
+        optics = np.array([0, 1, 0, 1, 0, 1], dtype=np.int64)
+
+        first = select_subset_for_iter(
+            state,
+            iter=1,
+            nr_particles=6,
+            optics_group_by_particle=optics,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            random_seed=7,
+            do_grad=True,
+            particle_order=particle_order,
+        )
+        second = select_subset_for_iter(
+            first,
+            iter=2,
+            nr_particles=6,
+            optics_group_by_particle=optics,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            random_seed=7,
+            do_grad=True,
+            particle_order=particle_order,
+        )
+
+        permutation = np.asarray(bind.vdam_randomise_particles_order(6, 9), dtype=np.int64)
+        expected_rows = np.asarray(first.sorted_particle_ids)[permutation]
+        expected_parts = np.asarray(first.sorted_particle_part_ids)[permutation]
+        prefix_order = np.argsort(optics[expected_rows[:4]], kind="stable")
+        expected_rows[:4] = expected_rows[:4][prefix_order]
+        expected_parts[:4] = expected_parts[:4][prefix_order]
+        np.testing.assert_array_equal(second.sorted_particle_ids, expected_rows)
+        np.testing.assert_array_equal(second.sorted_particle_part_ids, expected_parts)
+        np.testing.assert_array_equal(second.subset_particle_ids, expected_rows[:4])
+        np.testing.assert_array_equal(second.subset_halfset_ids, (expected_parts[:4] % 2).astype(np.int8))
 
     def test_5_iter_smoke(self, bind):
         ori = 16
