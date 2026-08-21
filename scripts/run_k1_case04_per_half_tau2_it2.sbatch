@@ -31,6 +31,7 @@ PIXI_ENV=${REPO}/.pixi/envs/default
 RELION_BIND=${SOURCE_ROOT}/relion_bind_build/shared
 LAUNCHER=${REPO}/scripts/run_k1_case04_per_half_tau2_it2.sbatch
 OUTPUT=${ROOT}/output
+TARGET_SOURCE_ROWS=${K1_CASE04_TARGET_SOURCE_ROWS:-}
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -77,6 +78,20 @@ export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=1
 export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
+if [[ -n "${TARGET_SOURCE_ROWS}" ]]; then
+  mkdir -p "${ROOT}/pass1" "${ROOT}/pass2"
+  export RECOVAR_SIGNIFICANCE_DUMP_DIR=${ROOT}/pass1
+  export RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES=${TARGET_SOURCE_ROWS}
+  export RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE=100
+  export RECOVAR_SIGNIFICANCE_DUMP_ITERATION=2
+  export RECOVAR_PASS2_DUMP_DIR=${ROOT}/pass2
+  export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${TARGET_SOURCE_ROWS}
+  export RECOVAR_PASS2_DUMP_CURRENT_SIZE=100
+  export RECOVAR_PASS2_DUMP_ITERATION=2
+  export RECOVAR_PASS2_DUMP_CLASS=1
+  export RECOVAR_PASS2_DUMP_RAW_OPERANDS=1
+  export RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET=1
+fi
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 
 nvidia-smi --query-gpu=uuid,name,memory.total --format=csv,noheader > "${ROOT}/provenance/gpu_${SLURM_JOB_ID}.txt"
@@ -100,8 +115,24 @@ command=("${PYTHON}" -m scripts.run_full_refinement
   --relion_init_dir "${RELION}")
 printf '%q ' "${command[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
+set +e
 "${command[@]}" > "${OUTPUT}/run.log" 2>&1
+command_status=$?
+set -e
 
+if [[ -n "${TARGET_SOURCE_ROWS}" ]]; then
+  IFS=, read -r -a target_rows <<< "${TARGET_SOURCE_ROWS}"
+  expected_count=${#target_rows[@]}
+  test "$(find "${ROOT}/pass1" -maxdepth 1 -type f -name 'significance_*_it002_cs100.npz' | wc -l)" -eq "${expected_count}"
+  test "$(find "${ROOT}/pass2" -maxdepth 1 -type f \( -name 'pass2_orig*_cs100.npz' -o -name 'pass2_orig*_class001_cs100.npz' \) | wc -l)" -eq "${expected_count}"
+  test "${command_status}" -ne 0
+  rg -q 'requested RECOVAR pass-2 dump target set was written' "${OUTPUT}/run.log"
+  ! rg -q 'RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' "${OUTPUT}/run.log"
+  touch "${ROOT}/SUCCESS_${SLURM_JOB_ID}"
+  exit 0
+fi
+
+test "${command_status}" -eq 0
 test -s "${OUTPUT}/refinement_results.npz"
 test -s "${OUTPUT}/intermediates/it001_half1_reg.mrc"
 test -s "${OUTPUT}/intermediates/it001_half2_reg.mrc"

@@ -36,8 +36,16 @@ BPREF_ACCUM=${ROOT}/bpref_accum
 PPREF=${ROOT}/ppref
 RELION_OUT=${ROOT}/relion
 ANALYSIS=${ROOT}/analysis
-PART_IDS=99886,71881,89328,77986,60268,16799,88741,18493,55303,80124,32732,63798,28614,92534,20635,29514,58368,75859
-STACK_INDICES=99887,71882,89329,77987,60269,16800,88742,18494,55304,80125,32733,63799,28615,92535,20636,29515,58369,75860
+CAPTURE_ITERATION=${CAPTURE_ITERATION:-1}
+PART_IDS=${CAPTURE_PART_IDS:-99886,71881,89328,77986,60268,16799,88741,18493,55303,80124,32732,63798,28614,92534,20635,29514,58368,75859}
+STACK_INDICES=${CAPTURE_STACK_INDICES:-99887,71882,89329,77987,60269,16800,88742,18494,55304,80125,32733,63799,28615,92535,20636,29515,58369,75860}
+case "${CAPTURE_ITERATION}" in 1|2) ;; *) echo "CAPTURE_ITERATION must be 1 or 2" >&2; exit 2 ;; esac
+IFS=, read -r -a part_id_rows <<< "${PART_IDS}"
+IFS=, read -r -a stack_index_rows <<< "${STACK_INDICES}"
+CAPTURE_PARTICLE_COUNT=${#part_id_rows[@]}
+test "${CAPTURE_PARTICLE_COUNT}" -gt 0
+test "${#stack_index_rows[@]}" -eq "${CAPTURE_PARTICLE_COUNT}"
+CAPTURE_ITERATION_PADDED=$(printf '%03d' "${CAPTURE_ITERATION}")
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -77,33 +85,33 @@ export OMPI_MCA_shmem_mmap_enable_nfs_warning=0
 export CUDA_VISIBLE_DEVICES=0
 
 export RELION_ACC_DUMP_DIR=${CAPTURE}
-export RELION_ACC_DUMP_ITER=1
+export RELION_ACC_DUMP_ITER=${CAPTURE_ITERATION}
 export RELION_ACC_DUMP_PART_IDS=${PART_IDS}
 export RELION_ACC_DUMP_WAVG_PIXELS=1
 export RELION_ACC_DUMP_WAVG_REFERENCE=1
 export RELION_P1_PREPROCESS_CAPTURE_DIR=${CAPTURE}
 export RELION_P1_PREPROCESS_CAPTURE_SCHEMA=1
-export RELION_P1_PREPROCESS_CAPTURE_ITER=1
-export RELION_P1_PREPROCESS_CAPTURE_EXPECTED_PARTICLES=18
-export RELION_P1_PREPROCESS_CAPTURE_MAX_PARTICLES_PER_RANK=18
+export RELION_P1_PREPROCESS_CAPTURE_ITER=${CAPTURE_ITERATION}
+export RELION_P1_PREPROCESS_CAPTURE_EXPECTED_PARTICLES=${CAPTURE_PARTICLE_COUNT}
+export RELION_P1_PREPROCESS_CAPTURE_MAX_PARTICLES_PER_RANK=${CAPTURE_PARTICLE_COUNT}
 export RELION_P1_PREPROCESS_CAPTURE_EXPECTED_FOLLOWERS=2
 export RELION_P1_PREPROCESS_CAPTURE_MAX_BYTES=200000000
 export RELION_P1_PREPROCESS_CAPTURE_PART_IDS=${PART_IDS}
 export RELION_BPRE_CAPTURE_DIR=${BPREF_CAPTURE}
 export RELION_BPRE_CAPTURE_SCHEMA=1
-export RELION_BPRE_CAPTURE_ITER=1
+export RELION_BPRE_CAPTURE_ITER=${CAPTURE_ITERATION}
 export RELION_BPRE_CAPTURE_CLASS=1
-export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES=18
-export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=18
+export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES=${CAPTURE_PARTICLE_COUNT}
+export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=${CAPTURE_PARTICLE_COUNT}
 export RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=2
 export RELION_BPRE_CAPTURE_MAX_BYTES=500000000
 export RELION_BPRE_CAPTURE_DEVICE_BYTES=33554432
 export RELION_BPRE_CAPTURE_PART_IDS=${PART_IDS}
 export RELION_DUMP_DIR=${BPREF_ACCUM}
 export RELION_DUMP_BPREF=1
-export RELION_DUMP_ITER=1
+export RELION_DUMP_ITER=${CAPTURE_ITERATION}
 export RELION_PPREF_CAPTURE_DIR=${PPREF}
-export RELION_PPREF_CAPTURE_ITER=1
+export RELION_PPREF_CAPTURE_ITER=${CAPTURE_ITERATION}
 
 nvidia-smi --query-gpu=uuid,name,memory.total --format=csv,noheader > "${ROOT}/provenance/gpu_${SLURM_JOB_ID}.txt"
 env | sort > "${ROOT}/provenance/environment_${SLURM_JOB_ID}.txt"
@@ -124,24 +132,24 @@ start_epoch=$(date +%s)
 ) > "${RELION_OUT}/runner.stdout" 2> "${RELION_OUT}/runner.stderr"
 wall_s=$(( $(date +%s) - start_epoch ))
 
-test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.preprocess-v1.bin' | wc -l)" -eq 18
-test "$(find "${BPREF_CAPTURE}" -maxdepth 1 -type f -name '*.bpre-v1.bin' | wc -l)" -eq 18
+test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.preprocess-v1.bin' | wc -l)" -eq "${CAPTURE_PARTICLE_COUNT}"
+test "$(find "${BPREF_CAPTURE}" -maxdepth 1 -type f -name '*.bpre-v1.bin' | wc -l)" -eq "${CAPTURE_PARTICLE_COUNT}"
 for suffix in wdiff2_pixels aa_pixels xa_pixels mresol fimg_real fimg_imag ctf trans_x trans_y weights eulers reference_real reference_imag valid_wdiff2_sum image_size current_size orientation_num translation_num; do
-    test "$(find "${CAPTURE}" -maxdepth 1 -type f -name "*_storeWavg_${suffix}.bin" | wc -l)" -eq 18
+    test "$(find "${CAPTURE}" -maxdepth 1 -type f -name "*_storeWavg_${suffix}.bin" | wc -l)" -eq "${CAPTURE_PARTICLE_COUNT}"
 done
 for half_rank in 1:1 2:2; do
     half=${half_rank%%:*}
     rank=${half_rank##*:}
     for kind in data weight; do
-        test -s "${BPREF_ACCUM}/mstep_it001_rank${rank}_half${half}_c0_pre_lowres_join_bpref_${kind}.bin"
+        test -s "${BPREF_ACCUM}/mstep_it${CAPTURE_ITERATION_PADDED}_rank${rank}_half${half}_c0_pre_lowres_join_bpref_${kind}.bin"
     done
 done
-test "$(find "${PPREF}" -maxdepth 1 -type f -name 'ppref_iter001_*.bin' | wc -l)" -eq 1
+test "$(find "${PPREF}" -maxdepth 1 -type f -name "ppref_iter${CAPTURE_ITERATION_PADDED}_*.bin" | wc -l)" -eq 1
 "${PYTHON}" "${REPO}/scripts/validate_relion_preprocess_capture.py" "${CAPTURE}" \
-    --expected-particles 18 --expected-part-ids "${PART_IDS}" --expected-stack-indices "${STACK_INDICES}" \
-    --expected-iteration 1 --output "${ANALYSIS}/RELION_PREPROCESS_CAPTURE_V1.json"
+    --expected-particles "${CAPTURE_PARTICLE_COUNT}" --expected-part-ids "${PART_IDS}" --expected-stack-indices "${STACK_INDICES}" \
+    --expected-iteration "${CAPTURE_ITERATION}" --output "${ANALYSIS}/RELION_PREPROCESS_CAPTURE_V1.json"
 "${PYTHON}" "${REPO}/scripts/validate_relion_bpref_prescatter.py" "${BPREF_CAPTURE}" \
-    --expected-particles 18 --output-json "${ANALYSIS}/RELION_BPREF_PRESCATTER_VALIDATION.json"
+    --expected-particles "${CAPTURE_PARTICLE_COUNT}" --output-json "${ANALYSIS}/RELION_BPREF_PRESCATTER_VALIDATION.json"
 "${PYTHON}" "${AUDIT_REPO}/scripts/audit_relion_control_reproducibility.py" \
     --control-dir "${CONTROL}" --candidate-dir "${RELION_OUT}" --iterations 1 2 \
     --map-fsc-auc-threshold 0.999999 \
@@ -155,5 +163,7 @@ assert all(item["map_stable"] for item in report["iterations"])
 assert all(item["selected_topology_exact"] for item in report["iterations"])
 PY
 find "${CAPTURE}" "${BPREF_CAPTURE}" "${BPREF_ACCUM}" "${PPREF}" "${RELION_OUT}" "${ANALYSIS}" -type f -print0 | sort -z | xargs -0 sha256sum > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
-printf '{"job_id":"%s","wall_s":%d,"physical_iteration":1,"particle_count":18}\n' "${SLURM_JOB_ID}" "${wall_s}" > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
+printf '{"job_id":"%s","wall_s":%d,"physical_iteration":%d,"particle_count":%d}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${CAPTURE_PARTICLE_COUNT}" \
+    > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/SUCCESS_${SLURM_JOB_ID}"
