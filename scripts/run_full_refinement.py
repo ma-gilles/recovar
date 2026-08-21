@@ -3203,6 +3203,7 @@ def main():
     our_names = np.asarray(our_particles["rlnImageName"])
     relion_optics_image_sizes = None
     relion_optics_pixel_sizes = None
+    relion_model_pixel_size = None
     expected_accuracy_half1_base_order_local = None
     expected_accuracy_half1_trial_order_local = None
     expected_accuracy_half1_optics_group_ids = None
@@ -3727,7 +3728,17 @@ def main():
         )
     elif args.n_classes == 1:
         init_mrc_path = args.init_volume or os.path.join(args.data_dir, "reference_init.mrc")
-        init_vol_real = _load_mrc(init_mrc_path).astype(np.float32)
+        init_vol_real, init_mrc_voxel_size = _load_mrc(
+            init_mrc_path,
+            return_voxel_size=True,
+        )
+        init_vol_real = init_vol_real.astype(np.float32)
+        relion_model_pixel_size = float(init_mrc_voxel_size.x)
+        if not np.isfinite(relion_model_pixel_size) or relion_model_pixel_size <= 0.0:
+            raise SystemExit(
+                f"Initial RELION reference has invalid voxel size {relion_model_pixel_size}: "
+                f"{init_mrc_path}"
+            )
         assert init_vol_real.shape == ds.volume_shape, (
             f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
         )
@@ -3745,7 +3756,12 @@ def main():
         elif _use_initial_projector_real:
             init_reference_real_for_projector = np.asarray(init_vol_real, dtype=np.float64)
         init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
-        logger.info("Initial volume loaded from %s: shape=%s", init_mrc_path, init_vol_real.shape)
+        logger.info(
+            "Initial volume loaded from %s: shape=%s model_pixel_size=%.9g A/px",
+            init_mrc_path,
+            init_vol_real.shape,
+            relion_model_pixel_size,
+        )
     else:
         if args.init_class_volumes:
             class_paths = [p.strip() for p in args.init_class_volumes.split(",")]
@@ -4543,6 +4559,7 @@ def main():
         optimizer_random_seed=args.seed,
         relion_optics_image_sizes=relion_optics_image_sizes,
         relion_optics_pixel_sizes=relion_optics_pixel_sizes,
+        relion_model_pixel_size=relion_model_pixel_size,
         expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
         expected_accuracy_half1_trial_order_local=expected_accuracy_half1_trial_order_local,
         expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,

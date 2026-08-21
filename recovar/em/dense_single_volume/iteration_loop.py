@@ -4445,6 +4445,7 @@ def refine_single_volume(
     optimizer_random_seed=None,
     relion_optics_image_sizes=None,
     relion_optics_pixel_sizes=None,
+    relion_model_pixel_size=None,
     expected_accuracy_half1_base_order_local=None,
     expected_accuracy_half1_trial_order_local=None,
     expected_accuracy_half1_optics_group_ids=None,
@@ -4739,6 +4740,7 @@ def refine_single_volume(
         optimizer_random_seed=optimizer_random_seed,
         relion_optics_image_sizes=relion_optics_image_sizes,
         relion_optics_pixel_sizes=relion_optics_pixel_sizes,
+        relion_model_pixel_size=relion_model_pixel_size,
         expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
         expected_accuracy_half1_trial_order_local=expected_accuracy_half1_trial_order_local,
         expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
@@ -4846,6 +4848,7 @@ def _run_relion_iteration_loop(
     optimizer_random_seed=None,
     relion_optics_image_sizes=None,
     relion_optics_pixel_sizes=None,
+    relion_model_pixel_size=None,
     expected_accuracy_half1_base_order_local=None,
     expected_accuracy_half1_trial_order_local=None,
     expected_accuracy_half1_optics_group_ids=None,
@@ -4963,6 +4966,13 @@ def _run_relion_iteration_loop(
         optics_pixel_sizes = np.asarray(relion_optics_pixel_sizes, dtype=np.float64).reshape(-1)
         if optics_image_sizes.shape != optics_pixel_sizes.shape or optics_image_sizes.size == 0:
             raise ValueError("RELION optics image geometry arrays must be non-empty and aligned")
+    model_pixel_size = (
+        float(cryo.voxel_size)
+        if relion_model_pixel_size is None
+        else float(relion_model_pixel_size)
+    )
+    if not np.isfinite(model_pixel_size) or model_pixel_size <= 0.0:
+        raise ValueError(f"RELION model pixel size must be positive, got {model_pixel_size}")
     _validate_bpref_particle_order_scope(
         preserve_bpref_particle_order=preserve_bpref_particle_order,
         n_classes=n_classes,
@@ -6641,7 +6651,7 @@ def _run_relion_iteration_loop(
             remapped_image_sizes = relion_optics_image_current_sizes(
                 current_size,
                 model_ori_size=grid_size,
-                model_pixel_size=cryo.voxel_size,
+                model_pixel_size=model_pixel_size,
                 optics_image_sizes=optics_image_sizes,
                 optics_pixel_sizes=optics_pixel_sizes,
             )
@@ -6659,7 +6669,7 @@ def _run_relion_iteration_loop(
                 "image_current_size=%d model_pixel_size=%.9g",
                 int(current_size),
                 image_current_size,
-                float(cryo.voxel_size),
+                model_pixel_size,
             )
         sigma_rot = state.sigma_rot
         sigma_psi = state.sigma_psi if state.sigma_psi > 0 else sigma_rot
@@ -6711,8 +6721,16 @@ def _run_relion_iteration_loop(
                         parent_order = local_search_order - int(state.adaptive_oversampling)
                         local_pass1_current_size = _relion_local_pass1_current_size(
                             pre_update_healpix_order=coarse_size_healpix_order,
-                            pixel_size=cryo.voxel_size if cryo.voxel_size > 0 else 1.0,
-                            ori_size=grid_size,
+                            pixel_size=(
+                                float(optics_pixel_sizes[0])
+                                if optics_pixel_sizes is not None
+                                else model_pixel_size
+                            ),
+                            ori_size=(
+                                int(optics_image_sizes[0])
+                                if optics_image_sizes is not None
+                                else grid_size
+                            ),
                             particle_diameter=particle_diameter_ang,
                             current_size=image_current_size if cs_for_engine is not None else None,
                         )
