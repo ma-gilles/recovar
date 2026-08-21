@@ -37,6 +37,7 @@ PPREF=${ROOT}/ppref
 RELION_OUT=${ROOT}/relion
 ANALYSIS=${ROOT}/analysis
 CAPTURE_ITERATION=${CAPTURE_ITERATION:-1}
+CONTINUE_OPTIMISER=${RELION_CONTINUE_OPTIMISER:-}
 PART_IDS=${CAPTURE_PART_IDS:-99886,71881,89328,77986,60268,16799,88741,18493,55303,80124,32732,63798,28614,92534,20635,29514,58368,75859}
 STACK_INDICES=${CAPTURE_STACK_INDICES:-99887,71882,89329,77987,60269,16800,88742,18494,55304,80125,32733,63799,28615,92535,20636,29515,58369,75860}
 case "${CAPTURE_ITERATION}" in 1|2) ;; *) echo "CAPTURE_ITERATION must be 1 or 2" >&2; exit 2 ;; esac
@@ -57,6 +58,11 @@ test "$(sha256sum "${RELION_BINARY}" | awk '{print $1}')" = 235052e48ccf843df483
 test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = 0a90714711cdf0a1820d46fa82460d828b87e1ecbd2e49de645170863546ac98
 test "$(sha256sum "${DATA}/reference_init_relion.mrc" | awk '{print $1}')" = beffccd2b5b9e4dba765751b2e8e7933229deb70e65061de97a486264066dec9
 test "$(stat -Lc %s "${DATA}/particles.256.mrcs")" = 26214401024
+if [[ -n "${CONTINUE_OPTIMISER}" ]]; then
+    test "${CAPTURE_ITERATION}" -eq 2
+    test -f "${CONTINUE_OPTIMISER}"
+    test "$(sha256sum "${CONTINUE_OPTIMISER}" | awk '{print $1}')" = 881de25817c531ecc6df6879171d942152e27f8cfebfaf3db29c2052b0463b91
+fi
 test -z "$(find "${CAPTURE}" "${BPREF_CAPTURE}" "${BPREF_ACCUM}" "${PPREF}" "${RELION_OUT}" -mindepth 1 -print -quit)"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
@@ -116,13 +122,19 @@ export RELION_PPREF_CAPTURE_ITER=${CAPTURE_ITERATION}
 nvidia-smi --query-gpu=uuid,name,memory.total --format=csv,noheader > "${ROOT}/provenance/gpu_${SLURM_JOB_ID}.txt"
 env | sort > "${ROOT}/provenance/environment_${SLURM_JOB_ID}.txt"
 git -C "${RELION_SOURCE}" diff --binary > "${ROOT}/provenance/relion_capture.patch"
-command=(srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
-  --i particles.star --ref reference_init_relion.mrc --o "${RELION_OUT}/run"
-  --auto_refine --split_random_halves --particle_diameter 200 --ini_high 30
-  --firstiter_cc --ctf --flatten_solvent --zero_mask --low_resol_join_halves 40
-  --norm --scale --healpix_order 3 --offset_range 3.0 --offset_step 1.0
-  --oversampling 1 --pad 2 --random_seed 1704 --auto_iter_max 2
-  --pool 3 --gpu 0:0:0 --j 4)
+if [[ -n "${CONTINUE_OPTIMISER}" ]]; then
+  command=(srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
+    --continue "${CONTINUE_OPTIMISER}" --o "${RELION_OUT}/run"
+    --auto_iter_max 2 --pool 3 --gpu 0:0:0 --j 4)
+else
+  command=(srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
+    --i particles.star --ref reference_init_relion.mrc --o "${RELION_OUT}/run"
+    --auto_refine --split_random_halves --particle_diameter 200 --ini_high 30
+    --firstiter_cc --ctf --flatten_solvent --zero_mask --low_resol_join_halves 40
+    --norm --scale --healpix_order 3 --offset_range 3.0 --offset_step 1.0
+    --oversampling 1 --pad 2 --random_seed 1704 --auto_iter_max 2
+    --pool 3 --gpu 0:0:0 --j 4)
+fi
 printf '%q ' "${command[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 start_epoch=$(date +%s)
@@ -151,7 +163,7 @@ test "$(find "${PPREF}" -maxdepth 1 -type f -name "ppref_iter${CAPTURE_ITERATION
 "${PYTHON}" "${REPO}/scripts/validate_relion_bpref_prescatter.py" "${BPREF_CAPTURE}" \
     --expected-particles "${CAPTURE_PARTICLE_COUNT}" --output-json "${ANALYSIS}/RELION_BPREF_PRESCATTER_VALIDATION.json"
 "${PYTHON}" "${AUDIT_REPO}/scripts/audit_relion_control_reproducibility.py" \
-    --control-dir "${CONTROL}" --candidate-dir "${RELION_OUT}" --iterations 1 2 \
+    --control-dir "${CONTROL}" --candidate-dir "${RELION_OUT}" --iterations "${CAPTURE_ITERATION}" \
     --map-fsc-auc-threshold 0.999999 \
     --output-json "${ANALYSIS}/RELION_CAPTURE_INERTNESS.json" \
     --output-markdown "${ANALYSIS}/RELION_CAPTURE_INERTNESS.md"
