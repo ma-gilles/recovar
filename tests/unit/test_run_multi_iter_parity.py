@@ -2,6 +2,7 @@ import inspect
 import sys
 from pathlib import Path
 
+import mrcfile
 import numpy as np
 import pytest
 
@@ -26,6 +27,7 @@ from scripts.run_multi_iter_parity import (
     parse_iteration_normalization_factor_overrides,
     parse_relion_optimiser_cli_flags,
     particle_half_indices,
+    read_relion_model_pixel_size,
     relion_final_gt_series,
     replay_control_relion_iteration,
     replay_override_iteration_pairs,
@@ -39,6 +41,15 @@ from scripts.run_multi_iter_parity import (
     validate_fresh_initial_reference_args,
     validate_fresh_particle_order_args,
 )
+
+
+def test_read_relion_model_pixel_size_uses_mrc_header(tmp_path):
+    model = tmp_path / "run_it001_half1_class001.mrc"
+    with mrcfile.new(model, overwrite=False) as handle:
+        handle.set_data(np.zeros((4, 4, 4), dtype=np.float32))
+        handle.voxel_size = 1.4166666269302368
+
+    assert read_relion_model_pixel_size(model) == pytest.approx(1.4166666269302368)
 
 
 def test_iteration_normalization_override_applies_only_at_requested_boundary():

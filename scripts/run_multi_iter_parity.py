@@ -104,6 +104,23 @@ def stack_index_from_image_name(name: str) -> int:
     return int(m.group(1)) - 1 if m else -1
 
 
+def read_relion_model_pixel_size(path: str | Path) -> float:
+    """Read the model pixel size from a RELION reference MRC header."""
+
+    import mrcfile
+
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise ValueError(f"RELION model reference does not exist: {source}")
+    with mrcfile.open(source, mode="r", header_only=True) as handle:
+        pixel_size = float(handle.voxel_size.x)
+    if not np.isfinite(pixel_size) or pixel_size <= 0.0:
+        raise ValueError(
+            f"RELION model reference has invalid pixel size {pixel_size}: {source}"
+        )
+    return pixel_size
+
+
 def replay_previous_relion_iteration(init_relion_iteration: int, recovar_iteration: int) -> int:
     """Return the RELION iteration whose particle metadata seeds this replay step."""
     return int(init_relion_iteration) + int(recovar_iteration)
@@ -1527,6 +1544,12 @@ def main():
 
     # Volume: get_dft3(vol_real) produces the unnormalized centered DFT.
     # This matches the internal convention expected by the refinement code.
+    model_reference_path = Path(f"{prefix}_half1_class001.mrc")
+    relion_model_pixel_size = read_relion_model_pixel_size(model_reference_path)
+    print(
+        "  RELION model pixel size: "
+        f"{relion_model_pixel_size:.9g} A/px from {model_reference_path}"
+    )
     initial_reference_real_for_projector = None
     if args.fresh_initial_reference_mrc is not None:
         unfiltered_real = helpers.load_mrc(args.fresh_initial_reference_mrc)
@@ -2183,6 +2206,7 @@ def main():
         force_max_iter_after_convergence=args.force_max_iter_after_convergence,
         image_fourier_backend=args.image_fourier_backend,
         preserve_bpref_particle_order=args.diagnostic_preserve_bpref_particle_order,
+        relion_model_pixel_size=relion_model_pixel_size,
     )
     elapsed = time.time() - t0
     completed_iters = len(result.get("current_sizes", []))
