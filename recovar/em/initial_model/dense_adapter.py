@@ -995,14 +995,23 @@ def _arrays_to_accumulators(
 def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
     meta: dict[str, Any] = {"halfset_ids": tuple(sorted(halfset_results))}
     class_posterior_sums = None
+    class_posterior_sums_full = None
     class_reconstruction_support_sums = None
     class_direction_posterior_sums = None
     noise_totals: dict[str, Any] | None = None
     for h, result in halfset_results.items():
         if getattr(result, "class_posterior_sums", None) is not None:
-            sums = np.asarray(result.class_posterior_sums, dtype=np.float64)
+            full_sums = np.asarray(result.class_posterior_sums, dtype=np.float64)
+            sums = np.asarray(
+                getattr(result, "class_mstep_posterior_sums", full_sums),
+                dtype=np.float64,
+            )
             meta[f"halfset_{h}_class_posterior_sums"] = sums
+            meta[f"halfset_{h}_class_posterior_sums_full"] = full_sums
             class_posterior_sums = sums if class_posterior_sums is None else class_posterior_sums + sums
+            class_posterior_sums_full = (
+                full_sums if class_posterior_sums_full is None else class_posterior_sums_full + full_sums
+            )
         per_class_noise = getattr(result, "noise_stats", None)
         if per_class_noise is not None:
             support = np.asarray([float(stats.sumw) for stats in per_class_noise], dtype=np.float64)
@@ -1051,6 +1060,8 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
             )
     if class_posterior_sums is not None:
         meta["class_posterior_sums"] = class_posterior_sums
+    if class_posterior_sums_full is not None:
+        meta["class_posterior_sums_full"] = class_posterior_sums_full
     if class_reconstruction_support_sums is not None:
         meta["class_reconstruction_support_sums"] = class_reconstruction_support_sums
     if class_direction_posterior_sums is not None:

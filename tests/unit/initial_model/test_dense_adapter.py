@@ -268,6 +268,26 @@ def test_estep_meta_aggregates_noise_stats_for_model_updates():
     np.testing.assert_allclose(meta["halfset_1_wsum_img_power"], [10.0, 11.0, 12.0])
 
 
+def test_estep_meta_uses_significant_mstep_mass_for_relion_probability_updates():
+    halfset_results = {
+        0: SimpleNamespace(
+            class_posterior_sums=np.asarray([1.0, 2.0], dtype=np.float32),
+            class_mstep_posterior_sums=np.asarray([0.8, 1.9], dtype=np.float32),
+        ),
+        1: SimpleNamespace(
+            class_posterior_sums=np.asarray([3.0, 4.0], dtype=np.float32),
+            class_mstep_posterior_sums=np.asarray([2.7, 3.6], dtype=np.float32),
+        ),
+    }
+
+    meta = _estep_meta(halfset_results)
+
+    np.testing.assert_allclose(meta["class_posterior_sums"], [3.5, 5.5])
+    np.testing.assert_allclose(meta["class_posterior_sums_full"], [4.0, 6.0])
+    np.testing.assert_allclose(meta["halfset_0_class_posterior_sums"], [0.8, 1.9])
+    np.testing.assert_allclose(meta["halfset_0_class_posterior_sums_full"], [1.0, 2.0])
+
+
 def test_dense_initial_model_estep_slices_full_translation_prior_for_pseudo_halfsets(monkeypatch):
     calls = []
 
