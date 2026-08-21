@@ -27,7 +27,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     relion_translation_prior_center,
 )
 from recovar.reconstruction.noise import make_radial_noise
-from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion, write_relion_mrc
+from recovar.utils.helpers import R_to_relion, get_gpu_memory_total, recovar_volume_to_relion, write_relion_mrc
 
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
@@ -55,6 +55,39 @@ RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS = 100
 # Suppress sub-centiparticle support leakage from the dense sparse-pass
 # adapter while keeping RELION's real small-support update path active.
 RELION_INITIALMODEL_MIN_EFFECTIVE_CLASS_SUPPORT = 1.0e-2
+INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE = 256
+INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB = 32
+
+
+def _effective_initial_model_image_batch_size(
+    requested: int,
+    *,
+    grid_size: int,
+    gpu_memory_gb: float,
+) -> int:
+    """Conservatively cap exact-local batches for large InitialModel grids.
+
+    Exact fine search has a transient that scales approximately with
+    ``batch * grid_size**2`` in addition to its resident projector/cache
+    state.  The user-facing batch remains an upper bound; 128-pixel jobs keep
+    their established behavior, while 256+ grids scale from 32 images on a
+    40 GB accelerator.
+    """
+
+    if requested < 1:
+        raise ValueError(f"image_batch_size must be positive, got {requested}")
+    if grid_size < 1:
+        raise ValueError(f"grid_size must be positive, got {grid_size}")
+    if gpu_memory_gb <= 0:
+        raise ValueError(f"gpu_memory_gb must be positive, got {gpu_memory_gb}")
+    if grid_size < INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE:
+        return int(requested)
+    scaled_cap = int(
+        INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB
+        * (INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE / float(grid_size)) ** 2
+        * (float(gpu_memory_gb) / 40.0)
+    )
+    return min(int(requested), max(1, scaled_cap))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1090,11 +1123,16 @@ def _dense_estep_config(
     if coarse_translation_log_prior is not None:
         engine_kwargs["coarse_translation_log_prior"] = coarse_translation_log_prior
 
+    effective_image_batch_size = _effective_initial_model_image_batch_size(
+        int(opts.image_batch_size),
+        grid_size=int(dataset.image_shape[0]),
+        gpu_memory_gb=float(get_gpu_memory_total()),
+    )
     return DenseInitialModelEstepConfig(
         noise_variance=noise_variance,
         rotations=sampling_plan.rotations,
         translations=sampling_plan.translations,
-        image_batch_size=int(opts.image_batch_size),
+        image_batch_size=effective_image_batch_size,
         rotation_block_size=int(opts.rotation_block_size),
         padding_factor=int(opts.padding_factor),
         relion_bpref_frame=True,
@@ -1186,6 +1224,8 @@ def _native_expectation_step(
             random_perturbation=float(sampling_plan.random_perturbation),
             n_rotations=int(sampling_plan.rotations.shape[0]),
             n_translations=int(sampling_plan.translations.shape[0]),
+            requested_image_batch_size=int(opts.image_batch_size),
+            effective_image_batch_size=int(config.image_batch_size),
             healpix_order=int(sampling_plan.healpix_order),
             oversampling=int(sampling_plan.oversampling),
             offset_range_px=float(sampling_plan.offset_range_px),

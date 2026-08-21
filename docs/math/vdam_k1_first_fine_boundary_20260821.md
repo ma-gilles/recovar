@@ -361,3 +361,37 @@ Closure evidence:
 - Slurm job `12725298`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_relion_frame_ssnr_20260823T150000Z/vdam-01/trajectory_audit.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_relion_frame_ssnr_20260823T150000Z/vdam-01/particle_state_audit.json`
+
+## Frozen K=1 matrix and large-grid memory closure
+
+The corrected scorer, M-step spectrum, and resolution schedule pass every
+scientifically evaluated case in the frozen 12-case GUI-default K=1 matrix.
+The first matrix screen produced 11 passing reports; `vdam-09` terminated
+before evaluation because a 256-pixel A100 run inherited the user-facing
+500-image batch and attempted a transient allocation of about 17 GB after the
+projector state was resident.  This was an execution-policy failure, not a
+parity failure.
+
+InitialModel now treats the requested batch as an upper bound on 256-pixel and
+larger inputs.  Its internal cap scales approximately with image area and
+available accelerator memory, from 32 images at 256 pixels on a 40 GB device.
+The requested and effective values are written to every iteration metadata
+file.  A separate packed-M-step safety cap scales to 15 percent of the
+smallest visible device, with the existing environment variable remaining an
+explicit override.
+
+The automatic default-policy rerun of `vdam-09` completed all eight
+iterations on the A100 with an effective batch of 33 and passed every map
+checkpoint.  Its minimum cross-engine FSC-AUC was `0.999999997955`; RECOVAR
+took `228.21 s` versus RELION's `50.26 s`.  A deliberately conservative
+25-image counterfactual also passed, with minimum FSC-AUC `0.999911635235`.
+Thus the frozen scientific screen is 12/12 passing, while formal post-commit
+matrix qualification and runtime convergence remain open.
+
+Matrix and memory evidence:
+
+- Slurm array `12725777` (11 evaluated passes and the original operational
+  `vdam-09` OOM)
+- Slurm job `12726759` (automatic default-policy `vdam-09` pass)
+- Slurm job `12726698` (explicit 25-image safety counterfactual pass)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam09_auto_batch_a100_20260823T162000Z/vdam-09/trajectory_audit.json`

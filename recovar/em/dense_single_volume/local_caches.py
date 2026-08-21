@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 
@@ -27,6 +28,37 @@ EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_PROCESSED_HAL
 
 EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB = 12.0
 EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB"
+EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_DEVICE_FRACTION = 0.15
+
+
+@lru_cache(maxsize=1)
+def _default_sparse_big_jit_mstep_max_gb() -> float:
+    """Scale the packed-M-step cap to the smallest visible GPU.
+
+    The tensor estimator covers returned M-step arrays, not the scorer's
+    resident inputs or XLA's output-allocation margin.  A fixed 12 GB cap is
+    appropriate on 80 GB accelerators but can request a 16+ GB allocation
+    after the rest of a 40 GB device is resident.  Keep the historical 12 GB
+    ceiling while limiting these outputs to 15% of device memory.
+    """
+
+    try:
+        import jax
+
+        limits = []
+        for device in jax.local_devices():
+            if device.platform not in {"gpu", "cuda"}:
+                continue
+            stats = device.memory_stats() or {}
+            if int(stats.get("bytes_limit", 0)) > 0:
+                limits.append(int(stats["bytes_limit"]))
+        if limits:
+            device_cap_gb = min(limits) * EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_DEVICE_FRACTION / 1e9
+            return min(EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB, device_cap_gb)
+    except Exception:
+        # CPU-only imports/tests and older JAX backends have no memory stats.
+        pass
+    return EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB
 
 
 @dataclass(frozen=True)
@@ -84,11 +116,11 @@ def _sparse_big_jit_mstep_tensors_memory_gb(
     ctf_bytes = 8 if use_float64_scoring else 4
     # Keep margin for XLA output buffers and the following packed tensors.
     estimated_gb = int(image_count) * int(rotation_count) * int(n_recon_windowed) * (summed_bytes + ctf_bytes) / 1e9
-    max_gb = float(
-        os.environ.get(
-            EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
-            EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB,
-        )
+    configured_max_gb = os.environ.get(EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV)
+    max_gb = (
+        float(configured_max_gb)
+        if configured_max_gb is not None
+        else _default_sparse_big_jit_mstep_max_gb()
     )
     return estimated_gb, max_gb
 

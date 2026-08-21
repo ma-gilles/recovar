@@ -57,6 +57,28 @@ def test_noise_variance_preserves_relion_rfloat_shell_values():
     assert np.any(noise != noise.astype(np.float32).astype(np.float64))
 
 
+@pytest.mark.parametrize(
+    ("requested", "grid_size", "gpu_memory_gb", "expected"),
+    [
+        (500, 128, 40.0, 500),
+        (500, 256, 40.0, 32),
+        (500, 256, 80.0, 64),
+        (500, 384, 40.0, 14),
+        (25, 384, 80.0, 25),
+        (8, 256, 40.0, 8),
+    ],
+)
+def test_effective_initial_model_image_batch_size(requested, grid_size, gpu_memory_gb, expected):
+    assert (
+        driver._effective_initial_model_image_batch_size(
+            requested,
+            grid_size=grid_size,
+            gpu_memory_gb=gpu_memory_gb,
+        )
+        == expected
+    )
+
+
 def test_experiment_read_order_uses_micrograph_lexicographic_order():
     main = pd.DataFrame(
         {
@@ -1011,7 +1033,7 @@ def test_expand_class_rotation_prior_for_dense_fine_grid_uses_parent_map(monkeyp
 
 
 def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
-    dataset = SimpleNamespace(voxel_size=2.0, n_images=1)
+    dataset = SimpleNamespace(voxel_size=2.0, n_images=1, image_shape=(8, 8))
     opts = driver.NativeInitialModelOptions(
         fn_img="particles.star",
         oversampling=1,
