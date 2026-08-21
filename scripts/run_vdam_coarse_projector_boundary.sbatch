@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=vdam-translate
+#SBATCH --job-name=vdam-coarse-ppref
 #SBATCH --account=amits
 #SBATCH --partition=cryoem
 #SBATCH --gres=gpu:1
@@ -8,12 +8,12 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=00:15:00
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-translate-%j.out
+#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-coarse-ppref-%j.out
 
 set -euo pipefail
 
 : "${NATIVE_DIRECTORY:?set NATIVE_DIRECTORY=/scratch/...}"
-: "${LIVE_SCORE:?set LIVE_SCORE=/scratch/...npz}"
+: "${RECOVAR_COARSE_DUMP:?set RECOVAR_COARSE_DUMP=/scratch/...npz}"
 : "${OUTPUT_JSON:?set OUTPUT_JSON=/scratch/...json}"
 
 REPO_ROOT="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}"
@@ -54,26 +54,19 @@ assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo) + "/")
 assert ".pixi/envs/default/" in str(pathlib.Path(jax.__file__).resolve())
 assert jax.default_backend() == "gpu"
 assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
-print("VDAM native translation provenance/GPU/CUDA-FFI gate passed", jax.devices())
+print("VDAM coarse PPref provenance/GPU/CUDA-FFI gate passed", jax.devices())
 PY
 
 ANALYZER_ARGS=(
   --native-directory "${NATIVE_DIRECTORY}"
-  --live-score "${LIVE_SCORE}"
-  --full-image-size "${FULL_IMAGE_SIZE:-128}"
+  --recovar-coarse-dump "${RECOVAR_COARSE_DUMP}"
+  --projector-prefix "${PROJECTOR_PREFIX:-pass1_class0_ppref_}"
+  --native-score-name "${NATIVE_SCORE_NAME:-pass0_coarse_raw_diff2.bin}"
+  --physical-image-size "${PHYSICAL_IMAGE_SIZE:-128}"
   --output-json "${OUTPUT_JSON}"
 )
-if [[ -n "${PARTICLE_STACK:-}" ]]; then
-  ANALYZER_ARGS+=(
-    --particle-stack "${PARTICLE_STACK}"
-    --particle-index "${PARTICLE_INDEX:?set PARTICLE_INDEX with PARTICLE_STACK}"
-    --normalization-factor "${NORMALIZATION_FACTOR:-1.0}"
-    --integer-pre-shift "${INTEGER_PRE_SHIFT_X:-0}" "${INTEGER_PRE_SHIFT_Y:-0}"
-    --mask-radius "${MASK_RADIUS:?set MASK_RADIUS with PARTICLE_STACK}"
-    --mask-cosine-width "${MASK_COSINE_WIDTH:-5.0}"
-  )
+if [[ -n "${DEBUG_NPZ:-}" ]]; then
+  ANALYZER_ARGS+=(--debug-npz "${DEBUG_NPZ}")
 fi
-if [[ -n "${NATIVE_PREPROCESS_DIRECTORY:-}" ]]; then
-  ANALYZER_ARGS+=(--native-preprocess-directory "${NATIVE_PREPROCESS_DIRECTORY}")
-fi
-"${PIXI_PY}" scripts/analyze_vdam_native_translation_boundary.py "${ANALYZER_ARGS[@]}"
+"${PIXI_PY}" scripts/analyze_vdam_coarse_projector_boundary.py \
+  "${ANALYZER_ARGS[@]}"

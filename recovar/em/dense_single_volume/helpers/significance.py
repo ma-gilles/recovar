@@ -2100,6 +2100,24 @@ def _compute_k_class_significance_batched(
             f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV} requires "
             f"{_K1_COARSE_GAUSSIAN_FFI_ENV}=1",
         )
+    coarse_fused_projector_requested = _k1_coarse_fused_projector_enabled(
+        default=(
+            relion_coarse_gaussian_default
+            and coarse_gaussian_ffi_enabled
+            and coarse_gaussian_sincosf_enabled
+        ),
+    )
+    coarse_fused_projector_enabled = (
+        coarse_fused_projector_requested and score_mode == "gaussian"
+    )
+    if coarse_fused_projector_enabled and not (
+        coarse_gaussian_ffi_enabled and coarse_gaussian_sincosf_enabled
+    ):
+        raise ValueError(
+            f"{_K1_COARSE_FUSED_PROJECTOR_ENV} requires "
+            f"{_K1_COARSE_GAUSSIAN_FFI_ENV}=1 and "
+            f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV}=1",
+        )
     exact_coarse_operands_requested = _k1_relion_exact_coarse_operands_enabled(
         default=(
             relion_coarse_gaussian_default
@@ -2194,6 +2212,10 @@ def _compute_k_class_significance_batched(
             _relion_cuda_pixel_correction_from_rfloat_ctf,
             _relion_cuda_powerclass_highres_xi2_half,
             _relion_exact_ctf_half_from_source_star,
+            _relion_translation_angles_f32,
+        )
+        from recovar.em.dense_single_volume.helpers.projection import (
+            relion_projector_half_to_texture_full,
         )
 
         if jax.default_backend() != "gpu" or not cuda_backproject.cuda_available():
@@ -2235,6 +2257,20 @@ def _compute_k_class_significance_batched(
             dtype=jnp.int32,
         )
         coarse_gaussian_powerclass = _relion_cuda_powerclass_highres_xi2_half
+        coarse_gaussian_projector_full = None
+        coarse_gaussian_translation_angles = None
+        if coarse_fused_projector_enabled:
+            coarse_gaussian_projector_full = relion_projector_half_to_texture_full(
+                relion_projector_half[0],
+            )
+            coarse_gaussian_translation_angles = jnp.asarray(
+                _relion_translation_angles_f32(translations_source, image_shape),
+                dtype=jnp.float32,
+            )
+            # One all-rotation launch preserves RELION's 128-orientation main
+            # segment followed by its one-orientation tail.  It also avoids
+            # projecting a memory-planner padding block (often 5000 rows).
+            rotation_block_size = n_rot
         logger.warning(
             "K=1 RELION coarse Gaussian FFI enabled (%s): "
             "current_size=%d square_pixels=%d translations=%d",

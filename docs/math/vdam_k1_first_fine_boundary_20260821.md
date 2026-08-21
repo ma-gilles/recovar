@@ -240,3 +240,124 @@ Panel and atomic-reduction evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_all200_score_panel_df055428_20260822T123000Z/storewavg_panel_report.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_atomic_powerclass_exact_diff2_df055428_20260822T150000Z/storewavg_panel_report.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_atomic_powerclass_exact_diff2_df055428_20260822T150000Z/vdam-01/trajectory_audit.json`
+
+## Coarse-grid and aggregate counterfactuals
+
+The adaptive coarse pass now obtains its Euler matrices from the same
+device-side float32 RELION sampler used by the fine pass.  The captured coarse
+matrices are bitwise exact, but paired trajectory job `12719051` is unchanged.
+This rules out host Euler conversion as the cause of the iteration-2
+four-versus-five support split.  A support-boundary analyzer now reports
+matched and unmatched posterior mass, cumulative threshold state, and winners
+for that first hard divergence.  On original image 107 (stack image 108), the
+native fine support has 32 rotations versus RECOVAR's 24.  The eight
+native-only rotations carry `0.9937483` posterior mass, and the dominant
+missing rotation alone carries `0.9742115`; it contains the native winner at
+probability `0.6623028`.  The RECOVAR winner is consequently a different
+rotation and translation.  The late trajectory divergence is therefore a
+coarse-threshold support error with a known missing parent, not a small
+same-support posterior perturbation.
+
+Changing the adaptive fraction is not a viable way to mask the split.  A
+controlled `0.9992` run (job `12720469`) worsened every recorded checkpoint:
+iteration-1/2/4/8 FSC-AUC became `0.99976629`, `0.99981799`, `0.99822291`, and
+`0.98991555`.  RELION's default float32 `0.999` contract remains fixed.
+
+A native-shaped one-particle SGD BPref launch was also rejected.  It worsened
+the iteration-1 gate to `0.9999998512` and left the later trajectory effectively
+unchanged (`0.9985361155` and `0.9909848864` at iterations 4 and 8; job
+`12720193`).  More importantly, the matched capture made the raw accumulator
+much less native: data relative errors rose to `2.208e-2` / `2.258e-2` and
+weight errors to `8.26e-3` / `8.80e-3`, compared with the accepted sub-`8e-4`
+boundary.  A single coupled particle launch does not reproduce RELION's
+aggregate BPref schedule, so the implementation and diagnostic flag were
+removed.
+
+Rejected-aggregate evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_native_sgd_mstep_capture_20260822T221500Z/mstep_boundary_report.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_it2_hard108_capture_6833cb22_20260822T174500Z/posterior_support_report.json`
+- Slurm jobs `12719051`, `12720193`, and `12720469`
+
+## Native fused coarse projector boundary
+
+The iteration-2 hard split was caused by separating projection from RELION's
+coarse diff2 kernel.  Replaying the captured in-memory `PPref` through the
+existing preprojected path leaves a centered raw-diff2 RMS error of
+`0.2371851` (maximum `1.00757`).  A fused CUDA diagnostic now follows the
+native source topology: it stages the compact `PPref` in texture memory,
+projects 16 Euler matrices per 128-thread block, applies the translation with
+the native `sincosf` arithmetic, and accumulates diff2 in the same lane/atomic
+topology.  It also clips the projector to `min(mdlMaxR, imgX - 1)`, which is
+essential for RELION's even current-image crop.
+
+The fused replay reduces the centered native score residual to `2.3677e-5`
+RMS and `9.1553e-5` maximum; `8,912/16,704` hypotheses are bitwise exact.  On
+the formerly failing original image 107, both engines now select hypothesis
+14891 and retain the same five coarse hypotheses at the `0.999` cumulative
+cutoff.  The exact K=1 route therefore uses one all-rotation fused launch,
+preserving RELION's 128-orientation main segment and one-orientation tail.
+
+Paired trajectory job `12723377` confirms that this closes the first hard
+boundary.  Iterations 1 and 2 have zero pose/translation mismatches across all
+3,000 particles, and their FSC-AUC values are `0.99999999995` and
+`0.99999999994`.  A separate divergence begins at iteration 3 (94 particles),
+so iteration 4 and 8 still fail at `0.9985507` and `0.9910791`.  RECOVAR wall
+time remains `163.29 s` versus RELION's `22.45 s`; the fused change is a
+correctness closure, not yet the required performance closure.
+
+Fused-coarse evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_native_ppref_coarse_replay_20260823T021500Z/report_v5.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_fused_coarse_20260823T110000Z/vdam-01/trajectory_audit.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_fused_coarse_20260823T110000Z/vdam-01/particle_state_audit.json`
+
+## K=1 resolution schedule and eight-iteration closure
+
+After the fused coarse scorer removed all iteration-2 winner mismatches, the
+next divergence was not another fine-score defect.  RELION entered iteration
+3 with a 34-pixel fine grid, while RECOVAR used 30 pixels.  Their model STARs
+localized the cause to the previous M-step spectrum: RELION selected shell 7
+(`77.714286 A`) after iteration 2, while RECOVAR selected shell 5
+(`108.8 A`).
+
+Two independent native-boundary errors caused the spectral gap:
+
+1. `getSpectrum` and `Projector::computeFourierTransformMap` were called with
+   RECOVAR-frame real-space volumes.  RELION's half-spectrum traversal is not
+   invariant to RECOVAR's X/Z frame swap.  On the captured iteration-1
+   reference, the old call exactly reproduces RECOVAR's discrepant tau2,
+   whereas applying `recovar_volume_to_relion` first reproduces RELION's tau2
+   to displayed precision for every inspected shell.
+2. `updateSSNRarrays` was given `0.5 * (accum_h0.weight +
+   accum_h1.weight)` for K=1.  RELION actually calls it on
+   `BPref[iclass].weight`; the pseudo-halfset backprojector participates in
+   the gradient moments but not this SsnrMap calculation.  The captured
+   primary RECOVAR and native weights agree shell-by-shell to about `2e-5`
+   relative or better over the decisive low shells.
+
+Using only the primary weight improves iteration-8 FSC-AUC from `0.9910791`
+to `0.9942334` but does not close the run (job `12725109`).  Applying both
+native-boundary corrections makes the resolution and image-size schedules
+identical through iteration 8 and eliminates every particle winner mismatch
+at iterations 1, 2, 3, 4, and 8.  The paired trajectory then passes all map
+checkpoints:
+
+| Iteration | Cross-engine FSC-AUC |
+| ---: | ---: |
+| 1 | `0.999999999947` |
+| 2 | `0.999999999937` |
+| 4 | `0.999999999898` |
+| 8 | `0.999999999437` |
+
+The remaining Pmax differences do not change winners: mean absolute error is
+`3.38e-5` at iteration 3 and `1.33e-4` at iteration 8.  Runtime is not yet
+closed: this cold-cache run took `191.57 s` for RECOVAR versus `22.29 s` for
+RELION.  K=1 correctness can now expand to the rest of the fixed parameter
+matrix while performance remains a separate required workstream.
+
+Closure evidence:
+
+- Slurm job `12725298`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_relion_frame_ssnr_20260823T150000Z/vdam-01/trajectory_audit.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_relion_frame_ssnr_20260823T150000Z/vdam-01/particle_state_audit.json`

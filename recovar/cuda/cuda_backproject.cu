@@ -5175,6 +5175,7 @@ void relion_fine_diff2_rectangular_f32_kernel(
     const float2* reference,
     const float2* shifted_image,
     const float* weight,
+    const float* initial_diff2,
     const int32_t* full_to_compact,
     float* output,
     int64_t batch_size,
@@ -5219,7 +5220,8 @@ void relion_fine_diff2_rectangular_f32_kernel(
                 lane_sums[threadIdx.x], lane_sums[threadIdx.x + width]);
         __syncthreads();
     }
-    if (threadIdx.x == 0) output[hypothesis] = lane_sums[0];
+    if (threadIdx.x == 0)
+        output[hypothesis] = __fadd_rn(lane_sums[0], initial_diff2[batch]);
 }
 
 __global__ __launch_bounds__(kRelionFineDiff2BlockSize)
@@ -5378,6 +5380,7 @@ cudaError_t launch_relion_fine_diff2_rectangular_f32(
     const float2* reference,
     const float2* shifted_image,
     const float* weight,
+    const float* initial_diff2,
     const int32_t* full_to_compact,
     float* output,
     int64_t batch_size,
@@ -5396,6 +5399,7 @@ cudaError_t launch_relion_fine_diff2_rectangular_f32(
             reference,
             shifted_image,
             weight,
+            initial_diff2,
             full_to_compact,
             output,
             batch_size,
@@ -6996,6 +7000,7 @@ ffi::Error RelionFineDiff2RectangularF32Impl(
     ffi::AnyBuffer reference,
     ffi::AnyBuffer shifted_image,
     ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
     ffi::AnyBuffer full_to_compact,
     ffi::Result<ffi::AnyBuffer> output)
 {
@@ -7004,9 +7009,10 @@ ffi::Error RelionFineDiff2RectangularF32Impl(
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2RectangularF32: reference/image must be C64");
     if (weight.element_type() != ffi::DataType::F32 ||
+        initial_diff2.element_type() != ffi::DataType::F32 ||
         output->element_type() != ffi::DataType::F32)
         return ffi::Error::InvalidArgument(
-            "RelionFineDiff2RectangularF32: weight/output must be F32");
+            "RelionFineDiff2RectangularF32: weight/initial/output must be F32");
     if (full_to_compact.element_type() != ffi::DataType::S32)
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2RectangularF32: lookup must be S32");
@@ -7014,16 +7020,19 @@ ffi::Error RelionFineDiff2RectangularF32Impl(
     const auto reference_dims = reference.dimensions();
     const auto image_dims = shifted_image.dimensions();
     const auto weight_dims = weight.dimensions();
+    const auto initial_dims = initial_diff2.dimensions();
     const auto lookup_dims = full_to_compact.dimensions();
     const auto output_dims = output->dimensions();
     if (reference_dims.size() != 3 || image_dims.size() != 3 ||
-        weight_dims.size() != 2 || lookup_dims.size() != 1 ||
+        weight_dims.size() != 2 || initial_dims.size() != 1 ||
+        lookup_dims.size() != 1 ||
         output_dims.size() != 3 || reference_dims[0] <= 0 ||
         reference_dims[1] <= 0 || reference_dims[2] <= 0 ||
         image_dims[0] != reference_dims[0] ||
         image_dims[1] <= 0 || image_dims[2] != reference_dims[2] ||
         weight_dims[0] != reference_dims[0] ||
         weight_dims[1] != reference_dims[2] || lookup_dims[0] <= 0 ||
+        initial_dims[0] != reference_dims[0] ||
         output_dims[0] != reference_dims[0] ||
         output_dims[1] != reference_dims[1] ||
         output_dims[2] != image_dims[1])
@@ -7040,6 +7049,7 @@ ffi::Error RelionFineDiff2RectangularF32Impl(
         reinterpret_cast<const float2*>(reference.untyped_data()),
         reinterpret_cast<const float2*>(shifted_image.untyped_data()),
         static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(initial_diff2.untyped_data()),
         static_cast<const int32_t*>(full_to_compact.untyped_data()),
         static_cast<float*>(output->untyped_data()),
         reference_dims[0],
@@ -7057,6 +7067,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     RelionFineDiff2RectangularF32, RelionFineDiff2RectangularF32Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

@@ -1593,6 +1593,99 @@ def relion_coarse_diff2_rectangular_f32(
     )(reference, shifted_image, weight, initial_diff2, full_to_compact)
 
 
+@functools.partial(
+    jax.jit,
+    static_argnames=("current_size", "physical_image_size", "model_max_r"),
+)
+def relion_coarse_diff2_projector_f32(
+    projector_full: jax.Array,
+    rotation_matrices: jax.Array,
+    images: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+    *,
+    current_size: int,
+    physical_image_size: int,
+    model_max_r: int,
+) -> jax.Array:
+    """Fuse RELION texture projection, translation, and coarse diff2."""
+
+    if projector_full.dtype != jnp.complex64 or projector_full.ndim != 3:
+        raise TypeError(
+            "projector_full must be a rank-3 complex64 array, got "
+            f"{projector_full.shape} {projector_full.dtype}"
+        )
+    if images.dtype != jnp.complex64 or images.ndim != 2:
+        raise TypeError(
+            f"images must be rank-2 complex64, got {images.shape} {images.dtype}"
+        )
+    if rotation_matrices.dtype != jnp.float32 or rotation_matrices.ndim != 3:
+        raise TypeError(
+            "rotation_matrices must be rank-3 float32, got "
+            f"{rotation_matrices.shape} {rotation_matrices.dtype}"
+        )
+    if rotation_matrices.shape[1:] != (3, 3):
+        raise ValueError(
+            f"rotation_matrices must end in (3, 3), got {rotation_matrices.shape}"
+        )
+    if translation_angles.dtype != jnp.float32 or translation_angles.ndim != 2:
+        raise TypeError(
+            "translation_angles must be rank-2 float32, got "
+            f"{translation_angles.shape} {translation_angles.dtype}"
+        )
+    if translation_angles.shape[1] != 2 or translation_angles.shape[0] > 128:
+        raise ValueError(
+            "translation_angles must have shape (T, 2) with T <= 128, got "
+            f"{translation_angles.shape}"
+        )
+    if weight.dtype != jnp.float32 or weight.shape != images.shape:
+        raise TypeError(
+            f"weight must be float32 with shape {images.shape}, got {weight.shape} {weight.dtype}"
+        )
+    if initial_diff2.dtype != jnp.float32 or initial_diff2.shape != (images.shape[0],):
+        raise TypeError(
+            "initial_diff2 must be float32 with one value per image, got "
+            f"{initial_diff2.shape} {initial_diff2.dtype}"
+        )
+    if full_to_compact.dtype != jnp.int32 or full_to_compact.shape != (
+        int(current_size) * (int(current_size) // 2 + 1),
+    ):
+        raise TypeError(
+            "full_to_compact must be the current-size packed int32 lookup, got "
+            f"{full_to_compact.shape} {full_to_compact.dtype}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION fused coarse projector requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION fused coarse projector was requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+    compact_rotations = _rot_to_compact(rotation_matrices, jnp.float32)
+    out_type = jax.ShapeDtypeStruct(
+        (images.shape[0], rotation_matrices.shape[0], translation_angles.shape[0]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        projector_full,
+        compact_rotations,
+        images,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        current_size=np.int64(current_size),
+        physical_image_size=np.int64(physical_image_size),
+        model_max_r=np.int64(model_max_r),
+    )
+
+
 @jax.jit
 def relion_coarse_normalized_cc_pairs_f32(
     shifted_image: jax.Array,
@@ -1891,13 +1984,15 @@ def relion_fine_diff2_rectangular_f32(
     shifted_image: jax.Array,
     weight: jax.Array,
     full_to_compact: jax.Array,
+    initial_diff2: jax.Array | None = None,
 ) -> jax.Array:
     """Evaluate RELION's SM80 fine Gaussian tree on a rectangular grid.
 
     Shapes are ``reference=(B,R,N)``, ``shifted_image=(B,T,N)``,
-    ``weight=(B,N)``, and ``full_to_compact=(F,)``. One CUDA block evaluates
-    each output hypothesis ``(B,R,T)`` with the production 256-lane topology
-    and explicit binary32 FMA rounding boundaries.
+    ``weight=(B,N)``, ``full_to_compact=(F,)``, and ``initial_diff2=(B,)``.
+    One CUDA block evaluates each output hypothesis ``(B,R,T)`` with the
+    production 256-lane topology, explicit binary32 FMA rounding boundaries,
+    and RELION's final in-kernel ``sum + sum_init`` operation.
     """
 
     _validate_relion_fine_diff2_inputs(
@@ -1926,6 +2021,17 @@ def relion_fine_diff2_rectangular_f32(
             "rectangular fine diff2 operands have inconsistent shapes: "
             f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
         )
+    if initial_diff2 is None:
+        initial_diff2 = jnp.zeros((reference.shape[0],), dtype=jnp.float32)
+    else:
+        initial_diff2 = jnp.asarray(initial_diff2)
+    if initial_diff2.dtype != jnp.float32 or initial_diff2.shape != (
+        reference.shape[0],
+    ):
+        raise ValueError(
+            "rectangular fine diff2 initial_diff2 must be float32 with shape "
+            f"({reference.shape[0]},), got {initial_diff2.shape} {initial_diff2.dtype}"
+        )
     out_type = jax.ShapeDtypeStruct(
         (reference.shape[0], reference.shape[1], shifted_image.shape[1]),
         jnp.float32,
@@ -1934,7 +2040,7 @@ def relion_fine_diff2_rectangular_f32(
         _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32,
         out_type,
         vmap_method="sequential",
-    )(reference, shifted_image, weight, full_to_compact)
+    )(reference, shifted_image, weight, initial_diff2, full_to_compact)
 
 
 @functools.partial(

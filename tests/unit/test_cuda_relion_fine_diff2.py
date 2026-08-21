@@ -117,6 +117,9 @@ def test_relion_fine_diff2_cuda_source_pins_production_rounding_order():
     assert "__fmaf_rn(diff_real, diff_real, imag_square)" in block
     assert "__fmul_rn(square_sum, 0.5f)" in block
     assert "__fmaf_rn(half_square_sum, weight, lane_sum)" in block
+    kernel_start = source.index("relion_fine_diff2_rectangular_f32_kernel")
+    kernel = source[kernel_start : source.index("__global__", kernel_start)]
+    assert "__fadd_rn(lane_sums[0], initial_diff2[batch])" in kernel
 
 
 def test_relion_fused_translate_cuda_source_pins_native_block_topology():
@@ -312,10 +315,20 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS", "1")
     assert significance._k1_relion_exact_coarse_operands_enabled()
 
+    monkeypatch.delenv("RECOVAR_K1_COARSE_FUSED_PROJECTOR", raising=False)
+    assert not significance._k1_coarse_fused_projector_enabled()
+    assert significance._k1_coarse_fused_projector_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_COARSE_FUSED_PROJECTOR", "0")
+    assert not significance._k1_coarse_fused_projector_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_COARSE_FUSED_PROJECTOR", "1")
+    assert significance._k1_coarse_fused_projector_enabled()
+
     source = Path(significance.__file__).read_text()
     assert "coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled" in source
     assert "relion_coarse_gaussian_default and coarse_gaussian_ffi_enabled" in source
     assert "production half-image preprocessing path" in source
+    assert "relion_coarse_diff2_projector_f32(" in source
+    assert "rotation_block_size = n_rot" in source
 
 
 def test_exact_relion_ctf_source_defaults_to_dataset_star(monkeypatch, tmp_path):
@@ -603,7 +616,12 @@ def test_relion_fine_diff2_rectangular_matches_production_tree_bitwise(
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
     reference, shifted, weight, lookup = _operands()
-    expected = _production_reference(reference, shifted, weight, lookup)
+    initial_diff2 = np.asarray([0.022644043], dtype=np.float32)
+    expected = np.add(
+        _production_reference(reference, shifted, weight, lookup),
+        initial_diff2[0],
+        dtype=np.float32,
+    )
 
     with jax.default_device(gpu_device):
         actual = cuda_backproject.relion_fine_diff2_rectangular_f32(
@@ -611,6 +629,7 @@ def test_relion_fine_diff2_rectangular_matches_production_tree_bitwise(
             jnp.asarray(shifted[None, None, :]),
             jnp.asarray(weight[None, :]),
             jnp.asarray(lookup),
+            initial_diff2=jnp.asarray(initial_diff2),
         )
 
     np.testing.assert_array_equal(

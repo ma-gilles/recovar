@@ -226,8 +226,9 @@ def test_dense_run_em_reject_is_frozenset_with_pinned_contents():
         {
             "disable_adjoint_ctf",
             "disable_adjoint_y",
-            "normalization_log_evidence",
-            "recon_exact_radius",
+                "normalization_log_evidence",
+                "projection_mask_current_image_disk",
+                "recon_exact_radius",
             "recon_square_window",
             "reconstruct_with_masked_images",
             "reconstruction_subtract_projected_reference",

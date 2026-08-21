@@ -819,6 +819,20 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         fake_perturb,
     )
 
+    def fake_device_coarse(source_eulers, random_perturbation, angular_sampling_deg):
+        source_eulers = np.asarray(source_eulers)
+        calls["device_coarse"] = (
+            source_eulers.copy(),
+            float(random_perturbation),
+            float(angular_sampling_deg),
+        )
+        return np.full((source_eulers.shape[0], 3, 3), 9.0, dtype=np.float32)
+
+    monkeypatch.setattr(
+        "recovar.em.sampling._relion_adaptive_pass1_rotations_f32",
+        fake_device_coarse,
+    )
+
     state = initialise_denovo_state(
         ori_size=8,
         pixel_size=1.0,
@@ -871,7 +885,9 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["pass1_relion_coarse_gaussian_default"] is True
     assert calls["local_current_size"] == state.current_size
     assert calls["rotation_perturbation"] == (0.25, 60.0)
-    assert np.max(calls["pass1_rotations"]) > 6.0
+    assert calls["device_coarse"][0].shape == (72, 3)
+    assert calls["device_coarse"][1:] == (0.25, 60.0)
+    np.testing.assert_array_equal(calls["pass1_rotations"], np.full((72, 3, 3), 9.0, dtype=np.float32))
     np.testing.assert_allclose(calls["pass2_parent_prior"], coarse_prior[[1, 3]])
     assert calls["fine_prior"] is None
     np.testing.assert_allclose(calls["local_pre_shifts"], pre_shifts[[1, 3]])

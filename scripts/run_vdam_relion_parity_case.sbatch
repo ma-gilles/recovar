@@ -15,7 +15,7 @@ set -euo pipefail
 : "${CASE_ID:?submit with --export=ALL,CASE_ID=vdam-XX,OUTPUT_ROOT=/scratch/...}"
 : "${OUTPUT_ROOT:?submit with --export=ALL,CASE_ID=vdam-XX,OUTPUT_ROOT=/scratch/...}"
 
-REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+REPO_ROOT="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}"
 cd "${REPO_ROOT}"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV

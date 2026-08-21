@@ -100,6 +100,33 @@ def test_refresh_tau2_from_projector_power_updates_all_classes(bind):
     assert not np.array_equal(out.tau2_class[0], out.tau2_class[1])
     np.testing.assert_array_equal(state.tau2_class, np.full((2, ori // 2 + 1), 123.0))
 
+    from recovar.utils.helpers import recovar_volume_to_relion
+
+    expected = np.asarray(
+        bind.vdam_projector_power_spectrum(
+            np.ascontiguousarray(recovar_volume_to_relion(state.Iref[0])),
+            ori,
+            1,
+            1,
+            state.current_size,
+            True,
+            2,
+        )
+    )
+    direct_wrong_frame = np.asarray(
+        bind.vdam_projector_power_spectrum(
+            np.ascontiguousarray(state.Iref[0]),
+            ori,
+            1,
+            1,
+            state.current_size,
+            True,
+            2,
+        )
+    )
+    np.testing.assert_array_equal(out.tau2_class[0], expected)
+    assert not np.array_equal(out.tau2_class[0], direct_wrong_frame)
+
 
 class TestRunVdamIterations:
     def test_current_resolution_uses_relion_data_vs_prior_scan(self):

@@ -21,7 +21,7 @@ if (( SLURM_ARRAY_TASK_ID < 1 || SLURM_ARRAY_TASK_ID > 12 )); then
   exit 2
 fi
 
-REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+REPO_ROOT="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}"
 CASE_ID="$(printf 'vdam-%02d' "${SLURM_ARRAY_TASK_ID}")"
 if [[ -z "${RECOVAR_VDAM_IMAGE_BATCH_SIZE:-}" ]]; then
   case "${CASE_ID}" in

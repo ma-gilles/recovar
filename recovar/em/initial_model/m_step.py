@@ -227,12 +227,11 @@ def vdam_m_step_single_class(
     # RELION's gradient InitialModel path routes class 0 FSC into the common
     # updateSSNRarrays call, then passes per-class FSC to reconstructGrad below.
     fsc_for_ssnr = np.asarray(state.fsc_halves_class[0], dtype=np.float64)
-    # K=1: avg(h0,h1) matches RELION's unified BPref weight (HEALPix 1→2 at iter-10).
-    # K>1: h0/h1 per-class accumulators are asymmetric, so averaging regresses K=4 CC.
-    if accum_h1 is not None and state.K == 1:
-        weight_for_ssnr = 0.5 * (accum_h0.weight + accum_h1.weight)
-    else:
-        weight_for_ssnr = accum_h0.weight
+    # RELION calls updateSSNRarrays on BPref[iclass], not on an average with
+    # the pseudo-halfset BPref[iclass + nr_classes].  The latter contributes
+    # to gradient moments only.  Captured native K=1 buffers confirm that
+    # BPref[0].weight matches accum_h0.weight shell-by-shell.
+    weight_for_ssnr = accum_h0.weight
     tau2, sigma2, data_vs_prior, fourier_coverage = bind.vdam_update_ssnr_arrays_from_bpref(
         weight_for_ssnr,
         fsc_for_ssnr,

@@ -33,7 +33,7 @@ from scripts.analyze_em_k1_native_fine_operands import (
     _flat_memmap,
     _stats,
 )
-from scripts.analyze_vdam_storewavg_boundary import _complex_2d, _real_2d
+from scripts.analyze_vdam_storewavg_boundary import _complex_2d, _real_2d, _scalar
 from scripts.compare_relion_recovar_estep_dump import (
     _nearest_rotation_rows_by_matrix,
 )
@@ -53,6 +53,85 @@ def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | i
         "relative_l2": float(np.linalg.norm(residual.reshape(-1)) / denominator),
         "max_abs": float(np.max(np.abs(residual))),
     }
+
+
+def _flat_real_dump(path: Path) -> np.ndarray:
+    """Read RELION's count-prefixed ``__relion_acc_dump_flat_real`` format."""
+
+    path = Path(path)
+    with path.open("rb") as stream:
+        count = np.fromfile(stream, dtype=np.int32, count=1)
+        if count.size != 1 or int(count[0]) < 0:
+            raise ValueError(f"invalid RELION flat-real header: {path}")
+        values = np.fromfile(stream, dtype=np.float64, count=int(count[0]))
+        trailing = stream.read(1)
+    if values.size != int(count[0]) or trailing:
+        raise ValueError(f"invalid RELION flat-real payload: {path}")
+    return values
+
+
+def _captured_native_current_size(native_dir: Path) -> int:
+    """Return the fine-pass image size sealed by RELION's verbose capture."""
+
+    value = _scalar(Path(native_dir) / "pass1_img0_exp_current_image_size.bin")
+    rounded = int(round(value))
+    if rounded <= 0 or float(rounded) != value:
+        raise ValueError(f"invalid native fine current size: {value}")
+    return rounded
+
+
+def _preprocess_capture(
+    preprocess_dir: Path,
+    *,
+    full_size: int,
+    current_size: int,
+) -> dict[str, np.ndarray | float]:
+    prefix = Path(preprocess_dir) / "preprocess_img0_"
+    normalized = _flat_real_dump(Path(f"{prefix}normalized_shifted_real.bin"))
+    masked = _flat_real_dump(Path(f"{prefix}masked_real.bin"))
+    fourier_real = _flat_real_dump(Path(f"{prefix}masked_fourier_pre_optics_real.bin"))
+    fourier_imag = _flat_real_dump(Path(f"{prefix}masked_fourier_pre_optics_imag.bin"))
+    post_optics_real = _flat_real_dump(Path(f"{prefix}masked_fourier_post_optics_real.bin"))
+    post_optics_imag = _flat_real_dump(Path(f"{prefix}masked_fourier_post_optics_imag.bin"))
+    expected_real = full_size * full_size
+    expected_fourier = current_size * (current_size // 2 + 1)
+    if normalized.size != expected_real or masked.size != expected_real:
+        raise ValueError("RELION preprocessing real-space capture has the wrong image size")
+    if any(
+        values.size != expected_fourier
+        for values in (fourier_real, fourier_imag, post_optics_real, post_optics_imag)
+    ):
+        raise ValueError("RELION preprocessing Fourier capture has the wrong image size")
+    background_path = Path(f"{prefix}softmask_background.bin")
+    background = np.fromfile(background_path, dtype=np.float64)
+    if background.shape != (1,):
+        raise ValueError(f"invalid RELION scalar payload: {background_path}")
+    return {
+        "normalized_shifted": normalized.astype(np.float32).reshape(full_size, full_size),
+        "masked": masked.astype(np.float32).reshape(full_size, full_size),
+        "masked_fourier_pre_optics": (
+            fourier_real.astype(np.float32) + np.complex64(1j) * fourier_imag.astype(np.float32)
+        ).astype(np.complex64),
+        "masked_fourier_post_optics": (
+            post_optics_real.astype(np.float32)
+            + np.complex64(1j) * post_optics_imag.astype(np.float32)
+        ).astype(np.complex64),
+        "background": float(np.float32(background[0])),
+    }
+
+
+def _native_current_fft_rows(*, full_size: int, current_size: int) -> np.ndarray:
+    """Map RELION's standard current-size FFTW grid into a centered full FFT."""
+
+    logical_y = np.where(
+        np.arange(current_size) <= current_size // 2,
+        np.arange(current_size),
+        np.arange(current_size) - current_size,
+    )
+    return (
+        (logical_y[:, None] + full_size // 2) * (full_size // 2 + 1)
+        + np.arange(current_size // 2 + 1)[None, :]
+    ).astype(np.int32).reshape(-1)
 
 
 def _native_crop_rows(score_indices: np.ndarray, full_size: int, current_size: int) -> np.ndarray:
@@ -91,12 +170,34 @@ def analyze(
     integer_pre_shift: tuple[int, int] = (0, 0),
     mask_radius: float | None = None,
     mask_cosine_width: float = 5.0,
+    native_preprocess_dir: Path | None = None,
 ) -> dict[str, object]:
     native_dir = Path(native_dir)
     with np.load(live_score_path, allow_pickle=False) as payload:
         live = {name: np.array(payload[name]) for name in payload.files}
 
     current_size = int(np.asarray(live["current_size"]).reshape(-1)[0])
+    native_current_size = _captured_native_current_size(native_dir)
+    if native_current_size != current_size:
+        return {
+            "schema": "recovar.vdam_native_translation_boundary.v1",
+            "status": "current_size_mismatch",
+            "device": str(jax.devices()[0]),
+            "identity": {
+                "recovar_current_size": current_size,
+                "native_current_size": native_current_size,
+            },
+            "comparisons": {},
+            "artifacts": {
+                "native_directory": str(native_dir.resolve()),
+                "live_score_dump": str(Path(live_score_path).resolve()),
+                "native_preprocess_directory": (
+                    str(Path(native_preprocess_dir).resolve())
+                    if native_preprocess_dir is not None
+                    else None
+                ),
+            },
+        }
     score_indices, _ = make_fourier_window_indices_np(
         (full_size, full_size),
         current_size,
@@ -258,12 +359,25 @@ def analyze(
             raise ValueError("particle preprocessing replay requires particle_index and mask_radius")
         with mrcfile.open(particle_stack, permissive=False) as stack_file:
             raw_image = np.asarray(stack_file.data[int(particle_index)], dtype=np.float32)
+        captured_preprocess = (
+            _preprocess_capture(
+                native_preprocess_dir,
+                full_size=full_size,
+                current_size=current_size,
+            )
+            if native_preprocess_dir is not None
+            else None
+        )
+        current_fft_rows = _native_current_fft_rows(
+            full_size=full_size,
+            current_size=current_size,
+        )
         for mode, native_lane_reduction, native_atomic_reduction in (
             ("block_first", False, False),
             ("native_lane", True, False),
             ("native_atomic", False, True),
         ):
-            _, masked_real = cuda_backproject.relion_preprocess_real_f32(
+            normalized_real, masked_real = cuda_backproject.relion_preprocess_real_f32(
                 jnp.asarray(raw_image[None], dtype=jnp.float32),
                 jnp.asarray([normalization_factor], dtype=jnp.float32),
                 jnp.asarray([integer_pre_shift], dtype=jnp.int32),
@@ -274,11 +388,52 @@ def analyze(
                 native_atomic_reduction=native_atomic_reduction,
             )
             replay_half = _centered_rfft2_per_image(masked_real)
-            replay_half = np.asarray(jax.block_until_ready(replay_half), dtype=np.complex64)[0]
+            normalized_real, masked_real, replay_half = (
+                np.asarray(value)
+                for value in jax.block_until_ready((normalized_real, masked_real, replay_half))
+            )
+            normalized_real = np.asarray(normalized_real, dtype=np.float32)[0]
+            masked_real = np.asarray(masked_real, dtype=np.float32)[0]
+            replay_half = np.asarray(replay_half, dtype=np.complex64)[0]
             comparisons[f"native_masked_fourier_vs_{mode}_preprocess_replay"] = _metric(
                 -native_processed,
                 replay_half[score_indices],
             )
+            if captured_preprocess is not None:
+                comparisons[f"native_normalized_real_vs_{mode}_preprocess_replay"] = _metric(
+                    captured_preprocess["normalized_shifted"],
+                    normalized_real,
+                )
+                comparisons[f"native_masked_real_vs_{mode}_preprocess_replay"] = _metric(
+                    captured_preprocess["masked"],
+                    masked_real,
+                )
+                native_preoptics = np.asarray(
+                    captured_preprocess["masked_fourier_pre_optics"], dtype=np.complex64
+                )
+                native_postoptics = np.asarray(
+                    captured_preprocess["masked_fourier_post_optics"], dtype=np.complex64
+                )
+                comparisons["native_preoptics_vs_postoptics_fourier"] = _metric(
+                    native_preoptics,
+                    native_postoptics,
+                )
+                comparisons[f"native_preoptics_fourier_vs_{mode}_preprocess_replay"] = _metric(
+                    native_preoptics,
+                    (replay_half.reshape(-1)[current_fft_rows] / scale).astype(np.complex64),
+                )
+                native_masked_fft = _centered_rfft2_per_image(
+                    jnp.asarray(captured_preprocess["masked"][None], dtype=jnp.float32)
+                )
+                native_masked_fft = np.asarray(
+                    jax.block_until_ready(native_masked_fft), dtype=np.complex64
+                )[0]
+                comparisons[f"native_preoptics_fourier_vs_native_real_recovar_fft_{mode}"] = _metric(
+                    native_preoptics,
+                    (
+                        native_masked_fft.reshape(-1)[current_fft_rows] / scale
+                    ).astype(np.complex64),
+                )
             pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
                 jnp.asarray([1.0], dtype=jnp.float32),
                 jnp.asarray(
@@ -366,6 +521,11 @@ def analyze(
         "artifacts": {
             "native_directory": str(native_dir.resolve()),
             "live_score_dump": str(Path(live_score_path).resolve()),
+            "native_preprocess_directory": (
+                str(Path(native_preprocess_dir).resolve())
+                if native_preprocess_dir is not None
+                else None
+            ),
         },
     }
 
@@ -381,6 +541,7 @@ def main() -> None:
     parser.add_argument("--integer-pre-shift", type=int, nargs=2, default=(0, 0))
     parser.add_argument("--mask-radius", type=float)
     parser.add_argument("--mask-cosine-width", type=float, default=5.0)
+    parser.add_argument("--native-preprocess-directory", type=Path)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     if args.output_json.exists():
@@ -395,6 +556,7 @@ def main() -> None:
         integer_pre_shift=tuple(args.integer_pre_shift),
         mask_radius=args.mask_radius,
         mask_cosine_width=args.mask_cosine_width,
+        native_preprocess_dir=args.native_preprocess_directory,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

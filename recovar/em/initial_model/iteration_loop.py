@@ -73,13 +73,16 @@ def refresh_tau2_from_projector_power(
 ) -> InitialModelState:
     """``MlModel::setFourierTransformMaps(!fix_tau)``."""
     from recovar.relion_bind import _relion_bind_core as bind
+    from recovar.utils.helpers import recovar_volume_to_relion
 
     current_size = int(state.current_size if state.current_size > 0 else state.ori_size)
     new_tau2 = np.asarray(state.tau2_class, dtype=np.float64).copy()
     for k in range(int(state.K)):
         new_tau2[k] = np.asarray(
             bind.vdam_projector_power_spectrum(
-                np.asarray(state.Iref[k], dtype=np.float64),
+                np.ascontiguousarray(
+                    recovar_volume_to_relion(np.asarray(state.Iref[k], dtype=np.float64))
+                ),
                 int(state.ori_size),
                 int(padding_factor),
                 int(interpolator),
