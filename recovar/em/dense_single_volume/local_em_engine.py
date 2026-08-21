@@ -1851,6 +1851,7 @@ def run_local_em_exact(
     image_batch_size: int,
     rotation_block_size: int,
     current_size: int | None,
+    reconstruction_current_size: int | None = None,
     accumulate_noise: bool = False,
     projection_padding_factor: int = 1,
     reconstruction_padding_factor: int = 1,
@@ -1923,6 +1924,11 @@ def run_local_em_exact(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     H, W = image_shape
+    mstep_current_size = (
+        current_size
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
     n_half = H * (W // 2 + 1)
     n_trans = int(local_layout.translation_grid.shape[0])
     n_images = int(local_layout.n_images)
@@ -2046,7 +2052,7 @@ def run_local_em_exact(
             volume_shape,
             projection_padding_factor,
             do_gridding_correction=do_gridding_correction,
-            current_size=current_size,
+            current_size=mstep_current_size,
         )
     else:
         mean_for_proj = mean
@@ -2066,7 +2072,7 @@ def run_local_em_exact(
         recon_volume_shape = relion_backprojector_volume_shape(
             volume_shape,
             reconstruction_padding_factor,
-            current_size=current_size,
+            current_size=mstep_current_size,
         )
     elif reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
@@ -2089,6 +2095,7 @@ def run_local_em_exact(
         image_shape,
         current_size,
         n_half,
+        reconstruction_current_size=mstep_current_size,
         square=square_window,
         include_recon_window=True,
     )
@@ -2098,7 +2105,7 @@ def run_local_em_exact(
     mstep_recon_window_indices, mstep_adjoint_max_r = _local_mstep_adjoint_window(
         image_shape,
         n_half,
-        current_size,
+        mstep_current_size,
         use_window=use_window,
         recon_window_indices=recon_window_indices,
         mstep_relion_x_half=bool(mstep_relion_x_half),

@@ -2960,6 +2960,7 @@ def _score_half_local(
     current_translation_range: float,
     disc_type,
     cs_for_engine,
+    model_current_size_for_engine=None,
     local_pass1_current_size,
     image_corrections_k,
     scale_corrections_k,
@@ -3388,6 +3389,7 @@ def _score_half_local(
                 image_batch_size=safe_ibs,
                 rotation_block_size=safe_rbs,
                 current_size=cs_for_engine,
+                reconstruction_current_size=model_current_size_for_engine,
                 accumulate_noise=False,
                 projection_padding_factor=PROJECTION_PADDING_FACTOR,
                 reconstruction_padding_factor=PADDING_FACTOR,
@@ -3473,6 +3475,7 @@ def _score_half_local(
         image_batch_size=safe_ibs,
         rotation_block_size=safe_rbs,
         current_size=cs_for_engine,
+        reconstruction_current_size=model_current_size_for_engine,
         accumulate_noise=local_accumulate_noise,
         projection_padding_factor=PROJECTION_PADDING_FACTOR,
         reconstruction_padding_factor=PADDING_FACTOR,
@@ -3593,7 +3596,7 @@ def _score_half_local(
             relion_backprojector_volume_shape(
                 experiment_dataset.volume_shape,
                 PADDING_FACTOR,
-                current_size=cs_for_engine,
+                current_size=model_current_size_for_engine,
             )
             if local_relion_x_half_mstep
             else None
@@ -7227,6 +7230,7 @@ def _run_relion_iteration_loop(
                     current_translation_range=current_translation_range,
                     disc_type=disc_type,
                     cs_for_engine=cs_for_engine,
+                    model_current_size_for_engine=model_current_size_for_engine,
                     local_pass1_current_size=local_pass1_current_size,
                     image_corrections_k=relion_half_inputs.image_corrections[k],
                     scale_corrections_k=relion_half_inputs.scale_corrections[k],
