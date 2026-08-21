@@ -63,7 +63,6 @@ from scripts.run_full_refinement import (
     _save_initial_noise_cache,
     _select_authoritative_group_particles,
     _use_fresh_auto_refine_particle_order,
-    _use_fresh_k1_per_half_mean_variance,
     _validate_fixed_diagnostic_arm_cli,
     _validate_fixed_diagnostic_math_environment,
     _verify_fixed_diagnostic_provenance_manifests,
@@ -140,27 +139,6 @@ def test_state_swap_diagnostic_can_preserve_fresh_auto_refine_particle_order():
     args.state_swap_variant = None
     with pytest.raises(ValueError, match="complete state-swap replay diagnostic"):
         _use_fresh_auto_refine_particle_order(args, None, environ=env)
-
-
-def test_fresh_k1_per_half_tau2_excludes_continuations_and_replays():
-    args = SimpleNamespace(
-        n_classes=1,
-        init_relion_iteration=0,
-        perturb_replay_relion_dir=None,
-        relion_init_dir="/relion/fresh",
-        relion_half_sets="/relion/fresh/run_it000_data.star",
-    )
-    assert _use_fresh_k1_per_half_mean_variance(args, None)
-
-    args.init_relion_iteration = 1
-    assert not _use_fresh_k1_per_half_mean_variance(args, None)
-    args.init_relion_iteration = 0
-    args.perturb_replay_relion_dir = "/relion/replay"
-    assert not _use_fresh_k1_per_half_mean_variance(args, None)
-    args.perturb_replay_relion_dir = None
-    assert not _use_fresh_k1_per_half_mean_variance(args, object())
-    args.n_classes = 4
-    assert not _use_fresh_k1_per_half_mean_variance(args, None)
 
 
 @pytest.mark.parametrize("token", ["1", "true", "YES", "on"])

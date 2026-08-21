@@ -1365,19 +1365,6 @@ def _use_fresh_auto_refine_particle_order(
     )
 
 
-def _use_fresh_k1_per_half_mean_variance(args, frozen_boundary) -> bool:
-    """Preserve RELION's independently updated half-map tau2 for fresh K=1."""
-
-    return (
-        int(args.n_classes) == 1
-        and int(args.init_relion_iteration) == 0
-        and frozen_boundary is None
-        and args.perturb_replay_relion_dir is None
-        and args.relion_init_dir is not None
-        and args.relion_half_sets is not None
-    )
-
-
 def _refine_sampling_kwargs(args, init_healpix_order):
     """Return sampling kwargs forwarded from the CLI into ``refine_single_volume``."""
     return {
@@ -4524,26 +4511,12 @@ def main():
             bool(state_swap_probe["replay_relion_references"]),
         )
 
-    use_fresh_k1_per_half_mean_variance = _use_fresh_k1_per_half_mean_variance(
-        args,
-        frozen_boundary,
-    )
-    initial_mean_variance_for_refinement = mean_variance
-    if use_fresh_k1_per_half_mean_variance:
-        initial_mean_variance_for_refinement = jnp.stack(
-            [jnp.asarray(mean_variance), jnp.asarray(mean_variance)],
-            axis=0,
-        )
-        logger.info(
-            "STRICT-PARITY: fresh K=1 preserves independently updated per-half tau2 priors"
-        )
-
     result = refine_single_volume(
         experiment_datasets=experiment_datasets,
         init_volume=jnp.asarray(init_vol_ft),
         init_reference_real=init_reference_real_for_projector,
         init_noise_variance=noise_variance,
-        init_mean_variance=initial_mean_variance_for_refinement,
+        init_mean_variance=mean_variance,
         rotations=rotations,
         translations=translations_jnp,
         disc_type=os.environ.get("RECOVAR_DISC_TYPE_OVERRIDE", "linear_interp"),
@@ -4668,8 +4641,7 @@ def main():
             else None
         ),
         use_per_half_mean_variance=(
-            use_fresh_k1_per_half_mean_variance
-            or (frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm)
+            frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
         ),
         preserve_bpref_particle_order=use_fresh_auto_refine_order,
         state_swap_probe=state_swap_probe,
