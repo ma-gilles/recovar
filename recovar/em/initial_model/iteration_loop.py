@@ -642,6 +642,7 @@ def run_vdam_iterations(
             accumulators=accumulators,
             grad_current_stepsize=current.grad_current_stepsize,
             tau2_fudge_factor=current.tau2_fudge_factor,
+            padding_factor=projector_padding_factor,
         )
         current = update_probabilities_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
         current = update_noise_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)

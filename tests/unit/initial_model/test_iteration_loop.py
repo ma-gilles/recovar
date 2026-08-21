@@ -258,6 +258,45 @@ class TestRunVdamIterations:
         assert seen["refresh_current_size"] == 16
         np.testing.assert_array_equal(seen["estep_tau2"], np.full((1, 9), 7.0))
 
+    def test_iteration_loop_passes_projector_padding_to_m_step(self, monkeypatch):
+        import recovar.em.initial_model.iteration_loop as loop
+
+        state = initialise_denovo_state(
+            ori_size=16,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        seen = {}
+
+        def estep(current, particle_ids, halfset_ids):
+            return [], {}
+
+        def fake_m_step(current, accumulators, **kwargs):
+            seen["padding_factor"] = kwargs["padding_factor"]
+            return current
+
+        monkeypatch.setattr(loop, "vdam_m_step", fake_m_step)
+
+        run_vdam_iterations(
+            state,
+            nr_particles=200,
+            optics_group_by_particle=[0] * 200,
+            grad_ini_subset_size=50,
+            grad_fin_subset_size=100,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=0,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=estep,
+            refresh_tau2_from_projector=False,
+            projector_padding_factor=2,
+        )
+
+        assert seen["padding_factor"] == 2
+
     def test_relion_solvent_flatten_state_matches_centered_spherical_mask(self):
         state = initialise_denovo_state(
             ori_size=8,
