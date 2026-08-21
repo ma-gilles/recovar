@@ -1,6 +1,6 @@
 # RECOVAR / RELION EM Parity Scorecard
 
-**K=1 fixed-suite score: 30 / 34 passing (34 / 34 evaluated; 33 / 34 intermediate-topology passes).**
+**K=1 fixed-suite score: 31 / 34 passing (34 / 34 evaluated; 34 / 34 intermediate-topology passes).**
 
 **K=4 fixed-trajectory score: 41 / 60 direct class checks passing (9 / 15 iterations pass all classes).**
 
@@ -13,9 +13,9 @@ The artifact-pinned fixture manifest is checked into the repository and binds al
 
 Acceptance uses shellwise FSC and normalized FSC-AUC, exact schedule/topology, convergence/finalization semantics, same-physical-GPU RELION/RECOVAR pairs, grid correction unset/off, and no forced K-class-like finalization. Correlation is not computed or gated.
 
-Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v11`, generated `2026-08-14T14:46:03+00:00`, JSON SHA-256 `ea466f54e32a7d29043bda06e56ebff7a781b193e76dedbf6c36dc93813260e7`.
+Evidence snapshot: `em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v12`, generated `2026-08-21T05:30:00+00:00`, JSON SHA-256 `49113a0d7da5fe729a31a8069b9e702144338ea38fa334392a03294e9422ad71`.
 K=4 evidence snapshot: `k4-relion-cuda-4181d340-20260725`, JSON SHA-256 `bc10d0555488b22f0bc8d54afe5afc5288064ddb4708bd1c75f3b55dd4c0060a`.
-Progress: +10 passing cases since the first frozen snapshot; +1 since the previous snapshot.
+Progress: +11 passing cases since the first frozen snapshot; +1 since the previous snapshot.
 
 ## K=1 fixed cases
 
@@ -27,7 +27,7 @@ Progress: +10 passing cases since the first frozen snapshot; +1 since the previo
 | [ ] | `k1-04` | `high_noise_100k_g256_white_noise3_bf80` | fail | pass | 0.991556309 | +0.003869282 | science 11384179; trajectory 11384368; intermediate 11384369 |
 | [ ] | `k1-05` | `very_high_noise_100k_g256_white_noise10_bf80` | fail | pass | 0.985743479 | +0.000544950 | science 11384180; trajectory 11384370; intermediate 11384371 |
 | [x] | `k1-06` | `noctf_control_100k_g256_white_noise3_bf80` | pass | pass | 0.997522945 | +0.005563842 | science 11384181; trajectory 11384372; intermediate 11384373 |
-| [ ] | `k1-07` | `anisotropic_100k_g256_white_noise1_bf80` | fail | fail | 0.843316945 | +0.006670338 | science 11384182; trajectory 11384374; intermediate 11384375 |
+| [x] | `k1-07` | `anisotropic_100k_g256_white_noise1_bf80` | pass | pass | 0.998345357 | -0.000382787 | science 12694866; trajectory 12695233; intermediate 12695233 |
 | [x] | `k1-08` | `anisotropic_high_noise_100k_g256_white_noise3_bf80` | pass | pass | 0.996260789 | +0.001007928 | science 11384183; trajectory 11384376; intermediate 11384377 |
 | [x] | `k1-09` | `high_res_near_nyquist_100k_g384_white_noise1_bf0` | pass | pass | 0.995510893 | +0.003664545 | science 11432807; trajectory 11454201; intermediate 11432810 |
 | [ ] | `k1-10` | `high_res_anisotropic_100k_g384_radial_noise3_bf0` | fail | pass | 0.983006504 | +0.000128347 | science 11421265; trajectory 11454202; intermediate 11421267 |
@@ -92,6 +92,7 @@ Each row contains four class-level FSC-AUC checks at the frozen `0.995` gate. A 
 | `strict-k1-v9-20260727` | 2026-07-27T07:29:46+00:00 | `ac5177d2b0cd`, `9d1722781e1d`, `6ddd094011db`, `ab52b1ff4038`, `84143872a517`, `a2be302cdc08`, `4c8b043a9b80`, `916ab17a4c80`, `31c4a0ca203b` | 28 | +1 | 6 | 0 |
 | `strict-k1-v10-20260814` | 2026-08-14T10:59:00+00:00 | `36dac0171859`, `7f0e2348dbee` | 29 | +1 | 5 | 0 |
 | `strict-k1-v11-20260814` | 2026-08-14T14:46:03+00:00 | `e791e87502b5` | 30 | +1 | 4 | 0 |
+| `strict-k1-v12-20260821` | 2026-08-21T05:30:00+00:00 | `fdec6f931d22` | 31 | +1 | 3 | 0 |
 
 <!-- BEGIN MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 ## Current K=1 case-7 bounded metric
@@ -2838,7 +2839,7 @@ hashes. It never mutates the checked scorecard. For example:
 ```bash
 pixi run python scripts/summarize_em_relion_parity_scorecard.py \
   --proposal-previous-ledger /absolute/path/to/current-ledger.json \
-  --proposal-ledger-schema em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v12 \
+  --proposal-ledger-schema em_k1_gui_grid0_local_highshell_full34_superseding_ledger_v13 \
   --proposal-generated-utc 2026-07-26T21:00:00+00:00 \
   --proposal-status-note "Case k1-NN passed immutable strict evidence." \
   --proposal-evidence 'k1-NN|/absolute/path/to/case-root|SCIENCE_JOB|AUDIT_JOB' \
