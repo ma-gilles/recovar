@@ -4,7 +4,9 @@ from pathlib import Path
 
 import mrcfile
 import numpy as np
+import pandas as pd
 import pytest
+import starfile
 
 from scripts import diff_relion_recovar_per_iter as parity_diff
 from scripts.postprocess_multi_iter_gt import resolve_intermediates_dir
@@ -28,6 +30,7 @@ from scripts.run_multi_iter_parity import (
     parse_relion_optimiser_cli_flags,
     particle_half_indices,
     read_relion_model_pixel_size,
+    read_relion_optics_image_geometry,
     relion_final_gt_series,
     replay_control_relion_iteration,
     replay_override_iteration_pairs,
@@ -50,6 +53,33 @@ def test_read_relion_model_pixel_size_uses_mrc_header(tmp_path):
         handle.voxel_size = 1.4166666269302368
 
     assert read_relion_model_pixel_size(model) == pytest.approx(1.4166666269302368)
+
+
+def test_read_relion_optics_image_geometry_uses_particle_star(tmp_path):
+    particle_star = tmp_path / "particles.star"
+    starfile.write(
+        {
+            "optics": pd.DataFrame(
+                {
+                    "rlnOpticsGroup": [1, 2],
+                    "rlnImageSize": [384, 256],
+                    "rlnImagePixelSize": [1.416667, 2.125],
+                }
+            ),
+            "particles": pd.DataFrame(
+                {
+                    "rlnOpticsGroup": [1, 2],
+                    "rlnImageName": ["000001@particles.mrcs", "000002@particles.mrcs"],
+                }
+            ),
+        },
+        particle_star,
+    )
+
+    image_sizes, pixel_sizes = read_relion_optics_image_geometry(particle_star)
+
+    np.testing.assert_array_equal(image_sizes, np.asarray([384, 256], dtype=np.int64))
+    np.testing.assert_allclose(pixel_sizes, np.asarray([1.416667, 2.125]))
 
 
 def test_iteration_normalization_override_applies_only_at_requested_boundary():

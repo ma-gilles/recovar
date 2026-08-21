@@ -121,6 +121,37 @@ def read_relion_model_pixel_size(path: str | Path) -> float:
     return pixel_size
 
 
+def read_relion_optics_image_geometry(
+    path: str | Path,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Read the image size and pixel size for every RELION optics group."""
+
+    import starfile
+
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise ValueError(f"RELION particle STAR does not exist: {source}")
+    star = starfile.read(source)
+    optics = star.get("optics") if isinstance(star, dict) else None
+    if optics is None:
+        raise ValueError(f"RELION particle STAR has no optics table: {source}")
+    required = {"rlnImageSize", "rlnImagePixelSize"}
+    missing = required.difference(optics.columns)
+    if missing:
+        raise ValueError(
+            "RELION optics table is missing "
+            + ", ".join(sorted(missing))
+            + f": {source}"
+        )
+    image_sizes = np.asarray(optics["rlnImageSize"], dtype=np.int64).reshape(-1)
+    pixel_sizes = np.asarray(optics["rlnImagePixelSize"], dtype=np.float64).reshape(-1)
+    if image_sizes.size == 0 or image_sizes.shape != pixel_sizes.shape:
+        raise ValueError(f"RELION optics geometry is empty or misaligned: {source}")
+    if np.any(image_sizes <= 0) or np.any(~np.isfinite(pixel_sizes)) or np.any(pixel_sizes <= 0.0):
+        raise ValueError(f"RELION optics geometry contains invalid values: {source}")
+    return image_sizes, pixel_sizes
+
+
 def replay_previous_relion_iteration(init_relion_iteration: int, recovar_iteration: int) -> int:
     """Return the RELION iteration whose particle metadata seeds this replay step."""
     return int(init_relion_iteration) + int(recovar_iteration)
@@ -1546,9 +1577,17 @@ def main():
     # This matches the internal convention expected by the refinement code.
     model_reference_path = Path(f"{prefix}_half1_class001.mrc")
     relion_model_pixel_size = read_relion_model_pixel_size(model_reference_path)
+    relion_optics_image_sizes, relion_optics_pixel_sizes = read_relion_optics_image_geometry(
+        args.data_star
+    )
     print(
         "  RELION model pixel size: "
         f"{relion_model_pixel_size:.9g} A/px from {model_reference_path}"
+    )
+    print(
+        "  RELION optics image geometry: "
+        f"sizes={relion_optics_image_sizes.tolist()} "
+        f"pixel_sizes={relion_optics_pixel_sizes.tolist()} from {args.data_star}"
     )
     initial_reference_real_for_projector = None
     if args.fresh_initial_reference_mrc is not None:
@@ -2206,6 +2245,8 @@ def main():
         force_max_iter_after_convergence=args.force_max_iter_after_convergence,
         image_fourier_backend=args.image_fourier_backend,
         preserve_bpref_particle_order=args.diagnostic_preserve_bpref_particle_order,
+        relion_optics_image_sizes=relion_optics_image_sizes,
+        relion_optics_pixel_sizes=relion_optics_pixel_sizes,
         relion_model_pixel_size=relion_model_pixel_size,
     )
     elapsed = time.time() - t0
