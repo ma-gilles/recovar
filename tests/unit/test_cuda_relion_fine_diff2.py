@@ -322,6 +322,8 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assert not significance._k1_coarse_fused_projector_enabled(default=True)
     monkeypatch.setenv("RECOVAR_K1_COARSE_FUSED_PROJECTOR", "1")
     assert significance._k1_coarse_fused_projector_enabled()
+    assert significance._k1_coarse_fused_projector_supports_padding(1)
+    assert not significance._k1_coarse_fused_projector_supports_padding(2)
 
     source = Path(significance.__file__).read_text()
     assert "coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled" in source

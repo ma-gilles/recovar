@@ -148,6 +148,15 @@ def _k1_coarse_gaussian_native_texture_enabled(*, default: bool = False) -> bool
     )
 
 
+def _k1_coarse_fused_projector_supports_padding(padding_factor: int) -> bool:
+    """Whether the fused CUDA projector implements this RELION padding."""
+
+    # The fused kernel stages the compact pad-1 Projector texture and samples
+    # unscaled Fourier coordinates.  The general texture-projector path below
+    # infers and applies larger padding factors from the projector shape.
+    return int(padding_factor) == 1
+
+
 def _k1_relion_exact_coarse_operands_enabled(*, default: bool = False) -> bool:
     """Return whether coarse Gaussian scoring uses native RFLOAT CTF operands."""
 
@@ -2108,8 +2117,20 @@ def _compute_k_class_significance_batched(
         ),
     )
     coarse_fused_projector_enabled = (
-        coarse_fused_projector_requested and score_mode == "gaussian"
+        coarse_fused_projector_requested
+        and score_mode == "gaussian"
+        and _k1_coarse_fused_projector_supports_padding(projection_padding_factor)
     )
+    if (
+        coarse_fused_projector_requested
+        and score_mode == "gaussian"
+        and not _k1_coarse_fused_projector_supports_padding(projection_padding_factor)
+    ):
+        logger.warning(
+            "K=1 RELION fused coarse projector disabled for padding_factor=%d; "
+            "using the padding-aware projector and exact diff2 path",
+            int(projection_padding_factor),
+        )
     if coarse_fused_projector_enabled and not (
         coarse_gaussian_ffi_enabled and coarse_gaussian_sincosf_enabled
     ):
