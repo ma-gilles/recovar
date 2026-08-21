@@ -586,8 +586,8 @@ def _run_sparse_pass2_initial_model_estep(
     base_kwargs, options = _pop_sparse_pass2_options(engine_kwargs)
     healpix_order = int(options.get("healpix_order", 1))
     oversampling_order = int(options.get("oversampling_order", 1))
-    if oversampling_order < 1:
-        raise ValueError("sparse pass-2 requires oversampling_order >= 1")
+    if oversampling_order < 0:
+        raise ValueError("sparse pass-2 requires oversampling_order >= 0")
     adaptive_fraction = float(options.get("adaptive_fraction", 0.999))
     max_significants = int(options.get("max_significants", -1))
     random_perturbation = float(options.get("random_perturbation", 0.0))

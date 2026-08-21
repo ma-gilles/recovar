@@ -1062,6 +1062,32 @@ def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
     np.testing.assert_allclose(coarse_prior, np.asarray([[-0.5]], dtype=np.float32), rtol=1e-6)
 
 
+def test_dense_estep_config_keeps_zero_oversampling_on_exact_adaptive_route():
+    dataset = SimpleNamespace(voxel_size=2.0, n_images=1, image_shape=(8, 8))
+    opts = driver.NativeInitialModelOptions(fn_img="particles.star", oversampling=0)
+    plan = driver.NativeSamplingPlan(
+        rotations=np.zeros((72, 3, 3), dtype=np.float32),
+        translations=np.asarray([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32),
+        random_perturbation=0.0,
+        healpix_order=0,
+        oversampling=0,
+        offset_step_px=2.0,
+        coarse_translations=np.asarray([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32),
+    )
+
+    config = driver._dense_estep_config(
+        dataset,
+        opts,
+        np.ones(5, dtype=np.float32),
+        plan,
+        np.zeros((1, 2), dtype=np.float32),
+    )
+
+    assert config.engine_kwargs["sparse_pass2"] is True
+    assert config.engine_kwargs["oversampling_order"] == 0
+    assert config.engine_kwargs["healpix_order"] == 0
+
+
 def test_driver_output_mrc_path_matches_relion_snapshot():
     assert driver._initial_model_mrc_from_prefix("ab_initio/run") == "ab_initio/initial_model.mrc"
 

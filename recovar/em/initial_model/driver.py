@@ -1081,6 +1081,11 @@ def _dense_estep_config(
     coarse_translation_log_prior = _translation_log_prior(coarse_prior_translations, **_prior_kwargs)
     translation_log_prior = _translation_log_prior(sampling_plan.translations, **_prior_kwargs)
 
+    sparse_pass2_enabled = os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in (
+        "1",
+        "true",
+        "TRUE",
+    )
     engine_kwargs: dict = {
         "score_with_masked_images": True,
         "reconstruct_with_masked_images": False,
@@ -1090,12 +1095,13 @@ def _dense_estep_config(
         "image_pre_shifts": image_pre_shifts,
         "translation_prior_centers": relion_sigma_offset_prior_center(translation_offsets),
         # RECOVAR_DISABLE_SPARSE_PASS2=1 forces dense path (cuFFT plan OOM at 256²+).
-        "sparse_pass2": (
-            int(sampling_plan.oversampling) > 0
-            and os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in ("1", "true", "TRUE")
-        ),
+        # Oversampling zero is still RELION's adaptive two-pass algorithm: its
+        # fine children are the coarse samples themselves.  Keep it on the
+        # same exact significance/local route as positive oversampling instead
+        # of falling back to RECOVAR's algebraic dense engine.
+        "sparse_pass2": sparse_pass2_enabled,
     }
-    if int(sampling_plan.oversampling) > 0:
+    if sparse_pass2_enabled or int(sampling_plan.oversampling) > 0:
         engine_kwargs.update(
             healpix_order=int(sampling_plan.healpix_order),
             oversampling_order=int(sampling_plan.oversampling),
