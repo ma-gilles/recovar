@@ -427,6 +427,21 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
     assert not missing, f"VDAM post-merge parity guard lost required wiring: {missing}"
 
 
+def test_deferred_big_jit_backprojects_vdam_residual_images():
+    """The memory-deferred path must not silently backproject raw images."""
+
+    source = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
+    start = source.index(
+        "if return_big_jit_deferred_mstep_inputs and (not disable_adjoint_y or not disable_adjoint_ctf):"
+    )
+    stop = source.index("if return_big_jit_deferred_mstep_inputs and accumulate_noise:", start)
+    deferred_mstep = source[start:stop]
+
+    assert "if mstep_subtract_ctf_projection:" in deferred_mstep
+    assert "chunk_proj_for_residual = _project_packed_noise_rows(" in deferred_mstep
+    assert "chunk_summed = chunk_summed - chunk_probs_sum_t[..., None] * frefctf_weighted" in deferred_mstep
+
+
 def test_relion_initialmodel_reference_checker_rejects_autorefine(tmp_path):
     mod = _load_long_guard_module()
 

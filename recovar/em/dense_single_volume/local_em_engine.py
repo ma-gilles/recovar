@@ -3679,11 +3679,45 @@ def run_local_em_exact(
                 for chunk_start in range(0, packed_rotation_count, chunk_rows):
                     chunk_stop = min(packed_rotation_count, chunk_start + chunk_rows)
                     chunk_probs = packed_reconstruction_probs[:, chunk_start:chunk_stop]
+                    chunk_scoring_rotations = packed_rotations_np[:, chunk_start:chunk_stop]
                     chunk_rotations = packed_mstep_rotations_np[:, chunk_start:chunk_stop]
                     chunk_flat_rotations = flatten_bucket_rotations(jnp.asarray(chunk_rotations))
                     if not disable_adjoint_y:
                         mstep_t0 = time.time()
                         chunk_summed = compute_local_weighted_sums(chunk_probs, shifted_recon_split_unpadded)
+                        if mstep_subtract_ctf_projection:
+                            # The memory-deferred big-JIT path returns posterior rows instead
+                            # of the already reduced residual-image rows. Recreate RELION's
+                            # Fimg_store = Fimg - Frefctf operand before backprojection, just
+                            # as the ordinary deferred path does below.
+                            chunk_proj_for_residual = _project_packed_noise_rows(
+                                mean_for_proj=mean_for_proj,
+                                packed_flat_rotations=flatten_bucket_rotations(
+                                    jnp.asarray(chunk_scoring_rotations)
+                                ),
+                                packed_rotation_count=chunk_stop - chunk_start,
+                                batch_size=unpadded_batch_size,
+                                image_shape=image_shape,
+                                proj_volume_shape=proj_volume_shape,
+                                disc_type=disc_type,
+                                projection_kwargs=projection_kwargs,
+                                window_spec=window_spec,
+                                n_half=n_half,
+                                precision_policy=precision_policy,
+                                reconstruction_pack_mask_jnp=reconstruction_pack_mask_jnp[
+                                    :, chunk_start:chunk_stop
+                                ],
+                                relion_projector_half=relion_projector_half,
+                                relion_projector_r_max=relion_projector_r_max,
+                                projection_padding_factor=projection_padding_factor,
+                            )
+                            chunk_probs_sum_t = packed_reconstruction_probs_sum_t[
+                                :, chunk_start:chunk_stop
+                            ]
+                            frefctf_weighted = (
+                                chunk_proj_for_residual * ctf2_over_nv_recon_unpadded[:, None, :]
+                            )
+                            chunk_summed = chunk_summed - chunk_probs_sum_t[..., None] * frefctf_weighted
                         if return_profile:
                             _block_until_ready(chunk_summed)
                         timing.mstep_s += time.time() - mstep_t0
