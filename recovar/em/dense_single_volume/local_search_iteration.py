@@ -232,7 +232,11 @@ def _run_local_search_iteration(
     requested_image_batch_size = int(image_batch_size)
     requested_rotation_block_size = int(rotation_block_size)
     rotation_block_size = _local_search_engine_rotation_block_size(rotation_block_size)
-    prior_rotations = np.asarray(prior_rotations, dtype=np.float32)
+    # Keep the local-search hypothesis grid (rotations/translations/priors)
+    # genuinely double precision end to end when either flag requests it;
+    # default stays float32 to match RELION's accelerated-GPU precision.
+    local_layout_dtype = np.float64 if (use_float64_scoring or use_float64_projections) else np.float32
+    prior_rotations = np.asarray(prior_rotations, dtype=local_layout_dtype)
     if prior_rotations.ndim == 3:
         n_prior = prior_rotations.shape[0]
     elif prior_rotations.ndim == 2 and prior_rotations.shape[1] == 3:
@@ -242,10 +246,10 @@ def _run_local_search_iteration(
     if prior_translations is None:
         prior_translations = np.zeros(
             (n_prior, np.asarray(translations).shape[1]),
-            dtype=np.float32,
+            dtype=local_layout_dtype,
         )
     else:
-        prior_translations = np.asarray(prior_translations, dtype=np.float32).reshape(
+        prior_translations = np.asarray(prior_translations, dtype=local_layout_dtype).reshape(
             -1,
             np.asarray(translations).shape[1],
         )
@@ -283,6 +287,7 @@ def _run_local_search_iteration(
             rotation_log_prior=rotation_log_prior,
             rotation_grid_random_perturbation=rotation_grid_random_perturbation,
             rotation_grid_angular_sampling_deg=rotation_grid_angular_sampling_deg,
+            dtype=local_layout_dtype,
             **layout_kwargs,
         )
         selector_time = time.time() - layout_t0

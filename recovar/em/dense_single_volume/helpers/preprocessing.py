@@ -263,19 +263,28 @@ def preprocess_batch_firstiter_cc(
     return shifted_half, image_power, ctf2_half, ctf2_over_nv_half
 
 
-def half_translation_phase_table(translations, image_shape):
+def half_translation_phase_table(translations, image_shape, dtype=jnp.float32):
+    """Return the complex phase-shift table for a translation grid.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision, and
+    RECOVAR's own historical default here). Pass ``jnp.float64`` to compute
+    genuinely double-precision phase factors; ``jax.lax.Precision.HIGHEST``
+    alone does not upcast float32 inputs, so the input dtype must change too.
+    """
     lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
         image_shape,
         voxel_size=1,
         scaled=True,
     )
+    real_dtype = jnp.float64 if jnp.dtype(dtype) == jnp.dtype(jnp.float64) else jnp.float32
+    complex_dtype = jnp.complex128 if real_dtype == jnp.float64 else jnp.complex64
     phase_arg = jnp.einsum(
         "td,pd->tp",
-        jnp.asarray(translations, dtype=jnp.float32),
-        lattice_half,
+        jnp.asarray(translations, dtype=real_dtype),
+        jnp.asarray(lattice_half, dtype=real_dtype),
         precision=jax.lax.Precision.HIGHEST,
     )
-    return jnp.exp(-2j * jnp.pi * phase_arg)
+    return jnp.exp(jnp.asarray(-2j * jnp.pi, dtype=complex_dtype) * phase_arg)
 
 
 def image_preprocess_backend(experiment_dataset):

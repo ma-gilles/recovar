@@ -2501,6 +2501,7 @@ def run_local_em_exact(
     translation_phases_half = _half_translation_phase_table(
         local_layout.translation_grid,
         image_shape,
+        dtype=precision_policy.score_real_dtype,
     )
     relion_score_translation_angles = (
         _sparse_pass2_diagnostics._relion_cuda_score_translation_angles_if_available(

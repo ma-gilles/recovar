@@ -2951,13 +2951,14 @@ def _local_translation_prior_reference_translations(
     current_translations,
     base_translations,
     replay_prior_translations,
+    dtype: np.dtype = np.float32,
 ) -> tuple[np.ndarray, str, bool]:
     """Choose a local-search translation-prior grid compatible with scoring."""
 
-    current = np.asarray(current_translations, dtype=np.float32)
-    base = np.asarray(base_translations, dtype=np.float32)
+    current = np.asarray(current_translations, dtype=dtype)
+    base = np.asarray(base_translations, dtype=dtype)
     if replay_prior_translations is not None:
-        candidate = np.asarray(replay_prior_translations, dtype=np.float32)
+        candidate = np.asarray(replay_prior_translations, dtype=dtype)
         source = "replay"
     else:
         candidate = base
@@ -3087,6 +3088,11 @@ def _score_half_local(
         local_debug_iteration,
         pass_index=2,
     )
+    # Adaptive pass-2 (fine, oversampled) hypothesis layout precision; see
+    # ``parent_local_layout_dtype`` below for the matching pass-1 value.
+    fine_local_layout_dtype = (
+        np.float64 if (fine_use_float64_scoring or fine_use_float64_projections) else np.float32
+    )
     if fine_use_float64_scoring or fine_use_float64_projections:
         logger.info(
             "Local-search precision iteration %d: pass1 scoring/projections=%s/%s "
@@ -3115,13 +3121,22 @@ def _score_half_local(
         safe_ibs,
         safe_rbs,
     )
-    translation_prior_reference_translations = np.asarray(current_translations, dtype=np.float32)
+    # Keep the local-search hypothesis grid genuinely double precision end to
+    # end when either flag requests it; default stays float32 to match
+    # RELION's accelerated-GPU precision.
+    parent_local_layout_dtype = (
+        np.float64 if (parent_use_float64_scoring or parent_use_float64_projections) else np.float32
+    )
+    translation_prior_reference_translations = np.asarray(
+        current_translations, dtype=parent_local_layout_dtype
+    )
     if local_search_translation_prior_mode == "coarse":
         translation_prior_reference_translations, prior_grid_source, prior_grid_shape_mismatch = (
             _local_translation_prior_reference_translations(
                 current_translations=current_translations,
                 base_translations=base_translations,
                 replay_prior_translations=replay_prior_translations,
+                dtype=parent_local_layout_dtype,
             )
         )
         if prior_grid_shape_mismatch:
@@ -3158,7 +3173,7 @@ def _score_half_local(
         if parent_prior_translations is None:
             parent_prior_translations = np.zeros(
                 (np.asarray(previous_best_rotation_eulers_k).shape[0], np.asarray(current_translations).shape[1]),
-                dtype=np.float32,
+                dtype=parent_local_layout_dtype,
             )
         parent_order = int(local_search_order) - int(local_parent_oversampling_order)
         if parent_order < 0:
@@ -3183,6 +3198,7 @@ def _score_half_local(
             rotation_log_prior=relion_local_rotation_log_prior_k,
             rotation_grid_random_perturbation=local_search_random_perturbation,
             rotation_grid_angular_sampling_deg=relion_angular_sampling_deg(parent_order, adaptive_oversampling=0),
+            dtype=parent_local_layout_dtype,
         )
         parent_local_rot_max = (
             int(np.max(np.asarray(parent_layout.rotation_counts, dtype=np.int64)))
@@ -3298,6 +3314,7 @@ def _score_half_local(
             parent_order,
             oversampling_order=int(local_parent_oversampling_order),
             random_perturbation=float(local_search_random_perturbation),
+            dtype=fine_local_layout_dtype,
         )
         if local_adaptive_pass2_denominator_mode is not None:
             if local_adaptive_pass2_denominator_mode == "full_parent":
@@ -3315,6 +3332,7 @@ def _score_half_local(
                 parent_order,
                 oversampling_order=int(local_parent_oversampling_order),
                 random_perturbation=float(local_search_random_perturbation),
+                dtype=fine_local_layout_dtype,
             )
             if local_adaptive_pass2_denominator_layout.sample_mask_flat is None:
                 denominator_valid_samples_per_image = (
