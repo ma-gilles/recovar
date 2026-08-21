@@ -1,0 +1,381 @@
+diff --git a/src/acc/acc_ml_optimiser_impl.h b/src/acc/acc_ml_optimiser_impl.h
+index 3d90489..6efcb90 100644
+--- a/src/acc/acc_ml_optimiser_impl.h
++++ b/src/acc/acc_ml_optimiser_impl.h
+@@ -107,8 +107,27 @@ struct RelionCoarsePass1ConfigV1
+ 	std::uint64_t expected_followers;
+ 	std::uint64_t max_bytes;
+ 	std::vector<std::uint64_t> part_ids;
++	std::vector<std::uint64_t> operand_rotation_keys;
+ };
+ 
++struct RelionCoarseOperandHeaderV1
++{
++	char magic[16];
++	std::uint64_t values[40];
++};
++
++struct RelionCoarseOperandFooterV1
++{
++	char magic[16];
++	std::uint64_t rotation_count;
++	std::uint64_t pixel_count;
++};
++
++static_assert(sizeof(RelionCoarseOperandHeaderV1) == 336,
++	"Unexpected RELION coarse-operand header layout");
++static_assert(sizeof(RelionCoarseOperandFooterV1) == 32,
++	"Unexpected RELION coarse-operand footer layout");
++
+ std::uint64_t relion_bpre_required_u64(const char *name)
+ {
+ 	const char *text = std::getenv(name);
+@@ -272,8 +291,12 @@ const RelionCoarsePass1ConfigV1 &relion_p1_config_v1()
+ 		result.expected_followers = relion_bpre_required_u64("RELION_P1_CAPTURE_EXPECTED_FOLLOWERS");
+ 		result.max_bytes = relion_bpre_required_u64("RELION_P1_CAPTURE_MAX_BYTES");
+ 		result.part_ids = relion_bpre_optional_u64_csv("RELION_P1_CAPTURE_PART_IDS");
++		result.operand_rotation_keys =
++			relion_bpre_optional_u64_csv("RELION_P1_CAPTURE_OPERAND_ROTATION_KEYS");
+ 		if (!result.part_ids.empty() && result.expected_particles != result.part_ids.size())
+ 			REPORT_ERROR("RELION_P1_CAPTURE_EXPECTED_PARTICLES must equal the explicit PART_IDS count");
++		if (result.operand_rotation_keys.size() > 64)
++			REPORT_ERROR("RELION_P1_CAPTURE_OPERAND_ROTATION_KEYS is limited to 64 rotations");
+ 		if (result.expected_particles > result.max_particles_per_rank * result.expected_followers)
+ 			REPORT_ERROR("RELION coarse-pass1 capture cannot fit EXPECTED_PARTICLES within the explicit per-rank/follower cap");
+ 		struct stat status;
+@@ -311,6 +334,7 @@ int relion_bpre_mpi_rank()
+ std::atomic<std::uint64_t> relion_bpre_files_reserved_v1(0);
+ std::atomic<std::uint64_t> relion_bpm_files_reserved_v1(0);
+ std::atomic<std::uint64_t> relion_p1_files_reserved_v1(0);
++std::atomic<std::uint64_t> relion_p1_operand_files_reserved_v1(0);
+ 
+ void relion_capture_bpref_prescatter_v1(
+ 	MlOptimiser *baseMLO,
+@@ -679,6 +703,216 @@ bool relion_should_capture_coarse_pass1_v1(
+ 		&& relion_p1_part_id_selected(config, static_cast<std::uint64_t>(op.part_id));
+ }
+ 
++void relion_capture_coarse_operands_v1(
++	MlOptimiser *baseMLO,
++	OptimisationParamters &op,
++	unsigned long iclass,
++	unsigned long img_id,
++	AccProjectorPlan &projector_plan,
++	AccProjectorKernel &projector,
++	AccPtr<XFLOAT> &image,
++	std::size_t image_real_offset,
++	std::size_t image_imag_offset,
++	AccPtr<XFLOAT> &correction,
++	AccPtr<XFLOAT> &translations,
++	std::size_t translation_x_offset,
++	std::size_t translation_y_offset,
++	std::size_t translation_z_offset,
++	unsigned long image_size,
++	unsigned long translation_num,
++	XFLOAT scale_correction,
++	deviceStream_t stream)
++{
++	const RelionCoarsePass1ConfigV1 &config = relion_p1_config_v1();
++	if (!relion_should_capture_coarse_pass1_v1(baseMLO, op)
++		|| config.operand_rotation_keys.empty() || img_id != 0)
++		return;
++	if (sizeof(XFLOAT) != sizeof(float))
++		REPORT_ERROR("RELION coarse-operand schema v1 requires float32 XFLOAT");
++	if (iclass != 0)
++		REPORT_ERROR("RELION coarse-operand schema v1 is intentionally restricted to K=1");
++	if (image_size == 0 || translation_num == 0 || projector_plan.orientation_num == 0)
++		REPORT_ERROR("RELION coarse-operand capture saw empty runtime support");
++
++	const std::uint64_t rotation_count = config.operand_rotation_keys.size();
++	const std::uint64_t artifact_bytes = sizeof(RelionCoarseOperandHeaderV1)
++		+ rotation_count * sizeof(std::uint64_t)
++		+ rotation_count * sizeof(std::uint64_t)
++		+ rotation_count * 9 * sizeof(float)
++		+ rotation_count * image_size * 2 * sizeof(float)
++		+ image_size * 3 * sizeof(float)
++		+ translation_num * 3 * sizeof(float)
++		+ sizeof(RelionCoarseOperandFooterV1);
++	const std::uint64_t estimated_max_bytes = artifact_bytes
++		* config.max_particles_per_rank * config.expected_followers;
++	if (estimated_max_bytes > config.max_bytes)
++		REPORT_ERROR("RELION coarse-operand runtime dimensions exceed RELION_P1_CAPTURE_MAX_BYTES");
++
++	std::vector<std::uint64_t> local_rotation_indices(rotation_count);
++	for (std::size_t target = 0; target < rotation_count; target++)
++	{
++		bool found = false;
++		for (std::size_t local = 0; local < projector_plan.orientation_num; local++)
++		{
++			if (static_cast<std::uint64_t>(projector_plan.iorientclasses[local])
++				!= config.operand_rotation_keys[target])
++				continue;
++			if (found)
++				REPORT_ERROR("RELION coarse-operand rotation key is not unique");
++			local_rotation_indices[target] = local;
++			found = true;
++		}
++		if (!found)
++			REPORT_ERROR("RELION coarse-operand rotation key is absent from the live plan");
++	}
++
++	std::vector<float> matrices(rotation_count * 9);
++	std::vector<float> reference_real(rotation_count * image_size);
++	std::vector<float> reference_imag(rotation_count * image_size);
++	std::vector<float> captured_reference(2 * image_size);
++	XFLOAT *device_reference = nullptr;
++	DEBUG_HANDLE_ERROR(cudaMalloc(&device_reference, 2 * image_size * sizeof(XFLOAT)));
++	for (std::size_t target = 0; target < rotation_count; target++)
++	{
++		const std::uint64_t local = local_rotation_indices[target];
++		for (std::size_t element = 0; element < 9; element++)
++			matrices[target * 9 + element] =
++				static_cast<float>(projector_plan.eulers[local * 9 + element]);
++		AccUtilities::capture_diff2_coarse_reference<D2C_BLOCK_SIZE_REF3D>(
++			~projector_plan.eulers,
++			projector,
++			device_reference,
++			device_reference + image_size,
++			image_size,
++			local,
++			stream);
++		LAUNCH_HANDLE_ERROR(cudaGetLastError());
++		DEBUG_HANDLE_ERROR(cudaMemcpyAsync(
++			captured_reference.data(), device_reference,
++			2 * image_size * sizeof(XFLOAT), cudaMemcpyDeviceToHost, stream));
++		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
++		std::copy(
++			captured_reference.begin(), captured_reference.begin() + image_size,
++			reference_real.begin() + target * image_size);
++		std::copy(
++			captured_reference.begin() + image_size, captured_reference.end(),
++			reference_imag.begin() + target * image_size);
++	}
++	DEBUG_HANDLE_ERROR(cudaFree(device_reference));
++
++	std::vector<float> image_real(image_size);
++	std::vector<float> image_imag(image_size);
++	std::vector<float> correction_values(image_size);
++	for (std::size_t pixel = 0; pixel < image_size; pixel++)
++	{
++		image_real[pixel] = static_cast<float>(image[image_real_offset + pixel]);
++		image_imag[pixel] = static_cast<float>(image[image_imag_offset + pixel]);
++		correction_values[pixel] = static_cast<float>(correction[pixel]);
++	}
++	std::vector<float> translation_values(3 * translation_num);
++	for (std::size_t translation = 0; translation < translation_num; translation++)
++	{
++		translation_values[translation] =
++			static_cast<float>(translations[translation_x_offset + translation]);
++		translation_values[translation_num + translation] =
++			static_cast<float>(translations[translation_y_offset + translation]);
++		translation_values[2 * translation_num + translation] =
++			static_cast<float>(translations[translation_z_offset + translation]);
++	}
++
++	std::uint64_t reservation = relion_p1_operand_files_reserved_v1.fetch_add(1);
++	if (reservation >= config.max_particles_per_rank)
++		REPORT_ERROR("RELION coarse-operand capture exceeded MAX_PARTICLES_PER_RANK");
++
++	FileName image_name = baseMLO->mydata.particles[op.part_id].name;
++	FileName stack_name;
++	long int stack_index = -1;
++	image_name.decompose(stack_index, stack_name);
++	if (stack_index < 0 || stack_name.empty())
++		REPORT_ERROR("RELION coarse-operand capture could not resolve canonical stack identity");
++
++	RelionCoarseOperandHeaderV1 header = {};
++	std::memcpy(header.magic, "RLNP1OPV1HEADER", 15);
++	header.values[0] = 1;
++	header.values[1] = sizeof(header);
++	header.values[2] = sizeof(float);
++	header.values[3] = sizeof(std::uint64_t);
++	header.values[4] = sizeof(RelionCoarseOperandFooterV1);
++	header.values[5] = baseMLO->iter;
++	header.values[6] = op.part_id;
++	header.values[7] = stack_index;
++	header.values[8] = static_cast<std::uint64_t>(relion_bpre_mpi_rank());
++	header.values[9] = omp_get_thread_num();
++	header.values[10] = iclass + 1;
++	header.values[11] = img_id;
++	header.values[12] = baseMLO->mymodel.current_size;
++	header.values[13] = image_size;
++	header.values[14] = translation_num;
++	header.values[15] = rotation_count;
++	header.values[16] = projector_plan.orientation_num;
++	header.values[17] = projector.imgX;
++	header.values[18] = projector.imgY;
++	header.values[19] = projector.imgZ;
++	header.values[20] = projector.maxR;
++	header.values[21] = projector.mdlX;
++	header.values[22] = projector.mdlXY;
++	header.values[23] = projector.mdlZ;
++	header.values[24] = relion_bpre_float_bits(static_cast<float>(scale_correction));
++	header.values[25] = config.expected_particles;
++	header.values[26] = config.max_particles_per_rank;
++	header.values[27] = config.expected_followers;
++	header.values[28] = config.max_bytes;
++	header.values[29] = estimated_max_bytes;
++	header.values[30] = relion_bpre_fnv1a64(stack_name);
++	header.values[31] = relion_bpre_fnv1a64(image_name);
++	header.values[32] = 1; // passive reference-only kernel
++	header.values[33] = 1; // production Fimg after pixel/scale correction
++	header.values[34] = 1; // production corr_img
++	header.values[35] = 1; // production translation phase coordinates
++
++	RelionCoarseOperandFooterV1 footer = {};
++	std::memcpy(footer.magic, "RLNP1OPV1FOOTER", 15);
++	footer.rotation_count = rotation_count;
++	footer.pixel_count = image_size;
++
++	std::string basename = config.directory + "/part" + std::to_string(op.part_id)
++		+ "_stack" + std::to_string(stack_index) + ".p1-op-v1.bin";
++	std::string temporary = basename + ".tmp." + std::to_string(getpid())
++		+ "." + std::to_string(omp_get_thread_num());
++	struct stat existing;
++	if (stat(basename.c_str(), &existing) == 0 || stat(temporary.c_str(), &existing) == 0)
++		REPORT_ERROR("RELION coarse-operand capture refuses to overwrite an existing artifact");
++	std::ofstream output(temporary, std::ios::binary | std::ios::out | std::ios::trunc);
++	if (!output)
++		REPORT_ERROR("Cannot create RELION coarse-operand temporary artifact");
++	output.write(reinterpret_cast<const char *>(&header), sizeof(header));
++	output.write(
++		reinterpret_cast<const char *>(config.operand_rotation_keys.data()),
++		config.operand_rotation_keys.size() * sizeof(config.operand_rotation_keys[0]));
++	output.write(
++		reinterpret_cast<const char *>(local_rotation_indices.data()),
++		local_rotation_indices.size() * sizeof(local_rotation_indices[0]));
++	output.write(reinterpret_cast<const char *>(matrices.data()), matrices.size() * sizeof(matrices[0]));
++	output.write(
++		reinterpret_cast<const char *>(reference_real.data()),
++		reference_real.size() * sizeof(reference_real[0]));
++	output.write(
++		reinterpret_cast<const char *>(reference_imag.data()),
++		reference_imag.size() * sizeof(reference_imag[0]));
++	output.write(reinterpret_cast<const char *>(image_real.data()), image_real.size() * sizeof(image_real[0]));
++	output.write(reinterpret_cast<const char *>(image_imag.data()), image_imag.size() * sizeof(image_imag[0]));
++	output.write(
++		reinterpret_cast<const char *>(correction_values.data()),
++		correction_values.size() * sizeof(correction_values[0]));
++	output.write(
++		reinterpret_cast<const char *>(translation_values.data()),
++		translation_values.size() * sizeof(translation_values[0]));
++	output.write(reinterpret_cast<const char *>(&footer), sizeof(footer));
++	output.close();
++	if (!output || rename(temporary.c_str(), basename.c_str()) != 0)
++		REPORT_ERROR("Cannot seal RELION coarse-operand artifact");
++}
++
+ void relion_capture_coarse_pass1_v1(
+ 	MlOptimiser *baseMLO,
+ 	OptimisationParamters &op,
+@@ -2193,6 +2427,26 @@ void getAllSquaredDifferencesCoarse(
+ 						op.local_Minvsigma2.zdim,
+ 						op.local_Minvsigma2.xdim-1);
+ 
++				relion_capture_coarse_operands_v1(
++						baseMLO,
++						op,
++						iclass,
++						img_id,
++						projectorPlans[iclass*sp.nr_images + img_id],
++						projKernel,
++						Fimg_,
++						img_re_offset,
++						img_im_offset,
++						corr_img,
++						trans_xyz,
++						trans_x_offset,
++						trans_y_offset,
++						trans_z_offset,
++						image_size,
++						translation_num,
++						scale_correction,
++						accMLO->classStreams[iclass]);
++
+                 runDiff2KernelCoarse(
+ 						projKernel,
+ 						&(~trans_xyz)[trans_x_offset], //~trans_x,
+diff --git a/src/acc/cuda/cuda_kernels/diff2.cuh b/src/acc/cuda/cuda_kernels/diff2.cuh
+index f21baa2..1fc14a8 100644
+--- a/src/acc/cuda/cuda_kernels/diff2.cuh
++++ b/src/acc/cuda/cuda_kernels/diff2.cuh
+@@ -221,6 +221,43 @@ __global__ void cuda_kernel_diff2_coarse(
+ }
+ 
+ 
++// Passive coarse-reference capture. This uses the live production Euler
++// matrix, texture-backed AccProjectorKernel, pixel decoding, and
++// project3Dmodel call without reading or writing any score buffer.
++template<int block_sz>
++__global__ void cuda_kernel_capture_diff2_coarse_reference(
++		XFLOAT *g_eulers,
++		AccProjectorKernel projector,
++		XFLOAT *g_ref_real,
++		XFLOAT *g_ref_imag,
++		unsigned image_size,
++		unsigned long rotation_index)
++{
++	const unsigned long pixel = blockIdx.x * block_sz + threadIdx.x;
++	if (pixel >= image_size)
++		return;
++
++	int x = pixel % projector.imgX;
++	int y = floorfracf(pixel, projector.imgX);
++	if (y > projector.maxR)
++		y -= projector.imgY;
++
++	XFLOAT ref_real;
++	XFLOAT ref_imag;
++	projector.project3Dmodel(
++		x, y,
++		__ldg(&g_eulers[rotation_index * 9    ]),
++		__ldg(&g_eulers[rotation_index * 9 + 1]),
++		__ldg(&g_eulers[rotation_index * 9 + 3]),
++		__ldg(&g_eulers[rotation_index * 9 + 4]),
++		__ldg(&g_eulers[rotation_index * 9 + 6]),
++		__ldg(&g_eulers[rotation_index * 9 + 7]),
++		ref_real, ref_imag);
++	g_ref_real[pixel] = ref_real;
++	g_ref_imag[pixel] = ref_imag;
++}
++
++
+ template<bool REF3D, bool DATA3D, int block_sz, int chunk_sz>
+ __global__ void cuda_kernel_diff2_fine(
+ 		XFLOAT *g_eulers,
+diff --git a/src/acc/utilities.h b/src/acc/utilities.h
+index adea4fb..710d48b 100644
+--- a/src/acc/utilities.h
++++ b/src/acc/utilities.h
+@@ -1163,6 +1163,31 @@ void diff2_coarse(
+ #endif
+ }
+ 
++template<int block_sz>
++void capture_diff2_coarse_reference(
++		XFLOAT *g_eulers,
++		AccProjectorKernel projector,
++		XFLOAT *g_ref_real,
++		XFLOAT *g_ref_imag,
++		unsigned long image_size,
++		unsigned long rotation_index,
++		deviceStream_t stream)
++{
++#ifdef _CUDA_ENABLED
++	const unsigned long grid_size = (image_size + block_sz - 1) / block_sz;
++	cuda_kernel_capture_diff2_coarse_reference<block_sz>
++		<<<grid_size, block_sz, 0, stream>>>(
++			g_eulers,
++			projector,
++			g_ref_real,
++			g_ref_imag,
++			image_size,
++			rotation_index);
++#else
++	REPORT_ERROR("RELION coarse-reference capture is implemented only for CUDA");
++#endif
++}
++
+ template<bool REF3D, bool DATA3D, int block_sz>
+ void diff2_CC_coarse(
+ 		unsigned long grid_size,

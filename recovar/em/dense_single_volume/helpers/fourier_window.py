@@ -268,11 +268,75 @@ def make_fourier_window_indices_np(image_shape, current_size, square=False, incl
     return indices, len(indices)
 
 
+def centered_half_indices_to_fftw_half_indices(image_shape, indices):
+    """Map RECOVAR centered-row half-spectrum indices to FFTW row order.
+
+    RECOVAR stores packed half-images with the row axis fftshifted
+    (``ky=-N/2..N/2-1``). RELION's BackProjector x-half path consumes FFTW row
+    order (``ky=0..N/2,-N/2+1..-1``). The values can remain in their current
+    compact order; only the coordinate indices passed to the indexed adjoint
+    need this row remapping.
+    """
+
+    height, width = (int(image_shape[0]), int(image_shape[1]))
+    half_width = width // 2 + 1
+    indices = jnp.asarray(indices, dtype=jnp.int32)
+    rows = indices // half_width
+    cols = indices % half_width
+    fftw_rows = (rows + height // 2) % height
+    return (fftw_rows * half_width + cols).astype(jnp.int32)
+
+
+def relion_fftw_order_for_square_score_window(image_shape, current_size, score_indices):
+    """Return the gather order for RELION's cropped FFTW half-image.
+
+    ``score_indices`` address RECOVAR's full-box, centered-row half spectrum.
+    RELION's coarse normalized-CC CUDA kernel instead walks a compact
+    ``current_size x (current_size // 2 + 1)`` FFTW array in row-major order:
+    ``ky=0,+1,...,+N/2,-N/2+1,...,-1`` for a cropped box (and the analogous
+    full-box order including ``ky=-N/2``).  The returned permutation reorders
+    compact values gathered at ``score_indices`` into that exact pixel order.
+
+    This function is deliberately host-side.  The permutation is static for
+    one EM iteration and is transferred once for the bounded near-tie replay.
+    """
+
+    height, width = (int(image_shape[0]), int(image_shape[1]))
+    current_size = int(current_size)
+    if height != width:
+        raise ValueError(f"RELION square score order requires a square image, got {image_shape}")
+    if current_size <= 0 or current_size > height or current_size % 2:
+        raise ValueError(
+            f"current_size must be positive, even, and <= {height}, got {current_size}",
+        )
+
+    indices = np.asarray(score_indices, dtype=np.int64).reshape(-1)
+    expected_size = current_size * (current_size // 2 + 1)
+    if indices.size != expected_size:
+        raise ValueError(
+            "score_indices do not span the full RELION square score window: "
+            f"got {indices.size}, expected {expected_size}",
+        )
+    full_half_width = width // 2 + 1
+    centered_rows = indices // full_half_width
+    centered_cols = indices % full_half_width
+    ky = centered_rows - height // 2
+    kx = np.where(centered_cols == width // 2, -width // 2, centered_cols)
+    fftw_rows = np.where(ky >= 0, ky, current_size + ky)
+    fftw_cols = np.where(kx >= 0, kx, current_size // 2)
+    packed_indices = fftw_rows * (current_size // 2 + 1) + fftw_cols
+    expected_packed = np.arange(expected_size, dtype=np.int64)
+    if not np.array_equal(np.sort(packed_indices), expected_packed):
+        raise ValueError("score_indices do not map bijectively onto the RELION FFTW score window")
+    return np.argsort(packed_indices, kind="stable").astype(np.int32, copy=False)
+
+
 def make_fourier_window_spec(
     image_shape,
     current_size,
     n_half: int,
     *,
+    reconstruction_current_size=None,
     square=False,
     score_square=None,
     score_include_dc=False,
@@ -280,7 +344,14 @@ def make_fourier_window_spec(
     include_recon_window=True,
     dtype=jnp.int32,
 ) -> FourierWindowSpec:
-    """Return shared score/reconstruction window metadata for EM engines."""
+    """Return shared score/reconstruction window metadata for EM engines.
+
+    ``current_size`` is the particle-image score window.  RELION may remap
+    that size per optics group while retaining ``mymodel.current_size`` for
+    the Projector/BackProjector support.  ``reconstruction_current_size``
+    represents that separate model-coordinate cutoff; omitting it preserves
+    the historical shared-size behavior.
+    """
 
     use_window = current_size is not None and current_size < image_shape[0]
     if not use_window:
@@ -305,7 +376,17 @@ def make_fourier_window_spec(
 
     if score_square is None:
         score_square = square
-    resolved_max_r = float(int(current_size) // 2)
+    resolved_reconstruction_current_size = (
+        int(current_size)
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
+    if resolved_reconstruction_current_size <= 0 or resolved_reconstruction_current_size > image_shape[0]:
+        raise ValueError(
+            "reconstruction_current_size must be positive and no larger than the image box, "
+            f"got {resolved_reconstruction_current_size}",
+        )
+    resolved_max_r = float(resolved_reconstruction_current_size // 2)
     if projection_max_r is _DEFAULT_PROJECTION_MAX_R:
         resolved_projection_max_r = resolved_max_r
     elif projection_max_r is None:
@@ -325,7 +406,7 @@ def make_fourier_window_spec(
     if include_recon_window:
         recon_indices_np, n_recon = make_fourier_window_indices_np(
             image_shape,
-            int(current_size),
+            resolved_reconstruction_current_size,
             square=square,
             include_dc=True,
             exact_radius=True,

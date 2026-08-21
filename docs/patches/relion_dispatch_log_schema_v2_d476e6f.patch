@@ -1,0 +1,73 @@
+diff --git a/src/ml_optimiser_mpi.cpp b/src/ml_optimiser_mpi.cpp
+index 656ddb7..19499a9 100644
+--- a/src/ml_optimiser_mpi.cpp
++++ b/src/ml_optimiser_mpi.cpp
+@@ -36,6 +36,36 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ 
++static const char* const DISPATCH_LOG_SCHEMA_MARKER = "RELION_DISPATCH_LOG_SCHEMA_V2";
++
++static void writeExpectationDispatchLog(
++	long int iteration,
++	const std::vector<int>& follower_by_sorted_position,
++	const std::vector<long int>& sorted_idx)
++{
++	const char* path = std::getenv("RELION_DISPATCH_LOG");
++	if (path == NULL || path[0] == '\0')
++		return;
++	if (follower_by_sorted_position.size() != sorted_idx.size())
++		REPORT_ERROR("Internal error while writing RELION_DISPATCH_LOG: inconsistent particle counts");
++
++	std::ofstream log(path, std::ios::out | std::ios::app);
++	if (!log)
++		REPORT_ERROR(std::string("Cannot append RELION_DISPATCH_LOG: ") + path);
++	if (log.tellp() == 0)
++		log << "# " << DISPATCH_LOG_SCHEMA_MARKER << '\n';
++	for (size_t sorted_position = 0; sorted_position < sorted_idx.size(); ++sorted_position)
++	{
++		const int follower_rank = follower_by_sorted_position[sorted_position];
++		if (follower_rank >= 0)
++			log << 2 << '\t' << iteration << '\t' << follower_rank << '\t'
++			    << sorted_position << '\t' << sorted_idx[sorted_position] << '\n';
++	}
++	log.close();
++	if (!log)
++		REPORT_ERROR(std::string("Cannot close RELION_DISPATCH_LOG: ") + path);
++}
++
+ //#define PRINT_GPU_MEM_INFO
+ //#define DEBUG
+ //#define DEBUG_MPIEXP2
+@@ -1353,6 +1383,7 @@ void MlOptimiserMpi::expectation()
+ #endif
+ 		try
+ 		{
++			std::vector<int> follower_by_sorted_position(mydata.numberOfParticles(), -1);
+ 			long int progress_bar_step_size = XMIPP_MAX(1, my_nr_particles / 60);
+ 			long int prev_barstep = 0;
+ 			long int my_first_particle = 0.;
+@@ -1500,6 +1531,15 @@ void MlOptimiserMpi::expectation()
+ 				//std::cerr << "subset= " << subset << " half-set= " << random_halfset
+ 				//		<< " nr_subset_particles_done= " << nr_subset_particles_done
+ 				//		<< " nr_particles_todo=" << nr_particles_todo << " JOB_FIRST= " << JOB_FIRST << " JOB_LAST= " << JOB_LAST << std::endl;
++				if (JOB_NIMG > 0)
++				{
++					for (long int sorted_position = JOB_FIRST; sorted_position <= JOB_LAST; ++sorted_position)
++					{
++						if (sorted_position < 0 || sorted_position >= static_cast<long int>(follower_by_sorted_position.size()))
++							REPORT_ERROR("Internal error while recording RELION dispatch: sorted position out of range");
++						follower_by_sorted_position[sorted_position] = this_follower;
++					}
++				}
+ 
+ #ifdef DEBUG_MPIEXP2
+ 				std::cerr << " MASTER SENDING to follower= " << this_follower<< " JOB_FIRST= " << JOB_FIRST << " JOB_LAST= " << JOB_LAST
+@@ -1546,6 +1586,7 @@ void MlOptimiserMpi::expectation()
+ 					}
+ 				}
+ 			}
++			writeExpectationDispatchLog(iter, follower_by_sorted_position, mydata.sorted_idx);
+ 		}
+ 		catch (RelionError XE)
+ 		{

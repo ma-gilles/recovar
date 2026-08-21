@@ -11,6 +11,7 @@ Tests:
 """
 
 import logging
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -28,7 +29,13 @@ from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
 )
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
+from recovar.em.dense_single_volume.helpers.half_spectrum import (
+    bin_shell_values_jax,
+    bin_shell_values_np,
+    make_half_image_weights,
+    make_relion_noise_shell_indices_half,
+    make_scoring_half_image_weights,
+)
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     preprocess_batch as _preprocess_batch,
 )
@@ -58,6 +65,90 @@ N_ROTATIONS = 5
 N_TRANSLATIONS = 3
 N_IMAGES = 4
 SEED = 42
+
+
+def test_relion_scoring_half_weights_drop_redundant_negative_kx0_rows():
+    weights = np.asarray(
+        make_scoring_half_image_weights(IMAGE_SHAPE, relion_half_sum=True)
+    ).reshape(IMAGE_SHAPE[0], IMAGE_SHAPE[1] // 2 + 1)
+
+    expected = np.ones_like(weights)
+    expected[1 : IMAGE_SHAPE[0] // 2, 0] = 0.0
+    np.testing.assert_array_equal(weights, expected)
+
+    # RELION treats the Nyquist boundary row as +N/2 and keeps it.
+    assert weights[0, 0] == 1.0
+    assert weights[IMAGE_SHAPE[0] // 2, 0] == 1.0
+
+
+def test_relion_normalized_cc_half_weights_keep_rectangular_x0_rows():
+    weights = np.asarray(
+        make_scoring_half_image_weights(
+            (8, 8),
+            relion_half_sum=True,
+            exclude_relion_redundant_x0=False,
+        )
+    ).reshape(8, 5)
+
+    np.testing.assert_array_equal(weights, np.ones((8, 5), dtype=np.float32))
+
+
+def test_non_relion_scoring_half_weights_keep_hermitian_multiplicity():
+    actual = make_scoring_half_image_weights(IMAGE_SHAPE, relion_half_sum=False)
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(make_half_image_weights(IMAGE_SHAPE)))
+
+
+def test_relion_shell_binning_drops_sentinel_indices_under_jit():
+    shell_count = IMAGE_SHAPE[0] // 2 + 1
+    shell_indices = np.asarray(make_relion_noise_shell_indices_half(IMAGE_SHAPE), dtype=np.int32)
+    assert np.any(shell_indices == shell_count)
+
+    values = np.arange(1, shell_indices.size + 1, dtype=np.float32)
+    expected = bin_shell_values_np(values, shell_indices, shell_count)
+
+    bin_jit = jax.jit(lambda vals, inds: bin_shell_values_jax(vals, inds, shell_count))
+    actual = np.asarray(bin_jit(jnp.asarray(values), jnp.asarray(shell_indices)))
+
+    np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
+
+
+def test_shell_binning_maps_arbitrary_out_of_range_indices_to_drop_bin():
+    shell_count = 5
+    shell_indices = np.asarray([-1, 0, 2, 4, 5, 99], dtype=np.int32)
+    values = np.asarray([1, 2, 3, 4, 5, 6], dtype=np.float32)
+
+    actual_jax = np.asarray(
+        bin_shell_values_jax(jnp.asarray(values), jnp.asarray(shell_indices), shell_count)
+    )
+    actual_np = bin_shell_values_np(values, shell_indices, shell_count)
+
+    np.testing.assert_allclose(
+        actual_jax,
+        np.asarray([2, 0, 3, 0, 4], dtype=np.float32),
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        actual_np,
+        np.asarray([2, 0, 3, 0, 4], dtype=np.float32),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_noise_shell_accumulation_uses_sentinel_safe_binning_helper():
+    repo_root = Path(__file__).resolve().parents[2]
+    rel_paths = [
+        "recovar/em/dense_single_volume/em_engine.py",
+        "recovar/em/dense_single_volume/local_big_jit.py",
+        "recovar/em/dense_single_volume/local_em_engine.py",
+        "recovar/em/dense_single_volume/helpers/projection.py",
+        "recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py",
+    ]
+    for rel_path in rel_paths:
+        source = (repo_root / rel_path).read_text()
+        assert ".at[shell_indices" not in source
+        assert "bin_shell_values_jax" in source
 
 
 # ---------------------------------------------------------------------------

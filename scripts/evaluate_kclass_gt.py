@@ -9,8 +9,9 @@ case end-to-end:
 * runs the same coarse + local-refinement rotation alignment as
   ``evaluate_ab_initio_gt.py`` (HEALPix-2 coarse, refined at orders 3/4
   by default, locks mirror+sign at coarse stage);
-* tries all K! permutations of (recovar class -> GT class) and reports
-  the permutation that maximizes mean fsc(shells 1..8);
+* solves the best one-to-one assignment of (recovar class -> GT class) using
+  normalized FSC-AUC, and records the old mean fsc(shells 1..8) assignment
+  as a diagnostic;
 * prints per-class FSC curves so the user can see whether a single
   class is dragging the mean (use ``--print_per_shell_fsc``).
 
@@ -22,13 +23,13 @@ Mirrors the per-class needs the upstream ab-initio benchmarking has —
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from recovar.em.initial_model.gt_metrics import (
     DEFAULT_GT_ALIGN_HEALPIX_ORDER,
@@ -141,8 +142,10 @@ def _fsc(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     c = n // 2
     z, y, x = np.indices(a.shape)
     r = np.round(np.sqrt((z - c) ** 2 + (y - c) ** 2 + (x - c) ** 2)).astype(np.int32)
-    out = np.zeros(c + 1)
-    for s in range(c + 1):
+    # Match regularization.get_fsc_gpu: shell indices [0, N // 2 - 2].
+    # The Nyquist-edge shells are not complete spherical shells on this grid.
+    out = np.zeros(c - 1)
+    for s in range(c - 1):
         m = r == s
         if not m.any():
             continue
@@ -158,6 +161,93 @@ def _mean_fsc(fsc: np.ndarray, lo: int, hi: int) -> float:
     if hi <= lo:
         return float("nan")
     return float(np.mean(fsc[lo:hi]))
+
+
+def _normalized_fsc_auc(fsc: np.ndarray) -> float:
+    values = np.asarray(fsc, dtype=np.float64).reshape(-1)
+    if values.size <= 1:
+        return float("nan")
+    finite = np.isfinite(values)
+    finite[0] = False
+    if not finite.any():
+        return float("nan")
+    x = np.arange(values.size, dtype=np.float64)[finite]
+    y = values[finite]
+    if y.size == 1:
+        return float(y[0])
+    span = float(x[-1] - x[0])
+    if span <= 0.0 or not np.isfinite(span):
+        return float(np.mean(y))
+    x = (x - x[0]) / span
+    integrate = getattr(np, "trapezoid", np.trapz)
+    return float(integrate(y, x))
+
+
+def _best_permutation_from_score_matrix(score_matrix: np.ndarray) -> tuple[tuple[int, ...], float]:
+    """Return the max-score one-to-one class assignment.
+
+    This is equivalent to maximizing over all permutations, but uses the
+    Hungarian algorithm instead of enumerating K! assignments. K=16 already
+    makes factorial enumeration impractical in validation runs.
+    """
+
+    scores = np.asarray(score_matrix, dtype=np.float64)
+    if scores.ndim != 2 or scores.shape[0] != scores.shape[1]:
+        raise ValueError(f"score_matrix must be square, got shape {scores.shape}")
+    if scores.shape[0] == 0:
+        raise ValueError("score_matrix must be non-empty")
+    finite = np.isfinite(scores)
+    if not finite.any(axis=1).all() or not finite.any(axis=0).all():
+        raise ValueError("score_matrix must have at least one finite score in every row and column")
+
+    finite_scores = scores[finite]
+    penalty = float(np.min(finite_scores) - max(1.0, np.ptp(finite_scores), np.max(np.abs(finite_scores))))
+    safe_scores = np.where(finite, scores, penalty)
+    rows, cols = linear_sum_assignment(-safe_scores)
+    if set(int(row) for row in rows) != set(range(scores.shape[0])):
+        raise RuntimeError("linear_sum_assignment did not assign every class")
+    perm = [0] * scores.shape[0]
+    for row, col in zip(rows, cols):
+        perm[int(row)] = int(col)
+    chosen = scores[np.arange(scores.shape[0]), np.asarray(perm, dtype=np.int64)]
+    return tuple(perm), float(np.mean(chosen))
+
+
+def _mean_score_for_perm(score_matrix: np.ndarray, perm: tuple[int, ...]) -> float:
+    scores = np.asarray(score_matrix, dtype=np.float64)
+    if scores.ndim != 2 or scores.shape[0] != scores.shape[1]:
+        raise ValueError(f"score_matrix must be square, got shape {scores.shape}")
+    if len(perm) != scores.shape[0]:
+        raise ValueError(f"perm length {len(perm)} does not match score matrix shape {scores.shape}")
+    chosen = scores[np.arange(scores.shape[0]), np.asarray(perm, dtype=np.int64)]
+    return float(np.mean(chosen))
+
+
+def _pairwise_score_matrices(fsc_table: list[list[np.ndarray]]) -> tuple[np.ndarray, np.ndarray]:
+    K = len(fsc_table)
+    if K == 0 or any(len(row) != K for row in fsc_table):
+        raise ValueError("fsc_table must be a non-empty square table")
+    mean_fsc_1_8 = np.array([[_mean_fsc(fsc_table[i][j], 1, 8) for j in range(K)] for i in range(K)])
+    fsc_auc = np.array([[_normalized_fsc_auc(fsc_table[i][j]) for j in range(K)] for i in range(K)])
+    return mean_fsc_1_8, fsc_auc
+
+
+def _assignment_summary_from_fsc_table(fsc_table: list[list[np.ndarray]]) -> dict[str, Any]:
+    mean_fsc_1_8_matrix, fsc_auc_matrix = _pairwise_score_matrices(fsc_table)
+    best_perm, best_mean_fsc_auc = _best_permutation_from_score_matrix(fsc_auc_matrix)
+    best_perm_by_mean_fsc_1_8, best_mean_fsc_1_8_by_mean_fsc_1_8 = _best_permutation_from_score_matrix(
+        mean_fsc_1_8_matrix
+    )
+    return {
+        "best_perm": best_perm,
+        "best_perm_score_key": "fsc_auc",
+        "best_mean_fsc_auc": float(best_mean_fsc_auc),
+        "best_mean_fsc_1_8": _mean_score_for_perm(mean_fsc_1_8_matrix, best_perm),
+        "best_perm_by_mean_fsc_1_8": best_perm_by_mean_fsc_1_8,
+        "best_mean_fsc_1_8_by_mean_fsc_1_8": float(best_mean_fsc_1_8_by_mean_fsc_1_8),
+        "pairwise_mean_fsc_1_8": mean_fsc_1_8_matrix,
+        "pairwise_fsc_auc": fsc_auc_matrix,
+    }
 
 
 def _shell_resolution(shell_index: int, volume_size: int, voxel_size: float) -> float:
@@ -208,19 +298,15 @@ def _evaluate_one_set(
             fsc_table[i][j] = _fsc(a.aligned_volume, gt_vols[j])
             print(
                 f"[{label}]     align rec[{i}] -> gt[{j}]: "
-                f"corr={a.corr:.4f} mean_fsc(1-8)={_mean_fsc(fsc_table[i][j], 1, 8):.4f}",
+                f"corr={a.corr:.4f} mean_fsc(1-8)={_mean_fsc(fsc_table[i][j], 1, 8):.4f} "
+                f"fsc_auc={_normalized_fsc_auc(fsc_table[i][j]):.4f}",
                 flush=True,
             )
     print(f"[{label}]   alignment done in {time.time() - t0:.1f}s", flush=True)
 
-    best_perm: tuple[int, ...] | None = None
-    best_score = -np.inf
-    for perm in itertools.permutations(range(K)):
-        score = float(np.mean([_mean_fsc(fsc_table[i][perm[i]], 1, 8) for i in range(K)]))
-        if score > best_score:
-            best_score = score
-            best_perm = perm
-    assert best_perm is not None
+    assignment = _assignment_summary_from_fsc_table(fsc_table)
+    best_perm = assignment["best_perm"]
+    pairwise_corr = np.array([[float(alignments[i][j].corr) for j in range(K)] for i in range(K)])
 
     shape = rec_vols[0].shape
     per_class = []
@@ -228,6 +314,7 @@ def _evaluate_one_set(
         j = best_perm[i]
         a = alignments[i][j]
         fsc = fsc_table[i][j]
+        fsc_auc = float(_normalized_fsc_auc(fsc))
         sh05 = int(first_shell_below_threshold(fsc, 0.5))
         sh143 = int(first_shell_below_threshold(fsc, 0.143))
         per_class.append(
@@ -237,6 +324,7 @@ def _evaluate_one_set(
                 "rec_path": str(rec_paths[i]),
                 "gt_path": str(gt_paths[j]),
                 "corr": float(a.corr),
+                "fsc_auc": fsc_auc,
                 "mean_fsc_1_8": float(_mean_fsc(fsc, 1, 8)),
                 "mean_fsc_1_16": float(_mean_fsc(fsc, 1, 16)),
                 "shell_05": sh05,
@@ -249,25 +337,43 @@ def _evaluate_one_set(
                 "sign": int(a.sign),
             }
         )
+    mean_fsc_auc = float(assignment["best_mean_fsc_auc"])
 
     return {
         "label": label,
         "K": K,
         "voxel_size": float(voxel_size),
         "best_perm": list(best_perm),
-        "best_mean_fsc_1_8": best_score,
+        "best_perm_score_key": str(assignment["best_perm_score_key"]),
+        "best_mean_fsc_auc": float(assignment["best_mean_fsc_auc"]),
+        "best_mean_fsc_1_8": float(assignment["best_mean_fsc_1_8"]),
+        "best_perm_by_mean_fsc_1_8": list(assignment["best_perm_by_mean_fsc_1_8"]),
+        "best_mean_fsc_1_8_by_mean_fsc_1_8": float(assignment["best_mean_fsc_1_8_by_mean_fsc_1_8"]),
+        "pairwise_fsc_auc": np.asarray(assignment["pairwise_fsc_auc"], dtype=np.float64).tolist(),
+        "pairwise_mean_fsc_1_8": np.asarray(assignment["pairwise_mean_fsc_1_8"], dtype=np.float64).tolist(),
+        "pairwise_corr": pairwise_corr.tolist(),
+        "mean_fsc_auc": mean_fsc_auc,
+        "mean_fsc_auc_1_nyquist": mean_fsc_auc,
         "per_class": per_class,
     }
 
 
 def _print_set_table(result: dict[str, Any]) -> None:
     print(
-        f"\n[{result['label']}] best permutation (rec -> gt): {tuple(result['best_perm'])}, "
+        f"\n[{result['label']}] best permutation by {result.get('best_perm_score_key', 'fsc_auc')} "
+        f"(rec -> gt): {tuple(result['best_perm'])}, "
+        f"mean fsc_auc = {result['mean_fsc_auc']:.6f}, "
         f"mean fsc(1-8) = {result['best_mean_fsc_1_8']:.6f}"
     )
+    legacy_perm = tuple(result.get("best_perm_by_mean_fsc_1_8", result["best_perm"]))
+    if legacy_perm != tuple(result["best_perm"]):
+        print(
+            f"[{result['label']}] mean-fsc(1-8) diagnostic permutation: {legacy_perm}, "
+            f"mean fsc(1-8) = {result['best_mean_fsc_1_8_by_mean_fsc_1_8']:.6f}"
+        )
     header = (
         f"{'class':<6s} {'rec_path':<60s} {'gt_path':<60s} "
-        f"{'corr':>8s} {'fsc1-8':>8s} {'fsc1-16':>8s} {'sh@0.5':>7s} {'sh@.143':>8s}"
+        f"{'corr':>8s} {'auc':>8s} {'fsc1-8':>8s} {'fsc1-16':>8s} {'sh@0.5':>7s} {'sh@.143':>8s}"
     )
     print(header)
     print("-" * len(header))
@@ -275,7 +381,8 @@ def _print_set_table(result: dict[str, Any]) -> None:
         print(
             f"{entry['class']:<6d} {Path(entry['rec_path']).name[:60]:<60s} "
             f"{Path(entry['gt_path']).name[:60]:<60s} "
-            f"{entry['corr']:>8.4f} {entry['mean_fsc_1_8']:>8.4f} {entry['mean_fsc_1_16']:>8.4f} "
+            f"{entry['corr']:>8.4f} {entry['fsc_auc']:>8.4f} "
+            f"{entry['mean_fsc_1_8']:>8.4f} {entry['mean_fsc_1_16']:>8.4f} "
             f"{entry['shell_05']:>7d} {entry['shell_0143']:>8d}"
         )
 
@@ -283,41 +390,51 @@ def _print_set_table(result: dict[str, Any]) -> None:
 def _print_side_by_side_delta(primary: dict[str, Any], comparison: dict[str, Any]) -> None:
     """Print a per-class delta table primary - comparison.
 
-    Best permutations are evaluated INDEPENDENTLY for each set so an unrelated
-    permutation difference doesn't confuse the delta. Class IDs in the delta
-    table are primary's class indices; the comparison's row uses ITS best
-    permutation lookup at the same primary class.
+    Best permutations are evaluated INDEPENDENTLY for each set. Rows are joined
+    by matched GT class, so an unrelated raw class-order difference does not
+    create a fake per-class delta.
     """
     if primary["K"] != comparison["K"]:
         print(f"\n[delta] skipping side-by-side: K mismatch primary={primary['K']} vs comparison={comparison['K']}")
         return
-    print(f"\n[delta] {primary['label']} vs {comparison['label']} (per-class, best-permutation per set):")
+    print(f"\n[delta] {primary['label']} vs {comparison['label']} (per matched GT class, best-permutation per set):")
     header = (
-        f"{'class':<6s} "
+        f"{'class':<6s} {'gt':<4s} {comparison['label'] + '_class':>15s} "
         f"{primary['label'] + '_corr':>15s} {comparison['label'] + '_corr':>15s} {'Δcorr':>8s}  "
+        f"{primary['label'] + '_auc':>15s} {comparison['label'] + '_auc':>15s} {'Δauc':>8s}  "
         f"{primary['label'] + '_fsc1-8':>17s} {comparison['label'] + '_fsc1-8':>17s} {'Δfsc1-8':>9s}  "
         f"{primary['label'] + '_sh@.143':>17s} {comparison['label'] + '_sh@.143':>17s} {'Δshell':>8s}"
     )
     print(header)
     print("-" * len(header))
-    for i in range(primary["K"]):
-        p = primary["per_class"][i]
-        c = comparison["per_class"][i]
+    comparison_by_gt = {int(entry["matched_gt_class"]): entry for entry in comparison["per_class"]}
+    for p in primary["per_class"]:
+        gt_class = int(p["matched_gt_class"])
+        c = comparison_by_gt.get(gt_class)
+        if c is None:
+            print(f"{p['class']:<6d} {gt_class:<4d} {'missing':>15s}")
+            continue
         d_corr = p["corr"] - c["corr"]
+        d_auc = p["fsc_auc"] - c["fsc_auc"]
         d_fsc18 = p["mean_fsc_1_8"] - c["mean_fsc_1_8"]
         d_sh143 = p["shell_0143"] - c["shell_0143"]
         print(
-            f"{i:<6d} "
+            f"{p['class']:<6d} {gt_class:<4d} {c['class']:>15d} "
             f"{p['corr']:>15.4f} {c['corr']:>15.4f} {d_corr:>+8.4f}  "
+            f"{p['fsc_auc']:>15.4f} {c['fsc_auc']:>15.4f} {d_auc:>+8.4f}  "
             f"{p['mean_fsc_1_8']:>17.4f} {c['mean_fsc_1_8']:>17.4f} {d_fsc18:>+9.4f}  "
             f"{p['shell_0143']:>17d} {c['shell_0143']:>17d} {d_sh143:>+8d}"
         )
     # Aggregate row
     p_mean_fsc = primary["best_mean_fsc_1_8"]
     c_mean_fsc = comparison["best_mean_fsc_1_8"]
+    p_mean_auc = primary["mean_fsc_auc"]
+    c_mean_auc = comparison["mean_fsc_auc"]
     print(
         f"{'mean':<6s} "
+        f"{'':<4s} {'':>15s} "
         f"{'':>15s} {'':>15s} {'':>8s}  "
+        f"{p_mean_auc:>15.4f} {c_mean_auc:>15.4f} {p_mean_auc - c_mean_auc:>+8.4f}  "
         f"{p_mean_fsc:>17.4f} {c_mean_fsc:>17.4f} {p_mean_fsc - c_mean_fsc:>+9.4f}  "
         f"{'':>17s} {'':>17s} {'':>8s}"
     )

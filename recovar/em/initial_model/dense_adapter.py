@@ -724,7 +724,7 @@ def _run_sparse_pass2_initial_model_estep(
             score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
             half_spectrum_scoring=bool(group_kwargs.get("half_spectrum_scoring", False)),
             use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
-            use_float64_normalization=bool(group_kwargs.get("use_float64_scoring", False)),
+            use_float64_normalization=True,
             use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
             do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
             square_window=bool(group_kwargs.get("square_window", False)),
@@ -817,7 +817,8 @@ def _resolve_class_inputs(
             projector_half_by_class,
             int(state.ori_size),
         )
-        if os.environ.get(_EXACT_RELION_PROJECTOR_ENV, "").strip().lower() in {"1", "true", "yes"}:
+        exact_projector_setting = os.environ.get(_EXACT_RELION_PROJECTOR_ENV, "1").strip().lower()
+        if exact_projector_setting not in {"0", "false", "no", "off"}:
             relion_projector_half_by_class = projector_half_by_class
             relion_projector_r_max = projector_r_max
     else:

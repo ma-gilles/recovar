@@ -18,6 +18,7 @@ Quick start::
 
 from __future__ import annotations
 
+import contextvars
 import ctypes
 import functools
 import logging
@@ -57,6 +58,12 @@ _DISABLE_CUSTOM_CUDA_ENV = "RECOVAR_DISABLE_CUDA"
 _CUDA_LIB_ENV = "RECOVAR_CUDA_LIB"
 _CUDA_CACHE_DIR_ENV = "RECOVAR_CUDA_CACHE_DIR"
 _BUILD_LOCKFILE = ".build.lock"
+_RELION_X_HALF_BP_BLOCK_TOPOLOGY_ENV = "RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY"
+_BPREF_DEVICE_SIGNATURE_DUMP_DIR_ENV = "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR"
+_bpref_device_signature_scope = contextvars.ContextVar(
+    "recovar_bpref_device_signature_scope",
+    default=None,
+)
 
 
 def _env_flag(name: str) -> bool:
@@ -64,13 +71,42 @@ def _env_flag(name: str) -> bool:
     return value.lower() not in {"", "0", "false", "no", "off"}
 
 
+def relion_x_half_bp_block_topology_enabled() -> bool:
+    """Return whether the diagnostic RELION GPU pixel-pass topology is enabled.
+
+    The value is consumed while JAX traces the caller. Change it only between
+    fresh processes; changing the environment after compilation does not
+    invalidate an already cached executable.
+    """
+
+    if os.environ.get(_BPREF_DEVICE_SIGNATURE_DUMP_DIR_ENV, "").strip():
+        if _bpref_device_signature_scope.get() is not True:
+            return False
+    return relion_x_half_bp_block_topology_requested()
+
+
+def relion_x_half_bp_block_topology_requested() -> bool:
+    """Return the raw diagnostic request without changing live-path scope."""
+
+    return _env_flag(_RELION_X_HALF_BP_BLOCK_TOPOLOGY_ENV)
+
+
+@contextmanager
+def bpref_device_signature_scope(active: bool):
+    """Scope trace-time CUDA diagnostic flags to one explicit score boundary."""
+
+    token = _bpref_device_signature_scope.set(bool(active))
+    try:
+        yield
+    finally:
+        _bpref_device_signature_scope.reset(token)
+
+
 def custom_cuda_requested() -> bool:
     """Return True unless the user explicitly disables custom CUDA.
 
-    Routes through ``recovar.utils.cuda_env`` so the canonical
-    ``RECOVAR_DISABLE_CUDA`` env var and the common typo
-    ``RECOVAR_CUDA_DISABLE`` produce a single consistent signal (and a
-    one-time warning when only the typo is set).
+    Routes through ``recovar.utils.cuda_env`` so the codebase reads the
+    canonical ``RECOVAR_DISABLE_CUDA`` env var in one place.
     """
     from recovar.utils.cuda_env import custom_cuda_disabled_from_env
 
@@ -231,8 +267,7 @@ def _lib_is_stale(lib_path: pathlib.Path) -> bool:
     missing = _lib_missing_required_symbols(lib_path)
     if missing is not None:
         logger.info(
-            "RECOVAR CUDA library %s is missing symbol '%s' required by the "
-            "current source — will rebuild.",
+            "RECOVAR CUDA library %s is missing symbol '%s' required by the current source — will rebuild.",
             lib_path,
             missing,
         )
@@ -462,6 +497,7 @@ _ffi_lock = threading.Lock()
 # FFI target name constants
 _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
+_TARGET_BACKPROJECT_INDEXED_SIGNATURE = "cuda_backproject_indexed_signature"
 _TARGET_PROJECT = "cuda_project"
 _TARGET_PROJECT_INDEXED = "cuda_project_indexed"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
@@ -470,6 +506,46 @@ _TARGET_BATCH_PROJECT = "cuda_batch_project"
 _TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
 _TARGET_FUSED_BP = "cuda_fused_bp"
 _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
+_TARGET_RELION_FUSED_X_HALF_BP = "cuda_relion_fused_x_half_bp"
+_TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE = "cuda_relion_fused_x_half_bp_signature"
+_TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
+_TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE = (
+    "cuda_relion_preprocess_real_f32_native_lane"
+)
+_TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_ATOMIC = (
+    "cuda_relion_preprocess_real_f32_native_atomic"
+)
+_TARGET_RELION_MAKE_SCORING_ROTATIONS_F32 = "cuda_relion_make_scoring_rotations_f32"
+_TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
+_TARGET_RELION_TRANSLATE_BPREF_F32 = "cuda_relion_translate_bpref_f32"
+_TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
+_TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
+    "cuda_relion_coarse_diff2_rectangular_f32"
+)
+_TARGET_RELION_COARSE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32 = (
+    "cuda_relion_coarse_diff2_native_texture_rectangular_f32"
+)
+_TARGET_RELION_COARSE_NORMALIZED_CC_PAIRS_F32 = (
+    "cuda_relion_coarse_normalized_cc_pairs_f32"
+)
+_TARGET_RELION_COARSE_NORMALIZED_CC_NATIVE_TEXTURE_PAIRS_F32 = (
+    "cuda_relion_coarse_normalized_cc_native_texture_pairs_f32"
+)
+_TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32 = (
+    "cuda_relion_fine_diff2_rectangular_f32"
+)
+_TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
+    "cuda_relion_fine_diff2_fused_translate_rectangular_f32"
+)
+_TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
+_TARGET_RELION_EXPONENTIATE_F32 = "cuda_relion_exponentiate_f32"
+_TARGET_RELION_DIVIDE_F32 = "cuda_relion_divide_f32"
+_TARGET_RELION_CUB_SORT_SCAN_F32 = "cuda_relion_cub_sort_scan_f32"
+_TARGET_RELION_WAVG_ROTATION_ATOMIC_F32 = "cuda_relion_wavg_rotation_atomic_f32"
+_TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32 = "cuda_relion_wavg_rotation_atomic_add_f32"
+_TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32 = (
+    "cuda_relion_wavg_rotation_atomic_triplet_add_f32"
+)
 
 # Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
 # Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
@@ -478,6 +554,7 @@ _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
 _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_BACKPROJECT, "Backproject"),
     (_TARGET_BACKPROJECT_INDEXED, "BackprojectIndexed"),
+    (_TARGET_BACKPROJECT_INDEXED_SIGNATURE, "BackprojectIndexedSignature"),
     (_TARGET_PROJECT, "Project"),
     (_TARGET_PROJECT_INDEXED, "ProjectIndexed"),
     (_TARGET_BATCH_BACKPROJECT, "BatchBackproject"),
@@ -486,6 +563,67 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_BATCH_BP_INTERLEAVED, "BatchBackprojectInterleaved"),
     (_TARGET_FUSED_BP, "FusedBackproject"),
     (_TARGET_PER_IMAGE_BP, "PerImageBackproject"),
+    (_TARGET_RELION_FUSED_X_HALF_BP, "RelionFusedXHalfBackproject"),
+    (
+        _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE,
+        "RelionFusedXHalfBackprojectSignature",
+    ),
+    (_TARGET_RELION_PREPROCESS_REAL_F32, "RelionPreprocessRealF32"),
+    (
+        _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE,
+        "RelionPreprocessRealF32NativeLane",
+    ),
+    (
+        _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_ATOMIC,
+        "RelionPreprocessRealF32NativeAtomic",
+    ),
+    (
+        _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32,
+        "RelionMakeScoringRotationsF32",
+    ),
+    (_TARGET_RELION_TRANSLATE_SCORE_F32, "RelionTranslateScoreF32"),
+    (_TARGET_RELION_TRANSLATE_BPREF_F32, "RelionTranslateBprefF32"),
+    (_TARGET_RELION_BPREF_OPERANDS_F32, "RelionBprefOperandsF32"),
+    (
+        _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
+        "RelionCoarseDiff2RectangularF32",
+    ),
+    (
+        _TARGET_RELION_COARSE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32,
+        "RelionCoarseDiff2NativeTextureRectangularF32",
+    ),
+    (
+        _TARGET_RELION_COARSE_NORMALIZED_CC_PAIRS_F32,
+        "RelionCoarseNormalizedCcPairsF32",
+    ),
+    (
+        _TARGET_RELION_COARSE_NORMALIZED_CC_NATIVE_TEXTURE_PAIRS_F32,
+        "RelionCoarseNormalizedCcNativeTexturePairsF32",
+    ),
+    (
+        _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32,
+        "RelionFineDiff2RectangularF32",
+    ),
+    (
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32,
+        "RelionFineDiff2FusedTranslateRectangularF32",
+    ),
+    (_TARGET_RELION_FINE_DIFF2_PAIRS_F32, "RelionFineDiff2PairsF32"),
+    (_TARGET_RELION_EXPONENTIATE_F32, "RelionExponentiateF32"),
+    (_TARGET_RELION_DIVIDE_F32, "RelionDivideF32"),
+    (_TARGET_RELION_CUB_SORT_SCAN_F32, "RelionCubSortScanF32"),
+    (
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_F32,
+        "RelionWavgRotationAtomicF32",
+    ),
+    (
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32,
+        "RelionWavgRotationAtomicAddF32",
+    ),
+    (
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32,
+        "RelionWavgRotationAtomicTripletAddF32",
+    ),
 )
 
 
@@ -727,15 +865,13 @@ def cuda_available() -> bool:
     ``RECOVAR_DISABLE_CUDA=1`` to force the slower JAX GPU path instead.
     """
     global _auto_build_error, _cuda_ok
+    if not custom_cuda_requested():
+        logger.info("CUDA kernels disabled via %s", _DISABLE_CUSTOM_CUDA_ENV)
+        return False
     if _cuda_ok is not None:
         return _cuda_ok
-
-    if not custom_cuda_requested():
-        _cuda_ok = False
-        logger.info("CUDA kernels disabled via %s", _DISABLE_CUSTOM_CUDA_ENV)
-        return _cuda_ok
     try:
-        if not any(d.platform == "gpu" for d in jax.devices()):
+        if not any(getattr(d, "platform", "") in {"gpu", "cuda"} for d in jax.devices()):
             _cuda_ok = False
         else:
             _ensure_ffi()
@@ -782,12 +918,107 @@ def _rot_to_compact(rotation_matrices: jax.Array, real_dtype=None) -> jax.Array:
     return compact
 
 
+def _relion_x_half_backproject_rotation_to_kernel(
+    rotation_matrices: jax.Array,
+    target_dtype=None,
+) -> jax.Array:
+    """Map RELION/RECOVAR scorer rotations to the CUDA ``(z, y, xhalf)`` scatter frame.
+
+    RELION's BackProjector stores the Fourier x-axis as the packed half axis but
+    RECOVAR's generic CUDA half-volume kernel packs its last coordinate. RELION
+    computes a numerical ``A.inv()`` rather than using a transpose; boundary
+    pixels at Nyquist can differ by one ulp, so mirror that inverse before
+    reversing to the kernel's ``(z, y, x)`` scatter coordinates.
+    """
+
+    if target_dtype is not None and jnp.dtype(target_dtype) == jnp.dtype(jnp.float32):
+        # RELION builds an orthonormal Euler matrix in CPU RFLOAT, inverts it
+        # there, and only then stores the result as accelerated XFLOAT.  For a
+        # single-precision ACC build this is the float-cast transpose, not the
+        # inverse of an already rounded float32 matrix.
+        return rotation_matrices.astype(jnp.float32)[..., [2, 1, 0]]
+    inverse = jnp.linalg.inv(rotation_matrices.astype(jnp.float64))
+    return jnp.swapaxes(inverse, -1, -2)[..., [2, 1, 0]]
+
+
+def _prepare_relion_x_half_block_topology_operands(images, pixel_indices, image_shape, max_r):
+    """Expand compact x-half rows into RELION's native current-size square.
+
+    RELION launches one block per orientation over a cropped FFTW array with
+    ``2*max_r`` rows and ``max_r+1`` packed-x columns. RECOVAR normally keeps
+    only the nonzero circular support. The diagnostic restores the omitted
+    square positions as explicit zeros so the CUDA kernel can enumerate native
+    FFTW pixel positions in the same 128-thread serial-pass topology. This is
+    deliberately a pixel-pass diagnostic, not full launch-order equivalence:
+    RELION also uses per-particle launches and couples translation reduction
+    with data/weight scattering, while RECOVAR performs those stages separately.
+    Values
+    absent from RECOVAR's compact support cannot be recovered: in particular,
+    redundant negative-y ``x=0`` lanes remain zero. RELION's normal 2-D input
+    also gives those lanes zero inverse-noise weight, but unusual callers with
+    nonzero values there are not exactly emulated by this diagnostic.
+    """
+
+    full_height, full_width = (int(image_shape[0]), int(image_shape[1]))
+    full_half_width = full_width // 2 + 1
+    if max_r is None:
+        current_height = full_height
+    else:
+        current_height = 2 * int(round(float(max_r)))
+    current_half_width = current_height // 2 + 1
+    if current_height <= 0 or current_height > full_height:
+        raise ValueError(f"invalid RELION block-topology current height {current_height} for image shape {image_shape}")
+
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    full_rows = pixel_indices // full_half_width
+    columns = pixel_indices % full_half_width
+    signed_rows = jnp.where(full_rows <= full_height // 2, full_rows, full_rows - full_height)
+    current_rows = jnp.mod(signed_rows, current_height)
+    current_indices = current_rows * current_half_width + columns
+    dense_pixels = current_height * current_half_width
+    dense_images = jnp.zeros((*images.shape[:-1], dense_pixels), dtype=images.dtype)
+    dense_images = dense_images.at[..., current_indices].set(images)
+    dense_indices = jnp.arange(dense_pixels, dtype=jnp.int32)
+    return dense_images, dense_indices, current_height, current_half_width
+
+
 def _volume_real_dtype(volume: jax.Array):
     """Return the real component dtype of a volume (float32 for complex64, etc.)."""
     return jnp.finfo(volume.dtype).dtype if jnp.issubdtype(volume.dtype, jnp.complexfloating) else volume.dtype
 
 
-def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
+def _infer_backproject_upsampling(image_shape, volume_shape, max_r=None):
+    """Infer Fourier oversampling for standard and RELION BackProjector grids."""
+
+    ih, _ = image_shape
+    N0, N1, N2 = volume_shape
+    if N0 % ih == 0:
+        ups = N0 // ih
+        if ups <= 0:
+            raise ValueError(f"volume_shape[0] ({N0}) must be at least image_shape[0] ({ih})")
+        return int(ups)
+    if N0 != N1 or N0 != N2:
+        raise ValueError(
+            "non-cubic volume_shape requires standard integer upsampling along axis 0, "
+            f"got image_shape={image_shape}, volume_shape={volume_shape}"
+        )
+    if max_r is not None and float(max_r) > 0:
+        ups = int((float(N0) - 3.0) / (2.0 * float(max_r)) + 0.5)
+        expected = 2 * (int(float(ups) * float(max_r) + 0.5) + 1) + 1
+        if ups > 0 and expected == int(N0):
+            return ups
+    full_support = float(ih) / 2.0
+    ups = int((float(N0) - 3.0) / (2.0 * full_support) + 0.5)
+    expected = 2 * (int(float(ups) * full_support + 0.5) + 1) + 1
+    if ups > 0 and expected == int(N0):
+        return ups
+    raise ValueError(
+        f"volume_shape[0] ({N0}) must be divisible by image_shape[0] ({ih}) "
+        "or match RELION pad_size=2*(int(padding_factor*support_radius+0.5)+1)+1"
+    )
+
+
+def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=None):
     """Validate parameters at trace time (not inside JIT)."""
     ih, iw = image_shape
     N0, N1, N2 = volume_shape
@@ -797,8 +1028,7 @@ def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
         raise ValueError(f"volume_shape must be positive, got {volume_shape}")
     if order not in (0, 1, 3):
         raise ValueError(f"order must be 0, 1, or 3, got {order}")
-    if N0 % ih != 0:
-        raise ValueError(f"volume_shape[0] ({N0}) must be divisible by image_shape[0] ({ih})")
+    _infer_backproject_upsampling(image_shape, volume_shape, max_r=max_r)
 
 
 def _encode_max_r(max_r):
@@ -821,7 +1051,7 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
     """
     ih, iw_full = image_shape
     N0, N1, N2 = volume_shape
-    ups = N0 // ih
+    ups = _infer_backproject_upsampling(image_shape, volume_shape, max_r=max_r)
     iw_eff = iw_full // 2 + 1 if half_image else iw_full
     return (
         dict(
@@ -854,7 +1084,9 @@ def _project_ffi_kwargs(
     """FFI kwargs for forward projection.
 
     ``relion_texture_interp=True`` enables CUDA texture interpolation for
-    full-volume order-1 projections, matching RELION's accelerated projector.
+    full-volume order-1 projections, including RELION's positive even-box
+    Nyquist convention. Generic projections retain RECOVAR's centered-grid
+    convention.
     """
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     kw["relion_texture_interp"] = np.int64(int(relion_texture_interp))
@@ -898,7 +1130,7 @@ def backproject(
     Updated volume (same shape and dtype as *volume*).
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
@@ -909,6 +1141,1007 @@ def backproject(
         input_output_aliases={2: 0},
         vmap_method="sequential",
     )(images, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(2,))
+def relion_make_scoring_rotations_f32(
+    eulers_deg: jax.Array,
+    right_matrix: jax.Array,
+    do_right: bool = True,
+) -> jax.Array:
+    """Build scorer rotations with RELION's accelerated float32 arithmetic.
+
+    This reproduces ``cuda_kernel_make_eulers_3D<true,false,do_right>``
+    through its Euler construction and optional ``B = A @ R`` product.  The
+    returned matrices use RECOVAR's scorer convention ``B``.  RELION stores
+    the inverse-projector convention ``B.T``, so a frozen RELION device dump
+    must be transposed before a bitwise comparison with this result.
+
+    This is a strict CUDA primitive: it has no CPU or JAX arithmetic fallback.
+    """
+
+    if eulers_deg.dtype != jnp.float32:
+        raise TypeError(f"eulers_deg must be float32, got {eulers_deg.dtype}")
+    if right_matrix.dtype != jnp.float32:
+        raise TypeError(f"right_matrix must be float32, got {right_matrix.dtype}")
+    if eulers_deg.ndim != 2 or eulers_deg.shape[1:] != (3,):
+        raise ValueError(f"eulers_deg must have shape (N, 3), got {eulers_deg.shape}")
+    if right_matrix.shape != (3, 3):
+        raise ValueError(f"right_matrix must have shape (3, 3), got {right_matrix.shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION scorer-rotation construction requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("RELION scorer-rotation construction was explicitly requested but custom CUDA is disabled")
+    _ensure_ffi()
+
+    out_type = jax.ShapeDtypeStruct((eulers_deg.shape[0], 3, 3), jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        eulers_deg,
+        right_matrix,
+        do_right=np.int64(int(do_right)),
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(3,))
+def relion_translate_score_f32(
+    images: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    image_shape: Tuple[int, int],
+) -> jax.Array:
+    """Translate score images with RELION's accelerated float32 arithmetic.
+
+    ``translation_angles`` contains RELION's per-translation ``(tx, ty)``
+    radians. ``pixel_indices`` use RECOVAR's centered half-spectrum layout.
+    The CUDA primitive evaluates ``sincosf(x*tx + y*ty)`` and the explicit
+    real/imaginary products used by RELION's fine Gaussian scorer. The output
+    is flattened in image-major, translation-major order to match
+    :func:`apply_half_translation_phases`.
+
+    This is a strict CUDA primitive. Callers that support a non-CUDA fallback
+    must select it before invoking this function.
+    """
+
+    if images.dtype != jnp.complex64:
+        raise TypeError(f"images must be complex64, got {images.dtype}")
+    if translation_angles.dtype != jnp.float32:
+        raise TypeError(
+            f"translation_angles must be float32, got {translation_angles.dtype}"
+        )
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError(f"pixel_indices must be int32, got {pixel_indices.dtype}")
+    if images.ndim != 2:
+        raise ValueError(f"images must have shape (batch, pixels), got {images.shape}")
+    if translation_angles.ndim != 2 or translation_angles.shape[1:] != (2,):
+        raise ValueError(
+            "translation_angles must have shape (translations, 2), got "
+            f"{translation_angles.shape}"
+        )
+    if pixel_indices.shape != (images.shape[1],):
+        raise ValueError(
+            f"pixel_indices must have shape ({images.shape[1]},), got "
+            f"{pixel_indices.shape}"
+        )
+    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
+        raise ValueError(f"image_shape must contain two positive sizes, got {image_shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION score translation requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION score translation was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    image_h, image_w = (int(size) for size in image_shape)
+    half_width = image_w // 2 + 1
+    out_type = jax.ShapeDtypeStruct(
+        (
+            images.shape[0] * translation_angles.shape[0],
+            images.shape[1],
+        ),
+        jnp.complex64,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_TRANSLATE_SCORE_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        images,
+        translation_angles,
+        pixel_indices,
+        image_h=np.int64(image_h),
+        image_half_width=np.int64(half_width),
+    )
+
+
+@jax.jit
+def relion_exponentiate_f32(values: jax.Array, add: jax.Array) -> jax.Array:
+    """Apply RELION's fine-weight ``expf(value + add)`` CUDA kernel."""
+
+    if values.dtype != jnp.float32:
+        raise TypeError(f"values must be float32, got {values.dtype}")
+    if values.ndim != 1 or values.shape[0] < 1:
+        raise ValueError(f"values must be a nonempty 1-D array, got {values.shape}")
+    if add.dtype != jnp.float32 or add.ndim != 0:
+        raise TypeError(f"add must be a float32 scalar, got {add.dtype} {add.shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION float32 exponentiation requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("RELION float32 exponentiation was requested but custom CUDA is disabled")
+    _ensure_ffi()
+
+    output_type = jax.ShapeDtypeStruct(values.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_EXPONENTIATE_F32,
+        output_type,
+        vmap_method="sequential",
+    )(values, add)
+
+
+@jax.jit
+def relion_divide_f32(values: jax.Array, divisor: jax.Array) -> jax.Array:
+    """Apply RELION's CUDA ``float / float`` posterior normalization."""
+
+    if values.dtype != jnp.float32:
+        raise TypeError(f"values must be float32, got {values.dtype}")
+    if values.ndim != 1 or values.shape[0] < 1:
+        raise ValueError(f"values must be a nonempty 1-D array, got {values.shape}")
+    if divisor.dtype != jnp.float32 or divisor.ndim != 0:
+        raise TypeError(
+            f"divisor must be a float32 scalar, got {divisor.dtype} {divisor.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION float32 division requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("RELION float32 division was requested but custom CUDA is disabled")
+    _ensure_ffi()
+
+    output_type = jax.ShapeDtypeStruct(values.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_DIVIDE_F32,
+        output_type,
+        vmap_method="sequential",
+    )(values, divisor)
+
+
+@jax.jit
+def relion_cub_sort_scan_f32(values: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Sort and inclusively scan one float32 vector with RELION's CUB calls.
+
+    This is a strict diagnostic primitive for the coarse-significance boundary.
+    RELION invokes ``cub::DeviceRadixSort::SortKeys`` followed by
+    ``cub::DeviceScan::InclusiveSum`` on each particle's positive weights.
+    Keeping both intermediate arrays observable lets parity tests identify a
+    sort discrepancy separately from a scan discrepancy.
+    """
+
+    if values.dtype != jnp.float32:
+        raise TypeError(f"values must be float32, got {values.dtype}")
+    if values.ndim != 1 or values.shape[0] < 1:
+        raise ValueError(f"values must be a nonempty 1-D array, got {values.shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION CUB sort/scan requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("RELION CUB sort/scan was requested but custom CUDA is disabled")
+    _ensure_ffi()
+
+    output_type = jax.ShapeDtypeStruct(values.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_CUB_SORT_SCAN_F32,
+        (output_type, output_type),
+        vmap_method="sequential",
+    )(values)
+
+
+@functools.partial(jax.jit, static_argnums=(4,))
+def relion_translate_bpref_f32(
+    images: jax.Array,
+    weighted_ctf: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    image_shape: Tuple[int, int],
+) -> jax.Array:
+    """Translate raw images, then apply BPref weights in RELION float32 order.
+
+    RELION evaluates ``sincosf`` and the explicit complex translation before
+    multiplying each translated real/imaginary component by ``weighted_ctf``.
+    Keeping this as one CUDA primitive avoids the extra rounding boundary in
+    RECOVAR's algebraically equivalent weight-then-translate path.
+    """
+
+    if images.dtype != jnp.complex64:
+        raise TypeError(f"images must be complex64, got {images.dtype}")
+    if weighted_ctf.dtype != jnp.float32:
+        raise TypeError(f"weighted_ctf must be float32, got {weighted_ctf.dtype}")
+    if translation_angles.dtype != jnp.float32:
+        raise TypeError(
+            f"translation_angles must be float32, got {translation_angles.dtype}"
+        )
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError(f"pixel_indices must be int32, got {pixel_indices.dtype}")
+    if images.ndim != 2:
+        raise ValueError(f"images must have shape (batch, pixels), got {images.shape}")
+    if weighted_ctf.shape != images.shape:
+        raise ValueError(
+            f"weighted_ctf must have shape {images.shape}, got {weighted_ctf.shape}"
+        )
+    if translation_angles.ndim != 2 or translation_angles.shape[1:] != (2,):
+        raise ValueError(
+            "translation_angles must have shape (translations, 2), got "
+            f"{translation_angles.shape}"
+        )
+    if pixel_indices.shape != (images.shape[1],):
+        raise ValueError(
+            f"pixel_indices must have shape ({images.shape[1]},), got "
+            f"{pixel_indices.shape}"
+        )
+    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
+        raise ValueError(f"image_shape must contain two positive sizes, got {image_shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION BPref translation requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION BPref translation was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    image_h, image_w = (int(size) for size in image_shape)
+    half_width = image_w // 2 + 1
+    out_type = jax.ShapeDtypeStruct(
+        (
+            images.shape[0] * translation_angles.shape[0],
+            images.shape[1],
+        ),
+        jnp.complex64,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_TRANSLATE_BPREF_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        images,
+        weighted_ctf,
+        translation_angles,
+        pixel_indices,
+        image_h=np.int64(image_h),
+        image_half_width=np.int64(half_width),
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(6, 7))
+def relion_bpref_operands_f32(
+    images: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior_over_weight_norm: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    image_shape: Tuple[int, int],
+    arithmetic_variant: int = 0,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Evaluate RELION BP.cuh's native-unit numerator and denominator terms."""
+
+    if images.dtype != jnp.complex64:
+        raise TypeError(f"images must be complex64, got {images.dtype}")
+    for name, value in (
+        ("ctf", ctf),
+        ("minvsigma2", minvsigma2),
+        ("posterior_over_weight_norm", posterior_over_weight_norm),
+        ("translation_angles", translation_angles),
+    ):
+        if value.dtype != jnp.float32:
+            raise TypeError(f"{name} must be float32, got {value.dtype}")
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError(f"pixel_indices must be int32, got {pixel_indices.dtype}")
+    if images.ndim != 2:
+        raise ValueError(f"images must have shape (batch, pixels), got {images.shape}")
+    if ctf.shape != images.shape or minvsigma2.shape != images.shape:
+        raise ValueError("ctf and minvsigma2 must have the same shape as images")
+    if translation_angles.ndim != 2 or translation_angles.shape[1:] != (2,):
+        raise ValueError("translation_angles must have shape (translations, 2)")
+    expected_posterior_shape = (images.shape[0], translation_angles.shape[0])
+    if posterior_over_weight_norm.shape != expected_posterior_shape:
+        raise ValueError(
+            "posterior_over_weight_norm must have shape "
+            f"{expected_posterior_shape}, got {posterior_over_weight_norm.shape}"
+        )
+    if pixel_indices.shape != (images.shape[1],):
+        raise ValueError(
+            f"pixel_indices must have shape ({images.shape[1]},), got "
+            f"{pixel_indices.shape}"
+        )
+    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
+        raise ValueError(f"image_shape must contain two positive sizes, got {image_shape}")
+    if int(arithmetic_variant) not in range(24):
+        raise ValueError("arithmetic_variant must be in [0, 23]")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION BPref operands require a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION BPref operands were explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    image_h, image_w = (int(size) for size in image_shape)
+    half_width = image_w // 2 + 1
+    output_shape = (
+        images.shape[0] * translation_angles.shape[0],
+        images.shape[1],
+    )
+    output_types = (
+        jax.ShapeDtypeStruct(output_shape, jnp.complex64),
+        jax.ShapeDtypeStruct(output_shape, jnp.float32),
+        jax.ShapeDtypeStruct(output_shape, jnp.complex64),
+        jax.ShapeDtypeStruct(output_shape, jnp.float32),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_BPREF_OPERANDS_F32,
+        output_types,
+        vmap_method="sequential",
+    )(
+        images,
+        ctf,
+        minvsigma2,
+        posterior_over_weight_norm,
+        translation_angles,
+        pixel_indices,
+        image_h=np.int64(image_h),
+        image_half_width=np.int64(half_width),
+        arithmetic_variant=np.int64(arithmetic_variant),
+    )
+
+
+def _validate_relion_fine_diff2_inputs(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+) -> None:
+    if reference.dtype != jnp.complex64:
+        raise TypeError(f"reference must be complex64, got {reference.dtype}")
+    if shifted_image.dtype != jnp.complex64:
+        raise TypeError(f"shifted_image must be complex64, got {shifted_image.dtype}")
+    if weight.dtype != jnp.float32:
+        raise TypeError(f"weight must be float32, got {weight.dtype}")
+    if full_to_compact.dtype != jnp.int32:
+        raise TypeError(
+            f"full_to_compact must be int32, got {full_to_compact.dtype}"
+        )
+    if full_to_compact.ndim != 1 or full_to_compact.shape[0] <= 0:
+        raise ValueError(
+            "full_to_compact must be a nonempty rank-1 array, got "
+            f"{full_to_compact.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION fine diff2 requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION fine diff2 was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+
+@jax.jit
+def relion_coarse_diff2_rectangular_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+) -> jax.Array:
+    """Evaluate RELION's coarse Gaussian CUDA reduction topology.
+
+    Shapes are ``reference=(R,N)``, ``shifted_image=(B,T,N)``,
+    ``weight=(B,N)``, ``initial_diff2=(B,)``, and
+    ``full_to_compact=(F,)``. The kernel uses RELION's 128-thread,
+    16-orientation blocks and its native per-translation lane assignment. The
+    lane partials are combined with CUDA atomics on top of the supplied
+    high-resolution image term, as in RELION's coarse scorer.
+    """
+
+    _validate_relion_fine_diff2_inputs(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+    )
+    if initial_diff2.dtype != jnp.float32:
+        raise TypeError(
+            f"initial_diff2 must be float32, got {initial_diff2.dtype}"
+        )
+    if reference.ndim != 2 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError(
+            "rectangular coarse diff2 expects reference rank 2, shifted rank "
+            f"3, and weight rank 2, got {reference.shape}, "
+            f"{shifted_image.shape}, {weight.shape}"
+        )
+    if (
+        shifted_image.shape[0] != weight.shape[0]
+        or reference.shape[1] != shifted_image.shape[2]
+        or reference.shape[1] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or shifted_image.shape[0] <= 0
+        or shifted_image.shape[1] <= 0
+        or shifted_image.shape[1] > 128
+        or initial_diff2.shape != (shifted_image.shape[0],)
+    ):
+        raise ValueError(
+            "rectangular coarse diff2 operands have inconsistent shapes or "
+            "more than 128 translations: "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    out_type = jax.ShapeDtypeStruct(
+        (shifted_image.shape[0], reference.shape[0], shifted_image.shape[1]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(reference, shifted_image, weight, initial_diff2, full_to_compact)
+
+
+@jax.jit
+def relion_coarse_normalized_cc_pairs_f32(
+    shifted_image: jax.Array,
+    score_weight: jax.Array,
+    reference: jax.Array,
+    half_weights: jax.Array,
+    packed_to_compact: jax.Array,
+) -> jax.Array:
+    """Evaluate bounded coarse normalized-CC pairs with RELION CUDA arithmetic.
+
+    The first three operands have shape ``(B,C,N)`` and the output has shape
+    ``(B,C)``. One 128-thread CUDA block evaluates each candidate, preserving
+    RELION's operand contraction, lane tree, ``sqrtf``, and 128 identical
+    atomic additions. ``packed_to_compact`` restores current-size FFTW order.
+    """
+
+    for name, value, dtype in (
+        ("shifted_image", shifted_image, jnp.complex64),
+        ("score_weight", score_weight, jnp.float32),
+        ("reference", reference, jnp.complex64),
+        ("half_weights", half_weights, jnp.float32),
+        ("packed_to_compact", packed_to_compact, jnp.int32),
+    ):
+        if value.dtype != dtype:
+            raise TypeError(f"{name} must be {dtype}, got {value.dtype}")
+    if (
+        shifted_image.ndim != 3
+        or score_weight.shape != shifted_image.shape
+        or reference.shape != shifted_image.shape
+        or half_weights.shape != (shifted_image.shape[-1],)
+        or packed_to_compact.ndim != 1
+        or packed_to_compact.shape[0] <= 0
+        or shifted_image.shape[0] <= 0
+        or shifted_image.shape[1] <= 0
+        or shifted_image.shape[2] <= 0
+    ):
+        raise ValueError(
+            "RELION coarse normalized-CC pairs have inconsistent shapes: "
+            f"{shifted_image.shape}, {score_weight.shape}, {reference.shape}, "
+            f"{half_weights.shape}, {packed_to_compact.shape}",
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION coarse normalized-CC pairs require a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION coarse normalized-CC pairs require the custom CUDA extension",
+        )
+    _ensure_ffi()
+    out_type = jax.ShapeDtypeStruct(shifted_image.shape[:-1], jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_NORMALIZED_CC_PAIRS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        shifted_image,
+        score_weight,
+        reference,
+        half_weights,
+        packed_to_compact,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(6, 7, 8, 9))
+def relion_coarse_normalized_cc_native_texture_pairs_f32(
+    projector_full: jax.Array,
+    rotation_matrices: jax.Array,
+    shifted_image: jax.Array,
+    score_weight: jax.Array,
+    half_weights: jax.Array,
+    packed_to_compact: jax.Array,
+    current_size: int,
+    padding_factor: int,
+    projector_max_r: int,
+    return_components: bool = False,
+    translation_angles: jax.Array | None = None,
+    numerator_weight: jax.Array | None = None,
+) -> jax.Array:
+    """Evaluate bounded normalized-CC pairs from RELION's CUDA texture.
+
+    Each row is one candidate. Its projection is sampled from
+    ``projector_full`` inside the same 128-thread CUDA block that contracts the
+    normalized-CC numerator and reference norm. When ``translation_angles`` is
+    supplied, the image is translated in that same block with RELION's
+    coarse-kernel ``sincosf`` arithmetic. This avoids materializing a RECOVAR
+    projection or translated image at a different arithmetic boundary.
+    """
+
+    projector_full = jnp.asarray(projector_full)
+    rotation_matrices = jnp.asarray(rotation_matrices)
+    shifted_image = jnp.asarray(shifted_image)
+    score_weight = jnp.asarray(score_weight)
+    half_weights = jnp.asarray(half_weights)
+    packed_to_compact = jnp.asarray(packed_to_compact)
+    if translation_angles is None:
+        translation_angles = jnp.zeros(
+            (shifted_image.shape[0], 2),
+            dtype=jnp.float32,
+        )
+    else:
+        translation_angles = jnp.asarray(translation_angles)
+    if numerator_weight is None:
+        numerator_weight = jnp.ones_like(score_weight, dtype=jnp.float32)
+    else:
+        numerator_weight = jnp.asarray(numerator_weight)
+    for name, value, dtype in (
+        ("projector_full", projector_full, jnp.complex64),
+        ("rotation_matrices", rotation_matrices, jnp.float32),
+        ("shifted_image", shifted_image, jnp.complex64),
+        ("score_weight", score_weight, jnp.float32),
+        ("half_weights", half_weights, jnp.float32),
+        ("packed_to_compact", packed_to_compact, jnp.int32),
+        ("translation_angles", translation_angles, jnp.float32),
+        ("numerator_weight", numerator_weight, jnp.float32),
+    ):
+        if value.dtype != dtype:
+            raise TypeError(f"{name} must be {dtype}, got {value.dtype}")
+    if (
+        projector_full.ndim != 3
+        or projector_full.shape[0] <= 0
+        or projector_full.shape[1:]
+        != (projector_full.shape[0], projector_full.shape[0])
+        or rotation_matrices.ndim != 3
+        or rotation_matrices.shape[1:] != (3, 3)
+        or rotation_matrices.shape[0] <= 0
+        or shifted_image.ndim != 2
+        or shifted_image.shape[0] != rotation_matrices.shape[0]
+        or shifted_image.shape[1] <= 0
+        or score_weight.shape != shifted_image.shape
+        or translation_angles.shape != (shifted_image.shape[0], 2)
+        or numerator_weight.shape != shifted_image.shape
+        or half_weights.shape != (shifted_image.shape[1],)
+        or packed_to_compact.shape
+        != (int(current_size) * (int(current_size) // 2 + 1),)
+        or int(current_size) <= 0
+        or int(padding_factor) <= 0
+        or int(projector_max_r) <= 0
+    ):
+        raise ValueError(
+            "native texture normalized-CC pair operands have inconsistent shapes: "
+            f"projector={projector_full.shape}, rotations={rotation_matrices.shape}, "
+            f"image={shifted_image.shape}, weight={score_weight.shape}, "
+            f"half_weights={half_weights.shape}, lookup={packed_to_compact.shape}",
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError(
+            "RELION native texture normalized-CC pairs require a JAX GPU backend"
+        )
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION native texture normalized-CC pairs require the custom CUDA extension"
+        )
+    _ensure_ffi()
+    eulers = jnp.swapaxes(rotation_matrices, -1, -2).reshape(
+        rotation_matrices.shape[0], 9
+    )
+    out_type = jax.ShapeDtypeStruct((shifted_image.shape[0], 3), jnp.float32)
+    components = jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_NORMALIZED_CC_NATIVE_TEXTURE_PAIRS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        projector_full,
+        eulers,
+        shifted_image,
+        translation_angles,
+        score_weight,
+        numerator_weight,
+        half_weights,
+        packed_to_compact,
+        current_size=np.int64(current_size),
+        padding_factor=np.int64(padding_factor),
+        projector_max_r=np.int64(projector_max_r),
+    )
+    return components if return_components else components[:, 0]
+
+
+@functools.partial(jax.jit, static_argnums=(7, 8, 9))
+def relion_coarse_diff2_native_texture_rectangular_f32(
+    projector_full: jax.Array,
+    rotation_matrices: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+    current_size: int,
+    padding_factor: int,
+    projector_max_r: int,
+) -> jax.Array:
+    """Run RELION's fused texture-projection coarse Gaussian topology.
+
+    This diagnostic mirrors ``cuda_kernel_diff2_coarse<true, false, 128,
+    16, 4>``: it loads 16 Euler matrices into shared memory, projects the
+    reference from a CUDA texture, translates each image, and accumulates the
+    coarse score in one kernel. ``projector_full`` is the centered full-cube
+    embedding of RELION ``Projector::data`` and must already carry the dense
+    scorer scale.
+    """
+
+    projector_full = jnp.asarray(projector_full)
+    rotation_matrices = jnp.asarray(rotation_matrices)
+    image = jnp.asarray(image)
+    translation_angles = jnp.asarray(translation_angles)
+    weight = jnp.asarray(weight)
+    initial_diff2 = jnp.asarray(initial_diff2)
+    full_to_compact = jnp.asarray(full_to_compact)
+    if projector_full.dtype != jnp.complex64:
+        raise TypeError(
+            f"projector_full must be complex64, got {projector_full.dtype}"
+        )
+    if rotation_matrices.dtype != jnp.float32:
+        raise TypeError(
+            "rotation_matrices must be float32, got "
+            f"{rotation_matrices.dtype}"
+        )
+    if image.dtype != jnp.complex64:
+        raise TypeError(f"image must be complex64, got {image.dtype}")
+    if translation_angles.dtype != jnp.float32:
+        raise TypeError(
+            f"translation_angles must be float32, got {translation_angles.dtype}"
+        )
+    if weight.dtype != jnp.float32 or initial_diff2.dtype != jnp.float32:
+        raise TypeError("weight and initial_diff2 must be float32")
+    if full_to_compact.dtype != jnp.int32:
+        raise TypeError(
+            f"full_to_compact must be int32, got {full_to_compact.dtype}"
+        )
+    if (
+        projector_full.ndim != 3
+        or projector_full.shape[0] <= 0
+        or projector_full.shape[1:]
+        != (projector_full.shape[0], projector_full.shape[0])
+        or rotation_matrices.ndim != 3
+        or rotation_matrices.shape[1:] != (3, 3)
+        or rotation_matrices.shape[0] <= 0
+        or image.ndim != 2
+        or image.shape[0] <= 0
+        or image.shape[1] <= 0
+        or translation_angles.ndim != 2
+        or translation_angles.shape[0] <= 0
+        or translation_angles.shape[0] > 128
+        or translation_angles.shape[1] != 2
+        or weight.shape != image.shape
+        or initial_diff2.shape != (image.shape[0],)
+        or full_to_compact.shape
+        != (int(current_size) * (int(current_size) // 2 + 1),)
+        or int(current_size) <= 0
+        or int(padding_factor) <= 0
+        or int(projector_max_r) <= 0
+    ):
+        raise ValueError(
+            "native texture coarse diff2 operands have inconsistent shapes: "
+            f"projector={projector_full.shape}, rotations={rotation_matrices.shape}, "
+            f"image={image.shape}, translations={translation_angles.shape}, "
+            f"weight={weight.shape}, initial={initial_diff2.shape}, "
+            f"lookup={full_to_compact.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION native texture coarse diff2 requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION native texture coarse diff2 was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    # RELION stores its scorer Euler matrices as a row-major transpose of the
+    # RECOVAR projection matrices at this handoff.
+    eulers = jnp.swapaxes(rotation_matrices, -1, -2).reshape(
+        rotation_matrices.shape[0], 9
+    )
+    out_type = jax.ShapeDtypeStruct(
+        (image.shape[0], rotation_matrices.shape[0], translation_angles.shape[0]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        projector_full,
+        eulers,
+        image,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        current_size=np.int64(current_size),
+        padding_factor=np.int64(padding_factor),
+        projector_max_r=np.int64(projector_max_r),
+    )
+
+
+@jax.jit
+def relion_fine_diff2_rectangular_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+) -> jax.Array:
+    """Evaluate RELION's SM80 fine Gaussian tree on a rectangular grid.
+
+    Shapes are ``reference=(B,R,N)``, ``shifted_image=(B,T,N)``,
+    ``weight=(B,N)``, and ``full_to_compact=(F,)``. One CUDA block evaluates
+    each output hypothesis ``(B,R,T)`` with the production 256-lane topology
+    and explicit binary32 FMA rounding boundaries.
+    """
+
+    _validate_relion_fine_diff2_inputs(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+    )
+    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError(
+            "rectangular fine diff2 expects reference/shifted rank 3 and "
+            f"weight rank 2, got {reference.shape}, {shifted_image.shape}, "
+            f"{weight.shape}"
+        )
+    if (
+        reference.shape[0] != shifted_image.shape[0]
+        or reference.shape[0] != weight.shape[0]
+        or reference.shape[2] != shifted_image.shape[2]
+        or reference.shape[2] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or shifted_image.shape[1] <= 0
+        or reference.shape[2] <= 0
+    ):
+        raise ValueError(
+            "rectangular fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    out_type = jax.ShapeDtypeStruct(
+        (reference.shape[0], reference.shape[1], shifted_image.shape[1]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(reference, shifted_image, weight, full_to_compact)
+
+
+@functools.partial(jax.jit, static_argnames=("current_size",))
+def relion_fine_diff2_fused_translate_rectangular_f32(
+    reference: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+    *,
+    current_size: int,
+) -> jax.Array:
+    """Evaluate RELION fine diff2 with translation inside the score kernel.
+
+    Shapes are ``reference=(B,R,N)``, ``image=(B,N)``,
+    ``translation_angles=(T,2)``, ``weight=(B,N)``, and
+    ``full_to_compact=(F,)``. The CUDA kernel follows RELION's 256-lane
+    REF3D topology: seven shared-memory translation slots, with the deployed
+    job builder filling at most four. It returns ``(B,R,T)``.
+
+    This entry point is intentionally separate from the production scorer
+    while the fused translation boundary is being qualified against native
+    RELION operand captures.
+    """
+
+    reference = jnp.asarray(reference)
+    image = jnp.asarray(image)
+    translation_angles = jnp.asarray(translation_angles)
+    weight = jnp.asarray(weight)
+    full_to_compact = jnp.asarray(full_to_compact)
+    if reference.dtype != jnp.complex64 or image.dtype != jnp.complex64:
+        raise TypeError(
+            "fused RELION fine diff2 reference/image must be complex64, got "
+            f"{reference.dtype} and {image.dtype}"
+        )
+    if translation_angles.dtype != jnp.float32 or weight.dtype != jnp.float32:
+        raise TypeError(
+            "fused RELION fine diff2 angles/weight must be float32, got "
+            f"{translation_angles.dtype} and {weight.dtype}"
+        )
+    if full_to_compact.dtype != jnp.int32:
+        raise TypeError(
+            "fused RELION fine diff2 lookup must be int32, got "
+            f"{full_to_compact.dtype}"
+        )
+    if (
+        reference.ndim != 3
+        or image.ndim != 2
+        or translation_angles.ndim != 2
+        or translation_angles.shape[1] != 2
+        or weight.ndim != 2
+        or full_to_compact.ndim != 1
+        or reference.shape[0] != image.shape[0]
+        or reference.shape[0] != weight.shape[0]
+        or reference.shape[2] != image.shape[1]
+        or reference.shape[2] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or reference.shape[2] <= 0
+        or translation_angles.shape[0] <= 0
+    ):
+        raise ValueError(
+            "fused RELION fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {image.shape}, {translation_angles.shape}, "
+            f"{weight.shape}, {full_to_compact.shape}"
+        )
+    current_size = int(current_size)
+    expected_full_pixels = current_size * (current_size // 2 + 1)
+    if current_size <= 0 or full_to_compact.shape != (expected_full_pixels,):
+        raise ValueError(
+            "fused RELION fine diff2 lookup does not match current_size: "
+            f"current_size={current_size}, lookup={full_to_compact.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("fused RELION fine diff2 requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "fused RELION fine diff2 was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    out_type = jax.ShapeDtypeStruct(
+        (reference.shape[0], reference.shape[1], translation_angles.shape[0]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        reference,
+        image,
+        translation_angles,
+        weight,
+        full_to_compact,
+        current_size=current_size,
+    )
+
+
+@jax.jit
+def relion_fine_diff2_pairs_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+) -> jax.Array:
+    """Evaluate RELION's SM80 fine Gaussian tree for compact candidate pairs.
+
+    Shapes are ``reference=(B,P,N)``, ``shifted_image=(B,P,N)``,
+    ``weight=(B,N)``, and ``full_to_compact=(F,)``; output is ``(B,P)``.
+    """
+
+    _validate_relion_fine_diff2_inputs(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+    )
+    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError(
+            "pair fine diff2 expects reference/shifted rank 3 and weight rank "
+            f"2, got {reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    if (
+        reference.shape != shifted_image.shape
+        or reference.shape[0] != weight.shape[0]
+        or reference.shape[2] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or reference.shape[2] <= 0
+    ):
+        raise ValueError(
+            "pair fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    out_type = jax.ShapeDtypeStruct(reference.shape[:2], jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_PAIRS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(reference, shifted_image, weight, full_to_compact)
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
+def relion_preprocess_real_f32(
+    images: jax.Array,
+    normalization_factors: jax.Array,
+    integer_shifts: jax.Array,
+    radius: float,
+    cosine_width: float,
+    apply_mask: bool = True,
+    native_lane_reduction: bool = False,
+    native_atomic_reduction: bool = False,
+) -> tuple[jax.Array, jax.Array]:
+    """Apply RELION's accelerated float32 real-space preprocessing.
+
+    Returns ``(normalized_shifted, masked)`` so captured operand tests can
+    gate both stored RELION boundaries.  The implementation preserves
+    RELION's separate float32 normalization and zero-filled translation and
+    CUDA ``sqrtf``/``cospif`` mask arithmetic.  The default uses RECOVAR's
+    accepted deterministic block-first addition tree.  The diagnostic-only
+    ``native_lane_reduction`` mode instead deterministically reproduces the
+    native observer's lane-across-blocks tree before its final CUB sum. The
+    diagnostic ``native_atomic_reduction`` mode reproduces RELION's actual
+    schedule-dependent atomic lane accumulation.
+    """
+
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION CUDA preprocessing requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("RELION CUDA preprocessing was explicitly requested but custom CUDA is disabled")
+    _ensure_ffi()
+    if images.dtype != jnp.float32:
+        raise TypeError(f"images must be float32, got {images.dtype}")
+    if normalization_factors.dtype != jnp.float32:
+        raise TypeError(f"normalization_factors must be float32, got {normalization_factors.dtype}")
+    if integer_shifts.dtype != jnp.int32:
+        raise TypeError(f"integer_shifts must be int32, got {integer_shifts.dtype}")
+    if images.ndim != 3 or images.shape[-2] != images.shape[-1]:
+        raise ValueError(f"images must have shape (batch, D, D), got {images.shape}")
+    batch_size = images.shape[0]
+    if normalization_factors.shape != (batch_size,):
+        raise ValueError(f"normalization_factors must have shape ({batch_size},), got {normalization_factors.shape}")
+    if integer_shifts.shape != (batch_size, 2):
+        raise ValueError(f"integer_shifts must have shape ({batch_size}, 2), got {integer_shifts.shape}")
+    if not np.isfinite(radius) or radius <= 0.0:
+        raise ValueError(f"radius must be finite and positive, got {radius}")
+    if not np.isfinite(cosine_width) or cosine_width <= 0.0:
+        raise ValueError(f"cosine_width must be finite and positive, got {cosine_width}")
+    if native_lane_reduction and native_atomic_reduction:
+        raise ValueError("native lane and native atomic reductions are mutually exclusive")
+
+    out_type = jax.ShapeDtypeStruct(images.shape, jnp.float32)
+    target = (
+        _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_ATOMIC
+        if native_atomic_reduction
+        else (
+            _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE
+            if native_lane_reduction
+            else _TARGET_RELION_PREPROCESS_REAL_F32
+        )
+    )
+    return jax.ffi.ffi_call(
+        target,
+        (out_type, out_type),
+        vmap_method="sequential",
+    )(
+        images,
+        normalization_factors,
+        integer_shifts,
+        radius=np.float32(radius),
+        cosine_width=np.float32(cosine_width),
+        apply_mask=np.int64(int(apply_mask)),
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
@@ -932,19 +2165,28 @@ def backproject_indexed(
     interprets ``images[:, j]`` as the value at ``pixel_indices[j]``.
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     if relion_x_half and not (half_volume and half_image):
         raise ValueError("relion_x_half requires half_volume=True and half_image=True")
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     kw["relion_fold_x"] = np.int64(int(relion_x_half))
-    if relion_x_half:
-        # The CUDA half-volume scatter packs its last coordinate. RELION's
-        # BackProjector packs the Fourier x-axis, which is RECOVAR axis 0.
-        # Reorder coordinates to kernel layout (z, y, x) so the packed last
-        # axis is the RELION/RECOVAR-x half-axis.
-        rotation_matrices = rotation_matrices[..., [2, 1, 0]]
-    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
+    use_relion_block_topology = bool(relion_x_half and relion_x_half_bp_block_topology_enabled())
+    kw["relion_block_topology"] = np.int64(int(use_relion_block_topology))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if use_relion_block_topology:
+        logger.info("RELION x-half diagnostic: 128-thread one-block backprojection topology enabled")
+        images, pixel_indices, current_height, current_half_width = _prepare_relion_x_half_block_topology_operands(
+            images, pixel_indices, image_shape, max_r
+        )
+        kw["image_h"] = np.int64(current_height)
+        kw["image_w"] = np.int64(current_half_width)
+        kw["full_image_w"] = np.int64(current_height)
+    if relion_x_half:
+        rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(
+            rotation_matrices,
+            _volume_real_dtype(volume),
+        )
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
 
     return jax.ffi.ffi_call(
@@ -953,6 +2195,475 @@ def backproject_indexed(
         input_output_aliases={3: 0},
         vmap_method="sequential",
     )(images, pixel_indices, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(6, 7, 8))
+def _backproject_indexed_signature_impl(
+    volume: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    canonical_rotation_keys: jax.Array,
+    signature_row_indices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, ...]:
+    """Run the ordinary indexed production kernel plus its inert signature companion."""
+
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(f"ordinary indexed signature requires an odd BPref grid, got {volume_shape}")
+    if volume.dtype != jnp.complex64 or images.dtype != jnp.complex64:
+        raise TypeError("ordinary indexed signature volume/images must be complex64")
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError("ordinary indexed signature pixel indices must be int32")
+    if canonical_rotation_keys.dtype != jnp.int32 or signature_row_indices.dtype != jnp.int32:
+        raise TypeError("ordinary indexed signature keys/selected rows must be int32")
+    if images.ndim != 2 or pixel_indices.shape != (images.shape[1],):
+        raise ValueError("ordinary indexed signature requires rank-2 rows and matching pixel indices")
+    if rotation_matrices.shape != (images.shape[0], 3, 3):
+        raise ValueError("ordinary indexed signature rotations must have shape (n_rows,3,3)")
+    if canonical_rotation_keys.shape != (images.shape[0],):
+        raise ValueError("ordinary indexed signature rotation key length mismatch")
+    expected_volume_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    if volume.shape != (expected_volume_size,):
+        raise ValueError("ordinary indexed signature accumulator shape mismatch")
+
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    kw["relion_fold_x"] = np.int64(1)
+    kw["relion_block_topology"] = np.int64(0)
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
+    rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
+    signature_shape = (int(signature_row_indices.shape[0]), int(images.shape[1]))
+    out_types = (
+        jax.ShapeDtypeStruct(volume.shape, volume.dtype),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct((*signature_shape, 5), jnp.float32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.int32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.float32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.int32),
+        jax.ShapeDtypeStruct(volume.shape, volume.dtype),
+        jax.ShapeDtypeStruct(images.shape, images.dtype),
+        jax.ShapeDtypeStruct(pixel_indices.shape, pixel_indices.dtype),
+        jax.ShapeDtypeStruct(rot6.shape, rot6.dtype),
+        jax.ShapeDtypeStruct(canonical_rotation_keys.shape, canonical_rotation_keys.dtype),
+        jax.ShapeDtypeStruct(signature_row_indices.shape, signature_row_indices.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_BACKPROJECT_INDEXED_SIGNATURE,
+        out_types,
+        input_output_aliases={5: 0},
+        vmap_method="sequential",
+    )(
+        images,
+        pixel_indices,
+        rot6,
+        canonical_rotation_keys,
+        signature_row_indices,
+        volume,
+        **kw,
+    )
+
+
+def backproject_indexed_signature(
+    volume: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    canonical_rotation_keys: jax.Array,
+    signature_row_indices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, ...]:
+    """Capture ordinary indexed CUDA geometry without changing its atomic launch."""
+
+    row_indices = np.asarray(signature_row_indices)
+    n_rows = int(images.shape[0])
+    if (
+        row_indices.ndim != 1
+        or row_indices.dtype != np.dtype(np.int32)
+        or row_indices.size == 0
+        or np.any(row_indices < 0)
+        or np.any(row_indices >= n_rows)
+        or (row_indices.size > 1 and np.any(np.diff(row_indices) <= 0))
+    ):
+        raise ValueError("ordinary indexed signature rows must be nonempty, unique, strictly increasing, and in range")
+    selected = jnp.asarray(row_indices, dtype=jnp.int32)
+    pixels = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    keys = jnp.asarray(canonical_rotation_keys, dtype=jnp.int32).reshape(-1)
+    outputs = _backproject_indexed_signature_impl(
+        volume,
+        images,
+        pixels,
+        rotation_matrices,
+        keys,
+        selected,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
+    rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
+    expected = (images, pixels, rot6, keys, selected)
+    observed = outputs[9:14]
+    mismatches = [
+        name
+        for name, lhs, rhs in zip(
+            ("images", "pixel_indices", "rot6", "rotation_keys", "signature_rows"),
+            expected,
+            observed,
+            strict=True,
+        )
+        if not _bitwise_array_equal(lhs, rhs)
+    ]
+    if not _bitwise_array_equal(outputs[0], outputs[8]):
+        mismatches.insert(0, "accumulator")
+    if mismatches:
+        raise RuntimeError(
+            "ordinary indexed signature deterministic inertness gate failed for " + ", ".join(mismatches)
+        )
+    return outputs[:8]
+
+
+@functools.partial(jax.jit, static_argnums=(6, 7, 8))
+def relion_fused_x_half_backproject_indexed(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    data_rows: jax.Array,
+    weight_rows: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float | None,
+) -> tuple[jax.Array, jax.Array]:
+    """Fused RELION x-half data/weight backprojection diagnostic.
+
+    This target is intentionally narrower than :func:`backproject_indexed`:
+    it accepts pre-reduced complex64 data rows and float32 weight rows, expands
+    both to RELION's native current-size FFTW square, and updates the complex64
+    data and float32 weight accumulators in one 128-thread CUDA grid.  The two
+    output buffers alias their corresponding input accumulators.
+    """
+
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if max_r is None:
+        raise ValueError("RELION fused x-half backprojection requires an explicit support radius")
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(f"RELION fused x-half backprojection requires an odd BPref grid, got {volume_shape}")
+
+    if data_volume.dtype != jnp.dtype(jnp.complex64):
+        raise TypeError(f"RELION fused x-half data volume must be complex64, got {data_volume.dtype}")
+    if weight_volume.dtype != jnp.dtype(jnp.float32):
+        raise TypeError(f"RELION fused x-half weight volume must be float32, got {weight_volume.dtype}")
+    if data_rows.dtype != jnp.dtype(jnp.complex64):
+        raise TypeError(f"RELION fused x-half data rows must be complex64, got {data_rows.dtype}")
+    if weight_rows.dtype != jnp.dtype(jnp.float32):
+        raise TypeError(f"RELION fused x-half weight rows must be float32, got {weight_rows.dtype}")
+    if pixel_indices.dtype != jnp.dtype(jnp.int32):
+        raise TypeError(f"RELION fused x-half pixel indices must be int32, got {pixel_indices.dtype}")
+    if not jnp.issubdtype(rotation_matrices.dtype, jnp.floating):
+        raise TypeError(f"RELION fused x-half rotations must be floating point, got {rotation_matrices.dtype}")
+
+    if data_rows.ndim != 2 or weight_rows.ndim != 2:
+        raise ValueError(
+            "RELION fused x-half rows must both have shape (n_rotations, n_pixels), "
+            f"got {data_rows.shape} and {weight_rows.shape}"
+        )
+    if data_rows.shape != weight_rows.shape:
+        raise ValueError(
+            f"RELION fused x-half data/weight row shape mismatch: {data_rows.shape} vs {weight_rows.shape}"
+        )
+    if data_rows.shape[0] <= 0 or data_rows.shape[1] <= 0:
+        raise ValueError(f"RELION fused x-half rows must be nonempty, got {data_rows.shape}")
+    if pixel_indices.ndim != 1 or pixel_indices.shape[0] != data_rows.shape[1]:
+        raise ValueError(
+            "RELION fused x-half pixel indices must match the row pixel axis, "
+            f"got {pixel_indices.shape} for rows {data_rows.shape}"
+        )
+    if rotation_matrices.shape != (data_rows.shape[0], 3, 3):
+        raise ValueError(
+            f"RELION fused x-half rotations must have shape ({data_rows.shape[0]}, 3, 3), got {rotation_matrices.shape}"
+        )
+    if data_volume.ndim != 1 or weight_volume.ndim != 1:
+        raise ValueError(
+            f"RELION fused x-half accumulators must be flat, got {data_volume.shape} and {weight_volume.shape}"
+        )
+    expected_volume_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    if data_volume.shape != (expected_volume_size,) or weight_volume.shape != (expected_volume_size,):
+        raise ValueError(
+            "RELION fused x-half accumulator shape mismatch: expected "
+            f"{(expected_volume_size,)}, got {data_volume.shape} and {weight_volume.shape}"
+        )
+
+    dense_data_rows, dense_indices, current_height, current_half_width = _prepare_relion_x_half_block_topology_operands(
+        data_rows, pixel_indices, image_shape, max_r
+    )
+    dense_weight_rows, weight_dense_indices, weight_height, weight_half_width = (
+        _prepare_relion_x_half_block_topology_operands(weight_rows, pixel_indices, image_shape, max_r)
+    )
+    if (weight_height, weight_half_width) != (current_height, current_half_width):
+        raise ValueError("RELION fused x-half data/weight topology metadata mismatch")
+    # Both preparations use the same original indices, shape, and radius, so
+    # their dense index vectors are identical. Keep a shape assertion here and
+    # pass only one vector to the FFI target.
+    if weight_dense_indices.shape != dense_indices.shape:
+        raise ValueError("RELION fused x-half data/weight dense index shape mismatch")
+
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    kw["image_h"] = np.int64(current_height)
+    kw["image_w"] = np.int64(current_half_width)
+    kw["full_image_w"] = np.int64(current_height)
+    rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
+    rot6 = _rot_to_compact(rotation_matrices, jnp.float32)
+
+    out_types = (
+        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FUSED_X_HALF_BP,
+        out_types,
+        input_output_aliases={4: 0, 5: 1},
+        vmap_method="sequential",
+    )(
+        dense_data_rows,
+        dense_weight_rows,
+        dense_indices,
+        rot6,
+        data_volume,
+        weight_volume,
+        **kw,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(8, 9, 10))
+def _relion_fused_x_half_backproject_signature_indexed_impl(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    data_rows: jax.Array,
+    weight_rows: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    canonical_rotation_keys: jax.Array,
+    signature_row_indices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float | None,
+) -> tuple[jax.Array, ...]:
+    """Run the native fused x-half scatter and capture exact device geometry.
+
+    The handler first launches the ordinary production accumulator kernel.  A
+    stream-ordered signature-only kernel then executes the same templated
+    float32 coordinate/fold/neighbor code without atomics and writes unique
+    ``(row, pixel[, neighbor])`` slots.  The ordinary accumulator launch still
+    receives every source row; ``signature_row_indices`` limits only the
+    subsequent signature-only launch and its output allocation.  Thus neither
+    signature stores nor contributor filtering can perturb the accumulator's
+    atomic schedule.  ``canonical_rotation_keys`` is passed explicitly from
+    the candidate grid; no Euler nearest-neighbor matching is performed.
+    """
+
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if max_r is None:
+        raise ValueError("RELION fused x-half signature requires an explicit support radius")
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(f"RELION fused x-half signature requires an odd BPref grid, got {volume_shape}")
+    if data_volume.dtype != jnp.complex64 or data_rows.dtype != jnp.complex64:
+        raise TypeError("RELION fused x-half signature data rows/volume must be complex64")
+    if weight_volume.dtype != jnp.float32 or weight_rows.dtype != jnp.float32:
+        raise TypeError("RELION fused x-half signature weight rows/volume must be float32")
+    if (
+        pixel_indices.dtype != jnp.int32
+        or canonical_rotation_keys.dtype != jnp.int32
+        or signature_row_indices.dtype != jnp.int32
+    ):
+        raise TypeError("RELION fused x-half signature pixel, canonical rotation keys, and row indices must be int32")
+    if data_rows.ndim != 2 or data_rows.shape != weight_rows.shape:
+        raise ValueError("RELION fused x-half signature rows must have matching rank-2 shapes")
+    if pixel_indices.shape != (data_rows.shape[1],):
+        raise ValueError("RELION fused x-half signature pixel index length mismatch")
+    if rotation_matrices.shape != (data_rows.shape[0], 3, 3):
+        raise ValueError("RELION fused x-half signature rotations must have shape (n_rows, 3, 3)")
+    if canonical_rotation_keys.shape != (data_rows.shape[0],):
+        raise ValueError("RELION fused x-half signature canonical key length mismatch")
+    if signature_row_indices.ndim != 1 or signature_row_indices.shape[0] <= 0:
+        raise ValueError("RELION fused x-half signature row indices must be a nonempty rank-1 array")
+    expected_volume_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    if data_volume.shape != (expected_volume_size,) or weight_volume.shape != (expected_volume_size,):
+        raise ValueError("RELION fused x-half signature accumulator shape mismatch")
+
+    dense_data_rows, dense_indices, current_height, current_half_width = _prepare_relion_x_half_block_topology_operands(
+        data_rows, pixel_indices, image_shape, max_r
+    )
+    dense_weight_rows, weight_dense_indices, weight_height, weight_half_width = (
+        _prepare_relion_x_half_block_topology_operands(weight_rows, pixel_indices, image_shape, max_r)
+    )
+    if (weight_height, weight_half_width) != (current_height, current_half_width):
+        raise ValueError("RELION fused x-half signature topology metadata mismatch")
+    if weight_dense_indices.shape != dense_indices.shape:
+        raise ValueError("RELION fused x-half signature dense index shape mismatch")
+
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    kw["image_h"] = np.int64(current_height)
+    kw["image_w"] = np.int64(current_half_width)
+    kw["full_image_w"] = np.int64(current_height)
+    rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
+    rot6 = _rot_to_compact(rotation_matrices, jnp.float32)
+    signature_shape = (int(signature_row_indices.shape[0]), int(dense_data_rows.shape[1]))
+    out_types = (
+        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct((*signature_shape, 6), jnp.float32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.int32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.float32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.int32),
+        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+        jax.ShapeDtypeStruct(dense_data_rows.shape, dense_data_rows.dtype),
+        jax.ShapeDtypeStruct(dense_weight_rows.shape, dense_weight_rows.dtype),
+        jax.ShapeDtypeStruct(dense_indices.shape, dense_indices.dtype),
+        jax.ShapeDtypeStruct(rot6.shape, rot6.dtype),
+        jax.ShapeDtypeStruct(canonical_rotation_keys.shape, canonical_rotation_keys.dtype),
+        jax.ShapeDtypeStruct(signature_row_indices.shape, signature_row_indices.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE,
+        out_types,
+        input_output_aliases={6: 0, 7: 1},
+        vmap_method="sequential",
+    )(
+        dense_data_rows,
+        dense_weight_rows,
+        dense_indices,
+        rot6,
+        canonical_rotation_keys,
+        signature_row_indices,
+        data_volume,
+        weight_volume,
+        **kw,
+    )
+
+
+def _bitwise_array_equal(left, right) -> bool:
+    """Compare diagnostic device snapshots without numeric tolerance."""
+
+    left_np = np.asarray(left)
+    right_np = np.asarray(right)
+    return (
+        left_np.shape == right_np.shape
+        and left_np.dtype == right_np.dtype
+        and left_np.tobytes(order="C") == right_np.tobytes(order="C")
+    )
+
+
+def _require_signature_inertness_outputs(outputs, expected_operands) -> None:
+    """Fail closed unless signature capture is bitwise inert and input-exact."""
+
+    accumulator_pairs = (
+        ("data_accumulator", outputs[0], outputs[9]),
+        ("weight_accumulator", outputs[1], outputs[10]),
+    )
+    operand_names = (
+        "data_rows",
+        "weight_rows",
+        "pixel_indices",
+        "rot6",
+        "canonical_rotation_keys",
+        "signature_row_indices",
+    )
+    operand_pairs = tuple(
+        (name, expected, shadow)
+        for name, expected, shadow in zip(operand_names, expected_operands, outputs[11:17], strict=True)
+    )
+    mismatches = [
+        name
+        for name, expected, observed in (*accumulator_pairs, *operand_pairs)
+        if not _bitwise_array_equal(expected, observed)
+    ]
+    if mismatches:
+        raise RuntimeError(
+            "RELION fused x-half signature deterministic inertness gate failed for " + ", ".join(mismatches)
+        )
+
+
+def relion_fused_x_half_backproject_signature_indexed(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    data_rows: jax.Array,
+    weight_rows: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    canonical_rotation_keys: jax.Array,
+    signature_row_indices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float | None,
+) -> tuple[jax.Array, ...]:
+    """Validate contributor row selection before invoking the jitted FFI."""
+
+    row_indices_np = np.asarray(signature_row_indices)
+    n_rows = int(data_rows.shape[0])
+    if (
+        row_indices_np.ndim != 1
+        or row_indices_np.dtype != np.dtype(np.int32)
+        or row_indices_np.size == 0
+        or np.any(row_indices_np < 0)
+        or np.any(row_indices_np >= n_rows)
+        or (row_indices_np.size > 1 and np.any(np.diff(row_indices_np) <= 0))
+    ):
+        raise ValueError(
+            "RELION fused x-half signature row indices must be nonempty, unique, "
+            "strictly increasing, and within the source-row range"
+        )
+    signature_row_indices_jax = jnp.asarray(row_indices_np, dtype=jnp.int32)
+    outputs = _relion_fused_x_half_backproject_signature_indexed_impl(
+        data_volume,
+        weight_volume,
+        data_rows,
+        weight_rows,
+        pixel_indices,
+        rotation_matrices,
+        canonical_rotation_keys,
+        signature_row_indices_jax,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+    dense_data_rows, dense_indices, _, _ = _prepare_relion_x_half_block_topology_operands(
+        data_rows, pixel_indices, image_shape, max_r
+    )
+    dense_weight_rows, weight_dense_indices, _, _ = _prepare_relion_x_half_block_topology_operands(
+        weight_rows, pixel_indices, image_shape, max_r
+    )
+    if not _bitwise_array_equal(dense_indices, weight_dense_indices):
+        raise RuntimeError("RELION fused x-half signature prepared pixel indices disagree by operand")
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
+    rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
+    _require_signature_inertness_outputs(
+        outputs,
+        (
+            dense_data_rows,
+            dense_weight_rows,
+            dense_indices,
+            rot6,
+            canonical_rotation_keys,
+            signature_row_indices_jax,
+        ),
+    )
+    # Shadow outputs are diagnostic gates only.  The public result retains the
+    # established accumulator + seven signature-array contract.
+    return outputs[:9]
 
 
 @functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
@@ -971,15 +2682,28 @@ def batch_backproject_indexed(
 ) -> jax.Array:
     """Back-project compact indexed images into a batch of volumes."""
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     if relion_x_half and not (half_volume and half_image):
         raise ValueError("relion_x_half requires half_volume=True and half_image=True")
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     kw["relion_fold_x"] = np.int64(int(relion_x_half))
-    if relion_x_half:
-        rotation_matrices = rotation_matrices[..., [2, 1, 0]]
-    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
+    use_relion_block_topology = bool(relion_x_half and relion_x_half_bp_block_topology_enabled())
+    kw["relion_block_topology"] = np.int64(int(use_relion_block_topology))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if use_relion_block_topology:
+        logger.info("RELION x-half diagnostic: batched 128-thread one-block backprojection topology enabled")
+        images, pixel_indices, current_height, current_half_width = _prepare_relion_x_half_block_topology_operands(
+            images, pixel_indices, image_shape, max_r
+        )
+        kw["image_h"] = np.int64(current_height)
+        kw["image_w"] = np.int64(current_half_width)
+        kw["full_image_w"] = np.int64(current_height)
+    if relion_x_half:
+        rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(
+            rotation_matrices,
+            _volume_real_dtype(volumes),
+        )
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
 
     return jax.ffi.ffi_call(
@@ -1015,7 +2739,7 @@ def _project_impl(
     complex array, shape ``(n_images, n_pixels)``  (n_pixels = H*W or H*(W//2+1)).
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     kw, ih, iw_eff = _project_ffi_kwargs(
         image_shape,
         volume_shape,
@@ -1051,8 +2775,9 @@ def project(
     """Project *volume* to 2D images.
 
     ``relion_texture_interp=True`` uses RELION-style CUDA texture
-    interpolation where the FFI backend supports it. The flag is forwarded as
-    a static argument so manual and texture traces cannot alias in JAX caches.
+    interpolation, including RELION's positive even-box Nyquist convention,
+    where the FFI backend supports it. The flag is forwarded as a static
+    argument so manual and texture traces cannot alias in JAX caches.
     """
     global _texture_debug_keys
     debug_key = (
@@ -1092,6 +2817,87 @@ def project(
     )
 
 
+@jax.jit
+def relion_wavg_rotation_atomic_f32(terms: jax.Array) -> jax.Array:
+    """Reduce ``[batch, rotation, pixel]`` terms with RELION Wavg atomics."""
+
+    _ensure_ffi()
+    terms = jnp.asarray(terms)
+    if terms.dtype != jnp.float32 or terms.ndim != 3:
+        raise ValueError(
+            "relion_wavg_rotation_atomic_f32 expects a float32 [batch, rotation, pixel] array"
+        )
+    output_type = jax.ShapeDtypeStruct((terms.shape[0], terms.shape[2]), jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_F32,
+        output_type,
+        vmap_method="sequential",
+    )(terms)
+
+
+@jax.jit
+def relion_wavg_rotation_atomic_add_f32(
+    terms: jax.Array,
+    accumulator: jax.Array,
+) -> jax.Array:
+    """Atomically add ``[batch, rotation, pixel]`` terms into ``[batch, pixel]``."""
+
+    _ensure_ffi()
+    terms = jnp.asarray(terms)
+    accumulator = jnp.asarray(accumulator)
+    if terms.dtype != jnp.float32 or terms.ndim != 3:
+        raise ValueError(
+            "relion_wavg_rotation_atomic_add_f32 expects float32 [batch, rotation, pixel] terms"
+        )
+    if accumulator.dtype != jnp.float32 or accumulator.shape != (
+        terms.shape[0],
+        terms.shape[2],
+    ):
+        raise ValueError(
+            "relion_wavg_rotation_atomic_add_f32 expects a matching float32 [batch, pixel] accumulator"
+        )
+    output_type = jax.ShapeDtypeStruct(accumulator.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32,
+        output_type,
+        input_output_aliases={1: 0},
+        vmap_method="sequential",
+    )(terms, accumulator)
+
+
+@jax.jit
+def relion_wavg_rotation_atomic_triplet_add_f32(
+    terms: jax.Array,
+    accumulator: jax.Array,
+) -> jax.Array:
+    """Atomically add Wavg ``[XA, AA, diff2]`` terms in RELION source order."""
+
+    _ensure_ffi()
+    terms = jnp.asarray(terms)
+    accumulator = jnp.asarray(accumulator)
+    if terms.dtype != jnp.float32 or terms.ndim != 4 or terms.shape[-1] != 3:
+        raise ValueError(
+            "relion_wavg_rotation_atomic_triplet_add_f32 expects float32 "
+            "[batch, rotation, pixel, 3] terms"
+        )
+    if accumulator.dtype != jnp.float32 or accumulator.shape != (
+        terms.shape[0],
+        terms.shape[2],
+        3,
+    ):
+        raise ValueError(
+            "relion_wavg_rotation_atomic_triplet_add_f32 expects a matching "
+            "float32 [batch, pixel, 3] accumulator"
+        )
+    output_type = jax.ShapeDtypeStruct(accumulator.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32,
+        output_type,
+        input_output_aliases={1: 0},
+        vmap_method="sequential",
+    )(terms, accumulator)
+
+
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
 def project_indexed(
     volume: jax.Array,
@@ -1111,7 +2917,7 @@ def project_indexed(
     output stores those pixels compactly as ``(n_images, len(pixel_indices))``.
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     n_images = rotation_matrices.shape[0]
@@ -1163,7 +2969,7 @@ def batch_backproject(
     Updated volumes, shape ``(batch, vol_flat_size)``.
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Aggregate per-cell calibration JSONs into the planner's table.
 
-Reads every ``cell_*.json`` produced by ``calibrate_memory_planner.py``
+Reads every per-cell JSON produced by ``calibrate_memory_planner.py``
 and emits ``recovar/utils/memory_calibration_data.json`` in the schema
 the planner expects.
 """
@@ -14,6 +14,9 @@ import os
 from pathlib import Path
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -24,9 +27,7 @@ def main() -> int:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(
-            "/scratch/gpfs/GILLES/mg6942/recovar_wt_agent_20260507_170447_778531/recovar/utils/memory_calibration_data.json"
-        ),
+        default=REPO_ROOT / "recovar" / "utils" / "memory_calibration_data.json",
     )
     parser.add_argument("--gpu-kind", default="NVIDIA H100")
     parser.add_argument("--driver", default="auto")

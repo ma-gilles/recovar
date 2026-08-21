@@ -1,0 +1,167 @@
+{
+  "schema": "recovar.em_k4_class_fsc_auc_scorecard.v1",
+  "suite_id": "k4-relion-cuda-4181d340-20260725-direct-class-fsc-auc",
+  "suite_version": 1,
+  "frozen_denominator": 60,
+  "classes": 4,
+  "numbered_iterations": 15,
+  "direct_fsc_auc_gate": 0.995,
+  "metric_policy": "Shellwise cross-engine FSC-AUC at the fixed 0.995 gate; correlation is not used.",
+  "scorecard_change_admissible": false,
+  "same_physical_gpu": true,
+  "gpu_uuid": "GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30",
+  "grid_correction": "unset",
+  "forced_final_all_data_after_nonconvergence": false,
+  "source_commit": "4181d340997e548af36c6458cce825e133dba95a",
+  "source_snapshot": {
+    "path": "docs/math/em_k4_backend_trajectory_snapshot_v2.json",
+    "sha256": "bc10d0555488b22f0bc8d54afe5afc5288064ddb4708bd1c75f3b55dd4c0060a"
+  },
+  "source_trajectory": {
+    "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_host_relioncuda_samegpu_4181d340_20260725T051500ET/analysis/relion_cuda/k4_fsc_trajectory.json",
+    "sha256": "5e030ab63c779b8e3050c8fc63ad4efabcc3e353d3b77ce047da8c20e63076fd"
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "cross_engine_fsc_auc": [
+        0.9999999217960965,
+        0.9999954896222087,
+        0.9999999188377671,
+        0.9999998980067087
+      ]
+    },
+    {
+      "iteration": 2,
+      "cross_engine_fsc_auc": [
+        0.9999983668090692,
+        0.9999923692189739,
+        0.9999977433218156,
+        0.9999973371391635
+      ]
+    },
+    {
+      "iteration": 3,
+      "cross_engine_fsc_auc": [
+        0.9999144079328093,
+        0.9997640431569881,
+        0.9996615492698013,
+        0.9992629383951085
+      ]
+    },
+    {
+      "iteration": 4,
+      "cross_engine_fsc_auc": [
+        0.9991911072085428,
+        0.9985409272560956,
+        0.9989829553151702,
+        0.9992354225490828
+      ]
+    },
+    {
+      "iteration": 5,
+      "cross_engine_fsc_auc": [
+        0.99839214574649,
+        0.9974502894935262,
+        0.9981080525628414,
+        0.9989359915219649
+      ]
+    },
+    {
+      "iteration": 6,
+      "cross_engine_fsc_auc": [
+        0.9972767893840797,
+        0.9967933985716844,
+        0.9975057769185138,
+        0.9981695713568843
+      ]
+    },
+    {
+      "iteration": 7,
+      "cross_engine_fsc_auc": [
+        0.9976145268052282,
+        0.9966698973059185,
+        0.9973954374980095,
+        0.9979266001035745
+      ]
+    },
+    {
+      "iteration": 8,
+      "cross_engine_fsc_auc": [
+        0.9973312707800083,
+        0.9963192468392627,
+        0.9965626995939341,
+        0.9971708946878254
+      ]
+    },
+    {
+      "iteration": 9,
+      "cross_engine_fsc_auc": [
+        0.996282314583045,
+        0.9951995275573638,
+        0.9956998381921592,
+        0.9963308221874827
+      ]
+    },
+    {
+      "iteration": 10,
+      "cross_engine_fsc_auc": [
+        0.996185137717064,
+        0.9948890936244424,
+        0.9952918748224759,
+        0.9963470825705978
+      ]
+    },
+    {
+      "iteration": 11,
+      "cross_engine_fsc_auc": [
+        0.9948252391062554,
+        0.9934831677593646,
+        0.9933616944645686,
+        0.9946532315314668
+      ]
+    },
+    {
+      "iteration": 12,
+      "cross_engine_fsc_auc": [
+        0.9957695992786886,
+        0.9940211272807769,
+        0.9936717912244045,
+        0.9950124845885435
+      ]
+    },
+    {
+      "iteration": 13,
+      "cross_engine_fsc_auc": [
+        0.9948790904352033,
+        0.9933167865795268,
+        0.9924670644050795,
+        0.9944513966582168
+      ]
+    },
+    {
+      "iteration": 14,
+      "cross_engine_fsc_auc": [
+        0.9935362674564922,
+        0.9919011463930602,
+        0.9915812757362203,
+        0.9943106599903103
+      ]
+    },
+    {
+      "iteration": 15,
+      "cross_engine_fsc_auc": [
+        0.9936005126730775,
+        0.9912818890621345,
+        0.9900911277299856,
+        0.9938280816577081
+      ]
+    }
+  ],
+  "summary": {
+    "pass": 41,
+    "fail": 19,
+    "evaluated": 60,
+    "iterations_all_classes_passed": 9
+  }
+}

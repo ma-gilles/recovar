@@ -34,13 +34,22 @@ def test_jax_scipy_nd_image_mean_complex_path_returns_complex64():
 
 
 def test_get_fsc_gpu_returns_finite_values():
-    shape = (4, 4, 4)
+    shape = (8, 8, 8)
     rng = np.random.default_rng(0)
     v1 = (rng.normal(size=np.prod(shape)) + 1j * rng.normal(size=np.prod(shape))).astype(np.complex64)
     v2 = (rng.normal(size=np.prod(shape)) + 1j * rng.normal(size=np.prod(shape))).astype(np.complex64)
     fsc = regularization.get_fsc_gpu(v1, v2, shape, substract_shell_mean=False, frequency_shift=0)
     fsc = np.asarray(fsc)
     assert fsc.ndim == 1
+    assert np.all(np.isfinite(fsc))
+    assert fsc[0] == fsc[1]
+
+
+def test_get_fsc_gpu_single_shell_is_finite():
+    shape = (4, 4, 4)
+    volume = np.ones(np.prod(shape), dtype=np.complex64)
+    fsc = np.asarray(regularization.get_fsc_gpu(volume, volume, shape))
+    assert fsc.shape == (1,)
     assert np.all(np.isfinite(fsc))
 
 
@@ -205,6 +214,65 @@ def test_compute_relion_fsc_from_backprojector_accepts_packed_half_accumulators(
     np.testing.assert_allclose(fsc_from_half, fsc_from_full, atol=1e-6, rtol=1e-6)
 
 
+def test_compute_relion_fsc_from_backprojector_accepts_odd_packed_half_accumulators():
+    shape = (8, 8, 8)
+    padding_factor = 2
+    accumulator_shape = (19, 19, 19)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(accumulator_shape)
+    rng = np.random.default_rng(19)
+
+    data0_half = (
+        rng.normal(size=half_shape).astype(np.float32)
+        + 1j * rng.normal(size=half_shape).astype(np.float32)
+    )
+    data1_half = (
+        rng.normal(size=half_shape).astype(np.float32)
+        + 1j * rng.normal(size=half_shape).astype(np.float32)
+    )
+    weight0_half = (0.25 + rng.random(size=half_shape)).astype(np.float32)
+    weight1_half = (0.25 + rng.random(size=half_shape)).astype(np.float32)
+
+    data0_full = np.asarray(
+        fourier_transform_utils.half_volume_to_full_volume(data0_half, accumulator_shape)
+    )
+    data1_full = np.asarray(
+        fourier_transform_utils.half_volume_to_full_volume(data1_half, accumulator_shape)
+    )
+    weight0_full = np.asarray(
+        fourier_transform_utils.half_volume_to_full_volume(weight0_half, accumulator_shape)
+    )
+    weight1_full = np.asarray(
+        fourier_transform_utils.half_volume_to_full_volume(weight1_half, accumulator_shape)
+    )
+
+    fsc_from_full = np.asarray(
+        regularization.compute_relion_fsc_from_backprojector(
+            data0_full.reshape(-1),
+            data1_full.reshape(-1),
+            weight0_full.reshape(-1),
+            weight1_full.reshape(-1),
+            shape,
+            padding_factor=padding_factor,
+            r_max=shape[0] // 2,
+            accumulator_volume_shape=accumulator_shape,
+        )
+    )
+    fsc_from_half = np.asarray(
+        regularization.compute_relion_fsc_from_backprojector(
+            data0_half.reshape(-1),
+            data1_half.reshape(-1),
+            weight0_half.reshape(-1),
+            weight1_half.reshape(-1),
+            shape,
+            padding_factor=padding_factor,
+            r_max=shape[0] // 2,
+            accumulator_volume_shape=accumulator_shape,
+        )
+    )
+
+    np.testing.assert_allclose(fsc_from_half, fsc_from_full, atol=1e-6, rtol=1e-6)
+
+
 def test_compute_relion_fsc_from_backprojector_applies_exact_rmax_before_shell_binning():
     shape = (4, 4, 4)
     data0 = np.zeros(shape, dtype=np.complex128)
@@ -236,6 +304,90 @@ def test_compute_relion_fsc_from_backprojector_applies_exact_rmax_before_shell_b
     )
 
     np.testing.assert_allclose(fsc[1], 1.0, atol=1e-7, rtol=1e-7)
+
+
+def test_join_halves_at_low_resolution_uses_explicit_padding_for_current_size_accumulator():
+    native_shape = (16, 16, 16)
+    accumulator_shape = (23, 23, 23)
+    padding_factor = 2
+
+    data0 = np.zeros(accumulator_shape, dtype=np.complex64)
+    data1 = np.zeros(accumulator_shape, dtype=np.complex64)
+    weight0 = np.zeros(accumulator_shape, dtype=np.float32)
+    weight1 = np.zeros(accumulator_shape, dtype=np.float32)
+
+    # Native join radius is ceil(16 / 8 A) = 2 shells. RELION applies the
+    # backprojector padding factor before comparing accumulator coordinates,
+    # so this radius-3 accumulator voxel must be joined when padding_factor=2.
+    joined_only_with_explicit_padding = (14, 11, 11)
+    data0[joined_only_with_explicit_padding] = 1.0 + 0.0j
+    data1[joined_only_with_explicit_padding] = 0.0 + 1.0j
+    weight0[joined_only_with_explicit_padding] = 1.0
+    weight1[joined_only_with_explicit_padding] = 1.0
+
+    legacy_join = regularization.join_halves_at_low_resolution(
+        data0.reshape(-1),
+        data1.reshape(-1),
+        weight0.reshape(-1),
+        weight1.reshape(-1),
+        accumulator_shape,
+        1.0,
+        native_shape[0],
+        8.0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(legacy_join[0]).reshape(accumulator_shape)[joined_only_with_explicit_padding],
+        1.0 + 0.0j,
+    )
+
+    joined = regularization.join_halves_at_low_resolution(
+        data0.reshape(-1),
+        data1.reshape(-1),
+        weight0.reshape(-1),
+        weight1.reshape(-1),
+        accumulator_shape,
+        1.0,
+        native_shape[0],
+        8.0,
+        padding_factor=padding_factor,
+    )
+    expected = np.complex64(0.5 + 0.5j)
+    np.testing.assert_allclose(
+        np.asarray(joined[0]).reshape(accumulator_shape)[joined_only_with_explicit_padding],
+        expected,
+    )
+    np.testing.assert_allclose(
+        np.asarray(joined[1]).reshape(accumulator_shape)[joined_only_with_explicit_padding],
+        expected,
+    )
+
+    fsc_before_join = np.asarray(
+        regularization.compute_relion_fsc_from_backprojector(
+            data0.reshape(-1),
+            data1.reshape(-1),
+            weight0.reshape(-1),
+            weight1.reshape(-1),
+            native_shape,
+            padding_factor=padding_factor,
+            r_max=2,
+            accumulator_volume_shape=accumulator_shape,
+        )
+    )
+    fsc_after_join = np.asarray(
+        regularization.compute_relion_fsc_from_backprojector(
+            joined[0],
+            joined[1],
+            joined[2],
+            joined[3],
+            native_shape,
+            padding_factor=padding_factor,
+            r_max=2,
+            accumulator_volume_shape=accumulator_shape,
+        )
+    )
+
+    np.testing.assert_allclose(fsc_before_join[2], 0.0, atol=1e-7, rtol=1e-7)
+    np.testing.assert_allclose(fsc_after_join[2], 1.0, atol=1e-7, rtol=1e-7)
 
 
 @pytest.mark.parametrize(
@@ -354,6 +506,30 @@ def test_relion_weight_shell_stats_floor_bins_reconstruct_support():
         np.asarray(stats_floor["shell_count"])[: expected.shape[0]],
         np.asarray(stats_round["shell_count"])[: expected.shape[0]],
     )
+
+
+def test_relion_weight_shell_stats_rounds_half_integer_radii_up():
+    """RELION ``ROUND`` maps positive 0.5/2.5 radii to shells 1/3."""
+    shape = (8, 8, 8)
+    padding_factor = 2
+    full_shape = tuple(s * padding_factor for s in shape)
+    weight = np.zeros(full_shape, dtype=np.float32)
+    center = tuple(s // 2 for s in full_shape)
+    weight[center[0], center[1], center[2] + 1] = 2.0  # radius / padding = 0.5
+    weight[center[0], center[1], center[2] + 5] = 3.0  # radius / padding = 2.5
+
+    stats = regularization._compute_relion_weight_shell_stats(
+        weight,
+        shape,
+        padding_factor=padding_factor,
+        shell_rounding="round",
+    )
+
+    shell_sum = np.asarray(stats["shell_sum"])
+    assert shell_sum[0] == pytest.approx(0.0)
+    assert shell_sum[1] == pytest.approx(2.0)
+    assert shell_sum[2] == pytest.approx(0.0)
+    assert shell_sum[3] == pytest.approx(3.0)
 
 
 def test_relion_weight_shell_stats_large_grid_cpu_path_matches_device_path(monkeypatch):

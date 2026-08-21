@@ -130,6 +130,36 @@ def _class_weights_from_posterior(class_posterior_per_half, n_classes: int, prev
     return weights / float(np.sum(weights))
 
 
+def _relion_optimizer_average_pmax(max_posterior_per_half, normalization_mass_per_half=None):
+    """Return RELION's optimizer Pmax scalar and its normalization mass.
+
+    In split-half refinement, RELION computes this independently per half,
+    then broadcasts half 1's scalar for shared scheduling. Class3D divides
+    half 1's Pmax sum by that half's retained M-step posterior mass
+    (``sum(wsum_model.pdf_class)``). The concatenated array is still returned
+    for per-particle diagnostics.
+    """
+
+    per_half = [np.asarray(pmax, dtype=np.float32).reshape(-1) for pmax in max_posterior_per_half]
+    if not per_half:
+        raise ValueError("RELION average Pmax requires at least one half-set")
+    combined = np.concatenate(per_half, axis=0)
+    numerator = float(np.sum(per_half[0], dtype=np.float64))
+    if normalization_mass_per_half is None:
+        denominator = float(per_half[0].size)
+    else:
+        half1_mass = normalization_mass_per_half[0]
+        if half1_mass is None:
+            raise ValueError("RELION average Pmax requires half-1 M-step posterior mass")
+        denominator = float(np.asarray(half1_mass, dtype=np.float64))
+    if not np.isfinite(denominator) or denominator <= 0.0:
+        raise ValueError(f"RELION average-Pmax denominator must be finite and positive, got {denominator}")
+    average = numerator / denominator
+    if not np.isfinite(average) or average < 0.0 or average > 1.0 + 1e-6:
+        raise ValueError(f"RELION average Pmax must be a probability, got {average}")
+    return combined, float(average), denominator
+
+
 def _combined_noise_stats(noise_stats_per_half):
     """Sum half-set noise sufficient statistics before RELION Class3D normalization."""
 
@@ -147,32 +177,20 @@ def _combined_noise_stats(noise_stats_per_half):
     wsum_sigma2_offset = float(sum(float(stats_k.wsum_sigma2_offset) for stats_k in stats))
     sumw = float(sum(float(stats_k.sumw) for stats_k in stats))
 
-    if any(stats_k.wsum_noise_a2 is not None for stats_k in stats):
-        wsum_noise_a2 = np.sum(
+    def _sum_optional_field(name: str, like):
+        values = [getattr(stats_k, name, None) for stats_k in stats]
+        if all(value is None for value in values):
+            return None
+        return np.sum(
             [
-                np.zeros_like(wsum_sigma2_noise)
-                if stats_k.wsum_noise_a2 is None
-                else np.asarray(stats_k.wsum_noise_a2, dtype=np.float64)
-                for stats_k in stats
+                np.zeros_like(like, dtype=np.float64) if value is None else np.asarray(value, dtype=np.float64)
+                for value in values
             ],
             axis=0,
         )
-    else:
-        wsum_noise_a2 = None
 
-    if any(stats_k.wsum_noise_xa is not None for stats_k in stats):
-        wsum_noise_xa = np.sum(
-            [
-                np.zeros_like(wsum_sigma2_noise)
-                if stats_k.wsum_noise_xa is None
-                else np.asarray(stats_k.wsum_noise_xa, dtype=np.float64)
-                for stats_k in stats
-            ],
-            axis=0,
-        )
-    else:
-        wsum_noise_xa = None
-
+    wsum_noise_a2 = _sum_optional_field("wsum_noise_a2", wsum_sigma2_noise)
+    wsum_noise_xa = _sum_optional_field("wsum_noise_xa", wsum_sigma2_noise)
     return make_noise_stats(
         wsum_sigma2_noise=wsum_sigma2_noise,
         wsum_img_power=wsum_img_power,
@@ -228,6 +246,11 @@ def _reconstruct_volume_eager(
     grid_correct=True,
     minres_map=0,
     current_size=None,
+    return_real_space=False,
+    accumulator_volume_shape=None,
+    tau_is_1d=False,
+    preserve_output_precision=False,
+    relion_filter_scale=None,
 ):
     """Eager RELION-style reconstruction from full or half Fourier accumulators.
 
@@ -252,6 +275,11 @@ def _reconstruct_volume_eager(
         gridding_padding_factor=projection_padding_factor,
         minres_map=minres_map,
         current_size=current_size,
+        return_real_space=return_real_space,
+        accumulator_volume_shape=accumulator_volume_shape,
+        tau_is_1d=tau_is_1d,
+        preserve_output_precision=preserve_output_precision,
+        relion_filter_scale=relion_filter_scale,
     )
 
 
@@ -261,18 +289,22 @@ def _apply_relion_initial_lowpass_filter(
     """Apply RELION's ``initialLowPassFilterReferences`` to a full Fourier volume."""
     if ini_high_angstrom is None or float(ini_high_angstrom) <= 0.0:
         return volume_ft_flat
-    from recovar.heterogeneity import locres
+    from recovar.em.initial_model.bootstrap_iref import initial_low_pass_filter_references
 
-    filtered = locres.low_pass_filter_map(
-        jnp.asarray(volume_ft_flat).reshape(volume_shape),
-        volume_shape[0],
-        float(ini_high_angstrom),
-        float(voxel_size),
-        int(filter_edgewidth),
-        do_highpass_instead=False,
-        volume_shape=volume_shape,
+    original = jnp.asarray(volume_ft_flat).reshape(volume_shape)
+    volume_real = np.real(np.asarray(fourier_transform_utils.get_idft3(original))).astype(
+        np.float64,
+        copy=False,
     )
-    return filtered.reshape(-1)
+    filtered_real = initial_low_pass_filter_references(
+        volume_real[None, ...],
+        ori_size=int(volume_shape[0]),
+        pixel_size=float(voxel_size),
+        ini_high_ang=float(ini_high_angstrom),
+        filter_edgewidth=float(filter_edgewidth),
+    )[0]
+    filtered_ft = fourier_transform_utils.get_dft3(jnp.asarray(filtered_real))
+    return filtered_ft.astype(original.dtype).reshape(-1)
 
 
 def _align_fourier_volume_sign_to_reference(volume_ft_flat, reference_ft_flat, volume_shape):
@@ -305,6 +337,7 @@ def _reconstruct_and_postprocess_means(
     Ft_y_combined,
     Ft_ctf_combined,
     mean_signal_variance,
+    mean_signal_variance_shells,
     mean_signal_variance_per_half,
     n_classes: int,
     k_class_enabled: bool,
@@ -322,6 +355,7 @@ def _reconstruct_and_postprocess_means(
     relion_firstiter_ini_high_angstrom,
     relion_width_mask_edge: int,
     relion_fmask_edge: int,
+    accumulator_volume_shape=None,
 ) -> None:
     """Run one iteration's regularized reconstruction + post-processing.
 
@@ -338,22 +372,46 @@ def _reconstruct_and_postprocess_means(
     _t_recon = time.time()
     cs_int = int(cs) if cs is not None else None
     if k_class_enabled:
-        shared_classes = jnp.stack(
-            [
-                _reconstruct_volume_eager(
-                    Ft_ctf_combined[class_idx],
-                    Ft_y_combined[class_idx],
-                    volume_shape,
-                    padding_factor,
-                    tau=mean_signal_variance[class_idx],
-                    tau2_fudge=tau2_fudge,
-                    projection_padding_factor=projection_padding_factor,
-                    minres_map=relion_minres_map,
-                    current_size=cs_int,
-                ).reshape(-1)
-                for class_idx in range(n_classes)
-            ],
-            axis=0,
+        shared_class_maps = []
+        for class_idx in range(n_classes):
+            logger.info(
+                "Class3D reconstruction start: iter=%d class=%d/%d current_size=%s",
+                iteration + 1,
+                class_idx + 1,
+                n_classes,
+                cs_int,
+            )
+            class_map = _reconstruct_volume_eager(
+                Ft_ctf_combined[class_idx],
+                Ft_y_combined[class_idx],
+                volume_shape,
+                padding_factor,
+                tau=(
+                    mean_signal_variance_shells[class_idx]
+                    if mean_signal_variance_shells is not None
+                    else mean_signal_variance[class_idx]
+                ),
+                tau2_fudge=tau2_fudge,
+                projection_padding_factor=projection_padding_factor,
+                minres_map=relion_minres_map,
+                current_size=cs_int,
+                accumulator_volume_shape=accumulator_volume_shape,
+                tau_is_1d=mean_signal_variance_shells is not None,
+            ).reshape(-1)
+            shared_class_maps.append(class_map)
+            logger.info(
+                "Class3D reconstruction done: iter=%d class=%d/%d elapsed=%.1fs",
+                iteration + 1,
+                class_idx + 1,
+                n_classes,
+                time.time() - _t_recon,
+            )
+        shared_classes = jnp.stack(shared_class_maps, axis=0)
+        logger.info(
+            "Class3D reconstruction stack complete: iter=%d classes=%d elapsed=%.1fs",
+            iteration + 1,
+            n_classes,
+            time.time() - _t_recon,
         )
         means[0] = shared_classes
         means[1] = shared_classes
@@ -361,16 +419,27 @@ def _reconstruct_and_postprocess_means(
         for k in range(2):
             Ft_y_k_local = Ft_y_0 if k == 0 else Ft_y_1
             Ft_ctf_k_local = Ft_ctf_0 if k == 0 else Ft_ctf_1
+            # This RELION build uses double RFLOAT in BackProjector::reconstruct.
+            # Keep the stored/controller tau2 state compact, but promote the
+            # reconstruction operand so 1 / (padding_factor**3 * tau2) is not
+            # rounded in float32 before it enters the Wiener denominator.
+            reconstruction_tau = jnp.asarray(
+                mean_signal_variance_per_half[k],
+                dtype=jnp.float64,
+            )
             means[k] = _reconstruct_volume_eager(
                 Ft_ctf_k_local,
                 Ft_y_k_local,
                 volume_shape,
                 padding_factor,
-                tau=mean_signal_variance_per_half[k],
+                tau=reconstruction_tau,
                 tau2_fudge=tau2_fudge,
                 projection_padding_factor=projection_padding_factor,
                 minres_map=relion_minres_map,
                 current_size=cs_int,
+                accumulator_volume_shape=accumulator_volume_shape,
+                preserve_output_precision=True,
+                relion_filter_scale=float(volume_shape[0] ** 4),
             ).reshape(-1)
 
     for k in range(2):
@@ -380,6 +449,26 @@ def _reconstruct_and_postprocess_means(
             import pathlib
 
             pathlib.Path(_premask_dump).mkdir(parents=True, exist_ok=True)
+            _preserve_premask_dtype = os.environ.get(
+                "RECOVAR_PREMASK_DUMP_PRESERVE_DTYPE", ""
+            ).strip().lower() not in {"", "0", "false", "no", "off"}
+            _premask_fourier = np.asarray(means[k])
+            if k_class_enabled:
+                _premask_real = np.stack(
+                    [
+                        np.asarray(
+                            fourier_transform_utils.get_idft3(
+                                means[k][class_idx].reshape(volume_shape)
+                            )
+                        ).real
+                        for class_idx in range(n_classes)
+                    ],
+                    axis=0,
+                )
+            else:
+                _premask_real = np.asarray(
+                    fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
+                ).real
             np.savez(
                 pathlib.Path(_premask_dump) / f"recovar_premask_it{iteration + 1:03d}_half{k + 1}.npz",
                 iteration=np.int32(iteration + 1),
@@ -388,31 +477,23 @@ def _reconstruct_and_postprocess_means(
                 grid_size=np.int32(grid_size),
                 voxel_size=np.float32(cryo.voxel_size),
                 volume_shape=np.asarray(volume_shape, dtype=np.int32),
-                means_premask=np.asarray(means[k], dtype=np.complex64),
+                means_premask=(
+                    _premask_fourier
+                    if _preserve_premask_dtype
+                    else np.asarray(_premask_fourier, dtype=np.complex64)
+                ),
+                means_premask_real=(
+                    _premask_real
+                    if _preserve_premask_dtype
+                    else np.asarray(_premask_real, dtype=np.float32)
+                ),
+                dump_preserve_dtype=np.int32(int(_preserve_premask_dtype)),
             )
 
-        # RELION's solventFlatten (ml_optimiser.cpp:5469): mask the
-        # reconstructed reference outside particle_diameter to remove
-        # solvent noise before the next E-step's projections.
-        if particle_diameter_ang is not None and particle_diameter_ang > 0:
-            flatten_radius = particle_diameter_ang / (2.0 * cryo.voxel_size)
-            solvent_mask = mask.raised_cosine_mask(
-                volume_shape,
-                radius=flatten_radius,
-                radius_p=flatten_radius + relion_width_mask_edge,
-                offset=jnp.zeros(3),
-            )
-            if k_class_enabled:
-                flattened_classes = []
-                for class_idx in range(n_classes):
-                    vol_real = fourier_transform_utils.get_idft3(means[k][class_idx].reshape(volume_shape))
-                    flattened_classes.append(
-                        fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1),
-                    )
-                means[k] = jnp.stack(flattened_classes, axis=0)
-            else:
-                vol_real = fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
-                means[k] = fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1)
+        # RELION filters Iref inside maximizationOtherParameters, then calls
+        # solventFlatten from the outer iteration loop.  These operations do
+        # not commute: masking in real space after the Fourier low-pass adds a
+        # small, deterministic high-shell tail.
         if relion_firstiter_cc_this_iter:
             if k_class_enabled:
                 means[k] = jnp.stack(
@@ -436,6 +517,25 @@ def _reconstruct_and_postprocess_means(
                     relion_firstiter_ini_high_angstrom,
                     filter_edgewidth=relion_fmask_edge,
                 )
+        if particle_diameter_ang is not None and particle_diameter_ang > 0:
+            flatten_radius = particle_diameter_ang / (2.0 * cryo.voxel_size)
+            solvent_mask = mask.raised_cosine_mask(
+                volume_shape,
+                radius=flatten_radius,
+                radius_p=flatten_radius + relion_width_mask_edge,
+                offset=jnp.zeros(3),
+            )
+            if k_class_enabled:
+                flattened_classes = []
+                for class_idx in range(n_classes):
+                    vol_real = fourier_transform_utils.get_idft3(means[k][class_idx].reshape(volume_shape))
+                    flattened_classes.append(
+                        fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1),
+                    )
+                means[k] = jnp.stack(flattened_classes, axis=0)
+            else:
+                vol_real = fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
+                means[k] = fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1)
     if relion_firstiter_cc_this_iter and relion_firstiter_ini_high_angstrom is not None:
         logger.info(
             "RELION iter-1 CC emulation: reapplying ini_high low-pass filter at %.2f A",
@@ -454,48 +554,108 @@ from dataclasses import dataclass as _dataclass  # noqa: E402  -- inline import
 class SigmaOffsetUpdateResult:
     """Posterior-weighted ``sigma_offset`` update result.
 
-    ``per_class_sigma_offset_angstrom`` is the K-class diagnostic, currently
-    logged only (the cross-class aggregate ``current_sigma_offset_angstrom``
-    is what feeds the next iteration's translation prior). Both halves of
-    the dual cross-class / hard-assignment fallback formula are folded
-    into ``current_sigma_offset_angstrom`` before return.
+    RELION gold-standard refinement has one model per half-set, so each half
+    updates and consumes its own sigma offset. The scalar value remains the
+    mean of the pair for backward-compatible telemetry only.
     """
 
     current_sigma_offset_angstrom: float
+    current_sigma_offset_angstrom_per_half: list[float]
     per_class_sigma_offset_angstrom: np.ndarray | None
+
+    @property
+    def per_half_sigma_offset_angstrom(self):
+        """Backward-compatible alias for pre-PR157 callers."""
+
+        return np.asarray(self.current_sigma_offset_angstrom_per_half, dtype=np.float64)
+
+
+def _sigma_offset_from_moment(
+    wsum: float,
+    sumw: float,
+    *,
+    current_sigma_offset_angstrom: float,
+    state_fallback_offsets_angstrom: float,
+) -> float:
+    min_sigma2_angstrom2 = 2.0
+    if wsum > 0.0 and sumw > 0.0:
+        return float(np.sqrt(max(wsum / (2.0 * sumw), min_sigma2_angstrom2)))
+    if np.isfinite(state_fallback_offsets_angstrom) and state_fallback_offsets_angstrom > 0.0:
+        return max(float(state_fallback_offsets_angstrom), float(np.sqrt(min_sigma2_angstrom2)))
+    return float(current_sigma_offset_angstrom)
 
 
 def update_c1_sigma_offset_from_posterior(
     *,
     noise_stats_per_half,
     noise_stats_per_half_per_class,
-    current_sigma_offset_angstrom: float,
+    current_sigma_offset_angstrom: float | None = None,
+    current_sigma_offset_angstrom_per_half=None,
     n_classes: int,
     k_class_enabled: bool,
     state_fallback_offsets_angstrom: float,
 ) -> SigmaOffsetUpdateResult:
-    """RELION C1 posterior-weighted ``sigma_offset`` update.
+    """RELION C1 posterior-weighted ``sigma_offset`` update per half-set.
 
     Prefer RELION's posterior-weighted sufficient statistic:
 
         sigma2_offset_new = wsum_sigma2_offset / (2 * sum_weight)
 
-    for 2D single-particle data. Fall back to the older hard-assignment
-    proxy only when a path does not propagate the full posterior moment
-    (``sigma2_offset_wsum == 0``). Both halves of the M-step contribute.
+    for 2D single-particle data. A half without a propagated posterior moment
+    uses the hard-assignment fallback independently; pooling the other half's
+    posterior into it would not match RELION's gold-standard models.
     """
 
-    sigma2_offset_wsum = 0.0
-    sigma2_offset_sumw = 0.0
-    for stats_k in noise_stats_per_half:
+    if current_sigma_offset_angstrom_per_half is None:
+        if current_sigma_offset_angstrom is None:
+            raise ValueError("a scalar or per-half current sigma offset is required")
+        current_per_half = np.full(2, float(current_sigma_offset_angstrom), dtype=np.float64)
+    else:
+        current_per_half = np.asarray(current_sigma_offset_angstrom_per_half, dtype=np.float64).reshape(-1)
+        if current_per_half.size != 2 or not np.all(np.isfinite(current_per_half)):
+            raise ValueError("current_sigma_offset_angstrom_per_half must contain two finite values")
+    per_half_values = []
+    pooled_wsum = 0.0
+    pooled_sumw = 0.0
+    for half_idx, stats_k in enumerate(noise_stats_per_half):
         if stats_k is None:
+            per_half_values.append(
+                _sigma_offset_from_moment(
+                    0.0,
+                    0.0,
+                    current_sigma_offset_angstrom=float(current_per_half[half_idx]),
+                    state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
+                )
+            )
             continue
-        sigma2_offset_wsum += float(getattr(stats_k, "wsum_sigma2_offset", 0.0))
-        sigma2_offset_sumw += float(getattr(stats_k, "sumw", 0.0))
-    # D.2: per-class sigma_offset diagnostic. RELION Class3D maintains K
-    # independent sigma_offset values; recovar currently uses the
-    # cross-class aggregate. Compute and log per-class sigmas to gauge
-    # whether the per-class refactor is justified for this fixture.
+        wsum_k = float(getattr(stats_k, "wsum_sigma2_offset", 0.0))
+        sumw_k = float(getattr(stats_k, "sumw", 0.0))
+        pooled_wsum += wsum_k
+        pooled_sumw += sumw_k
+        per_half_values.append(
+            _sigma_offset_from_moment(
+                wsum_k,
+                sumw_k,
+                current_sigma_offset_angstrom=float(current_per_half[half_idx]),
+                state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
+            )
+        )
+    if len(per_half_values) != 2:
+        raise ValueError(f"noise_stats_per_half must contain two halves, got {len(per_half_values)}")
+    per_half_sigma_offset = np.asarray(per_half_values, dtype=np.float64)
+    if k_class_enabled:
+        shared_sigma_offset = _sigma_offset_from_moment(
+            pooled_wsum,
+            pooled_sumw,
+            current_sigma_offset_angstrom=float(np.mean(current_per_half)),
+            state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
+        )
+        per_half_sigma_offset[:] = shared_sigma_offset
+    current_sigma_offset_angstrom = float(np.mean(per_half_sigma_offset))
+    # D.2: per-class sigma_offset diagnostic. RELION Class3D maintains one
+    # shared sigma2_offset in model_general; per-class values here are logged
+    # only to help diagnose skewed class posteriors without changing the live
+    # shared translation prior.
     per_class_sigma_offset = None
     if k_class_enabled:
         per_class_w = np.zeros(n_classes, dtype=np.float64)
@@ -517,37 +677,17 @@ def update_c1_sigma_offset_from_posterior(
         logger.info(
             "C1: per-class sigma_offset = [%s] (cross-class aggregate %.3f Å)",
             ", ".join(f"{s:.3f}" for s in per_class_sigma_offset),
-            float(np.sqrt(max(sigma2_offset_wsum / max(2.0 * sigma2_offset_sumw, 1e-30), min_sigma2)))
-            if sigma2_offset_wsum > 0
-            else current_sigma_offset_angstrom,
-        )
-    if sigma2_offset_wsum > 0.0 and sigma2_offset_sumw > 0.0:
-        min_sigma2_angstrom2 = 2.0
-        sigma2_offset_angstrom2 = max(
-            sigma2_offset_wsum / (2.0 * sigma2_offset_sumw),
-            min_sigma2_angstrom2,
-        )
-        current_sigma_offset_angstrom = float(np.sqrt(sigma2_offset_angstrom2))
-        logger.info(
-            "C1: sigma_offset updated %.3f Å from posterior variance (clamp sigma^2 >= %.3f Å^2)",
             current_sigma_offset_angstrom,
-            min_sigma2_angstrom2,
         )
-    else:
-        new_sigma_offset_angstrom = state_fallback_offsets_angstrom
-        if np.isfinite(new_sigma_offset_angstrom) and new_sigma_offset_angstrom > 0:
-            min_sigma_angstrom = float(np.sqrt(2.0))  # RELION min_sigma2_offset = 2 Å²
-            current_sigma_offset_angstrom = max(
-                float(new_sigma_offset_angstrom),
-                min_sigma_angstrom,
-            )
-            logger.info(
-                "C1 fallback: sigma_offset updated %.3f Å from hard assignments (clamp >= %.3f Å)",
-                current_sigma_offset_angstrom,
-                min_sigma_angstrom,
-            )
+    logger.info(
+        "C1: sigma_offset updated per half [%.3f, %.3f] Å (mean %.3f Å)",
+        per_half_sigma_offset[0],
+        per_half_sigma_offset[1],
+        current_sigma_offset_angstrom,
+    )
     return SigmaOffsetUpdateResult(
         current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+        current_sigma_offset_angstrom_per_half=per_half_sigma_offset.tolist(),
         per_class_sigma_offset_angstrom=per_class_sigma_offset,
     )
 
@@ -591,6 +731,7 @@ def compute_unregularized_halfmaps_and_align_signs(
     projection_padding_factor: int,
     minres_map: int,
     need_unreg_means: bool,
+    accumulator_volume_shape=None,
 ) -> UnregularizedHalfmapResult:
     """Reconstruct unregularized half-maps (only when diagnostics need them)
     and sign-align the regularized means against the previous-iter reference.
@@ -619,6 +760,7 @@ def compute_unregularized_halfmaps_and_align_signs(
                         tau2_fudge=tau2_fudge,
                         projection_padding_factor=projection_padding_factor,
                         minres_map=minres_map,
+                        accumulator_volume_shape=accumulator_volume_shape,
                     ).reshape(-1)
                     for class_idx in range(n_classes)
                 ],
@@ -636,6 +778,7 @@ def compute_unregularized_halfmaps_and_align_signs(
                     tau2_fudge=tau2_fudge,
                     projection_padding_factor=projection_padding_factor,
                     minres_map=minres_map,
+                    accumulator_volume_shape=accumulator_volume_shape,
                 )
                 for Ft_ctf_half, Ft_y_half in zip(Ft_ctf_per_half, Ft_y_per_half)
             ]
@@ -685,6 +828,280 @@ def compute_unregularized_halfmaps_and_align_signs(
         unregularized_means=unreg_means,
         aligned_means=means,
         any_sign_flipped=any_sign_flipped,
+    )
+
+
+# ---------------------------------------------------------------------------
+# RELION norm/scale correction update
+# ---------------------------------------------------------------------------
+
+
+@_dataclass
+class NormScaleCorrectionUpdateResult:
+    """Native RELION norm/scale correction state for the next iteration."""
+
+    norm_corrections_per_half: list
+    avg_norm_correction_per_half: list
+    group_scale_corrections_per_half: list
+    image_corrections_per_half: list
+    scale_corrections_per_half: list
+    zero_norm_residual_counts: list
+
+
+def _half_list_or_none(values, *, n_halves: int, name: str):
+    if values is None:
+        return [None] * n_halves
+    if not isinstance(values, (list, tuple)) or len(values) != n_halves:
+        raise ValueError(f"{name} must be a {n_halves}-element list/tuple or None")
+    return list(values)
+
+
+def _derive_group_scale_from_image_scale(scale_per_image, group_ids, n_groups):
+    group_scale = np.ones(n_groups, dtype=np.float64)
+    if scale_per_image is None:
+        return group_scale
+    sums = np.bincount(group_ids, weights=np.asarray(scale_per_image, dtype=np.float64), minlength=n_groups)
+    counts = np.bincount(group_ids, minlength=n_groups)
+    present = counts > 0
+    group_scale[present] = sums[present] / counts[present]
+    return group_scale
+
+
+def update_relion_norm_scale_corrections(
+    *,
+    noise_stats_per_half,
+    image_corrections_per_half=None,
+    scale_corrections_per_half=None,
+    group_ids_per_half=None,
+    group_count_per_half=None,
+    group_scale_corrections_per_half=None,
+    avg_norm_correction_per_half=None,
+    relion_firstiter_cc_this_iter: bool = False,
+    do_norm_correction: bool = True,
+    do_scale_correction: bool = True,
+    scale_relaxation_mu: float = 0.0,
+    eps: float = 1e-30,
+) -> NormScaleCorrectionUpdateResult:
+    """Update RELION-style per-image norm and per-group scale corrections.
+
+    The existing scoring paths consume two per-image arrays:
+    ``image_corrections = (avg_norm / normcorr) * scale[group_id]`` and
+    ``scale_corrections = scale[group_id]``.  This helper updates the native
+    RELION state behind those arrays from M-step sufficient statistics.
+
+    Scale sufficient statistics are expected to match RELION's
+    ``wsum_model.wsum_signal_product`` and ``wsum_model.wsum_reference_power``:
+    the collection site must divide XA by the old scale and AA by its square
+    before accumulation.
+
+    RELION's average norm-correction numerator contains one updated
+    ``normcorr`` per particle, without posterior weighting.  Its denominator
+    is ``wsum_model.pdf_class.sum()``, i.e. the retained significant-support
+    posterior mass.  That mass is normally slightly smaller than the particle
+    count, so using a conventional arithmetic mean introduces a systematic
+    normalization drift.
+    """
+
+    stats_per_half = _half_list_or_none(noise_stats_per_half, n_halves=2, name="noise_stats_per_half")
+    image_corr_in = _half_list_or_none(image_corrections_per_half, n_halves=2, name="image_corrections_per_half")
+    scale_corr_in = _half_list_or_none(scale_corrections_per_half, n_halves=2, name="scale_corrections_per_half")
+    group_ids_in = _half_list_or_none(group_ids_per_half, n_halves=2, name="group_ids_per_half")
+    group_count_in = _half_list_or_none(group_count_per_half, n_halves=2, name="group_count_per_half")
+    group_scale_in = _half_list_or_none(
+        group_scale_corrections_per_half,
+        n_halves=2,
+        name="group_scale_corrections_per_half",
+    )
+    avg_norm_in = (
+        [1.0, 1.0]
+        if avg_norm_correction_per_half is None
+        else list(avg_norm_correction_per_half)
+        if isinstance(avg_norm_correction_per_half, (list, tuple)) and len(avg_norm_correction_per_half) == 2
+        else None
+    )
+    if avg_norm_in is None:
+        raise ValueError("avg_norm_correction_per_half must be a 2-element list/tuple or None")
+    if not (0.0 <= float(scale_relaxation_mu) <= 1.0):
+        raise ValueError(f"scale_relaxation_mu must be in [0, 1], got {scale_relaxation_mu}")
+
+    out_norm = []
+    out_avg_norm = []
+    out_group_scale = []
+    out_image_corr = []
+    out_scale_corr = []
+    out_zero_norm_counts = []
+
+    for half_idx, stats in enumerate(stats_per_half):
+        if stats is None:
+            raise RuntimeError("RELION norm/scale update expected per-half NoiseStats")
+
+        norm_stats = getattr(stats, "wsum_norm_correction", None)
+        if norm_stats is None:
+            if image_corr_in[half_idx] is None and scale_corr_in[half_idx] is None and group_ids_in[half_idx] is None:
+                raise RuntimeError("Cannot infer image count without norm stats or correction arrays")
+            n_images = int(
+                len(
+                    next(
+                        value
+                        for value in (image_corr_in[half_idx], scale_corr_in[half_idx], group_ids_in[half_idx])
+                        if value is not None
+                    )
+                )
+            )
+        else:
+            n_images = int(np.asarray(norm_stats).reshape(-1).shape[0])
+
+        group_ids = (
+            np.zeros(n_images, dtype=np.int64)
+            if group_ids_in[half_idx] is None
+            else np.asarray(group_ids_in[half_idx], dtype=np.int64).reshape(-1)
+        )
+        if group_ids.shape != (n_images,):
+            raise ValueError(
+                f"group_ids_per_half[{half_idx}] has shape {group_ids.shape}, expected ({n_images},)",
+            )
+        if group_ids.size and int(np.min(group_ids)) < 0:
+            raise ValueError("group IDs must be non-negative")
+
+        scale_per_image_in = (
+            None
+            if scale_corr_in[half_idx] is None
+            else np.asarray(scale_corr_in[half_idx], dtype=np.float64).reshape(-1)
+        )
+        image_corr = (
+            None
+            if image_corr_in[half_idx] is None
+            else np.asarray(image_corr_in[half_idx], dtype=np.float64).reshape(-1)
+        )
+        if scale_per_image_in is not None and scale_per_image_in.shape != (n_images,):
+            raise ValueError(
+                f"scale_corrections_per_half[{half_idx}] has shape {scale_per_image_in.shape}, expected ({n_images},)",
+            )
+        if image_corr is not None and image_corr.shape != (n_images,):
+            raise ValueError(
+                f"image_corrections_per_half[{half_idx}] has shape {image_corr.shape}, expected ({n_images},)",
+            )
+
+        n_groups_from_ids = int(np.max(group_ids)) + 1 if group_ids.size else 1
+        explicit_group_count = 0
+        if group_count_in[half_idx] is not None:
+            explicit_group_count = int(group_count_in[half_idx])
+            if (
+                explicit_group_count < 0
+                or not np.isfinite(float(group_count_in[half_idx]))
+                or float(group_count_in[half_idx]) != float(explicit_group_count)
+            ):
+                raise ValueError(
+                    f"group_count_per_half[{half_idx}] must be a non-negative integer, "
+                    f"got {group_count_in[half_idx]!r}"
+                )
+        required_group_count = max(explicit_group_count, n_groups_from_ids)
+        if group_scale_in[half_idx] is None:
+            n_groups = required_group_count
+            group_scale_old = _derive_group_scale_from_image_scale(scale_per_image_in, group_ids, n_groups)
+        else:
+            group_scale_old = np.asarray(group_scale_in[half_idx], dtype=np.float64).reshape(-1)
+            n_groups = int(group_scale_old.shape[0])
+            if n_groups < required_group_count:
+                raise ValueError(
+                    f"group_scale_corrections_per_half[{half_idx}] has {n_groups} groups, "
+                    f"but group IDs / explicit count require {required_group_count}",
+                )
+        if np.any(group_scale_old <= 0.0):
+            raise ValueError("group scale corrections must be positive")
+
+        scale_per_image_old = group_scale_old[group_ids]
+        if scale_per_image_in is not None:
+            scale_per_image_old = scale_per_image_in
+        if image_corr is None:
+            image_corr = scale_per_image_old.copy()
+        if np.any(image_corr <= 0.0):
+            raise ValueError("image corrections must be positive")
+
+        image_norm_factor = image_corr / np.maximum(scale_per_image_old, eps)
+        avg_norm_old = float(avg_norm_in[half_idx])
+        if avg_norm_old <= 0.0:
+            raise ValueError("avg_norm corrections must be positive")
+
+        if do_norm_correction and norm_stats is not None:
+            norm_residual = np.asarray(norm_stats, dtype=np.float64).reshape(-1)
+            if norm_residual.shape != (n_images,):
+                raise ValueError(
+                    f"wsum_norm_correction for half {half_idx} has shape {norm_residual.shape}, "
+                    f"expected ({n_images},)",
+                )
+            if not np.all(np.isfinite(norm_residual)):
+                raise ValueError("wsum_norm_correction must be finite")
+            if np.any(norm_residual < -1e-12):
+                raise ValueError("wsum_norm_correction must be non-negative")
+            old_norm_over_avg = scale_per_image_old / image_corr
+            valid_norm = norm_residual > eps
+            zero_norm_count = int(n_images - np.count_nonzero(valid_norm))
+            normcorr_from_stats = old_norm_over_avg * np.sqrt(np.maximum(2.0 * norm_residual, 0.0))
+            retained_sum_weight = float(getattr(stats, "sumw", 0.0))
+            if retained_sum_weight > 0.0:
+                target_avg_norm = float(np.sum(normcorr_from_stats[valid_norm]) / retained_sum_weight)
+            elif np.any(valid_norm):
+                target_avg_norm = float(np.mean(normcorr_from_stats[valid_norm]))
+            else:
+                target_avg_norm = avg_norm_old
+            avg_norm_new = float(scale_relaxation_mu) * avg_norm_old + (1.0 - float(scale_relaxation_mu)) * target_avg_norm
+            image_norm_factor_new = image_norm_factor.copy()
+            image_norm_factor_new[valid_norm] = avg_norm_new / np.maximum(normcorr_from_stats[valid_norm], eps)
+            image_norm_factor = image_norm_factor_new
+            normcorr_new = avg_norm_new / np.maximum(image_norm_factor, eps)
+        else:
+            normcorr_new = avg_norm_old / np.maximum(image_norm_factor, eps)
+            avg_norm_new = avg_norm_old
+            zero_norm_count = 0
+
+        scale_xa = getattr(stats, "wsum_scale_correction_xa", None)
+        scale_aa = getattr(stats, "wsum_scale_correction_aa", None)
+        if (
+            do_scale_correction
+            and not relion_firstiter_cc_this_iter
+            and scale_xa is not None
+            and scale_aa is not None
+        ):
+            xa = np.asarray(scale_xa, dtype=np.float64).reshape(-1)
+            aa = np.asarray(scale_aa, dtype=np.float64).reshape(-1)
+            if xa.shape != (n_groups,) or aa.shape != (n_groups,):
+                raise ValueError(
+                    f"scale stats for half {half_idx} have shapes {xa.shape}/{aa.shape}, expected ({n_groups},)",
+                )
+            scale_target = np.ones_like(xa, dtype=np.float64)
+            np.divide(xa, aa, out=scale_target, where=aa > 0.0)
+            scale_new = float(scale_relaxation_mu) * group_scale_old + (1.0 - float(scale_relaxation_mu)) * scale_target
+            sorted_scale = np.sort(scale_new)
+            median = float(sorted_scale[n_groups // 2])
+            if np.isfinite(median) and median > 0.0:
+                scale_new = np.clip(scale_new, median / 5.0, 5.0 * median)
+            counts = np.bincount(group_ids, minlength=n_groups).astype(np.float64)
+            count_sum = float(np.sum(counts))
+            if count_sum > 0.0:
+                avg_scale = float(np.sum(counts * scale_new) / count_sum)
+                if avg_scale > 0.0 and np.isfinite(avg_scale):
+                    scale_new = scale_new / avg_scale
+        else:
+            scale_new = group_scale_old.copy()
+
+        scale_per_image_new = scale_new[group_ids]
+        image_corr_new = image_norm_factor * scale_per_image_new
+
+        out_norm.append(jnp.asarray(normcorr_new, dtype=jnp.float32))
+        out_avg_norm.append(avg_norm_new)
+        out_group_scale.append(jnp.asarray(scale_new, dtype=jnp.float32))
+        out_scale_corr.append(jnp.asarray(scale_per_image_new, dtype=jnp.float32))
+        out_image_corr.append(jnp.asarray(image_corr_new, dtype=jnp.float32))
+        out_zero_norm_counts.append(zero_norm_count)
+
+    return NormScaleCorrectionUpdateResult(
+        norm_corrections_per_half=out_norm,
+        avg_norm_correction_per_half=out_avg_norm,
+        group_scale_corrections_per_half=out_group_scale,
+        image_corrections_per_half=out_image_corr,
+        scale_corrections_per_half=out_scale_corr,
+        zero_norm_residual_counts=out_zero_norm_counts,
     )
 
 

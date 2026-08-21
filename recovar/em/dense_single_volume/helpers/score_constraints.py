@@ -263,7 +263,10 @@ def apply_dense_score_constraints(
     score tensor of shape ``(batch, rot_block, n_trans)``.
     """
 
-    if score_mode == "gaussian":
+    # RELION firstiter_cc binarizes raw CC/diff2 scores before the branch that
+    # applies orientation and translation priors.  Keep masks active, but do
+    # not let priors perturb the WTA pose/class selection in normalized-CC mode.
+    if score_mode != "normalized_cc":
         scores = scores + rotation_prior[:, :, None]
         scores = scores + translation_prior[:, None, :]
     if candidate_mask.ndim == 3:

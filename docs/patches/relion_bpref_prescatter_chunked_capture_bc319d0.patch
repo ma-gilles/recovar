@@ -1,0 +1,236 @@
+diff --git a/src/acc/acc_ml_optimiser_impl.h b/src/acc/acc_ml_optimiser_impl.h
+index a44104c..e9c03d1 100644
+--- a/src/acc/acc_ml_optimiser_impl.h
++++ b/src/acc/acc_ml_optimiser_impl.h
+@@ -43,6 +43,8 @@ struct RelionBprefPreScatterConfigV1
+ 	std::uint64_t max_particles_per_rank;
+ 	std::uint64_t expected_followers;
+ 	std::uint64_t max_bytes;
++	std::uint64_t device_buffer_bytes;
++	std::vector<std::uint64_t> part_ids;
+ };
+ 
+ std::uint64_t relion_bpre_required_u64(const char *name)
+@@ -58,6 +60,50 @@ std::uint64_t relion_bpre_required_u64(const char *name)
+ 	return static_cast<std::uint64_t>(value);
+ }
+ 
++std::vector<std::uint64_t> relion_bpre_optional_u64_csv(const char *name)
++{
++	const char *text = std::getenv(name);
++	if (text == nullptr)
++		return {};
++	if (text[0] == '\0')
++		REPORT_ERROR(std::string("Empty particle identity list in ") + name);
++
++	std::vector<std::uint64_t> values;
++	const char *cursor = text;
++	while (*cursor != '\0')
++	{
++		if (*cursor < '0' || *cursor > '9')
++			REPORT_ERROR(std::string("Invalid comma-separated particle identity list in ") + name + ": " + text);
++		char *end = nullptr;
++		errno = 0;
++		unsigned long long value = std::strtoull(cursor, &end, 10);
++		if (errno != 0 || end == cursor || (*end != '\0' && *end != ','))
++			REPORT_ERROR(std::string("Invalid comma-separated particle identity list in ") + name + ": " + text);
++		for (std::uint64_t existing : values)
++			if (existing == static_cast<std::uint64_t>(value))
++				REPORT_ERROR(std::string("Duplicate particle identity in ") + name + ": " + text);
++		values.push_back(static_cast<std::uint64_t>(value));
++		if (*end == '\0')
++			break;
++		cursor = end + 1;
++		if (*cursor == '\0')
++			REPORT_ERROR(std::string("Trailing comma in particle identity list ") + name + ": " + text);
++	}
++	return values;
++}
++
++bool relion_bpre_part_id_selected(
++	const RelionBprefPreScatterConfigV1 &config,
++	std::uint64_t part_id)
++{
++	if (config.part_ids.empty())
++		return true;
++	for (std::uint64_t selected : config.part_ids)
++		if (selected == part_id)
++			return true;
++	return false;
++}
++
+ const RelionBprefPreScatterConfigV1 &relion_bpre_config_v1()
+ {
+ 	static const RelionBprefPreScatterConfigV1 config = []()
+@@ -76,6 +122,10 @@ const RelionBprefPreScatterConfigV1 &relion_bpre_config_v1()
+ 		result.max_particles_per_rank = relion_bpre_required_u64("RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK");
+ 		result.expected_followers = relion_bpre_required_u64("RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS");
+ 		result.max_bytes = relion_bpre_required_u64("RELION_BPRE_CAPTURE_MAX_BYTES");
++		result.device_buffer_bytes = relion_bpre_required_u64("RELION_BPRE_CAPTURE_DEVICE_BYTES");
++		result.part_ids = relion_bpre_optional_u64_csv("RELION_BPRE_CAPTURE_PART_IDS");
++		if (!result.part_ids.empty() && result.expected_particles != result.part_ids.size())
++			REPORT_ERROR("RELION_BPRE_CAPTURE_EXPECTED_PARTICLES must equal the explicit PART_IDS count");
+ 		if (result.expected_particles > result.max_particles_per_rank * result.expected_followers)
+ 			REPORT_ERROR("RELION BPref capture cannot fit EXPECTED_PARTICLES within the explicit per-rank/follower cap");
+ 		struct stat status;
+@@ -144,10 +194,14 @@ void relion_capture_bpref_prescatter_v1(
+ 	if (!config.enabled || static_cast<std::uint64_t>(baseMLO->iter) != config.iteration
+ 		|| iclass + 1 != config.class_one_based)
+ 		return;
++	if (!relion_bpre_part_id_selected(config, static_cast<std::uint64_t>(op.part_id)))
++		return;
+ 	if (data_is_3d)
+ 		REPORT_ERROR("RELION BPref pre-scatter schema v1 currently supports 2D particle images only");
+ 	if (orientation_num == 0 || image_size == 0)
+ 		REPORT_ERROR("RELION BPref pre-scatter capture saw empty orientation/pixel support");
++	if (orientation_num > UINT32_MAX)
++		REPORT_ERROR("RELION BPref pre-scatter orientation count exceeds the schema-v1 identity width");
+ 
+ 	const std::uint64_t worst_particle_bytes = sizeof(RelionBprefPreScatterHeaderV1)
+ 		+ orientation_num * sizeof(RelionBprefPreScatterRotationV1)
+@@ -159,42 +213,86 @@ void relion_capture_bpref_prescatter_v1(
+ 		REPORT_ERROR("RELION BPref pre-scatter runtime dimensions exceed RELION_BPRE_CAPTURE_MAX_BYTES");
+ 
+ 	const std::size_t candidate_count = orientation_num * image_size;
++	const std::size_t bytes_per_orientation =
++		image_size * sizeof(RelionBprefPreScatterRowV1);
++	if (config.device_buffer_bytes < bytes_per_orientation)
++		REPORT_ERROR("RELION_BPRE_CAPTURE_DEVICE_BYTES cannot hold one orientation");
++	const std::size_t orientations_per_chunk = std::min<std::size_t>(
++		orientation_num, config.device_buffer_bytes / bytes_per_orientation);
++	const std::size_t chunk_candidate_capacity =
++		orientations_per_chunk * image_size;
++	const std::size_t chunk_device_bytes =
++		chunk_candidate_capacity * sizeof(RelionBprefPreScatterRowV1);
++	const std::size_t chunk_count =
++		(orientation_num + orientations_per_chunk - 1) / orientations_per_chunk;
++	std::size_t free_device_bytes = 0;
++	std::size_t total_device_bytes = 0;
++	DEBUG_HANDLE_ERROR(cudaMemGetInfo(&free_device_bytes, &total_device_bytes));
++	if (chunk_device_bytes > free_device_bytes)
++		REPORT_ERROR("RELION_BPRE_CAPTURE_DEVICE_BYTES exceeds free device memory");
++	std::cerr
++		<< "RELION_BPRE_CHUNKED_CAPTURE"
++		<< " part_id=" << op.part_id
++		<< " iteration=" << baseMLO->iter
++		<< " current_size=" << baseMLO->mymodel.current_size
++		<< " orientation_num=" << orientation_num
++		<< " image_size=" << image_size
++		<< " translation_num=" << translation_num
++		<< " candidate_count=" << candidate_count
++		<< " candidate_bytes=" << candidate_count * sizeof(RelionBprefPreScatterRowV1)
++		<< " configured_device_bytes=" << config.device_buffer_bytes
++		<< " chunk_device_bytes=" << chunk_device_bytes
++		<< " orientations_per_chunk=" << orientations_per_chunk
++		<< " chunk_count=" << chunk_count
++		<< " free_device_bytes=" << free_device_bytes
++		<< " total_device_bytes=" << total_device_bytes
++		<< std::endl;
+ 	RelionBprefPreScatterRowV1 *device_rows = nullptr;
+-	DEBUG_HANDLE_ERROR(cudaMalloc(&device_rows, candidate_count * sizeof(*device_rows)));
+-	DEBUG_HANDLE_ERROR(cudaMemsetAsync(device_rows, 0, candidate_count * sizeof(*device_rows), stream));
++	DEBUG_HANDLE_ERROR(cudaMalloc(&device_rows, chunk_device_bytes));
+ 	const unsigned threads = BP_REF3D_BLOCK_SIZE;
+-	if (ctf_premultiplied)
+-		cuda_kernel_capture_bpref_prescatter_v1<false, true><<<orientation_num, threads, 0, stream>>>(
+-			image_real, image_imag, trans_x, trans_y, trans_z, weights, minvsigma2, ctfs,
+-			translation_num, significant_weight, weight_norm, ~eulers, backprojector.maxR2,
+-			backprojector.padding_factor, img_x, img_y, img_z, image_size, device_rows);
+-	else
+-		cuda_kernel_capture_bpref_prescatter_v1<false, false><<<orientation_num, threads, 0, stream>>>(
+-			image_real, image_imag, trans_x, trans_y, trans_z, weights, minvsigma2, ctfs,
+-			translation_num, significant_weight, weight_norm, ~eulers, backprojector.maxR2,
+-			backprojector.padding_factor, img_x, img_y, img_z, image_size, device_rows);
+-	LAUNCH_HANDLE_ERROR(cudaGetLastError());
+-
+-	std::vector<RelionBprefPreScatterRowV1> candidates(candidate_count);
+-	DEBUG_HANDLE_ERROR(cudaMemcpyAsync(candidates.data(), device_rows,
+-		candidate_count * sizeof(*device_rows), cudaMemcpyDeviceToHost, stream));
+-	DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
+-	DEBUG_HANDLE_ERROR(cudaFree(device_rows));
+-
++	std::vector<RelionBprefPreScatterRowV1> candidates(chunk_candidate_capacity);
+ 	std::vector<RelionBprefPreScatterRowV1> rows;
+-	rows.reserve(candidate_count);
++	rows.reserve(chunk_candidate_capacity);
+ 	std::uint64_t positive_fweight_candidate_count = 0;
+ 	std::uint64_t radius_excluded_positive_fweight_count = 0;
+-	for (const RelionBprefPreScatterRowV1 &row : candidates)
++	for (std::size_t orientation_offset = 0; orientation_offset < orientation_num;
++		orientation_offset += orientations_per_chunk)
+ 	{
+-		if (row.state != 1)
+-			continue;
+-		positive_fweight_candidate_count++;
+-		if ((row.flags & RELION_BPRE_RELION_RADIUS_SUPPORT) != 0)
+-			rows.push_back(row);
++		const std::size_t chunk_orientations = std::min<std::size_t>(
++			orientations_per_chunk, orientation_num - orientation_offset);
++		const std::size_t chunk_candidate_count = chunk_orientations * image_size;
++		const std::size_t chunk_bytes =
++			chunk_candidate_count * sizeof(RelionBprefPreScatterRowV1);
++		DEBUG_HANDLE_ERROR(cudaMemsetAsync(device_rows, 0, chunk_bytes, stream));
++		if (ctf_premultiplied)
++			cuda_kernel_capture_bpref_prescatter_v1<false, true><<<chunk_orientations, threads, 0, stream>>>(
++				image_real, image_imag, trans_x, trans_y, trans_z, weights, minvsigma2, ctfs,
++				translation_num, significant_weight, weight_norm, ~eulers, backprojector.maxR2,
++				backprojector.padding_factor, img_x, img_y, img_z, image_size,
++				orientation_offset, device_rows);
+ 		else
+-			radius_excluded_positive_fweight_count++;
++			cuda_kernel_capture_bpref_prescatter_v1<false, false><<<chunk_orientations, threads, 0, stream>>>(
++				image_real, image_imag, trans_x, trans_y, trans_z, weights, minvsigma2, ctfs,
++				translation_num, significant_weight, weight_norm, ~eulers, backprojector.maxR2,
++				backprojector.padding_factor, img_x, img_y, img_z, image_size,
++				orientation_offset, device_rows);
++		LAUNCH_HANDLE_ERROR(cudaGetLastError());
++		DEBUG_HANDLE_ERROR(cudaMemcpyAsync(candidates.data(), device_rows,
++			chunk_bytes, cudaMemcpyDeviceToHost, stream));
++		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
++		for (std::size_t candidate = 0; candidate < chunk_candidate_count; candidate++)
++		{
++			const RelionBprefPreScatterRowV1 &row = candidates[candidate];
++			if (row.state != 1)
++				continue;
++			positive_fweight_candidate_count++;
++			if ((row.flags & RELION_BPRE_RELION_RADIUS_SUPPORT) != 0)
++				rows.push_back(row);
++			else
++				radius_excluded_positive_fweight_count++;
++		}
+ 	}
++	DEBUG_HANDLE_ERROR(cudaFree(device_rows));
+ 	if (positive_fweight_candidate_count != rows.size()
+ 		+ radius_excluded_positive_fweight_count)
+ 		REPORT_ERROR("RELION BPref pre-scatter candidate/support accounting is inconsistent");
+diff --git a/src/acc/cuda/cuda_kernels/bpref_prescatter_capture.cuh b/src/acc/cuda/cuda_kernels/bpref_prescatter_capture.cuh
+index eaa1203..56d7e10 100644
+--- a/src/acc/cuda/cuda_kernels/bpref_prescatter_capture.cuh
++++ b/src/acc/cuda/cuda_kernels/bpref_prescatter_capture.cuh
+@@ -50,10 +50,12 @@ __global__ void cuda_kernel_capture_bpref_prescatter_v1(
+ 		unsigned img_y,
+ 		unsigned img_z,
+ 		unsigned img_xyz,
++		unsigned long orientation_offset,
+ 		RelionBprefPreScatterRowV1 *g_rows)
+ {
+ 	unsigned tid = threadIdx.x;
+-	unsigned orientation = blockIdx.x;
++	unsigned orientation_in_chunk = blockIdx.x;
++	unsigned long orientation = orientation_offset + orientation_in_chunk;
+ 	int img_y_half = img_y / 2;
+ 	int img_z_half = img_z / 2;
+ 	// Match cuda_kernel_backproject3D exactly: the production radius bound is
+@@ -73,9 +75,10 @@ __global__ void cuda_kernel_capture_bpref_prescatter_v1(
+ 		if (pixel >= img_xyz)
+ 			continue;
+ 
+-		RelionBprefPreScatterRowV1 &row = g_rows[orientation * img_xyz + pixel];
++		RelionBprefPreScatterRowV1 &row =
++			g_rows[orientation_in_chunk * img_xyz + pixel];
+ 		row.state = 0;
+-		row.orientation_local = orientation;
++		row.orientation_local = static_cast<std::uint32_t>(orientation);
+ 		row.pixel = pixel;
+ 		row.flags = DATA3D ? RELION_BPRE_DATA3D : 0u;
+ 

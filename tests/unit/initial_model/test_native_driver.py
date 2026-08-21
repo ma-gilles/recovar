@@ -62,7 +62,7 @@ def test_translation_log_prior_matches_relion_pdf_offset_scaling():
 
     prior = driver._translation_log_prior(translations, voxel_size=3.0, sigma_angstrom=6.0)
 
-    np.testing.assert_allclose(prior, np.asarray([0.0, -4.5, -1.125], dtype=np.float32), rtol=1e-6)
+    np.testing.assert_allclose(prior, np.asarray([0.0, -0.5, -0.125], dtype=np.float32), rtol=1e-6)
 
     centered = driver._translation_log_prior(
         translations,
@@ -72,7 +72,7 @@ def test_translation_log_prior_matches_relion_pdf_offset_scaling():
     )
     np.testing.assert_allclose(
         centered,
-        np.asarray([[-1.125, -10.125, -2.25], [-1.125, -5.625, -4.5]], dtype=np.float32),
+        np.asarray([[-0.125, -1.125, -0.25], [-0.125, -0.625, -0.5]], dtype=np.float32),
         rtol=1e-6,
     )
 
@@ -101,11 +101,24 @@ def test_image_pre_shifts_from_star_converts_angstrom_origins_to_rounded_pixels(
 
 
 def test_image_pre_shifts_from_star_uses_legacy_pixel_origins():
-    main = pd.DataFrame({"_rlnOriginX": ["0.5", "-1.4"], "_rlnOriginY": ["1.6", "-0.49"]})
+    main = pd.DataFrame({"_rlnOriginX": ["0.5", "-1.5"], "_rlnOriginY": ["1.6", "-0.49"]})
 
     shifts = driver._image_pre_shifts_from_star(main, SimpleNamespace(voxel_size=2.0))
 
-    np.testing.assert_array_equal(shifts, np.asarray([[0.0, 2.0], [-1.0, 0.0]], dtype=np.float32))
+    np.testing.assert_array_equal(shifts, np.asarray([[1.0, 2.0], [-2.0, 0.0]], dtype=np.float32))
+
+
+def test_image_pre_shifts_from_star_rounds_before_float32_downcast():
+    main = pd.DataFrame(
+        {
+            "_rlnOriginX": ["0.49999999", "0.50000001"],
+            "_rlnOriginY": ["-0.49999999", "-0.50000001"],
+        }
+    )
+
+    shifts = driver._image_pre_shifts_from_star(main, SimpleNamespace(voxel_size=2.0))
+
+    np.testing.assert_array_equal(shifts, np.asarray([[0.0, 0.0], [1.0, -1.0]], dtype=np.float32))
 
 
 def test_image_pre_shifts_from_star_defaults_to_zero_without_origins():
@@ -482,8 +495,30 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
     np.testing.assert_array_equal(calls[1]["pre_shifts"], np.asarray([[2.0, -1.0], [5.0, -1.0]], dtype=np.float32))
     assert calls[0]["prior"].shape == (2, 3)
     assert calls[1]["prior"].shape == (2, 3)
-    assert calls[0]["prior"][0, 0] == pytest.approx(0.0)
-    assert calls[1]["prior"][0, 0] < calls[0]["prior"][0, 0]
+    np.testing.assert_allclose(
+        calls[0]["prior"],
+        np.asarray(
+            [
+                [0.0, -0.025, -0.08],
+                [-0.00005, -0.02305, -0.07605],
+            ],
+            dtype=np.float32,
+        ),
+        rtol=1e-6,
+        atol=1e-8,
+    )
+    np.testing.assert_allclose(
+        calls[1]["prior"],
+        np.asarray(
+            [
+                [0.0, -0.025, -0.08],
+                [0.0, -0.025, -0.08],
+            ],
+            dtype=np.float32,
+        ),
+        rtol=1e-6,
+        atol=1e-8,
+    )
     np.testing.assert_array_equal(
         particle_state.translation_offsets,
         np.asarray([[4.0, -2.0], [9.0, -1.0]], dtype=np.float32),
@@ -916,8 +951,8 @@ def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
 
     fine_prior = np.asarray(config.engine_kwargs["translation_log_prior"], dtype=np.float32)
     coarse_prior = np.asarray(config.engine_kwargs["coarse_translation_log_prior"], dtype=np.float32)
-    np.testing.assert_allclose(fine_prior, np.asarray([[-0.125, -1.125]], dtype=np.float32), rtol=1e-6)
-    np.testing.assert_allclose(coarse_prior, np.asarray([[-0.5]], dtype=np.float32), rtol=1e-6)
+    np.testing.assert_allclose(fine_prior, np.asarray([[-0.03125, -0.28125]], dtype=np.float32), rtol=1e-6)
+    np.testing.assert_allclose(coarse_prior, np.asarray([[-0.125]], dtype=np.float32), rtol=1e-6)
 
 
 def test_driver_output_mrc_path_matches_relion_snapshot():

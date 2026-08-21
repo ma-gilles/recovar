@@ -29,9 +29,7 @@ def test_ffi_registrations_cover_all_target_constants():
     updating the single-source-of-truth ``_FFI_REGISTRATIONS``.
     """
     targets_in_table = {target for target, _symbol in cb._FFI_REGISTRATIONS}
-    target_constants = {
-        v for k, v in vars(cb).items() if k.startswith("_TARGET_") and isinstance(v, str)
-    }
+    target_constants = {v for k, v in vars(cb).items() if k.startswith("_TARGET_") and isinstance(v, str)}
     missing_from_table = target_constants - targets_in_table
     assert not missing_from_table, (
         f"_FFI_REGISTRATIONS is missing entries for: {sorted(missing_from_table)}. "

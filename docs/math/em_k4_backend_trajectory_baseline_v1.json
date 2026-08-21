@@ -1,0 +1,54 @@
+{
+  "schema": "em_k4_backend_trajectory_baseline_v1",
+  "snapshot_id": "k4-host-ac5177d2-20260719",
+  "status": "accepted_baseline",
+  "source_commit": "ac5177d2b0cd639db7ed6f14225d80fe9cff7d4d",
+  "quality_metric_policy": "shellwise FSC/FSC-AUC; correlation is not used",
+  "direct_fsc_auc_gate": 0.995,
+  "numbered_iterations": 15,
+  "classes": 4,
+  "direct_fsc_auc_checks_passed": 40,
+  "direct_fsc_auc_checks_total": 60,
+  "direct_fsc_auc_passes_by_iteration": [
+    4,
+    4,
+    4,
+    4,
+    4,
+    4,
+    4,
+    4,
+    4,
+    3,
+    0,
+    1,
+    0,
+    0,
+    0
+  ],
+  "iterations_all_classes_passed": 9,
+  "min_cross_engine_fsc_auc": 0.9912957080903252,
+  "min_gt_fsc_auc_delta": -0.0001556260741278903,
+  "min_class_agreement": 0.9932,
+  "exact_control_topology": true,
+  "wall_s": 32876,
+  "gpu_uuid": "GPU-98fb77aa-8391-8a59-9417-606deb654b53",
+  "evidence": {
+    "fsc_trajectory": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/analysis/k4_fsc_trajectory.json",
+      "sha256": "791152220bb3978555c7bf5459835a56322d8116ce3bb7db7837bf9d47c38298"
+    },
+    "control_topology": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/analysis/k4_control_topology.json",
+      "sha256": "5ec76a3f5eaac60edde104b5006aa631833501b8ac3a8f0dbf1c93e2faa7990d"
+    },
+    "walltime": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/recovar/slurm_walltime.json",
+      "sha256": "daf378e2c6fdfb389cbfd613c3ec6933548c64f8563ae6760a8ae21fd2a6ac17"
+    },
+    "acceptance_seal": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/analysis/FINAL_ACCEPTANCE_SEAL.json",
+      "sha256": "ab9e1f58d0f93e8a6ac2da6dff5a27aa0ba3e3bf2af2023cd2434bf9682f4638"
+    }
+  }
+}

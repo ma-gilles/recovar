@@ -1,0 +1,309 @@
+diff --git a/src/acc/acc_helper_functions.h b/src/acc/acc_helper_functions.h
+index 3d2511a..41e0b1a 100644
+--- a/src/acc/acc_helper_functions.h
++++ b/src/acc/acc_helper_functions.h
+@@ -146,9 +146,18 @@ void deviceInitValue(AccPtr<T> &data, T value, size_t Size)
+ void mapAllWeightsToMweights(
+ 		unsigned long * d_iorient, //projectorPlan.iorientclasses
+ 		XFLOAT * d_allweights, //allWeights
+-		XFLOAT * d_mweights, //Mweight
+-		unsigned long orientation_num, //projectorPlan.orientation_num
+-		unsigned long translation_num, //translation_num
++			XFLOAT * d_mweights, //Mweight
++			unsigned long orientation_num, //projectorPlan.orientation_num
++			unsigned long translation_num, //translation_num
++		deviceStream_t stream
++		);
++
++void mapAllDoubleWeightsToMweights(
++		unsigned long * d_iorient,
++		double * d_allweights,
++		double * d_mweights,
++		unsigned long orientation_num,
++		unsigned long translation_num,
+ 		deviceStream_t stream
+ 		);
+ 
+@@ -256,8 +265,8 @@ void runDiff2KernelCoarse(
+ 		deviceStream_t stream,
+ 		bool do_CC,
+ 		bool data_is_3D,
+-		XFLOAT *reference_norms = nullptr,
+-		XFLOAT *cross_terms = nullptr);
++		double *reference_norms = nullptr,
++		double *cross_terms = nullptr);
+ 
+ void runDiff2KernelFine(
+ 		AccProjectorKernel &projector,
+diff --git a/src/acc/acc_helper_functions_impl.h b/src/acc/acc_helper_functions_impl.h
+index f699e17..5aa1b48 100644
+--- a/src/acc/acc_helper_functions_impl.h
++++ b/src/acc/acc_helper_functions_impl.h
+@@ -1136,6 +1136,31 @@ void mapAllWeightsToMweights(
+ #endif
+ }
+ 
++void mapAllDoubleWeightsToMweights(
++		unsigned long * d_iorient,
++		double * d_allweights,
++		double * d_mweights,
++		unsigned long orientation_num,
++		unsigned long translation_num,
++		deviceStream_t stream
++		)
++{
++	size_t combinations = orientation_num*translation_num;
++	int grid_size = ceil((float)(combinations)/(float)WEIGHT_MAP_BLOCK_SIZE);
++#ifdef _CUDA_ENABLED
++	cuda_kernel_all_double_weights_to_mweights<<< grid_size, WEIGHT_MAP_BLOCK_SIZE, 0, stream >>>(
++			d_iorient,
++			d_allweights,
++			d_mweights,
++			orientation_num,
++			translation_num,
++			WEIGHT_MAP_BLOCK_SIZE);
++	LAUNCH_HANDLE_ERROR(cudaGetLastError());
++#else
++	CRITICAL("Double coarse-component mapping is implemented only for CUDA");
++#endif
++}
++
+ void runDiff2KernelCoarse(
+ 		AccProjectorKernel &projector,
+ 		XFLOAT *trans_x,
+@@ -1153,8 +1178,8 @@ void runDiff2KernelCoarse(
+ 		deviceStream_t stream,
+ 		bool do_CC,
+ 		bool data_is_3D,
+-		XFLOAT *reference_norms,
+-		XFLOAT *cross_terms)
++			double *reference_norms,
++			double *cross_terms)
+ {
+ 	const long unsigned blocks3D = (data_is_3D? D2C_BLOCK_SIZE_DATA3D : D2C_BLOCK_SIZE_REF3D);
+ 	const bool capture_components =
+diff --git a/src/acc/acc_ml_optimiser_impl.h b/src/acc/acc_ml_optimiser_impl.h
+index 2153911..3d90489 100644
+--- a/src/acc/acc_ml_optimiser_impl.h
++++ b/src/acc/acc_ml_optimiser_impl.h
+@@ -1993,15 +1993,15 @@ void getAllSquaredDifferencesCoarse(
+ 	for (int exp_iclass = sp.iclass_min; exp_iclass <= sp.iclass_max; exp_iclass++)
+ 		allWeights_size += projectorPlans[exp_iclass*sp.nr_images + 0].orientation_num * sp.nr_trans*sp.nr_oversampled_trans;
+ 
+-	AccPtr<XFLOAT> allWeights = ptrFactory.make<XFLOAT>(allWeights_size);
+-	AccPtr<XFLOAT> allReferenceNorms =
+-		ptrFactory.make<XFLOAT>(capture_components ? allWeights_size : 1);
+-	AccPtr<XFLOAT> allCrossTerms =
+-		ptrFactory.make<XFLOAT>(capture_components ? allWeights_size : 1);
+-	AccPtr<XFLOAT> referenceNormMweights =
+-		ptrFactory.make<XFLOAT>(capture_components ? Mweight.getSize() : 1);
+-	AccPtr<XFLOAT> crossTermMweights =
+-		ptrFactory.make<XFLOAT>(capture_components ? Mweight.getSize() : 1);
++		AccPtr<XFLOAT> allWeights = ptrFactory.make<XFLOAT>(allWeights_size);
++		AccPtr<double> allReferenceNorms =
++			ptrFactory.make<double>(capture_components ? allWeights_size : 1);
++		AccPtr<double> allCrossTerms =
++			ptrFactory.make<double>(capture_components ? allWeights_size : 1);
++		AccPtr<double> referenceNormMweights =
++			ptrFactory.make<double>(capture_components ? Mweight.getSize() : 1);
++		AccPtr<double> crossTermMweights =
++			ptrFactory.make<double>(capture_components ? Mweight.getSize() : 1);
+ 
+ #ifdef _SYCL_ENABLED
+ 	allWeights.setStreamAccType(devAcc);
+@@ -2020,12 +2020,12 @@ void getAllSquaredDifferencesCoarse(
+ 		allCrossTerms.accAlloc();
+ 		referenceNormMweights.allAlloc();
+ 		crossTermMweights.allAlloc();
+-		deviceInitValue<XFLOAT>(allReferenceNorms, 0);
+-		deviceInitValue<XFLOAT>(allCrossTerms, 0);
+-		deviceInitValue<XFLOAT>(
+-			referenceNormMweights, std::numeric_limits<XFLOAT>::quiet_NaN());
+-		deviceInitValue<XFLOAT>(
+-			crossTermMweights, std::numeric_limits<XFLOAT>::quiet_NaN());
++			deviceInitValue<double>(allReferenceNorms, 0.);
++			deviceInitValue<double>(allCrossTerms, 0.);
++			deviceInitValue<double>(
++				referenceNormMweights, std::numeric_limits<double>::quiet_NaN());
++			deviceInitValue<double>(
++				crossTermMweights, std::numeric_limits<double>::quiet_NaN());
+ 	}
+ 
+     bool do_CC = (baseMLO->iter == 1 && baseMLO->do_firstiter_cc) || baseMLO->do_always_cc;
+@@ -2213,8 +2213,8 @@ void getAllSquaredDifferencesCoarse(
+ 						capture_components ? &((~allReferenceNorms)[allWeights_pos]) : nullptr,
+ 						capture_components ? &((~allCrossTerms)[allWeights_pos]) : nullptr);
+ #if !defined(_SYCL_ENABLED) || defined(USE_ONEDPL)
+-				if (img_id == sp.nr_images - 1)
+-                    mapAllWeightsToMweights(
++					if (img_id == sp.nr_images - 1)
++						mapAllWeightsToMweights(
+ 						~projectorPlans[iclass*sp.nr_images + img_id].iorientclasses,
+ 						&(~allWeights)[allWeights_pos],
+ 						&(~Mweight)[0],
+@@ -2224,14 +2224,14 @@ void getAllSquaredDifferencesCoarse(
+ 						);
+ 					if (capture_components)
+ 					{
+-						mapAllWeightsToMweights(
++							mapAllDoubleWeightsToMweights(
+ 							~projectorPlans[iclass*sp.nr_images + img_id].iorientclasses,
+ 							&(~allReferenceNorms)[allWeights_pos],
+ 							&(~referenceNormMweights)[0],
+ 							projectorPlans[iclass*sp.nr_images + img_id].orientation_num,
+ 							translation_num,
+ 							accMLO->classStreams[iclass]);
+-						mapAllWeightsToMweights(
++							mapAllDoubleWeightsToMweights(
+ 							~projectorPlans[iclass*sp.nr_images + img_id].iorientclasses,
+ 							&(~allCrossTerms)[allWeights_pos],
+ 							&(~crossTermMweights)[0],
+@@ -2293,12 +2293,16 @@ void getAllSquaredDifferencesCoarse(
+ 		crossTermMweights.cpToHost();
+ 		referenceNormMweights.streamSync();
+ 		crossTermMweights.streamSync();
+-		reference_norm_output->assign(
+-			referenceNormMweights.getHostPtr(),
+-			referenceNormMweights.getHostPtr() + referenceNormMweights.getSize());
+-		cross_output->assign(
+-			crossTermMweights.getHostPtr(),
+-			crossTermMweights.getHostPtr() + crossTermMweights.getSize());
++			reference_norm_output->resize(referenceNormMweights.getSize());
++			cross_output->resize(crossTermMweights.getSize());
++			for (std::size_t candidate = 0;
++				candidate < referenceNormMweights.getSize(); candidate++)
++			{
++				(*reference_norm_output)[candidate] = static_cast<float>(
++					referenceNormMweights.getHostPtr()[candidate]);
++				(*cross_output)[candidate] = static_cast<float>(
++					crossTermMweights.getHostPtr()[candidate]);
++			}
+ 	}
+ 
+ #if defined(_SYCL_ENABLED) && ! defined(USE_ONEDPL)
+diff --git a/src/acc/cuda/cuda_kernels/diff2.cuh b/src/acc/cuda/cuda_kernels/diff2.cuh
+index ef1269f..f21baa2 100644
+--- a/src/acc/cuda/cuda_kernels/diff2.cuh
++++ b/src/acc/cuda/cuda_kernels/diff2.cuh
+@@ -33,8 +33,8 @@ __global__ void cuda_kernel_diff2_coarse(
+ 		XFLOAT *g_diff2s,
+ 		int translation_num,
+ 		int image_size,
+-		XFLOAT *g_reference_norms,
+-		XFLOAT *g_cross_terms
++		double *g_reference_norms,
++		double *g_cross_terms
+ 		)
+ {
+ 	int tid = threadIdx.x;
+@@ -58,8 +58,8 @@ __global__ void cuda_kernel_diff2_coarse(
+ 	__shared__ XFLOAT s_corr[block_sz];
+ 
+ 	XFLOAT diff2s[eulers_per_block] = {0.f};
+-	XFLOAT reference_norms[eulers_per_block] = {0.f};
+-	XFLOAT cross_terms[eulers_per_block] = {0.f};
++	double reference_norms[eulers_per_block] = {0.};
++	double cross_terms[eulers_per_block] = {0.};
+ 	const bool capture_components =
+ 		g_reference_norms != nullptr && g_cross_terms != nullptr;
+ 
+@@ -186,15 +186,18 @@ __global__ void cuda_kernel_diff2_coarse(
+ 				diff2s[j] += (diff_real * diff_real + diff_imag * diff_imag) * s_corr[i + init_pixel % block_sz];
+ 				if (capture_components)
+ 				{
++					const double ref_real =
++						static_cast<double>(s_ref_real[eulers_per_block * i + j]);
++					const double ref_imag =
++						static_cast<double>(s_ref_imag[eulers_per_block * i + j]);
++					const double image_real = static_cast<double>(real);
++					const double image_imag = static_cast<double>(imag);
++					const double corr =
++						static_cast<double>(s_corr[i + init_pixel % block_sz]);
+ 					reference_norms[j] +=
+-						(s_ref_real[eulers_per_block * i + j] * s_ref_real[eulers_per_block * i + j]
+-						+ s_ref_imag[eulers_per_block * i + j] * s_ref_imag[eulers_per_block * i + j])
+-						* s_corr[i + init_pixel % block_sz];
++						(ref_real * ref_real + ref_imag * ref_imag) * corr;
+ 					cross_terms[j] +=
+-						-2.f
+-						* (s_ref_real[eulers_per_block * i + j] * real
+-							+ s_ref_imag[eulers_per_block * i + j] * imag)
+-						* s_corr[i + init_pixel % block_sz];
++						-2. * (ref_real * image_real + ref_imag * image_imag) * corr;
+ 				}
+ 			}
+ 		}
+@@ -207,10 +210,10 @@ __global__ void cuda_kernel_diff2_coarse(
+ 		cuda_atomic_add(&g_diff2s[(blockIdx.x * eulers_per_block + i) * translation_num + tid % translation_num], diff2s[i]);
+ 		if (capture_components)
+ 		{
+-			cuda_atomic_add(
++			atomicAdd(
+ 				&g_reference_norms[(blockIdx.x * eulers_per_block + i) * translation_num + tid % translation_num],
+ 				reference_norms[i]);
+-			cuda_atomic_add(
++			atomicAdd(
+ 				&g_cross_terms[(blockIdx.x * eulers_per_block + i) * translation_num + tid % translation_num],
+ 				cross_terms[i]);
+ 		}
+diff --git a/src/acc/cuda/cuda_kernels/helper.cu b/src/acc/cuda/cuda_kernels/helper.cu
+index c28258f..8bb5c67 100644
+--- a/src/acc/cuda/cuda_kernels/helper.cu
++++ b/src/acc/cuda/cuda_kernels/helper.cu
+@@ -795,6 +795,21 @@ __global__ void cuda_kernel_allweights_to_mweights(
+                 // TODO - isn't this just d_allweights[idx + idx%translation_num]?   Really?
+ }
+ 
++__global__ void cuda_kernel_all_double_weights_to_mweights(
++		unsigned long * d_iorient,
++		double * d_allweights,
++		double * d_mweights,
++		unsigned long orientation_num,
++		unsigned long translation_num,
++		int block_size
++		)
++{
++	size_t idx = blockIdx.x * block_size + threadIdx.x;
++	if (idx < orientation_num*translation_num)
++		d_mweights[d_iorient[idx/translation_num] * translation_num + idx%translation_num] =
++				d_allweights[idx/translation_num * translation_num + idx%translation_num];
++}
++
+ __global__ void cuda_kernel_initOrientations(RFLOAT *pdfs, XFLOAT *pdf_orientation, bool *pdf_orientation_zeros, size_t sz)
+ {
+ 	int idx = blockIdx.x*blockDim.x + threadIdx.x;
+diff --git a/src/acc/cuda/cuda_kernels/helper.cuh b/src/acc/cuda/cuda_kernels/helper.cuh
+index 7079884..b988358 100644
+--- a/src/acc/cuda/cuda_kernels/helper.cuh
++++ b/src/acc/cuda/cuda_kernels/helper.cuh
+@@ -871,6 +871,15 @@ __global__ void cuda_kernel_allweights_to_mweights(
+ 		unsigned long orientation_num,
+ 		unsigned long translation_num,
+         int block_size
++			);
++
++__global__ void cuda_kernel_all_double_weights_to_mweights(
++		unsigned long * d_iorient,
++		double * d_allweights,
++		double * d_mweights,
++		unsigned long orientation_num,
++		unsigned long translation_num,
++		int block_size
+ 		);
+ 
+ #define OVER_THRESHOLD_BLOCK_SIZE 512
+diff --git a/src/acc/utilities.h b/src/acc/utilities.h
+index a824021..adea4fb 100644
+--- a/src/acc/utilities.h
++++ b/src/acc/utilities.h
+@@ -1096,8 +1096,8 @@ void diff2_coarse(
+ 		unsigned long translation_num,
+ 		unsigned long image_size,
+ 		deviceStream_t stream,
+-		XFLOAT *g_reference_norms = nullptr,
+-		XFLOAT *g_cross_terms = nullptr
++		double *g_reference_norms = nullptr,
++		double *g_cross_terms = nullptr
+ 		)
+ {
+ #ifdef _CUDA_ENABLED

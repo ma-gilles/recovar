@@ -11,14 +11,9 @@ For each iteration index, loads:
 
 Reports per-iter, side-by-side:
   - current_size (Fourier window radius — RELION's _rlnCurrentImageSize)
-  - ave_Pmax     (mean of RELION's per-particle rlnMaxValueProbDistribution
-                  from data.star — the apples-to-apples comparison vs
-                  recovar's per-particle E-step Pmax mean)
-  - ave_Pmax_mstep (RELION's _rlnAveragePmax from model.star — this is the
-                    M-step accumulator; differs from the per-particle mean
-                    by ~3% for half-set/full-set accounting reasons. NOT
-                    directly comparable to recovar's ave_Pmax. Kept here
-                    for completeness only.)
+  - ave_Pmax     (RELION's optimizer/scheduling rlnAveragePmax from model.star)
+  - ave_Pmax_particles (mean of data.star::rlnMaxValueProbDistribution,
+                        retained as a separate distribution diagnostic)
   - current_resolution  (RELION's _rlnCurrentResolution)
   - healpix_order
   - changes in angles / offsets / classes (RELION-only; recovar tracks differently)
@@ -130,20 +125,40 @@ def get_field(d, *names):
     return None
 
 
-def load_relion_iter(relion_dir, it):
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _model_general(model):
+    if model and "model_general" in model:
+        return model["model_general"]
+    return None
+
+
+def _sigma_offset_from_model(model):
+    mg = _model_general(model)
+    if mg is None:
+        return float("nan")
+    return _safe_float(mg.get("rlnSigmaOffsetsAngst", float("nan")))
+
+
+def load_relion_iter(relion_dir, it, run_prefix="run"):
     """Load all per-iter STARs for one RELION iteration."""
     nnn = f"{it:03d}"
     out = {}
-    out["optimiser"] = parse_relion_optimiser(relion_dir / f"run_it{nnn}_optimiser.star")
-    out["model_h1"] = parse_relion_model(relion_dir / f"run_it{nnn}_half1_model.star")
-    out["model_h2"] = parse_relion_model(relion_dir / f"run_it{nnn}_half2_model.star")
+    out["optimiser"] = parse_relion_optimiser(relion_dir / f"{run_prefix}_it{nnn}_optimiser.star")
+    out["model_h1"] = parse_relion_model(relion_dir / f"{run_prefix}_it{nnn}_half1_model.star")
+    out["model_h2"] = parse_relion_model(relion_dir / f"{run_prefix}_it{nnn}_half2_model.star")
     if out["model_h1"] is None and out["model_h2"] is None:
         # 3D classification writes one run_itNNN_model.star instead of
         # auto-refine half-model STARs. Use it for K-class diagnostics.
-        model = parse_relion_model(relion_dir / f"run_it{nnn}_model.star")
+        model = parse_relion_model(relion_dir / f"{run_prefix}_it{nnn}_model.star")
         out["model_h1"] = model
         out["model_h2"] = model
-    data_path = relion_dir / f"run_it{nnn}_data.star"
+    data_path = relion_dir / f"{run_prefix}_it{nnn}_data.star"
     out["data"] = starfile.read(str(data_path)) if data_path.exists() else None
     return out
 
@@ -154,56 +169,52 @@ def extract_relion_scalars(relion_iter):
     Per-iter scalars live in THREE places:
       - model.star::model_general — current_size, current_resolution,
         sigma_offsets, log_likelihood, norm_correction, _rlnAveragePmax
-        (M-step accumulator — see note on ``ave_Pmax`` below).
+        (the optimizer scalar used for scheduling).
       - data.star — per-particle ``rlnMaxValueProbDistribution`` column.
-        Mean of this column is the apples-to-apples comparison to recovar's
-        per-particle E-step Pmax mean (``ave_Pmax_trajectory[i]``).
+        Its mean is retained as a separate distribution diagnostic.
       - optimiser.star — smallest_changes (convergence indicators), iter counters
 
     NOTE on ``ave_Pmax``:
-        ``_rlnAveragePmax`` written into ``run_it{NNN}_half{1,2}_model.star``
-        is RELION's M-step half-set accumulator. It differs from the mean of
-        ``rlnMaxValueProbDistribution`` (per-particle column in
-        ``run_it{NNN}_data.star``) by ~3% for half-set/full-set accounting
-        reasons. recovar's ``ave_Pmax_trajectory`` is the per-particle E-step
-        mean, so the apples-to-apples RELION column is the per-particle one.
-        Setting ``out["ave_Pmax"]`` from the per-particle column closes the
-        spurious 0.0412-vs-0.0436 "iter-1 5.5% gap" that was just two
-        differently-aggregated RELION numbers.
+        RELION computes ``_rlnAveragePmax`` from the weighted-sum model and
+        consumes it for current-size scheduling. It is therefore the parity
+        oracle for recovar's optimizer state. The arithmetic particle-column
+        mean is not interchangeable with it and is reported under
+        ``ave_Pmax_particles`` only.
     """
     out = {}
     opt = relion_iter["optimiser"]
     model = relion_iter["model_h1"]
+    model_h2 = relion_iter["model_h2"]
     data = relion_iter.get("data")
 
-    # Per-particle Pmax mean from data.star — this is the apples-to-apples
-    # comparison versus recovar's ave_Pmax_trajectory entry.
+    # Preserve the particle-column mean as a distribution diagnostic.
     relion_data_df = None
     if data is not None:
         relion_data_df = data["particles"] if isinstance(data, dict) and "particles" in data else data
     if relion_data_df is not None and "rlnMaxValueProbDistribution" in relion_data_df:
         col = np.asarray(relion_data_df["rlnMaxValueProbDistribution"], dtype=np.float64)
         if col.size:
-            out["ave_Pmax"] = float(col.mean())
+            out["ave_Pmax_particles"] = float(col.mean())
 
     # From model_general (the per-iter "state" block)
     if model and "model_general" in model:
         mg = model["model_general"]
         out["current_size"] = int(mg.get("rlnCurrentImageSize", 0) or 0)
-        # _rlnAveragePmax is RELION's M-step accumulator. Keep it under a
-        # distinct key so the comparison table can show the discrepancy
-        # without conflating it with the per-particle metric.
-        out["ave_Pmax_mstep"] = float(mg.get("rlnAveragePmax", float("nan")))
-        # Fallback: if data.star did not carry rlnMaxValueProbDistribution
-        # (e.g. iter-0 bootstrap), use the M-step accumulator so downstream
-        # code still has *some* value rather than KeyError. The comparison
-        # row will then trivially be NaN-vs-recovar at that iter.
-        if "ave_Pmax" not in out:
-            out["ave_Pmax"] = out["ave_Pmax_mstep"]
+        out["ave_Pmax"] = float(mg.get("rlnAveragePmax", float("nan")))
+        # Backward-compatible alias for older consumers. Despite the historic
+        # name, this is the authoritative optimizer/scheduling scalar.
+        out["ave_Pmax_mstep"] = out["ave_Pmax"]
         out["current_resolution"] = float(mg.get("rlnCurrentResolution", float("nan")))
         out["log_likelihood"] = float(mg.get("rlnLogLikelihood", float("nan")))
         out["norm_correction_avg"] = float(mg.get("rlnNormCorrectionAverage", float("nan")))
-        out["sigma_offsets_angst"] = float(mg.get("rlnSigmaOffsetsAngst", float("nan")))
+        sigma_h1 = _sigma_offset_from_model(model)
+        sigma_h2 = _sigma_offset_from_model(model_h2)
+        if np.isfinite(sigma_h1):
+            out["sigma_offsets_h1_angst"] = sigma_h1
+        if np.isfinite(sigma_h2):
+            out["sigma_offsets_h2_angst"] = sigma_h2
+        sigma_pair = [v for v in (sigma_h1, sigma_h2) if np.isfinite(v)]
+        out["sigma_offsets_angst"] = float(np.mean(sigma_pair)) if sigma_pair else float("nan")
         out["tau2_fudge"] = float(mg.get("rlnTau2FudgeFactor", float("nan")))
         out["nr_groups"] = int(mg.get("rlnNrGroups", 0) or 0)
 
@@ -252,6 +263,18 @@ def extract_relion_per_shell(relion_iter, half):
     return out
 
 
+def extract_relion_direction_prior(relion_iter, half):
+    """Extract one half's class-1 RELION HEALPix direction prior."""
+
+    model = relion_iter[f"model_h{half}"]
+    if model is None or "model_pdf_orient_class_1" not in model:
+        return None
+    table = model["model_pdf_orient_class_1"]
+    if "rlnOrientationDistribution" not in table.columns:
+        return None
+    return np.asarray(table["rlnOrientationDistribution"], dtype=np.float64)
+
+
 def load_recovar(npz_path):
     if not npz_path.exists():
         return None
@@ -287,6 +310,26 @@ def _recovar_per_shell_array(recovar, key):
     return arr
 
 
+def _recovar_optional_pair(recovar, key, it):
+    if recovar is None or key not in recovar.files:
+        return None
+    arr = np.asarray(recovar[key], dtype=object)
+    if it >= len(arr):
+        return None
+    value = arr[it]
+    if value is None:
+        return None
+    if isinstance(value, np.ndarray) and value.shape == () and value.item() is None:
+        return None
+    try:
+        pair = np.asarray(value, dtype=np.float64).reshape(-1)
+    except (TypeError, ValueError):
+        return None
+    if pair.size != 2 or not np.all(np.isfinite(pair)):
+        return None
+    return [float(pair[0]), float(pair[1])]
+
+
 def extract_recovar_scalars(recovar, it):
     """Extract per-iter scalars from recovar's npz at iter index `it` (0-based)."""
     if recovar is None:
@@ -297,6 +340,8 @@ def extract_recovar_scalars(recovar, it):
     hpx_arr = recovar.get("healpix_order_trajectory")
     sigma_offset_arr = recovar.get("sigma_offset_trajectory")
     sigma_offset_used_arr = recovar.get("sigma_offset_used_trajectory")
+    sigma_offset_per_half = _recovar_optional_pair(recovar, "sigma_offset_per_half_trajectory", it)
+    sigma_offset_used_per_half = _recovar_optional_pair(recovar, "sigma_offset_used_per_half_trajectory", it)
     if sigma_offset_arr is None:
         sigma_offset_arr = sigma_offset_used_arr
     frac_changed_arr = recovar.get("frac_changed_trajectory")
@@ -308,14 +353,25 @@ def extract_recovar_scalars(recovar, it):
         out["current_size"] = int(cs_arr[it])
     if pmax_arr is not None and it < len(pmax_arr):
         out["ave_Pmax"] = float(pmax_arr[it])
+    pmax_particles_key = f"pmax_per_image_iter_{it:03d}"
+    if pmax_particles_key in recovar.files:
+        pmax_particles = np.asarray(recovar[pmax_particles_key], dtype=np.float64)
+        if pmax_particles.size:
+            out["ave_Pmax_particles"] = float(np.mean(pmax_particles))
     if pr_arr is not None and it < len(pr_arr):
         out["current_resolution_pix"] = int(pr_arr[it])
     if hpx_arr is not None and it < len(hpx_arr):
         out["healpix_order"] = int(hpx_arr[it])
     if sigma_offset_arr is not None and it < len(sigma_offset_arr):
         out["sigma_offsets_angst"] = float(sigma_offset_arr[it])
+    if sigma_offset_per_half is not None:
+        out["sigma_offsets_h1_angst"] = sigma_offset_per_half[0]
+        out["sigma_offsets_h2_angst"] = sigma_offset_per_half[1]
     if sigma_offset_used_arr is not None and it < len(sigma_offset_used_arr):
         out["sigma_offsets_used_angst"] = float(sigma_offset_used_arr[it])
+    if sigma_offset_used_per_half is not None:
+        out["sigma_offsets_used_h1_angst"] = sigma_offset_used_per_half[0]
+        out["sigma_offsets_used_h2_angst"] = sigma_offset_used_per_half[1]
     if frac_changed_arr is not None and it < len(frac_changed_arr):
         out["fraction_changed"] = float(frac_changed_arr[it])
     if acc_rot_arr is not None and it < len(acc_rot_arr):
@@ -368,6 +424,47 @@ def extract_recovar_per_shell(recovar, it):
         out["SsnrMap"] = ssnr
         out["DataVsPriorRatio"] = out["SsnrMap"]
     return out if out else None
+
+
+def extract_recovar_direction_prior(recovar, it):
+    """Return the saved [half1, half2] direction-prior snapshot for iteration ``it``."""
+
+    if recovar is None or "direction_prior_trajectory_per_half" not in recovar.files:
+        return None, None
+    trajectory = recovar["direction_prior_trajectory_per_half"]
+    if it < 0 or it >= len(trajectory) or trajectory[it] is None:
+        return None, None
+    entry = trajectory[it]
+    return tuple(
+        None if value is None else np.asarray(value, dtype=np.float64).reshape(-1)
+        for value in entry
+    )
+
+
+def compare_direction_priors(relion_arr, recovar_arr):
+    """Return direct array-error diagnostics; correlation is auxiliary only."""
+
+    if relion_arr is None or recovar_arr is None:
+        return None
+    relion_arr = np.asarray(relion_arr, dtype=np.float64).reshape(-1)
+    recovar_arr = np.asarray(recovar_arr, dtype=np.float64).reshape(-1)
+    if relion_arr.shape != recovar_arr.shape:
+        return {"mismatch": True, "n_relion": int(relion_arr.size), "n_recovar": int(recovar_arr.size)}
+    difference = recovar_arr - relion_arr
+    l1_diff = float(np.sum(np.abs(difference)))
+    relion_l1 = float(np.sum(np.abs(relion_arr)))
+    corr = float("nan")
+    if relion_arr.size > 1 and np.std(relion_arr) > 0 and np.std(recovar_arr) > 0:
+        corr = float(np.corrcoef(relion_arr, recovar_arr)[0, 1])
+    return {
+        "mismatch": False,
+        "n_directions": int(relion_arr.size),
+        "max_abs_diff": float(np.max(np.abs(difference), initial=0.0)),
+        "l1_diff": l1_diff,
+        "relative_l1_diff": float(l1_diff / max(relion_l1, np.finfo(np.float64).tiny)),
+        "mass_diff": float(np.sum(recovar_arr) - np.sum(relion_arr)),
+        "corr_auxiliary": corr,
+    }
 
 
 def fsc_resolution_angstrom(fsc, voxel_size, grid_size, threshold=0.143):
@@ -434,6 +531,11 @@ def print_metric_block(prefix, pose_npz, metric_specs):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
+    parser.add_argument(
+        "--relion_run_prefix",
+        default="run",
+        help="RELION output prefix inside --relion_dir (default: run)",
+    )
     parser.add_argument("--recovar_dir", required=True)
     parser.add_argument("--max_iter", type=int, default=10)
     parser.add_argument(
@@ -470,7 +572,10 @@ def main():
 
     # Find which iters RELION actually wrote
     relion_iters = sorted(
-        {int(p.stem.split("_it")[1].split("_")[0]) for p in relion_dir.glob("run_it*_optimiser.star")}
+        {
+            int(p.stem.split("_it")[1].split("_")[0])
+            for p in relion_dir.glob(f"{args.relion_run_prefix}_it*_optimiser.star")
+        }
     )
     logger.info("RELION wrote iters: %s", relion_iters)
 
@@ -484,7 +589,7 @@ def main():
 
     for it in range(n_iters_to_check):
         relion_it = it + relion_offset
-        relion_iter = load_relion_iter(relion_dir, relion_it)
+        relion_iter = load_relion_iter(relion_dir, relion_it, args.relion_run_prefix)
         rsc = extract_relion_scalars(relion_iter)
         rps = extract_relion_per_shell(relion_iter, half=1)
 
@@ -520,18 +625,18 @@ def main():
 
         scalars_to_compare = [
             ("current_size", rsc.get("current_size"), rec_sc.get("current_size")),
-            # ave_Pmax compares the per-particle mean of
-            # rlnMaxValueProbDistribution from RELION's data.star against
-            # recovar's per-particle E-step Pmax mean. This is the
-            # apples-to-apples row.
-            ("ave_Pmax", rsc.get("ave_Pmax"), rec_sc.get("ave_Pmax")),
-            # _rlnAveragePmax from model.star is the M-step accumulator.
-            # It differs from the per-particle mean by ~3% for half-set/
-            # full-set accounting reasons; reported here for completeness
-            # but NOT directly comparable to recovar's ave_Pmax.
-            ("ave_Pmax_mstep (RELION-only)", rsc.get("ave_Pmax_mstep"), None),
-            ("sigma_offsets_Å", rsc.get("sigma_offsets_angst"), rec_sc.get("sigma_offsets_angst")),
-            ("sigma_offsets_used_Å", None, rec_sc.get("sigma_offsets_used_angst")),
+            ("ave_Pmax_optimizer", rsc.get("ave_Pmax"), rec_sc.get("ave_Pmax")),
+            (
+                "ave_Pmax_particles",
+                rsc.get("ave_Pmax_particles"),
+                rec_sc.get("ave_Pmax_particles"),
+            ),
+            ("sigma_offsets_mean_Å", rsc.get("sigma_offsets_angst"), rec_sc.get("sigma_offsets_angst")),
+            ("sigma_offsets_h1_Å", rsc.get("sigma_offsets_h1_angst"), rec_sc.get("sigma_offsets_h1_angst")),
+            ("sigma_offsets_h2_Å", rsc.get("sigma_offsets_h2_angst"), rec_sc.get("sigma_offsets_h2_angst")),
+            ("sigma_offsets_used_mean_Å", None, rec_sc.get("sigma_offsets_used_angst")),
+            ("sigma_offsets_used_h1_Å", None, rec_sc.get("sigma_offsets_used_h1_angst")),
+            ("sigma_offsets_used_h2_Å", None, rec_sc.get("sigma_offsets_used_h2_angst")),
             ("smallest_chg_angles_°", rsc.get("smallest_change_angles"), rec_sc.get("smallest_change_angles")),
             ("smallest_chg_offsets", rsc.get("smallest_change_offsets"), rec_sc.get("smallest_change_offsets")),
             ("current_resolution Å", rsc.get("current_resolution"), None),
@@ -555,7 +660,9 @@ def main():
         for f, label in [
             ("log_likelihood", "log_likelihood"),
             ("norm_correction_avg", "norm_correction_avg"),
-            ("sigma_offsets_angst", "sigma_offsets_Å"),
+            ("sigma_offsets_angst", "sigma_offsets_mean_Å"),
+            ("sigma_offsets_h1_angst", "sigma_offsets_h1_Å"),
+            ("sigma_offsets_h2_angst", "sigma_offsets_h2_Å"),
             ("best_resolution_so_far", "best_res_so_far_(1/Å)"),
             ("smallest_change_angles", "smallest_chg_angles_°"),
             ("smallest_change_offsets", "smallest_chg_offsets_px"),
@@ -566,6 +673,36 @@ def main():
             v = rsc.get(f)
             if v is not None and not (isinstance(v, float) and np.isnan(v)):
                 print(f"    {label:<26s} {fmt(v, 16):>16s}")
+
+        recovar_dir_h1, recovar_dir_h2 = (
+            extract_recovar_direction_prior(recovar, recovar_iter_index)
+            if recovar_iter_index >= 0
+            else (None, None)
+        )
+        direction_prior_rows = [
+            ("h1", extract_relion_direction_prior(relion_iter, half=1), recovar_dir_h1),
+            ("h2", extract_relion_direction_prior(relion_iter, half=2), recovar_dir_h2),
+        ]
+        if any(lhs is not None or rhs is not None for _, lhs, rhs in direction_prior_rows):
+            print(f"  {'pdf_orient direct array diff:':<28s}")
+            for label, relion_arr, recovar_arr in direction_prior_rows:
+                stats = compare_direction_priors(relion_arr, recovar_arr)
+                if stats is None:
+                    print(f"    {label:<26s} {'—':>16s}  (missing on one side)")
+                elif stats["mismatch"]:
+                    print(
+                        f"    {label:<26s} HEALPix-size mismatch "
+                        f"(RELION n={stats['n_relion']}, RECOVAR n={stats['n_recovar']})"
+                    )
+                else:
+                    color = GREEN if stats["relative_l1_diff"] <= args.tol else RED
+                    print(
+                        f"    {label:<26s} n={stats['n_directions']:<6d} "
+                        f"relative_L1={color}{stats['relative_l1_diff']:.3e}{RESET}  "
+                        f"max_abs={stats['max_abs_diff']:.3e}  L1={stats['l1_diff']:.3e}  "
+                        f"mass_diff={stats['mass_diff']:.3e}  "
+                        f"corr={stats['corr_auxiliary']:.6f} (aux only)"
+                    )
 
         # ---- Per-shell comparison ----
         if rps is not None and rps.get("_n_shells", 0) > 0:

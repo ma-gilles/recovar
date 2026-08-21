@@ -1,0 +1,412 @@
+diff --git a/src/acc/acc_ml_optimiser_impl.h b/src/acc/acc_ml_optimiser_impl.h
+index 4fcef15..a9b046e 100644
+--- a/src/acc/acc_ml_optimiser_impl.h
++++ b/src/acc/acc_ml_optimiser_impl.h
+@@ -130,0 +131,59 @@ static_assert(sizeof(RelionCoarseOperandFooterV1) == 32,
++struct RelionPreprocessCaptureHeaderV1
++{
++	char magic[16];
++	std::uint64_t values[40];
++};
++
++struct RelionPreprocessCaptureFooterV1
++{
++	char magic[16];
++	std::uint64_t real_count;
++	std::uint64_t fourier_count;
++};
++
++struct RelionPreprocessCaptureConfigV1
++{
++	bool enabled;
++	std::string directory;
++	std::uint64_t iteration;
++	std::uint64_t expected_particles;
++	std::uint64_t max_particles_per_rank;
++	std::uint64_t expected_followers;
++	std::uint64_t max_bytes;
++	std::vector<std::uint64_t> part_ids;
++};
++
++struct RelionPreprocessCaptureDataV1
++{
++	std::vector<float> raw_input_real;
++	std::vector<float> normalized_shifted_real;
++	std::vector<float> unmasked_fourier_pre_optics_real;
++	std::vector<float> unmasked_fourier_pre_optics_imag;
++	std::vector<float> unmasked_fourier_post_optics_real;
++	std::vector<float> unmasked_fourier_post_optics_imag;
++	std::vector<float> masked_real;
++	std::vector<float> masked_fourier_pre_optics_real;
++	std::vector<float> masked_fourier_pre_optics_imag;
++	std::vector<float> masked_fourier_post_optics_real;
++	std::vector<float> masked_fourier_post_optics_imag;
++	float norm_correction;
++	float old_offset_x;
++	float old_offset_y;
++	float old_offset_z;
++	float mask_radius;
++	float mask_radius_p;
++	float mask_cosine_width;
++	float mask_background;
++	std::uint64_t real_x;
++	std::uint64_t real_y;
++	std::uint64_t real_z;
++	std::uint64_t fourier_x;
++	std::uint64_t fourier_y;
++	std::uint64_t fourier_z;
++};
++
++static_assert(sizeof(RelionPreprocessCaptureHeaderV1) == 336,
++	"Unexpected RELION preprocess-capture header layout");
++static_assert(sizeof(RelionPreprocessCaptureFooterV1) == 32,
++	"Unexpected RELION preprocess-capture footer layout");
++
+@@ -211,0 +271,10 @@ bool relion_p1_part_id_selected(
++bool relion_preprocess_part_id_selected(
++	const RelionPreprocessCaptureConfigV1 &config,
++	std::uint64_t part_id)
++{
++	for (std::uint64_t selected : config.part_ids)
++		if (selected == part_id)
++			return true;
++	return false;
++}
++
+@@ -309,0 +379,43 @@ const RelionCoarsePass1ConfigV1 &relion_p1_config_v1()
++const RelionPreprocessCaptureConfigV1 &relion_preprocess_config_v1()
++{
++	static const RelionPreprocessCaptureConfigV1 config = []()
++	{
++		RelionPreprocessCaptureConfigV1 result = {};
++		const char *directory = std::getenv("RELION_P1_PREPROCESS_CAPTURE_DIR");
++		result.enabled = directory != nullptr && directory[0] != '\0';
++		if (!result.enabled)
++			return result;
++		result.directory = directory;
++		if (relion_bpre_required_u64("RELION_P1_PREPROCESS_CAPTURE_SCHEMA") != 1)
++			REPORT_ERROR("RELION_P1_PREPROCESS_CAPTURE_SCHEMA must be exactly 1");
++		result.iteration =
++			relion_bpre_required_u64("RELION_P1_PREPROCESS_CAPTURE_ITER");
++		result.expected_particles =
++			relion_bpre_required_u64("RELION_P1_PREPROCESS_CAPTURE_EXPECTED_PARTICLES");
++		result.max_particles_per_rank =
++			relion_bpre_required_u64("RELION_P1_PREPROCESS_CAPTURE_MAX_PARTICLES_PER_RANK");
++		result.expected_followers =
++			relion_bpre_required_u64("RELION_P1_PREPROCESS_CAPTURE_EXPECTED_FOLLOWERS");
++		result.max_bytes =
++			relion_bpre_required_u64("RELION_P1_PREPROCESS_CAPTURE_MAX_BYTES");
++		result.part_ids =
++			relion_bpre_optional_u64_csv("RELION_P1_PREPROCESS_CAPTURE_PART_IDS");
++		if (result.part_ids.empty())
++			REPORT_ERROR("RELION_P1_PREPROCESS_CAPTURE_PART_IDS must be an explicit non-empty list");
++		if (result.expected_particles != result.part_ids.size())
++			REPORT_ERROR("RELION_P1_PREPROCESS_CAPTURE_EXPECTED_PARTICLES must equal the explicit PART_IDS count");
++		if (result.expected_particles > 1024
++			|| result.max_particles_per_rank > 1024
++			|| result.expected_followers > 1024)
++			REPORT_ERROR("RELION preprocess capture is limited to 1024 explicitly selected particles/ranks");
++		if (result.expected_particles
++			> result.max_particles_per_rank * result.expected_followers)
++			REPORT_ERROR("RELION preprocess capture cannot fit EXPECTED_PARTICLES within the explicit per-rank/follower cap");
++		struct stat status;
++		if (stat(result.directory.c_str(), &status) != 0 || !S_ISDIR(status.st_mode))
++			REPORT_ERROR("RELION_P1_PREPROCESS_CAPTURE_DIR must name an existing directory");
++		return result;
++	}();
++	return config;
++}
++
+@@ -337,0 +450,197 @@ std::atomic<std::uint64_t> relion_p1_operand_files_reserved_v1(0);
++std::atomic<std::uint64_t> relion_preprocess_files_reserved_v1(0);
++
++bool relion_should_capture_preprocess_v1(
++	MlOptimiser *baseMLO,
++	OptimisationParamters &op,
++	long int part_id,
++	int img_id,
++	int ibody,
++	bool data_is_3d)
++{
++	const RelionPreprocessCaptureConfigV1 &config = relion_preprocess_config_v1();
++	if (!config.enabled
++		|| static_cast<std::uint64_t>(baseMLO->iter) != config.iteration
++		|| !relion_preprocess_part_id_selected(
++			config, static_cast<std::uint64_t>(op.part_id)))
++		return false;
++	if (part_id != op.part_id)
++		REPORT_ERROR("RELION preprocess capture requires matching runtime and optimisation particle identities");
++	if (img_id != 0 || ibody != 0 || baseMLO->mymodel.nr_bodies != 1)
++		REPORT_ERROR("RELION preprocess capture supports only image 0 of a single-body particle");
++	if (data_is_3d || op.is_tomo)
++		REPORT_ERROR("RELION preprocess capture supports only ordinary 2D particle images");
++	if (!baseMLO->do_zero_mask)
++		REPORT_ERROR("RELION preprocess capture requires deterministic zero masking");
++	if (baseMLO->has_converged && baseMLO->do_use_reconstruct_images)
++		REPORT_ERROR("RELION preprocess capture does not support separate reconstruction images");
++	if (baseMLO->do_helical_refine
++		|| ((baseMLO->mymodel.ref_dim == 2)
++			&& (baseMLO->helical_tube_outer_diameter > 0.)))
++		REPORT_ERROR("RELION preprocess capture does not support helical masking");
++	if (sizeof(XFLOAT) != sizeof(float))
++		REPORT_ERROR("RELION preprocess schema v1 requires single-precision accelerator arrays");
++	return true;
++}
++
++template <typename AccArray>
++void relion_copy_device_float32_v1(
++	AccArray &source,
++	std::size_t count,
++	std::vector<float> &destination)
++{
++	if (source.getSize() != count)
++		REPORT_ERROR("RELION preprocess capture saw an unexpected device-array size");
++	destination.resize(count);
++	DEBUG_HANDLE_ERROR(cudaMemcpyAsync(
++		destination.data(),
++		~source,
++		count * sizeof(XFLOAT),
++		cudaMemcpyDeviceToHost,
++		source.getStream()));
++	DEBUG_HANDLE_ERROR(cudaStreamSynchronize(source.getStream()));
++}
++
++void relion_copy_fourier_float32_v1(
++	const MultidimArray<Complex> &source,
++	std::vector<float> &real_values,
++	std::vector<float> &imag_values)
++{
++	real_values.resize(source.nzyxdim);
++	imag_values.resize(source.nzyxdim);
++	for (std::size_t index = 0; index < source.nzyxdim; index++)
++	{
++		real_values[index] = static_cast<float>(source.data[index].real);
++		imag_values[index] = static_cast<float>(source.data[index].imag);
++	}
++}
++
++void relion_write_preprocess_capture_v1(
++	MlOptimiser *baseMLO,
++	OptimisationParamters &op,
++	int img_id,
++	int ibody,
++	const RelionPreprocessCaptureDataV1 &capture)
++{
++	const RelionPreprocessCaptureConfigV1 &config = relion_preprocess_config_v1();
++	const std::uint64_t real_count = capture.raw_input_real.size();
++	const std::uint64_t fourier_count =
++		capture.masked_fourier_post_optics_real.size();
++	const std::uint64_t artifact_bytes =
++		sizeof(RelionPreprocessCaptureHeaderV1)
++		+ 3 * real_count * sizeof(float)
++		+ 8 * fourier_count * sizeof(float)
++		+ sizeof(RelionPreprocessCaptureFooterV1);
++	const std::uint64_t estimated_max_bytes = artifact_bytes
++		* config.max_particles_per_rank * config.expected_followers;
++	if (real_count == 0 || fourier_count == 0
++		|| capture.normalized_shifted_real.size() != real_count
++		|| capture.masked_real.size() != real_count
++		|| capture.unmasked_fourier_pre_optics_real.size() != fourier_count
++		|| capture.unmasked_fourier_pre_optics_imag.size() != fourier_count
++		|| capture.unmasked_fourier_post_optics_real.size() != fourier_count
++		|| capture.unmasked_fourier_post_optics_imag.size() != fourier_count
++		|| capture.masked_fourier_pre_optics_real.size() != fourier_count
++		|| capture.masked_fourier_pre_optics_imag.size() != fourier_count
++		|| capture.masked_fourier_post_optics_imag.size() != fourier_count)
++		REPORT_ERROR("RELION preprocess capture has incomplete or inconsistent stage arrays");
++	if (capture.real_x * capture.real_y * capture.real_z != real_count
++		|| capture.fourier_x * capture.fourier_y * capture.fourier_z
++			!= fourier_count)
++		REPORT_ERROR("RELION preprocess capture dimensions do not match its stage arrays");
++	if (estimated_max_bytes > config.max_bytes)
++		REPORT_ERROR("RELION preprocess runtime dimensions exceed RELION_P1_PREPROCESS_CAPTURE_MAX_BYTES");
++
++	const std::uint64_t reservation =
++		relion_preprocess_files_reserved_v1.fetch_add(1);
++	if (reservation >= config.max_particles_per_rank)
++		REPORT_ERROR("RELION preprocess capture exceeded MAX_PARTICLES_PER_RANK");
++
++	FileName image_name = baseMLO->mydata.particles[op.part_id].name;
++	FileName stack_name;
++	long int stack_index = -1;
++	image_name.decompose(stack_index, stack_name);
++	if (stack_index < 0 || stack_name.empty())
++		REPORT_ERROR("RELION preprocess capture could not resolve canonical stack identity");
++
++	RelionPreprocessCaptureHeaderV1 header = {};
++	std::memcpy(header.magic, "RLNPREPV1HEADER", 15);
++	header.values[0] = 1;
++	header.values[1] = sizeof(header);
++	header.values[2] = sizeof(float);
++	header.values[3] = sizeof(std::uint64_t);
++	header.values[4] = sizeof(RelionPreprocessCaptureFooterV1);
++	header.values[5] = baseMLO->iter;
++	header.values[6] = op.part_id;
++	header.values[7] = stack_index;
++	header.values[8] = static_cast<std::uint64_t>(relion_bpre_mpi_rank());
++	header.values[9] = omp_get_thread_num();
++	header.values[10] = img_id;
++	header.values[11] = ibody;
++	header.values[12] = capture.real_x;
++	header.values[13] = capture.real_y;
++	header.values[14] = capture.real_z;
++	header.values[15] = real_count;
++	header.values[16] = capture.fourier_x;
++	header.values[17] = capture.fourier_y;
++	header.values[18] = capture.fourier_z;
++	header.values[19] = fourier_count;
++	header.values[20] = relion_bpre_float_bits(capture.norm_correction);
++	header.values[21] = relion_bpre_float_bits(capture.old_offset_x);
++	header.values[22] = relion_bpre_float_bits(capture.old_offset_y);
++	header.values[23] = relion_bpre_float_bits(capture.old_offset_z);
++	header.values[24] = relion_bpre_float_bits(capture.mask_radius);
++	header.values[25] = relion_bpre_float_bits(capture.mask_radius_p);
++	header.values[26] = relion_bpre_float_bits(capture.mask_cosine_width);
++	header.values[27] = relion_bpre_float_bits(capture.mask_background);
++	header.values[28] = baseMLO->do_zero_mask ? 1 : 0;
++	header.values[29] = config.expected_particles;
++	header.values[30] = config.max_particles_per_rank;
++	header.values[31] = config.expected_followers;
++	header.values[32] = config.max_bytes;
++	header.values[33] = estimated_max_bytes;
++	header.values[34] = relion_bpre_fnv1a64(stack_name);
++	header.values[35] = relion_bpre_fnv1a64(image_name);
++	header.values[36] = 127; // all seven passive preprocessing stages present
++	header.values[37] = 1; // capture reads no scores, weights, references, or maps
++	header.values[38] = 1; // artifact is written by temporary-file rename
++	header.values[39] = SOFTMASK_BLOCK_SIZE;
++
++	RelionPreprocessCaptureFooterV1 footer = {};
++	std::memcpy(footer.magic, "RLNPREPV1FOOTER", 15);
++	footer.real_count = real_count;
++	footer.fourier_count = fourier_count;
++
++	std::string basename = config.directory + "/part" + std::to_string(op.part_id)
++		+ "_stack" + std::to_string(stack_index) + ".preprocess-v1.bin";
++	std::string temporary = basename + ".tmp." + std::to_string(getpid())
++		+ "." + std::to_string(omp_get_thread_num());
++	struct stat existing;
++	if (stat(basename.c_str(), &existing) == 0
++		|| stat(temporary.c_str(), &existing) == 0)
++		REPORT_ERROR("RELION preprocess capture refuses to overwrite an existing artifact");
++	std::ofstream output(temporary, std::ios::binary | std::ios::out | std::ios::trunc);
++	if (!output)
++		REPORT_ERROR("Cannot create RELION preprocess temporary artifact");
++	output.write(reinterpret_cast<const char *>(&header), sizeof(header));
++	const std::vector<const std::vector<float> *> stages = {
++		&capture.raw_input_real,
++		&capture.normalized_shifted_real,
++		&capture.unmasked_fourier_pre_optics_real,
++		&capture.unmasked_fourier_pre_optics_imag,
++		&capture.unmasked_fourier_post_optics_real,
++		&capture.unmasked_fourier_post_optics_imag,
++		&capture.masked_real,
++		&capture.masked_fourier_pre_optics_real,
++		&capture.masked_fourier_pre_optics_imag,
++		&capture.masked_fourier_post_optics_real,
++		&capture.masked_fourier_post_optics_imag,
++	};
++	for (const std::vector<float> *stage : stages)
++		output.write(
++			reinterpret_cast<const char *>(stage->data()),
++			stage->size() * sizeof((*stage)[0]));
++	output.write(reinterpret_cast<const char *>(&footer), sizeof(footer));
++	output.close();
++	if (!output || rename(temporary.c_str(), basename.c_str()) != 0)
++		REPORT_ERROR("Cannot seal RELION preprocess artifact");
++}
+@@ -1460,0 +1770,25 @@ void getFourierTransformsAndCtfs(long int part_id,
++#ifdef _CUDA_ENABLED
++		const bool capture_preprocess = relion_should_capture_preprocess_v1(
++			baseMLO, op, part_id, img_id, ibody, accMLO->dataIs3D);
++		RelionPreprocessCaptureDataV1 preprocess_capture = {};
++		if (capture_preprocess)
++		{
++			preprocess_capture.real_x = img.data.xdim;
++			preprocess_capture.real_y = img.data.ydim;
++			preprocess_capture.real_z = img.data.zdim;
++			preprocess_capture.fourier_x = current_size_x;
++			preprocess_capture.fourier_y = current_size_y;
++			preprocess_capture.fourier_z = current_size_z;
++			preprocess_capture.old_offset_x =
++				static_cast<float>(XX(my_old_offset));
++			preprocess_capture.old_offset_y =
++				static_cast<float>(YY(my_old_offset));
++			preprocess_capture.old_offset_z = accMLO->shiftsIs3D
++				? static_cast<float>(ZZ(my_old_offset)) : 0.0f;
++			preprocess_capture.raw_input_real.resize(img.data.nzyxdim);
++			for (std::size_t index = 0; index < img.data.nzyxdim; index++)
++				preprocess_capture.raw_input_real[index] =
++					static_cast<float>(img().data[index]);
++		}
++#endif
++
+@@ -1553,0 +1888,12 @@ void getFourierTransformsAndCtfs(long int part_id,
++#ifdef _CUDA_ENABLED
++			if (capture_preprocess)
++			{
++				preprocess_capture.norm_correction =
++					static_cast<float>(normcorr_val);
++				relion_copy_device_float32_v1(
++					d_img,
++					img.data.nzyxdim,
++					preprocess_capture.normalized_shifted_real);
++			}
++#endif
++
+@@ -1642,0 +1989,8 @@ void getFourierTransformsAndCtfs(long int part_id,
++#ifdef _CUDA_ENABLED
++		if (capture_preprocess)
++			relion_copy_fourier_float32_v1(
++				Fimg,
++				preprocess_capture.unmasked_fourier_pre_optics_real,
++				preprocess_capture.unmasked_fourier_pre_optics_imag);
++#endif
++
+@@ -1649,0 +2004,8 @@ void getFourierTransformsAndCtfs(long int part_id,
++#ifdef _CUDA_ENABLED
++		if (capture_preprocess)
++			relion_copy_fourier_float32_v1(
++				Fimg,
++				preprocess_capture.unmasked_fourier_post_optics_real,
++				preprocess_capture.unmasked_fourier_post_optics_imag);
++#endif
++
+@@ -1785,0 +2148,15 @@ void getFourierTransformsAndCtfs(long int part_id,
++#ifdef _CUDA_ENABLED
++			if (capture_preprocess)
++			{
++				preprocess_capture.mask_radius = static_cast<float>(radius);
++				preprocess_capture.mask_radius_p = static_cast<float>(radius_p);
++				preprocess_capture.mask_cosine_width =
++					static_cast<float>(cosine_width);
++				preprocess_capture.mask_background = static_cast<float>(bg_val);
++				relion_copy_device_float32_v1(
++					d_img,
++					img.data.nzyxdim,
++					preprocess_capture.masked_real);
++			}
++#endif
++
+@@ -1809,0 +2187,8 @@ void getFourierTransformsAndCtfs(long int part_id,
++#ifdef _CUDA_ENABLED
++		if (capture_preprocess)
++			relion_copy_fourier_float32_v1(
++				Fimg,
++				preprocess_capture.masked_fourier_pre_optics_real,
++				preprocess_capture.masked_fourier_pre_optics_imag);
++#endif
++
+@@ -1970,0 +2356,12 @@ void getFourierTransformsAndCtfs(long int part_id,
++#ifdef _CUDA_ENABLED
++		if (capture_preprocess)
++		{
++			relion_copy_fourier_float32_v1(
++				Fimg,
++				preprocess_capture.masked_fourier_post_optics_real,
++				preprocess_capture.masked_fourier_post_optics_imag);
++			relion_write_preprocess_capture_v1(
++				baseMLO, op, img_id, ibody, preprocess_capture);
++		}
++#endif
++

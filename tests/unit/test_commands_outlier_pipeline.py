@@ -32,9 +32,9 @@ def test_run_test_outliers_pipeline_defaults_to_run_all(monkeypatch, tmp_path):
     removed = []
     os.makedirs(tmp_path / "outliers_test", exist_ok=True)
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
+    def fake_run(command, **kwargs):
+        assert "shell" not in kwargs
+        commands.append(" ".join(command) if isinstance(command, list) else command)
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(run_test_outliers_pipeline.subprocess, "run", fake_run)
@@ -71,7 +71,10 @@ def test_run_test_outliers_pipeline_tilt_basic_emits_tilt_flags(monkeypatch, tmp
     monkeypatch.setattr(
         run_test_outliers_pipeline.subprocess,
         "run",
-        lambda command, shell: (commands.append(command), SimpleNamespace(returncode=0))[1],
+        lambda command, **kwargs: (
+            commands.append(" ".join(command) if isinstance(command, list) else command),
+            SimpleNamespace(returncode=0),
+        )[1],
     )
     monkeypatch.setattr(run_test_outliers_pipeline, "create_outlier_volume", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(run_test_outliers_pipeline, "verify_outlier_results", lambda *_args, **_kwargs: True)

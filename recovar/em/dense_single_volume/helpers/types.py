@@ -72,6 +72,12 @@ class NoiseStats(NamedTuple):
             image and no significant-support pruning is active).
         wsum_noise_a2: optional diagnostic split of ``wsum_sigma2_noise``.
         wsum_noise_xa: optional diagnostic split of ``wsum_sigma2_noise``.
+        wsum_norm_correction: optional per-image residual sums for RELION's
+            ``normcorr = old_normcorr / avg_norm * sqrt(2 * residual)`` update.
+        wsum_scale_correction_xa: optional per-group signal-product sums for
+            RELION's group scale update.
+        wsum_scale_correction_aa: optional per-group reference-power sums for
+            RELION's group scale update.
     """
 
     wsum_sigma2_noise: jax.Array
@@ -80,6 +86,9 @@ class NoiseStats(NamedTuple):
     sumw: float
     wsum_noise_a2: jax.Array | None = None
     wsum_noise_xa: jax.Array | None = None
+    wsum_norm_correction: jax.Array | None = None
+    wsum_scale_correction_xa: jax.Array | None = None
+    wsum_scale_correction_aa: jax.Array | None = None
 
 
 def make_relion_stats(
@@ -109,6 +118,9 @@ def make_noise_stats(
     sumw,
     wsum_noise_a2=None,
     wsum_noise_xa=None,
+    wsum_norm_correction=None,
+    wsum_scale_correction_xa=None,
+    wsum_scale_correction_aa=None,
     array_dtype=jnp.float32,
 ) -> NoiseStats:
     """Build a ``NoiseStats`` object with consistent array and scalar coercion."""
@@ -120,6 +132,15 @@ def make_noise_stats(
         sumw=float(sumw),
         wsum_noise_a2=None if wsum_noise_a2 is None else jnp.asarray(wsum_noise_a2, dtype=array_dtype),
         wsum_noise_xa=None if wsum_noise_xa is None else jnp.asarray(wsum_noise_xa, dtype=array_dtype),
+        wsum_norm_correction=None
+        if wsum_norm_correction is None
+        else jnp.asarray(wsum_norm_correction, dtype=array_dtype),
+        wsum_scale_correction_xa=None
+        if wsum_scale_correction_xa is None
+        else jnp.asarray(wsum_scale_correction_xa, dtype=array_dtype),
+        wsum_scale_correction_aa=None
+        if wsum_scale_correction_aa is None
+        else jnp.asarray(wsum_scale_correction_aa, dtype=array_dtype),
     )
 
 

@@ -1,0 +1,44 @@
+import numpy as np
+
+from scripts.compare_k4_relion_recovar_fine_scores import (
+    _constant_offset_fit,
+    _counterfactual_residuals,
+    _metric,
+)
+
+
+def test_fine_score_counterfactual_identifies_data_component():
+    components = {
+        "data_log_score_centered": np.asarray([1.0, -2.0, 3.0]),
+        "orientation_log_prior": np.asarray([0.01, -0.01, 0.0]),
+        "translation_log_prior": np.asarray([0.0, 0.01, -0.01]),
+    }
+
+    report = _counterfactual_residuals(components)
+
+    assert report["strongest_single_component"] == "data_log_score_centered"
+    assert report["strongest_residual_energy_removed_fraction"] > 0.999
+
+
+def test_fine_score_metric_is_directional_and_exact_aware():
+    relion = np.asarray([1.0, 2.0], dtype=np.float32)
+    recovar = np.asarray([1.0, 2.25], dtype=np.float64)
+
+    report = _metric(relion, recovar)
+
+    assert report["exact_equal"] is False
+    assert report["mismatch_count"] == 1
+    assert report["max_abs"] == 0.25
+    assert report["relative_l2_over_relion"] > 0
+
+
+def test_fine_score_constant_offset_fit_separates_scalar_and_varying_residual():
+    scalar = _constant_offset_fit(np.asarray([0.25, 0.25, 0.25]))
+    varying = _constant_offset_fit(np.asarray([0.0, 0.25, 0.5]))
+
+    assert scalar["least_squares_offset"] == 0.25
+    assert scalar["residual_energy_removed_fraction"] == 1.0
+    assert scalar["after_offset_max_abs"] == 0
+    assert varying["least_squares_offset"] == 0.25
+    assert varying["residual_energy_removed_fraction"] < 1.0
+    assert varying["after_offset_max_abs"] == 0.25

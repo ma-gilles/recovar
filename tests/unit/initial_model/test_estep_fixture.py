@@ -464,9 +464,7 @@ def test_estep_bpref_forward_parity():
     noise_variance = np.asarray(make_radial_noise(sigma2 * n4, (ori, ori))).astype(np.float32).reshape(-1)
     translations_np = np.asarray(translations, dtype=np.float32)
     t_dist2_Ang2 = (translations_np[:, 0] ** 2 + translations_np[:, 1] ** 2) * (float(ds.voxel_size) ** 2)
-    translation_log_prior = (-0.5 * t_dist2_Ang2 / (sigma_offset_Ang**2) * (float(ds.voxel_size) ** 2)).astype(
-        np.float32
-    )
+    translation_log_prior = (-0.5 * t_dist2_Ang2 / (sigma_offset_Ang**2)).astype(np.float32)
     coarse_translation_log_prior = make_relion_translation_log_prior(
         coarse_translations,
         voxel_size=float(ds.voxel_size),

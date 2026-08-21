@@ -1,0 +1,92 @@
+{
+  "schema": "recovar.em_k4_deterministic_contribution_repeatability_candidate_scorecard.v1",
+  "suite_id": "k4-softmask2-it2-h1-same-observer-repeatability-candidate",
+  "suite_version": 1,
+  "recorded_et": "2026-08-01T01:50:00-04:00",
+  "classification": "same_observer_archives_repeat_bit_for_bit",
+  "metric_policy": "Fixed three-gate strict per-element byte equality; identical keys, shapes, dtypes, and included bytes required; no tolerance, scale, sign, threshold, map metric, FSC claim, or correlation. This candidate panel cannot replace the published 0/3 baseline or authorize integration until the separately predeclared K=4 FSC/FSC-AUC and GT-quality A/B accepts the implementation.",
+  "correlation_used": false,
+  "fsc_auc_evaluated": false,
+  "scorecard_change_admissible": false,
+  "frozen_denominator": 3,
+  "acceptance_contract": {
+    "producer_job_id": 11854999,
+    "producer_state": "COMPLETED",
+    "producer_exit_code": "0:0",
+    "producer_elapsed": "01:10:11",
+    "same_physical_gpu": true,
+    "gpu_uuid": "GPU-207cab82-50a4-308f-2e39-5b84b6608639",
+    "source_commit": "e98a5f333cc789f1e2511da58b95b974c6fe6636",
+    "cuda_library_sha256": "567f8d8af5a45a0a3501f30ee22bc8b012243de7edc1ad7464cfadb197bbea69",
+    "repeatability_accepted": true,
+    "production_integration_accepted": false,
+    "quality_gate_job_id": 11854692,
+    "quality_audit_job_id": 11854693,
+    "grid_correction": "unset/default-off",
+    "forced_final_all_data_after_nonconvergence": false
+  },
+  "evidence": {
+    "strict_audit_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_contribution_repeatability_twostage_retry1_e98a5f33_20260801T0033ET/analysis/STRICT_BYTE_REPEATABILITY.json",
+      "sha256": "59e37fa9155075822ccbf1994d562dcab949cad9a49ea4261911184d12ed22ce"
+    },
+    "completion_seal": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_contribution_repeatability_twostage_retry1_e98a5f33_20260801T0033ET/provenance/SCIENCE_COMPLETE_11854999.json",
+      "sha256": "071cc32789470d39f4a4045f5f796f99fcababe81d8eec60c6640186971672a0"
+    },
+    "science_output_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_contribution_repeatability_twostage_retry1_e98a5f33_20260801T0033ET/provenance/science_outputs_11854999.sha256",
+      "sha256": "3430b96dc2a17a55751b9fa5eea82f599a9a69708b93f5fe32c0d22e41d277de"
+    },
+    "static_input_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_contribution_repeatability_twostage_retry1_e98a5f33_20260801T0033ET/provenance/static_inputs_11854999.sha256",
+      "sha256": "0a224d9a646f1ef33ca9642b5804f94ece203d267930db61c83e067fd37d221d"
+    },
+    "launcher": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_contribution_repeatability_twostage_retry1_e98a5f33_20260801T0033ET/jobs/run_repeatability_retry1.sbatch",
+      "sha256": "cbf39909660218e8ceeceea5d3617829ef62abed4d7a7e61bcd9e2899bd7b125"
+    },
+    "predeclaration": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_contribution_repeatability_twostage_retry1_e98a5f33_20260801T0033ET/provenance/PREDECLARATION.md",
+      "sha256": "3a6b01f6a70fcd6eb420f61f4d6b0e9e850e7aa6bc1bbab084b9fc9336c921d8"
+    },
+    "post_terminal_audit": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_contribution_repeatability_twostage_retry1_e98a5f33_20260801T0033ET/provenance/POST_TERMINAL_AUDIT.md",
+      "sha256": "859827b619c212ab7267dae9c471a221fbb893a50c5a83e114da2b9c7af592aa"
+    },
+    "independent_manifest_verification": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k4_contribution_repeatability_twostage_retry1_e98a5f33_20260801T0033ET/audit_hash_check_11854999.log",
+      "sha256": "15f57de1363d004d1eac624e7850ba5b8b607f12c62fb5922bcc9e813a75689c"
+    }
+  },
+  "cases": [
+    {
+      "id": "candidate-pass2-archive-byte-equality",
+      "name": "Candidate pass-2 score archive strict byte equality",
+      "archive": "pass2",
+      "result": "pass",
+      "checked": true,
+      "failed_array_count": 0
+    },
+    {
+      "id": "candidate-contribution-archive-byte-equality",
+      "name": "Candidate BPref contribution archive strict byte equality",
+      "archive": "contribution",
+      "result": "pass",
+      "checked": true,
+      "failed_array_count": 0
+    },
+    {
+      "id": "candidate-device-signature-archive-byte-equality",
+      "name": "Candidate device-signature archive strict byte equality",
+      "archive": "device_signature",
+      "result": "pass",
+      "checked": true,
+      "failed_array_count": 0
+    }
+  ],
+  "summary": {
+    "pass": 3,
+    "evaluated": 3
+  }
+}

@@ -1,17 +1,38 @@
 """Nonfinite-score guardrails for exact-local EM's big-JIT normalizer."""
 
+import inspect
+
 import numpy as np
 import pytest
 
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.local_big_jit import _score_normalize_mstep
-from recovar.em.dense_single_volume.local_backprojection import compute_local_ctf_sums
+from recovar.em.dense_single_volume.local_big_jit import _score_normalize_mstep, _score_normalize_support
+from recovar.em.dense_single_volume.local_backprojection import compute_local_ctf_sums, compute_local_weighted_sums
 from recovar.em.dense_single_volume.local_score_pass import fused_score_normalize_mstep_abs2_on_demand
 from recovar.em.dense_single_volume.helpers.projection import compute_noise_block
+from recovar.em.dense_single_volume import local_em_engine
 
 pytestmark = pytest.mark.unit
+
+
+def _mstep_outputs(result):
+    arrays = [np.asarray(x) for x in result]
+    return {
+        "log_z": arrays[0],
+        "best_log_score": arrays[1],
+        "best_argmax": arrays[2],
+        "max_posterior": arrays[3],
+        "reconstruction_sample_mask": arrays[4],
+        "reconstruction_rotation_mask": arrays[5],
+        "n_significant_samples": arrays[6],
+        "reconstruction_probs": arrays[7],
+        "probs_sum_t": arrays[8],
+        "reconstruction_probs_sum_t": arrays[9],
+        "summed": arrays[10],
+        "ctf_probs": arrays[11],
+    }
 
 
 def _base_inputs():
@@ -56,30 +77,24 @@ def test_score_normalize_mstep_zeroes_all_nonfinite_score_rows():
         adaptive_fraction=0.999,
         max_significants=-1,
     )
-    (
-        log_z,
-        best_log_score,
-        _best_argmax,
-        max_posterior,
-        reconstruction_rotation_mask,
-        n_significant_samples,
-        reconstruction_probs,
-        probs_sum_t,
-        reconstruction_probs_sum_t,
-        summed,
-        ctf_probs,
-    ) = [np.asarray(x) for x in result]
+    outputs = _mstep_outputs(result)
 
-    assert np.all(np.isfinite(log_z))
-    assert np.isneginf(best_log_score[1])
-    assert max_posterior[1] == 0.0
-    assert n_significant_samples[1] == 0
-    assert not reconstruction_rotation_mask[1, 0]
-    np.testing.assert_array_equal(reconstruction_probs[1], np.zeros_like(reconstruction_probs[1]))
-    np.testing.assert_array_equal(probs_sum_t[1], np.zeros_like(probs_sum_t[1]))
-    np.testing.assert_array_equal(reconstruction_probs_sum_t[1], np.zeros_like(reconstruction_probs_sum_t[1]))
-    np.testing.assert_array_equal(summed[1], np.zeros_like(summed[1]))
-    np.testing.assert_array_equal(ctf_probs[1], np.zeros_like(ctf_probs[1]))
+    assert np.all(np.isfinite(outputs["log_z"]))
+    assert np.isneginf(outputs["best_log_score"][1])
+    assert outputs["max_posterior"][1] == 0.0
+    assert outputs["n_significant_samples"][1] == 0
+    assert not outputs["reconstruction_rotation_mask"][1, 0]
+    np.testing.assert_array_equal(
+        outputs["reconstruction_probs"][1],
+        np.zeros_like(outputs["reconstruction_probs"][1]),
+    )
+    np.testing.assert_array_equal(outputs["probs_sum_t"][1], np.zeros_like(outputs["probs_sum_t"][1]))
+    np.testing.assert_array_equal(
+        outputs["reconstruction_probs_sum_t"][1],
+        np.zeros_like(outputs["reconstruction_probs_sum_t"][1]),
+    )
+    np.testing.assert_array_equal(outputs["summed"][1], np.zeros_like(outputs["summed"][1]))
+    np.testing.assert_array_equal(outputs["ctf_probs"][1], np.zeros_like(outputs["ctf_probs"][1]))
 
 
 def test_score_normalize_mstep_zeroes_nonfinite_external_logz_rows():
@@ -99,17 +114,75 @@ def test_score_normalize_mstep_zeroes_nonfinite_external_logz_rows():
         adaptive_fraction=0.999,
         max_significants=-1,
     )
-    log_z, best_log_score, _best_argmax, max_posterior, _, _, reconstruction_probs, probs_sum_t, _, summed, ctf_probs = [
-        np.asarray(x) for x in result
-    ]
+    outputs = _mstep_outputs(result)
 
-    assert np.all(np.isfinite(log_z))
-    assert np.isneginf(best_log_score[1])
-    assert max_posterior[1] == 0.0
-    np.testing.assert_array_equal(reconstruction_probs[1], np.zeros_like(reconstruction_probs[1]))
-    np.testing.assert_array_equal(probs_sum_t[1], np.zeros_like(probs_sum_t[1]))
-    np.testing.assert_array_equal(summed[1], np.zeros_like(summed[1]))
-    np.testing.assert_array_equal(ctf_probs[1], np.zeros_like(ctf_probs[1]))
+    assert np.all(np.isfinite(outputs["log_z"]))
+    assert np.isneginf(outputs["best_log_score"][1])
+    assert outputs["max_posterior"][1] == 0.0
+    np.testing.assert_array_equal(
+        outputs["reconstruction_probs"][1],
+        np.zeros_like(outputs["reconstruction_probs"][1]),
+    )
+    np.testing.assert_array_equal(outputs["probs_sum_t"][1], np.zeros_like(outputs["probs_sum_t"][1]))
+    np.testing.assert_array_equal(outputs["summed"][1], np.zeros_like(outputs["summed"][1]))
+    np.testing.assert_array_equal(outputs["ctf_probs"][1], np.zeros_like(outputs["ctf_probs"][1]))
+
+
+def test_score_normalize_support_deferred_mstep_matches_full_mstep():
+    """Deferred big-JIT M-step staging must preserve the fused M-step tensors."""
+
+    inputs = _base_inputs()
+    full = _mstep_outputs(
+        _score_normalize_mstep(
+            **inputs,
+            has_normalization_log_z=False,
+            half_spectrum_scoring=True,
+            use_float64_normalization=True,
+            reconstruct_significant_only=False,
+            adaptive_fraction=0.999,
+            max_significants=-1,
+        )
+    )
+    support = _score_normalize_support(
+        inputs["shifted_score_split"],
+        inputs["ctf2_over_nv_score"],
+        inputs["proj_weighted"],
+        inputs["half_weights"],
+        inputs["rotation_log_prior"],
+        inputs["translation_log_prior"],
+        inputs["rotation_mask"],
+        inputs["sample_mask"],
+        inputs["valid_image_mask"],
+        inputs["normalization_log_z"],
+        has_normalization_log_z=False,
+        half_spectrum_scoring=True,
+        use_float64_normalization=True,
+        reconstruct_significant_only=False,
+        adaptive_fraction=0.999,
+        max_significants=-1,
+    )
+    support_arrays = [np.asarray(x) for x in support]
+    deferred_summed = np.asarray(compute_local_weighted_sums(support[9], inputs["shifted_recon_split"]))
+    deferred_ctf = np.asarray(compute_local_ctf_sums(support[9], inputs["ctf2_over_nv_recon"]))
+
+    np.testing.assert_allclose(support_arrays[0], full["log_z"], rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(support_arrays[5], full["max_posterior"], rtol=1e-6, atol=1e-6)
+    np.testing.assert_array_equal(support_arrays[6], full["reconstruction_sample_mask"])
+    np.testing.assert_array_equal(support_arrays[7], full["reconstruction_rotation_mask"])
+    np.testing.assert_allclose(support_arrays[10], full["probs_sum_t"], rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(support_arrays[11], full["reconstruction_probs_sum_t"], rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(deferred_summed, full["summed"], rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(deferred_ctf, full["ctf_probs"], rtol=1e-6, atol=1e-6)
+
+
+def test_local_em_engine_normcorr_full_box_current_size_guard():
+    """Full-box local passes use current_size=None and must not divide it by two."""
+    source = inspect.getsource(local_em_engine.run_local_em_exact)
+
+    assert "norm_unweighted_shell_cutoff = image_shape[0] // 2 if current_size is None else int(current_size // 2)" in source
+    assert source.count("_norm_correction_image_power_per_image(") == 2
+    assert source.count("shell_count=n_shells") == 2
+    assert "jnp.asarray(shell_indices_half) > int(current_size // 2)" not in source
 
 
 def test_compute_noise_block_zero_weight_nonfinite_projection_is_zero():

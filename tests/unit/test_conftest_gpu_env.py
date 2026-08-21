@@ -50,6 +50,15 @@ def test_gpu_subprocess_env_preserves_existing_xla_flags(monkeypatch):
     assert "--xla_force_host_platform_device_count=8" in tokens
 
 
+def test_gpu_subprocess_env_pins_regression_memory_fraction(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    monkeypatch.setenv("XLA_PYTHON_CLIENT_MEM_FRACTION", ".50")
+
+    env = _CONFTEST.gpu_subprocess_env()
+
+    assert env["XLA_PYTHON_CLIENT_MEM_FRACTION"] == ".90"
+
+
 def test_gpu_subprocess_env_enables_custom_cuda_when_test_lib_available(monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -67,6 +76,8 @@ def test_gpu_subprocess_env_enables_custom_cuda_when_test_lib_available(monkeypa
 def test_gpu_subprocess_env_respects_explicit_cuda_disable(monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", "/tmp/inherited_cuda_backproject.so")
 
     def _forbidden_resolve(*, require=False):
         raise AssertionError("custom CUDA should not be resolved when RECOVAR_DISABLE_CUDA=1")

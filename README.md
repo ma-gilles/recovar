@@ -1,22 +1,22 @@
 # RECOVAR: Tools for cryo-EM heterogeneity analysis
 
-RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. It reconstructs high-resolution volumes, estimates conformational density and low free-energy motions, and automatically identifies image subsets associated with specific volume features.
+RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. It reconstructs volumes, estimates conformational density in latent space, and identifies the image subsets associated with specific volume features.
 
-**[Full Documentation](https://ma-gilles.github.io/recovar)** | **[Paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122)** | **[Talk](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)**
+**[Full Documentation](https://ma-gilles.github.io/recovar)** | **[Paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122)**
 
 > **Looking for the older release?** Active development happens on the `dev` branch. If you want the previous stable release (`0.4.5`, possibly more stable but missing recent features like `.cs`/`.star` auto-extraction), install with `pip install recovar==0.4.5` or check out the [`legacy-0.4.5`](https://github.com/ma-gilles/recovar/tree/legacy-0.4.5) branch.
 
-**License**: the code has been modified and is now under the PU-RL v2.0 license, and the code imports libraries that are under non-PU-RL v2.0 (including GPL) licenses. See [LICENSE](LICENSE).
+**License**: the code has been modified and is now under the PU-RL v2.0 license, and the code imports libraries that are under non-PU-RL v2.0 (including GPL) licenses. See [LICENSE](https://github.com/ma-gilles/recovar/blob/dev/LICENSE).
 
 ## Key features
 
 - **High resolution** — top performer on [CryoBench](https://cryobench.cs.princeton.edu)
 - **Direct input** — accepts RELION `.star` and cryoSPARC `.cs` files (no preprocessing needed)
 - **Image-to-volume attribution** — extract images that produced a specific volume feature
-- **Conformational density** — estimate free energy landscapes
+- **Conformational density** — estimate the conformational density in latent space
 - **Focus masks** — targeted heterogeneity analysis
 - **Cryo-ET support** — tilt-series data with focus masks
-- **Transparent volume generation** — kernel regression produces no hallucinations
+- **No generative model** — volumes come from kernel regression, not a neural network
 - **Web GUI** — browser-based interface for launching jobs, exploring latent spaces, and viewing 3D volumes
 
 ## Installation
@@ -131,6 +131,39 @@ Or use the interactive wizard: `recovar quickstart`
 
 See the [quick start guide](https://ma-gilles.github.io/recovar/getting-started/quickstart/) for more examples.
 
+## Web GUI
+
+RECOVAR includes a browser-based GUI for launching jobs, exploring latent spaces,
+and viewing 3D volumes. It is a web app, so there are **two machines** and only one
+of them needs anything installed:
+
+| | **Backend** — runs `recovar gui` + the pipelines | **Viewer** — where the browser runs |
+|---|---|---|
+| Which machine | the Linux box with the GPU (a workstation, or an HPC login node) | your laptop/desktop, any OS |
+| Install | `pip install "recovar[gpu,gui]"` | **nothing** — just a modern browser |
+
+On the backend machine:
+
+```bash
+pip install "recovar[gpu,gui]"   # install into your environment
+recovar gui                      # start the server (picks a free port, opens your browser)
+```
+
+Prefer a fully pinned environment? Use `pixi install && pixi run gui` instead.
+Run `recovar gui --check` for a readiness report (dependencies, GPU, SLURM, the
+bind URL, and the exact SSH command).
+
+**Viewing from another machine** (e.g. an HPC login node): the server binds to
+`localhost`, so forward the port over SSH and open the URL — nothing is installed
+on the viewing machine:
+
+```bash
+ssh -L 8080:localhost:8080 user@your-cluster   # then open http://localhost:8080
+```
+
+The GUI auto-detects SLURM: when `sbatch` is on PATH you choose SLURM or local
+execution per job; otherwise jobs run on the local GPU.
+
 ## GPU memory
 
 Every heavy-GPU command (`pipeline`, `analyze`, `compute_state`, `compute_trajectory`, `pipeline_with_outliers`, `reconstruct_from_external_embedding`, `junk_particle_detection`, `outlier_detection`, `run_test_dataset`) accepts the same memory-planning flags. They control RECOVAR's batch-size and PC choices — they do **not** cap JAX's allocation. JAX-level memory behavior is controlled separately via `XLA_PYTHON_CLIENT_MEM_FRACTION` and `XLA_PYTHON_CLIENT_PREALLOCATE`.
@@ -149,17 +182,17 @@ recovar pipeline ... --gpu-budget-gb 24 --adaptive-n-pcs
 recovar pipeline ... --gpu-budget-gb 12 --low-memory-option
 recovar pipeline ... --gpu-budget-gb 8  --very-low-memory-option
 
-# Diagnostics (memory_plan.json, memory_trace.jsonl, args.json,
-# allocator_env.json) are always written to <outdir>/_diagnostics/.
-# For heavyweight per-phase JAX-profiler captures, add --memory-profile.
+# memory_plan.json is always written to <outdir>/_diagnostics/.
+# For per-phase memory_trace.jsonl, args.json, allocator_env.json,
+# and heavyweight JAX-profiler captures, add --memory-profile.
 recovar pipeline ... --gpu-budget-gb 40 --memory-profile
 ```
 
 The planner never refuses to launch. If it predicts the run will exceed the budget (based on a calibrated peak-memory table when present, or the heuristic in `covariance_estimation` when absent), it logs a loud WARNING and launches anyway. If the run actually OOMs, the error message is followed by an actionable hint suggesting `--gpu-budget-gb`, `--adaptive-n-pcs`, `--low-memory-option`, etc. — the hint is the **last** thing on stderr so it doesn't get lost above the JAX traceback.
 
-The peak-memory table at `recovar/utils/memory_calibration_data.json` is **optional** — when present, the planner uses it to predict per-phase peaks (so the warning above is more accurate) and to drive `--adaptive-n-pcs`. When **absent**, `--adaptive-n-pcs` falls back to the same heuristic in `covariance_estimation.get_default_covariance_computation_options` that walks `n_pcs` down from 200 until predicted memory fits 70 % of the budget. To populate the table on your hardware, run `scripts/submit_calibrate_memory_planner.sh` (Slurm) and then `pixi run python scripts/aggregate_memory_calibration.py`.
+The peak-memory table at `recovar/utils/memory_calibration_data.json` is **optional** — when present, the planner uses it to predict per-phase peaks (so the warning above is more accurate) and to drive `--adaptive-n-pcs`. When **absent**, `--adaptive-n-pcs` falls back to the same heuristic in `covariance_estimation.get_default_covariance_computation_options` that walks `n_pcs` down from 200 until predicted memory fits the budget. To populate the table on your hardware, run `scripts/submit_calibrate_memory_planner.sh` (Slurm) and then `pixi run python scripts/aggregate_memory_calibration.py`.
 
-`run_test_dataset` always splices `--adaptive-n-pcs` into its inner pipeline calls so the install-sanity test always finishes. Pass `--full-memory-test` if you specifically want the default 200-PC configuration.
+`run_test_dataset` always splices `--adaptive-n-pcs` into its inner pipeline calls so the install-sanity test always finishes. Pass `--full-memory-test` if you specifically want the fixed 200-PC, non-adaptive configuration.
 
 ### Workstation / shared-GPU OOM
 
@@ -174,7 +207,7 @@ That makes JAX allocate on demand, so the run can succeed if the *actual* peak i
 
 ### CUDA-fallback env var
 
-The canonical CUDA-fallback env var is `RECOVAR_DISABLE_CUDA=1`. The common typo `RECOVAR_CUDA_DISABLE` is treated as an alias for the duration of the run, with a one-time warning telling you to rename it in your shell init.
+The CUDA-fallback env var is `RECOVAR_DISABLE_CUDA=1`.
 
 ## Documentation
 

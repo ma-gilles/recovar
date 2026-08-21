@@ -572,7 +572,7 @@ def test_relion_projector_projection_dense_scale_matches_embedded_means(monkeypa
     np.testing.assert_allclose(np.asarray(proj_abs2), np.abs(expected) ** 2, rtol=1e-5, atol=1e-3)
 
 
-def test_resolve_class_inputs_relion_projector_keeps_exact_path_opt_in(monkeypatch):
+def test_resolve_class_inputs_relion_projector_uses_exact_path_by_default(monkeypatch):
     projector_half = np.ones((1, 3, 3, 2), dtype=np.complex64)
     dense_means = np.full((1, 8**3), 2.0 + 0.5j, dtype=np.complex64)
 
@@ -595,14 +595,14 @@ def test_resolve_class_inputs_relion_projector_keeps_exact_path_opt_in(monkeypat
     means, _mean_variance, exact_half, exact_rmax = _resolve_class_inputs(state, config)
 
     np.testing.assert_array_equal(means, dense_means)
-    assert exact_half is None
-    assert exact_rmax is None
-
-    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR", "1")
-    _means, _mean_variance, exact_half, exact_rmax = _resolve_class_inputs(state, config)
-
     np.testing.assert_array_equal(exact_half, projector_half)
     assert exact_rmax == 2
+
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR", "0")
+    _means, _mean_variance, exact_half, exact_rmax = _resolve_class_inputs(state, config)
+
+    assert exact_half is None
+    assert exact_rmax is None
 
 
 def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
@@ -700,6 +700,8 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["local_mstep_subtract_ctf_projection"] = kwargs["mstep_subtract_ctf_projection"]
         calls["local_mstep_relion_x_half"] = kwargs["mstep_relion_x_half"]
         calls["local_max_significants"] = kwargs["max_significants"]
+        calls["local_use_float64_scoring"] = kwargs["use_float64_scoring"]
+        calls["local_use_float64_normalization"] = kwargs["use_float64_normalization"]
         calls["local_unify_bucket_sizes"] = kwargs["unify_local_bucket_sizes"]
         calls["local_stats_use_reconstruction_probs"] = kwargs["stats_use_reconstruction_probs"]
         calls["local_class_posterior_sums_from_noise"] = kwargs["class_posterior_sums_from_noise"]
@@ -789,6 +791,8 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_mstep_subtract_ctf_projection"] is True
     assert calls["local_mstep_relion_x_half"] is False
     assert calls["local_max_significants"] == -1
+    assert calls["local_use_float64_scoring"] is False
+    assert calls["local_use_float64_normalization"] is True
     assert calls["local_unify_bucket_sizes"] is True
     assert calls["local_stats_use_reconstruction_probs"] is True
     assert calls["local_class_posterior_sums_from_noise"] is False

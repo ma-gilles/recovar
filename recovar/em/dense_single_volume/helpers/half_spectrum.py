@@ -18,17 +18,34 @@ def make_half_image_weights(image_shape):
     return weights.reshape(-1)
 
 
-def make_scoring_half_image_weights(image_shape, *, relion_half_sum: bool):
+def make_scoring_half_image_weights(
+    image_shape,
+    *,
+    relion_half_sum: bool,
+    exclude_relion_redundant_x0: bool = True,
+):
     """Return half-spectrum weights for likelihood scoring.
 
-    RELION scores the packed rfft half-plane with unit weights rather than
-    Hermitian weights. Keep this convention centralized so dense/local/sparse
-    scoring cannot drift apart.
+    RELION scores its non-redundant FFTW half-plane with unit weights rather
+    than Hermitian weights.  RECOVAR's centered packed layout also contains
+    the conjugate ``kx=0, ky<0`` rows; RELION's Gaussian likelihood leaves
+    those redundant rows at zero.  Mask them here so full-size
+    dense/local/sparse Gaussian scoring cannot count the axis twice.  The
+    ``ky=-N/2`` boundary is retained because RELION represents it as
+    ``+N/2``.
+
+    RELION's first-iteration normalized-CC CUDA kernels are different: they
+    iterate over every pixel in the rectangular FFTW crop, including both
+    sides of the centered ``kx=0`` axis.  Those callers must pass
+    ``exclude_relion_redundant_x0=False``.
     """
 
     height, width = image_shape
     if relion_half_sum:
-        return jnp.ones(height * (width // 2 + 1), dtype=jnp.float32)
+        weights = jnp.ones((height, width // 2 + 1), dtype=jnp.float32)
+        if exclude_relion_redundant_x0 and height > 2:
+            weights = weights.at[1 : (height + 1) // 2, 0].set(0.0)
+        return weights.reshape(-1)
     return make_half_image_weights(image_shape)
 
 
@@ -78,11 +95,62 @@ def make_relion_noise_shell_indices_half(image_shape):
     return jnp.asarray(shell_indices.reshape(-1), dtype=jnp.int32)
 
 
-def bin_shell_values_np(values, shell_indices, n_shells):
-    """Bin per-pixel values into integer shell indices on host."""
+def mask_relion_noise_shell_indices_to_current_window(
+    shell_indices,
+    image_shape,
+    current_size,
+    current_window_indices,
+):
+    """Drop low-shell pixels outside RELION's asymmetric current FFT crop.
 
+    A rounded radial shell mask alone retains a few pixels on both even-size
+    boundary rows (for example ``ky=+/-28`` at current size 56). RELION's
+    ``windowFourierTransform`` rectangle retains only the positive boundary
+    row in RECOVAR's centered layout. Pixels on the opposite boundary are
+    neither current-image residuals nor high-shell extensions, because their
+    rounded shell is still the current cutoff.
+    """
+
+    if current_size is None or int(current_size) >= int(image_shape[0]):
+        return jnp.asarray(shell_indices, dtype=jnp.int32)
+    shell_indices = jnp.asarray(shell_indices, dtype=jnp.int32)
+    current_window_mask = jnp.zeros(shell_indices.shape, dtype=bool)
+    current_window_mask = current_window_mask.at[jnp.asarray(current_window_indices, dtype=jnp.int32)].set(True)
+    current_window_mask = current_window_mask.at[half_spectrum_dc_index(image_shape)].set(True)
+    shell_cutoff = int(current_size) // 2
+    sentinel = int(image_shape[0]) // 2 + 1
+    outside_current_crop = (shell_indices <= shell_cutoff) & ~current_window_mask
+    return jnp.where(outside_current_crop, sentinel, shell_indices)
+
+
+def bin_shell_values_jax(values, shell_indices, n_shells):
+    """Bin per-pixel values into shell indices, dropping RELION sentinel pixels."""
+
+    shell_count = int(n_shells)
+    values = jnp.asarray(values)
+    shell_indices = jnp.asarray(shell_indices, dtype=jnp.int32)
+    sentinel = jnp.asarray(shell_count, dtype=jnp.int32)
+    safe_indices = jnp.where(
+        (shell_indices >= 0) & (shell_indices < shell_count),
+        shell_indices,
+        sentinel,
+    )
+    bins = jnp.zeros(shell_count + 1, dtype=values.dtype)
+    return bins.at[safe_indices].add(values)[:shell_count]
+
+
+def bin_shell_values_np(values, shell_indices, n_shells):
+    """Bin per-pixel values into shell indices, dropping sentinel pixels on host."""
+
+    shell_count = int(n_shells)
+    shell_indices_np = np.asarray(shell_indices, dtype=np.int64)
+    safe_indices = np.where(
+        (shell_indices_np >= 0) & (shell_indices_np < shell_count),
+        shell_indices_np,
+        shell_count,
+    )
     return np.bincount(
-        np.asarray(shell_indices, dtype=np.int64),
+        safe_indices,
         weights=np.asarray(values, dtype=np.float64),
-        minlength=int(n_shells),
-    )[: int(n_shells)]
+        minlength=shell_count + 1,
+    )[:shell_count]

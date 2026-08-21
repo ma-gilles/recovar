@@ -87,6 +87,7 @@ def _load_embeddings_sync(
         "umap_coords": None,
         "kmeans_labels": None,
         "kmeans_centers": None,
+        "orig_indices": None,
         "n_particles": 0,
         "n_particles_total": 0,
         "subsampled": False,
@@ -166,6 +167,37 @@ def _load_embeddings_sync(
                 logger.warning("Failed to load k-means from %s: %s", kmeans_path, exc)
                 # Non-fatal: continue without k-means
 
+    # ----- Validate per-particle array lengths against pca_coords -----
+    # umap_coords and kmeans_labels come from independent pkl files that may
+    # have been produced by a different analysis run.  If their row count does
+    # not match pca_coords, the binary layout (and any index-based subsampling
+    # below) would desync, so drop the mismatched array with a warning rather
+    # than serving corrupt offsets to the frontend parser.
+    if result["pca_coords"] is not None:
+        n_pca = result["pca_coords"].shape[0]
+        if (
+            result["umap_coords"] is not None
+            and result["umap_coords"].shape[0] != n_pca
+        ):
+            logger.warning(
+                "Dropping UMAP coords: row count %d != PCA count %d (zdim=%d)",
+                result["umap_coords"].shape[0],
+                n_pca,
+                zdim,
+            )
+            result["umap_coords"] = None
+        if (
+            result["kmeans_labels"] is not None
+            and result["kmeans_labels"].shape[0] != n_pca
+        ):
+            logger.warning(
+                "Dropping k-means labels: row count %d != PCA count %d (zdim=%d)",
+                result["kmeans_labels"].shape[0],
+                n_pca,
+                zdim,
+            )
+            result["kmeans_labels"] = None
+
     # ----- Pad or trim k-means centers to match requested zdim -----
     # The analyze job may have been run at a different zdim than the requested
     # one, so the k-means centers may have a different dimensionality.
@@ -199,6 +231,9 @@ def _load_embeddings_sync(
         if result["kmeans_labels"] is not None:
             result["kmeans_labels"] = result["kmeans_labels"][indices]
         # kmeans_centers are NOT subsampled (they are cluster centers, not per-particle)
+        # Record the original (pre-subsample) particle indices so the frontend can
+        # map subsampled positions back to real particle indices for exports.
+        result["orig_indices"] = indices.astype(np.int32)
         result["n_particles"] = max_particles
         result["subsampled"] = True
 
@@ -289,11 +324,14 @@ async def get_embeddings(
     Binary format (float32/int32, row-major):
         [pca_coords: n x zdim] [umap_coords: n x 2 | empty]
         [kmeans_labels: n x 1 int32 | empty] [kmeans_centers: k x zdim | empty]
+        [orig_indices: n x 1 int32 | empty]
 
     If the particle count exceeds ``MAX_EMBEDDING_PARTICLES``, the data is
     uniformly subsampled and the response includes
     ``X-Embedding-Subsampled: true`` with the original count in
-    ``X-Embedding-Total-Particles``.
+    ``X-Embedding-Total-Particles``.  In that case ``orig_indices`` maps each
+    returned (subsampled) position back to its original particle index so that
+    index-based exports (.ind/.star) reference the correct particles.
     """
     job, session = await _get_job(job_id)
     await session.close()
@@ -326,6 +364,12 @@ async def get_embeddings(
         )
 
     # Common metadata included in every response format.
+    #
+    # ``has_kmeans`` reflects the presence of per-particle labels, while
+    # ``has_kmeans_centers`` reflects the presence of cluster centers.  These
+    # are decoupled because a kmeans_result.pkl may contain centers without
+    # labels (or vice versa); the binary parser keys each section on the
+    # matching flag so the layout stays in sync with what was actually appended.
     meta = {
         "n_particles": data["n_particles"],
         "n_particles_total": data["n_particles_total"],
@@ -333,6 +377,7 @@ async def get_embeddings(
         "zdim": zdim,
         "has_umap": data["umap_coords"] is not None,
         "has_kmeans": data["kmeans_labels"] is not None,
+        "has_kmeans_centers": data["kmeans_centers"] is not None,
         "n_clusters": (int(data["kmeans_centers"].shape[0]) if data["kmeans_centers"] is not None else 0),
     }
 
@@ -344,6 +389,7 @@ async def get_embeddings(
             "umap_coords": (data["umap_coords"].tolist() if data["umap_coords"] is not None else None),
             "kmeans_labels": (data["kmeans_labels"].tolist() if data["kmeans_labels"] is not None else None),
             "kmeans_centers": (data["kmeans_centers"].tolist() if data["kmeans_centers"] is not None else None),
+            "orig_indices": (data["orig_indices"].tolist() if data["orig_indices"] is not None else None),
         }
         return Response(
             content=json.dumps(json_data),
@@ -362,6 +408,11 @@ async def get_embeddings(
 
     if data["kmeans_centers"] is not None:
         parts.append(data["kmeans_centers"].tobytes())
+
+    # Original particle indices for the subsample (int32, n x 1), appended last
+    # so the frontend can map subsampled positions back to real particle indices.
+    if data["orig_indices"] is not None:
+        parts.append(data["orig_indices"].tobytes())
 
     body = b"".join(parts)
 
@@ -456,11 +507,68 @@ async def get_related_density(job_id: str) -> list[dict]:
     return related
 
 
+@router.get("/{job_id}/explore-target")
+async def get_explore_target(job_id: str) -> dict:
+    """Resolve which job to open in the latent-space explorer for ``job_id``.
+
+    Density jobs have no embeddings of their own, so this finds the Analyze job
+    (preferred) or Pipeline job that produced the embeddings the density was
+    estimated on.  Analyze/Pipeline jobs resolve to themselves.  Returns
+    ``{"target_job_id": <id or None>}``.
+    """
+    job, session = await _get_job(job_id)
+    await session.close()
+
+    jtype = job.type or ""
+    if jtype in ("Analyze", "Pipeline"):
+        return {"target_job_id": job.id}
+    if jtype != "Density":
+        return {"target_job_id": None}
+
+    params = job.params or {}
+    result_dir = params.get("result_dir") or params.get("recovar_result_dir")
+    if not result_dir:
+        return {"target_job_id": None}
+    target = str(Path(result_dir).resolve())
+
+    from recovar.gui_v2.backend.api.project import get_project_path
+
+    project_path = get_project_path(job.project_id)
+    if not project_path:
+        return {"target_job_id": None}
+
+    db_path = get_db_path(project_path)
+    session_factory = await init_db(db_path)
+    async with session_factory() as db_session:
+        stmt = (
+            select(Job)
+            .where(Job.project_id == job.project_id)
+            .where(Job.status == JobStatus.COMPLETED.value)
+        )
+        result = await db_session.execute(stmt)
+        jobs = result.scalars().all()
+
+    # Prefer an Analyze job whose result_dir matches the density's pipeline dir.
+    for j in jobs:
+        if j.type != "Analyze":
+            continue
+        rd = (j.params or {}).get("result_dir")
+        if rd and str(Path(rd).resolve()) == target:
+            return {"target_job_id": j.id}
+    # Fall back to the Pipeline job that produced this output directory.
+    for j in jobs:
+        if j.type == "Pipeline" and str(Path(j.output_dir).resolve()) == target:
+            return {"target_job_id": j.id}
+
+    return {"target_job_id": None}
+
+
 def _evaluate_density_sync(
     pipeline_dir: str,
     density_output_dir: str,
     zdim: int,
     pca_dim: int,
+    analyze_dir: str | None = None,
     max_particles: int = MAX_EMBEDDING_PARTICLES,
 ) -> dict:
     """Evaluate the deconvolved density grid at each particle's PCA coords.
@@ -487,7 +595,7 @@ def _evaluate_density_sync(
     alpha = float(density_data.get("alpha", 0.0))
 
     # Load PCA coords using the same logic as _load_embeddings_sync.
-    embeddings = _load_embeddings_sync(pipeline_dir, zdim, analyze_dir=None, max_particles=max_particles)
+    embeddings = _load_embeddings_sync(pipeline_dir, zdim, analyze_dir=analyze_dir, max_particles=max_particles)
     pca_coords = embeddings["pca_coords"]
     if pca_coords is None:
         raise _EmbeddingLoadError(f"No PCA coordinates found for zdim={zdim}")
@@ -517,7 +625,12 @@ def _evaluate_density_sync(
         )
     else:
         particle_points = pca_coords[:, :pca_dim].astype(np.float64)
-    particle_density = interpolator(particle_points).astype(np.float64)
+    # Some particles can have NaN latent coordinates (e.g. failed/outlier
+    # embeddings). The interpolator returns NaN for those, and a single NaN
+    # would poison np.max() below -> max_val=NaN -> the WHOLE density array
+    # becomes NaN. Map NaN coords to density 0 so they color as lowest density
+    # instead of breaking the entire overlay.
+    particle_density = np.nan_to_num(interpolator(particle_points).astype(np.float64), nan=0.0)
 
     # Evaluate at k-means centers if available.
     center_density = np.array([], dtype=np.float64)
@@ -532,7 +645,7 @@ def _evaluate_density_sync(
             )
         else:
             center_points = kmeans_centers[:, :pca_dim].astype(np.float64)
-        center_density = interpolator(center_points).astype(np.float64)
+        center_density = np.nan_to_num(interpolator(center_points).astype(np.float64), nan=0.0)
         n_clusters = kmeans_centers.shape[0]
 
     # Normalize all values to [0, 1].
@@ -610,6 +723,7 @@ async def get_embeddings_density(
             density_job.output_dir,
             zdim,
             pca_dim,
+            job.output_dir if job.type == "Analyze" else None,
         )
     except _EmbeddingLoadError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

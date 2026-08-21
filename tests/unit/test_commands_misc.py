@@ -40,7 +40,13 @@ def test_make_test_dataset_non_tilt_passes_expected_generate_kwargs(monkeypatch,
     monkeypatch.setattr(make_test_dataset.simulator, "generate_synthetic_dataset", fake_generate_synthetic_dataset)
 
     outdir = tmp_path / "out"
-    make_test_dataset.make_test_dataset(str(outdir), image_size=32, noise_level=0.25, n_images=123)
+    make_test_dataset.make_test_dataset(
+        str(outdir),
+        image_size=32,
+        noise_level=0.25,
+        n_images=123,
+        noise_rng_batch_size=6080,
+    )
 
     assert "args" in calls
     assert calls["args"][0].rstrip("/").endswith("/test_dataset")
@@ -48,6 +54,7 @@ def test_make_test_dataset_non_tilt_passes_expected_generate_kwargs(monkeypatch,
     assert calls["kwargs"]["grid_size"] == 32
     assert calls["kwargs"]["noise_level"] == 0.25
     assert calls["kwargs"]["disc_type"] == "linear_interp"
+    assert calls["kwargs"]["noise_rng_batch_size"] == 6080
     assert "n_tilts" not in calls["kwargs"]
 
 
@@ -67,12 +74,14 @@ def test_make_test_dataset_tilt_series_passes_tilt_kwargs(monkeypatch, tmp_path)
         n_images=270,
         tilt_series=True,
         percent_tilt_series_outliers=0.3,
+        noise_rng_batch_size=6080,
     )
 
     assert calls["kwargs"]["n_tilts"] == 27
     assert calls["kwargs"]["dose_per_tilt"] == 3
     assert calls["kwargs"]["angle_per_tilt"] == 3
     assert calls["kwargs"]["percent_tilt_series_outliers"] == 0.3
+    assert calls["kwargs"]["noise_rng_batch_size"] == 6080
 
 
 def test_make_test_dataset_tilt_series_respects_explicit_n_tilts_and_volume_input(monkeypatch, tmp_path):
@@ -159,6 +168,8 @@ def test_make_test_dataset_main_parses_grid_volume_and_n_tilts(monkeypatch, tmp_
             "--tilt-series",
             "--n-tilts",
             "9",
+            "--noise-rng-batch-size",
+            "640",
         ],
     )
 
@@ -166,6 +177,7 @@ def test_make_test_dataset_main_parses_grid_volume_and_n_tilts(monkeypatch, tmp_
     assert captured["kwargs"]["grid_size"] == 40
     assert captured["kwargs"]["volume_input"] == str(tmp_path / "vol")
     assert captured["kwargs"]["n_tilts"] == 9
+    assert captured["kwargs"]["noise_rng_batch_size"] == 640
 
 
 def test_compute_trajectory_add_args_parses_ind_list():
@@ -770,6 +782,43 @@ def test_run_test_dataset_non_tilt_pipeline_paths_with_spaces(monkeypatch, tmp_p
     pipeline_out = str(outdir / "test_dataset" / "pipeline_output")
     assert any(f"pipeline {particles} " in cmd for cmd in commands)
     assert any(f"-o {pipeline_out} " in cmd for cmd in commands)
+
+
+def test_run_test_dataset_custom_synthetic_size_forwarded(monkeypatch, tmp_path):
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_test_dataset.jax,
+        "devices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GPU check should not run with --cpu")),
+    )
+    monkeypatch.setattr(run_test_dataset.os.path, "exists", lambda _p: False)
+    monkeypatch.setattr(
+        run_test_dataset.sys,
+        "argv",
+        [
+            "run_test_dataset",
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            "--no-delete",
+            "--image-size",
+            "128",
+            "--n-images",
+            "2000",
+        ],
+    )
+
+    run_test_dataset.main()
+
+    assert any("make_test_dataset" in cmd and "--image-size 128" in cmd and "--n-images 2000" in cmd for cmd in commands)
+    particles = str(tmp_path / "test_dataset" / "particles.128.mrcs")
+    assert any(f"pipeline {particles} " in cmd for cmd in commands)
 
 
 def test_run_test_dataset_all_tests_quotes_reconstruct_paths_with_spaces(monkeypatch, tmp_path):

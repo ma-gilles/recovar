@@ -1,0 +1,177 @@
+diff --git a/src/acc/acc_ml_optimiser_impl.h b/src/acc/acc_ml_optimiser_impl.h
+index 6efcb90..d85eb85 100644
+--- a/src/acc/acc_ml_optimiser_impl.h
++++ b/src/acc/acc_ml_optimiser_impl.h
+@@ -742,6 +742,7 @@ void relion_capture_coarse_operands_v1(
+ 		+ rotation_count * image_size * 2 * sizeof(float)
+ 		+ image_size * 3 * sizeof(float)
+ 		+ translation_num * 3 * sizeof(float)
++		+ translation_num * image_size * 2 * sizeof(float)
+ 		+ sizeof(RelionCoarseOperandFooterV1);
+ 	const std::uint64_t estimated_max_bytes = artifact_bytes
+ 		* config.max_particles_per_rank * config.expected_followers;
+@@ -819,6 +820,32 @@ void relion_capture_coarse_operands_v1(
+ 		translation_values[2 * translation_num + translation] =
+ 			static_cast<float>(translations[translation_z_offset + translation]);
+ 	}
++	const std::size_t shifted_value_count = translation_num * image_size;
++	std::vector<float> shifted_real(shifted_value_count);
++	std::vector<float> shifted_imag(shifted_value_count);
++	XFLOAT *device_shifted = nullptr;
++	DEBUG_HANDLE_ERROR(cudaMalloc(
++		&device_shifted, 2 * shifted_value_count * sizeof(XFLOAT)));
++	AccUtilities::capture_diff2_coarse_shifted_images<D2C_BLOCK_SIZE_REF3D>(
++		&(~translations)[translation_x_offset],
++		&(~translations)[translation_y_offset],
++		&(~image)[image_real_offset],
++		&(~image)[image_imag_offset],
++		projector,
++		device_shifted,
++		device_shifted + shifted_value_count,
++		image_size,
++		translation_num,
++		stream);
++	LAUNCH_HANDLE_ERROR(cudaGetLastError());
++	DEBUG_HANDLE_ERROR(cudaMemcpyAsync(
++		shifted_real.data(), device_shifted,
++		shifted_value_count * sizeof(XFLOAT), cudaMemcpyDeviceToHost, stream));
++	DEBUG_HANDLE_ERROR(cudaMemcpyAsync(
++		shifted_imag.data(), device_shifted + shifted_value_count,
++		shifted_value_count * sizeof(XFLOAT), cudaMemcpyDeviceToHost, stream));
++	DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
++	DEBUG_HANDLE_ERROR(cudaFree(device_shifted));
+ 
+ 	std::uint64_t reservation = relion_p1_operand_files_reserved_v1.fetch_add(1);
+ 	if (reservation >= config.max_particles_per_rank)
+@@ -832,8 +859,8 @@ void relion_capture_coarse_operands_v1(
+ 		REPORT_ERROR("RELION coarse-operand capture could not resolve canonical stack identity");
+ 
+ 	RelionCoarseOperandHeaderV1 header = {};
+-	std::memcpy(header.magic, "RLNP1OPV1HEADER", 15);
+-	header.values[0] = 1;
++	std::memcpy(header.magic, "RLNP1OPV2HEADER", 15);
++	header.values[0] = 2;
+ 	header.values[1] = sizeof(header);
+ 	header.values[2] = sizeof(float);
+ 	header.values[3] = sizeof(std::uint64_t);
+@@ -869,14 +896,18 @@ void relion_capture_coarse_operands_v1(
+ 	header.values[33] = 1; // production Fimg after pixel/scale correction
+ 	header.values[34] = 1; // production corr_img
+ 	header.values[35] = 1; // production translation phase coordinates
++	header.values[36] = 1; // exact GPU translatePixel outputs
++	header.values[37] = D2C_BLOCK_SIZE_REF3D;
++	header.values[38] = 4; // production CUDA REF3D coarse prefetch factor
++	header.values[39] = D2C_EULERS_PER_BLOCK_REF3D;
+ 
+ 	RelionCoarseOperandFooterV1 footer = {};
+-	std::memcpy(footer.magic, "RLNP1OPV1FOOTER", 15);
++	std::memcpy(footer.magic, "RLNP1OPV2FOOTER", 15);
+ 	footer.rotation_count = rotation_count;
+ 	footer.pixel_count = image_size;
+ 
+ 	std::string basename = config.directory + "/part" + std::to_string(op.part_id)
+-		+ "_stack" + std::to_string(stack_index) + ".p1-op-v1.bin";
++		+ "_stack" + std::to_string(stack_index) + ".p1-op-v2.bin";
+ 	std::string temporary = basename + ".tmp." + std::to_string(getpid())
+ 		+ "." + std::to_string(omp_get_thread_num());
+ 	struct stat existing;
+@@ -907,6 +938,12 @@ void relion_capture_coarse_operands_v1(
+ 	output.write(
+ 		reinterpret_cast<const char *>(translation_values.data()),
+ 		translation_values.size() * sizeof(translation_values[0]));
++	output.write(
++		reinterpret_cast<const char *>(shifted_real.data()),
++		shifted_real.size() * sizeof(shifted_real[0]));
++	output.write(
++		reinterpret_cast<const char *>(shifted_imag.data()),
++		shifted_imag.size() * sizeof(shifted_imag[0]));
+ 	output.write(reinterpret_cast<const char *>(&footer), sizeof(footer));
+ 	output.close();
+ 	if (!output || rename(temporary.c_str(), basename.c_str()) != 0)
+diff --git a/src/acc/cuda/cuda_kernels/diff2.cuh b/src/acc/cuda/cuda_kernels/diff2.cuh
+index 1fc14a8..3b788d5 100644
+--- a/src/acc/cuda/cuda_kernels/diff2.cuh
++++ b/src/acc/cuda/cuda_kernels/diff2.cuh
+@@ -257,6 +257,39 @@ __global__ void cuda_kernel_capture_diff2_coarse_reference(
+ 	g_ref_imag[pixel] = ref_imag;
+ }
+ 
++// Passive capture of the exact translatePixel output consumed by the coarse
++// squared-difference kernel. This does not read or write any score buffer.
++template<int block_sz>
++__global__ void cuda_kernel_capture_diff2_coarse_shifted_images(
++		XFLOAT *trans_x,
++		XFLOAT *trans_y,
++		XFLOAT *g_real,
++		XFLOAT *g_imag,
++		AccProjectorKernel projector,
++		XFLOAT *g_shifted_real,
++		XFLOAT *g_shifted_imag,
++		unsigned image_size,
++		unsigned translation_num)
++{
++	const unsigned long index = blockIdx.x * block_sz + threadIdx.x;
++	const unsigned long value_count =
++		static_cast<unsigned long>(image_size) * translation_num;
++	if (index >= value_count)
++		return;
++
++	const unsigned translation = index / image_size;
++	const unsigned pixel = index % image_size;
++	const int x = pixel % projector.imgX;
++	int y = floorfracf(pixel, projector.imgX);
++	if (y > projector.maxR)
++		y -= projector.imgY;
++	translatePixel(
++		x, y,
++		trans_x[translation], trans_y[translation],
++		g_real[pixel], g_imag[pixel],
++		g_shifted_real[index], g_shifted_imag[index]);
++}
++
+ 
+ template<bool REF3D, bool DATA3D, int block_sz, int chunk_sz>
+ __global__ void cuda_kernel_diff2_fine(
+diff --git a/src/acc/utilities.h b/src/acc/utilities.h
+index 710d48b..5123aa1 100644
+--- a/src/acc/utilities.h
++++ b/src/acc/utilities.h
+@@ -1188,6 +1188,38 @@ void capture_diff2_coarse_reference(
+ #endif
+ }
+ 
++template<int block_sz>
++void capture_diff2_coarse_shifted_images(
++		XFLOAT *trans_x,
++		XFLOAT *trans_y,
++		XFLOAT *g_real,
++		XFLOAT *g_imag,
++		AccProjectorKernel projector,
++		XFLOAT *g_shifted_real,
++		XFLOAT *g_shifted_imag,
++		unsigned long image_size,
++		unsigned long translation_num,
++		deviceStream_t stream)
++{
++#ifdef _CUDA_ENABLED
++	const unsigned long value_count = image_size * translation_num;
++	const unsigned long grid_size = (value_count + block_sz - 1) / block_sz;
++	cuda_kernel_capture_diff2_coarse_shifted_images<block_sz>
++		<<<grid_size, block_sz, 0, stream>>>(
++			trans_x,
++			trans_y,
++			g_real,
++			g_imag,
++			projector,
++			g_shifted_real,
++			g_shifted_imag,
++			image_size,
++			translation_num);
++#else
++	REPORT_ERROR("RELION shifted-image capture is implemented only for CUDA");
++#endif
++}
++
+ template<bool REF3D, bool DATA3D, int block_sz>
+ void diff2_CC_coarse(
+ 		unsigned long grid_size,

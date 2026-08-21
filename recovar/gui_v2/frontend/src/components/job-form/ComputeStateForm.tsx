@@ -1,25 +1,21 @@
 import { useState, useCallback } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import { Crosshair } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
+import { PipelineOutputPicker } from "./PipelineOutputPicker";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
-import { submitJob } from "../../lib/api/client";
+import { getSystemInfo, submitJob } from "../../lib/api/client";
 
 interface ComputeStateFormProps {
   projectId: string;
   prefilledResultDir?: string;
   prefilledZdim?: number;
   prefilledCoords?: number[];
-  /** Job ID for linking to the Explore view to pick coordinates interactively */
-  exploreJobId?: string;
   onSubmitted?: (jobId: string) => void;
 }
 
@@ -28,7 +24,6 @@ export function ComputeStateForm({
   prefilledResultDir,
   prefilledZdim,
   prefilledCoords,
-  exploreJobId,
   onSubmitted,
 }: ComputeStateFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
@@ -40,6 +35,16 @@ export function ComputeStateForm({
   const [localOpts, setLocalOpts] = useState<LocalOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
+  const { data: sysInfo } = useQuery({
+    queryKey: ["system-info"],
+    queryFn: getSystemInfo,
+    staleTime: 60_000,
+  });
+  // The job runs locally either when the user explicitly picks "local" or when
+  // the host is local-only (ExecutorSelector renders nothing and never sets the
+  // mode). In both cases we must show LocalSettings and send local_opts.
+  const showLocal = executorMode === "local" || sysInfo?.executor_mode === "local";
+
   const mutation = useMutation({
     mutationFn: () => {
       const latentPoints = coords.split(",").map((s) => parseFloat(s.trim()));
@@ -49,7 +54,7 @@ export function ComputeStateForm({
         latent_points: latentPoints,
       };
       if (slurmOpts) params.slurm_opts = slurmOpts;
-      if (localOpts && executorMode === "local") params.local_opts = localOpts;
+      if (localOpts && showLocal) params.local_opts = localOpts;
       return submitJob(projectId, "compute_state", params, executorMode);
     },
     onSuccess: (data) => {
@@ -61,47 +66,29 @@ export function ComputeStateForm({
   const coordsValid = coords.length > 0 && coords.split(",").every((s) => !isNaN(parseFloat(s.trim())));
 
   const zdimNum = parseInt(zdim);
-  // Validate coordinate count per line: single-line comma-separated, or multi-line with one point per line
-  const coordLines = coords.trim().split(/\n/).filter((line) => line.trim().length > 0);
-  const coordCountErrors: Array<{ line: number; expected: number; got: number }> = [];
+  // Validate the coordinate count for a single point (one comma-separated vector).
+  let coordCountError: { expected: number; got: number } | null = null;
   if (coordsValid && !isNaN(zdimNum) && zdimNum > 0) {
-    if (coordLines.length > 1) {
-      // Multi-line: validate each line independently
-      coordLines.forEach((line, idx) => {
-        const count = line.split(",").filter((v) => v.trim().length > 0).length;
-        if (count !== zdimNum) {
-          coordCountErrors.push({ line: idx + 1, expected: zdimNum, got: count });
-        }
-      });
-    } else {
-      // Single line: validate total count
-      const count = coords.split(",").filter((v) => v.trim().length > 0).length;
-      if (count !== zdimNum) {
-        coordCountErrors.push({ line: 1, expected: zdimNum, got: count });
-      }
+    const count = coords.split(",").filter((v) => v.trim().length > 0).length;
+    if (count !== zdimNum) {
+      coordCountError = { expected: zdimNum, got: count };
     }
   }
-  const hasCoordMismatch = coordCountErrors.length > 0;
+  const hasCoordMismatch = coordCountError !== null;
+
+  const missingFields = [
+    !resultDir && "Result Directory",
+    !zdim && "zdim",
+    !coordsValid && "Latent Coordinates",
+  ].filter(Boolean) as string[];
 
   return (
     <div className="space-y-4">
-      <div className="space-y-1">
-        <div className="flex items-center gap-1">
-          <Label>Result Directory</Label>
-          <TooltipIcon text={tooltips["compute_state.result_dir"]} />
-        </div>
-        <PathInput
-          value={resultDir}
-          onChange={setResultDir}
-          directoryOnly
-          placeholder="/path/to/pipeline/output"
-          className="font-mono"
-        />
-      </div>
+      <PipelineOutputPicker value={resultDir} onChange={setResultDir} tooltip={tooltips["compute_state.result_dir"]} />
 
       <div className="space-y-1">
         <div className="flex items-center gap-1">
-          <Label>zdim</Label>
+          <Label>zdim (latent dimension)</Label>
           <TooltipIcon text={tooltips["compute_state.zdim"]} />
         </div>
         <Input
@@ -126,41 +113,34 @@ export function ComputeStateForm({
         {coords.length > 0 && !coordsValid && (
           <p className="text-xs text-red-400">Enter comma-separated numbers</p>
         )}
-        {hasCoordMismatch && coordCountErrors.map((err) => (
-          <p key={err.line} className="text-xs text-red-400">
-            {coordLines.length > 1
-              ? `Line ${err.line}: expected ${err.expected} coordinates, got ${err.got}`
-              : `Expected ${err.expected} coordinates, got ${err.got}`}
+        {coordCountError && (
+          <p className="text-xs text-red-400">
+            Expected {coordCountError.expected} coordinates, got {coordCountError.got}
           </p>
-        ))}
-        {exploreJobId && (
-          <Link
-            to="/explore/$jobId"
-            params={{ jobId: exploreJobId }}
-            className="inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300"
-          >
-            <Crosshair className="h-3.5 w-3.5" />
-            Select point in Explore view
-          </Link>
         )}
       </div>
 
       {/* SLURM Settings */}
       <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
-      {executorMode === "local" ? (
+      {showLocal ? (
         <LocalSettings value={localOpts} onChange={setLocalOpts} />
       ) : (
         <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
       )}
 
-      <div className="flex justify-end pt-2">
-        <Button
-          onClick={() => mutation.mutate()}
-          disabled={!resultDir || !zdim || !coordsValid || hasCoordMismatch}
-          loading={mutation.isPending}
-        >
-          {mutation.isPending ? "Submitting..." : "Compute State"}
-        </Button>
+      <div className="space-y-2 pt-2">
+        {missingFields.length > 0 && (
+          <p className="text-xs text-amber-400">Required to submit: {missingFields.join(", ")}</p>
+        )}
+        <div className="flex justify-end">
+          <Button
+            onClick={() => mutation.mutate()}
+            disabled={!resultDir || !zdim || !coordsValid || hasCoordMismatch}
+            loading={mutation.isPending}
+          >
+            {mutation.isPending ? "Submitting..." : "Compute State"}
+          </Button>
+        </div>
       </div>
       {mutation.isError && (
         <p className="text-sm text-red-400">{(mutation.error as Error).message}</p>

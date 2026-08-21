@@ -21,14 +21,14 @@
 #
 # Outputs:
 #   tests/baselines/em_parity_quality_long_ledger_*.json (per-test ledgers)
-#   /scratch/gpfs/GILLES/mg6942/_agent_scratch/em_parity_long_<timestamp>/  (Slurm logs)
+#   /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_long_<timestamp>/  (Slurm logs)
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_ID="em_parity_long_${TIMESTAMP}_${RANDOM}"
-SCRATCH_DIR="/scratch/gpfs/GILLES/mg6942/_agent_scratch/${RUN_ID}"
+SCRATCH_DIR="${EM_PARITY_LONG_SCRATCH_DIR:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/${RUN_ID}}"
 ACCOUNT="${SBATCH_ACCOUNT:-gilles}"
 K1_FIXTURE_DIR="${K1_FIXTURE_DIR:-/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_50k_256_normalized}"
 K1_NATIVE_RELION_DIR="${K1_NATIVE_RELION_DIR:-${K1_FIXTURE_DIR}/relion_initialmodel_k1_it008}"

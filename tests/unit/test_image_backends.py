@@ -1,12 +1,13 @@
 from types import SimpleNamespace
 
+import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 import pytest
-
-from recovar.data_io import image_backends
-from recovar.core import fourier_transform_utils, mask
 from helpers import tiny_synthetic
+
+from recovar.core import fourier_transform_utils, mask
+from recovar.data_io import image_backends
 
 pytestmark = pytest.mark.unit
 
@@ -69,6 +70,209 @@ def test_particle_image_dataset_relion_background_fill_mask_mode(monkeypatch):
     expected = image_backends._centered_fft2_numpy(masked).reshape((1, -1)).astype(np.complex64)
 
     np.testing.assert_allclose(processed, expected, atol=1e-6)
+
+
+def test_particle_image_dataset_relion_half_preprocess_defaults_to_numpy(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    imgs, _p_idx, _t_idx = ds[2]
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    masked = image_backends._apply_relion_soft_image_mask_numpy(imgs, ds.image_mask)
+    expected = image_backends._centered_rfft2_numpy(masked).reshape((1, -1)).astype(np.complex64)
+
+    assert ds.relion_fourier_backend == "host_numpy"
+    np.testing.assert_array_equal(ds.process_images_half(imgs, apply_image_mask=True), expected)
+
+
+@pytest.mark.gpu
+def test_particle_image_dataset_relion_jax_fourier_backend_avoids_numpy_fft(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    imgs, _p_idx, _t_idx = ds[2]
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    masked = image_backends._apply_relion_soft_image_mask_numpy(imgs, ds.image_mask)
+    expected = image_backends._centered_rfft2_jax(masked).reshape((1, -1)).astype(np.complex64)
+    ds.set_relion_fourier_backend("jax_gpu")
+    monkeypatch.setattr(
+        image_backends,
+        "_centered_rfft2_numpy",
+        lambda _images: pytest.fail("jax_gpu mode must not call the NumPy rFFT"),
+    )
+
+    processed = ds.process_images_half(imgs, apply_image_mask=True)
+
+    assert processed.dtype == np.complex64
+    np.testing.assert_array_equal(np.asarray(processed), np.asarray(expected))
+
+
+def test_particle_image_dataset_rejects_unknown_relion_fourier_backend(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    with pytest.raises(ValueError, match="Unsupported RELION Fourier backend"):
+        ds.set_relion_fourier_backend("not-a-backend")
+
+
+def test_relion_jax_fourier_backend_requires_gpu(monkeypatch):
+    monkeypatch.setattr(image_backends.jax, "default_backend", lambda: "cpu")
+
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        image_backends._centered_rfft2_jax(np.zeros((8, 8), dtype=np.float32))
+
+
+@pytest.mark.gpu
+def test_relion_per_image_fft_is_batch_size_invariant(gpu_device):
+    images = np.random.default_rng(1722).standard_normal((64, 128, 128)).astype(
+        np.float32
+    )
+
+    with image_backends.jax.default_device(gpu_device):
+        single = image_backends._centered_rfft2_jax(images[:1])
+        per_image = image_backends._centered_rfft2_jax_per_image(images)
+
+    np.testing.assert_array_equal(np.asarray(per_image[0]), np.asarray(single[0]))
+
+
+def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    ds.set_relion_fourier_backend("relion_cuda")
+    images, _p_idx, _t_idx = ds[2]
+    factors = np.asarray([0.75], dtype=np.float32)
+    shifts = np.asarray([[2, -1]], dtype=np.int32)
+    captured = {}
+
+    def fake_preprocess(
+        got_images,
+        got_factors,
+        got_shifts,
+        radius,
+        width,
+        apply_mask,
+        *,
+        native_lane_reduction,
+        native_atomic_reduction,
+    ):
+        captured.update(
+            images=np.asarray(got_images),
+            factors=np.asarray(got_factors),
+            shifts=np.asarray(got_shifts),
+            radius=radius,
+            width=width,
+            apply_mask=apply_mask,
+            native_lane_reduction=native_lane_reduction,
+            native_atomic_reduction=native_atomic_reduction,
+        )
+        return got_images, got_images + jnp.float32(3.0)
+
+    monkeypatch.setattr(cuda_backproject, "relion_preprocess_real_f32", fake_preprocess)
+    monkeypatch.setattr(image_backends, "_centered_rfft2_jax", lambda x: x.astype(jnp.complex64))
+
+    result = ds.process_images_half(
+        images,
+        apply_image_mask=True,
+        relion_normalization_factors=factors,
+        relion_integer_shifts=shifts,
+    )
+
+    np.testing.assert_array_equal(captured["images"], images.astype(np.float32))
+    np.testing.assert_array_equal(captured["factors"], factors)
+    np.testing.assert_array_equal(captured["shifts"], shifts)
+    assert captured["radius"] == 3.0
+    assert captured["width"] == 2.0
+    assert captured["apply_mask"] is True
+    assert captured["native_lane_reduction"] is False
+    assert captured["native_atomic_reduction"] is False
+    np.testing.assert_array_equal(np.asarray(result).reshape(images.shape).real, images + 3.0)
+
+
+def test_particle_image_dataset_relion_cuda_routes_per_image_fft(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(
+        image_backends.ImageLoader,
+        "from_file",
+        lambda *args, **kwargs: _DummySource(n=4, D=8),
+    )
+    ds = image_backends.ParticleImageDataset(
+        "dummy.mrcs", lazy=True, invert_data=False
+    )
+    ds.set_relion_image_mask(
+        pixel_size=1.0,
+        particle_diameter_ang=6.0,
+        width_mask_edge_px=2.0,
+    )
+    ds.set_relion_fourier_backend("relion_cuda")
+    images, _p_idx, _t_idx = ds[2]
+
+    def fake_preprocess(*args, **kwargs):
+        return jnp.asarray(images), jnp.asarray(images)
+
+    monkeypatch.setattr(
+        cuda_backproject, "relion_preprocess_real_f32", fake_preprocess
+    )
+    monkeypatch.setattr(
+        image_backends,
+        "_centered_rfft2_jax",
+        lambda _images: pytest.fail("per-image mode must not use a batched FFT"),
+    )
+    monkeypatch.setattr(
+        image_backends,
+        "_centered_rfft2_jax_per_image",
+        lambda values: values.astype(jnp.complex64),
+    )
+
+    result = ds.process_images_half(
+        images,
+        apply_image_mask=False,
+        relion_normalization_factors=np.ones(1, dtype=np.float32),
+        relion_integer_shifts=np.zeros((1, 2), dtype=np.int32),
+        relion_fft_per_image=True,
+    )
+
+    np.testing.assert_array_equal(np.asarray(result).reshape(images.shape).real, images)
+
+
+def test_particle_image_dataset_routes_native_lane_softmask_diagnostic(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    ds.set_relion_fourier_backend("relion_cuda")
+    ds.set_relion_native_lane_reduction(True)
+    images, _p_idx, _t_idx = ds[2]
+    captured = {}
+
+    def fake_preprocess(*args, **kwargs):
+        captured.update(kwargs)
+        return jnp.asarray(images), jnp.asarray(images)
+
+    monkeypatch.setattr(cuda_backproject, "relion_preprocess_real_f32", fake_preprocess)
+    ds.process_images_half(
+        images,
+        apply_image_mask=True,
+        relion_normalization_factors=np.ones(1, dtype=np.float32),
+        relion_integer_shifts=np.zeros((1, 2), dtype=np.int32),
+    )
+
+    assert captured["native_lane_reduction"] is True
+
+
+def test_particle_image_dataset_relion_cuda_fails_closed_without_operands(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    ds.set_relion_fourier_backend("relion_cuda")
+    images, _p_idx, _t_idx = ds[2]
+
+    with pytest.raises(RuntimeError, match="requires per-image float32 normalization"):
+        ds.process_images_half(images, apply_image_mask=True)
 
 
 def test_particle_image_dataset_data_multiplier_and_mult_share_state(monkeypatch):

@@ -64,6 +64,22 @@ def _sparse_big_jit_mstep_tensors_within_memory(
     n_recon_windowed: int,
     use_float64_scoring: bool,
 ) -> bool:
+    estimated_gb, max_gb = _sparse_big_jit_mstep_tensors_memory_gb(
+        image_count=image_count,
+        rotation_count=rotation_count,
+        n_recon_windowed=n_recon_windowed,
+        use_float64_scoring=use_float64_scoring,
+    )
+    return max_gb > 0.0 and estimated_gb <= max_gb
+
+
+def _sparse_big_jit_mstep_tensors_memory_gb(
+    *,
+    image_count: int,
+    rotation_count: int,
+    n_recon_windowed: int,
+    use_float64_scoring: bool,
+) -> tuple[float, float]:
     summed_bytes = 16 if use_float64_scoring else 8
     ctf_bytes = 8 if use_float64_scoring else 4
     # Keep margin for XLA output buffers and the following packed tensors.
@@ -74,7 +90,7 @@ def _sparse_big_jit_mstep_tensors_within_memory(
             EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB,
         )
     )
-    return max_gb > 0.0 and estimated_gb <= max_gb
+    return estimated_gb, max_gb
 
 
 def _validate_native_half_batch(batch, image_shape):

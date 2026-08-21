@@ -136,6 +136,21 @@ def collect_e_step(
         "wsum_img_power": np.asarray(noise_stats.wsum_img_power, dtype=np.float64) if noise_stats is not None else None,
         "wsum_sigma2_offset": float(noise_stats.wsum_sigma2_offset) if noise_stats is not None else 0.0,
         "sumw": float(noise_stats.sumw) if noise_stats is not None else 0.0,
+        "wsum_norm_correction": (
+            np.asarray(noise_stats.wsum_norm_correction, dtype=np.float64)
+            if noise_stats is not None and noise_stats.wsum_norm_correction is not None
+            else None
+        ),
+        "wsum_scale_correction_xa": (
+            np.asarray(noise_stats.wsum_scale_correction_xa, dtype=np.float64)
+            if noise_stats is not None and noise_stats.wsum_scale_correction_xa is not None
+            else None
+        ),
+        "wsum_scale_correction_aa": (
+            np.asarray(noise_stats.wsum_scale_correction_aa, dtype=np.float64)
+            if noise_stats is not None and noise_stats.wsum_scale_correction_aa is not None
+            else None
+        ),
         "Ft_y_norm_per_voxel": _voxel_magnitude(Ft_y),
         "Ft_ctf_per_voxel": _voxel_magnitude(Ft_ctf),
         "pose_eulers": (
@@ -186,6 +201,15 @@ def dump_iteration(
     unreg_means: list,
     new_iter_best_rotation_eulers: list,
     new_iter_best_translations: list,
+    image_corrections: list | None = None,
+    scale_corrections: list | None = None,
+    group_ids: list | None = None,
+    group_counts: list | None = None,
+    group_scale_corrections: list | None = None,
+    norm_corrections: list | None = None,
+    avg_norm_corrections: list | None = None,
+    zero_norm_residual_counts: list | None = None,
+    scale_correction_data_vs_prior=None,
     iteration_start: float | None = None,
 ) -> None:
     """Write one .npz per iteration combining both halves with E-step snapshots.
@@ -199,6 +223,15 @@ def dump_iteration(
     out = dump_dir()
     if out is None:
         return
+
+    image_corrections = [None, None] if image_corrections is None else image_corrections
+    scale_corrections = [None, None] if scale_corrections is None else scale_corrections
+    group_ids = [None, None] if group_ids is None else group_ids
+    group_counts = [None, None] if group_counts is None else group_counts
+    group_scale_corrections = [None, None] if group_scale_corrections is None else group_scale_corrections
+    norm_corrections = [None, None] if norm_corrections is None else norm_corrections
+    avg_norm_corrections = [None, None] if avg_norm_corrections is None else avg_norm_corrections
+    zero_norm_residual_counts = [None, None] if zero_norm_residual_counts is None else zero_norm_residual_counts
 
     payload: dict[str, Any] = {
         "iteration": np.int32(iteration),
@@ -261,6 +294,33 @@ def dump_iteration(
             payload[f"half{k + 1}_best_translations_total"] = np.asarray(
                 new_iter_best_translations[k], dtype=np.float32
             )
+        for name, values, dtype in (
+            ("image_corrections", image_corrections[k], np.float64),
+            ("scale_corrections", scale_corrections[k], np.float64),
+            ("group_ids", group_ids[k], np.int64),
+            ("group_scale_corrections", group_scale_corrections[k], np.float64),
+            ("norm_corrections", norm_corrections[k], np.float64),
+        ):
+            if values is not None:
+                payload[f"half{k + 1}_{name}"] = np.asarray(values, dtype=dtype)
+        if group_counts[k] is not None:
+            payload[f"half{k + 1}_group_count"] = np.int64(group_counts[k])
+            if group_ids[k] is not None:
+                payload[f"half{k + 1}_group_particle_counts"] = np.bincount(
+                    np.asarray(group_ids[k], dtype=np.int64),
+                    minlength=int(group_counts[k]),
+                )
+        if avg_norm_corrections[k] is not None:
+            payload[f"half{k + 1}_avg_norm_correction"] = np.float64(avg_norm_corrections[k])
+        if zero_norm_residual_counts[k] is not None:
+            payload[f"half{k + 1}_zero_norm_residual_count"] = np.int64(zero_norm_residual_counts[k])
+
+    if scale_correction_data_vs_prior is not None:
+        payload["scale_correction_data_vs_prior"] = np.asarray(
+            scale_correction_data_vs_prior,
+            dtype=np.float64,
+        )
+    payload["scale_correction_data_vs_prior_threshold"] = np.float64(3.0)
 
     relion_iter = int(init_relion_iteration) + int(iteration) + 1
     np.savez_compressed(out / f"iter_{relion_iter:03d}.npz", **payload)

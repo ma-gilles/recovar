@@ -57,11 +57,14 @@ def process_half_image(
     experiment_dataset,
     batch,
     apply_image_mask: bool,
+    *,
+    relion_preprocess_kwargs=None,
 ):
     process_half_fn = getattr(experiment_dataset, "process_images_half", None)
     if process_half_fn is None:
         raise ValueError("Dense EM requires experiment_dataset.process_images_half")
-    return process_half_fn(batch, apply_image_mask=apply_image_mask)
+    kwargs = {} if relion_preprocess_kwargs is None else dict(relion_preprocess_kwargs)
+    return process_half_fn(batch, apply_image_mask=apply_image_mask, **kwargs)
 
 
 def _dense_batch_half_inputs(
@@ -72,11 +75,14 @@ def _dense_batch_half_inputs(
     translations,
     config,
     apply_image_mask: bool,
+    *,
+    relion_preprocess_kwargs=None,
 ):
     processed_half = process_half_image(
         experiment_dataset,
         batch,
         apply_image_mask,
+        relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     ctf_half = config.compute_ctf_half(ctf_params)
     noise_variance_half = jnp.asarray(noise_variance)
@@ -96,6 +102,8 @@ def preprocess_batch(
     score_complex_dtype=None,
     score_real_dtype=None,
     norm_real_dtype=None,
+    relion_preprocess_kwargs=None,
+    return_unshifted_score_weighted=False,
 ):
     """Preprocess one dense image batch for E-step scoring."""
 
@@ -107,6 +115,7 @@ def preprocess_batch(
         translations,
         config,
         score_with_masked_images,
+        relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     shift_processed_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
         processed_half,
@@ -133,6 +142,8 @@ def preprocess_batch(
     weight_ctf_half = shift_ctf_half if score_real_dtype is not None else ctf_half
     weight_noise_half = shift_noise_half if score_real_dtype is not None else noise_variance_half
     ctf2_over_nv_half = weight_ctf_half**2 / weight_noise_half
+    if return_unshifted_score_weighted:
+        return shifted_half, batch_norm, ctf2_over_nv_half, score_weighted_half
     return shifted_half, batch_norm, ctf2_over_nv_half
 
 
@@ -146,6 +157,7 @@ def prepare_reconstruction_batch(
     *,
     score_complex_dtype=None,
     score_real_dtype=None,
+    relion_preprocess_kwargs=None,
 ):
     """Preprocess one dense image batch for the unmasked M-step path."""
 
@@ -157,6 +169,7 @@ def prepare_reconstruction_batch(
         translations,
         config,
         False,
+        relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     shift_processed_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
         processed_half,
@@ -185,6 +198,8 @@ def preprocess_batch_firstiter_cc(
     score_complex_dtype=None,
     score_real_dtype=None,
     norm_real_dtype=None,
+    relion_preprocess_kwargs=None,
+    return_unshifted_score_weighted=False,
 ):
     """Preprocess one dense image batch for RELION's iter-1 normalized CC scoring.
 
@@ -205,6 +220,7 @@ def preprocess_batch_firstiter_cc(
         translations,
         config,
         score_with_masked_images,
+        relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     # RELION ml_optimiser.cpp:8758-8774 (do_firstiter_cc CC branch) iterates
     # `Frefctf = CTF * F_proj` against `Fimg_shift = Fimg * shift_phase` directly:
@@ -225,8 +241,9 @@ def preprocess_batch_firstiter_cc(
         score_complex_dtype=score_complex_dtype,
         score_real_dtype=score_real_dtype,
     )
+    unshifted_score_weighted = shift_processed_half * shift_ctf_half
     shifted_half = apply_half_translation_phases(
-        shift_processed_half * shift_ctf_half,
+        unshifted_score_weighted,
         shift_phases_half,
     )
     norm_processed_half, _, _ = _norm_inputs(
@@ -245,7 +262,10 @@ def preprocess_batch_firstiter_cc(
     )
     ctf2_half = weight_ctf_half**2
     ctf2_over_nv_half = ctf2_half / weight_noise_half
-    return shifted_half, image_power, ctf2_half, ctf2_over_nv_half
+    result = shifted_half, image_power, ctf2_half, ctf2_over_nv_half
+    if return_unshifted_score_weighted:
+        return result + (unshifted_score_weighted,)
+    return result
 
 
 def half_translation_phase_table(translations, image_shape):
@@ -258,6 +278,7 @@ def half_translation_phase_table(translations, image_shape):
         "td,pd->tp",
         jnp.asarray(translations, dtype=jnp.float32),
         lattice_half,
+        precision=jax.lax.Precision.HIGHEST,
     )
     return jnp.exp(-2j * jnp.pi * phase_arg)
 
@@ -265,6 +286,59 @@ def half_translation_phase_table(translations, image_shape):
 def image_preprocess_backend(experiment_dataset):
     image_source = getattr(experiment_dataset, "image_source", None)
     return getattr(image_source, "backend", image_source)
+
+
+def prepare_batch_preprocess_operands(
+    experiment_dataset,
+    batch,
+    image_indices,
+    *,
+    image_corrections=None,
+    scale_corrections=None,
+    image_pre_shifts=None,
+):
+    """Select typed per-image operands for host or strict CUDA preprocessing."""
+
+    from .image_shifts import integer_pre_shifts_or_none
+
+    image_indices_np = np.asarray(image_indices)
+    batch_size = int(batch.shape[0])
+    integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, image_indices_np, batch=batch)
+    backend = image_preprocess_backend(experiment_dataset)
+    relion_cuda_preprocess = getattr(backend, "relion_fourier_backend", None) == "relion_cuda"
+    if relion_cuda_preprocess and image_pre_shifts is not None and integer_pre_shifts is None:
+        raise RuntimeError("relion_cuda preprocessing requires integral RELION image pre-shifts")
+    if relion_cuda_preprocess and integer_pre_shifts is None:
+        integer_pre_shifts = np.zeros((batch_size, 2), dtype=np.int32)
+
+    batch_scale_np = (
+        np.asarray(scale_corrections)[image_indices_np].astype(np.float32, copy=False)
+        if scale_corrections is not None
+        else np.ones(batch_size, dtype=np.float32)
+    )
+    batch_corr_np = (
+        np.asarray(image_corrections)[image_indices_np].astype(np.float32, copy=False)
+        if image_corrections is not None
+        else None
+    )
+    relion_preprocess_kwargs = None
+    if relion_cuda_preprocess:
+        normalization_factors = (
+            batch_corr_np / batch_scale_np
+            if batch_corr_np is not None
+            else np.ones(batch_size, dtype=np.float32)
+        )
+        relion_preprocess_kwargs = {
+            "relion_normalization_factors": jnp.asarray(normalization_factors, dtype=jnp.float32),
+            "relion_integer_shifts": jnp.asarray(integer_pre_shifts, dtype=jnp.int32),
+        }
+    return (
+        relion_cuda_preprocess,
+        integer_pre_shifts,
+        batch_corr_np,
+        batch_scale_np,
+        relion_preprocess_kwargs,
+    )
 
 
 def resolve_image_mask_for_half_preprocess(

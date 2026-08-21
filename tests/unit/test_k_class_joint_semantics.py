@@ -11,13 +11,20 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     normalize_class_direction_prior_per_half,
 )
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_translation_angles_f32,
+)
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.k_class import (
     _ClassFineGridSignificanceMask,
     _assemble_result,
     _build_fine_grid_significance_mask,
+    _compact_sparse_pass2_preferred_over_dense,
     _dense_engine_kwargs_for_class,
+    _expand_subset_noise_stats,
     _run_sparse_k_class_adaptive_pass2,
+    _strict_exact_fine_gaussian_requested,
+    _zero_subset_noise_stats,
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
     run_local_k_class_em,
@@ -27,6 +34,7 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _combine_optional_half_accumulators,
 )
 from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
+from recovar.em.dense_single_volume.mean_helpers import update_c1_sigma_offset_from_posterior
 from recovar.em.sampling import read_relion_direction_priors
 
 
@@ -64,6 +72,162 @@ def _firstiter_probe_result(class_assignments, per_class_hard=None, n_rot=1):
     )
 
 
+def test_large_k_class_prefers_compact_sparse_pass2_over_dense_fallback(monkeypatch):
+    monkeypatch.delenv("RECOVAR_K_CLASS_COMPACT_SPARSE_PASS2_MIN_IMAGES", raising=False)
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", raising=False)
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", raising=False)
+
+    assert _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=50_000)
+    assert not _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+    assert not _compact_sparse_pass2_preferred_over_dense(n_classes=1, n_images=50_000)
+
+
+def test_compact_sparse_pass2_preference_respects_env_overrides(monkeypatch):
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", raising=False)
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", raising=False)
+
+    monkeypatch.setenv("RECOVAR_K_CLASS_COMPACT_SPARSE_PASS2_MIN_IMAGES", "1000")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+    assert _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "0")
+    assert not _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+    monkeypatch.setenv("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", "0.2")
+    assert not _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+
+    monkeypatch.setenv("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", "")
+    monkeypatch.setenv("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", "  ")
+    assert _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", raising=False)
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", raising=False)
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", "1")
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", raising=False)
+    assert not _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+
+
+def test_exact_fine_gaussian_requires_sparse_float32_gaussian_pass2():
+    assert _strict_exact_fine_gaussian_requested({})
+    assert not _strict_exact_fine_gaussian_requested(
+        {"relion_exact_fine_gaussian": False},
+    )
+    assert not _strict_exact_fine_gaussian_requested(
+        {"use_float64_scoring": True},
+    )
+    assert not _strict_exact_fine_gaussian_requested(
+        {"relion_firstiter_score_mode": "normalized_cc"},
+    )
+    assert not _strict_exact_fine_gaussian_requested(
+        {},
+        firstiter_cc_pass2_only_best_coarse=True,
+    )
+
+
+def test_adaptive_exact_fine_gaussian_rejects_explicit_dense_pass2():
+    class TinyDataset:
+        n_images = 1
+
+    with pytest.raises(RuntimeError, match="requires sparse adaptive pass 2"):
+        run_dense_k_class_em_adaptive(
+            TinyDataset(),
+            jnp.zeros((1, 4), dtype=jnp.complex64),
+            jnp.ones(4, dtype=jnp.float32),
+            jnp.ones(1, dtype=jnp.float32),
+            np.eye(3, dtype=np.float32)[None],
+            np.zeros((1, 2), dtype=np.float32),
+            np.eye(3, dtype=np.float32)[None],
+            np.zeros((1, 2), dtype=np.float32),
+            np.zeros(1, dtype=np.int64),
+            np.zeros(1, dtype=np.int64),
+            "linear_interp",
+            sparse_pass2=False,
+            relion_exact_fine_gaussian=True,
+        )
+
+
+def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import significance as significance_module
+
+    class TinyDataset:
+        n_images = 1
+
+    significance_calls = []
+
+    def fake_significance(*_args, **kwargs):
+        significance_calls.append(kwargs)
+        return (
+            None,
+            np.full(1, 6, dtype=np.int32),
+            np.zeros(1, dtype=np.int32),
+            np.zeros(1, dtype=np.int32),
+            [[np.asarray([0], dtype=np.int32)]],
+            {"significant_cutoff_counts": np.full(1, 5, dtype=np.int32)},
+        )
+
+    sparse_result = _assemble_result(
+        class_log_evidence=np.zeros((1, 1), dtype=np.float64),
+        new_means=None,
+        Ft_y=[jnp.asarray([1, 2, 3, 4], dtype=jnp.complex64)],
+        Ft_ctf=[jnp.asarray([5, 6, 7, 8], dtype=jnp.float32)],
+        per_class_hard_assignments=np.zeros((1, 1), dtype=np.int32),
+        per_class_stats=(
+            make_relion_stats(
+                log_evidence_per_image=np.zeros(1, dtype=np.float32),
+                best_log_score_per_image=np.zeros(1, dtype=np.float32),
+                max_posterior_per_image=np.ones(1, dtype=np.float32),
+                rotation_posterior_sums=np.ones(1, dtype=np.float32),
+            ),
+        ),
+        noise_stats=None,
+    )
+    sparse_calls = []
+
+    def fake_sparse(*args, **kwargs):
+        sparse_calls.append((args, kwargs))
+        return sparse_result
+
+    def fail_dense(*_args, **_kwargs):
+        raise AssertionError("exact Gaussian broad support silently fell back to dense")
+
+    monkeypatch.setattr(significance_module, "_compute_k_class_significance_batched", fake_significance)
+    monkeypatch.setattr(k_class_module, "_run_sparse_k_class_adaptive_pass2", fake_sparse)
+    monkeypatch.setattr(k_class_module, "run_dense_k_class_em", fail_dense)
+    monkeypatch.setattr(k_class_module, "_dense_pass2_rotation_fraction_threshold", lambda _n_classes: 0.0)
+
+    result = run_dense_k_class_em_adaptive(
+        TinyDataset(),
+        jnp.zeros((1, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(1, dtype=jnp.float32),
+        np.eye(3, dtype=np.float32)[None],
+        np.zeros((1, 2), dtype=np.float32),
+        np.eye(3, dtype=np.float32)[None],
+        np.zeros((1, 2), dtype=np.float32),
+        np.zeros(1, dtype=np.int64),
+        np.zeros(1, dtype=np.int64),
+        "linear_interp",
+        coarse_healpix_order=0,
+        oversampling_order=0,
+        sparse_pass2=True,
+        relion_exact_fine_gaussian=True,
+        pass2_use_float64_scoring=True,
+        pass2_use_float64_projections=True,
+    )
+
+    assert len(sparse_calls) == 1
+    assert significance_calls[0]["use_float64_scoring"] is False
+    assert sparse_calls[0][1]["engine_kwargs"]["use_float64_scoring"] is True
+    assert sparse_calls[0][1]["engine_kwargs"]["use_float64_projections"] is True
+    np.testing.assert_array_equal(np.asarray(result.significant_counts), np.array([5], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(result.Ft_y), np.array([[1, 2, 3, 4]], dtype=np.complex64))
+    np.testing.assert_array_equal(np.asarray(result.Ft_ctf), np.array([[5, 6, 7, 8]], dtype=np.float32))
+
+
 def test_k_class_hard_assignment_uses_joint_best_pose_not_marginal_class():
     result = _assemble_result(
         class_log_evidence=np.asarray([[0.0], [-0.2]], dtype=np.float64),
@@ -81,7 +245,54 @@ def test_k_class_hard_assignment_uses_joint_best_pose_not_marginal_class():
     assert np.asarray(result.class_responsibilities)[0, 0] > np.asarray(result.class_responsibilities)[1, 0]
     np.testing.assert_array_equal(np.asarray(result.class_assignments), np.asarray([1], dtype=np.int32))
     np.testing.assert_array_equal(np.asarray(result.pose_assignments), np.asarray([7], dtype=np.int32))
-    np.testing.assert_allclose(np.asarray(result.stats.max_posterior_per_image), np.asarray([0.20], dtype=np.float32))
+    expected_pmax = np.exp(-1.0 - np.logaddexp(0.0, -0.2))
+    np.testing.assert_allclose(
+        np.asarray(result.stats.max_posterior_per_image),
+        np.asarray([expected_pmax], dtype=np.float32),
+    )
+
+
+def test_k_class_assemble_result_reports_joint_pmax_not_per_class_pmax():
+    result = _assemble_result(
+        class_log_evidence=np.asarray([[0.0], [0.0]], dtype=np.float64),
+        new_means=[jnp.zeros(2), jnp.zeros(2)],
+        Ft_y=[jnp.zeros(2), jnp.zeros(2)],
+        Ft_ctf=[jnp.zeros(2), jnp.zeros(2)],
+        per_class_hard_assignments=np.asarray([[3], [7]], dtype=np.int32),
+        per_class_stats=(
+            _stats([0.0], [-0.1], [np.exp(-0.1)]),
+            _stats([0.0], [-2.0], [np.exp(-2.0)]),
+        ),
+        noise_stats=None,
+    )
+
+    old_per_class_normalized_pmax = np.exp(-0.1)
+    expected_joint_pmax = np.exp(-0.1 - np.log(2.0))
+    assert old_per_class_normalized_pmax > 1.9 * expected_joint_pmax
+    np.testing.assert_allclose(
+        np.asarray(result.stats.max_posterior_per_image),
+        np.asarray([expected_joint_pmax], dtype=np.float32),
+    )
+
+
+def test_k_class_assemble_result_clips_inconsistent_pmax_before_exp_overflow():
+    with np.errstate(over="raise"):
+        result = _assemble_result(
+            class_log_evidence=np.asarray([[-1000.0]], dtype=np.float64),
+            new_means=[jnp.zeros(2)],
+            Ft_y=[jnp.zeros(2)],
+            Ft_ctf=[jnp.zeros(2)],
+            per_class_hard_assignments=np.asarray([[3]], dtype=np.int32),
+            per_class_stats=(
+                _stats([-1000.0], [1000.0], [1.0]),
+            ),
+            noise_stats=None,
+        )
+
+    np.testing.assert_allclose(
+        np.asarray(result.stats.max_posterior_per_image),
+        np.asarray([1.0], dtype=np.float32),
+    )
 
 
 def test_k_class_assemble_result_can_keep_full_accumulators_on_host():
@@ -172,6 +383,163 @@ def test_k_class_noise_aggregate_uses_joint_relion_sum_weight():
     )
     assert result.aggregate_noise_stats.wsum_sigma2_offset / (2.0 * result.aggregate_noise_stats.sumw) == pytest.approx(
         20.0,
+    )
+
+
+def test_k_class_noise_aggregate_keeps_exact_mass_image_power():
+    """Fused K-class noise stats already weight image power by class mass."""
+
+    noise_stats = (
+        make_noise_stats(
+            wsum_sigma2_noise=np.asarray([1.0], dtype=np.float32),
+            wsum_img_power=np.asarray([2.0], dtype=np.float32),
+            wsum_sigma2_offset=30.0,
+            sumw=0.5,
+        ),
+        make_noise_stats(
+            wsum_sigma2_noise=np.asarray([3.0], dtype=np.float32),
+            wsum_img_power=np.asarray([4.0], dtype=np.float32),
+            wsum_sigma2_offset=50.0,
+            sumw=1.5,
+        ),
+    )
+
+    result = _assemble_result(
+        class_log_evidence=np.asarray(
+            [
+                [np.log(0.25), np.log(0.25)],
+                [np.log(0.75), np.log(0.75)],
+            ],
+            dtype=np.float64,
+        ),
+        new_means=[jnp.zeros(1), jnp.zeros(1)],
+        Ft_y=[jnp.zeros(1), jnp.zeros(1)],
+        Ft_ctf=[jnp.zeros(1), jnp.zeros(1)],
+        per_class_hard_assignments=np.zeros((2, 2), dtype=np.int32),
+        per_class_stats=(
+            _stats([0.0, 0.0], [0.0, 0.0], [0.5, 0.5], n_rot=1),
+            _stats([0.0, 0.0], [0.0, 0.0], [0.5, 0.5], n_rot=1),
+        ),
+        noise_stats=noise_stats,
+    )
+
+    assert result.aggregate_noise_stats is not None
+    assert result.aggregate_noise_stats.sumw == pytest.approx(2.0)
+    np.testing.assert_allclose(
+        np.asarray(result.aggregate_noise_stats.wsum_img_power),
+        np.asarray([6.0], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_subset_noise_stats_expand_optional_fields_to_parent_axes():
+    stats0 = make_noise_stats(
+        wsum_sigma2_noise=np.asarray([1.0], dtype=np.float32),
+        wsum_img_power=np.asarray([2.0], dtype=np.float32),
+        wsum_sigma2_offset=3.0,
+        sumw=2.0,
+        wsum_norm_correction=np.asarray([5.0, 7.0], dtype=np.float32),
+        wsum_scale_correction_xa=np.asarray([11.0, 13.0], dtype=np.float32),
+        wsum_scale_correction_aa=np.asarray([17.0, 19.0], dtype=np.float32),
+    )
+    stats1 = make_noise_stats(
+        wsum_sigma2_noise=np.asarray([10.0], dtype=np.float32),
+        wsum_img_power=np.asarray([20.0], dtype=np.float32),
+        wsum_sigma2_offset=30.0,
+        sumw=1.0,
+        wsum_norm_correction=np.asarray([23.0], dtype=np.float32),
+        wsum_scale_correction_xa=np.asarray([29.0], dtype=np.float32),
+        wsum_scale_correction_aa=np.asarray([31.0], dtype=np.float32),
+    )
+    expanded0 = _expand_subset_noise_stats(
+        stats0,
+        np.asarray([0, 2], dtype=np.int64),
+        4,
+        full_group_count=3,
+    )
+    expanded1 = _expand_subset_noise_stats(
+        stats1,
+        np.asarray([1], dtype=np.int64),
+        4,
+        full_group_count=3,
+    )
+    expanded_empty = _zero_subset_noise_stats(
+        np.asarray([0.0], dtype=np.float32),
+        n_images=4,
+        full_group_count=3,
+    )
+
+    summed = k_class_module._sum_noise_stats((expanded0, expanded1, expanded_empty))
+
+    np.testing.assert_allclose(np.asarray(summed.wsum_norm_correction), [5.0, 23.0, 7.0, 0.0])
+    np.testing.assert_allclose(np.asarray(summed.wsum_scale_correction_xa), [40.0, 13.0, 0.0])
+    np.testing.assert_allclose(np.asarray(summed.wsum_scale_correction_aa), [48.0, 19.0, 0.0])
+
+
+def test_k_class_sigma_offset_live_update_uses_shared_relion_aggregate():
+    """Per-class sigma diagnostics must not replace RELION's shared Class3D sigma."""
+
+    aggregate = (
+        make_noise_stats(
+            wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+            wsum_img_power=np.asarray([0.0], dtype=np.float32),
+            wsum_sigma2_offset=20.0,
+            sumw=2.0,
+        ),
+        make_noise_stats(
+            wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+            wsum_img_power=np.asarray([0.0], dtype=np.float32),
+            wsum_sigma2_offset=60.0,
+            sumw=6.0,
+        ),
+    )
+    per_class = (
+        (
+            make_noise_stats(
+                wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+                wsum_img_power=np.asarray([0.0], dtype=np.float32),
+                wsum_sigma2_offset=200.0,
+                sumw=2.0,
+            ),
+            make_noise_stats(
+                wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+                wsum_img_power=np.asarray([0.0], dtype=np.float32),
+                wsum_sigma2_offset=8.0,
+                sumw=2.0,
+            ),
+        ),
+        (
+            make_noise_stats(
+                wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+                wsum_img_power=np.asarray([0.0], dtype=np.float32),
+                wsum_sigma2_offset=200.0,
+                sumw=2.0,
+            ),
+            make_noise_stats(
+                wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+                wsum_img_power=np.asarray([0.0], dtype=np.float32),
+                wsum_sigma2_offset=8.0,
+                sumw=2.0,
+            ),
+        ),
+    )
+
+    result = update_c1_sigma_offset_from_posterior(
+        noise_stats_per_half=aggregate,
+        noise_stats_per_half_per_class=per_class,
+        current_sigma_offset_angstrom=1.5,
+        n_classes=2,
+        k_class_enabled=True,
+        state_fallback_offsets_angstrom=9.0,
+    )
+
+    assert result.current_sigma_offset_angstrom == pytest.approx(np.sqrt(80.0 / (2.0 * 8.0)))
+    np.testing.assert_allclose(
+        result.per_class_sigma_offset_angstrom,
+        np.asarray([np.sqrt(50.0), np.sqrt(2.0)], dtype=np.float64),
+        rtol=1e-6,
+        atol=1e-6,
     )
 
 
@@ -463,6 +831,7 @@ def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeyp
         firstiter_cc_pass2_only_best_coarse=True,
         skip_significance_pruning=True,
         return_best_pose_details=True,
+        coarse_healpix_order=0,
     )
 
     assert len(probe_calls) == 1
@@ -512,6 +881,10 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
     monkeypatch.setattr(significance_module, "_compute_k_class_significance_batched", fake_compute_significance)
     monkeypatch.setattr(k_class_module, "run_em", fail_run_em)
 
+    phase_source = np.asarray(
+        [[0.0, 0.0], [1.0 + 2.0**-30, 0.0], [2.0, 0.0]],
+        dtype=np.float64,
+    )
     result = k_class_module._run_dense_k_class_score_probe(
         TinyDataset(),
         jnp.zeros((2, 4), dtype=jnp.complex64),
@@ -523,9 +896,13 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
         class_log_priors=np.log(np.asarray([0.4, 0.6], dtype=np.float64)),
         relion_firstiter_score_mode="normalized_cc",
         relion_firstiter_winner_take_all=True,
+        rotation_log_prior=np.asarray([0.0, -1.0, -2.0, -3.0, -4.0], dtype=np.float32),
+        translation_log_prior=np.asarray([0.0, -0.5, -1.0], dtype=np.float32),
         current_size=26,
         image_batch_size=7,
         rotation_block_size=5,
+        coarse_relion_projector_texture_interp=True,
+        translation_phase_source=phase_source,
     )
 
     assert len(calls) == 1
@@ -533,6 +910,11 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
     assert calls[0]["collect_significance"] is False
     assert calls[0]["return_class_best"] is True
     assert calls[0]["current_size"] == 26
+    assert calls[0]["relion_projector_texture_interp"] is True
+    np.testing.assert_allclose(calls[0]["class_log_priors"], np.zeros(2, dtype=np.float64))
+    assert calls[0]["rotation_log_prior"] is None
+    assert calls[0]["translation_log_prior"] is None
+    assert calls[0]["translation_phase_source"] is phase_source
     np.testing.assert_array_equal(result.class_assignments, np.asarray([1, 0, 1], dtype=np.int32))
     np.testing.assert_array_equal(result.per_class_hard_assignments, np.asarray([[4, 5, 6], [7, 8, 9]], dtype=np.int32))
 
@@ -633,14 +1015,24 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
         coarse_current_size=26,
         fine_current_size=56,
         current_size=56,
+        image_batch_size=19,
+        rotation_block_size=23,
+        significance_image_batch_size=3,
+        significance_rotation_block_size=5,
         firstiter_cc_pass2_only_best_coarse=True,
+        coarse_healpix_order=0,
     )
 
     assert len(probe_calls) == 1
     assert len(score_calls) == 0
     assert len(dense_calls) == 1
     assert probe_calls[0]["current_size"] == 26
+    assert probe_calls[0]["image_batch_size"] == 3
+    assert probe_calls[0]["rotation_block_size"] == 5
+    assert probe_calls[0]["coarse_relion_projector_texture_interp"] is None
     assert dense_calls[0]["current_size"] == 56
+    assert dense_calls[0]["image_batch_size"] == 19
+    assert dense_calls[0]["rotation_block_size"] == 23
     assert dense_calls[0]["sparse_pass2"] is False
 
 
@@ -721,6 +1113,7 @@ def test_adaptive_k_class_firstiter_fine_pass_uses_global_winner_subsets(monkeyp
         "linear_interp",
         firstiter_cc_pass2_only_best_coarse=True,
         image_corrections=np.arange(4, dtype=np.float32),
+        coarse_healpix_order=0,
     )
 
     fine_calls = [call for call in calls if call[0]]
@@ -728,6 +1121,44 @@ def test_adaptive_k_class_firstiter_fine_pass_uses_global_winner_subsets(monkeyp
     assert [call[1] for call in fine_calls] == [(0, 3), (1, 2)]
     np.testing.assert_array_equal(np.asarray(result.class_assignments), np.asarray([0, 1, 1, 0], dtype=np.int32))
     np.testing.assert_allclose(np.asarray(result.class_posterior_sums), np.asarray([2.0, 2.0], dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(result.significant_counts), np.ones(4, dtype=np.int32))
+
+
+def test_diagnostic_firstiter_class_override_uses_original_image_identity(monkeypatch):
+    class Dataset:
+        def original_image_indices_from_local(self, local_indices):
+            np.testing.assert_array_equal(local_indices, np.arange(4, dtype=np.int64))
+            return np.asarray([91, 7915, 17, 3], dtype=np.int64)
+
+    native = np.asarray([1, 1, 0, 1], dtype=np.int32)
+    monkeypatch.setenv("RECOVAR_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES", "7915:0")
+    routed = k_class_module._diagnostic_firstiter_class_assignments(
+        Dataset(), native, n_classes=2
+    )
+    np.testing.assert_array_equal(routed, np.asarray([1, 0, 0, 1], dtype=np.int32))
+    np.testing.assert_array_equal(native, np.asarray([1, 1, 0, 1], dtype=np.int32))
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "7915", "7915:", ":0", "bad:0", "-1:0", "7915:-1", "7915:2", "7915:0,7915:1"],
+)
+def test_diagnostic_firstiter_class_override_rejects_invalid_values(value):
+    if not value:
+        assert k_class_module._env_value_or_none("ABSENT_DIAGNOSTIC_TEST_ENV") is None
+        return
+    with pytest.raises(ValueError):
+        k_class_module._parse_diagnostic_firstiter_class_overrides(value, n_classes=2)
+
+
+def test_diagnostic_firstiter_class_override_is_inert_when_unset(monkeypatch):
+    class Dataset:
+        def original_image_indices_from_local(self, _local_indices):
+            raise AssertionError("identity resolver must not run while the diagnostic is inactive")
+
+    monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES", raising=False)
+    native = np.asarray([1, 0], dtype=np.int32)
+    assert k_class_module._diagnostic_firstiter_class_assignments(Dataset(), native, n_classes=2) is native
 
 
 def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(monkeypatch):
@@ -799,6 +1230,7 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
         )
         assert kwargs["relion_firstiter_score_mode"] == "normalized_cc"
         assert kwargs["relion_firstiter_winner_take_all"] is True
+        assert "preserve_bpref_particle_order" not in kwargs
         n_images = int(dataset.n_units)
         hard = np.arange(n_images, dtype=np.int32) % n_fine_trans
         best_rot_ids = np.full(n_images, class_index, dtype=np.int32)
@@ -853,6 +1285,17 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
     np.testing.assert_array_equal(np.asarray(result.class_assignments), np.asarray([0, 1, 1, 0], dtype=np.int32))
     np.testing.assert_allclose(np.asarray(result.class_posterior_sums), np.asarray([2.0, 2.0], dtype=np.float32))
     np.testing.assert_array_equal(np.asarray(result.pose_assignments), np.asarray([0, 2, 3, 1], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(result.significant_counts), np.ones(4, dtype=np.int32))
+    # Significant-count serialization is result metadata only; the per-class
+    # M-step accumulators returned by the sparse global-winner route survive.
+    np.testing.assert_array_equal(
+        np.asarray(result.Ft_y),
+        np.asarray([[1, 1, 1, 1], [2, 2, 2, 2]], dtype=np.complex64),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(result.Ft_ctf),
+        np.asarray([[2, 2, 2, 2], [3, 3, 3, 3]], dtype=np.float32),
+    )
 
 
 def test_lazy_k_class_adaptive_mask_matches_dense_blocks_without_materializing():
@@ -998,20 +1441,29 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
         np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         np.zeros((1, 2), dtype=np.float32),
         np.repeat(np.eye(3, dtype=np.float32)[None], n_fine_rot, axis=0),
-        np.repeat(np.arange(n_coarse_rot, dtype=np.int64), n_fine_rot // n_coarse_rot),
-        np.zeros((2, 2), dtype=np.float32),
-        np.asarray([0, 0], dtype=np.int64),
-        [[np.asarray([0], dtype=np.int32)] * TinyDataset.n_units for _ in range(2)],
-        "linear_interp",
+        fine_mstep_rotations_np=None,
+        rot_parent_map_np=np.repeat(np.arange(n_coarse_rot, dtype=np.int64), n_fine_rot // n_coarse_rot),
+        fine_translations_np=np.zeros((2, 2), dtype=np.float32),
+        trans_parent_map_np=np.asarray([0, 0], dtype=np.int64),
+        sig_sample_indices_by_class=[
+            [np.asarray([0], dtype=np.int32)] * TinyDataset.n_units for _ in range(2)
+        ],
+        disc_type="linear_interp",
         class_log_priors=np.log(np.asarray([0.5, 0.5], dtype=np.float64)),
         accumulate_noise=False,
         return_best_pose_details=False,
         oversampling_order=1,
         random_perturbation=0.0,
-        engine_kwargs={"relion_half_volume_mstep": True},
+        engine_kwargs={
+            "relion_half_volume_mstep": True,
+            "relion_exact_fine_gaussian": False,
+        },
     )
 
     assert len(calls) == 3
+    assert all(call["relion_exact_fine_normalized_cc"] is False for call in calls)
+    assert all(call["relion_fine_diff2_fused_ffi"] is False for call in calls)
+    assert all(call["relion_f32_fine_posterior"] is False for call in calls)
     assert calls[0].get("return_score_log_z_only")
     assert calls[1].get("return_score_log_z")
     np.testing.assert_allclose(calls[1]["normalization_other_score_log_z"], probe_score_log_z[0])
@@ -1093,24 +1545,37 @@ def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypa
         np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         np.zeros((1, 2), dtype=np.float32),
         np.repeat(np.eye(3, dtype=np.float32)[None], n_fine_rot, axis=0),
-        np.repeat(np.arange(n_coarse_rot, dtype=np.int64), n_fine_rot // n_coarse_rot),
-        np.zeros((2, 2), dtype=np.float32),
-        np.asarray([0, 0], dtype=np.int64),
-        [
+        fine_mstep_rotations_np=None,
+        rot_parent_map_np=np.repeat(np.arange(n_coarse_rot, dtype=np.int64), n_fine_rot // n_coarse_rot),
+        fine_translations_np=np.zeros((2, 2), dtype=np.float32),
+        trans_parent_map_np=np.asarray([0, 0], dtype=np.int64),
+        sig_sample_indices_by_class=[
             [np.asarray([0], dtype=np.int32)] * n_images,
             [np.asarray([0, 1, 2, 3, 4], dtype=np.int32)] * n_images,
             [np.asarray([0, 1], dtype=np.int32)] * n_images,
         ],
-        "linear_interp",
+        disc_type="linear_interp",
         class_log_priors=np.log(np.full(n_classes, 1.0 / n_classes, dtype=np.float64)),
         accumulate_noise=False,
         return_best_pose_details=False,
         oversampling_order=1,
         random_perturbation=0.0,
-        engine_kwargs={"relion_half_volume_mstep": True},
+        engine_kwargs={
+            "relion_half_volume_mstep": True,
+            "relion_exact_fine_gaussian": False,
+        },
     )
 
     assert [class_index for class_index, _ in calls] == [0, 2, 1, 0, 2]
+    assert all(
+        call_kwargs["relion_exact_fine_normalized_cc"] is False
+        for _, call_kwargs in calls
+    )
+    assert all(
+        call_kwargs["relion_fine_diff2_fused_ffi"] is False
+        and call_kwargs["relion_f32_fine_posterior"] is False
+        for _, call_kwargs in calls
+    )
     other_log_z = np.logaddexp(score_log_z[0], score_log_z[2])
     global_log_z = np.logaddexp(other_log_z, score_log_z[1])
     np.testing.assert_allclose(calls[2][1]["normalization_other_score_log_z"], other_log_z)
@@ -1160,6 +1625,75 @@ def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
     ) + np.float32(expected_shift)
     np.testing.assert_allclose(fine_trans, expected, atol=1e-6)
     np.testing.assert_array_equal(trans_parent_map, np.zeros(4, dtype=np.int64))
+
+
+def test_firstiter_adaptive_translation_angle_preserves_relion_host_precision():
+    """Do not round fine translations before RELION's float32 angle cast."""
+
+    coarse_rot = np.eye(3, dtype=np.float32)[None]
+    base_trans = np.asarray([[1.0, 0.0]], dtype=np.float64)
+    random_perturbation = -0.04798632860183716
+    coarse_trans = np.asarray(
+        base_trans + random_perturbation,
+        dtype=np.float32,
+    )
+
+    fine_trans = _build_firstiter_cc_pass2_grids(
+        coarse_rot,
+        coarse_trans,
+        base_trans,
+        coarse_healpix_order=0,
+        adaptive_oversampling=1,
+        translation_step_px=1.0,
+        random_perturbation=random_perturbation,
+    )[3]
+
+    assert fine_trans.dtype == np.float64
+    source_angle_bits = _relion_translation_angles_f32(
+        fine_trans,
+        (128, 128),
+    ).view(np.uint32)
+    rounded_angle_bits = _relion_translation_angles_f32(
+        fine_trans.astype(np.float32),
+        (128, 128),
+    ).view(np.uint32)
+    # The x=1.25 child is the exact case-22 stack-2124 boundary: RELION's
+    # host-double translation produces one lower float32 angle bit pattern.
+    assert source_angle_bits[2, 0] == np.uint32(3178343903)
+    assert rounded_angle_bits[2, 0] == np.uint32(3178343904)
+
+
+def test_firstiter_adaptive_grid_can_return_relion_host_mstep_rotations():
+    coarse_rot = np.eye(3, dtype=np.float32)[None]
+    coarse_trans = np.array([[0.0, 0.0]], dtype=np.float32)
+    legacy = _build_firstiter_cc_pass2_grids(
+        coarse_rot,
+        coarse_trans,
+        coarse_trans,
+        coarse_healpix_order=0,
+        adaptive_oversampling=1,
+        translation_step_px=2.0,
+        random_perturbation=-0.11648395657539368,
+    )
+    extended = _build_firstiter_cc_pass2_grids(
+        coarse_rot,
+        coarse_trans,
+        coarse_trans,
+        coarse_healpix_order=0,
+        adaptive_oversampling=1,
+        translation_step_px=2.0,
+        random_perturbation=-0.11648395657539368,
+        return_mstep_rotations=True,
+    )
+
+    assert len(legacy) == 6
+    assert len(extended) == 7
+    for legacy_array, extended_array in zip(legacy, extended[:6], strict=True):
+        np.testing.assert_array_equal(extended_array, legacy_array)
+    fine_mstep_rotations = extended[6]
+    assert fine_mstep_rotations.dtype == np.float32
+    assert fine_mstep_rotations.shape == extended[2].shape
+    np.testing.assert_allclose(fine_mstep_rotations, extended[2], rtol=2e-7, atol=2e-7)
 
 
 def test_local_k_class_single_class_skips_score_probe(monkeypatch):
@@ -1297,6 +1831,7 @@ def test_local_k_class_accepts_per_class_layouts_and_external_evidence(monkeypat
     assert len(calls) == 2
     np.testing.assert_allclose(calls[0][0].rotation_log_priors_flat, np.asarray([0.0, -1.0]))
     np.testing.assert_allclose(calls[1][0].rotation_log_priors_flat, np.asarray([-2.0, -3.0]))
+    assert [kwargs["include_unweighted_norm_high_shell"] for _layout, kwargs in calls] == [True, False]
     for _layout, kwargs in calls:
         np.testing.assert_allclose(kwargs["normalization_log_evidence"], normalization_log_evidence)
 

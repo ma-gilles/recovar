@@ -686,6 +686,39 @@ def test_estimate_initial_noise_spectrum_from_unaligned_images_matches_legacy_lo
     np.testing.assert_allclose(np.asarray(got), np.asarray(expected), atol=1e-6, rtol=1e-6)
 
 
+def test_normalize_wsum_to_sigma2_noise_drops_relion_shell_sentinels(monkeypatch):
+    import recovar.em.dense_single_volume.helpers.half_spectrum as half_spectrum
+
+    image_shape = (8, 8)
+    n_shells = image_shape[0] // 2 + 1
+
+    def fake_relion_shell_indices(_image_shape):
+        assert _image_shape == image_shape
+        return jnp.asarray([-1, -1, 0, 0, 2, n_shells, 99], dtype=jnp.int32)
+
+    monkeypatch.setattr(
+        half_spectrum,
+        "make_relion_noise_shell_indices_half",
+        fake_relion_shell_indices,
+    )
+
+    got = noise.normalize_wsum_to_sigma2_noise(
+        wsum_sigma2_noise=jnp.zeros(n_shells, dtype=jnp.float32),
+        wsum_img_power=jnp.asarray([8.0, 20.0, 6.0, 8.0, 10.0], dtype=jnp.float32),
+        sumw=2.0,
+        image_shape=image_shape,
+    )
+
+    # Valid shell counts are [2, 0, 1, 0, 0]; invalid negative and high labels
+    # are dropped, and empty shells use denominator count 1.
+    np.testing.assert_allclose(
+        np.asarray(got),
+        np.asarray([1.0, 5.0, 1.5, 2.0, 2.5], dtype=np.float32),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
 def test_estimate_initial_noise_spectrum_matches_image_power_scale():
     """The returned sigma² must agree with mean |F|² for noise-only images.
 

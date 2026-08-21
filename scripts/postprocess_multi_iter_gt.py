@@ -27,10 +27,28 @@ from recovar.em.initial_model.gt_metrics import (
 )
 
 
+def resolve_intermediates_dir(recovar_dir, explicit_intermediates_dir=None):
+    """Return the saved-volume directory used by the parity postprocessor."""
+
+    if explicit_intermediates_dir is not None:
+        return Path(explicit_intermediates_dir)
+    return Path(recovar_dir) / "intermediates"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--recovar_dir", required=True, help="run_multi_iter_parity output directory")
+    parser.add_argument(
+        "--intermediates_dir",
+        default=None,
+        help="Saved intermediate-volume directory (default: <recovar_dir>/intermediates)",
+    )
     parser.add_argument("--relion_dir", required=True, help="RELION run directory with run_itNNN_* outputs")
+    parser.add_argument(
+        "--relion_run_prefix",
+        default="run",
+        help="RELION output prefix inside --relion_dir (default: run)",
+    )
     parser.add_argument(
         "--relion_start_iter",
         type=int,
@@ -91,7 +109,7 @@ def main():
 
     recovar_dir = Path(args.recovar_dir)
     relion_dir = Path(args.relion_dir)
-    intermediates_dir = recovar_dir / "intermediates"
+    intermediates_dir = resolve_intermediates_dir(recovar_dir, args.intermediates_dir)
     if not intermediates_dir.exists():
         raise FileNotFoundError(f"Missing intermediates directory: {intermediates_dir}")
 
@@ -254,8 +272,8 @@ def main():
             _add_metrics(out, "recovar_unreg_half2", rec_unreg_half2_real, rec_unreg_half2_ft)
             _add_metrics(out, "recovar_unreg_merged", rec_unreg_merged_real, rec_unreg_merged_ft)
 
-        rel_h1_path = relion_dir / f"run_it{relion_it:03d}_half1_class001.mrc"
-        rel_h2_path = relion_dir / f"run_it{relion_it:03d}_half2_class001.mrc"
+        rel_h1_path = relion_dir / f"{args.relion_run_prefix}_it{relion_it:03d}_half1_class001.mrc"
+        rel_h2_path = relion_dir / f"{args.relion_run_prefix}_it{relion_it:03d}_half2_class001.mrc"
         if rel_h1_path.exists() and rel_h2_path.exists():
             rel_half1_real = helpers.load_relion_volume(str(rel_h1_path))
             rel_half2_real = helpers.load_relion_volume(str(rel_h2_path))

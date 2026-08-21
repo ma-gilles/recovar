@@ -22,6 +22,8 @@ import vtkImageMarchingCubes from "@kitware/vtk.js/Filters/General/ImageMarching
 import vtkImageData from "@kitware/vtk.js/Common/DataModel/ImageData";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+import vtkCellPicker from "@kitware/vtk.js/Rendering/Core/CellPicker";
 
 // Side-effect import: register ALL OpenGL view-node factories needed for
 // geometry rendering.  The Geometry profile registers Camera, Renderer,
@@ -97,6 +99,20 @@ interface VtkViewerProps {
    * Null means the volume was served at full resolution.
    */
   onDownsampleInfo?: (info: DownsampleInfo | null) => void;
+  /**
+   * Target view resolution (downsample box size) requested from the server.
+   * null/undefined means "Auto" (server default, MAX_SERVE_DIM). Changing this
+   * re-fetches at the new resolution; caches are keyed by ``path@viewDim``.
+   */
+  viewDim?: number | null;
+  /**
+   * Optional click-to-pick callback. When set, every left-click in the
+   * 3D viewport runs a vtkCellPicker against all visible isosurfaces and
+   * the picked world position is delivered as ``(x, y, z)`` voxel
+   * coordinates (vtkImageData uses unit spacing/origin so world == voxel).
+   * Set to undefined to disable picking and restore plain camera control.
+   */
+  onPickWorld?: (xyz: [number, number, number]) => void;
 }
 
 // Design system palette: sky-400, rose-400, emerald-400, amber-400
@@ -211,17 +227,41 @@ function nx_ny_nz(vol: VolumeData): [number, number, number] {
   return [vol.nx, vol.ny, vol.nz];
 }
 
+/**
+ * Cache key for the pipeline/inflight/failed maps. The same path can be served
+ * at different resolutions (Auto / 256 / 128 / 64 / Full), so the resolution
+ * must be part of the key or switching it would show a stale-resolution mesh.
+ */
+function cacheKey(path: string, viewDim: number | null | undefined): string {
+  return `${path}@${viewDim ?? "auto"}`;
+}
+
 // ---- Component ----
 
-export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, activeCategory, preserveCamera = false, prefetchPaths, onDownsampleInfo }: VtkViewerProps): React.JSX.Element {
+export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, activeCategory, preserveCamera = false, prefetchPaths, onDownsampleInfo, viewDim, onPickWorld }: VtkViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const renderContextRef = useRef<any>(null);
+  // Latest onPickWorld in a ref so the click handler always sees the
+  // current callback without re-binding the listener.
+  const onPickWorldRef = useRef(onPickWorld);
+  useEffect(() => {
+    onPickWorldRef.current = onPickWorld;
+  }, [onPickWorld]);
+  // Latest requested view resolution in a ref so ensurePipeline (a stable
+  // useCallback) can build the fetch URL and cache key without re-binding.
+  const viewDimRef = useRef(viewDim);
+  useEffect(() => {
+    viewDimRef.current = viewDim;
+  }, [viewDim]);
   const pipelinesRef = useRef<Map<string, VtkPipelineEntry>>(new Map());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const negSurfacesRef = useRef<{ actor: any; mapper: any; mc: any }[]>([]);
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  // Bumped by the error-banner Retry button to force the sync effect to
+  // re-attempt a previously-failed fetch at the same resolution.
+  const [retryNonce, setRetryNonce] = useState(0);
   const [webglFailed, setWebglFailed] = useState(false);
   // Track the last rendered state to avoid redundant re-renders
   const renderedStateRef = useRef<string>("");
@@ -257,6 +297,41 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
       renderContextRef.current = grw;
 
+      // Click-to-pick: when an onPickWorld handler is registered, intercept
+      // left-clicks and run a vtkCellPicker pass against the renderer. The
+      // picker walks all visible actors (including marching-cubes meshes)
+      // and returns the world position of the closest hit. Because the
+      // vtkImageData is built with origin (0,0,0) and spacing (1,1,1),
+      // world coordinates ARE voxel coordinates.
+      const picker = vtkCellPicker.newInstance();
+      picker.setTolerance(0.005);
+      const onClick = (evt: MouseEvent) => {
+        const cb = onPickWorldRef.current;
+        if (!cb) return;
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        // vtk.js display coordinates: origin bottom-left, in DEVICE pixels.
+        // grw.resize() sizes the render window to clientSize × devicePixelRatio,
+        // so the picker expects device pixels — scale the CSS-pixel click by DPR
+        // (otherwise picks are offset/halved on retina screens and miss the mesh).
+        const dpr = window.devicePixelRatio || 1;
+        const x = (evt.clientX - rect.left) * dpr;
+        const y = (rect.height - (evt.clientY - rect.top)) * dpr;
+        const renderer = grw.getRenderer();
+        picker.pick([x, y, 0], renderer);
+        const actors = picker.getActors();
+        if (!actors || actors.length === 0) return;
+        const pos = picker.getPickPosition();
+        if (!pos) return;
+        // Suppress the click from triggering camera reset / drag init.
+        evt.preventDefault();
+        evt.stopPropagation();
+        cb([pos[0], pos[1], pos[2]]);
+      };
+      // Use capture so we run before vtk.js's interactor swallows the event.
+      containerRef.current.addEventListener("click", onClick, { capture: true });
+
       // Handle resize
       const observer = new ResizeObserver((entries) => {
         for (const entry of entries) {
@@ -270,6 +345,10 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
       return () => {
         observer.disconnect();
+        if (containerRef.current) {
+          containerRef.current.removeEventListener("click", onClick, { capture: true } as unknown as EventListenerOptions);
+        }
+        try { picker.delete(); } catch { /* noop */ }
         // Clean up negative surface actors
         for (const neg of negSurfacesRef.current) {
           neg.actor.delete();
@@ -312,25 +391,30 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
   // Fetch and create pipeline for a volume
   const ensurePipeline = useCallback(async (path: string): Promise<VtkPipelineEntry | null> => {
+    // Resolve the requested resolution now; the cache key and fetch URL both
+    // depend on it so that switching resolution does not return a stale mesh.
+    const dim = viewDimRef.current;
+    const key = cacheKey(path, dim);
+
     // Already loaded
-    if (pipelinesRef.current.has(path)) {
-      return pipelinesRef.current.get(path)!;
+    if (pipelinesRef.current.has(key)) {
+      return pipelinesRef.current.get(key)!;
     }
 
     // Already failed — don't retry (avoids infinite loop)
-    if (failedPathsRef.current.has(path)) {
+    if (failedPathsRef.current.has(key)) {
       return null;
     }
 
     // Already being fetched — wait for the existing request
-    if (inflightRef.current.has(path)) {
-      return inflightRef.current.get(path)!;
+    if (inflightRef.current.has(key)) {
+      return inflightRef.current.get(key)!;
     }
 
     // Wrap the fetch in a promise tracked by inflightRef BEFORE any async
     // work starts, so concurrent callers see it immediately.
     const doFetch = async (): Promise<VtkPipelineEntry | null> => {
-    setLoading((prev) => new Set(prev).add(path));
+    setLoading((prev) => new Set(prev).add(key));
     setError(null);
 
     try {
@@ -342,8 +426,9 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       // Chromium when the response is large (>~4 MB) and served over an
       // SSH tunnel, because the browser tries to allocate the full buffer
       // before the Content-Length is known.  Streaming avoids this.
-      console.log(`VtkViewer: fetching volume: ${path}`);
-      const resp = await fetch(`/api/volumes/raw?path=${encodeURIComponent(path)}`, {
+      console.log(`VtkViewer: fetching volume: ${path} (dim=${dim ?? "auto"})`);
+      const dimParam = dim != null ? `&dim=${dim}` : "";
+      const resp = await fetch(`/api/volumes/raw?path=${encodeURIComponent(path)}${dimParam}`, {
         cache: "force-cache",
       });
       if (!resp.ok) {
@@ -383,6 +468,7 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       // Check for downsampling headers
       const isDownsampled = resp.headers.get("X-Volume-Downsampled") === "true";
       const originalShapeHeader = resp.headers.get("X-Original-Shape");
+      const servedDimHeader = resp.headers.get("X-Served-Dim");
 
       // Step 2: Parse the MRC header and data
       let volumeData: VolumeData;
@@ -393,11 +479,15 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
         throw new Error(`MRC parsing failed: ${parseMsg}`);
       }
 
-      // Attach downsampling metadata if the server downsampled this volume
+      // Attach downsampling metadata if the server downsampled this volume.
+      // Prefer the X-Served-Dim header (authoritative) over the parsed mesh
+      // dimensions for the served resolution; fall back to the volume dims.
       if (isDownsampled && originalShapeHeader) {
         const dims = originalShapeHeader.split(",").map(Number);
         const originalDim = Math.max(...dims);
-        const servedDim = Math.max(volumeData.nx, volumeData.ny, volumeData.nz);
+        const servedDim = servedDimHeader
+          ? Number(servedDimHeader)
+          : Math.max(volumeData.nx, volumeData.ny, volumeData.nz);
         volumeData.downsampleInfo = { servedDim, originalDim };
       }
 
@@ -432,19 +522,19 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
         volumeData,
       };
 
-      pipelinesRef.current.set(path, pipeline);
+      pipelinesRef.current.set(key, pipeline);
       console.log(`VtkViewer: pipeline ready for ${path} (${volumeData.nx}x${volumeData.ny}x${volumeData.nz})`);
       return pipeline;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("VtkViewer: pipeline error:", msg, err);
-      failedPathsRef.current.add(path);
+      failedPathsRef.current.add(key);
       setError(msg);
       return null;
     } finally {
       setLoading((prev) => {
         const next = new Set(prev);
-        next.delete(path);
+        next.delete(key);
         return next;
       });
     }
@@ -452,11 +542,11 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
     };
 
     const promise = doFetch();
-    inflightRef.current.set(path, promise);
+    inflightRef.current.set(key, promise);
     try {
       return await promise;
     } finally {
-      inflightRef.current.delete(path);
+      inflightRef.current.delete(key);
     }
   }, []);
 
@@ -469,6 +559,22 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
   const hasEigenVolume = volumesToShow.some((v) => v.visible && v.category === "eigen");
 
+  // Retry after a transient fetch/parse failure. failedPathsRef permanently
+  // records every failed path@dim to break infinite retry loops, which means a
+  // transient blip would otherwise leave the volume unrecoverable at the same
+  // resolution. The Retry button clears the failed keys for the currently
+  // shown volumes, resets the rendered-state guard so the sync effect re-runs,
+  // and bumps retryNonce to force that effect to fire.
+  const handleRetry = useCallback(() => {
+    const dim = viewDimRef.current;
+    for (const v of volumesToShow) {
+      failedPathsRef.current.delete(cacheKey(v.path, dim));
+    }
+    renderedStateRef.current = "";
+    setError(null);
+    setRetryNonce((n) => n + 1);
+  }, [volumesToShow]);
+
   // Sync pipelines with volumesToShow
   useEffect(() => {
     const grw = renderContextRef.current;
@@ -476,8 +582,10 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
     const renderer = grw.getRenderer();
 
-    // Build a state key to avoid redundant updates
-    const stateKey = volumesToShow.map(
+    // Build a state key to avoid redundant updates. Include viewDim so that
+    // changing the view resolution forces a re-fetch/re-mesh instead of being
+    // short-circuited as "unchanged".
+    const stateKey = `@${viewDim ?? "auto"};` + volumesToShow.map(
       (v) => `${v.path}|${v.threshold}|${v.opacity}|${v.visible}|${v.colorIndex}|${v.category ?? ""}`
     ).join(";");
     if (stateKey === renderedStateRef.current) return;
@@ -491,9 +599,27 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       );
       if (cancelled) return;
 
-      // Report downsampling status for the active (first) volume
-      if (onDownsampleInfo && entries.length > 0 && entries[0]) {
-        onDownsampleInfo(entries[0].volumeData.downsampleInfo ?? null);
+      // Clear any stale error banner once every needed pipeline has loaded.
+      // ensurePipeline's setError(null) only runs when it actually fetches, so
+      // switching to an already-cached volume after a previous failure would
+      // otherwise leave the old error visible over a correct render.
+      if (entries.length > 0 && entries.every((e) => e !== null)) {
+        setError(null);
+      }
+
+      // Report downsampling status for the volume the info row describes.
+      // VolumeViewer's Shape/Voxel/Range row tracks the active volume, so the
+      // badge must describe that same volume. When pinned volumes are shown,
+      // entries[0] is pinnedVolumes[0] (which may differ from activeVolume),
+      // so prefer the entry whose path matches activeVolume; fall back to the
+      // first loaded entry.
+      if (onDownsampleInfo && entries.length > 0) {
+        const activeIdx = activeVolume != null
+          ? volumesToShow.findIndex((v) => v.path === activeVolume)
+          : -1;
+        const infoEntry =
+          (activeIdx >= 0 ? entries[activeIdx] : null) ?? entries[0];
+        onDownsampleInfo(infoEntry ? infoEntry.volumeData.downsampleInfo ?? null : null);
       }
 
       // Remove all actors first
@@ -593,7 +719,7 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [volumesToShow, ensurePipeline, preserveCamera, onDownsampleInfo]);
+  }, [volumesToShow, ensurePipeline, preserveCamera, onDownsampleInfo, viewDim, activeVolume, retryNonce]);
 
   // Pre-fetch upcoming trajectory frames in the background
   useEffect(() => {
@@ -657,8 +783,17 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
       {/* Overlay: error */}
       {error && (
-        <div className="absolute bottom-2 left-2 right-2 rounded bg-red-900/80 px-3 py-2 text-xs text-red-200">
-          {error}
+        <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between gap-2 rounded bg-red-900/80 px-3 py-2 text-xs text-red-200">
+          <span>{error}</span>
+          {hasVolumes && (
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="shrink-0 rounded border border-red-400/50 px-2 py-0.5 text-red-100 hover:bg-red-800/80"
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -306,7 +306,7 @@ def main():
     # Verify GPU
     devices = jax.devices()
     logger.info("JAX devices: %s", devices)
-    if not any(d.platform == "gpu" for d in devices):
+    if not any(getattr(d, "platform", "") in {"gpu", "cuda"} for d in devices):
         logger.error("No GPU available. Aborting.")
         sys.exit(1)
 

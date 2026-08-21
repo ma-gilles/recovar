@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
+import jax
 import jax.numpy as jnp
 
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
@@ -218,3 +219,12 @@ def test_half_image_pre_shift_phase_helpers_match_explicit_tiling():
         atol=0,
         rtol=0,
     )
+
+
+def test_half_image_pre_shift_phase_requests_highest_precision():
+    shifts = jnp.asarray([[0.5, -1.25], [2.0, 0.0]], dtype=jnp.float32)
+    phase_jaxpr = jax.make_jaxpr(lambda value: half_image_phase_factors((8, 8), value))(shifts)
+
+    jaxpr_text = str(phase_jaxpr)
+    assert "dot_general[" in jaxpr_text
+    assert "precision=(Precision.HIGHEST, Precision.HIGHEST)" in jaxpr_text

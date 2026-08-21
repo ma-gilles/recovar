@@ -1,0 +1,278 @@
+--- a/src/acc/acc_ml_optimiser_impl.h
++++ b/src/acc/acc_ml_optimiser_impl.h
+@@ -78,6 +78,36 @@
+ 	std::vector<std::uint64_t> part_ids;
+ };
+ 
++struct RelionCoarsePass1HeaderV1
++{
++	char magic[16];
++	std::uint64_t values[40];
++};
++
++struct RelionCoarsePass1FooterV1
++{
++	char magic[16];
++	std::uint64_t candidate_count;
++	std::uint64_t significant_count;
++};
++
++static_assert(sizeof(RelionCoarsePass1HeaderV1) == 336,
++	"Unexpected RELION coarse-pass1 header layout");
++static_assert(sizeof(RelionCoarsePass1FooterV1) == 32,
++	"Unexpected RELION coarse-pass1 footer layout");
++
++struct RelionCoarsePass1ConfigV1
++{
++	bool enabled;
++	std::string directory;
++	std::uint64_t iteration;
++	std::uint64_t expected_particles;
++	std::uint64_t max_particles_per_rank;
++	std::uint64_t expected_followers;
++	std::uint64_t max_bytes;
++	std::vector<std::uint64_t> part_ids;
++};
++
+ std::uint64_t relion_bpre_required_u64(const char *name)
+ {
+ 	const char *text = std::getenv(name);
+@@ -147,6 +177,18 @@
+ 	return false;
+ }
+ 
++bool relion_p1_part_id_selected(
++	const RelionCoarsePass1ConfigV1 &config,
++	std::uint64_t part_id)
++{
++	if (config.part_ids.empty())
++		return true;
++	for (std::uint64_t selected : config.part_ids)
++		if (selected == part_id)
++			return true;
++	return false;
++}
++
+ const RelionBprefPreScatterConfigV1 &relion_bpre_config_v1()
+ {
+ 	static const RelionBprefPreScatterConfigV1 config = []()
+@@ -210,6 +252,36 @@
+ 	return config;
+ }
+ 
++const RelionCoarsePass1ConfigV1 &relion_p1_config_v1()
++{
++	static const RelionCoarsePass1ConfigV1 config = []()
++	{
++		RelionCoarsePass1ConfigV1 result = {};
++		const char *directory = std::getenv("RELION_P1_CAPTURE_DIR");
++		result.enabled = directory != nullptr && directory[0] != '\0';
++		if (!result.enabled)
++			return result;
++		result.directory = directory;
++		if (relion_bpre_required_u64("RELION_P1_CAPTURE_SCHEMA") != 1)
++			REPORT_ERROR("RELION_P1_CAPTURE_SCHEMA must be exactly 1");
++		result.iteration = relion_bpre_required_u64("RELION_P1_CAPTURE_ITER");
++		result.expected_particles = relion_bpre_required_u64("RELION_P1_CAPTURE_EXPECTED_PARTICLES");
++		result.max_particles_per_rank = relion_bpre_required_u64("RELION_P1_CAPTURE_MAX_PARTICLES_PER_RANK");
++		result.expected_followers = relion_bpre_required_u64("RELION_P1_CAPTURE_EXPECTED_FOLLOWERS");
++		result.max_bytes = relion_bpre_required_u64("RELION_P1_CAPTURE_MAX_BYTES");
++		result.part_ids = relion_bpre_optional_u64_csv("RELION_P1_CAPTURE_PART_IDS");
++		if (!result.part_ids.empty() && result.expected_particles != result.part_ids.size())
++			REPORT_ERROR("RELION_P1_CAPTURE_EXPECTED_PARTICLES must equal the explicit PART_IDS count");
++		if (result.expected_particles > result.max_particles_per_rank * result.expected_followers)
++			REPORT_ERROR("RELION coarse-pass1 capture cannot fit EXPECTED_PARTICLES within the explicit per-rank/follower cap");
++		struct stat status;
++		if (stat(result.directory.c_str(), &status) != 0 || !S_ISDIR(status.st_mode))
++			REPORT_ERROR("RELION_P1_CAPTURE_DIR must name an existing directory");
++		return result;
++	}();
++	return config;
++}
++
+ std::uint64_t relion_bpre_fnv1a64(const std::string &text)
+ {
+ 	std::uint64_t hash = UINT64_C(14695981039346656037);
+@@ -236,6 +308,7 @@
+ 
+ std::atomic<std::uint64_t> relion_bpre_files_reserved_v1(0);
+ std::atomic<std::uint64_t> relion_bpm_files_reserved_v1(0);
++std::atomic<std::uint64_t> relion_p1_files_reserved_v1(0);
+ 
+ void relion_capture_bpref_prescatter_v1(
+ 	MlOptimiser *baseMLO,
+@@ -593,6 +666,141 @@
+ 	if (!output || rename(temporary.c_str(), basename.c_str()) != 0)
+ 		REPORT_ERROR("Cannot seal RELION BPref membership artifact");
+ }
++
++bool relion_should_capture_coarse_pass1_v1(
++	MlOptimiser *baseMLO,
++	OptimisationParamters &op)
++{
++	const RelionCoarsePass1ConfigV1 &config = relion_p1_config_v1();
++	return config.enabled
++		&& static_cast<std::uint64_t>(baseMLO->iter) == config.iteration
++		&& relion_p1_part_id_selected(config, static_cast<std::uint64_t>(op.part_id));
++}
++
++void relion_capture_coarse_pass1_v1(
++	MlOptimiser *baseMLO,
++	OptimisationParamters &op,
++	SamplingParameters &sp,
++	const std::vector<float> &raw_diff2,
++	const XFLOAT *posterior_weights)
++{
++	const RelionCoarsePass1ConfigV1 &config = relion_p1_config_v1();
++	if (!relion_should_capture_coarse_pass1_v1(baseMLO, op))
++		return;
++	if (sizeof(XFLOAT) != sizeof(float))
++		REPORT_ERROR("RELION coarse-pass1 schema v1 requires float32 XFLOAT");
++	if (sp.iclass_min != 0 || sp.iclass_max != 0)
++		REPORT_ERROR("RELION coarse-pass1 schema v1 is intentionally restricted to K=1");
++
++	const std::uint64_t candidate_count =
++		static_cast<std::uint64_t>(sp.nr_dir) * sp.nr_psi * sp.nr_trans;
++	if (candidate_count == 0 || raw_diff2.size() != candidate_count)
++		REPORT_ERROR("RELION coarse-pass1 capture saw an invalid candidate count");
++
++	std::vector<std::uint8_t> significant_mask(candidate_count);
++	std::uint64_t significant_count = 0;
++	for (std::uint64_t index = 0; index < candidate_count; index++)
++	{
++		significant_mask[index] = DIRECT_A1D_ELEM(op.Mcoarse_significant, index) ? 1 : 0;
++		significant_count += significant_mask[index];
++	}
++
++	const std::uint64_t translation_value_count = 2 * static_cast<std::uint64_t>(sp.nr_trans);
++	const std::uint64_t artifact_bytes = sizeof(RelionCoarsePass1HeaderV1)
++		+ 2 * candidate_count * sizeof(float)
++		+ candidate_count * sizeof(std::uint8_t)
++		+ translation_value_count * sizeof(float)
++		+ sizeof(RelionCoarsePass1FooterV1);
++	const std::uint64_t estimated_max_bytes = artifact_bytes
++		* config.max_particles_per_rank * config.expected_followers;
++	if (estimated_max_bytes > config.max_bytes)
++		REPORT_ERROR("RELION coarse-pass1 runtime dimensions exceed RELION_P1_CAPTURE_MAX_BYTES");
++
++	std::uint64_t reservation = relion_p1_files_reserved_v1.fetch_add(1);
++	if (reservation >= config.max_particles_per_rank)
++		REPORT_ERROR("RELION coarse-pass1 capture exceeded MAX_PARTICLES_PER_RANK");
++
++	FileName image_name = baseMLO->mydata.particles[op.part_id].name;
++	FileName stack_name;
++	long int stack_index = -1;
++	image_name.decompose(stack_index, stack_name);
++	if (stack_index < 0 || stack_name.empty())
++		REPORT_ERROR("RELION coarse-pass1 capture could not resolve canonical stack identity");
++
++	std::vector<float> weights(candidate_count);
++	for (std::uint64_t index = 0; index < candidate_count; index++)
++		weights[index] = static_cast<float>(posterior_weights[index]);
++	std::vector<float> translations(translation_value_count);
++	for (std::uint64_t index = 0; index < static_cast<std::uint64_t>(sp.nr_trans); index++)
++	{
++		translations[2 * index] = static_cast<float>(baseMLO->sampling.translations_x[index]);
++		translations[2 * index + 1] = static_cast<float>(baseMLO->sampling.translations_y[index]);
++	}
++
++	RelionCoarsePass1HeaderV1 header = {};
++	std::memcpy(header.magic, "RLNP1V1HEADER", 13);
++	header.values[0] = 1;
++	header.values[1] = sizeof(header);
++	header.values[2] = sizeof(float);
++	header.values[3] = sizeof(std::uint8_t);
++	header.values[4] = sizeof(RelionCoarsePass1FooterV1);
++	header.values[5] = baseMLO->iter;
++	header.values[6] = op.part_id;
++	header.values[7] = stack_index;
++	header.values[8] = static_cast<std::uint64_t>(relion_bpre_mpi_rank());
++	header.values[9] = omp_get_thread_num();
++	header.values[10] = sp.nr_dir;
++	header.values[11] = sp.nr_psi;
++	header.values[12] = sp.nr_trans;
++	header.values[13] = candidate_count;
++	header.values[14] = significant_count;
++	header.values[15] = op.max_index.coarseIdx;
++	header.values[16] = relion_bpre_float_bits(static_cast<float>(op.significant_weight));
++	header.values[17] = relion_bpre_float_bits(static_cast<float>(op.sum_weight));
++	header.values[18] = relion_bpre_float_bits(static_cast<float>(op.max_weight));
++	header.values[19] = relion_bpre_float_bits(static_cast<float>(op.min_diff2));
++	header.values[20] = config.expected_particles;
++	header.values[21] = config.max_particles_per_rank;
++	header.values[22] = config.expected_followers;
++	header.values[23] = config.max_bytes;
++	header.values[24] = estimated_max_bytes;
++	header.values[25] = relion_bpre_fnv1a64(stack_name);
++	header.values[26] = relion_bpre_fnv1a64(image_name);
++	header.values[27] = baseMLO->mymodel.current_size;
++	header.values[28] = relion_bpre_float_bits(static_cast<float>(baseMLO->adaptive_fraction));
++	header.values[29] = static_cast<std::uint64_t>(baseMLO->maximum_significants);
++	header.values[30] = translation_value_count;
++	header.values[31] = 1; // raw diff2 copied before prior/weight conversion
++	header.values[32] = 1; // post-prior production weights copied after conversion
++	header.values[33] = 1; // exact production coarse-significance mask
++
++	RelionCoarsePass1FooterV1 footer = {};
++	std::memcpy(footer.magic, "RLNP1V1FOOTER", 13);
++	footer.candidate_count = candidate_count;
++	footer.significant_count = significant_count;
++
++	std::string basename = config.directory + "/part" + std::to_string(op.part_id)
++		+ "_stack" + std::to_string(stack_index) + ".p1-v1.bin";
++	std::string temporary = basename + ".tmp." + std::to_string(getpid())
++		+ "." + std::to_string(omp_get_thread_num());
++	struct stat existing;
++	if (stat(basename.c_str(), &existing) == 0 || stat(temporary.c_str(), &existing) == 0)
++		REPORT_ERROR("RELION coarse-pass1 capture refuses to overwrite an existing artifact");
++	std::ofstream output(temporary, std::ios::binary | std::ios::out | std::ios::trunc);
++	if (!output)
++		REPORT_ERROR("Cannot create RELION coarse-pass1 temporary artifact");
++	output.write(reinterpret_cast<const char *>(&header), sizeof(header));
++	output.write(reinterpret_cast<const char *>(raw_diff2.data()), raw_diff2.size() * sizeof(raw_diff2[0]));
++	output.write(reinterpret_cast<const char *>(weights.data()), weights.size() * sizeof(weights[0]));
++	output.write(reinterpret_cast<const char *>(significant_mask.data()),
++		significant_mask.size() * sizeof(significant_mask[0]));
++	output.write(reinterpret_cast<const char *>(translations.data()),
++		translations.size() * sizeof(translations[0]));
++	output.write(reinterpret_cast<const char *>(&footer), sizeof(footer));
++	output.close();
++	if (!output || rename(temporary.c_str(), basename.c_str()) != 0)
++		REPORT_ERROR("Cannot seal RELION coarse-pass1 artifact");
++}
+ }
+ #endif
+ 
+@@ -4478,9 +4686,32 @@
+ 				getAllSquaredDifferencesCoarse<MlClass>(ipass, op, sp, baseMLO, myInstance, Mweight, ptrFactory, ibody);
+ 				CTOC(timer,"getAllSquaredDifferencesCoarse");
+ 
++#ifdef _CUDA_ENABLED
++				const bool capture_coarse_pass1 =
++					relion_should_capture_coarse_pass1_v1(baseMLO, op);
++				std::vector<float> raw_coarse_diff2;
++				if (capture_coarse_pass1)
++				{
++					if (sizeof(XFLOAT) != sizeof(float))
++						REPORT_ERROR("RELION coarse-pass1 schema v1 requires float32 XFLOAT");
++					Mweight.cpToHost();
++					Mweight.streamSync();
++					raw_coarse_diff2.assign(op.Mweight.data, op.Mweight.data + weightsPerPart);
++				}
++#endif
++
+ 				CTIC(timer,"convertAllSquaredDifferencesToWeightsCoarse");
+ 				convertAllSquaredDifferencesToWeights<MlClass>(ipass, op, sp, baseMLO, myInstance, CoarsePassWeights, FinePassClassMasks, Mweight, ptrFactory, ibody);
+                 CTOC(timer,"convertAllSquaredDifferencesToWeightsCoarse");
++#ifdef _CUDA_ENABLED
++				if (capture_coarse_pass1)
++				{
++					Mweight.cpToHost();
++					Mweight.streamSync();
++					relion_capture_coarse_pass1_v1(
++						baseMLO, op, sp, raw_coarse_diff2, op.Mweight.data);
++				}
++#endif
+ 			}
+ 			else
+ 			{

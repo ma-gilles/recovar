@@ -43,6 +43,7 @@ _RELION_EM_BATCH_RUNTIME_TRANSLATION_TILE_FRACTION = 0.17
 _RELION_EM_BATCH_MAX_TRANSLATION_TILE_GB = 14.0
 _RELION_EM_BATCH_MIN_TRANSLATION_TILE_GB = 0.5
 _RELION_EM_BATCH_RUNTIME_FREE_FRACTION = 0.80
+_RELION_EM_BATCH_PROJECTION_FRACTION_ENV = "RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION"
 
 _EM_RAW_IMAGE_CACHE_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE"
 _EM_RAW_IMAGE_CACHE_MAX_GB_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB"
@@ -73,6 +74,19 @@ def _safe_int(value, default):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _positive_env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return float(default)
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive finite float, got {raw!r}") from exc
+    if not np.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a positive finite float, got {raw!r}")
+    return float(value)
 
 
 def _active_half_spectrum_pixels(image_shape, current_size: int | None) -> int:
@@ -153,9 +167,13 @@ def _estimate_relion_em_batch_sizes(
             ),
         )
     )
+    projection_fraction = _positive_env_float(
+        _RELION_EM_BATCH_PROJECTION_FRACTION_ENV,
+        _RELION_EM_BATCH_PROJECTION_FRACTION,
+    )
     projection_budget_gb = max(
         _RELION_EM_BATCH_MIN_PROJECTION_GB,
-        min(_RELION_EM_BATCH_MAX_PROJECTION_GB, usable_gb * _RELION_EM_BATCH_PROJECTION_FRACTION),
+        min(_RELION_EM_BATCH_MAX_PROJECTION_GB, usable_gb * projection_fraction),
     )
     translation_tile_budget_gb = max(
         _RELION_EM_BATCH_MIN_TRANSLATION_TILE_GB,

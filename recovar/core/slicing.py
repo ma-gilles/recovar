@@ -458,7 +458,7 @@ def adjoint_slice_volume_indexed(
         vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
         if volume is None:
             volume = jnp.zeros(int(np.prod(vol_shape)), dtype=slices.dtype)
-        out_dtype = jnp.result_type(slices, volume)
+        out_dtype = volume.dtype if relion_x_half else jnp.result_type(slices, volume)
         slices = slices.astype(out_dtype)
         volume = volume.astype(out_dtype)
         return backproject_indexed(
@@ -533,7 +533,7 @@ def batch_adjoint_slice_volume_indexed(
     if _use_cuda_backproject(order):
         from recovar.cuda_backproject import batch_backproject_indexed
 
-        out_dtype = jnp.result_type(slices, volumes)
+        out_dtype = volumes.dtype if relion_x_half else jnp.result_type(slices, volumes)
         return batch_backproject_indexed(
             volumes.astype(out_dtype),
             slices.astype(out_dtype),

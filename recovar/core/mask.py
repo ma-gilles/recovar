@@ -69,6 +69,12 @@ def masking_options(
 
         if keep_input_mask:
             volume_mask = input_mask
+            # Use a separate boolean base for dilation, keeping the (soft) input
+            # mask intact for soft masking. A mask loaded from an .mrc carries tiny
+            # (~1e-8) nonzero roundoff in almost every voxel, and binary_dilation
+            # treats any nonzero as foreground -- dilating the raw float directly
+            # blows the dilated mask up to all-ones.
+            dilation_base = input_mask > 0.5
         else:
             logger.info("Using input mask")
             if mask_dilation_iter > 0:
@@ -82,8 +88,9 @@ def masking_options(
             logger.info("Thresholding mask at 0.5 and softening with cosine kernel of radius %d pixels", kernel_size)
             input_mask = input_mask > 0.5
             volume_mask = soften_volume_mask(input_mask, kernel_size)
+            dilation_base = input_mask
 
-        dilated_volume_mask = binary_dilation(input_mask, iterations=dilated_mask_dilations_iter)
+        dilated_volume_mask = binary_dilation(dilation_base, iterations=dilated_mask_dilations_iter)
         dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
 
     elif volume_mask_option == "from_halfmaps":
@@ -452,18 +459,28 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
     if radius < 0:
         radius = np.max(np.array(vol.shape) // 2)
 
+    # RELION evaluates the solvent-mask geometry in RFLOAT.  Keep the mask
+    # arithmetic at the real precision of the input volume instead of
+    # inheriting the float32 dtype of the shared Fourier-coordinate helper.
+    # This matters for the reconstruction path, where ``vol`` is float64.
+    real_dtype = vol.real.dtype
+    radius = jnp.asarray(radius, dtype=real_dtype)
+    cosine_width = jnp.asarray(cosine_width, dtype=real_dtype)
     radius_p = radius + cosine_width
     shape = vol.shape
 
-    volume_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False).reshape(
-        list(shape) + [len(list(shape))]
+    volume_coords = (
+        fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False)
+        .astype(real_dtype)
+        .reshape(list(shape) + [len(list(shape))])
     )
     r = jnp.linalg.norm(volume_coords, axis=-1)
 
     mask1 = r < radius
     mask2 = (r >= radius) & (r <= radius_p)
     mask3 = r > radius_p
-    raised_cos = 0.5 + 0.5 * jnp.cos(jnp.pi * (radius_p - r) / cosine_width)
+    half = jnp.asarray(0.5, dtype=real_dtype)
+    raised_cos = half + half * jnp.cos(jnp.asarray(np.pi, dtype=real_dtype) * (radius_p - r) / cosine_width)
 
     mask = jnp.zeros_like(vol).real
     mask = jnp.where(mask1, 1, mask)
@@ -549,6 +566,9 @@ def relion_soft_image_mask(image_size, pixel_size, particle_diameter_ang, width_
     - radius = ``particle_diameter_ang / (2 * pixel_size)``
     - cosine width = ``width_mask_edge_px``
 
+    A negative radius is RELION's sentinel for ``image_size / 2``. Positive
+    radii are used as-is rather than clamped to the half-box radius.
+
     This helper mirrors that convention and returns a mask in image-space
     pixels, ready to multiply against centered particle images before the DFT.
     """
@@ -556,13 +576,15 @@ def relion_soft_image_mask(image_size, pixel_size, particle_diameter_ang, width_
         raise ValueError(f"image_size must be positive, got {image_size}")
     if pixel_size <= 0:
         raise ValueError(f"pixel_size must be positive, got {pixel_size}")
-    if particle_diameter_ang <= 0:
-        raise ValueError(f"particle_diameter_ang must be positive, got {particle_diameter_ang}")
     if width_mask_edge_px < 0:
         raise ValueError(f"width_mask_edge_px must be non-negative, got {width_mask_edge_px}")
 
     radius_px = float(particle_diameter_ang) / (2.0 * float(pixel_size))
-    radius_px = min(radius_px, image_size / 2.0)
+    # RELION's softMaskOutsideMap uses half the box only for its negative-radius
+    # sentinel. Positive radii are not clamped, even when they exceed half the
+    # box and therefore mask only the corners.
+    if radius_px < 0.0:
+        radius_px = image_size / 2.0
     thickness_px = float(width_mask_edge_px)
 
     if thickness_px == 0.0:

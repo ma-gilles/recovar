@@ -1,0 +1,1065 @@
+From 004e29ba34e073309961d611a7b176dc52a93315 Mon Sep 17 00:00:00 2001
+From: "Marc A. Gilles" <mg6942@princeton.com>
+Date: Wed, 29 Jul 2026 22:36:26 -0400
+Subject: [PATCH] RELION coarse diff2 components combined capture
+
+---
+ src/acc/acc_helper_functions.h                |   4 +-
+ src/acc/acc_helper_functions_impl.h           |  28 +-
+ src/acc/acc_ml_optimiser_impl.h               | 725 +++++++++++++++++-
+ .../cuda_kernels/bpref_prescatter_capture.cuh |   9 +-
+ src/acc/cuda/cuda_kernels/diff2.cuh           |  31 +-
+ src/acc/utilities.h                           |   8 +-
+ 6 files changed, 764 insertions(+), 41 deletions(-)
+
+diff --git a/src/acc/acc_helper_functions.h b/src/acc/acc_helper_functions.h
+index 0b14c66..3d2511a 100644
+--- a/src/acc/acc_helper_functions.h
++++ b/src/acc/acc_helper_functions.h
+@@ -255,7 +255,9 @@ void runDiff2KernelCoarse(
+ 		unsigned long image_size,
+ 		deviceStream_t stream,
+ 		bool do_CC,
+-		bool data_is_3D);
++		bool data_is_3D,
++		XFLOAT *reference_norms = nullptr,
++		XFLOAT *cross_terms = nullptr);
+ 
+ void runDiff2KernelFine(
+ 		AccProjectorKernel &projector,
+diff --git a/src/acc/acc_helper_functions_impl.h b/src/acc/acc_helper_functions_impl.h
+index c06a122..f699e17 100644
+--- a/src/acc/acc_helper_functions_impl.h
++++ b/src/acc/acc_helper_functions_impl.h
+@@ -1152,9 +1152,23 @@ void runDiff2KernelCoarse(
+ 		long unsigned image_size,
+ 		deviceStream_t stream,
+ 		bool do_CC,
+-		bool data_is_3D)
++		bool data_is_3D,
++		XFLOAT *reference_norms,
++		XFLOAT *cross_terms)
+ {
+ 	const long unsigned blocks3D = (data_is_3D? D2C_BLOCK_SIZE_DATA3D : D2C_BLOCK_SIZE_REF3D);
++	const bool capture_components =
++		reference_norms != nullptr || cross_terms != nullptr;
++	if ((reference_norms == nullptr) != (cross_terms == nullptr))
++		CRITICAL("Coarse diff2 component capture requires both output arrays");
++	if (capture_components && (data_is_3D || projector.mdlZ == 0 || do_CC))
++		CRITICAL("Coarse diff2 component capture supports only Gaussian REF3D/DATA2D");
++#ifndef _CUDA_ENABLED
++	if (capture_components)
++		CRITICAL("Coarse diff2 component capture is implemented only for CUDA");
++#endif
++	if (capture_components && translation_num > blocks3D)
++		CRITICAL("Coarse diff2 component capture requires translation_num <= blocks3D");
+ 
+ 	if(!do_CC)
+ 	{
+@@ -1291,7 +1305,9 @@ void runDiff2KernelCoarse(
+ 							diff2s,
+ 							translation_num,
+ 							image_size,
+-							stream);
++							stream,
++							reference_norms,
++							cross_terms);
+ 				}
+ 
+ 				if (rest != 0)
+@@ -1327,7 +1343,13 @@ void runDiff2KernelCoarse(
+ 							&diff2s[translation_num*even_orientation_num],
+ 							translation_num,
+ 							image_size,
+-							stream);
++							stream,
++							capture_components
++								? &reference_norms[translation_num*even_orientation_num]
++								: nullptr,
++							capture_components
++								? &cross_terms[translation_num*even_orientation_num]
++								: nullptr);
+ 				}
+ 			}
+ 			else if (translation_num <= blocks3D*2)
+diff --git a/src/acc/acc_ml_optimiser_impl.h b/src/acc/acc_ml_optimiser_impl.h
+index a44104c..2153911 100644
+--- a/src/acc/acc_ml_optimiser_impl.h
++++ b/src/acc/acc_ml_optimiser_impl.h
+@@ -43,6 +43,70 @@ struct RelionBprefPreScatterConfigV1
+ 	std::uint64_t max_particles_per_rank;
+ 	std::uint64_t expected_followers;
+ 	std::uint64_t max_bytes;
++	std::uint64_t device_buffer_bytes;
++	std::vector<std::uint64_t> part_ids;
++};
++
++struct RelionBprefMembershipHeaderV1
++{
++	char magic[16];
++	std::uint64_t values[40];
++};
++
++struct RelionBprefMembershipFooterV1
++{
++	char magic[16];
++	std::uint64_t weight_count;
++	std::uint64_t rotation_count;
++};
++
++static_assert(sizeof(RelionBprefMembershipHeaderV1) == 336,
++	"Unexpected RELION BPref membership header layout");
++static_assert(sizeof(RelionBprefMembershipFooterV1) == 32,
++	"Unexpected RELION BPref membership footer layout");
++
++struct RelionBprefMembershipConfigV1
++{
++	bool enabled;
++	std::string directory;
++	std::uint64_t iteration;
++	std::uint64_t class_one_based;
++	std::uint64_t expected_particles;
++	std::uint64_t max_particles_per_rank;
++	std::uint64_t expected_followers;
++	std::uint64_t max_bytes;
++	std::vector<std::uint64_t> part_ids;
++};
++
++struct RelionCoarsePass1HeaderV1
++{
++	char magic[16];
++	std::uint64_t values[40];
++};
++
++struct RelionCoarsePass1FooterV1
++{
++	char magic[16];
++	std::uint64_t candidate_count;
++	std::uint64_t significant_count;
++};
++
++static_assert(sizeof(RelionCoarsePass1HeaderV1) == 336,
++	"Unexpected RELION coarse-pass1 header layout");
++static_assert(sizeof(RelionCoarsePass1FooterV1) == 32,
++	"Unexpected RELION coarse-pass1 footer layout");
++
++struct RelionCoarsePass1ConfigV1
++{
++	bool enabled;
++	std::string directory;
++	std::uint64_t schema;
++	std::uint64_t iteration;
++	std::uint64_t expected_particles;
++	std::uint64_t max_particles_per_rank;
++	std::uint64_t expected_followers;
++	std::uint64_t max_bytes;
++	std::vector<std::uint64_t> part_ids;
+ };
+ 
+ std::uint64_t relion_bpre_required_u64(const char *name)
+@@ -58,6 +122,74 @@ std::uint64_t relion_bpre_required_u64(const char *name)
+ 	return static_cast<std::uint64_t>(value);
+ }
+ 
++std::vector<std::uint64_t> relion_bpre_optional_u64_csv(const char *name)
++{
++	const char *text = std::getenv(name);
++	if (text == nullptr)
++		return {};
++	if (text[0] == '\0')
++		REPORT_ERROR(std::string("Empty particle identity list in ") + name);
++
++	std::vector<std::uint64_t> values;
++	const char *cursor = text;
++	while (*cursor != '\0')
++	{
++		if (*cursor < '0' || *cursor > '9')
++			REPORT_ERROR(std::string("Invalid comma-separated particle identity list in ") + name + ": " + text);
++		char *end = nullptr;
++		errno = 0;
++		unsigned long long value = std::strtoull(cursor, &end, 10);
++		if (errno != 0 || end == cursor || (*end != '\0' && *end != ','))
++			REPORT_ERROR(std::string("Invalid comma-separated particle identity list in ") + name + ": " + text);
++		for (std::uint64_t existing : values)
++			if (existing == static_cast<std::uint64_t>(value))
++				REPORT_ERROR(std::string("Duplicate particle identity in ") + name + ": " + text);
++		values.push_back(static_cast<std::uint64_t>(value));
++		if (*end == '\0')
++			break;
++		cursor = end + 1;
++		if (*cursor == '\0')
++			REPORT_ERROR(std::string("Trailing comma in particle identity list ") + name + ": " + text);
++	}
++	return values;
++}
++
++bool relion_bpre_part_id_selected(
++	const RelionBprefPreScatterConfigV1 &config,
++	std::uint64_t part_id)
++{
++	if (config.part_ids.empty())
++		return true;
++	for (std::uint64_t selected : config.part_ids)
++		if (selected == part_id)
++			return true;
++	return false;
++}
++
++bool relion_bpm_part_id_selected(
++	const RelionBprefMembershipConfigV1 &config,
++	std::uint64_t part_id)
++{
++	if (config.part_ids.empty())
++		return true;
++	for (std::uint64_t selected : config.part_ids)
++		if (selected == part_id)
++			return true;
++	return false;
++}
++
++bool relion_p1_part_id_selected(
++	const RelionCoarsePass1ConfigV1 &config,
++	std::uint64_t part_id)
++{
++	if (config.part_ids.empty())
++		return true;
++	for (std::uint64_t selected : config.part_ids)
++		if (selected == part_id)
++			return true;
++	return false;
++}
++
+ const RelionBprefPreScatterConfigV1 &relion_bpre_config_v1()
+ {
+ 	static const RelionBprefPreScatterConfigV1 config = []()
+@@ -76,6 +208,10 @@ const RelionBprefPreScatterConfigV1 &relion_bpre_config_v1()
+ 		result.max_particles_per_rank = relion_bpre_required_u64("RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK");
+ 		result.expected_followers = relion_bpre_required_u64("RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS");
+ 		result.max_bytes = relion_bpre_required_u64("RELION_BPRE_CAPTURE_MAX_BYTES");
++		result.device_buffer_bytes = relion_bpre_required_u64("RELION_BPRE_CAPTURE_DEVICE_BYTES");
++		result.part_ids = relion_bpre_optional_u64_csv("RELION_BPRE_CAPTURE_PART_IDS");
++		if (!result.part_ids.empty() && result.expected_particles != result.part_ids.size())
++			REPORT_ERROR("RELION_BPRE_CAPTURE_EXPECTED_PARTICLES must equal the explicit PART_IDS count");
+ 		if (result.expected_particles > result.max_particles_per_rank * result.expected_followers)
+ 			REPORT_ERROR("RELION BPref capture cannot fit EXPECTED_PARTICLES within the explicit per-rank/follower cap");
+ 		struct stat status;
+@@ -86,6 +222,68 @@ const RelionBprefPreScatterConfigV1 &relion_bpre_config_v1()
+ 	return config;
+ }
+ 
++const RelionBprefMembershipConfigV1 &relion_bpm_config_v1()
++{
++	static const RelionBprefMembershipConfigV1 config = []()
++	{
++		RelionBprefMembershipConfigV1 result = {};
++		const char *directory = std::getenv("RELION_BPM_CAPTURE_DIR");
++		result.enabled = directory != nullptr && directory[0] != '\0';
++		if (!result.enabled)
++			return result;
++		result.directory = directory;
++		if (relion_bpre_required_u64("RELION_BPM_CAPTURE_SCHEMA") != 1)
++			REPORT_ERROR("RELION_BPM_CAPTURE_SCHEMA must be exactly 1");
++		result.iteration = relion_bpre_required_u64("RELION_BPM_CAPTURE_ITER");
++		result.class_one_based = relion_bpre_required_u64("RELION_BPM_CAPTURE_CLASS");
++		result.expected_particles = relion_bpre_required_u64("RELION_BPM_CAPTURE_EXPECTED_PARTICLES");
++		result.max_particles_per_rank = relion_bpre_required_u64("RELION_BPM_CAPTURE_MAX_PARTICLES_PER_RANK");
++		result.expected_followers = relion_bpre_required_u64("RELION_BPM_CAPTURE_EXPECTED_FOLLOWERS");
++		result.max_bytes = relion_bpre_required_u64("RELION_BPM_CAPTURE_MAX_BYTES");
++		result.part_ids = relion_bpre_optional_u64_csv("RELION_BPM_CAPTURE_PART_IDS");
++		if (!result.part_ids.empty() && result.expected_particles != result.part_ids.size())
++			REPORT_ERROR("RELION_BPM_CAPTURE_EXPECTED_PARTICLES must equal the explicit PART_IDS count");
++		if (result.expected_particles > result.max_particles_per_rank * result.expected_followers)
++			REPORT_ERROR("RELION BPref membership capture cannot fit EXPECTED_PARTICLES within the explicit per-rank/follower cap");
++		struct stat status;
++		if (stat(result.directory.c_str(), &status) != 0 || !S_ISDIR(status.st_mode))
++			REPORT_ERROR("RELION_BPM_CAPTURE_DIR must name an existing directory");
++		return result;
++	}();
++	return config;
++}
++
++const RelionCoarsePass1ConfigV1 &relion_p1_config_v1()
++{
++	static const RelionCoarsePass1ConfigV1 config = []()
++	{
++		RelionCoarsePass1ConfigV1 result = {};
++		const char *directory = std::getenv("RELION_P1_CAPTURE_DIR");
++		result.enabled = directory != nullptr && directory[0] != '\0';
++		if (!result.enabled)
++			return result;
++		result.directory = directory;
++		result.schema = relion_bpre_required_u64("RELION_P1_CAPTURE_SCHEMA");
++		if (result.schema != 1 && result.schema != 2)
++			REPORT_ERROR("RELION_P1_CAPTURE_SCHEMA must be exactly 1 or 2");
++		result.iteration = relion_bpre_required_u64("RELION_P1_CAPTURE_ITER");
++		result.expected_particles = relion_bpre_required_u64("RELION_P1_CAPTURE_EXPECTED_PARTICLES");
++		result.max_particles_per_rank = relion_bpre_required_u64("RELION_P1_CAPTURE_MAX_PARTICLES_PER_RANK");
++		result.expected_followers = relion_bpre_required_u64("RELION_P1_CAPTURE_EXPECTED_FOLLOWERS");
++		result.max_bytes = relion_bpre_required_u64("RELION_P1_CAPTURE_MAX_BYTES");
++		result.part_ids = relion_bpre_optional_u64_csv("RELION_P1_CAPTURE_PART_IDS");
++		if (!result.part_ids.empty() && result.expected_particles != result.part_ids.size())
++			REPORT_ERROR("RELION_P1_CAPTURE_EXPECTED_PARTICLES must equal the explicit PART_IDS count");
++		if (result.expected_particles > result.max_particles_per_rank * result.expected_followers)
++			REPORT_ERROR("RELION coarse-pass1 capture cannot fit EXPECTED_PARTICLES within the explicit per-rank/follower cap");
++		struct stat status;
++		if (stat(result.directory.c_str(), &status) != 0 || !S_ISDIR(status.st_mode))
++			REPORT_ERROR("RELION_P1_CAPTURE_DIR must name an existing directory");
++		return result;
++	}();
++	return config;
++}
++
+ std::uint64_t relion_bpre_fnv1a64(const std::string &text)
+ {
+ 	std::uint64_t hash = UINT64_C(14695981039346656037);
+@@ -111,6 +309,8 @@ int relion_bpre_mpi_rank()
+ }
+ 
+ std::atomic<std::uint64_t> relion_bpre_files_reserved_v1(0);
++std::atomic<std::uint64_t> relion_bpm_files_reserved_v1(0);
++std::atomic<std::uint64_t> relion_p1_files_reserved_v1(0);
+ 
+ void relion_capture_bpref_prescatter_v1(
+ 	MlOptimiser *baseMLO,
+@@ -144,10 +344,14 @@ void relion_capture_bpref_prescatter_v1(
+ 	if (!config.enabled || static_cast<std::uint64_t>(baseMLO->iter) != config.iteration
+ 		|| iclass + 1 != config.class_one_based)
+ 		return;
++	if (!relion_bpre_part_id_selected(config, static_cast<std::uint64_t>(op.part_id)))
++		return;
+ 	if (data_is_3d)
+ 		REPORT_ERROR("RELION BPref pre-scatter schema v1 currently supports 2D particle images only");
+ 	if (orientation_num == 0 || image_size == 0)
+ 		REPORT_ERROR("RELION BPref pre-scatter capture saw empty orientation/pixel support");
++	if (orientation_num > UINT32_MAX)
++		REPORT_ERROR("RELION BPref pre-scatter orientation count exceeds the schema-v1 identity width");
+ 
+ 	const std::uint64_t worst_particle_bytes = sizeof(RelionBprefPreScatterHeaderV1)
+ 		+ orientation_num * sizeof(RelionBprefPreScatterRotationV1)
+@@ -159,42 +363,86 @@ void relion_capture_bpref_prescatter_v1(
+ 		REPORT_ERROR("RELION BPref pre-scatter runtime dimensions exceed RELION_BPRE_CAPTURE_MAX_BYTES");
+ 
+ 	const std::size_t candidate_count = orientation_num * image_size;
++	const std::size_t bytes_per_orientation =
++		image_size * sizeof(RelionBprefPreScatterRowV1);
++	if (config.device_buffer_bytes < bytes_per_orientation)
++		REPORT_ERROR("RELION_BPRE_CAPTURE_DEVICE_BYTES cannot hold one orientation");
++	const std::size_t orientations_per_chunk = std::min<std::size_t>(
++		orientation_num, config.device_buffer_bytes / bytes_per_orientation);
++	const std::size_t chunk_candidate_capacity =
++		orientations_per_chunk * image_size;
++	const std::size_t chunk_device_bytes =
++		chunk_candidate_capacity * sizeof(RelionBprefPreScatterRowV1);
++	const std::size_t chunk_count =
++		(orientation_num + orientations_per_chunk - 1) / orientations_per_chunk;
++	std::size_t free_device_bytes = 0;
++	std::size_t total_device_bytes = 0;
++	DEBUG_HANDLE_ERROR(cudaMemGetInfo(&free_device_bytes, &total_device_bytes));
++	if (chunk_device_bytes > free_device_bytes)
++		REPORT_ERROR("RELION_BPRE_CAPTURE_DEVICE_BYTES exceeds free device memory");
++	std::cerr
++		<< "RELION_BPRE_CHUNKED_CAPTURE"
++		<< " part_id=" << op.part_id
++		<< " iteration=" << baseMLO->iter
++		<< " current_size=" << baseMLO->mymodel.current_size
++		<< " orientation_num=" << orientation_num
++		<< " image_size=" << image_size
++		<< " translation_num=" << translation_num
++		<< " candidate_count=" << candidate_count
++		<< " candidate_bytes=" << candidate_count * sizeof(RelionBprefPreScatterRowV1)
++		<< " configured_device_bytes=" << config.device_buffer_bytes
++		<< " chunk_device_bytes=" << chunk_device_bytes
++		<< " orientations_per_chunk=" << orientations_per_chunk
++		<< " chunk_count=" << chunk_count
++		<< " free_device_bytes=" << free_device_bytes
++		<< " total_device_bytes=" << total_device_bytes
++		<< std::endl;
+ 	RelionBprefPreScatterRowV1 *device_rows = nullptr;
+-	DEBUG_HANDLE_ERROR(cudaMalloc(&device_rows, candidate_count * sizeof(*device_rows)));
+-	DEBUG_HANDLE_ERROR(cudaMemsetAsync(device_rows, 0, candidate_count * sizeof(*device_rows), stream));
++	DEBUG_HANDLE_ERROR(cudaMalloc(&device_rows, chunk_device_bytes));
+ 	const unsigned threads = BP_REF3D_BLOCK_SIZE;
+-	if (ctf_premultiplied)
+-		cuda_kernel_capture_bpref_prescatter_v1<false, true><<<orientation_num, threads, 0, stream>>>(
+-			image_real, image_imag, trans_x, trans_y, trans_z, weights, minvsigma2, ctfs,
+-			translation_num, significant_weight, weight_norm, ~eulers, backprojector.maxR2,
+-			backprojector.padding_factor, img_x, img_y, img_z, image_size, device_rows);
+-	else
+-		cuda_kernel_capture_bpref_prescatter_v1<false, false><<<orientation_num, threads, 0, stream>>>(
+-			image_real, image_imag, trans_x, trans_y, trans_z, weights, minvsigma2, ctfs,
+-			translation_num, significant_weight, weight_norm, ~eulers, backprojector.maxR2,
+-			backprojector.padding_factor, img_x, img_y, img_z, image_size, device_rows);
+-	LAUNCH_HANDLE_ERROR(cudaGetLastError());
+-
+-	std::vector<RelionBprefPreScatterRowV1> candidates(candidate_count);
+-	DEBUG_HANDLE_ERROR(cudaMemcpyAsync(candidates.data(), device_rows,
+-		candidate_count * sizeof(*device_rows), cudaMemcpyDeviceToHost, stream));
+-	DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
+-	DEBUG_HANDLE_ERROR(cudaFree(device_rows));
+-
++	std::vector<RelionBprefPreScatterRowV1> candidates(chunk_candidate_capacity);
+ 	std::vector<RelionBprefPreScatterRowV1> rows;
+-	rows.reserve(candidate_count);
++	rows.reserve(chunk_candidate_capacity);
+ 	std::uint64_t positive_fweight_candidate_count = 0;
+ 	std::uint64_t radius_excluded_positive_fweight_count = 0;
+-	for (const RelionBprefPreScatterRowV1 &row : candidates)
++	for (std::size_t orientation_offset = 0; orientation_offset < orientation_num;
++		orientation_offset += orientations_per_chunk)
+ 	{
+-		if (row.state != 1)
+-			continue;
+-		positive_fweight_candidate_count++;
+-		if ((row.flags & RELION_BPRE_RELION_RADIUS_SUPPORT) != 0)
+-			rows.push_back(row);
++		const std::size_t chunk_orientations = std::min<std::size_t>(
++			orientations_per_chunk, orientation_num - orientation_offset);
++		const std::size_t chunk_candidate_count = chunk_orientations * image_size;
++		const std::size_t chunk_bytes =
++			chunk_candidate_count * sizeof(RelionBprefPreScatterRowV1);
++		DEBUG_HANDLE_ERROR(cudaMemsetAsync(device_rows, 0, chunk_bytes, stream));
++		if (ctf_premultiplied)
++			cuda_kernel_capture_bpref_prescatter_v1<false, true><<<chunk_orientations, threads, 0, stream>>>(
++				image_real, image_imag, trans_x, trans_y, trans_z, weights, minvsigma2, ctfs,
++				translation_num, significant_weight, weight_norm, ~eulers, backprojector.maxR2,
++				backprojector.padding_factor, img_x, img_y, img_z, image_size,
++				orientation_offset, device_rows);
+ 		else
+-			radius_excluded_positive_fweight_count++;
++			cuda_kernel_capture_bpref_prescatter_v1<false, false><<<chunk_orientations, threads, 0, stream>>>(
++				image_real, image_imag, trans_x, trans_y, trans_z, weights, minvsigma2, ctfs,
++				translation_num, significant_weight, weight_norm, ~eulers, backprojector.maxR2,
++				backprojector.padding_factor, img_x, img_y, img_z, image_size,
++				orientation_offset, device_rows);
++		LAUNCH_HANDLE_ERROR(cudaGetLastError());
++		DEBUG_HANDLE_ERROR(cudaMemcpyAsync(candidates.data(), device_rows,
++			chunk_bytes, cudaMemcpyDeviceToHost, stream));
++		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
++		for (std::size_t candidate = 0; candidate < chunk_candidate_count; candidate++)
++		{
++			const RelionBprefPreScatterRowV1 &row = candidates[candidate];
++			if (row.state != 1)
++				continue;
++			positive_fweight_candidate_count++;
++			if ((row.flags & RELION_BPRE_RELION_RADIUS_SUPPORT) != 0)
++				rows.push_back(row);
++			else
++				radius_excluded_positive_fweight_count++;
++		}
+ 	}
++	DEBUG_HANDLE_ERROR(cudaFree(device_rows));
+ 	if (positive_fweight_candidate_count != rows.size()
+ 		+ radius_excluded_positive_fweight_count)
+ 		REPORT_ERROR("RELION BPref pre-scatter candidate/support accounting is inconsistent");
+@@ -293,6 +541,296 @@ void relion_capture_bpref_prescatter_v1(
+ 	if (!output || rename(temporary.c_str(), basename.c_str()) != 0)
+ 		REPORT_ERROR("Cannot seal RELION BPref pre-scatter artifact");
+ }
++
++void relion_capture_bpref_membership_v1(
++	MlOptimiser *baseMLO,
++	OptimisationParamters &op,
++	ProjectionParams &projection_data,
++	unsigned long iclass,
++	unsigned long orientation_num,
++	unsigned long translation_num,
++	XFLOAT *weights,
++	XFLOAT significant_weight,
++	XFLOAT weight_norm,
++	AccPtr<XFLOAT> &eulers,
++	int img_id,
++	deviceStream_t stream)
++{
++	const RelionBprefMembershipConfigV1 &config = relion_bpm_config_v1();
++	if (!config.enabled || static_cast<std::uint64_t>(baseMLO->iter) != config.iteration
++		|| iclass + 1 != config.class_one_based)
++		return;
++	if (!relion_bpm_part_id_selected(config, static_cast<std::uint64_t>(op.part_id)))
++		return;
++	if (sizeof(XFLOAT) != sizeof(float))
++		REPORT_ERROR("RELION BPref membership schema v1 requires float32 XFLOAT");
++	if (orientation_num == 0 || translation_num == 0)
++		REPORT_ERROR("RELION BPref membership capture saw empty orientation/translation support");
++	if (orientation_num > UINT32_MAX)
++		REPORT_ERROR("RELION BPref membership orientation count exceeds the schema-v1 identity width");
++
++	const std::uint64_t weight_count = orientation_num * translation_num;
++	if (weight_count / translation_num != orientation_num)
++		REPORT_ERROR("RELION BPref membership weight count overflow");
++	const std::uint64_t artifact_bytes = sizeof(RelionBprefMembershipHeaderV1)
++		+ orientation_num * sizeof(RelionBprefPreScatterRotationV1)
++		+ weight_count * sizeof(float)
++		+ sizeof(RelionBprefMembershipFooterV1);
++	const std::uint64_t estimated_max_bytes = artifact_bytes
++		* config.max_particles_per_rank * config.expected_followers;
++	if (estimated_max_bytes > config.max_bytes)
++		REPORT_ERROR("RELION BPref membership runtime dimensions exceed RELION_BPM_CAPTURE_MAX_BYTES");
++
++	std::vector<float> posterior_weights(weight_count);
++	DEBUG_HANDLE_ERROR(cudaMemcpyAsync(
++		posterior_weights.data(), weights, weight_count * sizeof(float),
++		cudaMemcpyDeviceToHost, stream));
++	DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
++
++	std::uint64_t reservation = relion_bpm_files_reserved_v1.fetch_add(1);
++	if (reservation >= config.max_particles_per_rank)
++		REPORT_ERROR("RELION BPref membership capture exceeded MAX_PARTICLES_PER_RANK");
++
++	FileName image_name = baseMLO->mydata.particles[op.part_id].name;
++	FileName stack_name;
++	long int stack_index = -1;
++	image_name.decompose(stack_index, stack_name);
++	if (stack_index < 0 || stack_name.empty())
++		REPORT_ERROR("RELION BPref membership capture could not resolve canonical stack identity");
++
++	std::vector<RelionBprefPreScatterRotationV1> rotations(orientation_num);
++	const std::size_t class_offset = projection_data.class_idx[iclass];
++	if (class_offset + orientation_num > projection_data.iorientclasses.size()
++		|| class_offset + orientation_num > projection_data.iover_rots.size())
++		REPORT_ERROR("RELION BPref membership orientation identity range is incomplete");
++	for (std::size_t orientation = 0; orientation < orientation_num; orientation++)
++	{
++		RelionBprefPreScatterRotationV1 &rotation = rotations[orientation];
++		rotation.orientation_class_key = projection_data.iorientclasses[class_offset + orientation];
++		rotation.oversampled_rotation = projection_data.iover_rots[class_offset + orientation];
++		rotation.orientation_local = orientation;
++		rotation.reserved = 0;
++		for (std::size_t element = 0; element < 9; element++)
++			rotation.matrix[element] = eulers[orientation * 9 + element];
++	}
++
++	RelionBprefMembershipHeaderV1 header = {};
++	std::memcpy(header.magic, "RLNBPMV1HEADER", 14);
++	header.values[0] = 1;
++	header.values[1] = sizeof(header);
++	header.values[2] = sizeof(RelionBprefPreScatterRotationV1);
++	header.values[3] = sizeof(float);
++	header.values[4] = sizeof(RelionBprefMembershipFooterV1);
++	header.values[5] = baseMLO->iter;
++	header.values[6] = iclass + 1;
++	header.values[7] = op.part_id;
++	header.values[8] = stack_index;
++	header.values[9] = img_id;
++	header.values[10] = static_cast<std::uint64_t>(relion_bpre_mpi_rank());
++	header.values[11] = omp_get_thread_num();
++	header.values[12] = orientation_num;
++	header.values[13] = translation_num;
++	header.values[14] = weight_count;
++	header.values[15] = relion_bpre_float_bits(static_cast<float>(significant_weight));
++	header.values[16] = relion_bpre_float_bits(static_cast<float>(weight_norm));
++	header.values[17] = config.expected_particles;
++	header.values[18] = config.max_particles_per_rank;
++	header.values[19] = config.expected_followers;
++	header.values[20] = config.max_bytes;
++	header.values[21] = estimated_max_bytes;
++	header.values[22] = relion_bpre_fnv1a64(stack_name);
++	header.values[23] = relion_bpre_fnv1a64(image_name);
++	header.values[24] = 1; // device-to-host diagnostic copy after production backprojection
++	header.values[25] = baseMLO->mymodel.current_size;
++
++	RelionBprefMembershipFooterV1 footer = {};
++	std::memcpy(footer.magic, "RLNBPMV1FOOTER", 14);
++	footer.weight_count = posterior_weights.size();
++	footer.rotation_count = rotations.size();
++
++	std::string basename = config.directory + "/part" + std::to_string(op.part_id)
++		+ "_stack" + std::to_string(stack_index) + "_img" + std::to_string(img_id)
++		+ "_class" + std::to_string(iclass + 1) + ".bpm-v1.bin";
++	std::string temporary = basename + ".tmp." + std::to_string(getpid())
++		+ "." + std::to_string(omp_get_thread_num());
++	struct stat existing;
++	if (stat(basename.c_str(), &existing) == 0 || stat(temporary.c_str(), &existing) == 0)
++		REPORT_ERROR("RELION BPref membership capture refuses to overwrite an existing artifact");
++	std::ofstream output(temporary, std::ios::binary | std::ios::out | std::ios::trunc);
++	if (!output)
++		REPORT_ERROR("Cannot create RELION BPref membership temporary artifact");
++	output.write(reinterpret_cast<const char *>(&header), sizeof(header));
++	output.write(reinterpret_cast<const char *>(rotations.data()), rotations.size() * sizeof(rotations[0]));
++	output.write(reinterpret_cast<const char *>(posterior_weights.data()),
++		posterior_weights.size() * sizeof(posterior_weights[0]));
++	output.write(reinterpret_cast<const char *>(&footer), sizeof(footer));
++	output.close();
++	if (!output || rename(temporary.c_str(), basename.c_str()) != 0)
++		REPORT_ERROR("Cannot seal RELION BPref membership artifact");
++}
++
++bool relion_should_capture_coarse_pass1_v1(
++	MlOptimiser *baseMLO,
++	OptimisationParamters &op)
++{
++	const RelionCoarsePass1ConfigV1 &config = relion_p1_config_v1();
++	return config.enabled
++		&& static_cast<std::uint64_t>(baseMLO->iter) == config.iteration
++		&& relion_p1_part_id_selected(config, static_cast<std::uint64_t>(op.part_id));
++}
++
++void relion_capture_coarse_pass1_v1(
++	MlOptimiser *baseMLO,
++	OptimisationParamters &op,
++	SamplingParameters &sp,
++	const std::vector<float> &raw_diff2,
++	const XFLOAT *posterior_weights,
++	const std::vector<float> &reference_norms,
++	const std::vector<float> &cross_terms)
++{
++	const RelionCoarsePass1ConfigV1 &config = relion_p1_config_v1();
++	if (!relion_should_capture_coarse_pass1_v1(baseMLO, op))
++		return;
++	if (sizeof(XFLOAT) != sizeof(float))
++		REPORT_ERROR("RELION coarse-pass1 schema v1 requires float32 XFLOAT");
++	if (sp.iclass_min != 0 || sp.iclass_max != 0)
++		REPORT_ERROR("RELION coarse-pass1 schema v1 is intentionally restricted to K=1");
++
++	const std::uint64_t candidate_count =
++		static_cast<std::uint64_t>(sp.nr_dir) * sp.nr_psi * sp.nr_trans;
++	if (candidate_count == 0 || raw_diff2.size() != candidate_count)
++		REPORT_ERROR("RELION coarse-pass1 capture saw an invalid candidate count");
++	const bool has_components = config.schema == 2;
++	if (has_components
++		&& (reference_norms.size() != candidate_count
++			|| cross_terms.size() != candidate_count))
++		REPORT_ERROR("RELION coarse-pass1 schema v2 requires two complete component arrays");
++	if (!has_components && (!reference_norms.empty() || !cross_terms.empty()))
++		REPORT_ERROR("RELION coarse-pass1 schema v1 refuses component arrays");
++
++	std::vector<std::uint8_t> significant_mask(candidate_count);
++	std::uint64_t significant_count = 0;
++	for (std::uint64_t index = 0; index < candidate_count; index++)
++	{
++		significant_mask[index] = DIRECT_A1D_ELEM(op.Mcoarse_significant, index) ? 1 : 0;
++		significant_count += significant_mask[index];
++	}
++
++	const std::uint64_t translation_value_count = 2 * static_cast<std::uint64_t>(sp.nr_trans);
++	const std::uint64_t artifact_bytes = sizeof(RelionCoarsePass1HeaderV1)
++		+ (has_components ? 4 : 2) * candidate_count * sizeof(float)
++		+ candidate_count * sizeof(std::uint8_t)
++		+ translation_value_count * sizeof(float)
++		+ sizeof(RelionCoarsePass1FooterV1);
++	const std::uint64_t estimated_max_bytes = artifact_bytes
++		* config.max_particles_per_rank * config.expected_followers;
++	if (estimated_max_bytes > config.max_bytes)
++		REPORT_ERROR("RELION coarse-pass1 runtime dimensions exceed RELION_P1_CAPTURE_MAX_BYTES");
++
++	std::uint64_t reservation = relion_p1_files_reserved_v1.fetch_add(1);
++	if (reservation >= config.max_particles_per_rank)
++		REPORT_ERROR("RELION coarse-pass1 capture exceeded MAX_PARTICLES_PER_RANK");
++
++	FileName image_name = baseMLO->mydata.particles[op.part_id].name;
++	FileName stack_name;
++	long int stack_index = -1;
++	image_name.decompose(stack_index, stack_name);
++	if (stack_index < 0 || stack_name.empty())
++		REPORT_ERROR("RELION coarse-pass1 capture could not resolve canonical stack identity");
++
++	std::vector<float> weights(candidate_count);
++	for (std::uint64_t index = 0; index < candidate_count; index++)
++		weights[index] = static_cast<float>(posterior_weights[index]);
++	std::vector<float> translations(translation_value_count);
++	for (std::uint64_t index = 0; index < static_cast<std::uint64_t>(sp.nr_trans); index++)
++	{
++		translations[2 * index] = static_cast<float>(baseMLO->sampling.translations_x[index]);
++		translations[2 * index + 1] = static_cast<float>(baseMLO->sampling.translations_y[index]);
++	}
++
++	RelionCoarsePass1HeaderV1 header = {};
++	std::memcpy(
++		header.magic,
++		has_components ? "RLNP1V2HEADER" : "RLNP1V1HEADER",
++		13);
++	header.values[0] = config.schema;
++	header.values[1] = sizeof(header);
++	header.values[2] = sizeof(float);
++	header.values[3] = sizeof(std::uint8_t);
++	header.values[4] = sizeof(RelionCoarsePass1FooterV1);
++	header.values[5] = baseMLO->iter;
++	header.values[6] = op.part_id;
++	header.values[7] = stack_index;
++	header.values[8] = static_cast<std::uint64_t>(relion_bpre_mpi_rank());
++	header.values[9] = omp_get_thread_num();
++	header.values[10] = sp.nr_dir;
++	header.values[11] = sp.nr_psi;
++	header.values[12] = sp.nr_trans;
++	header.values[13] = candidate_count;
++	header.values[14] = significant_count;
++	header.values[15] = op.max_index.coarseIdx;
++	header.values[16] = relion_bpre_float_bits(static_cast<float>(op.significant_weight));
++	header.values[17] = relion_bpre_float_bits(static_cast<float>(op.sum_weight));
++	header.values[18] = relion_bpre_float_bits(static_cast<float>(op.max_weight));
++	header.values[19] = relion_bpre_float_bits(static_cast<float>(op.min_diff2));
++	header.values[20] = config.expected_particles;
++	header.values[21] = config.max_particles_per_rank;
++	header.values[22] = config.expected_followers;
++	header.values[23] = config.max_bytes;
++	header.values[24] = estimated_max_bytes;
++	header.values[25] = relion_bpre_fnv1a64(stack_name);
++	header.values[26] = relion_bpre_fnv1a64(image_name);
++	header.values[27] = baseMLO->mymodel.current_size;
++	header.values[28] = relion_bpre_float_bits(static_cast<float>(baseMLO->adaptive_fraction));
++	header.values[29] = static_cast<std::uint64_t>(baseMLO->maximum_significants);
++	header.values[30] = translation_value_count;
++	header.values[31] = 1; // raw diff2 copied before prior/weight conversion
++	header.values[32] = 1; // post-prior production weights copied after conversion
++	header.values[33] = 1; // exact production coarse-significance mask
++	header.values[34] = has_components ? 1 : 0; // reference-norm component
++	header.values[35] = has_components ? 1 : 0; // image/reference cross component
++	header.values[36] = config.schema;
++
++	RelionCoarsePass1FooterV1 footer = {};
++	std::memcpy(
++		footer.magic,
++		has_components ? "RLNP1V2FOOTER" : "RLNP1V1FOOTER",
++		13);
++	footer.candidate_count = candidate_count;
++	footer.significant_count = significant_count;
++
++	std::string basename = config.directory + "/part" + std::to_string(op.part_id)
++		+ "_stack" + std::to_string(stack_index)
++		+ (has_components ? ".p1-v2.bin" : ".p1-v1.bin");
++	std::string temporary = basename + ".tmp." + std::to_string(getpid())
++		+ "." + std::to_string(omp_get_thread_num());
++	struct stat existing;
++	if (stat(basename.c_str(), &existing) == 0 || stat(temporary.c_str(), &existing) == 0)
++		REPORT_ERROR("RELION coarse-pass1 capture refuses to overwrite an existing artifact");
++	std::ofstream output(temporary, std::ios::binary | std::ios::out | std::ios::trunc);
++	if (!output)
++		REPORT_ERROR("Cannot create RELION coarse-pass1 temporary artifact");
++	output.write(reinterpret_cast<const char *>(&header), sizeof(header));
++	output.write(reinterpret_cast<const char *>(raw_diff2.data()), raw_diff2.size() * sizeof(raw_diff2[0]));
++	output.write(reinterpret_cast<const char *>(weights.data()), weights.size() * sizeof(weights[0]));
++	if (has_components)
++	{
++		output.write(
++			reinterpret_cast<const char *>(reference_norms.data()),
++			reference_norms.size() * sizeof(reference_norms[0]));
++		output.write(
++			reinterpret_cast<const char *>(cross_terms.data()),
++			cross_terms.size() * sizeof(cross_terms[0]));
++	}
++	output.write(reinterpret_cast<const char *>(significant_mask.data()),
++		significant_mask.size() * sizeof(significant_mask[0]));
++	output.write(reinterpret_cast<const char *>(translations.data()),
++		translations.size() * sizeof(translations[0]));
++	output.write(reinterpret_cast<const char *>(&footer), sizeof(footer));
++	output.close();
++	if (!output || rename(temporary.c_str(), basename.c_str()) != 0)
++		REPORT_ERROR("Cannot seal RELION coarse-pass1 artifact");
++}
+ }
+ #endif
+ 
+@@ -1317,8 +1855,20 @@ void getAllSquaredDifferencesCoarse(
+ 		MlClass *accMLO,
+ 	 	AccPtr<XFLOAT> &Mweight,
+ 	 	AccPtrFactory ptrFactory,
+-	 	int ibody = 0)
++		int ibody = 0,
++		std::vector<float> *reference_norm_output = nullptr,
++		std::vector<float> *cross_output = nullptr)
+ {
++	const bool capture_components =
++		reference_norm_output != nullptr || cross_output != nullptr;
++	if ((reference_norm_output == nullptr) != (cross_output == nullptr))
++		REPORT_ERROR("RELION coarse diff2 component capture requires both output vectors");
++#ifndef _CUDA_ENABLED
++	if (capture_components)
++		REPORT_ERROR("RELION coarse diff2 component capture is implemented only for CUDA");
++#endif
++	if (capture_components && sizeof(XFLOAT) != sizeof(float))
++		REPORT_ERROR("RELION coarse diff2 component capture requires float32 XFLOAT");
+ 
+ #ifdef TIMING
+ 	if (op.part_id == baseMLO->exp_my_first_part_id)
+@@ -1444,6 +1994,14 @@ void getAllSquaredDifferencesCoarse(
+ 		allWeights_size += projectorPlans[exp_iclass*sp.nr_images + 0].orientation_num * sp.nr_trans*sp.nr_oversampled_trans;
+ 
+ 	AccPtr<XFLOAT> allWeights = ptrFactory.make<XFLOAT>(allWeights_size);
++	AccPtr<XFLOAT> allReferenceNorms =
++		ptrFactory.make<XFLOAT>(capture_components ? allWeights_size : 1);
++	AccPtr<XFLOAT> allCrossTerms =
++		ptrFactory.make<XFLOAT>(capture_components ? allWeights_size : 1);
++	AccPtr<XFLOAT> referenceNormMweights =
++		ptrFactory.make<XFLOAT>(capture_components ? Mweight.getSize() : 1);
++	AccPtr<XFLOAT> crossTermMweights =
++		ptrFactory.make<XFLOAT>(capture_components ? Mweight.getSize() : 1);
+ 
+ #ifdef _SYCL_ENABLED
+ 	allWeights.setStreamAccType(devAcc);
+@@ -1456,6 +2014,19 @@ void getAllSquaredDifferencesCoarse(
+ 	allWeights.accAlloc();
+ #endif
+ 	deviceInitValue<XFLOAT>(allWeights, 0);  // Make sure entire array initialized
++	if (capture_components)
++	{
++		allReferenceNorms.accAlloc();
++		allCrossTerms.accAlloc();
++		referenceNormMweights.allAlloc();
++		crossTermMweights.allAlloc();
++		deviceInitValue<XFLOAT>(allReferenceNorms, 0);
++		deviceInitValue<XFLOAT>(allCrossTerms, 0);
++		deviceInitValue<XFLOAT>(
++			referenceNormMweights, std::numeric_limits<XFLOAT>::quiet_NaN());
++		deviceInitValue<XFLOAT>(
++			crossTermMweights, std::numeric_limits<XFLOAT>::quiet_NaN());
++	}
+ 
+     bool do_CC = (baseMLO->iter == 1 && baseMLO->do_firstiter_cc) || baseMLO->do_always_cc;
+     long unsigned translation_num((sp.itrans_max - sp.itrans_min + 1) * sp.nr_oversampled_trans);
+@@ -1638,7 +2209,9 @@ void getAllSquaredDifferencesCoarse(
+ 						image_size,
+ 						accMLO->classStreams[iclass],
+ 						do_CC,
+-						accMLO->dataIs3D);
++						accMLO->dataIs3D,
++						capture_components ? &((~allReferenceNorms)[allWeights_pos]) : nullptr,
++						capture_components ? &((~allCrossTerms)[allWeights_pos]) : nullptr);
+ #if !defined(_SYCL_ENABLED) || defined(USE_ONEDPL)
+ 				if (img_id == sp.nr_images - 1)
+                     mapAllWeightsToMweights(
+@@ -1649,6 +2222,23 @@ void getAllSquaredDifferencesCoarse(
+ 						translation_num,
+ 						accMLO->classStreams[iclass]
+ 						);
++					if (capture_components)
++					{
++						mapAllWeightsToMweights(
++							~projectorPlans[iclass*sp.nr_images + img_id].iorientclasses,
++							&(~allReferenceNorms)[allWeights_pos],
++							&(~referenceNormMweights)[0],
++							projectorPlans[iclass*sp.nr_images + img_id].orientation_num,
++							translation_num,
++							accMLO->classStreams[iclass]);
++						mapAllWeightsToMweights(
++							~projectorPlans[iclass*sp.nr_images + img_id].iorientclasses,
++							&(~allCrossTerms)[allWeights_pos],
++							&(~crossTermMweights)[0],
++							projectorPlans[iclass*sp.nr_images + img_id].orientation_num,
++							translation_num,
++							accMLO->classStreams[iclass]);
++					}
+ #endif
+ 				/*====================================
+ 				    	   Retrieve Results
+@@ -1697,6 +2287,20 @@ void getAllSquaredDifferencesCoarse(
+ 
+ 	} // end loop img_id
+ 
++	if (capture_components)
++	{
++		referenceNormMweights.cpToHost();
++		crossTermMweights.cpToHost();
++		referenceNormMweights.streamSync();
++		crossTermMweights.streamSync();
++		reference_norm_output->assign(
++			referenceNormMweights.getHostPtr(),
++			referenceNormMweights.getHostPtr() + referenceNormMweights.getSize());
++		cross_output->assign(
++			crossTermMweights.getHostPtr(),
++			crossTermMweights.getHostPtr() + crossTermMweights.getSize());
++	}
++
+ #if defined(_SYCL_ENABLED) && ! defined(USE_ONEDPL)
+ 	allWeights.setAccType(accCPU);
+ #endif
+@@ -3731,6 +4335,15 @@ void storeWeightedSums(OptimisationParamters &op, SamplingParameters &sp,
+ 					op.local_Minvsigma2.xdim, op.local_Minvsigma2.ydim,
+ 					op.local_Minvsigma2.zdim, accMLO->dataIs3D, ctf_premultiplied,
+ 					img_id, accMLO->classStreams[iclass]);
++				// Passive diagnostic: copy the exact fine-posterior table and
++				// rotation identities only.  This is bounded independently of
++				// the per-pixel pre-scatter diagnostic above.
++				relion_capture_bpref_membership_v1(
++					baseMLO, op, ProjectionData, iclass, orientation_num,
++					translation_num, &(~sorted_weights)[classPos],
++					(XFLOAT)op.significant_weight,
++					(XFLOAT)(baseMLO->is_som_iter ? class_sum_weight[iclass] : op.sum_weight),
++					eulers[iclass], img_id, accMLO->classStreams[iclass]);
+ #endif
+ 
+ 				CTOC(accMLO->timer,"backproject");
+@@ -4165,13 +4778,63 @@ baseMLO->timer.toc(baseMLO->TIMING_ESP_DIFF2_B);
+                 //deviceInitValue<XFLOAT>(Mweight, 0.);
+ 				Mweight.streamSync();
+ 
++#ifdef _CUDA_ENABLED
++				const bool capture_coarse_pass1 =
++					relion_should_capture_coarse_pass1_v1(baseMLO, op);
++				const bool capture_coarse_components =
++					capture_coarse_pass1 && relion_p1_config_v1().schema == 2;
++				std::vector<float> reference_norms;
++				std::vector<float> cross_terms;
++#endif
++
+ 				CTIC(timer,"getAllSquaredDifferencesCoarse");
+-				getAllSquaredDifferencesCoarse<MlClass>(ipass, op, sp, baseMLO, myInstance, Mweight, ptrFactory, ibody);
++				getAllSquaredDifferencesCoarse<MlClass>(
++					ipass,
++					op,
++					sp,
++					baseMLO,
++					myInstance,
++					Mweight,
++					ptrFactory,
++					ibody
++#ifdef _CUDA_ENABLED
++					,
++					capture_coarse_components ? &reference_norms : nullptr,
++					capture_coarse_components ? &cross_terms : nullptr
++#endif
++					);
+ 				CTOC(timer,"getAllSquaredDifferencesCoarse");
+ 
++#ifdef _CUDA_ENABLED
++				std::vector<float> raw_coarse_diff2;
++				if (capture_coarse_pass1)
++				{
++					if (sizeof(XFLOAT) != sizeof(float))
++						REPORT_ERROR("RELION coarse-pass1 schema v1 requires float32 XFLOAT");
++					Mweight.cpToHost();
++					Mweight.streamSync();
++					raw_coarse_diff2.assign(op.Mweight.data, op.Mweight.data + weightsPerPart);
++				}
++#endif
++
+ 				CTIC(timer,"convertAllSquaredDifferencesToWeightsCoarse");
+ 				convertAllSquaredDifferencesToWeights<MlClass>(ipass, op, sp, baseMLO, myInstance, CoarsePassWeights, FinePassClassMasks, Mweight, ptrFactory, ibody);
+                 CTOC(timer,"convertAllSquaredDifferencesToWeightsCoarse");
++#ifdef _CUDA_ENABLED
++				if (capture_coarse_pass1)
++				{
++					Mweight.cpToHost();
++					Mweight.streamSync();
++					relion_capture_coarse_pass1_v1(
++						baseMLO,
++						op,
++						sp,
++						raw_coarse_diff2,
++						op.Mweight.data,
++						reference_norms,
++						cross_terms);
++				}
++#endif
+ 			}
+ 			else
+ 			{
+diff --git a/src/acc/cuda/cuda_kernels/bpref_prescatter_capture.cuh b/src/acc/cuda/cuda_kernels/bpref_prescatter_capture.cuh
+index eaa1203..56d7e10 100644
+--- a/src/acc/cuda/cuda_kernels/bpref_prescatter_capture.cuh
++++ b/src/acc/cuda/cuda_kernels/bpref_prescatter_capture.cuh
+@@ -50,10 +50,12 @@ __global__ void cuda_kernel_capture_bpref_prescatter_v1(
+ 		unsigned img_y,
+ 		unsigned img_z,
+ 		unsigned img_xyz,
++		unsigned long orientation_offset,
+ 		RelionBprefPreScatterRowV1 *g_rows)
+ {
+ 	unsigned tid = threadIdx.x;
+-	unsigned orientation = blockIdx.x;
++	unsigned orientation_in_chunk = blockIdx.x;
++	unsigned long orientation = orientation_offset + orientation_in_chunk;
+ 	int img_y_half = img_y / 2;
+ 	int img_z_half = img_z / 2;
+ 	// Match cuda_kernel_backproject3D exactly: the production radius bound is
+@@ -73,9 +75,10 @@ __global__ void cuda_kernel_capture_bpref_prescatter_v1(
+ 		if (pixel >= img_xyz)
+ 			continue;
+ 
+-		RelionBprefPreScatterRowV1 &row = g_rows[orientation * img_xyz + pixel];
++		RelionBprefPreScatterRowV1 &row =
++			g_rows[orientation_in_chunk * img_xyz + pixel];
+ 		row.state = 0;
+-		row.orientation_local = orientation;
++		row.orientation_local = static_cast<std::uint32_t>(orientation);
+ 		row.pixel = pixel;
+ 		row.flags = DATA3D ? RELION_BPRE_DATA3D : 0u;
+ 
+diff --git a/src/acc/cuda/cuda_kernels/diff2.cuh b/src/acc/cuda/cuda_kernels/diff2.cuh
+index f2e8020..ef1269f 100644
+--- a/src/acc/cuda/cuda_kernels/diff2.cuh
++++ b/src/acc/cuda/cuda_kernels/diff2.cuh
+@@ -32,7 +32,9 @@ __global__ void cuda_kernel_diff2_coarse(
+ 		XFLOAT *g_corr,
+ 		XFLOAT *g_diff2s,
+ 		int translation_num,
+-		int image_size
++		int image_size,
++		XFLOAT *g_reference_norms,
++		XFLOAT *g_cross_terms
+ 		)
+ {
+ 	int tid = threadIdx.x;
+@@ -56,6 +58,10 @@ __global__ void cuda_kernel_diff2_coarse(
+ 	__shared__ XFLOAT s_corr[block_sz];
+ 
+ 	XFLOAT diff2s[eulers_per_block] = {0.f};
++	XFLOAT reference_norms[eulers_per_block] = {0.f};
++	XFLOAT cross_terms[eulers_per_block] = {0.f};
++	const bool capture_components =
++		g_reference_norms != nullptr && g_cross_terms != nullptr;
+ 
+ 	XFLOAT tx = trans_x[tid%translation_num];
+ 	XFLOAT ty = trans_y[tid%translation_num];
+@@ -178,6 +184,18 @@ __global__ void cuda_kernel_diff2_coarse(
+ 				XFLOAT diff_real =  s_ref_real[eulers_per_block * i + j] - real;
+ 				XFLOAT diff_imag =  s_ref_imag[eulers_per_block * i + j] - imag;
+ 				diff2s[j] += (diff_real * diff_real + diff_imag * diff_imag) * s_corr[i + init_pixel % block_sz];
++				if (capture_components)
++				{
++					reference_norms[j] +=
++						(s_ref_real[eulers_per_block * i + j] * s_ref_real[eulers_per_block * i + j]
++						+ s_ref_imag[eulers_per_block * i + j] * s_ref_imag[eulers_per_block * i + j])
++						* s_corr[i + init_pixel % block_sz];
++					cross_terms[j] +=
++						-2.f
++						* (s_ref_real[eulers_per_block * i + j] * real
++							+ s_ref_imag[eulers_per_block * i + j] * imag)
++						* s_corr[i + init_pixel % block_sz];
++				}
+ 			}
+ 		}
+ 	}
+@@ -185,7 +203,18 @@ __global__ void cuda_kernel_diff2_coarse(
+ 	//Set global
+ 	#pragma unroll
+ 	for (int i = 0; i < eulers_per_block; i ++)
++	{
+ 		cuda_atomic_add(&g_diff2s[(blockIdx.x * eulers_per_block + i) * translation_num + tid % translation_num], diff2s[i]);
++		if (capture_components)
++		{
++			cuda_atomic_add(
++				&g_reference_norms[(blockIdx.x * eulers_per_block + i) * translation_num + tid % translation_num],
++				reference_norms[i]);
++			cuda_atomic_add(
++				&g_cross_terms[(blockIdx.x * eulers_per_block + i) * translation_num + tid % translation_num],
++				cross_terms[i]);
++		}
++	}
+ }
+ 
+ 
+diff --git a/src/acc/utilities.h b/src/acc/utilities.h
+index f407bdb..a824021 100644
+--- a/src/acc/utilities.h
++++ b/src/acc/utilities.h
+@@ -1095,7 +1095,9 @@ void diff2_coarse(
+ 		XFLOAT *g_diff2s,
+ 		unsigned long translation_num,
+ 		unsigned long image_size,
+-		deviceStream_t stream
++		deviceStream_t stream,
++		XFLOAT *g_reference_norms = nullptr,
++		XFLOAT *g_cross_terms = nullptr
+ 		)
+ {
+ #ifdef _CUDA_ENABLED
+@@ -1111,7 +1113,9 @@ void diff2_coarse(
+ 			g_corr,
+ 			g_diff2s,
+ 			translation_num,
+-			image_size);
++			image_size,
++			g_reference_norms,
++			g_cross_terms);
+ #elif _HIP_ENABLED
+ 	hipLaunchKernelGGL(HIP_KERNEL_NAME(hip_kernel_diff2_coarse<REF3D, DATA3D, block_sz, eulers_per_block, prefetch_fraction>), dim3(grid_size), dim3(block_size), 0, stream,
+ 			g_eulers,

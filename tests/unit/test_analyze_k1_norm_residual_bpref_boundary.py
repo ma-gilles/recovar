@@ -1,0 +1,222 @@
+import struct
+
+import numpy as np
+
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_translation_angles_f32,
+)
+from scripts import analyze_k1_norm_residual_bpref_boundary as analyzer
+from scripts.validate_relion_bpref_prescatter import ROTATION_DTYPE, ROW_DTYPE
+
+
+def _write_flat(path, values: np.ndarray) -> None:
+    array = np.asarray(values)
+    path.write_bytes(struct.pack("<i", array.size) + array.tobytes())
+
+
+def test_load_native_ppref_preserves_shape_origin_and_float32_values(tmp_path) -> None:
+    prefix = "panel_"
+    _write_flat(
+        tmp_path / f"{prefix}dims.bin",
+        np.asarray([2, 2, 1, 0, -1, 0, 1], dtype="<i4"),
+    )
+    _write_flat(
+        tmp_path / f"{prefix}real.bin",
+        np.asarray([1.0, 2.0, 3.0, 4.0], dtype="<f8"),
+    )
+    _write_flat(
+        tmp_path / f"{prefix}imag.bin",
+        np.asarray([0.5, 0.0, -0.5, 1.0], dtype="<f8"),
+    )
+    (tmp_path / f"{prefix}padding_factor.bin").write_bytes(struct.pack("<d", 2.0))
+
+    ppref, identity = analyzer._load_native_ppref(tmp_path, prefix)
+
+    assert ppref.shape == (1, 2, 2)
+    assert ppref.dtype == np.complex64
+    np.testing.assert_array_equal(
+        ppref.reshape(-1),
+        np.asarray([1.0 + 0.5j, 2.0, 3.0 - 0.5j, 4.0 + 1.0j], dtype=np.complex64),
+    )
+    assert identity["origin_xyz"] == [0, -1, 0]
+    assert identity["r_max"] == 1
+    assert identity["padding_factor"] == 2.0
+
+
+def test_load_native_posterior_aligns_rotation_and_translation_permutations(tmp_path) -> None:
+    prefix = "posterior_"
+    rotations = np.asarray(
+        [
+            np.eye(3, dtype=np.float32),
+            np.diag([-1.0, -1.0, 1.0]).astype(np.float32),
+        ]
+    )
+    translations = np.asarray([[0.0, 0.0], [1.0, -1.0]], dtype=np.float32)
+    probabilities = np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+    rotation_order = np.asarray([1, 0])
+    translation_order = np.asarray([1, 0])
+    for name, value in {
+        "orientation_num": 2.0,
+        "translation_num": 2.0,
+        "sum_weight": 1.0,
+        "significant_weight": 0.0,
+    }.items():
+        (tmp_path / f"{prefix}{name}.bin").write_bytes(struct.pack("<d", value))
+    _write_flat(
+        tmp_path / f"{prefix}sorted_weights.bin",
+        probabilities[rotation_order][:, translation_order].astype("<f8"),
+    )
+    _write_flat(
+        tmp_path / f"{prefix}eulers.bin",
+        rotations[rotation_order].transpose(0, 2, 1).astype("<f8"),
+    )
+    phases = np.asarray(_relion_translation_angles_f32(translations, (128, 128)))
+    native_phases = phases[translation_order]
+    _write_flat(
+        tmp_path / f"{prefix}trans_xyz.bin",
+        np.concatenate((native_phases[:, 0], native_phases[:, 1], np.zeros(2))).astype("<f8"),
+    )
+
+    aligned, identity = analyzer._load_native_posterior_aligned(
+        tmp_path,
+        prefix,
+        recovar_rotations=rotations,
+        recovar_translations=translations,
+        physical_image_size=128,
+    )
+
+    np.testing.assert_array_equal(aligned, probabilities)
+    assert identity["rotation_exact_match_count"] == 2
+    assert identity["translation_matched_count"] == 2
+    assert identity["native_positive_candidate_count"] == 4
+
+
+def test_dense_native_operands_align_rotations_pixels_and_units() -> None:
+    recovar_rotations = np.stack(
+        (
+            np.eye(3, dtype=np.float32),
+            np.asarray([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float32),
+        )
+    )
+    native_rotations = np.zeros(2, dtype=ROTATION_DTYPE)
+    native_rotations["orientation_local"] = np.arange(2, dtype=np.uint32)
+    native_rotations["matrix"] = recovar_rotations.transpose(0, 2, 1).reshape(2, 9)
+    rows = np.zeros(2, dtype=ROW_DTYPE)
+    rows["orientation_local"] = [1, 0]
+    rows["x"] = [1, 2]
+    rows["y"] = [-1, 0]
+    rows["source_re"] = [64.0, -128.0]
+    rows["source_im"] = [32.0, 0.0]
+    rows["source_weight"] = [4096.0, 8192.0]
+
+    data, weight, identity = analyzer._dense_native_operands(
+        rows=rows,
+        native_rotations=native_rotations,
+        recovar_rotations=recovar_rotations,
+        recon_window_indices=np.asarray([16, 22], dtype=np.int32),
+        physical_image_size=8,
+    )
+
+    expected_data = np.zeros((2, 2), dtype=np.complex64)
+    expected_weight = np.zeros((2, 2), dtype=np.float32)
+    expected_data[1, 0] = -1.0 - 0.5j
+    expected_data[0, 1] = 2.0
+    expected_weight[1, 0] = 1.0
+    expected_weight[0, 1] = 2.0
+    np.testing.assert_array_equal(data, expected_data)
+    np.testing.assert_array_equal(weight, expected_weight)
+    assert identity["rotation_max_abs"] == 0.0
+    assert identity["native_supported_rows"] == 2
+
+
+def test_norm_terms_preserve_split_formula() -> None:
+    projection = np.asarray([[1 + 2j, 3 + 4j]], dtype=np.complex64)
+    projection_abs2 = np.abs(projection) ** 2
+    summed = np.asarray([[5 + 6j, 0 + 0j]], dtype=np.complex64)
+    ctf_prob = np.asarray([[2.0, 0.0]], dtype=np.float32)
+    noise = np.asarray([7.0, 11.0], dtype=np.float32)
+
+    terms = analyzer._norm_terms(
+        projection,
+        projection_abs2,
+        summed,
+        ctf_prob,
+        noise,
+    )
+
+    np.testing.assert_array_equal(terms["ctf_probs_raw"], [[14.0, 0.0]])
+    np.testing.assert_array_equal(terms["a2"], [[70.0, 0.0]])
+    np.testing.assert_array_equal(terms["cross"], [[17.0 + 4.0j, 0.0 + 0.0j]])
+    np.testing.assert_array_equal(terms["xa"], [[119.0, 0.0]])
+    summary = analyzer._float64_scalar_summary(terms)
+    assert summary == {"a2": 70.0, "xa": 119.0, "residual_a2_minus_2xa": -168.0}
+
+
+def test_native_norm_block_terms_stream_rows_in_native_units() -> None:
+    projection = np.asarray(
+        [[1.0 + 2.0j, 3.0 + 4.0j], [5.0 + 6.0j, 7.0 + 8.0j]],
+        dtype=np.complex64,
+    )
+    rows = np.zeros(3, dtype=ROW_DTYPE)
+    rows["state"] = 1
+    rows["flags"] = 3
+    rows["orientation_local"] = [4, 4, 5]
+    rows["pixel"] = [0, 1, 1]
+    rows["source_re"] = [-64.0, -128.0, -192.0]
+    rows["source_im"] = [0.0, -64.0, 0.0]
+    rows["source_weight"] = [4096.0, 8192.0, 12288.0]
+
+    result = analyzer._native_norm_block_terms(
+        projection,
+        np.abs(projection) ** 2,
+        rows,
+        orientation_start=4,
+        rectangle_to_reconstruction=np.asarray([1, 0], dtype=np.int32),
+        noise_variance=np.asarray([2.0, 3.0], dtype=np.float32),
+        physical_image_size=8,
+    )
+
+    source = np.asarray([[2.0 + 1.0j, 1.0 + 0.0j], [3.0 + 0.0j, 0.0]], dtype=np.complex64)
+    weight = np.asarray([[2.0, 1.0], [3.0, 0.0]], dtype=np.float32)
+    expected = analyzer._norm_terms(
+        projection,
+        np.abs(projection) ** 2,
+        source,
+        weight,
+        np.asarray([2.0, 3.0], dtype=np.float32),
+    )
+    assert result["a2"] == float(np.sum(expected["a2"], dtype=np.float64))
+    assert result["xa"] == float(np.sum(expected["xa"], dtype=np.float64))
+    assert result["row_count"] == 3
+    assert result["active_rotation_count"] == 2
+
+
+def test_counterfactual_totals_split_a2_and_xa() -> None:
+    assert analyzer._counterfactual_totals(
+        weighted_image=100.0,
+        recovar_a2=20.0,
+        recovar_xa=5.0,
+        native_a2=18.0,
+        native_xa=7.0,
+    ) == {
+        "recovar": 110.0,
+        "native_a2_only": 108.0,
+        "native_xa_only": 106.0,
+        "native_a2_and_xa": 104.0,
+    }
+
+
+def test_native_unit_target_comparison_applies_fourier_n4_divisor() -> None:
+    report = analyzer._native_unit_target_comparison(
+        {"recovar": 32.0, "native_a2_only": 16.0},
+        target=0.5,
+        physical_image_size=2,
+    )
+
+    assert report["recovar_to_native_divisor"] == 16.0
+    assert report["counterfactual_totals_native_units"] == {
+        "recovar": 2.0,
+        "native_a2_only": 1.0,
+    }
+    assert report["absolute_errors"] == {"recovar": 1.5, "native_a2_only": 0.5}
+    assert report["absolute_gap_closure_fraction"]["native_a2_only"] == 2.0 / 3.0

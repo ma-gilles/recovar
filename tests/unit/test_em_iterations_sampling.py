@@ -78,6 +78,7 @@ def test_read_relion_optimiser_metadata_reads_replay_accuracies(tmp_path):
                 "_rlnChangesOptimalOffsets 0.33",
                 "_rlnSmallestChangesOrientations 0.5405",
                 "_rlnSmallestChangesOffsets 0.4216",
+                "_rlnDoCorrectCtf 1",
                 "",
             ]
         )
@@ -93,6 +94,7 @@ def test_read_relion_optimiser_metadata_reads_replay_accuracies(tmp_path):
     assert meta["changes_optimal_offsets"] == pytest.approx(0.33)
     assert meta["smallest_changes_orientations"] == pytest.approx(0.5405)
     assert meta["smallest_changes_offsets"] == pytest.approx(0.4216)
+    assert meta["do_correct_ctf"] == 1
 
 
 def test_translations_to_indices_maps_centered_integer_offsets():

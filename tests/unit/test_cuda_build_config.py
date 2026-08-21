@@ -186,8 +186,9 @@ def test_build_custom_cuda_writes_requested_output(monkeypatch, tmp_path):
     target = (tmp_path / "cache" / "libcuda_backproject.so").resolve()
     captured = {}
 
-    def fake_check_call(cmd):
+    def fake_check_call(cmd, *, env):
         captured["cmd"] = cmd
+        captured["env"] = env
         target.write_text("stub")
 
     monkeypatch.setattr(cb.subprocess, "check_call", fake_check_call)
@@ -196,6 +197,7 @@ def test_build_custom_cuda_writes_requested_output(monkeypatch, tmp_path):
     assert result == target
     assert target.exists()
     assert captured["cmd"][-1] == f"LIB={target}"
+    assert captured["env"]["PATH"] == os.environ["PATH"]
 
 
 def test_build_custom_cuda_force_rebuilds_even_when_output_exists(monkeypatch, tmp_path):
@@ -206,8 +208,9 @@ def test_build_custom_cuda_force_rebuilds_even_when_output_exists(monkeypatch, t
     target.write_text("old")
     captured = {}
 
-    def fake_check_call(cmd):
+    def fake_check_call(cmd, *, env):
         captured["cmd"] = cmd
+        captured["env"] = env
         target.write_text("new")
 
     monkeypatch.setattr(cb.subprocess, "check_call", fake_check_call)
@@ -217,6 +220,7 @@ def test_build_custom_cuda_force_rebuilds_even_when_output_exists(monkeypatch, t
     assert target.read_text() == "new"
     assert captured["cmd"][:3] == ["make", "-B", "-C"]
     assert captured["cmd"][-1] == f"LIB={target}"
+    assert captured["env"]["PATH"] == os.environ["PATH"]
 
 
 def test_ensure_lib_path_autobuilds_when_missing(monkeypatch, tmp_path):
@@ -259,6 +263,30 @@ def test_cuda_available_records_load_error_for_followup_failure_message(monkeypa
     assert cb.cuda_available() is False
     assert cb._auto_build_error is error
     assert "dlopen failed" in str(cb.cuda_unavailable_error())
+
+
+def test_cuda_available_accepts_cuda_platform_name(monkeypatch):
+    import recovar.cuda_backproject as cb
+
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cb, "_cuda_ok", None)
+    monkeypatch.setattr(cb, "_auto_build_error", None)
+    monkeypatch.setattr(cb.jax, "devices", lambda: [types.SimpleNamespace(platform="cuda")])
+    monkeypatch.setattr(cb, "_ensure_ffi", lambda: None)
+
+    assert cb.cuda_available() is True
+
+
+def test_cuda_available_respects_runtime_disable_without_poisoning_cached_success(monkeypatch):
+    import recovar.cuda_backproject as cb
+
+    monkeypatch.setattr(cb, "_cuda_ok", True)
+    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    assert cb.cuda_available() is False
+    assert cb._cuda_ok is True
+
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA")
+    assert cb.cuda_available() is True
 
 
 def test_slicing_uses_custom_cuda_by_default_on_gpu(monkeypatch):

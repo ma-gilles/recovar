@@ -19,7 +19,8 @@ G (angular sampling), H (speed tricks).
 """
 
 import logging
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 import numpy as np
@@ -31,6 +32,14 @@ MAX_NR_ITER_WO_RESOL_GAIN = 1
 MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES = 1
 LOCAL_SEARCH_HEALPIX_ORDER = 4  # Switch to local search at order >= 4 (~3.7 deg)
 SIGMA_CUTOFF = 3.0  # Only search within 3-sigma of prior
+_LOW_PMAX_REFINE_GUARD_ENV = "RECOVAR_EM_LOW_PMAX_REFINE_GUARD"
+_LOW_PMAX_REFINE_MAX_AVE_PMAX_ENV = "RECOVAR_EM_LOW_PMAX_REFINE_MAX_AVE_PMAX"
+_LOW_PMAX_REFINE_MIN_RES_STALL_ENV = "RECOVAR_EM_LOW_PMAX_REFINE_MIN_RES_STALL"
+_LOW_PMAX_REFINE_REQUIRE_LOCAL_ENV = "RECOVAR_EM_LOW_PMAX_REFINE_REQUIRE_LOCAL"
+_LOW_PMAX_REFINE_DEFAULT_MAX_AVE_PMAX = 0.15
+_LOW_PMAX_REFINE_DEFAULT_MIN_RES_STALL = 3
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 
 # RELION's "smallest changes thus far" sentinel values (ml_optimiser.cpp:1042-1044)
 SMALLEST_CHANGES_INIT_ORIENTATIONS = 999.0  # degrees
@@ -74,6 +83,57 @@ def effective_angular_step(order: int, adaptive_oversampling: int = 0) -> float:
     return healpix_angular_step(order) / (2**adaptive_oversampling)
 
 
+def relion_mpi_hidden_variable_change_is_small(
+    *,
+    current_classes: float,
+    current_offsets_angstrom: float,
+    current_orientations_deg: float,
+    smallest_classes: float,
+    smallest_offsets_angstrom: float,
+    smallest_orientations_deg: float,
+    mpi_leader_angular_step_deg: float,
+    mpi_leader_translation_step_angstrom: float,
+) -> bool:
+    """Evaluate RELION MPI's hidden-variable stall predicate.
+
+    This deliberately accepts the sampling steps held by the MPI leader, not
+    the current follower sampling.  In ``MlOptimiserMpi::expectation`` RELION
+    calls ``updateAngularSampling`` only on followers.  For non-helical runs it
+    broadcasts the updated counters and smallest-change trackers, but not the
+    sampling object.  Later, rank 0 calls
+    ``updateOverallChangesInHiddenVariables`` and therefore divides by the
+    effective sampling steps that the leader had when the process (or restart)
+    was initialized.  See ``ml_optimiser_mpi.cpp:1094-1125,2880-2903`` and
+    ``ml_optimiser.cpp:9263-9273`` in RELION d476e6f.
+
+    The caller is responsible for applying adaptive oversampling when it
+    initializes the two fixed leader-step arguments.
+    """
+    angular_step = float(mpi_leader_angular_step_deg)
+    translation_step = float(mpi_leader_translation_step_angstrom)
+    ratio_orient = (
+        float(current_orientations_deg) / angular_step
+        if angular_step > 0.0
+        else float("inf")
+    )
+    ratio_trans = (
+        float(current_offsets_angstrom) / translation_step
+        if translation_step > 0.0
+        else float("inf")
+    )
+    return bool(
+        1.03 * float(current_classes) >= float(smallest_classes)
+        and (
+            ratio_trans < 0.40
+            or 1.03 * float(current_offsets_angstrom) >= float(smallest_offsets_angstrom)
+        )
+        and (
+            ratio_orient < 0.40
+            or 1.03 * float(current_orientations_deg) >= float(smallest_orientations_deg)
+        )
+    )
+
+
 def resolution_required_angular_sampling(
     current_resolution_angstrom: float,
     particle_diameter_angstrom: float,
@@ -101,14 +161,14 @@ def resolution_required_angular_sampling(
 
 
 def fine_enough_angular_accuracy(state: "RefinementState") -> float:
-    """Return the angular-accuracy threshold used for fine-enough checks."""
-    return min(
-        float(state.acc_rot),
-        resolution_required_angular_sampling(
-            state.current_resolution,
-            state.particle_diameter_angstrom,
-        ),
-    )
+    """Return RELION's measured accuracy for the fine-enough check.
+
+    The resolution-implied angular step is a separate trigger for entering
+    ``updateAngularSampling``.  RELION does not substitute that step for a
+    missing ``acc_rot`` and does not cap a finite ``acc_rot`` with it when
+    deciding whether the current grid is already fine enough.
+    """
+    return float(state.acc_rot)
 
 
 def convergence_sampling_diagnostics(state: "RefinementState") -> dict[str, float | bool]:
@@ -117,14 +177,14 @@ def convergence_sampling_diagnostics(state: "RefinementState") -> dict[str, floa
         state.current_resolution,
         state.particle_diameter_angstrom,
     )
-    angular_accuracy = min(float(state.acc_rot), float(resolution_required))
+    angular_accuracy = fine_enough_angular_accuracy(state)
     return {
         "effective_step": float(state.effective_step),
         "acc_rot": float(state.acc_rot),
         "resolution_required_step": float(resolution_required),
         "angular_accuracy": float(angular_accuracy),
         "fine_enough": bool(
-            state.acc_rot < float("inf")
+            np.isfinite(angular_accuracy)
             and state.effective_step < 0.75 * angular_accuracy
         ),
         "resolution_requires_finer_sampling": bool(
@@ -239,6 +299,7 @@ class RefinementState:
 
     # Convergence flags
     has_converged: bool = False
+    has_fine_enough_angular_sampling: bool = False
     do_local_search: bool = False
 
     # Local search priors (radians)
@@ -292,11 +353,26 @@ class RefinementState:
     # the older field is kept for assignment-change logging.
     nr_iter_wo_large_hidden_variable_changes: int = 0
 
+    # RELION MPI quirk: B4 is evaluated by rank 0, whose non-helical sampling
+    # object is not updated or synchronized when followers refine sampling.
+    # These are the effective (oversampling-applied) denominator steps held by
+    # the leader at process/restart initialization and remain fixed thereafter.
+    mpi_leader_hidden_variable_angular_step_deg: float = 0.0
+    mpi_leader_hidden_variable_translation_step_angstrom: float = 0.0
+    suppress_hidden_variable_increment_once: bool = False
+
     def __post_init__(self):
         if self.auto_local_healpix_order < 0:
             raise ValueError("auto_local_healpix_order must be non-negative")
         if self.angular_step == 0.0:
             self.angular_step = healpix_angular_step(self.healpix_order)
+        oversampling_scale = 2**self.adaptive_oversampling
+        if self.mpi_leader_hidden_variable_angular_step_deg == 0.0:
+            self.mpi_leader_hidden_variable_angular_step_deg = self.angular_step / oversampling_scale
+        if self.mpi_leader_hidden_variable_translation_step_angstrom == 0.0:
+            self.mpi_leader_hidden_variable_translation_step_angstrom = (
+                self.translation_step * self.voxel_size_angstrom / oversampling_scale
+            )
         if self.should_do_local_search:
             self.do_local_search = True
 
@@ -304,33 +380,6 @@ class RefinementState:
     def effective_step(self) -> float:
         """Effective angular step in degrees (accounting for oversampling)."""
         return effective_angular_step(self.healpix_order, self.adaptive_oversampling)
-
-    @property
-    def has_fine_enough_angular_sampling(self) -> bool:
-        """True when angular sampling should not be refined further.
-
-        Fires when the per-particle ``acc_rot`` estimate is populated and
-        ``effective_step < 0.75 * acc_rot``. When particle diameter and current
-        resolution are known, cap ``acc_rot`` by RELION's resolution-implied
-        angular sampling. This prevents a loose approximate ``acc_rot`` from
-        declaring convergence while the current resolution still requires a
-        finer orientation grid.
-
-        Mirrors RELION ``ml_optimiser.cpp:9817`` which sets
-        ``has_fine_enough_angular_sampling = true`` when the old step is
-        already finer than ``0.75 * acc_rot``, so the convergence check
-        downstream (``ml_optimiser.cpp:10137``) can proceed.
-
-        ``max_healpix_order`` is a RECOVAR runtime cap, not RELION's
-        fine-enough criterion. Hitting that cap must stop further grid
-        refinement but must not by itself trigger the final all-data
-        iteration, otherwise RECOVAR can terminate earlier than RELION.
-        """
-        if self.acc_rot < float("inf"):
-            angular_accuracy = fine_enough_angular_accuracy(self)
-            if self.effective_step < 0.75 * angular_accuracy:
-                return True
-        return False
 
     @property
     def should_do_local_search(self) -> bool:
@@ -570,11 +619,13 @@ def calculate_expected_angular_errors(
     nr_significant_per_image: np.ndarray,
     n_translations: int = 1,
 ) -> tuple[float, float]:
-    """Estimate angular and translational accuracy from the posterior.
+    """Approximate angular and translational accuracy from posterior support.
 
-    Port of RELION's ``calculateExpectedAngularErrors()``
-    (``ml_optimiser.cpp:9534-9564``).  The angular precision is estimated
-    from the number of significant orientations per image::
+    This is a cheap support-width proxy, not RELION's full
+    ``calculateExpectedAngularErrors()`` implementation. RELION perturbs
+    the current map until the likelihood ratio reaches ``P=0.01``; this
+    helper only estimates angular precision from the number of significant
+    orientation samples per image::
 
         sigma2_rot  = step^2 / (3 * n_sig)
         sigma2_tilt = step^2 / (3 * n_sig)
@@ -720,13 +771,9 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
     bool
         True if angular sampling should be refined.
     """
-    # RELION fine-enough sampling: do not refine further. This may allow
-    # convergence downstream once the stall counters are also satisfied.
     if state.has_fine_enough_angular_sampling:
         return False
 
-    # RECOVAR runtime cap: do not refine beyond it, but do not report
-    # fine-enough/converged just because the cap was reached.
     if state.healpix_order >= state.max_healpix_order:
         logger.info(
             "Angular sampling reached max_healpix_order=%d; not refining further "
@@ -735,9 +782,14 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
         )
         return False
 
-    # RELION can proceed either because resolution stalled, or because the
-    # current resolution requires finer angular sampling. The resolution-based
-    # shortcut is disabled for the direct transition into local search.
+    if not _angular_sampling_update_is_ready(state):
+        return False
+
+    return not _angular_sampling_is_fine_enough_now(state)
+
+
+def _angular_sampling_update_is_ready(state: RefinementState) -> bool:
+    """Return whether RELION enters the body of ``updateAngularSampling``."""
     do_proceed_resolution = (
         resolution_triggers_angular_refinement(state)
         or state.nr_iter_wo_resol_gain >= MAX_NR_ITER_WO_RESOL_GAIN
@@ -761,17 +813,122 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
         ):
             return False
 
-    # Don't refine beyond 75% of estimated angular accuracy.
-    if state.acc_rot < float("inf"):
-        angular_accuracy = fine_enough_angular_accuracy(state)
-        if state.effective_step < 0.75 * angular_accuracy:
-            logger.info(
-                "Angular step %.2f deg < 75%% of angular accuracy %.2f deg; not refining further",
-                state.effective_step,
-                angular_accuracy,
-            )
-            return False
+    if _low_pmax_refinement_guard_blocks(state):
+        return False
 
+    return True
+
+
+def _angular_sampling_is_fine_enough_now(state: RefinementState) -> bool:
+    """Evaluate RELION's strict old-step versus measured-accuracy test."""
+    angular_accuracy = fine_enough_angular_accuracy(state)
+    return bool(
+        np.isfinite(angular_accuracy)
+        and state.effective_step < 0.75 * angular_accuracy
+    )
+
+
+def update_angular_sampling(state: RefinementState) -> RefinementState:
+    """Run RELION's expectation-boundary sampling transition.
+
+    ``has_fine_enough_angular_sampling`` is a latched optimiser flag.  It is
+    set only when the resolution/hidden-variable proceed conditions are met
+    and the *old* sampling step is already finer than 75% of measured
+    ``acc_rot``.  Recomputing it as a property of a newly refined grid causes
+    an off-by-one convergence decision.
+    """
+    if state.has_fine_enough_angular_sampling or not _angular_sampling_update_is_ready(state):
+        return state
+    if _angular_sampling_is_fine_enough_now(state):
+        logger.info(
+            "Angular step %.2f deg < 75%% of angular accuracy %.2f deg; "
+            "latching fine-enough sampling",
+            state.effective_step,
+            fine_enough_angular_accuracy(state),
+        )
+        return replace(state, has_fine_enough_angular_sampling=True)
+    if state.healpix_order >= state.max_healpix_order:
+        logger.info(
+            "Angular sampling reached max_healpix_order=%d; keeping RELION "
+            "fine-enough flag false",
+            state.max_healpix_order,
+        )
+        return state
+    return refine_angular_sampling(state)
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; using %.3f", name, value, default)
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; using %d", name, value, default)
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    normalized = value.strip().lower()
+    if normalized in _TRUE_ENV_VALUES:
+        return True
+    if normalized in _FALSE_ENV_VALUES:
+        return False
+    logger.warning("Ignoring invalid %s=%r; using %s", name, value, default)
+    return default
+
+
+def _low_pmax_refinement_guard_blocks(state: RefinementState) -> bool:
+    """Return whether the opt-in diffuse-posterior guard should stop refinement.
+
+    This is an ablation hook, disabled by default.  It prevents further
+    post-local angular refinement when the posterior remains diffuse
+    (low ave_Pmax) and the FSC-derived resolution has already stalled.
+    """
+    if not _env_flag_enabled(_LOW_PMAX_REFINE_GUARD_ENV):
+        return False
+    require_local_search = _env_bool(_LOW_PMAX_REFINE_REQUIRE_LOCAL_ENV, True)
+    if require_local_search and not state.do_local_search:
+        return False
+    max_ave_pmax = _env_float(
+        _LOW_PMAX_REFINE_MAX_AVE_PMAX_ENV,
+        _LOW_PMAX_REFINE_DEFAULT_MAX_AVE_PMAX,
+    )
+    min_res_stall = _env_int(
+        _LOW_PMAX_REFINE_MIN_RES_STALL_ENV,
+        _LOW_PMAX_REFINE_DEFAULT_MIN_RES_STALL,
+    )
+    if not np.isfinite(state.ave_Pmax) or float(state.ave_Pmax) > max_ave_pmax:
+        return False
+    if int(state.nr_iter_wo_resol_gain) < min_res_stall:
+        return False
+    logger.info(
+        "Low-Pmax angular-refinement guard active: ave_Pmax=%.4f <= %.4f, "
+        "resolution stalls=%d >= %d; keeping healpix_order=%d",
+        state.ave_Pmax,
+        max_ave_pmax,
+        state.nr_iter_wo_resol_gain,
+        min_res_stall,
+        state.healpix_order,
+    )
     return True
 
 
@@ -905,6 +1062,7 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
         nr_iter_wo_resol_gain=0,
         nr_iter_wo_assignment_changes=0,
         has_converged=False,
+        has_fine_enough_angular_sampling=False,
         do_local_search=do_local,
         sigma_rot=sigma_rad,
         sigma_psi=sigma_rad,
@@ -928,6 +1086,14 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
         smallest_changes_optimal_offsets_angstrom=SMALLEST_CHANGES_INIT_OFFSETS,
         smallest_changes_optimal_classes=SMALLEST_CHANGES_INIT_CLASSES,
         nr_iter_wo_large_hidden_variable_changes=0,
+        mpi_leader_hidden_variable_angular_step_deg=state.mpi_leader_hidden_variable_angular_step_deg,
+        mpi_leader_hidden_variable_translation_step_angstrom=(
+            state.mpi_leader_hidden_variable_translation_step_angstrom
+        ),
+        # The follower reset performed by updateAngularSampling is the value
+        # observed in the optimiser STAR for the first iteration on every new
+        # sampling, even though rank 0 subsequently aggregates B3 changes.
+        suppress_hidden_variable_increment_once=True,
     )
 
 
@@ -954,7 +1120,10 @@ def update_refinement_state(
     previous_translations_pixel: Optional[np.ndarray] = None,
     current_classes: Optional[np.ndarray] = None,
     previous_classes: Optional[np.ndarray] = None,
+    ave_pmax_override: Optional[float] = None,
     voxel_size_angstrom: float = 1.0,
+    update_sampling: bool = True,
+    check_convergence_now: bool = True,
 ) -> RefinementState:
     """Update RefinementState after one EM iteration.
 
@@ -998,8 +1167,22 @@ def update_refinement_state(
         are provided, ``current_changes_optimal_classes`` is the number of
         particles whose hard class changed.  When omitted, single-class refine
         keeps the historical zero class-change behavior.
+    ave_pmax_override : float, optional
+        Authoritative optimizer scalar. When supplied, use this instead of the
+        raw mean of ``max_posterior_per_image``. Split-half RELION uses half
+        1's retained-mass-normalized Pmax and broadcasts it to both halves.
     voxel_size_angstrom : float, default 1.0
         Pixel size in angstroms. Required for the offset metric.
+    update_sampling : bool, default True
+        Apply RELION's angular/translation sampling scheduler after updating
+        the statistics.  The autonomous iteration loop sets this false because
+        it runs the scheduler at the next expectation boundary, after exact
+        expected-accuracy estimation, matching RELION's call order.
+    check_convergence_now : bool, default True
+        Evaluate convergence immediately after recording this iteration.  The
+        autonomous loop sets this false and evaluates at the top of the next
+        iteration, matching RELION and avoiding a synthetic final pass when
+        ``max_iter`` is exhausted before that next iteration exists.
 
     Returns
     -------
@@ -1044,11 +1227,17 @@ def update_refinement_state(
                 "current_classes and previous_classes must have matching shapes; "
                 f"got {current_classes_arr.shape} and {previous_classes_arr.shape}",
             )
-        current_changes_classes = float(np.count_nonzero(current_classes_arr != previous_classes_arr))
+        current_changes_classes = float(
+            np.count_nonzero(current_classes_arr != previous_classes_arr) / current_classes_arr.size
+        ) if current_classes_arr.size else 0.0
 
     # --- Compute Pmax ---
     ave_pmax = state.ave_Pmax
-    if max_posterior_per_image is not None:
+    if ave_pmax_override is not None:
+        ave_pmax = float(ave_pmax_override)
+        if not np.isfinite(ave_pmax) or ave_pmax < 0.0 or ave_pmax > 1.0 + 1e-6:
+            raise ValueError(f"ave_pmax_override must be a probability, got {ave_pmax}")
+    elif max_posterior_per_image is not None:
         ave_pmax = compute_ave_Pmax(max_posterior_per_image)
 
     # --- Resolution stall detection ---
@@ -1056,11 +1245,25 @@ def update_refinement_state(
     # (lower = better resolution).  Matches RELION
     # MlOptimiser::updateCurrentResolution at ml_optimiser.cpp:5658-5663:
     #
-    #   if (newres <= mymodel.current_resolution+0.0001) // Å, lower is better
+    #   if (newres <= mymodel.current_resolution+0.0001)
+    #
+    # where RELION stores both resolutions as reciprocal Angstrom.  RECOVAR
+    # stores Angstrom, so compare the reciprocals and preserve the +0.0001
+    # tolerance exactly.
     #       nr_iter_wo_resol_gain_sum_bodies++;
     #   else
     #       nr_iter_wo_resol_gain = 0;
-    resol_improved = new_resolution < state.current_resolution
+    old_resolution_frequency = (
+        0.0
+        if not np.isfinite(state.current_resolution) or state.current_resolution <= 0.0
+        else 1.0 / float(state.current_resolution)
+    )
+    new_resolution_frequency = (
+        0.0
+        if not np.isfinite(new_resolution) or new_resolution <= 0.0
+        else 1.0 / float(new_resolution)
+    )
+    resol_improved = new_resolution_frequency > old_resolution_frequency + 0.0001
     if resol_improved:
         nr_iter_wo_resol_gain = 0
     else:
@@ -1092,29 +1295,20 @@ def update_refinement_state(
     smallest_offsets = state.smallest_changes_optimal_offsets_angstrom
     smallest_classes = state.smallest_changes_optimal_classes
     if np.isfinite(current_changes_orientations) and np.isfinite(current_changes_offsets_angstrom):
-        # Sampling steps used as the "small enough" denominator. RELION uses
-        # the ANGULAR SAMPLING STEP (in degrees, after oversampling) for the
-        # orientation ratio and the TRANSLATION SAMPLING STEP (in pixels,
-        # after oversampling) for the offset ratio. Convert offsets to pixels.
-        rot_step_deg = effective_angular_step(
-            state.healpix_order,
-            state.adaptive_oversampling,
-        )
-        # offset RMS is in angstroms; convert to pixels for the ratio
-        # comparison against the translation sampling step (also in pixels).
-        if voxel_size_angstrom > 0:
-            offsets_pixels = current_changes_offsets_angstrom / voxel_size_angstrom
-        else:
-            offsets_pixels = current_changes_offsets_angstrom
-        trans_step = state.translation_step / (2**state.adaptive_oversampling)
-        ratio_orient_changes = current_changes_orientations / rot_step_deg if rot_step_deg > 0 else float("inf")
-        ratio_trans_changes = offsets_pixels / trans_step if trans_step > 0 else float("inf")
-
-        class_ok = 1.03 * current_changes_classes >= smallest_classes
-        trans_ok = ratio_trans_changes < 0.40 or 1.03 * current_changes_offsets_angstrom >= smallest_offsets
-        rot_ok = ratio_orient_changes < 0.40 or 1.03 * current_changes_orientations >= smallest_orient
-
-        if class_ok and trans_ok and rot_ok:
+        if state.suppress_hidden_variable_increment_once:
+            nr_iter_wo_large_hidden_variable_changes = 0
+        elif relion_mpi_hidden_variable_change_is_small(
+            current_classes=current_changes_classes,
+            current_offsets_angstrom=current_changes_offsets_angstrom,
+            current_orientations_deg=current_changes_orientations,
+            smallest_classes=smallest_classes,
+            smallest_offsets_angstrom=smallest_offsets,
+            smallest_orientations_deg=smallest_orient,
+            mpi_leader_angular_step_deg=state.mpi_leader_hidden_variable_angular_step_deg,
+            mpi_leader_translation_step_angstrom=(
+                state.mpi_leader_hidden_variable_translation_step_angstrom
+            ),
+        ):
             nr_iter_wo_large_hidden_variable_changes += 1
         else:
             nr_iter_wo_large_hidden_variable_changes = 0
@@ -1125,7 +1319,9 @@ def update_refinement_state(
         if current_changes_offsets_angstrom < smallest_offsets:
             smallest_offsets = current_changes_offsets_angstrom
     if np.isfinite(current_changes_classes) and current_changes_classes < smallest_classes:
-        smallest_classes = round(current_changes_classes)
+        # RELION's ROUND macro is floor(x + 0.5), unlike Python's bankers
+        # rounding at exactly 0.5.
+        smallest_classes = float(np.floor(current_changes_classes + 0.5))
 
     # --- Update accuracy estimates ---
     new_acc_rot = acc_rot if acc_rot is not None else state.acc_rot
@@ -1144,6 +1340,7 @@ def update_refinement_state(
         nr_iter_wo_resol_gain=nr_iter_wo_resol_gain,
         nr_iter_wo_assignment_changes=nr_iter_wo_assignment_changes,
         has_converged=False,
+        has_fine_enough_angular_sampling=state.has_fine_enough_angular_sampling,
         do_local_search=state.do_local_search,
         sigma_rot=state.sigma_rot,
         sigma_psi=state.sigma_psi,
@@ -1166,6 +1363,11 @@ def update_refinement_state(
         smallest_changes_optimal_offsets_angstrom=smallest_offsets,
         smallest_changes_optimal_classes=smallest_classes,
         nr_iter_wo_large_hidden_variable_changes=nr_iter_wo_large_hidden_variable_changes,
+        mpi_leader_hidden_variable_angular_step_deg=state.mpi_leader_hidden_variable_angular_step_deg,
+        mpi_leader_hidden_variable_translation_step_angstrom=(
+            state.mpi_leader_hidden_variable_translation_step_angstrom
+        ),
+        suppress_hidden_variable_increment_once=False,
     )
 
     logger.info(
@@ -1199,12 +1401,11 @@ def update_refinement_state(
     )
 
     # --- Check if we should refine angular sampling ---
-    if should_refine_angular_sampling(updated):
-        updated = refine_angular_sampling(updated)
-        return updated
+    if update_sampling:
+        updated = update_angular_sampling(updated)
 
     # --- Check convergence ---
-    if check_convergence(updated):
+    if check_convergence_now and check_convergence(updated):
         updated.has_converged = True
         logger.info(
             "Convergence detected at iteration %d: "
