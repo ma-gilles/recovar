@@ -275,6 +275,18 @@ def test_vdam_parameter_suite_freezes_user_facing_variants_and_default_resources
     assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
 
 
+def test_vdam_long_trajectory_suite_freezes_all_late_checkpoints():
+    suite = json.loads((REPO_ROOT / "docs/math/vdam_k1_long_trajectory_suite_v1.json").read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_long_trajectory_suite.sbatch").read_text()
+
+    assert suite["suite_id"] == "vdam-k1-long-trajectory-v1"
+    assert suite["acceptance_contract"]["required_checkpoints"] == [0, 1, 2, 4, 8, 12, 16, 20, 25]
+    assert [case["id"] for case in suite["cases"]] == ["vdam-l01", "vdam-l02", "vdam-l03"]
+    assert all(case["definition"]["nr_iter"] == 25 for case in suite["cases"])
+    assert "#SBATCH --array=1-3%3" in matrix
+    assert "VDAM_SCORECARD" in matrix
+
+
 def test_vdam_case_runner_uses_job_scoped_runtime_roots():
     runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
     expected_tokens = [
