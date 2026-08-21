@@ -538,6 +538,9 @@ _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_fused_translate_rectangular_f32"
 )
 _TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
+_TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_F32 = (
+    "cuda_relion_powerclass_spectrum_highres_f32"
+)
 _TARGET_RELION_EXPONENTIATE_F32 = "cuda_relion_exponentiate_f32"
 _TARGET_RELION_DIVIDE_F32 = "cuda_relion_divide_f32"
 _TARGET_RELION_CUB_SORT_SCAN_F32 = "cuda_relion_cub_sort_scan_f32"
@@ -609,6 +612,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionFineDiff2FusedTranslateRectangularF32",
     ),
     (_TARGET_RELION_FINE_DIFF2_PAIRS_F32, "RelionFineDiff2PairsF32"),
+    (
+        _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_F32,
+        "RelionPowerClassSpectrumHighresF32",
+    ),
     (_TARGET_RELION_EXPONENTIATE_F32, "RelionExponentiateF32"),
     (_TARGET_RELION_DIVIDE_F32, "RelionDivideF32"),
     (_TARGET_RELION_CUB_SORT_SCAN_F32, "RelionCubSortScanF32"),
@@ -1928,6 +1935,65 @@ def relion_fine_diff2_rectangular_f32(
         out_type,
         vmap_method="sequential",
     )(reference, shifted_image, weight, full_to_compact)
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=("xdim", "ydim", "resolution_limit"),
+)
+def relion_powerclass_spectrum_highres_f32(
+    relion_image: jax.Array,
+    *,
+    xdim: int,
+    ydim: int,
+    resolution_limit: int,
+) -> jax.Array:
+    """Run RELION's 2-D CUDA ``powerClass`` spectrum/high-tail atomics.
+
+    ``relion_image`` is the native uncentred RFFT layout ``(B, ydim*xdim)``.
+    The result contains ``xdim`` shell bins followed by the high-resolution
+    Xi2 scalar, preserving the native spectrum atomics that influence block
+    arrival order at the final scalar atomic.
+    """
+
+    relion_image = jnp.asarray(relion_image)
+    if relion_image.dtype != jnp.complex64:
+        raise TypeError(f"relion_image must be complex64, got {relion_image.dtype}")
+    if (
+        relion_image.ndim != 2
+        or relion_image.shape[0] <= 0
+        or xdim <= 0
+        or ydim <= 0
+        or relion_image.shape[1] != int(xdim) * int(ydim)
+        or resolution_limit < 0
+        or resolution_limit > xdim
+    ):
+        raise ValueError(
+            "RELION powerClass operands have inconsistent dimensions: "
+            f"image={relion_image.shape}, xdim={xdim}, ydim={ydim}, "
+            f"resolution_limit={resolution_limit}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION powerClass requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION powerClass was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+    out_type = jax.ShapeDtypeStruct(
+        (relion_image.shape[0], int(xdim) + 1),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        relion_image,
+        xdim=int(xdim),
+        ydim=int(ydim),
+        resolution_limit=int(resolution_limit),
+    )
 
 
 @functools.partial(jax.jit, static_argnames=("current_size",))

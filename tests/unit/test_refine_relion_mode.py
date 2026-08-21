@@ -3857,6 +3857,16 @@ def test_texture_centered_crop_masks_current_image_disk():
     expected[:, 3, 2] = 0.0
     np.testing.assert_array_equal(got, expected)
 
+    unmasked = np.asarray(
+        _texture_centered_crop_to_full(
+            crop,
+            image_shape=(4, 4),
+            projector_output_size=4,
+            mask_current_image_disk=False,
+        )
+    ).reshape(1, 4, 3)
+    np.testing.assert_array_equal(unmasked, np.ones((1, 4, 3), dtype=np.complex64))
+
 
 def test_local_big_jit_relion_projector_matches_helper(rng):
     from recovar.em.dense_single_volume.helpers.projection import compute_relion_projector_projections_block
@@ -5256,7 +5266,8 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         shifted_score_half,
         shifted_recon_half,
         _batch_norm,
-        ctf2_over_nv_half,
+        ctf2_over_nv_score_half,
+        ctf2_over_nv_recon_half,
         _processed_score_half,
         _real_space_pre_shift_applied,
     ) = _prepare_local_exact_bucket(
@@ -5299,7 +5310,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     proj_weighted = proj_half * score_half_weights[None, None, :]
     proj_abs2_weighted = proj_abs2 * score_half_weights[None, None, :]
     shifted_score = window_spec.score_values(shifted_score_half)
-    ctf2_over_nv_score = window_spec.score_values(ctf2_over_nv_half)
+    ctf2_over_nv_score = window_spec.score_values(ctf2_over_nv_score_half)
     scores = score_local_bucket(
         shifted_score.reshape(1, 1, -1),
         ctf2_over_nv_score,
@@ -5311,7 +5322,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     )
     _log_Z, probs, _best_log_score, _best_argmax, _max_posterior = normalize_local_scores(scores)
     shifted_recon = window_spec.recon_values(shifted_recon_half)
-    ctf2_over_nv_recon = window_spec.recon_values(ctf2_over_nv_half)
+    ctf2_over_nv_recon = window_spec.recon_values(ctf2_over_nv_recon_half)
     shifted_recon_split = shifted_recon.reshape(1, 1, -1)
     manual_summed = compute_local_weighted_sums(probs, shifted_recon_split)
     manual_ctf_probs = compute_local_ctf_sums(probs, ctf2_over_nv_recon)
@@ -5379,6 +5390,83 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         rtol=1e-5,
     )
     assert np.all(np.isfinite(np.asarray(noise_exact.wsum_sigma2_noise)))
+
+
+def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(monkeypatch, rng):
+    import recovar.em.dense_single_volume.local_em_engine as local_engine_module
+
+    dataset = MockDataset(1, rng)
+    config = ForwardModelConfig.from_dataset(
+        dataset,
+        disc_type="linear_interp",
+        process_fn=dataset.process_images,
+    )
+    n_half = dataset.image_shape[0] * (dataset.image_shape[1] // 2 + 1)
+    processed = (
+        np.arange(n_half, dtype=np.float32)[None, :]
+        + 1j * np.arange(n_half, dtype=np.float32)[None, ::-1]
+    ).astype(np.complex64)
+    ctf_rfloat = np.linspace(-1.25, 1.75, n_half, dtype=np.float64)[None, :]
+    noise_f64 = np.linspace(0.7, 2.3, n_half, dtype=np.float64)
+
+    monkeypatch.setattr(
+        local_engine_module._sparse_pass2_diagnostics,
+        "_relion_exact_ctf_half_from_source_star",
+        lambda *_args, **_kwargs: ctf_rfloat,
+    )
+    monkeypatch.setattr(
+        local_engine_module,
+        "resolve_image_mask_for_half_preprocess",
+        lambda *_args, **_kwargs: (np.zeros(dataset.image_shape, dtype=np.float32), "none"),
+    )
+    monkeypatch.setattr(
+        local_engine_module,
+        "_big_jit_preprocess_half",
+        lambda *_args, **_kwargs: jnp.asarray(processed),
+    )
+
+    (
+        shifted_score,
+        shifted_recon,
+        batch_norm,
+        score_weight,
+        recon_weight,
+        processed_score,
+        pre_shift_applied,
+    ) = _prepare_local_exact_bucket(
+        dataset,
+        np.zeros((1, *dataset.image_shape), dtype=np.float32),
+        np.zeros((1, 9), dtype=np.float32),
+        np.asarray([0], dtype=np.int32),
+        jnp.asarray(noise_f64),
+        jnp.zeros((1, 2), dtype=jnp.float32),
+        config,
+        make_half_image_weights(dataset.image_shape),
+        score_with_masked_images=False,
+        relion_exact_bpref_operands=True,
+    )
+
+    inverse_noise = np.reciprocal(noise_f64).astype(np.float32)
+    ctf_f32 = ctf_rfloat.astype(np.float32)
+    expected_weighted_ctf = ctf_f32 * inverse_noise[None, :]
+    expected_score_weight = (
+        inverse_noise[None, :].astype(np.float64) * ctf_rfloat * ctf_rfloat
+    ).astype(np.float32)
+    expected_recon_weight = expected_weighted_ctf * ctf_f32
+    np.testing.assert_array_equal(np.asarray(processed_score), processed)
+    np.testing.assert_array_equal(np.asarray(shifted_score), processed * expected_weighted_ctf)
+    np.testing.assert_array_equal(np.asarray(shifted_recon), processed * expected_weighted_ctf)
+    np.testing.assert_array_equal(np.asarray(score_weight), expected_score_weight)
+    np.testing.assert_array_equal(np.asarray(recon_weight), expected_recon_weight)
+    expected_norm = np.sum(
+        np.abs(processed) ** 2
+        * inverse_noise[None, :]
+        * np.asarray(make_half_image_weights(dataset.image_shape))[None, :],
+        axis=-1,
+        keepdims=True,
+    )
+    np.testing.assert_allclose(np.asarray(batch_norm), expected_norm, rtol=1e-6, atol=1e-5)
+    assert pre_shift_applied is False
 
 
 def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch):

@@ -13,7 +13,10 @@ from recovar.em.dense_single_volume.helpers.projection import compute_noise_bloc
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_f32_fine_reconstruction_probs,
 )
-from recovar.em.dense_single_volume.local_backprojection import compute_local_ctf_sums, compute_local_weighted_sums
+from recovar.em.dense_single_volume.local_backprojection import (
+    compute_local_ctf_sums,
+    compute_local_weighted_sums,
+)
 from recovar.em.dense_single_volume.local_big_jit import _score_normalize_mstep, _score_normalize_support
 from recovar.em.dense_single_volume.local_score_pass import fused_score_normalize_mstep_abs2_on_demand
 

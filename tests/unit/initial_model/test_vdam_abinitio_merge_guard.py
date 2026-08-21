@@ -230,6 +230,8 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "RECOVAR_CUDA_LIB",
         "cuda_backproject.cuda_available()",
         "VDAM parity provenance/GPU/CUDA-FFI gate passed",
+        '--threads "${RELION_THREADS:-8}"',
+        'mkdir -p "${RELION_ACC_DUMP_DIR}"',
     ]
     haystack = "\n".join([guard, runner, auditor, sbatch])
     missing = [token for token in expected_tokens if token not in haystack]

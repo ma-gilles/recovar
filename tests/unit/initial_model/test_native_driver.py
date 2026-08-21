@@ -48,6 +48,15 @@ def test_micrograph_sort_order_matches_relion_experiment_order():
     assert driver._micrograph_sort_order(main).tolist() == [0, 2, 3, 4, 1]
 
 
+def test_noise_variance_preserves_relion_rfloat_shell_values():
+    sigma2 = np.asarray([[1.00000006e-5, 2.00000012e-5, 3.00000018e-5]], dtype=np.float64)
+
+    noise = driver._noise_variance_from_sigma2(sigma2, 4)
+
+    assert noise.dtype == np.float64
+    assert np.any(noise != noise.astype(np.float32).astype(np.float64))
+
+
 def test_experiment_read_order_uses_micrograph_lexicographic_order():
     main = pd.DataFrame(
         {
@@ -196,6 +205,37 @@ def test_sampling_plan_oversamples_relion_grid():
     assert plan.rotations.shape == (4608, 3, 3)
     assert plan.translations.shape == (116, 2)
     assert plan.random_perturbation == 0.0
+
+
+def test_configure_relion_image_mask_forwards_image_backend():
+    calls = {}
+
+    class Backend:
+        def set_relion_image_mask(self, **kwargs):
+            calls["mask"] = kwargs
+
+        def set_relion_fourier_backend(self, value):
+            calls["fourier_backend"] = value
+
+    dataset = SimpleNamespace(
+        image_source=SimpleNamespace(backend=Backend()),
+        grid_size=128,
+        voxel_size=2.125,
+    )
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        particle_diameter=200.0,
+        image_fourier_backend="relion_cuda",
+    )
+
+    driver._configure_relion_image_mask(dataset, opts)
+
+    assert calls["mask"] == {
+        "pixel_size": 2.125,
+        "particle_diameter_ang": 200.0,
+        "width_mask_edge_px": 5.0,
+    }
+    assert calls["fourier_backend"] == "relion_cuda"
 
 
 def test_initial_sampling_state_uses_relion_angstrom_internal_units():
@@ -359,6 +399,14 @@ def test_random_perturbation_sequence_matches_relion_initialmodel_fixture():
 
     assert driver._random_perturbation_for_iteration(opts, 1) == pytest.approx(-0.25278, abs=5e-6)
     assert driver._random_perturbation_for_iteration(opts, 2) == pytest.approx(0.125066, abs=5e-6)
+
+    seed_zero = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        random_seed=0,
+        perturbation_factor=0.5,
+    )
+    assert driver._random_perturbation_for_iteration(seed_zero, 1) == -0.07990610599517822
+    assert driver._random_perturbation_for_iteration(seed_zero, 2) == 0.34533798694610596
 
 
 def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch):
@@ -1221,5 +1269,20 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
     assert opts.offset_step_px == 1.5
     assert opts.random_perturbation == 0.25
     assert opts.translation_sigma_angstrom == 6.5
+    assert opts.image_fourier_backend == "host_numpy"
     assert opts.write_iter_artifacts is False
     assert "recovar InitialModel complete: out/initial_model.mrc" in capsys.readouterr().out
+
+
+def test_cli_gpu_auto_selects_relion_cuda_image_backend(monkeypatch):
+    run_ab_initio = _load_run_ab_initio()
+    calls = {}
+
+    def fake_run_native(opts):
+        calls["opts"] = opts
+        return SimpleNamespace(final_mrc="out/initial_model.mrc", final_model_star="out/run_it001_model.star")
+
+    monkeypatch.setattr(driver, "run_native_initial_model", fake_run_native)
+
+    assert run_ab_initio.main(["--i", "particles.star", "--gpu", "0", "--nr_iter", "1"]) == 0
+    assert calls["opts"].image_fourier_backend == "relion_cuda"

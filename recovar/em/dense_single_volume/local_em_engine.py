@@ -122,6 +122,7 @@ from recovar.em.dense_single_volume.local_backprojection import (
 )
 from recovar.em.dense_single_volume.local_big_jit import (
     _norm_correction_image_power_per_image,
+    _preprocess_half as _big_jit_preprocess_half,
     run_local_bucket_big_jit,
 )
 from recovar.em.dense_single_volume.local_debug import (
@@ -674,6 +675,7 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     max_global_rotation_id: int,
     group_index: int,
     n_groups: int,
+    projection_mask_current_image_disk: bool = True,
 ) -> _LocalRelionProjectionCache:
     """Precompute compact RELION projections for one bounded bucket group."""
 
@@ -726,6 +728,9 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     )
     for start in range(0, row_count, chunk_rows):
         stop = min(row_count, start + chunk_rows)
+        disk_kwargs = {}
+        if not projection_mask_current_image_disk:
+            disk_kwargs["mask_current_image_disk"] = False
         proj_chunk, _ = _compute_relion_projector_projections_block(
             relion_projector_half,
             jnp.asarray(cache_rotations[start:stop], dtype=jnp.float32),
@@ -738,6 +743,7 @@ def _build_exact_local_relion_projection_cache_for_buckets(
             relion_texture_interp=projection_relion_texture_interp,
             projector_output_size=int(projector_output_size) if int(projector_output_size) > 0 else None,
             pixel_indices=projection_pixel_indices,
+            **disk_kwargs,
         )
         _block_until_ready(proj_chunk)
         host_cache[start:stop] = np.asarray(proj_chunk, dtype=np.complex64)
@@ -908,6 +914,7 @@ def _project_local_bucket(
                 f"got {relion_projector_half.shape}",
             )
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
+        mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
             projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
@@ -918,6 +925,8 @@ def _project_local_bucket(
             )
         if projection_indices is not None:
             projector_kwargs["pixel_indices"] = projection_indices
+        if not mask_current_image_disk:
+            projector_kwargs["mask_current_image_disk"] = False
         proj_relion_flat, _ = _compute_relion_projector_projections_block(
             relion_projector_half,
             flat_rotations,
@@ -997,6 +1006,8 @@ def _project_local_bucket(
         )
         return _LocalProjectionBlock(proj_weighted=proj_weighted, proj_for_noise=proj_for_noise)
     else:
+        ordinary_projection_kwargs = dict(projection_kwargs)
+        ordinary_projection_kwargs.pop("mask_current_image_disk", None)
         proj_half_flat, _ = _compute_projections_block(
             mean_for_proj,
             flat_rotations,
@@ -1004,7 +1015,7 @@ def _project_local_bucket(
             proj_volume_shape,
             disc_type,
             return_abs2=False,
-            **projection_kwargs,
+            **ordinary_projection_kwargs,
         )
 
     if window_spec.use_window:
@@ -1075,6 +1086,7 @@ def _project_packed_noise_rows(
                 f"got {relion_projector_half.shape}",
             )
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
+        mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
             projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
@@ -1085,6 +1097,8 @@ def _project_packed_noise_rows(
             )
         if projection_indices is not None:
             projector_kwargs["pixel_indices"] = projection_indices
+        if not mask_current_image_disk:
+            projector_kwargs["mask_current_image_disk"] = False
         proj_relion_flat, _ = _compute_relion_projector_projections_block(
             relion_projector_half,
             packed_flat_rotations,
@@ -1114,6 +1128,8 @@ def _project_packed_noise_rows(
             max_r=projection_kwargs.get("max_r"),
         )
     else:
+        ordinary_projection_kwargs = dict(projection_kwargs)
+        ordinary_projection_kwargs.pop("mask_current_image_disk", None)
         proj_half_flat, _ = _compute_projections_block(
             mean_for_proj,
             packed_flat_rotations,
@@ -1121,7 +1137,7 @@ def _project_packed_noise_rows(
             proj_volume_shape,
             disc_type,
             return_abs2=False,
-            **projection_kwargs,
+            **ordinary_projection_kwargs,
         )
         flat_proj_for_noise = window_spec.recon_values(proj_half_flat) if window_spec.use_window else proj_half_flat
 
@@ -1622,6 +1638,7 @@ def _prepare_local_exact_bucket(
     score_complex_dtype=None,
     score_real_dtype=None,
     norm_real_dtype=None,
+    relion_exact_bpref_operands: bool = False,
 ):
     """Prepare score, reconstruction, and noise inputs for one local bucket.
 
@@ -1658,7 +1675,29 @@ def _prepare_local_exact_bucket(
     if raw_translations and timer is not None:
         timer["translation_phase_s"] += time.time() - phase_t0
 
+    exact_image_mask = None
+    exact_image_mask_mode = None
+    if relion_exact_bpref_operands:
+        exact_image_mask, exact_image_mask_mode = resolve_image_mask_for_half_preprocess(
+            experiment_dataset,
+            config.image_shape,
+            require_mask=score_with_masked_images,
+        )
+
     def _process_half(apply_image_mask: bool):
+        if relion_exact_bpref_operands:
+            # Contribution capture forces the split scorer, but its operands
+            # must still be those of the production big-JIT path.  In
+            # particular, do not fall back through the image-source backend:
+            # a relion_cuda source requires separate normalization/shift
+            # operands and would introduce a different preprocessing graph.
+            return _big_jit_preprocess_half(
+                jnp.asarray(batch),
+                jnp.asarray(exact_image_mask),
+                config,
+                apply_image_mask=apply_image_mask,
+                mask_mode=exact_image_mask_mode,
+            )
         return process_half_image(
             experiment_dataset,
             batch,
@@ -1666,14 +1705,41 @@ def _prepare_local_exact_bucket(
         )
 
     ctf_t0 = time.time()
-    ctf_half = config.compute_ctf_half(ctf_params)
-    ctf2_over_nv_ctf = ctf_half.astype(score_real_dtype) if score_real_dtype is not None else ctf_half
-    ctf2_over_nv_noise = (
-        noise_variance_half.astype(score_real_dtype) if score_real_dtype is not None else noise_variance_half
-    )
-    ctf2_over_nv_half = ctf2_over_nv_ctf**2 / ctf2_over_nv_noise
+    if relion_exact_bpref_operands:
+        ctf_rfloat = np.asarray(
+            _sparse_pass2_diagnostics._relion_exact_ctf_half_from_source_star(
+                experiment_dataset,
+                image_indices,
+                config.image_shape,
+            ),
+            dtype=np.float64,
+        )
+        inverse_noise_rfloat_cast = np.reciprocal(
+            np.asarray(noise_variance_half, dtype=np.float64)
+        ).astype(np.float32)
+        ctf_half = jnp.asarray(ctf_rfloat, dtype=jnp.float64).astype(jnp.float32)
+        inverse_noise_half = jnp.asarray(inverse_noise_rfloat_cast, dtype=jnp.float32)
+        weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
+        ctf2_over_nv_recon_half = weighted_ctf_half * ctf_half
+        ctf2_over_nv_score_half = jnp.asarray(
+            (
+                inverse_noise_rfloat_cast[None, :].astype(np.float64)
+                * ctf_rfloat
+                * ctf_rfloat
+            ).astype(np.float32),
+            dtype=jnp.float32,
+        )
+    else:
+        ctf_half = config.compute_ctf_half(ctf_params)
+        ctf2_over_nv_ctf = ctf_half.astype(score_real_dtype) if score_real_dtype is not None else ctf_half
+        ctf2_over_nv_noise = (
+            noise_variance_half.astype(score_real_dtype) if score_real_dtype is not None else noise_variance_half
+        )
+        ctf2_over_nv_recon_half = ctf2_over_nv_ctf**2 / ctf2_over_nv_noise
+        ctf2_over_nv_score_half = ctf2_over_nv_recon_half
+        weighted_ctf_half = None
     if synchronize_profile:
-        _block_until_ready(ctf2_over_nv_half)
+        _block_until_ready(ctf2_over_nv_score_half, ctf2_over_nv_recon_half)
     if timer is not None:
         timer["ctf_s"] += time.time() - ctf_t0
 
@@ -1699,7 +1765,11 @@ def _prepare_local_exact_bucket(
         score_complex_dtype=score_complex_dtype,
         score_real_dtype=score_real_dtype,
     )
-    score_weighted_half = shift_processed_score_half * shift_ctf_half / shift_noise_half
+    score_weighted_half = (
+        shift_processed_score_half * weighted_ctf_half
+        if relion_exact_bpref_operands
+        else shift_processed_score_half * shift_ctf_half / shift_noise_half
+    )
     if relion_score_translation_angles is not None:
         from recovar import cuda_backproject
 
@@ -1723,8 +1793,14 @@ def _prepare_local_exact_bucket(
         norm_half_weights,
         norm_real_dtype=norm_real_dtype,
     )
+    norm_power_over_noise = (
+        jnp.abs(norm_processed_score_half) ** 2
+        * inverse_noise_half.astype(norm_processed_score_half.real.dtype)[None, :]
+        if relion_exact_bpref_operands
+        else jnp.abs(norm_processed_score_half) ** 2 / norm_noise_half
+    )
     batch_norm = jnp.sum(
-        (jnp.abs(norm_processed_score_half) ** 2 / norm_noise_half) * norm_weights[None, :],
+        norm_power_over_noise * norm_weights[None, :],
         axis=-1,
         keepdims=True,
     ).real
@@ -1760,7 +1836,11 @@ def _prepare_local_exact_bucket(
             score_complex_dtype=score_complex_dtype,
             score_real_dtype=score_real_dtype,
         )
-        recon_weighted_half = shift_processed_recon_half * shift_ctf_half / shift_noise_half
+        recon_weighted_half = (
+            shift_processed_recon_half * weighted_ctf_half
+            if relion_exact_bpref_operands
+            else shift_processed_recon_half * shift_ctf_half / shift_noise_half
+        )
         shifted_recon_half = _apply_half_translation_phases(recon_weighted_half, shift_phases_half)
         if synchronize_profile:
             _block_until_ready(shifted_recon_half)
@@ -1780,7 +1860,8 @@ def _prepare_local_exact_bucket(
         shifted_score_half,
         shifted_recon_half,
         batch_norm,
-        ctf2_over_nv_half,
+        ctf2_over_nv_score_half,
+        ctf2_over_nv_recon_half,
         processed_score_half,
         real_space_pre_shift_applied,
     )
@@ -1863,6 +1944,9 @@ def run_local_em_exact(
     use_float64_projections: bool = False,
     projection_relion_texture_interp: bool = False,
     projection_force_jax: bool = False,
+    projection_mask_current_image_disk: bool = True,
+    relion_exact_bpref_operands: bool = False,
+    relion_exact_fine_diff2: bool = False,
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
     do_gridding_correction: bool = False,
@@ -1915,10 +1999,14 @@ def run_local_em_exact(
         )
     include_unweighted_norm_high_shell = bool(include_unweighted_norm_high_shell)
     relion_exact_score_translation = bool(relion_exact_score_translation)
+    relion_exact_bpref_operands = bool(relion_exact_bpref_operands)
+    relion_exact_fine_diff2 = bool(relion_exact_fine_diff2)
     if relion_exact_score_translation and not half_spectrum_scoring:
         raise ValueError("exact RELION score translation requires half_spectrum_scoring=True")
     if relion_exact_score_translation and use_float64_scoring:
         raise ValueError("exact RELION score translation is a float32 scoring path")
+    if relion_exact_fine_diff2 and not relion_exact_bpref_operands:
+        raise ValueError("exact RELION fine diff2 requires exact BPref operands")
     if score_only:
         if not (disable_adjoint_y and disable_adjoint_ctf):
             raise ValueError("score_only exact-local EM requires both adjoints disabled")
@@ -2113,6 +2201,18 @@ def run_local_em_exact(
     )
     use_window = window_spec.use_window
     window_indices = window_spec.score_indices
+    if relion_exact_fine_diff2:
+        if not use_window:
+            raise ValueError("exact RELION fine diff2 currently requires a current-size score window")
+        relion_fine_full_to_compact = (
+            _sparse_pass2_diagnostics._relion_cuda_fine_full_to_compact_lookup(
+                image_shape,
+                int(current_size),
+                window_spec.score_indices_np,
+            )
+        )
+    else:
+        relion_fine_full_to_compact = np.zeros(1, dtype=np.int32)
     recon_window_indices = window_spec.recon_indices
     mstep_recon_window_indices, mstep_adjoint_max_r = _local_mstep_adjoint_window(
         image_shape,
@@ -2126,6 +2226,7 @@ def run_local_em_exact(
     projection_kwargs = window_spec.projection_kwargs()
     projection_kwargs["relion_texture_interp"] = projection_relion_texture_interp
     projection_kwargs["force_jax"] = bool(projection_force_jax)
+    projection_kwargs["mask_current_image_disk"] = bool(projection_mask_current_image_disk)
     projection_mode = _local_projection_mode(window_spec, projection_kwargs, relion_projector_half)
 
     half_weights = make_scoring_half_image_weights(
@@ -2540,6 +2641,21 @@ def run_local_em_exact(
         require_mask=score_with_masked_images,
     )
     big_jit_image_mask_arg = jnp.asarray(big_jit_image_mask_arg)
+    relion_cuda_preprocess_radius = 0.0
+    relion_cuda_preprocess_cosine_width = 0.0
+    if relion_exact_bpref_operands:
+        image_source = getattr(experiment_dataset, "image_source", None)
+        while hasattr(image_source, "parent"):
+            image_source = image_source.parent
+        preprocess_backend = getattr(image_source, "backend", image_source)
+        if getattr(preprocess_backend, "relion_fourier_backend", None) != "relion_cuda":
+            raise ValueError("exact RELION BPref operands require RELION CUDA image preprocessing")
+        preprocess_params = getattr(preprocess_backend, "_relion_image_mask_params", None)
+        if preprocess_params is None:
+            raise ValueError("RELION CUDA image preprocessing requires explicit image-mask parameters")
+        pixel_size, particle_diameter_ang, cosine_width = preprocess_params
+        relion_cuda_preprocess_radius = float(particle_diameter_ang) / (2.0 * float(pixel_size))
+        relion_cuda_preprocess_cosine_width = float(cosine_width)
 
     big_jit_window_indices_arg = window_spec.score_or_full_indices(n_half)
     big_jit_recon_window_indices_arg = window_spec.recon_or_full_indices(n_half)
@@ -2585,6 +2701,8 @@ def run_local_em_exact(
         and not (accumulate_noise and debug_noise_dump_dir is not None)
         and not processed_half_cache_preferred
     )
+    if relion_exact_fine_diff2 and not use_big_jit_buckets:
+        raise ValueError("exact RELION fine diff2 requires the local big-JIT bucket path")
     mean_for_proj_big_jit = mean_for_proj
     projection_half_volume_big_jit = False
     relion_projector_half_big_jit = jnp.zeros((1, 1, 1), dtype=jnp.complex64)
@@ -2725,6 +2843,7 @@ def run_local_em_exact(
                 relion_projector_r_max=int(relion_projector_r_max_big_jit),
                 projection_padding_factor=int(projection_padding_factor),
                 projection_relion_texture_interp=projection_relion_texture_interp,
+                projection_mask_current_image_disk=bool(projection_mask_current_image_disk),
                 projection_pixel_indices=jnp.asarray(window_spec.projection_indices, dtype=jnp.int32),
                 projector_output_size=int(big_jit_relion_projector_output_size),
                 cache_row_capacity=int(relion_projection_cache_capacity_rows),
@@ -2880,6 +2999,58 @@ def run_local_em_exact(
                 ctf_params,
             )
             bucket_image_indices = np.asarray(unpadded_bucket.image_indices, dtype=np.int32)
+            if relion_exact_bpref_operands:
+                ctf_rfloat_unpadded = np.asarray(
+                    _sparse_pass2_diagnostics._relion_exact_ctf_half_from_source_star(
+                        experiment_dataset,
+                        bucket_image_indices,
+                        image_shape,
+                    ),
+                    dtype=np.float64,
+                )
+                ctf_rfloat_half_arg = jnp.asarray(
+                    pad_axis(
+                        ctf_rfloat_unpadded,
+                        0,
+                        batch_size,
+                        value=0,
+                    ),
+                    dtype=jnp.float64,
+                )
+                inverse_noise_rfloat_cast_np = np.reciprocal(
+                    np.asarray(noise_variance_half, dtype=np.float64)
+                ).astype(np.float32)
+                ctf_squared_rfloat = ctf_rfloat_unpadded * ctf_rfloat_unpadded
+                corr_img_rfloat_square_unpadded = (
+                    inverse_noise_rfloat_cast_np[None, :].astype(np.float64)
+                    * ctf_squared_rfloat
+                ).astype(np.float32)
+                inverse_noise_rfloat_cast_arg = jnp.asarray(
+                    inverse_noise_rfloat_cast_np,
+                    dtype=jnp.float32,
+                )
+                corr_img_rfloat_square_arg = jnp.asarray(
+                    pad_axis(
+                        corr_img_rfloat_square_unpadded,
+                        0,
+                        batch_size,
+                        value=0,
+                    ),
+                    dtype=jnp.float32,
+                )
+            else:
+                ctf_rfloat_half_arg = jnp.zeros(
+                    (batch_size, n_half),
+                    dtype=jnp.float64,
+                )
+                inverse_noise_rfloat_cast_arg = jnp.zeros(
+                    (n_half,),
+                    dtype=jnp.float32,
+                )
+                corr_img_rfloat_square_arg = jnp.zeros(
+                    (batch_size, n_half),
+                    dtype=jnp.float32,
+                )
             apply_integer_pre_shift = integer_pre_shifts is not None
             if apply_integer_pre_shift:
                 integer_pre_shifts_arg = jnp.asarray(
@@ -3034,6 +3205,9 @@ def run_local_em_exact(
             big_jit_result = run_local_bucket_big_jit(
                 jnp.asarray(batch_data),
                 jnp.asarray(ctf_params),
+                ctf_rfloat_half_arg,
+                inverse_noise_rfloat_cast_arg,
+                corr_img_rfloat_square_arg,
                 mean_for_proj_big_jit,
                 relion_projector_half_big_jit,
                 Ft_y,
@@ -3059,6 +3233,7 @@ def run_local_em_exact(
                 half_weights,
                 norm_half_weights,
                 big_jit_window_indices_arg,
+                jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
                 big_jit_recon_window_indices_arg,
                 big_jit_mstep_recon_window_indices_arg,
                 shell_indices_half_arg,
@@ -3107,6 +3282,11 @@ def run_local_em_exact(
                 relion_projector_output_size=int(big_jit_relion_projector_output_size),
                 projection_relion_texture_interp=bool(projection_relion_texture_interp),
                 projection_force_jax=bool(projection_force_jax),
+                projection_mask_current_image_disk=bool(projection_mask_current_image_disk),
+                relion_exact_bpref_operands=relion_exact_bpref_operands,
+                relion_exact_fine_diff2=relion_exact_fine_diff2,
+                relion_cuda_preprocess_radius=relion_cuda_preprocess_radius,
+                relion_cuda_preprocess_cosine_width=relion_cuda_preprocess_cosine_width,
                 mstep_subtract_ctf_projection=bool(mstep_subtract_ctf_projection),
                 mstep_relion_x_half=bool(mstep_relion_x_half),
                 disable_adjoint_y=big_jit_disable_adjoint_y,
@@ -3789,7 +3969,8 @@ def run_local_em_exact(
             shifted_half,
             shifted_recon_half,
             batch_norm,
-            ctf2_over_nv_half,
+            ctf2_over_nv_score_half,
+            ctf2_over_nv_recon_half,
             processed_score_half,
             real_space_pre_shift_applied,
         ) = _prepare_local_exact_bucket(
@@ -3810,6 +3991,7 @@ def run_local_em_exact(
             score_complex_dtype=precision_policy.score_complex_dtype,
             score_real_dtype=precision_policy.score_real_dtype,
             norm_real_dtype=precision_policy.normalization_real_dtype,
+            relion_exact_bpref_operands=relion_exact_bpref_operands,
         )
         if scale_corrections is not None:
             batch_scale = jnp.asarray(scale_corrections[np.asarray(bucket.image_indices)])
@@ -3833,7 +4015,8 @@ def run_local_em_exact(
             image_only_corr = None
 
         if scale_corrections is not None:
-            ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
+            ctf2_over_nv_score_half = ctf2_over_nv_score_half * (batch_scale**2)[:, None]
+            ctf2_over_nv_recon_half = ctf2_over_nv_recon_half * (batch_scale**2)[:, None]
 
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(bucket.image_indices)])
@@ -3841,24 +4024,26 @@ def run_local_em_exact(
             shifted_half = shifted_half * phase_expanded
             shifted_recon_half = shifted_recon_half * phase_expanded
         shifted_half_with_dc = shifted_half
-        ctf2_over_nv_half_with_dc = ctf2_over_nv_half
+        ctf2_over_nv_recon_half_with_dc = ctf2_over_nv_recon_half
 
         if half_spectrum_scoring:
             dc_mask = make_shell_indices_half(image_shape) == 0
             shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
-            ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
+            ctf2_over_nv_score_half = jnp.where(
+                dc_mask[None, :], 0.0, ctf2_over_nv_score_half
+            )
 
         if use_window:
             shifted_score = shifted_half[:, window_indices]
             shifted_recon = shifted_recon_half[:, recon_window_indices]
-            ctf2_over_nv_score = ctf2_over_nv_half[:, window_indices]
-            ctf2_over_nv_recon = ctf2_over_nv_half_with_dc[:, recon_window_indices]
+            ctf2_over_nv_score = ctf2_over_nv_score_half[:, window_indices]
+            ctf2_over_nv_recon = ctf2_over_nv_recon_half_with_dc[:, recon_window_indices]
             shifted_noise = shifted_half_with_dc[:, recon_window_indices]
         else:
             shifted_score = shifted_half
             shifted_recon = shifted_recon_half
-            ctf2_over_nv_score = ctf2_over_nv_half
-            ctf2_over_nv_recon = ctf2_over_nv_half_with_dc
+            ctf2_over_nv_score = ctf2_over_nv_score_half
+            ctf2_over_nv_recon = ctf2_over_nv_recon_half_with_dc
             shifted_noise = shifted_half_with_dc
 
         (

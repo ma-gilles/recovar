@@ -85,6 +85,7 @@ class NativeInitialModelOptions:
     bootstrap_min_particles: int = 1000
     sigma2_min_particles: int = 1000
     padding_factor: int = 1
+    image_fourier_backend: str = "host_numpy"
     lazy: bool = True
     datadir: str | None = None
     strip_prefix: str | None = None
@@ -423,18 +424,33 @@ def _configure_relion_image_mask(dataset, opts: NativeInitialModelOptions) -> No
     backend = getattr(source, "backend", source)
     if backend is None:
         return
-    image_mask = core_mask.relion_soft_image_mask(
-        int(dataset.grid_size),
-        float(dataset.voxel_size),
-        float(opts.particle_diameter),
-        float(opts.width_mask_edge_px),
-    )
-    if hasattr(backend, "image_mask"):
-        backend.image_mask = image_mask
-    if hasattr(backend, "mask"):
-        backend.mask = image_mask
-    if hasattr(backend, "image_mask_mode"):
-        backend.image_mask_mode = "relion_background_fill"
+    if hasattr(backend, "set_relion_image_mask"):
+        backend.set_relion_image_mask(
+            pixel_size=float(dataset.voxel_size),
+            particle_diameter_ang=float(opts.particle_diameter),
+            width_mask_edge_px=float(opts.width_mask_edge_px),
+        )
+    else:
+        image_mask = core_mask.relion_soft_image_mask(
+            int(dataset.grid_size),
+            float(dataset.voxel_size),
+            float(opts.particle_diameter),
+            float(opts.width_mask_edge_px),
+        )
+        if hasattr(backend, "image_mask"):
+            backend.image_mask = image_mask
+        if hasattr(backend, "mask"):
+            backend.mask = image_mask
+        if hasattr(backend, "image_mask_mode"):
+            backend.image_mask_mode = "relion_background_fill"
+
+    if hasattr(backend, "set_relion_fourier_backend"):
+        backend.set_relion_fourier_backend(opts.image_fourier_backend)
+    elif opts.image_fourier_backend != "host_numpy":
+        raise ValueError(
+            "InitialModel image_fourier_backend requires a compatible image backend; "
+            f"got {opts.image_fourier_backend!r}",
+        )
 
 
 def _initial_sampling_state(opts: NativeInitialModelOptions, *, pixel_size: float) -> NativeSamplingState:
@@ -906,29 +922,34 @@ def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteratio
 
 
 def _random_perturbation_sequence(random_seed: int, perturbation_factor: float, n_steps: int) -> float:
-    """Replay RELION's per-iter perturbation sequence (seed=1 first, then random_seed+step)."""
+    """Replay RELION's per-iter perturbation sequence with source float arithmetic."""
     if perturbation_factor <= 0.0:
         return 0.0
-    pf = float(perturbation_factor)
-    value = 0.0
-    for step in range(max(1, int(n_steps)) + 1):
-        seed = 1 if step == 0 else int(random_seed) + step
-        value += 0.5 * pf + (pf - 0.5 * pf) * _relion_rnd_unif_factory(seed)(0)
-        while value > pf:
-            value -= 2.0 * pf
-        while value < -pf:
-            value += 2.0 * pf
-    return float(value)
+    # rnd_unif(low, high) performs its range scaling inside RELION's float
+    # function. Scaling a separately rounded unit draw changes the result by
+    # one float32 ulp for seed 0 / iteration 1, which is enough to flip the
+    # integer-truncated fine-projector radius predicate on the rounded rim.
+    return sampling.relion_sampling_perturbation_for_iteration(
+        float(perturbation_factor),
+        int(random_seed),
+        max(1, int(n_steps)),
+    )
 
 
 def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.ndarray:
     """Convert RELION normalized shell power to engine-frame radial noise (unnormalised FFT)."""
     n4 = int(ori_size) ** 4
-    return (
-        np.asarray(make_radial_noise(np.asarray(sigma2_noise)[0] * n4, (ori_size, ori_size)))
-        .astype(np.float32, copy=False)
-        .reshape(-1)
-    )
+    # Keep RELION's RFLOAT shell spectrum through the reciprocal used by the
+    # guarded exact coarse path.  The downstream float32 kernels already cast
+    # their ordinary operands explicitly; narrowing here first loses up to a
+    # few ULP in Minvsigma2 and changes near-threshold candidate weights.
+    return np.asarray(
+        make_radial_noise(
+            np.asarray(sigma2_noise, dtype=np.float64)[0] * n4,
+            (ori_size, ori_size),
+        ),
+        dtype=np.float64,
+    ).reshape(-1)
 
 
 def _n_directions_for_healpix_order(healpix_order: int) -> int:

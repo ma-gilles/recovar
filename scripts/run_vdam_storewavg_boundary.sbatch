@@ -59,7 +59,13 @@ ANALYZER_ARGS=(
 if [[ -n "${NATIVE_INVERSE_NOISE:-}" ]]; then
   ANALYZER_ARGS+=(--native-inverse-noise "${NATIVE_INVERSE_NOISE}")
 fi
+if [[ -n "${NATIVE_PROJECTOR_PREFIX:-}" ]]; then
+  ANALYZER_ARGS+=(--native-projector-prefix "${NATIVE_PROJECTOR_PREFIX}")
+fi
 if [[ -n "${RECOVAR_ORIGINAL_INDEX:-}" ]]; then
   ANALYZER_ARGS+=(--recovar-original-index "${RECOVAR_ORIGINAL_INDEX}")
+fi
+if [[ -n "${RECOVAR_SCORE_DUMP:-}" ]]; then
+  ANALYZER_ARGS+=(--recovar-score-dump "${RECOVAR_SCORE_DUMP}")
 fi
 "${PIXI_PY}" scripts/analyze_vdam_storewavg_boundary.py "${ANALYZER_ARGS[@]}"

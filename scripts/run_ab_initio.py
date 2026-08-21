@@ -194,6 +194,15 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--random_perturbation", type=float, default=None)
     p.add_argument("--image_batch_size", type=int, default=500)
     p.add_argument("--rotation_block_size", type=int, default=5000)
+    p.add_argument(
+        "--image_fourier_backend",
+        choices=("auto", "host_numpy", "jax_gpu", "relion_cuda"),
+        default="auto",
+        help=(
+            "Image preprocessing backend. 'auto' selects the RELION CUDA path "
+            "for GPU runs and the host NumPy path otherwise."
+        ),
+    )
     p.add_argument("--bootstrap_min_particles", type=int, default=1000)
     p.add_argument("--sigma2_min_particles", type=int, default=1000)
     p.add_argument("--translation_sigma_angstrom", type=float, default=None)
@@ -297,6 +306,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         translation_sigma_angstrom=args.translation_sigma_angstrom,
         write_iter_artifacts=not args.no_iter_artifacts,
         padding_factor=int(args.padding_factor),
+        image_fourier_backend=(
+            "relion_cuda"
+            if args.image_fourier_backend == "auto" and bool(args.gpu_ids)
+            else (
+                "host_numpy"
+                if args.image_fourier_backend == "auto"
+                else args.image_fourier_backend
+            )
+        ),
     )
     result = run_native_initial_model(native_opts)
     print(f"recovar InitialModel complete: {result.final_mrc}")

@@ -80,7 +80,7 @@ def _load_unmasked_image(path: Path) -> np.ndarray:
     _require("nomask" in path.name, f"refusing masked StoreWavg image: {path}")
     if path.name.endswith("Fimg_unweighted_nomask.bin"):
         return _complex_2d(path)
-    if path.name.endswith("Fimg_nomask.bin"):
+    if path.name.endswith(("Fimg_nomask.bin", "Fimg_shifted_t0_nomask.bin")):
         return _complex_long_3d(path)
     raise ValueError(f"unrecognized unmasked StoreWavg image dump: {path}")
 
@@ -106,6 +106,25 @@ def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, object]:
         "reference_norm": ref_norm,
         "candidate_norm": cand_norm,
     }
+
+
+def _posterior_metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, object]:
+    reference = np.asarray(reference, dtype=np.float32)
+    candidate = np.asarray(candidate, dtype=np.float32)
+    result = _metric(reference, candidate)
+    result.update(
+        {
+            "reference_retained_mass": float(np.sum(reference, dtype=np.float64)),
+            "candidate_retained_mass": float(np.sum(candidate, dtype=np.float64)),
+            "l1": float(np.sum(np.abs(candidate - reference), dtype=np.float64)),
+            "support_mismatch_count": int(
+                np.count_nonzero((reference > 0.0) != (candidate > 0.0))
+            ),
+            "reference_positive_count": int(np.count_nonzero(reference > 0.0)),
+            "candidate_positive_count": int(np.count_nonzero(candidate > 0.0)),
+        }
+    )
+    return result
 
 
 def _match_rotations(native: np.ndarray, recovar: np.ndarray, tolerance: float) -> np.ndarray:
@@ -190,6 +209,98 @@ def _native_gradient_rows(
     return data, weight
 
 
+def _restore_storewavg_inverse_noise_dc(
+    inverse_noise: np.ndarray,
+    crop_indices: np.ndarray,
+    sigma2_noise: np.ndarray,
+    sigma2_fudge: float,
+) -> np.ndarray:
+    """Restore the DC lane that RELION sets immediately inside StoreWavg."""
+
+    inverse_noise = np.asarray(inverse_noise, dtype=np.float32).copy()
+    crop_indices = np.asarray(crop_indices, dtype=np.int32).reshape(-1)
+    dc_rows = np.flatnonzero(crop_indices == 0)
+    _require(dc_rows.size == 1, "StoreWavg crop must contain exactly one DC lane")
+    sigma2 = np.asarray(sigma2_noise, dtype=np.float64).reshape(-1)
+    _require(sigma2.size > 0 and sigma2[0] > 0.0, "native sigma2_noise DC must be positive")
+    _require(float(sigma2_fudge) > 0.0, "native sigma2_fudge must be positive")
+    inverse_noise[dc_rows[0]] = np.float32(1.0 / (float(sigma2_fudge) * float(sigma2[0])))
+    return inverse_noise
+
+
+def _production_score_gradient_rows(
+    score_dump: dict[str, np.ndarray],
+    reconstruction_probs_override: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Replay the fused production M-step rows from a local score dump.
+
+    The score dump operands are already in RECOVAR's reconstruction frame:
+    ``debug_shifted_recon`` contains translated ``Fimg * CTF / sigma2`` and
+    ``debug_ctf2_over_nv_recon`` contains ``CTF**2 / sigma2``.  Keep the
+    contraction on JAX so its float32 GEMM reduction matches production.
+    """
+
+    import jax
+    import jax.numpy as jnp
+
+    from recovar.em.dense_single_volume.local_backprojection import (
+        compute_local_weighted_sums,
+    )
+
+    required = {
+        "posterior",
+        "reconstruction_sample_mask",
+        "debug_shifted_recon",
+        "debug_ctf2_over_nv_recon",
+        "debug_proj_for_recon",
+    }
+    missing = sorted(required.difference(score_dump))
+    _require(not missing, f"production score dump is missing operands: {missing}")
+    posterior = np.asarray(score_dump["posterior"], dtype=np.float32)
+    sample_mask = np.asarray(score_dump["reconstruction_sample_mask"], dtype=bool)
+    _require(posterior.ndim == 3 and posterior.shape[0] == 1, "score posterior topology changed")
+    _require(sample_mask.shape == posterior.shape, "score reconstruction mask topology changed")
+    if reconstruction_probs_override is None:
+        reconstruction_probs = jnp.asarray(posterior * sample_mask, dtype=jnp.float32)
+    else:
+        override = np.asarray(reconstruction_probs_override, dtype=np.float32)
+        _require(
+            override.shape == posterior.shape[1:],
+            "score reconstruction-probability override topology changed",
+        )
+        reconstruction_probs = jnp.asarray(override[None, ...], dtype=jnp.float32)
+    shifted = jnp.asarray(
+        np.asarray(score_dump["debug_shifted_recon"], dtype=np.complex64)[None, :, :]
+    )
+    ctf2 = jnp.asarray(
+        np.asarray(score_dump["debug_ctf2_over_nv_recon"], dtype=np.float32)[None, :]
+    )
+    projections = jnp.asarray(
+        np.asarray(score_dump["debug_proj_for_recon"], dtype=np.complex64)[None, :, :]
+    )
+    _require(shifted.shape[:2] == (1, posterior.shape[2]), "score shifted-image topology changed")
+    _require(projections.shape[:2] == posterior.shape[:2], "score projection topology changed")
+    _require(shifted.shape[-1] == ctf2.shape[-1] == projections.shape[-1], "score pixel topology changed")
+    rotation_mass = jnp.sum(reconstruction_probs, axis=-1, dtype=jnp.float32)
+    numerator = compute_local_weighted_sums(reconstruction_probs, shifted)
+    denominator = jnp.where(
+        rotation_mass[..., None] != 0.0,
+        rotation_mass[..., None] * ctf2[:, None, :],
+        0.0,
+    )
+    numerator = numerator - jnp.where(
+        rotation_mass[..., None] != 0.0,
+        rotation_mass[..., None] * projections * ctf2[:, None, :],
+        0.0,
+    )
+    numerator, denominator = jax.block_until_ready((numerator, denominator))
+    return (
+        np.asarray(numerator[0], dtype=np.complex64),
+        np.asarray(denominator[0], dtype=np.float32),
+        np.asarray(reconstruction_probs[0], dtype=np.float32),
+    )
+
+
 def _scatter_relion_rows(
     data_rows: np.ndarray,
     weight_rows: np.ndarray,
@@ -230,7 +341,13 @@ def _scatter_relion_rows(
     return np.asarray(data), np.asarray(weight)
 
 
-def _load_native(native_directory: Path, prefix: str) -> dict[str, np.ndarray | float | int]:
+def _load_native(
+    native_directory: Path,
+    prefix: str,
+    *,
+    projector_prefix: str | None = None,
+    load_projector: bool = True,
+) -> dict[str, np.ndarray | float | int]:
     root = native_directory / prefix
     orientation_count = int(round(_scalar(Path(f"{root}orientation_num.bin"))))
     translation_count = int(round(_scalar(Path(f"{root}translation_num.bin"))))
@@ -248,37 +365,53 @@ def _load_native(native_directory: Path, prefix: str) -> dict[str, np.ndarray | 
         axis=1,
     )
     ctf = _flat(Path(f"{root}ctfs.bin"), np.dtype("<f8")).astype(np.float32)
-    dims = _flat(Path(f"{root}wavg_ppref_dims.bin"), np.dtype("<i4")).astype(np.int64)
-    _require(dims.size == 7, "native Projector dimensions changed")
-    xdim, ydim, zdim, _xinit, _yinit, _zinit, r_max = (int(value) for value in dims)
-    real = _flat(Path(f"{root}wavg_ppref_real.bin"), np.dtype("<f8"))
-    imag = _flat(Path(f"{root}wavg_ppref_imag.bin"), np.dtype("<f8"))
-    _require(real.size == imag.size == xdim * ydim * zdim, "native Projector payload changed")
-    projector = (real + 1j * imag).astype(np.complex64).reshape(zdim, ydim, xdim)
-    return {
+    result = {
         "orientation_count": orientation_count,
         "translation_count": translation_count,
         "probabilities": probabilities,
         "rotations": rotations,
         "translation_angles": translation_angles,
         "ctf": ctf,
-        "projector": projector,
-        "r_max": r_max,
         "retained_mass": float(np.sum(probabilities, dtype=np.float64)),
     }
+    if load_projector:
+        projector_root = (
+            Path(f"{root}wavg_ppref_")
+            if projector_prefix is None
+            else native_directory / projector_prefix
+        )
+        dims = _flat(Path(f"{projector_root}dims.bin"), np.dtype("<i4")).astype(np.int64)
+        _require(dims.size == 7, "native Projector dimensions changed")
+        xdim, ydim, zdim, _xinit, _yinit, _zinit, r_max = (int(value) for value in dims)
+        real = _flat(Path(f"{projector_root}real.bin"), np.dtype("<f8"))
+        imag = _flat(Path(f"{projector_root}imag.bin"), np.dtype("<f8"))
+        _require(real.size == imag.size == xdim * ydim * zdim, "native Projector payload changed")
+        result.update(
+            {
+                "projector": (real + 1j * imag).astype(np.complex64).reshape(zdim, ydim, xdim),
+                "r_max": r_max,
+            }
+        )
+    return result
 
 
 def analyze(
     native_directory: Path,
     recovar_capture: Path,
     *,
-    native_image_path: Path,
+    native_image_path: Path | None,
     native_inverse_noise_path: Path,
+    native_sigma2_noise_path: Path,
+    native_sigma2_fudge_path: Path,
     recovar_original_index: int | None,
     native_prefix: str,
+    native_projector_prefix: str | None,
+    recovar_score_dump: Path | None,
     physical_image_size: int,
     current_size: int,
     rotation_tolerance: float,
+    posterior_only: bool = False,
+    adaptive_fraction: float = 0.999,
 ) -> dict[str, object]:
     import jax
     import jax.numpy as jnp
@@ -290,13 +423,91 @@ def analyze(
     from recovar.relion_bind._relion_bind_core import get_backprojector_data
 
     _require(jax.default_backend() == "gpu", "VDAM StoreWavg replay requires a GPU")
-    native = _load_native(native_directory, native_prefix)
+    native = _load_native(
+        native_directory,
+        native_prefix,
+        projector_prefix=native_projector_prefix,
+        load_projector=not posterior_only,
+    )
     with np.load(recovar_capture, allow_pickle=False) as archive:
         recovar = {name: archive[name] for name in archive.files}
     _require(int(recovar["current_size"]) == current_size, "RECOVAR current size changed")
-    _require(int(native["r_max"]) == current_size // 2, "native current size changed")
     particle_slot, recovar_row_mask = _select_recovar_particle_rows(recovar, recovar_original_index)
 
+    score_dump = None
+    if recovar_score_dump is not None:
+        with np.load(recovar_score_dump, allow_pickle=False) as archive:
+            score_dump = {name: archive[name] for name in archive.files}
+        score_original_indices = np.asarray(score_dump["selected_global_image_indices"], dtype=np.int64)
+        _require(
+            score_original_indices.size == 1
+            and int(score_original_indices[0]) == int(np.asarray(recovar["original_indices"])[particle_slot]),
+            "production score dump particle identity differs from contribution capture",
+        )
+
+    rotations = np.asarray(native["rotations"], dtype=np.float32)
+    recovar_rotations = (
+        np.asarray(score_dump["local_rotation_matrices"], dtype=np.float32)
+        if score_dump is not None
+        else np.asarray(recovar["active_rotations"])[recovar_row_mask]
+    )
+    rotation_map = _match_rotations(rotations, recovar_rotations, rotation_tolerance)
+
+    active_rotation_rows = np.asarray(recovar["active_rotation_rows"], dtype=np.int64)[
+        recovar_row_mask
+    ]
+    if score_dump is not None:
+        production_data, production_weight, production_posterior = _production_score_gradient_rows(
+            score_dump
+        )
+        current_posterior = production_posterior[rotation_map]
+    else:
+        production_data = None
+        production_weight = None
+        current_posterior = np.asarray(recovar["reconstruction_probs"])[particle_slot][
+            active_rotation_rows
+        ][rotation_map]
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_f32_fine_reconstruction_probs,
+    )
+
+    replay_posterior, *_ = _relion_f32_fine_reconstruction_probs(
+        jnp.asarray(np.asarray(recovar["candidate_combined_scores"])[particle_slot : particle_slot + 1]),
+        adaptive_fraction=float(adaptive_fraction),
+    )
+    replay_posterior = np.asarray(jax.block_until_ready(replay_posterior))[0][
+        active_rotation_rows
+    ][rotation_map]
+    posterior_comparisons = {
+        "fine_posterior_current": _posterior_metric(native["probabilities"], current_posterior),
+        "fine_posterior_relion_f32_replay": _posterior_metric(
+            native["probabilities"], replay_posterior
+        ),
+    }
+    if posterior_only:
+        return {
+            "schema": SCHEMA,
+            "identity": {
+                "original_index": int(np.asarray(recovar["original_indices"])[particle_slot]),
+                "image_identity": str(np.asarray(recovar["image_identities"])[particle_slot]),
+                "iteration": int(recovar["iteration"]),
+                "half": int(recovar["half"]),
+                "physical_image_size": physical_image_size,
+                "current_size": current_size,
+                "orientation_count": int(native["orientation_count"]),
+                "translation_count": int(native["translation_count"]),
+            },
+            "comparisons": posterior_comparisons,
+            "artifacts": {
+                "native_directory": str(native_directory.resolve()),
+                "recovar_capture": str(recovar_capture.resolve()),
+                "recovar_capture_sha256": _sha256(recovar_capture),
+            },
+            "device": str(jax.devices()[0]),
+        }
+
+    _require(int(native["r_max"]) == current_size // 2, "native current size changed")
+    _require(native_image_path is not None, "native unmasked image is required for gradient replay")
     crop_indices, centered_indices = _fftw_window_to_native_crop(
         recovar["window_indices"],
         physical_image_size=physical_image_size,
@@ -304,10 +515,13 @@ def analyze(
     )
     native_ctf = np.asarray(native["ctf"], dtype=np.float32)[crop_indices]
     inverse_noise = _real_2d(native_inverse_noise_path).astype(np.float32).reshape(-1)[crop_indices]
+    inverse_noise = _restore_storewavg_inverse_noise_dc(
+        inverse_noise,
+        crop_indices,
+        _real_2d(native_sigma2_noise_path),
+        _scalar(native_sigma2_fudge_path),
+    )
     native_image = _load_unmasked_image(native_image_path).astype(np.complex64).reshape(-1)[crop_indices]
-    rotations = np.asarray(native["rotations"], dtype=np.float32)
-    recovar_rotations = np.asarray(recovar["active_rotations"])[recovar_row_mask]
-    rotation_map = _match_rotations(rotations, recovar_rotations, rotation_tolerance)
 
     translated = cuda_backproject.relion_translate_score_f32(
         jnp.asarray(native_image[None, :]),
@@ -337,10 +551,69 @@ def analyze(
         native_ctf,
         inverse_noise,
     )
-    recovar_data = np.asarray(recovar["active_summed"], dtype=np.complex64)[recovar_row_mask][rotation_map]
-    recovar_weight = np.asarray(recovar["active_ctf_probs"], dtype=np.float32)[recovar_row_mask][rotation_map]
+    controlled_data, controlled_weight = _native_gradient_rows(
+        current_posterior,
+        translated,
+        projections,
+        native_ctf,
+        inverse_noise,
+    )
+    native_ctf_inverse_noise = (native_ctf * inverse_noise).astype(np.float32)
+    controlled_image_term = (
+        (current_posterior @ translated).astype(np.complex64)
+        * native_ctf_inverse_noise[None, :]
+    ).astype(np.complex64)
+    controlled_projection_term = (
+        projections * controlled_weight
+    ).astype(np.complex64)
+    recovar_data = (
+        production_data[rotation_map]
+        if production_data is not None
+        else np.asarray(recovar["active_summed"], dtype=np.complex64)[recovar_row_mask][rotation_map]
+    )
+    recovar_weight = (
+        production_weight[rotation_map]
+        if production_weight is not None
+        else np.asarray(recovar["active_ctf_probs"], dtype=np.float32)[recovar_row_mask][rotation_map]
+    )
     data_scale = -float(physical_image_size) ** -2
     weight_scale = float(physical_image_size) ** -4
+    operand_comparisons = {}
+    if score_dump is not None:
+        recovar_shifted = np.asarray(score_dump["debug_shifted_recon"], dtype=np.complex64)
+        recovar_ctf2 = np.asarray(score_dump["debug_ctf2_over_nv_recon"], dtype=np.float32)
+        recovar_projection = np.asarray(score_dump["debug_proj_for_recon"], dtype=np.complex64)[
+            rotation_map
+        ]
+        recovar_image_term = (
+            (current_posterior @ recovar_shifted).astype(np.complex64)
+        )
+        recovar_projection_term = (
+            recovar_projection
+            * (np.sum(current_posterior, axis=1, dtype=np.float32)[:, None] * recovar_ctf2[None, :])
+        ).astype(np.complex64)
+        operand_comparisons = {
+            "translated_image_ctf_inverse_noise_operand": _metric(
+                translated * native_ctf_inverse_noise[None, :] * data_scale,
+                recovar_shifted,
+            ),
+            "ctf2_inverse_noise_operand": _metric(
+                (native_ctf * native_ctf * inverse_noise).astype(np.float32) * weight_scale,
+                recovar_ctf2,
+            ),
+            "projection_operand": _metric(
+                projections * (data_scale / weight_scale),
+                recovar_projection,
+            ),
+            "gradient_image_term_same_posterior_control": _metric(
+                controlled_image_term * data_scale,
+                recovar_image_term,
+            ),
+            "gradient_projection_term_same_posterior_control": _metric(
+                controlled_projection_term * data_scale,
+                recovar_projection_term,
+            ),
+        }
     padding_factor = int(recovar["reconstruction_padding_factor"])
     native_bpref_data, native_bpref_weight = _scatter_relion_rows(
         native_data * data_scale,
@@ -355,6 +628,16 @@ def analyze(
     recovar_bpref_data, recovar_bpref_weight = _scatter_relion_rows(
         recovar_data,
         recovar_weight,
+        rotations,
+        recovar["window_indices"],
+        physical_image_size=physical_image_size,
+        current_size=current_size,
+        padding_factor=padding_factor,
+        get_backprojector_data=get_backprojector_data,
+    )
+    controlled_bpref_data, controlled_bpref_weight = _scatter_relion_rows(
+        controlled_data * data_scale,
+        controlled_weight * weight_scale,
         rotations,
         recovar["window_indices"],
         physical_image_size=physical_image_size,
@@ -381,10 +664,28 @@ def analyze(
             "native_weight_to_recovar": weight_scale,
         },
         "comparisons": {
+            **posterior_comparisons,
+            **operand_comparisons,
             "gradient_numerator": _metric(native_data * data_scale, recovar_data),
             "gradient_denominator": _metric(native_weight * weight_scale, recovar_weight),
+            "gradient_numerator_same_posterior_control": _metric(
+                controlled_data * data_scale,
+                recovar_data,
+            ),
+            "gradient_denominator_same_posterior_control": _metric(
+                controlled_weight * weight_scale,
+                recovar_weight,
+            ),
             "bpref_data_after_relion_scatter": _metric(native_bpref_data, recovar_bpref_data),
             "bpref_weight_after_relion_scatter": _metric(native_bpref_weight, recovar_bpref_weight),
+            "bpref_data_same_posterior_control": _metric(
+                controlled_bpref_data,
+                recovar_bpref_data,
+            ),
+            "bpref_weight_same_posterior_control": _metric(
+                controlled_bpref_weight,
+                recovar_bpref_weight,
+            ),
         },
         "artifacts": {
             "native_directory": str(native_directory.resolve()),
@@ -392,8 +693,20 @@ def analyze(
             "native_unmasked_image_sha256": _sha256(native_image_path),
             "native_inverse_noise": str(native_inverse_noise_path.resolve()),
             "native_inverse_noise_sha256": _sha256(native_inverse_noise_path),
+            "native_sigma2_noise": str(native_sigma2_noise_path.resolve()),
+            "native_sigma2_noise_sha256": _sha256(native_sigma2_noise_path),
+            "native_sigma2_fudge": str(native_sigma2_fudge_path.resolve()),
+            "native_sigma2_fudge_sha256": _sha256(native_sigma2_fudge_path),
             "recovar_capture": str(recovar_capture.resolve()),
             "recovar_capture_sha256": _sha256(recovar_capture),
+            **(
+                {
+                    "recovar_production_score_dump": str(recovar_score_dump.resolve()),
+                    "recovar_production_score_dump_sha256": _sha256(recovar_score_dump),
+                }
+                if recovar_score_dump is not None
+                else {}
+            ),
         },
         "device": str(jax.devices()[0]),
     }
@@ -402,14 +715,35 @@ def analyze(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native-directory", type=Path, required=True)
-    parser.add_argument("--native-image", type=Path, required=True)
+    parser.add_argument("--native-image", type=Path)
     parser.add_argument("--native-inverse-noise", type=Path)
+    parser.add_argument("--native-sigma2-noise", type=Path)
+    parser.add_argument("--native-sigma2-fudge", type=Path)
     parser.add_argument("--recovar-original-index", type=int)
     parser.add_argument("--recovar-capture", type=Path, required=True)
+    parser.add_argument(
+        "--recovar-score-dump",
+        type=Path,
+        help=(
+            "Optional production fused-score dump. When supplied, posterior and pre-scatter "
+            "M-step rows are replayed from its exact production operands; --recovar-capture "
+            "continues to provide reconstruction window/scatter metadata."
+        ),
+    )
     parser.add_argument("--native-prefix", default="img0_part0_storeWavg_")
+    parser.add_argument(
+        "--native-projector-prefix",
+        help=(
+            "Optional independent prefix for projector dims/real/imag files, relative to "
+            "--native-directory (for example pass1_class0_ppref_). By default they are "
+            "read from <native-prefix>wavg_ppref_."
+        ),
+    )
     parser.add_argument("--physical-image-size", type=int, default=128)
     parser.add_argument("--current-size", type=int, default=38)
     parser.add_argument("--rotation-tolerance", type=float, default=1.0e-6)
+    parser.add_argument("--posterior-only", action="store_true")
+    parser.add_argument("--adaptive-fraction", type=float, default=0.999)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     _require(not args.output_json.exists(), f"refusing to overwrite {args.output_json}")
@@ -422,11 +756,25 @@ def main() -> None:
             if args.native_inverse_noise is not None
             else args.native_directory / "Minvsigma2.bin"
         ),
+        native_sigma2_noise_path=(
+            args.native_sigma2_noise
+            if args.native_sigma2_noise is not None
+            else args.native_directory / "sigma2_noise.bin"
+        ),
+        native_sigma2_fudge_path=(
+            args.native_sigma2_fudge
+            if args.native_sigma2_fudge is not None
+            else args.native_directory / "sigma2_fudge.bin"
+        ),
         recovar_original_index=args.recovar_original_index,
         native_prefix=args.native_prefix,
+        native_projector_prefix=args.native_projector_prefix,
+        recovar_score_dump=args.recovar_score_dump,
         physical_image_size=args.physical_image_size,
         current_size=args.current_size,
         rotation_tolerance=args.rotation_tolerance,
+        posterior_only=args.posterior_only,
+        adaptive_fraction=args.adaptive_fraction,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

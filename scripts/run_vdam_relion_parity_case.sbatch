@@ -30,6 +30,9 @@ export JAX_COMPILATION_CACHE_DIR="${OUTPUT_ROOT}/jax_cache"
 export RECOVAR_CUDA_LIB="${REPO_ROOT}/recovar/cuda/libcuda_backproject.so"
 mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}" \
   /scratch/gpfs/GILLES/mg6942/slurmo
+if [[ -n "${RELION_ACC_DUMP_DIR:-}" ]]; then
+  mkdir -p "${RELION_ACC_DUMP_DIR}"
+fi
 
 PIXI_PY="${REPO_ROOT}/.pixi/envs/default/bin/python"
 test -x "${PIXI_PY}"
@@ -53,4 +56,5 @@ PY
 "${PIXI_PY}" scripts/run_vdam_relion_parity_case.py \
   --case-id "${CASE_ID}" \
   --output-root "${OUTPUT_ROOT}" \
-  --repo "${REPO_ROOT}"
+  --repo "${REPO_ROOT}" \
+  --threads "${RELION_THREADS:-8}"

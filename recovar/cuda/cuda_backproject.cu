@@ -3631,6 +3631,7 @@ constexpr int kRelionFineDiff2BlockSize = 256;
 // translations. Preserve both observable constants here.
 constexpr int kRelionFineDiff2TranslationCapacity = 7;
 constexpr int kRelionFineDiff2Ref3dJobChunk = 4;
+constexpr int kRelionPowerClassBlockSize = 128;
 
 template <bool DoRight>
 __global__ void relion_make_scoring_rotations_f32_kernel(
@@ -5405,6 +5406,91 @@ cudaError_t launch_relion_fine_diff2_rectangular_f32(
     return cudaGetLastError();
 }
 
+__global__ __launch_bounds__(kRelionPowerClassBlockSize)
+void relion_powerclass_spectrum_highres_f32_kernel(
+    const float2* image,
+    float* spectrum,
+    int image_size,
+    int spectrum_size,
+    int xdim,
+    int ydim,
+    int resolution_limit,
+    float* highres_xi2)
+{
+    const int tid = threadIdx.x;
+    const int voxel = tid + static_cast<int>(blockIdx.x) * kRelionPowerClassBlockSize;
+    __shared__ float highres_lanes[kRelionPowerClassBlockSize];
+    highres_lanes[tid] = 0.0f;
+
+    if (voxel < image_size) {
+        const int x = voxel % xdim;
+        int y = (voxel - x) / xdim;
+        y = y < xdim ? y : y - ydim;
+        const int radius_squared = x * x + y * y;
+        const bool coordinates_in_range = !(x == 0 && y < 0);
+        const int shell = __float2int_rn(sqrtf(static_cast<float>(radius_squared)));
+        if (shell > 0 && shell < spectrum_size && coordinates_in_range) {
+            const float value =
+                image[voxel].x * image[voxel].x +
+                image[voxel].y * image[voxel].y;
+            atomicAdd(&spectrum[shell], value);
+            if (shell >= resolution_limit)
+                highres_lanes[tid] = value;
+        }
+    }
+
+    __syncthreads();
+    for (int width = kRelionPowerClassBlockSize / 2; width > 0; width /= 2) {
+        if (tid < width)
+            highres_lanes[tid] += highres_lanes[tid + width];
+        __syncthreads();
+    }
+    if (tid == 0)
+        atomicAdd(highres_xi2, highres_lanes[0]);
+}
+
+cudaError_t launch_relion_powerclass_spectrum_highres_f32(
+    cudaStream_t stream,
+    const float2* image,
+    float* spectrum_and_highres,
+    int64_t batch_size,
+    int image_size,
+    int spectrum_size,
+    int xdim,
+    int ydim,
+    int resolution_limit)
+{
+    const int output_stride = spectrum_size + 1;
+    cudaError_t err = cudaMemsetAsync(
+        spectrum_and_highres,
+        0,
+        static_cast<size_t>(batch_size) * output_stride * sizeof(float),
+        stream);
+    if (err != cudaSuccess) return err;
+    const int block_count =
+        (image_size + kRelionPowerClassBlockSize - 1) /
+        kRelionPowerClassBlockSize;
+    for (int64_t batch = 0; batch < batch_size; ++batch) {
+        float* output_row = spectrum_and_highres + batch * output_stride;
+        relion_powerclass_spectrum_highres_f32_kernel<<<
+            block_count,
+            kRelionPowerClassBlockSize,
+            0,
+            stream>>>(
+                image + batch * image_size,
+                output_row,
+                image_size,
+                spectrum_size,
+                xdim,
+                ydim,
+                resolution_limit,
+                output_row + spectrum_size);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) return err;
+    }
+    return cudaSuccess;
+}
+
 cudaError_t launch_relion_fine_diff2_pairs_f32(
     cudaStream_t stream,
     const float2* reference,
@@ -6974,6 +7060,61 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionPowerClassSpectrumHighresF32Impl(
+    cudaStream_t stream,
+    int64_t xdim,
+    int64_t ydim,
+    int64_t resolution_limit,
+    ffi::AnyBuffer image,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (image.element_type() != ffi::DataType::C64 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionPowerClassSpectrumHighresF32: image/output must be C64/F32");
+    const auto image_dims = image.dimensions();
+    const auto output_dims = output->dimensions();
+    if (image_dims.size() != 2 || output_dims.size() != 2 ||
+        image_dims[0] <= 0 || image_dims[1] <= 0 ||
+        xdim <= 0 || ydim <= 0 || image_dims[1] != xdim * ydim ||
+        output_dims[0] != image_dims[0] || output_dims[1] != xdim + 1 ||
+        resolution_limit < 0 || resolution_limit > xdim)
+        return ffi::Error::InvalidArgument(
+            "RelionPowerClassSpectrumHighresF32: inconsistent dimensions");
+    if (image_dims[0] > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        image_dims[1] > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        xdim > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        ydim > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionPowerClassSpectrumHighresF32: dimensions exceed CUDA limits");
+    cudaError_t err = launch_relion_powerclass_spectrum_highres_f32(
+        stream,
+        reinterpret_cast<const float2*>(image.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        image_dims[0],
+        static_cast<int>(image_dims[1]),
+        static_cast<int>(xdim),
+        static_cast<int>(xdim),
+        static_cast<int>(ydim),
+        static_cast<int>(resolution_limit));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionPowerClassSpectrumHighresF32,
+    RelionPowerClassSpectrumHighresF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("xdim")
+        .Attr<int64_t>("ydim")
+        .Attr<int64_t>("resolution_limit")
         .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
 );

@@ -47,9 +47,13 @@ _ENGINE_DEFAULTS: dict[str, Any] = {
     "recon_square_window": False,
     "recon_exact_radius": False,
     "reconstruction_subtract_projected_reference": True,
+    # RELION InitialModel scores the full rounded Fourier crop emitted by its
+    # CUDA projector, including the few crop-corner pixels outside r_max.
+    "projection_mask_current_image_disk": False,
 }
 _INACTIVE_CLASS_LOG_PRIOR = -1.0e30
 _EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
+_EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
 _SPARSE_PASS2_CONTROL_KEYS = {
     "adaptive_fraction",
     "max_significants",
@@ -200,6 +204,7 @@ _DENSE_RUN_EM_REJECT = frozenset(
         "recon_square_window",
         "recon_exact_radius",
         "reconstruction_subtract_projected_reference",
+        "projection_mask_current_image_disk",
         "relion_projector_shape",
         # Sparse/local engine kwargs that run_dense_k_class_em rejects.
         "return_profile",
@@ -262,6 +267,16 @@ def _translation_step_from_grid(translations: np.ndarray) -> float:
     diffs = np.diff(np.sort(unique_vals))
     diffs = diffs[diffs > 1.0e-6]
     return float(diffs.min()) if diffs.size else 1.0
+
+
+def _uses_relion_cuda_image_preprocessing(experiment_dataset) -> bool:
+    """Return whether a dataset uses the strict RELION CUDA image path."""
+
+    image_source = getattr(experiment_dataset, "image_source", None)
+    while hasattr(image_source, "parent"):
+        image_source = image_source.parent
+    backend = getattr(image_source, "backend", image_source)
+    return getattr(backend, "relion_fourier_backend", None) == "relion_cuda"
 
 
 def _resolve_sparse_pass1_current_size(
@@ -664,6 +679,16 @@ def _run_sparse_pass2_initial_model_estep(
             relion_projector_half=relion_projector_half_by_class,
             relion_projector_r_max=relion_projector_r_max,
             debug_iteration=group_kwargs.get("debug_iteration"),
+            # The supplied-map EM path enables RELION's exact CUDA coarse
+            # operands/support for fresh K=1 runs. InitialModel reaches the
+            # same significance engine through this adapter, so opt into the
+            # shared guarded path whenever its exact projector is active.
+            # K>1 remains on the joint-class implementation.
+            relion_coarse_gaussian_default=bool(
+                state.K == 1
+                and use_exact_relion_projector
+                and _uses_relion_cuda_image_preprocessing(group_dataset)
+            ),
         )
         (
             _sig_rot_any,
@@ -714,6 +739,19 @@ def _run_sparse_pass2_initial_model_estep(
         t0 = time.time()
         from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_diagnostics
 
+        use_exact_local_relion_operands = bool(
+            state.K == 1
+            and use_exact_relion_projector
+            and _uses_relion_cuda_image_preprocessing(group_dataset)
+        )
+        exact_fine_diff2_setting = os.environ.get(
+            _EXACT_RELION_FINE_DIFF2_ENV,
+            "0",
+        ).strip().lower()
+        use_exact_fine_diff2 = bool(
+            use_exact_local_relion_operands
+            and exact_fine_diff2_setting not in {"0", "false", "no", "off"}
+        )
         sparse_diagnostics.set_bpref_contribution_dump_context(
             iteration=int(group_kwargs.get("debug_iteration", -1)),
             half=int(halfset_idx) + 1,
@@ -767,6 +805,14 @@ def _run_sparse_pass2_initial_model_estep(
                 translation_prior_centers=group_kwargs.get("translation_prior_centers"),
                 relion_projector_half=relion_projector_half_by_class,
                 relion_projector_r_max=relion_projector_r_max,
+                projection_mask_current_image_disk=bool(
+                    group_kwargs.get("projection_mask_current_image_disk", True)
+                ),
+                relion_exact_bpref_operands=bool(
+                    use_exact_local_relion_operands
+                ),
+                relion_exact_fine_diff2=use_exact_fine_diff2,
+                relion_exact_score_translation=use_exact_fine_diff2,
             )
         finally:
             sparse_diagnostics.clear_bpref_contribution_dump_context()

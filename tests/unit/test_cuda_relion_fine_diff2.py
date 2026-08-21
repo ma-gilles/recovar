@@ -135,6 +135,23 @@ def test_relion_fused_translate_cuda_source_pins_native_block_topology():
     assert "lane_sums[lane_index] = relion_fine_diff2_update_f32(" in source
 
 
+def test_relion_powerclass_cuda_source_pins_native_atomic_topology():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+
+    start = source.index("relion_powerclass_spectrum_highres_f32_kernel")
+    block = source[start : source.index("cudaError_t", start)]
+    assert "kRelionPowerClassBlockSize = 128" in source
+    assert "__float2int_rn(sqrtf(" in block
+    assert "atomicAdd(&spectrum[shell], value)" in block
+    assert "highres_lanes[tid] += highres_lanes[tid + width]" in block
+    assert "atomicAdd(highres_xi2, highres_lanes[0])" in block
+
+
 def test_relion_coarse_diff2_cuda_source_pins_production_topology():
     source = (
         Path(__file__).resolve().parents[2]
@@ -630,6 +647,53 @@ def test_relion_fine_diff2_pairs_matches_production_tree_bitwise(
     )
 
 
+@pytest.mark.gpu
+def test_relion_powerclass_highres_matches_single_block_tree_bitwise(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(31)
+    xdim, ydim = 5, 8
+    image = (
+        rng.normal(0.0, 0.2, xdim * ydim)
+        + 1j * rng.normal(0.0, 0.2, xdim * ydim)
+    ).astype(np.complex64)
+    resolution_limit = 3
+    lanes = np.zeros(128, dtype=np.float32)
+    for voxel, value in enumerate(image):
+        x = voxel % xdim
+        y = voxel // xdim
+        y = y if y < xdim else y - ydim
+        shell = int(np.rint(np.sqrt(np.float32(x * x + y * y))))
+        if shell <= 0 or shell >= xdim or (x == 0 and y < 0):
+            continue
+        imag_square = np.float32(value.imag * value.imag)
+        power = _fma32(value.real, value.real, imag_square)
+        if shell >= resolution_limit:
+            lanes[voxel] = power
+    for width in (64, 32, 16, 8, 4, 2, 1):
+        lanes[:width] = np.add(lanes[:width], lanes[width : 2 * width], dtype=np.float32)
+
+    with jax.default_device(gpu_device):
+        actual = cuda_backproject.relion_powerclass_spectrum_highres_f32(
+            jnp.asarray(image[None, :]),
+            xdim=xdim,
+            ydim=ydim,
+            resolution_limit=resolution_limit,
+        )
+
+    np.testing.assert_array_equal(
+        np.asarray(actual)[0, -1].view(np.uint32),
+        lanes[0].view(np.uint32),
+    )
+
+
 @pytest.mark.parametrize(
     "function_name",
     ["relion_fine_diff2_rectangular_f32", "relion_fine_diff2_pairs_f32"],
@@ -660,6 +724,19 @@ def test_relion_fused_translate_fine_diff2_fails_closed_without_gpu(monkeypatch)
             jnp.ones((1, 1), dtype=jnp.float32),
             jnp.asarray([0], dtype=jnp.int32),
             current_size=1,
+        )
+
+
+def test_relion_powerclass_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_powerclass_spectrum_highres_f32.__wrapped__(
+            jnp.zeros((1, 40), dtype=jnp.complex64),
+            xdim=5,
+            ydim=8,
+            resolution_limit=3,
         )
 
 

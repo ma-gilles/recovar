@@ -10,6 +10,9 @@ from scripts.analyze_vdam_storewavg_boundary import (
     _match_rotations,
     _metric,
     _native_gradient_rows,
+    _posterior_metric,
+    _production_score_gradient_rows,
+    _restore_storewavg_inverse_noise_dc,
     _scatter_relion_rows,
     _select_recovar_particle_rows,
 )
@@ -66,6 +69,47 @@ def test_native_gradient_rows_replays_relion_residual_formula():
     np.testing.assert_allclose(data, expected_data.astype(np.complex64), rtol=1.0e-7, atol=1.0e-7)
 
 
+def test_restore_storewavg_inverse_noise_dc_uses_sigma2_model_value():
+    inverse_noise = np.asarray([0.0, 2.0, 3.0], dtype=np.float32)
+    crop_indices = np.asarray([0, 4, 7], dtype=np.int32)
+
+    restored = _restore_storewavg_inverse_noise_dc(
+        inverse_noise,
+        crop_indices,
+        np.asarray([[0.25, 0.5]], dtype=np.float64),
+        2.0,
+    )
+
+    np.testing.assert_array_equal(restored, np.asarray([2.0, 2.0, 3.0], dtype=np.float32))
+    np.testing.assert_array_equal(inverse_noise, np.asarray([0.0, 2.0, 3.0], dtype=np.float32))
+
+
+def test_production_score_gradient_rows_replays_fused_mstep_formula():
+    posterior = np.asarray([[[0.25, 0.75], [0.5, 0.5]]], dtype=np.float32)
+    mask = np.asarray([[[True, False], [True, True]]])
+    shifted = np.asarray([[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]], dtype=np.complex64)
+    ctf2 = np.asarray([2.0, 3.0], dtype=np.float32)
+    projections = np.asarray([[0.5 + 0.25j, 1 + 0.5j], [2 + 1j, 3 + 1.5j]], dtype=np.complex64)
+
+    data, weight, reconstruction_probs = _production_score_gradient_rows(
+        {
+            "posterior": posterior,
+            "reconstruction_sample_mask": mask,
+            "debug_shifted_recon": shifted,
+            "debug_ctf2_over_nv_recon": ctf2,
+            "debug_proj_for_recon": projections,
+        }
+    )
+
+    expected_probs = posterior[0] * mask[0]
+    mass = expected_probs.sum(axis=-1, dtype=np.float32)
+    expected_weight = mass[:, None] * ctf2[None, :]
+    expected_data = expected_probs @ shifted - projections * expected_weight
+    np.testing.assert_array_equal(reconstruction_probs, expected_probs)
+    np.testing.assert_array_equal(weight, expected_weight.astype(np.float32))
+    np.testing.assert_allclose(data, expected_data.astype(np.complex64), rtol=1.0e-7, atol=1.0e-7)
+
+
 def test_metric_uses_relative_l2_and_complex_inner_product():
     reference = np.asarray([1 + 1j, 2 - 1j], dtype=np.complex64)
     result = _metric(reference, reference.copy())
@@ -73,6 +117,20 @@ def test_metric_uses_relative_l2_and_complex_inner_product():
     assert result["relative_l2"] == 0.0
     assert result["cosine"] == pytest.approx(1.0)
     assert result["max_abs"] == 0.0
+
+
+def test_posterior_metric_reports_mass_support_and_l1():
+    reference = np.asarray([[0.25, 0.75, 0.0]], dtype=np.float32)
+    candidate = np.asarray([[0.2, 0.0, 0.8]], dtype=np.float32)
+
+    result = _posterior_metric(reference, candidate)
+
+    assert result["reference_retained_mass"] == pytest.approx(1.0)
+    assert result["candidate_retained_mass"] == pytest.approx(1.0)
+    assert result["l1"] == pytest.approx(1.6)
+    assert result["support_mismatch_count"] == 2
+    assert result["reference_positive_count"] == 2
+    assert result["candidate_positive_count"] == 2
 
 
 def test_complex_long_3d_reads_relion_multidimarray_dump(tmp_path):
@@ -83,6 +141,10 @@ def test_complex_long_3d_reads_relion_multidimarray_dump(tmp_path):
 
     np.testing.assert_array_equal(_complex_long_3d(path), values)
     np.testing.assert_array_equal(_load_unmasked_image(path), values)
+
+    shifted_path = tmp_path / "store_Fimg_shifted_t0_nomask.bin"
+    shifted_path.write_bytes(dimensions.tobytes() + values.tobytes())
+    np.testing.assert_array_equal(_load_unmasked_image(shifted_path), values)
 
 
 def test_load_unmasked_image_rejects_masked_scoring_operand(tmp_path):

@@ -695,6 +695,7 @@ def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
 
 def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeypatch):
     calls = {}
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", "1")
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_diagnostics
 
@@ -717,6 +718,9 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["pass1_current_size"] = kwargs["current_size"]
         calls["pass1_max_significants"] = kwargs["max_significants"]
         calls["pass1_debug_iteration"] = kwargs["debug_iteration"]
+        calls["pass1_relion_coarse_gaussian_default"] = kwargs[
+            "relion_coarse_gaussian_default"
+        ]
         n_images = int(dataset.n_images)
         n_rot = int(np.asarray(rotations).shape[0])
         significant = [[np.array([0], dtype=np.int32) for _ in range(n_images)]]
@@ -769,6 +773,15 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["local_unify_bucket_sizes"] = kwargs["unify_local_bucket_sizes"]
         calls["local_stats_use_reconstruction_probs"] = kwargs["stats_use_reconstruction_probs"]
         calls["local_class_posterior_sums_from_noise"] = kwargs["class_posterior_sums_from_noise"]
+        calls["local_relion_f32_fine_posterior"] = kwargs["relion_f32_fine_posterior"]
+        calls["local_projection_mask_current_image_disk"] = kwargs["projection_mask_current_image_disk"]
+        calls["local_relion_exact_bpref_operands"] = kwargs[
+            "relion_exact_bpref_operands"
+        ]
+        calls["local_relion_exact_fine_diff2"] = kwargs["relion_exact_fine_diff2"]
+        calls["local_relion_exact_score_translation"] = kwargs[
+            "relion_exact_score_translation"
+        ]
         return _fake_result(n_classes=1, n=8, n_images=int(dataset.n_units), n_groups=1)
 
     monkeypatch.setattr(
@@ -782,6 +795,19 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     monkeypatch.setattr(
         "recovar.em.initial_model.dense_adapter.run_local_k_class_em",
         fake_run_local,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._resolve_class_inputs",
+        lambda state, config: (
+            config.means,
+            config.mean_variance,
+            np.zeros((1, 1), dtype=np.complex64),
+            1,
+        ),
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._uses_relion_cuda_image_preprocessing",
+        lambda dataset: True,
     )
 
     def fake_perturb(rotations, random_perturbation, angular_sampling_deg):
@@ -842,6 +868,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["pass1_current_size"] == 6
     assert calls["pass1_max_significants"] == 100
     assert calls["pass1_debug_iteration"] == 7
+    assert calls["pass1_relion_coarse_gaussian_default"] is True
     assert calls["local_current_size"] == state.current_size
     assert calls["rotation_perturbation"] == (0.25, 60.0)
     assert np.max(calls["pass1_rotations"]) > 6.0
@@ -863,6 +890,11 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_unify_bucket_sizes"] is True
     assert calls["local_stats_use_reconstruction_probs"] is True
     assert calls["local_class_posterior_sums_from_noise"] is False
+    assert calls["local_relion_f32_fine_posterior"] is False
+    assert calls["local_projection_mask_current_image_disk"] is False
+    assert calls["local_relion_exact_bpref_operands"] is True
+    assert calls["local_relion_exact_fine_diff2"] is True
+    assert calls["local_relion_exact_score_translation"] is True
     assert calls["diagnostic_context"] == [{"iteration": 7, "half": 1}, "clear"]
     assert result.meta["sparse_pass2"] is True
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
@@ -877,6 +909,9 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
         del noise_variance, translations, disc_type
         calls["pass1_means_shape"] = np.asarray(means).shape
         calls["pass1_class_log_priors"] = np.asarray(kwargs["class_log_priors"], dtype=np.float64).copy()
+        calls["pass1_relion_coarse_gaussian_default"] = kwargs[
+            "relion_coarse_gaussian_default"
+        ]
         n_images = int(dataset.n_images)
         n_rot = int(np.asarray(rotations).shape[0])
         significant = [[np.asarray([class_idx], dtype=np.int32) for _ in range(n_images)] for class_idx in range(2)]
@@ -978,6 +1013,7 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
     assert calls["pass2_mean_variance_shape"] == (2, 8**3)
     np.testing.assert_allclose(calls["pass1_class_log_priors"], np.log([0.8, 0.2]))
     np.testing.assert_allclose(calls["pass2_class_log_priors"], np.log([0.8, 0.2]))
+    assert calls["pass1_relion_coarse_gaussian_default"] is False
     assert calls["local_layout_count"] == 2
     assert calls["has_class_local_rotation_log_prior"] is False
     assert calls["local_stats_use_reconstruction_probs"] is True

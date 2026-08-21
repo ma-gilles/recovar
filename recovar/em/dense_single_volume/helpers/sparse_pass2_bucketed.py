@@ -6542,6 +6542,45 @@ def _relion_cuda_powerclass_highres_xi2_half(
     return highres_xi2 * jnp.asarray(0.5, dtype=jnp.float32)
 
 
+@partial(jax.jit, static_argnames=("image_shape", "current_size"))
+def _relion_cuda_powerclass_highres_xi2_half_atomic(
+    processed_score_half,
+    *,
+    image_shape,
+    current_size,
+):
+    """Run the native CUDA powerClass atomics used by exact fine scoring."""
+
+    from recovar import cuda_backproject
+
+    image_height = int(image_shape[0])
+    image_width = int(image_shape[1])
+    if image_height != image_width:
+        raise ValueError(f"RELION powerClass parity requires square images, got {image_shape}")
+    half_width = image_width // 2 + 1
+    processed_score_half = jnp.asarray(processed_score_half, dtype=jnp.complex64)
+    if processed_score_half.ndim != 2 or processed_score_half.shape[-1] != image_height * half_width:
+        raise ValueError(
+            "RELION powerClass input must be flattened centred rfft images, got "
+            f"{processed_score_half.shape} for image_shape={image_shape}"
+        )
+    relion_image = jnp.roll(
+        processed_score_half.reshape((-1, image_height, half_width)),
+        -(image_height // 2),
+        axis=1,
+    ).reshape((processed_score_half.shape[0], -1))
+    relion_image = (
+        relion_image / jnp.asarray(image_height * image_width, dtype=jnp.float32)
+    ).astype(jnp.complex64)
+    spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
+        relion_image,
+        xdim=half_width,
+        ydim=image_height,
+        resolution_limit=int(current_size) // 2 + 1,
+    )
+    return spectrum_and_highres[:, -1] * jnp.asarray(0.5, dtype=jnp.float32)
+
+
 def _relion_powerclass_highres_xi2_half_to_norm_units(highres_xi2_half, image_shape):
     """Convert RELION's half-Xi2 FFT units to RECOVAR norm N^4 units."""
 
