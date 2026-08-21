@@ -35,6 +35,13 @@ ACCUM=${ROOT}/accum
 PREJOIN=${ROOT}/prejoin
 IMAGE_NAMES=${ROOT}/provenance/image_names.npy
 CAPTURE_INDICES=${CAPTURE_ORIGINAL_INDICES:-99886,71881,89328,77986,60268,16799,88741,18493,55303,80124,32732,63798,28614,92534,20635,29514,58368,75859}
+DEVICE_SIGNATURE_DIR=${BPREF_DEVICE_SIGNATURE_DIR:-}
+STOP_AFTER_TARGET=${BPREF_STOP_AFTER_TARGET:-0}
+
+if [[ "${STOP_AFTER_TARGET}" != 0 && "${STOP_AFTER_TARGET}" != 1 ]]; then
+    echo "BPREF_STOP_AFTER_TARGET must be 0 or 1" >&2
+    exit 2
+fi
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -47,6 +54,10 @@ test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = 0a90714711cdf0
 test "$(stat -Lc %s "${DATA}/particles.256.mrcs")" = 26214401024
 test -s "${RELION}/run_it000_data.star" -a -s "${RELION}/run_it000_optimiser.star"
 test -z "$(find "${OUTPUT}" "${CONTRIBUTIONS}" "${ACCUM}" "${PREJOIN}" -mindepth 1 -print -quit)"
+if [[ -n "${DEVICE_SIGNATURE_DIR}" ]]; then
+    mkdir -p "${DEVICE_SIGNATURE_DIR}"
+    test -z "$(find "${DEVICE_SIGNATURE_DIR}" -mindepth 1 -print -quit)"
+fi
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
@@ -98,6 +109,12 @@ export RECOVAR_BPREF_ACCUM_DUMP_DIR=${ACCUM}
 export RECOVAR_BPREF_PREJOIN_DUMP_DIR=${PREJOIN}
 export RECOVAR_BPREF_BOUNDARY_DUMP_ITERATION=1
 export RECOVAR_BPREF_BOUNDARY_DUMP_RUN_ID=case04-it1-physical-panel
+if [[ -n "${DEVICE_SIGNATURE_DIR}" ]]; then
+    export RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR=${DEVICE_SIGNATURE_DIR}
+fi
+if [[ "${STOP_AFTER_TARGET}" == 1 ]]; then
+    export RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET=1
+fi
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 
 nvidia-smi --query-gpu=uuid,name,memory.total --format=csv,noheader > "${ROOT}/provenance/gpu_${SLURM_JOB_ID}.txt"
@@ -160,8 +177,15 @@ wall_s=$(( $(date +%s) - start_epoch ))
 
 rg -q 'Applied RELION fresh paired AutoRefine particle order with effective seed 1705' "${OUTPUT}/run.log"
 rg -q 'preserving fresh RELION physical BPref particle order' "${OUTPUT}/run.log"
-test -s "${ACCUM}/recovar_bpref_accum_it001.npz"
-test -s "${PREJOIN}/recovar_bpref_prejoin_it001.npz"
+if [[ "${STOP_AFTER_TARGET}" == 1 ]]; then
+    rg -q 'BPref contribution dump completed; stopping at the requested pass-2 boundary' "${OUTPUT}/run.log"
+    test "$(find "${CONTRIBUTIONS}" -maxdepth 1 -name 'bpref_contribution_rows_it001_h*_*.npz' | wc -l)" -eq 1
+    test -n "${DEVICE_SIGNATURE_DIR}"
+    test "$(find "${DEVICE_SIGNATURE_DIR}" -maxdepth 1 -name '*.device.npz' | wc -l)" -eq 1
+else
+    test -s "${ACCUM}/recovar_bpref_accum_it001.npz"
+    test -s "${PREJOIN}/recovar_bpref_prejoin_it001.npz"
+fi
 test "$(find "${CONTRIBUTIONS}" -maxdepth 1 -name 'bpref_contribution_rows_it001_h*_*.npz' | wc -l)" -ge 1
 "${PYTHON}" - "${CONTRIBUTIONS}" <<'PY'
 from pathlib import Path
@@ -181,6 +205,13 @@ for path in Path(sys.argv[1]).glob("bpref_contribution_rows_it001_h*_*.npz"):
 assert seen == expected, (seen, expected)
 PY
 ! rg -q 'Traceback|RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' "${OUTPUT}/run.log"
-find "${OUTPUT}" "${CONTRIBUTIONS}" "${ACCUM}" "${PREJOIN}" -type f -print0 | sort -z | xargs -0 sha256sum > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
-printf '{"job_id":"%s","wall_s":%d,"physical_iteration":1,"particle_count":18}\n' "${SLURM_JOB_ID}" "${wall_s}" > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
+result_roots=("${OUTPUT}" "${CONTRIBUTIONS}" "${ACCUM}" "${PREJOIN}")
+if [[ -n "${DEVICE_SIGNATURE_DIR}" ]]; then
+    result_roots+=("${DEVICE_SIGNATURE_DIR}")
+fi
+find "${result_roots[@]}" -type f -print0 | sort -z | xargs -0 sha256sum > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
+particle_count=$(awk -F, '{n += NF} END {print n}' <<< "${CAPTURE_INDICES}")
+printf '{"job_id":"%s","wall_s":%d,"physical_iteration":1,"particle_count":%d,"stop_after_target":%s}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${particle_count}" "${STOP_AFTER_TARGET}" \
+    > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/SUCCESS_${SLURM_JOB_ID}"
