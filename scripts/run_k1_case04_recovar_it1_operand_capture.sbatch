@@ -34,6 +34,7 @@ CONTRIBUTIONS=${ROOT}/contributions
 ACCUM=${ROOT}/accum
 PREJOIN=${ROOT}/prejoin
 IMAGE_NAMES=${ROOT}/provenance/image_names.npy
+CAPTURE_INDICES=${CAPTURE_ORIGINAL_INDICES:-99886,71881,89328,77986,60268,16799,88741,18493,55303,80124,32732,63798,28614,92534,20635,29514,58368,75859}
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -88,7 +89,7 @@ export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
 export RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR=${CONTRIBUTIONS}
 export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=1
 export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=56
-export RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES=99886,71881,89328,77986,60268,16799,88741,18493,55303,80124,32732,63798,28614,92534,20635,29514,58368,75859
+export RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES=${CAPTURE_INDICES}
 export RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID=case04-it1-physical-panel
 export RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY=${IMAGE_NAMES}
 export RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256=b0f1430d5884e71b9d09e9ff955b19502c2df84ee0b411ab40ffa4f8cc090ef2
@@ -120,9 +121,19 @@ assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_erro
 particles = starfile.read(
     "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET/cases/4_high_noise_100k_g256_white_noise3_bf80/data/particles.star"
 )["particles"]
+data_root = Path(
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET/cases/4_high_noise_100k_g256_white_noise3_bf80/data"
+)
+image_names = []
+for value in particles["rlnImageName"]:
+    stack_index, stack_path = str(value).split("@", 1)
+    path = Path(stack_path)
+    if not path.is_absolute():
+        path = (data_root / path).resolve()
+    image_names.append(f"{stack_index}@{path}")
 np.save(
     os.environ["RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY"],
-    np.asarray(particles["rlnImageName"], dtype=str),
+    np.asarray(image_names, dtype=str),
 )
 print(jax.devices())
 PY
@@ -154,10 +165,14 @@ test -s "${PREJOIN}/recovar_bpref_prejoin_it001.npz"
 test "$(find "${CONTRIBUTIONS}" -maxdepth 1 -name 'bpref_contribution_rows_it001_h*_*.npz' | wc -l)" -ge 1
 "${PYTHON}" - "${CONTRIBUTIONS}" <<'PY'
 from pathlib import Path
+import os
 import sys
 import numpy as np
 
-expected = {99886,71881,89328,77986,60268,16799,88741,18493,55303,80124,32732,63798,28614,92534,20635,29514,58368,75859}
+expected = {
+    int(value)
+    for value in os.environ["RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES"].split(",")
+}
 seen = set()
 for path in Path(sys.argv[1]).glob("bpref_contribution_rows_it001_h*_*.npz"):
     with np.load(path, allow_pickle=False) as values:
