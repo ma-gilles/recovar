@@ -270,9 +270,15 @@ def update_probabilities_from_estep_meta(
         wsum_sigma2_offset = float(wsum_sigma2_offset)
         if not np.isfinite(wsum_sigma2_offset) or wsum_sigma2_offset < 0.0:
             raise ValueError("wsum_sigma2_offset must be non-negative and finite")
+        sigma2_offset_sumw = float(meta.get("sigma2_offset_sumw", sum_weight))
+        if not np.isfinite(sigma2_offset_sumw) or sigma2_offset_sumw <= 0.0:
+            raise ValueError("sigma2_offset_sumw must be positive and finite")
         sigma2_offset = float(state.sigma2_offset) * my_mu
         # RELION divides by 2*sum_weight for 2D particle translations.
-        sigma2_offset += (1.0 - my_mu) * wsum_sigma2_offset / (2.0 * sum_weight)
+        # Its sum_weight is accumulated from the same significant-pruned
+        # reconstruction weights as wsum_sigma2_offset, rather than from the
+        # unpruned per-image class responsibilities.
+        sigma2_offset += (1.0 - my_mu) * wsum_sigma2_offset / (2.0 * sigma2_offset_sumw)
         new_state.sigma2_offset = max(float(sigma2_offset), MIN_SIGMA2_OFFSET_ANGSTROM2)
 
     return new_state

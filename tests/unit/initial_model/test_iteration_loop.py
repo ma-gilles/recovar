@@ -370,6 +370,26 @@ class TestRunVdamIterations:
         assert out.sigma2_offset == pytest.approx(90.25)
         np.testing.assert_allclose(state.pdf_class, [0.5, 0.5])
 
+    def test_sigma2_offset_uses_significant_reconstruction_mass(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.subset_size = 50
+        meta = {
+            "class_posterior_sums": np.asarray([100.0]),
+            "wsum_sigma2_offset": 500.0,
+            "sigma2_offset_sumw": 80.0,
+        }
+
+        out = update_probabilities_from_estep_meta(state, meta, do_grad=True, mu=0.9)
+
+        assert out.sigma2_offset == pytest.approx(90.3125)
+
     def test_updates_sigma2_noise_from_estep_meta_in_relion_units(self):
         from recovar.reconstruction import noise
 
