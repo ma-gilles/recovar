@@ -690,6 +690,7 @@ def _validate_bpref_particle_order_scope(
     replay_iteration_overrides,
     sealed_sampling_state,
     sealed_scoring_context,
+    allow_replayed_bpref_particle_order: bool = False,
 ) -> None:
     """Fail closed unless RELION physical order starts an unsealed fresh K=1 run."""
 
@@ -697,6 +698,20 @@ def _validate_bpref_particle_order_scope(
         return
     if int(n_classes) != 1:
         raise ValueError("RELION BPref particle-order preservation is K=1-only")
+    if allow_replayed_bpref_particle_order:
+        if int(init_relion_iteration) <= 0:
+            raise ValueError(
+                "replayed RELION BPref particle-order preservation requires an imported iteration"
+            )
+        if perturb_replay_relion_dir is None:
+            raise ValueError(
+                "replayed RELION BPref particle-order preservation requires perturbation replay"
+            )
+        if sealed_sampling_state is not None or sealed_scoring_context is not None:
+            raise ValueError(
+                "replayed RELION BPref particle-order preservation cannot alter a sealed boundary"
+            )
+        return
     if int(init_relion_iteration) != 0:
         raise ValueError("RELION BPref particle-order preservation requires a fresh iteration-0 run")
     if perturb_replay_relion_dir is not None:
@@ -4507,6 +4522,7 @@ def refine_single_volume(
     sealed_scoring_context=None,
     use_per_half_mean_variance=False,
     preserve_bpref_particle_order=False,
+    allow_replayed_bpref_particle_order=False,
 ):
     """Multi-iteration RELION-parity EM refinement.
 
@@ -4799,6 +4815,7 @@ def refine_single_volume(
         sealed_scoring_context=sealed_scoring_context,
         use_per_half_mean_variance=use_per_half_mean_variance,
         preserve_bpref_particle_order=preserve_bpref_particle_order,
+        allow_replayed_bpref_particle_order=allow_replayed_bpref_particle_order,
     )
 
 
@@ -4907,6 +4924,7 @@ def _run_relion_iteration_loop(
     sealed_scoring_context=None,
     use_per_half_mean_variance=False,
     preserve_bpref_particle_order=False,
+    allow_replayed_bpref_particle_order=False,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -4981,6 +4999,7 @@ def _run_relion_iteration_loop(
         replay_iteration_overrides=replay_iteration_overrides,
         sealed_sampling_state=sealed_sampling_state,
         sealed_scoring_context=sealed_scoring_context,
+        allow_replayed_bpref_particle_order=allow_replayed_bpref_particle_order,
     )
     class_log_priors = _normalize_class_log_priors(n_classes, init_class_log_priors)
     class_weights = np.exp(class_log_priors)

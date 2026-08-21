@@ -699,6 +699,26 @@ def validate_fresh_particle_order_args(
         )
 
 
+def validate_native_relion_particle_order_args(
+    *,
+    native_order_seed: int | None,
+    fresh_order_seed: int | None,
+    start_iteration: int,
+) -> None:
+    """Confine imported RELION physical order to a non-fresh replay boundary."""
+
+    if native_order_seed is None:
+        return
+    if fresh_order_seed is not None:
+        raise ValueError(
+            "native RELION and fresh particle-order diagnostics are mutually exclusive"
+        )
+    if int(start_iteration) <= 0:
+        raise ValueError(
+            "--diagnostic-native-relion-particle-order-seed requires --iter greater than 0"
+        )
+
+
 def load_initial_noise_variance(path: str | Path, image_shape: tuple[int, int]) -> np.ndarray:
     """Load one sealed full-pixel noise-variance state without STAR rounding."""
 
@@ -966,6 +986,16 @@ def main():
             "Diagnostic exact-state A/B only: reconstruct RELION's one-time fresh "
             "paired half order using this optimizer seed. Ordinary continuation "
             "preserves source order."
+        ),
+    )
+    parser.add_argument(
+        "--diagnostic-native-relion-particle-order-seed",
+        type=int,
+        default=None,
+        help=(
+            "Diagnostic imported-boundary A/B only: reconstruct the native RELION "
+            "run's one-time paired half order using this optimizer seed, and preserve "
+            "that order through K=1 BPref. Requires --iter greater than 0."
         ),
     )
     parser.add_argument(
@@ -1273,6 +1303,11 @@ def main():
         initial_half1_ft_npz=args.initial_half1_ft_npz,
         initial_half2_ft_npz=args.initial_half2_ft_npz,
         final_replay_fields=args.final_replay_fields,
+    )
+    validate_native_relion_particle_order_args(
+        native_order_seed=args.diagnostic_native_relion_particle_order_seed,
+        fresh_order_seed=args.diagnostic_fresh_particle_order_seed,
+        start_iteration=args.iter,
     )
     validate_final_only_replay_args(
         max_iter=args.max_iter,
@@ -1653,10 +1688,15 @@ def main():
 
     relion_idx_map = {_idx(relion_names[i]): relion_subsets[i] for i in range(len(relion_names))}
     our_subsets = np.array([relion_idx_map.get(_idx(n), 0) for n in our_names])
-    if args.diagnostic_fresh_particle_order_seed is not None:
+    selected_order_seed = (
+        args.diagnostic_fresh_particle_order_seed
+        if args.diagnostic_fresh_particle_order_seed is not None
+        else args.diagnostic_native_relion_particle_order_seed
+    )
+    if selected_order_seed is not None:
         if args.keep_stack_indices or args.max_particles is not None:
             raise ValueError(
-                "--diagnostic-fresh-particle-order-seed requires the complete particle table"
+                "particle-order diagnostics require the complete particle table"
             )
         relion_optics = (
             np.asarray(relion_df["rlnOpticsGroup"], dtype=np.int64)
@@ -1665,7 +1705,7 @@ def main():
         )
         relion_half_orders = particle_half_indices(
             relion_subsets,
-            fresh_order_seed=args.diagnostic_fresh_particle_order_seed,
+            fresh_order_seed=selected_order_seed,
             optics_group_ids=relion_optics,
         )
         half1_indices, half2_indices = map_relion_half_orders_to_dataset_rows(
@@ -1673,10 +1713,14 @@ def main():
             relion_names,
             relion_half_orders,
         )
+        order_scope = (
+            "fresh"
+            if args.diagnostic_fresh_particle_order_seed is not None
+            else "imported native RELION boundary"
+        )
         print(
-            "  Diagnostic reconstructed fresh particle order: "
-            f"optimizer_seed={args.diagnostic_fresh_particle_order_seed}, "
-            f"effective_seed={args.diagnostic_fresh_particle_order_seed + 1}"
+            f"  Diagnostic reconstructed {order_scope} particle order: "
+            f"optimizer_seed={selected_order_seed}, effective_seed={selected_order_seed + 1}"
         )
     else:
         half1_indices = None
@@ -2244,7 +2288,13 @@ def main():
         first_iteration_reconstruction_mode=args.first_iteration_reconstruction_mode,
         force_max_iter_after_convergence=args.force_max_iter_after_convergence,
         image_fourier_backend=args.image_fourier_backend,
-        preserve_bpref_particle_order=args.diagnostic_preserve_bpref_particle_order,
+        preserve_bpref_particle_order=(
+            args.diagnostic_preserve_bpref_particle_order
+            or args.diagnostic_native_relion_particle_order_seed is not None
+        ),
+        allow_replayed_bpref_particle_order=(
+            args.diagnostic_native_relion_particle_order_seed is not None
+        ),
         relion_optics_image_sizes=relion_optics_image_sizes,
         relion_optics_pixel_sizes=relion_optics_pixel_sizes,
         relion_model_pixel_size=relion_model_pixel_size,

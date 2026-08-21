@@ -10,6 +10,7 @@ import starfile
 
 from scripts import diff_relion_recovar_per_iter as parity_diff
 from scripts.postprocess_multi_iter_gt import resolve_intermediates_dir
+from recovar.em.dense_single_volume.iteration_loop import _validate_bpref_particle_order_scope
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
     _read_relion_scheduling_average_pmax,
@@ -43,6 +44,7 @@ from scripts.run_multi_iter_parity import (
     validate_final_only_replay_args,
     validate_fresh_initial_reference_args,
     validate_fresh_particle_order_args,
+    validate_native_relion_particle_order_args,
 )
 
 
@@ -512,6 +514,65 @@ def test_fresh_particle_order_accepts_unsealed_fresh_k1_boundary():
         initial_half2_ft_npz=None,
         final_replay_fields=None,
     )
+
+
+def test_native_relion_particle_order_accepts_imported_boundary():
+    validate_native_relion_particle_order_args(
+        native_order_seed=1710,
+        fresh_order_seed=None,
+        start_iteration=1,
+    )
+
+
+def test_native_relion_particle_order_rejects_fresh_boundary():
+    with pytest.raises(ValueError, match="requires --iter greater than 0"):
+        validate_native_relion_particle_order_args(
+            native_order_seed=1710,
+            fresh_order_seed=None,
+            start_iteration=0,
+        )
+
+
+def test_native_relion_particle_order_rejects_fresh_order_arm():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        validate_native_relion_particle_order_args(
+            native_order_seed=1710,
+            fresh_order_seed=1710,
+            start_iteration=1,
+        )
+
+
+def test_replayed_bpref_particle_order_requires_explicit_diagnostic_scope():
+    kwargs = {
+        "preserve_bpref_particle_order": True,
+        "n_classes": 1,
+        "init_relion_iteration": 1,
+        "perturb_replay_relion_dir": "/relion",
+        "replay_iteration_overrides": [None, {"state": 1}],
+        "sealed_sampling_state": None,
+        "sealed_scoring_context": None,
+    }
+    with pytest.raises(ValueError, match="requires a fresh iteration-0 run"):
+        _validate_bpref_particle_order_scope(**kwargs)
+
+    _validate_bpref_particle_order_scope(
+        **kwargs,
+        allow_replayed_bpref_particle_order=True,
+    )
+
+
+def test_replayed_bpref_particle_order_cannot_alter_sealed_boundary():
+    with pytest.raises(ValueError, match="cannot alter a sealed boundary"):
+        _validate_bpref_particle_order_scope(
+            preserve_bpref_particle_order=True,
+            n_classes=1,
+            init_relion_iteration=1,
+            perturb_replay_relion_dir="/relion",
+            replay_iteration_overrides=[None, {"state": 1}],
+            sealed_sampling_state={"sealed": True},
+            sealed_scoring_context=None,
+            allow_replayed_bpref_particle_order=True,
+        )
 
 
 def test_filter_fresh_initial_reference_preserves_binary64_real_handoff():
