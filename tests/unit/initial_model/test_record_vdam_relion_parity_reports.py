@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -19,7 +19,13 @@ def test_record_reports_script_help_is_directly_executable():
     assert "--report-root" in proc.stdout
 
 
-def _write_report(root: Path, *, case_id: str = "vdam-01", source_id: str = "k1-11") -> Path:
+def _write_report(
+    root: Path,
+    *,
+    case_id: str = "vdam-01",
+    source_id: str = "k1-11",
+    source_head: str = "1" * 40,
+) -> Path:
     case_root = root / case_id
     case_root.mkdir(parents=True)
     checkpoints = []
@@ -45,7 +51,7 @@ def _write_report(root: Path, *, case_id: str = "vdam-01", source_id: str = "k1-
     report_path = case_root / "trajectory_audit.json"
     report_path.write_text(json.dumps(report))
     (case_root / "run_provenance.json").write_text(
-        json.dumps({"git_head": "1" * 40, "slurm_job_id": "123_1"})
+        json.dumps({"git_head": source_head, "slurm_job_id": "123_1"})
     )
     return report_path
 
@@ -90,3 +96,47 @@ def test_discover_reports_rejects_duplicate_case_ids(tmp_path):
 
     with pytest.raises(ValueError, match="duplicate trajectory audit"):
         discover_reports([first, second])
+
+
+def test_replace_evaluated_requires_complete_same_head_snapshot(tmp_path):
+    scorecard_path = tmp_path / "scorecard.json"
+    scorecard_path.write_text(DEFAULT_SCORECARD.read_text())
+    report_root = tmp_path / "reports"
+    report = _write_report(report_root)
+
+    with pytest.raises(ValueError, match="complete fixed-suite snapshot"):
+        record_reports(
+            scorecard_path,
+            {"vdam-01": report},
+            snapshot_id="incomplete-replacement",
+            ledger_path=tmp_path / "ledger.json",
+            source_head="1" * 40,
+            replace_evaluated=True,
+        )
+
+
+def test_replace_evaluated_accepts_complete_same_head_snapshot(tmp_path):
+    scorecard_path = tmp_path / "scorecard.json"
+    scorecard = json.loads(DEFAULT_SCORECARD.read_text())
+    scorecard_path.write_text(json.dumps(scorecard))
+    report_root = tmp_path / "reports"
+    reports = {
+        case["id"]: _write_report(
+            report_root,
+            case_id=case["id"],
+            source_id=case["definition"]["source_em_case_id"],
+        )
+        for case in scorecard["cases"]
+    }
+
+    updated = record_reports(
+        scorecard_path,
+        reports,
+        snapshot_id="complete-replacement",
+        ledger_path=tmp_path / "ledger.json",
+        source_head="1" * 40,
+        replace_evaluated=True,
+    )
+
+    assert updated["current_snapshot"]["counts"] == {"pass": 12, "fail": 0, "not_run": 0}
+    assert all(case["evidence"]["source_head"] == "1" * 40 for case in updated["cases"])

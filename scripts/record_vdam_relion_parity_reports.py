@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
-from datetime import datetime, timezone
 import hashlib
 import json
-from pathlib import Path
 import subprocess
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
 
 if __package__:
     from scripts.summarize_vdam_relion_parity_scorecard import (
@@ -125,21 +125,33 @@ def record_reports(
     snapshot_id: str,
     ledger_path: Path,
     source_head: str,
+    replace_evaluated: bool = False,
 ) -> dict:
     scorecard = load_and_validate(scorecard_path)
     known = {case["id"]: case for case in scorecard["cases"]}
     unknown = sorted(set(report_paths).difference(known))
     if unknown:
         raise ValueError(f"unknown VDAM case reports: {unknown}")
+    if replace_evaluated and set(report_paths) != set(known):
+        missing = sorted(set(known).difference(report_paths))
+        raise ValueError(
+            "replacing evaluated results requires one complete fixed-suite snapshot; "
+            f"missing reports: {missing}",
+        )
     ledger_cases = []
     for case_id, report_path in sorted(report_paths.items()):
         case = known[case_id]
-        if case["result"] != "not_run":
+        if case["result"] != "not_run" and not replace_evaluated:
             raise ValueError(f"refusing to replace evaluated scorecard case {case_id}")
         update, ledger_entry = _case_update(
             report_path,
             str(case["definition"]["source_em_case_id"]),
         )
+        if replace_evaluated and ledger_entry["source_head"] != source_head:
+            raise ValueError(
+                f"{case_id}: report source head {ledger_entry['source_head']} "
+                f"does not match snapshot source head {source_head}",
+            )
         case.update(update)
         ledger_cases.append(ledger_entry)
 
@@ -184,6 +196,11 @@ def main() -> None:
     parser.add_argument("--scorecard", type=Path, default=DEFAULT_SCORECARD)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--ledger", type=Path, required=True)
+    parser.add_argument(
+        "--replace-evaluated",
+        action="store_true",
+        help="replace current results only from a complete fixed-suite snapshot at the current source head",
+    )
     args = parser.parse_args()
     source_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[1], text=True
@@ -195,6 +212,7 @@ def main() -> None:
         snapshot_id=args.snapshot_id,
         ledger_path=args.ledger.resolve(),
         source_head=source_head,
+        replace_evaluated=args.replace_evaluated,
     )
     args.scorecard.write_text(json.dumps(scorecard, indent=2) + "\n")
     validated = load_and_validate(args.scorecard)
