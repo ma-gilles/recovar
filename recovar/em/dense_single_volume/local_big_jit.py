@@ -188,6 +188,52 @@ def _norm_correction_image_power_per_image(
     return per_image + full_mass * (relion_high - generic_high)
 
 
+def _noise_image_power_shells_and_per_image(
+    processed_noise_power_half,
+    support_mass,
+    shell_indices_half,
+    valid_image_mask,
+    projection_max_r,
+    *,
+    shell_count: int,
+    image_shape,
+    current_size,
+    include_unweighted_high_shell: bool = True,
+):
+    """Return RELION's noise-spectrum and norm-correction image power.
+
+    Current-model shells are weighted by the retained posterior mass. RELION
+    accumulates ``power_img`` once per valid particle above that window, so the
+    high-shell spectrum must not be scaled by a Pmax/significance mass smaller
+    than one.
+    """
+
+    processed_noise_power_half = jnp.asarray(processed_noise_power_half)
+    pixel_power = jnp.abs(processed_noise_power_half) ** 2
+    power_mass = _norm_correction_image_power_mass(
+        support_mass,
+        shell_indices_half,
+        valid_image_mask,
+        projection_max_r,
+        shell_count=shell_count,
+        include_unweighted_high_shell=include_unweighted_high_shell,
+    )
+    weighted_half = jnp.sum(pixel_power * power_mass, axis=0).astype(jnp.float32)
+    shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
+    per_image = _norm_correction_image_power_per_image(
+        processed_noise_power_half,
+        support_mass,
+        shell_indices_half,
+        valid_image_mask,
+        projection_max_r,
+        shell_count=shell_count,
+        image_shape=image_shape,
+        current_size=current_size,
+        include_unweighted_high_shell=include_unweighted_high_shell,
+    )
+    return shells, per_image
+
+
 def _exact_local_mstep_should_split_adjoints(recon_volume_shape, *arrays) -> bool:
     """Return whether exact-local y/CTF adjoints must run separately."""
 
@@ -1514,7 +1560,7 @@ def run_local_bucket_big_jit(
         translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(jnp.float32)
         noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist_ang.astype(jnp.float32))
         processed_noise_power_half = processed_score_half * image_only_corr[:, None]
-        batch_img_power_per_image = _norm_correction_image_power_per_image(
+        batch_img_power_shells, batch_img_power_per_image = _noise_image_power_shells_and_per_image(
             processed_noise_power_half,
             support_mass,
             shell_indices_half,
@@ -1525,11 +1571,6 @@ def run_local_bucket_big_jit(
             current_size=norm_current_size,
             include_unweighted_high_shell=include_unweighted_norm_high_shell,
         )
-        batch_img_power = jnp.sum(
-            (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
-            axis=0,
-        ).astype(jnp.float32)
-        batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
         noise_img_power = noise_img_power + batch_img_power_shells
         noise_sumw = noise_sumw + jnp.sum(support_mass)
 

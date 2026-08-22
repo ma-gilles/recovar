@@ -16,6 +16,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _weighted_image_power_shells_and_per_image,
 )
 from recovar.em.dense_single_volume.local_big_jit import (
+    _noise_image_power_shells_and_per_image,
     _norm_correction_image_power_mass,
     _norm_correction_image_power_per_image,
 )
@@ -142,6 +143,54 @@ def test_norm_correction_power_uses_relion_powerclass_once_or_not_at_all():
         rtol=2e-7,
         atol=2e-2,
     )
+
+
+def test_local_noise_spectrum_uses_unweighted_high_shell_particle_power():
+    processed_prefix = np.asarray(
+        [
+            [1.0 + 1.0j, 2.0 + 0.0j, 3.0 + 0.0j],
+            [4.0 + 0.0j, 0.0 + 5.0j, 6.0 + 0.0j],
+        ],
+        dtype=jnp.complex64,
+    )
+    processed = jnp.asarray(np.pad(processed_prefix, ((0, 0), (0, 9))))
+    support_mass = jnp.asarray([0.25, 0.0], dtype=jnp.float32)
+    shell_indices = jnp.asarray([0, 1, 2] + [3] * 9, dtype=jnp.int32)
+
+    shells, _ = _noise_image_power_shells_and_per_image(
+        processed,
+        support_mass,
+        shell_indices,
+        jnp.asarray([True, True]),
+        projection_max_r=1,
+        shell_count=3,
+        image_shape=(4, 4),
+        current_size=2,
+    )
+
+    power = np.abs(processed_prefix) ** 2
+    expected = np.asarray(
+        [power[0, 0] * 0.25, power[0, 1] * 0.25, power[0, 2] + power[1, 2]],
+        dtype=np.float32,
+    )
+    np.testing.assert_array_equal(np.asarray(shells), expected)
+
+
+def test_local_noise_spectrum_omits_shared_high_shell_for_non_owner_class():
+    processed = jnp.asarray([[1.0 + 0.0j, 2.0 + 0.0j, 3.0 + 0.0j]], dtype=jnp.complex64)
+    shells, _ = _noise_image_power_shells_and_per_image(
+        processed,
+        jnp.asarray([0.25], dtype=jnp.float32),
+        jnp.asarray([0, 1, 2], dtype=jnp.int32),
+        jnp.asarray([True]),
+        projection_max_r=1,
+        shell_count=3,
+        image_shape=(4, 4),
+        current_size=2,
+        include_unweighted_high_shell=False,
+    )
+
+    np.testing.assert_array_equal(np.asarray(shells), np.asarray([0.25, 1.0, 0.0], dtype=np.float32))
 
 
 def test_powerclass_spectrum_norm_sums_shell_bins_in_host_precision():

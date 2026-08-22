@@ -26,7 +26,6 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_spec,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
-    bin_shell_values_jax,
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
@@ -121,7 +120,7 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.dense_single_volume.local_big_jit import (
-    _norm_correction_image_power_per_image,
+    _noise_image_power_shells_and_per_image,
     _preprocess_half as _big_jit_preprocess_half,
     run_local_bucket_big_jit,
 )
@@ -3845,11 +3844,7 @@ def run_local_em_exact(
                 processed_noise_power_half = (
                     processed_noise_power_half * image_only_corrections_arg[:unpadded_batch_size, None]
                 )
-                batch_img_power = jnp.sum(
-                    (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
-                    axis=0,
-                ).astype(jnp.float32)
-                batch_img_power_per_image = _norm_correction_image_power_per_image(
+                batch_img_power_shells, batch_img_power_per_image = _noise_image_power_shells_and_per_image(
                     processed_noise_power_half,
                     support_mass,
                     shell_indices_half,
@@ -3860,7 +3855,6 @@ def run_local_em_exact(
                     current_size=current_size,
                     include_unweighted_high_shell=include_unweighted_norm_high_shell,
                 )
-                batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
                 noise_img_power = noise_img_power + batch_img_power_shells
                 noise_sumw = noise_sumw + jnp.sum(support_mass)
 
@@ -4932,11 +4926,7 @@ def run_local_em_exact(
             processed_noise_power_half = processed_score_half
             if image_only_corr is not None:
                 processed_noise_power_half = processed_noise_power_half * image_only_corr[:, None]
-            batch_img_power = jnp.sum(
-                (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
-                axis=0,
-            ).astype(jnp.float32)
-            batch_img_power_per_image = _norm_correction_image_power_per_image(
+            batch_img_power_shells, batch_img_power_per_image = _noise_image_power_shells_and_per_image(
                 processed_noise_power_half,
                 support_mass,
                 shell_indices_half,
@@ -4947,7 +4937,6 @@ def run_local_em_exact(
                 current_size=current_size,
                 include_unweighted_high_shell=include_unweighted_norm_high_shell,
             )
-            batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
             noise_img_power = noise_img_power + batch_img_power_shells
             noise_sumw = noise_sumw + jnp.sum(support_mass)
 

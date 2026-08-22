@@ -601,3 +601,56 @@ boundary, rather than only its amplified iteration-14 consequence.
 Iteration-14 M-step evidence:
 
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_it14_boundary_20260824T023000Z/mstep_boundary_it14.json`
+
+## Iteration-13 score operand and high-shell noise boundary
+
+The failing iteration-13 particle is a genuine near tie. RELION assigns
+posterior `0.366620` to mapped key `[6, 57]` and `0.366151` to `[14, 58]`;
+RECOVAR reverses them at `0.366301` and `0.366359`. The projector differs by
+only `5.07e-6` relative L2, while the inverse-noise score weights differ by
+`3.02e-4` and the weighted shifted image by `2.81e-4`. The resulting top-pair
+raw-score odds are biased by about `-1.19e-3`; the pose-prior bias is only
+about `6.7e-6`. This localizes the systematic operand to the evolving noise
+spectrum rather than geometry or the pose prior.
+
+The opt-in exact fine path avoids that particular tie and remains pose-exact
+through iteration 15, but moves the first tie to iteration 16. There RELION's
+top probabilities are `0.498213` and `0.498031`, while RECOVAR returns
+`0.497909` and `0.498334`. Projector relative L2 is `1.17e-5`; score-weight
+relative L2 is `1.61e-4`. Exact fine scoring therefore changes which near tie
+fails but does not remove the upstream operand drift.
+
+Native per-particle noise captures exposed a separate local-engine defect.
+Within the currently scored shells, RECOVAR's raw noise numerator matches
+RELION at roughly `2e-6--5e-6` relative L2. Above the current window, however,
+RECOVAR multiplied `power_img` by the retained significance/Pmax mass even
+though RELION adds it once per particle. At iteration 13 the common high-shell
+ratio was exactly the retained-mass ratio, `568.847/569 = 0.999732`. This tail
+feeds future iterations when the Fourier window expands.
+
+The exact-local engine now uses the same mass topology already implemented by
+the shared sparse EM path: current shells remain posterior weighted, and valid
+high shells are unweighted and owned by exactly one class. Focused CPU tests
+pass `18/18`; the related InitialModel/EM noise subset passes `90/90`. In
+25-iteration jobs `12749438` and `12749439`, both default and exact-fine routes
+have zero pose mismatches through iteration 19 and cross-engine FSC-AUC above
+`0.9999999996` through iteration 16. The earlier iteration-13 and iteration-16
+single-particle failures are removed.
+
+This correction does not close the full trajectory. Both routes transition
+from zero pose mismatches at iteration 19 to 557 mismatches at iteration 20,
+when the sampling schedule advances from HEALPix order 1 to 2. Iteration-20
+FSC-AUC is `0.9989211`; iteration-25 values are `0.9871984` (default) and
+`0.9872198` (exact fine). Since the two scorers are indistinguishable at this
+boundary, the remaining long-run problem is now isolated to the order-change
+sampling/significance path rather than fine diff2 or high-shell noise power.
+
+Evidence roots:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_it13_part357_fused_20260824T031000Z`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_it13_part357_score_20260824T031000Z`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_exact_it16_part691_fused_20260824T033000Z`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_exact_it16_part691_score_20260824T033000Z`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_noise_terms_20260824T034500Z`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_highshell_fix_default_20260824T041500Z`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_highshell_fix_exact_20260824T041500Z`
