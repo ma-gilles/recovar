@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -58,9 +58,6 @@ RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_ORIENTATIONS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES = 9999999.0
 RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS = 100
-# Suppress sub-centiparticle support leakage from the dense sparse-pass
-# adapter while keeping RELION's real small-support update path active.
-RELION_INITIALMODEL_MIN_EFFECTIVE_CLASS_SUPPORT = 1.0e-2
 INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE = 256
 INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB = 32
 
@@ -520,77 +517,6 @@ def _active_relion_initialmodel_max_significants(state: InitialModelState, *, do
     if not bool(do_grad):
         return -1
     return int(RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS) * int(state.K)
-
-
-def _apply_effective_class_support_floor(result, state: InitialModelState):
-    """Drop sub-particle reconstruction support before the RELION M-step branch."""
-
-    if int(state.K) <= 1:
-        return result
-    posterior_sums = result.meta.get("class_posterior_sums")
-    bpref_weight_sums = result.meta.get("class_bpref_weight_sums")
-    support = result.meta.get("class_reconstruction_support_sums", posterior_sums)
-    if support is None:
-        return result
-    support = np.asarray(support, dtype=np.float64)
-    if support.shape != (int(state.K),):
-        return result
-    active = support >= RELION_INITIALMODEL_MIN_EFFECTIVE_CLASS_SUPPORT
-    if np.all(active):
-        return result
-
-    accumulators = []
-    for accum in result.accumulators:
-        if active[int(accum.class_idx)]:
-            accumulators.append(accum)
-        else:
-            accumulators.append(
-                replace(
-                    accum,
-                    data=np.zeros_like(accum.data),
-                    weight=np.zeros_like(accum.weight),
-                )
-            )
-
-    meta = dict(result.meta)
-    meta["class_reconstruction_support_sums_raw"] = support
-    meta["class_effective_support_active"] = active
-    meta["class_reconstruction_support_sums"] = np.where(active, support, 0.0)
-    if posterior_sums is not None:
-        posterior_sums = np.asarray(posterior_sums, dtype=np.float64)
-        if posterior_sums.shape == active.shape:
-            meta["class_posterior_sums_raw"] = posterior_sums
-            posterior_for_update = np.where(active, posterior_sums, 0.0)
-            if bpref_weight_sums is not None:
-                bpref_weight_sums = np.asarray(bpref_weight_sums, dtype=np.float64)
-                if bpref_weight_sums.shape == active.shape:
-                    meta["class_bpref_weight_sums_raw"] = bpref_weight_sums
-                    masked_bpref = np.where(active, bpref_weight_sums, 0.0)
-                    bpref_total = float(np.sum(masked_bpref))
-                    posterior_total = float(np.sum(posterior_for_update))
-                    if bpref_total > 0.0 and posterior_total > 0.0:
-                        posterior_for_update = masked_bpref * (posterior_total / bpref_total)
-            meta["class_posterior_sums"] = posterior_for_update
-    if bpref_weight_sums is not None:
-        bpref_weight_sums = np.asarray(bpref_weight_sums, dtype=np.float64)
-        if bpref_weight_sums.shape == active.shape:
-            meta["class_bpref_weight_sums"] = np.where(active, bpref_weight_sums, 0.0)
-    for key in tuple(meta):
-        if key.startswith("halfset_") and key.endswith("_class_reconstruction_support_sums"):
-            half_sums = np.asarray(meta[key], dtype=np.float64)
-            if half_sums.shape == active.shape:
-                meta[key] = np.where(active, half_sums, 0.0)
-        if key.startswith("halfset_") and key.endswith("_class_posterior_sums"):
-            half_sums = np.asarray(meta[key], dtype=np.float64)
-            if half_sums.shape == active.shape:
-                meta[f"{key}_raw"] = half_sums
-                meta[key] = np.where(active, half_sums, 0.0)
-    if (direction_sums := meta.get("class_direction_posterior_sums")) is not None:
-        direction_sums = np.asarray(direction_sums, dtype=np.float64).copy()
-        direction_sums[~active] = 0.0
-        meta["class_direction_posterior_sums"] = direction_sums
-
-    return replace(result, accumulators=accumulators, meta=meta)
 
 
 def _should_update_native_sampling(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
@@ -1266,7 +1192,6 @@ def _native_expectation_step(
         result = run_dense_initial_model_estep(
             dataset, state, config, particle_ids=particle_ids, halfset_ids=halfset_ids
         )
-        result = _apply_effective_class_support_floor(result, state)
         result.meta.update(
             random_perturbation=float(sampling_plan.random_perturbation),
             n_rotations=int(sampling_plan.rotations.shape[0]),

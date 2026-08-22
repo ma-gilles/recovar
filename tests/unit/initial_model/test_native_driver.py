@@ -14,9 +14,7 @@ import pytest
 import recovar.em.initial_model.driver as driver
 from recovar.data_io.starfile import read_star
 from recovar.em.initial_model import initialise_denovo_state
-from recovar.em.initial_model.dense_adapter import DenseInitialModelEstepResult
 from recovar.em.initial_model.iteration_loop import select_subset_for_iter
-from recovar.em.initial_model.m_step import VdamAccumulator
 
 SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_ab_initio.py"
 
@@ -397,60 +395,6 @@ def test_active_relion_initialmodel_max_significants_matches_gradient_default():
 
     assert driver._active_relion_initialmodel_max_significants(state, do_grad=True) == 300
     assert driver._active_relion_initialmodel_max_significants(state, do_grad=False) == -1
-
-
-def test_effective_class_support_floor_zeros_subparticle_accumulators():
-    state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=4, nr_iter=4, n_directions=1)
-
-    accumulators = []
-    for halfset_idx in (0, 1):
-        for class_idx in range(4):
-            accumulators.append(
-                VdamAccumulator(
-                    data=np.full((3, 3, 2), class_idx + 1, dtype=np.complex128),
-                    weight=np.full((3, 3, 2), class_idx + 1, dtype=np.float64),
-                    class_idx=class_idx,
-                    halfset_idx=halfset_idx,
-                )
-            )
-    result = DenseInitialModelEstepResult(
-        accumulators=accumulators,
-        meta={
-            "selected_particle_ids": np.asarray([13, 10, 12, 11], dtype=np.int64),
-            "class_assignments": np.zeros(4, dtype=np.int32),
-            "class_posterior_sums": np.asarray([12.0, 4.0, 3.0, 0.0], dtype=np.float64),
-            "halfset_0_class_posterior_sums": np.asarray([6.0, 1.5, 1.0, 0.0], dtype=np.float64),
-            "halfset_1_class_posterior_sums": np.asarray([6.0, 2.5, 2.0, 0.0], dtype=np.float64),
-            "class_reconstruction_support_sums": np.asarray([12.0, 0.0017, 3.0, 0.0], dtype=np.float64),
-            "halfset_0_class_reconstruction_support_sums": np.asarray([6.0, 0.0017, 1.0, 0.0], dtype=np.float64),
-            "halfset_1_class_reconstruction_support_sums": np.asarray([6.0, 0.0, 2.0, 0.0], dtype=np.float64),
-            "class_bpref_weight_sums": np.asarray([90.0, 8.0, 30.0, 0.0], dtype=np.float64),
-            "class_direction_posterior_sums": np.ones((4, 2), dtype=np.float64),
-        },
-        halfset_results={},
-    )
-
-    masked = driver._apply_effective_class_support_floor(result, state)
-
-    np.testing.assert_array_equal(masked.meta["class_effective_support_active"], [True, False, True, False])
-    np.testing.assert_allclose(masked.meta["class_reconstruction_support_sums_raw"], [12.0, 0.0017, 3.0, 0.0])
-    np.testing.assert_allclose(masked.meta["class_posterior_sums_raw"], [12.0, 4.0, 3.0, 0.0])
-    np.testing.assert_allclose(masked.meta["class_bpref_weight_sums_raw"], [90.0, 8.0, 30.0, 0.0])
-    np.testing.assert_allclose(masked.meta["class_bpref_weight_sums"], [90.0, 0.0, 30.0, 0.0])
-    np.testing.assert_allclose(masked.meta["class_posterior_sums"], [11.25, 0.0, 3.75, 0.0])
-    np.testing.assert_allclose(masked.meta["class_reconstruction_support_sums"], [12.0, 0.0, 3.0, 0.0])
-    np.testing.assert_allclose(masked.meta["halfset_0_class_posterior_sums_raw"], [6.0, 1.5, 1.0, 0.0])
-    np.testing.assert_allclose(masked.meta["halfset_0_class_posterior_sums"], [6.0, 0.0, 1.0, 0.0])
-    np.testing.assert_allclose(masked.meta["halfset_1_class_posterior_sums"], [6.0, 0.0, 2.0, 0.0])
-    np.testing.assert_allclose(masked.meta["halfset_0_class_reconstruction_support_sums"], [6.0, 0.0, 1.0, 0.0])
-    np.testing.assert_allclose(masked.meta["halfset_1_class_reconstruction_support_sums"], [6.0, 0.0, 2.0, 0.0])
-    np.testing.assert_allclose(masked.meta["class_direction_posterior_sums"][[1, 3]], 0.0)
-    for accum in masked.accumulators:
-        if accum.class_idx in (1, 3):
-            assert not np.any(accum.weight)
-            assert not np.any(accum.data)
-        else:
-            assert np.any(accum.weight)
 
 
 def test_random_perturbation_override_is_fixed():
