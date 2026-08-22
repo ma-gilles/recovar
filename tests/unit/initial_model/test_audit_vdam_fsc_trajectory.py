@@ -72,6 +72,7 @@ def _fixture(tmp_path: Path) -> dict[str, Path]:
         {
             "nr_classes": 1,
             "nr_iter": 8,
+            "grad_write_iter": 1,
             "random_seed": 0,
             "tau2_fudge": 4.0,
             "healpix_order": 1,

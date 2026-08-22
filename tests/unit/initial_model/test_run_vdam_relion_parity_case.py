@@ -69,6 +69,7 @@ def test_recovar_command_maps_the_same_frozen_definition(monkeypatch):
 
     assert argv[:2] == ["/env/python", "scripts/run_ab_initio.py"]
     assert _value(argv, "--nr_iter") == "8"
+    assert _value(argv, "--grad_write_iter") == "1"
     assert _value(argv, "--K") == "1"
     assert _value(argv, "--sym") == "C1"
     assert _value(argv, "--particle_diameter") == "200.0"

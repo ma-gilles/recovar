@@ -79,6 +79,19 @@ def test_effective_initial_model_image_batch_size(requested, grid_size, gpu_memo
     )
 
 
+@pytest.mark.parametrize(
+    ("iteration", "nr_iter", "grad_write_iter", "expected"),
+    [(1, 25, 10, False), (10, 25, 10, True), (20, 25, 10, True), (25, 25, 10, True)],
+)
+def test_iteration_artifact_cadence_matches_relion(iteration, nr_iter, grad_write_iter, expected):
+    assert driver._should_write_iteration_artifacts(iteration, nr_iter, grad_write_iter) is expected
+
+
+def test_iteration_artifact_cadence_rejects_nonpositive_interval():
+    with pytest.raises(ValueError, match="grad_write_iter must be >= 1"):
+        driver._should_write_iteration_artifacts(1, 10, 0)
+
+
 def test_experiment_read_order_uses_micrograph_lexicographic_order():
     main = pd.DataFrame(
         {
@@ -1292,6 +1305,8 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
             "out/run",
             "--nr_iter",
             "3",
+            "--grad_write_iter",
+            "7",
             "--K",
             "2",
             "--particle_diameter",
@@ -1319,6 +1334,7 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
     assert opts.fn_img == "particles.star"
     assert opts.outputname == "out/run"
     assert opts.nr_iter == 3
+    assert opts.grad_write_iter == 7
     assert opts.nr_classes == 2
     assert opts.particle_diameter == 250.0
     assert opts.random_seed == 17

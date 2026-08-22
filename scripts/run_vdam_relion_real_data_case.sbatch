@@ -105,7 +105,7 @@ RELION_CMD=(
 RECOVAR_CMD=(
   "${PIXI_PY}" scripts/run_ab_initio.py
   --i "${INPUT_STAR}" --o "${OUTPUT_ROOT}/recovar/run"
-  --nr_iter "${NR_ITER}" --K "${K}" --tau2_fudge "${TAU2_FUDGE}"
+  --nr_iter "${NR_ITER}" --grad_write_iter 1 --K "${K}" --tau2_fudge "${TAU2_FUDGE}"
   --sym "${SYM}" --do_run_C1 1 --particle_diameter "${PARTICLE_DIAMETER}"
   --random_seed "${RANDOM_SEED}" --healpix_order "${HEALPIX_ORDER}"
   --oversampling "${OVERSAMPLING}" --offset_range "${OFFSET_RANGE}"

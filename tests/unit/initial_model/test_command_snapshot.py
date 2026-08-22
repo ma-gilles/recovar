@@ -67,6 +67,11 @@ class TestCommandContainsRequiredFlags:
         cmd = run_ab_initio.build_command(_basic_opts(run_ab_initio))
         assert "--grad" in cmd
         assert "--denovo_3dref" in cmd
+        assert cmd[cmd.index("--grad_write_iter") + 1] == "10"
+
+    def test_grad_write_interval_is_configurable(self, run_ab_initio):
+        cmd = run_ab_initio.build_command(_basic_opts(run_ab_initio, grad_write_iter=1))
+        assert cmd[cmd.index("--grad_write_iter") + 1] == "1"
 
     def test_pad_1(self, run_ab_initio):
         cmd = run_ab_initio.build_command(_basic_opts(run_ab_initio))

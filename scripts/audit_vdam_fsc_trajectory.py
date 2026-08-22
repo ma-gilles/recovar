@@ -98,6 +98,8 @@ def _validate_run_contract(
         raise AuditError(f"RELION command is missing switches: {missing_switches}")
     if _flag_value(argv, "--grad_write_iter") != "1":
         raise AuditError("RELION --grad_write_iter must be exactly 1 for the frozen checkpoint topology")
+    if native_options.get("grad_write_iter") != 1:
+        raise AuditError("native grad_write_iter must be exactly 1 for the frozen checkpoint topology")
 
     pairs = (
         ("nr_classes", "nr_classes", "--K"),

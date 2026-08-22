@@ -124,6 +124,7 @@ class NativeInitialModelOptions:
     strip_prefix: str | None = None
     translation_sigma_angstrom: float | None = None
     write_iter_artifacts: bool = True
+    grad_write_iter: int = 10
     run_relion_align_symmetry: bool = False
 
 
@@ -1670,6 +1671,14 @@ def _write_iteration_artifacts(
         )
 
 
+def _should_write_iteration_artifacts(iteration: int, nr_iter: int, grad_write_iter: int) -> bool:
+    """Match RELION's gradient-output cadence, including the final iteration."""
+
+    if grad_write_iter < 1:
+        raise ValueError("grad_write_iter must be >= 1")
+    return (iteration % grad_write_iter) == 0 or iteration == nr_iter
+
+
 def _json_ready(value):
     if isinstance(value, np.ndarray):
         return value.tolist()
@@ -1703,6 +1712,8 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         raise ValueError("nr_classes must be >= 1")
     if opts.nr_iter < 1:
         raise ValueError("nr_iter must be >= 1")
+    if opts.grad_write_iter < 1:
+        raise ValueError("grad_write_iter must be >= 1")
     if opts.padding_factor not in (1, 2):
         raise NotImplementedError("native InitialModel currently supports RELION GUI --pad 1 or 2 only")
     if opts.run_relion_align_symmetry:
@@ -1766,6 +1777,10 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     if opts.write_iter_artifacts:
 
         def artifact_sink(current, iteration, meta):
+            if not _should_write_iteration_artifacts(
+                iteration, int(opts.nr_iter), int(opts.grad_write_iter)
+            ):
+                return
             _write_iteration_artifacts(
                 opts.outputname,
                 current,

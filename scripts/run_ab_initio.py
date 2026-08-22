@@ -45,6 +45,7 @@ class InitialModelJobOptions:
     fn_img: str = ""
     outputname: str = "ab_initio/run"
     nr_iter: int = 200
+    grad_write_iter: int = 10
     nr_classes: int = 1
     tau2_fudge: float = 4.0
     sym_name: str = "C1"
@@ -75,6 +76,8 @@ def build_command(opts: InitialModelJobOptions) -> List[str]:
         _reject_mpi()
     if not opts.fn_img:
         raise SystemExit("ERROR: empty field for input STAR file (fn_img)")
+    if opts.grad_write_iter < 1:
+        raise SystemExit("ERROR: grad_write_iter must be >= 1")
 
     tokens: List[str] = [
         "relion_refine",
@@ -84,6 +87,8 @@ def build_command(opts: InitialModelJobOptions) -> List[str]:
         str(opts.nr_iter),
         "--grad",
         "--denovo_3dref",
+        "--grad_write_iter",
+        str(opts.grad_write_iter),
         "--i",
         opts.fn_img,
     ]
@@ -172,6 +177,12 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--i", dest="fn_img", required=True, help="Input images STAR file")
     p.add_argument("--o", dest="outputname", default="ab_initio/run", help="Output name prefix (no trailing slash)")
     p.add_argument("--nr_iter", type=int, default=200)
+    p.add_argument(
+        "--grad_write_iter",
+        type=int,
+        default=10,
+        help="Write trajectory artifacts every N iterations and at the final iteration",
+    )
     p.add_argument("--K", dest="nr_classes", type=int, default=1)
     p.add_argument("--tau2_fudge", type=float, default=4.0)
     p.add_argument("--sym", dest="sym_name", default="C1")
@@ -252,6 +263,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         fn_img=args.fn_img,
         outputname=args.outputname,
         nr_iter=args.nr_iter,
+        grad_write_iter=args.grad_write_iter,
         nr_classes=args.nr_classes,
         tau2_fudge=args.tau2_fudge,
         sym_name=args.sym_name,
@@ -305,6 +317,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         strip_prefix=args.strip_prefix,
         translation_sigma_angstrom=args.translation_sigma_angstrom,
         write_iter_artifacts=not args.no_iter_artifacts,
+        grad_write_iter=opts.grad_write_iter,
         padding_factor=int(args.padding_factor),
         image_fourier_backend=(
             "relion_cuda"

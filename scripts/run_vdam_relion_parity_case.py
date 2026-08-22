@@ -168,6 +168,8 @@ def build_recovar_command(
         str(output_prefix),
         "--nr_iter",
         str(definition["nr_iter"]),
+        "--grad_write_iter",
+        "1",
         "--K",
         str(definition["nr_classes"]),
         "--tau2_fudge",
