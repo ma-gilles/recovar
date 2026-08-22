@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import time
-import inspect
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -915,6 +915,9 @@ def _run_sparse_k_class_adaptive_pass2(
         square_window=bool(base_engine_kwargs.get("square_window", False)),
         relion_half_volume_mstep=bool(base_engine_kwargs.get("relion_half_volume_mstep", False)),
         relion_x_half_mstep=bool(base_engine_kwargs.get("mstep_relion_x_half", False)),
+        mstep_subtract_ctf_projection=bool(
+            base_engine_kwargs.get("mstep_subtract_ctf_projection", False)
+        ),
         adaptive_fraction=float(base_engine_kwargs.get("adaptive_fraction", 0.999)),
         relion_fine_mstep_prune=bool(base_engine_kwargs.get("relion_fine_mstep_prune", False)) and n_classes == 1,
         relion_firstiter_score_mode=base_engine_kwargs.get(

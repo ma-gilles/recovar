@@ -11047,6 +11047,24 @@ def _prepare_bucket_io(
     )
 
 
+def subtract_projected_reference_from_sparse_mstep_sums(
+    summed,
+    reconstruction_probs,
+    projected_reference,
+    ctf2_over_noise,
+):
+    """Form RELION VDAM's residual backprojection operand on compact support."""
+
+    reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
+    projected_reference_weighted = projected_reference * ctf2_over_noise[:, None, :]
+    projected_reference_delta = jnp.where(
+        reconstruction_probs_sum_t[..., None] != 0.0,
+        reconstruction_probs_sum_t[..., None] * projected_reference_weighted,
+        0.0,
+    )
+    return summed - projected_reference_delta
+
+
 def compute_pass2_stats_sparse_bucketed(
     experiment_dataset,
     volume,
@@ -11095,6 +11113,7 @@ def compute_pass2_stats_sparse_bucketed(
     fine_translation_parent_override=None,
     relion_half_volume_mstep=False,
     relion_x_half_mstep=False,
+    mstep_subtract_ctf_projection=False,
     relion_fine_mstep_prune=False,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
@@ -11190,6 +11209,8 @@ def compute_pass2_stats_sparse_bucketed(
     if bool(disable_adjoint_y) != bool(disable_adjoint_ctf):
         raise NotImplementedError("Sparse pass-2 currently supports disabling both M-step adjoints together")
     score_only = bool(disable_adjoint_y and disable_adjoint_ctf)
+    if score_only and mstep_subtract_ctf_projection:
+        raise ValueError("score-only sparse pass 2 cannot subtract the projected reference")
     if return_score_log_z_only:
         if not score_only:
             raise ValueError("return_score_log_z_only requires both M-step adjoints to be disabled")
@@ -13074,6 +13095,13 @@ def compute_pass2_stats_sparse_bucketed(
                         relion_x_half=use_relion_x_half_mstep,
                         sequential_translation_reduction=use_sequential_translation_reduction,
                     )
+                    if mstep_subtract_ctf_projection:
+                        summed = subtract_projected_reference_from_sparse_mstep_sums(
+                            summed,
+                            mstep_probs,
+                            proj_for_noise_chunk,
+                            ctf2_over_nv_recon,
+                        )
                     if contribution_chunked_bucket:
                         dump_summed = summed
                         dump_ctf_probs = ctf_probs
@@ -14374,6 +14402,13 @@ def compute_pass2_stats_sparse_bucketed(
                 relion_x_half=use_relion_x_half_mstep,
                 sequential_translation_reduction=use_sequential_translation_reduction,
             )
+            if mstep_subtract_ctf_projection:
+                summed = subtract_projected_reference_from_sparse_mstep_sums(
+                    summed,
+                    mstep_probs,
+                    proj_for_noise,
+                    ctf2_over_nv_recon,
+                )
             dump_summed = summed
             dump_ctf_probs = ctf_probs
             shadow_reduction_agreement = None
