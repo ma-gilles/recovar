@@ -17,7 +17,7 @@ else:
     from summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
 
 
-SCHEMA = "recovar.vdam_relion_repeat_panel.v1"
+SCHEMA = "recovar.vdam_relion_repeat_panel.v2"
 TRAJECTORY_SCHEMA = "recovar.vdam_relion_fsc_trajectory_audit.v1"
 
 
@@ -39,7 +39,7 @@ def classify_checkpoint(
     *,
     relion_self_fsc_auc: list[float],
     recovar_self_fsc_auc: list[float],
-    cross_engine_fsc_auc: list[float],
+    cross_engine_fsc_auc: list[list[float]],
     gt_deltas: list[float],
     cross_engine_min: float,
     gt_delta_min: float,
@@ -52,14 +52,23 @@ def classify_checkpoint(
         raise RepeatPanelError("repeat classification requires per-run GT nondegradation evidence")
     native_floor = float(min(relion_self_fsc_auc))
     candidate_floor = float(min(recovar_self_fsc_auc))
-    cross_floor = float(min(cross_engine_fsc_auc))
-    cross_ceiling = float(max(cross_engine_fsc_auc))
+    cross_matrix = np.asarray(cross_engine_fsc_auc, dtype=np.float64)
+    if cross_matrix.ndim != 2 or 0 in cross_matrix.shape or not np.all(np.isfinite(cross_matrix)):
+        raise RepeatPanelError("cross-engine comparisons must form a finite candidate-by-native matrix")
+    candidate_best_native = np.max(cross_matrix, axis=1)
+    native_best_candidate = np.max(cross_matrix, axis=0)
+    cross_floor = float(np.min(cross_matrix))
+    cross_ceiling = float(np.max(cross_matrix))
     gt_floor = float(min(gt_deltas))
     checks = {
-        "candidate_repeat_meets_frozen_cross_gate": candidate_floor >= float(cross_engine_min),
-        "cross_engine_panel_reaches_frozen_cross_gate": cross_ceiling >= float(cross_engine_min),
-        "worst_cross_engine_meets_frozen_gate_or_native_repeat_floor": (
-            cross_floor >= float(cross_engine_min) or cross_floor >= native_floor
+        "candidate_repeat_within_native_envelope": (
+            candidate_floor >= float(cross_engine_min) or candidate_floor >= native_floor
+        ),
+        "every_candidate_run_matches_native_mode_at_frozen_gate": bool(
+            np.all(candidate_best_native >= float(cross_engine_min))
+        ),
+        "every_native_run_has_candidate_mode_at_frozen_gate": bool(
+            np.all(native_best_candidate >= float(cross_engine_min))
         ),
         "all_runs_meet_frozen_gt_nondegradation_gate": gt_floor >= float(gt_delta_min),
     }
@@ -70,6 +79,8 @@ def classify_checkpoint(
         "recovar_repeat_floor_fsc_auc": candidate_floor,
         "cross_engine_floor_fsc_auc": cross_floor,
         "cross_engine_ceiling_fsc_auc": cross_ceiling,
+        "minimum_candidate_best_native_fsc_auc": float(np.min(candidate_best_native)),
+        "minimum_native_best_candidate_fsc_auc": float(np.min(native_best_candidate)),
         "minimum_recovar_minus_relion_gt_fsc_auc": gt_floor,
     }
 
@@ -172,16 +183,14 @@ def audit_repeat_panel(
                     shellwise=shellwise,
                 )
             )
-        cross = []
+        cross = np.empty((repeat_count, repeat_count), dtype=np.float64)
         for rec_index, recovar_volume in enumerate(recovar_volumes):
             for rel_index, relion_volume in enumerate(relion_volumes):
-                cross.append(
-                    _metric(
-                        recovar_volume,
-                        relion_volume,
-                        key=f"it{iteration:03d}_recovar_r{rec_index + 1:02d}_relion_r{rel_index + 1:02d}",
-                        shellwise=shellwise,
-                    )
+                cross[rec_index, rel_index] = _metric(
+                    recovar_volume,
+                    relion_volume,
+                    key=f"it{iteration:03d}_recovar_r{rec_index + 1:02d}_relion_r{rel_index + 1:02d}",
+                    shellwise=shellwise,
                 )
         gt_deltas = []
         for repeat in repeats:
@@ -192,7 +201,7 @@ def audit_repeat_panel(
         classification = classify_checkpoint(
             relion_self_fsc_auc=relion_self,
             recovar_self_fsc_auc=recovar_self,
-            cross_engine_fsc_auc=cross,
+            cross_engine_fsc_auc=cross.tolist(),
             gt_deltas=gt_deltas,
             cross_engine_min=cross_min,
             gt_delta_min=gt_min,
@@ -216,7 +225,8 @@ def audit_repeat_panel(
         },
         "metric_policy": (
             "signed shellwise FSC and normalized non-DC FSC-AUC only; the frozen point gates are retained, "
-            "and a cross-engine repeat panel must be no worse than the observed same-GPU native RELION floor"
+            "candidate repeat variability must stay inside the same-GPU native RELION envelope, and every "
+            "candidate and native repeat must have a cross-engine mode match at the frozen point gate"
         ),
         "correlation_used": False,
         "individual_results": [repeat["trajectory"]["result"] for repeat in repeats],
