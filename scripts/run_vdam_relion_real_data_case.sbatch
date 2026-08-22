@@ -26,14 +26,17 @@ unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA RECOVAR_CUDA_DISABLE
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+if [[ "${VDAM_ALLOW_ASYNC_CUDA:-}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]] &&
+   [[ "${VDAM_DETERMINISTIC_CUDA:-}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
+  echo "VDAM_ALLOW_ASYNC_CUDA and VDAM_DETERMINISTIC_CUDA are mutually exclusive" >&2
+  exit 2
+fi
 RECOVAR_CUDA_MODE_ARGS=()
-if [[ "${VDAM_ALLOW_ASYNC_CUDA:-}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
-  export CUDA_LAUNCH_BLOCKING=0
-  RECOVAR_CUDA_MODE_ARGS+=(--allow_async_cuda)
-else
-  # Keep the reference and candidate in the same deterministic launch mode,
-  # and establish it before the provenance process creates a CUDA context.
+if [[ "${VDAM_DETERMINISTIC_CUDA:-}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
   export CUDA_LAUNCH_BLOCKING=1
+  RECOVAR_CUDA_MODE_ARGS+=(--deterministic_cuda)
+else
+  export CUDA_LAUNCH_BLOCKING=0
 fi
 RUNTIME_ROOT="/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${SLURM_JOB_ID:-manual}"
 export TMPDIR="${RUNTIME_ROOT}/tmp"

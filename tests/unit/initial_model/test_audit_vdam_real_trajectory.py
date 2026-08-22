@@ -44,7 +44,7 @@ def test_real_data_sbatch_sets_paired_launch_mode_before_gpu_gate():
     launch_mode = text.index("export CUDA_LAUNCH_BLOCKING=1")
     gpu_gate = text.index('"${PIXI_PY}" - <<\'PY\'')
     assert launch_mode < gpu_gate
-    assert "RECOVAR_CUDA_MODE_ARGS+=(--allow_async_cuda)" in text
+    assert "RECOVAR_CUDA_MODE_ARGS+=(--deterministic_cuda)" in text
     assert '"cuda_launch_blocking_value"' in text
 
 

@@ -52,12 +52,12 @@ def _env_flag(name: str, environ: dict[str, str] | None = None) -> bool:
 def _qualification_cuda_environment(
     env: dict[str, str],
     *,
-    allow_async_cuda: bool,
+    deterministic_cuda: bool,
 ) -> dict[str, str]:
     """Return one launch mode shared by the paired reference and candidate."""
 
     configured = dict(env)
-    configured["CUDA_LAUNCH_BLOCKING"] = "0" if allow_async_cuda else "1"
+    configured["CUDA_LAUNCH_BLOCKING"] = "1" if deterministic_cuda else "0"
     return configured
 
 
@@ -302,8 +302,11 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         image_batch_size=image_batch_size,
     )
     allow_async_cuda = _env_flag("VDAM_ALLOW_ASYNC_CUDA")
-    if allow_async_cuda:
-        recovar_argv.append("--allow_async_cuda")
+    deterministic_cuda = _env_flag("VDAM_DETERMINISTIC_CUDA")
+    if allow_async_cuda and deterministic_cuda:
+        raise RunError("VDAM_ALLOW_ASYNC_CUDA and VDAM_DETERMINISTIC_CUDA are mutually exclusive")
+    if deterministic_cuda:
+        recovar_argv.append("--deterministic_cuda")
     (relion_dir / "relion_command.json").write_text(
         json.dumps({"argv": relion_argv}, indent=2, sort_keys=True) + "\n"
     )
@@ -323,13 +326,13 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "recovar_sparse_big_jit_mstep_max_gb": os.environ.get(
             "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB"
         ),
-        "cuda_launch_blocking": not allow_async_cuda,
+        "cuda_launch_blocking": deterministic_cuda,
     }
     (case_root / "run_provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
 
     env = _qualification_cuda_environment(
         dict(os.environ),
-        allow_async_cuda=allow_async_cuda,
+        deterministic_cuda=deterministic_cuda,
     )
     env.update(
         {

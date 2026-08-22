@@ -1376,7 +1376,7 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
     assert "recovar InitialModel complete: out/initial_model.mrc" in capsys.readouterr().out
 
 
-def test_cli_gpu_auto_selects_relion_cuda_image_backend(monkeypatch):
+def test_cli_gpu_defaults_to_async_relion_cuda_image_backend(monkeypatch):
     run_ab_initio = _load_run_ab_initio()
     calls = {}
     monkeypatch.delenv("CUDA_LAUNCH_BLOCKING", raising=False)
@@ -1389,11 +1389,11 @@ def test_cli_gpu_auto_selects_relion_cuda_image_backend(monkeypatch):
 
     assert run_ab_initio.main(["--i", "particles.star", "--gpu", "0", "--nr_iter", "1"]) == 0
     assert calls["opts"].image_fourier_backend == "relion_cuda"
-    assert calls["opts"].deterministic_cuda is True
-    assert run_ab_initio.os.environ["CUDA_LAUNCH_BLOCKING"] == "1"
+    assert calls["opts"].deterministic_cuda is False
+    assert run_ab_initio.os.environ["CUDA_LAUNCH_BLOCKING"] == "0"
 
 
-def test_cli_gpu_allows_explicit_async_cuda(monkeypatch):
+def test_cli_gpu_allows_explicit_deterministic_cuda(monkeypatch):
     run_ab_initio = _load_run_ab_initio()
     calls = {}
     monkeypatch.delenv("CUDA_LAUNCH_BLOCKING", raising=False)
@@ -1406,9 +1406,9 @@ def test_cli_gpu_allows_explicit_async_cuda(monkeypatch):
 
     assert (
         run_ab_initio.main(
-            ["--i", "particles.star", "--gpu", "0", "--nr_iter", "1", "--allow_async_cuda"]
+            ["--i", "particles.star", "--gpu", "0", "--nr_iter", "1", "--deterministic_cuda"]
         )
         == 0
     )
-    assert calls["opts"].deterministic_cuda is False
-    assert run_ab_initio.os.environ["CUDA_LAUNCH_BLOCKING"] == "0"
+    assert calls["opts"].deterministic_cuda is True
+    assert run_ab_initio.os.environ["CUDA_LAUNCH_BLOCKING"] == "1"

@@ -22,13 +22,18 @@ unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA RECOVAR_CUDA_DISABLE
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-if [[ "${VDAM_ALLOW_ASYNC_CUDA:-}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
-  export CUDA_LAUNCH_BLOCKING=0
-else
-  # This must precede the provenance GPU gate: that short-lived process is
-  # the first CUDA context in the allocation and affects the subsequent
-  # schedule-sensitive RELION/RECOVAR InitialModel reductions.
+if [[ "${VDAM_ALLOW_ASYNC_CUDA:-}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]] &&
+   [[ "${VDAM_DETERMINISTIC_CUDA:-}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
+  echo "VDAM_ALLOW_ASYNC_CUDA and VDAM_DETERMINISTIC_CUDA are mutually exclusive" >&2
+  exit 2
+fi
+if [[ "${VDAM_DETERMINISTIC_CUDA:-}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
   export CUDA_LAUNCH_BLOCKING=1
+else
+  # Match stock RELION's default execution mode. Deterministic launch blocking
+  # remains an explicit diagnostic because it is slower and does not remove
+  # native intra-kernel reduction variability.
+  export CUDA_LAUNCH_BLOCKING=0
 fi
 RUNTIME_ROOT="/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${SLURM_JOB_ID:-manual}"
 export TMPDIR="${RUNTIME_ROOT}/tmp"

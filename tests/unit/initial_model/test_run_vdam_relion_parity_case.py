@@ -208,18 +208,18 @@ def test_recovar_child_environment_requires_cuda_without_legacy_platform_overrid
     assert env["KEEP"] == "yes"
 
 
-def test_parity_cuda_environment_defaults_to_reproducible_launches():
+def test_parity_cuda_environment_supports_explicit_deterministic_launches():
     env = runner._qualification_cuda_environment(
         {"CUDA_LAUNCH_BLOCKING": "0", "KEEP": "yes"},
-        allow_async_cuda=False,
+        deterministic_cuda=True,
     )
 
     assert env["CUDA_LAUNCH_BLOCKING"] == "1"
     assert env["KEEP"] == "yes"
 
 
-def test_parity_cuda_environment_has_explicit_async_escape_hatch():
-    env = runner._qualification_cuda_environment({}, allow_async_cuda=True)
+def test_parity_cuda_environment_defaults_to_stock_async_mode():
+    env = runner._qualification_cuda_environment({}, deterministic_cuda=False)
 
     assert env["CUDA_LAUNCH_BLOCKING"] == "0"
 

@@ -225,13 +225,21 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Fail before InitialModel execution unless the GPU custom CUDA FFI path is ready",
     )
-    p.add_argument(
+    cuda_launch_mode = p.add_mutually_exclusive_group()
+    cuda_launch_mode.add_argument(
+        "--deterministic_cuda",
+        action="store_true",
+        help=(
+            "Serialize CUDA launches for repeatability diagnostics. This is slower and "
+            "does not remove RELION's intra-kernel GPU reduction variability."
+        ),
+    )
+    cuda_launch_mode.add_argument(
         "--allow_async_cuda",
         action="store_true",
         help=(
-            "Allow asynchronous CUDA launches. The default serializes launches because "
-            "RELION InitialModel GPU reductions can otherwise select different late "
-            "autosampling branches across identical runs."
+            "Explicitly select the default asynchronous CUDA launch mode. Retained for "
+            "compatibility with earlier parity runners."
         ),
     )
     p.add_argument("--dry_run", action="store_true", help="Only print the assembled command(s)")
@@ -244,10 +252,10 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _configure_cuda_launch_blocking(*, allow_async_cuda: bool) -> str:
-    """Select the reproducible InitialModel CUDA launch mode before CUDA starts."""
+def _configure_cuda_launch_blocking(*, deterministic_cuda: bool) -> str:
+    """Select the InitialModel CUDA launch mode before CUDA starts."""
 
-    value = "0" if bool(allow_async_cuda) else "1"
+    value = "1" if bool(deterministic_cuda) else "0"
     os.environ["CUDA_LAUNCH_BLOCKING"] = value
     return value
 
@@ -303,7 +311,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if args.gpu_ids:
-        _configure_cuda_launch_blocking(allow_async_cuda=bool(args.allow_async_cuda))
+        _configure_cuda_launch_blocking(deterministic_cuda=bool(args.deterministic_cuda))
 
     if args.require_custom_cuda:
         _require_custom_cuda_runtime()
@@ -349,7 +357,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 else args.image_fourier_backend
             )
         ),
-        deterministic_cuda=not bool(args.allow_async_cuda),
+        deterministic_cuda=bool(args.deterministic_cuda),
     )
     result = run_native_initial_model(native_opts)
     print(f"recovar InitialModel complete: {result.final_mrc}")
