@@ -8620,6 +8620,8 @@ def _relion_fine_mstep_prune_mode(*, use_relion_x_half_mstep: bool, mode_overrid
     if value is None or not value.strip():
         return "per_class" if use_relion_x_half_mstep else "none"
     mode = value.strip().lower()
+    if mode in {"all", "keep_all", "keep-all", "no_prune", "no-prune"}:
+        return "none"
     if mode in _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_JOINT_MODES:
         return "joint"
     if mode in {"1", "true", "yes", "on", "class", "per_class", "per-class"}:
@@ -15328,6 +15330,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
     bpref_device_signature_active: bool = False,
+    normalization_log_evidence=None,
     compact_pair_min_bucket_size_default: int | None = None,
     compact_pair_tail_coalesce_max_images_default: int | None = None,
     compact_pair_tail_coalesce_max_inflation_default: float | None = None,
@@ -15432,6 +15435,17 @@ def compute_k_class_pass2_stats_sparse_fused(
         raise NotImplementedError("fused sparse K-class pass-2 requires shared class noise variance")
 
     n_images = int(experiment_dataset.n_units)
+    normalization_log_evidence_np = None
+    if normalization_log_evidence is not None:
+        normalization_log_evidence_np = np.asarray(
+            normalization_log_evidence,
+            dtype=np.float64,
+        )
+        if normalization_log_evidence_np.shape != (n_images,):
+            raise ValueError(
+                "normalization_log_evidence must have shape "
+                f"({n_images},), got {normalization_log_evidence_np.shape}",
+            )
     n_coarse_trans = int(np.asarray(translations).shape[0])
     n_coarse_rot = rotation_grid_size(nside_level)
     if not hasattr(experiment_dataset, "image_shape") or not hasattr(experiment_dataset, "volume_shape"):
@@ -17369,7 +17383,26 @@ def compute_k_class_pass2_stats_sparse_fused(
                 )
         _add_sparse_group_timing(group_timing, "score", time.time() - stage_t0)
 
-        global_score_log_z_bucket = _logsumexp_class_log_z(jnp.stack(class_score_log_z_bucket, axis=0))
+        log_score_offset = (
+            np.asarray(
+                _relion_cuda_fine_log_evidence_offset(global_min_diff2),
+                dtype=np.float64,
+            )
+            if use_exact_relion_gaussian
+            else -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+        )
+        if normalization_log_evidence_np is None:
+            global_score_log_z_bucket = _logsumexp_class_log_z(
+                jnp.stack(class_score_log_z_bucket, axis=0)
+            )
+        else:
+            # RELION's oversampling-zero symbolic second pass reuses the
+            # coarse pass sum_weight. Convert its absolute log evidence into
+            # this pass's common-min-centered score frame.
+            global_score_log_z_bucket = jnp.asarray(
+                normalization_log_evidence_np[image_indices] - log_score_offset,
+                dtype=jnp.float64,
+            )
         joint_mstep_masks_by_class = None
         joint_mstep_probs_by_class = None
         joint_full_probs_by_class = None
@@ -17626,14 +17659,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                         dump_count=completed_dump_count,
                         current_size=current_size,
                     )
-        log_score_offset = (
-            np.asarray(
-                _relion_cuda_fine_log_evidence_offset(global_min_diff2),
-                dtype=np.float64,
-            )
-            if use_exact_relion_gaussian
-            else -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
-        )
         shifted_recon_split = shifted_recon.reshape(batch, n_fine_trans, -1)
         if accumulate_noise:
             shifted_noise_split = (

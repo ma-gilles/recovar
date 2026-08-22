@@ -86,9 +86,15 @@ def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
-def _k_class_fused_relion_fine_mstep_prune_mode_override(*, relion_fine_mstep_prune: bool) -> str | None:
+def _k_class_fused_relion_fine_mstep_prune_mode_override(
+    *,
+    relion_fine_mstep_prune: bool,
+    keep_all_candidates: bool = False,
+) -> str | None:
     """Default K-class sparse pass-2 to joint pruning, unless explicitly overridden."""
 
+    if bool(keep_all_candidates):
+        return "keep_all"
     if not bool(relion_fine_mstep_prune):
         return None
     if _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV in os.environ:
@@ -1026,6 +1032,10 @@ def _run_sparse_k_class_adaptive_pass2(
             )
         fused_common["relion_projector_half"] = relion_projector_half_by_class
         fused_common["relion_projector_r_max"] = relion_projector_r_max
+        if "normalization_log_evidence" in base_engine_kwargs:
+            fused_common["normalization_log_evidence"] = base_engine_kwargs[
+                "normalization_log_evidence"
+            ]
         for planner_name in (
             "compact_pair_min_bucket_size_default",
             "compact_pair_tail_coalesce_max_images_default",
@@ -1048,6 +1058,9 @@ def _run_sparse_k_class_adaptive_pass2(
                 accumulate_noise=accumulate_noise,
                 relion_fine_mstep_prune_mode=_k_class_fused_relion_fine_mstep_prune_mode_override(
                     relion_fine_mstep_prune=bool(base_engine_kwargs.get("relion_fine_mstep_prune", False)),
+                    keep_all_candidates=bool(
+                        base_engine_kwargs.get("relion_fine_mstep_keep_all", False)
+                    ),
                 ),
                 **fused_common,
             )

@@ -1123,6 +1123,88 @@ def test_dense_initial_model_estep_os0_keeps_coarse_normalization_pose_and_suppo
     np.testing.assert_array_equal(result.meta["max_posterior_per_image"], coarse_pmax)
 
 
+def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_support(
+    monkeypatch,
+):
+    calls = {}
+    coarse_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 72, axis=0)
+    coarse_translations = np.asarray([[0.0, 0.0], [1.5, -0.5]], dtype=np.float32)
+    coarse_log_evidence = np.asarray([11.0, 12.0], dtype=np.float64)
+
+    def fake_significance(dataset, *_args, **_kwargs):
+        n_images = int(dataset.n_images)
+        significant = [
+            [np.asarray([class_idx], dtype=np.int32) for _ in range(n_images)]
+            for class_idx in range(2)
+        ]
+        return (
+            np.ones((2, 72), dtype=bool),
+            np.full(n_images, 2, dtype=np.int32),
+            np.zeros(n_images, dtype=np.int32),
+            np.zeros(n_images, dtype=np.int32),
+            significant,
+            {"normalization_log_evidence": coarse_log_evidence},
+        )
+
+    def fake_run_compact(dataset, *_args, **kwargs):
+        calls.update(kwargs["engine_kwargs"])
+        return _fake_result(
+            n_classes=2,
+            n=8,
+            n_images=int(dataset.n_units),
+            n_groups=1,
+        )
+
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        fake_significance,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._run_sparse_k_class_adaptive_pass2",
+        fake_run_compact,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._collapse_compact_pass2_rotation_stats_to_directions",
+        lambda result, _n_psi: result,
+    )
+
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=2,
+        nr_iter=1,
+        n_directions=4,
+        pseudo_halfsets=False,
+    )
+    config = DenseInitialModelEstepConfig(
+        means=np.zeros((2, 8**3), dtype=np.complex64),
+        mean_variance=np.ones((2, 8**3), dtype=np.float32),
+        noise_variance=np.ones(8 * 8, dtype=np.float32),
+        rotations=coarse_rotations,
+        translations=coarse_translations,
+        pass2_engine="compact",
+        relion_bpref_frame=False,
+        engine_kwargs={
+            "sparse_pass2": True,
+            "healpix_order": 0,
+            "oversampling_order": 0,
+            "coarse_translations": coarse_translations,
+        },
+    )
+
+    result = run_dense_initial_model_estep(
+        _Dataset(),
+        state,
+        config,
+        particle_ids=np.asarray([0, 1], dtype=np.int64),
+    )
+
+    assert calls["relion_fine_mstep_prune"] is False
+    assert calls["relion_fine_mstep_keep_all"] is True
+    np.testing.assert_array_equal(calls["normalization_log_evidence"], coarse_log_evidence)
+    assert result.meta["pass2_engine"] == "compact"
+
+
 def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypatch):
     calls = {"layouts": []}
 

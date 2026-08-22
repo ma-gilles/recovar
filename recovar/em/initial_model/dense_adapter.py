@@ -956,7 +956,8 @@ def _run_sparse_pass2_initial_model_estep(
                         "mstep_subtract_ctf_projection": bool(
                             group_kwargs.get("reconstruction_subtract_projected_reference", False)
                         ),
-                        "relion_fine_mstep_prune": True,
+                        "relion_fine_mstep_prune": oversampling_order > 0,
+                        "relion_fine_mstep_keep_all": oversampling_order == 0,
                         "adaptive_fraction": adaptive_fraction,
                         "relion_projector_half": relion_projector_half_by_class,
                         "relion_projector_r_max": relion_projector_r_max,
@@ -969,6 +970,11 @@ def _run_sparse_pass2_initial_model_estep(
                         "compact_pair_tail_coalesce_min_bucket_size_default": 1,
                     }
                 )
+                if oversampling_order == 0:
+                    compact_engine_kwargs["normalization_log_evidence"] = np.asarray(
+                        _full_stats["normalization_log_evidence"],
+                        dtype=np.float64,
+                    )
                 result = _run_sparse_k_class_adaptive_pass2(
                     group_dataset,
                     means,

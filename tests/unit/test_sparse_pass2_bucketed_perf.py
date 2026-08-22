@@ -4550,6 +4550,13 @@ def test_relion_fine_mstep_prune_mode_override_beats_env(monkeypatch):
         )
         == "none"
     )
+    assert (
+        _relion_fine_mstep_prune_mode(
+            use_relion_x_half_mstep=True,
+            mode_override="keep_all",
+        )
+        == "none"
+    )
 
 
 def test_k_class_fused_prune_mode_allows_explicit_env_override(monkeypatch):
@@ -4561,6 +4568,13 @@ def test_k_class_fused_prune_mode_allows_explicit_env_override(monkeypatch):
     assert (
         _k_class_fused_relion_fine_mstep_prune_mode_override(relion_fine_mstep_prune=True)
         == "joint"
+    )
+    assert (
+        _k_class_fused_relion_fine_mstep_prune_mode_override(
+            relion_fine_mstep_prune=True,
+            keep_all_candidates=True,
+        )
+        == "keep_all"
     )
 
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE", "none")
