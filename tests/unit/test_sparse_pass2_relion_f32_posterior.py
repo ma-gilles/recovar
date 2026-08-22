@@ -8,6 +8,7 @@ import jax.numpy as jnp
 
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _RELION_X_HALF_F32_FINE_POSTERIOR_ENV,
+    _relion_f32_fine_posterior,
     _relion_f32_fine_reconstruction_probs,
     _relion_pass2_reconstruction_probs,
     _relion_pass2_reconstruction_probs_for_mstep,
@@ -93,6 +94,32 @@ def test_relion_f32_fine_posterior_matches_numpy_reference_with_cutoff_ties():
     assert actual[1][0, 0, 1] == actual[1][0, 0, 2]
     # Invalid padded hypotheses must never be revived when a threshold is zero.
     assert not np.any(actual[1][2])
+
+
+def test_relion_f32_fine_posterior_exposes_full_joint_normalization():
+    scores = jnp.asarray(
+        [[0.0, -0.25, -1.5, -4.0, -np.inf]],
+        dtype=jnp.float32,
+    )
+    full = tuple(
+        np.asarray(value)
+        for value in _relion_f32_fine_posterior(
+            scores,
+            adaptive_fraction=0.8,
+        )
+    )
+    legacy = tuple(
+        np.asarray(value)
+        for value in _relion_f32_fine_reconstruction_probs(
+            scores,
+            adaptive_fraction=0.8,
+        )
+    )
+
+    np.testing.assert_allclose(np.sum(full[0], axis=1), np.ones(1), rtol=2e-6)
+    np.testing.assert_array_equal(full[1], np.where(full[2], full[0], 0.0))
+    for actual, expected in zip(full[1:], legacy, strict=True):
+        np.testing.assert_array_equal(actual, expected)
 
 
 def test_relion_f32_fine_posterior_gate_off_preserves_default(monkeypatch):

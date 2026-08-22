@@ -902,6 +902,9 @@ def _run_sparse_k_class_adaptive_pass2(
         translation_log_prior=base_engine_kwargs.get("translation_log_prior"),
         half_spectrum_scoring=bool(base_engine_kwargs.get("half_spectrum_scoring", False)),
         projection_padding_factor=int(base_engine_kwargs.get("projection_padding_factor", 1)),
+        projection_mask_current_image_disk=bool(
+            base_engine_kwargs.get("projection_mask_current_image_disk", True)
+        ),
         reconstruction_padding_factor=int(base_engine_kwargs.get("reconstruction_padding_factor", 1)),
         image_corrections=base_engine_kwargs.get("image_corrections"),
         scale_corrections=base_engine_kwargs.get("scale_corrections"),

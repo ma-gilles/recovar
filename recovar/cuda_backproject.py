@@ -507,6 +507,9 @@ _TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
 _TARGET_FUSED_BP = "cuda_fused_bp"
 _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
 _TARGET_RELION_FUSED_X_HALF_BP = "cuda_relion_fused_x_half_bp"
+_TARGET_RELION_FUSED_X_HALF_BP_PARTICLE_GRID = (
+    "cuda_relion_fused_x_half_bp_particle_grid"
+)
 _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE = "cuda_relion_fused_x_half_bp_signature"
 _TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
 _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE = (
@@ -567,6 +570,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_FUSED_BP, "FusedBackproject"),
     (_TARGET_PER_IMAGE_BP, "PerImageBackproject"),
     (_TARGET_RELION_FUSED_X_HALF_BP, "RelionFusedXHalfBackproject"),
+    (
+        _TARGET_RELION_FUSED_X_HALF_BP_PARTICLE_GRID,
+        "RelionFusedXHalfBackprojectParticleGrid",
+    ),
     (
         _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE,
         "RelionFusedXHalfBackprojectSignature",
@@ -2623,6 +2630,108 @@ def relion_fused_x_half_backproject_indexed(
     )(
         dense_data_rows,
         dense_weight_rows,
+        dense_indices,
+        rot6,
+        data_volume,
+        weight_volume,
+        **kw,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(6, 7, 8))
+def relion_fused_x_half_backproject_particle_grid_indexed(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    data_rows: jax.Array,
+    weight_rows: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float | None,
+) -> tuple[jax.Array, jax.Array]:
+    """Launch one ordered native fused grid for every particle in one FFI call.
+
+    Inputs retain explicit ``(particle, rotation, pixel)`` ownership.  The
+    native handler loops over particles on the caller's CUDA stream and
+    launches the same RELION-shaped grid used by the single-particle target,
+    eliminating framework dispatch between particle-owned launches without
+    combining their atomic streams.
+    """
+
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if max_r is None:
+        raise ValueError("RELION fused x-half particle grid requires an explicit support radius")
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(f"RELION fused x-half particle grid requires an odd BPref grid, got {volume_shape}")
+    if data_volume.dtype != jnp.dtype(jnp.complex64) or data_rows.dtype != jnp.dtype(jnp.complex64):
+        raise TypeError("RELION fused x-half particle-grid data must be complex64")
+    if weight_volume.dtype != jnp.dtype(jnp.float32) or weight_rows.dtype != jnp.dtype(jnp.float32):
+        raise TypeError("RELION fused x-half particle-grid weights must be float32")
+    if pixel_indices.dtype != jnp.dtype(jnp.int32):
+        raise TypeError("RELION fused x-half particle-grid pixel indices must be int32")
+    if data_rows.ndim != 3 or weight_rows.shape != data_rows.shape:
+        raise ValueError(
+            "RELION fused x-half particle-grid rows must have matching "
+            f"(particle, rotation, pixel) shapes, got {data_rows.shape} and {weight_rows.shape}"
+        )
+    n_particles, rows_per_particle, n_pixels = map(int, data_rows.shape)
+    if n_particles <= 0 or rows_per_particle <= 0 or n_pixels <= 0:
+        raise ValueError(f"RELION fused x-half particle-grid rows must be nonempty, got {data_rows.shape}")
+    if pixel_indices.shape != (n_pixels,):
+        raise ValueError(
+            f"RELION fused x-half particle-grid pixel indices must have shape {(n_pixels,)}, "
+            f"got {pixel_indices.shape}"
+        )
+    if rotation_matrices.shape != (n_particles, rows_per_particle, 3, 3):
+        raise ValueError(
+            "RELION fused x-half particle-grid rotations must have shape "
+            f"{(n_particles, rows_per_particle, 3, 3)}, got {rotation_matrices.shape}"
+        )
+
+    flat_data = data_rows.reshape(n_particles * rows_per_particle, n_pixels)
+    flat_weight = weight_rows.reshape(n_particles * rows_per_particle, n_pixels)
+    dense_data, dense_indices, current_height, current_half_width = (
+        _prepare_relion_x_half_block_topology_operands(
+            flat_data, pixel_indices, image_shape, max_r
+        )
+    )
+    dense_weight, weight_dense_indices, weight_height, weight_half_width = (
+        _prepare_relion_x_half_block_topology_operands(
+            flat_weight, pixel_indices, image_shape, max_r
+        )
+    )
+    if (weight_height, weight_half_width) != (current_height, current_half_width):
+        raise ValueError("RELION fused x-half particle-grid topology metadata mismatch")
+    if weight_dense_indices.shape != dense_indices.shape:
+        raise ValueError("RELION fused x-half particle-grid dense index shape mismatch")
+
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    kw.update(
+        image_h=np.int64(current_height),
+        image_w=np.int64(current_half_width),
+        full_image_w=np.int64(current_height),
+        n_particles=np.int64(n_particles),
+        rows_per_particle=np.int64(rows_per_particle),
+    )
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(
+        rotation_matrices.reshape(n_particles * rows_per_particle, 3, 3),
+        jnp.float32,
+    )
+    rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
+    out_types = (
+        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FUSED_X_HALF_BP_PARTICLE_GRID,
+        out_types,
+        input_output_aliases={4: 0, 5: 1},
+        vmap_method="sequential",
+    )(
+        dense_data,
+        dense_weight,
         dense_indices,
         rot6,
         data_volume,

@@ -4151,6 +4151,10 @@ def _compute_sparse_pass2_projections_block(
     projection_kwargs = dict(projection_kwargs)
     return_abs2 = projection_kwargs.pop("return_abs2", True)
     projection_max_r = projection_kwargs.pop("max_r", None)
+    projection_relion_texture_interp = projection_kwargs.get("relion_texture_interp")
+    projection_mask_current_image_disk = bool(
+        projection_kwargs.pop("mask_current_image_disk", True)
+    )
     if projector_output_size is None and projection_max_r is not None:
         projector_output_size = int(2 * float(projection_max_r))
     use_relion_projector = relion_projector_half is not None
@@ -4168,7 +4172,9 @@ def _compute_sparse_pass2_projections_block(
                 return_abs2=bool(return_abs2),
                 centered_rows=True,
                 dense_scale=True,
+                relion_texture_interp=projection_relion_texture_interp,
                 projector_output_size=projector_output_size,
+                mask_current_image_disk=projection_mask_current_image_disk,
             )
         return _compute_projections_block(
             mean_for_proj,
@@ -5167,6 +5173,15 @@ def relion_x_half_bp_fused_atomics_enabled() -> bool:
     """Return whether the diagnostic fused data/weight scatter is enabled."""
 
     return _env_flag_enabled(_RELION_X_HALF_BP_FUSED_ATOMICS_ENV, default=False)
+
+
+def relion_x_half_bp_native_particle_grid_enabled() -> bool:
+    """Return whether particle-owned fused launches share one FFI dispatch."""
+
+    return _env_flag_enabled(
+        _RELION_X_HALF_BP_NATIVE_PARTICLE_GRID_ENV,
+        default=False,
+    )
 
 
 def _scoped_bpref_diagnostic_flags(*, active: bool) -> dict[str, bool]:
@@ -8351,6 +8366,28 @@ def _normalize_pass2_bucket_with_log_z(scores, log_z):
     return safe_log_z, probs, best_log_score, best_argmax, max_posterior
 
 
+@jax.jit
+def _diagnostics_from_normalized_pass2_probs(scores, probs, log_z):
+    """Return normalization diagnostics without recomputing probabilities."""
+
+    flat_scores = jnp.asarray(scores).reshape(scores.shape[0], -1)
+    flat_probs = jnp.asarray(probs).reshape(probs.shape[0], -1)
+    best_log_score = jnp.max(flat_scores, axis=1)
+    has_finite = jnp.isfinite(best_log_score) & jnp.isfinite(log_z)
+    best_argmax = jnp.where(has_finite, jnp.argmax(flat_scores, axis=1), 0)
+    max_posterior = jnp.where(
+        has_finite,
+        jnp.max(flat_probs, axis=1),
+        jnp.asarray(0.0, dtype=flat_probs.dtype),
+    )
+    return (
+        jnp.where(has_finite, log_z, 0.0),
+        jnp.where(has_finite, best_log_score, -jnp.inf),
+        best_argmax,
+        max_posterior,
+    )
+
+
 def _relion_pass2_reconstruction_probs(probs, *, adaptive_fraction: float):
     """Apply RELION's fine-pass significant threshold before M-step sums."""
 
@@ -8365,8 +8402,8 @@ def _relion_pass2_reconstruction_probs(probs, *, adaptive_fraction: float):
 
 
 @partial(jax.jit, static_argnames=("adaptive_fraction",))
-def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
-    """Build fine M-step probabilities with RELION GPU float32 arithmetic.
+def _relion_f32_fine_posterior(scores, *, adaptive_fraction: float):
+    """Build full and pruned fine probabilities with RELION GPU arithmetic.
 
     The reference GPU path shifts its float32 log weights so the maximum is
     50, applies ``expf``, sorts the raw weights in ascending order, and obtains
@@ -8445,12 +8482,23 @@ def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
     n_significant = jnp.sum(mask_flat, axis=1).astype(jnp.int32)
     output_shape = scores_f32.shape
     return (
+        normalized_weights.reshape(output_shape),
         reconstruction_probs_flat.reshape(output_shape),
         mask_flat.reshape(output_shape),
         n_significant,
         sum_weight,
         threshold,
     )
+
+
+def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
+    """Return the legacy pruned view of :func:`_relion_f32_fine_posterior`."""
+
+    full = _relion_f32_fine_posterior(
+        scores,
+        adaptive_fraction=adaptive_fraction,
+    )
+    return full[1:]
 
 
 def relion_x_half_f32_fine_posterior_enabled() -> bool:
@@ -10081,7 +10129,7 @@ def _maybe_dump_k_class_pass2_bucket(
                 raw_diff2_dense = np.asarray(
                     raw_diff2_by_batch_row[row],
                     dtype=np.float32,
-                )
+                )[:n_rot, :]
                 if raw_diff2_dense.shape != scores_with.shape:
                     raise ValueError(
                         "dense raw diff2 shape differs from scores: "
@@ -11123,6 +11171,7 @@ def compute_pass2_stats_sparse_bucketed(
     accumulate_noise,
     half_spectrum_scoring,
     projection_padding_factor,
+    projection_mask_current_image_disk=True,
     reconstruction_padding_factor,
     image_corrections,
     scale_corrections,
@@ -11914,6 +11963,9 @@ def compute_pass2_stats_sparse_bucketed(
             cache_t0 = time.time()
             if use_window:
                 projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
+                projection_kwargs["mask_current_image_disk"] = bool(
+                    projection_mask_current_image_disk
+                )
                 score_cache, recon_cache, recon_abs2_cache = _compute_sparse_pass2_windowed_projections_block(
                     mean_for_proj,
                     jnp.asarray(fine_rotations_override, dtype=jnp.float32),
@@ -11937,6 +11989,9 @@ def compute_pass2_stats_sparse_bucketed(
                 }
             else:
                 projection_kwargs = window_spec.projection_kwargs(return_abs2=None if not score_only else False)
+                projection_kwargs["mask_current_image_disk"] = bool(
+                    projection_mask_current_image_disk
+                )
                 proj_half_cache_flat, proj_abs2_cache_flat = _compute_sparse_pass2_projections_block(
                     mean_for_proj,
                     jnp.asarray(fine_rotations_override, dtype=jnp.float32),
@@ -12566,6 +12621,9 @@ def compute_pass2_stats_sparse_bucketed(
                     rotations_chunk = jnp.asarray(rotations[:, start:stop])
                     flat_rotations_chunk = flatten_bucket_rotations(rotations_chunk)
                     projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
+                    projection_kwargs["mask_current_image_disk"] = bool(
+                        projection_mask_current_image_disk
+                    )
                     score_flat, recon_flat, recon_abs2_flat = _compute_sparse_pass2_windowed_projections_block(
                         mean_for_proj,
                         flat_rotations_chunk,
@@ -13974,6 +14032,9 @@ def compute_pass2_stats_sparse_bucketed(
         else:
             # Project (B*R, 3, 3) -> (B*R, n_half) -> reshape (B, R, n_half)
             projection_kwargs = window_spec.projection_kwargs(return_abs2=False if (use_window or score_only) else None)
+            projection_kwargs["mask_current_image_disk"] = bool(
+                projection_mask_current_image_disk
+            )
             if use_window:
                 proj_half_flat, proj_for_noise_flat, proj_abs2_for_noise_flat = (
                     _compute_sparse_pass2_windowed_projections_block(
@@ -15206,6 +15267,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     translation_log_prior=None,
     half_spectrum_scoring=False,
     projection_padding_factor=1,
+    projection_mask_current_image_disk=True,
     reconstruction_padding_factor=1,
     image_corrections=None,
     scale_corrections=None,
@@ -16161,6 +16223,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                 cache_t0 = time.time()
                 if use_window:
                     projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
+                    projection_kwargs["mask_current_image_disk"] = bool(
+                        projection_mask_current_image_disk
+                    )
                     score_cache, recon_cache, recon_abs2_cache = _compute_sparse_pass2_windowed_projections_block(
                         mean_for_proj_by_class[class_index],
                         jnp.asarray(fine_rotations_override, dtype=jnp.float32),
@@ -16184,6 +16249,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                     }
                 else:
                     projection_kwargs = window_spec.projection_kwargs(return_abs2=None)
+                    projection_kwargs["mask_current_image_disk"] = bool(
+                        projection_mask_current_image_disk
+                    )
                     proj_half_cache_flat, proj_abs2_cache_flat = _compute_sparse_pass2_projections_block(
                         mean_for_proj_by_class[class_index],
                         jnp.asarray(fine_rotations_override, dtype=jnp.float32),
@@ -16786,6 +16854,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                     proj_abs2_for_noise = cache_recon_abs2[rotation_indices_jax]
             else:
                 projection_kwargs = window_spec.projection_kwargs(return_abs2=False if use_window else None)
+                projection_kwargs["mask_current_image_disk"] = bool(
+                    projection_mask_current_image_disk
+                )
                 if use_window:
                     retained_window_projection_bytes = (
                         int(flat_rotations.shape[0])
@@ -17262,6 +17333,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         global_score_log_z_bucket = _logsumexp_class_log_z(jnp.stack(class_score_log_z_bucket, axis=0))
         joint_mstep_masks_by_class = None
         joint_mstep_probs_by_class = None
+        joint_full_probs_by_class = None
         if relion_fine_mstep_prune_mode == "joint":
             flat_joint_probs_by_class = []
             flat_joint_scores_by_class = []
@@ -17310,17 +17382,33 @@ def compute_k_class_pass2_stats_sparse_fused(
             elif use_relion_f32_fine_posterior:
                 flat_sizes = [int(scores.shape[1]) for scores in flat_joint_scores_by_class]
                 joint_scores = jnp.concatenate(flat_joint_scores_by_class, axis=1)
-                joint_reconstruction_probs, joint_mask, *_diagnostics = (
-                    _relion_f32_fine_reconstruction_probs(
+                (
+                    joint_full_probs,
+                    joint_reconstruction_probs,
+                    joint_mask,
+                    *_diagnostics,
+                ) = (
+                    _relion_f32_fine_posterior(
                         joint_scores,
                         adaptive_fraction=float(adaptive_fraction),
                     )
                 )
                 split_points = np.cumsum(flat_sizes[:-1], dtype=np.int64).tolist()
                 flat_joint_masks = list(jnp.split(joint_mask, split_points, axis=1))
+                flat_joint_full_probs = list(
+                    jnp.split(joint_full_probs, split_points, axis=1)
+                )
                 flat_joint_reconstruction_probs = list(
                     jnp.split(joint_reconstruction_probs, split_points, axis=1)
                 )
+                joint_full_probs_by_class = [
+                    flat_probs.reshape(shape)
+                    for flat_probs, shape in zip(
+                        flat_joint_full_probs,
+                        joint_prob_shapes,
+                        strict=True,
+                    )
+                ]
                 joint_mstep_probs_by_class = [
                     flat_probs.reshape(shape)
                     for flat_probs, shape in zip(
@@ -17344,13 +17432,26 @@ def compute_k_class_pass2_stats_sparse_fused(
                 if bucket_uses_compact_pairs:
                     pair_arrays = compact_pair_arrays_by_class[class_index]
                     pair_mask = jnp.asarray(pair_arrays["pair_mask"])
-                    _log_Z, pair_probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
-                        _normalize_pass2_pairs_with_log_z(
+                    if joint_full_probs_by_class is None:
+                        _log_Z, pair_probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
+                            _normalize_pass2_pairs_with_log_z(
+                                scores_by_class[class_index],
+                                pair_mask,
+                                global_score_log_z_bucket,
+                            )
+                        )
+                    else:
+                        pair_probs = joint_full_probs_by_class[class_index]
+                        (
+                            _log_Z,
+                            best_log_score_bucket,
+                            best_argmax,
+                            _max_posterior_bucket,
+                        ) = _diagnostics_from_normalized_pass2_probs(
                             scores_by_class[class_index],
-                            pair_mask,
+                            pair_probs,
                             global_score_log_z_bucket,
                         )
-                    )
                     if winner_take_all:
                         pair_probs = _winner_take_all_pair_probs(
                             scores_by_class[class_index],
@@ -17393,12 +17494,25 @@ def compute_k_class_pass2_stats_sparse_fused(
                         relion_min_diff2=relion_min_diff2_dump,
                     )
                 else:
-                    _log_Z, probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
-                        _normalize_pass2_bucket_with_log_z(
+                    if joint_full_probs_by_class is None:
+                        _log_Z, probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
+                            _normalize_pass2_bucket_with_log_z(
+                                scores_by_class[class_index],
+                                global_score_log_z_bucket,
+                            )
+                        )
+                    else:
+                        probs = joint_full_probs_by_class[class_index]
+                        (
+                            _log_Z,
+                            best_log_score_bucket,
+                            best_argmax,
+                            _max_posterior_bucket,
+                        ) = _diagnostics_from_normalized_pass2_probs(
                             scores_by_class[class_index],
+                            probs,
                             global_score_log_z_bucket,
                         )
-                    )
                     if winner_take_all:
                         probs = _winner_take_all_bucket_probs(
                             scores_by_class[class_index],
@@ -17505,13 +17619,26 @@ def compute_k_class_pass2_stats_sparse_fused(
             if bucket_uses_compact_pairs:
                 pair_arrays = compact_pair_arrays_by_class[class_index]
                 pair_mask = jnp.asarray(pair_arrays["pair_mask"])
-                log_Z, pair_probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
-                    _normalize_pass2_pairs_with_log_z(
+                if joint_full_probs_by_class is None:
+                    log_Z, pair_probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
+                        _normalize_pass2_pairs_with_log_z(
+                            scores_by_class[class_index],
+                            pair_mask,
+                            global_score_log_z_bucket,
+                        )
+                    )
+                else:
+                    pair_probs = joint_full_probs_by_class[class_index]
+                    (
+                        log_Z,
+                        best_log_score_bucket,
+                        best_argmax,
+                        max_posterior_bucket,
+                    ) = _diagnostics_from_normalized_pass2_probs(
                         scores_by_class[class_index],
-                        pair_mask,
+                        pair_probs,
                         global_score_log_z_bucket,
                     )
-                )
                 if winner_take_all:
                     pair_probs = _winner_take_all_pair_probs(
                         scores_by_class[class_index],
@@ -17602,12 +17729,25 @@ def compute_k_class_pass2_stats_sparse_fused(
                         )
                     )
             else:
-                log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
-                    _normalize_pass2_bucket_with_log_z(
+                if joint_full_probs_by_class is None:
+                    log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
+                        _normalize_pass2_bucket_with_log_z(
+                            scores_by_class[class_index],
+                            global_score_log_z_bucket,
+                        )
+                    )
+                else:
+                    probs = joint_full_probs_by_class[class_index]
+                    (
+                        log_Z,
+                        best_log_score_bucket,
+                        best_argmax,
+                        max_posterior_bucket,
+                    ) = _diagnostics_from_normalized_pass2_probs(
                         scores_by_class[class_index],
+                        probs,
                         global_score_log_z_bucket,
                     )
-                )
                 if winner_take_all:
                     probs = _winner_take_all_bucket_probs(
                         scores_by_class[class_index],

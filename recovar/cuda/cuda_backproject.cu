@@ -7796,6 +7796,94 @@ ffi::Error RelionFusedXHalfBackprojectImpl(
     return ffi::Error::Success();
 }
 
+ffi::Error RelionFusedXHalfBackprojectParticleGridImpl(
+    cudaStream_t stream,
+    int64_t image_h, int64_t image_w,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t upsampling, int64_t order,
+    int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4, int64_t n_particles, int64_t rows_per_particle,
+    ffi::AnyBuffer data_rows,
+    ffi::AnyBuffer weight_rows,
+    ffi::AnyBuffer pixel_indices,
+    ffi::AnyBuffer rot,
+    ffi::AnyBuffer data_volume_in,
+    ffi::AnyBuffer weight_volume_in,
+    ffi::Result<ffi::AnyBuffer> data_volume_out,
+    ffi::Result<ffi::AnyBuffer> weight_volume_out)
+{
+    if (data_rows.element_type() != ffi::DataType::C64 ||
+        data_volume_in.element_type() != ffi::DataType::C64 ||
+        data_volume_out->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: data rows and volumes must be complex64");
+    if (weight_rows.element_type() != ffi::DataType::F32 ||
+        weight_volume_in.element_type() != ffi::DataType::F32 ||
+        weight_volume_out->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: weight rows and volumes must be float32");
+    if (pixel_indices.element_type() != ffi::DataType::S32 ||
+        rot.element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: indices/rotations have invalid dtypes");
+    if (order != 1 || half_volume != 1 || half_image != 1 ||
+        N0 <= 0 || N0 != N1 || N1 != N2 || (N2 & 1) == 0 ||
+        image_h <= 0 || image_w != image_h / 2 + 1 || full_image_w != image_h ||
+        upsampling <= 0 || max_r2_x4 < 0 ||
+        n_particles <= 0 || rows_per_particle <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: invalid strict x-half attributes");
+
+    const auto data_dims = data_rows.dimensions();
+    const auto weight_dims = weight_rows.dimensions();
+    const auto pixel_dims = pixel_indices.dimensions();
+    const auto rot_dims = rot.dimensions();
+    const int64_t n_rows = n_particles * rows_per_particle;
+    if (data_dims.size() != 2 || data_dims[0] != n_rows || data_dims[1] <= 0 ||
+        weight_dims.size() != 2 || weight_dims[0] != n_rows ||
+        weight_dims[1] != data_dims[1] ||
+        pixel_dims.size() != 1 || pixel_dims[0] != data_dims[1] ||
+        rot_dims.size() != 2 || rot_dims[0] != n_rows || rot_dims[1] != 6 ||
+        data_dims[1] != image_h * image_w)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: inconsistent row topology");
+
+    const int64_t volume_size = N0 * N1 * (N2 / 2 + 1);
+    const auto data_in_dims = data_volume_in.dimensions();
+    const auto weight_in_dims = weight_volume_in.dimensions();
+    const auto data_out_dims = data_volume_out->dimensions();
+    const auto weight_out_dims = weight_volume_out->dimensions();
+    if (data_in_dims.size() != 1 || data_in_dims[0] != volume_size ||
+        weight_in_dims.size() != 1 || weight_in_dims[0] != volume_size ||
+        data_out_dims.size() != 1 || data_out_dims[0] != volume_size ||
+        weight_out_dims.size() != 1 || weight_out_dims[0] != volume_size)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: accumulator sizes do not match");
+
+    auto* data_out = reinterpret_cast<float2*>(data_volume_out->untyped_data());
+    auto* weight_out = static_cast<float*>(weight_volume_out->untyped_data());
+    const auto* data = reinterpret_cast<const float2*>(data_rows.untyped_data());
+    const auto* weight = static_cast<const float*>(weight_rows.untyped_data());
+    const auto* indices = static_cast<const int32_t*>(pixel_indices.untyped_data());
+    const auto* rotations = static_cast<const float*>(rot.untyped_data());
+    const int64_t n_pixels = data_dims[1];
+    const int64_t row_stride = rows_per_particle * n_pixels;
+    const int64_t rotation_stride = rows_per_particle * 6;
+    for (int64_t particle = 0; particle < n_particles; ++particle) {
+        cudaError_t err = launch_relion_fused_x_half_backproject(
+            stream, data_out, weight_out,
+            data + particle * row_stride,
+            weight + particle * row_stride,
+            indices,
+            rotations + particle * rotation_stride,
+            rows_per_particle, n_pixels, image_h, image_w,
+            N0, N1, N2, upsampling, max_r2_x4);
+        if (err != cudaSuccess)
+            return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    }
+    return ffi::Error::Success();
+}
+
 ffi::Error RelionFusedXHalfBackprojectSignatureImpl(
     cudaStream_t stream,
     int64_t image_h, int64_t image_w,
@@ -8070,6 +8158,34 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()           /* pixel_indices   */
         .Arg<ffi::AnyBuffer>()           /* rot             */
         .Arg<ffi::AnyBuffer>()           /* data_volume_in  */
+        .Arg<ffi::AnyBuffer>()           /* weight_volume_in */
+        .Ret<ffi::AnyBuffer>()           /* data_volume_out (aliased) */
+        .Ret<ffi::AnyBuffer>()           /* weight_volume_out (aliased) */
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFusedXHalfBackprojectParticleGrid,
+    RelionFusedXHalfBackprojectParticleGridImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("N0")
+        .Attr<int64_t>("N1")
+        .Attr<int64_t>("N2")
+        .Attr<int64_t>("upsampling")
+        .Attr<int64_t>("order")
+        .Attr<int64_t>("half_volume")
+        .Attr<int64_t>("half_image")
+        .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
+        .Attr<int64_t>("n_particles")
+        .Attr<int64_t>("rows_per_particle")
+        .Arg<ffi::AnyBuffer>()           /* data_rows */
+        .Arg<ffi::AnyBuffer>()           /* weight_rows */
+        .Arg<ffi::AnyBuffer>()           /* pixel_indices */
+        .Arg<ffi::AnyBuffer>()           /* rot */
+        .Arg<ffi::AnyBuffer>()           /* data_volume_in */
         .Arg<ffi::AnyBuffer>()           /* weight_volume_in */
         .Ret<ffi::AnyBuffer>()           /* data_volume_out (aliased) */
         .Ret<ffi::AnyBuffer>()           /* weight_volume_out (aliased) */

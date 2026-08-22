@@ -331,7 +331,11 @@ def test_sparse_pass2_preserves_relion_projector_api_and_forwarding():
         sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused,
     ):
         sig = inspect.signature(func)
-        for name in ("relion_projector_half", "relion_projector_r_max"):
+        for name in (
+            "relion_projector_half",
+            "relion_projector_r_max",
+            "projection_mask_current_image_disk",
+        ):
             assert name in sig.parameters, f"{func.__name__} lost projector parameter {name!r}"
 
     source = inspect.getsource(k_class_mod._run_sparse_k_class_adaptive_pass2)
@@ -339,6 +343,7 @@ def test_sparse_pass2_preserves_relion_projector_api_and_forwarding():
         'fused_common["relion_projector_half"] = relion_projector_half_by_class',
         "relion_projector_half=_select_projector_half_for_class(",
         "relion_projector_r_max=relion_projector_r_max",
+        'base_engine_kwargs.get("projection_mask_current_image_disk", True)',
     ):
         assert needle in source, f"adaptive sparse pass-2 lost projector forwarding: {needle!r}"
 
@@ -1369,11 +1374,13 @@ def test_kclass_dense_pass2_dump_preserves_selected_raw_diff2(monkeypatch, tmp_p
         n_rot * n_trans,
         dtype=np.float32,
     ).reshape(1, n_rot, n_trans)
-    raw_diff2 = (
-        np.arange(n_rot * n_trans, dtype=np.float32)
-        .reshape(n_rot, n_trans)
+    padded_rotations = 4
+    raw_diff2_padded = (
+        np.arange(padded_rotations * n_trans, dtype=np.float32)
+        .reshape(padded_rotations, n_trans)
         + np.float32(500.0)
     )
+    raw_diff2 = raw_diff2_padded[:n_rot]
 
     dump_dir = tmp_path / "pass2"
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
@@ -1392,7 +1399,7 @@ def test_kclass_dense_pass2_dump_preserves_selected_raw_diff2(monkeypatch, tmp_p
         probs=np.full_like(scores, 1.0 / scores.size),
         bucket_translation_prior=np.zeros((1, n_trans), dtype=np.float32),
         compact_pairs=False,
-        raw_diff2_by_batch_row={0: raw_diff2},
+        raw_diff2_by_batch_row={0: raw_diff2_padded},
         relion_min_diff2=np.asarray([499.0], dtype=np.float32),
     )
 
