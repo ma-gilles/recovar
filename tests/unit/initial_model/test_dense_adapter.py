@@ -1167,6 +1167,10 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
         "recovar.em.initial_model.dense_adapter._collapse_compact_pass2_rotation_stats_to_directions",
         lambda result, _n_psi: result,
     )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._restore_zero_oversampling_coarse_metadata",
+        lambda result, **_kwargs: result,
+    )
 
     state = initialise_denovo_state(
         ori_size=8,
@@ -1203,6 +1207,70 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
     assert calls["relion_fine_mstep_keep_all"] is True
     np.testing.assert_array_equal(calls["normalization_log_evidence"], coarse_log_evidence)
     assert result.meta["pass2_engine"] == "compact"
+
+
+def test_zero_oversampling_restores_k_class_coarse_argmax_metadata():
+    from recovar.em.dense_single_volume.helpers.types import make_relion_stats
+    from recovar.em.dense_single_volume.k_class import KClassEMResult
+    from recovar.em.initial_model.dense_adapter import (
+        _restore_zero_oversampling_coarse_metadata,
+    )
+
+    coarse_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 4, axis=0)
+    coarse_rotations[:, 0, 0] = np.arange(4, dtype=np.float32)
+    coarse_translations = np.asarray([[0.0, 0.0], [1.5, -0.5]], dtype=np.float32)
+    coarse_hard = np.asarray([5, 6], dtype=np.int32)
+    coarse_classes = np.asarray([1, 0], dtype=np.int32)
+    coarse_pmax = np.asarray([0.25, 0.75], dtype=np.float32)
+    fine_stats = make_relion_stats(
+        log_evidence_per_image=np.asarray([1.0, 2.0], dtype=np.float32),
+        best_log_score_per_image=np.asarray([0.5, 1.5], dtype=np.float32),
+        max_posterior_per_image=np.asarray([0.9, 0.8], dtype=np.float32),
+        rotation_posterior_sums=np.ones(4, dtype=np.float32),
+    )
+    fine_per_class_hard = np.asarray([[0, 1], [2, 3]], dtype=np.int32)
+    result = KClassEMResult(
+        new_means=None,
+        Ft_y=np.ones((2, 8**3), dtype=np.complex64),
+        Ft_ctf=np.ones((2, 8**3), dtype=np.float32),
+        per_class_hard_assignments=fine_per_class_hard,
+        class_assignments=np.asarray([0, 1], dtype=np.int32),
+        pose_assignments=np.asarray([0, 3], dtype=np.int32),
+        class_responsibilities=np.full((2, 2), 0.5, dtype=np.float32),
+        class_posterior_sums=np.ones(2, dtype=np.float32),
+        stats=fine_stats,
+        per_class_stats=(fine_stats, fine_stats),
+        noise_stats=None,
+        aggregate_noise_stats=None,
+        best_pose_rotations=np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0),
+        best_pose_translations=np.zeros((2, 2), dtype=np.float32),
+        best_pose_rotation_ids=np.zeros(2, dtype=np.int32),
+    )
+
+    restored = _restore_zero_oversampling_coarse_metadata(
+        result,
+        hard_assignment=coarse_hard,
+        class_assignment=coarse_classes,
+        full_stats={
+            "log_evidence_per_image": np.asarray([11.0, 12.0], dtype=np.float32),
+            "best_log_score_per_image": np.asarray([10.0, 11.5], dtype=np.float32),
+            "max_posterior_per_image": coarse_pmax,
+        },
+        coarse_rotations=coarse_rotations,
+        coarse_translations=coarse_translations,
+    )
+
+    np.testing.assert_array_equal(restored.class_assignments, coarse_classes)
+    np.testing.assert_array_equal(restored.pose_assignments, coarse_hard)
+    np.testing.assert_array_equal(restored.per_class_hard_assignments, fine_per_class_hard)
+    np.testing.assert_array_equal(restored.best_pose_rotation_ids, [2, 3])
+    np.testing.assert_array_equal(restored.best_pose_rotations, coarse_rotations[[2, 3]])
+    np.testing.assert_array_equal(restored.best_pose_translations, coarse_translations[[1, 0]])
+    np.testing.assert_array_equal(restored.stats.max_posterior_per_image, coarse_pmax)
+    np.testing.assert_array_equal(
+        restored.per_class_stats[0].max_posterior_per_image,
+        fine_stats.max_posterior_per_image,
+    )
 
 
 def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypatch):

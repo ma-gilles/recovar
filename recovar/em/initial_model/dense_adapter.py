@@ -644,21 +644,30 @@ def _class_pass2_rotation_log_prior(group_kwargs: dict[str, Any], class_index: i
     return prior[int(class_index)]
 
 
-def _restore_k1_zero_oversampling_coarse_metadata(
+def _restore_zero_oversampling_coarse_metadata(
     result,
     *,
     hard_assignment: np.ndarray,
+    class_assignment: np.ndarray,
     full_stats: dict[str, Any],
     coarse_rotations: np.ndarray,
     coarse_translations: np.ndarray,
 ):
-    """Keep RELION's pass-1 pose/Pmax metadata for an os0 pass-2 M-step."""
+    """Keep RELION's pass-1 argmax/Pmax metadata for an os0 pass-2 M-step."""
 
     hard = np.asarray(hard_assignment, dtype=np.int32)
+    classes = np.asarray(class_assignment, dtype=np.int32)
     n_images = int(hard.size)
+    n_classes = len(result.per_class_stats)
     n_translations = int(np.asarray(coarse_translations).shape[0])
-    if hard.shape != (n_images,) or n_translations <= 0:
-        raise ValueError("invalid coarse assignments for K=1 zero-oversampling metadata")
+    if (
+        hard.shape != (n_images,)
+        or classes.shape != (n_images,)
+        or n_translations <= 0
+        or np.any(classes < 0)
+        or np.any(classes >= n_classes)
+    ):
+        raise ValueError("invalid coarse assignments for zero-oversampling metadata")
     rotation_ids = hard.astype(np.int64) // n_translations
     translation_ids = hard.astype(np.int64) % n_translations
     rotations = np.asarray(coarse_rotations, dtype=np.float32)[rotation_ids]
@@ -681,20 +690,23 @@ def _restore_k1_zero_oversampling_coarse_metadata(
         )
 
     aggregate_stats = _coarse_scalars(result.stats)
-    per_class_stats = (_coarse_scalars(result.per_class_stats[0]),)
-    return result._replace(
-        per_class_hard_assignments=hard[None, :],
-        class_assignments=np.zeros(n_images, dtype=np.int32),
+    replace_kwargs = dict(
+        class_assignments=classes,
         pose_assignments=hard,
         stats=aggregate_stats,
-        per_class_stats=per_class_stats,
-        per_class_best_pose_rotations=(rotations,),
-        per_class_best_pose_translations=(translations,),
-        per_class_best_pose_rotation_ids=(rotation_ids.astype(np.int32),),
         best_pose_rotations=rotations,
         best_pose_translations=translations,
         best_pose_rotation_ids=rotation_ids.astype(np.int32),
     )
+    if n_classes == 1:
+        replace_kwargs.update(
+            per_class_hard_assignments=hard[None, :],
+            per_class_stats=(_coarse_scalars(result.per_class_stats[0]),),
+            per_class_best_pose_rotations=(rotations,),
+            per_class_best_pose_translations=(translations,),
+            per_class_best_pose_rotation_ids=(rotation_ids.astype(np.int32),),
+        )
+    return result._replace(**replace_kwargs)
 
 
 def _run_sparse_pass2_initial_model_estep(
@@ -861,7 +873,8 @@ def _run_sparse_pass2_initial_model_estep(
             significant_sample_indices,
             _full_stats,
         ) = sig_result
-        k1_zero_oversampling = state.K == 1 and oversampling_order == 0
+        zero_oversampling = oversampling_order == 0
+        k1_zero_oversampling = state.K == 1 and zero_oversampling
         pass1_time_s += time.time() - t0
         n_significant_by_image.append(np.asarray(_n_sig_all, dtype=np.int32))
 
@@ -1076,10 +1089,11 @@ def _run_sparse_pass2_initial_model_estep(
         finally:
             sparse_diagnostics.clear_bpref_contribution_dump_context()
         pass2_time_s += time.time() - t0
-        if k1_zero_oversampling:
-            result = _restore_k1_zero_oversampling_coarse_metadata(
+        if zero_oversampling:
+            result = _restore_zero_oversampling_coarse_metadata(
                 result,
                 hard_assignment=_hard_assignment,
+                class_assignment=_class_assignment,
                 full_stats=_full_stats,
                 coarse_rotations=coarse_metadata_rotations,
                 coarse_translations=coarse_translations,
