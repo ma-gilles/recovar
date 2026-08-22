@@ -22,6 +22,7 @@ module is the pure orchestrator.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
@@ -595,8 +596,19 @@ def run_vdam_iterations(
     """Full VDAM loop; ``state`` must come from ``initialise_denovo_state`` + ``seed_noise_from_mavg``."""
     phase_lengths = compute_phase_lengths(state.nr_iter, grad_ini_frac, grad_fin_frac)
     current = state
+    profile_iterations = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
 
     for it in range(1, state.nr_iter + 1):
+        iteration_started = time.perf_counter()
+        stage_started = iteration_started
+        iteration_profile: dict[str, float] = {}
+
+        def _record_stage(name: str) -> None:
+            nonlocal stage_started
+            now = time.perf_counter()
+            iteration_profile[f"{name}_time_s"] = float(now - stage_started)
+            stage_started = now
+
         do_grad = ((state.nr_iter - it) >= grad_em_iters) and not current.has_converged
 
         current = default_schedule_update(
@@ -609,6 +621,8 @@ def run_vdam_iterations(
             tau2_fudge_arg=tau2_fudge_arg,
             grad_em_iters=grad_em_iters,
         )
+        if profile_iterations:
+            _record_stage("schedule")
 
         current = select_subset_for_iter(
             current,
@@ -620,6 +634,8 @@ def run_vdam_iterations(
             do_grad=do_grad,
             particle_order=particle_order,
         )
+        if profile_iterations:
+            _record_stage("subset")
 
         current = update_image_size_and_resolution_pointers(current)
         if refresh_tau2_from_projector:
@@ -628,6 +644,8 @@ def run_vdam_iterations(
                 padding_factor=projector_padding_factor,
                 interpolator=projector_interpolator,
             )
+        if profile_iterations:
+            _record_stage("projector_refresh")
 
         # E-step: caller-supplied closure over the data loader + dense kernels
         accumulators, meta = expectation_step(
@@ -635,6 +653,8 @@ def run_vdam_iterations(
             current.subset_particle_ids,
             current.subset_halfset_ids,
         )
+        if profile_iterations:
+            _record_stage("expectation")
 
         # M-step
         current = vdam_m_step(
@@ -644,6 +664,8 @@ def run_vdam_iterations(
             tau2_fudge_factor=current.tau2_fudge_factor,
             padding_factor=projector_padding_factor,
         )
+        if profile_iterations:
+            _record_stage("mstep")
         current = update_probabilities_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
         current = update_noise_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
         ave_pmax = _ave_pmax_from_meta(meta)
@@ -653,6 +675,8 @@ def run_vdam_iterations(
             current = post_mstep_update(current, it, meta)
 
         current = update_current_resolution_from_data_vs_prior(current)
+        if profile_iterations:
+            _record_stage("state_update")
         meta = dict(meta)
         meta.update(
             {
@@ -662,7 +686,15 @@ def run_vdam_iterations(
                 "ave_Pmax": float(current.ave_Pmax),
             }
         )
+        if profile_iterations:
+            iteration_profile["pre_artifact_time_s"] = float(time.perf_counter() - iteration_started)
+            meta["vdam_iteration_profile_summary"] = iteration_profile
+            stage_started = time.perf_counter()
         iter_artifact_sink(current, it, meta)
+        if profile_iterations:
+            _record_stage("artifact")
+            iteration_profile["total_time_s"] = float(time.perf_counter() - iteration_started)
+            print(f"VDAM iteration {it} profile: {iteration_profile}", flush=True)
 
         # RECOVAR_CLEAR_JAX_CACHES_PER_ITER=1: release scratch buffers to avoid
         # CUFFT_ALLOC_FAILED at 50k×256² (forces next-iter recompile).

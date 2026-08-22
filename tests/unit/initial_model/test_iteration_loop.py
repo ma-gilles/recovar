@@ -297,6 +297,53 @@ class TestRunVdamIterations:
 
         assert seen["padding_factor"] == 2
 
+    def test_iteration_profile_reports_stage_times_only_when_enabled(self, monkeypatch, capsys):
+        import recovar.em.initial_model.iteration_loop as loop
+
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        seen_meta = []
+
+        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PROFILE", "1")
+        monkeypatch.setattr(loop, "vdam_m_step", lambda current, accumulators, **kwargs: current)
+
+        run_vdam_iterations(
+            state,
+            nr_particles=20,
+            optics_group_by_particle=[0] * 20,
+            grad_ini_subset_size=10,
+            grad_fin_subset_size=20,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=0,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=lambda current, particle_ids, halfset_ids: ([], {}),
+            iter_artifact_sink=lambda current, iteration, meta: seen_meta.append(meta),
+            refresh_tau2_from_projector=False,
+        )
+
+        summary = seen_meta[0]["vdam_iteration_profile_summary"]
+        expected = {
+            "schedule_time_s",
+            "subset_time_s",
+            "projector_refresh_time_s",
+            "expectation_time_s",
+            "mstep_time_s",
+            "state_update_time_s",
+            "pre_artifact_time_s",
+            "artifact_time_s",
+            "total_time_s",
+        }
+        assert set(summary) == expected
+        assert all(np.isfinite(value) and value >= 0.0 for value in summary.values())
+        assert "VDAM iteration 1 profile:" in capsys.readouterr().out
+
     def test_relion_solvent_flatten_state_matches_centered_spherical_mask(self):
         state = initialise_denovo_state(
             ori_size=8,
