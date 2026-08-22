@@ -238,6 +238,28 @@ def test_relion_coarse_native_texture_source_pins_fused_projection_topology():
     assert "output + batch * hypotheses_per_batch" in source
     assert "static_cast<unsigned int>(rotation_blocks)" in source
 
+
+def test_relion_fused_coarse_projector_source_pins_vdam_support_and_segmentation():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+
+    start = source.index("relion_coarse_diff2_projector_f32_kernel")
+    block = source[start : source.index("cudaError_t", start)]
+    launcher_start = source.index("launch_relion_coarse_diff2_projector_f32")
+    launcher = source[launcher_start : source.index("__global__", launcher_start)]
+    assert "shared_rotations[EULERS_PER_BLOCK * 6]" in block
+    assert "relion_score_translate_f32(" in block
+    assert "tex3D<float>(" in block
+    assert "projector_scale * tex3D<float>(" in block
+    assert "relion_fine_diff2_update_f32(" in block
+    assert "const int score_max_r = min(model_max_r, current_size / 2);" in launcher
+    assert "(rotation_count / 128) * 128" in launcher
+    assert "relion_coarse_diff2_projector_f32_kernel<1>" in launcher
+
     from recovar.em.dense_single_volume.helpers import significance
 
     significance_source = Path(significance.__file__).read_text()
@@ -332,7 +354,7 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assert "coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled" in source
     assert "relion_coarse_gaussian_default and coarse_gaussian_ffi_enabled" in source
     assert "production half-image preprocessing path" in source
-    assert "relion_coarse_diff2_native_texture_rectangular_f32(" in source
+    assert "relion_coarse_diff2_projector_f32(" in source
     assert "rotation_block_size = n_rot" in source
 
 
@@ -867,6 +889,25 @@ def test_relion_coarse_native_texture_fails_closed_without_gpu(monkeypatch):
             1,
             1,
             1,
+        )
+
+
+def test_relion_coarse_vdam_projector_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_coarse_diff2_projector_f32.__wrapped__(
+            jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+            jnp.eye(3, dtype=jnp.float32)[None, :, :],
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.zeros((1,), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            current_size=1,
+            physical_image_size=1,
+            model_max_r=1,
         )
 
 
