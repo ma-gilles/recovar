@@ -41,11 +41,14 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_cuda_fine_diff2_to_scores,
+    _relion_cuda_pixel_correction_from_rfloat_ctf,
+    _relion_cuda_powerclass_highres_xi2_half,
+    _relion_cuda_powerclass_highres_xi2_half_atomic,
     _relion_cuda_powerclass_highres_norm_units,
+    _relion_f32_fine_reconstruction_probs,
 )
-from recovar.em.dense_single_volume.local_backprojection import (
-    compute_local_weighted_sums,
-)
+from recovar.em.dense_single_volume.local_backprojection import compute_local_weighted_sums
 
 
 def _apply_integer_pre_shifts(images, shifts):
@@ -90,6 +93,19 @@ def _preprocess_half(
             raise ValueError(f"unknown image mask mode {mask_mode!r}")
     images = images * jnp.asarray(config.data_multiplier, dtype=images.dtype)
     return padding.padded_rfft(images, int(config.grid_size), int(config.padding))
+
+
+def _centered_rfft2_per_image(images):
+    """Run the RELION/cuFFT packed transform with one plan per particle."""
+
+    images = jnp.asarray(images, dtype=jnp.float32)
+
+    def _transform(image):
+        shifted = jnp.fft.fftshift(image, axes=(-2, -1))
+        transformed = jnp.fft.rfft2(shifted, axes=(-2, -1))
+        return jnp.fft.fftshift(transformed, axes=(-2,)).reshape(-1)
+
+    return jax.lax.map(_transform, images)
 
 
 def _norm_correction_image_power_mass(
@@ -172,6 +188,52 @@ def _norm_correction_image_power_per_image(
     return per_image + full_mass * (relion_high - generic_high)
 
 
+def _noise_image_power_shells_and_per_image(
+    processed_noise_power_half,
+    support_mass,
+    shell_indices_half,
+    valid_image_mask,
+    projection_max_r,
+    *,
+    shell_count: int,
+    image_shape,
+    current_size,
+    include_unweighted_high_shell: bool = True,
+):
+    """Return RELION's noise-spectrum and norm-correction image power.
+
+    Current-model shells are weighted by the retained posterior mass. RELION
+    accumulates ``power_img`` once per valid particle above that window, so the
+    high-shell spectrum must not be scaled by a Pmax/significance mass smaller
+    than one.
+    """
+
+    processed_noise_power_half = jnp.asarray(processed_noise_power_half)
+    pixel_power = jnp.abs(processed_noise_power_half) ** 2
+    power_mass = _norm_correction_image_power_mass(
+        support_mass,
+        shell_indices_half,
+        valid_image_mask,
+        projection_max_r,
+        shell_count=shell_count,
+        include_unweighted_high_shell=include_unweighted_high_shell,
+    )
+    weighted_half = jnp.sum(pixel_power * power_mass, axis=0).astype(jnp.float32)
+    shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
+    per_image = _norm_correction_image_power_per_image(
+        processed_noise_power_half,
+        support_mass,
+        shell_indices_half,
+        valid_image_mask,
+        projection_max_r,
+        shell_count=shell_count,
+        image_shape=image_shape,
+        current_size=current_size,
+        include_unweighted_high_shell=include_unweighted_high_shell,
+    )
+    return shells, per_image
+
+
 def _exact_local_mstep_should_split_adjoints(recon_volume_shape, *arrays) -> bool:
     """Return whether exact-local y/CTF adjoints must run separately."""
 
@@ -204,34 +266,39 @@ def _score_normalize_support(
     half_spectrum_scoring: bool,
     use_float64_normalization: bool,
     reconstruct_significant_only: bool,
+    use_relion_f32_fine_posterior: bool = False,
     adaptive_fraction: float,
     max_significants: int,
+    scores_override=None,
 ):
     """Score, normalize, and form posterior support inside the fused bucket JIT."""
 
-    cross = (
-        -2.0
-        * jnp.einsum(
-            "btn,brn->btr",
-            jnp.conj(shifted_score_split),
-            proj_weighted,
+    if scores_override is None:
+        cross = (
+            -2.0
+            * jnp.einsum(
+                "btn,brn->btr",
+                jnp.conj(shifted_score_split),
+                proj_weighted,
+                precision=jax.lax.Precision.HIGHEST,
+            ).real
+        )
+        cross = cross.swapaxes(1, 2)
+        if half_spectrum_scoring:
+            weighted_abs2 = jnp.abs(proj_weighted) ** 2
+        else:
+            weighted_abs2 = (jnp.abs(proj_weighted) ** 2) / half_weights[None, None, :]
+        norms = jnp.einsum(
+            "bn,brn->br",
+            ctf2_over_nv_score,
+            weighted_abs2,
             precision=jax.lax.Precision.HIGHEST,
-        ).real
-    )
-    cross = cross.swapaxes(1, 2)
-    if half_spectrum_scoring:
-        weighted_abs2 = jnp.abs(proj_weighted) ** 2
+        )
+        scores = -0.5 * (cross + norms[..., None])
+        scores = scores + rotation_log_prior[:, :, None]
+        scores = scores + translation_log_prior[:, None, :]
     else:
-        weighted_abs2 = (jnp.abs(proj_weighted) ** 2) / half_weights[None, None, :]
-    norms = jnp.einsum(
-        "bn,brn->br",
-        ctf2_over_nv_score,
-        weighted_abs2,
-        precision=jax.lax.Precision.HIGHEST,
-    )
-    scores = -0.5 * (cross + norms[..., None])
-    scores = scores + rotation_log_prior[:, :, None]
-    scores = scores + translation_log_prior[:, None, :]
+        scores = jnp.asarray(scores_override, dtype=jnp.float32)
     valid_sample_mask = rotation_mask[:, :, None]
     if sample_mask is not None:
         valid_sample_mask = valid_sample_mask & sample_mask
@@ -267,7 +334,45 @@ def _score_normalize_support(
     max_posterior = jnp.where(row_has_mass & jnp.isfinite(max_posterior), max_posterior, 0.0)
     reconstruction_image_mask = valid_image_mask & row_has_mass
 
-    if reconstruct_significant_only:
+    if reconstruct_significant_only and use_relion_f32_fine_posterior:
+        if has_reconstruction_probability_threshold:
+            raise ValueError(
+                "RELION float32 fine posterior does not accept an external "
+                "reconstruction threshold"
+            )
+        (
+            reconstruction_probs,
+            reconstruction_sample_mask,
+            n_significant_samples,
+            _relion_sum_weight,
+            _relion_significant_weight,
+        ) = _relion_f32_fine_reconstruction_probs(
+            scores,
+            adaptive_fraction=adaptive_fraction,
+        )
+        reconstruction_sample_mask = (
+            reconstruction_sample_mask
+            & reconstruction_image_mask[:, None, None]
+        )
+        reconstruction_probs = jnp.where(
+            reconstruction_sample_mask,
+            reconstruction_probs,
+            jnp.float32(0.0),
+        )
+        reconstruction_rotation_mask = jnp.any(
+            reconstruction_sample_mask,
+            axis=-1,
+        )
+        n_significant_samples = jnp.where(
+            reconstruction_image_mask,
+            n_significant_samples,
+            0,
+        )
+        max_posterior = jnp.max(
+            reconstruction_probs.reshape(reconstruction_probs.shape[0], -1),
+            axis=1,
+        )
+    elif reconstruct_significant_only:
         if has_reconstruction_probability_threshold:
             threshold = reconstruction_probability_threshold.astype(probs.dtype).reshape((probs.shape[0], 1, 1))
             reconstruction_sample_mask = (probs > 0.0) & (probs >= threshold)
@@ -337,8 +442,10 @@ def _score_normalize_mstep(
     half_spectrum_scoring: bool,
     use_float64_normalization: bool,
     reconstruct_significant_only: bool,
+    use_relion_f32_fine_posterior: bool = False,
     adaptive_fraction: float,
     max_significants: int,
+    scores_override=None,
 ):
     """Score, normalize, and form M-step tensors inside the fused bucket JIT."""
 
@@ -372,8 +479,10 @@ def _score_normalize_mstep(
         half_spectrum_scoring=half_spectrum_scoring,
         use_float64_normalization=use_float64_normalization,
         reconstruct_significant_only=reconstruct_significant_only,
+        use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        scores_override=scores_override,
     )
     summed = compute_local_weighted_sums(reconstruction_probs, shifted_recon_split)
     ctf_probs = jnp.where(
@@ -527,6 +636,7 @@ def _project_local_half_spectrum(
     relion_projector_output_size: int,
     projection_relion_texture_interp: bool,
     projection_force_jax: bool,
+    projection_mask_current_image_disk: bool = True,
     use_relion_projector: bool,
     relion_projector_r_max: int,
     projection_padding_factor: int,
@@ -548,6 +658,7 @@ def _project_local_half_spectrum(
             return_abs2=False,
             centered_rows=True,
             dense_scale=True,
+            mask_current_image_disk=projection_mask_current_image_disk,
             **projector_kwargs,
         )
         return proj_half
@@ -582,6 +693,7 @@ def _project_local_half_spectrum(
         "use_float64_normalization",
         "use_window",
         "reconstruct_significant_only",
+        "use_relion_f32_fine_posterior",
         "adaptive_fraction",
         "max_significants",
         "image_shape",
@@ -596,6 +708,11 @@ def _project_local_half_spectrum(
         "relion_projector_output_size",
         "projection_relion_texture_interp",
         "projection_force_jax",
+        "projection_mask_current_image_disk",
+        "relion_exact_bpref_operands",
+        "relion_exact_fine_diff2",
+        "relion_cuda_preprocess_radius",
+        "relion_cuda_preprocess_cosine_width",
         "mstep_subtract_ctf_projection",
         "mstep_relion_x_half",
         "disable_adjoint_y",
@@ -624,6 +741,9 @@ def _project_local_half_spectrum(
 def run_local_bucket_big_jit(
     batch,
     ctf_params,
+    ctf_rfloat_half,
+    inverse_noise_rfloat_cast_half,
+    corr_img_rfloat_square_half,
     mean_for_proj,
     relion_projector_half,
     Ft_y,
@@ -649,6 +769,7 @@ def run_local_bucket_big_jit(
     half_weights,
     norm_half_weights,
     window_indices,
+    relion_fine_full_to_compact,
     recon_window_indices,
     mstep_recon_window_indices,
     shell_indices_half,
@@ -683,6 +804,7 @@ def run_local_bucket_big_jit(
     use_float64_normalization: bool,
     use_window: bool,
     reconstruct_significant_only: bool,
+    use_relion_f32_fine_posterior: bool = False,
     adaptive_fraction: float,
     max_significants: int,
     image_shape,
@@ -697,6 +819,11 @@ def run_local_bucket_big_jit(
     relion_projector_output_size: int,
     projection_relion_texture_interp: bool,
     projection_force_jax: bool,
+    projection_mask_current_image_disk: bool = True,
+    relion_exact_bpref_operands: bool = False,
+    relion_exact_fine_diff2: bool = False,
+    relion_cuda_preprocess_radius: float = 0.0,
+    relion_cuda_preprocess_cosine_width: float = 0.0,
     mstep_subtract_ctf_projection: bool,
     mstep_relion_x_half: bool,
     disable_adjoint_y: bool,
@@ -750,36 +877,99 @@ def run_local_bucket_big_jit(
             "disable in-kernel adjoints, residual subtraction, full M-step tensors, and in-kernel noise"
         )
 
-    if apply_integer_pre_shift:
+    use_relion_cuda_preprocess = bool(
+        relion_exact_bpref_operands and relion_cuda_preprocess_radius > 0.0
+    )
+    if relion_exact_fine_diff2 and not (
+        relion_exact_bpref_operands and use_relion_cuda_preprocess and use_window
+    ):
+        raise ValueError(
+            "RELION exact fine diff2 requires exact operands, CUDA preprocessing, and a score window"
+        )
+    if use_relion_cuda_preprocess and relion_cuda_preprocess_cosine_width <= 0.0:
+        raise ValueError("RELION CUDA preprocessing requires a positive cosine width")
+    if use_relion_cuda_preprocess and apply_fourier_pre_shift:
+        raise ValueError("RELION CUDA preprocessing requires integral real-space pre-shifts")
+    if apply_integer_pre_shift and not use_relion_cuda_preprocess:
         batch = _apply_integer_pre_shifts(batch, integer_pre_shifts)
 
     precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
-    ctf_half = config.compute_ctf_half(ctf_params).astype(precision_policy.score_real_dtype)
-    noise_variance_half = noise_variance_half.astype(precision_policy.score_real_dtype)
+    if relion_exact_bpref_operands:
+        inverse_noise_half = jnp.asarray(
+            inverse_noise_rfloat_cast_half,
+            dtype=jnp.float32,
+        )
+        ctf_rfloat_half = jnp.asarray(ctf_rfloat_half, dtype=jnp.float64)
+        ctf_half = ctf_rfloat_half.astype(jnp.float32)
+        weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
+        # BPref evaluates (Minvsigma2 * CTF) * CTF in XFLOAT, while the
+        # fine-score corr_img squares the RFLOAT CTF before the final XFLOAT
+        # cast. Keep the two demonstrated RELION orders separate.
+        ctf2_over_nv_recon_half = weighted_ctf_half * ctf_half
+        ctf2_over_nv_score_half = jnp.asarray(
+            corr_img_rfloat_square_half,
+            dtype=jnp.float32,
+        )
+        noise_variance_half = jnp.asarray(
+            noise_variance_half, dtype=jnp.float32
+        )
+    else:
+        ctf_half = config.compute_ctf_half(ctf_params).astype(
+            precision_policy.score_real_dtype
+        )
+        noise_variance_half = noise_variance_half.astype(
+            precision_policy.score_real_dtype
+        )
+        inverse_noise_half = None
+        weighted_ctf_half = None
+        ctf2_over_nv_recon_half = ctf_half**2 / noise_variance_half
+        ctf2_over_nv_score_half = ctf2_over_nv_recon_half
     translation_phases_half = translation_phases_half.astype(precision_policy.score_complex_dtype)
     if relion_score_translation_angles is not None:
         relion_score_translation_angles = relion_score_translation_angles.astype(jnp.float32)
-    ctf2_over_nv_half = ctf_half**2 / noise_variance_half
+    if use_relion_cuda_preprocess:
+        from recovar import cuda_backproject
 
-    processed_score_half = _preprocess_half(
-        batch,
-        image_mask,
-        config,
-        apply_image_mask=score_with_masked_images,
-        mask_mode=mask_mode,
-    ).astype(precision_policy.score_complex_dtype)
-    if score_only:
-        processed_recon_half = None
-    elif score_with_masked_images:
-        processed_recon_half = _preprocess_half(
+        normalized_images, masked_images = cuda_backproject.relion_preprocess_real_f32(
+            jnp.asarray(batch, dtype=jnp.float32),
+            jnp.asarray(image_only_corrections, dtype=jnp.float32),
+            jnp.asarray(integer_pre_shifts, dtype=jnp.int32),
+            float(relion_cuda_preprocess_radius),
+            float(relion_cuda_preprocess_cosine_width),
+            apply_mask=score_with_masked_images,
+        )
+        score_images = masked_images if score_with_masked_images else normalized_images
+        processed_score_half = _centered_rfft2_per_image(score_images).astype(
+            precision_policy.score_complex_dtype
+        )
+        if score_only:
+            processed_recon_half = None
+        elif score_with_masked_images:
+            processed_recon_half = _centered_rfft2_per_image(normalized_images).astype(
+                precision_policy.score_complex_dtype
+            )
+        else:
+            processed_recon_half = processed_score_half
+    else:
+        processed_score_half = _preprocess_half(
             batch,
             image_mask,
             config,
-            apply_image_mask=False,
+            apply_image_mask=score_with_masked_images,
             mask_mode=mask_mode,
         ).astype(precision_policy.score_complex_dtype)
-    else:
-        processed_recon_half = processed_score_half
+        if score_only:
+            processed_recon_half = None
+        elif score_with_masked_images:
+            processed_recon_half = _preprocess_half(
+                batch,
+                image_mask,
+                config,
+                apply_image_mask=False,
+                mask_mode=mask_mode,
+            ).astype(precision_policy.score_complex_dtype)
+        else:
+            processed_recon_half = processed_score_half
 
     batch_size = processed_score_half.shape[0]
     n_trans = translation_phases_half.shape[0]
@@ -802,11 +992,17 @@ def run_local_bucket_big_jit(
         )
 
     def _translate_weighted_half_window(processed_half, pixel_indices):
-        weighted_half = (
-            processed_half[:, pixel_indices]
-            * ctf_half[:, pixel_indices]
-            / noise_variance_half[pixel_indices]
-        )
+        if relion_exact_bpref_operands:
+            weighted_half = (
+                processed_half[:, pixel_indices]
+                * weighted_ctf_half[:, pixel_indices]
+            )
+        else:
+            weighted_half = (
+                processed_half[:, pixel_indices]
+                * ctf_half[:, pixel_indices]
+                / noise_variance_half[pixel_indices]
+            )
         translation_phases = translation_phases_half[:, pixel_indices]
         return (weighted_half[:, None, :] * translation_phases[None, :, :]).reshape(
             batch_size * n_trans,
@@ -814,13 +1010,19 @@ def run_local_bucket_big_jit(
         )
 
     if use_window:
-        score_weighted_half = (
-            processed_score_half[:, window_indices]
-            * ctf_half[:, window_indices]
-            / noise_variance_half[window_indices]
-        )
+        if relion_exact_bpref_operands:
+            score_weighted_half = (
+                processed_score_half[:, window_indices]
+                * weighted_ctf_half[:, window_indices]
+            )
+        else:
+            score_weighted_half = (
+                processed_score_half[:, window_indices]
+                * ctf_half[:, window_indices]
+                / noise_variance_half[window_indices]
+            )
         shifted_score = _translate_score_weighted_half(score_weighted_half, window_indices)
-        ctf2_over_nv_score = ctf2_over_nv_half[:, window_indices]
+        ctf2_over_nv_score = ctf2_over_nv_score_half[:, window_indices]
         score_half_weights = half_weights[window_indices]
         if not score_only:
             shifted_recon = _translate_weighted_half_window(processed_recon_half, recon_window_indices)
@@ -828,21 +1030,34 @@ def run_local_bucket_big_jit(
                 shifted_noise = _translate_weighted_half_window(processed_score_half, recon_window_indices)
             else:
                 shifted_noise = jnp.zeros((1, 1), dtype=shifted_score.dtype)
-            ctf2_over_nv_recon = ctf2_over_nv_half[:, recon_window_indices]
+            ctf2_over_nv_recon = ctf2_over_nv_recon_half[:, recon_window_indices]
     else:
-        score_weighted_half = processed_score_half * ctf_half / noise_variance_half
+        score_weighted_half = (
+            processed_score_half * weighted_ctf_half
+            if relion_exact_bpref_operands
+            else processed_score_half * ctf_half / noise_variance_half
+        )
         shifted_half = _translate_score_weighted_half(
             score_weighted_half,
             jnp.arange(processed_score_half.shape[1], dtype=jnp.int32),
         )
         if not score_only:
-            recon_weighted_half = processed_recon_half * ctf_half / noise_variance_half
+            recon_weighted_half = (
+                processed_recon_half * weighted_ctf_half
+                if relion_exact_bpref_operands
+                else processed_recon_half * ctf_half / noise_variance_half
+            )
             shifted_recon_half = (recon_weighted_half[:, None, :] * translation_phases_half[None, :, :]).reshape(
                 batch_size * n_trans,
                 processed_recon_half.shape[1],
             )
+    score_power_over_noise = (
+        jnp.abs(processed_score_half) ** 2 * inverse_noise_half[None, :]
+        if relion_exact_bpref_operands
+        else jnp.abs(processed_score_half) ** 2 / noise_variance_half
+    )
     batch_norm = jnp.sum(
-        (jnp.abs(processed_score_half) ** 2 / noise_variance_half) * norm_half_weights[None, :],
+        score_power_over_noise * norm_half_weights[None, :],
         axis=-1,
         keepdims=True,
     ).real
@@ -851,7 +1066,8 @@ def run_local_bucket_big_jit(
     batch_corr = image_corrections.astype(batch_norm.dtype)
     image_only_corr = image_only_corrections.astype(batch_norm.dtype)
     valid_image_mask = valid_image_mask.astype(bool)
-    corr_expanded = jnp.repeat(batch_corr, n_trans)
+    applied_corr = batch_scale if use_relion_cuda_preprocess else batch_corr
+    corr_expanded = jnp.repeat(applied_corr, n_trans)
     if use_window:
         shifted_score = shifted_score * corr_expanded[:, None]
         if not score_only:
@@ -862,8 +1078,10 @@ def run_local_bucket_big_jit(
         shifted_half = shifted_half * corr_expanded[:, None]
         if not score_only:
             shifted_recon_half = shifted_recon_half * corr_expanded[:, None]
-    batch_norm = batch_norm * (image_only_corr**2)[:, None]
-    ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
+    if not use_relion_cuda_preprocess:
+        batch_norm = batch_norm * (image_only_corr**2)[:, None]
+    ctf2_over_nv_score_half = ctf2_over_nv_score_half * (batch_scale**2)[:, None]
+    ctf2_over_nv_recon_half = ctf2_over_nv_recon_half * (batch_scale**2)[:, None]
     if use_window:
         ctf2_over_nv_score = ctf2_over_nv_score * (batch_scale**2)[:, None]
         if not score_only:
@@ -894,17 +1112,24 @@ def run_local_bucket_big_jit(
         else:
             shifted_half_with_dc = shifted_half
             if not score_only:
-                ctf2_over_nv_half_with_dc = ctf2_over_nv_half
+                ctf2_over_nv_score_half_with_dc = ctf2_over_nv_score_half
+                ctf2_over_nv_recon_half_with_dc = ctf2_over_nv_recon_half
             shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
-            ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
+            ctf2_over_nv_score_half = jnp.where(
+                dc_mask[None, :], 0.0, ctf2_over_nv_score_half
+            )
+            ctf2_over_nv_recon_half = jnp.where(
+                dc_mask[None, :], 0.0, ctf2_over_nv_recon_half
+            )
 
     if not use_window:
         if not half_spectrum_scoring:
             shifted_half_with_dc = shifted_half
             if not score_only:
-                ctf2_over_nv_half_with_dc = ctf2_over_nv_half
+                ctf2_over_nv_score_half_with_dc = ctf2_over_nv_score_half
+                ctf2_over_nv_recon_half_with_dc = ctf2_over_nv_recon_half
         shifted_score = shifted_half
-        ctf2_over_nv_score = ctf2_over_nv_half
+        ctf2_over_nv_score = ctf2_over_nv_score_half
         score_half_weights = half_weights
         if not score_only:
             shifted_recon = shifted_recon_half
@@ -912,7 +1137,7 @@ def run_local_bucket_big_jit(
                 shifted_noise = jnp.zeros((1, 1), dtype=shifted_half_with_dc.dtype)
             else:
                 shifted_noise = shifted_half_with_dc
-            ctf2_over_nv_recon = ctf2_over_nv_half_with_dc
+            ctf2_over_nv_recon = ctf2_over_nv_recon_half_with_dc
 
     flat_rotations = local_rotations.reshape(local_rotations.shape[0] * local_rotations.shape[1], 3, 3)
     flat_mstep_rotations = local_mstep_rotations.reshape(
@@ -938,6 +1163,7 @@ def run_local_bucket_big_jit(
             relion_projector_output_size=relion_projector_output_size,
             projection_relion_texture_interp=projection_relion_texture_interp,
             projection_force_jax=projection_force_jax,
+            projection_mask_current_image_disk=projection_mask_current_image_disk,
             use_relion_projector=use_relion_projector,
             relion_projector_r_max=relion_projector_r_max,
             projection_padding_factor=projection_padding_factor,
@@ -983,6 +1209,44 @@ def run_local_bucket_big_jit(
                 proj_for_noise = proj_half
 
     proj_weighted = proj_half * score_half_weights[None, None, :]
+
+    direct_scores = None
+    if relion_exact_fine_diff2:
+        from recovar import cuda_backproject
+
+        pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
+            scale_corrections[:, None],
+            ctf_rfloat_half,
+        )
+        corrected_score = (
+            processed_score_half[:, window_indices] * pixel_correction[:, window_indices]
+        ).astype(jnp.complex64)
+        direct_weight = (
+            ctf2_over_nv_score * score_half_weights[None, :]
+        ).astype(jnp.float32)
+        direct_highres = _relion_cuda_powerclass_highres_xi2_half_atomic(
+            processed_score_half,
+            image_shape=image_shape,
+            current_size=norm_current_size,
+        )
+        direct_diff2 = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+            jnp.asarray(proj_half, dtype=jnp.complex64),
+            corrected_score,
+            jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+            direct_weight,
+            jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
+            direct_highres,
+            current_size=norm_current_size,
+        )
+        direct_candidate_mask = rotation_mask[:, :, None]
+        if sample_mask is not None:
+            direct_candidate_mask = direct_candidate_mask & sample_mask
+        direct_scores = _relion_cuda_fine_diff2_to_scores(
+            direct_diff2,
+            rotation_log_prior[:, :, None],
+            translation_log_prior[:, None, :],
+            direct_candidate_mask,
+        )
 
     def _append_debug_outputs(
         result,
@@ -1072,8 +1336,10 @@ def run_local_bucket_big_jit(
             half_spectrum_scoring=half_spectrum_scoring,
             use_float64_normalization=use_float64_normalization,
             reconstruct_significant_only=reconstruct_significant_only,
+            use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
             adaptive_fraction=adaptive_fraction,
             max_significants=max_significants,
+            scores_override=direct_scores,
         )
         reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
         result = (
@@ -1166,8 +1432,10 @@ def run_local_bucket_big_jit(
             half_spectrum_scoring=half_spectrum_scoring,
             use_float64_normalization=use_float64_normalization,
             reconstruct_significant_only=reconstruct_significant_only,
+            use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
             adaptive_fraction=adaptive_fraction,
             max_significants=max_significants,
+            scores_override=direct_scores,
         )
         reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
         if return_deferred_noise_inputs:
@@ -1250,8 +1518,10 @@ def run_local_bucket_big_jit(
         half_spectrum_scoring=half_spectrum_scoring,
         use_float64_normalization=use_float64_normalization,
         reconstruct_significant_only=reconstruct_significant_only,
+        use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        scores_override=direct_scores,
     )
     if mstep_subtract_ctf_projection:
         # RELION's VDAM/--grad storeWeightedSums backprojects
@@ -1290,7 +1560,7 @@ def run_local_bucket_big_jit(
         translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(jnp.float32)
         noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist_ang.astype(jnp.float32))
         processed_noise_power_half = processed_score_half * image_only_corr[:, None]
-        batch_img_power_per_image = _norm_correction_image_power_per_image(
+        batch_img_power_shells, batch_img_power_per_image = _noise_image_power_shells_and_per_image(
             processed_noise_power_half,
             support_mass,
             shell_indices_half,
@@ -1301,11 +1571,6 @@ def run_local_bucket_big_jit(
             current_size=norm_current_size,
             include_unweighted_high_shell=include_unweighted_norm_high_shell,
         )
-        batch_img_power = jnp.sum(
-            (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
-            axis=0,
-        ).astype(jnp.float32)
-        batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
         noise_img_power = noise_img_power + batch_img_power_shells
         noise_sumw = noise_sumw + jnp.sum(support_mass)
 

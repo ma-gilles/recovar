@@ -14,8 +14,8 @@ import pytest
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.iteration_loop import (
     refresh_tau2_from_projector_power,
-    relion_solvent_mask,
     relion_solvent_flatten_state,
+    relion_solvent_mask,
     run_vdam_iterations,
     select_subset_for_iter,
     update_current_resolution_from_data_vs_prior,
@@ -99,6 +99,33 @@ def test_refresh_tau2_from_projector_power_updates_all_classes(bind):
     assert not np.array_equal(out.tau2_class, state.tau2_class)
     assert not np.array_equal(out.tau2_class[0], out.tau2_class[1])
     np.testing.assert_array_equal(state.tau2_class, np.full((2, ori // 2 + 1), 123.0))
+
+    from recovar.utils.helpers import recovar_volume_to_relion
+
+    expected = np.asarray(
+        bind.vdam_projector_power_spectrum(
+            np.ascontiguousarray(recovar_volume_to_relion(state.Iref[0])),
+            ori,
+            1,
+            1,
+            state.current_size,
+            True,
+            2,
+        )
+    )
+    direct_wrong_frame = np.asarray(
+        bind.vdam_projector_power_spectrum(
+            np.ascontiguousarray(state.Iref[0]),
+            ori,
+            1,
+            1,
+            state.current_size,
+            True,
+            2,
+        )
+    )
+    np.testing.assert_array_equal(out.tau2_class[0], expected)
+    assert not np.array_equal(out.tau2_class[0], direct_wrong_frame)
 
 
 class TestRunVdamIterations:
@@ -231,6 +258,92 @@ class TestRunVdamIterations:
         assert seen["refresh_current_size"] == 16
         np.testing.assert_array_equal(seen["estep_tau2"], np.full((1, 9), 7.0))
 
+    def test_iteration_loop_passes_projector_padding_to_m_step(self, monkeypatch):
+        import recovar.em.initial_model.iteration_loop as loop
+
+        state = initialise_denovo_state(
+            ori_size=16,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        seen = {}
+
+        def estep(current, particle_ids, halfset_ids):
+            return [], {}
+
+        def fake_m_step(current, accumulators, **kwargs):
+            seen["padding_factor"] = kwargs["padding_factor"]
+            return current
+
+        monkeypatch.setattr(loop, "vdam_m_step", fake_m_step)
+
+        run_vdam_iterations(
+            state,
+            nr_particles=200,
+            optics_group_by_particle=[0] * 200,
+            grad_ini_subset_size=50,
+            grad_fin_subset_size=100,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=0,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=estep,
+            refresh_tau2_from_projector=False,
+            projector_padding_factor=2,
+        )
+
+        assert seen["padding_factor"] == 2
+
+    def test_iteration_profile_reports_stage_times_only_when_enabled(self, monkeypatch, capsys):
+        import recovar.em.initial_model.iteration_loop as loop
+
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        seen_meta = []
+
+        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PROFILE", "1")
+        monkeypatch.setattr(loop, "vdam_m_step", lambda current, accumulators, **kwargs: current)
+
+        run_vdam_iterations(
+            state,
+            nr_particles=20,
+            optics_group_by_particle=[0] * 20,
+            grad_ini_subset_size=10,
+            grad_fin_subset_size=20,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=0,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=lambda current, particle_ids, halfset_ids: ([], {}),
+            iter_artifact_sink=lambda current, iteration, meta: seen_meta.append(meta),
+            refresh_tau2_from_projector=False,
+        )
+
+        summary = seen_meta[0]["vdam_iteration_profile_summary"]
+        expected = {
+            "schedule_time_s",
+            "subset_time_s",
+            "projector_refresh_time_s",
+            "expectation_time_s",
+            "mstep_time_s",
+            "state_update_time_s",
+            "pre_artifact_time_s",
+            "artifact_time_s",
+            "total_time_s",
+        }
+        assert set(summary) == expected
+        assert all(np.isfinite(value) and value >= 0.0 for value in summary.values())
+        assert "VDAM iteration 1 profile:" in capsys.readouterr().out
+
     def test_relion_solvent_flatten_state_matches_centered_spherical_mask(self):
         state = initialise_denovo_state(
             ori_size=8,
@@ -342,6 +455,26 @@ class TestRunVdamIterations:
         )
         assert out.sigma2_offset == pytest.approx(90.25)
         np.testing.assert_allclose(state.pdf_class, [0.5, 0.5])
+
+    def test_sigma2_offset_uses_significant_reconstruction_mass(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.subset_size = 50
+        meta = {
+            "class_posterior_sums": np.asarray([100.0]),
+            "wsum_sigma2_offset": 500.0,
+            "sigma2_offset_sumw": 80.0,
+        }
+
+        out = update_probabilities_from_estep_meta(state, meta, do_grad=True, mu=0.9)
+
+        assert out.sigma2_offset == pytest.approx(90.3125)
 
     def test_updates_sigma2_noise_from_estep_meta_in_relion_units(self):
         from recovar.reconstruction import noise
@@ -556,7 +689,7 @@ class TestRunVdamIterations:
         )
 
         np.testing.assert_array_equal(out.subset_particle_ids, np.array([0, 4, 2, 5, 3, 1]))
-        np.testing.assert_array_equal(out.subset_halfset_ids, np.array([0, 0, 0, 1, 1, 1], dtype=np.int8))
+        np.testing.assert_array_equal(out.subset_halfset_ids, np.array([1, 1, 1, 0, 0, 0], dtype=np.int8))
 
     def test_rejects_invalid_particle_order(self):
         state = initialise_denovo_state(
@@ -580,6 +713,89 @@ class TestRunVdamIterations:
                 do_grad=True,
                 particle_order=np.array([0, 1, 1, 3], dtype=np.int64),
             )
+
+    def test_nonzero_seed_full_dataset_randomises_only_once(self, bind):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=2,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.subset_size = 6
+        particle_order = np.array([5, 0, 3, 4, 1, 2], dtype=np.int64)
+
+        first = select_subset_for_iter(
+            state,
+            iter=1,
+            nr_particles=6,
+            optics_group_by_particle=[0, 1, 0, 1, 0, 1],
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            random_seed=7,
+            do_grad=True,
+            particle_order=particle_order,
+        )
+        second = select_subset_for_iter(
+            first,
+            iter=2,
+            nr_particles=6,
+            optics_group_by_particle=[0, 1, 0, 1, 0, 1],
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            random_seed=7,
+            do_grad=True,
+            particle_order=particle_order,
+        )
+
+        np.testing.assert_array_equal(second.subset_particle_ids, first.subset_particle_ids)
+        np.testing.assert_array_equal(second.subset_halfset_ids, first.subset_halfset_ids)
+        np.testing.assert_array_equal(second.sorted_particle_ids, first.sorted_particle_ids)
+        np.testing.assert_array_equal(second.sorted_particle_part_ids, first.sorted_particle_part_ids)
+
+    def test_nonzero_seed_true_subset_reshuffles_previous_sorted_idx(self, bind):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=2,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.subset_size = 4
+        particle_order = np.array([5, 0, 3, 4, 1, 2], dtype=np.int64)
+        optics = np.array([0, 1, 0, 1, 0, 1], dtype=np.int64)
+
+        first = select_subset_for_iter(
+            state,
+            iter=1,
+            nr_particles=6,
+            optics_group_by_particle=optics,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            random_seed=7,
+            do_grad=True,
+            particle_order=particle_order,
+        )
+        second = select_subset_for_iter(
+            first,
+            iter=2,
+            nr_particles=6,
+            optics_group_by_particle=optics,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            random_seed=7,
+            do_grad=True,
+            particle_order=particle_order,
+        )
+
+        permutation = np.asarray(bind.vdam_randomise_particles_order(6, 9), dtype=np.int64)
+        expected_rows = np.asarray(first.sorted_particle_ids)[permutation]
+        expected_parts = np.asarray(first.sorted_particle_part_ids)[permutation]
+        prefix_order = np.argsort(optics[expected_rows[:4]], kind="stable")
+        expected_rows[:4] = expected_rows[:4][prefix_order]
+        expected_parts[:4] = expected_parts[:4][prefix_order]
+        np.testing.assert_array_equal(second.sorted_particle_ids, expected_rows)
+        np.testing.assert_array_equal(second.sorted_particle_part_ids, expected_parts)
+        np.testing.assert_array_equal(second.subset_particle_ids, expected_rows[:4])
+        np.testing.assert_array_equal(second.subset_halfset_ids, (expected_parts[:4] % 2).astype(np.int8))
 
     def test_5_iter_smoke(self, bind):
         ori = 16
@@ -655,7 +871,9 @@ class TestRunVdamIterations:
         optics = [0] * 200
 
         iter_log = []
-        sink = lambda s, it, meta: iter_log.append({"iter": it, "pseudo": s.pseudo_halfsets})
+
+        def sink(s, it, meta):
+            iter_log.append({"iter": it, "pseudo": s.pseudo_halfsets})
 
         run_vdam_iterations(
             state,

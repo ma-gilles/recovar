@@ -117,6 +117,9 @@ def test_relion_fine_diff2_cuda_source_pins_production_rounding_order():
     assert "__fmaf_rn(diff_real, diff_real, imag_square)" in block
     assert "__fmul_rn(square_sum, 0.5f)" in block
     assert "__fmaf_rn(half_square_sum, weight, lane_sum)" in block
+    kernel_start = source.index("relion_fine_diff2_rectangular_f32_kernel")
+    kernel = source[kernel_start : source.index("__global__", kernel_start)]
+    assert "__fadd_rn(lane_sums[0], initial_diff2[batch])" in kernel
 
 
 def test_relion_fused_translate_cuda_source_pins_native_block_topology():
@@ -133,6 +136,24 @@ def test_relion_fused_translate_cuda_source_pins_native_block_topology():
     assert "relion_score_translate_f32(" in source
     assert "translation_offset * kRelionFineDiff2BlockSize" in source
     assert "lane_sums[lane_index] = relion_fine_diff2_update_f32(" in source
+    assert "initial_diff2[batch]" in source
+
+
+def test_relion_powerclass_cuda_source_pins_native_atomic_topology():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+
+    start = source.index("relion_powerclass_spectrum_highres_f32_kernel")
+    block = source[start : source.index("cudaError_t", start)]
+    assert "kRelionPowerClassBlockSize = 128" in source
+    assert "__float2int_rn(sqrtf(" in block
+    assert "atomicAdd(&spectrum[shell], value)" in block
+    assert "highres_lanes[tid] += highres_lanes[tid + width]" in block
+    assert "atomicAdd(highres_xi2, highres_lanes[0])" in block
 
 
 def test_relion_coarse_diff2_cuda_source_pins_production_topology():
@@ -217,13 +238,37 @@ def test_relion_coarse_native_texture_source_pins_fused_projection_topology():
     assert "output + batch * hypotheses_per_batch" in source
     assert "static_cast<unsigned int>(rotation_blocks)" in source
 
+
+def test_relion_fused_coarse_projector_source_pins_vdam_support_and_segmentation():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+
+    start = source.index("relion_coarse_diff2_projector_f32_kernel")
+    block = source[start : source.index("cudaError_t", start)]
+    launcher_start = source.index("launch_relion_coarse_diff2_projector_f32")
+    launcher = source[launcher_start : source.index("__global__", launcher_start)]
+    assert "shared_rotations[EULERS_PER_BLOCK * 6]" in block
+    assert "relion_score_translate_f32(" in block
+    assert "tex3D<float>(" in block
+    assert "projector_scale * tex3D<float>(" in block
+    assert "relion_fine_diff2_update_f32(" in block
+    assert "const int score_max_r = min(model_max_r, current_size / 2);" in launcher
+    assert "(rotation_count / 128) * 128" in launcher
+    assert "relion_coarse_diff2_projector_f32_kernel<1>" in launcher
+
     from recovar.em.dense_single_volume.helpers import significance
 
     significance_source = Path(significance.__file__).read_text()
-    # Only the guarded K=1/K-class significance implementation owns this
-    # native-texture route.  The legacy helper must not reference its local
-    # enable flag (that stale duplicate raised NameError on ordinary callers).
-    assert significance_source.count("rotation_block_size = n_rot") == 1
+    # Both guarded routes in the shared K=1/K-class significance
+    # implementation preserve RELION's all-rotation launch: the original
+    # native-texture diagnostic and InitialModel's fused Gaussian projector.
+    # The legacy helper must not add a third copy (its stale duplicate raised
+    # NameError on ordinary callers).
+    assert significance_source.count("rotation_block_size = n_rot") == 2
     assert "one particle per " in significance_source
     assert "full orientation grid (%d rotations)" in significance_source
 
@@ -242,8 +287,8 @@ def test_k1_coarse_gaussian_flag_honors_scoped_default_and_explicit_opt_out(monk
     source = Path(significance.__file__).read_text()
     start = source.index("if coarse_gaussian_ffi_enabled:")
     guard = source[start : source.index("tree_rescore_fftw_order", start)]
-    assert "if n_classes != 1:" in guard
-    assert "restricted to K=1" in guard
+    assert "coarse_gaussian_projector_full_by_class" in guard
+    assert "relion_projector_half[class_index]" in guard
     assert "square_score_indices_np" in guard
     assert "square=True" in guard
     assert "include_dc=True" in guard
@@ -295,10 +340,22 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS", "1")
     assert significance._k1_relion_exact_coarse_operands_enabled()
 
+    monkeypatch.delenv("RECOVAR_K1_COARSE_FUSED_PROJECTOR", raising=False)
+    assert not significance._k1_coarse_fused_projector_enabled()
+    assert significance._k1_coarse_fused_projector_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_COARSE_FUSED_PROJECTOR", "0")
+    assert not significance._k1_coarse_fused_projector_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_COARSE_FUSED_PROJECTOR", "1")
+    assert significance._k1_coarse_fused_projector_enabled()
+    assert significance._k1_coarse_fused_projector_supports_padding(1)
+    assert not significance._k1_coarse_fused_projector_supports_padding(2)
+
     source = Path(significance.__file__).read_text()
     assert "coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled" in source
     assert "relion_coarse_gaussian_default and coarse_gaussian_ffi_enabled" in source
     assert "production half-image preprocessing path" in source
+    assert "relion_coarse_diff2_projector_f32(" in source
+    assert "rotation_block_size = n_rot" in source
 
 
 def test_exact_relion_ctf_source_defaults_to_dataset_star(monkeypatch, tmp_path):
@@ -586,7 +643,12 @@ def test_relion_fine_diff2_rectangular_matches_production_tree_bitwise(
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
     reference, shifted, weight, lookup = _operands()
-    expected = _production_reference(reference, shifted, weight, lookup)
+    initial_diff2 = np.asarray([0.022644043], dtype=np.float32)
+    expected = np.add(
+        _production_reference(reference, shifted, weight, lookup),
+        initial_diff2[0],
+        dtype=np.float32,
+    )
 
     with jax.default_device(gpu_device):
         actual = cuda_backproject.relion_fine_diff2_rectangular_f32(
@@ -594,6 +656,46 @@ def test_relion_fine_diff2_rectangular_matches_production_tree_bitwise(
             jnp.asarray(shifted[None, None, :]),
             jnp.asarray(weight[None, :]),
             jnp.asarray(lookup),
+            initial_diff2=jnp.asarray(initial_diff2),
+        )
+
+    np.testing.assert_array_equal(
+        np.asarray(actual).view(np.uint32),
+        np.asarray([[[expected]]], dtype=np.float32).view(np.uint32),
+    )
+
+
+@pytest.mark.gpu
+def test_relion_fused_translate_fine_diff2_adds_highres_in_native_order(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    reference, image, weight, compact_lookup = _operands()
+    current_size = 32
+    lookup = np.full(current_size * (current_size // 2 + 1), -1, dtype=np.int32)
+    lookup[: compact_lookup.size] = compact_lookup
+    initial_diff2 = np.asarray([0.022644043], dtype=np.float32)
+    expected = np.add(
+        _production_reference(reference, image, weight, lookup),
+        initial_diff2[0],
+        dtype=np.float32,
+    )
+
+    with jax.default_device(gpu_device):
+        actual = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+            jnp.asarray(reference[None, None, :]),
+            jnp.asarray(image[None, :]),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.asarray(weight[None, :]),
+            jnp.asarray(lookup),
+            jnp.asarray(initial_diff2),
+            current_size=current_size,
         )
 
     np.testing.assert_array_equal(
@@ -630,6 +732,53 @@ def test_relion_fine_diff2_pairs_matches_production_tree_bitwise(
     )
 
 
+@pytest.mark.gpu
+def test_relion_powerclass_highres_matches_single_block_tree_bitwise(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(31)
+    xdim, ydim = 5, 8
+    image = (
+        rng.normal(0.0, 0.2, xdim * ydim)
+        + 1j * rng.normal(0.0, 0.2, xdim * ydim)
+    ).astype(np.complex64)
+    resolution_limit = 3
+    lanes = np.zeros(128, dtype=np.float32)
+    for voxel, value in enumerate(image):
+        x = voxel % xdim
+        y = voxel // xdim
+        y = y if y < xdim else y - ydim
+        shell = int(np.rint(np.sqrt(np.float32(x * x + y * y))))
+        if shell <= 0 or shell >= xdim or (x == 0 and y < 0):
+            continue
+        imag_square = np.float32(value.imag * value.imag)
+        power = _fma32(value.real, value.real, imag_square)
+        if shell >= resolution_limit:
+            lanes[voxel] = power
+    for width in (64, 32, 16, 8, 4, 2, 1):
+        lanes[:width] = np.add(lanes[:width], lanes[width : 2 * width], dtype=np.float32)
+
+    with jax.default_device(gpu_device):
+        actual = cuda_backproject.relion_powerclass_spectrum_highres_f32(
+            jnp.asarray(image[None, :]),
+            xdim=xdim,
+            ydim=ydim,
+            resolution_limit=resolution_limit,
+        )
+
+    np.testing.assert_array_equal(
+        np.asarray(actual)[0, -1].view(np.uint32),
+        lanes[0].view(np.uint32),
+    )
+
+
 @pytest.mark.parametrize(
     "function_name",
     ["relion_fine_diff2_rectangular_f32", "relion_fine_diff2_pairs_f32"],
@@ -660,6 +809,19 @@ def test_relion_fused_translate_fine_diff2_fails_closed_without_gpu(monkeypatch)
             jnp.ones((1, 1), dtype=jnp.float32),
             jnp.asarray([0], dtype=jnp.int32),
             current_size=1,
+        )
+
+
+def test_relion_powerclass_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_powerclass_spectrum_highres_f32.__wrapped__(
+            jnp.zeros((1, 40), dtype=jnp.complex64),
+            xdim=5,
+            ydim=8,
+            resolution_limit=3,
         )
 
 
@@ -727,6 +889,25 @@ def test_relion_coarse_native_texture_fails_closed_without_gpu(monkeypatch):
             1,
             1,
             1,
+        )
+
+
+def test_relion_coarse_vdam_projector_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_coarse_diff2_projector_f32.__wrapped__(
+            jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+            jnp.eye(3, dtype=jnp.float32)[None, :, :],
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.zeros((1,), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            current_size=1,
+            physical_image_size=1,
+            model_max_r=1,
         )
 
 

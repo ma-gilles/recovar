@@ -20,8 +20,8 @@ We use a tiny mock dataset so the test is fast on a login node.
 
 from __future__ import annotations
 
-import inspect
 import gc
+import inspect
 import logging
 import os
 import weakref
@@ -36,10 +36,6 @@ import jax.numpy as jnp
 import recovar.core as core
 import recovar.core.fourier_transform_utils as ftu
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.k_class import (
-    _build_fine_grid_significance_mask,
-    _fine_support_stats,
-)
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.oversampling import (
     compute_pass2_stats_sparse,
@@ -48,6 +44,7 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
     apply_half_translation_phases,
     half_translation_phase_table,
 )
+from recovar.em.dense_single_volume.helpers.projection import compute_noise_block
 from recovar.em.dense_single_volume.helpers.significance import (
     ComplementSignificantSampleIndices,
     compact_significant_sample_indices_from_mask,
@@ -62,8 +59,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _active_row_grouping_for_canonical_matmul,
     _active_row_grouping_shape,
     _adjoint_block_chunk_rows,
-    _select_active_flat_rows,
-    _select_active_flat_values,
     _best_compact_pair_from_scores,
     _bucket_pass2_inputs,
     _bucket_sparse_k_class_compact_pair_counts,
@@ -72,75 +67,74 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _build_compact_pair_bucket_arrays,
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
     _build_k_class_bucket_arrays,
+    _candidate_mask_count,
     _coalesce_tail_bucket_sizes,
-    _compact_pair_dense_mstep_max_bytes_for_pass,
     _compact_k_class_pair_plan_stats,
+    _compact_k_class_pair_plan_stats_from_counts,
     _compact_pair_buckets_for_execution_threshold,
     _compact_pair_counts_from_candidate_masks,
+    _compact_pair_dense_mstep_max_bytes_for_pass,
+    _compact_pair_dense_probs_and_reductions,
     _compact_pair_execution_enabled_for_pass,
-    _compact_pair_max_images_per_microbatch_for_pass,
-    _compact_pair_prepare_max_images_per_microbatch,
+    _compact_pair_execution_mask_excluding_full_support,
+    _compact_pair_hybrid_threshold_reports,
     _compact_pair_image_mask_for_threshold,
+    _compact_pair_max_images_per_microbatch_for_pass,
     _compact_pair_min_bucket_size_for_pass,
     _compact_pair_mstep_mode_for_pass,
+    _compact_pair_prepare_max_images_per_microbatch,
     _compact_pair_tail_bucket_coalesce_params_for_pass,
-    _compact_pair_dense_probs_and_reductions,
-    _compact_pair_execution_mask_excluding_full_support,
+    _compact_pair_weighted_image_sums,
     _compact_pair_weighted_image_sums_dense,
     _compact_pair_weighted_image_sums_pair_sparse,
-    _compact_pair_weighted_image_sums,
-    _compact_pair_weighted_rotation_and_image_sums_pair_sparse,
     _compact_pair_weighted_rotation_and_image_sums,
+    _compact_pair_weighted_rotation_and_image_sums_pair_sparse,
+    _compact_pair_weighted_rotation_sums,
     _compact_pair_weighted_rotation_sums_dense,
     _compact_pair_weighted_rotation_sums_pair_sparse,
-    _compact_pair_weighted_rotation_sums,
-    _candidate_mask_count,
-    _compact_k_class_pair_plan_stats_from_counts,
     _compute_active_noise_rows_chunked,
-    _rectangular_active_weighted_image_sums_or_none,
-    _rectangular_active_weighted_sums_or_none,
     _compute_noise_block_and_norm_residual_chunked,
     _compute_noise_block_chunked,
     _compute_sparse_pass2_projections_block,
     _compute_sparse_pass2_windowed_projections_block,
-    _compact_pair_hybrid_threshold_reports,
     _exact_raw_diff2_cache_estimated_bytes,
     _exact_raw_diff2_cache_fits_budget,
     _exact_raw_diff2_cache_limit_bytes,
     _flat_image_indices_for_rotation_rows,
-    _hybrid_k_class_compact_pair_execution_buckets,
-    _validate_k_class_execution_bucket_partition,
     _half_translation_phase_table_for_indices,
-    _logsumexp_pass2_pairs_score_only,
+    _hybrid_k_class_compact_pair_execution_buckets,
     _logsumexp_pass2_bucket_score_only,
-    _max_hypotheses_per_microbatch_for_pass,
+    _logsumexp_pass2_pairs_score_only,
     _max_adjoint_block_bytes_for_pass,
-    _max_images_for_translation_tile,
+    _max_hypotheses_per_microbatch_for_pass,
     _max_images_for_sparse_pass2_translation_tile,
+    _max_images_for_translation_tile,
     _max_noise_block_bytes_for_pass,
-    _max_projection_gather_bytes_for_pass,
     _max_projected_rotations_per_call_for_pass,
+    _max_projection_gather_bytes_for_pass,
     _max_translation_tile_bytes_for_pass,
+    _maybe_prepare_sparse_k_class_compact_pair_plan,
     _normalize_pass2_bucket,
+    _normalize_pass2_bucket_score_only,
     _normalize_pass2_bucket_with_log_z,
     _normalize_pass2_pairs_score_only,
-    _normalize_pass2_bucket_score_only,
-    _nvidia_smi_visible_device_memory_bytes,
-    _maybe_prepare_sparse_k_class_compact_pair_plan,
     _normalize_pass2_pairs_with_log_z,
+    _nvidia_smi_visible_device_memory_bytes,
+    _pass2_conservative_dump_execution_enabled,
+    _pass2_dump_enabled,
+    _prepare_bucket_io,
     _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
+    _projection_budget_pixels_for_pass,
     _projection_cache_budget_complex_dtype,
     _projection_cache_enabled_for_pass,
     _projection_cache_fits_budget,
     _projection_cache_max_bytes_for_pass,
     _projection_cache_transient_bytes,
     _projection_gather_bytes_per_rotation_row,
-    _projection_budget_pixels_for_pass,
     _projection_rotation_chunk_size,
-    _pass2_conservative_dump_execution_enabled,
-    _pass2_dump_enabled,
     _rectangular_active_prematmul_is_efficient,
+    _rectangular_active_weighted_sums_or_none,
     _relion_cuda_corr_img_from_rfloat_ctf,
     _relion_cuda_pixel_correction_from_rfloat_ctf,
     _relion_fine_mstep_prune_mode,
@@ -149,24 +143,27 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_pass2_reconstruction_pair_probs,
     _relion_pass2_reconstruction_probs,
     _relion_translation_angles_f32,
-    _weighted_image_power_shells_and_per_image,
-    _prepare_bucket_io,
     _score_pass2_bucket_normalized_cc,
     _score_pass2_bucket_relion_gpu_diff2,
     _score_pass2_bucket_relion_gpu_diff2_raw,
     _score_pass2_pairs_normalized_cc,
     _score_pass2_pairs_relion_gpu_diff2,
     _score_pass2_pairs_relion_gpu_diff2_raw,
+    _select_active_flat_rows,
+    _select_active_flat_values,
     _select_active_noise_rows,
     _small_bucket_coalesce_size_for_pass,
     _split_compact_pair_buckets_by_projection_gather_budget,
     _tail_bucket_coalesce_params_for_pass,
     _translation_tile_half_pixels_for_budget,
-    _winner_take_all_bucket_probs_from_global_argmax,
+    _validate_k_class_execution_bucket_partition,
+    _weighted_image_power_shells_and_per_image,
     _windowed_translation_tile_cap_enabled_for_pass,
+    _winner_take_all_bucket_probs_from_global_argmax,
 )
-from recovar.em.dense_single_volume.helpers.projection import compute_noise_block
 from recovar.em.dense_single_volume.k_class import (
+    _build_fine_grid_significance_mask,
+    _fine_support_stats,
     _k_class_fused_relion_fine_mstep_prune_mode_override,
     _run_sparse_k_class_adaptive_pass2,
     _use_fused_sparse_k_class_pass2,
@@ -1005,6 +1002,11 @@ def test_compact_pair_tail_bucket_coalescing_defaults_to_bounded_tail(monkeypatc
 
     assert _tail_bucket_coalesce_params_for_pass(fused_k_class=True) == (None, None, None)
     assert _compact_pair_tail_bucket_coalesce_params_for_pass() == (19, 2.0, 4096)
+    assert _compact_pair_tail_bucket_coalesce_params_for_pass(
+        default_max_images=1024,
+        default_max_inflation=8.0,
+        default_min_bucket_size=1,
+    ) == (1024, 8.0, 1)
 
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_IMAGES", "0")
     assert _compact_pair_tail_bucket_coalesce_params_for_pass() == (None, None, None)
@@ -1013,6 +1015,11 @@ def test_compact_pair_tail_bucket_coalescing_defaults_to_bounded_tail(monkeypatc
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_INFLATION", "1.5")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MIN_BUCKET_SIZE", "8192")
     assert _compact_pair_tail_bucket_coalesce_params_for_pass() == (5, 1.5, 8192)
+    assert _compact_pair_tail_bucket_coalesce_params_for_pass(
+        default_max_images=1024,
+        default_max_inflation=8.0,
+        default_min_bucket_size=1,
+    ) == (5, 1.5, 8192)
 
 
 def test_sparse_pass2_tail_bucket_coalescing_merges_only_bounded_high_tail():
@@ -4543,6 +4550,13 @@ def test_relion_fine_mstep_prune_mode_override_beats_env(monkeypatch):
         )
         == "none"
     )
+    assert (
+        _relion_fine_mstep_prune_mode(
+            use_relion_x_half_mstep=True,
+            mode_override="keep_all",
+        )
+        == "none"
+    )
 
 
 def test_k_class_fused_prune_mode_allows_explicit_env_override(monkeypatch):
@@ -4554,6 +4568,20 @@ def test_k_class_fused_prune_mode_allows_explicit_env_override(monkeypatch):
     assert (
         _k_class_fused_relion_fine_mstep_prune_mode_override(relion_fine_mstep_prune=True)
         == "joint"
+    )
+    assert (
+        _k_class_fused_relion_fine_mstep_prune_mode_override(
+            relion_fine_mstep_prune=True,
+            keep_all_candidates=True,
+        )
+        == "joint_keep_all"
+    )
+    assert (
+        _relion_fine_mstep_prune_mode(
+            use_relion_x_half_mstep=False,
+            mode_override="joint_keep_all",
+        )
+        == "joint_keep_all"
     )
 
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE", "none")
@@ -5260,6 +5288,7 @@ def test_compact_pair_execution_defaults_to_high_bucket_hybrid(monkeypatch):
 
     assert _compact_pair_execution_enabled_for_pass() is True
     assert _compact_pair_min_bucket_size_for_pass() == 512
+    assert _compact_pair_min_bucket_size_for_pass(1) == 1
 
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "0")
     assert _compact_pair_execution_enabled_for_pass() is False
@@ -5268,6 +5297,7 @@ def test_compact_pair_execution_defaults_to_high_bucket_hybrid(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1024")
     assert _compact_pair_execution_enabled_for_pass() is True
     assert _compact_pair_min_bucket_size_for_pass() == 1024
+    assert _compact_pair_min_bucket_size_for_pass(1) == 1024
 
 
 def test_compact_pair_execution_treats_blank_env_flags_as_unset(monkeypatch):
@@ -5424,7 +5454,9 @@ def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypat
         return_abs2,
         centered_rows,
         dense_scale,
+        relion_texture_interp,
         projector_output_size=None,
+        mask_current_image_disk=True,
     ):
         del projector_output_size
         calls.append(
@@ -5436,6 +5468,8 @@ def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypat
                 "return_abs2": bool(return_abs2),
                 "centered_rows": bool(centered_rows),
                 "dense_scale": bool(dense_scale),
+                "relion_texture_interp": relion_texture_interp,
+                "mask_current_image_disk": bool(mask_current_image_disk),
                 "projector_shape": tuple(volume_relion_half.shape),
             }
         )
@@ -5461,6 +5495,8 @@ def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypat
         relion_projector_half=relion_projector_half,
         relion_projector_r_max=3,
         projection_padding_factor=2,
+        relion_texture_interp=False,
+        mask_current_image_disk=False,
     )
 
     assert [call["n_rot"] for call in calls] == [3, 3, 1]
@@ -5473,6 +5509,8 @@ def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypat
             "return_abs2": False,
             "centered_rows": True,
             "dense_scale": True,
+            "relion_texture_interp": False,
+            "mask_current_image_disk": False,
             "projector_shape": (4, 4, 3),
         }
     assert score.shape == (7, 2)
@@ -9403,6 +9441,7 @@ def test_compact_pair_xhalf_gpu_matches_rectangular_fused(monkeypatch):
         pytest.skip("set RECOVAR_RUN_CUDA_XHALF_TEST=1 to run the CUDA x-half compact-pair guard")
 
     import jax
+
     import recovar.cuda_backproject as cb
     from recovar.em.sampling import rotation_grid_size
 

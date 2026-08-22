@@ -226,6 +226,7 @@ def _texture_centered_crop_to_full(
     *,
     image_shape,
     projector_output_size: int,
+    mask_current_image_disk: bool = True,
 ):
     """Scatter a centered even-size CUDA projection into the full image box."""
 
@@ -240,7 +241,8 @@ def _texture_centered_crop_to_full(
     # RELION clips projections to min(PPref.mdlMaxR, image_half_width-1).
     # The texture kernel already enforces the PPref/model sphere; apply the
     # independent current-image disk here before embedding the crop.
-    crop = jnp.where(output_disk[None, :, :], crop, jnp.zeros((), dtype=crop.dtype))
+    if mask_current_image_disk:
+        crop = jnp.where(output_disk[None, :, :], crop, jnp.zeros((), dtype=crop.dtype))
     if crop_size == image_size:
         return crop.reshape((projection_crop.shape[0], -1))
     # Row zero is the even-box Nyquist row (+N/2 == -N/2); remaining rows
@@ -261,6 +263,7 @@ def _project_relion_projector_texture(
     *,
     r_max: int,
     projector_output_size: int,
+    mask_current_image_disk: bool = True,
 ):
     """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic."""
 
@@ -279,6 +282,7 @@ def _project_relion_projector_texture(
         projection_crop,
         image_shape=image_shape,
         projector_output_size=int(projector_output_size),
+        mask_current_image_disk=bool(mask_current_image_disk),
     )
 
 
@@ -295,6 +299,7 @@ def compute_relion_projector_projections_block(
     projector_output_size: int | None = None,
     pixel_indices=None,
     relion_texture_interp: bool | None = None,
+    mask_current_image_disk: bool = True,
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block.
 
@@ -324,12 +329,16 @@ def compute_relion_projector_projections_block(
                 image_shape=image_shape,
                 projector_output_size=resolved_output_size,
             )
+        texture_kwargs = {}
+        if not mask_current_image_disk:
+            texture_kwargs["mask_current_image_disk"] = False
         proj_centered = _project_relion_projector_texture(
             volume_relion_half,
             rotations_block,
             image_shape,
             r_max=int(r_max),
             projector_output_size=resolved_output_size,
+            **texture_kwargs,
         )
         if centered_rows:
             proj_half = proj_centered if pixel_indices is None else proj_centered[:, pixel_indices]

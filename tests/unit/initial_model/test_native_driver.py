@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ import recovar.em.initial_model.driver as driver
 from recovar.data_io.starfile import read_star
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.dense_adapter import DenseInitialModelEstepResult
+from recovar.em.initial_model.iteration_loop import select_subset_for_iter
 from recovar.em.initial_model.m_step import VdamAccumulator
 
 SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_ab_initio.py"
@@ -46,6 +48,50 @@ def test_micrograph_sort_order_matches_relion_experiment_order():
     assert driver._micrograph_sort_order(main).tolist() == [0, 2, 3, 4, 1]
 
 
+def test_noise_variance_preserves_relion_rfloat_shell_values():
+    sigma2 = np.asarray([[1.00000006e-5, 2.00000012e-5, 3.00000018e-5]], dtype=np.float64)
+
+    noise = driver._noise_variance_from_sigma2(sigma2, 4)
+
+    assert noise.dtype == np.float64
+    assert np.any(noise != noise.astype(np.float32).astype(np.float64))
+
+
+@pytest.mark.parametrize(
+    ("requested", "grid_size", "gpu_memory_gb", "expected"),
+    [
+        (500, 128, 40.0, 500),
+        (500, 256, 40.0, 32),
+        (500, 256, 80.0, 64),
+        (500, 384, 40.0, 14),
+        (25, 384, 80.0, 25),
+        (8, 256, 40.0, 8),
+    ],
+)
+def test_effective_initial_model_image_batch_size(requested, grid_size, gpu_memory_gb, expected):
+    assert (
+        driver._effective_initial_model_image_batch_size(
+            requested,
+            grid_size=grid_size,
+            gpu_memory_gb=gpu_memory_gb,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("iteration", "nr_iter", "grad_write_iter", "expected"),
+    [(1, 25, 10, False), (10, 25, 10, True), (20, 25, 10, True), (25, 25, 10, True)],
+)
+def test_iteration_artifact_cadence_matches_relion(iteration, nr_iter, grad_write_iter, expected):
+    assert driver._should_write_iteration_artifacts(iteration, nr_iter, grad_write_iter) is expected
+
+
+def test_iteration_artifact_cadence_rejects_nonpositive_interval():
+    with pytest.raises(ValueError, match="grad_write_iter must be >= 1"):
+        driver._should_write_iteration_artifacts(1, 10, 0)
+
+
 def test_experiment_read_order_uses_micrograph_lexicographic_order():
     main = pd.DataFrame(
         {
@@ -57,12 +103,47 @@ def test_experiment_read_order_uses_micrograph_lexicographic_order():
     assert driver._experiment_read_order(main).tolist() == [0, 2, 3, 4, 1]
 
 
+def test_seed_zero_halfsets_use_relion_experiment_position_parity():
+    main = pd.DataFrame(
+        {
+            "_rlnMicrographName": ["1", "2", "10", "100", "11"],
+            "_rlnImageName": ["1@s.mrcs", "2@s.mrcs", "3@s.mrcs", "4@s.mrcs", "5@s.mrcs"],
+        }
+    )
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=1,
+        n_directions=3,
+        pseudo_halfsets=True,
+    )
+    state.subset_size = len(main)
+
+    def fail_if_called(seed):
+        raise AssertionError(f"unexpected randomization for seed {seed}")
+
+    out = select_subset_for_iter(
+        state,
+        iter=1,
+        nr_particles=len(main),
+        optics_group_by_particle=np.zeros(len(main), dtype=np.int64),
+        rnd_unif_factory=fail_if_called,
+        random_seed=0,
+        do_grad=True,
+        particle_order=driver._experiment_read_order(main),
+    )
+
+    np.testing.assert_array_equal(out.subset_particle_ids, [0, 2, 3, 4, 1])
+    np.testing.assert_array_equal(out.subset_halfset_ids, [0, 1, 0, 1, 0])
+
+
 def test_translation_log_prior_matches_relion_pdf_offset_scaling():
     translations = np.asarray([[0.0, 0.0], [2.0, 0.0], [0.0, -1.0]], dtype=np.float32)
 
     prior = driver._translation_log_prior(translations, voxel_size=3.0, sigma_angstrom=6.0)
 
-    np.testing.assert_allclose(prior, np.asarray([0.0, -0.5, -0.125], dtype=np.float32), rtol=1e-6)
+    np.testing.assert_allclose(prior, np.asarray([0.0, -4.5, -1.125], dtype=np.float32), rtol=1e-6)
 
     centered = driver._translation_log_prior(
         translations,
@@ -72,7 +153,7 @@ def test_translation_log_prior_matches_relion_pdf_offset_scaling():
     )
     np.testing.assert_allclose(
         centered,
-        np.asarray([[-0.125, -1.125, -0.25], [-0.125, -0.625, -0.5]], dtype=np.float32),
+        np.asarray([[-1.125, -10.125, -2.25], [-1.125, -5.625, -4.5]], dtype=np.float32),
         rtol=1e-6,
     )
 
@@ -161,6 +242,48 @@ def test_sampling_plan_oversamples_relion_grid():
     assert plan.random_perturbation == 0.0
 
 
+def test_native_driver_rejects_unimplemented_direct_symmetry_before_io():
+    opts = driver.NativeInitialModelOptions(
+        fn_img="missing.star",
+        sym_name="C2",
+        do_run_C1=False,
+    )
+
+    with pytest.raises(NotImplementedError, match="direct refinement currently supports C1 only"):
+        driver.run_native_initial_model(opts)
+
+
+def test_configure_relion_image_mask_forwards_image_backend():
+    calls = {}
+
+    class Backend:
+        def set_relion_image_mask(self, **kwargs):
+            calls["mask"] = kwargs
+
+        def set_relion_fourier_backend(self, value):
+            calls["fourier_backend"] = value
+
+    dataset = SimpleNamespace(
+        image_source=SimpleNamespace(backend=Backend()),
+        grid_size=128,
+        voxel_size=2.125,
+    )
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        particle_diameter=200.0,
+        image_fourier_backend="relion_cuda",
+    )
+
+    driver._configure_relion_image_mask(dataset, opts)
+
+    assert calls["mask"] == {
+        "pixel_size": 2.125,
+        "particle_diameter_ang": 200.0,
+        "width_mask_edge_px": 5.0,
+    }
+    assert calls["fourier_backend"] == "relion_cuda"
+
+
 def test_initial_sampling_state_uses_relion_angstrom_internal_units():
     opts = driver.NativeInitialModelOptions(
         fn_img="particles.star",
@@ -183,6 +306,33 @@ def test_initial_sampling_state_uses_relion_angstrom_internal_units():
     assert plan.offset_step_angstrom == pytest.approx(4.25)
     assert plan.rotations.shape == (4608, 3, 3)
     assert plan.translations.shape == (116, 2)
+
+
+def test_sampling_plan_applies_relion_radius_tolerance_in_angstroms():
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        healpix_order=3,
+        oversampling=1,
+        random_perturbation=0.0,
+    )
+    sampling_state = driver.NativeSamplingState(
+        healpix_order=3,
+        adaptive_oversampling=1,
+        offset_range_angstrom=6.707714,
+        offset_step_angstrom=3.0,
+        offset_range_ori_angstrom=25.5,
+        offset_step_ori_angstrom=8.5,
+        pixel_size=4.25,
+    )
+
+    plan = driver._build_sampling_plan(
+        opts,
+        iteration=20,
+        sampling_state=sampling_state,
+    )
+
+    assert plan.coarse_prior_translations.shape == (13, 2)
+    assert plan.translations.shape == (52, 2)
 
 
 def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
@@ -322,6 +472,14 @@ def test_random_perturbation_sequence_matches_relion_initialmodel_fixture():
 
     assert driver._random_perturbation_for_iteration(opts, 1) == pytest.approx(-0.25278, abs=5e-6)
     assert driver._random_perturbation_for_iteration(opts, 2) == pytest.approx(0.125066, abs=5e-6)
+
+    seed_zero = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        random_seed=0,
+        perturbation_factor=0.5,
+    )
+    assert driver._random_perturbation_for_iteration(seed_zero, 1) == -0.07990610599517822
+    assert driver._random_perturbation_for_iteration(seed_zero, 2) == 0.34533798694610596
 
 
 def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch):
@@ -500,7 +658,7 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
         np.asarray(
             [
                 [0.0, -0.025, -0.08],
-                [-0.00005, -0.02305, -0.07605],
+                [-0.01, -0.065, -0.13],
             ],
             dtype=np.float32,
         ),
@@ -511,8 +669,8 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
         calls[1]["prior"],
         np.asarray(
             [
-                [0.0, -0.025, -0.08],
-                [0.0, -0.025, -0.08],
+                [-0.025, -0.1, -0.185],
+                [-0.13, -0.265, -0.41],
             ],
             dtype=np.float32,
         ),
@@ -926,7 +1084,7 @@ def test_expand_class_rotation_prior_for_dense_fine_grid_uses_parent_map(monkeyp
 
 
 def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
-    dataset = SimpleNamespace(voxel_size=2.0, n_images=1)
+    dataset = SimpleNamespace(voxel_size=2.0, n_images=1, image_shape=(8, 8))
     opts = driver.NativeInitialModelOptions(
         fn_img="particles.star",
         oversampling=1,
@@ -951,8 +1109,57 @@ def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
 
     fine_prior = np.asarray(config.engine_kwargs["translation_log_prior"], dtype=np.float32)
     coarse_prior = np.asarray(config.engine_kwargs["coarse_translation_log_prior"], dtype=np.float32)
-    np.testing.assert_allclose(fine_prior, np.asarray([[-0.03125, -0.28125]], dtype=np.float32), rtol=1e-6)
-    np.testing.assert_allclose(coarse_prior, np.asarray([[-0.125]], dtype=np.float32), rtol=1e-6)
+    np.testing.assert_allclose(fine_prior, np.asarray([[-0.125, -1.125]], dtype=np.float32), rtol=1e-6)
+    np.testing.assert_allclose(coarse_prior, np.asarray([[-0.5]], dtype=np.float32), rtol=1e-6)
+
+
+def test_dense_estep_config_propagates_public_pass2_engine():
+    dataset = SimpleNamespace(voxel_size=2.0, n_images=1, image_shape=(8, 8))
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        pass2_engine="compact",
+    )
+    plan = driver.NativeSamplingPlan(
+        rotations=np.zeros((1, 3, 3), dtype=np.float32),
+        translations=np.asarray([[0.0, 0.0]], dtype=np.float32),
+        random_perturbation=0.0,
+    )
+
+    config = driver._dense_estep_config(
+        dataset,
+        opts,
+        np.ones(5, dtype=np.float32),
+        plan,
+        np.zeros((1, 2), dtype=np.float32),
+    )
+
+    assert config.pass2_engine == "compact"
+
+
+def test_dense_estep_config_keeps_zero_oversampling_on_exact_adaptive_route():
+    dataset = SimpleNamespace(voxel_size=2.0, n_images=1, image_shape=(8, 8))
+    opts = driver.NativeInitialModelOptions(fn_img="particles.star", oversampling=0)
+    plan = driver.NativeSamplingPlan(
+        rotations=np.zeros((72, 3, 3), dtype=np.float32),
+        translations=np.asarray([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32),
+        random_perturbation=0.0,
+        healpix_order=0,
+        oversampling=0,
+        offset_step_px=2.0,
+        coarse_translations=np.asarray([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32),
+    )
+
+    config = driver._dense_estep_config(
+        dataset,
+        opts,
+        np.ones(5, dtype=np.float32),
+        plan,
+        np.zeros((1, 2), dtype=np.float32),
+    )
+
+    assert config.engine_kwargs["sparse_pass2"] is True
+    assert config.engine_kwargs["oversampling_order"] == 0
+    assert config.engine_kwargs["healpix_order"] == 0
 
 
 def test_driver_output_mrc_path_matches_relion_snapshot():
@@ -1002,6 +1209,46 @@ def test_model_star_uses_relion_model_blocks(tmp_path):
     assert "1 0.125 8 9 0 0.8 0.2 2" in text
     assert "1 0.125 8 2 0 0.2 0.4 4" in text
     assert "_rlnOrientationDistribution" in text
+
+
+def test_iteration_zero_artifacts_use_the_normal_iteration_writer(monkeypatch, tmp_path):
+    state = initialise_denovo_state(ori_size=8, pixel_size=1.5, K=1, nr_iter=8, n_directions=12)
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnMicrographName": ["1", "2"],
+            "_rlnOpticsGroup": ["1", "1"],
+        }
+    )
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((2, 2), dtype=np.float32),
+        class_assignments=np.zeros(2, dtype=np.int32),
+        max_posterior=np.zeros(2, dtype=np.float32),
+    )
+
+    def fake_write_mrc(path, volume, *, voxel_size):
+        assert np.asarray(volume).shape == (8, 8, 8)
+        assert voxel_size == 1.5
+        Path(path).write_bytes(b"iteration-zero-map")
+
+    monkeypatch.setattr(driver, "write_relion_mrc", fake_write_mrc)
+    prefix = str(tmp_path / "run")
+    driver._write_iteration_artifacts(
+        prefix,
+        state,
+        0,
+        {"checkpoint_iteration": 0, "phase": "bootstrap"},
+        main_star=main,
+        optics_star=None,
+        dataset=SimpleNamespace(voxel_size=1.5, n_images=2),
+        particle_state=particle_state,
+    )
+
+    assert (tmp_path / "run_it000_class001.mrc").read_bytes() == b"iteration-zero-map"
+    assert (tmp_path / "run_it000_model.star").is_file()
+    assert (tmp_path / "run_it000_data.star").is_file()
+    meta = json.loads((tmp_path / "run_it000_recovar_meta.json").read_text())
+    assert meta == {"checkpoint_iteration": 0, "phase": "bootstrap"}
 
 
 def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):
@@ -1108,6 +1355,8 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
             "out/run",
             "--nr_iter",
             "3",
+            "--grad_write_iter",
+            "7",
             "--K",
             "2",
             "--particle_diameter",
@@ -1135,6 +1384,7 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
     assert opts.fn_img == "particles.star"
     assert opts.outputname == "out/run"
     assert opts.nr_iter == 3
+    assert opts.grad_write_iter == 7
     assert opts.nr_classes == 2
     assert opts.particle_diameter == 250.0
     assert opts.random_seed == 17
@@ -1144,5 +1394,44 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
     assert opts.offset_step_px == 1.5
     assert opts.random_perturbation == 0.25
     assert opts.translation_sigma_angstrom == 6.5
+    assert opts.image_fourier_backend == "host_numpy"
     assert opts.write_iter_artifacts is False
     assert "recovar InitialModel complete: out/initial_model.mrc" in capsys.readouterr().out
+
+
+def test_cli_gpu_defaults_to_async_relion_cuda_image_backend(monkeypatch):
+    run_ab_initio = _load_run_ab_initio()
+    calls = {}
+    monkeypatch.delenv("CUDA_LAUNCH_BLOCKING", raising=False)
+
+    def fake_run_native(opts):
+        calls["opts"] = opts
+        return SimpleNamespace(final_mrc="out/initial_model.mrc", final_model_star="out/run_it001_model.star")
+
+    monkeypatch.setattr(driver, "run_native_initial_model", fake_run_native)
+
+    assert run_ab_initio.main(["--i", "particles.star", "--gpu", "0", "--nr_iter", "1"]) == 0
+    assert calls["opts"].image_fourier_backend == "relion_cuda"
+    assert calls["opts"].deterministic_cuda is False
+    assert run_ab_initio.os.environ["CUDA_LAUNCH_BLOCKING"] == "0"
+
+
+def test_cli_gpu_allows_explicit_deterministic_cuda(monkeypatch):
+    run_ab_initio = _load_run_ab_initio()
+    calls = {}
+    monkeypatch.delenv("CUDA_LAUNCH_BLOCKING", raising=False)
+
+    def fake_run_native(opts):
+        calls["opts"] = opts
+        return SimpleNamespace(final_mrc="out/initial_model.mrc", final_model_star="out/run_it001_model.star")
+
+    monkeypatch.setattr(driver, "run_native_initial_model", fake_run_native)
+
+    assert (
+        run_ab_initio.main(
+            ["--i", "particles.star", "--gpu", "0", "--nr_iter", "1", "--deterministic_cuda"]
+        )
+        == 0
+    )
+    assert calls["opts"].deterministic_cuda is True
+    assert run_ab_initio.os.environ["CUDA_LAUNCH_BLOCKING"] == "1"

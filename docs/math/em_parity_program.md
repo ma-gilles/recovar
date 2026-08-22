@@ -12,6 +12,184 @@ auto-refine and K=4 3D classification. Then optimize to near RELION speed while
 holding the accepted quality checkpoint. Treat native InitialModel/VDAM parity
 as the next product milestone rather than mixing it into the first closure.
 
+## VDAM active experiment — 2026-08-20
+
+The native InitialModel/VDAM implementation checkpoint is
+`5a4c57839e50a46e47b2d25efb8d55744db04871`, on top of PR #158 head
+`b10412ca`.  Iteration-0 bootstrap state is exact, and identity-aligned
+iteration-1 particle pose/translation state is effectively exact, but the
+frozen tiny trajectory still misses the map gates (iteration-1 cross FSC-AUC
+`0.8274473`, GT delta `-0.0140749`).
+
+The particle-0 projected-reference hypothesis is now rejected as the dominant
+iteration-1 cause.  Against the current native RELION StoreWavg project panel,
+VDAM's reference has the expected `-N^2` frame/normalization conversion.  The
+converted reference differs by relative L2 `1.0028e-3`, but substituting the
+native reference changes the actual gradient numerator by only `5.6474e-5`.
+Replaying RELION's sequential translation accumulation with the current VDAM
+reference changes that numerator by only `7.5372e-8`.  The previously isolated
+scatter boundary remains machine precision (`4.78e-15` data, `2.87e-15`
+weight).  Therefore the next measurable hypothesis is that the first material
+iteration-1 divergence is in aggregate subset/pseudo-halfset routing or the
+VDAM moment/reconstruction update, not the shared fine posterior, image/CTF
+operands, projected-reference subtraction, or scatter arithmetic.
+
+The apparent subset-routing mismatch was a row-coordinate mistake and is
+rejected.  RELION writes its data STAR in lexicographic Experiment order, so
+RELION output row `0..199` is not input particle-table row `0..199`.
+Comparing stable `_rlnImageName` identities proves that the existing RECOVAR
+and RELION iteration-1 subsets are exactly equal.  A table-order
+counterfactual (Slurm job `12669580`, stopped after the result was known)
+makes 79 identities differ in each direction and moves iteration-1
+cross-engine FSC-AUC only from `0.8274473` to `0.8313125`, while worsening the
+GT delta slightly to about `-0.0143244`.  The lexicographic Experiment-order
+implementation is retained.  The frozen trajectory auditor now compares
+iteration-1 subsets by `_rlnImageName`, preventing either input-row/output-row
+coordinate system from passing accidentally.  The next measurable boundary
+is pseudo-halfset membership after the already exact particle-identity,
+posterior/scatter, and bootstrap controls.
+
+The apparent pseudo-halfset failure was another unsupported inference and is
+rejected.  A position-parity counterfactual made the nominal counts `100/100`,
+but direct native-vs-RECOVAR BPref errors remained essentially unchanged and
+the frozen trajectory did not improve.  Slurm job `12669867` produced
+iteration-1 cross-engine FSC-AUC `0.8247451` and GT delta `-0.0137202`; the
+minimum through iteration 8 was `0.6359682`.  The production global-particle
+parity routing is restored.
+
+The first direct aggregate boundary remains BPref.  Against native RELION's
+captured iteration-1 arrays, production RECOVAR half-0/half-1 BPref data have
+relative L2 `1.33211`/`1.33062` and cosine `0.10345`/`0.09585`; weights have
+relative L2 `0.78793`/`0.83375`.  The position-parity counterfactual changes
+these only marginally.  Downstream replay is not the cause: feeding RELION's
+native post-`applyMomenta` data, moment-noise power, reference, and exact
+parameters into the shared binding reproduces native `reconstructGrad` at
+`7.10e-8` relative L2.
+
+The particle-0 StoreWavg boundary is now closed with the actual unmasked
+reconstruction image.  A first replay using RELION's masked scoring image was
+invalid and produced numerator cosine `0.48068`; the analyzer now rejects that
+operand by construction.  RELION's accelerated path does not expose the
+unmasked Fourier image in the shared binary, so Slurm job `12671650` captured
+the same pre-StoreWavg operand through the already compiled CPU hook.  Using
+that image with the authoritative GPU posterior/projector gives numerator
+relative L2 `0.0077293`, cosine `0.9999703`, and denominator relative L2
+`0.0074343`, cosine `0.9999725` (analysis job `12671684`).  This rejects
+per-particle image, posterior, CTF/noise, residual subtraction, and scatter
+arithmetic as the dominant particle-0 cause.
+
+The stable-identity StoreWavg panel also agrees.  For input rows `0`, `100`,
+`277`, and `999` (native part IDs `0`, `4`, `199`, and `3`), numerator relative
+L2 is `0.00774`, `0.00701`, `0.00449`, and `0.00987`, with cosines from
+`0.999955` to `0.999992`; denominator results are comparable.  Slurm jobs
+`12671889`--`12671892` used RECOVAR contribution captures from jobs `12671818`
+and `12671819` and unmasked-image capture `12671784`.
+
+That panel accidentally sampled only identities for which input-row parity and
+RELION internal `part_id` parity agree.  Directly decoding RELION's frozen
+iteration-1 `sorted_idx` and mapping through lexicographic Experiment order
+shows `101/200` selected identities have different parities.  RELION source is
+explicit that StoreWavg routes by internal `part_id % 2`; current RECOVAR routes
+by original input-row parity.  The earlier position-parity trajectory is still
+valid negative whole-run evidence, but it cannot override this demonstrated
+first-boundary semantic mismatch while other aggregate defects remain.  The
+active bounded experiment is therefore one deliberately mismatched identity:
+native part ID `2` / input row `99`.  Capture its unmasked StoreWavg rows and
+show both their arithmetic agreement and their opposite current half routing
+before restoring Experiment-position parity as an independently tested fix.
+
+That mismatched-identity experiment passed its arithmetic controls and failed
+the routing control exactly as predicted.  Native part ID `2` / input row `99`
+has numerator relative L2 `0.003556`, cosine `0.999994`, and denominator
+relative L2 `0.001540`, cosine `0.999999` (Slurm job `12672040`), but the
+production capture records it in RECOVAR half 2 while RELION routes even
+internal part ID `2` to half 1.  RECOVAR now carries Experiment-position parity
+alongside the lexicographic row mapping through shuffle, prefix selection, and
+optics stable-sort.  Unit coverage pins the distinction.  The earlier
+position-parity trajectory (`12669867`) remains evidence that this necessary
+semantic correction does not by itself close aggregate or map parity; after
+the focused validation ladder, the next boundary is native-vs-RECOVAR partial
+accumulator sums in identical Experiment particle order.
+
+A direct replay rejects missing x=0 Hermitian enforcement as the aggregate
+cause.  Applying the existing shared RELION half-volume Hermitian helper to the
+corrected-position RECOVAR accumulator worsens relative error and leaves data
+cosines at only `0.1441`/`0.1136` and weight cosines at `0.6769`/`0.6530`.
+Exhaustive simple axis swaps, flips, conjugation, and circular y/z shifts also
+fail (best weight cosine below `0.717`; data below `0.17`).  No production
+Hermitian or layout change is justified by that evidence.
+
+The one-particle post-scatter boundary is also closed.  Slurm job `12672415`
+moved the already matched particle-99/native-part-ID-2 rows through RELION's
+CPU BackProjector in the same native layout.  Data relative L2 is `0.003511`
+with cosine `0.9999940`; weight relative L2 is `0.001431` with cosine
+`0.9999992`.  The scatter primitive and its native BPref layout are therefore
+not the aggregate cause.
+
+That closure exposed a separate adapter boundary.  The shared RELION x-half
+M-step returns a public full cube by expanding native `(z,y,xhalf)` storage and
+transposing it to RECOVAR `(x,y,z)`.  InitialModel then feeds that public cube
+to the generic centered-slab converter without undoing the transpose and also
+applies a projector-frame z flip.  A synthetic valid-Hermitian round trip has
+relative L2 `1.3923` and cosine `0.02118`, which is the same signature as the
+full aggregate mismatch.  Transposing the public cube back to `(z,y,x)` before
+extracting the positive-x slab is exact (`0.0` relative L2).  The active
+bounded fix is an explicit RELION-x-half-public-to-BPref inverse in the VDAM
+adapter, with a lossless round-trip unit test; the unrelated generic dense
+converter remains unchanged.  That fix is now implemented at `5a4c5783` and
+the focused layout/adapter tests are exact.  The frozen `vdam-08` autonomous
+trajectory (source EM case `k1-25`) passes unchanged gates in Slurm job
+`12672666`: cross-engine FSC-AUC is `0.99999964`, `0.99999931`, `0.99918555`,
+and `0.99900277` at iterations 1/2/4/8, respectively.  The worst RECOVAR-minus-
+RELION GT FSC-AUC is `-8.23e-6`, compared with the fixed `-0.002` gate.  This
+is the first accepted end-to-end VDAM checkpoint.  The active validation is
+the frozen fixed-12 matrix, using the same per-case runner and at most four
+simultaneous one-GPU Slurm tasks.
+
+The first fixed-12 matrix round is Slurm array `12672742`.  The early cases
+confirm the intended late-trajectory sensitivity: `vdam-03`, `vdam-04`,
+`vdam-05`, and `vdam-07` pass; `vdam-01`, `vdam-02`, `vdam-06`, and `vdam-10`
+miss only the fixed cross-engine FSC-AUC gate while retaining acceptable GT
+quality.  `vdam-09` did not reach an audit because its high-resolution local
+E-step exhausted the 40 GB GPU at the default 500-image batch.  `vdam-11`
+completed and misses only the fixed cross-engine gate (minimum FSC-AUC
+`0.99691967`) while retaining acceptable GT quality (minimum delta
+`-0.00018535`).  `vdam-12` independently exhausted the same 40 GB GPU boundary
+at the default batch.  Batch 200 closes the resource boundary for `vdam-09`,
+which then completes with minimum cross-engine FSC-AUC `0.99734426` and no
+negative GT delta.  For `vdam-12`, batch 200 reduces the failed allocation from
+`37.54` GiB to `29.33` GiB but still exhausts the device once resident buffers
+are included.  Batch 100 still requests `29.27` GiB, showing that the fused
+sparse-M-step tensor rather than the outer image batch controls this boundary.
+The runner records its resource/execution overrides; the matrix pins `vdam-09`
+to batch 200 and routes `vdam-12` through the shared exact deferred packed-
+M-step fallback by setting the sparse big-JIT tensor cap to zero.  The first
+deferred attempt reaches a later batch-dependent shifted-reconstruction
+tile and exhausts memory at 6.40 GiB with batch 100.  Pinning only `vdam-12`
+to batch 25 while retaining the deferred path completes in Slurm job
+`12673810` and passes every unchanged checkpoint: minimum cross-engine FSC-AUC
+`0.99931708`, minimum GT delta `-1.60e-7`.  The complete SHA-bound scorecard is
+now 6/12 passing with 12/12 evaluated.  Passing cases are `vdam-03`,
+`vdam-04`, `vdam-05`, `vdam-07`, `vdam-08`, and `vdam-12`; all six failures
+retain acceptable GT quality and fail only the strict cross-engine FSC-AUC
+gate.  Evidence is recorded in
+`docs/math/vdam_relion_parity_evidence_ledger_20260820_layoutfix.json`.
+
+The first remaining autonomous divergence is now identity-localized rather
+than inferred from maps.  The reusable STAR-to-STAR diagnostic
+`scripts/audit_vdam_particle_state_trajectory.py` aligns every row by exact
+`rlnImageName` and computes geodesic pose error, translation error, and
+absolute Pmax error without correlation or an acceptance gate.  For
+`vdam-01`, iteration 1 has exact pose/translation winners for all 3,000
+particles.  Iteration 2 has only six divergent identities:
+`1016@particles.128.mrcs`, `108@particles.128.mrcs`,
+`1085@particles.128.mrcs`, `1130@particles.128.mrcs`,
+`1137@particles.128.mrcs`, and `1171@particles.128.mrcs`.  The divergent count
+then grows to 104/182/359 at iterations 3/4/8, while Pmax MAE grows from
+`5.61e-5` at iteration 1 to `4.49e-4`, `0.01305`, `0.02358`, and `0.03399`.
+The next scientific boundary is the iteration-2 score/support decision for
+those six immutable original image identities; map tolerances remain frozen.
+
 ## Mode Contract
 
 - **Strict oracle:** the default during parity closure; pinned RELION GUI

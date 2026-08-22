@@ -277,6 +277,18 @@ def test_cuda_available_accepts_cuda_platform_name(monkeypatch):
     assert cb.cuda_available() is True
 
 
+@pytest.mark.parametrize(("platform", "expected"), [("gpu", True), ("cuda", True), ("cpu", False)])
+def test_slicing_gpu_detection_uses_visible_device_platform(monkeypatch, platform, expected):
+    import recovar.core.slicing as core_slicing
+
+    core_slicing._on_gpu.cache_clear()
+    monkeypatch.setattr(core_slicing.jax, "devices", lambda: [types.SimpleNamespace(platform=platform)])
+    try:
+        assert core_slicing._on_gpu() is expected
+    finally:
+        core_slicing._on_gpu.cache_clear()
+
+
 def test_cuda_available_respects_runtime_disable_without_poisoning_cached_success(monkeypatch):
     import recovar.cuda_backproject as cb
 

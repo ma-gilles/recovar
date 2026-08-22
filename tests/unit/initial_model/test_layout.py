@@ -16,6 +16,7 @@ from recovar.em.initial_model.layout import (
     bpref_to_run_em_output,
     run_em_output_to_bpref,
 )
+from recovar.em.initial_model.relion_layout import relion_x_public_output_to_bpref
 
 
 def _make_full_with_centered_slab(ori_size: int, r_max: int, slab: np.ndarray) -> np.ndarray:
@@ -164,3 +165,77 @@ def test_run_em_output_to_bpref_round_trip_on_realistic_data():
 
     np.testing.assert_array_equal(bp_data, bp_data_rt, "data round-trip lossy")
     np.testing.assert_array_equal(bp_weight, bp_weight_rt, "weight round-trip lossy")
+
+
+def test_run_em_output_to_bpref_accepts_shared_compact_backprojector_cube():
+    """Shared local EM returns a current-size odd BPref cube, not ori_size³."""
+    ori_size = 128
+    r_max = 19
+    compact_size = 2 * (r_max + 1) + 1
+    rng = np.random.default_rng(17)
+    data_cube = (
+        rng.standard_normal((compact_size,) * 3) + 1j * rng.standard_normal((compact_size,) * 3)
+    ).astype(np.complex64)
+    weight_cube = rng.uniform(1e-3, 2.0, size=(compact_size,) * 3).astype(np.float32)
+
+    bp_data, bp_weight = run_em_output_to_bpref(
+        data_cube.reshape(-1),
+        weight_cube.reshape(-1),
+        ori_size,
+        r_max,
+        padding_factor=1,
+    )
+
+    center = compact_size // 2
+    np.testing.assert_array_equal(bp_data, data_cube[:, :, center:])
+    np.testing.assert_array_equal(bp_weight, weight_cube[:, :, center:].astype(np.float64))
+    assert bp_data.shape == (compact_size, compact_size, r_max + 2)
+
+
+def test_relion_x_public_output_to_bpref_exactly_inverts_shared_public_layout():
+    from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+        relion_x_half_volume_to_full,
+    )
+    from recovar.em.dense_single_volume.local_backprojection import (
+        enforce_relion_half_volume_x0_hermitian_host,
+    )
+
+    ori_size = 128
+    r_max = 19
+    compact_size = 2 * (r_max + 1) + 1
+    half_shape = (compact_size, compact_size, compact_size // 2 + 1)
+    rng = np.random.default_rng(91)
+    bp_data = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    bp_weight = rng.uniform(1e-3, 2.0, size=half_shape).astype(np.float32)
+    bp_data = enforce_relion_half_volume_x0_hermitian_host(
+        bp_data.reshape(-1), (compact_size,) * 3
+    ).reshape(half_shape)
+    bp_weight = enforce_relion_half_volume_x0_hermitian_host(
+        bp_weight.reshape(-1), (compact_size,) * 3
+    ).reshape(half_shape)
+    public_data = relion_x_half_volume_to_full(bp_data.reshape(-1), (compact_size,) * 3)
+    public_weight = relion_x_half_volume_to_full(bp_weight.reshape(-1), (compact_size,) * 3)
+
+    actual_data, actual_weight = relion_x_public_output_to_bpref(
+        public_data,
+        public_weight,
+        ori_size,
+        r_max,
+        padding_factor=1,
+    )
+
+    np.testing.assert_array_equal(actual_data, bp_data.astype(np.complex128))
+    np.testing.assert_array_equal(actual_weight, bp_weight.astype(np.float64))
+
+
+def test_run_em_output_to_bpref_rejects_unknown_compact_accumulator_shape():
+    with np.testing.assert_raises_regex(ValueError, "current-size BackProjector cube"):
+        run_em_output_to_bpref(
+            np.zeros(123, dtype=np.complex64),
+            np.zeros(123, dtype=np.float32),
+            ori_size=128,
+            r_max=19,
+            padding_factor=1,
+        )

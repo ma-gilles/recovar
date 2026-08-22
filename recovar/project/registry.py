@@ -36,6 +36,13 @@ class JobType:
 
 # All registered job types, keyed by CLI command name.
 JOB_TYPES = {
+    "initial_model": JobType(
+        "InitialModel",
+        "initial_model",
+        True,
+        False,
+        "RELION-equivalent VDAM ab-initio 3D InitialModel",
+    ),
     "pipeline": JobType(
         "Pipeline",
         "pipeline",

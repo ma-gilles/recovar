@@ -33,6 +33,7 @@ _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
 )
 _K1_COARSE_GAUSSIAN_FFI_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_FFI"
 _K1_COARSE_GAUSSIAN_SINCOSF_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF"
+_K1_COARSE_FUSED_PROJECTOR_ENV = "RECOVAR_K1_COARSE_FUSED_PROJECTOR"
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
 )
@@ -46,6 +47,68 @@ _SIGNIFICANCE_DUMP_PASSIVE_CACHE_ENV = (
 )
 NVTX_DOMAIN_EM = "recovar_em"
 logger = logging.getLogger(__name__)
+
+
+def _repeat_pad_batch_axis(value, target_size: int):
+    """Pad a non-empty image batch by repeating row zero.
+
+    Repeating a real row keeps normalized-CC and exact CUDA preprocessing
+    finite. Callers must discard the repeated rows from all science outputs.
+    """
+
+    array = np.asarray(value)
+    target_size = int(target_size)
+    if array.shape[0] >= target_size:
+        return array
+    if array.shape[0] == 0:
+        raise ValueError("cannot repeat-pad an empty image batch")
+    return np.concatenate(
+        [array, np.repeat(array[:1], target_size - array.shape[0], axis=0)],
+        axis=0,
+    )
+
+
+def _pad_significance_preprocess_inputs(
+    batch_data,
+    ctf_params,
+    integer_pre_shifts,
+    batch_corr,
+    batch_scale,
+    relion_preprocess_kwargs,
+    *,
+    target_size: int,
+):
+    """Give a tail significance batch the same compiled image shape as full batches."""
+
+    actual_size = int(np.asarray(batch_data).shape[0])
+    target_size = max(actual_size, int(target_size))
+    if actual_size == target_size:
+        return (
+            batch_data,
+            ctf_params,
+            integer_pre_shifts,
+            batch_corr,
+            batch_scale,
+            relion_preprocess_kwargs,
+        )
+    padded_kwargs = None
+    if relion_preprocess_kwargs is not None:
+        padded_kwargs = {
+            key: jnp.asarray(_repeat_pad_batch_axis(value, target_size))
+            for key, value in relion_preprocess_kwargs.items()
+        }
+    return (
+        _repeat_pad_batch_axis(batch_data, target_size),
+        _repeat_pad_batch_axis(ctf_params, target_size),
+        (
+            None
+            if integer_pre_shifts is None
+            else _repeat_pad_batch_axis(integer_pre_shifts, target_size)
+        ),
+        None if batch_corr is None else _repeat_pad_batch_axis(batch_corr, target_size),
+        _repeat_pad_batch_axis(batch_scale, target_size),
+        padded_kwargs,
+    )
 
 
 class SignificanceDumpComplete(RuntimeError):
@@ -146,6 +209,31 @@ def _k1_coarse_gaussian_native_texture_enabled(*, default: bool = False) -> bool
     raise ValueError(
         f"Unsupported {_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV}={token!r}",
     )
+
+
+def _k1_coarse_fused_projector_enabled(*, default: bool = False) -> bool:
+    """Return whether coarse projection and diff2 use RELION's fused topology."""
+
+    token = os.environ.get(
+        _K1_COARSE_FUSED_PROJECTOR_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_K1_COARSE_FUSED_PROJECTOR_ENV}={token!r}",
+    )
+
+
+def _k1_coarse_fused_projector_supports_padding(padding_factor: int) -> bool:
+    """Whether the fused CUDA projector implements this RELION padding."""
+
+    # The fused kernel stages the compact pad-1 Projector texture and samples
+    # unscaled Fourier coordinates.  The general texture-projector path below
+    # infers and applies larger padding factors from the projector shape.
+    return int(padding_factor) == 1
 
 
 def _k1_relion_exact_coarse_operands_enabled(*, default: bool = False) -> bool:
@@ -996,11 +1084,12 @@ def _maybe_dump_k_class_significance_batch(
         [np.asarray(mat, dtype=np.float64) for mat in class_weight_mats],
         axis=1,
     )
-    sig_mask_full = np.asarray(batch_sig_mask, dtype=bool).reshape(
-        local_indices.shape[0],
+    sig_mask_array = np.asarray(batch_sig_mask, dtype=bool)
+    sig_mask_full = sig_mask_array.reshape(
+        sig_mask_array.shape[0],
         n_classes,
         n_rot * n_trans,
-    )
+    )[: local_indices.shape[0]]
     class_log_z_stack = np.stack(
         [np.asarray(class_log_z, dtype=np.float64) for class_log_z in class_log_z_values],
         axis=1,
@@ -1926,6 +2015,7 @@ def _compute_k_class_significance_batched(
     coarse_rotation_ids=None,
     translation_phase_source=None,
     relion_coarse_gaussian_default: bool = False,
+    pad_final_image_batch: bool = False,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
 
@@ -2100,6 +2190,36 @@ def _compute_k_class_significance_batched(
             f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV} requires "
             f"{_K1_COARSE_GAUSSIAN_FFI_ENV}=1",
         )
+    coarse_fused_projector_requested = _k1_coarse_fused_projector_enabled(
+        default=(
+            relion_coarse_gaussian_default
+            and coarse_gaussian_ffi_enabled
+            and coarse_gaussian_sincosf_enabled
+        ),
+    )
+    coarse_fused_projector_enabled = (
+        coarse_fused_projector_requested
+        and score_mode == "gaussian"
+        and _k1_coarse_fused_projector_supports_padding(projection_padding_factor)
+    )
+    if (
+        coarse_fused_projector_requested
+        and score_mode == "gaussian"
+        and not _k1_coarse_fused_projector_supports_padding(projection_padding_factor)
+    ):
+        logger.warning(
+            "K=1 RELION fused coarse projector disabled for padding_factor=%d; "
+            "using the padding-aware projector and exact diff2 path",
+            int(projection_padding_factor),
+        )
+    if coarse_fused_projector_enabled and not (
+        coarse_gaussian_ffi_enabled and coarse_gaussian_sincosf_enabled
+    ):
+        raise ValueError(
+            f"{_K1_COARSE_FUSED_PROJECTOR_ENV} requires "
+            f"{_K1_COARSE_GAUSSIAN_FFI_ENV}=1 and "
+            f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV}=1",
+        )
     exact_coarse_operands_requested = _k1_relion_exact_coarse_operands_enabled(
         default=(
             relion_coarse_gaussian_default
@@ -2141,10 +2261,6 @@ def _compute_k_class_significance_batched(
         relion_f32_coarse_support_requested and score_mode == "gaussian"
     )
     if relion_f32_coarse_support_enabled:
-        if n_classes != 1:
-            raise ValueError(
-                f"{_K1_RELION_F32_COARSE_SUPPORT_ENV} is restricted to K=1",
-            )
         if use_float64_scoring:
             raise ValueError(
                 f"{_K1_RELION_F32_COARSE_SUPPORT_ENV} requires production float32 scoring",
@@ -2152,7 +2268,7 @@ def _compute_k_class_significance_batched(
         logger.warning(
             "RELION CUDA float32 coarse support enabled (%s): current_size=%d",
             (
-                "guarded fresh-K=1 default"
+                "guarded fresh InitialModel default"
                 if relion_coarse_gaussian_default
                 and _K1_RELION_F32_COARSE_SUPPORT_ENV not in os.environ
                 else "environment override"
@@ -2165,10 +2281,6 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_powerclass = None
     coarse_gaussian_projector_full = None
     if coarse_gaussian_ffi_enabled:
-        if n_classes != 1:
-            raise ValueError(
-                f"{_K1_COARSE_GAUSSIAN_FFI_ENV} is restricted to K=1"
-            )
         if use_float64_scoring:
             raise ValueError(
                 f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires production float32 scoring"
@@ -2188,12 +2300,16 @@ def _compute_k_class_significance_batched(
                 f"translations, got {n_trans}"
             )
         from recovar import cuda_backproject
+        from recovar.em.dense_single_volume.helpers.projection import (
+            relion_projector_half_to_texture_full,
+        )
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
             _relion_cuda_corr_img_from_rfloat_ctf,
             _relion_cuda_fine_full_to_compact_lookup,
             _relion_cuda_pixel_correction_from_rfloat_ctf,
             _relion_cuda_powerclass_highres_xi2_half,
             _relion_exact_ctf_half_from_source_star,
+            _relion_translation_angles_f32,
         )
 
         if jax.default_backend() != "gpu" or not cuda_backproject.cuda_available():
@@ -2235,43 +2351,76 @@ def _compute_k_class_significance_batched(
             dtype=jnp.int32,
         )
         coarse_gaussian_powerclass = _relion_cuda_powerclass_highres_xi2_half
+        coarse_gaussian_projector_full_by_class = None
+        coarse_gaussian_translation_angles = None
+        if coarse_fused_projector_enabled:
+            coarse_gaussian_projector_full_by_class = [
+                relion_projector_half_to_texture_full(
+                    relion_projector_half[class_index],
+                )
+                for class_index in range(n_classes)
+            ]
+            coarse_gaussian_translation_angles = jnp.asarray(
+                _relion_translation_angles_f32(translations_source, image_shape),
+                dtype=jnp.float32,
+            )
+            # One all-rotation launch preserves RELION's 128-orientation main
+            # segment followed by its one-orientation tail.  It also avoids
+            # projecting a memory-planner padding block (often 5000 rows).
+            rotation_block_size = n_rot
         logger.warning(
-            "K=1 RELION coarse Gaussian FFI enabled (%s): "
-            "current_size=%d square_pixels=%d translations=%d",
+            "RELION coarse Gaussian FFI enabled (%s): "
+            "classes=%d current_size=%d square_pixels=%d translations=%d",
             (
-                "guarded fresh-K=1 default"
+                "guarded fresh InitialModel default"
                 if relion_coarse_gaussian_default
                 and _K1_COARSE_GAUSSIAN_FFI_ENV not in os.environ
                 else "environment override"
             ),
+            n_classes,
             score_size,
             square_score_count,
             n_trans,
         )
         if coarse_gaussian_sincosf_enabled:
             logger.warning(
-                "K=1 RELION coarse CUDA sincosf translation enabled (%s): "
-                "current_size=%d square_pixels=%d translations=%d",
+                "RELION coarse CUDA sincosf translation enabled (%s): "
+                "classes=%d current_size=%d square_pixels=%d translations=%d",
                 (
-                    "guarded fresh-K=1 default"
+                    "guarded fresh InitialModel default"
                     if relion_coarse_gaussian_default
                     and _K1_COARSE_GAUSSIAN_SINCOSF_ENV not in os.environ
                     else "environment override"
                 ),
+                n_classes,
                 score_size,
                 square_score_count,
                 n_trans,
             )
         if exact_coarse_operands_enabled:
             logger.warning(
-                "K=1 RELION exact coarse operands enabled (%s): per-image FFT, "
+                "RELION exact coarse operands enabled (%s): per-image FFT, "
                 "RFLOAT CTF division/square, and binary64-to-XFLOAT inverse noise",
                 (
-                    "guarded fresh-K=1 default"
+                    "guarded fresh InitialModel default"
                     if relion_coarse_gaussian_default
                     and _K1_RELION_EXACT_COARSE_OPERANDS_ENV not in os.environ
                     else "environment override"
                 ),
+            )
+        if coarse_fused_projector_enabled:
+            logger.warning(
+                "RELION fused coarse projector/diff2 enabled (%s): "
+                "classes=%d rotations=%d translations=%d",
+                (
+                    "guarded fresh InitialModel default"
+                    if relion_coarse_gaussian_default
+                    and _K1_COARSE_FUSED_PROJECTOR_ENV not in os.environ
+                    else "environment override"
+                ),
+                n_classes,
+                n_rot,
+                n_trans,
             )
         if coarse_gaussian_native_texture_enabled:
             from recovar.em.dense_single_volume.helpers.projection import (
@@ -2287,7 +2436,7 @@ def _compute_k_class_significance_batched(
                 "K=1 RELION native texture coarse scoring enabled (%s): "
                 "projection, translation, and score reduction share one kernel",
                 (
-                    "guarded fresh-K=1 default"
+                    "guarded fresh InitialModel default"
                     if relion_coarse_gaussian_default
                     and _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV not in os.environ
                     else "environment override"
@@ -2520,6 +2669,23 @@ def _compute_k_class_significance_batched(
         return proj_half_b, proj_abs2_half_b
 
     def _score_block(class_index, mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
+        if coarse_fused_projector_enabled:
+            from recovar import cuda_backproject
+
+            diff2 = cuda_backproject.relion_coarse_diff2_projector_f32(
+                coarse_gaussian_projector_full_by_class[class_index],
+                jnp.asarray(rots_b, dtype=jnp.float32),
+                jnp.asarray(coarse_gaussian_unshifted_corrected, dtype=jnp.complex64),
+                coarse_gaussian_translation_angles,
+                jnp.asarray(coarse_gaussian_pixel_weight, dtype=jnp.float32),
+                jnp.asarray(coarse_gaussian_initial_diff2, dtype=jnp.float32),
+                coarse_gaussian_full_to_compact,
+                current_size=score_size,
+                physical_image_size=int(image_shape[0]),
+                model_max_r=int(relion_projector_r_max),
+            )
+            return -diff2
+
         if coarse_gaussian_native_texture_enabled:
             from recovar import cuda_backproject
 
@@ -2634,6 +2800,11 @@ def _compute_k_class_significance_batched(
     log_evidence = np.empty(n_images, dtype=np.float32)
     best_log_score = np.empty(n_images, dtype=np.float32)
     max_posterior = np.empty(n_images, dtype=np.float32)
+    relion_f32_sum_weight = (
+        np.empty(n_images, dtype=np.float32)
+        if relion_f32_coarse_support_enabled and collect_significance
+        else None
+    )
     class_log_evidence = np.empty((n_classes, n_images), dtype=np.float64)
     class_best_log_score = (
         np.empty((n_classes, n_images), dtype=np.float32) if return_class_best else None
@@ -2668,8 +2839,8 @@ def _compute_k_class_significance_batched(
         indices=image_indices,
         by_image=False,
     ):
-        batch_size = len(indices)
-        end_idx = start_idx + batch_size
+        actual_batch_size = len(indices)
+        end_idx = start_idx + actual_batch_size
         (
             relion_cuda_preprocess,
             integer_pre_shifts,
@@ -2684,6 +2855,24 @@ def _compute_k_class_significance_batched(
             scale_corrections=scale_corrections,
             image_pre_shifts=image_pre_shifts,
         )
+        if pad_final_image_batch and actual_batch_size < int(image_batch_size):
+            (
+                batch_data,
+                ctf_params,
+                integer_pre_shifts,
+                batch_corr_np,
+                batch_scale_np,
+                relion_preprocess_kwargs,
+            ) = _pad_significance_preprocess_inputs(
+                batch_data,
+                ctf_params,
+                integer_pre_shifts,
+                batch_corr_np,
+                batch_scale_np,
+                relion_preprocess_kwargs,
+                target_size=int(image_batch_size),
+            )
+        batch_size = int(np.asarray(batch_data).shape[0])
         real_space_pre_shift_applied = integer_pre_shifts is not None
         if real_space_pre_shift_applied and not relion_cuda_preprocess:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
@@ -2693,7 +2882,13 @@ def _compute_k_class_significance_batched(
         elif translation_log_prior.ndim == 1:
             batch_translation_log_prior = jnp.asarray(translation_log_prior)
         else:
-            batch_translation_log_prior = jnp.asarray(translation_log_prior[start_idx:end_idx])
+            batch_translation_log_prior_np = np.asarray(translation_log_prior[start_idx:end_idx])
+            if batch_size > actual_batch_size:
+                batch_translation_log_prior_np = _repeat_pad_batch_axis(
+                    batch_translation_log_prior_np,
+                    batch_size,
+                )
+            batch_translation_log_prior = jnp.asarray(batch_translation_log_prior_np)
 
         if score_mode == "normalized_cc":
             cc_window_indices = window_indices if use_window else None
@@ -2791,7 +2986,10 @@ def _compute_k_class_significance_batched(
             if score_mode == "normalized_cc":
                 ctf2_half_score = ctf2_half_score * (batch_scale**2)[:, None]
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
-            batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
+            batch_shifts_np = np.asarray(image_pre_shifts)[np.asarray(indices)]
+            if batch_size > actual_batch_size:
+                batch_shifts_np = _repeat_pad_batch_axis(batch_shifts_np, batch_size)
+            batch_shifts = jnp.asarray(batch_shifts_np)
             shifted_half = shifted_half * tiled_half_image_phase_factors(image_shape, batch_shifts, n_trans)
             if score_mode == "normalized_cc" and tree_rescore_enabled:
                 tree_rescore_unshifted_half = (
@@ -2961,11 +3159,20 @@ def _compute_k_class_significance_batched(
                     n_trans=n_trans,
                 )
             if exact_coarse_operands_enabled:
-                ctf_half_rfloat = _relion_exact_ctf_half_from_source_star(
-                    experiment_dataset,
-                    indices,
-                    image_shape,
+                ctf_half_rfloat_np = np.asarray(
+                    _relion_exact_ctf_half_from_source_star(
+                        experiment_dataset,
+                        indices,
+                        image_shape,
+                    ),
+                    dtype=np.float64,
                 )
+                if batch_size > actual_batch_size:
+                    ctf_half_rfloat_np = _repeat_pad_batch_axis(
+                        ctf_half_rfloat_np,
+                        batch_size,
+                    )
+                ctf_half_rfloat = jnp.asarray(ctf_half_rfloat_np, dtype=jnp.float64)
                 batch_scale_f32 = jnp.asarray(batch_scale_np, dtype=jnp.float32)
                 pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
                     batch_scale_f32[:, None],
@@ -3463,6 +3670,10 @@ def _compute_k_class_significance_batched(
                     adaptive_fraction=float(adaptive_fraction),
                     max_significants=max_significants,
                 )
+                relion_f32_sum_weight[start_idx:end_idx] = np.asarray(
+                    _batch_sum_weight[:actual_batch_size],
+                    dtype=np.float32,
+                )
                 batch_sig_rot_mask = jnp.any(
                     batch_sig_mask.reshape(batch_size, n_classes * n_rot, n_trans),
                     axis=2,
@@ -3483,16 +3694,28 @@ def _compute_k_class_significance_batched(
                     return_cutoff_count=True,
                 )
             batch_sig_mask_np = np.asarray(batch_sig_mask, dtype=bool)
-            sig_rot_any |= np.asarray(jnp.any(batch_sig_rot_mask, axis=0), dtype=bool).reshape(n_classes, n_rot)
-            n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig, dtype=np.int32)
-            cutoff_count_all[start_idx:end_idx] = np.asarray(batch_cutoff_count, dtype=np.int32)
+            sig_rot_any |= np.asarray(
+                jnp.any(batch_sig_rot_mask[:actual_batch_size], axis=0),
+                dtype=bool,
+            ).reshape(n_classes, n_rot)
+            n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig[:actual_batch_size], dtype=np.int32)
+            cutoff_count_all[start_idx:end_idx] = np.asarray(
+                batch_cutoff_count[:actual_batch_size],
+                dtype=np.int32,
+            )
         else:
             batch_sig_mask_np = None
             n_sig_all[start_idx:end_idx] = 0
             cutoff_count_all[start_idx:end_idx] = 0
 
-        hard_assignment[start_idx:end_idx] = np.asarray(best_argmax_batch, dtype=np.int32)
-        class_assignment[start_idx:end_idx] = np.asarray(best_class_batch, dtype=np.int32)
+        hard_assignment[start_idx:end_idx] = np.asarray(
+            best_argmax_batch[:actual_batch_size],
+            dtype=np.int32,
+        )
+        class_assignment[start_idx:end_idx] = np.asarray(
+            best_class_batch[:actual_batch_size],
+            dtype=np.int32,
+        )
 
         log_score_offset = (
             np.zeros(batch_size, dtype=np.float64)
@@ -3502,14 +3725,28 @@ def _compute_k_class_significance_batched(
         )
         global_log_z_np = np.asarray(global_log_z, dtype=np.float64)
         best_score_np = np.asarray(best_score_batch, dtype=np.float64)
-        normalization_log_z[start_idx:end_idx] = global_log_z_np
-        normalization_log_evidence[start_idx:end_idx] = global_log_z_np + log_score_offset
+        output_slice = slice(0, actual_batch_size)
+        normalization_log_z[start_idx:end_idx] = global_log_z_np[output_slice]
+        normalization_log_evidence[start_idx:end_idx] = (
+            global_log_z_np[output_slice] + log_score_offset[output_slice]
+        )
         log_evidence[start_idx:end_idx] = normalization_log_evidence[start_idx:end_idx].astype(np.float32)
-        best_log_score[start_idx:end_idx] = (best_score_np + log_score_offset).astype(np.float32)
-        max_posterior[start_idx:end_idx] = np.exp(best_score_np - global_log_z_np).astype(np.float32)
+        best_log_score[start_idx:end_idx] = (
+            best_score_np[output_slice] + log_score_offset[output_slice]
+        ).astype(np.float32)
+        if relion_f32_coarse_support_enabled and collect_significance:
+            max_posterior[start_idx:end_idx] = np.asarray(
+                jnp.max(batch_weights[:actual_batch_size], axis=1),
+                dtype=np.float32,
+            )
+        else:
+            max_posterior[start_idx:end_idx] = np.exp(
+                best_score_np[output_slice] - global_log_z_np[output_slice]
+            ).astype(np.float32)
         for class_index, class_log_z in enumerate(class_log_z_values):
             class_log_evidence[class_index, start_idx:end_idx] = (
-                np.asarray(class_log_z, dtype=np.float64) + log_score_offset
+                np.asarray(class_log_z, dtype=np.float64)[output_slice]
+                + log_score_offset[output_slice]
             )
         if return_class_best:
             for class_index in range(n_classes):
@@ -3517,10 +3754,10 @@ def _compute_k_class_significance_batched(
                     class_best_scores[class_index],
                     log_score_offset,
                 )
-                class_best_offset_free_log_score[class_index, start_idx:end_idx] = offset_free
-                class_best_log_score[class_index, start_idx:end_idx] = absolute
+                class_best_offset_free_log_score[class_index, start_idx:end_idx] = offset_free[output_slice]
+                class_best_log_score[class_index, start_idx:end_idx] = absolute[output_slice]
                 class_hard_assignment[class_index, start_idx:end_idx] = np.asarray(
-                    class_best_argmaxes[class_index],
+                    class_best_argmaxes[class_index][output_slice],
                     dtype=np.int32,
                 )
         if return_class_second:
@@ -3529,10 +3766,10 @@ def _compute_k_class_significance_batched(
                     class_second_best_scores[class_index],
                     log_score_offset,
                 )
-                class_second_best_offset_free_log_score[class_index, start_idx:end_idx] = offset_free
-                class_second_best_log_score[class_index, start_idx:end_idx] = absolute
+                class_second_best_offset_free_log_score[class_index, start_idx:end_idx] = offset_free[output_slice]
+                class_second_best_log_score[class_index, start_idx:end_idx] = absolute[output_slice]
                 class_second_hard_assignment[class_index, start_idx:end_idx] = np.asarray(
-                    class_second_best_argmaxes[class_index],
+                    class_second_best_argmaxes[class_index][output_slice],
                     dtype=np.int32,
                 )
 
@@ -3755,6 +3992,12 @@ def _compute_k_class_significance_batched(
         # expand the pass-2/M-step support represented by ``n_sig_all``.
         "significant_cutoff_counts": cutoff_count_all,
     }
+    if relion_f32_sum_weight is not None:
+        # RELION's oversampling-zero second pass deliberately reuses this
+        # coarse, maximum-shifted float32 denominator numerically.  It is not
+        # interchangeable with a log-evidence value because the fine pass
+        # independently shifts its own maximum to 50 before division.
+        full_stats["relion_f32_sum_weight"] = relion_f32_sum_weight
     if return_class_best:
         full_stats["class_best_log_score_per_image"] = class_best_log_score
         full_stats["class_best_offset_free_log_score_per_image"] = class_best_offset_free_log_score

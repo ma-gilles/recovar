@@ -18,16 +18,27 @@ import numpy as np
 from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_step
 from recovar.em.dense_single_volume.helpers.resolution import compute_coarse_image_size
 from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
-from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_local_k_class_em
+from recovar.em.dense_single_volume.k_class import (
+    _run_sparse_k_class_adaptive_pass2,
+    run_dense_k_class_em,
+    run_local_k_class_em,
+)
 from recovar.em.dense_single_volume.local_layout import build_pass2_hypothesis_layout
 from recovar.em.sampling import (
+    get_oversampled_rotation_grid_from_samples,
+    get_oversampled_translation_grid,
     get_translation_grid,
     relion_angular_sampling_deg,
+    rotation_grid_n_in_planes,
     rotation_grid_size,
 )
 
-from .layout import relion_bpref_frame_scales, run_em_output_to_bpref
+from .layout import (
+    relion_bpref_frame_scales,
+    run_em_output_to_bpref,
+)
 from .m_step import VdamAccumulator
+from .relion_layout import relion_x_public_output_to_bpref
 from .state import InitialModelState
 
 _ENGINE_DEFAULTS: dict[str, Any] = {
@@ -43,9 +54,54 @@ _ENGINE_DEFAULTS: dict[str, Any] = {
     "recon_square_window": False,
     "recon_exact_radius": False,
     "reconstruction_subtract_projected_reference": True,
+    # RELION InitialModel scores the full rounded Fourier crop emitted by its
+    # CUDA projector, including the few crop-corner pixels outside r_max.
+    "projection_mask_current_image_disk": False,
 }
 _INACTIVE_CLASS_LOG_PRIOR = -1.0e30
 _EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
+_EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
+_UNIFY_LOCAL_BUCKET_SIZES_ENV = "RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES"
+_COMPACT_SPARSE_PASS2_ENV = "RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2"
+_RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
+
+
+def _exact_relion_fine_diff2_enabled() -> bool:
+    """Use RELION's CUDA fine-score arithmetic unless explicitly disabled."""
+
+    setting = os.environ.get(_EXACT_RELION_FINE_DIFF2_ENV, "1").strip().lower()
+    return setting not in {"0", "false", "no", "off"}
+
+
+def _unify_local_bucket_sizes_enabled() -> bool:
+    """Keep the proven single-shape policy unless a performance probe disables it."""
+
+    setting = os.environ.get(_UNIFY_LOCAL_BUCKET_SIZES_ENV, "1").strip().lower()
+    return setting not in {"0", "false", "no", "off"}
+
+
+def _compact_sparse_pass2_enabled(n_classes: int, pass2_engine: str = "auto") -> bool:
+    """Resolve the InitialModel pass-2 engine without changing K=1 defaults.
+
+    ``auto`` keeps the source-faithful local K=1 reduction and uses the joint
+    class-by-pose compact engine for K>1.  The legacy environment variable is
+    retained as an explicit diagnostic override only when ``auto`` is used.
+    """
+
+    engine = str(pass2_engine).strip().lower()
+    if engine not in {"auto", "local", "compact"}:
+        raise ValueError(
+            "InitialModel pass2_engine must be one of 'auto', 'local', or "
+            f"'compact', got {pass2_engine!r}"
+        )
+    if engine != "auto":
+        return engine == "compact"
+    setting = os.environ.get(_COMPACT_SPARSE_PASS2_ENV)
+    if setting is not None and setting.strip():
+        return setting.strip().lower() not in {"0", "false", "no", "off"}
+    return int(n_classes) > 1
+
+
 _SPARSE_PASS2_CONTROL_KEYS = {
     "adaptive_fraction",
     "max_significants",
@@ -56,6 +112,7 @@ _SPARSE_PASS2_CONTROL_KEYS = {
     "coarse_translations",
     "coarse_translation_log_prior",
     "particle_diameter_ang",
+    "pass1_healpix_order",
     "pass1_current_size",
     "return_profile",
 }
@@ -73,6 +130,7 @@ class DenseInitialModelEstepConfig:
     disc_type: str = "linear_interp"
     image_batch_size: int = 500
     rotation_block_size: int = 5000
+    pass2_engine: str = "auto"
     padding_factor: int = 1
     class_log_priors: Any | None = None
     relion_bpref_frame: bool = True
@@ -196,6 +254,7 @@ _DENSE_RUN_EM_REJECT = frozenset(
         "recon_square_window",
         "recon_exact_radius",
         "reconstruction_subtract_projected_reference",
+        "projection_mask_current_image_disk",
         "relion_projector_shape",
         # Sparse/local engine kwargs that run_dense_k_class_em rejects.
         "return_profile",
@@ -260,6 +319,16 @@ def _translation_step_from_grid(translations: np.ndarray) -> float:
     return float(diffs.min()) if diffs.size else 1.0
 
 
+def _uses_relion_cuda_image_preprocessing(experiment_dataset) -> bool:
+    """Return whether a dataset uses the strict RELION CUDA image path."""
+
+    image_source = getattr(experiment_dataset, "image_source", None)
+    while hasattr(image_source, "parent"):
+        image_source = image_source.parent
+    backend = getattr(image_source, "backend", image_source)
+    return getattr(backend, "relion_fourier_backend", None) == "relion_cuda"
+
+
 def _resolve_sparse_pass1_current_size(
     state: InitialModelState,
     group_kwargs: dict[str, Any],
@@ -278,7 +347,9 @@ def _resolve_sparse_pass1_current_size(
 
     coarse_size = int(
         compute_coarse_image_size(
-            healpix_angular_step(int(options.get("healpix_order", 0))),
+            healpix_angular_step(
+                int(options.get("pass1_healpix_order", options.get("healpix_order", 0)))
+            ),
             float(state.pixel_size),
             int(state.ori_size),
             particle_diameter=float(particle_diameter),
@@ -537,6 +608,30 @@ def _initial_model_pass2_layout(layout):
     )
 
 
+def _collapse_compact_pass2_rotation_stats_to_directions(result, n_psi: int):
+    """Convert shared-EM coarse orientation statistics to VDAM direction bins."""
+
+    n_psi = int(n_psi)
+    if n_psi <= 0:
+        raise ValueError(f"n_psi must be positive, got {n_psi}")
+
+    def _collapse(stats):
+        values = np.asarray(stats.rotation_posterior_sums, dtype=np.float64)
+        if values.size % n_psi:
+            raise ValueError(
+                "compact pass-2 rotation posterior count is not divisible by "
+                f"n_psi={n_psi}: {values.size}"
+            )
+        direction_sums = values.reshape(-1, n_psi).sum(axis=1)
+        return stats._replace(rotation_posterior_sums=direction_sums)
+
+    per_class_stats = tuple(_collapse(stats) for stats in result.per_class_stats)
+    return result._replace(
+        per_class_stats=per_class_stats,
+        stats=_collapse(result.stats),
+    )
+
+
 def _class_pass2_rotation_log_prior(group_kwargs: dict[str, Any], class_index: int) -> np.ndarray | None:
     class_prior = group_kwargs.get("class_rotation_log_prior")
     if class_prior is None:
@@ -547,6 +642,71 @@ def _class_pass2_rotation_log_prior(group_kwargs: dict[str, Any], class_index: i
             f"class_rotation_log_prior must have shape (n_classes, n_coarse_rotations), got {prior.shape}",
         )
     return prior[int(class_index)]
+
+
+def _restore_zero_oversampling_coarse_metadata(
+    result,
+    *,
+    hard_assignment: np.ndarray,
+    class_assignment: np.ndarray,
+    full_stats: dict[str, Any],
+    coarse_rotations: np.ndarray,
+    coarse_translations: np.ndarray,
+):
+    """Keep RELION's pass-1 argmax/Pmax metadata for an os0 pass-2 M-step."""
+
+    hard = np.asarray(hard_assignment, dtype=np.int32)
+    classes = np.asarray(class_assignment, dtype=np.int32)
+    n_images = int(hard.size)
+    n_classes = len(result.per_class_stats)
+    n_translations = int(np.asarray(coarse_translations).shape[0])
+    if (
+        hard.shape != (n_images,)
+        or classes.shape != (n_images,)
+        or n_translations <= 0
+        or np.any(classes < 0)
+        or np.any(classes >= n_classes)
+    ):
+        raise ValueError("invalid coarse assignments for zero-oversampling metadata")
+    rotation_ids = hard.astype(np.int64) // n_translations
+    translation_ids = hard.astype(np.int64) % n_translations
+    rotations = np.asarray(coarse_rotations, dtype=np.float32)[rotation_ids]
+    translations = np.asarray(coarse_translations, dtype=np.float32)[translation_ids]
+
+    def _coarse_scalars(stats):
+        return stats._replace(
+            log_evidence_per_image=np.asarray(
+                full_stats["log_evidence_per_image"],
+                dtype=np.float32,
+            ),
+            best_log_score_per_image=np.asarray(
+                full_stats["best_log_score_per_image"],
+                dtype=np.float32,
+            ),
+            max_posterior_per_image=np.asarray(
+                full_stats["max_posterior_per_image"],
+                dtype=np.float32,
+            ),
+        )
+
+    aggregate_stats = _coarse_scalars(result.stats)
+    replace_kwargs = dict(
+        class_assignments=classes,
+        pose_assignments=hard,
+        stats=aggregate_stats,
+        best_pose_rotations=rotations,
+        best_pose_translations=translations,
+        best_pose_rotation_ids=rotation_ids.astype(np.int32),
+    )
+    if n_classes == 1:
+        replace_kwargs.update(
+            per_class_hard_assignments=hard[None, :],
+            per_class_stats=(_coarse_scalars(result.per_class_stats[0]),),
+            per_class_best_pose_rotations=(rotations,),
+            per_class_best_pose_translations=(translations,),
+            per_class_best_pose_rotation_ids=(rotation_ids.astype(np.int32),),
+        )
+    return result._replace(**replace_kwargs)
 
 
 def _run_sparse_pass2_initial_model_estep(
@@ -567,12 +727,16 @@ def _run_sparse_pass2_initial_model_estep(
     base_kwargs, options = _pop_sparse_pass2_options(engine_kwargs)
     healpix_order = int(options.get("healpix_order", 1))
     oversampling_order = int(options.get("oversampling_order", 1))
-    if oversampling_order < 1:
-        raise ValueError("sparse pass-2 requires oversampling_order >= 1")
+    if oversampling_order < 0:
+        raise ValueError("sparse pass-2 requires oversampling_order >= 0")
     adaptive_fraction = float(options.get("adaptive_fraction", 0.999))
     max_significants = int(options.get("max_significants", -1))
     random_perturbation = float(options.get("random_perturbation", 0.0))
     return_profile = bool(options.get("return_profile", False))
+    use_compact_sparse_pass2 = _compact_sparse_pass2_enabled(
+        state.K,
+        config.pass2_engine,
+    )
     pass1_time_s = 0.0
     pass2_time_s = 0.0
     n_significant_by_image: list[np.ndarray] = []
@@ -586,6 +750,7 @@ def _run_sparse_pass2_initial_model_estep(
     n_coarse_rotations = rotation_grid_size(healpix_order)
     if int(np.asarray(config.rotations).shape[0]) == n_coarse_rotations:
         coarse_rotations = np.asarray(config.rotations, dtype=np.float32)
+        coarse_metadata_rotations = coarse_rotations
     else:
         from recovar.em import sampling
 
@@ -598,6 +763,26 @@ def _run_sparse_pass2_initial_model_estep(
             random_perturbation,
             relion_angular_sampling_deg(healpix_order),
         ).astype(np.float32, copy=False)
+        coarse_metadata_rotations = coarse_rotations
+    # AccProjectorPlan builds coarse scorer matrices on the accelerator even
+    # when adaptive_oversampling == 0 and config.rotations already contains
+    # exactly the coarse grid.  Do not let that equal-size fast path retain
+    # the nearby host-double matrices.  Fine scoring and weighted-sum
+    # backprojection deliberately continue to use their separate host path.
+    if use_exact_relion_projector:
+        from recovar.em import sampling
+
+        coarse_source_eulers = sampling.get_relion_rotation_grid_eulers(
+            healpix_order,
+            rotation_index_order="relion",
+        )
+        device_coarse_rotations = sampling._relion_adaptive_pass1_rotations_f32(
+            coarse_source_eulers,
+            random_perturbation,
+            relion_angular_sampling_deg(healpix_order),
+        )
+        if device_coarse_rotations is not None:
+            coarse_rotations = device_coarse_rotations
     coarse_rotations_for_dense = np.asarray(coarse_rotations, dtype=np.float32)
     if config.relion_projector_frame and not use_exact_relion_projector:
         coarse_rotations_for_dense = _relion_projector_dense_rotations(coarse_rotations)
@@ -630,7 +815,14 @@ def _run_sparse_pass2_initial_model_estep(
             )
         else:
             pass1_translation_log_prior = group_kwargs.get("translation_log_prior")
-        pass1_current_size = _resolve_sparse_pass1_current_size(state, group_kwargs, options)
+        # RELION only uses its reduced coarse image size when adaptive
+        # oversampling is active. At os0, pass 0 and the symbolic pass 1 both
+        # score the full current image size (``exp_current_image_size``).
+        pass1_current_size = (
+            group_kwargs.get("current_size")
+            if oversampling_order == 0
+            else _resolve_sparse_pass1_current_size(state, group_kwargs, options)
+        )
 
         t0 = time.time()
         sig_result = _compute_k_class_significance_batched(
@@ -659,6 +851,19 @@ def _run_sparse_pass2_initial_model_estep(
             use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
             relion_projector_half=relion_projector_half_by_class,
             relion_projector_r_max=relion_projector_r_max,
+            debug_iteration=group_kwargs.get("debug_iteration"),
+            # The supplied-map EM path enables RELION's exact CUDA coarse
+            # operands/support for fresh InitialModel runs. InitialModel reaches the
+            # same significance engine through this adapter, so opt into the
+            # shared guarded path whenever its exact projector is active.
+            relion_coarse_gaussian_default=bool(
+                use_exact_relion_projector
+                and _uses_relion_cuda_image_preprocessing(group_dataset)
+            ),
+            # VDAM changes its subset size almost every iteration. Keep the
+            # coarse scorer's image axis fixed so JAX reuses one executable
+            # instead of compiling each tail mini-batch shape.
+            pad_final_image_batch=True,
         )
         (
             _sig_rot_any,
@@ -668,6 +873,8 @@ def _run_sparse_pass2_initial_model_estep(
             significant_sample_indices,
             _full_stats,
         ) = sig_result
+        zero_oversampling = oversampling_order == 0
+        k1_zero_oversampling = state.K == 1 and zero_oversampling
         pass1_time_s += time.time() - t0
         n_significant_by_image.append(np.asarray(_n_sig_all, dtype=np.int32))
 
@@ -681,74 +888,227 @@ def _run_sparse_pass2_initial_model_estep(
             else:
                 pass2_fine_translation_log_prior = fallback
 
-        local_layouts = []
-        for class_index in range(state.K):
-            class_layout = build_pass2_hypothesis_layout(
-                significant_sample_indices[class_index],
-                n_coarse_rotations,
-                int(coarse_translations.shape[0]),
-                healpix_order,
-                coarse_translations,
-                oversampling_order=oversampling_order,
-                translation_step=translation_step,
-                rotation_log_prior=_class_pass2_rotation_log_prior(group_kwargs, class_index),
-                translation_log_prior=pass2_translation_log_prior,
-                fine_translation_log_prior=pass2_fine_translation_log_prior,
-                random_perturbation=random_perturbation,
-                rotation_index_order="relion_hidden",
-                allow_empty=True,
-            )
-            if config.relion_projector_frame and not use_exact_relion_projector:
-                class_layout = replace(
-                    class_layout,
-                    rotations_flat=_relion_projector_dense_rotations(class_layout.rotations_flat),
+        if use_compact_sparse_pass2 and k1_zero_oversampling:
+            raise ValueError("InitialModel compact sparse pass 2 does not yet support oversampling_order=0")
+
+        local_layout = None
+        fine_rotations = None
+        fine_rotation_parent = None
+        fine_translations = None
+        fine_translation_parent = None
+        if use_compact_sparse_pass2:
+            fine_rotations, fine_rotation_parent, _fine_rotation_ids = (
+                get_oversampled_rotation_grid_from_samples(
+                    np.arange(n_coarse_rotations, dtype=np.int64),
+                    healpix_order,
+                    oversampling_order=oversampling_order,
+                    random_perturbation=random_perturbation,
+                    return_rotation_indices=True,
+                    rotation_index_order="relion_hidden",
                 )
-            local_layouts.append(_initial_model_pass2_layout(class_layout))
-        local_layout = tuple(local_layouts)
+            )
+            fine_translations, fine_translation_parent = get_oversampled_translation_grid(
+                coarse_translations,
+                translation_step,
+                oversampling_order=oversampling_order,
+            )
+        else:
+            local_layouts = []
+            for class_index in range(state.K):
+                class_layout = build_pass2_hypothesis_layout(
+                    significant_sample_indices[class_index],
+                    n_coarse_rotations,
+                    int(coarse_translations.shape[0]),
+                    healpix_order,
+                    coarse_translations,
+                    oversampling_order=oversampling_order,
+                    translation_step=translation_step,
+                    rotation_log_prior=_class_pass2_rotation_log_prior(group_kwargs, class_index),
+                    translation_log_prior=pass2_translation_log_prior,
+                    fine_translation_log_prior=pass2_fine_translation_log_prior,
+                    random_perturbation=random_perturbation,
+                    rotation_index_order="relion_hidden",
+                    allow_empty=True,
+                )
+                if config.relion_projector_frame and not use_exact_relion_projector:
+                    class_layout = replace(
+                        class_layout,
+                        rotations_flat=_relion_projector_dense_rotations(class_layout.rotations_flat),
+                    )
+                local_layouts.append(_initial_model_pass2_layout(class_layout))
+            local_layout = tuple(local_layouts)
 
         t0 = time.time()
-        result = run_local_k_class_em(
-            group_dataset,
-            means,
-            mean_variance,
-            config.noise_variance,
-            local_layout,
-            config.disc_type,
-            class_log_priors=class_log_priors,
-            image_batch_size=config.image_batch_size,
-            rotation_block_size=config.rotation_block_size,
-            current_size=group_kwargs.get("current_size"),
-            accumulate_noise=True,
-            projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
-            reconstruction_padding_factor=int(group_kwargs.get("reconstruction_padding_factor", 1)),
-            score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
-            half_spectrum_scoring=bool(group_kwargs.get("half_spectrum_scoring", False)),
-            use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
-            use_float64_normalization=True,
-            use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
-            do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
-            square_window=bool(group_kwargs.get("square_window", False)),
-            image_corrections=group_kwargs.get("image_corrections"),
-            scale_corrections=group_kwargs.get("scale_corrections"),
-            image_pre_shifts=group_kwargs.get("image_pre_shifts"),
-            mstep_subtract_ctf_projection=bool(group_kwargs.get("reconstruction_subtract_projected_reference", False)),
-            mstep_relion_x_half=bool(config.relion_bpref_frame),
-            reconstruct_significant_only=True,
-            adaptive_fraction=adaptive_fraction,
-            # RELION's gradient InitialModel cap defines the coarse pass-1
-            # support only. Fine pass-2 reconstruction uses adaptive_fraction
-            # without reapplying maximum_significants.
-            max_significants=-1,
-            unify_local_bucket_sizes=True,
-            stats_use_reconstruction_probs=True,
-            class_posterior_sums_from_noise=False,
-            return_profile=return_profile,
-            return_best_pose_details=True,
-            translation_prior_centers=group_kwargs.get("translation_prior_centers"),
-            relion_projector_half=relion_projector_half_by_class,
-            relion_projector_r_max=relion_projector_r_max,
+        from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_diagnostics
+
+        use_exact_local_relion_operands = bool(
+            state.K == 1
+            and use_exact_relion_projector
+            and _uses_relion_cuda_image_preprocessing(group_dataset)
         )
+        use_exact_fine_diff2 = bool(
+            state.K == 1
+            and use_exact_local_relion_operands
+            and _exact_relion_fine_diff2_enabled()
+        )
+        sparse_diagnostics.set_bpref_contribution_dump_context(
+            iteration=int(group_kwargs.get("debug_iteration", -1)),
+            half=int(halfset_idx) + 1,
+        )
+        try:
+            if use_compact_sparse_pass2:
+                if pass2_fine_translation_log_prior is not None:
+                    compact_translation_prior = pass2_fine_translation_log_prior
+                else:
+                    compact_translation_prior = pass2_translation_log_prior
+                compact_engine_kwargs = dict(group_kwargs)
+                compact_engine_kwargs.update(
+                    {
+                        "translation_log_prior": compact_translation_prior,
+                        "mstep_relion_x_half": bool(config.relion_bpref_frame),
+                        "mstep_subtract_ctf_projection": bool(
+                            group_kwargs.get("reconstruction_subtract_projected_reference", False)
+                        ),
+                        "relion_fine_mstep_prune": oversampling_order > 0,
+                        "relion_fine_mstep_keep_all": oversampling_order == 0,
+                        "adaptive_fraction": adaptive_fraction,
+                        "relion_projector_half": relion_projector_half_by_class,
+                        "relion_projector_r_max": relion_projector_r_max,
+                        # InitialModel's small changing subsets benefit from a
+                        # stable compact-pair shape policy. Environment
+                        # overrides remain authoritative for diagnostics.
+                        "compact_pair_min_bucket_size_default": 1,
+                        "compact_pair_tail_coalesce_max_images_default": 1024,
+                        "compact_pair_tail_coalesce_max_inflation_default": 8.0,
+                        "compact_pair_tail_coalesce_min_bucket_size_default": 1,
+                    }
+                )
+                if oversampling_order == 0:
+                    if "relion_f32_sum_weight" in _full_stats:
+                        compact_engine_kwargs[
+                            "relion_f32_normalization_sum_weight"
+                        ] = np.asarray(
+                            _full_stats["relion_f32_sum_weight"],
+                            dtype=np.float32,
+                        )
+                    else:
+                        # CPU/reference scorers do not expose the native CUDA
+                        # denominator. Preserve their mathematically
+                        # equivalent log-evidence normalization fallback.
+                        compact_engine_kwargs["normalization_log_evidence"] = np.asarray(
+                            _full_stats["normalization_log_evidence"],
+                            dtype=np.float64,
+                        )
+                result = _run_sparse_k_class_adaptive_pass2(
+                    group_dataset,
+                    means,
+                    mean_variance,
+                    config.noise_variance,
+                    coarse_rotations_for_pass1,
+                    coarse_translations,
+                    np.asarray(fine_rotations, dtype=np.float32),
+                    None,
+                    np.asarray(fine_rotation_parent, dtype=np.int64),
+                    np.asarray(fine_translations),
+                    np.asarray(fine_translation_parent, dtype=np.int64),
+                    significant_sample_indices,
+                    config.disc_type,
+                    class_log_priors=class_log_priors,
+                    accumulate_noise=True,
+                    return_best_pose_details=True,
+                    coarse_healpix_order=healpix_order,
+                    oversampling_order=oversampling_order,
+                    random_perturbation=random_perturbation,
+                    engine_kwargs=compact_engine_kwargs,
+                )
+                result = _collapse_compact_pass2_rotation_stats_to_directions(
+                    result,
+                    rotation_grid_n_in_planes(healpix_order),
+                )
+            else:
+                result = run_local_k_class_em(
+                    group_dataset,
+                    means,
+                    mean_variance,
+                    config.noise_variance,
+                    local_layout,
+                    config.disc_type,
+                    class_log_priors=class_log_priors,
+                    class_log_evidence=(
+                        np.asarray(_full_stats["class_log_evidence_per_image"], dtype=np.float64)
+                        if k1_zero_oversampling
+                        else None
+                    ),
+                    normalization_max_posterior=(
+                        np.asarray(_full_stats["max_posterior_per_image"], dtype=np.float64)
+                        if k1_zero_oversampling
+                        else None
+                    ),
+                    image_batch_size=config.image_batch_size,
+                    rotation_block_size=config.rotation_block_size,
+                    current_size=group_kwargs.get("current_size"),
+                    accumulate_noise=True,
+                    projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
+                    reconstruction_padding_factor=int(group_kwargs.get("reconstruction_padding_factor", 1)),
+                    score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
+                    half_spectrum_scoring=bool(group_kwargs.get("half_spectrum_scoring", False)),
+                    use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
+                    use_float64_normalization=True,
+                    use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
+                    do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
+                    square_window=bool(group_kwargs.get("square_window", False)),
+                    image_corrections=group_kwargs.get("image_corrections"),
+                    scale_corrections=group_kwargs.get("scale_corrections"),
+                    image_pre_shifts=group_kwargs.get("image_pre_shifts"),
+                    mstep_subtract_ctf_projection=bool(
+                        group_kwargs.get("reconstruction_subtract_projected_reference", False)
+                    ),
+                    mstep_relion_x_half=bool(config.relion_bpref_frame),
+                    # InitialModel consumes these accumulators on the host. Host
+                    # x=0 enforcement and layout expansion avoid compiling two
+                    # new volume-shaped JAX programs at every resolution step.
+                    host_accumulator_finalize=True,
+                    relion_f32_fine_posterior=bool(
+                        state.K == 1
+                        and config.relion_bpref_frame
+                        and sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled()
+                    ),
+                    # RELION's symbolic pass 2 at os0 retains every sample selected
+                    # by pass 1. It does not apply another adaptive-fraction prune.
+                    reconstruct_significant_only=not k1_zero_oversampling,
+                    adaptive_fraction=adaptive_fraction,
+                    debug_iteration=int(group_kwargs.get("debug_iteration", -1)),
+                    # RELION's gradient InitialModel cap defines the coarse pass-1
+                    # support only. Fine pass-2 reconstruction uses adaptive_fraction
+                    # without reapplying maximum_significants.
+                    max_significants=-1,
+                    unify_local_bucket_sizes=_unify_local_bucket_sizes_enabled(),
+                    stats_use_reconstruction_probs=True,
+                    class_posterior_sums_from_noise=False,
+                    return_profile=return_profile,
+                    return_best_pose_details=True,
+                    translation_prior_centers=group_kwargs.get("translation_prior_centers"),
+                    relion_projector_half=relion_projector_half_by_class,
+                    relion_projector_r_max=relion_projector_r_max,
+                    projection_mask_current_image_disk=bool(
+                        group_kwargs.get("projection_mask_current_image_disk", True)
+                    ),
+                    relion_exact_bpref_operands=bool(use_exact_local_relion_operands),
+                    relion_exact_fine_diff2=use_exact_fine_diff2,
+                    relion_exact_score_translation=use_exact_fine_diff2,
+                )
+        finally:
+            sparse_diagnostics.clear_bpref_contribution_dump_context()
         pass2_time_s += time.time() - t0
+        if zero_oversampling:
+            result = _restore_zero_oversampling_coarse_metadata(
+                result,
+                hard_assignment=_hard_assignment,
+                class_assignment=_class_assignment,
+                full_stats=_full_stats,
+                coarse_rotations=coarse_metadata_rotations,
+                coarse_translations=coarse_translations,
+            )
         halfset_results[int(halfset_idx)] = result
         accumulators.extend(
             _arrays_to_accumulators(
@@ -767,6 +1127,7 @@ def _run_sparse_pass2_initial_model_estep(
         {int(group_index): np.asarray(image_ids, dtype=np.int64) for group_index, image_ids in groups},
     )
     _add_accumulator_weight_meta(meta, accumulators, state.K)
+    meta["pass2_engine"] = "compact" if use_compact_sparse_pass2 else "local"
     out = DenseInitialModelEstepResult(
         accumulators=accumulators,
         meta=meta,
@@ -813,6 +1174,19 @@ def _resolve_class_inputs(
             current_size=state.current_size if state.current_size > 0 else state.ori_size,
             padding_factor=config.padding_factor,
         )
+        projector_dump_dir = os.environ.get(_RELION_PROJECTOR_DUMP_DIR_ENV, "").strip()
+        if projector_dump_dir:
+            os.makedirs(projector_dump_dir, exist_ok=True)
+            np.savez_compressed(
+                os.path.join(projector_dump_dir, f"iter{int(state.iter):03d}_relion_projector_half.npz"),
+                projector_half=np.asarray(projector_half_by_class),
+                projector_r_max=np.int64(projector_r_max),
+                current_size=np.int64(
+                    state.current_size if state.current_size > 0 else state.ori_size
+                ),
+                padding_factor=np.int64(config.padding_factor),
+                iteration=np.int64(state.iter),
+            )
         means = relion_projector_half_maps_to_dense_means(
             projector_half_by_class,
             int(state.ori_size),
@@ -860,14 +1234,15 @@ def _arrays_to_accumulators(
 
     accumulators: list[VdamAccumulator] = []
     for k in range(state.K):
-        bp_data, bp_weight = run_em_output_to_bpref(
+        converter = relion_x_public_output_to_bpref if relion_bpref_frame else run_em_output_to_bpref
+        bp_data, bp_weight = converter(
             np.asarray(Ft_y_by_class[k]),
             np.asarray(Ft_ctf_by_class[k]),
             state.ori_size,
             r_max,
             padding_factor=padding_factor,
         )
-        if relion_projector_frame:
+        if relion_projector_frame and not relion_bpref_frame:
             bp_data = bp_data[::-1, :, :]
             bp_weight = bp_weight[::-1, :, :]
         if dump_dir:
@@ -903,14 +1278,23 @@ def _arrays_to_accumulators(
 def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
     meta: dict[str, Any] = {"halfset_ids": tuple(sorted(halfset_results))}
     class_posterior_sums = None
+    class_posterior_sums_full = None
     class_reconstruction_support_sums = None
     class_direction_posterior_sums = None
     noise_totals: dict[str, Any] | None = None
     for h, result in halfset_results.items():
         if getattr(result, "class_posterior_sums", None) is not None:
-            sums = np.asarray(result.class_posterior_sums, dtype=np.float64)
+            full_sums = np.asarray(result.class_posterior_sums, dtype=np.float64)
+            sums = np.asarray(
+                getattr(result, "class_mstep_posterior_sums", full_sums),
+                dtype=np.float64,
+            )
             meta[f"halfset_{h}_class_posterior_sums"] = sums
+            meta[f"halfset_{h}_class_posterior_sums_full"] = full_sums
             class_posterior_sums = sums if class_posterior_sums is None else class_posterior_sums + sums
+            class_posterior_sums_full = (
+                full_sums if class_posterior_sums_full is None else class_posterior_sums_full + full_sums
+            )
         per_class_noise = getattr(result, "noise_stats", None)
         if per_class_noise is not None:
             support = np.asarray([float(stats.sumw) for stats in per_class_noise], dtype=np.float64)
@@ -959,6 +1343,8 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
             )
     if class_posterior_sums is not None:
         meta["class_posterior_sums"] = class_posterior_sums
+    if class_posterior_sums_full is not None:
+        meta["class_posterior_sums_full"] = class_posterior_sums_full
     if class_reconstruction_support_sums is not None:
         meta["class_reconstruction_support_sums"] = class_reconstruction_support_sums
     if class_direction_posterior_sums is not None:
