@@ -1113,6 +1113,29 @@ def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
     np.testing.assert_allclose(coarse_prior, np.asarray([[-0.5]], dtype=np.float32), rtol=1e-6)
 
 
+def test_dense_estep_config_propagates_public_pass2_engine():
+    dataset = SimpleNamespace(voxel_size=2.0, n_images=1, image_shape=(8, 8))
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        pass2_engine="compact",
+    )
+    plan = driver.NativeSamplingPlan(
+        rotations=np.zeros((1, 3, 3), dtype=np.float32),
+        translations=np.asarray([[0.0, 0.0]], dtype=np.float32),
+        random_perturbation=0.0,
+    )
+
+    config = driver._dense_estep_config(
+        dataset,
+        opts,
+        np.ones(5, dtype=np.float32),
+        plan,
+        np.zeros((1, 2), dtype=np.float32),
+    )
+
+    assert config.pass2_engine == "compact"
+
+
 def test_dense_estep_config_keeps_zero_oversampling_on_exact_adaptive_route():
     dataset = SimpleNamespace(voxel_size=2.0, n_images=1, image_shape=(8, 8))
     opts = driver.NativeInitialModelOptions(fn_img="particles.star", oversampling=0)

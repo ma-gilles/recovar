@@ -3173,12 +3173,20 @@ def _compact_pair_execution_enabled_for_pass() -> bool:
     )
 
 
-def _compact_pair_min_bucket_size_for_pass() -> int:
-    """Return the hybrid threshold for compact-pair execution buckets."""
+def _compact_pair_min_bucket_size_for_pass(default_value: int | None = None) -> int:
+    """Return the hybrid threshold for compact-pair execution buckets.
+
+    An explicit environment setting wins over a caller-specific default so
+    benchmark and diagnostic jobs retain their existing override behavior.
+    """
 
     explicit = _optional_positive_int_env(_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE_ENV)
     if explicit is not None:
         return int(explicit)
+    if default_value is not None:
+        if int(default_value) <= 0:
+            raise ValueError("compact-pair minimum bucket size must be positive")
+        return int(default_value)
     return _DEFAULT_COMPACT_PAIR_MIN_BUCKET_SIZE
 
 
@@ -3256,14 +3264,23 @@ def _tail_bucket_coalesce_params_for_pass(*, fused_k_class: bool) -> tuple[int |
     return int(max_images), float(max_inflation), int(min_bucket_size)
 
 
-def _compact_pair_tail_bucket_coalesce_params_for_pass() -> tuple[int | None, float | None, int | None]:
+def _compact_pair_tail_bucket_coalesce_params_for_pass(
+    *,
+    default_max_images: int | None = None,
+    default_max_inflation: float | None = None,
+    default_min_bucket_size: int | None = None,
+) -> tuple[int | None, float | None, int | None]:
     """Return bounded tail-coalescing controls for compact-pair K-class buckets."""
 
     max_images = _optional_nonnegative_int_env(_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_IMAGES_ENV)
     if max_images is None:
         max_images = _optional_nonnegative_int_env(_TAIL_BUCKET_COALESCE_MAX_IMAGES_ENV)
     if max_images is None:
-        max_images = _DEFAULT_COMPACT_PAIR_TAIL_BUCKET_COALESCE_MAX_IMAGES
+        max_images = (
+            _DEFAULT_COMPACT_PAIR_TAIL_BUCKET_COALESCE_MAX_IMAGES
+            if default_max_images is None
+            else int(default_max_images)
+        )
     if int(max_images) <= 1:
         return None, None, None
 
@@ -3271,13 +3288,25 @@ def _compact_pair_tail_bucket_coalesce_params_for_pass() -> tuple[int | None, fl
     if max_inflation is None:
         max_inflation = _optional_positive_float_env(_TAIL_BUCKET_COALESCE_MAX_INFLATION_ENV)
     if max_inflation is None:
-        max_inflation = _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION
+        max_inflation = (
+            _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION
+            if default_max_inflation is None
+            else float(default_max_inflation)
+        )
+    if float(max_inflation) <= 0.0:
+        raise ValueError("compact-pair tail coalescing inflation must be positive")
 
     min_bucket_size = _optional_positive_int_env(_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MIN_BUCKET_SIZE_ENV)
     if min_bucket_size is None:
         min_bucket_size = _optional_positive_int_env(_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE_ENV)
     if min_bucket_size is None:
-        min_bucket_size = _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE
+        min_bucket_size = (
+            _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE
+            if default_min_bucket_size is None
+            else int(default_min_bucket_size)
+        )
+    if int(min_bucket_size) <= 0:
+        raise ValueError("compact-pair tail coalescing minimum bucket size must be positive")
     return int(max_images), float(max_inflation), int(min_bucket_size)
 
 
@@ -15299,6 +15328,10 @@ def compute_k_class_pass2_stats_sparse_fused(
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
     bpref_device_signature_active: bool = False,
+    compact_pair_min_bucket_size_default: int | None = None,
+    compact_pair_tail_coalesce_max_images_default: int | None = None,
+    compact_pair_tail_coalesce_max_inflation_default: float | None = None,
+    compact_pair_tail_coalesce_min_bucket_size_default: int | None = None,
 ) -> SparseKClassPass2FusedResult:
     """Evaluate K-class sparse pass-2 in one joint class-normalized sweep.
 
@@ -15770,9 +15803,15 @@ def compute_k_class_pass2_stats_sparse_fused(
         compact_pair_tail_coalesce_max_images,
         compact_pair_tail_coalesce_max_inflation,
         compact_pair_tail_coalesce_min_bucket_size,
-    ) = _compact_pair_tail_bucket_coalesce_params_for_pass()
+    ) = _compact_pair_tail_bucket_coalesce_params_for_pass(
+        default_max_images=compact_pair_tail_coalesce_max_images_default,
+        default_max_inflation=compact_pair_tail_coalesce_max_inflation_default,
+        default_min_bucket_size=compact_pair_tail_coalesce_min_bucket_size_default,
+    )
     if compact_pairs:
-        compact_pair_min_bucket_size = _compact_pair_min_bucket_size_for_pass()
+        compact_pair_min_bucket_size = _compact_pair_min_bucket_size_for_pass(
+            compact_pair_min_bucket_size_default,
+        )
         compact_pair_max_images_per_microbatch = _compact_pair_max_images_per_microbatch_for_pass(
             max_images_per_microbatch,
         )

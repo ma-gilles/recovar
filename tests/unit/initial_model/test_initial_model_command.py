@@ -38,6 +38,7 @@ def test_public_defaults_match_native_option_defaults():
         "random_perturbation",
         "image_batch_size",
         "rotation_block_size",
+        "pass2_engine",
         "bootstrap_min_particles",
         "sigma2_min_particles",
         "padding_factor",
@@ -94,6 +95,8 @@ def test_parser_accepts_important_overrides():
             "1.5",
             "--padding-factor",
             "2",
+            "--pass2-engine",
+            "compact",
             "--image-fourier-backend",
             "host_numpy",
             "--gpu",
@@ -119,6 +122,7 @@ def test_parser_accepts_important_overrides():
     assert options["offset_range_px"] == 4.5
     assert options["offset_step_px"] == 1.5
     assert options["padding_factor"] == 2
+    assert options["pass2_engine"] == "compact"
     assert options["image_fourier_backend"] == "host_numpy"
     assert options["deterministic_cuda"] is True
     assert args.require_custom_cuda is False

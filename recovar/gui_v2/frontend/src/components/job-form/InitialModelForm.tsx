@@ -122,6 +122,7 @@ function InitialModelFormLoaded({
   );
   const [imageBatchSize, setImageBatchSize] = useState(String(pick("image_batch_size", defaults.image_batch_size)));
   const [rotationBlockSize, setRotationBlockSize] = useState(String(pick("rotation_block_size", defaults.rotation_block_size)));
+  const [pass2Engine, setPass2Engine] = useState(String(pick("pass2_engine", defaults.pass2_engine)));
   const [bootstrapMin, setBootstrapMin] = useState(String(pick("bootstrap_min_particles", defaults.bootstrap_min_particles)));
   const [sigma2Min, setSigma2Min] = useState(String(pick("sigma2_min_particles", defaults.sigma2_min_particles)));
   const [translationSigma, setTranslationSigma] = useState(
@@ -164,6 +165,7 @@ function InitialModelFormLoaded({
       perturbation_factor: parseFloat(perturbationFactor),
       image_batch_size: parseInt(imageBatchSize),
       rotation_block_size: parseInt(rotationBlockSize),
+      pass2_engine: pass2Engine,
       bootstrap_min_particles: parseInt(bootstrapMin),
       sigma2_min_particles: parseInt(sigma2Min),
       padding_factor: parseInt(paddingFactor),
@@ -184,7 +186,7 @@ function InitialModelFormLoaded({
   }, [
     inputStar, nrIter, gradWriteIter, nrClasses, tau2Fudge, symName, particleDiameter,
     runInC1, doSolvent, doZeroMask, doCtf, randomSeed, healpixOrder, oversampling,
-    offsetRange, offsetStep, perturbationFactor, imageBatchSize, rotationBlockSize,
+    offsetRange, offsetStep, perturbationFactor, imageBatchSize, rotationBlockSize, pass2Engine,
     bootstrapMin, sigma2Min, paddingFactor, imageBackend, gpuIds, lazy, writeArtifacts,
     requireCuda, deterministicCuda, randomPerturbation, translationSigma, datadir,
     stripPrefix, slurmOpts, localOpts, executorMode,
@@ -274,6 +276,12 @@ function InitialModelFormLoaded({
             <NumberField label="Padding Factor" tooltip="initial_model.padding_factor" value={paddingFactor} onChange={setPaddingFactor} />
           </div>
           <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-1"><Label>Pass-2 Engine</Label><TooltipIcon text={tooltips["initial_model.pass2_engine"]} /></div>
+              <Select value={pass2Engine} onChange={(event) => setPass2Engine(event.target.value)}>
+                <option value="auto">Auto</option><option value="local">Local</option><option value="compact">Compact K-class</option>
+              </Select>
+            </div>
             <div className="space-y-1">
               <div className="flex items-center gap-1"><Label>Fourier Backend</Label><TooltipIcon text={tooltips["initial_model.image_backend"]} /></div>
               <Select value={imageBackend} onChange={(event) => setImageBackend(event.target.value)}>

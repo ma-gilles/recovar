@@ -80,11 +80,26 @@ def _unify_local_bucket_sizes_enabled() -> bool:
     return setting not in {"0", "false", "no", "off"}
 
 
-def _compact_sparse_pass2_enabled() -> bool:
-    """Use the shared compact sparse EM pass-2 route when explicitly requested."""
+def _compact_sparse_pass2_enabled(n_classes: int, pass2_engine: str = "auto") -> bool:
+    """Resolve the InitialModel pass-2 engine without changing K=1 defaults.
 
-    setting = os.environ.get(_COMPACT_SPARSE_PASS2_ENV, "0").strip().lower()
-    return setting not in {"0", "false", "no", "off"}
+    ``auto`` keeps the source-faithful local K=1 reduction and uses the joint
+    class-by-pose compact engine for K>1.  The legacy environment variable is
+    retained as an explicit diagnostic override only when ``auto`` is used.
+    """
+
+    engine = str(pass2_engine).strip().lower()
+    if engine not in {"auto", "local", "compact"}:
+        raise ValueError(
+            "InitialModel pass2_engine must be one of 'auto', 'local', or "
+            f"'compact', got {pass2_engine!r}"
+        )
+    if engine != "auto":
+        return engine == "compact"
+    setting = os.environ.get(_COMPACT_SPARSE_PASS2_ENV)
+    if setting is not None and setting.strip():
+        return setting.strip().lower() not in {"0", "false", "no", "off"}
+    return int(n_classes) > 1
 
 
 _SPARSE_PASS2_CONTROL_KEYS = {
@@ -115,6 +130,7 @@ class DenseInitialModelEstepConfig:
     disc_type: str = "linear_interp"
     image_batch_size: int = 500
     rotation_block_size: int = 5000
+    pass2_engine: str = "auto"
     padding_factor: int = 1
     class_log_priors: Any | None = None
     relion_bpref_frame: bool = True
@@ -705,6 +721,10 @@ def _run_sparse_pass2_initial_model_estep(
     max_significants = int(options.get("max_significants", -1))
     random_perturbation = float(options.get("random_perturbation", 0.0))
     return_profile = bool(options.get("return_profile", False))
+    use_compact_sparse_pass2 = _compact_sparse_pass2_enabled(
+        state.K,
+        config.pass2_engine,
+    )
     pass1_time_s = 0.0
     pass2_time_s = 0.0
     n_significant_by_image: list[np.ndarray] = []
@@ -855,7 +875,6 @@ def _run_sparse_pass2_initial_model_estep(
             else:
                 pass2_fine_translation_log_prior = fallback
 
-        use_compact_sparse_pass2 = _compact_sparse_pass2_enabled()
         if use_compact_sparse_pass2 and k1_zero_oversampling:
             raise ValueError("InitialModel compact sparse pass 2 does not yet support oversampling_order=0")
 
@@ -941,6 +960,13 @@ def _run_sparse_pass2_initial_model_estep(
                         "adaptive_fraction": adaptive_fraction,
                         "relion_projector_half": relion_projector_half_by_class,
                         "relion_projector_r_max": relion_projector_r_max,
+                        # InitialModel's small changing subsets benefit from a
+                        # stable compact-pair shape policy. Environment
+                        # overrides remain authoritative for diagnostics.
+                        "compact_pair_min_bucket_size_default": 1,
+                        "compact_pair_tail_coalesce_max_images_default": 1024,
+                        "compact_pair_tail_coalesce_max_inflation_default": 8.0,
+                        "compact_pair_tail_coalesce_min_bucket_size_default": 1,
                     }
                 )
                 result = _run_sparse_k_class_adaptive_pass2(
@@ -1070,6 +1096,7 @@ def _run_sparse_pass2_initial_model_estep(
         {int(group_index): np.asarray(image_ids, dtype=np.int64) for group_index, image_ids in groups},
     )
     _add_accumulator_weight_meta(meta, accumulators, state.K)
+    meta["pass2_engine"] = "compact" if use_compact_sparse_pass2 else "local"
     out = DenseInitialModelEstepResult(
         accumulators=accumulators,
         meta=meta,

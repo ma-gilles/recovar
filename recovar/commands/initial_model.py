@@ -143,6 +143,17 @@ def make_parser() -> argparse.ArgumentParser:
         default=DEFAULTS.rotation_block_size,
     )
     parser.add_argument(
+        "--pass2-engine",
+        "--pass2_engine",
+        dest="pass2_engine",
+        choices=("auto", "local", "compact"),
+        default=DEFAULTS.pass2_engine,
+        help=(
+            "Adaptive pass-2 implementation: auto keeps exact local K=1 and "
+            "uses joint compact class-by-pose scoring for K>1"
+        ),
+    )
+    parser.add_argument(
         "--bootstrap-min-particles",
         "--bootstrap_min_particles",
         dest="bootstrap_min_particles",
@@ -267,6 +278,7 @@ def _native_options_dict(args: argparse.Namespace) -> dict[str, object]:
         "random_perturbation": args.random_perturbation,
         "image_batch_size": args.image_batch_size,
         "rotation_block_size": args.rotation_block_size,
+        "pass2_engine": args.pass2_engine,
         "bootstrap_min_particles": args.bootstrap_min_particles,
         "sigma2_min_particles": args.sigma2_min_particles,
         "padding_factor": args.padding_factor,

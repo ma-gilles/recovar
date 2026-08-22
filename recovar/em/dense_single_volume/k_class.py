@@ -1026,6 +1026,14 @@ def _run_sparse_k_class_adaptive_pass2(
             )
         fused_common["relion_projector_half"] = relion_projector_half_by_class
         fused_common["relion_projector_r_max"] = relion_projector_r_max
+        for planner_name in (
+            "compact_pair_min_bucket_size_default",
+            "compact_pair_tail_coalesce_max_images_default",
+            "compact_pair_tail_coalesce_max_inflation_default",
+            "compact_pair_tail_coalesce_min_bucket_size_default",
+        ):
+            if planner_name in base_engine_kwargs:
+                fused_common[planner_name] = base_engine_kwargs[planner_name]
         try:
             fused = compute_k_class_pass2_stats_sparse_fused(
                 experiment_dataset,

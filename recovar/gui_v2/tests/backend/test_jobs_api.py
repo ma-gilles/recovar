@@ -86,6 +86,7 @@ class TestCommandBuilders:
         assert "--ctf" in cmd
         assert "--require-custom-cuda" in cmd
         assert cmd[cmd.index("--padding-factor") + 1] == "2"
+        assert cmd[cmd.index("--pass2-engine") + 1] == "auto"
 
     def test_pipeline_command_minimal(self):
         cmd = build_pipeline_command({

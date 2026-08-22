@@ -1212,6 +1212,7 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
         noise_variance=np.ones(8 * 8, dtype=np.float32),
         rotations=np.zeros((12, 3, 3), dtype=np.float32),
         translations=np.zeros((4, 2), dtype=np.float32),
+        pass2_engine="local",
         relion_bpref_frame=False,
         engine_kwargs={
             "sparse_pass2": True,

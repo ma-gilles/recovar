@@ -1,4 +1,4 @@
-"""Focused contracts for the opt-in shared compact InitialModel pass 2."""
+"""Focused contracts for InitialModel local/compact pass-2 routing."""
 
 from __future__ import annotations
 
@@ -25,13 +25,25 @@ from recovar.em.initial_model.dense_adapter import (
 pytestmark = pytest.mark.unit
 
 
-def test_compact_sparse_pass2_is_opt_in(monkeypatch):
+def test_compact_sparse_pass2_auto_routes_k1_local_and_kclass_compact(monkeypatch):
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2", raising=False)
-    assert _compact_sparse_pass2_enabled() is False
+    assert _compact_sparse_pass2_enabled(1) is False
+    assert _compact_sparse_pass2_enabled(2) is True
+    assert _compact_sparse_pass2_enabled(4) is True
 
     for value in ("1", "true", "YES", "on"):
         monkeypatch.setenv("RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2", value)
-        assert _compact_sparse_pass2_enabled() is True
+        assert _compact_sparse_pass2_enabled(1) is True
+
+
+def test_explicit_pass2_engine_overrides_legacy_environment(monkeypatch):
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2", "0")
+    assert _compact_sparse_pass2_enabled(2, "compact") is True
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2", "1")
+    assert _compact_sparse_pass2_enabled(2, "local") is False
+
+    with pytest.raises(ValueError, match="pass2_engine"):
+        _compact_sparse_pass2_enabled(2, "unknown")
 
 
 def test_compact_sparse_pass2_is_not_k1_scoped():

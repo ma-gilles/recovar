@@ -121,6 +121,7 @@ class NativeInitialModelOptions:
     offset_step_px: float = DEFAULT_OFFSET_STEP_PX
     image_batch_size: int = INITIAL_MODEL_GUI_DEFAULTS.image_batch_size
     rotation_block_size: int = INITIAL_MODEL_GUI_DEFAULTS.rotation_block_size
+    pass2_engine: str = INITIAL_MODEL_GUI_DEFAULTS.pass2_engine
     bootstrap_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.bootstrap_min_particles
     sigma2_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.sigma2_min_particles
     padding_factor: int = INITIAL_MODEL_GUI_DEFAULTS.padding_factor
@@ -1173,6 +1174,7 @@ def _dense_estep_config(
         translations=sampling_plan.translations,
         image_batch_size=effective_image_batch_size,
         rotation_block_size=int(opts.rotation_block_size),
+        pass2_engine=str(opts.pass2_engine),
         padding_factor=int(opts.padding_factor),
         relion_bpref_frame=True,
         relion_projector_frame=True,

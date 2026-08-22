@@ -222,6 +222,7 @@ export interface InitialModelDefaults {
   perturbation_factor: number;
   image_batch_size: number;
   rotation_block_size: number;
+  pass2_engine: "auto" | "local" | "compact";
   bootstrap_min_particles: number;
   sigma2_min_particles: number;
   padding_factor: number;

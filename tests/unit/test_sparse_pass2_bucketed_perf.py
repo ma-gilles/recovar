@@ -1002,6 +1002,11 @@ def test_compact_pair_tail_bucket_coalescing_defaults_to_bounded_tail(monkeypatc
 
     assert _tail_bucket_coalesce_params_for_pass(fused_k_class=True) == (None, None, None)
     assert _compact_pair_tail_bucket_coalesce_params_for_pass() == (19, 2.0, 4096)
+    assert _compact_pair_tail_bucket_coalesce_params_for_pass(
+        default_max_images=1024,
+        default_max_inflation=8.0,
+        default_min_bucket_size=1,
+    ) == (1024, 8.0, 1)
 
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_IMAGES", "0")
     assert _compact_pair_tail_bucket_coalesce_params_for_pass() == (None, None, None)
@@ -1010,6 +1015,11 @@ def test_compact_pair_tail_bucket_coalescing_defaults_to_bounded_tail(monkeypatc
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_INFLATION", "1.5")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MIN_BUCKET_SIZE", "8192")
     assert _compact_pair_tail_bucket_coalesce_params_for_pass() == (5, 1.5, 8192)
+    assert _compact_pair_tail_bucket_coalesce_params_for_pass(
+        default_max_images=1024,
+        default_max_inflation=8.0,
+        default_min_bucket_size=1,
+    ) == (5, 1.5, 8192)
 
 
 def test_sparse_pass2_tail_bucket_coalescing_merges_only_bounded_high_tail():
@@ -5257,6 +5267,7 @@ def test_compact_pair_execution_defaults_to_high_bucket_hybrid(monkeypatch):
 
     assert _compact_pair_execution_enabled_for_pass() is True
     assert _compact_pair_min_bucket_size_for_pass() == 512
+    assert _compact_pair_min_bucket_size_for_pass(1) == 1
 
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "0")
     assert _compact_pair_execution_enabled_for_pass() is False
@@ -5265,6 +5276,7 @@ def test_compact_pair_execution_defaults_to_high_bucket_hybrid(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1024")
     assert _compact_pair_execution_enabled_for_pass() is True
     assert _compact_pair_min_bucket_size_for_pass() == 1024
+    assert _compact_pair_min_bucket_size_for_pass(1) == 1024
 
 
 def test_compact_pair_execution_treats_blank_env_flags_as_unset(monkeypatch):

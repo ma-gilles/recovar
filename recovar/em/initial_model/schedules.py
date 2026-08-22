@@ -48,6 +48,7 @@ class GuiInitialModelDefaults:
     perturbation_factor: float = 0.5
     image_batch_size: int = 500
     rotation_block_size: int = 5000
+    pass2_engine: str = "auto"
     bootstrap_min_particles: int = 1000
     sigma2_min_particles: int = 1000
     padding_factor: int = 1

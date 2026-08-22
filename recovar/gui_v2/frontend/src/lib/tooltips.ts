@@ -25,6 +25,8 @@ export const tooltips: Record<string, string> = {
   "initial_model.random_perturbation": "Optional fixed perturbation that overrides the seeded per-iteration value.",
   "initial_model.image_batch_size": "Particles processed in one image batch. Tune for GPU memory and throughput.",
   "initial_model.rotation_block_size": "Orientations processed in one scoring block. Tune for GPU memory and throughput.",
+  "initial_model.pass2_engine":
+    "Adaptive pass-2 engine. Auto preserves the exact local K=1 path and uses joint class-by-pose compact scoring for K>1. Local and Compact are diagnostic overrides.",
   "initial_model.bootstrap_min": "Minimum particle count used to form the initial bootstrap reference.",
   "initial_model.sigma2_min": "Minimum particle count used for initial noise-spectrum estimation.",
   "initial_model.translation_sigma": "Optional translation-prior standard deviation in Angstroms.",
