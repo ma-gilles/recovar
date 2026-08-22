@@ -55,6 +55,7 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     _norm_inputs,
+    prepare_batch_preprocess_operands,
     process_half_image,
     resolve_image_mask_for_half_preprocess,
 )
@@ -1697,10 +1698,21 @@ def _prepare_local_exact_bucket(
                 apply_image_mask=apply_image_mask,
                 mask_mode=exact_image_mask_mode,
             )
+        # Integer shifts are applied to ``batch`` above and image/scale
+        # corrections are applied to the Fourier result by the caller.  The
+        # strict RELION CUDA backend still requires explicit typed operands at
+        # its boundary, so provide the corresponding identity values here.
+        # Other backends receive ``None`` and retain their existing path.
+        _, _, _, _, relion_preprocess_kwargs = prepare_batch_preprocess_operands(
+            experiment_dataset,
+            batch,
+            image_indices,
+        )
         return process_half_image(
             experiment_dataset,
             batch,
             apply_image_mask,
+            relion_preprocess_kwargs=relion_preprocess_kwargs,
         )
 
     ctf_t0 = time.time()

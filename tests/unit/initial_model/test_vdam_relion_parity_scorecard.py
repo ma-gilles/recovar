@@ -62,7 +62,7 @@ def _evaluate_first_case(value: dict, *, cross: float = 0.9995, gt_delta: float 
 def test_checked_scorecard_is_valid() -> None:
     loaded = scorecard_mod.load_and_validate()
     assert loaded["frozen_denominator"] == 12
-    assert loaded["current_snapshot"]["counts"] == {"pass": 6, "fail": 6, "not_run": 0}
+    assert loaded["current_snapshot"]["counts"] == {"pass": 12, "fail": 0, "not_run": 0}
 
 
 def test_definition_digest_is_reproducible(scorecard: dict) -> None:
@@ -182,7 +182,7 @@ def test_future_history_rows_need_immutable_evidence(tmp_path: Path, scorecard: 
 
 def test_renderer_exposes_fixed_denominator_and_metric_policy(scorecard: dict) -> None:
     rendered = scorecard_mod.render_markdown(scorecard_mod.load_and_validate())
-    assert "6 / 12 passing" in rendered
+    assert "12 / 12 passing" in rendered
     assert "iterations `0`, `1`, `2`, `4`, and `8`" in rendered
     assert "Map correlation is not computed or gated" in rendered
     assert rendered.count("| `vdam-") == 12
