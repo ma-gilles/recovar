@@ -54,6 +54,7 @@ _ENGINE_DEFAULTS: dict[str, Any] = {
 _INACTIVE_CLASS_LOG_PRIOR = -1.0e30
 _EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
 _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
+_UNIFY_LOCAL_BUCKET_SIZES_ENV = "RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES"
 _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
 
 
@@ -61,6 +62,13 @@ def _exact_relion_fine_diff2_enabled() -> bool:
     """Use RELION's CUDA fine-score arithmetic unless explicitly disabled."""
 
     setting = os.environ.get(_EXACT_RELION_FINE_DIFF2_ENV, "1").strip().lower()
+    return setting not in {"0", "false", "no", "off"}
+
+
+def _unify_local_bucket_sizes_enabled() -> bool:
+    """Keep the proven single-shape policy unless a performance probe disables it."""
+
+    setting = os.environ.get(_UNIFY_LOCAL_BUCKET_SIZES_ENV, "1").strip().lower()
     return setting not in {"0", "false", "no", "off"}
 
 
@@ -908,7 +916,7 @@ def _run_sparse_pass2_initial_model_estep(
                 # support only. Fine pass-2 reconstruction uses adaptive_fraction
                 # without reapplying maximum_significants.
                 max_significants=-1,
-                unify_local_bucket_sizes=True,
+                unify_local_bucket_sizes=_unify_local_bucket_sizes_enabled(),
                 stats_use_reconstruction_probs=True,
                 class_posterior_sums_from_noise=False,
                 return_profile=return_profile,

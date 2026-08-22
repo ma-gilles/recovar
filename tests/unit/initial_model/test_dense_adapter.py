@@ -979,6 +979,16 @@ def test_exact_relion_fine_diff2_can_be_disabled(monkeypatch):
         assert _exact_relion_fine_diff2_enabled() is False
 
 
+def test_initial_model_local_bucket_unification_can_be_disabled(monkeypatch):
+    from recovar.em.initial_model.dense_adapter import _unify_local_bucket_sizes_enabled
+
+    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES", raising=False)
+    assert _unify_local_bucket_sizes_enabled() is True
+    for value in ("0", "false", "NO", "Off"):
+        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES", value)
+        assert _unify_local_bucket_sizes_enabled() is False
+
+
 def test_dense_initial_model_estep_os0_keeps_coarse_normalization_pose_and_support(monkeypatch):
     from recovar.em.dense_single_volume.helpers.types import make_relion_stats
     from recovar.em.dense_single_volume.k_class import KClassEMResult
