@@ -59,12 +59,12 @@ def test_pair_commands_share_scientific_parameters(tmp_path: Path):
         assert recovar[recovar.index(recovar_flag) + 1] == value
 
 
-def test_default_checkpoints_include_final_iteration(tmp_path: Path):
+def test_default_checkpoints_cover_every_written_iteration(tmp_path: Path):
     args = runner._parse_args(
         ["--fixture-dir", str(tmp_path), "--output-root", str(tmp_path / "out"), "--nr-iter", "8"]
     )
 
-    assert args.checkpoint == [0, 1, 2, 4, 8]
+    assert args.checkpoint == list(range(9))
     assert args.minimum_assignment_accuracy == 0.995
 
 

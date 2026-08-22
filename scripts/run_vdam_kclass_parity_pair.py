@@ -292,7 +292,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--allow-dirty", action="store_true", help="Permit non-qualification diagnostic runs")
     args = parser.parse_args(argv)
     if args.checkpoint is None:
-        args.checkpoint = sorted({0, 1, 2, 4, args.nr_iter})
+        args.checkpoint = list(range(args.nr_iter + 1))
     return args
 
 
