@@ -76,27 +76,37 @@ def relion_cuda_f32_coarse_posterior(
     best = jnp.max(jnp.where(finite, scores_f32, -jnp.inf), axis=1)
     has_finite = jnp.isfinite(best)
     safe_best = jnp.where(has_finite, best, jnp.float32(0.0))
-    shifted = jnp.where(
-        finite,
-        scores_f32 - safe_best[:, None] + jnp.float32(50.0),
-        -jnp.inf,
-    )
-    raw_weights = jnp.where(
-        shifted < jnp.float32(-88.0),
-        jnp.float32(0.0),
-        jnp.exp(shifted),
-    )
-    raw_weights = jnp.where(
-        finite & jnp.isfinite(raw_weights),
-        raw_weights,
-        jnp.float32(0.0),
-    )
-
+    use_native_cuda = False
     if jax.default_backend() == "gpu":
-        from recovar.cuda_backproject import relion_cub_sort_scan_f32
+        from recovar import cuda_backproject
 
-        sorted_weights, cumulative = jax.vmap(relion_cub_sort_scan_f32)(raw_weights)
+        use_native_cuda = cuda_backproject.custom_cuda_requested()
+    if use_native_cuda:
+        exponent_add = jnp.float32(50.0) - safe_best
+        raw_weights = jax.vmap(cuda_backproject.relion_exponentiate_f32)(
+            jnp.where(finite, scores_f32, -jnp.inf),
+            exponent_add,
+        )
+        sorted_weights, cumulative = jax.vmap(
+            cuda_backproject.relion_cub_sort_scan_f32,
+        )(raw_weights)
     else:
+        shifted = jnp.where(
+            finite,
+            scores_f32 - safe_best[:, None] + jnp.float32(50.0),
+            -jnp.inf,
+        )
+        raw_weights = jnp.where(
+            shifted < jnp.float32(-88.0),
+            jnp.float32(0.0),
+            jnp.exp(shifted),
+        )
+        raw_weights = jnp.where(
+            finite & jnp.isfinite(raw_weights),
+            raw_weights,
+            jnp.float32(0.0),
+        )
+
         # Keep a CPU reference path for isolated unit tests. The live opt-in
         # route is CUDA-only and uses RELION's exact CUB primitives above.
         sorted_weights = jnp.sort(raw_weights, axis=1)
@@ -124,11 +134,22 @@ def relion_cuda_f32_coarse_posterior(
         raw_weights >= threshold[:, None]
     )
     safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
-    probabilities = jnp.where(
-        has_mass[:, None],
-        raw_weights / safe_sum_weight[:, None],
-        jnp.float32(0.0),
-    )
+    if use_native_cuda:
+        probabilities = jax.vmap(cuda_backproject.relion_divide_f32)(
+            raw_weights,
+            safe_sum_weight,
+        )
+        probabilities = jnp.where(
+            has_mass[:, None],
+            probabilities,
+            jnp.float32(0.0),
+        )
+    else:
+        probabilities = jnp.where(
+            has_mass[:, None],
+            raw_weights / safe_sum_weight[:, None],
+            jnp.float32(0.0),
+        )
     n_significant = jnp.sum(mask, axis=1).astype(jnp.int32)
     cutoff_count = jnp.where(
         has_mass,
