@@ -140,7 +140,9 @@ def test_local_search_keeps_relion_x_half_mstep_contract():
     assert "mstep_full_half_axis=0 if local_relion_x_half_mstep else None" in source
     assert "mstep_accumulator_shape=(" in source
     assert "relion_backprojector_volume_shape(" in source
-    assert "current_size=cs_for_engine" in source[source.index("mstep_accumulator_shape=(") :]
+    assert "current_size=reconstruction_current_size_for_engine" in source[
+        source.index("mstep_accumulator_shape=(") :
+    ]
 
 
 def test_empty_k1_local_or_adaptive_half_keeps_relion_x_half_shape_contract():
@@ -151,7 +153,8 @@ def test_empty_k1_local_or_adaptive_half_keeps_relion_x_half_shape_contract():
     assert "empty_k1_x_half_mstep = (" in empty_source
     assert "and (use_local or use_adaptive)" in empty_source
     assert "relion_backprojector_volume_shape(" in empty_source
-    assert "current_size=cs_for_engine" in empty_source
+    assert "if model_current_size_for_engine is None" in empty_source
+    assert "else model_current_size_for_engine" in empty_source
     assert "half_volume_accumulator_shape(empty_mstep_accumulator_shape)" in empty_source
     assert "relion_x_half_accumulators_to_public_layout(" in empty_source
     assert "mstep_full_half_axis=0 if empty_k1_x_half_mstep else None" in empty_source

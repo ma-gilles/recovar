@@ -3077,6 +3077,12 @@ def _score_half_local(
     if source_faithful_spectrum_norm and k_class_enabled:
         raise ValueError("RELION source-faithful spectrum normalization is fresh K=1-only")
 
+    reconstruction_current_size_for_engine = (
+        cs_for_engine
+        if model_current_size_for_engine is None
+        else model_current_size_for_engine
+    )
+
     # For local search the per-chunk M-step only sees the cone-restricted
     # rotation set (typically a few thousand rotations per image with high
     # overlap across the chunk) rather than the full ~10⁶-rotation grid at
@@ -3448,7 +3454,7 @@ def _score_half_local(
                 image_batch_size=safe_ibs,
                 rotation_block_size=safe_rbs,
                 current_size=cs_for_engine,
-                reconstruction_current_size=model_current_size_for_engine,
+                reconstruction_current_size=reconstruction_current_size_for_engine,
                 accumulate_noise=False,
                 projection_padding_factor=PROJECTION_PADDING_FACTOR,
                 reconstruction_padding_factor=PADDING_FACTOR,
@@ -3535,7 +3541,7 @@ def _score_half_local(
         image_batch_size=safe_ibs,
         rotation_block_size=safe_rbs,
         current_size=cs_for_engine,
-        reconstruction_current_size=model_current_size_for_engine,
+        reconstruction_current_size=reconstruction_current_size_for_engine,
         accumulate_noise=local_accumulate_noise,
         projection_padding_factor=PROJECTION_PADDING_FACTOR,
         reconstruction_padding_factor=PADDING_FACTOR,
@@ -3657,7 +3663,7 @@ def _score_half_local(
             relion_backprojector_volume_shape(
                 experiment_dataset.volume_shape,
                 PADDING_FACTOR,
-                current_size=model_current_size_for_engine,
+                current_size=reconstruction_current_size_for_engine,
             )
             if local_relion_x_half_mstep
             else None
@@ -6732,6 +6738,12 @@ def _run_relion_iteration_loop(
                 )
             image_current_size = int(unique_remapped_sizes[0])
         cs_for_engine = image_current_size if image_current_size < cryo.image_shape[0] else None
+        if image_current_size != int(current_size) and model_current_size_for_engine is None:
+            # ``None`` normally means full-box support, but the EM engines also
+            # interpret it as "reuse the particle-image score cutoff". Keep
+            # the full model size explicit when optics remapping makes those
+            # two cutoffs differ.
+            model_current_size_for_engine = int(current_size)
         if image_current_size != int(current_size):
             logger.info(
                 "RELION optics current-size remap: model_current_size=%d "
@@ -7221,7 +7233,11 @@ def _run_relion_iteration_loop(
                     relion_backprojector_volume_shape(
                         experiment_datasets[k].volume_shape,
                         PADDING_FACTOR,
-                        current_size=model_current_size_for_engine,
+                        current_size=(
+                            cs_for_engine
+                            if model_current_size_for_engine is None
+                            else model_current_size_for_engine
+                        ),
                     )
                     if empty_k1_x_half_mstep
                     else None
