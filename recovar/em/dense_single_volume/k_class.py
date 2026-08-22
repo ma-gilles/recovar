@@ -876,6 +876,11 @@ def _run_sparse_k_class_adaptive_pass2(
         from recovar import cuda_backproject
 
         use_k1_fine_diff2_ffi = cuda_backproject.cuda_available()
+    source_faithful_spectrum_norm = bool(
+        base_engine_kwargs.get("source_faithful_spectrum_norm", False)
+    )
+    if source_faithful_spectrum_norm and n_classes != 1:
+        raise ValueError("source-faithful powerClass normalization is K=1-only")
 
     def _class_rotation_prior(class_index: int):
         class_prior = base_engine_kwargs.get("class_rotation_log_prior")
@@ -947,6 +952,7 @@ def _run_sparse_k_class_adaptive_pass2(
         bpref_device_signature_active=bool(
             base_engine_kwargs.get("bpref_device_signature_active", False)
         ),
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
     preserve_bpref_particle_order = _apply_bpref_particle_order_policy(
         common,
@@ -2010,6 +2016,11 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
     n_images = int(coarse_class_assignments.shape[0])
     relion_projector_half_by_class = pass2_kwargs.get("relion_projector_half")
     relion_projector_r_max = pass2_kwargs.get("relion_projector_r_max")
+    source_faithful_spectrum_norm = bool(
+        pass2_kwargs.get("source_faithful_spectrum_norm", False)
+    )
+    if source_faithful_spectrum_norm and n_classes != 1:
+        raise ValueError("source-faithful powerClass normalization is K=1-only")
 
     def _class_rotation_prior(class_index: int):
         del class_index
@@ -2043,6 +2054,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         bpref_device_signature_active=bool(
             pass2_kwargs.get("bpref_device_signature_active", False)
         ),
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
     _apply_bpref_particle_order_policy(
         common,

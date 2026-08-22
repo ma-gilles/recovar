@@ -144,6 +144,57 @@ def test_norm_correction_power_uses_relion_powerclass_once_or_not_at_all():
     )
 
 
+def test_local_norm_correction_can_use_relion_powerclass_spectrum_tail():
+    rng = np.random.default_rng(21084)
+    height = 32
+    current_size = 15
+    processed = (
+        rng.normal(size=(2, height, height // 2 + 1))
+        + 1j * rng.normal(size=(2, height, height // 2 + 1))
+    ).astype(np.complex64) * np.float32(height * height)
+    processed = jnp.asarray(processed.reshape(2, -1))
+    shell_indices = jnp.asarray(make_relion_noise_shell_indices_half((height, height)))
+    zero_support = jnp.zeros(2, dtype=jnp.float32)
+    valid_images = jnp.ones(2, dtype=bool)
+
+    historical = _norm_correction_image_power_per_image(
+        processed,
+        zero_support,
+        shell_indices,
+        valid_images,
+        current_size // 2,
+        shell_count=height // 2 + 1,
+        image_shape=(height, height),
+        current_size=current_size,
+    )
+    source_faithful = _norm_correction_image_power_per_image(
+        processed,
+        zero_support,
+        shell_indices,
+        valid_images,
+        current_size // 2,
+        shell_count=height // 2 + 1,
+        image_shape=(height, height),
+        current_size=current_size,
+        source_faithful_spectrum_norm=True,
+    )
+
+    expected_historical = _relion_cuda_powerclass_highres_norm_units(
+        processed,
+        image_shape=(height, height),
+        current_size=current_size,
+    )
+    expected_source = _relion_cuda_powerclass_spectrum_highres_norm_units(
+        processed,
+        image_shape=(height, height),
+        current_size=current_size,
+    )
+    np.testing.assert_array_equal(np.asarray(historical), np.asarray(expected_historical))
+    np.testing.assert_array_equal(np.asarray(source_faithful), np.asarray(expected_source))
+    assert np.asarray(source_faithful).dtype == np.float64
+    assert np.any(np.asarray(source_faithful) != np.asarray(historical, dtype=np.float64))
+
+
 def test_powerclass_spectrum_norm_sums_shell_bins_in_host_precision():
     height = 8
     current_size = 4

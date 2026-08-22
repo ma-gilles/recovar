@@ -42,6 +42,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_powerclass_highres_norm_units,
+    _relion_cuda_powerclass_spectrum_highres_norm_units,
 )
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_weighted_sums,
@@ -126,6 +127,7 @@ def _norm_correction_image_power_per_image(
     image_shape,
     current_size,
     include_unweighted_high_shell: bool = True,
+    source_faithful_spectrum_norm: bool = False,
 ):
     """Return RELION norm-correction image power for one local class.
 
@@ -146,7 +148,11 @@ def _norm_correction_image_power_per_image(
         shell_count=shell_count,
         include_unweighted_high_shell=include_unweighted_high_shell,
     )
-    per_image = jnp.sum(pixel_power * power_mass, axis=-1).astype(jnp.float32)
+    norm_dtype = jnp.float64 if source_faithful_spectrum_norm else jnp.float32
+    per_image = jnp.sum(
+        (pixel_power * power_mass).astype(norm_dtype),
+        axis=-1,
+    ).astype(norm_dtype)
     if (
         current_size is None
         or projection_max_r == "auto"
@@ -159,15 +165,20 @@ def _norm_correction_image_power_per_image(
     valid_shell = (shell_indices_half >= 0) & (shell_indices_half < int(shell_count))
     unmodeled_shell = valid_shell & (shell_indices_half > int(projection_max_r))
     generic_high = jnp.sum(
-        jnp.where(unmodeled_shell[None, :], pixel_power, 0.0),
+        jnp.where(unmodeled_shell[None, :], pixel_power, 0.0).astype(norm_dtype),
         axis=-1,
-    ).astype(jnp.float32)
-    relion_high = _relion_cuda_powerclass_highres_norm_units(
+    ).astype(norm_dtype)
+    relion_high_fn = (
+        _relion_cuda_powerclass_spectrum_highres_norm_units
+        if source_faithful_spectrum_norm
+        else _relion_cuda_powerclass_highres_norm_units
+    )
+    relion_high = relion_high_fn(
         processed_noise_power_half,
         image_shape=image_shape,
         current_size=current_size,
-    )
-    full_mass = jnp.asarray(valid_image_mask, dtype=jnp.float32)
+    ).astype(norm_dtype)
+    full_mass = jnp.asarray(valid_image_mask, dtype=norm_dtype)
     per_image = jax.lax.optimization_barrier(per_image)
     return per_image + full_mass * (relion_high - generic_high)
 
@@ -609,6 +620,7 @@ def _project_local_half_spectrum(
         "n_shells",
         "norm_current_size",
         "include_unweighted_norm_high_shell",
+        "source_faithful_spectrum_norm",
         "has_normalization_log_z",
         "has_normalization_log_evidence",
         "has_reconstruction_probability_threshold",
@@ -710,6 +722,7 @@ def run_local_bucket_big_jit(
     n_shells: int,
     norm_current_size: int | None,
     include_unweighted_norm_high_shell: bool,
+    source_faithful_spectrum_norm: bool = False,
     has_normalization_log_z: bool,
     has_normalization_log_evidence: bool,
     has_reconstruction_probability_threshold: bool,
@@ -1283,7 +1296,8 @@ def run_local_bucket_big_jit(
         relion_x_half_mstep=mstep_relion_x_half,
     )
 
-    bucket_norm_correction = jnp.zeros((batch_size,), dtype=jnp.float32)
+    norm_correction_dtype = jnp.float64 if source_faithful_spectrum_norm else jnp.float32
+    bucket_norm_correction = jnp.zeros((batch_size,), dtype=norm_correction_dtype)
     if accumulate_noise:
         support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
         support_mass = jnp.where(valid_image_mask, support_mass, 0.0)
@@ -1300,6 +1314,7 @@ def run_local_bucket_big_jit(
             image_shape=image_shape,
             current_size=norm_current_size,
             include_unweighted_high_shell=include_unweighted_norm_high_shell,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
         batch_img_power = jnp.sum(
             (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
@@ -1358,7 +1373,9 @@ def run_local_bucket_big_jit(
             ctf_probs,
             noise_variance_for_noise,
         )
-        bucket_norm_correction = jnp.where(valid_image_mask, bucket_norm_correction, 0.0).astype(jnp.float32)
+        bucket_norm_correction = jnp.where(valid_image_mask, bucket_norm_correction, 0.0).astype(
+            norm_correction_dtype
+        )
 
     reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
     if return_mstep_tensors:

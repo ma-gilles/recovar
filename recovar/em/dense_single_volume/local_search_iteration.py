@@ -220,6 +220,7 @@ def _run_local_search_iteration(
     apply_max_significants_to_support=False,
     stats_use_reconstruction_probs=False,
     score_only=False,
+    source_faithful_spectrum_norm=False,
     rotation_grid_mstep_rotations=None,
     generate_relion_mstep_rotations=False,
 ):
@@ -293,6 +294,8 @@ def _run_local_search_iteration(
         selector_time = 0.0
 
     if class_log_priors is not None:
+        if source_faithful_spectrum_norm:
+            raise ValueError("RELION source-faithful spectrum normalization is fresh K=1-only")
         local_n_classes = int(np.asarray(class_log_priors).size)
     else:
         local_n_classes = 1
@@ -498,6 +501,7 @@ def _run_local_search_iteration(
             return_significant_counts=return_significant_counts,
             stats_use_reconstruction_probs=stats_use_reconstruction_probs,
             score_only=score_only,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
 
     result = _unpack_local_search_engine_outputs(

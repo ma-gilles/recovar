@@ -22,6 +22,7 @@ from recovar.em.dense_single_volume.k_class import (
     _compact_sparse_pass2_preferred_over_dense,
     _dense_engine_kwargs_for_class,
     _expand_subset_noise_stats,
+    _run_sparse_firstiter_global_winner_subset_pass2,
     _run_sparse_k_class_adaptive_pass2,
     _strict_exact_fine_gaussian_requested,
     _zero_subset_noise_stats,
@@ -1298,6 +1299,92 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
     )
 
 
+def test_sparse_firstiter_k1_adapter_forwards_source_faithful_spectrum_norm(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
+
+    calls = []
+
+    class TinyDataset:
+        volume_shape = (2, 2, 2)
+
+        def __init__(self, indices=None):
+            self.indices = (
+                np.arange(2, dtype=np.int64)
+                if indices is None
+                else np.asarray(indices, dtype=np.int64)
+            )
+            self.n_units = int(self.indices.size)
+            self.n_images = int(self.indices.size)
+
+        def subset(self, indices):
+            return TinyDataset(self.indices[np.asarray(indices, dtype=np.int64)])
+
+    def fake_compute_pass2_stats_sparse(
+        dataset,
+        volume,
+        _mean_variance,
+        _noise_variance,
+        _translations,
+        _significant_sample_indices,
+        **kwargs,
+    ):
+        calls.append(kwargs)
+        n_images = int(dataset.n_units)
+        stats = make_relion_stats(
+            log_evidence_per_image=np.zeros(n_images, dtype=np.float32),
+            best_log_score_per_image=np.zeros(n_images, dtype=np.float32),
+            max_posterior_per_image=np.ones(n_images, dtype=np.float32),
+            rotation_posterior_sums=np.zeros(1, dtype=np.float32),
+        )
+        return (
+            jnp.zeros_like(volume),
+            jnp.zeros_like(jnp.real(volume)),
+            np.zeros(n_images, dtype=np.int32),
+            np.repeat(np.eye(3, dtype=np.float32)[None], n_images, axis=0),
+            np.zeros((n_images, 2), dtype=np.float32),
+            np.zeros(n_images, dtype=np.int32),
+            stats,
+        )
+
+    monkeypatch.setattr(
+        oversampling_module,
+        "compute_pass2_stats_sparse",
+        fake_compute_pass2_stats_sparse,
+    )
+
+    _run_sparse_firstiter_global_winner_subset_pass2(
+        TinyDataset(),
+        jnp.zeros((1, 8), dtype=jnp.complex64),
+        jnp.ones(8, dtype=jnp.float32),
+        jnp.ones(1, dtype=jnp.float32),
+        np.zeros((1, 2), dtype=np.float32),
+        np.eye(3, dtype=np.float32)[None],
+        None,
+        np.zeros((1, 2), dtype=np.float32),
+        np.zeros(1, dtype=np.int64),
+        np.zeros(1, dtype=np.int64),
+        [[np.asarray([0], dtype=np.int32)] * 2],
+        "linear_interp",
+        coarse_result=_firstiter_probe_result(
+            [0, 0],
+            per_class_hard=np.zeros((1, 2), dtype=np.int32),
+            n_rot=1,
+        ),
+        coarse_class_assignments=np.zeros(2, dtype=np.int32),
+        n_rot_coarse=1,
+        n_fine_trans=1,
+        healpix_order=0,
+        oversampling_order=1,
+        class_log_priors=np.zeros(1, dtype=np.float64),
+        accumulate_noise=False,
+        return_best_pose_details=False,
+        pass2_kwargs={"source_faithful_spectrum_norm": True},
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["source_faithful_spectrum_norm"] is True
+
+
 def test_lazy_k_class_adaptive_mask_matches_dense_blocks_without_materializing():
     n_classes = 2
     n_images = 3
@@ -1581,6 +1668,89 @@ def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypa
     np.testing.assert_allclose(calls[2][1]["normalization_other_score_log_z"], other_log_z)
     np.testing.assert_allclose(calls[3][1]["normalization_log_z"], global_log_z)
     np.testing.assert_allclose(calls[4][1]["normalization_log_z"], global_log_z)
+
+
+def test_sparse_k1_adapter_forwards_source_faithful_spectrum_norm(monkeypatch):
+    """The K=1-through-K-class adapter must not drop the fresh-run guard."""
+
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
+    from recovar.em.sampling import rotation_grid_size
+
+    calls = []
+    n_images = 2
+    n_coarse_rot = rotation_grid_size(0)
+    n_fine_rot = rotation_grid_size(1)
+
+    class TinyDataset:
+        n_units = n_images
+
+    def fake_compute_pass2_stats_sparse(
+        _dataset,
+        volume,
+        _mean_variance,
+        _noise_variance,
+        _translations,
+        _significant_sample_indices,
+        **kwargs,
+    ):
+        calls.append(kwargs)
+        stats = make_relion_stats(
+            log_evidence_per_image=np.zeros(n_images, dtype=np.float64),
+            best_log_score_per_image=np.zeros(n_images, dtype=np.float64),
+            max_posterior_per_image=np.ones(n_images, dtype=np.float32),
+            rotation_posterior_sums=np.zeros(n_coarse_rot, dtype=np.float32),
+        )
+        return (
+            jnp.zeros_like(volume),
+            jnp.zeros_like(jnp.real(volume)),
+            np.zeros(n_images, dtype=np.int32),
+            np.repeat(np.eye(3, dtype=np.float32)[None], n_images, axis=0),
+            np.zeros((n_images, 2), dtype=np.float32),
+            np.zeros(n_images, dtype=np.int32),
+            stats,
+            np.zeros(n_images, dtype=np.float64),
+        )
+
+    monkeypatch.setattr(
+        oversampling_module,
+        "compute_pass2_stats_sparse",
+        fake_compute_pass2_stats_sparse,
+    )
+    monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: False)
+
+    _run_sparse_k_class_adaptive_pass2(
+        TinyDataset(),
+        jnp.zeros((1, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(4, dtype=jnp.float32),
+        np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
+        np.zeros((1, 2), dtype=np.float32),
+        np.repeat(np.eye(3, dtype=np.float32)[None], n_fine_rot, axis=0),
+        fine_mstep_rotations_np=None,
+        rot_parent_map_np=np.repeat(
+            np.arange(n_coarse_rot, dtype=np.int64),
+            n_fine_rot // n_coarse_rot,
+        ),
+        fine_translations_np=np.zeros((2, 2), dtype=np.float32),
+        trans_parent_map_np=np.asarray([0, 0], dtype=np.int64),
+        sig_sample_indices_by_class=[
+            [np.asarray([0], dtype=np.int32)] * n_images,
+        ],
+        disc_type="linear_interp",
+        class_log_priors=np.zeros(1, dtype=np.float64),
+        accumulate_noise=False,
+        return_best_pose_details=False,
+        oversampling_order=1,
+        random_perturbation=0.0,
+        engine_kwargs={
+            "relion_exact_fine_gaussian": False,
+            "source_faithful_spectrum_norm": True,
+        },
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["source_faithful_spectrum_norm"] is True
 
 
 def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():

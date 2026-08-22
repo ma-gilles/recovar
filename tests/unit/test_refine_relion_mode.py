@@ -7044,6 +7044,9 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
         image_pre_shifts=np.array([[0.25, -0.5], [-0.75, 0.5], [0.0, 0.0]], dtype=np.float32),
         max_significants=-1,
         return_reconstruction_sample_indices=True,
+        # Exercise the fresh-K=1 normalization route in both the fused bucket
+        # kernel and the diagnostic split path.
+        source_faithful_spectrum_norm=True,
     )
 
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", raising=False)

@@ -2972,6 +2972,18 @@ def _fresh_k1_direct_noise_default(
     return bool(preserve_bpref_particle_order and relion_exact_bpref_operands)
 
 
+def _relion_powerclass_spectrum_norm_enabled(
+    *,
+    fresh_k1_guard: bool,
+) -> bool:
+    """Use RELION's shell spectrum by default only in the fresh K=1 guard."""
+
+    return _env_flag_enabled(
+        _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
+        default=bool(fresh_k1_guard),
+    )
+
+
 def _relion_wavg_direct_modes(
     *,
     accumulate_noise: bool,
@@ -4566,6 +4578,7 @@ def _weighted_image_power_shells_and_per_image(
     norm_unweighted_high_shell=None,
     include_unweighted_high_shell: bool = True,
     valid_image_mask=None,
+    source_faithful_spectrum_norm: bool | None = None,
 ):
     """Accumulate image power for noise shells and per-image norm correction.
 
@@ -4595,10 +4608,12 @@ def _weighted_image_power_shells_and_per_image(
     weighted_pixel_power = pixel_power * shell_mass
     weighted_half = jnp.sum(weighted_pixel_power, axis=0).astype(jnp.float32)
     weighted_shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
-    source_faithful_spectrum_norm = _env_flag_enabled(
-        _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
-        default=False,
-    )
+    if source_faithful_spectrum_norm is None:
+        source_faithful_spectrum_norm = _env_flag_enabled(
+            _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
+            default=False,
+        )
+    source_faithful_spectrum_norm = bool(source_faithful_spectrum_norm)
     deterministic_norm_reduction = source_faithful_spectrum_norm or _env_flag_enabled(
         "RECOVAR_K1_RELION_DETERMINISTIC_NORM_REDUCTION",
         default=False,
@@ -9259,6 +9274,8 @@ def _maybe_dump_norm_residual_inputs(
     scale_correction_pixel_mask,
     scale_shell_indices,
     bucket_group_ids,
+    relion_wavg_atomic_diff2_rectangle=None,
+    relion_wavg_atomic_rectangle_shell_indices=None,
 ):
     """Capture norm and group-scale AA inputs before any global reduction.
 
@@ -9451,6 +9468,28 @@ def _maybe_dump_norm_residual_inputs(
         if bucket_group_ids is None
         else np.asarray(bucket_group_ids, dtype=np.int64)
     )
+    atomic_rectangle_np = (
+        None
+        if relion_wavg_atomic_diff2_rectangle is None
+        else np.asarray(relion_wavg_atomic_diff2_rectangle, dtype=np.float32)
+    )
+    atomic_rectangle_shells_np = (
+        None
+        if relion_wavg_atomic_rectangle_shell_indices is None
+        else np.asarray(
+            relion_wavg_atomic_rectangle_shell_indices,
+            dtype=np.int32,
+        ).reshape(-1)
+    )
+    if (atomic_rectangle_np is None) != (atomic_rectangle_shells_np is None):
+        raise ValueError(
+            "ordinary Wavg rectangle values and shell labels must be supplied together"
+        )
+    if atomic_rectangle_np is not None and atomic_rectangle_np.shape != (
+        local_indices.size,
+        atomic_rectangle_shells_np.size,
+    ):
+        raise ValueError("ordinary Wavg rectangle diff2 topology changed")
     original_indices = _original_indices_for_local(experiment_dataset, local_indices)
     os.makedirs(dump_dir, exist_ok=True)
     context_half = int(_bpref_contribution_context["half"])
@@ -9472,8 +9511,7 @@ def _maybe_dump_norm_residual_inputs(
             scale_shell_indices_np[valid_scale_shell],
             aa_per_pixel_np[selected_row, valid_scale_shell].astype(np.float64),
         )
-        np.savez_compressed(
-            out_path,
+        payload = dict(
             schema=np.asarray("recovar-k1-norm-residual-inputs-v3"),
             iteration=np.int64(context_iteration),
             half=np.int64(context_half),
@@ -9523,6 +9561,17 @@ def _maybe_dump_norm_residual_inputs(
             recon_window_indices=np.asarray(recon_window_indices, dtype=np.int32),
             wavg_window_indices=np.asarray(score_window_indices, dtype=np.int32),
         )
+        if atomic_rectangle_np is not None:
+            rectangle_pixels = atomic_rectangle_np[bucket_row]
+            valid_rectangle = atomic_rectangle_shells_np >= 0
+            payload.update(
+                wavg_diff2_atomic_rectangle_per_pixel=rectangle_pixels,
+                wavg_diff2_atomic_rectangle_shell_indices=atomic_rectangle_shells_np,
+                wavg_diff2_atomic_rectangle_per_image=np.float64(
+                    np.sum(rectangle_pixels[valid_rectangle], dtype=np.float64)
+                ),
+            )
+        np.savez_compressed(out_path, **payload)
     return int(target_rows.size)
 
 
@@ -11070,6 +11119,7 @@ def compute_pass2_stats_sparse_bucketed(
     bpref_class_index: int = 0,
     include_unweighted_norm_high_shell: bool = True,
     preserve_bpref_particle_order: bool = False,
+    source_faithful_spectrum_norm: bool = False,
 ):
     """Bucketed batched implementation of sparse pass-2 oversampling.
 
@@ -11734,12 +11784,20 @@ def compute_pass2_stats_sparse_bucketed(
         "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS",
         default=False,
     )
+    source_faithful_spectrum_norm = _relion_powerclass_spectrum_norm_enabled(
+        fresh_k1_guard=source_faithful_spectrum_norm,
+    )
     if relion_exact_bpref_operands:
         if use_float64_scoring:
             raise ValueError("exact RELION BPref operands require the native float32 path")
         logger.info(
             "STRICT-PARITY: using RELION binary64-to-float32 inverse-noise and "
             "fused translate-then-weight BPref operands"
+        )
+    if source_faithful_spectrum_norm:
+        logger.info(
+            "STRICT-PARITY: normalization high shell consumes RELION's "
+            "powerClass shell spectrum"
         )
 
     if accumulate_noise:
@@ -12249,10 +12307,7 @@ def compute_pass2_stats_sparse_bucketed(
                 current_size=current_size,
             )
         if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
-            if _env_flag_enabled(
-                _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
-                default=False,
-            ):
+            if source_faithful_spectrum_norm:
                 relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
                     processed_score_half_for_noise,
                     image_shape=image_shape,
@@ -12285,9 +12340,19 @@ def compute_pass2_stats_sparse_bucketed(
         raw_translated_wavg_for_atomic = None
         raw_translated_wavg_rectangle = None
         relion_wavg_rectangle = None
+        diagnostic_wavg_atomic_capture = bool(
+            accumulate_noise
+            and _env_flag_enabled(
+                "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS",
+                default=False,
+            )
+        )
         relion_wavg_atomic_scale_aa = bool(
             accumulate_noise
-            and noise_scale_correction_aa_total is not None
+            and (
+                noise_scale_correction_aa_total is not None
+                or diagnostic_wavg_atomic_capture
+            )
             and _env_flag_enabled(
                 _RELION_WAVG_ATOMIC_SCALE_AA_ENV,
                 default=_fresh_k1_direct_noise_default(
@@ -13675,6 +13740,7 @@ def compute_pass2_stats_sparse_bucketed(
                     norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
                     norm_unweighted_high_shell=relion_norm_high_shell,
                     include_unweighted_high_shell=include_unweighted_norm_high_shell,
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 )
                 if translated_wavg_norm and not relion_wavg_atomic_direct_norm:
                     weighted_img_per_image = _replace_untranslated_low_shell_norm_power(
@@ -14634,6 +14700,7 @@ def compute_pass2_stats_sparse_bucketed(
                 norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
                 norm_unweighted_high_shell=relion_norm_high_shell,
                 include_unweighted_high_shell=include_unweighted_norm_high_shell,
+                source_faithful_spectrum_norm=source_faithful_spectrum_norm,
             )
             if translated_wavg_norm and not relion_wavg_atomic_direct_norm:
                 weighted_img_per_image = _replace_untranslated_low_shell_norm_power(
@@ -14776,6 +14843,16 @@ def compute_pass2_stats_sparse_bucketed(
                 scale_correction_pixel_mask=scale_correction_pixel_mask,
                 scale_shell_indices=shell_indices_noise,
                 bucket_group_ids=bucket_group_ids,
+                relion_wavg_atomic_diff2_rectangle=(
+                    None
+                    if relion_wavg_atomic_scale_triplet_pixels_np is None
+                    else relion_wavg_atomic_scale_triplet_pixels_np[:, :, 2]
+                ),
+                relion_wavg_atomic_rectangle_shell_indices=(
+                    None
+                    if relion_wavg_atomic_scale_triplet_pixels_np is None
+                    else relion_wavg_rectangle.shell_indices
+                ),
             )
             if norm_residual_dump_count and _env_flag_enabled(
                 _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV,

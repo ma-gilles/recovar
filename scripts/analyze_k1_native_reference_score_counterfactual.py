@@ -25,6 +25,7 @@ from scripts.analyze_em_k1_live_reference_counterfactual import (
     relion_reference_on_recovar_window,
     relion_values_on_recovar_window,
 )
+from scripts.analyze_k1_native_coarse_boundary import load_native_coarse_capture
 from scripts.analyze_k1_coarse_operand_boundary_v3 import (
     _rotation_key_to_recovar,
 )
@@ -74,6 +75,42 @@ def _relative_l2(candidate: np.ndarray, reference: np.ndarray) -> float:
     candidate = np.asarray(candidate).reshape(-1).astype(np.complex128)
     reference = np.asarray(reference).reshape(-1).astype(np.complex128)
     return float(np.linalg.norm(candidate - reference) / max(np.linalg.norm(reference), np.finfo(float).tiny))
+
+
+def _complex_operand_stats(candidate: np.ndarray, reference: np.ndarray) -> dict[str, float | int]:
+    """Compare same-shaped complex64 operands without discarding their bit patterns."""
+
+    candidate = np.asarray(candidate, dtype=np.complex64)
+    reference = np.asarray(reference, dtype=np.complex64)
+    _require(candidate.shape == reference.shape and candidate.size > 0, "complex operand topology mismatch")
+    residual = candidate.astype(np.complex128) - reference.astype(np.complex128)
+    return {
+        "count": int(candidate.size),
+        "bitwise_equal_count": int(
+            np.count_nonzero(candidate.view(np.uint64) == reference.view(np.uint64))
+        ),
+        "relative_l2": _relative_l2(candidate, reference),
+        "max_abs": float(np.max(np.abs(residual))),
+    }
+
+
+def _rotation_matrix_stats(native_projectors: np.ndarray, recovar_rotations: np.ndarray) -> dict[str, float | int]:
+    """Compare RELION projector matrices with RECOVAR's transposed convention."""
+
+    native = np.asarray(native_projectors, dtype=np.float32)
+    recovar = np.asarray(recovar_rotations, dtype=np.float32)
+    _require(native.shape == recovar.shape and native.ndim == 3, "rotation topology mismatch")
+    expected_native = np.swapaxes(recovar, -1, -2)
+    residual = native.astype(np.float64) - expected_native.astype(np.float64)
+    return {
+        "matrix_count": int(native.shape[0]),
+        "element_count": int(native.size),
+        "bitwise_equal_count": int(
+            np.count_nonzero(native.view(np.uint32) == expected_native.view(np.uint32))
+        ),
+        "relative_l2": _relative_l2(native, expected_native),
+        "max_abs": float(np.max(np.abs(residual))),
+    }
 
 
 def _pixel_weight_shell_stats(
@@ -255,9 +292,28 @@ def _parse_parent(value: str) -> tuple[int, int]:
     return parent
 
 
+def _authoritative_native_raw_diff2(components, operand, native_coarse) -> np.ndarray:
+    """Choose raw scores without treating a rejected component capture as an oracle."""
+
+    if native_coarse is None:
+        return components.raw_diff2
+    _require(int(native_coarse.header[2]) == operand.stack_index, "coarse stack mismatch")
+    _require(int(native_coarse.header[3]) == operand.part_id, "coarse particle mismatch")
+    _require(
+        native_coarse.raw_diff2.size == components.raw_diff2.size,
+        "coarse/component score topology mismatch",
+    )
+    return native_coarse.raw_diff2.reshape(components.raw_diff2.shape)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--components", type=Path, required=True)
+    parser.add_argument(
+        "--native-coarse",
+        type=Path,
+        help="Authoritative coarse-v1 scores; component capture remains metadata-only",
+    )
     parser.add_argument("--operands", type=Path, required=True)
     parser.add_argument("--recovar", type=Path, required=True)
     parser.add_argument("--native-parent", type=_parse_parent)
@@ -267,6 +323,7 @@ def main() -> None:
     parser.add_argument("--uniform-pixel-weight-factor", type=float)
     parser.add_argument("--noise-report-json", type=Path)
     parser.add_argument("--noise-shell-max", type=int)
+    parser.add_argument("--physical-image-size", type=int, default=128)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     _require(
@@ -282,6 +339,9 @@ def main() -> None:
     _require(cuda_backproject.cuda_available(), "custom CUDA extension is unavailable")
     components = load_components(args.components)
     operand = load_operand(args.operands)
+    native_coarse = (
+        None if args.native_coarse is None else load_native_coarse_capture(args.native_coarse)
+    )
     with np.load(args.recovar, allow_pickle=False) as payload:
         recovar = {name: np.asarray(payload[name]) for name in payload.files}
 
@@ -294,7 +354,12 @@ def main() -> None:
     pixel_weight = np.asarray(recovar["coarse_gaussian_pixel_weight"], dtype=np.float32).reshape(1, -1)
     initial_diff2 = np.asarray(recovar["coarse_gaussian_initial_diff2"], dtype=np.float32).reshape(1)
     translation_source = np.asarray(recovar["translation_phase_source"], dtype=np.float64)
-    image_shape = (128, 128)
+    _require(args.physical_image_size > 0, "physical image size must be positive")
+    image_shape = (args.physical_image_size, args.physical_image_size)
+    _require(
+        current_size <= args.physical_image_size,
+        "current score size exceeds the physical image size",
+    )
 
     angles = _relion_translation_angles_f32(translation_source, image_shape)
     shifted = cuda_backproject.relion_translate_score_f32(
@@ -331,8 +396,11 @@ def main() -> None:
         components.translations,
         np.asarray(recovar["translations"], dtype=np.float64),
     )
+    native_raw_diff2 = _authoritative_native_raw_diff2(
+        components, operand, native_coarse
+    )
     mapped_native_diff2 = _map_relion_table(
-        components.raw_diff2,
+        native_raw_diff2,
         n_directions=n_directions,
         n_psi=n_psi,
         relion_to_recovar_translation=translation_permutation,
@@ -340,6 +408,10 @@ def main() -> None:
     rotation_ids = np.asarray(
         [_rotation_key_to_recovar(key, n_directions, n_psi) for key in operand.rotation_keys],
         dtype=np.int64,
+    )
+    rotation_matrix_stats = _rotation_matrix_stats(
+        operand.euler_matrices,
+        np.asarray(recovar["rotations"], dtype=np.float32)[rotation_ids],
     )
     selected_native_diff2 = mapped_native_diff2[rotation_ids]
     _require(np.all(selected_native_diff2 != RELION_INVALID_DIFF2), "captured rotations contain inactive candidates")
@@ -357,6 +429,25 @@ def main() -> None:
     native_shifted_ordered = np.empty_like(native_shifted)
     native_shifted_ordered[translation_permutation] = native_shifted
     expected_shifted = (-float(image_shape[0] ** 2) * native_shifted_ordered).astype(np.complex64)
+    native_unshifted = relion_values_on_recovar_window(
+        (operand.image_real.astype(np.float32) + 1j * operand.image_imag.astype(np.float32))[
+            np.newaxis,
+            :,
+        ],
+        score_indices,
+        full_image_size=image_shape[0],
+        current_size=current_size,
+    )[0]
+    expected_unshifted = (-float(image_shape[0] ** 2) * native_unshifted).astype(np.complex64)
+    native_unshifted_translated_via_recovar = np.asarray(
+        cuda_backproject.relion_translate_score_f32(
+            jnp.asarray(expected_unshifted.reshape(1, -1)),
+            jnp.asarray(angles, dtype=jnp.float32),
+            jnp.asarray(score_indices, dtype=jnp.int32),
+            image_shape,
+        ),
+        dtype=np.complex64,
+    ).reshape(1, translation_source.shape[0], -1)[0]
     native_correction = relion_values_on_recovar_window(
         operand.correction[np.newaxis, :],
         score_indices,
@@ -394,6 +485,14 @@ def main() -> None:
     )
     native_reference_native_image_and_weight = score_native_reference(
         expected_shifted,
+        expected_weight,
+    )
+    native_reference_native_unshifted_recovar_translation = score_native_reference(
+        native_unshifted_translated_via_recovar,
+        pixel_weight,
+    )
+    native_reference_native_unshifted_recovar_translation_and_weight = score_native_reference(
+        native_unshifted_translated_via_recovar,
         expected_weight,
     )
     high_shell_corrected_weight = None
@@ -454,25 +553,31 @@ def main() -> None:
     active_pixels = pixel_weight[0] > 0.0
     shifted_active = np.asarray(shifted[0])[:, active_pixels]
     expected_shifted_active = expected_shifted[:, active_pixels]
+    unshifted_active = unshifted[active_pixels]
+    expected_unshifted_active = expected_unshifted[active_pixels]
+    native_unshifted_translated_active = native_unshifted_translated_via_recovar[:, active_pixels]
     report = {
         "schema": "recovar.em.k1_native_reference_score_counterfactual.v1",
         "particle": {
             "part_id": components.part_id,
             "stack_index_one_based": components.stack_index,
             "original_index_zero_based": int(recovar["original_index"]),
+            "physical_image_size": int(args.physical_image_size),
         },
         "rotation_ids_recovar": rotation_ids.tolist(),
         "translation_mapping": translation_report,
         "operand_equality": {
-            "active_translated_image_bitwise_equal_count": int(
-                np.count_nonzero(
-                    shifted_active.view(np.uint64)
-                    == expected_shifted_active.view(np.uint64)
-                )
+            "rotation_matrices": rotation_matrix_stats,
+            "active_unshifted_image": _complex_operand_stats(
+                unshifted_active,
+                expected_unshifted_active,
             ),
-            "active_translated_image_count": int(expected_shifted_active.size),
-            "active_translated_image_relative_l2": _relative_l2(
+            "active_recovar_translated_image": _complex_operand_stats(
                 shifted_active,
+                expected_shifted_active,
+            ),
+            "active_native_unshifted_recovar_translation": _complex_operand_stats(
+                native_unshifted_translated_active,
                 expected_shifted_active,
             ),
             "pixel_weight_bitwise_equal_count": int(
@@ -512,6 +617,14 @@ def main() -> None:
                 native_reference_native_image_and_weight,
                 selected_native_diff2,
             ),
+            "native_reference_native_unshifted_recovar_translation_vs_native": _centered_stats(
+                native_reference_native_unshifted_recovar_translation,
+                selected_native_diff2,
+            ),
+            "native_reference_native_unshifted_recovar_translation_and_weight_vs_native": _centered_stats(
+                native_reference_native_unshifted_recovar_translation_and_weight,
+                selected_native_diff2,
+            ),
         },
         "artifacts": {
             "components": str(args.components.resolve()),
@@ -522,6 +635,12 @@ def main() -> None:
             "recovar_sha256": _sha256(args.recovar),
         },
     }
+    if native_coarse is not None:
+        report["artifacts"]["native_coarse"] = str(args.native_coarse.resolve())
+        report["artifacts"]["native_coarse_sha256"] = _sha256(args.native_coarse)
+        report["artifacts"]["components_semantics"] = (
+            "metadata_and_translation_grid_only; raw scores supplied by native_coarse"
+        )
     if high_shell_corrected_weight is not None:
         report["high_shell_noise_intervention"] = {
             "shell_cutoff_inclusive": int(args.high_shell_cutoff),
@@ -594,6 +713,18 @@ def main() -> None:
             ),
             "native_reference_native_image_and_weight": _raw_parent_margin(
                 native_reference_native_image_and_weight,
+                rotation_ids,
+                native_parent=args.native_parent,
+                recovar_parent=args.recovar_parent,
+            ),
+            "native_reference_native_unshifted_recovar_translation": _raw_parent_margin(
+                native_reference_native_unshifted_recovar_translation,
+                rotation_ids,
+                native_parent=args.native_parent,
+                recovar_parent=args.recovar_parent,
+            ),
+            "native_reference_native_unshifted_recovar_translation_and_weight": _raw_parent_margin(
+                native_reference_native_unshifted_recovar_translation_and_weight,
                 rotation_ids,
                 native_parent=args.native_parent,
                 recovar_parent=args.recovar_parent,

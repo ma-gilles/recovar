@@ -775,6 +775,7 @@ def compute_pass2_stats_sparse(
     bpref_class_index: int = 0,
     include_unweighted_norm_high_shell: bool = True,
     preserve_bpref_particle_order: bool = False,
+    source_faithful_spectrum_norm: bool = False,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -927,6 +928,7 @@ def compute_pass2_stats_sparse(
             bpref_class_index=bpref_class_index,
             include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
             preserve_bpref_particle_order=preserve_bpref_particle_order,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
 
     if relion_projector_half is not None:

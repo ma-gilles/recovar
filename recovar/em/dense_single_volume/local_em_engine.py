@@ -1892,6 +1892,7 @@ def run_local_em_exact(
     unify_local_bucket_sizes: bool | None = None,
     stats_use_reconstruction_probs: bool = False,
     include_unweighted_norm_high_shell: bool = True,
+    source_faithful_spectrum_norm: bool = False,
     reconstruction_probability_threshold: np.ndarray | None = None,
     return_reconstruction_probability_values: bool = False,
     return_reconstruction_sample_indices: bool = False,
@@ -1902,6 +1903,7 @@ def run_local_em_exact(
 
     score_only = bool(score_only)
     include_unweighted_norm_high_shell = bool(include_unweighted_norm_high_shell)
+    source_faithful_spectrum_norm = bool(source_faithful_spectrum_norm)
     relion_exact_score_translation = bool(relion_exact_score_translation)
     if relion_exact_score_translation and not half_spectrum_scoring:
         raise ValueError("exact RELION score translation requires half_spectrum_scoring=True")
@@ -2193,7 +2195,10 @@ def run_local_em_exact(
         )
         noise_wsum = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_img_power = jnp.zeros(n_shells, dtype=jnp.float32)
-        noise_norm_correction = jnp.zeros(n_images, dtype=jnp.float32)
+        noise_norm_correction = jnp.zeros(
+            n_images,
+            dtype=jnp.float64 if source_faithful_spectrum_norm else jnp.float32,
+        )
         noise_a2 = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_xa = jnp.zeros(n_shells, dtype=jnp.float32)
         if group_ids_np is not None:
@@ -3107,6 +3112,7 @@ def run_local_em_exact(
                 n_shells=n_shells_arg,
                 norm_current_size=current_size,
                 include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
+                source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 has_normalization_log_z=normalization_log_z_np is not None,
                 has_normalization_log_evidence=normalization_log_evidence_np is not None,
                 has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
@@ -3612,6 +3618,7 @@ def run_local_em_exact(
                     image_shape=image_shape,
                     current_size=current_size,
                     include_unweighted_high_shell=include_unweighted_norm_high_shell,
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 )
                 batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
                 noise_img_power = noise_img_power + batch_img_power_shells
@@ -4651,6 +4658,7 @@ def run_local_em_exact(
                 image_shape=image_shape,
                 current_size=current_size,
                 include_unweighted_high_shell=include_unweighted_norm_high_shell,
+                source_faithful_spectrum_norm=source_faithful_spectrum_norm,
             )
             batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
             noise_img_power = noise_img_power + batch_img_power_shells

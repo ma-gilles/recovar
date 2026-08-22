@@ -343,6 +343,15 @@ def test_sparse_pass2_preserves_relion_projector_api_and_forwarding():
         assert needle in source, f"adaptive sparse pass-2 lost projector forwarding: {needle!r}"
 
 
+def test_sparse_firstiter_k1_forwards_source_faithful_spectrum_norm():
+    """The firstiter global-winner adapter must retain the fresh K=1 flag."""
+
+    source = inspect.getsource(k_class_mod._run_sparse_firstiter_global_winner_subset_pass2)
+    assert 'pass2_kwargs.get("source_faithful_spectrum_norm", False)' in source
+    assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in source
+    assert "source-faithful powerClass normalization is K=1-only" in source
+
+
 # ----------------------------------------------------------------------
 # K-class significance dump operand-recording schema
 # ----------------------------------------------------------------------
@@ -855,6 +864,71 @@ def test_significance_dump_half_selector_fails_closed(tmp_path):
             n_classes=4,
             experiment_datasets=datasets,
             environ={**base_environ, "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET": "1"},
+        )
+
+
+def test_pass2_norm_dump_half_selector_reaches_only_target_half(tmp_path):
+    datasets = [
+        SimpleNamespace(dataset_indices=np.asarray([2, 4], dtype=np.int64)),
+        SimpleNamespace(dataset_indices=np.asarray([1, 3], dtype=np.int64)),
+    ]
+    environ = {
+        "RECOVAR_PASS2_DUMP_TARGET_HALF": "2",
+        "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS": "1",
+        "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET": "1",
+        "RECOVAR_PASS2_DUMP_DIR": str(tmp_path),
+        "RECOVAR_PASS2_DUMP_ITERATION": "2",
+        "RECOVAR_PASS2_DUMP_ORIGINAL_INDICES": "1,3",
+    }
+
+    assert iteration_loop._significance_dump_half_indices(
+        numbered_iteration=1,
+        n_classes=1,
+        experiment_datasets=datasets,
+        environ=environ,
+    ) == (0, 1)
+    assert iteration_loop._significance_dump_half_indices(
+        numbered_iteration=2,
+        n_classes=1,
+        experiment_datasets=datasets,
+        environ=environ,
+    ) == (1,)
+
+
+def test_pass2_norm_dump_half_selector_fails_closed(tmp_path):
+    datasets = [
+        SimpleNamespace(dataset_indices=np.asarray([2, 4], dtype=np.int64)),
+        SimpleNamespace(dataset_indices=np.asarray([1, 3], dtype=np.int64)),
+    ]
+    base = {
+        "RECOVAR_PASS2_DUMP_TARGET_HALF": "2",
+        "RECOVAR_PASS2_DUMP_DIR": str(tmp_path),
+        "RECOVAR_PASS2_DUMP_ITERATION": "2",
+        "RECOVAR_PASS2_DUMP_ORIGINAL_INDICES": "1",
+    }
+    with pytest.raises(RuntimeError, match="NORM_RESIDUAL_INPUTS"):
+        iteration_loop._significance_dump_half_indices(
+            numbered_iteration=2,
+            n_classes=1,
+            experiment_datasets=datasets,
+            environ=base,
+        )
+    with pytest.raises(RuntimeError, match="NORM_RESIDUAL_STOP_AFTER_TARGET"):
+        iteration_loop._significance_dump_half_indices(
+            numbered_iteration=2,
+            n_classes=1,
+            experiment_datasets=datasets,
+            environ={**base, "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS": "1"},
+        )
+    with pytest.raises(RuntimeError, match="mutually exclusive"):
+        iteration_loop._significance_dump_half_indices(
+            numbered_iteration=2,
+            n_classes=1,
+            experiment_datasets=datasets,
+            environ={
+                **base,
+                "RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF": "2",
+            },
         )
 
 

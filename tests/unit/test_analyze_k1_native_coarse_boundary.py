@@ -5,6 +5,7 @@ import struct
 import numpy as np
 
 from scripts.analyze_k1_native_coarse_boundary import (
+    _float32_ulp_distance,
     _raw_residual_structure,
     load_native_coarse_capture,
 )
@@ -40,6 +41,15 @@ def test_load_native_coarse_capture(tmp_path):
 
 def test_float_header_layout_is_little_endian():
     assert struct.unpack("<f", struct.pack("<I", 0x3F800000))[0] == 1.0
+
+
+def test_float32_ulp_distance_handles_neighbors_and_signed_zero():
+    one = np.float32(1.0)
+    next_one = np.nextafter(one, np.float32(np.inf), dtype=np.float32)
+
+    assert _float32_ulp_distance(one, next_one) == 1
+    assert _float32_ulp_distance(np.float32(-0.0), np.float32(0.0)) == 0
+    assert _float32_ulp_distance(np.nan, one) is None
 
 
 def test_raw_residual_structure_identifies_rotation_only_effect():

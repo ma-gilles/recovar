@@ -38,6 +38,21 @@ def _float32_from_bits(value: int) -> float:
     return struct.unpack("<f", struct.pack("<I", value & 0xFFFFFFFF))[0]
 
 
+def _float32_ulp_distance(left: float, right: float) -> int | None:
+    """Return the representable-float32 distance, including across zero."""
+
+    values = np.asarray([left, right], dtype=np.float32)
+    if not np.all(np.isfinite(values)):
+        return None
+    bits = values.view(np.uint32).astype(np.int64)
+    ordered = np.where(
+        bits & np.int64(0x80000000),
+        np.int64(0x80000000) - (bits & np.int64(0x7FFFFFFF)),
+        np.int64(0x80000000) + bits,
+    )
+    return int(abs(ordered[0] - ordered[1]))
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -269,6 +284,15 @@ def analyze(
         recovar_translation_prior = np.asarray(
             recovar["translation_log_prior"], dtype=np.float32
         ).reshape(-1)
+        recovar_summary = {
+            "adaptive_fraction": float(np.asarray(recovar["adaptive_fraction"]).item()),
+            "cutoff_count": int(np.asarray(recovar["relion_f32_cutoff_count"]).item()),
+            "selected_count": int(np.asarray(recovar["n_significant"]).item()),
+            "sum_weight": float(np.asarray(recovar["relion_f32_sum_weight"], dtype=np.float32).item()),
+            "significant_weight": float(
+                np.asarray(recovar["relion_f32_significant_weight"], dtype=np.float32).item()
+            ),
+        }
     native_rotation_prior = _map_relion_table(
         native.orientation_prior.reshape(int(native.header[16]), 1),
         n_directions=native_directions,
@@ -358,6 +382,8 @@ def analyze(
             }
         )
 
+    native_sum_weight = _float32_from_bits(int(native.header[12]))
+    native_significant_weight = threshold
     return {
         "schema": "recovar.em.k1_native_coarse_boundary.v1",
         "status": "complete",
@@ -385,6 +411,31 @@ def analyze(
                 None if threshold_index == 0 else float(native.cumulative_weights[threshold_index - 1])
             ),
             "scan_at_threshold": float(native.cumulative_weights[threshold_index]),
+        },
+        "recovar_summary": recovar_summary,
+        "cutoff_boundary": {
+            "adaptive_fraction_exact": bool(
+                np.float32(recovar_summary["adaptive_fraction"])
+                == np.float32(_float32_from_bits(int(native.header[14])))
+            ),
+            "cutoff_count_difference_recovar_minus_native": int(
+                recovar_summary["cutoff_count"] - (int(native.header[7]) - threshold_index)
+            ),
+            "selected_count_difference_recovar_minus_native": int(
+                recovar_summary["selected_count"] - np.count_nonzero(selected)
+            ),
+            "sum_weight_recovar_minus_native": float(
+                recovar_summary["sum_weight"] - native_sum_weight
+            ),
+            "sum_weight_ulp_distance": _float32_ulp_distance(
+                recovar_summary["sum_weight"], native_sum_weight
+            ),
+            "significant_weight_recovar_minus_native": float(
+                recovar_summary["significant_weight"] - native_significant_weight
+            ),
+            "significant_weight_ulp_distance": _float32_ulp_distance(
+                recovar_summary["significant_weight"], native_significant_weight
+            ),
         },
         "full_boundary": {
             "candidate_topology_exact": bool(native_raw.shape == recovar_raw.shape),

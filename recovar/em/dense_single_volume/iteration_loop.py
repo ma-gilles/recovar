@@ -202,6 +202,7 @@ _EM_RAW_IMAGE_CACHE_MAX_GB_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB"
 _EM_RAW_IMAGE_CACHE_DEFAULT_MAX_GB = 16.0
 _K1_RELION_EXACT_TRANSLATION_GRID_ENV = "RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID"
 _SIGNIFICANCE_DUMP_TARGET_HALF_ENV = "RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF"
+_PASS2_NORM_DUMP_TARGET_HALF_ENV = "RECOVAR_PASS2_DUMP_TARGET_HALF"
 
 
 def _k1_relion_exact_translation_grid_enabled(environ=None):
@@ -231,34 +232,57 @@ def _significance_dump_half_indices(
     experiment_datasets,
     environ=None,
 ) -> tuple[int, ...]:
-    """Select one half only at an explicitly terminating coarse-dump boundary."""
+    """Select one half only at an explicitly terminating diagnostic boundary."""
 
     env = os.environ if environ is None else environ
-    raw_half = str(env.get(_SIGNIFICANCE_DUMP_TARGET_HALF_ENV, "")).strip()
-    if not raw_half:
+    raw_significance_half = str(env.get(_SIGNIFICANCE_DUMP_TARGET_HALF_ENV, "")).strip()
+    raw_pass2_half = str(env.get(_PASS2_NORM_DUMP_TARGET_HALF_ENV, "")).strip()
+    if raw_significance_half and raw_pass2_half:
+        raise RuntimeError(
+            f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} and "
+            f"{_PASS2_NORM_DUMP_TARGET_HALF_ENV} are mutually exclusive"
+        )
+    if not raw_significance_half and not raw_pass2_half:
         return (0, 1)
-    if str(env.get("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET", "")).strip() != "1":
+    pass2_norm_mode = bool(raw_pass2_half)
+    target_half_env = (
+        _PASS2_NORM_DUMP_TARGET_HALF_ENV
+        if pass2_norm_mode
+        else _SIGNIFICANCE_DUMP_TARGET_HALF_ENV
+    )
+    raw_half = raw_pass2_half if pass2_norm_mode else raw_significance_half
+    if pass2_norm_mode:
+        if str(env.get("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS", "")).strip() != "1":
+            raise RuntimeError(
+                f"{_PASS2_NORM_DUMP_TARGET_HALF_ENV} requires "
+                "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS=1"
+            )
+        if str(env.get("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET", "")).strip() != "1":
+            raise RuntimeError(
+                f"{_PASS2_NORM_DUMP_TARGET_HALF_ENV} requires "
+                "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET=1"
+            )
+    elif str(env.get("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET", "")).strip() != "1":
         raise RuntimeError(
             f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} requires "
             "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET=1"
         )
     if int(n_classes) != 1:
-        raise RuntimeError(f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} is K=1 diagnostic-only")
+        raise RuntimeError(f"{target_half_env} is K=1 diagnostic-only")
     try:
         target_half = int(raw_half)
     except ValueError as exc:
-        raise ValueError(f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} must be 1 or 2") from exc
+        raise ValueError(f"{target_half_env} must be 1 or 2") from exc
     if target_half not in {1, 2}:
-        raise ValueError(f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} must be 1 or 2")
+        raise ValueError(f"{target_half_env} must be 1 or 2")
 
-    raw_iteration = str(env.get("RECOVAR_SIGNIFICANCE_DUMP_ITERATION", "")).strip()
-    raw_targets = str(
-        env.get("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES", "")
-    ).strip()
-    dump_dir = str(env.get("RECOVAR_SIGNIFICANCE_DUMP_DIR", "")).strip()
+    prefix = "RECOVAR_PASS2_DUMP" if pass2_norm_mode else "RECOVAR_SIGNIFICANCE_DUMP"
+    raw_iteration = str(env.get(f"{prefix}_ITERATION", "")).strip()
+    raw_targets = str(env.get(f"{prefix}_ORIGINAL_INDICES", "")).strip()
+    dump_dir = str(env.get(f"{prefix}_DIR", "")).strip()
     if not raw_iteration or not raw_targets or not dump_dir:
         raise RuntimeError(
-            f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} requires an explicit dump directory, "
+            f"{target_half_env} requires an explicit dump directory, "
             "iteration, and original-index target set"
         )
     try:
@@ -283,8 +307,9 @@ def _significance_dump_half_indices(
             f"half={target_half} missing={missing}"
         )
     logger.info(
-        "RECOVAR coarse-significance diagnostic: iteration=%d entering only half=%d "
-        "for %d target particles; completion must occur before pass 2/M-step",
+        "RECOVAR %s diagnostic: iteration=%d entering only half=%d "
+        "for %d target particles; completion is mandatory before returning from the half",
+        "pass-2 norm operand" if pass2_norm_mode else "coarse-significance",
         int(numbered_iteration),
         target_half,
         len(target_indices),
@@ -720,6 +745,18 @@ def _validate_bpref_particle_order_scope(
         raise ValueError("RELION BPref particle-order preservation cannot be used in numbered replay")
     if sealed_sampling_state is not None or sealed_scoring_context is not None:
         raise ValueError("RELION BPref particle-order preservation cannot be applied to a sealed boundary")
+
+
+def _fresh_k1_spectrum_norm_default(
+    *,
+    preserve_bpref_particle_order: bool,
+    allow_replayed_bpref_particle_order: bool,
+) -> bool:
+    """Enable source-faithful powerClass normalization only for a fresh run."""
+
+    return bool(
+        preserve_bpref_particle_order and not allow_replayed_bpref_particle_order
+    )
 
 
 def _should_run_final_all_data_iteration(
@@ -2353,6 +2390,7 @@ def _score_half_dense(
     debug_iteration: int | None = None,
     coarse_rotation_ids=None,
     preserve_bpref_particle_order: bool = False,
+    source_faithful_spectrum_norm: bool = False,
 ) -> HalfScoreResult:
     """Dense (non-local-search) E+M scoring for one half-set.
 
@@ -2408,6 +2446,8 @@ def _score_half_dense(
         raise ValueError("RELION BPref particle-order preservation is K=1-only")
     if preserve_bpref_particle_order:
         em_kwargs["preserve_bpref_particle_order"] = True
+    if source_faithful_spectrum_norm:
+        em_kwargs["source_faithful_spectrum_norm"] = True
     diagnostic_float64_pass2 = _diagnostic_float64_pass2_matches(debug_iteration)
     if diagnostic_float64_pass2:
         logger.info(
@@ -3012,6 +3052,7 @@ def _score_half_local(
     scale_correction_data_vs_prior=None,
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
+    source_faithful_spectrum_norm: bool = False,
 ) -> HalfScoreResult:
     """Local-search E+M scoring for one half-set.
 
@@ -3033,6 +3074,8 @@ def _score_half_local(
     relion_local_rotation_log_prior_k = None
     if diagnostic_score_only and k_class_enabled:
         raise NotImplementedError("score-only local-search diagnostics are currently K=1-only")
+    if source_faithful_spectrum_norm and k_class_enabled:
+        raise ValueError("RELION source-faithful spectrum normalization is fresh K=1-only")
 
     # For local search the per-chunk M-step only sees the cone-restricted
     # rotation set (typically a few thousand rotations per image with high
@@ -3231,6 +3274,7 @@ def _score_half_local(
             return_reconstruction_sample_indices=True,
             apply_max_significants_to_support=True,
             score_only=True,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
         parent_profile = parent_outputs[-1]
         significant_sample_indices = parent_profile["reconstruction_sample_indices_by_image"]
@@ -3443,6 +3487,7 @@ def _score_half_local(
                     adaptive_oversampling=0,
                 ),
                 score_only=True,
+                source_faithful_spectrum_norm=source_faithful_spectrum_norm,
             )
         finally:
             os.environ.update(saved_local_debug_env)
@@ -3540,6 +3585,7 @@ def _score_half_local(
         # deliberately not exposed as RELION's coarse pass-1 metadata count.
         return_significant_counts=False,
         score_only=diagnostic_score_only,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         rotation_grid_mstep_rotations=local_search_mstep_rotations,
         generate_relion_mstep_rotations=True,
     )
@@ -4999,6 +5045,10 @@ def _run_relion_iteration_loop(
         replay_iteration_overrides=replay_iteration_overrides,
         sealed_sampling_state=sealed_sampling_state,
         sealed_scoring_context=sealed_scoring_context,
+        allow_replayed_bpref_particle_order=allow_replayed_bpref_particle_order,
+    )
+    source_faithful_spectrum_norm = _fresh_k1_spectrum_norm_default(
+        preserve_bpref_particle_order=preserve_bpref_particle_order,
         allow_replayed_bpref_particle_order=allow_replayed_bpref_particle_order,
     )
     class_log_priors = _normalize_class_log_priors(n_classes, init_class_log_priors)
@@ -7302,6 +7352,7 @@ def _run_relion_iteration_loop(
                     local_profile_history=local_profile_history,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 )
                 ha_k = local_result.ha
                 Ft_y_k = local_result.Ft_y
@@ -7376,6 +7427,7 @@ def _run_relion_iteration_loop(
                     debug_iteration=numbered_relion_iteration,
                     coarse_rotation_ids=coarse_rotation_ids_for_scoring,
                     preserve_bpref_particle_order=preserve_bpref_particle_order,
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 )
                 ha_k = adaptive_result.ha
                 Ft_y_k = adaptive_result.Ft_y
@@ -7439,6 +7491,7 @@ def _run_relion_iteration_loop(
                     best_pose_rotation_eulers=best_pose_rotation_eulers,
                     best_pose_translations=best_pose_translations,
                     preserve_bpref_particle_order=preserve_bpref_particle_order,
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     debug_iteration=numbered_relion_iteration,
@@ -10346,6 +10399,7 @@ def _run_relion_iteration_loop(
                 return_best_pose_details=not k_class_enabled,
                 debug_iteration=final_sampling_relion_iteration,
                 preserve_bpref_particle_order=preserve_bpref_particle_order,
+                source_faithful_spectrum_norm=source_faithful_spectrum_norm,
             )
         if final_result.best_pose_translations is not None:
             final_result.best_pose_translations = _relion_metadata_translations(

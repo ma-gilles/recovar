@@ -10,7 +10,10 @@ import starfile
 
 from scripts import diff_relion_recovar_per_iter as parity_diff
 from scripts.postprocess_multi_iter_gt import resolve_intermediates_dir
-from recovar.em.dense_single_volume.iteration_loop import _validate_bpref_particle_order_scope
+from recovar.em.dense_single_volume.iteration_loop import (
+    _fresh_k1_spectrum_norm_default,
+    _validate_bpref_particle_order_scope,
+)
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
     _read_relion_scheduling_average_pmax,
@@ -558,6 +561,21 @@ def test_replayed_bpref_particle_order_requires_explicit_diagnostic_scope():
     _validate_bpref_particle_order_scope(
         **kwargs,
         allow_replayed_bpref_particle_order=True,
+    )
+
+
+def test_source_faithful_spectrum_norm_excludes_replayed_particle_order():
+    assert _fresh_k1_spectrum_norm_default(
+        preserve_bpref_particle_order=True,
+        allow_replayed_bpref_particle_order=False,
+    )
+    assert not _fresh_k1_spectrum_norm_default(
+        preserve_bpref_particle_order=True,
+        allow_replayed_bpref_particle_order=True,
+    )
+    assert not _fresh_k1_spectrum_norm_default(
+        preserve_bpref_particle_order=False,
+        allow_replayed_bpref_particle_order=False,
     )
 
 

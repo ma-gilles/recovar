@@ -13,6 +13,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _fresh_k1_direct_noise_default,
     _make_relion_wavg_rectangle,
     _prioritize_stopped_pass2_dump_buckets,
+    _relion_powerclass_spectrum_norm_enabled,
     _relion_wavg_atomic_triplet_terms,
     _relion_wavg_direct_modes,
     _relion_wavg_direct_norm_per_image,
@@ -79,6 +80,27 @@ def test_direct_noise_default_is_limited_to_fresh_k1_exact_bpref_guard(
         )
         is expected
     )
+
+
+@pytest.mark.parametrize("fresh_k1_guard", (False, True))
+def test_powerclass_spectrum_norm_defaults_to_explicit_fresh_k1_guard(
+    monkeypatch,
+    fresh_k1_guard,
+):
+    monkeypatch.delenv("RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM", raising=False)
+
+    assert (
+        _relion_powerclass_spectrum_norm_enabled(fresh_k1_guard=fresh_k1_guard)
+        is fresh_k1_guard
+    )
+
+
+def test_powerclass_spectrum_norm_explicit_env_overrides_guard(monkeypatch):
+    monkeypatch.setenv("RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM", "0")
+    assert not _relion_powerclass_spectrum_norm_enabled(fresh_k1_guard=True)
+
+    monkeypatch.setenv("RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM", "1")
+    assert _relion_powerclass_spectrum_norm_enabled(fresh_k1_guard=False)
 
 
 def test_wavg_direct_modes_reject_overlapping_factorial_arms(monkeypatch):

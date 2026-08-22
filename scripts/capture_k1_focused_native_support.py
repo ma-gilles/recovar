@@ -30,13 +30,19 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
 from recovar.em.dense_single_volume.iteration_loop import (
     _relion_projector_half_maps_for_scoring,
 )
+from recovar.em.dense_single_volume.relion_metadata import (
+    relion_translation_search_base,
+)
 from recovar.reconstruction import noise as reconstruction_noise
 from recovar.utils.helpers import load_mrc
 from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
 from scripts.analyze_em_k1_live_reference_counterfactual import (
     relion_values_on_recovar_window,
 )
-from scripts.run_full_refinement import _maybe_apply_relion_image_mask
+from scripts.run_full_refinement import (
+    _build_replay_iteration_overrides,
+    _maybe_apply_relion_image_mask,
+)
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import (
     ACTIVE,
@@ -262,6 +268,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--recovar-run", type=Path, required=True)
+    parser.add_argument(
+        "--relion-state-dir",
+        type=Path,
+        help=(
+            "Use the authoritative RELION numbered state for image/scale "
+            "corrections and translation-search centers. When omitted, the "
+            "legacy recovar-run/parity/iter_NNN.npz inputs are required."
+        ),
+    )
     parser.add_argument("--boundary-index", type=int, required=True)
     parser.add_argument("--consumer-iteration", type=int, required=True)
     parser.add_argument("--source-index", type=int, required=True)
@@ -477,48 +492,131 @@ def main() -> None:
         n_coarse_translations=int(coarse_translations.shape[0]),
     )
 
-    with np.load(parity_path, allow_pickle=False) as parity:
-        _require(int(parity["relion_iteration"]) == args.boundary_index, "parity boundary changed")
-        original_indices = np.asarray(
-            parity[f"half{args.half}_original_image_indices"],
-            dtype=np.int64,
+    if args.relion_state_dir is None:
+        with np.load(parity_path, allow_pickle=False) as parity:
+            _require(
+                int(parity["relion_iteration"]) == args.boundary_index,
+                "parity boundary changed",
+            )
+            original_indices = np.asarray(
+                parity[f"half{args.half}_original_image_indices"],
+                dtype=np.int64,
+            )
+            rows = np.flatnonzero(original_indices == args.source_index)
+            _require(
+                rows.size == 1,
+                "source particle is not unique in the requested half",
+            )
+            row = int(rows[0])
+            image_corrections = np.asarray(
+                [parity[f"half{args.half}_image_corrections"][row]],
+                dtype=np.float64,
+            )
+            scale_corrections = np.asarray(
+                [parity[f"half{args.half}_scale_corrections"][row]],
+                dtype=np.float64,
+            )
+        with np.load(consumer_parity_path, allow_pickle=False) as consumer_parity:
+            _require(
+                int(consumer_parity["relion_iteration"])
+                == args.consumer_iteration,
+                "consumer parity iteration changed",
+            )
+            consumer_original_indices = np.asarray(
+                consumer_parity[f"half{args.half}_original_image_indices"],
+                dtype=np.int64,
+            )
+            consumer_rows = np.flatnonzero(
+                consumer_original_indices == args.source_index
+            )
+            _require(
+                consumer_rows.size == 1,
+                "source particle is not unique at the consumer boundary",
+            )
+            image_pre_shifts = np.asarray(
+                consumer_parity[f"half{args.half}_translation_search_base"][
+                    int(consumer_rows[0]) : int(consumer_rows[0]) + 1
+                ],
+                dtype=np.float32,
+            )
+        image_correction_source = (
+            f"parity/iter_{args.boundary_index:03d}.npz"
         )
-        rows = np.flatnonzero(original_indices == args.source_index)
-        _require(rows.size == 1, "source particle is not unique in the requested half")
+        image_pre_shift_source = (
+            f"parity/iter_{args.consumer_iteration:03d}.npz"
+        )
+    else:
+        import starfile
+
+        relion_state_dir = args.relion_state_dir.resolve()
+        with np.load(results_path, allow_pickle=False) as results:
+            half_indices = [
+                np.asarray(results["half1_indices"], dtype=np.int64),
+                np.asarray(results["half2_indices"], dtype=np.int64),
+            ]
+        input_star = starfile.read(data_star)
+        input_particles = (
+            input_star["particles"] if isinstance(input_star, dict) else input_star
+        )
+        _require(
+            "rlnImageName" in input_particles.columns,
+            "input STAR is missing immutable image identities",
+        )
+        replay_overrides = _build_replay_iteration_overrides(
+            relion_state_dir,
+            half_indices[0],
+            half_indices[1],
+            max_iter=args.boundary_index,
+            ds_voxel=float(ds.voxel_size),
+            ds_grid=int(ds.image_shape[0]),
+            include_normcorr=True,
+            init_relion_iteration=0,
+            particle_names=np.asarray(input_particles["rlnImageName"]),
+            include_initial_state=True,
+            include_k1_scoring_scale=True,
+            strict=True,
+            process_start_noise_broadcast=True,
+        )
+        replay = replay_overrides[args.boundary_index]
+        _require(replay is not None, "RELION boundary replay state is missing")
+        half_row_indices = half_indices[args.half - 1]
+        rows = np.flatnonzero(half_row_indices == args.source_index)
+        _require(
+            rows.size == 1,
+            "source particle is not unique in the requested RELION half",
+        )
         row = int(rows[0])
         image_corrections = np.asarray(
-            [parity[f"half{args.half}_image_corrections"][row]],
+            [replay["image_corrections"][args.half - 1][row]],
             dtype=np.float64,
+        )
+        scoring_scales = replay.get("scoring_scale_corrections")
+        _require(
+            scoring_scales is not None,
+            "RELION boundary replay lacks the half-specific scoring scale",
         )
         scale_corrections = np.asarray(
-            [parity[f"half{args.half}_scale_corrections"][row]],
+            [scoring_scales[args.half - 1][row]],
             dtype=np.float64,
         )
-    image_correction_source = f"parity/iter_{args.boundary_index:03d}.npz"
+        previous_translations = np.asarray(
+            replay["previous_best_translations"][args.half - 1],
+            dtype=np.float32,
+        )
+        image_pre_shifts = np.asarray(
+            relion_translation_search_base(previous_translations)[row : row + 1],
+            dtype=np.float32,
+        )
+        image_correction_source = (
+            f"{relion_state_dir}/run_it{args.boundary_index:03d}_data.star"
+        )
+        image_pre_shift_source = image_correction_source
     if args.normalization_factor_override is not None:
         image_corrections = np.asarray(
             [np.float32(args.normalization_factor_override)],
             dtype=np.float64,
         )
         image_correction_source = "--normalization-factor-override (float32)"
-    with np.load(consumer_parity_path, allow_pickle=False) as consumer_parity:
-        _require(
-            int(consumer_parity["relion_iteration"]) == args.consumer_iteration,
-            "consumer parity iteration changed",
-        )
-        consumer_original_indices = np.asarray(
-            consumer_parity[f"half{args.half}_original_image_indices"],
-            dtype=np.int64,
-        )
-        consumer_rows = np.flatnonzero(consumer_original_indices == args.source_index)
-        _require(consumer_rows.size == 1, "source particle is not unique at the consumer boundary")
-        image_pre_shifts = np.asarray(
-            consumer_parity[f"half{args.half}_translation_search_base"][
-                int(consumer_rows[0]) : int(consumer_rows[0]) + 1
-            ],
-            dtype=np.float32,
-        )
-
     map_path = intermediate_dir / (f"it{zero_based_intermediate:03d}_half{args.half}_reg.mrc")
     map_real = load_mrc(str(map_path)).astype(np.float32)
     mean_ft = np.asarray(ftu.get_dft3(jax.numpy.asarray(map_real))).astype(np.complex64).reshape(-1)
@@ -697,7 +795,7 @@ def main() -> None:
         "native_fine_image_source": native_fine_image_source,
         "noise_source": noise_source,
         "noise_sigma2_fudge": noise_sigma2_fudge,
-        "image_pre_shift_source": f"parity/iter_{args.consumer_iteration:03d}.npz",
+        "image_pre_shift_source": image_pre_shift_source,
         "image_correction": float(image_corrections[0]),
         "image_correction_source": image_correction_source,
         "projector_dump_path": str(projector_dump_path.resolve()),

@@ -193,6 +193,22 @@ def test_k1_local_search_stats_use_relion_retained_weights():
     assert "stats_use_reconstruction_probs=stats_use_reconstruction_probs" in wrapper_source
 
 
+def test_fresh_k1_spectrum_norm_reaches_local_noise_update_only():
+    score_source = inspect.getsource(iteration_loop._score_half_local)
+    wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
+    loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+
+    assert "if source_faithful_spectrum_norm and k_class_enabled:" in score_source
+    assert score_source.count("source_faithful_spectrum_norm=source_faithful_spectrum_norm") == 3
+    assert "if source_faithful_spectrum_norm:" in wrapper_source
+    assert "fresh K=1-only" in wrapper_source
+    assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in wrapper_source
+    local_dispatch = loop_source[
+        loop_source.index("if use_local:") : loop_source.index("elif use_adaptive:")
+    ]
+    assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in local_dispatch
+
+
 def test_k1_local_full_parent_diagnostic_counts_unmasked_parent_layout():
     source = inspect.getsource(iteration_loop._score_half_local)
 
