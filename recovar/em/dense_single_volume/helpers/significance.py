@@ -2243,10 +2243,6 @@ def _compute_k_class_significance_batched(
         relion_f32_coarse_support_requested and score_mode == "gaussian"
     )
     if relion_f32_coarse_support_enabled:
-        if n_classes != 1:
-            raise ValueError(
-                f"{_K1_RELION_F32_COARSE_SUPPORT_ENV} is restricted to K=1",
-            )
         if use_float64_scoring:
             raise ValueError(
                 f"{_K1_RELION_F32_COARSE_SUPPORT_ENV} requires production float32 scoring",
@@ -2254,7 +2250,7 @@ def _compute_k_class_significance_batched(
         logger.warning(
             "RELION CUDA float32 coarse support enabled (%s): current_size=%d",
             (
-                "guarded fresh-K=1 default"
+                "guarded fresh InitialModel default"
                 if relion_coarse_gaussian_default
                 and _K1_RELION_F32_COARSE_SUPPORT_ENV not in os.environ
                 else "environment override"
@@ -2267,10 +2263,6 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_powerclass = None
     coarse_gaussian_projector_full = None
     if coarse_gaussian_ffi_enabled:
-        if n_classes != 1:
-            raise ValueError(
-                f"{_K1_COARSE_GAUSSIAN_FFI_ENV} is restricted to K=1"
-            )
         if use_float64_scoring:
             raise ValueError(
                 f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires production float32 scoring"
@@ -2290,6 +2282,9 @@ def _compute_k_class_significance_batched(
                 f"translations, got {n_trans}"
             )
         from recovar import cuda_backproject
+        from recovar.em.dense_single_volume.helpers.projection import (
+            relion_projector_half_to_texture_full,
+        )
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
             _relion_cuda_corr_img_from_rfloat_ctf,
             _relion_cuda_fine_full_to_compact_lookup,
@@ -2297,9 +2292,6 @@ def _compute_k_class_significance_batched(
             _relion_cuda_powerclass_highres_xi2_half,
             _relion_exact_ctf_half_from_source_star,
             _relion_translation_angles_f32,
-        )
-        from recovar.em.dense_single_volume.helpers.projection import (
-            relion_projector_half_to_texture_full,
         )
 
         if jax.default_backend() != "gpu" or not cuda_backproject.cuda_available():
@@ -2341,12 +2333,15 @@ def _compute_k_class_significance_batched(
             dtype=jnp.int32,
         )
         coarse_gaussian_powerclass = _relion_cuda_powerclass_highres_xi2_half
-        coarse_gaussian_projector_full = None
+        coarse_gaussian_projector_full_by_class = None
         coarse_gaussian_translation_angles = None
         if coarse_fused_projector_enabled:
-            coarse_gaussian_projector_full = relion_projector_half_to_texture_full(
-                relion_projector_half[0],
-            )
+            coarse_gaussian_projector_full_by_class = [
+                relion_projector_half_to_texture_full(
+                    relion_projector_half[class_index],
+                )
+                for class_index in range(n_classes)
+            ]
             coarse_gaussian_translation_angles = jnp.asarray(
                 _relion_translation_angles_f32(translations_source, image_shape),
                 dtype=jnp.float32,
@@ -2356,38 +2351,40 @@ def _compute_k_class_significance_batched(
             # projecting a memory-planner padding block (often 5000 rows).
             rotation_block_size = n_rot
         logger.warning(
-            "K=1 RELION coarse Gaussian FFI enabled (%s): "
-            "current_size=%d square_pixels=%d translations=%d",
+            "RELION coarse Gaussian FFI enabled (%s): "
+            "classes=%d current_size=%d square_pixels=%d translations=%d",
             (
-                "guarded fresh-K=1 default"
+                "guarded fresh InitialModel default"
                 if relion_coarse_gaussian_default
                 and _K1_COARSE_GAUSSIAN_FFI_ENV not in os.environ
                 else "environment override"
             ),
+            n_classes,
             score_size,
             square_score_count,
             n_trans,
         )
         if coarse_gaussian_sincosf_enabled:
             logger.warning(
-                "K=1 RELION coarse CUDA sincosf translation enabled (%s): "
-                "current_size=%d square_pixels=%d translations=%d",
+                "RELION coarse CUDA sincosf translation enabled (%s): "
+                "classes=%d current_size=%d square_pixels=%d translations=%d",
                 (
-                    "guarded fresh-K=1 default"
+                    "guarded fresh InitialModel default"
                     if relion_coarse_gaussian_default
                     and _K1_COARSE_GAUSSIAN_SINCOSF_ENV not in os.environ
                     else "environment override"
                 ),
+                n_classes,
                 score_size,
                 square_score_count,
                 n_trans,
             )
         if exact_coarse_operands_enabled:
             logger.warning(
-                "K=1 RELION exact coarse operands enabled (%s): per-image FFT, "
+                "RELION exact coarse operands enabled (%s): per-image FFT, "
                 "RFLOAT CTF division/square, and binary64-to-XFLOAT inverse noise",
                 (
-                    "guarded fresh-K=1 default"
+                    "guarded fresh InitialModel default"
                     if relion_coarse_gaussian_default
                     and _K1_RELION_EXACT_COARSE_OPERANDS_ENV not in os.environ
                     else "environment override"
@@ -2407,7 +2404,7 @@ def _compute_k_class_significance_batched(
                 "K=1 RELION native texture coarse scoring enabled (%s): "
                 "projection, translation, and score reduction share one kernel",
                 (
-                    "guarded fresh-K=1 default"
+                    "guarded fresh InitialModel default"
                     if relion_coarse_gaussian_default
                     and _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV not in os.environ
                     else "environment override"

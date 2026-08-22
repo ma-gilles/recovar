@@ -7452,7 +7452,7 @@ def _compact_pair_sparse_weighted_image_and_prob_sums(
     return summed, probs_sum_t, translation_posterior
 
 
-@partial(jax.jit, static_argnames=("n_rotation_rows",))
+@partial(jax.jit, static_argnames=("n_rotation_rows", "relion_x_half"))
 def _compact_pair_weighted_rotation_sums_dense(
     pair_probs,
     local_rotation_row,
@@ -7461,6 +7461,8 @@ def _compact_pair_weighted_rotation_sums_dense(
     shifted_recon_split,
     ctf2_over_nv_recon,
     n_rotation_rows,
+    *,
+    relion_x_half=False,
 ):
     """Accumulate compact-pair M-step stats without forming dense ``(B,R,T)``.
 
@@ -7482,9 +7484,14 @@ def _compact_pair_weighted_rotation_sums_dense(
     # Use the same dense weighted-sum primitive as the rectangular path after
     # compacting the scalar probabilities. Scattering complex image rows directly
     # changes GPU accumulation order enough to break x-half M-step parity.
-    summed = compute_local_weighted_sums(dense_probs, shifted_recon_split)
     probs_sum_t = jnp.sum(dense_probs, axis=-1)
-    ctf_probs = compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, ctf2_over_nv_recon)
+    summed, ctf_probs = compute_local_mstep_sums(
+        dense_probs,
+        shifted_recon_split,
+        ctf2_over_nv_recon,
+        relion_x_half=bool(relion_x_half),
+        default_probs_sum_t=probs_sum_t,
+    )
     translation_posterior = jnp.sum(dense_probs, axis=1)
     return summed, ctf_probs, probs_sum_t, translation_posterior
 
@@ -7523,12 +7530,26 @@ def _compact_pair_weighted_rotation_sums(
     n_rotation_rows,
     *,
     allow_pair_sparse=True,
+    relion_x_half=False,
 ):
+    use_sequential_relion_reduction = bool(
+        relion_x_half and relion_x_half_sequential_translation_reduction_enabled()
+    )
     impl = (
         _compact_pair_weighted_rotation_sums_pair_sparse
-        if _compact_pair_pair_sparse_mstep_enabled_for_pass(allow_pair_sparse=allow_pair_sparse)
+        if (
+            not use_sequential_relion_reduction
+            and _compact_pair_pair_sparse_mstep_enabled_for_pass(
+                allow_pair_sparse=allow_pair_sparse
+            )
+        )
         else _compact_pair_weighted_rotation_sums_dense
     )
+    kwargs = dict(
+        n_rotation_rows=n_rotation_rows,
+    )
+    if impl is _compact_pair_weighted_rotation_sums_dense:
+        kwargs["relion_x_half"] = bool(relion_x_half)
     return impl(
         pair_probs,
         local_rotation_row,
@@ -7536,7 +7557,7 @@ def _compact_pair_weighted_rotation_sums(
         pair_mask,
         shifted_recon_split,
         ctf2_over_nv_recon,
-        n_rotation_rows=n_rotation_rows,
+        **kwargs,
     )
 
 
@@ -11056,10 +11077,26 @@ def subtract_projected_reference_from_sparse_mstep_sums(
     """Form RELION VDAM's residual backprojection operand on compact support."""
 
     reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
+    return subtract_projected_reference_from_sparse_mstep_rotation_sums(
+        summed,
+        reconstruction_probs_sum_t,
+        projected_reference,
+        ctf2_over_noise,
+    )
+
+
+def subtract_projected_reference_from_sparse_mstep_rotation_sums(
+    summed,
+    posterior_mass_by_rotation,
+    projected_reference,
+    ctf2_over_noise,
+):
+    """Subtract reference signal after dense or pair-sparse translation sums."""
+
     projected_reference_weighted = projected_reference * ctf2_over_noise[:, None, :]
     projected_reference_delta = jnp.where(
-        reconstruction_probs_sum_t[..., None] != 0.0,
-        reconstruction_probs_sum_t[..., None] * projected_reference_weighted,
+        posterior_mass_by_rotation[..., None] != 0.0,
+        posterior_mass_by_rotation[..., None] * projected_reference_weighted,
         0.0,
     )
     return summed - projected_reference_delta
@@ -11204,6 +11241,10 @@ def compute_pass2_stats_sparse_bucketed(
     use_relion_fine_diff2_fused_ffi = bool(
         relion_fine_diff2_fused_ffi
         or _env_flag_enabled(_RELION_FINE_DIFF2_FUSED_FFI_ENV, default=False)
+    )
+    use_relion_f32_fine_posterior = bool(
+        relion_f32_fine_posterior
+        or relion_x_half_f32_fine_posterior_enabled()
     )
     winner_take_all = bool(relion_firstiter_winner_take_all)
     if bool(disable_adjoint_y) != bool(disable_adjoint_ctf):
@@ -15185,10 +15226,13 @@ def compute_k_class_pass2_stats_sparse_fused(
     fine_translation_parent_override=None,
     relion_half_volume_mstep=False,
     relion_x_half_mstep=False,
+    mstep_subtract_ctf_projection=False,
     relion_fine_mstep_prune_mode: str | None = None,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
     relion_exact_fine_gaussian=True,
+    relion_fine_diff2_fused_ffi=False,
+    relion_f32_fine_posterior=False,
     relion_projector_half=None,
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
@@ -15212,6 +15256,11 @@ def compute_k_class_pass2_stats_sparse_fused(
     scoped_diagnostic_flags = _scoped_bpref_diagnostic_flags(
         active=bpref_device_signature_active
     )
+    execution_modes = _resolve_bpref_execution_modes(
+        scoped_diagnostic_flags,
+        device_signature_requested=device_signature_requested,
+    )
+    use_per_particle_launches = execution_modes["live_per_particle_launches"]
     if device_signature_requested:
         if not os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR"):
             raise RuntimeError(
@@ -15239,6 +15288,25 @@ def compute_k_class_pass2_stats_sparse_fused(
         and relion_firstiter_score_mode == "gaussian"
         and not use_float64_scoring
     )
+    use_relion_fine_diff2_fused_ffi = bool(
+        relion_fine_diff2_fused_ffi
+        or _env_flag_enabled(_RELION_FINE_DIFF2_FUSED_FFI_ENV, default=False)
+    )
+    use_relion_f32_fine_posterior = bool(
+        relion_f32_fine_posterior
+        or relion_x_half_f32_fine_posterior_enabled()
+    )
+    relion_exact_bpref_operands = _env_flag_enabled(
+        "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS",
+        default=False,
+    )
+    if relion_exact_bpref_operands:
+        if use_float64_scoring:
+            raise ValueError("exact RELION BPref operands require the native float32 path")
+        logger.info(
+            "Sparse fused K-class pass-2: using RELION binary64-to-float32 "
+            "inverse-noise and fused translate-then-weight BPref operands"
+        )
     volumes = jnp.asarray(volumes)
     n_classes = int(volumes.shape[0])
     if device_signature_requested and not any(
@@ -15588,6 +15656,15 @@ def compute_k_class_pass2_stats_sparse_fused(
     )
     compact_pairs_env = os.environ.get(_SPARSE_KCLASS_COMPACT_PAIRS_ENV)
     compact_pairs = _compact_pair_execution_enabled_for_pass()
+    if use_per_particle_launches:
+        if not relion_x_half_mstep:
+            raise ValueError(
+                "fused K-class per-particle launches require the RELION x-half M-step"
+            )
+        if not compact_pairs:
+            raise ValueError(
+                "fused K-class per-particle launches require compact-pair execution"
+            )
     compact_active_rows_env = os.environ.get(_SPARSE_KCLASS_COMPACT_ACTIVE_ROWS_ENV)
     compact_active_rows = (
         compact_pairs
@@ -16282,6 +16359,10 @@ def compute_k_class_pass2_stats_sparse_fused(
         bucket_uses_active_rows = (
             compact_active_rows and bucket_uses_compact_pairs
         ) or bucket_uses_rectangular_active_rows
+        if mstep_subtract_ctf_projection:
+            # Residual VDAM accumulation needs the dense projected-reference
+            # row tensor before adjoint packing.
+            bucket_uses_active_rows = False
         group_key = (execution_mode, execution_bucket_size_key, bucket_size)
         if group_key != last_bucket_size_logged:
             if last_bucket_size_logged is not None and group_t0 is not None:
@@ -16604,6 +16685,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             relion_score_translation_angles=relion_score_translation_angles,
             return_windowed_shifted=windowed_prepare,
             return_shifted_score=not half_spectrum_scoring,
+            relion_exact_bpref_operands=relion_exact_bpref_operands,
         )
         relion_highres_xi2_half = None
         if use_exact_relion_gaussian or (accumulate_noise and current_size is not None):
@@ -16810,6 +16892,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         pair_mask,
                         relion_score_full_to_compact,
                         relion_highres_xi2_half,
+                        use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                     )
                     row = jnp.arange(batch)[:, None]
                     safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
@@ -16871,6 +16954,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                             direct_half_weights,
                             relion_score_full_to_compact,
                             relion_highres_xi2_half[0],
+                            use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                         )[jnp.newaxis, :, :]
                     else:
                         raw_diff2 = _score_pass2_bucket_relion_gpu_diff2_raw(
@@ -16880,6 +16964,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                             direct_half_weights,
                             relion_score_full_to_compact,
                             relion_highres_xi2_half,
+                            use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                         )
                     # Keep the inter-class staging on the host. The score
                     # microbatch cap applies to device residency; retaining
@@ -17125,6 +17210,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         pair_mask,
                         relion_score_full_to_compact,
                         relion_highres_xi2_half,
+                        use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                     )
                     row = jnp.arange(batch)[:, None]
                     safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
@@ -17175,6 +17261,7 @@ def compute_k_class_pass2_stats_sparse_fused(
 
         global_score_log_z_bucket = _logsumexp_class_log_z(jnp.stack(class_score_log_z_bucket, axis=0))
         joint_mstep_masks_by_class = None
+        joint_mstep_probs_by_class = None
         if relion_fine_mstep_prune_mode == "joint":
             flat_joint_probs_by_class = []
             flat_joint_scores_by_class = []
@@ -17220,6 +17307,28 @@ def compute_k_class_pass2_stats_sparse_fused(
                     joint_prob_shapes.append(probs.shape)
             if winner_take_all:
                 flat_joint_masks = _relion_joint_winner_take_all_masks(flat_joint_scores_by_class)
+            elif use_relion_f32_fine_posterior:
+                flat_sizes = [int(scores.shape[1]) for scores in flat_joint_scores_by_class]
+                joint_scores = jnp.concatenate(flat_joint_scores_by_class, axis=1)
+                joint_reconstruction_probs, joint_mask, *_diagnostics = (
+                    _relion_f32_fine_reconstruction_probs(
+                        joint_scores,
+                        adaptive_fraction=float(adaptive_fraction),
+                    )
+                )
+                split_points = np.cumsum(flat_sizes[:-1], dtype=np.int64).tolist()
+                flat_joint_masks = list(jnp.split(joint_mask, split_points, axis=1))
+                flat_joint_reconstruction_probs = list(
+                    jnp.split(joint_reconstruction_probs, split_points, axis=1)
+                )
+                joint_mstep_probs_by_class = [
+                    flat_probs.reshape(shape)
+                    for flat_probs, shape in zip(
+                        flat_joint_reconstruction_probs,
+                        joint_prob_shapes,
+                        strict=True,
+                    )
+                ]
             else:
                 flat_joint_masks = _relion_pass2_reconstruction_joint_masks(
                     flat_joint_probs_by_class,
@@ -17416,7 +17525,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                     )
                 if relion_fine_mstep_prune_mode == "joint":
                     reconstruction_mask = joint_mstep_masks_by_class[class_index]
-                    reconstruction_probs = jnp.where(reconstruction_mask, pair_probs, 0.0)
+                    reconstruction_probs = (
+                        joint_mstep_probs_by_class[class_index]
+                        if joint_mstep_probs_by_class is not None
+                        else jnp.where(reconstruction_mask, pair_probs, 0.0)
+                    )
                     mstep_probs = reconstruction_probs
                 elif relion_fine_mstep_prune:
                     reconstruction_probs, reconstruction_mask, _reconstruction_n_significant = (
@@ -17485,6 +17598,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                             ctf2_over_nv_recon,
                             n_rotation_rows=class_bucket_size,
                             allow_pair_sparse=compact_pair_pair_sparse_effective,
+                            relion_x_half=use_relion_x_half_mstep,
                         )
                     )
             else:
@@ -17507,7 +17621,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                     )
                 if relion_fine_mstep_prune_mode == "joint":
                     reconstruction_mask = joint_mstep_masks_by_class[class_index]
-                    reconstruction_probs = jnp.where(reconstruction_mask, probs, 0.0)
+                    reconstruction_probs = (
+                        joint_mstep_probs_by_class[class_index]
+                        if joint_mstep_probs_by_class is not None
+                        else jnp.where(reconstruction_mask, probs, 0.0)
+                    )
                     mstep_probs = reconstruction_probs
                 elif relion_fine_mstep_prune:
                     reconstruction_probs, reconstruction_mask, _reconstruction_n_significant = (
@@ -17605,6 +17723,13 @@ def compute_k_class_pass2_stats_sparse_fused(
                         relion_x_half=use_relion_x_half_mstep,
                         default_probs_sum_t=probs_sum_t_jax,
                     )
+            if mstep_subtract_ctf_projection:
+                summed = subtract_projected_reference_from_sparse_mstep_rotation_sums(
+                    summed,
+                    probs_sum_t_jax,
+                    proj_for_noise_by_class[class_index],
+                    ctf2_over_nv_recon,
+                )
             if (
                 bucket_device_signature_requested
                 and _bpref_contribution_class_enabled(class_index)
@@ -17815,7 +17940,30 @@ def compute_k_class_pass2_stats_sparse_fused(
             _add_sparse_group_timing(group_timing, "mstep_weighted_sums", time.time() - substage_t0)
             substage_t0 = time.time()
             mstep_window_indices = relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
-            if active_flat_rows_chunked:
+            live_per_particle_launches = bool(
+                use_relion_x_half_mstep and use_per_particle_launches
+            )
+            if live_per_particle_launches:
+                Ft_y_total[class_index], Ft_ctf_total[class_index] = (
+                    _accumulate_relion_x_half_per_particle_launches(
+                        jnp.asarray(summed, dtype=jnp.complex64),
+                        jnp.asarray(ctf_probs, dtype=jnp.float32),
+                        jnp.asarray(arrays["mstep_rotations"]),
+                        arrays["actual_counts"],
+                        Ft_y_total[class_index],
+                        Ft_ctf_total[class_index],
+                        window_indices=mstep_window_indices,
+                        image_shape=image_shape,
+                        volume_shape=recon_volume_shape,
+                        disc_type="linear_interp",
+                        half_volume=use_half_volume_mstep,
+                        max_r=float(current_size // 2) if use_window else None,
+                        winner_take_all=winner_take_all,
+                        strict_particle_order=False,
+                        log_label_prefix=f"kclass{class_index + 1}-particle-xhalf",
+                    )
+                )
+            elif active_flat_rows_chunked:
                 if use_window:
                     Ft_y_total[class_index], Ft_ctf_total[class_index] = (
                         _accumulate_active_flat_rows_adjoint_chunked(
@@ -18025,6 +18173,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                                 shifted_noise_split,
                                 n_rotation_rows=class_bucket_size,
                                 allow_pair_sparse=compact_pair_pair_sparse_effective,
+                                relion_x_half=use_relion_x_half_mstep,
                             )
                         else:
                             summed_masked_noise = summed_masked_noise_precomputed
@@ -18596,6 +18745,12 @@ def compute_k_class_pass2_stats_sparse_fused(
         "sparse_kclass_raw_host_staging_peak_bytes": np.int64(raw_host_staging_peak_bytes),
         "sparse_kclass_raw_host_staging_s": np.float64(raw_host_staging_s),
         "sparse_kclass_exact_relion_gaussian": bool(use_exact_relion_gaussian),
+        "sparse_kclass_relion_fine_diff2_fused_ffi": bool(
+            use_relion_fine_diff2_fused_ffi
+        ),
+        "sparse_kclass_relion_f32_fine_posterior": bool(
+            use_relion_f32_fine_posterior
+        ),
         "sparse_kclass_compact_pair_check_rows": np.int64(compact_pair_check_rows),
         "sparse_kclass_compact_pair_check_finite_mismatches": np.int64(
             compact_pair_check_finite_mismatches,

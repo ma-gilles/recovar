@@ -9,9 +9,14 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _compact_pair_weighted_rotation_sums,
+    subtract_projected_reference_from_sparse_mstep_rotation_sums,
     subtract_projected_reference_from_sparse_mstep_sums,
 )
 from recovar.em.dense_single_volume.helpers.types import make_relion_stats
+from recovar.em.dense_single_volume.local_backprojection import (
+    compute_relion_f32_sequential_mstep_sums,
+)
 from recovar.em.initial_model.dense_adapter import (
     _collapse_compact_pass2_rotation_stats_to_directions,
     _compact_sparse_pass2_enabled,
@@ -27,6 +32,15 @@ def test_compact_sparse_pass2_is_opt_in(monkeypatch):
     for value in ("1", "true", "YES", "on"):
         monkeypatch.setenv("RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2", value)
         assert _compact_sparse_pass2_enabled() is True
+
+
+def test_compact_sparse_pass2_is_not_k1_scoped():
+    from inspect import getsource
+
+    from recovar.em.initial_model import dense_adapter
+
+    source = getsource(dense_adapter._run_sparse_pass2_initial_model_estep)
+    assert "compact sparse pass 2 is currently qualified only for K=1" not in source
 
 
 def test_sparse_residual_mstep_matches_vdam_formula():
@@ -57,6 +71,48 @@ def test_sparse_residual_mstep_matches_vdam_formula():
         * np.asarray(ctf2_over_noise)[:, None, :]
     )
     np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
+    from_mass = subtract_projected_reference_from_sparse_mstep_rotation_sums(
+        summed,
+        posterior_mass,
+        projected_reference,
+        ctf2_over_noise,
+    )
+    np.testing.assert_allclose(from_mass, expected, rtol=0.0, atol=0.0)
+
+
+def test_compact_mstep_can_preserve_relion_translation_reduction(monkeypatch):
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION", "1")
+    pair_probs = jnp.asarray([[0.2, 0.3, 0.1, 0.4]], dtype=jnp.float32)
+    rotation_rows = jnp.asarray([[0, 0, 1, 1]], dtype=jnp.int32)
+    translation_ids = jnp.asarray([[0, 1, 0, 1]], dtype=jnp.int32)
+    pair_mask = jnp.ones_like(pair_probs, dtype=bool)
+    shifted = jnp.asarray(
+        [[[1.0 + 2.0j, -3.0 + 0.5j], [4.0 - 1.0j, 2.0 + 3.0j]]],
+        dtype=jnp.complex64,
+    )
+    ctf2 = jnp.asarray([[2.0, 0.25]], dtype=jnp.float32)
+
+    summed, weight, probs_sum_t, _translation_posterior = (
+        _compact_pair_weighted_rotation_sums(
+            pair_probs,
+            rotation_rows,
+            translation_ids,
+            pair_mask,
+            shifted,
+            ctf2,
+            n_rotation_rows=2,
+            relion_x_half=True,
+        )
+    )
+    dense_probs = jnp.asarray([[[0.2, 0.3], [0.1, 0.4]]], dtype=jnp.float32)
+    expected_summed, expected_weight = compute_relion_f32_sequential_mstep_sums(
+        dense_probs,
+        shifted,
+        ctf2,
+    )
+    np.testing.assert_array_equal(summed, expected_summed)
+    np.testing.assert_array_equal(weight, expected_weight)
+    np.testing.assert_array_equal(probs_sum_t, jnp.sum(dense_probs, axis=-1))
 
 
 class _StatsResult(NamedTuple):

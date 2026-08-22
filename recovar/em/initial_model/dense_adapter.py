@@ -821,13 +821,11 @@ def _run_sparse_pass2_initial_model_estep(
             relion_projector_r_max=relion_projector_r_max,
             debug_iteration=group_kwargs.get("debug_iteration"),
             # The supplied-map EM path enables RELION's exact CUDA coarse
-            # operands/support for fresh K=1 runs. InitialModel reaches the
+            # operands/support for fresh InitialModel runs. InitialModel reaches the
             # same significance engine through this adapter, so opt into the
             # shared guarded path whenever its exact projector is active.
-            # K>1 remains on the joint-class implementation.
             relion_coarse_gaussian_default=bool(
-                state.K == 1
-                and use_exact_relion_projector
+                use_exact_relion_projector
                 and _uses_relion_cuda_image_preprocessing(group_dataset)
             ),
             # VDAM changes its subset size almost every iteration. Keep the
@@ -858,8 +856,6 @@ def _run_sparse_pass2_initial_model_estep(
                 pass2_fine_translation_log_prior = fallback
 
         use_compact_sparse_pass2 = _compact_sparse_pass2_enabled()
-        if use_compact_sparse_pass2 and state.K != 1:
-            raise ValueError("InitialModel compact sparse pass 2 is currently qualified only for K=1")
         if use_compact_sparse_pass2 and k1_zero_oversampling:
             raise ValueError("InitialModel compact sparse pass 2 does not yet support oversampling_order=0")
 
@@ -919,7 +915,8 @@ def _run_sparse_pass2_initial_model_estep(
             and _uses_relion_cuda_image_preprocessing(group_dataset)
         )
         use_exact_fine_diff2 = bool(
-            use_exact_local_relion_operands
+            state.K == 1
+            and use_exact_local_relion_operands
             and _exact_relion_fine_diff2_enabled()
         )
         sparse_diagnostics.set_bpref_contribution_dump_context(

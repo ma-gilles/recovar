@@ -28,6 +28,12 @@ class PairRunError(RuntimeError):
     """Raised when paired execution or provenance validation fails."""
 
 
+def _recovar_environment(env: dict[str, str]) -> dict[str, str]:
+    """Return parity-affecting RECOVAR overrides for the evidence record."""
+
+    return {key: value for key, value in sorted(env.items()) if key.startswith("RECOVAR_")}
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -220,6 +226,7 @@ def run_pair(args: argparse.Namespace) -> dict[str, Any]:
         "schema": "recovar.vdam_kclass_pair.v1",
         "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip(),
         "git_dirty": bool(git_status),
+        "recovar_environment": _recovar_environment(env),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "physical_gpu_uuid": gpu_before,
         "fixture_dir": str(args.fixture_dir),

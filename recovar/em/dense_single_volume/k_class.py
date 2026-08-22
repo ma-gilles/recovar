@@ -1009,8 +1009,18 @@ def _run_sparse_k_class_adaptive_pass2(
         fused_common = dict(common)
         fused_common.pop("relion_fine_mstep_prune", None)
         fused_common.pop("relion_exact_fine_normalized_cc", None)
-        fused_common.pop("relion_fine_diff2_fused_ffi", None)
-        fused_common.pop("relion_f32_fine_posterior", None)
+        # The fused K-class scorer preserves one joint class-by-pose minimum,
+        # so it can use the same source-faithful CUDA reduction qualified by
+        # the K=1 path.  The legacy 2K-1 fallback remains unchanged.
+        if strict_exact_gaussian:
+            from recovar import cuda_backproject
+
+            fused_common["relion_fine_diff2_fused_ffi"] = (
+                cuda_backproject.cuda_available()
+            )
+            fused_common["relion_f32_fine_posterior"] = (
+                cuda_backproject.cuda_available()
+            )
         fused_common["relion_projector_half"] = relion_projector_half_by_class
         fused_common["relion_projector_r_max"] = relion_projector_r_max
         try:

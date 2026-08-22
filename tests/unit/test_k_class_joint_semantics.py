@@ -15,10 +15,14 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_translation_angles_f32,
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
+from recovar.em.dense_single_volume.iteration_loop import (
+    _build_firstiter_cc_pass2_grids,
+    _combine_optional_half_accumulators,
+)
 from recovar.em.dense_single_volume.k_class import (
-    _ClassFineGridSignificanceMask,
     _assemble_result,
     _build_fine_grid_significance_mask,
+    _ClassFineGridSignificanceMask,
     _compact_sparse_pass2_preferred_over_dense,
     _dense_engine_kwargs_for_class,
     _expand_subset_noise_stats,
@@ -28,10 +32,6 @@ from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
     run_local_k_class_em,
-)
-from recovar.em.dense_single_volume.iteration_loop import (
-    _build_firstiter_cc_pass2_grids,
-    _combine_optional_half_accumulators,
 )
 from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 from recovar.em.dense_single_volume.mean_helpers import update_c1_sigma_offset_from_posterior
@@ -1379,6 +1379,10 @@ def test_lazy_k_class_adaptive_mask_matches_dense_blocks_without_materializing()
 def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
     """Sparse K-class pass-2 normalizes scores, not evidence plus image offset."""
 
+    # This probe exercises the legacy 2K-1 normalization choreography. The
+    # production default is the joint fused path, covered separately.
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "0")
+
     from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
     from recovar.em.sampling import rotation_grid_size
 
@@ -1478,6 +1482,9 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
 
 def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypatch):
     """Avoid duplicating the most expensive class in the current sparse scheme."""
+
+    # Largest-support-class reuse is specific to the legacy 2K-1 path.
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "0")
 
     from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
     from recovar.em.sampling import rotation_grid_size

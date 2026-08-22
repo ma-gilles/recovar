@@ -66,3 +66,18 @@ def test_default_checkpoints_include_final_iteration(tmp_path: Path):
 
     assert args.checkpoint == [0, 1, 2, 4, 8]
     assert args.minimum_assignment_accuracy == 0.995
+
+
+def test_pair_report_records_only_recovar_environment():
+    captured = runner._recovar_environment(
+        {
+            "PATH": "/bin",
+            "RECOVAR_Z_OVERRIDE": "z",
+            "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI": "1",
+        }
+    )
+
+    assert captured == {
+        "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI": "1",
+        "RECOVAR_Z_OVERRIDE": "z",
+    }

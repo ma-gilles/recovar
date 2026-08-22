@@ -263,8 +263,8 @@ def test_k1_coarse_gaussian_flag_honors_scoped_default_and_explicit_opt_out(monk
     source = Path(significance.__file__).read_text()
     start = source.index("if coarse_gaussian_ffi_enabled:")
     guard = source[start : source.index("tree_rescore_fftw_order", start)]
-    assert "if n_classes != 1:" in guard
-    assert "restricted to K=1" in guard
+    assert "coarse_gaussian_projector_full_by_class" in guard
+    assert "relion_projector_half[class_index]" in guard
     assert "square_score_indices_np" in guard
     assert "square=True" in guard
     assert "include_dc=True" in guard
