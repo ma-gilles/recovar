@@ -783,6 +783,10 @@ def _run_sparse_pass2_initial_model_estep(
                 and use_exact_relion_projector
                 and _uses_relion_cuda_image_preprocessing(group_dataset)
             ),
+            # VDAM changes its subset size almost every iteration. Keep the
+            # coarse scorer's image axis fixed so JAX reuses one executable
+            # instead of compiling each tail mini-batch shape.
+            pad_final_image_batch=True,
         )
         (
             _sig_rot_any,

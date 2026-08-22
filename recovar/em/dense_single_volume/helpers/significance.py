@@ -48,6 +48,68 @@ NVTX_DOMAIN_EM = "recovar_em"
 logger = logging.getLogger(__name__)
 
 
+def _repeat_pad_batch_axis(value, target_size: int):
+    """Pad a non-empty image batch by repeating row zero.
+
+    Repeating a real row keeps normalized-CC and exact CUDA preprocessing
+    finite. Callers must discard the repeated rows from all science outputs.
+    """
+
+    array = np.asarray(value)
+    target_size = int(target_size)
+    if array.shape[0] >= target_size:
+        return array
+    if array.shape[0] == 0:
+        raise ValueError("cannot repeat-pad an empty image batch")
+    return np.concatenate(
+        [array, np.repeat(array[:1], target_size - array.shape[0], axis=0)],
+        axis=0,
+    )
+
+
+def _pad_significance_preprocess_inputs(
+    batch_data,
+    ctf_params,
+    integer_pre_shifts,
+    batch_corr,
+    batch_scale,
+    relion_preprocess_kwargs,
+    *,
+    target_size: int,
+):
+    """Give a tail significance batch the same compiled image shape as full batches."""
+
+    actual_size = int(np.asarray(batch_data).shape[0])
+    target_size = max(actual_size, int(target_size))
+    if actual_size == target_size:
+        return (
+            batch_data,
+            ctf_params,
+            integer_pre_shifts,
+            batch_corr,
+            batch_scale,
+            relion_preprocess_kwargs,
+        )
+    padded_kwargs = None
+    if relion_preprocess_kwargs is not None:
+        padded_kwargs = {
+            key: jnp.asarray(_repeat_pad_batch_axis(value, target_size))
+            for key, value in relion_preprocess_kwargs.items()
+        }
+    return (
+        _repeat_pad_batch_axis(batch_data, target_size),
+        _repeat_pad_batch_axis(ctf_params, target_size),
+        (
+            None
+            if integer_pre_shifts is None
+            else _repeat_pad_batch_axis(integer_pre_shifts, target_size)
+        ),
+        None if batch_corr is None else _repeat_pad_batch_axis(batch_corr, target_size),
+        _repeat_pad_batch_axis(batch_scale, target_size),
+        padded_kwargs,
+    )
+
+
 class SignificanceDumpComplete(RuntimeError):
     """Raised after an explicitly targeted coarse-significance dump is durable."""
 
@@ -1935,6 +1997,7 @@ def _compute_k_class_significance_batched(
     coarse_rotation_ids=None,
     translation_phase_source=None,
     relion_coarse_gaussian_default: bool = False,
+    pad_final_image_batch: bool = False,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
 
@@ -2725,8 +2788,8 @@ def _compute_k_class_significance_batched(
         indices=image_indices,
         by_image=False,
     ):
-        batch_size = len(indices)
-        end_idx = start_idx + batch_size
+        actual_batch_size = len(indices)
+        end_idx = start_idx + actual_batch_size
         (
             relion_cuda_preprocess,
             integer_pre_shifts,
@@ -2741,6 +2804,24 @@ def _compute_k_class_significance_batched(
             scale_corrections=scale_corrections,
             image_pre_shifts=image_pre_shifts,
         )
+        if pad_final_image_batch and actual_batch_size < int(image_batch_size):
+            (
+                batch_data,
+                ctf_params,
+                integer_pre_shifts,
+                batch_corr_np,
+                batch_scale_np,
+                relion_preprocess_kwargs,
+            ) = _pad_significance_preprocess_inputs(
+                batch_data,
+                ctf_params,
+                integer_pre_shifts,
+                batch_corr_np,
+                batch_scale_np,
+                relion_preprocess_kwargs,
+                target_size=int(image_batch_size),
+            )
+        batch_size = int(np.asarray(batch_data).shape[0])
         real_space_pre_shift_applied = integer_pre_shifts is not None
         if real_space_pre_shift_applied and not relion_cuda_preprocess:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
@@ -2750,7 +2831,13 @@ def _compute_k_class_significance_batched(
         elif translation_log_prior.ndim == 1:
             batch_translation_log_prior = jnp.asarray(translation_log_prior)
         else:
-            batch_translation_log_prior = jnp.asarray(translation_log_prior[start_idx:end_idx])
+            batch_translation_log_prior_np = np.asarray(translation_log_prior[start_idx:end_idx])
+            if batch_size > actual_batch_size:
+                batch_translation_log_prior_np = _repeat_pad_batch_axis(
+                    batch_translation_log_prior_np,
+                    batch_size,
+                )
+            batch_translation_log_prior = jnp.asarray(batch_translation_log_prior_np)
 
         if score_mode == "normalized_cc":
             cc_window_indices = window_indices if use_window else None
@@ -2848,7 +2935,10 @@ def _compute_k_class_significance_batched(
             if score_mode == "normalized_cc":
                 ctf2_half_score = ctf2_half_score * (batch_scale**2)[:, None]
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
-            batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
+            batch_shifts_np = np.asarray(image_pre_shifts)[np.asarray(indices)]
+            if batch_size > actual_batch_size:
+                batch_shifts_np = _repeat_pad_batch_axis(batch_shifts_np, batch_size)
+            batch_shifts = jnp.asarray(batch_shifts_np)
             shifted_half = shifted_half * tiled_half_image_phase_factors(image_shape, batch_shifts, n_trans)
             if score_mode == "normalized_cc" and tree_rescore_enabled:
                 tree_rescore_unshifted_half = (
@@ -3018,11 +3108,20 @@ def _compute_k_class_significance_batched(
                     n_trans=n_trans,
                 )
             if exact_coarse_operands_enabled:
-                ctf_half_rfloat = _relion_exact_ctf_half_from_source_star(
-                    experiment_dataset,
-                    indices,
-                    image_shape,
+                ctf_half_rfloat_np = np.asarray(
+                    _relion_exact_ctf_half_from_source_star(
+                        experiment_dataset,
+                        indices,
+                        image_shape,
+                    ),
+                    dtype=np.float64,
                 )
+                if batch_size > actual_batch_size:
+                    ctf_half_rfloat_np = _repeat_pad_batch_axis(
+                        ctf_half_rfloat_np,
+                        batch_size,
+                    )
+                ctf_half_rfloat = jnp.asarray(ctf_half_rfloat_np, dtype=jnp.float64)
                 batch_scale_f32 = jnp.asarray(batch_scale_np, dtype=jnp.float32)
                 pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
                     batch_scale_f32[:, None],
@@ -3540,16 +3639,28 @@ def _compute_k_class_significance_batched(
                     return_cutoff_count=True,
                 )
             batch_sig_mask_np = np.asarray(batch_sig_mask, dtype=bool)
-            sig_rot_any |= np.asarray(jnp.any(batch_sig_rot_mask, axis=0), dtype=bool).reshape(n_classes, n_rot)
-            n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig, dtype=np.int32)
-            cutoff_count_all[start_idx:end_idx] = np.asarray(batch_cutoff_count, dtype=np.int32)
+            sig_rot_any |= np.asarray(
+                jnp.any(batch_sig_rot_mask[:actual_batch_size], axis=0),
+                dtype=bool,
+            ).reshape(n_classes, n_rot)
+            n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig[:actual_batch_size], dtype=np.int32)
+            cutoff_count_all[start_idx:end_idx] = np.asarray(
+                batch_cutoff_count[:actual_batch_size],
+                dtype=np.int32,
+            )
         else:
             batch_sig_mask_np = None
             n_sig_all[start_idx:end_idx] = 0
             cutoff_count_all[start_idx:end_idx] = 0
 
-        hard_assignment[start_idx:end_idx] = np.asarray(best_argmax_batch, dtype=np.int32)
-        class_assignment[start_idx:end_idx] = np.asarray(best_class_batch, dtype=np.int32)
+        hard_assignment[start_idx:end_idx] = np.asarray(
+            best_argmax_batch[:actual_batch_size],
+            dtype=np.int32,
+        )
+        class_assignment[start_idx:end_idx] = np.asarray(
+            best_class_batch[:actual_batch_size],
+            dtype=np.int32,
+        )
 
         log_score_offset = (
             np.zeros(batch_size, dtype=np.float64)
@@ -3559,14 +3670,22 @@ def _compute_k_class_significance_batched(
         )
         global_log_z_np = np.asarray(global_log_z, dtype=np.float64)
         best_score_np = np.asarray(best_score_batch, dtype=np.float64)
-        normalization_log_z[start_idx:end_idx] = global_log_z_np
-        normalization_log_evidence[start_idx:end_idx] = global_log_z_np + log_score_offset
+        output_slice = slice(0, actual_batch_size)
+        normalization_log_z[start_idx:end_idx] = global_log_z_np[output_slice]
+        normalization_log_evidence[start_idx:end_idx] = (
+            global_log_z_np[output_slice] + log_score_offset[output_slice]
+        )
         log_evidence[start_idx:end_idx] = normalization_log_evidence[start_idx:end_idx].astype(np.float32)
-        best_log_score[start_idx:end_idx] = (best_score_np + log_score_offset).astype(np.float32)
-        max_posterior[start_idx:end_idx] = np.exp(best_score_np - global_log_z_np).astype(np.float32)
+        best_log_score[start_idx:end_idx] = (
+            best_score_np[output_slice] + log_score_offset[output_slice]
+        ).astype(np.float32)
+        max_posterior[start_idx:end_idx] = np.exp(
+            best_score_np[output_slice] - global_log_z_np[output_slice]
+        ).astype(np.float32)
         for class_index, class_log_z in enumerate(class_log_z_values):
             class_log_evidence[class_index, start_idx:end_idx] = (
-                np.asarray(class_log_z, dtype=np.float64) + log_score_offset
+                np.asarray(class_log_z, dtype=np.float64)[output_slice]
+                + log_score_offset[output_slice]
             )
         if return_class_best:
             for class_index in range(n_classes):
@@ -3574,10 +3693,10 @@ def _compute_k_class_significance_batched(
                     class_best_scores[class_index],
                     log_score_offset,
                 )
-                class_best_offset_free_log_score[class_index, start_idx:end_idx] = offset_free
-                class_best_log_score[class_index, start_idx:end_idx] = absolute
+                class_best_offset_free_log_score[class_index, start_idx:end_idx] = offset_free[output_slice]
+                class_best_log_score[class_index, start_idx:end_idx] = absolute[output_slice]
                 class_hard_assignment[class_index, start_idx:end_idx] = np.asarray(
-                    class_best_argmaxes[class_index],
+                    class_best_argmaxes[class_index][output_slice],
                     dtype=np.int32,
                 )
         if return_class_second:
@@ -3586,10 +3705,10 @@ def _compute_k_class_significance_batched(
                     class_second_best_scores[class_index],
                     log_score_offset,
                 )
-                class_second_best_offset_free_log_score[class_index, start_idx:end_idx] = offset_free
-                class_second_best_log_score[class_index, start_idx:end_idx] = absolute
+                class_second_best_offset_free_log_score[class_index, start_idx:end_idx] = offset_free[output_slice]
+                class_second_best_log_score[class_index, start_idx:end_idx] = absolute[output_slice]
                 class_second_hard_assignment[class_index, start_idx:end_idx] = np.asarray(
-                    class_second_best_argmaxes[class_index],
+                    class_second_best_argmaxes[class_index][output_slice],
                     dtype=np.int32,
                 )
 

@@ -11410,6 +11410,65 @@ class TestRelionModeSmokeTest:
                 atol=1e-6,
             )
 
+    def test_k_class_significance_tail_padding_preserves_outputs(
+        self,
+        half_datasets,
+        init_volume,
+    ):
+        dataset = half_datasets[0]
+        means = jnp.stack([init_volume, init_volume * jnp.asarray(1.01, dtype=init_volume.dtype)])
+        rotations = _make_rotations(3, seed=312)
+        translations = jnp.array([[0.0, 0.0], [1.0, -1.0]], dtype=jnp.float32)
+        common_kwargs = dict(
+            class_log_priors=np.log(np.array([0.55, 0.45], dtype=np.float64)),
+            adaptive_fraction=0.999,
+            max_significants=-1,
+            rotation_block_size=2,
+            current_size=6,
+            score_with_masked_images=True,
+            translation_log_prior=np.asarray([[0.0, -0.1], [-0.2, 0.0]], dtype=np.float32),
+            image_pre_shifts=np.asarray([[0.25, -0.5], [-0.75, 0.5]], dtype=np.float32),
+            half_spectrum_scoring=True,
+            return_class_best=True,
+            return_class_second=True,
+        )
+
+        unpadded = _compute_k_class_significance_batched(
+            dataset,
+            means,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=dataset.n_units,
+            pad_final_image_batch=False,
+            **common_kwargs,
+        )
+        padded = _compute_k_class_significance_batched(
+            dataset,
+            means,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=dataset.n_units + 1,
+            pad_final_image_batch=True,
+            **common_kwargs,
+        )
+
+        for expected, actual in zip(unpadded[:4], padded[:4]):
+            np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+        for expected_by_class, actual_by_class in zip(unpadded[4], padded[4]):
+            for expected, actual in zip(expected_by_class, actual_by_class):
+                np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+        for key, expected in unpadded[5].items():
+            np.testing.assert_allclose(
+                np.asarray(padded[5][key]),
+                np.asarray(expected),
+                rtol=1e-6,
+                atol=1e-6,
+            )
+
     def test_k_class_pass1_fused_matches_unfused_significance(
         self,
         half_datasets,

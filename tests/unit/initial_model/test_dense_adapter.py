@@ -772,6 +772,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["pass1_relion_coarse_gaussian_default"] = kwargs[
             "relion_coarse_gaussian_default"
         ]
+        calls["pass1_pad_final_image_batch"] = kwargs["pad_final_image_batch"]
         n_images = int(dataset.n_images)
         n_rot = int(np.asarray(rotations).shape[0])
         significant = [[np.array([0], dtype=np.int32) for _ in range(n_images)]]
@@ -934,6 +935,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["pass1_max_significants"] == 100
     assert calls["pass1_debug_iteration"] == 7
     assert calls["pass1_relion_coarse_gaussian_default"] is True
+    assert calls["pass1_pad_final_image_batch"] is True
     assert calls["local_current_size"] == state.current_size
     assert calls["rotation_perturbation"] == (0.25, 60.0)
     assert calls["device_coarse"][0].shape == (72, 3)
