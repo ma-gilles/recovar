@@ -94,7 +94,7 @@ def _k_class_fused_relion_fine_mstep_prune_mode_override(
     """Default K-class sparse pass-2 to joint pruning, unless explicitly overridden."""
 
     if bool(keep_all_candidates):
-        return "keep_all"
+        return "joint_keep_all"
     if not bool(relion_fine_mstep_prune):
         return None
     if _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV in os.environ:
@@ -1036,6 +1036,10 @@ def _run_sparse_k_class_adaptive_pass2(
             fused_common["normalization_log_evidence"] = base_engine_kwargs[
                 "normalization_log_evidence"
             ]
+        if "relion_f32_normalization_sum_weight" in base_engine_kwargs:
+            fused_common["relion_f32_normalization_sum_weight"] = base_engine_kwargs[
+                "relion_f32_normalization_sum_weight"
+            ]
         for planner_name in (
             "compact_pair_min_bucket_size_default",
             "compact_pair_tail_coalesce_max_images_default",
@@ -1698,6 +1702,7 @@ _IMAGE_AXIS_ENGINE_KWARGS = (
     "translation_log_prior",
     "rotation_log_prior",
     "normalization_log_evidence",
+    "relion_f32_normalization_sum_weight",
 )
 
 

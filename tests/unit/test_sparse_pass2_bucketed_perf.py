@@ -4574,7 +4574,14 @@ def test_k_class_fused_prune_mode_allows_explicit_env_override(monkeypatch):
             relion_fine_mstep_prune=True,
             keep_all_candidates=True,
         )
-        == "keep_all"
+        == "joint_keep_all"
+    )
+    assert (
+        _relion_fine_mstep_prune_mode(
+            use_relion_x_half_mstep=False,
+            mode_override="joint_keep_all",
+        )
+        == "joint_keep_all"
     )
 
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE", "none")

@@ -984,10 +984,21 @@ def _run_sparse_pass2_initial_model_estep(
                     }
                 )
                 if oversampling_order == 0:
-                    compact_engine_kwargs["normalization_log_evidence"] = np.asarray(
-                        _full_stats["normalization_log_evidence"],
-                        dtype=np.float64,
-                    )
+                    if "relion_f32_sum_weight" in _full_stats:
+                        compact_engine_kwargs[
+                            "relion_f32_normalization_sum_weight"
+                        ] = np.asarray(
+                            _full_stats["relion_f32_sum_weight"],
+                            dtype=np.float32,
+                        )
+                    else:
+                        # CPU/reference scorers do not expose the native CUDA
+                        # denominator. Preserve their mathematically
+                        # equivalent log-evidence normalization fallback.
+                        compact_engine_kwargs["normalization_log_evidence"] = np.asarray(
+                            _full_stats["normalization_log_evidence"],
+                            dtype=np.float64,
+                        )
                 result = _run_sparse_k_class_adaptive_pass2(
                     group_dataset,
                     means,

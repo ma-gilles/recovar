@@ -1130,6 +1130,7 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
     coarse_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 72, axis=0)
     coarse_translations = np.asarray([[0.0, 0.0], [1.5, -0.5]], dtype=np.float32)
     coarse_log_evidence = np.asarray([11.0, 12.0], dtype=np.float64)
+    coarse_sum_weight = np.asarray([2.5e22, 3.0e22], dtype=np.float32)
 
     def fake_significance(dataset, *_args, **_kwargs):
         n_images = int(dataset.n_images)
@@ -1143,7 +1144,10 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
             np.zeros(n_images, dtype=np.int32),
             np.zeros(n_images, dtype=np.int32),
             significant,
-            {"normalization_log_evidence": coarse_log_evidence},
+            {
+                "normalization_log_evidence": coarse_log_evidence,
+                "relion_f32_sum_weight": coarse_sum_weight,
+            },
         )
 
     def fake_run_compact(dataset, *_args, **kwargs):
@@ -1205,7 +1209,11 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
 
     assert calls["relion_fine_mstep_prune"] is False
     assert calls["relion_fine_mstep_keep_all"] is True
-    np.testing.assert_array_equal(calls["normalization_log_evidence"], coarse_log_evidence)
+    np.testing.assert_array_equal(
+        calls["relion_f32_normalization_sum_weight"],
+        coarse_sum_weight,
+    )
+    assert "normalization_log_evidence" not in calls
     assert result.meta["pass2_engine"] == "compact"
 
 

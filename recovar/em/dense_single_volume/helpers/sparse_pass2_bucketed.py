@@ -8430,8 +8430,14 @@ def _relion_pass2_reconstruction_probs(probs, *, adaptive_fraction: float):
     return jnp.where(mask, probs, 0.0), mask, n_significant
 
 
-@partial(jax.jit, static_argnames=("adaptive_fraction",))
-def _relion_f32_fine_posterior(scores, *, adaptive_fraction: float):
+@partial(jax.jit, static_argnames=("adaptive_fraction", "keep_all"))
+def _relion_f32_fine_posterior(
+    scores,
+    *,
+    adaptive_fraction: float,
+    normalization_sum_weight=None,
+    keep_all: bool = False,
+):
     """Build full and pruned fine probabilities with RELION GPU arithmetic.
 
     The reference GPU path shifts its float32 log weights so the maximum is
@@ -8485,16 +8491,30 @@ def _relion_f32_fine_posterior(scores, *, adaptive_fraction: float):
         )
         sorted_weights = jnp.sort(raw_weights, axis=1)
         cumulative = jnp.cumsum(sorted_weights, axis=1, dtype=jnp.float32)
-    sum_weight = cumulative[:, -1]
+    fine_sum_weight = cumulative[:, -1]
+    if normalization_sum_weight is None:
+        sum_weight = fine_sum_weight
+    else:
+        # Gradient InitialModel with adaptive_oversampling==0 does not update
+        # op.sum_weight in the symbolic fine pass.  The CUDA fine weights are
+        # shifted by their own maximum, then divided directly by the numeric
+        # float32 denominator retained from the coarse pass.
+        sum_weight = jnp.asarray(normalization_sum_weight, dtype=jnp.float32)
     has_mass = has_finite & jnp.isfinite(sum_weight) & (sum_weight > jnp.float32(0.0))
-    tail_target = _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction)
-    threshold_idx = jax.vmap(lambda row, target: jnp.searchsorted(row, target, side="right"))(
-        cumulative,
-        tail_target,
-    )
-    threshold_idx = jnp.minimum(threshold_idx, cumulative.shape[1] - 1)
-    threshold = sorted_weights[jnp.arange(flat_scores.shape[0]), threshold_idx]
-    mask_flat = has_mass[:, None] & finite & (raw_weights >= threshold[:, None])
+    if keep_all:
+        threshold = jnp.zeros_like(sum_weight)
+        mask_flat = has_mass[:, None] & finite & (raw_weights > jnp.float32(0.0))
+    else:
+        tail_target = _relion_cuda_f32_tail_target(fine_sum_weight, adaptive_fraction)
+        threshold_idx = jax.vmap(
+            lambda row, target: jnp.searchsorted(row, target, side="right")
+        )(
+            cumulative,
+            tail_target,
+        )
+        threshold_idx = jnp.minimum(threshold_idx, cumulative.shape[1] - 1)
+        threshold = sorted_weights[jnp.arange(flat_scores.shape[0]), threshold_idx]
+        mask_flat = has_mass[:, None] & finite & (raw_weights >= threshold[:, None])
     safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
     if use_native_cuda:
         normalized_weights = jax.vmap(cuda_backproject.relion_divide_f32)(
@@ -8612,6 +8632,8 @@ def _relion_fine_mstep_prune_mode(*, use_relion_x_half_mstep: bool, mode_overrid
     ``per_class`` preserves the original opt-in diagnostic. ``joint`` matches
     RELION Class3D storeWeightedSums: threshold one flattened class x pose
     posterior list per image before accumulating M-step sums.
+    ``joint_keep_all`` preserves every admitted coarse candidate while still
+    using the joint RELION float32 posterior arithmetic.
     """
 
     value = mode_override
@@ -8620,6 +8642,8 @@ def _relion_fine_mstep_prune_mode(*, use_relion_x_half_mstep: bool, mode_overrid
     if value is None or not value.strip():
         return "per_class" if use_relion_x_half_mstep else "none"
     mode = value.strip().lower()
+    if mode in {"joint_keep_all", "joint-keep-all"}:
+        return "joint_keep_all"
     if mode in {"all", "keep_all", "keep-all", "no_prune", "no-prune"}:
         return "none"
     if mode in _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_JOINT_MODES:
@@ -8630,7 +8654,7 @@ def _relion_fine_mstep_prune_mode(*, use_relion_x_half_mstep: bool, mode_overrid
         return "per_class" if use_relion_x_half_mstep else "none"
     raise ValueError(
         f"{_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV} must be one of "
-        "0/1/per_class/joint"
+        "0/1/per_class/joint/joint_keep_all"
     )
 
 
@@ -15331,6 +15355,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     adaptive_fraction=0.999,
     bpref_device_signature_active: bool = False,
     normalization_log_evidence=None,
+    relion_f32_normalization_sum_weight=None,
     compact_pair_min_bucket_size_default: int | None = None,
     compact_pair_tail_coalesce_max_images_default: int | None = None,
     compact_pair_tail_coalesce_max_inflation_default: float | None = None,
@@ -15446,6 +15471,17 @@ def compute_k_class_pass2_stats_sparse_fused(
                 "normalization_log_evidence must have shape "
                 f"({n_images},), got {normalization_log_evidence_np.shape}",
             )
+    relion_f32_normalization_sum_weight_np = None
+    if relion_f32_normalization_sum_weight is not None:
+        relion_f32_normalization_sum_weight_np = np.asarray(
+            relion_f32_normalization_sum_weight,
+            dtype=np.float32,
+        )
+        if relion_f32_normalization_sum_weight_np.shape != (n_images,):
+            raise ValueError(
+                "relion_f32_normalization_sum_weight must have shape "
+                f"({n_images},), got {relion_f32_normalization_sum_weight_np.shape}",
+            )
     n_coarse_trans = int(np.asarray(translations).shape[0])
     n_coarse_rot = rotation_grid_size(nside_level)
     if not hasattr(experiment_dataset, "image_shape") or not hasattr(experiment_dataset, "volume_shape"):
@@ -15501,6 +15537,10 @@ def compute_k_class_pass2_stats_sparse_fused(
         mode_override=relion_fine_mstep_prune_mode,
     )
     relion_fine_mstep_prune = relion_fine_mstep_prune_mode != "none"
+    relion_fine_mstep_joint = relion_fine_mstep_prune_mode in {
+        "joint",
+        "joint_keep_all",
+    }
     use_half_volume_mstep = bool(relion_half_volume_mstep) or use_relion_x_half_mstep
     compact_pair_mstep_mode_requested = _compact_pair_mstep_mode_for_pass()
     compact_pair_pair_sparse_requested = compact_pair_mstep_mode_requested == "pair_sparse"
@@ -17406,7 +17446,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         joint_mstep_masks_by_class = None
         joint_mstep_probs_by_class = None
         joint_full_probs_by_class = None
-        if relion_fine_mstep_prune_mode == "joint":
+        if relion_fine_mstep_joint:
             flat_joint_probs_by_class = []
             flat_joint_scores_by_class = []
             joint_prob_shapes = []
@@ -17463,6 +17503,15 @@ def compute_k_class_pass2_stats_sparse_fused(
                     _relion_f32_fine_posterior(
                         joint_scores,
                         adaptive_fraction=float(adaptive_fraction),
+                        normalization_sum_weight=(
+                            None
+                            if relion_f32_normalization_sum_weight_np is None
+                            else jnp.asarray(
+                                relion_f32_normalization_sum_weight_np[image_indices],
+                                dtype=jnp.float32,
+                            )
+                        ),
+                        keep_all=relion_fine_mstep_prune_mode == "joint_keep_all",
                     )
                 )
                 split_points = np.cumsum(flat_sizes[:-1], dtype=np.int64).tolist()
@@ -17714,7 +17763,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         jnp.ones_like(max_posterior_bucket),
                         jnp.zeros_like(max_posterior_bucket),
                     )
-                if relion_fine_mstep_prune_mode == "joint":
+                if relion_fine_mstep_joint:
                     reconstruction_mask = joint_mstep_masks_by_class[class_index]
                     reconstruction_probs = (
                         joint_mstep_probs_by_class[class_index]
@@ -17823,7 +17872,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         jnp.ones_like(max_posterior_bucket),
                         jnp.zeros_like(max_posterior_bucket),
                     )
-                if relion_fine_mstep_prune_mode == "joint":
+                if relion_fine_mstep_joint:
                     reconstruction_mask = joint_mstep_masks_by_class[class_index]
                     reconstruction_probs = (
                         joint_mstep_probs_by_class[class_index]

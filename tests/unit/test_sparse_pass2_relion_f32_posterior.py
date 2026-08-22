@@ -122,6 +122,37 @@ def test_relion_f32_fine_posterior_exposes_full_joint_normalization():
         np.testing.assert_array_equal(actual, expected)
 
 
+def test_relion_f32_fine_posterior_reuses_external_coarse_sum_and_keeps_support():
+    scores = jnp.asarray(
+        [[0.0, -0.25, -1.5, -4.0, -np.inf]],
+        dtype=jnp.float32,
+    )
+    ordinary = tuple(
+        np.asarray(value)
+        for value in _relion_f32_fine_posterior(
+            scores,
+            adaptive_fraction=0.8,
+        )
+    )
+    coarse_sum_weight = ordinary[4] * np.float32(2.0)
+    reused = tuple(
+        np.asarray(value)
+        for value in _relion_f32_fine_posterior(
+            scores,
+            adaptive_fraction=0.8,
+            normalization_sum_weight=jnp.asarray(coarse_sum_weight),
+            keep_all=True,
+        )
+    )
+
+    np.testing.assert_allclose(reused[0], ordinary[0] * np.float32(0.5), rtol=2e-6)
+    np.testing.assert_array_equal(reused[1], reused[0])
+    np.testing.assert_array_equal(reused[2], [[True, True, True, True, False]])
+    np.testing.assert_array_equal(reused[3], [4])
+    np.testing.assert_array_equal(reused[4], coarse_sum_weight)
+    np.testing.assert_array_equal(reused[5], np.zeros(1, dtype=np.float32))
+
+
 def test_relion_f32_fine_posterior_gate_off_preserves_default(monkeypatch):
     monkeypatch.delenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, raising=False)
     scores = jnp.asarray([[[0.0, -0.2, -1.7], [-2.1, -3.5, -np.inf]]], dtype=jnp.float32)

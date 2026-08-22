@@ -2752,6 +2752,11 @@ def _compute_k_class_significance_batched(
     log_evidence = np.empty(n_images, dtype=np.float32)
     best_log_score = np.empty(n_images, dtype=np.float32)
     max_posterior = np.empty(n_images, dtype=np.float32)
+    relion_f32_sum_weight = (
+        np.empty(n_images, dtype=np.float32)
+        if relion_f32_coarse_support_enabled and collect_significance
+        else None
+    )
     class_log_evidence = np.empty((n_classes, n_images), dtype=np.float64)
     class_best_log_score = (
         np.empty((n_classes, n_images), dtype=np.float32) if return_class_best else None
@@ -3617,6 +3622,10 @@ def _compute_k_class_significance_batched(
                     adaptive_fraction=float(adaptive_fraction),
                     max_significants=max_significants,
                 )
+                relion_f32_sum_weight[start_idx:end_idx] = np.asarray(
+                    _batch_sum_weight[:actual_batch_size],
+                    dtype=np.float32,
+                )
                 batch_sig_rot_mask = jnp.any(
                     batch_sig_mask.reshape(batch_size, n_classes * n_rot, n_trans),
                     axis=2,
@@ -3677,9 +3686,15 @@ def _compute_k_class_significance_batched(
         best_log_score[start_idx:end_idx] = (
             best_score_np[output_slice] + log_score_offset[output_slice]
         ).astype(np.float32)
-        max_posterior[start_idx:end_idx] = np.exp(
-            best_score_np[output_slice] - global_log_z_np[output_slice]
-        ).astype(np.float32)
+        if relion_f32_coarse_support_enabled and collect_significance:
+            max_posterior[start_idx:end_idx] = np.asarray(
+                jnp.max(batch_weights[:actual_batch_size], axis=1),
+                dtype=np.float32,
+            )
+        else:
+            max_posterior[start_idx:end_idx] = np.exp(
+                best_score_np[output_slice] - global_log_z_np[output_slice]
+            ).astype(np.float32)
         for class_index, class_log_z in enumerate(class_log_z_values):
             class_log_evidence[class_index, start_idx:end_idx] = (
                 np.asarray(class_log_z, dtype=np.float64)[output_slice]
@@ -3929,6 +3944,12 @@ def _compute_k_class_significance_batched(
         # expand the pass-2/M-step support represented by ``n_sig_all``.
         "significant_cutoff_counts": cutoff_count_all,
     }
+    if relion_f32_sum_weight is not None:
+        # RELION's oversampling-zero second pass deliberately reuses this
+        # coarse, maximum-shifted float32 denominator numerically.  It is not
+        # interchangeable with a log-evidence value because the fine pass
+        # independently shifts its own maximum to 50 before division.
+        full_stats["relion_f32_sum_weight"] = relion_f32_sum_weight
     if return_class_best:
         full_stats["class_best_log_score_per_image"] = class_best_log_score
         full_stats["class_best_offset_free_log_score_per_image"] = class_best_offset_free_log_score
