@@ -26,6 +26,15 @@ unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA RECOVAR_CUDA_DISABLE
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+RECOVAR_CUDA_MODE_ARGS=()
+if [[ "${VDAM_ALLOW_ASYNC_CUDA:-}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
+  export CUDA_LAUNCH_BLOCKING=0
+  RECOVAR_CUDA_MODE_ARGS+=(--allow_async_cuda)
+else
+  # Keep the reference and candidate in the same deterministic launch mode,
+  # and establish it before the provenance process creates a CUDA context.
+  export CUDA_LAUNCH_BLOCKING=1
+fi
 RUNTIME_ROOT="/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${SLURM_JOB_ID:-manual}"
 export TMPDIR="${RUNTIME_ROOT}/tmp"
 export PIXI_HOME="${RUNTIME_ROOT}/pixi_home"
@@ -112,6 +121,7 @@ RECOVAR_CMD=(
   --offset_step "${OFFSET_STEP}" --padding_factor "${PAD}"
   --image_batch_size "${IMAGE_BATCH_SIZE}" --datadir "${DATA_DIR}"
   --gpu 0 --require_custom_cuda
+  "${RECOVAR_CUDA_MODE_ARGS[@]}"
 )
 
 "${PIXI_PY}" - "${OUTPUT_ROOT}" "${RELION_CMD[@]}" __RECOVAR_COMMAND__ "${RECOVAR_CMD[@]}" <<'PY'
@@ -188,6 +198,8 @@ report = {
     "relion_reference": relion_reference,
     "relion_wall_s": int(sys.argv[4]),
     "recovar_wall_s": int(sys.argv[5]),
+    "cuda_launch_blocking": os.environ.get("CUDA_LAUNCH_BLOCKING") == "1",
+    "cuda_launch_blocking_value": os.environ.get("CUDA_LAUNCH_BLOCKING"),
 }
 (root / "run_provenance.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY

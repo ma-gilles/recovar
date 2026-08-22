@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -7,6 +9,8 @@ from scripts.audit_vdam_real_trajectory import (
     _compare_active_particle_state,
     _particle_state_gate,
 )
+
+SBATCH_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_vdam_relion_real_data_case.sbatch"
 
 
 def _acceptance() -> dict[str, float]:
@@ -32,6 +36,16 @@ def test_particle_state_gate_accepts_exact_topology_and_bounded_pmax():
 
     assert report["pass"] is True
     assert all(report["checks"].values())
+
+
+def test_real_data_sbatch_sets_paired_launch_mode_before_gpu_gate():
+    text = SBATCH_PATH.read_text()
+
+    launch_mode = text.index("export CUDA_LAUNCH_BLOCKING=1")
+    gpu_gate = text.index('"${PIXI_PY}" - <<\'PY\'')
+    assert launch_mode < gpu_gate
+    assert "RECOVAR_CUDA_MODE_ARGS+=(--allow_async_cuda)" in text
+    assert '"cuda_launch_blocking_value"' in text
 
 
 def test_particle_state_gate_rejects_topology_or_pmax_drift():
