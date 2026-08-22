@@ -1396,6 +1396,31 @@ def test_sparse_pass2_pass1_current_size_matches_relion_fixture_coarse_size():
     assert pass1_current_size == 10
 
 
+def test_sparse_pass2_pass1_current_size_uses_pre_update_healpix_order():
+    """InitialModel sizes pass 1 before RELION promotes the sampling order."""
+    state = initialise_denovo_state(
+        ori_size=128,
+        pixel_size=4.25,
+        K=1,
+        nr_iter=25,
+        n_directions=192,
+        pseudo_halfsets=False,
+    )
+    state.current_size = 56
+
+    pass1_current_size = _resolve_sparse_pass1_current_size(
+        state,
+        {"current_size": state.current_size},
+        {
+            "healpix_order": 2,
+            "pass1_healpix_order": 1,
+            "particle_diameter_ang": 200.0,
+        },
+    )
+
+    assert pass1_current_size == 26
+
+
 def test_initial_model_pass2_layout_uses_relion_direction_ids_for_posterior_bins():
     layout = LocalHypothesisLayout(
         n_global_rotations=4,

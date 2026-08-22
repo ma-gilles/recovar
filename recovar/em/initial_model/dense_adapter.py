@@ -65,6 +65,7 @@ _SPARSE_PASS2_CONTROL_KEYS = {
     "coarse_translations",
     "coarse_translation_log_prior",
     "particle_diameter_ang",
+    "pass1_healpix_order",
     "pass1_current_size",
     "return_profile",
 }
@@ -298,7 +299,9 @@ def _resolve_sparse_pass1_current_size(
 
     coarse_size = int(
         compute_coarse_image_size(
-            healpix_angular_step(int(options.get("healpix_order", 0))),
+            healpix_angular_step(
+                int(options.get("pass1_healpix_order", options.get("healpix_order", 0)))
+            ),
             float(state.pixel_size),
             int(state.ori_size),
             particle_diameter=float(particle_diameter),

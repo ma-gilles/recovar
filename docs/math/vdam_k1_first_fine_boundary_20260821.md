@@ -654,3 +654,38 @@ Evidence roots:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_noise_terms_20260824T034500Z`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_highshell_fix_default_20260824T041500Z`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_highshell_fix_exact_20260824T041500Z`
+
+## Iteration-20 order-promotion coarse-size boundary
+
+Verbose native and RECOVAR significance captures for source particle 0 show
+that the order-1-to-2 failure occurred before fine scoring. RELION's coarse
+pass selected rotation 3800 with four significant translations, while RECOVAR
+selected rotation 3824 with two. The captured coarse device Euler tables are
+bit-exact after the expected transpose, and replaying RECOVAR's coarse scorer
+with RELION's in-memory PPref changes centered diff2 by only `0.00285` RMS.
+The incoming map was therefore not the cause.
+
+The actual operand topology differed: RELION scored a 26-by-26 coarse Fourier
+window (364 half-spectrum pixels), while RECOVAR scored 50-by-50 (1300
+pixels). RELION computes `image_coarse_size` before `updateAngularSampling`, so
+an expectation that promotes HEALPix order must size pass 1 from the incoming
+order while using the promoted order for the orientation grid and fine-child
+expansion. InitialModel now carries that pre-update order explicitly into its
+sparse pass-2 adapter. A focused regression pins the observed order-1-to-2
+boundary to `coarse_size=26`.
+
+Paired H100 job `12751069` closes the frozen 25-iteration trajectory gate.
+Cross-engine FSC-AUC is `0.9999999857` at iteration 20 and `0.9999987771` at
+iteration 25, compared with `0.9989211` and about `0.9872` before the fix. All
+1,000 poses/translations agree at iteration 20; two near-tie rows differ at
+iteration 25. The full InitialModel adapter/driver unit suites pass `71/71`.
+External wall time remains non-comparable on this small case: RECOVAR takes
+`326.5 s` versus RELION's `23.0 s`, so performance is still an explicit K=1
+work item after correctness qualification.
+
+Evidence roots:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_it20_native_verbose_part0_forced_20260824T053000Z`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_it20_recovar_coarse_part0_20260824T052000Z`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_it20_order2_part0_boundary_20260824T043000Z`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_preupdate_coarse_size_default_20260824T073000Z`

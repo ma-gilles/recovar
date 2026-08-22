@@ -1047,6 +1047,7 @@ def _dense_estep_config(
     translation_offsets: np.ndarray,
     sigma_offset_angstrom: float | None = None,
     class_log_priors: np.ndarray | None = None,
+    pass1_healpix_order: int | None = None,
 ) -> DenseInitialModelEstepConfig:
     image_pre_shifts = relion_round_away_from_zero(translation_offsets)
     coarse_translations = np.asarray(
@@ -1109,6 +1110,11 @@ def _dense_estep_config(
             random_perturbation=float(sampling_plan.random_perturbation),
             coarse_translations=coarse_translations,
             particle_diameter_ang=float(opts.particle_diameter),
+            pass1_healpix_order=(
+                int(sampling_plan.healpix_order)
+                if pass1_healpix_order is None
+                else int(pass1_healpix_order)
+            ),
             return_profile=bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE")),
         )
         if _af := os.environ.get("RECOVAR_ADAPTIVE_FRACTION"):
@@ -1183,6 +1189,11 @@ def _native_expectation_step(
         do_grad = _native_initialmodel_do_grad(state, iteration)
         sampling_updated = False
         accuracy_meta = None
+        pass1_healpix_order = (
+            int(opts.healpix_order)
+            if sampling_state is None
+            else int(sampling_state.healpix_order)
+        )
         if sampling_state is None:
             sampling_plan = _build_sampling_plan(opts, iteration=iteration)
         else:
@@ -1221,6 +1232,7 @@ def _native_expectation_step(
             particle_state.translation_offsets,
             sigma_offset_angstrom=sigma_offset_angstrom,
             class_log_priors=np.zeros(int(state.K), dtype=np.float64),
+            pass1_healpix_order=pass1_healpix_order,
         )
         class_rotation_log_prior = _class_direction_rotation_log_prior(state, int(sampling_plan.healpix_order))
         if not bool(config.engine_kwargs.get("sparse_pass2", False)):
