@@ -81,3 +81,42 @@ def test_pair_report_records_only_recovar_environment():
         "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI": "1",
         "RECOVAR_Z_OVERRIDE": "z",
     }
+
+
+def test_required_fixture_paths_follow_star_stack_references(tmp_path: Path):
+    nested_stack = tmp_path / "nested" / "particles.mrcs"
+    nested_stack.parent.mkdir()
+    nested_stack.touch()
+    grid_stack = tmp_path / "particles.256.mrcs"
+    grid_stack.touch()
+    data_star = tmp_path / "particles.star"
+    data_star.write_text(
+        "\n".join(
+            [
+                "data_particles",
+                "loop_",
+                "_rlnImageName #1",
+                "1@particles.256.mrcs",
+                "2@nested/particles.mrcs",
+            ]
+        )
+        + "\n"
+    )
+
+    assert runner._required_fixture_paths(tmp_path) == [
+        data_star,
+        nested_stack.resolve(),
+        grid_stack.resolve(),
+    ]
+    assert runner._fixture_source_name(nested_stack, tmp_path) == "nested/particles.mrcs"
+
+
+def test_required_fixture_paths_reject_star_without_stack_reference(tmp_path: Path):
+    (tmp_path / "particles.star").write_text("data_particles\n")
+
+    try:
+        runner._required_fixture_paths(tmp_path)
+    except runner.PairRunError as error:
+        assert "no particle stacks" in str(error)
+    else:
+        raise AssertionError("expected a stack-free particle STAR to be rejected")

@@ -17,8 +17,10 @@ import numpy as np
 
 if __package__:
     from scripts.audit_vdam_kclass_trajectory import audit_trajectory
+    from scripts.run_k1_parity_smoke import referenced_particle_stacks
 else:
     from audit_vdam_kclass_trajectory import audit_trajectory
+    from run_k1_parity_smoke import referenced_particle_stacks
 
 
 DEFAULT_RELION = Path("/scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/build_clean_pinned/bin/relion_refine")
@@ -53,6 +55,24 @@ def _gpu_uuid() -> str:
     if len(values) != 1 or not values[0].startswith("GPU-"):
         raise PairRunError(f"expected exactly one visible physical GPU, found {values}")
     return values[0]
+
+
+def _required_fixture_paths(fixture_dir: Path) -> list[Path]:
+    data_star = fixture_dir / "particles.star"
+    if not data_star.is_file():
+        return [data_star]
+    particle_stacks = referenced_particle_stacks(data_star, fixture_dir)
+    if not particle_stacks:
+        raise PairRunError(f"no particle stacks are referenced by {data_star}")
+    return [data_star, *particle_stacks]
+
+
+def _fixture_source_name(path: Path, fixture_dir: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(fixture_dir.resolve()))
+    except ValueError:
+        return str(resolved)
 
 
 def build_relion_command(args: argparse.Namespace, output_prefix: Path) -> list[str]:
@@ -175,7 +195,7 @@ def run_pair(args: argparse.Namespace) -> dict[str, Any]:
         directory.mkdir(parents=True, exist_ok=True)
     (args.output_root / "SAFE_TO_DELETE").touch()
 
-    required_fixture = [args.fixture_dir / "particles.star", args.fixture_dir / "particles.128.mrcs"]
+    required_fixture = _required_fixture_paths(args.fixture_dir)
     missing = [str(path) for path in required_fixture if not path.is_file()]
     if missing:
         raise PairRunError(f"missing K-class fixture paths: {missing}")
@@ -230,7 +250,9 @@ def run_pair(args: argparse.Namespace) -> dict[str, Any]:
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "physical_gpu_uuid": gpu_before,
         "fixture_dir": str(args.fixture_dir),
-        "fixture_sha256": {path.name: _sha256(path) for path in required_fixture},
+        "fixture_sha256": {
+            _fixture_source_name(path, args.fixture_dir): _sha256(path) for path in required_fixture
+        },
         "relion_executable": str(args.relion_refine.resolve()),
         "relion_sha256": _sha256(args.relion_refine),
         "relion_timing": relion_timing,
