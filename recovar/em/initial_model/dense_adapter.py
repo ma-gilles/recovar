@@ -748,17 +748,12 @@ def _run_sparse_pass2_initial_model_estep(
     translation_step = float(options.get("translation_step", _translation_step_from_grid(coarse_translations)))
     coarse_translation_log_prior = options.get("coarse_translation_log_prior")
     n_coarse_rotations = rotation_grid_size(healpix_order)
-    coarse_source_eulers = None
     if int(np.asarray(config.rotations).shape[0]) == n_coarse_rotations:
         coarse_rotations = np.asarray(config.rotations, dtype=np.float32)
         coarse_metadata_rotations = coarse_rotations
     else:
         from recovar.em import sampling
 
-        coarse_source_eulers = sampling.get_relion_rotation_grid_eulers(
-            healpix_order,
-            rotation_index_order="relion",
-        )
         coarse_rotations = sampling.get_relion_hidden_rotation_grid(
             healpix_order,
             matrices=True,
@@ -769,20 +764,25 @@ def _run_sparse_pass2_initial_model_estep(
             relion_angular_sampling_deg(healpix_order),
         ).astype(np.float32, copy=False)
         coarse_metadata_rotations = coarse_rotations
-        # Adaptive pass 1 is the one InitialModel projection path whose Euler
-        # matrices RELION builds on the accelerator.  Keep the host-generated
-        # rotations above as the CPU fallback, but on GPU replace them with
-        # the source-Euler/sincosf result used by AccProjectorPlan::setup.
-        # Fine scoring and weighted-sum backprojection deliberately continue
-        # to use their separate host-generated matrices.
-        if use_exact_relion_projector:
-            device_coarse_rotations = sampling._relion_adaptive_pass1_rotations_f32(
-                coarse_source_eulers,
-                random_perturbation,
-                relion_angular_sampling_deg(healpix_order),
-            )
-            if device_coarse_rotations is not None:
-                coarse_rotations = device_coarse_rotations
+    # AccProjectorPlan builds coarse scorer matrices on the accelerator even
+    # when adaptive_oversampling == 0 and config.rotations already contains
+    # exactly the coarse grid.  Do not let that equal-size fast path retain
+    # the nearby host-double matrices.  Fine scoring and weighted-sum
+    # backprojection deliberately continue to use their separate host path.
+    if use_exact_relion_projector:
+        from recovar.em import sampling
+
+        coarse_source_eulers = sampling.get_relion_rotation_grid_eulers(
+            healpix_order,
+            rotation_index_order="relion",
+        )
+        device_coarse_rotations = sampling._relion_adaptive_pass1_rotations_f32(
+            coarse_source_eulers,
+            random_perturbation,
+            relion_angular_sampling_deg(healpix_order),
+        )
+        if device_coarse_rotations is not None:
+            coarse_rotations = device_coarse_rotations
     coarse_rotations_for_dense = np.asarray(coarse_rotations, dtype=np.float32)
     if config.relion_projector_frame and not use_exact_relion_projector:
         coarse_rotations_for_dense = _relion_projector_dense_rotations(coarse_rotations)

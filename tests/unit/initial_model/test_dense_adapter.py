@@ -979,6 +979,86 @@ def test_exact_relion_fine_diff2_can_be_disabled(monkeypatch):
         assert _exact_relion_fine_diff2_enabled() is False
 
 
+def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch):
+    """Equal coarse/fine grid sizes must not bypass AccProjectorPlan arithmetic."""
+
+    calls = {}
+    host_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 72, axis=0)
+    device_rotations = np.full((72, 3, 3), np.float32(9.0))
+
+    class BoundaryReached(RuntimeError):
+        pass
+
+    def fake_device_coarse(source_eulers, random_perturbation, angular_sampling_deg):
+        calls["source_eulers"] = np.asarray(source_eulers).copy()
+        calls["random_perturbation"] = float(random_perturbation)
+        calls["angular_sampling_deg"] = float(angular_sampling_deg)
+        return device_rotations
+
+    def fake_significance(_dataset, _means, _noise, rotations, *_args, **_kwargs):
+        calls["pass1_rotations"] = np.asarray(rotations).copy()
+        raise BoundaryReached
+
+    monkeypatch.setattr(
+        "recovar.em.sampling._relion_adaptive_pass1_rotations_f32",
+        fake_device_coarse,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        fake_significance,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._resolve_class_inputs",
+        lambda state, config: (
+            config.means,
+            config.mean_variance,
+            np.zeros((1, 1, 1, 1), dtype=np.complex64),
+            1,
+        ),
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._uses_relion_cuda_image_preprocessing",
+        lambda _dataset: True,
+    )
+
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=1,
+        n_directions=4,
+        pseudo_halfsets=False,
+    )
+    config = DenseInitialModelEstepConfig(
+        means=np.zeros((1, 8**3), dtype=np.complex64),
+        mean_variance=np.ones((1, 8**3), dtype=np.float32),
+        noise_variance=np.ones(8 * 8, dtype=np.float32),
+        rotations=host_rotations,
+        translations=np.zeros((1, 2), dtype=np.float32),
+        relion_bpref_frame=False,
+        engine_kwargs={
+            "sparse_pass2": True,
+            "healpix_order": 0,
+            "oversampling_order": 0,
+            "random_perturbation": 0.25,
+            "coarse_translations": np.zeros((1, 2), dtype=np.float32),
+        },
+    )
+
+    with pytest.raises(BoundaryReached):
+        run_dense_initial_model_estep(
+            _Dataset(),
+            state,
+            config,
+            particle_ids=np.asarray([0, 1], dtype=np.int64),
+        )
+
+    assert calls["source_eulers"].shape == (72, 3)
+    assert calls["random_perturbation"] == 0.25
+    assert calls["angular_sampling_deg"] == 60.0
+    np.testing.assert_array_equal(calls["pass1_rotations"], device_rotations)
+
+
 def test_initial_model_local_bucket_unification_can_be_disabled(monkeypatch):
     from recovar.em.initial_model.dense_adapter import _unify_local_bucket_sizes_enabled
 
