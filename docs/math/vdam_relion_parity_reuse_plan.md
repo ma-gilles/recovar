@@ -56,6 +56,12 @@ do not score under this contract.
    FSC-AUC, particle-state, schedule, and topology reports.
 5. Frozen twelve-case Slurm suite plus a separate non-scoring K>1 diagnostic
    trajectory. K>1 cannot change the K=1 denominator.
+6. Same-physical-GPU repeat panels for nonlinear late branches. Every original
+   paired result remains visible. A panel passes only when RECOVAR's own repeat
+   floor meets the frozen cross-engine gate, at least one cross pairing meets
+   that gate, every run retains the frozen GT nondegradation gate, and any
+   cross pairing below the point gate is no worse than stock RELION's measured
+   repeat floor at that checkpoint.
 
 Thresholds, fixture identities, and the denominator require a new suite
 version. Failed cases stay visible and are fixed in code rather than hidden by
@@ -83,6 +89,19 @@ sbatch \
   --export=ALL,OUTPUT_ROOT="$OUTPUT_ROOT" \
   scripts/run_vdam_relion_parity_matrix.sbatch
 ```
+
+For a late nonlinear case, run four complete pairs sequentially in one
+allocation so all native and candidate repeats use the same physical GPU:
+
+```bash
+sbatch \
+  --export=ALL,CASE_ID=vdam-l03,OUTPUT_ROOT="$OUTPUT_ROOT" \
+  scripts/run_vdam_relion_repeat_panel.sbatch
+```
+
+The repeat audit uses signed shellwise FSC/FSC-AUC only. It does not replace or
+rewrite the individual trajectory audits and does not widen the frozen point
+or GT thresholds.
 
 The case directory contains verified fixture symlinks, complete engine logs,
 exact argv JSON, timing/provenance records, `trajectory_audit.json`, and the
