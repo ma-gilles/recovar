@@ -866,9 +866,14 @@ def _build_sampling_plan(
     random_perturbation = _random_perturbation_for_iteration(opts, iteration)
     perturbed = abs(random_perturbation) > 1e-12
 
-    coarse_translations = sampling.get_translation_grid(max_pixel=offset_range_px, pixel_offset=offset_step_px).astype(
-        np.float32
+    source_units_per_pixel = (
+        float(sampling_state.pixel_size) if sampling_state is not None else 1.0
     )
+    coarse_translations = sampling.get_relion_translation_grid(
+        max_pixel=offset_range_px,
+        pixel_offset=offset_step_px,
+        source_units_per_pixel=source_units_per_pixel,
+    ).astype(np.float32)
     coarse_pass1_translations = (
         sampling.apply_relion_translation_perturbation(coarse_translations, random_perturbation, offset_step_px).astype(
             np.float32

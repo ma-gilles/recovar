@@ -308,6 +308,33 @@ def test_initial_sampling_state_uses_relion_angstrom_internal_units():
     assert plan.translations.shape == (116, 2)
 
 
+def test_sampling_plan_applies_relion_radius_tolerance_in_angstroms():
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        healpix_order=3,
+        oversampling=1,
+        random_perturbation=0.0,
+    )
+    sampling_state = driver.NativeSamplingState(
+        healpix_order=3,
+        adaptive_oversampling=1,
+        offset_range_angstrom=6.707714,
+        offset_step_angstrom=3.0,
+        offset_range_ori_angstrom=25.5,
+        offset_step_ori_angstrom=8.5,
+        pixel_size=4.25,
+    )
+
+    plan = driver._build_sampling_plan(
+        opts,
+        iteration=20,
+        sampling_state=sampling_state,
+    )
+
+    assert plan.coarse_prior_translations.shape == (13, 2)
+    assert plan.translations.shape == (52, 2)
+
+
 def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     opts = driver.NativeInitialModelOptions(
         fn_img="particles.star",

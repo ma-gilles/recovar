@@ -217,10 +217,20 @@ def _k1_relion_exact_translation_grid_enabled(environ=None):
     )
 
 
-def _translation_grid_for_class_count(max_pixel, pixel_offset, *, n_classes):
+def _translation_grid_for_class_count(
+    max_pixel,
+    pixel_offset,
+    *,
+    n_classes,
+    source_units_per_pixel=1.0,
+):
     """Use source-exact RELION translation enumeration for K=1 only."""
     if int(n_classes) == 1 and _k1_relion_exact_translation_grid_enabled():
-        return get_relion_translation_grid(max_pixel, pixel_offset)
+        return get_relion_translation_grid(
+            max_pixel,
+            pixel_offset,
+            source_units_per_pixel=source_units_per_pixel,
+        )
     return get_translation_grid(max_pixel, pixel_offset)
 
 
@@ -5220,6 +5230,7 @@ def _run_relion_iteration_loop(
             init_translation_range,
             init_translation_step,
             n_classes=n_classes,
+            source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
         ).astype(np.float64, copy=False)
         current_translations = jnp.asarray(
             base_translations,
@@ -6485,6 +6496,7 @@ def _run_relion_iteration_loop(
                 state.translation_range,
                 state.translation_step,
                 n_classes=n_classes,
+                source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
             ).astype(np.float64, copy=False)
             current_translations = jnp.array(
                 base_translations.astype(np.float32)
@@ -6503,6 +6515,7 @@ def _run_relion_iteration_loop(
                 state.translation_range,
                 state.translation_step,
                 n_classes=n_classes,
+                source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
             ).astype(np.float64, copy=False)
             _new_t = jnp.array(
                 _new_t_source.astype(np.float32)
@@ -9740,6 +9753,7 @@ def _run_relion_iteration_loop(
             state.translation_range,
             state.translation_step,
             n_classes=n_classes,
+            source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
         ).astype(np.float32),
         dtype=jnp.float32,
     )
@@ -9856,11 +9870,13 @@ def _run_relion_iteration_loop(
                     numbered_range,
                     numbered_step,
                     n_classes=n_classes,
+                    source_units_per_pixel=px,
                 ).astype(np.float32)
                 final_grid_preview = _translation_grid_for_class_count(
                     final_translation_range,
                     final_translation_step,
                     n_classes=n_classes,
+                    source_units_per_pixel=px,
                 ).astype(np.float32)
                 same_shape = numbered_grid.shape == final_grid_preview.shape
                 same_grid = bool(
@@ -9890,6 +9906,7 @@ def _run_relion_iteration_loop(
                     final_translation_range,
                     final_translation_step,
                     n_classes=n_classes,
+                    source_units_per_pixel=px,
                 ).astype(np.float32),
                 dtype=jnp.float32,
             )
