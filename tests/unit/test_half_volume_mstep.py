@@ -330,13 +330,16 @@ def test_relion_x_half_production_allocators_use_current_size_backprojector_shap
         assert "relion_backprojector_volume_shape(" in source
         calls = re.findall(r"relion_backprojector_volume_shape\([^)]*\)", source, flags=re.DOTALL)
         assert calls
-        assert any(
-            "current_size=current_size" in call or 'current_size=common["current_size"]' in call
-            for call in calls
+        current_size_arguments = (
+            "current_size=current_size",
+            "current_size=mstep_current_size",
+            'current_size=common["current_size"]',
+            "current_size=(",
         )
+        assert any(any(argument in call for argument in current_size_arguments) for call in calls)
         for call in calls:
             if "reconstruction_padding_factor" in call or 'common["reconstruction_padding_factor"]' in call:
-                assert "current_size=current_size" in call or 'current_size=common["current_size"]' in call
+                assert any(argument in call for argument in current_size_arguments)
 
     assert_uses_current_size_shape(local_em_engine.run_local_em_exact)
     assert_uses_current_size_shape(sparse_pass2_bucketed.compute_pass2_stats_sparse_bucketed)

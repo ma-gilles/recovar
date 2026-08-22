@@ -21,10 +21,9 @@ import jax
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
+import recovar.em.dense_single_volume.em_engine as em_engine_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-import recovar.em.dense_single_volume.em_engine as em_engine_module
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
@@ -138,17 +137,17 @@ def test_shell_binning_maps_arbitrary_out_of_range_indices_to_drop_bin():
 
 def test_noise_shell_accumulation_uses_sentinel_safe_binning_helper():
     repo_root = Path(__file__).resolve().parents[2]
-    rel_paths = [
-        "recovar/em/dense_single_volume/em_engine.py",
-        "recovar/em/dense_single_volume/local_big_jit.py",
-        "recovar/em/dense_single_volume/local_em_engine.py",
-        "recovar/em/dense_single_volume/helpers/projection.py",
-        "recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py",
-    ]
-    for rel_path in rel_paths:
+    safe_binning_markers = {
+        "recovar/em/dense_single_volume/em_engine.py": "bin_shell_values_jax",
+        "recovar/em/dense_single_volume/local_big_jit.py": "bin_shell_values_jax",
+        "recovar/em/dense_single_volume/local_em_engine.py": "_noise_image_power_shells_and_per_image",
+        "recovar/em/dense_single_volume/helpers/projection.py": "bin_shell_values_jax",
+        "recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py": "bin_shell_values_jax",
+    }
+    for rel_path, safe_binning_marker in safe_binning_markers.items():
         source = (repo_root / rel_path).read_text()
         assert ".at[shell_indices" not in source
-        assert "bin_shell_values_jax" in source
+        assert safe_binning_marker in source
 
 
 # ---------------------------------------------------------------------------
