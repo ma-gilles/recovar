@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import types
 from pathlib import Path
@@ -179,6 +180,21 @@ def test_gpu_capture_rejects_slurm_uuid_mismatch(monkeypatch):
 
     with pytest.raises(runner.RunError, match="differs from visible UUID"):
         runner._physical_gpu_uuid()
+
+
+def test_relion_reference_provenance_fingerprints_exact_binary(tmp_path):
+    executable = tmp_path / "relion_refine"
+    payload = b"pinned-relion-reference\n"
+    executable.write_bytes(payload)
+    executable.chmod(0o755)
+
+    report = runner._relion_reference_provenance(executable)
+
+    assert report == {
+        "executable": str(executable.resolve()),
+        "executable_sha256": hashlib.sha256(payload).hexdigest(),
+        "executable_size_bytes": len(payload),
+    }
 
 
 def test_recovar_child_environment_requires_cuda_without_legacy_platform_override():

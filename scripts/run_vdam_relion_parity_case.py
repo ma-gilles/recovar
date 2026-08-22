@@ -59,6 +59,40 @@ def _physical_gpu_uuid() -> str:
     return values[0]
 
 
+def _relion_reference_provenance(executable: Path) -> dict[str, Any]:
+    """Fingerprint the exact RELION binary and its source checkout when available."""
+
+    resolved = executable.resolve(strict=True)
+    report: dict[str, Any] = {
+        "executable": str(resolved),
+        "executable_sha256": sha256_file(resolved),
+        "executable_size_bytes": resolved.stat().st_size,
+    }
+    source = subprocess.run(
+        ["git", "-C", str(resolved.parent), "rev-parse", "--show-toplevel"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if source.returncode != 0:
+        return report
+    source_root = Path(source.stdout.strip()).resolve()
+    report.update(
+        source_git_root=str(source_root),
+        source_git_head=subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=source_root, text=True
+        ).strip(),
+        source_git_tracked_dirty=bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain", "--untracked-files=no"],
+                cwd=source_root,
+                text=True,
+            ).strip()
+        ),
+    )
+    return report
+
+
 def build_relion_command(
     *, input_star: Path, output_prefix: Path, definition: dict[str, Any], relion_refine: Path, threads: int
 ) -> list[str]:
@@ -261,6 +295,7 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "repo": str(repo),
         "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "relion_reference": _relion_reference_provenance(args.relion_refine),
         "recovar_image_batch_size": image_batch_size,
         "recovar_sparse_big_jit_mstep_max_gb": os.environ.get(
             "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB"

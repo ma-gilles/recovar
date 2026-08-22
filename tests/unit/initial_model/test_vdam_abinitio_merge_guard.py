@@ -231,6 +231,7 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "cuda_backproject.cuda_available()",
         "VDAM parity provenance/GPU/CUDA-FFI gate passed",
         '--threads "${RELION_THREADS:-8}"',
+        '--relion-refine "${RELION_REFINE}"',
         'mkdir -p "${RELION_ACC_DUMP_DIR}"',
     ]
     haystack = "\n".join([guard, runner, auditor, sbatch])

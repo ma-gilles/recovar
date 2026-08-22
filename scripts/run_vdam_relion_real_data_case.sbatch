@@ -141,7 +141,7 @@ GPU_UUID_AFTER_RECOVAR="$(nvidia-smi --query-gpu=uuid --format=csv,noheader | tr
 test "${GPU_UUID_BEFORE}" = "${GPU_UUID_AFTER_RELION}"
 test "${GPU_UUID_BEFORE}" = "${GPU_UUID_AFTER_RECOVAR}"
 
-"${PIXI_PY}" - "${OUTPUT_ROOT}" "${SCORECARD}" "${CASE_ID}" "${RELION_WALL_S}" "${RECOVAR_WALL_S}" "${GPU_UUID_BEFORE}" <<'PY'
+"${PIXI_PY}" - "${OUTPUT_ROOT}" "${SCORECARD}" "${CASE_ID}" "${RELION_WALL_S}" "${RECOVAR_WALL_S}" "${GPU_UUID_BEFORE}" "${RELION_REFINE}" <<'PY'
 import hashlib
 import json
 import os
@@ -150,6 +150,33 @@ import sys
 from pathlib import Path
 
 root, scorecard, case_id = map(Path, sys.argv[1:4])
+relion_refine = Path(sys.argv[7]).resolve(strict=True)
+relion_reference = {
+    "executable": str(relion_refine),
+    "executable_sha256": hashlib.sha256(relion_refine.read_bytes()).hexdigest(),
+    "executable_size_bytes": relion_refine.stat().st_size,
+}
+source = subprocess.run(
+    ["git", "-C", str(relion_refine.parent), "rev-parse", "--show-toplevel"],
+    check=False,
+    capture_output=True,
+    text=True,
+)
+if source.returncode == 0:
+    source_root = Path(source.stdout.strip()).resolve()
+    relion_reference.update(
+        source_git_root=str(source_root),
+        source_git_head=subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=source_root, text=True
+        ).strip(),
+        source_git_tracked_dirty=bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain", "--untracked-files=no"],
+                cwd=source_root,
+                text=True,
+            ).strip()
+        ),
+    )
 report = {
     "schema": "recovar.vdam_relion_real_data_run.v1",
     "case_id": case_id.name,
@@ -158,6 +185,7 @@ report = {
     "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
     "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
     "physical_gpu_uuid": sys.argv[6],
+    "relion_reference": relion_reference,
     "relion_wall_s": int(sys.argv[4]),
     "recovar_wall_s": int(sys.argv[5]),
 }

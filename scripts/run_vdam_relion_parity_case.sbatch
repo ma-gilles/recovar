@@ -63,4 +63,7 @@ RUN_ARGS=(
 if [[ -n "${VDAM_SCORECARD:-}" ]]; then
   RUN_ARGS+=(--scorecard "${VDAM_SCORECARD}")
 fi
+if [[ -n "${RELION_REFINE:-}" ]]; then
+  RUN_ARGS+=(--relion-refine "${RELION_REFINE}")
+fi
 "${PIXI_PY}" scripts/run_vdam_relion_parity_case.py "${RUN_ARGS[@]}"
