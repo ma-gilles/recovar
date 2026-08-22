@@ -25,6 +25,8 @@ DEFINITION = {
     "padding_factor": 1,
 }
 
+SBATCH_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_vdam_relion_parity_case.sbatch"
+
 
 def _value(argv: list[str], flag: str) -> str:
     assert argv.count(flag) == 1
@@ -220,6 +222,14 @@ def test_parity_cuda_environment_has_explicit_async_escape_hatch():
     env = runner._qualification_cuda_environment({}, allow_async_cuda=True)
 
     assert env["CUDA_LAUNCH_BLOCKING"] == "0"
+
+
+def test_parity_sbatch_sets_launch_mode_before_gpu_provenance_gate():
+    text = SBATCH_PATH.read_text()
+
+    launch_mode = text.index("export CUDA_LAUNCH_BLOCKING=1")
+    gpu_gate = text.index('"${PIXI_PY}" - <<\'PY\'')
+    assert launch_mode < gpu_gate
 
 
 def test_native_cli_custom_cuda_gate_primes_shared_slicing_dispatch(monkeypatch):

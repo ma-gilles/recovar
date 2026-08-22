@@ -22,6 +22,14 @@ unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA RECOVAR_CUDA_DISABLE
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+if [[ "${VDAM_ALLOW_ASYNC_CUDA:-}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
+  export CUDA_LAUNCH_BLOCKING=0
+else
+  # This must precede the provenance GPU gate: that short-lived process is
+  # the first CUDA context in the allocation and affects the subsequent
+  # schedule-sensitive RELION/RECOVAR InitialModel reductions.
+  export CUDA_LAUNCH_BLOCKING=1
+fi
 RUNTIME_ROOT="/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${SLURM_JOB_ID:-manual}"
 export TMPDIR="${RUNTIME_ROOT}/tmp"
 export PIXI_HOME="${RUNTIME_ROOT}/pixi_home"
