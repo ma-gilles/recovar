@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare matched RELION and RECOVAR VDAM iteration-one M-step stages."""
+"""Compare matched RELION and RECOVAR VDAM M-step stages."""
 
 from __future__ import annotations
 
@@ -72,12 +72,22 @@ _STAGES = (
 )
 
 
-def analyze(native_directory: Path, recovar_directory: Path) -> dict:
+def _stages_for_iteration(iteration: int):
+    if int(iteration) < 1:
+        raise ValueError(f"iteration must be positive, got {iteration}")
+    token = f"it{int(iteration)}"
+    return tuple(
+        (name, native_name.replace("it1", token), recovar_name, complex_values)
+        for name, native_name, recovar_name, complex_values in _STAGES
+    )
+
+
+def analyze(native_directory: Path, recovar_directory: Path, *, iteration: int = 1) -> dict:
     native_directory = Path(native_directory).resolve()
     recovar_directory = Path(recovar_directory).resolve()
     comparisons = {}
     first_nonexact = None
-    for name, native_name, recovar_name, complex_values in _STAGES:
+    for name, native_name, recovar_name, complex_values in _stages_for_iteration(iteration):
         native = _read_relion_array(
             native_directory / native_name,
             complex_values=complex_values,
@@ -90,6 +100,7 @@ def analyze(native_directory: Path, recovar_directory: Path) -> dict:
     return {
         "schema": SCHEMA,
         "status": "complete",
+        "iteration": int(iteration),
         "native_directory": str(native_directory),
         "recovar_directory": str(recovar_directory),
         "first_nonexact_stage": first_nonexact,
@@ -103,8 +114,13 @@ def main() -> None:
     parser.add_argument("--native-directory", type=Path, required=True)
     parser.add_argument("--recovar-directory", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
+    parser.add_argument("--iteration", type=int, default=1)
     args = parser.parse_args()
-    report = analyze(args.native_directory, args.recovar_directory)
+    report = analyze(
+        args.native_directory,
+        args.recovar_directory,
+        iteration=args.iteration,
+    )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps(report, indent=2, sort_keys=True))

@@ -2397,6 +2397,7 @@ def run_local_k_class_em(
     return_best_pose_details: bool = False,
     class_log_evidence=None,
     normalization_log_evidence=None,
+    normalization_max_posterior=None,
     stats_use_reconstruction_probs: bool = False,
     class_posterior_sums_from_noise: bool = False,
     **engine_kwargs,
@@ -2445,17 +2446,26 @@ def run_local_k_class_em(
             raise ValueError(
                 f"normalization_log_evidence must have shape ({n_images},), got {normalization_log_evidence_np.shape}",
             )
-    if class_log_evidence_np is not None:
-        if normalization_log_evidence_np is None:
-            normalization_log_evidence_np = _logsumexp_np(class_log_evidence_np, axis=0)
-        if class_log_evidence_np.shape[1] != normalization_log_evidence_np.shape[0]:
+    normalization_max_posterior_np = None
+    if normalization_max_posterior is not None:
+        normalization_max_posterior_np = np.asarray(normalization_max_posterior, dtype=np.float64)
+        if normalization_max_posterior_np.shape != (n_images,):
             raise ValueError(
-                "class_log_evidence and normalization_log_evidence image axes disagree: "
-                f"{class_log_evidence_np.shape[1]} vs {normalization_log_evidence_np.shape[0]}",
+                "normalization_max_posterior must have shape "
+                f"({n_images},), got {normalization_max_posterior_np.shape}",
             )
+        if normalization_log_evidence_np is not None:
+            raise ValueError(
+                "normalization_max_posterior and normalization_log_evidence are mutually exclusive",
+            )
+        if n_classes != 1:
+            raise ValueError("normalization_max_posterior is currently supported only for K=1")
+    if class_log_evidence_np is not None:
+        if normalization_log_evidence_np is None and normalization_max_posterior_np is None:
+            normalization_log_evidence_np = _logsumexp_np(class_log_evidence_np, axis=0)
 
     if class_log_evidence_np is None:
-        if n_classes == 1 and normalization_log_evidence_np is None:
+        if n_classes == 1 and normalization_log_evidence_np is None and normalization_max_posterior_np is None:
             class_layout = _select_local_layout_for_class(
                 local_layout,
                 class_local_rotation_log_prior,
@@ -2587,6 +2597,11 @@ def run_local_k_class_em(
         )
         class_engine_kwargs = _local_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
         with _LocalDebugDumpPhaseLabel(f"mstep_class{class_index:03d}"):
+            normalization_kwargs = (
+                {"normalization_max_posterior": normalization_max_posterior_np}
+                if normalization_max_posterior_np is not None
+                else {"normalization_log_evidence": global_log_evidence}
+            )
             output = run_local_em_exact(
                 experiment_dataset,
                 means_array[class_index],
@@ -2598,8 +2613,8 @@ def run_local_k_class_em(
                 return_profile=return_profile,
                 return_best_pose_details=return_best_pose_details,
                 class_log_prior=float(log_priors[class_index]),
-                normalization_log_evidence=global_log_evidence,
                 stats_use_reconstruction_probs=stats_use_reconstruction_probs,
+                **normalization_kwargs,
                 **class_engine_kwargs,
             )
         (

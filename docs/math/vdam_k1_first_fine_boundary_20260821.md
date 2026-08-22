@@ -427,3 +427,177 @@ Performance evidence:
 - Slurm job `12726796` (device-finalization profile)
 - Slurm job `12727257` (`vdam-01` host-finalization counterfactual)
 - Slurm job `12727430` (`vdam-09` host-finalization counterfactual)
+
+## Formal fine-score capture and native repeatability floor
+
+The patched RELION fine-score capture now records the production candidate
+table and one selected operand without relying on the older verbose dump's
+inferred common addend. Same-H100 Slurm job `12743706` captured iteration 1,
+internal part 69 / stack image 1060 / class 1 for `vdam-01`. The formal table
+contains all 608 active candidates and records the actual high-resolution
+`sum_init` as `0.022647816687822342`.
+
+The selected RELION projector row is bitwise identical to RECOVAR in all 596
+complex score pixels. Passive and SASS replays reproduce the selected native
+raw cost exactly. Across two independent RELION executions, however, only
+467/608 raw costs are bitwise equal; the centered residual has RMS
+`3.09e-5` and is confined to one or two float32 ULPs. RECOVAR's posterior is
+closer to the formal run than the older RELION run is:
+
+| Comparison | posterior L1 | posterior relative L2 | max absolute |
+| --- | ---: | ---: | ---: |
+| older RELION vs formal RELION | `1.55e-5` | `1.37e-5` | `6.67e-6` |
+| RECOVAR vs formal RELION | `7.02e-6` | `6.02e-6` | `3.00e-6` |
+
+All three select the same candidate. This establishes a native GPU
+repeatability floor and rejects the remaining fine-score ULP residual as the
+causal explanation for the long-trajectory failure. The opt-in exact fused
+fine scorer remains useful for boundary validation, but it is not promoted as
+a trajectory repair.
+
+Formal evidence root:
+
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_vdam01_formal_fine_capture_20260823T191500Z`
+
+## K=1 long-trajectory boundary
+
+The frozen 25-iteration K=1 suite passes through the short-trajectory region
+but fails all three long cases. Slurm array `12739560` produced minimum
+cross-engine FSC-AUC `0.9869212`, `0.9855999`, and `0.9613005` for
+`vdam-l01`, `vdam-l02`, and `vdam-l03`. Independent RELION repetitions stay
+above approximately `0.9999999996` through iteration 25, so the late split is
+not native run-to-run nondeterminism.
+
+For `vdam-l01`, RECOVAR-vs-RELION map relative L2 grows gradually from about
+`1.4e-5` at iteration 1 to `3.96e-5` at iteration 19, then jumps to
+`6.41e-3` at iteration 20. Pose and translation winners remain essentially
+identical through iteration 15. Iteration 20 is the scheduled transition from
+Healpix order 1 to 2; both engines use the same grid schedule. The fine grid
+therefore amplifies an accumulated map/posterior drift rather than introducing
+a scheduler mismatch.
+
+Two bounded counterfactuals were rejected:
+
+- preserving physical particle order for K=1 BPref accumulation (job
+  `12744453`) slightly worsened the RECOVAR-vs-RELION map relative L2 at every
+  checked iteration and was reverted;
+- replacing the expected-accuracy denominator's scheduled `tau2_fudge` with a
+  literal 1 (array `12744685`) was a production no-op because the schedule has
+  already deflated the factor to 1 by the accuracy-estimation iteration; it
+  reproduced the three prior failures and was reverted.
+
+Aggregate repeatability job `12745125` completed both full `vdam-01` pairs on
+one physical H100; only its final analyzer invocation failed, because the
+original shell loop nested arm B under arm A and invoked the analyzer with a
+non-package script path. The captures were complete and the repaired analyzer
+produced `mstep_repeatability.json` without rerunning science.
+
+RELION's raw BPref numerator varies by `9.62e-6` / `9.41e-6` relative L2
+between identical runs, while RECOVAR varies by only `2.61e-7` / `2.79e-7`.
+The two cross-engine numerator comparisons are `1.44e-5--1.65e-5`, or only
+about 1.5--1.7 times the native repeat floor. The reconstructed RELION map
+varies by `2.65e-6`; the cross-engine maps differ by `6.60e-6` and `8.21e-6`.
+Thus bitwise accumulator closure is impossible on the native GPU path, but a
+small systematic reduction-order residual remains above that floor.
+
+RELION does not scatter every orientation/translation hypothesis separately.
+`cuda_kernel_backproject3D` loops translations inside each orientation/pixel
+thread, then scatters one reduced numerator/weight row. The current RECOVAR
+path instead reduces validated BPref operands in XLA before its CUDA scatter.
+An opt-in CUDA primitive was tested that owned only this translation reduction
+in native storage order. Same-H100 job `12745587` passed the eight-iteration
+trajectory, but its iteration-1 boundary was unchanged: paired raw numerator
+errors were `1.60e-5` / `1.40e-5` and reconstructed-map error was `7.72e-6`.
+Against the two earlier RELION captures, changes from baseline were mixed at
+about `1e-7` relative and stayed inside native variability. The primitive and
+its routing were therefore reverted without a 25-iteration run. CUDA
+instruction ownership of the already validated translation reduction is not
+the long-trajectory cause.
+
+Repeatability evidence:
+
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_mstep_repeatability_20260821T234848Z/mstep_repeatability.json`
+
+Rejected CUDA-reduction evidence:
+
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_cuda_reduce_it1_20260824T003500Z/mstep_boundary.json`
+
+## Iteration-19 incoming-state boundary
+
+Same-H100 paired job `12746179` captured every M-step stage at iteration 19
+of `vdam-l01`. The expected frozen trajectory failure occurs after all 25
+iterations, but the late capture shows that reconstruction is not a new first
+boundary. Its incoming gradient halves already differ by `3.04e-2` and
+`2.65e-2` relative L2, and the incoming second moment differs by `2.01`.
+The RELION-frame reference differs by `1.84e-3` before reconstruction and
+`4.81e-3` after it. These internal pre-solvent values are more sensitive than
+the saved masked-map FSC, but their ordering is decisive: the expectation and
+running-gradient state have diverged before the iteration-19 M-step begins.
+
+The first focused RECOVAR pass-2 selector in that job was invalid. RELION
+internal particle 69 maps through `Experiment::read` ordering to RECOVAR input
+row 159 (`160@particles.128.mrcs`); stack image number 1060 is not a dataset
+row. Jobs `12746548` and `12746857` corrected and broadened the row selector,
+respectively, but exposed a second diagnostic constraint: InitialModel's local
+engine does not execute the adaptive sparse pass-2 writer used by the supplied-
+map EM path. Disabling local big-JIT in job `12747611` did not change that
+ownership, so the job was cancelled after it passed the target iteration
+without a dump. Job `12747788` instead uses the local engine's dedicated fused-
+posterior hook, which records the actual production fused path without changing
+its arithmetic. The M-step tensors and production trajectories from the earlier
+jobs remain valid.
+
+Late-boundary evidence:
+
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_it19_boundary_20260824T004500Z/mstep_boundary_it19.json`
+
+The production fused-posterior capture from job `12747788` closes the selected
+iteration-19 particle to the native numerical floor: the argmax and both
+reconstruction hypotheses are identical, posterior relative L2 is `1.54e-5`,
+L1 is `2.18e-5`, and Pmax is `0.9978859` versus native `0.9978750`. This is the
+same scale as the `1.37e-5` posterior relative-L2 difference between two native
+RELION captures. It rules out a new late-iteration posterior topology defect for
+this particle, but does not explain the aggregate half-map drift.
+
+Whole-map repeatability does rule out stochastic native drift as the explanation.
+Two independent paired runs have native RELION cross-repeat FSC-AUC
+`0.99999999995`, `0.99999999993`, `0.99999999994`, `0.99999999991`,
+`0.99999999978`, and `0.99999999963` at iterations 1, 8, 12, 16, 20, and 25.
+RECOVAR repeats are similarly stable (iteration-25 FSC-AUC
+`0.99999999871`). The cross-engine decay is therefore systematic even though a
+single late posterior is native-floor equivalent. The next boundary is the
+first resolution-expansion interval after iteration 12. Direct map relative L2
+stays at `1.54e-5` through iteration 13, then jumps to `2.20e-4` at iteration
+14 and grows monotonically thereafter. At iteration 14, shell-relative error is
+largest at shells 25--28 (`0.0062`, `0.0091`, `0.0123`, `0.0156`), exactly at
+the newly admitted edge of the size-56 Fourier window. Job `12748071` captures
+both iteration-14 M-steps, and job `12748177` captures the production fused
+posterior for the same selected particle at that first expansion boundary.
+
+Fused-posterior evidence:
+
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_it19_fused_posterior_20260824T021000Z/fused_posterior_boundary.json`
+
+The iteration-14 M-step makes the expansion failure asymmetric. Its incoming
+reference is still only `1.55e-5` relative L2 from RELION, but raw accumulator
+data differs by `4.35e-4` in half 0 and `6.81e-2` in half 1; reconstruction
+turns that into a `6.42e-4` reference difference. Comparing all 631 visited
+particles identifies a single topology change: source row 41
+(`42@particles.128.mrcs`, RELION internal part 357) changes Pmax from
+`0.994889` to `0.440294` and is the only different winning pose. The other
+selected particle used as a control retains identical argmax/support, although
+its posterior relative L2 has already grown to `1.08e-3` at the new shell edge.
+Jobs `12748468` and `12748469` retarget the production posterior and raw operand
+captures to the failing particle.
+
+The particle history moves the first topology boundary back one iteration. Its
+pose agrees through iteration 12 (Pmax `0.994789` versus `0.994158`), but at
+iteration 13 the engines choose different fine poses even though Pmax remains
+close (`0.366682` versus `0.366445`). Iteration 14 then searches around those
+different local centers and produces the large Pmax split. Jobs `12748544` and
+`12748545` capture the failing particle at iteration 13, the first pose-choice
+boundary, rather than only its amplified iteration-14 consequence.
+
+Iteration-14 M-step evidence:
+
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_it14_boundary_20260824T023000Z/mstep_boundary_it14.json`

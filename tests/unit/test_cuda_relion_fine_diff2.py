@@ -136,6 +136,7 @@ def test_relion_fused_translate_cuda_source_pins_native_block_topology():
     assert "relion_score_translate_f32(" in source
     assert "translation_offset * kRelionFineDiff2BlockSize" in source
     assert "lane_sums[lane_index] = relion_fine_diff2_update_f32(" in source
+    assert "initial_diff2[batch]" in source
 
 
 def test_relion_powerclass_cuda_source_pins_native_atomic_topology():
@@ -632,6 +633,45 @@ def test_relion_fine_diff2_rectangular_matches_production_tree_bitwise(
             jnp.asarray(weight[None, :]),
             jnp.asarray(lookup),
             initial_diff2=jnp.asarray(initial_diff2),
+        )
+
+    np.testing.assert_array_equal(
+        np.asarray(actual).view(np.uint32),
+        np.asarray([[[expected]]], dtype=np.float32).view(np.uint32),
+    )
+
+
+@pytest.mark.gpu
+def test_relion_fused_translate_fine_diff2_adds_highres_in_native_order(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    reference, image, weight, compact_lookup = _operands()
+    current_size = 32
+    lookup = np.full(current_size * (current_size // 2 + 1), -1, dtype=np.int32)
+    lookup[: compact_lookup.size] = compact_lookup
+    initial_diff2 = np.asarray([0.022644043], dtype=np.float32)
+    expected = np.add(
+        _production_reference(reference, image, weight, lookup),
+        initial_diff2[0],
+        dtype=np.float32,
+    )
+
+    with jax.default_device(gpu_device):
+        actual = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+            jnp.asarray(reference[None, None, :]),
+            jnp.asarray(image[None, :]),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.asarray(weight[None, :]),
+            jnp.asarray(lookup),
+            jnp.asarray(initial_diff2),
+            current_size=current_size,
         )
 
     np.testing.assert_array_equal(

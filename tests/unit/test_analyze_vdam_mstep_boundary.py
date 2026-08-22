@@ -41,6 +41,22 @@ def test_vdam_mstep_analyzer_localizes_first_nonexact_stage(tmp_path, monkeypatc
     assert report["comparisons"]["raw_accumulator_data_half0"]["exact_count"] == 7
 
 
+def test_vdam_mstep_analyzer_selects_requested_iteration(tmp_path):
+    native = tmp_path / "native"
+    recovar = tmp_path / "recovar"
+    native.mkdir()
+    recovar.mkdir()
+    for _name, native_name, recovar_name, complex_values in analyzer._stages_for_iteration(19):
+        values = np.ones((1, 1, 1), dtype=np.complex128 if complex_values else np.float64)
+        _write_relion(native / native_name, values)
+        np.save(recovar / recovar_name, values)
+
+    report = analyzer.analyze(native, recovar, iteration=19)
+
+    assert report["iteration"] == 19
+    assert report["all_stages_bitwise_exact"] is True
+
+
 def test_vdam_mstep_cli_writes_json(tmp_path, monkeypatch):
     native = tmp_path / "native"
     recovar = tmp_path / "recovar"

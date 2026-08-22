@@ -22,6 +22,7 @@ INPUT=${VDAM_RELION_CONT_INPUT_DIR}
 CONTINUE=${VDAM_RELION_CONT_OPTIMISER}
 ITERATION=${VDAM_RELION_CONT_ITERATION:-3}
 PART_ID=${VDAM_RELION_CONT_PART_ID:-9}
+STACK_INDEX=${VDAM_RELION_CONT_STACK_INDEX:-}
 CAPTURE_ENABLED=${VDAM_RELION_CONT_CAPTURE:-0}
 PERTURBATION=${VDAM_RELION_CONT_PERTURBATION:-}
 RELION_BINARY=${VDAM_RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
@@ -65,6 +66,9 @@ fi
 if [[ "${CAPTURE_ENABLED}" == 1 ]]; then
     export RELION_ACC_DUMP_DIR=${CAPTURE}
     export RELION_ACC_DUMP_PART_ID=${PART_ID}
+    if [[ -n "${STACK_INDEX}" ]]; then
+        export RELION_ACC_DUMP_STACK_INDEX=${STACK_INDEX}
+    fi
     export RELION_ACC_DUMP_ITER=${ITERATION}
     export RELION_ACC_DUMP_VERBOSE=1
 fi
@@ -94,7 +98,7 @@ if [[ "${CAPTURE_ENABLED}" == 1 ]]; then
     test -s "${CAPTURE}/pass1_exp_Mweight_posterior.bin"
 fi
 ! rg -qi 'Traceback|Out of memory|CUDA_ERROR_OUT_OF_MEMORY' "${OUTPUT}/runner.stderr"
-printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"part_id":%d,"capture":%s,"continued_from":"%s","forced_perturbation":"%s"}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${ITERATION}" "${PART_ID}" "${CAPTURE_ENABLED}" "${CONTINUE}" "${PERTURBATION}" \
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"part_id":%d,"stack_index":"%s","capture":%s,"continued_from":"%s","forced_perturbation":"%s"}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${ITERATION}" "${PART_ID}" "${STACK_INDEX}" "${CAPTURE_ENABLED}" "${CONTINUE}" "${PERTURBATION}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"

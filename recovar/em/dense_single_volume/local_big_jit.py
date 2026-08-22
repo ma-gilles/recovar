@@ -1175,12 +1175,6 @@ def run_local_bucket_big_jit(
         corrected_score = (
             processed_score_half[:, window_indices] * pixel_correction[:, window_indices]
         ).astype(jnp.complex64)
-        translated_corrected = cuda_backproject.relion_translate_score_f32(
-            corrected_score,
-            relion_score_translation_angles,
-            jnp.asarray(window_indices, dtype=jnp.int32),
-            image_shape,
-        ).reshape(batch_size, n_trans, -1)
         direct_weight = (
             ctf2_over_nv_score * score_half_weights[None, :]
         ).astype(jnp.float32)
@@ -1189,12 +1183,14 @@ def run_local_bucket_big_jit(
             image_shape=image_shape,
             current_size=norm_current_size,
         )
-        direct_diff2 = cuda_backproject.relion_fine_diff2_rectangular_f32(
+        direct_diff2 = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
             jnp.asarray(proj_half, dtype=jnp.complex64),
-            translated_corrected,
+            corrected_score,
+            jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
             direct_weight,
             jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
-            initial_diff2=direct_highres,
+            direct_highres,
+            current_size=norm_current_size,
         )
         direct_candidate_mask = rotation_mask[:, :, None]
         if sample_mask is not None:

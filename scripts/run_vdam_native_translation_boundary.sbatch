@@ -76,4 +76,10 @@ fi
 if [[ -n "${NATIVE_PREPROCESS_DIRECTORY:-}" ]]; then
   ANALYZER_ARGS+=(--native-preprocess-directory "${NATIVE_PREPROCESS_DIRECTORY}")
 fi
+if [[ -n "${NATIVE_FINE_SCORE:-}" ]]; then
+  ANALYZER_ARGS+=(--native-fine-score "${NATIVE_FINE_SCORE}")
+fi
+if [[ -n "${NATIVE_FINE_OPERAND:-}" ]]; then
+  ANALYZER_ARGS+=(--native-fine-operand "${NATIVE_FINE_OPERAND}")
+fi
 "${PIXI_PY}" scripts/analyze_vdam_native_translation_boundary.py "${ANALYZER_ARGS[@]}"

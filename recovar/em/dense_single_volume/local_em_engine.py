@@ -1973,6 +1973,7 @@ def run_local_em_exact(
     normalization_log_z: np.ndarray | None = None,
     class_log_prior: float = 0.0,
     normalization_log_evidence: np.ndarray | None = None,
+    normalization_max_posterior: np.ndarray | None = None,
     translation_prior_centers: np.ndarray | None = None,
     unify_local_bucket_sizes: bool | None = None,
     stats_use_reconstruction_probs: bool = False,
@@ -2072,6 +2073,24 @@ def run_local_em_exact(
             )
     if normalization_log_z_np is not None and normalization_log_evidence_np is not None:
         raise ValueError("Provide only one of normalization_log_z or normalization_log_evidence")
+    normalization_max_posterior_np = None
+    if normalization_max_posterior is not None:
+        normalization_max_posterior_np = np.asarray(normalization_max_posterior, dtype=np.float64)
+        if normalization_max_posterior_np.shape != (n_images,):
+            raise ValueError(
+                "normalization_max_posterior must have shape "
+                f"({n_images},), got {normalization_max_posterior_np.shape}",
+            )
+        if (
+            not np.all(np.isfinite(normalization_max_posterior_np))
+            or np.any(normalization_max_posterior_np <= 0.0)
+            or np.any(normalization_max_posterior_np > 1.0)
+        ):
+            raise ValueError("normalization_max_posterior must contain finite probabilities in (0, 1]")
+        if normalization_log_z_np is not None or normalization_log_evidence_np is not None:
+            raise ValueError(
+                "normalization_max_posterior is mutually exclusive with external log normalization",
+            )
     reconstruction_probability_threshold_np = None
     if reconstruction_probability_threshold is not None:
         reconstruction_probability_threshold_np = np.asarray(reconstruction_probability_threshold, dtype=np.float64)
@@ -4128,9 +4147,14 @@ def run_local_em_exact(
                 dtype=local_rotation_log_prior.dtype,
             )
         defer_packed_mstep_reduction = False
-        has_external_normalization = normalization_log_z_np is not None or normalization_log_evidence_np is not None
+        has_external_normalization = (
+            normalization_log_z_np is not None
+            or normalization_log_evidence_np is not None
+            or normalization_max_posterior_np is not None
+        )
         can_use_fused_score_mstep = (
             fused_score_mstep_enabled
+            and normalization_max_posterior_np is None
             and reconstruction_probability_threshold_np is None
             and not debug_score_dump_bucket_matches
             and not bpref_contribution_capture_active
@@ -4460,13 +4484,27 @@ def run_local_em_exact(
             timing.score_s += time.time() - score_t0
 
             normalize_t0 = time.time()
-            if normalization_log_z_np is None and normalization_log_evidence_np is None:
+            if (
+                normalization_log_z_np is None
+                and normalization_log_evidence_np is None
+                and normalization_max_posterior_np is None
+            ):
                 if use_float64_normalization:
                     log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores(scores)
                 else:
                     log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores_float32(scores)
             else:
-                if normalization_log_evidence_np is None:
+                if normalization_max_posterior_np is not None:
+                    normalization_dtype = precision_policy.normalization_real_dtype
+                    fine_best = jnp.max(scores.reshape(scores.shape[0], -1), axis=1).astype(
+                        normalization_dtype,
+                    )
+                    bucket_pmax = jnp.asarray(
+                        normalization_max_posterior_np[np.asarray(bucket.image_indices)],
+                        dtype=normalization_dtype,
+                    )
+                    bucket_log_z = fine_best - jnp.log(bucket_pmax)
+                elif normalization_log_evidence_np is None:
                     bucket_log_z = jnp.asarray(
                         normalization_log_z_np[np.asarray(bucket.image_indices)],
                         dtype=scores.real.dtype,

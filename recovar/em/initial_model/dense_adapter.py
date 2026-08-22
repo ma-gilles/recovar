@@ -54,6 +54,7 @@ _ENGINE_DEFAULTS: dict[str, Any] = {
 _INACTIVE_CLASS_LOG_PRIOR = -1.0e30
 _EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
 _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
+_RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
 _SPARSE_PASS2_CONTROL_KEYS = {
     "adaptive_fraction",
     "max_significants",
@@ -568,6 +569,59 @@ def _class_pass2_rotation_log_prior(group_kwargs: dict[str, Any], class_index: i
     return prior[int(class_index)]
 
 
+def _restore_k1_zero_oversampling_coarse_metadata(
+    result,
+    *,
+    hard_assignment: np.ndarray,
+    full_stats: dict[str, Any],
+    coarse_rotations: np.ndarray,
+    coarse_translations: np.ndarray,
+):
+    """Keep RELION's pass-1 pose/Pmax metadata for an os0 pass-2 M-step."""
+
+    hard = np.asarray(hard_assignment, dtype=np.int32)
+    n_images = int(hard.size)
+    n_translations = int(np.asarray(coarse_translations).shape[0])
+    if hard.shape != (n_images,) or n_translations <= 0:
+        raise ValueError("invalid coarse assignments for K=1 zero-oversampling metadata")
+    rotation_ids = hard.astype(np.int64) // n_translations
+    translation_ids = hard.astype(np.int64) % n_translations
+    rotations = np.asarray(coarse_rotations, dtype=np.float32)[rotation_ids]
+    translations = np.asarray(coarse_translations, dtype=np.float32)[translation_ids]
+
+    def _coarse_scalars(stats):
+        return stats._replace(
+            log_evidence_per_image=np.asarray(
+                full_stats["log_evidence_per_image"],
+                dtype=np.float32,
+            ),
+            best_log_score_per_image=np.asarray(
+                full_stats["best_log_score_per_image"],
+                dtype=np.float32,
+            ),
+            max_posterior_per_image=np.asarray(
+                full_stats["max_posterior_per_image"],
+                dtype=np.float32,
+            ),
+        )
+
+    aggregate_stats = _coarse_scalars(result.stats)
+    per_class_stats = (_coarse_scalars(result.per_class_stats[0]),)
+    return result._replace(
+        per_class_hard_assignments=hard[None, :],
+        class_assignments=np.zeros(n_images, dtype=np.int32),
+        pose_assignments=hard,
+        stats=aggregate_stats,
+        per_class_stats=per_class_stats,
+        per_class_best_pose_rotations=(rotations,),
+        per_class_best_pose_translations=(translations,),
+        per_class_best_pose_rotation_ids=(rotation_ids.astype(np.int32),),
+        best_pose_rotations=rotations,
+        best_pose_translations=translations,
+        best_pose_rotation_ids=rotation_ids.astype(np.int32),
+    )
+
+
 def _run_sparse_pass2_initial_model_estep(
     experiment_dataset,
     state: InitialModelState,
@@ -606,6 +660,7 @@ def _run_sparse_pass2_initial_model_estep(
     coarse_source_eulers = None
     if int(np.asarray(config.rotations).shape[0]) == n_coarse_rotations:
         coarse_rotations = np.asarray(config.rotations, dtype=np.float32)
+        coarse_metadata_rotations = coarse_rotations
     else:
         from recovar.em import sampling
 
@@ -622,6 +677,7 @@ def _run_sparse_pass2_initial_model_estep(
             random_perturbation,
             relion_angular_sampling_deg(healpix_order),
         ).astype(np.float32, copy=False)
+        coarse_metadata_rotations = coarse_rotations
         # Adaptive pass 1 is the one InitialModel projection path whose Euler
         # matrices RELION builds on the accelerator.  Keep the host-generated
         # rotations above as the CPU fallback, but on GPU replace them with
@@ -668,7 +724,14 @@ def _run_sparse_pass2_initial_model_estep(
             )
         else:
             pass1_translation_log_prior = group_kwargs.get("translation_log_prior")
-        pass1_current_size = _resolve_sparse_pass1_current_size(state, group_kwargs, options)
+        # RELION only uses its reduced coarse image size when adaptive
+        # oversampling is active. At os0, pass 0 and the symbolic pass 1 both
+        # score the full current image size (``exp_current_image_size``).
+        pass1_current_size = (
+            group_kwargs.get("current_size")
+            if oversampling_order == 0
+            else _resolve_sparse_pass1_current_size(state, group_kwargs, options)
+        )
 
         t0 = time.time()
         sig_result = _compute_k_class_significance_batched(
@@ -717,6 +780,7 @@ def _run_sparse_pass2_initial_model_estep(
             significant_sample_indices,
             _full_stats,
         ) = sig_result
+        k1_zero_oversampling = state.K == 1 and oversampling_order == 0
         pass1_time_s += time.time() - t0
         n_significant_by_image.append(np.asarray(_n_sig_all, dtype=np.int32))
 
@@ -784,6 +848,16 @@ def _run_sparse_pass2_initial_model_estep(
                 local_layout,
                 config.disc_type,
                 class_log_priors=class_log_priors,
+                class_log_evidence=(
+                    np.asarray(_full_stats["class_log_evidence_per_image"], dtype=np.float64)
+                    if k1_zero_oversampling
+                    else None
+                ),
+                normalization_max_posterior=(
+                    np.asarray(_full_stats["max_posterior_per_image"], dtype=np.float64)
+                    if k1_zero_oversampling
+                    else None
+                ),
                 image_batch_size=config.image_batch_size,
                 rotation_block_size=config.rotation_block_size,
                 current_size=group_kwargs.get("current_size"),
@@ -813,7 +887,9 @@ def _run_sparse_pass2_initial_model_estep(
                     and config.relion_bpref_frame
                     and sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled()
                 ),
-                reconstruct_significant_only=True,
+                # RELION's symbolic pass 2 at os0 retains every sample selected
+                # by pass 1. It does not apply another adaptive-fraction prune.
+                reconstruct_significant_only=not k1_zero_oversampling,
                 adaptive_fraction=adaptive_fraction,
                 debug_iteration=int(group_kwargs.get("debug_iteration", -1)),
                 # RELION's gradient InitialModel cap defines the coarse pass-1
@@ -840,6 +916,14 @@ def _run_sparse_pass2_initial_model_estep(
         finally:
             sparse_diagnostics.clear_bpref_contribution_dump_context()
         pass2_time_s += time.time() - t0
+        if k1_zero_oversampling:
+            result = _restore_k1_zero_oversampling_coarse_metadata(
+                result,
+                hard_assignment=_hard_assignment,
+                full_stats=_full_stats,
+                coarse_rotations=coarse_metadata_rotations,
+                coarse_translations=coarse_translations,
+            )
         halfset_results[int(halfset_idx)] = result
         accumulators.extend(
             _arrays_to_accumulators(
@@ -904,6 +988,19 @@ def _resolve_class_inputs(
             current_size=state.current_size if state.current_size > 0 else state.ori_size,
             padding_factor=config.padding_factor,
         )
+        projector_dump_dir = os.environ.get(_RELION_PROJECTOR_DUMP_DIR_ENV, "").strip()
+        if projector_dump_dir:
+            os.makedirs(projector_dump_dir, exist_ok=True)
+            np.savez_compressed(
+                os.path.join(projector_dump_dir, f"iter{int(state.iter):03d}_relion_projector_half.npz"),
+                projector_half=np.asarray(projector_half_by_class),
+                projector_r_max=np.int64(projector_r_max),
+                current_size=np.int64(
+                    state.current_size if state.current_size > 0 else state.ori_size
+                ),
+                padding_factor=np.int64(config.padding_factor),
+                iteration=np.int64(state.iter),
+            )
         means = relion_projector_half_maps_to_dense_means(
             projector_half_by_class,
             int(state.ori_size),

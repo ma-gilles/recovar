@@ -371,7 +371,7 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
             "sigma2_offset: float = 100.0",
             "sigma2_offset=100.0",
             "MIN_SIGMA2_OFFSET_ANGSTROM2",
-            "wsum_sigma2_offset / (2.0 * sum_weight)",
+            "wsum_sigma2_offset / (2.0 * sigma2_offset_sumw)",
             "def update_noise_from_estep_meta",
             "normalize_wsum_to_sigma2_noise",
             "int(state.ori_size) ** 4",

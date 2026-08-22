@@ -674,6 +674,37 @@ def test_resolve_class_inputs_relion_projector_uses_exact_path_by_default(monkey
     assert exact_rmax is None
 
 
+def test_resolve_class_inputs_can_dump_exact_projector_operand(monkeypatch, tmp_path):
+    projector_half = np.arange(54, dtype=np.float32).reshape(1, 3, 3, 6)[..., :2].astype(np.complex64)
+    dense_means = np.zeros((1, 8**3), dtype=np.complex64)
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.reference_to_relion_projector_half_maps",
+        lambda *args, **kwargs: (projector_half, 2),
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.relion_projector_half_maps_to_dense_means",
+        lambda *args, **kwargs: dense_means,
+    )
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR", str(tmp_path))
+    state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=4)
+    state.iter = 7
+    state.current_size = 4
+    config = DenseInitialModelEstepConfig(
+        noise_variance=np.ones(8 * 8, dtype=np.float32),
+        rotations=np.eye(3, dtype=np.float32)[None],
+        translations=np.zeros((1, 2), dtype=np.float32),
+        relion_projector_frame=True,
+    )
+
+    _resolve_class_inputs(state, config)
+
+    with np.load(tmp_path / "iter007_relion_projector_half.npz") as dumped:
+        np.testing.assert_array_equal(dumped["projector_half"], projector_half)
+        assert int(dumped["projector_r_max"]) == 2
+        assert int(dumped["current_size"]) == 4
+        assert int(dumped["iteration"]) == 7
+
+
 def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
     calls = []
 
@@ -936,6 +967,140 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
     np.testing.assert_allclose(result.meta["best_pose_translations"], [[0, 1], [2, 3]])
+
+
+def test_dense_initial_model_estep_os0_keeps_coarse_normalization_pose_and_support(monkeypatch):
+    from recovar.em.dense_single_volume.helpers.types import make_relion_stats
+    from recovar.em.dense_single_volume.k_class import KClassEMResult
+
+    calls = {}
+    coarse_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 72, axis=0)
+    coarse_rotations[:, 0, 0] = np.arange(72, dtype=np.float32)
+    coarse_translations = np.asarray([[0.0, 0.0], [1.5, -0.5]], dtype=np.float32)
+    coarse_hard = np.asarray([5, 6], dtype=np.int32)
+    coarse_pmax = np.asarray([0.25, 0.75], dtype=np.float32)
+    coarse_log_evidence = np.asarray([11.0, 12.0], dtype=np.float64)
+    coarse_class_evidence = coarse_log_evidence[None, :]
+
+    def fake_significance(dataset, *_args, **_kwargs):
+        n_images = int(dataset.n_images)
+        assert n_images == 2
+        calls["pass1_current_size"] = _kwargs["current_size"]
+        significant = [[np.asarray([5], dtype=np.int32), np.asarray([6], dtype=np.int32)]]
+        return (
+            np.ones((1, 72), dtype=bool),
+            np.ones(n_images, dtype=np.int32),
+            coarse_hard,
+            np.zeros(n_images, dtype=np.int32),
+            significant,
+            {
+                "normalization_log_z": np.asarray([3.0, 4.0], dtype=np.float64),
+                "normalization_log_evidence": coarse_log_evidence,
+                "log_evidence_per_image": coarse_log_evidence.astype(np.float32),
+                "best_log_score_per_image": np.asarray([10.0, 11.5], dtype=np.float32),
+                "max_posterior_per_image": coarse_pmax,
+                "class_log_evidence_per_image": coarse_class_evidence,
+            },
+        )
+
+    def fake_build_layout(*_args, **kwargs):
+        assert kwargs["oversampling_order"] == 0
+        return LocalHypothesisLayout(
+            n_global_rotations=72,
+            n_pixels=1,
+            n_psi=6,
+            rotation_offsets=np.asarray([0, 1, 2], dtype=np.int64),
+            rotation_ids_flat=np.asarray([2, 3], dtype=np.int32),
+            rotations_flat=coarse_rotations[[2, 3]],
+            rotation_log_priors_flat=np.zeros(2, dtype=np.float32),
+            rotation_counts=np.ones(2, dtype=np.int32),
+            translation_grid=coarse_translations,
+            translation_log_priors=np.zeros((2, 2), dtype=np.float32),
+            rotation_posterior_ids_flat=np.asarray([2, 3], dtype=np.int32),
+        )
+
+    fine_stats = make_relion_stats(
+        log_evidence_per_image=np.asarray([10.5, 11.5], dtype=np.float32),
+        best_log_score_per_image=np.asarray([10.4, 11.4], dtype=np.float32),
+        max_posterior_per_image=np.asarray([0.9, 0.8], dtype=np.float32),
+        rotation_posterior_sums=np.ones(12, dtype=np.float32),
+    )
+
+    def fake_run_local(dataset, *_args, **kwargs):
+        calls.update(kwargs)
+        assert int(dataset.n_images) == 2
+        return KClassEMResult(
+            new_means=None,
+            Ft_y=np.ones((1, 8**3), dtype=np.complex64),
+            Ft_ctf=np.ones((1, 8**3), dtype=np.float32),
+            per_class_hard_assignments=np.asarray([[0, 1]], dtype=np.int32),
+            class_assignments=np.zeros(2, dtype=np.int32),
+            pose_assignments=np.asarray([0, 1], dtype=np.int32),
+            class_responsibilities=np.ones((1, 2), dtype=np.float32),
+            class_posterior_sums=np.asarray([2.0], dtype=np.float32),
+            stats=fine_stats,
+            per_class_stats=(fine_stats,),
+            noise_stats=None,
+            aggregate_noise_stats=None,
+            per_class_best_pose_rotations=(coarse_rotations[[0, 1]],),
+            per_class_best_pose_translations=(coarse_translations[[0, 0]],),
+            per_class_best_pose_rotation_ids=(np.asarray([0, 1], dtype=np.int32),),
+            best_pose_rotations=coarse_rotations[[0, 1]],
+            best_pose_translations=coarse_translations[[0, 0]],
+            best_pose_rotation_ids=np.asarray([0, 1], dtype=np.int32),
+        )
+
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        fake_significance,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.build_pass2_hypothesis_layout",
+        fake_build_layout,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.run_local_k_class_em",
+        fake_run_local,
+    )
+
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=1,
+        n_directions=4,
+        pseudo_halfsets=False,
+    )
+    config = DenseInitialModelEstepConfig(
+        means=np.zeros((1, 8**3), dtype=np.complex64),
+        mean_variance=np.ones((1, 8**3), dtype=np.float32),
+        noise_variance=np.ones(8 * 8, dtype=np.float32),
+        rotations=coarse_rotations,
+        translations=coarse_translations,
+        relion_bpref_frame=False,
+        engine_kwargs={
+            "sparse_pass2": True,
+            "healpix_order": 0,
+            "oversampling_order": 0,
+            "coarse_translations": coarse_translations,
+        },
+    )
+    result = run_dense_initial_model_estep(
+        _Dataset(),
+        state,
+        config,
+        particle_ids=np.asarray([0, 1], dtype=np.int64),
+    )
+
+    assert calls["pass1_current_size"] == state.current_size
+    np.testing.assert_array_equal(calls["class_log_evidence"], coarse_class_evidence)
+    np.testing.assert_array_equal(calls["normalization_max_posterior"], coarse_pmax)
+    assert calls["reconstruct_significant_only"] is False
+    np.testing.assert_array_equal(result.meta["pose_assignments"], coarse_hard)
+    np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [2, 3])
+    np.testing.assert_array_equal(result.meta["best_pose_rotations"], coarse_rotations[[2, 3]])
+    np.testing.assert_array_equal(result.meta["best_pose_translations"], coarse_translations[[1, 0]])
+    np.testing.assert_array_equal(result.meta["max_posterior_per_image"], coarse_pmax)
 
 
 def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypatch):

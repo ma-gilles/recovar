@@ -2109,6 +2109,7 @@ def relion_fine_diff2_fused_translate_rectangular_f32(
     translation_angles: jax.Array,
     weight: jax.Array,
     full_to_compact: jax.Array,
+    initial_diff2: jax.Array | None = None,
     *,
     current_size: int,
 ) -> jax.Array:
@@ -2116,9 +2117,12 @@ def relion_fine_diff2_fused_translate_rectangular_f32(
 
     Shapes are ``reference=(B,R,N)``, ``image=(B,N)``,
     ``translation_angles=(T,2)``, ``weight=(B,N)``, and
-    ``full_to_compact=(F,)``. The CUDA kernel follows RELION's 256-lane
-    REF3D topology: seven shared-memory translation slots, with the deployed
-    job builder filling at most four. It returns ``(B,R,T)``.
+    ``full_to_compact=(F,)``, and ``initial_diff2=(B,)``. The CUDA kernel
+    follows RELION's 256-lane REF3D topology: seven shared-memory translation
+    slots, with the deployed job builder filling at most four. The per-image
+    high-resolution addend is applied inside the kernel after the reduction,
+    matching RELION's final ``sum + sum_init`` operation. It returns
+    ``(B,R,T)``.
 
     This entry point is intentionally separate from the production scorer
     while the fused translation boundary is being qualified against native
@@ -2166,6 +2170,17 @@ def relion_fine_diff2_fused_translate_rectangular_f32(
             f"{reference.shape}, {image.shape}, {translation_angles.shape}, "
             f"{weight.shape}, {full_to_compact.shape}"
         )
+    if initial_diff2 is None:
+        initial_diff2 = jnp.zeros((reference.shape[0],), dtype=jnp.float32)
+    else:
+        initial_diff2 = jnp.asarray(initial_diff2)
+    if initial_diff2.dtype != jnp.float32 or initial_diff2.shape != (
+        reference.shape[0],
+    ):
+        raise ValueError(
+            "fused RELION fine diff2 initial_diff2 must be float32 with shape "
+            f"({reference.shape[0]},), got {initial_diff2.shape} {initial_diff2.dtype}"
+        )
     current_size = int(current_size)
     expected_full_pixels = current_size * (current_size // 2 + 1)
     if current_size <= 0 or full_to_compact.shape != (expected_full_pixels,):
@@ -2194,6 +2209,7 @@ def relion_fine_diff2_fused_translate_rectangular_f32(
         image,
         translation_angles,
         weight,
+        initial_diff2,
         full_to_compact,
         current_size=current_size,
     )

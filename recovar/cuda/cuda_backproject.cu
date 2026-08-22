@@ -5274,6 +5274,7 @@ void relion_fine_diff2_fused_translate_rectangular_f32_kernel(
     const float2* image,
     const float* translation_angles,
     const float* weight,
+    const float* initial_diff2,
     const int32_t* full_to_compact,
     float* output,
     int64_t batch_size,
@@ -5370,8 +5371,9 @@ void relion_fine_diff2_fused_translate_rectangular_f32_kernel(
         const int64_t translation = translation_start + threadIdx.x;
         const int64_t output_index =
             (batch * rotation_count + rotation) * translation_count + translation;
-        output[output_index] =
-            lane_sums[threadIdx.x * kRelionFineDiff2BlockSize];
+        output[output_index] = __fadd_rn(
+            lane_sums[threadIdx.x * kRelionFineDiff2BlockSize],
+            initial_diff2[batch]);
     }
 }
 
@@ -5532,6 +5534,7 @@ cudaError_t launch_relion_fine_diff2_fused_translate_rectangular_f32(
     const float2* image,
     const float* translation_angles,
     const float* weight,
+    const float* initial_diff2,
     const int32_t* full_to_compact,
     float* output,
     int64_t batch_size,
@@ -5556,6 +5559,7 @@ cudaError_t launch_relion_fine_diff2_fused_translate_rectangular_f32(
             image,
             translation_angles,
             weight,
+            initial_diff2,
             full_to_compact,
             output,
             batch_size,
@@ -7137,6 +7141,7 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
     ffi::AnyBuffer image,
     ffi::AnyBuffer translation_angles,
     ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
     ffi::AnyBuffer full_to_compact,
     ffi::Result<ffi::AnyBuffer> output)
 {
@@ -7146,9 +7151,10 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
             "RelionFineDiff2FusedTranslateRectangularF32: reference/image must be C64");
     if (translation_angles.element_type() != ffi::DataType::F32 ||
         weight.element_type() != ffi::DataType::F32 ||
+        initial_diff2.element_type() != ffi::DataType::F32 ||
         output->element_type() != ffi::DataType::F32)
         return ffi::Error::InvalidArgument(
-            "RelionFineDiff2FusedTranslateRectangularF32: angles/weight/output must be F32");
+            "RelionFineDiff2FusedTranslateRectangularF32: angles/weight/initial/output must be F32");
     if (full_to_compact.element_type() != ffi::DataType::S32)
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2FusedTranslateRectangularF32: lookup must be S32");
@@ -7160,13 +7166,15 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
     const auto image_dims = image.dimensions();
     const auto translation_dims = translation_angles.dimensions();
     const auto weight_dims = weight.dimensions();
+    const auto initial_dims = initial_diff2.dimensions();
     const auto lookup_dims = full_to_compact.dimensions();
     const auto output_dims = output->dimensions();
     const int64_t expected_full_pixels =
         current_size * (current_size / 2 + 1);
     if (reference_dims.size() != 3 || image_dims.size() != 2 ||
         translation_dims.size() != 2 || translation_dims[1] != 2 ||
-        weight_dims.size() != 2 || lookup_dims.size() != 1 ||
+        weight_dims.size() != 2 || initial_dims.size() != 1 ||
+        lookup_dims.size() != 1 ||
         output_dims.size() != 3 || reference_dims[0] <= 0 ||
         reference_dims[1] <= 0 || reference_dims[2] <= 0 ||
         image_dims[0] != reference_dims[0] ||
@@ -7174,6 +7182,7 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
         translation_dims[0] <= 0 ||
         weight_dims[0] != reference_dims[0] ||
         weight_dims[1] != reference_dims[2] ||
+        initial_dims[0] != reference_dims[0] ||
         lookup_dims[0] != expected_full_pixels ||
         output_dims[0] != reference_dims[0] ||
         output_dims[1] != reference_dims[1] ||
@@ -7195,6 +7204,7 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
         reinterpret_cast<const float2*>(image.untyped_data()),
         static_cast<const float*>(translation_angles.untyped_data()),
         static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(initial_diff2.untyped_data()),
         static_cast<const int32_t*>(full_to_compact.untyped_data()),
         static_cast<float*>(output->untyped_data()),
         reference_dims[0],
@@ -7215,6 +7225,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Attr<int64_t>("current_size")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

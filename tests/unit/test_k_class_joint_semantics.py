@@ -1765,6 +1765,23 @@ def test_local_k_class_single_class_skips_score_probe(monkeypatch):
     np.testing.assert_allclose(np.asarray(result.class_posterior_sums), np.asarray([2.0], dtype=np.float32))
     np.testing.assert_array_equal(np.asarray(result.best_pose_rotation_ids), np.asarray([1, 0], dtype=np.int32))
 
+    calls.clear()
+    coarse_pmax = np.asarray([0.25, 0.5], dtype=np.float64)
+    run_local_k_class_em(
+        TinyDataset(),
+        jnp.zeros((1, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(4, dtype=jnp.float32),
+        local_layout,
+        "linear_interp",
+        return_best_pose_details=True,
+        class_log_evidence=np.asarray([[4.0, 5.0]], dtype=np.float64),
+        normalization_max_posterior=coarse_pmax,
+    )
+    assert len(calls) == 1
+    np.testing.assert_array_equal(calls[0]["normalization_max_posterior"], coarse_pmax)
+    assert "normalization_log_evidence" not in calls[0]
+
 
 def test_local_k_class_accepts_per_class_layouts_and_external_evidence(monkeypatch):
     calls = []

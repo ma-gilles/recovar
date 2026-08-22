@@ -37,6 +37,8 @@ from scripts.analyze_vdam_storewavg_boundary import _complex_2d, _real_2d, _scal
 from scripts.compare_relion_recovar_estep_dump import (
     _nearest_rotation_rows_by_matrix,
 )
+from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture  # noqa: E402
+from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture  # noqa: E402
 
 
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | int | list[int]]:
@@ -171,6 +173,8 @@ def analyze(
     mask_radius: float | None = None,
     mask_cosine_width: float = 5.0,
     native_preprocess_dir: Path | None = None,
+    native_fine_score_path: Path | None = None,
+    native_fine_operand_path: Path | None = None,
 ) -> dict[str, object]:
     native_dir = Path(native_dir)
     with np.load(live_score_path, allow_pickle=False) as payload:
@@ -229,7 +233,40 @@ def analyze(
         _flat_memmap(native_dir / "pass1_exp_Mweight_raw_preprior.bin"),
         dtype=np.float64,
     )
+    native_fine_score = None
+    if native_fine_score_path is not None:
+        native_fine_score = load_fine_score_capture(native_fine_score_path)
+        selected = native_fine_score.candidates[
+            (native_fine_score.candidates["flags"] & ACTIVE) != 0
+        ]
+        if selected.size != native_rotation.size:
+            raise ValueError("formal fine-score candidate count differs from verbose capture")
+        if not np.array_equal(
+            selected["rotation_local"], native_rotation.astype(np.uint64)
+        ):
+            raise ValueError("formal fine-score rotation order differs from verbose capture")
+        if not np.array_equal(
+            selected["translation_id"], translation.astype(np.uint64)
+        ):
+            raise ValueError("formal fine-score translation order differs from verbose capture")
+        native_raw = np.asarray(selected["raw_diff2"], dtype=np.float64)
     live_raw = np.asarray(live["pass2_scores_raw"])[0, rotation, translation]
+
+    native_fine_operand = None
+    captured_highres_xi2_half = None
+    if native_fine_operand_path is not None:
+        native_fine_operand = load_fine_operand_capture(native_fine_operand_path)
+        if (
+            native_fine_score is not None
+            and native_fine_operand.stack_index != native_fine_score.stack_index
+        ):
+            raise ValueError("formal fine-score and fine-operand particle identities differ")
+        captured_sum_init = np.asarray(
+            native_fine_operand.candidates["sum_init"], dtype=np.float32
+        )
+        if captured_sum_init.size == 0 or not np.all(captured_sum_init == captured_sum_init[0]):
+            raise ValueError("formal fine operand does not seal one high-resolution accumulator")
+        captured_highres_xi2_half = captured_sum_init[0]
 
     scale = np.float32(full_size**2)
     native_weight_full = np.asarray(
@@ -295,31 +332,10 @@ def analyze(
         jnp.asarray(score_indices, dtype=jnp.int32),
         (full_size, full_size),
     )
-    native_processed = (
-        -scale
-        * np.asarray(_complex_2d(native_dir / "Fimg_unweighted.bin"), dtype=np.complex64)
-        .reshape(-1)[crop]
-    ).astype(np.complex64)
-    native_ctf = np.asarray(
-        _real_2d(native_dir / "Fctf.bin"), dtype=np.float64
-    ).astype(np.float32).reshape(-1)[crop]
-    native_inverse_noise_engine = (
-        np.asarray(_real_2d(native_dir / "Minvsigma2.bin"), dtype=np.float64).reshape(-1)[crop]
-        / float(full_size**4)
-    ).astype(np.float32)
-    native_production_weighted = (
-        native_processed * (native_ctf * native_inverse_noise_engine).astype(np.float32)
-    ).astype(np.complex64)
-    translated_native_production = cuda_backproject.relion_translate_score_f32(
-        jnp.asarray(native_production_weighted[None], dtype=jnp.complex64),
-        translation_angles,
-        jnp.asarray(score_indices, dtype=jnp.int32),
-        (full_size, full_size),
-    )
-    translated_unweighted, translated_preweighted, translated_native_production = (
+    translated_unweighted, translated_preweighted = (
         np.asarray(value, dtype=np.complex64)
         for value in jax.block_until_ready(
-            (translated_unweighted, translated_preweighted, translated_native_production)
+            (translated_unweighted, translated_preweighted)
         )
     )
 
@@ -345,16 +361,59 @@ def analyze(
             translated_preweighted[translation],
             live_shifted_weighted,
         ),
-        "native_production_product_then_translate_vs_live": _metric(
+    }
+    storewavg_paths = {
+        "image": native_dir / "Fimg_unweighted.bin",
+        "ctf": native_dir / "Fctf.bin",
+        "inverse_noise": native_dir / "Minvsigma2.bin",
+    }
+    storewavg_available = all(path.is_file() for path in storewavg_paths.values())
+    native_processed = None
+    if storewavg_available:
+        native_processed = (
+            -scale
+            * np.asarray(_complex_2d(storewavg_paths["image"]), dtype=np.complex64)
+            .reshape(-1)[crop]
+        ).astype(np.complex64)
+        native_ctf = np.asarray(
+            _real_2d(storewavg_paths["ctf"]), dtype=np.float64
+        ).astype(np.float32).reshape(-1)[crop]
+        native_inverse_noise_engine = (
+            np.asarray(
+                _real_2d(storewavg_paths["inverse_noise"]),
+                dtype=np.float64,
+            ).reshape(-1)[crop]
+            / float(full_size**4)
+        ).astype(np.float32)
+        native_production_weighted = (
+            native_processed * (native_ctf * native_inverse_noise_engine).astype(np.float32)
+        ).astype(np.complex64)
+        translated_native_production = cuda_backproject.relion_translate_score_f32(
+            jnp.asarray(native_production_weighted[None], dtype=jnp.complex64),
+            translation_angles,
+            jnp.asarray(score_indices, dtype=jnp.int32),
+            (full_size, full_size),
+        )
+        translated_native_production = np.asarray(
+            jax.block_until_ready(translated_native_production),
+            dtype=np.complex64,
+        )
+        comparisons["native_production_product_then_translate_vs_live"] = _metric(
             translated_native_production[translation],
             live_shifted_weighted,
-        ),
-        "native_corrected_weight_product_vs_native_production_product": _metric(
+        )
+        comparisons[
+            "native_corrected_weight_product_vs_native_production_product"
+        ] = _metric(
             (base_corrected * native_weight).astype(np.complex64),
             native_production_weighted,
-        ),
-    }
+        )
     if particle_stack is not None:
+        if native_processed is None:
+            raise ValueError(
+                "particle preprocessing replay requires Fimg_unweighted.bin, "
+                "Fctf.bin, and Minvsigma2.bin from a StoreWavg capture"
+            )
         if particle_index is None or mask_radius is None:
             raise ValueError("particle preprocessing replay requires particle_index and mask_radius")
         with mrcfile.open(particle_stack, permissive=False) as stack_file:
@@ -462,6 +521,11 @@ def analyze(
                 image_shape=(full_size, full_size),
                 current_size=current_size,
             )[0]
+            production_highres_xi2_half = (
+                np.float32(highres_xi2_half)
+                if captured_highres_xi2_half is None
+                else np.float32(captured_highres_xi2_half)
+            )
             lookup_variants = {
                 "physical_grid": lookup,
                 "current_grid": _current_crop_to_compact(crop, current_size),
@@ -486,7 +550,7 @@ def analyze(
                 inferred_mode_index = int(np.argmax(inferred_counts))
                 inferred_mode = inferred_bits[inferred_mode_index].view(np.float32)
                 direct_cost = np.add(
-                    direct_lowres, np.float32(highres_xi2_half), dtype=np.float32
+                    direct_lowres, production_highres_xi2_half, dtype=np.float32
                 )
                 centered_direct_residual = _stats(_center(direct_cost - native_raw))
                 centered_direct_residual.update(
@@ -495,6 +559,9 @@ def analyze(
                             np.count_nonzero(direct_cost == native_raw.astype(np.float32))
                         ),
                         "highres_xi2_half": float(highres_xi2_half),
+                        "production_highres_xi2_half": float(
+                            production_highres_xi2_half
+                        ),
                         "inferred_highres_mode": float(inferred_mode),
                         "inferred_highres_mode_count": int(
                             inferred_counts[inferred_mode_index]
@@ -516,6 +583,7 @@ def analyze(
             "score_pixel_count": int(score_indices.size),
             "rotation_matrix_orientation": orientation,
             "rotation_matrix_max_frobenius": float(np.max(rotation_distance)),
+            "storewavg_operands_available": storewavg_available,
         },
         "comparisons": comparisons,
         "artifacts": {
@@ -524,6 +592,16 @@ def analyze(
             "native_preprocess_directory": (
                 str(Path(native_preprocess_dir).resolve())
                 if native_preprocess_dir is not None
+                else None
+            ),
+            "native_fine_score": (
+                str(Path(native_fine_score_path).resolve())
+                if native_fine_score_path is not None
+                else None
+            ),
+            "native_fine_operand": (
+                str(Path(native_fine_operand_path).resolve())
+                if native_fine_operand_path is not None
                 else None
             ),
         },
@@ -542,6 +620,8 @@ def main() -> None:
     parser.add_argument("--mask-radius", type=float)
     parser.add_argument("--mask-cosine-width", type=float, default=5.0)
     parser.add_argument("--native-preprocess-directory", type=Path)
+    parser.add_argument("--native-fine-score", type=Path)
+    parser.add_argument("--native-fine-operand", type=Path)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     if args.output_json.exists():
@@ -557,6 +637,8 @@ def main() -> None:
         mask_radius=args.mask_radius,
         mask_cosine_width=args.mask_cosine_width,
         native_preprocess_dir=args.native_preprocess_directory,
+        native_fine_score_path=args.native_fine_score,
+        native_fine_operand_path=args.native_fine_operand,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
