@@ -119,6 +119,7 @@ class NativeInitialModelOptions:
     sigma2_min_particles: int = 1000
     padding_factor: int = 1
     image_fourier_backend: str = "host_numpy"
+    deterministic_cuda: bool = True
     lazy: bool = True
     datadir: str | None = None
     strip_prefix: str | None = None

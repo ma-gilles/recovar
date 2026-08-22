@@ -43,6 +43,24 @@ def _scorecard_case(scorecard: dict[str, Any], case_id: str) -> dict[str, Any]:
     return matches[0]
 
 
+def _env_flag(name: str, environ: dict[str, str] | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    raw = str(env.get(name, "")).strip().lower()
+    return raw not in {"", "0", "false", "no", "off"}
+
+
+def _qualification_cuda_environment(
+    env: dict[str, str],
+    *,
+    allow_async_cuda: bool,
+) -> dict[str, str]:
+    """Return one launch mode shared by the paired reference and candidate."""
+
+    configured = dict(env)
+    configured["CUDA_LAUNCH_BLOCKING"] = "0" if allow_async_cuda else "1"
+    return configured
+
+
 def _physical_gpu_uuid() -> str:
     proc = subprocess.run(
         ["nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader"],
@@ -283,6 +301,9 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         definition=definition,
         image_batch_size=image_batch_size,
     )
+    allow_async_cuda = _env_flag("VDAM_ALLOW_ASYNC_CUDA")
+    if allow_async_cuda:
+        recovar_argv.append("--allow_async_cuda")
     (relion_dir / "relion_command.json").write_text(
         json.dumps({"argv": relion_argv}, indent=2, sort_keys=True) + "\n"
     )
@@ -302,10 +323,14 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "recovar_sparse_big_jit_mstep_max_gb": os.environ.get(
             "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB"
         ),
+        "cuda_launch_blocking": not allow_async_cuda,
     }
     (case_root / "run_provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
 
-    env = dict(os.environ)
+    env = _qualification_cuda_environment(
+        dict(os.environ),
+        allow_async_cuda=allow_async_cuda,
+    )
     env.update(
         {
             "PYTHONNOUSERSITE": "1",
@@ -323,6 +348,7 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
     recovar_env = _recovar_gpu_env(env)
     recorded_env_keys = (
         "CUDA_VISIBLE_DEVICES",
+        "CUDA_LAUNCH_BLOCKING",
         "JAX_PLATFORMS",
         "JAX_PLATFORM_NAME",
         "RECOVAR_CUDA_LIB",

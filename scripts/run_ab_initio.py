@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -224,6 +225,15 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Fail before InitialModel execution unless the GPU custom CUDA FFI path is ready",
     )
+    p.add_argument(
+        "--allow_async_cuda",
+        action="store_true",
+        help=(
+            "Allow asynchronous CUDA launches. The default serializes launches because "
+            "RELION InitialModel GPU reductions can otherwise select different late "
+            "autosampling branches across identical runs."
+        ),
+    )
     p.add_argument("--dry_run", action="store_true", help="Only print the assembled command(s)")
     p.add_argument(
         "--padding_factor",
@@ -232,6 +242,14 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="K-class M-step BPref padding factor. Use 2 to give the M-step the trilinear-interpolation margin RELION's BackProjector expects (closer parity for c2 CC).",
     )
     return p.parse_args(argv)
+
+
+def _configure_cuda_launch_blocking(*, allow_async_cuda: bool) -> str:
+    """Select the reproducible InitialModel CUDA launch mode before CUDA starts."""
+
+    value = "0" if bool(allow_async_cuda) else "1"
+    os.environ["CUDA_LAUNCH_BLOCKING"] = value
+    return value
 
 
 def _require_custom_cuda_runtime() -> dict:
@@ -284,6 +302,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(" ".join(align_cmd))
         return 0
 
+    if args.gpu_ids:
+        _configure_cuda_launch_blocking(allow_async_cuda=bool(args.allow_async_cuda))
+
     if args.require_custom_cuda:
         _require_custom_cuda_runtime()
 
@@ -328,6 +349,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 else args.image_fourier_backend
             )
         ),
+        deterministic_cuda=not bool(args.allow_async_cuda),
     )
     result = run_native_initial_model(native_opts)
     print(f"recovar InitialModel complete: {result.final_mrc}")

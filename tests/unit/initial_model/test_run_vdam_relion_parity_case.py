@@ -206,6 +206,22 @@ def test_recovar_child_environment_requires_cuda_without_legacy_platform_overrid
     assert env["KEEP"] == "yes"
 
 
+def test_parity_cuda_environment_defaults_to_reproducible_launches():
+    env = runner._qualification_cuda_environment(
+        {"CUDA_LAUNCH_BLOCKING": "0", "KEEP": "yes"},
+        allow_async_cuda=False,
+    )
+
+    assert env["CUDA_LAUNCH_BLOCKING"] == "1"
+    assert env["KEEP"] == "yes"
+
+
+def test_parity_cuda_environment_has_explicit_async_escape_hatch():
+    env = runner._qualification_cuda_environment({}, allow_async_cuda=True)
+
+    assert env["CUDA_LAUNCH_BLOCKING"] == "0"
+
+
 def test_native_cli_custom_cuda_gate_primes_shared_slicing_dispatch(monkeypatch):
     import jax
 
