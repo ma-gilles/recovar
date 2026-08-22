@@ -2355,8 +2355,12 @@ def _compute_k_class_significance_batched(
         coarse_gaussian_translation_angles = None
         if coarse_fused_projector_enabled:
             coarse_gaussian_projector_full_by_class = [
-                relion_projector_half_to_texture_full(
-                    relion_projector_half[class_index],
+                jnp.asarray(
+                    relion_projector_half_to_texture_full(
+                        relion_projector_half[class_index],
+                    )
+                    * jnp.asarray(_dense_projection_scale(image_shape), dtype=jnp.float32),
+                    dtype=jnp.complex64,
                 )
                 for class_index in range(n_classes)
             ]
@@ -2672,7 +2676,7 @@ def _compute_k_class_significance_batched(
         if coarse_fused_projector_enabled:
             from recovar import cuda_backproject
 
-            diff2 = cuda_backproject.relion_coarse_diff2_projector_f32(
+            diff2 = cuda_backproject.relion_coarse_diff2_native_texture_rectangular_f32(
                 coarse_gaussian_projector_full_by_class[class_index],
                 jnp.asarray(rots_b, dtype=jnp.float32),
                 jnp.asarray(coarse_gaussian_unshifted_corrected, dtype=jnp.complex64),
@@ -2680,9 +2684,9 @@ def _compute_k_class_significance_batched(
                 jnp.asarray(coarse_gaussian_pixel_weight, dtype=jnp.float32),
                 jnp.asarray(coarse_gaussian_initial_diff2, dtype=jnp.float32),
                 coarse_gaussian_full_to_compact,
-                current_size=score_size,
-                physical_image_size=int(image_shape[0]),
-                model_max_r=int(relion_projector_r_max),
+                score_size,
+                int(projection_padding_factor),
+                int(relion_projector_r_max),
             )
             return -diff2
 

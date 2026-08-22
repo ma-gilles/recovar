@@ -330,7 +330,7 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assert "coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled" in source
     assert "relion_coarse_gaussian_default and coarse_gaussian_ffi_enabled" in source
     assert "production half-image preprocessing path" in source
-    assert "relion_coarse_diff2_projector_f32(" in source
+    assert "relion_coarse_diff2_native_texture_rectangular_f32(" in source
     assert "rotation_block_size = n_rot" in source
 
 
