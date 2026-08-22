@@ -235,6 +235,9 @@ _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIO
 _RELION_FINE_DIFF2_FUSED_FFI_ENV = "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI"
 _RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV = "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH"
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
+_RELION_X_HALF_BP_NATIVE_PARTICLE_GRID_ENV = (
+    "RECOVAR_RELION_X_HALF_BP_NATIVE_PARTICLE_GRID"
+)
 _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
     "RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE"
 )
@@ -15315,6 +15318,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     disc_type,
     oversampling_order,
     current_size,
+    reconstruction_current_size=None,
     translation_step=None,
     score_with_masked_images=False,
     return_stats=True,
@@ -15489,6 +15493,11 @@ def compute_k_class_pass2_stats_sparse_fused(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     H, W = image_shape
+    mstep_current_size = (
+        current_size
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
     if (
         use_exact_relion_gaussian
         and current_size is not None
@@ -15511,6 +15520,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         image_shape,
         current_size,
         n_half,
+        reconstruction_current_size=mstep_current_size,
         square=square_window,
         include_recon_window=True,
         **window_spec_kwargs,
@@ -15526,7 +15536,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         recon_volume_shape = relion_backprojector_volume_shape(
             volume_shape,
             reconstruction_padding_factor,
-            current_size=current_size,
+            current_size=mstep_current_size,
         )
     elif reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
@@ -15563,7 +15573,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             "Sparse fused K-class RELION x-half current-size BPref accumulator shape: "
             "volume_shape=%s current_size=%s padding_factor=%s recon_volume_shape=%s half_accum_shape=%s voxels=%d",
             tuple(volume_shape),
-            current_size,
+            mstep_current_size,
             reconstruction_padding_factor,
             tuple(recon_volume_shape),
             tuple(recon_accum_shape),
@@ -16194,6 +16204,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         image_shape,
         current_size,
         n_half,
+        reconstruction_current_size=mstep_current_size,
         square=square_window,
         include_recon_window=True,
         **window_spec_kwargs,

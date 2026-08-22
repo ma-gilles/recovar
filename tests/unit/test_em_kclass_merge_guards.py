@@ -147,6 +147,20 @@ def test_kclass_pass2_dump_completion_honors_class_filter(tmp_path):
     assert sparse_pass2_mod._k_class_pass2_dump_progress(**kwargs) == (2, 2)
 
 
+def test_kclass_fused_pass2_accepts_reconstruction_current_size():
+    """The K-class adapter and fused implementation must share the M-step window API."""
+
+    signature = inspect.signature(
+        sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused,
+    )
+    assert "reconstruction_current_size" in signature.parameters
+    source = inspect.getsource(
+        sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused,
+    )
+    assert "reconstruction_current_size=mstep_current_size" in source
+    assert "current_size=mstep_current_size" in source
+
+
 def test_kclass_adaptive_wires_relion_x_half_without_mislabeling_dense_branch():
     source = inspect.getsource(iteration_loop._score_half_dense)
     assert "k_class_relion_x_half_mstep = _k_class_relion_x_half_mstep_enabled()" in source
