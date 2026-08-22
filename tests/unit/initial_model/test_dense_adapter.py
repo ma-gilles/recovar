@@ -746,7 +746,7 @@ def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
 
 def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeypatch):
     calls = {}
-    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", "1")
+    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", raising=False)
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_diagnostics
 
@@ -967,6 +967,14 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
     np.testing.assert_allclose(result.meta["best_pose_translations"], [[0, 1], [2, 3]])
+
+
+def test_exact_relion_fine_diff2_can_be_disabled(monkeypatch):
+    from recovar.em.initial_model.dense_adapter import _exact_relion_fine_diff2_enabled
+
+    for value in ("0", "false", "NO", "Off"):
+        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", value)
+        assert _exact_relion_fine_diff2_enabled() is False
 
 
 def test_dense_initial_model_estep_os0_keeps_coarse_normalization_pose_and_support(monkeypatch):

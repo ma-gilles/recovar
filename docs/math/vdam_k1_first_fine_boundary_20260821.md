@@ -689,3 +689,21 @@ Evidence roots:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_it20_recovar_coarse_part0_20260824T052000Z`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_it20_order2_part0_boundary_20260824T043000Z`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_preupdate_coarse_size_default_20260824T073000Z`
+
+## Exact fine arithmetic promoted to the K=1 default
+
+With the order-promotion boundary closed, the exact RELION CUDA fine-diff2
+path removes the two remaining iteration-25 translation-grid flips. Paired
+H100 job `12751275` has no pose or translation mismatch above `1e-4` across
+all 1,000 particles at iteration 25. Its minimum trajectory cross-engine
+FSC-AUC is `0.999999999223`, versus `0.999998777126` with the former default,
+and its worst RECOVAR-minus-RELION GT FSC-AUC delta is `-3.54e-7`.
+
+The exact path is therefore the default for the guarded K=1 RELION-projector
+route. `RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2=0` remains an explicit
+diagnostic/performance opt-out. This default does not affect CPU/dense
+fallbacks or routes without the exact RELION projector operands.
+
+Evidence root:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_preupdate_coarse_size_exact_20260824T083000Z`

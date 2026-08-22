@@ -55,6 +55,15 @@ _INACTIVE_CLASS_LOG_PRIOR = -1.0e30
 _EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
 _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
 _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
+
+
+def _exact_relion_fine_diff2_enabled() -> bool:
+    """Use RELION's CUDA fine-score arithmetic unless explicitly disabled."""
+
+    setting = os.environ.get(_EXACT_RELION_FINE_DIFF2_ENV, "1").strip().lower()
+    return setting not in {"0", "false", "no", "off"}
+
+
 _SPARSE_PASS2_CONTROL_KEYS = {
     "adaptive_fraction",
     "max_significants",
@@ -830,13 +839,9 @@ def _run_sparse_pass2_initial_model_estep(
             and use_exact_relion_projector
             and _uses_relion_cuda_image_preprocessing(group_dataset)
         )
-        exact_fine_diff2_setting = os.environ.get(
-            _EXACT_RELION_FINE_DIFF2_ENV,
-            "0",
-        ).strip().lower()
         use_exact_fine_diff2 = bool(
             use_exact_local_relion_operands
-            and exact_fine_diff2_setting not in {"0", "false", "no", "off"}
+            and _exact_relion_fine_diff2_enabled()
         )
         sparse_diagnostics.set_bpref_contribution_dump_context(
             iteration=int(group_kwargs.get("debug_iteration", -1)),

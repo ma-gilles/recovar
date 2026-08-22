@@ -1,0 +1,40 @@
+{
+  "schema": "recovar.vdam_relion_real_data_suite.v1",
+  "suite_id": "vdam-k1-real-data-v1",
+  "description": "Frozen real-particle K=1 InitialModel trajectory parity suite. Map quality is RECOVAR-vs-RELION FSC/FSC-AUC because real data have no ground-truth map.",
+  "acceptance_contract": {
+    "cross_engine_fsc_auc_min": 0.999,
+    "required_checkpoints": [0, 1, 2, 4, 8],
+    "exact_schedule": true,
+    "exact_artifact_topology": true,
+    "same_physical_gpu_per_pair": true,
+    "correlation_used": false
+  },
+  "cases": [
+    {
+      "id": "vdam-r01",
+      "name": "empiar10076_deterministic_10k",
+      "dataset": "EMPIAR-10076",
+      "input_star": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/particles.star",
+      "input_star_sha256": "2560afeea6839dddbb38b47d26cdf8944535a799d1e6d3e1441535c96043998f",
+      "data_dir": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data",
+      "source_indices_sha256": "b58a6d11fb292a9ed9573ac75c6a0673f4a0e8c216f4dadf11a7f0537b0e2c9d",
+      "particle_count": 10000,
+      "definition": {
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1,
+        "symmetry": "C1",
+        "do_run_C1": true,
+        "particle_diameter_angstrom": 200.0,
+        "image_batch_size": 128
+      }
+    }
+  ]
+}
