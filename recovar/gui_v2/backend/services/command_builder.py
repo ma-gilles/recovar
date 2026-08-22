@@ -8,11 +8,12 @@ argv elements.
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 from pathlib import Path
 from typing import Any
+
+from recovar.commands.initial_model import initial_model_defaults_dict
 
 
 def _recovar_cmd() -> list[str]:
@@ -278,6 +279,7 @@ def build_downsample_command(params: dict[str, Any]) -> list[str]:
 # ComputeState and ComputeTrajectory need special handling (coord files),
 # so they are not included here.
 COMMAND_BUILDERS: dict[str, Any] = {
+    "InitialModel": build_initial_model_command,
     "Pipeline": build_pipeline_command,
     "Analyze": build_analyze_command,
     "Density": build_density_command,

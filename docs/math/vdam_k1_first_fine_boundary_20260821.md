@@ -738,3 +738,42 @@ shared sparse execution driver.
 Evidence root:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_compact_pass2_76039662_20260820T120000Z`
+
+## Unified InitialModel CLI and GUI contract
+
+RECOVAR now exposes the native path as `recovar initial_model`. The lightweight
+`GuiInitialModelDefaults` dataclass is the sole default source for that command,
+`NativeInitialModelOptions`, the legacy parity runner, the GUI defaults API,
+and the GUI command builder. The GUI retrieves those values from
+`GET /api/jobs/initial-model/defaults`, so a backend default change cannot be
+silently shadowed by a TypeScript literal.
+
+The default form matches the RELION GUI contract (`nr_iter=200`, `K=1`,
+`tau2_fudge=4`, C1 refinement, particle diameter 200 Angstrom, Healpix order 1,
+oversampling 1, offset range/step 6/2 pixels) and defaults to GPU 0 with the
+custom-CUDA runtime gate enabled. It exposes the important parity and scaling
+controls, including masks/CTF, symmetry, K, sampling, offsets, batching,
+padding, image Fourier backend, deterministic diagnostics, and iteration
+artifact cadence. Job clones preserve the complete submitted parameter map.
+
+This interface work does not change the qualified K=1 numerical path. The
+remaining scientific frontier is K>1 class-matched parity; the remaining K=1
+engineering frontier is the real-data runtime ratio documented above.
+
+Focused CPU coverage passes `90/90`, including the public command, legacy
+runner, native driver, compact-pass diagnostic, and project registry. H100
+Slurm smoke job `12766060` exercised the public command with the resolved GUI
+K=1 controls; the CUDA gate passed and the expected iteration/final artifacts
+were written in 38 seconds. A focused Chromium check also verified the live
+defaults endpoint and rendered form against the built static bundle.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_unified_cli_smoke_20260822T061500Z`
+- `/tmp/gui_qa/screenshots/initial_model_focused.png`
+
+The repository-wide `gui_qa.sh` now waits for slow server imports and includes
+an InitialModel form assertion. Its legacy full-journey portion cannot run on
+this machine because both hard-coded `old_regression_scores_v2` fixture roots
+are absent; the focused live-browser check covers the changed InitialModel
+surface independently.

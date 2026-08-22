@@ -28,6 +28,10 @@ import os
 from dataclasses import dataclass
 from typing import List, Optional
 
+from recovar.em.initial_model.schedules import GuiInitialModelDefaults
+
+INITIAL_MODEL_GUI_DEFAULTS = GuiInitialModelDefaults()
+
 
 def _reject_mpi() -> None:
     """Match RELION's pipeline_jobs.cpp:3435-3439 behaviour."""
@@ -45,15 +49,15 @@ class InitialModelJobOptions:
 
     fn_img: str = ""
     outputname: str = "ab_initio/run"
-    nr_iter: int = 200
-    grad_write_iter: int = 10
-    nr_classes: int = 1
-    tau2_fudge: float = 4.0
-    sym_name: str = "C1"
-    do_run_C1: bool = True
-    particle_diameter: float = 200.0
-    do_solvent: bool = True  # --flatten_solvent
-    do_ctf_correction: bool = True
+    nr_iter: int = INITIAL_MODEL_GUI_DEFAULTS.nr_iter
+    grad_write_iter: int = INITIAL_MODEL_GUI_DEFAULTS.grad_write_iter
+    nr_classes: int = INITIAL_MODEL_GUI_DEFAULTS.nr_classes
+    tau2_fudge: float = INITIAL_MODEL_GUI_DEFAULTS.tau2_fudge
+    sym_name: str = INITIAL_MODEL_GUI_DEFAULTS.sym_name
+    do_run_C1: bool = INITIAL_MODEL_GUI_DEFAULTS.do_run_C1
+    particle_diameter: float = INITIAL_MODEL_GUI_DEFAULTS.particle_diameter
+    do_solvent: bool = INITIAL_MODEL_GUI_DEFAULTS.do_solvent  # --flatten_solvent
+    do_ctf_correction: bool = INITIAL_MODEL_GUI_DEFAULTS.do_ctf_correction
     ctf_intact_first_peak: bool = False
     do_parallel_discio: bool = True
     nr_pool: int = 3
@@ -177,35 +181,71 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     p.add_argument("--i", dest="fn_img", required=True, help="Input images STAR file")
     p.add_argument("--o", dest="outputname", default="ab_initio/run", help="Output name prefix (no trailing slash)")
-    p.add_argument("--nr_iter", type=int, default=200)
+    p.add_argument("--nr_iter", type=int, default=INITIAL_MODEL_GUI_DEFAULTS.nr_iter)
     p.add_argument(
         "--grad_write_iter",
         type=int,
-        default=10,
+        default=INITIAL_MODEL_GUI_DEFAULTS.grad_write_iter,
         help="Write trajectory artifacts every N iterations and at the final iteration",
     )
-    p.add_argument("--K", dest="nr_classes", type=int, default=1)
-    p.add_argument("--tau2_fudge", type=float, default=4.0)
-    p.add_argument("--sym", dest="sym_name", default="C1")
+    p.add_argument("--K", dest="nr_classes", type=int, default=INITIAL_MODEL_GUI_DEFAULTS.nr_classes)
+    p.add_argument("--tau2_fudge", type=float, default=INITIAL_MODEL_GUI_DEFAULTS.tau2_fudge)
+    p.add_argument("--sym", dest="sym_name", default=INITIAL_MODEL_GUI_DEFAULTS.sym_name)
     p.add_argument(
-        "--do_run_C1", type=int, default=1, help="1 = run in C1 and apply symmetry later, 0 = run in sym_name"
+        "--do_run_C1",
+        type=int,
+        default=int(INITIAL_MODEL_GUI_DEFAULTS.do_run_C1),
+        help="1 = run in C1 and apply symmetry later, 0 = run in sym_name",
     )
-    p.add_argument("--particle_diameter", type=float, default=200.0)
+    p.add_argument(
+        "--particle_diameter",
+        type=float,
+        default=INITIAL_MODEL_GUI_DEFAULTS.particle_diameter,
+    )
     p.add_argument("--j", dest="nr_threads", type=int, default=1)
     p.add_argument("--nr_mpi", type=int, default=1, help="Rejected at > 1 (RELION behaviour for --grad).")
     p.add_argument("--gpu", dest="gpu_ids", default="", help="If non-empty, --gpu <gpu_ids> is appended")
     p.add_argument("--scratch_dir", default="")
     p.add_argument("--datadir", default=None, help="Directory used to resolve relative STAR image paths")
     p.add_argument("--strip_prefix", default=None, help="Prefix to strip from STAR image paths before --datadir")
-    p.add_argument("--random_seed", type=int, default=0, help="Native path seed for bootstrap and VDAM subsets")
-    p.add_argument("--healpix_order", type=int, default=1, help="Native path base Healpix order")
-    p.add_argument("--oversampling", type=int, default=1, help="Native path adaptive oversampling level")
-    p.add_argument("--offset_range", type=float, default=6.0, help="Native path translation search range in pixels")
-    p.add_argument("--offset_step", type=float, default=2.0, help="Native path translation search step in pixels")
-    p.add_argument("--perturbation_factor", type=float, default=0.5)
+    p.add_argument(
+        "--random_seed",
+        type=int,
+        default=INITIAL_MODEL_GUI_DEFAULTS.random_seed,
+        help="Native path seed for bootstrap and VDAM subsets",
+    )
+    p.add_argument(
+        "--healpix_order",
+        type=int,
+        default=INITIAL_MODEL_GUI_DEFAULTS.healpix_order,
+        help="Native path base Healpix order",
+    )
+    p.add_argument(
+        "--oversampling",
+        type=int,
+        default=INITIAL_MODEL_GUI_DEFAULTS.oversampling,
+        help="Native path adaptive oversampling level",
+    )
+    p.add_argument(
+        "--offset_range",
+        type=float,
+        default=INITIAL_MODEL_GUI_DEFAULTS.offset_range_px,
+        help="Native path translation search range in pixels",
+    )
+    p.add_argument(
+        "--offset_step",
+        type=float,
+        default=INITIAL_MODEL_GUI_DEFAULTS.offset_step_px,
+        help="Native path translation search step in pixels",
+    )
+    p.add_argument(
+        "--perturbation_factor",
+        type=float,
+        default=INITIAL_MODEL_GUI_DEFAULTS.perturbation_factor,
+    )
     p.add_argument("--random_perturbation", type=float, default=None)
-    p.add_argument("--image_batch_size", type=int, default=500)
-    p.add_argument("--rotation_block_size", type=int, default=5000)
+    p.add_argument("--image_batch_size", type=int, default=INITIAL_MODEL_GUI_DEFAULTS.image_batch_size)
+    p.add_argument("--rotation_block_size", type=int, default=INITIAL_MODEL_GUI_DEFAULTS.rotation_block_size)
     p.add_argument(
         "--image_fourier_backend",
         choices=("auto", "host_numpy", "jax_gpu", "relion_cuda"),
@@ -215,8 +255,16 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
             "for GPU runs and the host NumPy path otherwise."
         ),
     )
-    p.add_argument("--bootstrap_min_particles", type=int, default=1000)
-    p.add_argument("--sigma2_min_particles", type=int, default=1000)
+    p.add_argument(
+        "--bootstrap_min_particles",
+        type=int,
+        default=INITIAL_MODEL_GUI_DEFAULTS.bootstrap_min_particles,
+    )
+    p.add_argument(
+        "--sigma2_min_particles",
+        type=int,
+        default=INITIAL_MODEL_GUI_DEFAULTS.sigma2_min_particles,
+    )
     p.add_argument("--translation_sigma_angstrom", type=float, default=None)
     p.add_argument("--eager_images", action="store_true", help="Load image stack eagerly instead of lazily")
     p.add_argument("--no_iter_artifacts", action="store_true", help="Only write final native output artifacts")
@@ -246,7 +294,7 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument(
         "--padding_factor",
         type=int,
-        default=1,
+        default=INITIAL_MODEL_GUI_DEFAULTS.padding_factor,
         help="K-class M-step BPref padding factor. Use 2 to give the M-step the trilinear-interpolation margin RELION's BackProjector expects (closer parity for c2 CC).",
     )
     return p.parse_args(argv)

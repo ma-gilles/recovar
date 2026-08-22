@@ -34,17 +34,23 @@ from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstra
 from .dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
 from .init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
 from .iteration_loop import relion_solvent_flatten_state, relion_solvent_mask, run_vdam_iterations
-from .schedules import DEFAULT_GRAD_EM_ITERS, DEFAULT_GRAD_MU, default_subset_sizes_for_3d_initial_model
+from .schedules import (
+    DEFAULT_GRAD_EM_ITERS,
+    DEFAULT_GRAD_MU,
+    GuiInitialModelDefaults,
+    default_subset_sizes_for_3d_initial_model,
+)
 from .state import InitialModelState
 from .subset import RndUnifFn
 
+INITIAL_MODEL_GUI_DEFAULTS = GuiInitialModelDefaults()
 DEFAULT_WIDTH_MASK_EDGE_PX = 5.0
-DEFAULT_HEALPIX_ORDER = 1
-DEFAULT_OFFSET_RANGE_PX = 6.0
-DEFAULT_OFFSET_STEP_PX = 2.0
-DEFAULT_RANDOM_SEED = 0
-DEFAULT_OVERSAMPLING = 1
-DEFAULT_PERTURBATION_FACTOR = 0.5
+DEFAULT_HEALPIX_ORDER = INITIAL_MODEL_GUI_DEFAULTS.healpix_order
+DEFAULT_OFFSET_RANGE_PX = INITIAL_MODEL_GUI_DEFAULTS.offset_range_px
+DEFAULT_OFFSET_STEP_PX = INITIAL_MODEL_GUI_DEFAULTS.offset_step_px
+DEFAULT_RANDOM_SEED = INITIAL_MODEL_GUI_DEFAULTS.random_seed
+DEFAULT_OVERSAMPLING = INITIAL_MODEL_GUI_DEFAULTS.oversampling
+DEFAULT_PERTURBATION_FACTOR = INITIAL_MODEL_GUI_DEFAULTS.perturbation_factor
 RELION_INITIALMODEL_LOCAL_SEARCH_HEALPIX_ORDER = 4
 RELION_INITIALMODEL_MIN_TRANSLATION_STEP_ANGSTROM = 1.5
 RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN = 1
@@ -96,36 +102,36 @@ class NativeInitialModelOptions:
 
     fn_img: str
     outputname: str = "ab_initio/run"
-    nr_iter: int = 200
-    nr_classes: int = 1
-    tau2_fudge: float = 4.0
-    sym_name: str = "C1"
-    do_run_C1: bool = True
-    particle_diameter: float = 200.0
-    do_solvent: bool = True
-    do_zero_mask: bool = True
-    do_ctf_correction: bool = True
+    nr_iter: int = INITIAL_MODEL_GUI_DEFAULTS.nr_iter
+    nr_classes: int = INITIAL_MODEL_GUI_DEFAULTS.nr_classes
+    tau2_fudge: float = INITIAL_MODEL_GUI_DEFAULTS.tau2_fudge
+    sym_name: str = INITIAL_MODEL_GUI_DEFAULTS.sym_name
+    do_run_C1: bool = INITIAL_MODEL_GUI_DEFAULTS.do_run_C1
+    particle_diameter: float = INITIAL_MODEL_GUI_DEFAULTS.particle_diameter
+    do_solvent: bool = INITIAL_MODEL_GUI_DEFAULTS.do_solvent
+    do_zero_mask: bool = INITIAL_MODEL_GUI_DEFAULTS.do_zero_mask
+    do_ctf_correction: bool = INITIAL_MODEL_GUI_DEFAULTS.do_ctf_correction
     random_seed: int = DEFAULT_RANDOM_SEED
     width_mask_edge_px: float = DEFAULT_WIDTH_MASK_EDGE_PX
     healpix_order: int = DEFAULT_HEALPIX_ORDER
     oversampling: int = DEFAULT_OVERSAMPLING
     perturbation_factor: float = DEFAULT_PERTURBATION_FACTOR
-    random_perturbation: float | None = None
+    random_perturbation: float | None = INITIAL_MODEL_GUI_DEFAULTS.random_perturbation
     offset_range_px: float = DEFAULT_OFFSET_RANGE_PX
     offset_step_px: float = DEFAULT_OFFSET_STEP_PX
-    image_batch_size: int = 500
-    rotation_block_size: int = 5000
-    bootstrap_min_particles: int = 1000
-    sigma2_min_particles: int = 1000
-    padding_factor: int = 1
+    image_batch_size: int = INITIAL_MODEL_GUI_DEFAULTS.image_batch_size
+    rotation_block_size: int = INITIAL_MODEL_GUI_DEFAULTS.rotation_block_size
+    bootstrap_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.bootstrap_min_particles
+    sigma2_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.sigma2_min_particles
+    padding_factor: int = INITIAL_MODEL_GUI_DEFAULTS.padding_factor
     image_fourier_backend: str = "host_numpy"
-    deterministic_cuda: bool = False
-    lazy: bool = True
+    deterministic_cuda: bool = INITIAL_MODEL_GUI_DEFAULTS.deterministic_cuda
+    lazy: bool = INITIAL_MODEL_GUI_DEFAULTS.lazy
     datadir: str | None = None
     strip_prefix: str | None = None
-    translation_sigma_angstrom: float | None = None
-    write_iter_artifacts: bool = True
-    grad_write_iter: int = 10
+    translation_sigma_angstrom: float | None = INITIAL_MODEL_GUI_DEFAULTS.translation_sigma_angstrom
+    write_iter_artifacts: bool = INITIAL_MODEL_GUI_DEFAULTS.write_iter_artifacts
+    grad_write_iter: int = INITIAL_MODEL_GUI_DEFAULTS.grad_write_iter
     run_relion_align_symmetry: bool = False
 
 

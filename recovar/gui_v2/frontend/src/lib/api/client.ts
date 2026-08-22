@@ -203,6 +203,47 @@ export interface ValidationResult {
   info: Record<string, unknown>;
 }
 
+export interface InitialModelDefaults {
+  nr_iter: number;
+  grad_write_iter: number;
+  nr_classes: number;
+  tau2_fudge: number;
+  sym_name: string;
+  do_run_C1: boolean;
+  particle_diameter: number;
+  do_solvent: boolean;
+  do_zero_mask: boolean;
+  do_ctf_correction: boolean;
+  random_seed: number;
+  healpix_order: number;
+  oversampling: number;
+  offset_range_px: number;
+  offset_step_px: number;
+  perturbation_factor: number;
+  image_batch_size: number;
+  rotation_block_size: number;
+  bootstrap_min_particles: number;
+  sigma2_min_particles: number;
+  padding_factor: number;
+  image_fourier_backend: string;
+  gpu_ids: string;
+  require_custom_cuda: boolean;
+  lazy: boolean;
+  write_iter_artifacts: boolean;
+  deterministic_cuda: boolean;
+  random_perturbation: number | null;
+  translation_sigma_angstrom: number | null;
+  grad_ini_frac: number;
+  grad_fin_frac: number;
+  grad_em_iters: number;
+  stepsize: number;
+  mu: number;
+}
+
+export function getInitialModelDefaults(): Promise<InitialModelDefaults> {
+  return request("/jobs/initial-model/defaults");
+}
+
 export function validateJob(
   projectId: string,
   type: string,
