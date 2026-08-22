@@ -144,8 +144,16 @@ test -s "${OUTPUT}/refinement_results.npz"
   --output-markdown "${ANALYSIS}/prefix_fsc.md" \
   --output-shellwise-npz "${ANALYSIS}/prefix_fsc_shellwise.npz"
 
+"${PYTHON}" -m scripts.audit_k1_intermediate_trajectory \
+  --case-root "${CASE_SOURCE}" \
+  --recovar-dir "${OUTPUT}" \
+  --relion-dir "${RELION}" \
+  --output-json "${ANALYSIS}/prefix_intermediates.json" \
+  --output-markdown "${ANALYSIS}/prefix_intermediates.md"
+
 sha256sum "${OUTPUT}/refinement_results.npz" "${ANALYSIS}/prefix_fsc.json" \
-  "${ANALYSIS}/prefix_fsc_shellwise.npz" > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
+  "${ANALYSIS}/prefix_fsc_shellwise.npz" "${ANALYSIS}/prefix_intermediates.json" \
+  > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
 printf '{"case":"%s","job_id":"%s","wall_s":%d,"max_iter":%d,"mode":"matrix_faithful_existing_relion_prefix"}\n' \
   "${CASE_NAME}" "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" \
   > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
