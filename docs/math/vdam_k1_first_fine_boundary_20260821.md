@@ -707,3 +707,34 @@ fallbacks or routes without the exact RELION projector operands.
 Evidence root:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_l01_preupdate_coarse_size_exact_20260824T083000Z`
+
+## Rejected compact shared-pass-2 execution topology
+
+InitialModel's qualified exact-local route pads each image's retained fine
+rotations to a bounded rectangular bucket.  As a performance experiment, the
+adapter can instead call the shared supplied-map EM compact sparse pass 2 with
+`RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2=1`.  The experiment reuses the
+same coarse significance lists and RELION child grids.  The shared sparse
+engine gained one explicit VDAM operation that it previously lacked: before
+backprojection it can subtract
+`posterior_mass * projected_reference * CTF^2 / sigma^2` from the translated
+image sufficient statistic, matching the proven exact-local gradient formula.
+
+Same-H100 frozen case job `12764156` completed and passed the unchanged audit,
+so the residual extension is scientifically coherent.  It is not a candidate
+default.  Cross-engine FSC-AUC fell to `0.9994907915` at iteration 8, while
+RECOVAR wall time rose to `334.44 s` versus RELION's `7.70 s` (`43.4x`).  The
+shared compact implementation generated thousands of small JAX cache entries
+and compiled changing support shapes; steady-state iterations also remained
+slower.  This is about twice the wall time of the qualified local route on the
+same scale of frozen fixture.
+
+The switch therefore remains opt-in and fail-closed for K>1 and
+zero-oversampling.  Production keeps unified exact-local buckets.  Future
+performance work should reuse compact pair indexing inside the qualified
+single-shape local scorer, rather than switching wholesale to the current
+shared sparse execution driver.
+
+Evidence root:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_compact_pass2_76039662_20260820T120000Z`
