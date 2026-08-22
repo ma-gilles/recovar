@@ -1806,7 +1806,8 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
                 particle_state=particle_state,
             )
     else:
-        artifact_sink = lambda *args, **kwargs: None
+        def artifact_sink(*args, **kwargs):
+            return None
 
     post_mstep_update = None
     if opts.do_solvent:
@@ -1816,7 +1817,8 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             particle_diameter_ang=float(opts.particle_diameter),
             width_mask_edge_px=float(opts.width_mask_edge_px),
         )
-        post_mstep_update = lambda current, _iteration, _meta: relion_solvent_flatten_state(current, mask=solvent_mask)
+        def post_mstep_update(current, _iteration, _meta):
+            return relion_solvent_flatten_state(current, mask=solvent_mask)
 
     final_state = run_vdam_iterations(
         state,

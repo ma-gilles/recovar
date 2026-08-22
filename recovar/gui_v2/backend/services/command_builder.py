@@ -74,6 +74,87 @@ def _add_bool_optional(cmd: list[str], flag_base: str, value: bool | None) -> No
         cmd.append(f"--no-{flag_base}")
 
 
+def _add_boolean_option(cmd: list[str], flag: str, value: bool) -> None:
+    """Append one side of an argparse ``BooleanOptionalAction`` option."""
+
+    cmd.append(flag if value else f"--no-{flag.removeprefix('--')}")
+
+
+def build_initial_model_command(params: dict[str, Any]) -> list[str]:
+    """Build a fully resolved ``recovar initial_model`` command."""
+
+    defaults = initial_model_defaults_dict()
+
+    def value(name: str) -> Any:
+        return params.get(name, defaults[name])
+
+    cmd = [
+        *_recovar_cmd(),
+        "initial_model",
+        "--i",
+        str(params["input_star"]),
+        "--o",
+        str(Path(params["outdir"]) / "run"),
+        "--nr-iter",
+        str(value("nr_iter")),
+        "--grad-write-iter",
+        str(value("grad_write_iter")),
+        "--K",
+        str(value("nr_classes")),
+        "--tau2-fudge",
+        str(value("tau2_fudge")),
+        "--sym",
+        str(value("sym_name")),
+        "--particle-diameter",
+        str(value("particle_diameter")),
+        "--random-seed",
+        str(value("random_seed")),
+        "--healpix-order",
+        str(value("healpix_order")),
+        "--oversampling",
+        str(value("oversampling")),
+        "--offset-range",
+        str(value("offset_range_px")),
+        "--offset-step",
+        str(value("offset_step_px")),
+        "--perturbation-factor",
+        str(value("perturbation_factor")),
+        "--image-batch-size",
+        str(value("image_batch_size")),
+        "--rotation-block-size",
+        str(value("rotation_block_size")),
+        "--pass2-engine",
+        str(value("pass2_engine")),
+        "--bootstrap-min-particles",
+        str(value("bootstrap_min_particles")),
+        "--sigma2-min-particles",
+        str(value("sigma2_min_particles")),
+        "--padding-factor",
+        str(value("padding_factor")),
+        "--image-fourier-backend",
+        str(value("image_fourier_backend")),
+        "--gpu",
+        str(value("gpu_ids")),
+    ]
+    for flag, name in (
+        ("--run-in-c1", "do_run_C1"),
+        ("--solvent", "do_solvent"),
+        ("--zero-mask", "do_zero_mask"),
+        ("--ctf", "do_ctf_correction"),
+        ("--lazy", "lazy"),
+        ("--write-iter-artifacts", "write_iter_artifacts"),
+        ("--require-custom-cuda", "require_custom_cuda"),
+    ):
+        _add_boolean_option(cmd, flag, bool(value(name)))
+
+    cmd.append("--deterministic-cuda" if bool(value("deterministic_cuda")) else "--allow-async-cuda")
+    _add_optional(cmd, "--random-perturbation", params.get("random_perturbation"))
+    _add_optional(cmd, "--translation-sigma-angstrom", params.get("translation_sigma_angstrom"))
+    _add_optional(cmd, "--datadir", params.get("datadir"))
+    _add_optional(cmd, "--strip-prefix", params.get("strip_prefix"))
+    return cmd
+
+
 def build_pipeline_command(params: dict[str, Any]) -> list[str]:
     """Build ``recovar pipeline`` command from validated parameters.
 

@@ -871,7 +871,9 @@ class TestRunVdamIterations:
         optics = [0] * 200
 
         iter_log = []
-        sink = lambda s, it, meta: iter_log.append({"iter": it, "pseudo": s.pseudo_halfsets})
+
+        def sink(s, it, meta):
+            iter_log.append({"iter": it, "pseudo": s.pseudo_halfsets})
 
         run_vdam_iterations(
             state,
