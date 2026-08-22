@@ -241,10 +241,12 @@ def test_relion_coarse_native_texture_source_pins_fused_projection_topology():
     from recovar.em.dense_single_volume.helpers import significance
 
     significance_source = Path(significance.__file__).read_text()
-    # Only the guarded K=1/K-class significance implementation owns this
-    # native-texture route.  The legacy helper must not reference its local
-    # enable flag (that stale duplicate raised NameError on ordinary callers).
-    assert significance_source.count("rotation_block_size = n_rot") == 1
+    # Both guarded routes in the shared K=1/K-class significance
+    # implementation preserve RELION's all-rotation launch: the original
+    # native-texture diagnostic and InitialModel's fused Gaussian projector.
+    # The legacy helper must not add a third copy (its stale duplicate raised
+    # NameError on ordinary callers).
+    assert significance_source.count("rotation_block_size = n_rot") == 2
     assert "one particle per " in significance_source
     assert "full orientation grid (%d rotations)" in significance_source
 
