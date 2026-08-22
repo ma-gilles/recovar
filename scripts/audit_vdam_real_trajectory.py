@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 
+from recovar.data_io.starfile import read_star
+
 if __package__:
     from scripts.audit_vdam_fsc_trajectory import (
         _artifact_paths,
@@ -20,6 +22,7 @@ if __package__:
         _validate_iteration_one_particle_subset,
         _validate_run_contract,
     )
+    from scripts.audit_vdam_particle_state_trajectory import compare_particle_tables
     from scripts.summarize_em_completion_bench import _load_relion_volume
 else:
     from audit_vdam_fsc_trajectory import (
@@ -30,11 +33,14 @@ else:
         _validate_iteration_one_particle_subset,
         _validate_run_contract,
     )
+    from audit_vdam_particle_state_trajectory import compare_particle_tables
     from summarize_em_completion_bench import _load_relion_volume
 
 
-SCHEMA = "recovar.vdam_relion_real_data_trajectory_audit.v1"
+SCHEMA = "recovar.vdam_relion_real_data_trajectory_audit.v2"
 SUITE_SCHEMA = "recovar.vdam_relion_real_data_suite.v1"
+IDENTITY_NAMES = ("_rlnImageName", "rlnImageName")
+CLASS_NAMES = ("_rlnClassNumber", "rlnClassNumber")
 
 
 class RealDataAuditError(RuntimeError):
@@ -48,6 +54,89 @@ def _case(scorecard: dict[str, Any], case_id: str) -> dict[str, Any]:
     if len(matches) != 1:
         raise RealDataAuditError(f"expected one case {case_id}, found {len(matches)}")
     return matches[0]
+
+
+def _particle_state_gate(state: dict[str, Any], acceptance: dict[str, Any]) -> dict[str, Any]:
+    """Apply the frozen real-data winning-state and Pmax tolerances."""
+
+    pmax = state["pmax_absolute_error"]
+    checks = {
+        "identity_alignment_exact": bool(state["identity_alignment_exact"]),
+        "visited_topology_exact": bool(state["visited_topology_exact"]),
+        "zero_pose_or_translation_mismatches": int(state["divergent_particle_count"]) == 0,
+        "pmax_p95_within_tolerance": float(pmax["p95"])
+        <= float(acceptance["pmax_absolute_error_p95_max"]),
+        "pmax_max_within_tolerance": float(pmax["max"])
+        <= float(acceptance["pmax_absolute_error_max"]),
+    }
+    return {
+        **state,
+        "thresholds": {
+            "pose_tolerance_deg": float(acceptance["pose_tolerance_deg"]),
+            "translation_tolerance_angst": float(acceptance["translation_tolerance_angst"]),
+            "pmax_absolute_error_p95_max": float(acceptance["pmax_absolute_error_p95_max"]),
+            "pmax_absolute_error_max": float(acceptance["pmax_absolute_error_max"]),
+        },
+        "checks": checks,
+        "pass": all(checks.values()),
+    }
+
+
+def _one_column(table, alternatives: tuple[str, ...], *, label: str) -> str:
+    matches = [name for name in alternatives if name in table.columns]
+    if len(matches) != 1:
+        raise RealDataAuditError(
+            f"{label} must contain exactly one of {alternatives}, found {matches}"
+        )
+    return matches[0]
+
+
+def _compare_active_particle_state(
+    recovar_table,
+    relion_table,
+    *,
+    iteration: int,
+    pose_tolerance_deg: float,
+    translation_tolerance_angst: float,
+) -> dict[str, Any]:
+    """Compare the exact selected subset while checking full visited topology."""
+
+    rec_id_col = _one_column(recovar_table, IDENTITY_NAMES, label="RECOVAR table")
+    rel_id_col = _one_column(relion_table, IDENTITY_NAMES, label="RELION table")
+    rec_ids = recovar_table[rec_id_col].astype(str).to_numpy()
+    rel_ids = relion_table[rel_id_col].astype(str).to_numpy()
+    if len(set(rec_ids.tolist())) != rec_ids.size or len(set(rel_ids.tolist())) != rel_ids.size:
+        raise RealDataAuditError("particle tables must have unique image identities")
+    rel_by_id = {identity: row for row, identity in enumerate(rel_ids.tolist())}
+    if set(rec_ids.tolist()) != set(rel_ids.tolist()):
+        raise RealDataAuditError("RECOVAR and RELION particle identity sets differ")
+    aligned_relion = relion_table.iloc[
+        np.asarray([rel_by_id[identity] for identity in rec_ids], dtype=np.int64)
+    ].reset_index(drop=True)
+    aligned_recovar = recovar_table.reset_index(drop=True)
+
+    rec_class_col = _one_column(aligned_recovar, CLASS_NAMES, label="RECOVAR table")
+    rel_class_col = _one_column(aligned_relion, CLASS_NAMES, label="RELION table")
+    rec_active = aligned_recovar[rec_class_col].astype(int).to_numpy() > 0
+    rel_active = aligned_relion[rel_class_col].astype(int).to_numpy() > 0
+    active = rec_active | rel_active
+    if not np.any(active):
+        raise RealDataAuditError(f"iteration {iteration} has no selected particles")
+    state = compare_particle_tables(
+        aligned_recovar.loc[active].reset_index(drop=True),
+        aligned_relion.loc[active].reset_index(drop=True),
+        iteration=iteration,
+        pose_tolerance_deg=pose_tolerance_deg,
+        translation_tolerance_angst=translation_tolerance_angst,
+    )
+    state.update(
+        full_particle_count=int(rec_ids.size),
+        evaluated_particle_count=int(np.count_nonzero(active)),
+        recovar_visited_particle_count=int(np.count_nonzero(rec_active)),
+        relion_visited_particle_count=int(np.count_nonzero(rel_active)),
+        visited_topology_exact=bool(np.array_equal(rec_active, rel_active)),
+    )
+    return state
 
 
 def audit(
@@ -100,11 +189,31 @@ def audit(
                 f"iteration {iteration} map shapes differ: {rec_map.shape} != {rel_map.shape}"
             )
         metric = _map_metric(rec_map, rel_map, key=f"it{iteration:03d}_cross_engine", shellwise=shellwise)
+        particle_state = None
+        if iteration > 0:
+            recovar_table, _ = read_star(str(rec_paths["data.star"]))
+            relion_table, _ = read_star(str(rel_paths["data.star"]))
+            particle_state = _particle_state_gate(
+                _compare_active_particle_state(
+                    recovar_table,
+                    relion_table,
+                    iteration=iteration,
+                    pose_tolerance_deg=float(acceptance["pose_tolerance_deg"]),
+                    translation_tolerance_angst=float(
+                        acceptance["translation_tolerance_angst"]
+                    ),
+                ),
+                acceptance,
+            )
+        checkpoint_pass = bool(metric["fsc_auc"] >= threshold) and (
+            particle_state is None or bool(particle_state["pass"])
+        )
         rows.append(
             {
                 "iteration": iteration,
                 "cross_engine": metric,
-                "pass": bool(metric["fsc_auc"] >= threshold),
+                "particle_state": particle_state,
+                "pass": checkpoint_pass,
                 "artifact_topology_exact": True,
             }
         )
@@ -115,9 +224,18 @@ def audit(
         "case_id": case_id,
         "dataset": case["dataset"],
         "result": "pass" if all(row["pass"] for row in rows) else "fail",
-        "metric_policy": "signed shellwise RECOVAR-vs-RELION FSC and normalized non-DC FSC-AUC only",
+        "metric_policy": (
+            "signed shellwise RECOVAR-vs-RELION FSC, normalized non-DC FSC-AUC, "
+            "exact particle identity, winning pose/translation topology, and absolute Pmax error"
+        ),
         "correlation_used": False,
-        "thresholds": {"cross_engine_fsc_auc_min": threshold},
+        "thresholds": {
+            "cross_engine_fsc_auc_min": threshold,
+            "pose_tolerance_deg": float(acceptance["pose_tolerance_deg"]),
+            "translation_tolerance_angst": float(acceptance["translation_tolerance_angst"]),
+            "pmax_absolute_error_p95_max": float(acceptance["pmax_absolute_error_p95_max"]),
+            "pmax_absolute_error_max": float(acceptance["pmax_absolute_error_max"]),
+        },
         "run_contract": run_contract,
         "same_physical_gpu": True,
         "physical_gpu_uuid": gpu_uuid,

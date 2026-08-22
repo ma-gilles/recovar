@@ -1,9 +1,13 @@
 {
   "schema": "recovar.vdam_relion_real_data_suite.v1",
   "suite_id": "vdam-k1-real-data-v1",
-  "description": "Frozen real-particle K=1 InitialModel trajectory parity suite. Map quality is RECOVAR-vs-RELION FSC/FSC-AUC because real data have no ground-truth map.",
+  "description": "Frozen real-particle K=1 InitialModel trajectory parity suite. It gates RECOVAR-vs-RELION FSC/FSC-AUC plus exact particle identity and winning pose/translation topology with bounded Pmax drift because real data have no ground-truth map.",
   "acceptance_contract": {
     "cross_engine_fsc_auc_min": 0.999,
+    "pose_tolerance_deg": 0.001,
+    "translation_tolerance_angst": 0.0001,
+    "pmax_absolute_error_p95_max": 0.005,
+    "pmax_absolute_error_max": 0.01,
     "required_checkpoints": [0, 1, 2, 4, 8],
     "exact_schedule": true,
     "exact_artifact_topology": true,

@@ -1,6 +1,6 @@
 # RECOVAR / RELION VDAM InitialModel parity scorecard
 
-**Fixed-suite score: 6 / 12 passing (12 / 12 evaluated).**
+**Fixed-suite score: 12 / 12 passing (12 / 12 evaluated).**
 
 Suite: `vdam-k1-gui-grid0-fixed12` (version 1; denominator frozen at 12).
 Frozen case-definition SHA-256: `1a37a1b360b022d60eefdd0481eb0784d4a0e98a4d92066199625ceaf6d11dd1`.
@@ -11,18 +11,18 @@ Map correlation is not computed or gated. Historical correlation-only runs are n
 
 | Case | Reused fixed EM fixture | Result | Checkpoints | Evidence |
 |---|---|---:|---|---|
-| `vdam-01` small_baseline | `k1-11` | FAIL | 0:pass, 1:pass, 2:pass, 4:fail, 8:fail | `95605b72a2ab13c63af52d2ed52dfbad40fedcead954469d04dbbd784267700d` |
-| `vdam-02` small_very_high_noise | `k1-12` | FAIL | 0:pass, 1:pass, 2:pass, 4:pass, 8:fail | `4ff0ca29029fbffcd5d93649abf860aa435fbc9c9cde32273b00231866145bda` |
-| `vdam-03` small_anisotropic | `k1-13` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `b5428af040140d54baec548548839c55e407a12c8553fd9d7ade3d72f7a9561e` |
-| `vdam-04` small_noctf | `k1-14` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `8247af430cfcafff6862cfa9203627d2de2640570178fcaf442acb571718d5c5` |
-| `vdam-05` small_contrast_noise_scale | `k1-18` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `05462686b83ceaa0dca0dcc0e84129ba32c1ee3fadc1212c96d8e62430b8628d` |
-| `vdam-06` small_image_offset | `k1-19` | FAIL | 0:pass, 1:pass, 2:pass, 4:fail, 8:fail | `fc78050fd2ccdcc6a77db9a36ce689a8cbc04cf17a3c18164dda406ba9c43fd8` |
-| `vdam-07` small_severe_outliers | `k1-22` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `e425a83b0fcb3b42d830f116f1e295d887b55f7fb7fc29318b2fa8d5e3ab7383` |
-| `vdam-08` tiny_baseline | `k1-25` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `b2d674406b8c81eefff32318b321f0950b09cc8dfc80b5bbe83674cd97bff27c` |
-| `vdam-09` small_high_res_radial | `k1-20` | FAIL | 0:pass, 1:fail, 2:fail, 4:fail, 8:fail | `b457b94fc2ddd4d29e6be25b3320277cd0b69d8118ea4c4eb87d77617b28acf6` |
-| `vdam-10` mid_baseline | `k1-31` | FAIL | 0:pass, 1:pass, 2:pass, 4:pass, 8:fail | `89748dbb669cc1ce5597cf9b45db5b6229d26777628e81a774898e42be57805b` |
-| `vdam-11` production_baseline | `k1-01` | FAIL | 0:pass, 1:pass, 2:pass, 4:pass, 8:fail | `ef3266923a7b512bb94365b74623293023ae6f064de50dfe044d9243d24282c9` |
-| `vdam-12` production_near_nyquist | `k1-09` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `6450095ddafee18a67a63ebe7aec64c4815779608a19121d730ce63cca6860f2` |
+| `vdam-01` small_baseline | `k1-11` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `fbccbcbf23e3e0266aac04812bf77ea18b3ba40be495b6ca24051481b16f1d22` |
+| `vdam-02` small_very_high_noise | `k1-12` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `6aa5f5496e82d9081b9a9645caf760ccf4c2db4a2ac6bec0e41a04ce8a4e33a0` |
+| `vdam-03` small_anisotropic | `k1-13` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `4d501c845f44d7f10e727eefbd19a456e34191c400013dc4438b4209fa9ffe16` |
+| `vdam-04` small_noctf | `k1-14` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `7b9ee22176cbe71779f7e5343c3b11843b46336c72a049724269c3c7ec56a4a3` |
+| `vdam-05` small_contrast_noise_scale | `k1-18` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `5fb662ed072dd9b21f72ce0911e7a35ccd622a26a8064f550df9ee1f56f9686f` |
+| `vdam-06` small_image_offset | `k1-19` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `33333dc7ed29125b9e4c9c08a1df34b46e0f60800f581d1dba9e982e2e301f86` |
+| `vdam-07` small_severe_outliers | `k1-22` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `1fa5d1ee9d0af5ca9e8e594f3a15cf048ba3fc56fcb62856d79651a0bf4f123e` |
+| `vdam-08` tiny_baseline | `k1-25` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `8a3d17131449baf23ab20c275a5552b68ed4c860d7306ebc37ca773bc7a251b1` |
+| `vdam-09` small_high_res_radial | `k1-20` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `69661d3c4d60c8b23ebb73716dd781d4b7f44c96eb48c09bd035f9c2fc2cacfe` |
+| `vdam-10` mid_baseline | `k1-31` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `b8d8e3fccb24a5e8d7489f4efee6cbb4a03c801c08637ce8537329d5dc76ba7b` |
+| `vdam-11` production_baseline | `k1-01` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `df1801f8ea4fe4d77f48b3d56d14a95b482439dd3c9934869ae78f09ca22ca18` |
+| `vdam-12` production_near_nyquist | `k1-09` | PASS | 0:pass, 1:pass, 2:pass, 4:pass, 8:pass | `46d4335ad91dc29d4af11cc80ba5528dd8ec652add3680ef3b067ebcb4bb438d` |
 
 ## Fixed checkpoints
 
