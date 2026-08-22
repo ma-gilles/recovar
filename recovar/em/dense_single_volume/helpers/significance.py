@@ -33,6 +33,7 @@ _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
 )
 _K1_COARSE_GAUSSIAN_FFI_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_FFI"
 _K1_COARSE_GAUSSIAN_SINCOSF_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF"
+_K1_COARSE_FUSED_PROJECTOR_ENV = "RECOVAR_K1_COARSE_FUSED_PROJECTOR"
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
 )
@@ -207,6 +208,22 @@ def _k1_coarse_gaussian_native_texture_enabled(*, default: bool = False) -> bool
         return True
     raise ValueError(
         f"Unsupported {_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV}={token!r}",
+    )
+
+
+def _k1_coarse_fused_projector_enabled(*, default: bool = False) -> bool:
+    """Return whether coarse projection and diff2 use RELION's fused topology."""
+
+    token = os.environ.get(
+        _K1_COARSE_FUSED_PROJECTOR_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_K1_COARSE_FUSED_PROJECTOR_ENV}={token!r}",
     )
 
 
@@ -2391,6 +2408,20 @@ def _compute_k_class_significance_batched(
                     else "environment override"
                 ),
             )
+        if coarse_fused_projector_enabled:
+            logger.warning(
+                "RELION fused coarse projector/diff2 enabled (%s): "
+                "classes=%d rotations=%d translations=%d",
+                (
+                    "guarded fresh InitialModel default"
+                    if relion_coarse_gaussian_default
+                    and _K1_COARSE_FUSED_PROJECTOR_ENV not in os.environ
+                    else "environment override"
+                ),
+                n_classes,
+                n_rot,
+                n_trans,
+            )
         if coarse_gaussian_native_texture_enabled:
             from recovar.em.dense_single_volume.helpers.projection import (
                 relion_projector_half_to_texture_full,
@@ -2638,6 +2669,23 @@ def _compute_k_class_significance_batched(
         return proj_half_b, proj_abs2_half_b
 
     def _score_block(class_index, mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
+        if coarse_fused_projector_enabled:
+            from recovar import cuda_backproject
+
+            diff2 = cuda_backproject.relion_coarse_diff2_projector_f32(
+                coarse_gaussian_projector_full_by_class[class_index],
+                jnp.asarray(rots_b, dtype=jnp.float32),
+                jnp.asarray(coarse_gaussian_unshifted_corrected, dtype=jnp.complex64),
+                coarse_gaussian_translation_angles,
+                jnp.asarray(coarse_gaussian_pixel_weight, dtype=jnp.float32),
+                jnp.asarray(coarse_gaussian_initial_diff2, dtype=jnp.float32),
+                coarse_gaussian_full_to_compact,
+                current_size=score_size,
+                physical_image_size=int(image_shape[0]),
+                model_max_r=int(relion_projector_r_max),
+            )
+            return -diff2
+
         if coarse_gaussian_native_texture_enabled:
             from recovar import cuda_backproject
 
