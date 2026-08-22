@@ -1067,11 +1067,12 @@ def _maybe_dump_k_class_significance_batch(
         [np.asarray(mat, dtype=np.float64) for mat in class_weight_mats],
         axis=1,
     )
-    sig_mask_full = np.asarray(batch_sig_mask, dtype=bool).reshape(
-        local_indices.shape[0],
+    sig_mask_array = np.asarray(batch_sig_mask, dtype=bool)
+    sig_mask_full = sig_mask_array.reshape(
+        sig_mask_array.shape[0],
         n_classes,
         n_rot * n_trans,
-    )
+    )[: local_indices.shape[0]]
     class_log_z_stack = np.stack(
         [np.asarray(class_log_z, dtype=np.float64) for class_log_z in class_log_z_values],
         axis=1,
