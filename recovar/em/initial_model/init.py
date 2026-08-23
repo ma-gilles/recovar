@@ -159,9 +159,15 @@ def initialise_data_vs_prior_from_references(
     shell_factor = np.ones(n_shells, dtype=np.float64)
     shell_factor[1:] = 2.0 * shells[1:]
 
+    from recovar.utils.helpers import recovar_volume_to_relion
+
     for k in range(int(state.K)):
         if not fix_tau:
-            spectrum = _relion_power_spectrum_3d(np.asarray(state.Iref[k], dtype=np.float64), n_shells)
+            # getSpectrum runs on RELION-frame Iref.  Its half-spectrum shell
+            # traversal is not invariant to swapping RECOVAR's X/Z axes, so
+            # convert at this native boundary just as reconstruction does.
+            iref_relion = recovar_volume_to_relion(np.asarray(state.Iref[k], dtype=np.float64))
+            spectrum = _relion_power_spectrum_3d(iref_relion, n_shells)
             spectrum *= normfft / 2.0
             new_tau2[k] = float(state.tau2_fudge_factor) * spectrum
         evidence = float(nr_particles) * float(pdf_class[k]) / avg_sigma2_noise

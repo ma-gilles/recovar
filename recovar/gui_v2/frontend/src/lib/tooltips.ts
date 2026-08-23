@@ -1,5 +1,45 @@
 /** Tooltip text for job form parameters. Single source of truth per PHASE1.md. */
 export const tooltips: Record<string, string> = {
+  "initial_model.input_star":
+    "RELION particle STAR file used for ab-initio 3D InitialModel refinement.",
+  "initial_model.nr_iter":
+    "Number of VDAM iterations. The RELION GUI default is 200.",
+  "initial_model.nr_classes":
+    "Number of independent 3D classes. Start with K=1; K>1 jointly estimates class assignments and volumes.",
+  "initial_model.tau2_fudge":
+    "Regularization multiplier for the signal prior. The RELION InitialModel default is 4.",
+  "initial_model.particle_diameter":
+    "Particle diameter in Angstroms used to construct the spherical solvent mask.",
+  "initial_model.sym_name":
+    "Point-group symmetry for the final model, such as C1, C2, or D7.",
+  "initial_model.run_in_c1":
+    "Refine without symmetry and apply the requested point group to the final output, matching the RELION GUI default.",
+  "initial_model.grad_write_iter":
+    "Write RELION-compatible trajectory STAR and MRC artifacts every N iterations.",
+  "initial_model.random_seed": "Seed for bootstrap references, particle subsets, and angular perturbations.",
+  "initial_model.healpix_order": "Base angular Healpix order. Higher orders evaluate a finer orientation grid.",
+  "initial_model.oversampling": "Adaptive angular and translation oversampling order.",
+  "initial_model.offset_range": "Maximum translation searched along each image axis, in pixels.",
+  "initial_model.offset_step": "Spacing of the base translation grid, in pixels.",
+  "initial_model.perturbation_factor": "Fraction of one angular sampling step used for iteration perturbations.",
+  "initial_model.random_perturbation": "Optional fixed perturbation that overrides the seeded per-iteration value.",
+  "initial_model.image_batch_size": "Particles processed in one image batch. Tune for GPU memory and throughput.",
+  "initial_model.rotation_block_size": "Orientations processed in one scoring block. Tune for GPU memory and throughput.",
+  "initial_model.pass2_engine":
+    "Adaptive pass-2 engine. Auto preserves the exact local K=1 path and uses joint class-by-pose compact scoring for K>1. Local and Compact are diagnostic overrides.",
+  "initial_model.bootstrap_min": "Minimum particle count used to form the initial bootstrap reference.",
+  "initial_model.sigma2_min": "Minimum particle count used for initial noise-spectrum estimation.",
+  "initial_model.translation_sigma": "Optional translation-prior standard deviation in Angstroms.",
+  "initial_model.padding_factor": "Backprojection padding factor. The RELION GUI InitialModel default is 1.",
+  "initial_model.image_backend": "Fourier preprocessing implementation. Auto selects the RELION CUDA-compatible route on GPU.",
+  "initial_model.gpu_ids": "GPU identifiers passed to the native runner. A single allocated GPU is normally ID 0.",
+  "initial_model.solvent": "Apply RELION-equivalent solvent flattening after each update.",
+  "initial_model.zero_mask": "Zero image pixels outside the spherical particle mask.",
+  "initial_model.ctf": "Include each particle's contrast transfer function in scoring and reconstruction.",
+  "initial_model.lazy": "Load particle images in bounded batches instead of holding the complete stack in memory.",
+  "initial_model.write_artifacts": "Write the full iteration trajectory for RELION parity audits and restart diagnostics.",
+  "initial_model.require_cuda": "Fail early unless RECOVAR's custom CUDA backprojection path is available.",
+  "initial_model.deterministic_cuda": "Serialize CUDA launches for repeatability diagnosis; slower than normal asynchronous execution.",
   "pipeline.particles":
     "Input particle images. Accepts .star (RELION), .cs (cryoSPARC), .mrcs (cryoDRGN format \u2014 requires passing CTF and Poses .pkl files separately), or .txt (list of .mrcs paths).",
   "pipeline.mask":

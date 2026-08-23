@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -21,28 +21,36 @@ from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star, write_star
 from recovar.em import sampling
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
+    make_relion_translation_log_prior,
     relion_round_away_from_zero,
     relion_sigma_offset_prior_center,
+    relion_translation_prior_center,
 )
 from recovar.reconstruction.noise import make_radial_noise
-from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion, write_relion_mrc
+from recovar.utils.helpers import R_to_relion, get_gpu_memory_total, recovar_volume_to_relion, write_relion_mrc
 
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
 from .dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
 from .init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
 from .iteration_loop import relion_solvent_flatten_state, relion_solvent_mask, run_vdam_iterations
-from .schedules import DEFAULT_GRAD_EM_ITERS, DEFAULT_GRAD_MU, default_subset_sizes_for_3d_initial_model
+from .schedules import (
+    DEFAULT_GRAD_EM_ITERS,
+    DEFAULT_GRAD_MU,
+    GuiInitialModelDefaults,
+    default_subset_sizes_for_3d_initial_model,
+)
 from .state import InitialModelState
 from .subset import RndUnifFn
 
+INITIAL_MODEL_GUI_DEFAULTS = GuiInitialModelDefaults()
 DEFAULT_WIDTH_MASK_EDGE_PX = 5.0
-DEFAULT_HEALPIX_ORDER = 1
-DEFAULT_OFFSET_RANGE_PX = 6.0
-DEFAULT_OFFSET_STEP_PX = 2.0
-DEFAULT_RANDOM_SEED = 0
-DEFAULT_OVERSAMPLING = 1
-DEFAULT_PERTURBATION_FACTOR = 0.5
+DEFAULT_HEALPIX_ORDER = INITIAL_MODEL_GUI_DEFAULTS.healpix_order
+DEFAULT_OFFSET_RANGE_PX = INITIAL_MODEL_GUI_DEFAULTS.offset_range_px
+DEFAULT_OFFSET_STEP_PX = INITIAL_MODEL_GUI_DEFAULTS.offset_step_px
+DEFAULT_RANDOM_SEED = INITIAL_MODEL_GUI_DEFAULTS.random_seed
+DEFAULT_OVERSAMPLING = INITIAL_MODEL_GUI_DEFAULTS.oversampling
+DEFAULT_PERTURBATION_FACTOR = INITIAL_MODEL_GUI_DEFAULTS.perturbation_factor
 RELION_INITIALMODEL_LOCAL_SEARCH_HEALPIX_ORDER = 4
 RELION_INITIALMODEL_MIN_TRANSLATION_STEP_ANGSTROM = 1.5
 RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN = 1
@@ -50,9 +58,39 @@ RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_ORIENTATIONS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES = 9999999.0
 RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS = 100
-# Suppress sub-centiparticle support leakage from the dense sparse-pass
-# adapter while keeping RELION's real small-support update path active.
-RELION_INITIALMODEL_MIN_EFFECTIVE_CLASS_SUPPORT = 1.0e-2
+INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE = 256
+INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB = 32
+
+
+def _effective_initial_model_image_batch_size(
+    requested: int,
+    *,
+    grid_size: int,
+    gpu_memory_gb: float,
+) -> int:
+    """Conservatively cap exact-local batches for large InitialModel grids.
+
+    Exact fine search has a transient that scales approximately with
+    ``batch * grid_size**2`` in addition to its resident projector/cache
+    state.  The user-facing batch remains an upper bound; 128-pixel jobs keep
+    their established behavior, while 256+ grids scale from 32 images on a
+    40 GB accelerator.
+    """
+
+    if requested < 1:
+        raise ValueError(f"image_batch_size must be positive, got {requested}")
+    if grid_size < 1:
+        raise ValueError(f"grid_size must be positive, got {grid_size}")
+    if gpu_memory_gb <= 0:
+        raise ValueError(f"gpu_memory_gb must be positive, got {gpu_memory_gb}")
+    if grid_size < INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE:
+        return int(requested)
+    scaled_cap = int(
+        INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB
+        * (INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE / float(grid_size)) ** 2
+        * (float(gpu_memory_gb) / 40.0)
+    )
+    return min(int(requested), max(1, scaled_cap))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -61,33 +99,37 @@ class NativeInitialModelOptions:
 
     fn_img: str
     outputname: str = "ab_initio/run"
-    nr_iter: int = 200
-    nr_classes: int = 1
-    tau2_fudge: float = 4.0
-    sym_name: str = "C1"
-    do_run_C1: bool = True
-    particle_diameter: float = 200.0
-    do_solvent: bool = True
-    do_zero_mask: bool = True
-    do_ctf_correction: bool = True
+    nr_iter: int = INITIAL_MODEL_GUI_DEFAULTS.nr_iter
+    nr_classes: int = INITIAL_MODEL_GUI_DEFAULTS.nr_classes
+    tau2_fudge: float = INITIAL_MODEL_GUI_DEFAULTS.tau2_fudge
+    sym_name: str = INITIAL_MODEL_GUI_DEFAULTS.sym_name
+    do_run_C1: bool = INITIAL_MODEL_GUI_DEFAULTS.do_run_C1
+    particle_diameter: float = INITIAL_MODEL_GUI_DEFAULTS.particle_diameter
+    do_solvent: bool = INITIAL_MODEL_GUI_DEFAULTS.do_solvent
+    do_zero_mask: bool = INITIAL_MODEL_GUI_DEFAULTS.do_zero_mask
+    do_ctf_correction: bool = INITIAL_MODEL_GUI_DEFAULTS.do_ctf_correction
     random_seed: int = DEFAULT_RANDOM_SEED
     width_mask_edge_px: float = DEFAULT_WIDTH_MASK_EDGE_PX
     healpix_order: int = DEFAULT_HEALPIX_ORDER
     oversampling: int = DEFAULT_OVERSAMPLING
     perturbation_factor: float = DEFAULT_PERTURBATION_FACTOR
-    random_perturbation: float | None = None
+    random_perturbation: float | None = INITIAL_MODEL_GUI_DEFAULTS.random_perturbation
     offset_range_px: float = DEFAULT_OFFSET_RANGE_PX
     offset_step_px: float = DEFAULT_OFFSET_STEP_PX
-    image_batch_size: int = 500
-    rotation_block_size: int = 5000
-    bootstrap_min_particles: int = 1000
-    sigma2_min_particles: int = 1000
-    padding_factor: int = 1
-    lazy: bool = True
+    image_batch_size: int = INITIAL_MODEL_GUI_DEFAULTS.image_batch_size
+    rotation_block_size: int = INITIAL_MODEL_GUI_DEFAULTS.rotation_block_size
+    pass2_engine: str = INITIAL_MODEL_GUI_DEFAULTS.pass2_engine
+    bootstrap_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.bootstrap_min_particles
+    sigma2_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.sigma2_min_particles
+    padding_factor: int = INITIAL_MODEL_GUI_DEFAULTS.padding_factor
+    image_fourier_backend: str = "host_numpy"
+    deterministic_cuda: bool = INITIAL_MODEL_GUI_DEFAULTS.deterministic_cuda
+    lazy: bool = INITIAL_MODEL_GUI_DEFAULTS.lazy
     datadir: str | None = None
     strip_prefix: str | None = None
-    translation_sigma_angstrom: float | None = None
-    write_iter_artifacts: bool = True
+    translation_sigma_angstrom: float | None = INITIAL_MODEL_GUI_DEFAULTS.translation_sigma_angstrom
+    write_iter_artifacts: bool = INITIAL_MODEL_GUI_DEFAULTS.write_iter_artifacts
+    grad_write_iter: int = INITIAL_MODEL_GUI_DEFAULTS.grad_write_iter
     run_relion_align_symmetry: bool = False
 
 
@@ -421,18 +463,33 @@ def _configure_relion_image_mask(dataset, opts: NativeInitialModelOptions) -> No
     backend = getattr(source, "backend", source)
     if backend is None:
         return
-    image_mask = core_mask.relion_soft_image_mask(
-        int(dataset.grid_size),
-        float(dataset.voxel_size),
-        float(opts.particle_diameter),
-        float(opts.width_mask_edge_px),
-    )
-    if hasattr(backend, "image_mask"):
-        backend.image_mask = image_mask
-    if hasattr(backend, "mask"):
-        backend.mask = image_mask
-    if hasattr(backend, "image_mask_mode"):
-        backend.image_mask_mode = "relion_background_fill"
+    if hasattr(backend, "set_relion_image_mask"):
+        backend.set_relion_image_mask(
+            pixel_size=float(dataset.voxel_size),
+            particle_diameter_ang=float(opts.particle_diameter),
+            width_mask_edge_px=float(opts.width_mask_edge_px),
+        )
+    else:
+        image_mask = core_mask.relion_soft_image_mask(
+            int(dataset.grid_size),
+            float(dataset.voxel_size),
+            float(opts.particle_diameter),
+            float(opts.width_mask_edge_px),
+        )
+        if hasattr(backend, "image_mask"):
+            backend.image_mask = image_mask
+        if hasattr(backend, "mask"):
+            backend.mask = image_mask
+        if hasattr(backend, "image_mask_mode"):
+            backend.image_mask_mode = "relion_background_fill"
+
+    if hasattr(backend, "set_relion_fourier_backend"):
+        backend.set_relion_fourier_backend(opts.image_fourier_backend)
+    elif opts.image_fourier_backend != "host_numpy":
+        raise ValueError(
+            "InitialModel image_fourier_backend requires a compatible image backend; "
+            f"got {opts.image_fourier_backend!r}",
+        )
 
 
 def _initial_sampling_state(opts: NativeInitialModelOptions, *, pixel_size: float) -> NativeSamplingState:
@@ -460,77 +517,6 @@ def _active_relion_initialmodel_max_significants(state: InitialModelState, *, do
     if not bool(do_grad):
         return -1
     return int(RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS) * int(state.K)
-
-
-def _apply_effective_class_support_floor(result, state: InitialModelState):
-    """Drop sub-particle reconstruction support before the RELION M-step branch."""
-
-    if int(state.K) <= 1:
-        return result
-    posterior_sums = result.meta.get("class_posterior_sums")
-    bpref_weight_sums = result.meta.get("class_bpref_weight_sums")
-    support = result.meta.get("class_reconstruction_support_sums", posterior_sums)
-    if support is None:
-        return result
-    support = np.asarray(support, dtype=np.float64)
-    if support.shape != (int(state.K),):
-        return result
-    active = support >= RELION_INITIALMODEL_MIN_EFFECTIVE_CLASS_SUPPORT
-    if np.all(active):
-        return result
-
-    accumulators = []
-    for accum in result.accumulators:
-        if active[int(accum.class_idx)]:
-            accumulators.append(accum)
-        else:
-            accumulators.append(
-                replace(
-                    accum,
-                    data=np.zeros_like(accum.data),
-                    weight=np.zeros_like(accum.weight),
-                )
-            )
-
-    meta = dict(result.meta)
-    meta["class_reconstruction_support_sums_raw"] = support
-    meta["class_effective_support_active"] = active
-    meta["class_reconstruction_support_sums"] = np.where(active, support, 0.0)
-    if posterior_sums is not None:
-        posterior_sums = np.asarray(posterior_sums, dtype=np.float64)
-        if posterior_sums.shape == active.shape:
-            meta["class_posterior_sums_raw"] = posterior_sums
-            posterior_for_update = np.where(active, posterior_sums, 0.0)
-            if bpref_weight_sums is not None:
-                bpref_weight_sums = np.asarray(bpref_weight_sums, dtype=np.float64)
-                if bpref_weight_sums.shape == active.shape:
-                    meta["class_bpref_weight_sums_raw"] = bpref_weight_sums
-                    masked_bpref = np.where(active, bpref_weight_sums, 0.0)
-                    bpref_total = float(np.sum(masked_bpref))
-                    posterior_total = float(np.sum(posterior_for_update))
-                    if bpref_total > 0.0 and posterior_total > 0.0:
-                        posterior_for_update = masked_bpref * (posterior_total / bpref_total)
-            meta["class_posterior_sums"] = posterior_for_update
-    if bpref_weight_sums is not None:
-        bpref_weight_sums = np.asarray(bpref_weight_sums, dtype=np.float64)
-        if bpref_weight_sums.shape == active.shape:
-            meta["class_bpref_weight_sums"] = np.where(active, bpref_weight_sums, 0.0)
-    for key in tuple(meta):
-        if key.startswith("halfset_") and key.endswith("_class_reconstruction_support_sums"):
-            half_sums = np.asarray(meta[key], dtype=np.float64)
-            if half_sums.shape == active.shape:
-                meta[key] = np.where(active, half_sums, 0.0)
-        if key.startswith("halfset_") and key.endswith("_class_posterior_sums"):
-            half_sums = np.asarray(meta[key], dtype=np.float64)
-            if half_sums.shape == active.shape:
-                meta[f"{key}_raw"] = half_sums
-                meta[key] = np.where(active, half_sums, 0.0)
-    if (direction_sums := meta.get("class_direction_posterior_sums")) is not None:
-        direction_sums = np.asarray(direction_sums, dtype=np.float64).copy()
-        direction_sums[~active] = 0.0
-        meta["class_direction_posterior_sums"] = direction_sums
-
-    return replace(result, accumulators=accumulators, meta=meta)
 
 
 def _should_update_native_sampling(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
@@ -814,9 +800,14 @@ def _build_sampling_plan(
     random_perturbation = _random_perturbation_for_iteration(opts, iteration)
     perturbed = abs(random_perturbation) > 1e-12
 
-    coarse_translations = sampling.get_translation_grid(max_pixel=offset_range_px, pixel_offset=offset_step_px).astype(
-        np.float32
+    source_units_per_pixel = (
+        float(sampling_state.pixel_size) if sampling_state is not None else 1.0
     )
+    coarse_translations = sampling.get_relion_translation_grid(
+        max_pixel=offset_range_px,
+        pixel_offset=offset_step_px,
+        source_units_per_pixel=source_units_per_pixel,
+    ).astype(np.float32)
     coarse_pass1_translations = (
         sampling.apply_relion_translation_perturbation(coarse_translations, random_perturbation, offset_step_px).astype(
             np.float32
@@ -874,24 +865,20 @@ def _translation_log_prior(
     sigma_angstrom: float | None,
     centers: np.ndarray | None = None,
 ) -> np.ndarray | None:
+    """Build InitialModel's RELION accelerated-path ``pdf_offset`` values."""
+
     if sigma_angstrom is None:
         return None
-    sigma_angstrom = float(sigma_angstrom)
-    if sigma_angstrom <= 0.0:
-        raise ValueError("translation_sigma_angstrom must be positive when provided")
     translations = np.asarray(translations, dtype=np.float32)
     shared = centers is None
-    if centers is not None:
-        centers_arr = np.asarray(centers, dtype=np.float32)
-        if centers_arr.ndim != 2 or centers_arr.shape[1] != 2:
-            raise ValueError(f"translation prior centers must have shape (N, 2), got {centers_arr.shape}")
-    else:
-        centers_arr = np.zeros((1, 2), dtype=np.float32)
-
-    diffs_angstrom = (translations[None, :, :2] - centers_arr[:, None, :2]) * float(voxel_size)
-    log_prior = -0.5 * np.sum(diffs_angstrom**2, axis=-1) / (sigma_angstrom**2)
-    log_prior = log_prior.astype(np.float32, copy=False)
-    return log_prior[0] if shared else log_prior
+    centers_arr = np.zeros(2, dtype=np.float32) if shared else np.asarray(centers, dtype=np.float32)
+    log_prior = make_relion_translation_log_prior(
+        translations,
+        voxel_size=float(voxel_size),
+        sigma_offset_angstrom=float(sigma_angstrom),
+        prior_centers=centers_arr,
+    )
+    return np.asarray(log_prior, dtype=np.float32)
 
 
 def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteration: int) -> float:
@@ -908,29 +895,34 @@ def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteratio
 
 
 def _random_perturbation_sequence(random_seed: int, perturbation_factor: float, n_steps: int) -> float:
-    """Replay RELION's per-iter perturbation sequence (seed=1 first, then random_seed+step)."""
+    """Replay RELION's per-iter perturbation sequence with source float arithmetic."""
     if perturbation_factor <= 0.0:
         return 0.0
-    pf = float(perturbation_factor)
-    value = 0.0
-    for step in range(max(1, int(n_steps)) + 1):
-        seed = 1 if step == 0 else int(random_seed) + step
-        value += 0.5 * pf + (pf - 0.5 * pf) * _relion_rnd_unif_factory(seed)(0)
-        while value > pf:
-            value -= 2.0 * pf
-        while value < -pf:
-            value += 2.0 * pf
-    return float(value)
+    # rnd_unif(low, high) performs its range scaling inside RELION's float
+    # function. Scaling a separately rounded unit draw changes the result by
+    # one float32 ulp for seed 0 / iteration 1, which is enough to flip the
+    # integer-truncated fine-projector radius predicate on the rounded rim.
+    return sampling.relion_sampling_perturbation_for_iteration(
+        float(perturbation_factor),
+        int(random_seed),
+        max(1, int(n_steps)),
+    )
 
 
 def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.ndarray:
     """Convert RELION normalized shell power to engine-frame radial noise (unnormalised FFT)."""
     n4 = int(ori_size) ** 4
-    return (
-        np.asarray(make_radial_noise(np.asarray(sigma2_noise)[0] * n4, (ori_size, ori_size)))
-        .astype(np.float32, copy=False)
-        .reshape(-1)
-    )
+    # Keep RELION's RFLOAT shell spectrum through the reciprocal used by the
+    # guarded exact coarse path.  The downstream float32 kernels already cast
+    # their ordinary operands explicitly; narrowing here first loses up to a
+    # few ULP in Minvsigma2 and changes near-threshold candidate weights.
+    return np.asarray(
+        make_radial_noise(
+            np.asarray(sigma2_noise, dtype=np.float64)[0] * n4,
+            (ori_size, ori_size),
+        ),
+        dtype=np.float64,
+    ).reshape(-1)
 
 
 def _n_directions_for_healpix_order(healpix_order: int) -> int:
@@ -995,6 +987,7 @@ def _dense_estep_config(
     translation_offsets: np.ndarray,
     sigma_offset_angstrom: float | None = None,
     class_log_priors: np.ndarray | None = None,
+    pass1_healpix_order: int | None = None,
 ) -> DenseInitialModelEstepConfig:
     image_pre_shifts = relion_round_away_from_zero(translation_offsets)
     coarse_translations = np.asarray(
@@ -1014,10 +1007,13 @@ def _dense_estep_config(
         sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
     else:
         sigma_angstrom = float(sigma_offset_angstrom)
-    # InitialModel pre-applies rounded image shifts, so pdf_offset is centered
-    # on the remaining sub-pixel residual and scored in Angstrom units.
-    residual_offsets = np.asarray(translation_offsets, dtype=np.float32)[:, :2] - image_pre_shifts[:, :2]
-    translation_prior_centers = (residual_offsets / float(dataset.voxel_size)).astype(np.float32, copy=False)
+    # InitialModel uses the same accelerated ``pdf_offset`` convention as the
+    # supplied-map EM path: the sampling grid is represented in projection
+    # pixels, while RELION applies its source-faithful pixel_size**4 scale.
+    translation_prior_centers = relion_translation_prior_center(
+        translation_offsets,
+        float(dataset.voxel_size),
+    )
     _prior_kwargs = dict(
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=sigma_angstrom,
@@ -1026,6 +1022,11 @@ def _dense_estep_config(
     coarse_translation_log_prior = _translation_log_prior(coarse_prior_translations, **_prior_kwargs)
     translation_log_prior = _translation_log_prior(sampling_plan.translations, **_prior_kwargs)
 
+    sparse_pass2_enabled = os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in (
+        "1",
+        "true",
+        "TRUE",
+    )
     engine_kwargs: dict = {
         "score_with_masked_images": True,
         "reconstruct_with_masked_images": False,
@@ -1035,12 +1036,13 @@ def _dense_estep_config(
         "image_pre_shifts": image_pre_shifts,
         "translation_prior_centers": relion_sigma_offset_prior_center(translation_offsets),
         # RECOVAR_DISABLE_SPARSE_PASS2=1 forces dense path (cuFFT plan OOM at 256²+).
-        "sparse_pass2": (
-            int(sampling_plan.oversampling) > 0
-            and os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in ("1", "true", "TRUE")
-        ),
+        # Oversampling zero is still RELION's adaptive two-pass algorithm: its
+        # fine children are the coarse samples themselves.  Keep it on the
+        # same exact significance/local route as positive oversampling instead
+        # of falling back to RECOVAR's algebraic dense engine.
+        "sparse_pass2": sparse_pass2_enabled,
     }
-    if int(sampling_plan.oversampling) > 0:
+    if sparse_pass2_enabled or int(sampling_plan.oversampling) > 0:
         engine_kwargs.update(
             healpix_order=int(sampling_plan.healpix_order),
             oversampling_order=int(sampling_plan.oversampling),
@@ -1048,6 +1050,11 @@ def _dense_estep_config(
             random_perturbation=float(sampling_plan.random_perturbation),
             coarse_translations=coarse_translations,
             particle_diameter_ang=float(opts.particle_diameter),
+            pass1_healpix_order=(
+                int(sampling_plan.healpix_order)
+                if pass1_healpix_order is None
+                else int(pass1_healpix_order)
+            ),
             return_profile=bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE")),
         )
         if _af := os.environ.get("RECOVAR_ADAPTIVE_FRACTION"):
@@ -1068,12 +1075,32 @@ def _dense_estep_config(
     if coarse_translation_log_prior is not None:
         engine_kwargs["coarse_translation_log_prior"] = coarse_translation_log_prior
 
+    dataset_image_shape = getattr(dataset, "image_shape", None)
+    if dataset_image_shape is None:
+        # Lightweight test/adaptor datasets may intentionally expose only the
+        # metadata consumed by this function.  The cap is an execution-policy
+        # guard for real image stacks, so an unknown grid keeps the requested
+        # value rather than inventing a size or probing a device.
+        effective_image_batch_size = int(opts.image_batch_size)
+    else:
+        grid_size = int(dataset_image_shape[0])
+        gpu_memory_gb = (
+            float(get_gpu_memory_total())
+            if grid_size >= INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE
+            else 40.0
+        )
+        effective_image_batch_size = _effective_initial_model_image_batch_size(
+            int(opts.image_batch_size),
+            grid_size=grid_size,
+            gpu_memory_gb=gpu_memory_gb,
+        )
     return DenseInitialModelEstepConfig(
         noise_variance=noise_variance,
         rotations=sampling_plan.rotations,
         translations=sampling_plan.translations,
-        image_batch_size=int(opts.image_batch_size),
+        image_batch_size=effective_image_batch_size,
         rotation_block_size=int(opts.rotation_block_size),
+        pass2_engine=str(opts.pass2_engine),
         padding_factor=int(opts.padding_factor),
         relion_bpref_frame=True,
         relion_projector_frame=True,
@@ -1103,6 +1130,11 @@ def _native_expectation_step(
         do_grad = _native_initialmodel_do_grad(state, iteration)
         sampling_updated = False
         accuracy_meta = None
+        pass1_healpix_order = (
+            int(opts.healpix_order)
+            if sampling_state is None
+            else int(sampling_state.healpix_order)
+        )
         if sampling_state is None:
             sampling_plan = _build_sampling_plan(opts, iteration=iteration)
         else:
@@ -1141,6 +1173,7 @@ def _native_expectation_step(
             particle_state.translation_offsets,
             sigma_offset_angstrom=sigma_offset_angstrom,
             class_log_priors=np.zeros(int(state.K), dtype=np.float64),
+            pass1_healpix_order=pass1_healpix_order,
         )
         class_rotation_log_prior = _class_direction_rotation_log_prior(state, int(sampling_plan.healpix_order))
         if not bool(config.engine_kwargs.get("sparse_pass2", False)):
@@ -1159,11 +1192,12 @@ def _native_expectation_step(
         result = run_dense_initial_model_estep(
             dataset, state, config, particle_ids=particle_ids, halfset_ids=halfset_ids
         )
-        result = _apply_effective_class_support_floor(result, state)
         result.meta.update(
             random_perturbation=float(sampling_plan.random_perturbation),
             n_rotations=int(sampling_plan.rotations.shape[0]),
             n_translations=int(sampling_plan.translations.shape[0]),
+            requested_image_batch_size=int(opts.image_batch_size),
+            effective_image_batch_size=int(config.image_batch_size),
             healpix_order=int(sampling_plan.healpix_order),
             oversampling=int(sampling_plan.oversampling),
             offset_range_px=float(sampling_plan.offset_range_px),
@@ -1576,6 +1610,14 @@ def _write_iteration_artifacts(
         )
 
 
+def _should_write_iteration_artifacts(iteration: int, nr_iter: int, grad_write_iter: int) -> bool:
+    """Match RELION's gradient-output cadence, including the final iteration."""
+
+    if grad_write_iter < 1:
+        raise ValueError("grad_write_iter must be >= 1")
+    return (iteration % grad_write_iter) == 0 or iteration == nr_iter
+
+
 def _json_ready(value):
     if isinstance(value, np.ndarray):
         return value.tolist()
@@ -1609,10 +1651,17 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         raise ValueError("nr_classes must be >= 1")
     if opts.nr_iter < 1:
         raise ValueError("nr_iter must be >= 1")
+    if opts.grad_write_iter < 1:
+        raise ValueError("grad_write_iter must be >= 1")
     if opts.padding_factor not in (1, 2):
         raise NotImplementedError("native InitialModel currently supports RELION GUI --pad 1 or 2 only")
     if opts.run_relion_align_symmetry:
         raise NotImplementedError("native post-run relion_align_symmetry execution is not wired yet")
+    if not opts.do_run_C1 and opts.sym_name.lower() != "c1":
+        raise NotImplementedError(
+            "native InitialModel direct refinement currently supports C1 only; "
+            "use the GUI-default do_run_C1 mode until symmetry-restricted sampling is implemented"
+        )
 
     main_star, optics_star = read_star(opts.fn_img)
     particle_order = _micrograph_sort_order(main_star)
@@ -1653,10 +1702,24 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         config_path = f"{opts.outputname}_native_options.json"
         with open(config_path, "w") as f:
             json.dump(asdict(opts), f, indent=2, sort_keys=True)
+        _write_iteration_artifacts(
+            opts.outputname,
+            state,
+            0,
+            {"checkpoint_iteration": 0, "phase": "bootstrap"},
+            main_star=main_star,
+            optics_star=optics_star,
+            dataset=dataset,
+            particle_state=particle_state,
+        )
 
     if opts.write_iter_artifacts:
 
         def artifact_sink(current, iteration, meta):
+            if not _should_write_iteration_artifacts(
+                iteration, int(opts.nr_iter), int(opts.grad_write_iter)
+            ):
+                return
             _write_iteration_artifacts(
                 opts.outputname,
                 current,
@@ -1668,7 +1731,8 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
                 particle_state=particle_state,
             )
     else:
-        artifact_sink = lambda *args, **kwargs: None
+        def artifact_sink(*args, **kwargs):
+            return None
 
     post_mstep_update = None
     if opts.do_solvent:
@@ -1678,7 +1742,8 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             particle_diameter_ang=float(opts.particle_diameter),
             width_mask_edge_px=float(opts.width_mask_edge_px),
         )
-        post_mstep_update = lambda current, _iteration, _meta: relion_solvent_flatten_state(current, mask=solvent_mask)
+        def post_mstep_update(current, _iteration, _meta):
+            return relion_solvent_flatten_state(current, mask=solvent_mask)
 
     final_state = run_vdam_iterations(
         state,

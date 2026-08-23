@@ -3631,6 +3631,7 @@ constexpr int kRelionFineDiff2BlockSize = 256;
 // translations. Preserve both observable constants here.
 constexpr int kRelionFineDiff2TranslationCapacity = 7;
 constexpr int kRelionFineDiff2Ref3dJobChunk = 4;
+constexpr int kRelionPowerClassBlockSize = 128;
 
 template <bool DoRight>
 __global__ void relion_make_scoring_rotations_f32_kernel(
@@ -4524,6 +4525,315 @@ void relion_coarse_normalized_cc_native_texture_pairs_f32_kernel(
     atomicAdd(&candidate_output[0], contribution);
 }
 
+/* VDAM compatibility path for RELION's historical InitialModel coarse
+ * projector.  Keep the compact six-component rotation layout and the
+ * 128-orientation main segment plus one-orientation tail: marginal adaptive
+ * parents depend on this exact arithmetic and launch topology. */
+__global__ void relion_coarse_diff2_initialize_f32_kernel(
+    const float* initial_diff2,
+    float* output,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t output_count);
+
+template <int EULERS_PER_BLOCK>
+__global__ __launch_bounds__(kRelionCoarseDiff2BlockSize)
+void relion_coarse_diff2_projector_f32_kernel(
+    cudaTextureObject_t tex_real,
+    cudaTextureObject_t tex_imag,
+    const float* rotations,
+    const float2* images,
+    const float* translation_angles,
+    const float* weight,
+    const int32_t* full_to_compact,
+    float* output,
+    int rotation_offset,
+    int rotation_count,
+    int output_rotation_count,
+    int batch_size,
+    int translation_count,
+    int compact_pixel_count,
+    int current_size,
+    int tex_yinit,
+    int tex_zinit,
+    int model_max_r2,
+    float projector_scale)
+{
+    const int rotation_blocks =
+        (rotation_count + EULERS_PER_BLOCK - 1) / EULERS_PER_BLOCK;
+    const int flat_block = static_cast<int>(blockIdx.x);
+    const int batch = flat_block / rotation_blocks;
+    const int block_in_batch = flat_block - batch * rotation_blocks;
+    const int rotation_start =
+        rotation_offset + block_in_batch * EULERS_PER_BLOCK;
+    if (batch >= batch_size) return;
+
+    __shared__ float shared_rotations[EULERS_PER_BLOCK * 6];
+    for (int index = threadIdx.x; index < EULERS_PER_BLOCK * 6; index += blockDim.x) {
+        const int local_rotation = index / 6;
+        const int component = index - local_rotation * 6;
+        const int rotation = rotation_start + local_rotation;
+        shared_rotations[index] =
+            rotation < rotation_offset + rotation_count
+            ? rotations[rotation * 6 + component]
+            : 0.0f;
+    }
+    __syncthreads();
+
+    const int translation = threadIdx.x % translation_count;
+    const int lane = threadIdx.x / translation_count;
+    const int active_lanes = kRelionCoarseDiff2BlockSize / translation_count;
+    const int current_half_width = current_size / 2 + 1;
+    const int current_max_r = current_size / 2;
+    const float tx = translation_angles[2 * translation];
+    const float ty = translation_angles[2 * translation + 1];
+    float lane_sums[EULERS_PER_BLOCK] = {0.0f};
+
+    if (lane < active_lanes) {
+        constexpr int pixels_per_chunk =
+            kRelionCoarseDiff2BlockSize / kRelionCoarsePrefetchFraction;
+        const int full_pixel_count = current_size * current_half_width;
+        for (int chunk_start = 0;
+             chunk_start < full_pixel_count;
+             chunk_start += pixels_per_chunk) {
+            for (int pixel_in_chunk = lane;
+                 pixel_in_chunk < pixels_per_chunk;
+                 pixel_in_chunk += active_lanes) {
+                const int full_pixel = chunk_start + pixel_in_chunk;
+                if (full_pixel >= full_pixel_count) break;
+                const int compact_pixel = full_to_compact[full_pixel];
+                if (compact_pixel < 0 || compact_pixel >= compact_pixel_count)
+                    continue;
+                const int x = full_pixel % current_half_width;
+                const int native_y = full_pixel / current_half_width;
+                const int y = native_y > current_max_r
+                    ? native_y - current_size
+                    : native_y;
+                const float2 image_value =
+                    images[batch * compact_pixel_count + compact_pixel];
+                const float2 shifted = relion_score_translate_f32(
+                    image_value, x, y, tx, ty);
+                const float pixel_weight =
+                    weight[batch * compact_pixel_count + compact_pixel];
+
+                #pragma unroll
+                for (int local_rotation = 0;
+                     local_rotation < EULERS_PER_BLOCK;
+                     ++local_rotation) {
+                    const int rotation = rotation_start + local_rotation;
+                    if (rotation >= rotation_offset + rotation_count) continue;
+                    const float* R = &shared_rotations[local_rotation * 6];
+                    const float rk0 = R[3] * static_cast<float>(x)
+                        + R[0] * static_cast<float>(y);
+                    const float rk1 = R[4] * static_cast<float>(x)
+                        + R[1] * static_cast<float>(y);
+                    const float rk2 = R[5] * static_cast<float>(x)
+                        + R[2] * static_cast<float>(y);
+                    float2 reference = make_float2(0.0f, 0.0f);
+                    if (static_cast<int>(rk0 * rk0 + rk1 * rk1 + rk2 * rk2)
+                        <= model_max_r2) {
+                        float xp = rk0;
+                        float yp = rk1;
+                        float zp = rk2;
+                        float imag_sign = 1.0f;
+                        if (xp < 0.0f) {
+                            xp = -xp;
+                            yp = -yp;
+                            zp = -zp;
+                            imag_sign = -1.0f;
+                        }
+                        reference.x = projector_scale * tex3D<float>(
+                            tex_real,
+                            xp + 0.5f,
+                            yp - static_cast<float>(tex_yinit) + 0.5f,
+                            zp - static_cast<float>(tex_zinit) + 0.5f);
+                        reference.y = projector_scale * imag_sign * tex3D<float>(
+                            tex_imag,
+                            xp + 0.5f,
+                            yp - static_cast<float>(tex_yinit) + 0.5f,
+                            zp - static_cast<float>(tex_zinit) + 0.5f);
+                    }
+                    lane_sums[local_rotation] = relion_fine_diff2_update_f32(
+                        reference,
+                        shifted,
+                        pixel_weight,
+                        lane_sums[local_rotation]);
+                }
+            }
+        }
+    }
+
+    #pragma unroll
+    for (int local_rotation = 0;
+         local_rotation < EULERS_PER_BLOCK;
+         ++local_rotation) {
+        const int rotation = rotation_start + local_rotation;
+        if (rotation >= rotation_offset + rotation_count) continue;
+        atomicAdd(
+            &output[(batch * output_rotation_count + rotation) *
+                    translation_count + translation],
+            lane_sums[local_rotation]);
+    }
+}
+
+cudaError_t launch_relion_coarse_diff2_projector_f32(
+    cudaStream_t stream,
+    const float2* projector_full,
+    const float* rotations,
+    const float2* images,
+    const float* translation_angles,
+    const float* weight,
+    const float* initial_diff2,
+    const int32_t* full_to_compact,
+    float* output,
+    int batch_size,
+    int rotation_count,
+    int translation_count,
+    int compact_pixel_count,
+    int current_size,
+    int projector_size,
+    int model_max_r,
+    float projector_scale)
+{
+    const int output_count = batch_size * rotation_count * translation_count;
+    constexpr int initialize_block_size = 256;
+    relion_coarse_diff2_initialize_f32_kernel<<<
+        (output_count + initialize_block_size - 1) / initialize_block_size,
+        initialize_block_size,
+        0,
+        stream>>>(
+            initial_diff2,
+            output,
+            rotation_count,
+            translation_count,
+            output_count);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+
+    const int tex_x = model_max_r + 2;
+    const int tex_y = 2 * model_max_r + 3;
+    const int tex_z = 2 * model_max_r + 3;
+    const int tex_yinit = -(model_max_r + 1);
+    const int tex_zinit = -(model_max_r + 1);
+    const int score_max_r = min(model_max_r, current_size / 2);
+    const int voxel_count = tex_x * tex_y * tex_z;
+    float* real = nullptr;
+    float* imag = nullptr;
+    cudaArray_t array_real = nullptr;
+    cudaArray_t array_imag = nullptr;
+    cudaTextureObject_t texture_real = 0;
+    cudaTextureObject_t texture_imag = 0;
+
+    err = cudaMalloc(reinterpret_cast<void**>(&real), voxel_count * sizeof(float));
+    if (err != cudaSuccess) goto cleanup;
+    err = cudaMalloc(reinterpret_cast<void**>(&imag), voxel_count * sizeof(float));
+    if (err != cudaSuccess) goto cleanup;
+    fill_relion_texture_compact_kernel<float><<<
+        (voxel_count + BLOCK_SIZE - 1) / BLOCK_SIZE,
+        BLOCK_SIZE,
+        0,
+        stream>>>(
+            reinterpret_cast<const float*>(projector_full),
+            real,
+            imag,
+            tex_x,
+            tex_y,
+            tex_z,
+            tex_yinit,
+            tex_zinit,
+            projector_size,
+            projector_size,
+            projector_size);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) goto cleanup;
+
+    {
+        cudaChannelFormatDesc desc =
+            cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
+        cudaExtent extent = make_cudaExtent(tex_x, tex_y, tex_z);
+        err = cudaMalloc3DArray(&array_real, &desc, extent);
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaMalloc3DArray(&array_imag, &desc, extent);
+        if (err != cudaSuccess) goto cleanup;
+        cudaMemcpy3DParms copy = {0};
+        copy.extent = extent;
+        copy.kind = cudaMemcpyDeviceToDevice;
+        copy.srcPtr = make_cudaPitchedPtr(
+            real, static_cast<size_t>(tex_x) * sizeof(float), tex_x, tex_y);
+        copy.dstArray = array_real;
+        err = cudaMemcpy3DAsync(&copy, stream);
+        if (err != cudaSuccess) goto cleanup;
+        copy.srcPtr = make_cudaPitchedPtr(
+            imag, static_cast<size_t>(tex_x) * sizeof(float), tex_x, tex_y);
+        copy.dstArray = array_imag;
+        err = cudaMemcpy3DAsync(&copy, stream);
+        if (err != cudaSuccess) goto cleanup;
+
+        cudaResourceDesc resource_real = {};
+        cudaResourceDesc resource_imag = {};
+        cudaTextureDesc texture_desc = {};
+        resource_real.resType = cudaResourceTypeArray;
+        resource_real.res.array.array = array_real;
+        resource_imag.resType = cudaResourceTypeArray;
+        resource_imag.res.array.array = array_imag;
+        texture_desc.filterMode = cudaFilterModeLinear;
+        texture_desc.readMode = cudaReadModeElementType;
+        texture_desc.normalizedCoords = false;
+        texture_desc.addressMode[0] = cudaAddressModeClamp;
+        texture_desc.addressMode[1] = cudaAddressModeClamp;
+        texture_desc.addressMode[2] = cudaAddressModeClamp;
+        err = cudaCreateTextureObject(
+            &texture_real, &resource_real, &texture_desc, nullptr);
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaCreateTextureObject(
+            &texture_imag, &resource_imag, &texture_desc, nullptr);
+        if (err != cudaSuccess) goto cleanup;
+    }
+
+    {
+        const int main_rotation_count = (rotation_count / 128) * 128;
+        if (main_rotation_count > 0) {
+            const int blocks =
+                batch_size * (main_rotation_count / kRelionCoarseEulersPerBlock);
+            relion_coarse_diff2_projector_f32_kernel<kRelionCoarseEulersPerBlock><<<
+                blocks, kRelionCoarseDiff2BlockSize, 0, stream>>>(
+                    texture_real, texture_imag, rotations, images,
+                    translation_angles, weight, full_to_compact, output,
+                    0, main_rotation_count, rotation_count, batch_size, translation_count,
+                    compact_pixel_count, current_size, tex_yinit, tex_zinit,
+                    score_max_r * score_max_r, projector_scale);
+            err = cudaGetLastError();
+            if (err != cudaSuccess) goto cleanup;
+        }
+        const int tail_count = rotation_count - main_rotation_count;
+        if (tail_count > 0) {
+            relion_coarse_diff2_projector_f32_kernel<1><<<
+                batch_size * tail_count,
+                kRelionCoarseDiff2BlockSize,
+                0,
+                stream>>>(
+                    texture_real, texture_imag, rotations, images,
+                    translation_angles, weight, full_to_compact, output,
+                    main_rotation_count, tail_count, rotation_count, batch_size,
+                    translation_count, compact_pixel_count, current_size,
+                    tex_yinit, tex_zinit, score_max_r * score_max_r,
+                    projector_scale);
+            err = cudaGetLastError();
+            if (err != cudaSuccess) goto cleanup;
+        }
+        err = cudaStreamSynchronize(stream);
+    }
+
+cleanup:
+    if (texture_real) cudaDestroyTextureObject(texture_real);
+    if (texture_imag) cudaDestroyTextureObject(texture_imag);
+    if (array_real) cudaFreeArray(array_real);
+    if (array_imag) cudaFreeArray(array_imag);
+    if (real) cudaFree(real);
+    if (imag) cudaFree(imag);
+    return err;
+}
+
 /* Diagnostic reproduction of RELION's complete REF3D/DATA2D coarse kernel.
  * Unlike relion_coarse_diff2_fused_translate_rectangular_f32_kernel, this
  * kernel performs the texture projection in the same thread that stages the
@@ -5174,6 +5484,7 @@ void relion_fine_diff2_rectangular_f32_kernel(
     const float2* reference,
     const float2* shifted_image,
     const float* weight,
+    const float* initial_diff2,
     const int32_t* full_to_compact,
     float* output,
     int64_t batch_size,
@@ -5218,7 +5529,8 @@ void relion_fine_diff2_rectangular_f32_kernel(
                 lane_sums[threadIdx.x], lane_sums[threadIdx.x + width]);
         __syncthreads();
     }
-    if (threadIdx.x == 0) output[hypothesis] = lane_sums[0];
+    if (threadIdx.x == 0)
+        output[hypothesis] = __fadd_rn(lane_sums[0], initial_diff2[batch]);
 }
 
 __global__ __launch_bounds__(kRelionFineDiff2BlockSize)
@@ -5271,6 +5583,7 @@ void relion_fine_diff2_fused_translate_rectangular_f32_kernel(
     const float2* image,
     const float* translation_angles,
     const float* weight,
+    const float* initial_diff2,
     const int32_t* full_to_compact,
     float* output,
     int64_t batch_size,
@@ -5367,8 +5680,9 @@ void relion_fine_diff2_fused_translate_rectangular_f32_kernel(
         const int64_t translation = translation_start + threadIdx.x;
         const int64_t output_index =
             (batch * rotation_count + rotation) * translation_count + translation;
-        output[output_index] =
-            lane_sums[threadIdx.x * kRelionFineDiff2BlockSize];
+        output[output_index] = __fadd_rn(
+            lane_sums[threadIdx.x * kRelionFineDiff2BlockSize],
+            initial_diff2[batch]);
     }
 }
 
@@ -5377,6 +5691,7 @@ cudaError_t launch_relion_fine_diff2_rectangular_f32(
     const float2* reference,
     const float2* shifted_image,
     const float* weight,
+    const float* initial_diff2,
     const int32_t* full_to_compact,
     float* output,
     int64_t batch_size,
@@ -5395,6 +5710,7 @@ cudaError_t launch_relion_fine_diff2_rectangular_f32(
             reference,
             shifted_image,
             weight,
+            initial_diff2,
             full_to_compact,
             output,
             batch_size,
@@ -5403,6 +5719,91 @@ cudaError_t launch_relion_fine_diff2_rectangular_f32(
             compact_pixel_count,
             full_pixel_count);
     return cudaGetLastError();
+}
+
+__global__ __launch_bounds__(kRelionPowerClassBlockSize)
+void relion_powerclass_spectrum_highres_f32_kernel(
+    const float2* image,
+    float* spectrum,
+    int image_size,
+    int spectrum_size,
+    int xdim,
+    int ydim,
+    int resolution_limit,
+    float* highres_xi2)
+{
+    const int tid = threadIdx.x;
+    const int voxel = tid + static_cast<int>(blockIdx.x) * kRelionPowerClassBlockSize;
+    __shared__ float highres_lanes[kRelionPowerClassBlockSize];
+    highres_lanes[tid] = 0.0f;
+
+    if (voxel < image_size) {
+        const int x = voxel % xdim;
+        int y = (voxel - x) / xdim;
+        y = y < xdim ? y : y - ydim;
+        const int radius_squared = x * x + y * y;
+        const bool coordinates_in_range = !(x == 0 && y < 0);
+        const int shell = __float2int_rn(sqrtf(static_cast<float>(radius_squared)));
+        if (shell > 0 && shell < spectrum_size && coordinates_in_range) {
+            const float value =
+                image[voxel].x * image[voxel].x +
+                image[voxel].y * image[voxel].y;
+            atomicAdd(&spectrum[shell], value);
+            if (shell >= resolution_limit)
+                highres_lanes[tid] = value;
+        }
+    }
+
+    __syncthreads();
+    for (int width = kRelionPowerClassBlockSize / 2; width > 0; width /= 2) {
+        if (tid < width)
+            highres_lanes[tid] += highres_lanes[tid + width];
+        __syncthreads();
+    }
+    if (tid == 0)
+        atomicAdd(highres_xi2, highres_lanes[0]);
+}
+
+cudaError_t launch_relion_powerclass_spectrum_highres_f32(
+    cudaStream_t stream,
+    const float2* image,
+    float* spectrum_and_highres,
+    int64_t batch_size,
+    int image_size,
+    int spectrum_size,
+    int xdim,
+    int ydim,
+    int resolution_limit)
+{
+    const int output_stride = spectrum_size + 1;
+    cudaError_t err = cudaMemsetAsync(
+        spectrum_and_highres,
+        0,
+        static_cast<size_t>(batch_size) * output_stride * sizeof(float),
+        stream);
+    if (err != cudaSuccess) return err;
+    const int block_count =
+        (image_size + kRelionPowerClassBlockSize - 1) /
+        kRelionPowerClassBlockSize;
+    for (int64_t batch = 0; batch < batch_size; ++batch) {
+        float* output_row = spectrum_and_highres + batch * output_stride;
+        relion_powerclass_spectrum_highres_f32_kernel<<<
+            block_count,
+            kRelionPowerClassBlockSize,
+            0,
+            stream>>>(
+                image + batch * image_size,
+                output_row,
+                image_size,
+                spectrum_size,
+                xdim,
+                ydim,
+                resolution_limit,
+                output_row + spectrum_size);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) return err;
+    }
+    return cudaSuccess;
 }
 
 cudaError_t launch_relion_fine_diff2_pairs_f32(
@@ -5442,6 +5843,7 @@ cudaError_t launch_relion_fine_diff2_fused_translate_rectangular_f32(
     const float2* image,
     const float* translation_angles,
     const float* weight,
+    const float* initial_diff2,
     const int32_t* full_to_compact,
     float* output,
     int64_t batch_size,
@@ -5466,6 +5868,7 @@ cudaError_t launch_relion_fine_diff2_fused_translate_rectangular_f32(
             image,
             translation_angles,
             weight,
+            initial_diff2,
             full_to_compact,
             output,
             batch_size,
@@ -6606,6 +7009,106 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
+ffi::Error RelionCoarseDiff2ProjectorF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    int64_t physical_image_size,
+    int64_t model_max_r,
+    ffi::AnyBuffer projector_full,
+    ffi::AnyBuffer rotations,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (projector_full.element_type() != ffi::DataType::C64 ||
+        images.element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionCoarseDiff2ProjectorF32: projector/images must be C64");
+    if (rotations.element_type() != ffi::DataType::F32 ||
+        translation_angles.element_type() != ffi::DataType::F32 ||
+        weight.element_type() != ffi::DataType::F32 ||
+        initial_diff2.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionCoarseDiff2ProjectorF32: rotations/angles/weight/initial/output must be F32");
+    if (full_to_compact.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument(
+            "RelionCoarseDiff2ProjectorF32: lookup must be S32");
+
+    const auto projector_dims = projector_full.dimensions();
+    const auto rotation_dims = rotations.dimensions();
+    const auto image_dims = images.dimensions();
+    const auto angle_dims = translation_angles.dimensions();
+    const auto weight_dims = weight.dimensions();
+    const auto initial_dims = initial_diff2.dimensions();
+    const auto lookup_dims = full_to_compact.dimensions();
+    const auto output_dims = output->dimensions();
+    if (projector_dims.size() != 3 ||
+        projector_dims[0] != projector_dims[1] ||
+        projector_dims[1] != projector_dims[2] ||
+        rotation_dims.size() != 2 || rotation_dims[1] != 6 ||
+        image_dims.size() != 2 || angle_dims.size() != 2 ||
+        angle_dims[1] != 2 || weight_dims.size() != 2 ||
+        initial_dims.size() != 1 || lookup_dims.size() != 1 ||
+        output_dims.size() != 3 || image_dims[0] <= 0 ||
+        image_dims[1] <= 0 || rotation_dims[0] <= 0 ||
+        angle_dims[0] <= 0 ||
+        angle_dims[0] > kRelionCoarseDiff2BlockSize ||
+        weight_dims[0] != image_dims[0] ||
+        weight_dims[1] != image_dims[1] ||
+        initial_dims[0] != image_dims[0] ||
+        lookup_dims[0] != current_size * (current_size / 2 + 1) ||
+        output_dims[0] != image_dims[0] ||
+        output_dims[1] != rotation_dims[0] ||
+        output_dims[2] != angle_dims[0] ||
+        current_size <= 0 || physical_image_size <= 0 || model_max_r <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionCoarseDiff2ProjectorF32: inconsistent operand shapes or attributes");
+
+    cudaError_t err = launch_relion_coarse_diff2_projector_f32(
+        stream,
+        static_cast<const float2*>(projector_full.untyped_data()),
+        static_cast<const float*>(rotations.untyped_data()),
+        static_cast<const float2*>(images.untyped_data()),
+        static_cast<const float*>(translation_angles.untyped_data()),
+        static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(initial_diff2.untyped_data()),
+        static_cast<const int32_t*>(full_to_compact.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        image_dims[0],
+        rotation_dims[0],
+        angle_dims[0],
+        image_dims[1],
+        current_size,
+        projector_dims[0],
+        model_max_r,
+        -static_cast<float>(physical_image_size * physical_image_size));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionCoarseDiff2ProjectorF32, RelionCoarseDiff2ProjectorF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("current_size")
+        .Attr<int64_t>("physical_image_size")
+        .Attr<int64_t>("model_max_r")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
 ffi::Error RelionCoarseDiff2NativeTextureRectangularF32Impl(
     cudaStream_t stream,
     int64_t current_size,
@@ -6910,6 +7413,7 @@ ffi::Error RelionFineDiff2RectangularF32Impl(
     ffi::AnyBuffer reference,
     ffi::AnyBuffer shifted_image,
     ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
     ffi::AnyBuffer full_to_compact,
     ffi::Result<ffi::AnyBuffer> output)
 {
@@ -6918,9 +7422,10 @@ ffi::Error RelionFineDiff2RectangularF32Impl(
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2RectangularF32: reference/image must be C64");
     if (weight.element_type() != ffi::DataType::F32 ||
+        initial_diff2.element_type() != ffi::DataType::F32 ||
         output->element_type() != ffi::DataType::F32)
         return ffi::Error::InvalidArgument(
-            "RelionFineDiff2RectangularF32: weight/output must be F32");
+            "RelionFineDiff2RectangularF32: weight/initial/output must be F32");
     if (full_to_compact.element_type() != ffi::DataType::S32)
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2RectangularF32: lookup must be S32");
@@ -6928,16 +7433,19 @@ ffi::Error RelionFineDiff2RectangularF32Impl(
     const auto reference_dims = reference.dimensions();
     const auto image_dims = shifted_image.dimensions();
     const auto weight_dims = weight.dimensions();
+    const auto initial_dims = initial_diff2.dimensions();
     const auto lookup_dims = full_to_compact.dimensions();
     const auto output_dims = output->dimensions();
     if (reference_dims.size() != 3 || image_dims.size() != 3 ||
-        weight_dims.size() != 2 || lookup_dims.size() != 1 ||
+        weight_dims.size() != 2 || initial_dims.size() != 1 ||
+        lookup_dims.size() != 1 ||
         output_dims.size() != 3 || reference_dims[0] <= 0 ||
         reference_dims[1] <= 0 || reference_dims[2] <= 0 ||
         image_dims[0] != reference_dims[0] ||
         image_dims[1] <= 0 || image_dims[2] != reference_dims[2] ||
         weight_dims[0] != reference_dims[0] ||
         weight_dims[1] != reference_dims[2] || lookup_dims[0] <= 0 ||
+        initial_dims[0] != reference_dims[0] ||
         output_dims[0] != reference_dims[0] ||
         output_dims[1] != reference_dims[1] ||
         output_dims[2] != image_dims[1])
@@ -6954,6 +7462,7 @@ ffi::Error RelionFineDiff2RectangularF32Impl(
         reinterpret_cast<const float2*>(reference.untyped_data()),
         reinterpret_cast<const float2*>(shifted_image.untyped_data()),
         static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(initial_diff2.untyped_data()),
         static_cast<const int32_t*>(full_to_compact.untyped_data()),
         static_cast<float*>(output->untyped_data()),
         reference_dims[0],
@@ -6975,6 +7484,62 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionPowerClassSpectrumHighresF32Impl(
+    cudaStream_t stream,
+    int64_t xdim,
+    int64_t ydim,
+    int64_t resolution_limit,
+    ffi::AnyBuffer image,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (image.element_type() != ffi::DataType::C64 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionPowerClassSpectrumHighresF32: image/output must be C64/F32");
+    const auto image_dims = image.dimensions();
+    const auto output_dims = output->dimensions();
+    if (image_dims.size() != 2 || output_dims.size() != 2 ||
+        image_dims[0] <= 0 || image_dims[1] <= 0 ||
+        xdim <= 0 || ydim <= 0 || image_dims[1] != xdim * ydim ||
+        output_dims[0] != image_dims[0] || output_dims[1] != xdim + 1 ||
+        resolution_limit < 0 || resolution_limit > xdim)
+        return ffi::Error::InvalidArgument(
+            "RelionPowerClassSpectrumHighresF32: inconsistent dimensions");
+    if (image_dims[0] > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        image_dims[1] > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        xdim > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        ydim > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionPowerClassSpectrumHighresF32: dimensions exceed CUDA limits");
+    cudaError_t err = launch_relion_powerclass_spectrum_highres_f32(
+        stream,
+        reinterpret_cast<const float2*>(image.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        image_dims[0],
+        static_cast<int>(image_dims[1]),
+        static_cast<int>(xdim),
+        static_cast<int>(xdim),
+        static_cast<int>(ydim),
+        static_cast<int>(resolution_limit));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionPowerClassSpectrumHighresF32,
+    RelionPowerClassSpectrumHighresF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("xdim")
+        .Attr<int64_t>("ydim")
+        .Attr<int64_t>("resolution_limit")
+        .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
 );
 
@@ -6985,6 +7550,7 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
     ffi::AnyBuffer image,
     ffi::AnyBuffer translation_angles,
     ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
     ffi::AnyBuffer full_to_compact,
     ffi::Result<ffi::AnyBuffer> output)
 {
@@ -6994,9 +7560,10 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
             "RelionFineDiff2FusedTranslateRectangularF32: reference/image must be C64");
     if (translation_angles.element_type() != ffi::DataType::F32 ||
         weight.element_type() != ffi::DataType::F32 ||
+        initial_diff2.element_type() != ffi::DataType::F32 ||
         output->element_type() != ffi::DataType::F32)
         return ffi::Error::InvalidArgument(
-            "RelionFineDiff2FusedTranslateRectangularF32: angles/weight/output must be F32");
+            "RelionFineDiff2FusedTranslateRectangularF32: angles/weight/initial/output must be F32");
     if (full_to_compact.element_type() != ffi::DataType::S32)
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2FusedTranslateRectangularF32: lookup must be S32");
@@ -7008,13 +7575,15 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
     const auto image_dims = image.dimensions();
     const auto translation_dims = translation_angles.dimensions();
     const auto weight_dims = weight.dimensions();
+    const auto initial_dims = initial_diff2.dimensions();
     const auto lookup_dims = full_to_compact.dimensions();
     const auto output_dims = output->dimensions();
     const int64_t expected_full_pixels =
         current_size * (current_size / 2 + 1);
     if (reference_dims.size() != 3 || image_dims.size() != 2 ||
         translation_dims.size() != 2 || translation_dims[1] != 2 ||
-        weight_dims.size() != 2 || lookup_dims.size() != 1 ||
+        weight_dims.size() != 2 || initial_dims.size() != 1 ||
+        lookup_dims.size() != 1 ||
         output_dims.size() != 3 || reference_dims[0] <= 0 ||
         reference_dims[1] <= 0 || reference_dims[2] <= 0 ||
         image_dims[0] != reference_dims[0] ||
@@ -7022,6 +7591,7 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
         translation_dims[0] <= 0 ||
         weight_dims[0] != reference_dims[0] ||
         weight_dims[1] != reference_dims[2] ||
+        initial_dims[0] != reference_dims[0] ||
         lookup_dims[0] != expected_full_pixels ||
         output_dims[0] != reference_dims[0] ||
         output_dims[1] != reference_dims[1] ||
@@ -7043,6 +7613,7 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
         reinterpret_cast<const float2*>(image.untyped_data()),
         static_cast<const float*>(translation_angles.untyped_data()),
         static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(initial_diff2.untyped_data()),
         static_cast<const int32_t*>(full_to_compact.untyped_data()),
         static_cast<float*>(output->untyped_data()),
         reference_dims[0],
@@ -7063,6 +7634,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Attr<int64_t>("current_size")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
@@ -7633,6 +8205,94 @@ ffi::Error RelionFusedXHalfBackprojectImpl(
     return ffi::Error::Success();
 }
 
+ffi::Error RelionFusedXHalfBackprojectParticleGridImpl(
+    cudaStream_t stream,
+    int64_t image_h, int64_t image_w,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t upsampling, int64_t order,
+    int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4, int64_t n_particles, int64_t rows_per_particle,
+    ffi::AnyBuffer data_rows,
+    ffi::AnyBuffer weight_rows,
+    ffi::AnyBuffer pixel_indices,
+    ffi::AnyBuffer rot,
+    ffi::AnyBuffer data_volume_in,
+    ffi::AnyBuffer weight_volume_in,
+    ffi::Result<ffi::AnyBuffer> data_volume_out,
+    ffi::Result<ffi::AnyBuffer> weight_volume_out)
+{
+    if (data_rows.element_type() != ffi::DataType::C64 ||
+        data_volume_in.element_type() != ffi::DataType::C64 ||
+        data_volume_out->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: data rows and volumes must be complex64");
+    if (weight_rows.element_type() != ffi::DataType::F32 ||
+        weight_volume_in.element_type() != ffi::DataType::F32 ||
+        weight_volume_out->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: weight rows and volumes must be float32");
+    if (pixel_indices.element_type() != ffi::DataType::S32 ||
+        rot.element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: indices/rotations have invalid dtypes");
+    if (order != 1 || half_volume != 1 || half_image != 1 ||
+        N0 <= 0 || N0 != N1 || N1 != N2 || (N2 & 1) == 0 ||
+        image_h <= 0 || image_w != image_h / 2 + 1 || full_image_w != image_h ||
+        upsampling <= 0 || max_r2_x4 < 0 ||
+        n_particles <= 0 || rows_per_particle <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: invalid strict x-half attributes");
+
+    const auto data_dims = data_rows.dimensions();
+    const auto weight_dims = weight_rows.dimensions();
+    const auto pixel_dims = pixel_indices.dimensions();
+    const auto rot_dims = rot.dimensions();
+    const int64_t n_rows = n_particles * rows_per_particle;
+    if (data_dims.size() != 2 || data_dims[0] != n_rows || data_dims[1] <= 0 ||
+        weight_dims.size() != 2 || weight_dims[0] != n_rows ||
+        weight_dims[1] != data_dims[1] ||
+        pixel_dims.size() != 1 || pixel_dims[0] != data_dims[1] ||
+        rot_dims.size() != 2 || rot_dims[0] != n_rows || rot_dims[1] != 6 ||
+        data_dims[1] != image_h * image_w)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: inconsistent row topology");
+
+    const int64_t volume_size = N0 * N1 * (N2 / 2 + 1);
+    const auto data_in_dims = data_volume_in.dimensions();
+    const auto weight_in_dims = weight_volume_in.dimensions();
+    const auto data_out_dims = data_volume_out->dimensions();
+    const auto weight_out_dims = weight_volume_out->dimensions();
+    if (data_in_dims.size() != 1 || data_in_dims[0] != volume_size ||
+        weight_in_dims.size() != 1 || weight_in_dims[0] != volume_size ||
+        data_out_dims.size() != 1 || data_out_dims[0] != volume_size ||
+        weight_out_dims.size() != 1 || weight_out_dims[0] != volume_size)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackprojectParticleGrid: accumulator sizes do not match");
+
+    auto* data_out = reinterpret_cast<float2*>(data_volume_out->untyped_data());
+    auto* weight_out = static_cast<float*>(weight_volume_out->untyped_data());
+    const auto* data = reinterpret_cast<const float2*>(data_rows.untyped_data());
+    const auto* weight = static_cast<const float*>(weight_rows.untyped_data());
+    const auto* indices = static_cast<const int32_t*>(pixel_indices.untyped_data());
+    const auto* rotations = static_cast<const float*>(rot.untyped_data());
+    const int64_t n_pixels = data_dims[1];
+    const int64_t row_stride = rows_per_particle * n_pixels;
+    const int64_t rotation_stride = rows_per_particle * 6;
+    for (int64_t particle = 0; particle < n_particles; ++particle) {
+        cudaError_t err = launch_relion_fused_x_half_backproject(
+            stream, data_out, weight_out,
+            data + particle * row_stride,
+            weight + particle * row_stride,
+            indices,
+            rotations + particle * rotation_stride,
+            rows_per_particle, n_pixels, image_h, image_w,
+            N0, N1, N2, upsampling, max_r2_x4);
+        if (err != cudaSuccess)
+            return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    }
+    return ffi::Error::Success();
+}
+
 ffi::Error RelionFusedXHalfBackprojectSignatureImpl(
     cudaStream_t stream,
     int64_t image_h, int64_t image_w,
@@ -7907,6 +8567,34 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()           /* pixel_indices   */
         .Arg<ffi::AnyBuffer>()           /* rot             */
         .Arg<ffi::AnyBuffer>()           /* data_volume_in  */
+        .Arg<ffi::AnyBuffer>()           /* weight_volume_in */
+        .Ret<ffi::AnyBuffer>()           /* data_volume_out (aliased) */
+        .Ret<ffi::AnyBuffer>()           /* weight_volume_out (aliased) */
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFusedXHalfBackprojectParticleGrid,
+    RelionFusedXHalfBackprojectParticleGridImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("N0")
+        .Attr<int64_t>("N1")
+        .Attr<int64_t>("N2")
+        .Attr<int64_t>("upsampling")
+        .Attr<int64_t>("order")
+        .Attr<int64_t>("half_volume")
+        .Attr<int64_t>("half_image")
+        .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
+        .Attr<int64_t>("n_particles")
+        .Attr<int64_t>("rows_per_particle")
+        .Arg<ffi::AnyBuffer>()           /* data_rows */
+        .Arg<ffi::AnyBuffer>()           /* weight_rows */
+        .Arg<ffi::AnyBuffer>()           /* pixel_indices */
+        .Arg<ffi::AnyBuffer>()           /* rot */
+        .Arg<ffi::AnyBuffer>()           /* data_volume_in */
         .Arg<ffi::AnyBuffer>()           /* weight_volume_in */
         .Ret<ffi::AnyBuffer>()           /* data_volume_out (aliased) */
         .Ret<ffi::AnyBuffer>()           /* weight_volume_out (aliased) */

@@ -22,6 +22,8 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
+from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
+from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_pass2_module
 from recovar.em.dense_single_volume.helpers.oversampling import (
     _compute_pass2_stats_sparse_perimage_reference,
     compute_pass2_stats_sparse,
@@ -36,8 +38,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _score_pass2_bucket_relion_gpu_diff2,
     _winner_take_all_bucket_probs,
 )
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_pass2_module
-from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
 
 pytestmark = pytest.mark.unit
 
@@ -612,6 +612,12 @@ def test_sparse_pass2_per_particle_xhalf_uses_mstep_rotation_tensor():
     fused_source = inspect.getsource(sparse_pass2_module.compute_k_class_pass2_stats_sparse_fused)
     assert "flat_backproject_rotations_by_class" in fused_source
     assert "active_flat_rotations = flat_backproject_rotations_by_class[class_index]" in fused_source
+    assert (
+        "_accumulate_relion_x_half_per_particle_launches(\n"
+        "                        jnp.asarray(summed, dtype=jnp.complex64),\n"
+        "                        jnp.asarray(ctf_probs, dtype=jnp.float32),\n"
+        '                        jnp.asarray(arrays["mstep_rotations"]),'
+    ) in fused_source
 
 
 class TestSparsePass2Bucketed:

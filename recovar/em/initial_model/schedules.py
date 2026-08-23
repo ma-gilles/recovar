@@ -28,11 +28,38 @@ DEFAULT_TAU2_FUDGE_3D_INITIAL_MODEL: float = 4.0
 
 @dataclass(frozen=True)
 class GuiInitialModelDefaults:
-    """Knobs that a GUI-InitialModel recovar driver must reproduce verbatim."""
+    """Single source of truth for RECOVAR's RELION-GUI InitialModel defaults."""
 
     nr_iter: int = GUI_DEFAULT_NR_ITER
+    grad_write_iter: int = 10
     nr_classes: int = GUI_DEFAULT_NR_CLASSES
     tau2_fudge: float = GUI_DEFAULT_TAU2_FUDGE
+    sym_name: str = "C1"
+    do_run_C1: bool = True
+    particle_diameter: float = 200.0
+    do_solvent: bool = True
+    do_zero_mask: bool = True
+    do_ctf_correction: bool = True
+    random_seed: int = 0
+    healpix_order: int = 1
+    oversampling: int = 1
+    offset_range_px: float = 6.0
+    offset_step_px: float = 2.0
+    perturbation_factor: float = 0.5
+    image_batch_size: int = 500
+    rotation_block_size: int = 5000
+    pass2_engine: str = "auto"
+    bootstrap_min_particles: int = 1000
+    sigma2_min_particles: int = 1000
+    padding_factor: int = 1
+    image_fourier_backend: str = "auto"
+    gpu_ids: str = "0"
+    require_custom_cuda: bool = True
+    lazy: bool = True
+    write_iter_artifacts: bool = True
+    deterministic_cuda: bool = False
+    random_perturbation: float | None = None
+    translation_sigma_angstrom: float | None = None
     grad_ini_frac: float = DEFAULT_GRAD_INI_FRAC
     grad_fin_frac: float = DEFAULT_GRAD_FIN_FRAC
     grad_em_iters: int = DEFAULT_GRAD_EM_ITERS

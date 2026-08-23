@@ -12,7 +12,6 @@ from recovar.em.initial_model.gt_metrics import (
 )
 from scripts.run_vdam_abinitio_merge_guard import _default_output_root, build_guard_commands, run_guard
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -74,6 +73,7 @@ def test_merge_guard_plan_contains_cpu_and_gpu_gates():
     assert cpu_names == [
         "py_compile",
         "vdam_abinitio_contracts",
+        "vdam_frozen_scorecard",
         "initial_model_vdam_unit_slice",
         "initial_model_unit_suite",
         "em_fast_guard",
@@ -180,7 +180,7 @@ def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
     run_ab_initio = (REPO_ROOT / "scripts/run_ab_initio.py").read_text()
 
     expected_tokens = [
-        "do_solvent: bool = True",
+        "do_solvent: bool = INITIAL_MODEL_GUI_DEFAULTS.do_solvent",
         "if opts.do_solvent",
         "relion_solvent_mask",
         "relion_solvent_flatten_state",
@@ -189,6 +189,115 @@ def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
     haystack = "\n".join([driver, iteration_loop, run_ab_initio])
     missing = [token for token in expected_tokens if token not in haystack]
     assert not missing, f"native InitialModel lost RELION --flatten_solvent post-M-step wiring: {missing}"
+
+
+def test_native_vdam_writes_auditable_iteration_zero_checkpoint():
+    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    tests = (REPO_ROOT / "tests/unit/initial_model/test_native_driver.py").read_text()
+    expected_tokens = [
+        '{"checkpoint_iteration": 0, "phase": "bootstrap"}',
+        "test_iteration_zero_artifacts_use_the_normal_iteration_writer",
+        'run_it000_class001.mrc',
+        'run_it000_model.star',
+        'run_it000_data.star',
+        'run_it000_recovar_meta.json',
+    ]
+    missing = [token for token in expected_tokens if token not in driver + tests]
+    assert not missing, f"native InitialModel lost iteration-zero checkpoint wiring: {missing}"
+
+
+def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
+    guard = (REPO_ROOT / "scripts/run_vdam_abinitio_merge_guard.py").read_text()
+    runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.py").read_text()
+    auditor = (REPO_ROOT / "scripts/audit_vdam_fsc_trajectory.py").read_text()
+    sbatch = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+    expected_tokens = [
+        "test_audit_vdam_fsc_trajectory.py",
+        "test_run_vdam_relion_parity_case.py",
+        "build_relion_command",
+        "build_recovar_command",
+        "--require_custom_cuda",
+        'env["JAX_PLATFORMS"] = "cuda,cpu"',
+        "runtime_environment.json",
+        "materialize(",
+        "cwd=fixture_dir",
+        "paired_gpu_uuid.json",
+        "signed shellwise FSC and normalized non-DC FSC-AUC only",
+        "CHECKPOINTS = (0, 1, 2, 4, 8)",
+        "artifact_topology_exact",
+        "correlation_used",
+        "--gres=gpu:1",
+        "RECOVAR_CUDA_LIB",
+        "cuda_backproject.cuda_available()",
+        "VDAM parity provenance/GPU/CUDA-FFI gate passed",
+        '--threads "${RELION_THREADS:-8}"',
+        '--relion-refine "${RELION_REFINE}"',
+        'mkdir -p "${RELION_ACC_DUMP_DIR}"',
+    ]
+    haystack = "\n".join([guard, runner, auditor, sbatch])
+    missing = [token for token in expected_tokens if token not in haystack]
+    assert not missing, f"VDAM trajectory runner/auditor lost required wiring: {missing}"
+
+
+def test_vdam_fixed12_matrix_maps_array_tasks_to_frozen_case_ids():
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_parity_matrix.sbatch").read_text()
+    expected_tokens = [
+        "#SBATCH --array=1-12%4",
+        "SLURM_ARRAY_TASK_ID < 1",
+        "SLURM_ARRAY_TASK_ID > 12",
+        "printf 'vdam-%02d'",
+        "run_vdam_relion_parity_case.sbatch",
+        "OUTPUT_ROOT",
+    ]
+    missing = [token for token in expected_tokens if token not in matrix]
+    assert not missing, f"VDAM fixed12 matrix lost task-to-case wiring: {missing}"
+    assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
+    assert "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB" not in matrix
+
+
+def test_vdam_parameter_suite_freezes_user_facing_variants_and_default_resources():
+    suite_path = REPO_ROOT / "docs/math/vdam_k1_parameter_suite_v1.json"
+    suite = json.loads(suite_path.read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_parameter_suite.sbatch").read_text()
+    case_runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-parameter-v1"
+    assert len(suite["cases"]) == 11
+    assert [case["id"] for case in suite["cases"]] == [f"vdam-p{index:02d}" for index in range(1, 12)]
+    definitions = [case["definition"] for case in suite["cases"]]
+    assert {definition["tau2_fudge"] for definition in definitions} >= {2, 4, 8}
+    assert {definition["healpix_order"] for definition in definitions} >= {0, 1, 2}
+    assert {definition["oversampling"] for definition in definitions} >= {0, 1, 2}
+    assert {definition["padding_factor"] for definition in definitions} >= {1, 2}
+    assert {definition["symmetry"] for definition in definitions} >= {"C1", "C2"}
+    assert "#SBATCH --array=1-11%4" in matrix
+    assert "VDAM_SCORECARD" in matrix and "VDAM_SCORECARD" in case_runner
+    assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
+
+
+def test_vdam_long_trajectory_suite_freezes_all_late_checkpoints():
+    suite = json.loads((REPO_ROOT / "docs/math/vdam_k1_long_trajectory_suite_v1.json").read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_long_trajectory_suite.sbatch").read_text()
+
+    assert suite["suite_id"] == "vdam-k1-long-trajectory-v1"
+    assert suite["acceptance_contract"]["required_checkpoints"] == [0, 1, 2, 4, 8, 12, 16, 20, 25]
+    assert [case["id"] for case in suite["cases"]] == ["vdam-l01", "vdam-l02", "vdam-l03"]
+    assert all(case["definition"]["nr_iter"] == 25 for case in suite["cases"])
+    assert "#SBATCH --array=1-3%3" in matrix
+    assert "VDAM_SCORECARD" in matrix
+
+
+def test_vdam_case_runner_uses_job_scoped_runtime_roots():
+    runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+    expected_tokens = [
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/",
+        'export TMPDIR="${RUNTIME_ROOT}/tmp"',
+        'export PIXI_HOME="${RUNTIME_ROOT}/pixi_home"',
+        'export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/rattler_cache"',
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM case runner lost job-scoped runtime roots: {missing}"
 
 
 def test_native_vdam_tau2_refresh_and_ssnr_diagnostics_are_merge_guarded():
@@ -263,7 +372,7 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
             "sigma2_offset: float = 100.0",
             "sigma2_offset=100.0",
             "MIN_SIGMA2_OFFSET_ANGSTROM2",
-            "wsum_sigma2_offset / (2.0 * sum_weight)",
+            "wsum_sigma2_offset / (2.0 * sigma2_offset_sumw)",
             "def update_noise_from_estep_meta",
             "normalize_wsum_to_sigma2_noise",
             "int(state.ori_size) ** 4",
@@ -285,6 +394,10 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
             "class_bpref_weight_sums",
             "class_posterior_sums_override",
             "reconstruction_probs_sum_t if stats_use_reconstruction_probs else probs_sum_t",
+            "relion_f32_fine_posterior=bool(",
+            "sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled()",
+            "use_relion_f32_fine_posterior=use_relion_f32_fine_posterior",
+            "_relion_f32_fine_reconstruction_probs(",
         ],
         "relion_model_star_contract": [
             "data_model_pdf_orient_class_",
@@ -313,6 +426,21 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
     }
     missing = {area: tokens for area, tokens in missing.items() if tokens}
     assert not missing, f"VDAM post-merge parity guard lost required wiring: {missing}"
+
+
+def test_deferred_big_jit_backprojects_vdam_residual_images():
+    """The memory-deferred path must not silently backproject raw images."""
+
+    source = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
+    start = source.index(
+        "if return_big_jit_deferred_mstep_inputs and (not disable_adjoint_y or not disable_adjoint_ctf):"
+    )
+    stop = source.index("if return_big_jit_deferred_mstep_inputs and accumulate_noise:", start)
+    deferred_mstep = source[start:stop]
+
+    assert "if mstep_subtract_ctf_projection:" in deferred_mstep
+    assert "chunk_proj_for_residual = _project_packed_noise_rows(" in deferred_mstep
+    assert "chunk_summed = chunk_summed - chunk_probs_sum_t[..., None] * frefctf_weighted" in deferred_mstep
 
 
 def test_relion_initialmodel_reference_checker_rejects_autorefine(tmp_path):
@@ -380,6 +508,7 @@ def test_merge_guard_dry_run_writes_reproducibility_ledger(tmp_path):
     assert [command["name"] for command in ledger["commands"]] == [
         "py_compile",
         "vdam_abinitio_contracts",
+        "vdam_frozen_scorecard",
         "initial_model_vdam_unit_slice",
         "em_fast_guard",
     ]

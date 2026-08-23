@@ -27,6 +27,7 @@ from recovar.em.initial_model.init import initialise_data_vs_prior_from_referenc
 from recovar.em.initial_model.m_step import (
     VdamAccumulator,
     _grad_min_resol_shell_from_state,
+    _has_relion_reconstruction_weight,
     vdam_m_step,
     vdam_m_step_single_class,
 )
@@ -74,6 +75,29 @@ def test_default_grad_min_resol_shell_matches_relion_initialmodel_default():
 
     assert _grad_min_resol_shell_from_state(state, None) == 27.0
     assert _grad_min_resol_shell_from_state(state, 0.0) == 0.0
+
+
+def test_relion_weight_guard_keeps_tiny_nonzero_class_support():
+    """Do not impose a particle-support floor beyond RELION's BPref epsilon."""
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=4,
+        n_directions=1,
+    )
+    accumulator = VdamAccumulator(
+        data=np.zeros((3, 3, 2), dtype=np.complex128),
+        weight=np.zeros((3, 3, 2), dtype=np.float64),
+        class_idx=0,
+        halfset_idx=0,
+    )
+
+    accumulator.weight.flat[0] = 2.0 * m_step.XMIPP_EQUAL_ACCURACY
+    assert _has_relion_reconstruction_weight(state, 0, accumulator)
+
+    accumulator.weight.flat[0] = 0.5 * m_step.XMIPP_EQUAL_ACCURACY
+    assert not _has_relion_reconstruction_weight(state, 0, accumulator)
 
 
 def test_m_step_matches_relion_fsc_routing_for_ssnr_and_reconstruct(monkeypatch):

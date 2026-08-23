@@ -22,6 +22,7 @@ module is the pure orchestrator.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
@@ -73,13 +74,16 @@ def refresh_tau2_from_projector_power(
 ) -> InitialModelState:
     """``MlModel::setFourierTransformMaps(!fix_tau)``."""
     from recovar.relion_bind import _relion_bind_core as bind
+    from recovar.utils.helpers import recovar_volume_to_relion
 
     current_size = int(state.current_size if state.current_size > 0 else state.ori_size)
     new_tau2 = np.asarray(state.tau2_class, dtype=np.float64).copy()
     for k in range(int(state.K)):
         new_tau2[k] = np.asarray(
             bind.vdam_projector_power_spectrum(
-                np.asarray(state.Iref[k], dtype=np.float64),
+                np.ascontiguousarray(
+                    recovar_volume_to_relion(np.asarray(state.Iref[k], dtype=np.float64))
+                ),
                 int(state.ori_size),
                 int(padding_factor),
                 int(interpolator),
@@ -267,9 +271,15 @@ def update_probabilities_from_estep_meta(
         wsum_sigma2_offset = float(wsum_sigma2_offset)
         if not np.isfinite(wsum_sigma2_offset) or wsum_sigma2_offset < 0.0:
             raise ValueError("wsum_sigma2_offset must be non-negative and finite")
+        sigma2_offset_sumw = float(meta.get("sigma2_offset_sumw", sum_weight))
+        if not np.isfinite(sigma2_offset_sumw) or sigma2_offset_sumw <= 0.0:
+            raise ValueError("sigma2_offset_sumw must be positive and finite")
         sigma2_offset = float(state.sigma2_offset) * my_mu
         # RELION divides by 2*sum_weight for 2D particle translations.
-        sigma2_offset += (1.0 - my_mu) * wsum_sigma2_offset / (2.0 * sum_weight)
+        # Its sum_weight is accumulated from the same significant-pruned
+        # reconstruction weights as wsum_sigma2_offset, rather than from the
+        # unpruned per-image class responsibilities.
+        sigma2_offset += (1.0 - my_mu) * wsum_sigma2_offset / (2.0 * sigma2_offset_sumw)
         new_state.sigma2_offset = max(float(sigma2_offset), MIN_SIGMA2_OFFSET_ANGSTROM2)
 
     return new_state
@@ -417,9 +427,21 @@ def select_subset_for_iter(
     particles if ``-1``), stable-sorts by optics group, and assigns pseudo-
     halfset ids.
     """
-    if particle_order is None:
+    stored_order = state.sorted_particle_ids
+    stored_part_ids = state.sorted_particle_part_ids
+    if stored_order is not None or stored_part_ids is not None:
+        if stored_order is None or stored_part_ids is None:
+            raise ValueError("stored RELION particle order is incomplete")
+        base_order = np.asarray(stored_order, dtype=np.int64)
+        base_halfset_ids = np.asarray(stored_part_ids, dtype=np.int64)
+        if base_order.shape != (int(nr_particles),) or base_halfset_ids.shape != base_order.shape:
+            raise ValueError(
+                "stored RELION particle order must match nr_particles: "
+                f"{base_order.shape}, {base_halfset_ids.shape} != ({int(nr_particles)},)",
+            )
+    elif particle_order is None:
         base_order = np.arange(int(nr_particles), dtype=np.int64)
-        base_halfset_ids = base_order
+        base_halfset_ids = np.arange(int(nr_particles), dtype=np.int64)
     else:
         base_order = np.asarray(particle_order, dtype=np.int64)
         if base_order.shape != (int(nr_particles),):
@@ -430,14 +452,18 @@ def select_subset_for_iter(
             or np.any(base_order >= nr_particles)
         ):
             raise ValueError("particle_order must be a permutation of particle ids [0, nr_particles)")
-        # RELION's InitialModel pseudo-halfset routing uses the global particle
-        # table row from ``mydata.sorted_idx``:
+        # RELION's InitialModel pseudo-halfset routing uses Experiment's
+        # internal ``part_id``, i.e. the position in its read-order particle
+        # table, not RECOVAR's original input-table row:
         # ``iproj_offset = (part_id % 2) * nr_classes`` in storeWeightedSums.
-        # ``particle_order`` is RECOVAR's copy of that sorted_idx list, so use
-        # the dataset-row parity rather than the sorted-position parity.
-        base_halfset_ids = base_order
+        # ``particle_order`` maps those internal positions to RECOVAR dataset
+        # rows, so parity must travel with the positions through shuffling.
+        base_halfset_ids = np.arange(int(nr_particles), dtype=np.int64)
 
-    if int(random_seed) == 0:
+    subset_size = state.subset_size if state.subset_size != -1 else nr_particles
+    doing_subset = 0 < int(subset_size) < int(nr_particles)
+    first_randomisation = stored_order is None
+    if int(random_seed) == 0 or (not first_randomisation and not doing_subset):
         shuffled = base_order.copy()
         shuffled_halfset_ids = base_halfset_ids.copy()
     else:
@@ -452,7 +478,19 @@ def select_subset_for_iter(
             permutation = randomise_particles_order(nr_particles, rnd_unif_factory(random_seed + iter))
         shuffled = base_order[permutation]
         shuffled_halfset_ids = base_halfset_ids[permutation]
-    subset_size = state.subset_size if state.subset_size != -1 else nr_particles
+
+    # randomiseParticlesOrder stable-sorts the selected prefix in place before
+    # the expectation step.  Persist that complete vector (including its
+    # untouched tail) because the next true-subset iteration shuffles it again.
+    if int(subset_size) > 0:
+        prefix = shuffled[: int(subset_size)]
+        keys = np.asarray(
+            [optics_group_by_particle[int(particle_id)] for particle_id in prefix],
+            dtype=np.int64,
+        )
+        stable_order = np.argsort(keys, kind="stable")
+        shuffled[: int(subset_size)] = prefix[stable_order]
+        shuffled_halfset_ids[: int(subset_size)] = shuffled_halfset_ids[: int(subset_size)][stable_order]
     # `-1` (all particles) still needs to be translated via select_vdam_subset
     pseudo = do_grad and pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=False)
     plan = select_vdam_subset(
@@ -465,6 +503,8 @@ def select_subset_for_iter(
     new_state = replace(state)
     new_state.subset_particle_ids = plan.particle_ids
     new_state.subset_halfset_ids = plan.halfset_ids
+    new_state.sorted_particle_ids = shuffled
+    new_state.sorted_particle_part_ids = shuffled_halfset_ids
     new_state.pseudo_halfsets = pseudo
     return new_state
 
@@ -556,8 +596,19 @@ def run_vdam_iterations(
     """Full VDAM loop; ``state`` must come from ``initialise_denovo_state`` + ``seed_noise_from_mavg``."""
     phase_lengths = compute_phase_lengths(state.nr_iter, grad_ini_frac, grad_fin_frac)
     current = state
+    profile_iterations = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
 
     for it in range(1, state.nr_iter + 1):
+        iteration_started = time.perf_counter()
+        stage_started = iteration_started
+        iteration_profile: dict[str, float] = {}
+
+        def _record_stage(name: str) -> None:
+            nonlocal stage_started
+            now = time.perf_counter()
+            iteration_profile[f"{name}_time_s"] = float(now - stage_started)
+            stage_started = now
+
         do_grad = ((state.nr_iter - it) >= grad_em_iters) and not current.has_converged
 
         current = default_schedule_update(
@@ -570,6 +621,8 @@ def run_vdam_iterations(
             tau2_fudge_arg=tau2_fudge_arg,
             grad_em_iters=grad_em_iters,
         )
+        if profile_iterations:
+            _record_stage("schedule")
 
         current = select_subset_for_iter(
             current,
@@ -581,6 +634,8 @@ def run_vdam_iterations(
             do_grad=do_grad,
             particle_order=particle_order,
         )
+        if profile_iterations:
+            _record_stage("subset")
 
         current = update_image_size_and_resolution_pointers(current)
         if refresh_tau2_from_projector:
@@ -589,6 +644,8 @@ def run_vdam_iterations(
                 padding_factor=projector_padding_factor,
                 interpolator=projector_interpolator,
             )
+        if profile_iterations:
+            _record_stage("projector_refresh")
 
         # E-step: caller-supplied closure over the data loader + dense kernels
         accumulators, meta = expectation_step(
@@ -596,6 +653,8 @@ def run_vdam_iterations(
             current.subset_particle_ids,
             current.subset_halfset_ids,
         )
+        if profile_iterations:
+            _record_stage("expectation")
 
         # M-step
         current = vdam_m_step(
@@ -603,7 +662,10 @@ def run_vdam_iterations(
             accumulators=accumulators,
             grad_current_stepsize=current.grad_current_stepsize,
             tau2_fudge_factor=current.tau2_fudge_factor,
+            padding_factor=projector_padding_factor,
         )
+        if profile_iterations:
+            _record_stage("mstep")
         current = update_probabilities_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
         current = update_noise_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
         ave_pmax = _ave_pmax_from_meta(meta)
@@ -613,6 +675,8 @@ def run_vdam_iterations(
             current = post_mstep_update(current, it, meta)
 
         current = update_current_resolution_from_data_vs_prior(current)
+        if profile_iterations:
+            _record_stage("state_update")
         meta = dict(meta)
         meta.update(
             {
@@ -622,7 +686,15 @@ def run_vdam_iterations(
                 "ave_Pmax": float(current.ave_Pmax),
             }
         )
+        if profile_iterations:
+            iteration_profile["pre_artifact_time_s"] = float(time.perf_counter() - iteration_started)
+            meta["vdam_iteration_profile_summary"] = iteration_profile
+            stage_started = time.perf_counter()
         iter_artifact_sink(current, it, meta)
+        if profile_iterations:
+            _record_stage("artifact")
+            iteration_profile["total_time_s"] = float(time.perf_counter() - iteration_started)
+            print(f"VDAM iteration {it} profile: {iteration_profile}", flush=True)
 
         # RECOVAR_CLEAR_JAX_CACHES_PER_ITER=1: release scratch buffers to avoid
         # CUFFT_ALLOC_FAILED at 50k×256² (forces next-iter recompile).

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import time
-import inspect
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -86,9 +86,15 @@ def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
-def _k_class_fused_relion_fine_mstep_prune_mode_override(*, relion_fine_mstep_prune: bool) -> str | None:
+def _k_class_fused_relion_fine_mstep_prune_mode_override(
+    *,
+    relion_fine_mstep_prune: bool,
+    keep_all_candidates: bool = False,
+) -> str | None:
     """Default K-class sparse pass-2 to joint pruning, unless explicitly overridden."""
 
+    if bool(keep_all_candidates):
+        return "joint_keep_all"
     if not bool(relion_fine_mstep_prune):
         return None
     if _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV in os.environ:
@@ -902,6 +908,9 @@ def _run_sparse_k_class_adaptive_pass2(
         translation_log_prior=base_engine_kwargs.get("translation_log_prior"),
         half_spectrum_scoring=bool(base_engine_kwargs.get("half_spectrum_scoring", False)),
         projection_padding_factor=int(base_engine_kwargs.get("projection_padding_factor", 1)),
+        projection_mask_current_image_disk=bool(
+            base_engine_kwargs.get("projection_mask_current_image_disk", True)
+        ),
         reconstruction_padding_factor=int(base_engine_kwargs.get("reconstruction_padding_factor", 1)),
         image_corrections=base_engine_kwargs.get("image_corrections"),
         scale_corrections=base_engine_kwargs.get("scale_corrections"),
@@ -915,6 +924,9 @@ def _run_sparse_k_class_adaptive_pass2(
         square_window=bool(base_engine_kwargs.get("square_window", False)),
         relion_half_volume_mstep=bool(base_engine_kwargs.get("relion_half_volume_mstep", False)),
         relion_x_half_mstep=bool(base_engine_kwargs.get("mstep_relion_x_half", False)),
+        mstep_subtract_ctf_projection=bool(
+            base_engine_kwargs.get("mstep_subtract_ctf_projection", False)
+        ),
         adaptive_fraction=float(base_engine_kwargs.get("adaptive_fraction", 0.999)),
         relion_fine_mstep_prune=bool(base_engine_kwargs.get("relion_fine_mstep_prune", False)) and n_classes == 1,
         relion_firstiter_score_mode=base_engine_kwargs.get(
@@ -1006,10 +1018,36 @@ def _run_sparse_k_class_adaptive_pass2(
         fused_common = dict(common)
         fused_common.pop("relion_fine_mstep_prune", None)
         fused_common.pop("relion_exact_fine_normalized_cc", None)
-        fused_common.pop("relion_fine_diff2_fused_ffi", None)
-        fused_common.pop("relion_f32_fine_posterior", None)
+        # The fused K-class scorer preserves one joint class-by-pose minimum,
+        # so it can use the same source-faithful CUDA reduction qualified by
+        # the K=1 path.  The legacy 2K-1 fallback remains unchanged.
+        if strict_exact_gaussian:
+            from recovar import cuda_backproject
+
+            fused_common["relion_fine_diff2_fused_ffi"] = (
+                cuda_backproject.cuda_available()
+            )
+            fused_common["relion_f32_fine_posterior"] = (
+                cuda_backproject.cuda_available()
+            )
         fused_common["relion_projector_half"] = relion_projector_half_by_class
         fused_common["relion_projector_r_max"] = relion_projector_r_max
+        if "normalization_log_evidence" in base_engine_kwargs:
+            fused_common["normalization_log_evidence"] = base_engine_kwargs[
+                "normalization_log_evidence"
+            ]
+        if "relion_f32_normalization_sum_weight" in base_engine_kwargs:
+            fused_common["relion_f32_normalization_sum_weight"] = base_engine_kwargs[
+                "relion_f32_normalization_sum_weight"
+            ]
+        for planner_name in (
+            "compact_pair_min_bucket_size_default",
+            "compact_pair_tail_coalesce_max_images_default",
+            "compact_pair_tail_coalesce_max_inflation_default",
+            "compact_pair_tail_coalesce_min_bucket_size_default",
+        ):
+            if planner_name in base_engine_kwargs:
+                fused_common[planner_name] = base_engine_kwargs[planner_name]
         try:
             fused = compute_k_class_pass2_stats_sparse_fused(
                 experiment_dataset,
@@ -1024,6 +1062,9 @@ def _run_sparse_k_class_adaptive_pass2(
                 accumulate_noise=accumulate_noise,
                 relion_fine_mstep_prune_mode=_k_class_fused_relion_fine_mstep_prune_mode_override(
                     relion_fine_mstep_prune=bool(base_engine_kwargs.get("relion_fine_mstep_prune", False)),
+                    keep_all_candidates=bool(
+                        base_engine_kwargs.get("relion_fine_mstep_keep_all", False)
+                    ),
                 ),
                 **fused_common,
             )
@@ -1661,6 +1702,7 @@ _IMAGE_AXIS_ENGINE_KWARGS = (
     "translation_log_prior",
     "rotation_log_prior",
     "normalization_log_evidence",
+    "relion_f32_normalization_sum_weight",
 )
 
 
@@ -2397,6 +2439,7 @@ def run_local_k_class_em(
     return_best_pose_details: bool = False,
     class_log_evidence=None,
     normalization_log_evidence=None,
+    normalization_max_posterior=None,
     stats_use_reconstruction_probs: bool = False,
     class_posterior_sums_from_noise: bool = False,
     **engine_kwargs,
@@ -2445,17 +2488,26 @@ def run_local_k_class_em(
             raise ValueError(
                 f"normalization_log_evidence must have shape ({n_images},), got {normalization_log_evidence_np.shape}",
             )
-    if class_log_evidence_np is not None:
-        if normalization_log_evidence_np is None:
-            normalization_log_evidence_np = _logsumexp_np(class_log_evidence_np, axis=0)
-        if class_log_evidence_np.shape[1] != normalization_log_evidence_np.shape[0]:
+    normalization_max_posterior_np = None
+    if normalization_max_posterior is not None:
+        normalization_max_posterior_np = np.asarray(normalization_max_posterior, dtype=np.float64)
+        if normalization_max_posterior_np.shape != (n_images,):
             raise ValueError(
-                "class_log_evidence and normalization_log_evidence image axes disagree: "
-                f"{class_log_evidence_np.shape[1]} vs {normalization_log_evidence_np.shape[0]}",
+                "normalization_max_posterior must have shape "
+                f"({n_images},), got {normalization_max_posterior_np.shape}",
             )
+        if normalization_log_evidence_np is not None:
+            raise ValueError(
+                "normalization_max_posterior and normalization_log_evidence are mutually exclusive",
+            )
+        if n_classes != 1:
+            raise ValueError("normalization_max_posterior is currently supported only for K=1")
+    if class_log_evidence_np is not None:
+        if normalization_log_evidence_np is None and normalization_max_posterior_np is None:
+            normalization_log_evidence_np = _logsumexp_np(class_log_evidence_np, axis=0)
 
     if class_log_evidence_np is None:
-        if n_classes == 1 and normalization_log_evidence_np is None:
+        if n_classes == 1 and normalization_log_evidence_np is None and normalization_max_posterior_np is None:
             class_layout = _select_local_layout_for_class(
                 local_layout,
                 class_local_rotation_log_prior,
@@ -2587,6 +2639,11 @@ def run_local_k_class_em(
         )
         class_engine_kwargs = _local_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
         with _LocalDebugDumpPhaseLabel(f"mstep_class{class_index:03d}"):
+            normalization_kwargs = (
+                {"normalization_max_posterior": normalization_max_posterior_np}
+                if normalization_max_posterior_np is not None
+                else {"normalization_log_evidence": global_log_evidence}
+            )
             output = run_local_em_exact(
                 experiment_dataset,
                 means_array[class_index],
@@ -2598,8 +2655,8 @@ def run_local_k_class_em(
                 return_profile=return_profile,
                 return_best_pose_details=return_best_pose_details,
                 class_log_prior=float(log_priors[class_index]),
-                normalization_log_evidence=global_log_evidence,
                 stats_use_reconstruction_probs=stats_use_reconstruction_probs,
+                **normalization_kwargs,
                 **class_engine_kwargs,
             )
         (
