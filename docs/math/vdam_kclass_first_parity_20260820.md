@@ -859,3 +859,52 @@ both outcomes without weakening or relabeling the strict audit:
 `repeatability_calibrated_result=pass`.  Its two focused unit cases passed in
 Slurm job `12845396`; the combined K=1 assembler/merge-guard/envelope selection
 passed 7 tests in `12845429`.
+
+### Repeated four-dataset K=1 qualification and reference envelopes
+
+The frozen four-case real-data denominator is now runnable as one Slurm array
+with `scripts/run_vdam_relion_real_data_suite.sbatch`, and
+`scripts/summarize_vdam_relion_suite.py` aggregates both the strict
+point-reference outcome and the separately measured RELION-repeatability
+outcome.  Cold array `12846132` completed all four eight-iteration trajectories
+at checkpoints 0/1/2/4/8.  Every map gate passed; the minimum cross-engine
+FSC-AUC was `0.9999974063321341`.  EMPIAR-10076 and filtered EMPIAR-10180
+passed the strict particle-state gate.  EMPIAR-10073 and EMPIAR-10345 failed
+only at iteration 8, on two and one active particles respectively.
+
+The EMPIAR-10345 state was tested with four additional complete trajectories
+(`12846614`--`12846617`), split between normal asynchronous execution and
+launch-blocking diagnostics.  The engines independently selected both sides
+of the same particle-3138 boundary: two runs had RECOVAR choose the native
+state while RELION chose the alternate, one had the reverse, and one had both
+choose the native state and passed strict.  RECOVAR wall times were
+`148--164 s`; launch blocking neither stabilized the choice nor imposed a
+material penalty.  Relative to the nearer independently observed RELION
+state, the array RECOVAR result has zero unmatched states, Pmax p95
+`0.00003605`, and maximum `0.000149`.
+
+The EMPIAR-10073 state was likewise sampled with four additional complete
+trajectories (`12847104`--`12847107`).  One pair passed strict; the other three
+sampled independent combinations of RELION's two one-pixel translation states
+for particles 70695 and 71231.  Relative to the repeat that selected both
+RECOVAR states, the array result has zero unmatched states, nearest-reference
+Pmax p95 `0.000054`, and maximum `0.000234`.  No threshold was changed.
+
+The resulting aggregate is **4/4 repeatability-calibrated pass**, while still
+reporting the **2/4 strict point-reference pass** and naming both strict
+exceptions.  Median RECOVAR/RELION runtime was `4.69x`, with range
+`2.47--4.81x`; runtime therefore remains open.  The aggregate report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_real4_482b71f8_20260823/real_data_suite_summary.json`
+(SHA-256 `c5c677e66edbefe7819f6a23c75c6ec30c4ed690d258207f58e15f6bb91b2d58`).
+The 10073 and 10345 envelope reports have SHA-256
+`8ae59ff7f0877acdc0096db2ac9636bb37da4fb1a04e78138588b65561dd01bb`
+and `0fe8217790c6e42d12323789d50c4453273b39a3e9a5188ea564c52196519125`.
+
+The array began at source head `482b71f80`; reporting-only commits advanced
+the shared worktree to `8407ac871` before the post-run provenance file was
+written, without changing science code.  The runner now captures the head
+before execution, requires a clean tracked worktree, and rejects any head or
+tracked-file change before provenance is emitted.  It also records the JAX
+cache path and the reconstruction-posterior opt-in value.  Focused runner,
+auditor, and summary validation passed 10 tests.  No repo-wide RECOVAR test
+suite was run.
