@@ -11,11 +11,11 @@
 #SBATCH --mem=500G
 #SBATCH --time=00:45:00
 
-# Bounded iteration-1 gate or autonomous terminal run for the other fixed-suite
-# K=1 failures. The submitter supplies isolated roots, mode, and Slurm limits.
+# Bounded iteration-1/2 gate or autonomous terminal run for the fixed-suite K=1
+# failures. The submitter supplies isolated roots, mode, and Slurm limits.
 set -euo pipefail
 
-: "${K1_CASE_INDEX:?set K1_CASE_INDEX to 4 or 10}"
+: "${K1_CASE_INDEX:?set K1_CASE_INDEX to 4, 5, or 10}"
 : "${RUN_ROOT:?set an isolated run root}"
 : "${RUNTIME_ROOT:?set an isolated runtime root}"
 : "${EXPECTED_REPO_HEAD:?submission must pin repository HEAD}"
@@ -25,8 +25,8 @@ set -euo pipefail
 
 MAX_ITER=${K1_MAX_ITER:-1}
 SKIP_FINAL=${K1_SKIP_FINAL:-1}
-if [[ "${MAX_ITER}" != 1 && "${MAX_ITER}" != 999 ]]; then
-    echo "K1_MAX_ITER must be 1 or 999" >&2
+if [[ "${MAX_ITER}" != 1 && "${MAX_ITER}" != 2 && "${MAX_ITER}" != 999 ]]; then
+    echo "K1_MAX_ITER must be 1, 2, or 999" >&2
     exit 2
 fi
 if [[ "${SKIP_FINAL}" != 0 && "${SKIP_FINAL}" != 1 ]]; then
@@ -39,12 +39,16 @@ case "${K1_CASE_INDEX}" in
         CASE_NAME=4_high_noise_100k_g256_white_noise3_bf80
         SEED=1704
         ;;
+    5)
+        CASE_NAME=5_very_high_noise_100k_g256_white_noise10_bf80
+        SEED=1705
+        ;;
     10)
         CASE_NAME=10_high_res_anisotropic_100k_g384_radial_noise3_bf0
         SEED=1710
         ;;
     *)
-        echo "K1_CASE_INDEX must be 4 or 10" >&2
+        echo "K1_CASE_INDEX must be 4, 5, or 10" >&2
         exit 2
         ;;
 esac
@@ -119,9 +123,14 @@ export RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
 export RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE=220
-if [[ "${MAX_ITER}" == 999 ]]; then
+if [[ "${MAX_ITER}" != 1 ]]; then
     export RECOVAR_SAVE_INTERMEDIATES_DIR=1
     export RECOVAR_SAVE_INTERMEDIATES_SKIP_UNREGULARIZED=1
+fi
+if [[ "${MAX_ITER}" == 2 ]]; then
+    export RECOVAR_PARITY_DUMP_DIR=${ROOT}/parity
+    export RECOVAR_PARITY_DUMP_VOLUME_DOWNSAMPLE=8
+    mkdir -p "${RECOVAR_PARITY_DUMP_DIR}"
 fi
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 
@@ -149,7 +158,7 @@ if [[ "${SKIP_FINAL}" == 1 ]]; then
     FINAL_ARGS+=(--skip_final_iteration)
 fi
 INTERMEDIATE_ARGS=()
-if [[ "${MAX_ITER}" == 999 ]]; then
+if [[ "${MAX_ITER}" != 1 ]]; then
     mkdir -p "${OUTPUT}/intermediates"
     INTERMEDIATE_ARGS+=(
         --save_intermediates_dir "${OUTPUT}/intermediates"
@@ -179,6 +188,10 @@ wall_s=$(( $(date +%s) - start_epoch ))
 test -s "${OUTPUT}/refinement_results.npz"
 rg -q 'Refinement complete' "${OUTPUT}/run_full_refinement.log"
 ! rg -q 'Traceback|RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' "${OUTPUT}/run_full_refinement.log"
+if [[ "${MAX_ITER}" == 2 ]]; then
+    test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
+    test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_002.npz"
+fi
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
 printf '{"job_id":"%s","wall_s":%d,"case_index":%d,"max_iter":%d,"skip_final":%d}\n' \
     "${SLURM_JOB_ID}" "${wall_s}" "${K1_CASE_INDEX}" "${MAX_ITER}" "${SKIP_FINAL}" \
