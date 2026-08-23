@@ -809,9 +809,14 @@ the shared K-class assembler discarded it for K=1 and reconstructed Pmax by
 subtracting separately offset, large absolute best-score and log-evidence
 values.  At the observed magnitude that subtraction has a `1/128` float32
 spacing.  K=1 now preserves the kernel Pmax; K>1 deliberately retains joint
-class normalization for its later phase.  InitialModel enables the qualified
-float32 posterior path by default, while supplied-map EM retains its existing
-opt-in default and the environment switch can explicitly disable either use.
+class normalization for its later phase.  The separate float32
+exp/sort/scan/divide reconstruction-weight path remains opt-in: enabling it by
+default passed 10076 and 10180 but moved the already-closed 10345 iteration-8
+decision boundary back to the alternate state (`12845042`).  With that path
+off, confirmation jobs `12845181` (10345) and `12845190` (10180) both pass,
+with iteration-8 Pmax p95/max `0.000041/0.000136` and
+`0.000069/0.000217`, respectively.  This preserves the qualified M-step while
+fixing only the lossy K=1 result assembly.
 
 Strict confirmation `12844116` passes all checkpoints with zero winning-state
 mismatches, minimum map FSC-AUC `0.9999999988031133`, and iteration-8 Pmax
@@ -830,3 +835,27 @@ from `87,329.78 MiB` to `4,612.27 MiB` and writes from `84,902.49 MiB` to
 wall also varied from `79 s` to `65 s`, leaving the normalized ratio nearly
 unchanged at `3.26x`.  Thus the accidental full-stack copy is closed, while
 the remaining compute/runtime gap remains an explicit open gate.
+
+The assembler-only change was then rerun across all four frozen real-data
+cases.  The float32 reconstruction-weight opt-in was explicitly disabled for
+the two diagnostic confirmations that separated it from Pmax assembly.
+
+| Case | Slurm job | Point-reference result | Minimum FSC-AUC | Iteration-8 Pmax p95 / max | RECOVAR / RELION wall |
+| --- | --- | --- | ---: | ---: | ---: |
+| EMPIAR-10076 (`vdam-r01`) | `12845024` | **pass** | `0.99999998066329` | `0.000090 / 0.000249` | `183 / 41 s` (`4.46x`) |
+| EMPIAR-10073 (`vdam-r02`) | `12845025` | **strict fail; repeat-envelope pass** | `0.9999998166285994` | `0.00035005 / 0.043352` vs canonical | `164 / 46 s` (`3.57x`) |
+| EMPIAR-10345 (`vdam-r03`) | `12845181` | **pass** | `0.9999998131188899` | `0.000041 / 0.000136` | `184 / 30 s` (`6.13x`) |
+| filtered EMPIAR-10180 (`vdam-r04`) | `12845190` | **pass** | `0.9999999988031124` | `0.000069 / 0.000217` | `171 / 66 s` (`2.59x`) |
+
+The 10073 strict exceptions exactly reproduce the measured RELION
+self-repeat boundary rather than adding a third state.  At iteration 8,
+RECOVAR differs from the canonical RELION run on one particle but matches the
+independent RELION repeat on all 1,000 selected states; canonical and repeat
+also differ on that one state.  RECOVAR's Pmax compared with the nearer RELION
+repeat has p95 `0.000037` and maximum `0.000166`, while the two RELION runs
+themselves differ by as much as `0.043367`.  The new companion auditor records
+both outcomes without weakening or relabeling the strict audit:
+`strict_point_reference_result=fail` and
+`repeatability_calibrated_result=pass`.  Its two focused unit cases passed in
+Slurm job `12845396`; the combined K=1 assembler/merge-guard/envelope selection
+passed 7 tests in `12845429`.
