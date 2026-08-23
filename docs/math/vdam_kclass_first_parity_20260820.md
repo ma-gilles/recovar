@@ -583,3 +583,35 @@ nine checkpoints with exact assignments and minimum per-class FSC-AUC
 than the earlier qualified `1083.94 s` RECOVAR run on the same fixture, so
 large-scale throughput is both the remaining product gap and a variability
 problem.  Correctness is not the blocker at this boundary.
+
+## 100k lazy-I/O runtime probes (2026-08-23)
+
+The next isolated probes tested whether the scale gap came primarily from
+bucket-ordered particle reads.  Each one-iteration job used the same
+100k-particle, 256-pixel, K=4 fixture and default scientific settings.
+
+| Probe | Slurm job | Iteration wall | Result |
+| --- | --- | ---: | --- |
+| Unmodified lazy control | `12829578` | `909.88 s` | reference |
+| Sort each bucket fetch into source order | `12829984` | `861.05 s` | rejected: only `5.4%` faster and changes accumulation order |
+| Direct indexed source fetch | `12831416` | `811.37 s` | rejected: `10.8%` faster is insufficient for the product runtime target |
+| Direct fetch plus bulk MRCS memmap gather | `12831942` | `956.81 s` | rejected: `5.2%` slower than control |
+| Existing eager mode (`--no-lazy`) | `12829869` | `424.32 s` | diagnostic only: substantially faster for iteration 1 but high host-memory cost |
+
+The direct and memmap implementations were reverted in the isolated runtime
+worktree after measurement and were never promoted to the tracking branch.
+The complete eight-iteration eager run (`12830515`) took `1406 s` wall and
+peaked at `94,388,912 KiB` RSS.  Its eight profiled iterations summed to
+`1330.67 s`; the final iteration alone took `423.19 s`.  Against the matched
+RELION wall of `266.60 s`, this is still `5.27x`, and the memory footprint is
+not suitable as the default GUI behavior.  Its independent all-checkpoint
+trajectory audit (`12832441`) passed iterations 0 through 8 with minimum
+per-class FSC-AUC `0.9999995412448371`, exact assignments, and exact artifact
+topology.  Eager loading therefore remains an explicit user option rather than
+a runtime fix: the science is sound, but the scale/runtime tradeoff is not.
+
+These measurements narrow the next implementation target: preserve lazy
+startup and bounded memory, but cache the much smaller current-size
+preprocessed Fourier representation used repeatedly by coarse/fine bucket
+passes.  Any such cache must first prove exact trajectory parity and a clear
+end-to-end gain in the isolated runtime worktree before promotion.
