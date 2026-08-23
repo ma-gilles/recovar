@@ -340,3 +340,30 @@ slower (`60.01` versus `57.69 s`) and iteration 2 substantially slower
 iteration 3.  A useful executable palette must therefore preserve bounded
 windowed work and make variable scientific extents runtime metadata inside a
 broader native boundary, rather than padding JAX arrays to the full image.
+
+A broader joint diff2/posterior diagnostic then moved the per-image global
+minimum, exact float32 prior-addition order, class concatenation, exponentiation,
+CUB sort/scan, adaptive pruning, and normalization into one custom call.  Its
+focused H100 test was bitwise equal to the decomposed chain for both pruning
+modes (`12815392`, 5 passed), and a full K=4 run plus trajectory audit passed
+(`12815620`, `12815824`; minimum FSC-AUC `0.9999999971882169`, assignment
+accuracy `1.0`).  It was nevertheless rejected and reverted: warm wall was
+`142.05 s`, while an isolated-cache run (`12815943`) took `523.18 s` versus
+the `523.91 s` control.  The control and diagnostic iteration boundaries were
+also effectively identical.  Posterior/scoring assembly is therefore not the
+dominant compilation boundary; the next probe must collapse the much larger
+set of eager bucket preparation and M-step primitives rather than adding a
+posterior-only FFI.
+
+A one-iteration fresh-cache compile trace (`12816179`) makes that boundary
+concrete.  JAX reported 1,975 XLA compilations totaling `87.58 s` (summed
+compiler durations; the logging run itself took `138.85 s`).  The largest
+named totals were `compute_noise_block` (`5.08 s`), `gather` (`5.04 s`), the
+native compact weighted-sum wrapper (`4.71 s`), `_reduce_sum` (`4.51 s`),
+`compute_norm_residual_per_image` (`4.40 s`), `_where` (`4.34 s`), and
+`broadcast_in_dim` (`4.08 s`).  There were 292 broadcast compilations, 133
+gathers, 118 where operations, 104 multiplies, and 100 adds in this single
+iteration.  In contrast, all ten fine-posterior compilations summed to only
+`3.09 s`.  The next runtime target is therefore a whole bucket-group
+preparation/M-step boundary (or an equivalently coarse JIT/native region),
+with runtime extents, rather than another isolated scoring primitive.
