@@ -555,6 +555,7 @@ _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32 = "cuda_relion_wavg_rotation_atomic_
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32 = (
     "cuda_relion_wavg_rotation_atomic_triplet_add_f32"
 )
+_TARGET_DUAL_WEIGHTED_SUMS_F32 = "cuda_dual_weighted_sums_f32"
 
 # Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
 # Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
@@ -645,6 +646,7 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32,
         "RelionWavgRotationAtomicTripletAddF32",
     ),
+    (_TARGET_DUAL_WEIGHTED_SUMS_F32, "DualWeightedSumsF32"),
 )
 
 
@@ -3200,6 +3202,64 @@ def relion_wavg_rotation_atomic_triplet_add_f32(
         input_output_aliases={1: 0},
         vmap_method="sequential",
     )(terms, accumulator)
+
+
+@jax.jit
+def dual_weighted_sums_f32(
+    probabilities: jax.Array,
+    first_values: jax.Array,
+    second_values: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Compute two real-probability/complex-value contractions in one FFI call.
+
+    This is a guarded VDAM runtime primitive.  It deliberately keeps the two
+    output reductions independent so their float32 accumulation does not
+    change when the two pixel axes have different sizes.
+    """
+
+    _ensure_ffi()
+    probabilities = jnp.asarray(probabilities)
+    first_values = jnp.asarray(first_values)
+    second_values = jnp.asarray(second_values)
+    if probabilities.dtype != jnp.float32 or probabilities.ndim != 3:
+        raise ValueError(
+            "dual_weighted_sums_f32 expects float32 probabilities with shape "
+            "[batch, rotation, translation]"
+        )
+    if first_values.dtype not in (jnp.complex64, jnp.complex128):
+        raise ValueError(
+            "dual_weighted_sums_f32 expects complex64 or complex128 value arrays"
+        )
+    if second_values.dtype != first_values.dtype:
+        raise ValueError(
+            "dual_weighted_sums_f32 expects both value arrays to have the same dtype"
+        )
+    for name, values in (("first_values", first_values), ("second_values", second_values)):
+        if values.ndim != 3:
+            raise ValueError(
+                f"dual_weighted_sums_f32 expects {name} to be complex "
+                "[batch, translation, pixel]"
+            )
+        if values.shape[:2] != (probabilities.shape[0], probabilities.shape[2]):
+            raise ValueError(
+                f"dual_weighted_sums_f32 {name} batch/translation axes do not match "
+                f"probabilities: {values.shape} vs {probabilities.shape}"
+            )
+    output_types = (
+        jax.ShapeDtypeStruct(
+            (probabilities.shape[0], probabilities.shape[1], first_values.shape[2]),
+            first_values.dtype,
+        ),
+        jax.ShapeDtypeStruct(
+            (probabilities.shape[0], probabilities.shape[1], second_values.shape[2]),
+            second_values.dtype,
+        ),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_DUAL_WEIGHTED_SUMS_F32,
+        output_types,
+        vmap_method="sequential",
+    )(probabilities, first_values, second_values)
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))

@@ -59,7 +59,9 @@ the fixed `0.999` per-class FSC-AUC and `0.995` class-assignment thresholds.
 | Case | Result | Minimum matched FSC-AUC | Minimum assignment accuracy | RELION wall time | RECOVAR wall time | Ratio |
 |---|---|---:|---:|---:|---:|---:|
 | K=2 default | PASS | 0.9999995522 | 1.0000 | 21.36 s | 119.97 s | 5.62x |
+| K=2 default, native dual replay | PASS | 0.9999999999 | 1.0000 | 14.34 s | 122.67 s | 8.55x |
 | K=4 default, clean post-fix | PASS | 0.9999999972 | 1.0000 | 17.34 s | 156.06 s | 9.00x |
+| K=4 default, native dual replay | PASS | 0.9999999996 | 1.0000 | 17.34 s | 144.00 s | 8.31x |
 | K=4, 25 iterations | PASS | 0.9999999679 | 1.0000 | 41.47 s | 402.48 s | 9.71x |
 | K=4, real 10076, 10,000 particles | PASS | 0.9999987694 | 0.9988 | 71.65 s | 705.67 s | 9.85x |
 | K=4, 100,000 particles, 256 pixels | PASS | 0.9999851527 | 0.9998 | 267.06 s | 1960.97 s | 7.34x |
@@ -171,6 +173,28 @@ The following same-contract experiments were rejected rather than promoted:
   summed iteration time improved by only 0.44 seconds.  The three-API CUDA
   surface was removed because that 0.3% internal gain did not improve
   end-to-end wall time.
+
+The accepted next step is one shared native dual weighted-sum boundary.  It
+keeps reconstruction and masked-noise contractions independent, supports the
+production `complex64` and `complex128` paths, and skips exactly-zero posterior
+weights before loading translated pixels.  Representative H100 tests are
+bitwise-equal to the two existing JAX matmuls in both precisions (`12808038`,
+three tests).  The opt-in K=4 run `12808109` completed in 142 seconds and its
+eight-checkpoint audit `12808277` passed with exact assignments and minimum
+FSC-AUC `0.9999999996`.  The promoted default replay `12808596` completed in
+144 seconds versus the accepted 150-second control; audit `12808723` passed
+with exact assignments and minimum FSC-AUC `0.9999999996`.  Summed iteration
+time fell from 135.26 to 126.84 seconds in the controlled run.  The K=1 default
+replay `12808650` also passed at minimum cross-engine FSC-AUC
+`0.9999999999`, and K=2 replay `12808673` passed with exact assignments and
+minimum FSC-AUC `0.9999999999`.  Explicit environment overrides can still
+disable or force the native boundary; by default it is restricted to the
+exact RELION Gaussian, x-half, noise-accumulating CUDA contract.
+
+A non-sparse prototype of the same boundary is rejected: job `12807978`
+retained the trajectory (audit `12808240`, minimum FSC-AUC `0.9999999996`,
+exact assignments) but took 179 seconds because every output thread loaded
+all 116 translated pixels, including zero-posterior rows.
 
 The next implementation boundary is therefore a broader native fused
 score/posterior/noise path with a deliberately small executable-shape palette,

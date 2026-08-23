@@ -8890,6 +8890,156 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>());
 
+static __device__ __forceinline__ float dual_weighted_fma(
+    float weight, float value, float accumulator)
+{
+    return __fmaf_rn(weight, value, accumulator);
+}
+
+static __device__ __forceinline__ double dual_weighted_fma(
+    float weight, double value, double accumulator)
+{
+    return __fma_rn(static_cast<double>(weight), value, accumulator);
+}
+
+template <typename T>
+__global__ void dual_weighted_sums_f32_kernel(
+    const float* probabilities,
+    const vec2_t<T>* values,
+    vec2_t<T>* output,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pixel_count)
+{
+    const int64_t output_index =
+        static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const int64_t output_count = batch_size * rotation_count * pixel_count;
+    if (output_index >= output_count) return;
+    const int64_t pixel = output_index % pixel_count;
+    const int64_t batch_rotation = output_index / pixel_count;
+    const int64_t rotation = batch_rotation % rotation_count;
+    const int64_t batch = batch_rotation / rotation_count;
+    const int64_t probability_base =
+        (batch * rotation_count + rotation) * translation_count;
+    const int64_t value_base = batch * translation_count * pixel_count + pixel;
+    T sum_real = static_cast<T>(0);
+    T sum_imag = static_cast<T>(0);
+    for (int64_t translation = 0; translation < translation_count; ++translation) {
+        const float weight = probabilities[probability_base + translation];
+        if (weight == 0.0f) continue;
+        const vec2_t<T> value = values[value_base + translation * pixel_count];
+        sum_real = dual_weighted_fma(weight, value.x, sum_real);
+        sum_imag = dual_weighted_fma(weight, value.y, sum_imag);
+    }
+    output[output_index] = make_v2(sum_real, sum_imag);
+}
+
+template <typename T>
+cudaError_t launch_dual_weighted_sums_f32(
+    cudaStream_t stream,
+    const float* probabilities,
+    const vec2_t<T>* first_values,
+    const vec2_t<T>* second_values,
+    vec2_t<T>* first_output,
+    vec2_t<T>* second_output,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t first_pixel_count,
+    int64_t second_pixel_count)
+{
+    constexpr int threads = 256;
+    const int64_t first_count = batch_size * rotation_count * first_pixel_count;
+    const int64_t second_count = batch_size * rotation_count * second_pixel_count;
+    const int first_blocks = static_cast<int>((first_count + threads - 1) / threads);
+    const int second_blocks = static_cast<int>((second_count + threads - 1) / threads);
+    dual_weighted_sums_f32_kernel<T><<<first_blocks, threads, 0, stream>>>(
+        probabilities, first_values, first_output,
+        batch_size, rotation_count, translation_count, first_pixel_count);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+    dual_weighted_sums_f32_kernel<T><<<second_blocks, threads, 0, stream>>>(
+        probabilities, second_values, second_output,
+        batch_size, rotation_count, translation_count, second_pixel_count);
+    return cudaGetLastError();
+}
+
+ffi::Error DualWeightedSumsF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer probabilities,
+    ffi::AnyBuffer first_values,
+    ffi::AnyBuffer second_values,
+    ffi::Result<ffi::AnyBuffer> first_output,
+    ffi::Result<ffi::AnyBuffer> second_output)
+{
+    const auto value_type = first_values.element_type();
+    if (probabilities.element_type() != ffi::DataType::F32 ||
+        (value_type != ffi::DataType::C64 && value_type != ffi::DataType::C128) ||
+        second_values.element_type() != value_type ||
+        first_output->element_type() != value_type ||
+        second_output->element_type() != value_type)
+        return ffi::Error::InvalidArgument(
+            "DualWeightedSumsF32: expected F32 probabilities and matching C64/C128 values/outputs");
+    const auto probability_dims = probabilities.dimensions();
+    const auto first_dims = first_values.dimensions();
+    const auto second_dims = second_values.dimensions();
+    const auto first_output_dims = first_output->dimensions();
+    const auto second_output_dims = second_output->dimensions();
+    if (probability_dims.size() != 3 || first_dims.size() != 3 || second_dims.size() != 3 ||
+        first_output_dims.size() != 3 || second_output_dims.size() != 3 ||
+        probability_dims[0] <= 0 || probability_dims[1] <= 0 || probability_dims[2] <= 0 ||
+        first_dims[0] != probability_dims[0] || first_dims[1] != probability_dims[2] ||
+        second_dims[0] != probability_dims[0] || second_dims[1] != probability_dims[2] ||
+        first_dims[2] <= 0 || second_dims[2] <= 0 ||
+        first_output_dims[0] != probability_dims[0] ||
+        first_output_dims[1] != probability_dims[1] ||
+        first_output_dims[2] != first_dims[2] ||
+        second_output_dims[0] != probability_dims[0] ||
+        second_output_dims[1] != probability_dims[1] ||
+        second_output_dims[2] != second_dims[2])
+        return ffi::Error::InvalidArgument(
+            "DualWeightedSumsF32: inconsistent [B,R,T], [B,T,P], and [B,R,P] shapes");
+    const int64_t largest_count = probability_dims[0] * probability_dims[1] *
+        std::max(first_dims[2], second_dims[2]);
+    if (largest_count > static_cast<int64_t>(std::numeric_limits<int>::max()) * 256)
+        return ffi::Error::InvalidArgument("DualWeightedSumsF32: output exceeds CUDA grid bounds");
+
+    cudaError_t err;
+    if (value_type == ffi::DataType::C64) {
+        err = launch_dual_weighted_sums_f32<float>(
+            stream, static_cast<const float*>(probabilities.untyped_data()),
+            reinterpret_cast<const float2*>(first_values.untyped_data()),
+            reinterpret_cast<const float2*>(second_values.untyped_data()),
+            reinterpret_cast<float2*>(first_output->untyped_data()),
+            reinterpret_cast<float2*>(second_output->untyped_data()),
+            probability_dims[0], probability_dims[1], probability_dims[2],
+            first_dims[2], second_dims[2]);
+    } else {
+        err = launch_dual_weighted_sums_f32<double>(
+            stream, static_cast<const float*>(probabilities.untyped_data()),
+            reinterpret_cast<const double2*>(first_values.untyped_data()),
+            reinterpret_cast<const double2*>(second_values.untyped_data()),
+            reinterpret_cast<double2*>(first_output->untyped_data()),
+            reinterpret_cast<double2*>(second_output->untyped_data()),
+            probability_dims[0], probability_dims[1], probability_dims[2],
+            first_dims[2], second_dims[2]);
+    }
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    DualWeightedSumsF32, DualWeightedSumsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ProjectIndexed, ProjectIndexedImpl,
     ffi::Ffi::Bind()

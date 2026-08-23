@@ -113,6 +113,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _max_projected_rotations_per_call_for_pass,
     _max_projection_gather_bytes_for_pass,
     _max_translation_tile_bytes_for_pass,
+    _native_dual_weighted_sums_enabled_for_pass,
     _maybe_prepare_sparse_k_class_compact_pair_plan,
     _normalize_pass2_bucket,
     _normalize_pass2_bucket_score_only,
@@ -5279,6 +5280,37 @@ def test_compact_pair_dense_mstep_budget_env_override(monkeypatch):
 
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_DENSE_MSTEP_MAX_BYTES", "12345")
     assert _compact_pair_dense_mstep_max_bytes_for_pass(None) == 12345
+
+
+def test_native_dual_weighted_sums_defaults_only_on_exact_gpu_contract(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS", raising=False)
+    kwargs = dict(
+        use_exact_relion_gaussian=True,
+        use_relion_x_half_mstep=True,
+        accumulate_noise=True,
+    )
+    monkeypatch.setattr(jax, "default_backend", lambda: "cpu")
+    monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+    assert not _native_dual_weighted_sums_enabled_for_pass(**kwargs)
+
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: False)
+    assert not _native_dual_weighted_sums_enabled_for_pass(**kwargs)
+
+    monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+    assert _native_dual_weighted_sums_enabled_for_pass(**kwargs)
+    for disabled_contract_key in kwargs:
+        disabled = dict(kwargs)
+        disabled[disabled_contract_key] = False
+        assert not _native_dual_weighted_sums_enabled_for_pass(**disabled)
+
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS", "0")
+    assert not _native_dual_weighted_sums_enabled_for_pass(**kwargs)
+    monkeypatch.setattr(jax, "default_backend", lambda: "cpu")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS", "1")
+    assert _native_dual_weighted_sums_enabled_for_pass(**kwargs)
 
 
 def test_compact_pair_execution_defaults_to_high_bucket_hybrid(monkeypatch):

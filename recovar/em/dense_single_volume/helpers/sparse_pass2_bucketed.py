@@ -229,6 +229,9 @@ _SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE_ENV = "RECOVAR_SPARSE_KCLASS_ACTIVE_ROW_P
 _SPARSE_KCLASS_FUSED_NOISE_NORM_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_NOISE_NORM"
 _SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV = "RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED"
 _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS"
+_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV = (
+    "RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS"
+)
 _SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTEP"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
@@ -2963,6 +2966,26 @@ def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
     if raw is None or raw.strip() == "":
         return bool(default)
     return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _native_dual_weighted_sums_enabled_for_pass(
+    *,
+    use_exact_relion_gaussian: bool,
+    use_relion_x_half_mstep: bool,
+    accumulate_noise: bool,
+) -> bool:
+    """Select the qualified native reduction only on its exact GPU contract."""
+
+    if os.environ.get(_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV) is not None:
+        return _env_flag_enabled(
+            _SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV,
+            default=False,
+        )
+    if not (use_exact_relion_gaussian and use_relion_x_half_mstep and accumulate_noise):
+        return False
+    from recovar.cuda_backproject import custom_cuda_requested
+
+    return bool(jax.default_backend() == "gpu" and custom_cuda_requested())
 
 
 def _fresh_k1_direct_noise_default(
@@ -7786,6 +7809,40 @@ def _compact_pair_weighted_rotation_and_image_sums_fused_image_sums(
     combined_summed = compute_local_weighted_sums(dense_probs, combined_shifted)
     summed = combined_summed[..., :recon_n_pixels]
     summed_image = combined_summed[..., recon_n_pixels:]
+    probs_sum_t = jnp.sum(dense_probs, axis=-1)
+    ctf_probs = compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, ctf2_over_nv_recon)
+    translation_posterior = jnp.sum(dense_probs, axis=1)
+    return summed, summed_image, ctf_probs, probs_sum_t, translation_posterior
+
+
+@partial(jax.jit, static_argnames=("n_rotation_rows",))
+def _compact_pair_weighted_rotation_and_image_sums_native(
+    pair_probs,
+    local_rotation_row,
+    translation_idx,
+    pair_mask,
+    shifted_recon_split,
+    shifted_image_split,
+    ctf2_over_nv_recon,
+    n_rotation_rows,
+):
+    """Use one native launch boundary for two independent weighted sums."""
+
+    from recovar.cuda_backproject import dual_weighted_sums_f32
+
+    dense_probs = _compact_pair_dense_probs_and_reductions(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        n_rotation_rows=n_rotation_rows,
+        n_trans=shifted_recon_split.shape[1],
+    )
+    summed, summed_image = dual_weighted_sums_f32(
+        dense_probs,
+        shifted_recon_split,
+        shifted_image_split,
+    )
     probs_sum_t = jnp.sum(dense_probs, axis=-1)
     ctf_probs = compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, ctf2_over_nv_recon)
     translation_posterior = jnp.sum(dense_probs, axis=1)
@@ -15833,6 +15890,11 @@ def compute_k_class_pass2_stats_sparse_fused(
         _SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS_ENV,
         default=False,
     )
+    native_dual_weighted_sums = _native_dual_weighted_sums_enabled_for_pass(
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        use_relion_x_half_mstep=use_relion_x_half_mstep,
+        accumulate_noise=accumulate_noise,
+    )
     compact_noise_sums_match_mstep = bool(
         reuse_compact_noise_sums
         and half_spectrum_scoring
@@ -16079,6 +16141,12 @@ def compute_k_class_pass2_stats_sparse_fused(
                 _SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS_ENV,
                 bool(half_spectrum_scoring),
                 bool(score_with_masked_images),
+            )
+        if native_dual_weighted_sums:
+            logger.info(
+                "Sparse fused K-class compact-pair M-step/noise image sums use the "
+                "guarded native dual reduction (%s=1)",
+                _SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV,
             )
         if _env_flag_enabled(_COMPACT_KCLASS_PAIRS_CHECK_ENV, default=False):
             raise ValueError(
@@ -17841,7 +17909,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                     ],
                     relion_min_diff2=relion_min_diff2_dump,
                 )
-                if accumulate_noise and reuse_compact_noise_sums and not compact_noise_sums_match_mstep:
+                if (
+                    accumulate_noise
+                    and (reuse_compact_noise_sums or native_dual_weighted_sums)
+                    and not compact_noise_sums_match_mstep
+                ):
                     compact_pair_noise_image_sum_precomputes += 1
                     (
                         summed,
@@ -17849,17 +17921,30 @@ def compute_k_class_pass2_stats_sparse_fused(
                         ctf_probs,
                         probs_sum_t_jax,
                         translation_posterior_jax,
-                    ) = _compact_pair_weighted_rotation_and_image_sums(
-                        mstep_probs,
-                        jnp.asarray(pair_arrays["local_rotation_row"]),
-                        jnp.asarray(pair_arrays["translation_idx"]),
-                        pair_mask,
-                        shifted_recon_split,
+                    ) = (
+                        _compact_pair_weighted_rotation_and_image_sums_native(
+                            mstep_probs,
+                            jnp.asarray(pair_arrays["local_rotation_row"]),
+                            jnp.asarray(pair_arrays["translation_idx"]),
+                            pair_mask,
+                            shifted_recon_split,
+                            shifted_noise_split,
+                            ctf2_over_nv_recon,
+                            n_rotation_rows=class_bucket_size,
+                        )
+                        if native_dual_weighted_sums
+                        else _compact_pair_weighted_rotation_and_image_sums(
+                            mstep_probs,
+                            jnp.asarray(pair_arrays["local_rotation_row"]),
+                            jnp.asarray(pair_arrays["translation_idx"]),
+                            pair_mask,
+                            shifted_recon_split,
                             shifted_noise_split,
                             ctf2_over_nv_recon,
                             n_rotation_rows=class_bucket_size,
                             allow_pair_sparse=compact_pair_pair_sparse_effective,
                         )
+                    )
                 else:
                     summed, ctf_probs, probs_sum_t_jax, translation_posterior_jax = (
                         _compact_pair_weighted_rotation_sums(
@@ -18423,6 +18508,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 accumulate_noise
                 and bucket_uses_compact_pairs
                 and not reuse_compact_noise_sums
+                and not native_dual_weighted_sums
                 and not compact_noise_sums_match_mstep
             ):
                 # The compact-pair noise path recomputes weighted image sums with
@@ -18449,7 +18535,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         noise_probs_sum_t = probs_sum_t_jax
                         compact_pair_noise_sum_reuses += 1
                         compact_pair_noise_ctf_sum_reuses += 1
-                    elif reuse_compact_noise_sums:
+                    elif reuse_compact_noise_sums or native_dual_weighted_sums:
                         if summed_masked_noise_precomputed is None:
                             summed_masked_noise = _compact_pair_weighted_image_sums(
                                 noise_probs,
@@ -19053,6 +19139,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         "sparse_kclass_mstep_class_posterior_sums": class_posterior_sums_mstep.astype(np.float64, copy=True),
         "sparse_kclass_mstep_class_posterior_sum_total": np.float64(np.sum(class_posterior_sums_mstep)),
         "sparse_kclass_compact_pairs": bool(compact_pairs),
+        "sparse_kclass_native_dual_weighted_sums": bool(native_dual_weighted_sums),
         "sparse_kclass_compact_pair_mstep_pair_sparse_requested": bool(
             compact_pair_pair_sparse_requested,
         ),
