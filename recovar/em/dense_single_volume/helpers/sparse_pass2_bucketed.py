@@ -2989,6 +2989,28 @@ def _native_dual_weighted_sums_enabled_for_pass(
     return bool(jax.default_backend() == "gpu" and custom_cuda_requested())
 
 
+def _fused_mstep_noise_enabled_for_pass(
+    *,
+    native_dual_weighted_sums: bool,
+    use_exact_relion_gaussian: bool,
+    use_relion_x_half_mstep: bool,
+    accumulate_noise: bool,
+    compact_noise_sums_match_mstep: bool,
+) -> bool:
+    """Select the fused reduction only on its qualified exact-GPU contract."""
+
+    if not (
+        native_dual_weighted_sums
+        and use_exact_relion_gaussian
+        and use_relion_x_half_mstep
+        and accumulate_noise
+        and not compact_noise_sums_match_mstep
+        and _env_flag_enabled(_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV, default=True)
+    ):
+        return False
+    return _env_flag_enabled(_SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV, default=False)
+
+
 def _fresh_k1_direct_noise_default(
     *,
     preserve_bpref_particle_order: bool,
@@ -15963,17 +15985,17 @@ def compute_k_class_pass2_stats_sparse_fused(
         use_relion_x_half_mstep=use_relion_x_half_mstep,
         accumulate_noise=accumulate_noise,
     )
-    fused_mstep_noise = bool(
-        native_dual_weighted_sums
-        and _env_flag_enabled(
-            _SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV,
-            default=False,
-        )
-    )
     compact_noise_sums_match_mstep = bool(
         reuse_compact_noise_sums
         and half_spectrum_scoring
         and not score_with_masked_images
+    )
+    fused_mstep_noise = _fused_mstep_noise_enabled_for_pass(
+        native_dual_weighted_sums=native_dual_weighted_sums,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        use_relion_x_half_mstep=use_relion_x_half_mstep,
+        accumulate_noise=accumulate_noise,
+        compact_noise_sums_match_mstep=compact_noise_sums_match_mstep,
     )
     rectangular_active_rows = _env_flag_enabled(_SPARSE_KCLASS_RECTANGULAR_ACTIVE_ROWS_ENV, default=True)
     rectangular_active_prematmul = (

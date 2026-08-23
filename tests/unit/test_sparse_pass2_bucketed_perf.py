@@ -101,6 +101,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _exact_raw_diff2_cache_fits_budget,
     _exact_raw_diff2_cache_limit_bytes,
     _flat_image_indices_for_rotation_rows,
+    _fused_mstep_noise_enabled_for_pass,
     _half_translation_phase_table_for_indices,
     _hybrid_k_class_compact_pair_execution_buckets,
     _logsumexp_pass2_bucket_score_only,
@@ -113,8 +114,8 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _max_projected_rotations_per_call_for_pass,
     _max_projection_gather_bytes_for_pass,
     _max_translation_tile_bytes_for_pass,
-    _native_dual_weighted_sums_enabled_for_pass,
     _maybe_prepare_sparse_k_class_compact_pair_plan,
+    _native_dual_weighted_sums_enabled_for_pass,
     _normalize_pass2_bucket,
     _normalize_pass2_bucket_score_only,
     _normalize_pass2_bucket_with_log_z,
@@ -5311,6 +5312,36 @@ def test_native_dual_weighted_sums_defaults_only_on_exact_gpu_contract(monkeypat
     monkeypatch.setattr(jax, "default_backend", lambda: "cpu")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS", "1")
     assert _native_dual_weighted_sums_enabled_for_pass(**kwargs)
+
+
+def test_fused_mstep_noise_defaults_off_and_rejects_incompatible_contracts(monkeypatch):
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED", raising=False)
+    kwargs = dict(
+        native_dual_weighted_sums=True,
+        use_exact_relion_gaussian=True,
+        use_relion_x_half_mstep=True,
+        accumulate_noise=True,
+        compact_noise_sums_match_mstep=False,
+    )
+    assert not _fused_mstep_noise_enabled_for_pass(**kwargs)
+
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE", "1")
+    assert _fused_mstep_noise_enabled_for_pass(**kwargs)
+    for disabled_contract_key in (
+        "native_dual_weighted_sums",
+        "use_exact_relion_gaussian",
+        "use_relion_x_half_mstep",
+        "accumulate_noise",
+    ):
+        disabled = dict(kwargs)
+        disabled[disabled_contract_key] = False
+        assert not _fused_mstep_noise_enabled_for_pass(**disabled)
+
+    compact_reuse = dict(kwargs, compact_noise_sums_match_mstep=True)
+    assert not _fused_mstep_noise_enabled_for_pass(**compact_reuse)
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED", "0")
+    assert not _fused_mstep_noise_enabled_for_pass(**kwargs)
 
 
 def test_compact_pair_execution_defaults_to_high_bucket_hybrid(monkeypatch):
