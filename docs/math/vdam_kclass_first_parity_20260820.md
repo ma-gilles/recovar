@@ -375,3 +375,16 @@ minimum FSC-AUC `0.9999999971650473`, assignment accuracy `1.0`), but a
 same-node warm pair (`12816795`) was conclusive: active rows took `139.30 s`
 and dense rows took `139.38 s`.  The saved synchronization and added dense work
 cancel, so the existing active-row default remains unchanged.
+
+Warm bucket-group timing (`12816984`, one iteration, `71.11 s` total) locates
+the remaining pass-2 wall more precisely.  The six K=4 compact-pair groups
+took `49.23 s`: `13.67 s` scoring, `7.83 s` preparation, and `20.14 s`
+M-step/noise, with the latter containing `7.34 s` weighted sums and `11.35 s`
+noise accumulation.  Fetch/build/stats were small.  Merely retaining all four
+raw diff2 partitions on device to remove their D2H/H2D staging preserved
+science (`12817189`; minimum FSC-AUC `0.9999999995961244`, assignment `1.0`)
+but regressed warm wall to `142.38 s` (`12817124`, versus the same-node
+`139.30 s` control).  That diagnostic was reverted: overlapping K raw tensors
+adds memory pressure without removing the downstream orchestration.  A useful
+native boundary must consume score operands through weighted/noise statistics,
+not just relocate raw intermediates.
