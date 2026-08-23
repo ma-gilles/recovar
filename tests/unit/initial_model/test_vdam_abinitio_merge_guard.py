@@ -336,6 +336,28 @@ def test_vdam_robustness_suite_covers_em_outlier_pose_and_noise_matrix():
     assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
 
 
+def test_vdam_robustness_long_suite_carries_stress_cases_through_late_schedule():
+    suite = json.loads((REPO_ROOT / "docs/math/vdam_k1_robustness_long_suite_v1.json").read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_robustness_long_suite.sbatch").read_text()
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-robustness-long-v1"
+    assert suite["acceptance_contract"]["required_checkpoints"] == [
+        0, 1, 2, 4, 8, 12, 16, 20, 25,
+    ]
+    cases = suite["cases"]
+    assert [case["id"] for case in cases] == [f"vdam-bl{index:02d}" for index in range(1, 5)]
+    assert [case["definition"]["source_em_case_id"] for case in cases] == [
+        "k1-16", "k1-24", "k1-27", "k1-32",
+    ]
+    assert all(case["definition"]["nr_iter"] == 25 for case in cases)
+    assert all("late_schedule" in case["coverage"] for case in cases)
+    assert "#SBATCH --array=1-4%4" in matrix
+    assert "printf 'vdam-bl%02d'" in matrix
+    assert "VDAM_SCORECARD" in matrix
+    assert "run_vdam_relion_parity_case.sbatch" in matrix
+
+
 def test_vdam_case_runner_uses_job_scoped_runtime_roots():
     runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
     expected_tokens = [

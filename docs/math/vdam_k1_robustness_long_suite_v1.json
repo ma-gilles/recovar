@@ -1,0 +1,44 @@
+{
+  "schema": "recovar.vdam_relion_parity_suite.v1",
+  "suite_id": "vdam-k1-robustness-long-v1",
+  "description": "Late-trajectory K=1 InitialModel robustness suite. It carries the hardest outlier, preferred-pose, and radial-noise fixtures through 25 complete RELION/RECOVAR iterations.",
+  "source_fixture_manifest": {
+    "path": "docs/math/em_relion_parity_fixture_manifest_v2.json",
+    "sha256": "422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee"
+  },
+  "acceptance_contract": {
+    "cross_engine_fsc_auc_min": 0.999,
+    "recovar_minus_relion_gt_fsc_auc_min": -0.002,
+    "required_checkpoints": [0, 1, 2, 4, 8, 12, 16, 20, 25],
+    "exact_schedule": true,
+    "exact_artifact_topology": true,
+    "same_physical_gpu_per_pair": true,
+    "correlation_used": false
+  },
+  "cases": [
+    {
+      "id": "vdam-bl01",
+      "name": "anisotropic_outliers_25pct_25iter",
+      "coverage": ["anisotropic_poses", "outliers", "high_noise", "late_schedule"],
+      "definition": {"source_em_case_id": "k1-16", "nr_classes": 1, "nr_iter": 25, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-bl02",
+      "name": "kent_outliers_20pct_25iter",
+      "coverage": ["kent_poses", "outliers", "high_noise", "late_schedule"],
+      "definition": {"source_em_case_id": "k1-24", "nr_classes": 1, "nr_iter": 25, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-bl03",
+      "name": "extreme_outliers_70pct_25iter",
+      "coverage": ["extreme_outliers", "uniform_poses", "late_schedule"],
+      "definition": {"source_em_case_id": "k1-27", "nr_classes": 1, "nr_iter": 25, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-bl04",
+      "name": "midscale_kent_radial_noise_25iter",
+      "coverage": ["midscale", "kent_poses", "radial_noise", "late_schedule"],
+      "definition": {"source_em_case_id": "k1-32", "nr_classes": 1, "nr_iter": 25, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    }
+  ]
+}
