@@ -17465,41 +17465,63 @@ def compute_k_class_pass2_stats_sparse_fused(
                 if bucket_uses_compact_pairs:
                     pair_arrays = compact_pair_arrays_by_class[class_index]
                     pair_mask = jnp.asarray(pair_arrays["pair_mask"])
-                    _log_Z, pair_probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
-                        _normalize_pass2_pairs_with_log_z(
+                    if use_relion_f32_fine_posterior and not winner_take_all:
+                        # The native RELION fine-posterior path rebuilds both
+                        # full and pruned probabilities directly from the
+                        # concatenated float32 scores below.  Computing the
+                        # generic float64 exp/log-Z probabilities here only
+                        # to discard them caused one shape-specific XLA
+                        # compilation per class and bucket group.
+                        pair_probs = None
+                    else:
+                        (
+                            _log_Z,
+                            pair_probs,
+                            best_log_score_bucket,
+                            best_argmax,
+                            _max_posterior_bucket,
+                        ) = _normalize_pass2_pairs_with_log_z(
                             scores_by_class[class_index],
                             pair_mask,
                             global_score_log_z_bucket,
                         )
-                    )
                     if winner_take_all:
                         pair_probs = _winner_take_all_pair_probs(
                             scores_by_class[class_index],
                             best_argmax,
                             best_log_score_bucket,
                         )
-                    pair_probs = jnp.where(pair_mask, pair_probs, 0.0)
-                    flat_joint_probs_by_class.append(pair_probs.reshape(batch, -1))
+                    if pair_probs is not None:
+                        pair_probs = jnp.where(pair_mask, pair_probs, 0.0)
+                        flat_joint_probs_by_class.append(pair_probs.reshape(batch, -1))
                     flat_joint_scores_by_class.append(
                         jnp.where(pair_mask, scores_by_class[class_index], -jnp.inf).reshape(batch, -1)
                     )
-                    joint_prob_shapes.append(pair_probs.shape)
+                    joint_prob_shapes.append(scores_by_class[class_index].shape)
                 else:
-                    _log_Z, probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
-                        _normalize_pass2_bucket_with_log_z(
+                    if use_relion_f32_fine_posterior and not winner_take_all:
+                        probs = None
+                    else:
+                        (
+                            _log_Z,
+                            probs,
+                            best_log_score_bucket,
+                            best_argmax,
+                            _max_posterior_bucket,
+                        ) = _normalize_pass2_bucket_with_log_z(
                             scores_by_class[class_index],
                             global_score_log_z_bucket,
                         )
-                    )
                     if winner_take_all:
                         probs = _winner_take_all_bucket_probs(
                             scores_by_class[class_index],
                             best_argmax,
                             best_log_score_bucket,
                         )
-                    flat_joint_probs_by_class.append(probs.reshape(batch, -1))
+                    if probs is not None:
+                        flat_joint_probs_by_class.append(probs.reshape(batch, -1))
                     flat_joint_scores_by_class.append(scores_by_class[class_index].reshape(batch, -1))
-                    joint_prob_shapes.append(probs.shape)
+                    joint_prob_shapes.append(scores_by_class[class_index].shape)
             if winner_take_all:
                 flat_joint_masks = _relion_joint_winner_take_all_masks(flat_joint_scores_by_class)
             elif use_relion_f32_fine_posterior:

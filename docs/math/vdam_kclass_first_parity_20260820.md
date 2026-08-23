@@ -109,6 +109,17 @@ JAX executable shapes and their first launch as the principal small-case
 overhead.  Raw diff2 host staging is only hundredths of a second per call and
 is not a useful optimization target.
 
+A fresh-cache compile audit (`12801524`) and one-iteration cProfile audit
+(`12801764`) confirmed this boundary.  The profiled process created 1,982
+backend executables and spent about 95.2 seconds in backend compilation;
+bucket I/O preparation and indexed gathers were the next material Python/JAX
+costs.  Removing generic float64 posterior normalization that the guarded
+RELION float32 path immediately discarded is therefore accepted.  Same-node
+job `12801958` completed in 150 seconds versus 154 seconds for control job
+`12798234`; its eight-iteration trajectory retained minimum FSC-AUC
+`0.9999999973`, exact assignments, and exact artifact topology.  The focused
+unit file passed 169 tests with one skip.
+
 The following same-contract experiments were rejected rather than promoted:
 
 - Increasing `--image-batch-size` from 500 to 2500 slowed RECOVAR from
@@ -125,9 +136,19 @@ The following same-contract experiments were rejected rather than promoted:
   several cold shapes at once and had not completed iteration 1 after 75
   seconds.  Diagnostic job `12800685` was cancelled at 88 seconds and the
   source experiment was removed.
+- Padding every semantic row count to a multiple of eight did not amortize
+  the added work.  Diagnostic job `12801069` reached a 33.5-second final
+  iteration before the experiment was cancelled and removed.
+- A native indexed compact-pair scorer eliminated the large pair-by-pixel JAX
+  gathers and was bitwise-equal to the existing CUDA reduction in focused GPU
+  tests (`12803423`).  Its complete trajectory was also unchanged (minimum
+  FSC-AUC `0.9999999996`, exact assignments), but shape-specific cold
+  compilation raised end-to-end time from 150 to 157 seconds in job
+  `12803430`.  The source experiment was removed; its audit was job `12803697`.
 
-The next implementation boundary is therefore fixed-shape padding with
-semantically masked rows, or a native fused score/noise path.  Either candidate
-must beat the clean 500-image control, preserve the unchanged FSC/assignment
-gates, and then pass the real and 100,000-particle scale gates before becoming
-the default.
+The next implementation boundary is therefore a broader native fused
+score/posterior/noise path with a deliberately small executable-shape palette,
+or ahead-of-time/persistent compilation reuse across recurring bucket shapes.
+Either candidate must beat the clean 500-image control including cold startup,
+preserve the unchanged FSC/assignment gates, and then pass the real and
+100,000-particle scale gates before becoming the default.
