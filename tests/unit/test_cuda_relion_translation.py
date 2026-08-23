@@ -222,7 +222,7 @@ def test_relion_translate_bpref_f32_validates_weight_shape(monkeypatch):
 
 
 @pytest.mark.gpu
-def test_relion_translate_bpref_f32_matches_translate_then_weight(
+def test_relion_translate_bpref_f32_matches_native_captured_bits(
     monkeypatch,
     custom_cuda_lib,
     gpu_device,
@@ -233,23 +233,39 @@ def test_relion_translate_bpref_f32_matches_translate_then_weight(
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
 
-    image_shape = (16, 16)
-    half_width = image_shape[1] // 2 + 1
+    image_shape = (256, 256)
     pixel_indices = np.asarray(
-        [0, 1, 3 * half_width + 2, 8 * half_width, 15 * half_width + 7],
+        [13031, 13160, 13161, 13167],
         dtype=np.int32,
     )
-    images = np.asarray(
-        [[1.0 + 0.5j, -2.0 + 0.25j, 0.125 - 4.0j, 3.0 + 2.0j, -0.75 - 0.5j]],
-        dtype=np.complex64,
+    image_words = np.asarray(
+        [
+            [3263777648, 1133111626],
+            [3272549528, 1090742966],
+            [1127815781, 1125080211],
+            [3252159688, 1125857107],
+        ],
+        dtype=np.uint32,
     )
+    images = (
+        image_words[:, 0].view(np.float32)
+        + np.complex64(1j) * image_words[:, 1].view(np.float32)
+    ).astype(np.complex64)[None, :]
     weighted_ctf = np.asarray(
-        [[2.0, -0.25, 1.5, 1000.0, -3.0]],
-        dtype=np.float32,
+        [[3106311266, 3108593774, 3108351983, 3104897938]],
+        dtype=np.uint32,
+    ).view(np.float32)
+    angles = np.asarray([[3168013433, 3176042026]], dtype=np.uint32).view(
+        np.float32
     )
-    angles = np.asarray(
-        [[0.0, 0.0], [0.018312519416213036, -0.006231173872947693]],
-        dtype=np.float32,
+    expected_words = np.asarray(
+        [
+            [1027138631, 3125411712],
+            [1008901170, 1020422283],
+            [1013229036, 3173746131],
+            [1017732809, 3152071391],
+        ],
+        dtype=np.uint32,
     )
 
     with jax.default_device(gpu_device):
@@ -260,21 +276,8 @@ def test_relion_translate_bpref_f32_matches_translate_then_weight(
             jnp.asarray(pixel_indices),
             image_shape,
         )
-        translated = cuda_backproject.relion_translate_score_f32(
-            jnp.asarray(images),
-            jnp.asarray(angles),
-            jnp.asarray(pixel_indices),
-            image_shape,
-        )
-    actual = np.asarray(actual)
-    translated = np.asarray(translated).reshape(1, angles.shape[0], -1)
-    expected = np.empty_like(translated)
-    for translation_index in range(angles.shape[0]):
-        for pixel_index in range(images.shape[1]):
-            expected[0, translation_index, pixel_index] = np.complex64(
-                np.float32(translated[0, translation_index, pixel_index].real * weighted_ctf[0, pixel_index])
-                + 1j
-                * np.float32(translated[0, translation_index, pixel_index].imag * weighted_ctf[0, pixel_index])
-            )
+    actual_words = (
+        np.asarray(actual)[0].view(np.float32).view(np.uint32).reshape(-1, 2)
+    )
 
-    np.testing.assert_array_equal(actual.reshape(expected.shape), expected)
+    np.testing.assert_array_equal(actual_words, expected_words)

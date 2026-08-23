@@ -3845,7 +3845,12 @@ __global__ void relion_translate_bpref_f32_kernel(
     float2 value = images[image * pixel_count + pixel_row];
     float factor = weighted_ctf[image * pixel_count + pixel_row];
     float translated_real = cosine * value.x - sine * value.y;
-    float translated_imag = cosine * value.y + sine * value.x;
+    // Match translatePixel() as compiled in RELION's BPref kernel.  The
+    // source expression is ``c * imag + s * real``; preserving its operand
+    // order explicitly makes nvcc contract the second product and addition
+    // into the same float32 FMA on both A100 and H100 builds.
+    float translated_imag = __fmaf_rn(
+        sine, value.x, __fmul_rn(cosine, value.y));
     weighted_shifted[flat] = make_float2(
         translated_real * factor,
         translated_imag * factor);

@@ -22002,3 +22002,77 @@ no FSC or topology failure and a positive RECOVAR-minus-RELION merged GT
 FSC-AUC delta.  Cases 4 and 5 have entered physical iteration 2; the next
 decision is reserved for their complete map and source-ID-aligned particle
 state, not for a live-log or aggregate-only inference.
+
+## 2026-08-23 19:50 EDT — case-5 BPref translation arithmetic is exact but map-neutral
+
+The clean full-pixel case-5 factor audit completed naturally.  Native producer
+job `12847784` captured immutable stack `38595` at physical iteration 1, and
+dependent H100 analyzer job `12847983` completed `0:0` in `00:03:22`.  The
+producer root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_stack38595_native_fresh_bpref_fullpixels_it1_retry2_44d770de3_20260823T1830ET`;
+the analyzer root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_it1_bpref_primitives_fullpixels_44d770de3_20260823T1830ET`.
+Both run roots and their corresponding runtime roots contain
+`SAFE_TO_DELETE`.
+
+On all `1,227` active reconstruction pixels, the processed Fourier image and
+CTF including scale are bit-exact.  The first unequal factor is inverse noise:
+`306` float32 words differ, with relative L2 `3.85990275290e-8` and maximum
+absolute difference `0.125`.  The source-STAR CTF replay is bit-exact, and
+reciprocal of the sealed binary64 native sigma2 spectrum is also bit-exact.
+This closes image preprocessing, CTF construction, and broad noise-spectrum
+formula hypotheses.  The durable report is
+`analysis/K1_CASE05_IT1_BPREF_PRIMITIVES.json` (SHA-256
+`e0c99651002387994ae2de0086467c4bd3a62e957ae9d9f9d340221ab255b739`),
+with its full primitive dump at
+`analysis/primitive_dumps/stack38595_it1_bpref_primitives.npz` (SHA-256
+`0afdb3424001055784fdbc259f9a2afba56733aaa9efc5c29153bafec12502bb`).
+
+An exact-angle 24-way CUDA arithmetic panel found an independent translated-
+image instruction-order discrepancy.  RELION's compiled BPref
+`c * imag + s * real` path is reproduced by an explicit float32 multiply for
+`c * imag` followed by `fmaf(s, real, ...)`.  With the exact binary32 angle
+words `3168013433,3176042026`, that variant makes the translated image,
+weighted CTF, numerator, and denominator exact on the captured panel.  The
+production kernel now encodes that operand order explicitly.  A sealed four-
+pixel GPU regression passes, and a separate production replay makes all
+`1,227/1,227` translated complex pixels bit-exact.  With native weights, all
+`1,227/1,227` numerator pixels are also bit-exact; with RECOVAR's rounded
+inverse-noise weights, the residual numerator relative L2 is
+`4.10116421164e-8`.  The replay is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_bpref_fma_sm80_44d770de3_20260823T1930ET/logs/full_1227_patched_production_validation.json`
+(SHA-256
+`3e4aedfade6cadbd4b71655ff994e0c7f2e4738dfe21d12d869b6d4ea2a4e84b`).
+The focused CUDA translation file passes `7/7` against patched multi-arch
+library SHA-256
+`42bc4c2fa03f287ab0c34e1febeb762f8da993704e83e0f5ecd4d7023e12d763`;
+an isolated sm_80 build has SHA-256
+`ab4842183a83c2bf394c50c887597d2210d10dd6a25fd37e42262cde6a858581`.
+
+The map-level causal gate is intentionally bounded to one iteration with live
+initial noise off.  H100 job `12850623` completed naturally `0:0` in
+`00:07:48`, with `63,047,564 KiB` maximum RSS, under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_it1_bpref_fma_44d770de3_20260823T1938ET`.
+The checksum-pinned CUDA library is copied inside that root.  All 100,000
+iteration-1 rotations, translations, and average Pmax are bit-identical to
+the control.  The candidate-to-control map displacement is only
+`1.36e-8`, `1.37e-8`, and `1.40e-8` relative L2 for half 1, half 2, and the
+merged map, respectively, which is at the measured native-repeat floor.
+
+The translation repair is therefore map-neutral rather than a standalone
+trajectory rescue.  Merged cross-engine relative L2 changes from
+`1.01044552382e-7` to `1.01176622716e-7` (`-0.13%`), and signed normalized
+non-DC FSC-AUC changes from `0.9999999999869639` to
+`0.9999999999866689`.  This tiny adverse movement is not material, but it is
+reported rather than classified as improvement.  The durable A/B report is
+`analysis/K1_CASE05_IT1_BPREF_FMA_MAP_AB_FAST.json` (SHA-256
+`fd3c01af872b10642f01ce576f7697a79655d4a316dffcdc31c656567a6a2e95`).
+
+This closes a real source-arithmetic mismatch without changing the fixed
+scorecard: it remains `31/34` strict signed FSC/FSC-AUC and `34/34` topology.
+After the repair, the only demonstrated per-particle BPref factor residual in
+this capture is the already-localized serialized inverse-noise boundary.
+Because the complete live-noise intervention was mixed or regressive at
+iteration 2, the next discriminator must separate its BPref operand effect
+from the score/state effect and then compare the first aggregate or
+iteration-2 boundary; another terminal run is not justified yet.
