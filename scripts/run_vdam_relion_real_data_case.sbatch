@@ -210,6 +210,7 @@ report = {
     "cuda_launch_blocking": os.environ.get("CUDA_LAUNCH_BLOCKING") == "1",
     "cuda_launch_blocking_value": os.environ.get("CUDA_LAUNCH_BLOCKING"),
     "recovar_cache_dir": os.environ.get("RECOVAR_CACHE_DIR"),
+    "jax_compilation_cache_dir": os.environ.get("JAX_COMPILATION_CACHE_DIR"),
 }
 (root / "run_provenance.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY

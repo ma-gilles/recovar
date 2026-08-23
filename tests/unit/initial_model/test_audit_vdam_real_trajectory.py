@@ -48,6 +48,7 @@ def test_real_data_sbatch_sets_paired_launch_mode_before_gpu_gate():
     assert '"cuda_launch_blocking_value"' in text
     assert 'export RECOVAR_CACHE_DIR="${RECOVAR_CACHE_DIR-}"' in text
     assert '"recovar_cache_dir": os.environ.get("RECOVAR_CACHE_DIR")' in text
+    assert '"jax_compilation_cache_dir": os.environ.get("JAX_COMPILATION_CACHE_DIR")' in text
 
 
 def test_particle_state_gate_rejects_topology_or_pmax_drift():
