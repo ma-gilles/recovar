@@ -358,6 +358,41 @@ def test_vdam_robustness_long_suite_carries_stress_cases_through_late_schedule()
     assert "run_vdam_relion_parity_case.sbatch" in matrix
 
 
+def test_vdam_gui_default_full_suite_audits_every_200_iteration_checkpoint():
+    suite = json.loads((REPO_ROOT / "docs/math/vdam_k1_gui_default_full_suite_v1.json").read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_gui_default_full_suite.sbatch").read_text()
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-gui-default-full-v1"
+    assert suite["acceptance_contract"]["required_checkpoints"] == list(range(201))
+    cases = suite["cases"]
+    assert [case["id"] for case in cases] == [f"vdam-gf{index:02d}" for index in range(1, 5)]
+    assert [case["definition"]["source_em_case_id"] for case in cases] == [
+        "k1-11", "k1-16", "k1-24", "k1-32",
+    ]
+    gui_defaults = {
+        "nr_classes": 1,
+        "nr_iter": 200,
+        "random_seed": 0,
+        "tau2_fudge": 4,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6,
+        "offset_step_px": 2,
+        "padding_factor": 1,
+        "symmetry": "C1",
+        "particle_diameter_angstrom": 200,
+    }
+    assert all(
+        all(case["definition"][key] == value for key, value in gui_defaults.items())
+        for case in cases
+    )
+    assert "#SBATCH --array=1-4%4" in matrix
+    assert "printf 'vdam-gf%02d'" in matrix
+    assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
+    assert "run_vdam_relion_parity_case.sbatch" in matrix
+
+
 def test_vdam_case_runner_uses_job_scoped_runtime_roots():
     runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
     expected_tokens = [
