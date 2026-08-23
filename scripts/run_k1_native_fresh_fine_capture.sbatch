@@ -9,7 +9,7 @@
 #SBATCH --ntasks=3
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=500G
-#SBATCH --time=01:30:00
+#SBATCH --time=03:00:00
 
 set -euo pipefail
 
@@ -37,18 +37,43 @@ EXPECTED_RELION_SOURCE_TREE=${EXPECTED_RELION_SOURCE_TREE:-3111173edb150f98bc244
 EXPECTED_RELION_SOURCE_DIFF_SHA256=${EXPECTED_RELION_SOURCE_DIFF_SHA256:-15e9cceb38815cc85ed946e1bb5ee8a9b42f89a530cf8d5af2d76e83228be3f9}
 EXPECTED_AUDIT_REPO_HEAD=${EXPECTED_AUDIT_REPO_HEAD:-187a9f60cdea19363d49d46099b052f23288f05a}
 TARGET_ITERATION=${TARGET_ITERATION:-2}
+TARGET_STACKS_ONE_BASED=${TARGET_STACKS_ONE_BASED:-${TARGET_STACK_ONE_BASED}}
+TARGET_STACKS_ONE_BASED=${TARGET_STACKS_ONE_BASED//:/,}
 PARTICLE_DIAMETER=${PARTICLE_DIAMETER:-200}
 INITIAL_HIGH=${INITIAL_HIGH:-30}
 HEALPIX_ORDER=${HEALPIX_ORDER:-3}
 OFFSET_RANGE=${OFFSET_RANGE:-3.0}
 OFFSET_STEP=${OFFSET_STEP:-1.0}
 OVERSAMPLING=${OVERSAMPLING:-1}
+FINE_OPERAND_ROTATION_LOCAL=${FINE_OPERAND_ROTATION_LOCAL:-}
+FINE_OPERAND_TRANSLATIONS=${FINE_OPERAND_TRANSLATIONS:-}
+FINE_OPERAND_TRANSLATIONS=${FINE_OPERAND_TRANSLATIONS//:/,}
 
 CAPTURE=${RUN_ROOT}/capture
 RELION_OUT=${RUN_ROOT}/relion
 
-test "${TARGET_STACK_ONE_BASED}" -gt 0
+IFS=',' read -r -a target_stack_values <<< "${TARGET_STACKS_ONE_BASED}"
+for target_stack in "${target_stack_values[@]}"; do
+  if [[ ! "${target_stack}" =~ ^[0-9]+$ ]] || (( target_stack < 1 )); then
+    echo "TARGET_STACKS_ONE_BASED must contain unique positive integers" >&2
+    exit 2
+  fi
+done
+TARGET_COUNT=${#target_stack_values[@]}
+test "${TARGET_COUNT}" -gt 0
+test "$(printf '%s\n' "${target_stack_values[@]}" | sort -u | wc -l)" -eq "${TARGET_COUNT}"
 test "${TARGET_ITERATION}" -eq 2
+if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" || -n "${FINE_OPERAND_TRANSLATIONS}" ]]; then
+  test "${TARGET_COUNT}" -eq 1
+  [[ "${FINE_OPERAND_ROTATION_LOCAL}" =~ ^[0-9]+$ ]]
+  IFS=',' read -r -a fine_operand_translation_values <<< "${FINE_OPERAND_TRANSLATIONS}"
+  test "${#fine_operand_translation_values[@]}" -gt 0
+  for translation in "${fine_operand_translation_values[@]}"; do
+    [[ "${translation}" =~ ^[0-9]+$ ]]
+  done
+  test "$(printf '%s\n' "${fine_operand_translation_values[@]}" | sort -u | wc -l)" \
+    -eq "${#fine_operand_translation_values[@]}"
+fi
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 test -x "${PYTHON}"
 test -s "${DATA_DIR}/particles.star"
@@ -106,12 +131,19 @@ export RELION_BPRE_CAPTURE_DIR=${CAPTURE}
 export RELION_BPRE_CAPTURE_SCHEMA=2
 export RELION_BPRE_CAPTURE_ITER=${TARGET_ITERATION}
 export RELION_BPRE_CAPTURE_CLASS=1
-export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES=1
-export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=1
+export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES=${TARGET_COUNT}
+export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=${TARGET_COUNT}
 export RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=2
 export RELION_BPRE_CAPTURE_MAX_BYTES=2000000000
-export RELION_BPRE_CAPTURE_STACKS=${TARGET_STACK_ONE_BASED}
+export RELION_BPRE_CAPTURE_STACKS=${TARGET_STACKS_ONE_BASED}
 export RELION_BPRE_CAPTURE_GEOMETRY_ONLY=1
+if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" ]]; then
+  export RELION_FINE_OPERAND_CAPTURE=1
+  export RELION_FINE_OPERAND_CAPTURE_ROTATION_LOCAL=${FINE_OPERAND_ROTATION_LOCAL}
+  export RELION_FINE_OPERAND_CAPTURE_TRANSLATIONS=${FINE_OPERAND_TRANSLATIONS}
+  export RELION_FINE_OPERAND_CAPTURE_EXPECTED_CANDIDATES=${#fine_operand_translation_values[@]}
+  export RELION_FINE_OPERAND_CAPTURE_MAX_BYTES=2000000000
+fi
 
 command=(srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
   --i particles.star --ref reference_init_relion.mrc --o "${RELION_OUT}/run"
@@ -137,24 +169,31 @@ start_epoch=$(date +%s)
 ) > "${RELION_OUT}/runner.stdout" 2> "${RELION_OUT}/runner.stderr"
 wall_s=$(( $(date +%s) - start_epoch ))
 
-fine_score=$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-score-v1.bin')
-factor=$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.bpre-v2.bin')
-test -n "${fine_score}" -a -n "${factor}"
-test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-score-v1.bin' | wc -l)" -eq 1
-test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.bpre-v2.bin' | wc -l)" -eq 1
+test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-score-v1.bin' | wc -l)" -eq "${TARGET_COUNT}"
+test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.bpre-v2.bin' | wc -l)" -eq "${TARGET_COUNT}"
+if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" ]]; then
+  test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-operand-v1.bin' | wc -l)" -eq 1
+else
+  test -z "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-operand-v1.bin' -print -quit)"
+fi
 test -s "${RELION_OUT}/run_it002_data.star"
-"${PYTHON}" - "${fine_score}" "${factor}" "${TARGET_STACK_ONE_BASED}" <<'PY'
+"${PYTHON}" - "${CAPTURE}" "${TARGET_STACKS_ONE_BASED}" <<'PY'
 import sys
+from pathlib import Path
+
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
-fine = load_fine_score_capture(sys.argv[1])
-factor = load_factor_capture(sys.argv[2])
-expected_stack = int(sys.argv[3])
-assert fine.stack_index == factor.stack_index == expected_stack
-assert fine.header[4] == factor.header[9] == 2
-assert factor.geometry_only
-assert (fine.candidates["flags"] & ACTIVE).any()
+capture = Path(sys.argv[1])
+expected_stacks = {int(value) for value in sys.argv[2].split(",")}
+fine = [load_fine_score_capture(path) for path in sorted(capture.glob("*.fine-score-v1.bin"))]
+factor = [load_factor_capture(path) for path in sorted(capture.glob("*.bpre-v2.bin"))]
+assert {item.stack_index for item in fine} == expected_stacks
+assert {item.stack_index for item in factor} == expected_stacks
+assert {item.header[4] for item in fine} == {2}
+assert {item.header[9] for item in factor} == {2}
+assert all(item.geometry_only for item in factor)
+assert all((item.candidates["flags"] & ACTIVE).any() for item in fine)
 PY
 ! rg -qi 'Traceback|Out of memory|CUDA_ERROR_OUT_OF_MEMORY' "${RELION_OUT}/runner.stderr"
 
@@ -174,7 +213,7 @@ PY
 
 find "${CAPTURE}" "${RELION_OUT}" "${RUN_ROOT}/analysis" -type f -print0 \
   | sort -z | xargs -0 sha256sum > "${RUN_ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
-printf '{"job_id":"%s","wall_s":%d,"iterations":[1,2],"stack_index_one_based":%d,"fresh_uninterrupted":true}\n' \
-  "${SLURM_JOB_ID}" "${wall_s}" "${TARGET_STACK_ONE_BASED}" \
+printf '{"job_id":"%s","wall_s":%d,"iterations":[1,2],"stack_indices_one_based":"%s","fresh_uninterrupted":true}\n' \
+  "${SLURM_JOB_ID}" "${wall_s}" "${TARGET_STACKS_ONE_BASED}" \
   > "${RUN_ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${RUN_ROOT}/SUCCESS_${SLURM_JOB_ID}"

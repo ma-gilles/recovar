@@ -1645,6 +1645,38 @@ def test_pass2_dump_target_rows_use_original_index_mapping(monkeypatch, tmp_path
     np.testing.assert_array_equal(rows, np.asarray([1, 2], dtype=np.int64))
 
 
+def test_pass2_dump_target_rows_require_requested_iteration(monkeypatch, tmp_path):
+    experiment_dataset = SimpleNamespace(
+        original_image_indices_from_local=lambda indices: np.asarray(
+            [100, 42, 300],
+            dtype=np.int64,
+        )
+    )
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42,300")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_CURRENT_SIZE", "14")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ITERATION", "2")
+
+    try:
+        sparse_pass2_mod.set_bpref_contribution_dump_context(iteration=1, half=1)
+        before_target = sparse_pass2_mod._pass2_dump_target_rows(
+            experiment_dataset=experiment_dataset,
+            image_indices=np.asarray([7, 8, 9], dtype=np.int64),
+            current_size=14,
+        )
+        sparse_pass2_mod.set_bpref_contribution_dump_context(iteration=2, half=1)
+        at_target = sparse_pass2_mod._pass2_dump_target_rows(
+            experiment_dataset=experiment_dataset,
+            image_indices=np.asarray([7, 8, 9], dtype=np.int64),
+            current_size=14,
+        )
+    finally:
+        sparse_pass2_mod.clear_bpref_contribution_dump_context()
+
+    np.testing.assert_array_equal(before_target, np.empty((0,), dtype=np.int64))
+    np.testing.assert_array_equal(at_target, np.asarray([1, 2], dtype=np.int64))
+
+
 # ----------------------------------------------------------------------
 # Pass1 fused gate (env-var contract)
 # ----------------------------------------------------------------------

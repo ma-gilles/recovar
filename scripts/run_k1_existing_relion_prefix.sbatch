@@ -42,6 +42,7 @@ NOISE_DEBUG_DUMP=${NOISE_DEBUG_DUMP:-0}
 NORM_RESIDUAL_DUMP=${NORM_RESIDUAL_DUMP:-0}
 NORM_RESIDUAL_TARGET_HALF=${NORM_RESIDUAL_TARGET_HALF:-}
 STATE_SWAP_VARIANT=${STATE_SWAP_VARIANT:-}
+SOFTMASK_REDUCTION=${SOFTMASK_REDUCTION:-control}
 
 case "${STOP_AFTER_TARGET}" in 0|1) ;; *) echo "STOP_AFTER_TARGET must be 0 or 1" >&2; exit 2 ;; esac
 case "${PASSIVE_SIGNIFICANCE_DUMP}" in 0|1) ;; *) echo "PASSIVE_SIGNIFICANCE_DUMP must be 0 or 1" >&2; exit 2 ;; esac
@@ -53,6 +54,7 @@ case "${SPECTRUM_NORM}" in 0|1) ;; *) echo "SPECTRUM_NORM must be 0 or 1" >&2; e
 case "${NOISE_DEBUG_DUMP}" in 0|1) ;; *) echo "NOISE_DEBUG_DUMP must be 0 or 1" >&2; exit 2 ;; esac
 case "${NORM_RESIDUAL_DUMP}" in 0|1) ;; *) echo "NORM_RESIDUAL_DUMP must be 0 or 1" >&2; exit 2 ;; esac
 case "${STATE_SWAP_VARIANT}" in ""|all_relion) ;; *) echo "STATE_SWAP_VARIANT must be empty or all_relion" >&2; exit 2 ;; esac
+case "${SOFTMASK_REDUCTION}" in control|native_lane|native_atomic) ;; *) echo "SOFTMASK_REDUCTION must be control, native_lane, or native_atomic" >&2; exit 2 ;; esac
 if [[ -n "${NORM_RESIDUAL_TARGET_HALF}" && "${NORM_RESIDUAL_TARGET_HALF}" != 1 && "${NORM_RESIDUAL_TARGET_HALF}" != 2 ]]; then
   echo "NORM_RESIDUAL_TARGET_HALF must be 1 or 2" >&2
   exit 2
@@ -227,6 +229,7 @@ command=(
   --seed "${SEED}" --perturb_seed "${SEED}" --particle_diameter_ang 200
   --tau2_fudge 1.0 --max_significants -1 --firstiter_cc --apply-initial-lowpass
   --image-fourier-backend relion_cuda
+  --relion-softmask-reduction "${SOFTMASK_REDUCTION}"
   --save_intermediates_dir "${OUTPUT}/intermediates" --save_intermediates_skip_unregularized
   --relion_half_sets "${RELION}/run_it000_data.star"
   --relion_optimiser "${RELION}/run_it000_optimiser.star"
@@ -260,9 +263,9 @@ if [[ "${PASSIVE_SIGNIFICANCE_DUMP}" = 1 && "${PASSIVE_STOP_AFTER_TARGET}" = 1 ]
     "${ROOT}/logs/run_${SLURM_JOB_ID}.log"
   sha256sum "${ROOT}"/pass1/*.npz \
     > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
-  printf '{"case":"%s","job_id":"%s","wall_s":%d,"max_iter":%d,"mode":"passive_coarse_projection_dump","target_source_rows":"%s","target_iteration":%d,"target_current_size":%d,"projection_rotations":"%s","exact_bpref":%s,"live_initial_noise":%s,"native_texture":%s,"spectrum_norm":%s}\n' \
+  printf '{"case":"%s","job_id":"%s","wall_s":%d,"max_iter":%d,"mode":"passive_coarse_projection_dump","target_source_rows":"%s","target_iteration":%d,"target_current_size":%d,"projection_rotations":"%s","exact_bpref":%s,"live_initial_noise":%s,"native_texture":%s,"spectrum_norm":%s,"softmask_reduction":"%s"}\n' \
     "${CASE_NAME}" "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" "${TARGET_SOURCE_ROWS}" \
-    "${TARGET_ITERATION}" "${TARGET_CURRENT_SIZE}" "${PROJECTION_ROTATIONS}" "${ENABLE_EXACT_BPREF}" "${ENABLE_LIVE_INITIAL_NOISE}" "${ENABLE_NATIVE_TEXTURE}" "${SPECTRUM_NORM}" \
+    "${TARGET_ITERATION}" "${TARGET_CURRENT_SIZE}" "${PROJECTION_ROTATIONS}" "${ENABLE_EXACT_BPREF}" "${ENABLE_LIVE_INITIAL_NOISE}" "${ENABLE_NATIVE_TEXTURE}" "${SPECTRUM_NORM}" "${SOFTMASK_REDUCTION}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
   touch "${ROOT}/SUCCESS_${SLURM_JOB_ID}"
   exit 0

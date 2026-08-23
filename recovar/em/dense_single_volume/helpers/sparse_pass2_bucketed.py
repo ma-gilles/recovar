@@ -10513,6 +10513,10 @@ def _pass2_dump_target_rows(
         target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
     if not target_original_indices:
         return np.empty((0,), dtype=np.int64)
+    target_iteration = os.environ.get("RECOVAR_PASS2_DUMP_ITERATION")
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    if target_iteration and context_iteration != int(target_iteration):
+        return np.empty((0,), dtype=np.int64)
     target_current_size = os.environ.get("RECOVAR_PASS2_DUMP_CURRENT_SIZE")
     if target_current_size:
         if current_size is None or int(current_size) != int(target_current_size):

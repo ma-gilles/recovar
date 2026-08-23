@@ -2781,6 +2781,16 @@ def main():
             "selects the source-faithful CUDA normalization, translation, and mask path."
         ),
     )
+    parser.add_argument(
+        "--relion-softmask-reduction",
+        choices=("control", "native_lane", "native_atomic"),
+        default="control",
+        help=(
+            "Diagnostic RELION-CUDA soft-mask background reduction. control keeps "
+            "the production deterministic reduction; native_lane and native_atomic "
+            "probe source-observer addition orders."
+        ),
+    )
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
     parser.add_argument(
         "--rotation_block_size",
@@ -3212,6 +3222,22 @@ def main():
             else fixed_diagnostic_source_paths["completed_optimiser"]
         ),
     )
+    if args.relion_softmask_reduction != "control":
+        if args.image_fourier_backend != "relion_cuda":
+            raise ValueError(
+                "--relion-softmask-reduction requires --image-fourier-backend relion_cuda"
+            )
+        backend = getattr(getattr(ds, "image_source", None), "backend", None)
+        if backend is None or not hasattr(backend, "set_relion_native_lane_reduction"):
+            raise ValueError("Dataset backend does not support RELION soft-mask reduction probes")
+        if args.relion_softmask_reduction == "native_lane":
+            backend.set_relion_native_lane_reduction(True)
+        else:
+            os.environ["RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION"] = "1"
+        logger.warning(
+            "Diagnostic RELION soft-mask reduction enabled: %s",
+            args.relion_softmask_reduction,
+        )
     args._relion_mask_params = relion_mask_params
     particle_diameter_ang = None if relion_mask_params is None else float(relion_mask_params[0])
     logger.info("Dataset: %d images, image_shape=%s, voxel_size=%.3f A/px", ds.n_units, ds.image_shape, ds.voxel_size)
