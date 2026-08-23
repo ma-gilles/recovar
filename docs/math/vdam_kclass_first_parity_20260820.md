@@ -311,3 +311,15 @@ a timing baseline; its kernel totals and call multiplicities are the causal
 result.  The next runtime boundary must collapse complete bucket-group graphs
 and shape-specific executable/module loads, not micro-optimize another device
 kernel.
+
+The matching pinned-RELION trace (`12813996`) rules out raw launch count as
+the explanation by itself.  RELION performs about `6.01 s` of GPU kernel work,
+very close to RECOVAR's `5.25 s`, while issuing roughly 581,000 runtime-level
+kernel launches and 795,000 stream synchronizations—more than RECOVAR in the
+profile.  It nevertheless completes the unprofiled pair in about 17 seconds.
+RELION loads 704 CUDA modules and drives work from eight host threads; RECOVAR
+loads 5,478 modules and constructs/deserializes shape-specific XLA executables
+through serial Python bucket boundaries.  Summed CUDA-API time is not directly
+comparable because RELION's calls overlap across threads.  The actionable gap
+is therefore executable construction/loading and serial host orchestration,
+not device arithmetic or the mere existence of many CUDA launches.
