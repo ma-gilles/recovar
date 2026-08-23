@@ -19,8 +19,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.core.ctf import _compute_spa_ctf
-from recovar.data_io.image_backends import _centered_rfft2_jax, _centered_rfft2_numpy
+from recovar.data_io.image_backends import (
+    _centered_rfft2_jax,
+    _centered_rfft2_jax_per_image,
+    _centered_rfft2_numpy,
+)
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_translation_angles_f32,
 )
@@ -40,7 +43,7 @@ else:
     )
 
 
-SCHEMA = "recovar.em.k1_bpref_primitive_boundary.v1"
+SCHEMA = "recovar.em.k1_bpref_primitive_boundary.v2"
 
 
 def _require(condition: bool, message: str) -> None:
@@ -78,6 +81,19 @@ def _load_live_initial_sigma2(path: Path) -> np.ndarray:
     _require(np.all(np.isfinite(sigma2)), "live initial sigma2 must be finite")
     _require(np.all(sigma2 > 0.0), "live initial sigma2 must be strictly positive")
     return sigma2
+
+
+def _load_selection(path: Path) -> tuple[dict[str, Any], int, float, int]:
+    """Load the pinned geometry required to replay production preprocessing."""
+
+    selection = json.loads(path.read_text())
+    image_size = int(selection["physical_image_size"])
+    particle_diameter_ang = float(selection["particle_diameter_ang"])
+    width_mask_edge_px = int(selection["width_mask_edge_px"])
+    _require(image_size > 0, "physical image size must be positive")
+    _require(particle_diameter_ang > 0.0, "particle diameter must be positive")
+    _require(width_mask_edge_px > 0, "mask-edge width must be positive")
+    return selection, image_size, particle_diameter_ang, width_mask_edge_px
 
 
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
@@ -202,6 +218,8 @@ def _compare_particle(
     contribution: dict[str, np.ndarray],
     contribution_row: int,
     image_size: int,
+    particle_diameter_ang: float,
+    width_mask_edge_px: int,
     dump_directory: Path,
     source_particles,
     source_optics_by_id: dict[int, Any],
@@ -263,28 +281,28 @@ def _compare_particle(
     posterior = np.float32(accepted["posterior_over_weight_norm"])
     _require(posterior == np.float32(1.0), f"stack {stack}: firstiter posterior is not exactly one")
 
-    params = jnp.asarray(
-        contribution["ctf_params"][contribution_row : contribution_row + 1],
-        dtype=jnp.float32,
+    particle_row = source_particles.iloc[original]
+    optics_group = int(
+        particle_row["rlnOpticsGroup"]
+        if "rlnOpticsGroup" in particle_row
+        else particle_row["_rlnOpticsGroup"]
     )
-    rec_ctf_full = _compute_spa_ctf(
-        params,
-        (image_size, image_size),
-        float(np.asarray(contribution["voxel_size"]).item()),
-        half_image=True,
+    optics_row = source_optics_by_id[optics_group]
+    native_ctf_fftw = _native_ctf_image(
+        particle_row=particle_row,
+        optics_row=optics_row,
+        relion_bind=relion_bind,
+        image_size=image_size,
     )
-    # JAX's half-spectrum CTF/noise arrays use RECOVAR's centered-y packed-x
-    # coordinates (the pass-2 indices).  The contribution bundle stores the
-    # same physical rows in the standard/FFTW y order for backprojection.
-    rec_ctf_physical = np.asarray(jax.device_get(rec_ctf_full))[0, centered].astype(np.float32)
+    native_ctf_replay = native_ctf_fftw.reshape(-1)[standard].astype(np.float32)
     rec_noise = np.asarray(contribution["noise_variance_half"], dtype=np.float32)[centered]
     rec_scale = np.float32(contribution["scale_corrections"][contribution_row])
     n2 = np.float32(image_size**2)
     n4 = np.float32(image_size**4)
-    # RELION's factor capture stores CTF with the opposite sign and inverse
-    # noise in native (unnormalized FFT) units.  RECOVAR's M-step operands use
-    # normalized FFT units, hence the explicit N^4 conversion.
-    rec_ctf_aligned = (-rec_ctf_physical * rec_scale).astype(np.float32)
+    # The active exact-BPref path evaluates the CTF from the immutable source
+    # STAR with RELION's scalar implementation, then casts once to float32.
+    # Do not replay the rounded diagnostic ctf_params array here.
+    rec_ctf_aligned = (native_ctf_replay * rec_scale).astype(np.float32)
     rec_inverse_noise_native = (
         (np.float32(1.0) / rec_noise).astype(np.float32) * n4
     ).astype(np.float32)
@@ -311,22 +329,54 @@ def _compare_particle(
     cuda_fft_replay = np.asarray(jax.block_until_ready(cuda_fft_full)).reshape(1, -1)[
         0, centered
     ].astype(np.complex64)
-    # The captured iteration-1 reconstruction lane has unit normalization,
-    # zero pre-shift, and no mask.  Its declared dataset-native backend is the
-    # host NumPy FFT, so this is the direct unshifted image operand rather than
-    # an inference obtained by dividing a translated/weighted operand.
+    preprocess_backend = str(np.asarray(contribution["preprocess_backend"]).item())
     _require(
-        str(np.asarray(contribution["preprocess_backend"]).item()) == "dataset_native",
-        f"stack {stack}: iteration-1 preprocessing backend changed",
+        preprocess_backend in {"dataset_native", "relion_cuda"},
+        f"stack {stack}: unsupported preprocessing backend {preprocess_backend!r}",
     )
-    _require(
-        np.array_equal(
-            contribution["integer_pre_shifts"][contribution_row],
-            np.zeros(2, dtype=np.int32),
-        ),
-        f"stack {stack}: iteration-1 pre-shift changed",
-    )
-    rec_processed = host_fft_replay
+    production_preprocessed_real = raw_real_image[None, ...]
+    if preprocess_backend == "relion_cuda":
+        from recovar import cuda_backproject
+
+        def optics_value(name: str) -> float:
+            return float(optics_row[name] if name in optics_row else optics_row[f"_{name}"])
+
+        pixel_size = optics_value("rlnImagePixelSize")
+        _require(pixel_size > 0.0, f"stack {stack}: invalid source pixel size")
+        radius = float(particle_diameter_ang) / (2.0 * pixel_size)
+        normalization_factors = np.asarray(
+            contribution["relion_preprocess_normalization_factors"][
+                contribution_row : contribution_row + 1
+            ],
+            dtype=np.float32,
+        )
+        integer_shifts = np.asarray(
+            contribution["integer_pre_shifts"][contribution_row : contribution_row + 1],
+            dtype=np.int32,
+        )
+        _, production_preprocessed_device = cuda_backproject.relion_preprocess_real_f32(
+            jnp.asarray(raw_real_image[None, ...], dtype=jnp.float32),
+            jnp.asarray(normalization_factors, dtype=jnp.float32),
+            jnp.asarray(integer_shifts, dtype=jnp.int32),
+            radius,
+            float(width_mask_edge_px),
+            False,
+            native_lane_reduction=bool(contribution["relion_native_lane_reduction"]),
+        )
+        production_preprocessed_real = np.asarray(
+            jax.block_until_ready(production_preprocessed_device),
+            dtype=np.float32,
+        )
+        production_fft_device = _centered_rfft2_jax_per_image(
+            production_preprocessed_device
+        )
+        production_fft_full = np.asarray(
+            jax.block_until_ready(production_fft_device),
+            dtype=np.complex64,
+        )
+        rec_processed = production_fft_full.reshape(1, -1)[0, centered]
+    else:
+        rec_processed = host_fft_replay
 
     rel_processed = (
         factor.pixels["image_re"][native_rows]
@@ -343,19 +393,6 @@ def _compare_particle(
     ).astype(np.complex64)
     rel_denominator = (terms["weight_term"] / n4).astype(np.float32)
 
-    particle_row = source_particles.iloc[original]
-    optics_group = int(
-        particle_row["rlnOpticsGroup"]
-        if "rlnOpticsGroup" in particle_row
-        else particle_row["_rlnOpticsGroup"]
-    )
-    native_ctf_fftw = _native_ctf_image(
-        particle_row=particle_row,
-        optics_row=source_optics_by_id[optics_group],
-        relion_bind=relion_bind,
-        image_size=image_size,
-    )
-    native_ctf_replay = native_ctf_fftw.reshape(-1)[standard].astype(np.float32)
     shells = np.rint(np.linalg.norm(coordinates, axis=1)).astype(np.int64)
     _require(int(shells.max(initial=0)) < live_initial_sigma2.size, "noise shell is out of range")
     native_inverse_noise_replay = (
@@ -378,7 +415,7 @@ def _compare_particle(
         dtype=jnp.float32,
     )
     cuda_translated_all = cuda_backproject.relion_translate_score_f32(
-        jnp.asarray(cuda_fft_replay[None, :], dtype=jnp.complex64),
+        jnp.asarray(rec_processed[None, :], dtype=jnp.complex64),
         translation_angles,
         jnp.asarray(centered, dtype=jnp.int32),
         (image_size, image_size),
@@ -431,11 +468,11 @@ def _compare_particle(
             rel_inverse_noise_native,
             native_inverse_noise_replay,
         ),
-        "recovar_processed_image_replayed_with_host_numpy_fft": _metric(
+        "recovar_processed_image_vs_host_numpy_fft": _metric(
             rec_processed,
             host_fft_replay,
         ),
-        "relion_processed_image_replayed_with_cuda_fft": _metric(
+        "relion_processed_image_vs_batched_cuda_fft": _metric(
             rel_processed,
             cuda_fft_replay,
         ),
@@ -477,10 +514,10 @@ def _compare_particle(
             rel_numerator,
             (rec_translated * native_replay_weighted_ctf).astype(np.complex64),
         ),
-        "cuda_fft_with_recovar_phase_and_native_ctf_noise": _metric(
+        "recovar_processed_with_recovar_phase_and_native_ctf_noise": _metric(
             rel_numerator[phase_valid],
             (
-                (cuda_fft_replay[phase_valid] * recovar_phase_observed).astype(np.complex64)
+                (rec_processed[phase_valid] * recovar_phase_observed).astype(np.complex64)
                 * native_replay_weighted_ctf[phase_valid]
             ).astype(np.complex64),
         ),
@@ -518,8 +555,10 @@ def _compare_particle(
         native_replay_weighted_ctf=native_replay_weighted_ctf,
         native_replay_denominator=native_replay_denominator,
         raw_real_image=raw_real_image,
+        production_preprocessed_real_image=production_preprocessed_real,
         host_numpy_fft_replay=host_fft_replay,
         cuda_fft_replay=cuda_fft_replay,
+        production_backend_fft_replay=rec_processed,
         cuda_sincosf_translated_replay=cuda_translated_replay,
         phase_valid=phase_valid,
         relion_translation_phase_observed=relion_phase_observed,
@@ -538,7 +577,7 @@ def _compare_particle(
         "operand_dump_sha256": _sha256(dump_path),
         "translation_map_max_abs": translation_error,
         "recovar_scale_correction": float(rec_scale),
-        "recovar_preprocess_backend": str(np.asarray(contribution["preprocess_backend"]).item()),
+        "recovar_preprocess_backend": preprocess_backend,
         "recovar_preprocess_normalization_factor_field": float(
             contribution["relion_preprocess_normalization_factors"][contribution_row]
         ),
@@ -566,8 +605,9 @@ def main() -> None:
     )
     args = parser.parse_args()
     _require(not args.output_json.exists(), f"refusing to overwrite {args.output_json}")
-    selection = json.loads(args.selection_json.read_text())
-    image_size = int(selection["physical_image_size"])
+    selection, image_size, particle_diameter_ang, width_mask_edge_px = _load_selection(
+        args.selection_json
+    )
     factors = {
         capture.stack_index: capture
         for capture in (
@@ -598,6 +638,8 @@ def main() -> None:
                 contribution=contribution,
                 contribution_row=contribution_row,
                 image_size=image_size,
+                particle_diameter_ang=particle_diameter_ang,
+                width_mask_edge_px=width_mask_edge_px,
                 dump_directory=args.dump_directory,
                 source_particles=source_particles,
                 source_optics_by_id=source_optics_by_id,
