@@ -196,6 +196,16 @@ retained the trajectory (audit `12808240`, minimum FSC-AUC `0.9999999996`,
 exact assignments) but took 179 seconds because every output thread loaded
 all 116 translated pixels, including zero-posterior rows.
 
+Moving the unique compact-pair scatter into that native boundary is also
+rejected.  Its representative `complex64` and `complex128` dense-scratch and
+weighted-sum outputs were bitwise-equal to JAX (`12809345`), and the complete
+trajectory remained exact (`12809513`, minimum FSC-AUC `0.9999999996`, exact
+assignments).  However, the full run `12809374` took 166 seconds versus the
+144--147-second accepted default replays.  Materializing the dense scratch as
+an observable custom-call output prevented the useful producer/consumer
+fusion and increased synchronization and weighted-sum traffic, so the
+prototype was removed.
+
 The next implementation boundary is therefore a broader native fused
 score/posterior/noise path with a deliberately small executable-shape palette,
 or ahead-of-time/persistent compilation reuse across recurring bucket shapes.
