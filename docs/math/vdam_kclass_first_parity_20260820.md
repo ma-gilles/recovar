@@ -164,6 +164,13 @@ The following same-contract experiments were rejected rather than promoted:
   first sparse pass.  Job `12804329` was cancelled after the one-time CUDA
   rebuild plus 235 seconds of candidate execution, and the route change was
   removed.
+- Replacing row-mapped RELION posterior CUDA primitives with batched
+  exponentiation, CUB sort/scan, and division was bitwise-equal in four H100
+  tests (`12806770`).  After a cold build/fill (`12806860`), its complete warm
+  replay (`12807074`) still took 151 seconds versus the 150-second control;
+  summed iteration time improved by only 0.44 seconds.  The three-API CUDA
+  surface was removed because that 0.3% internal gain did not improve
+  end-to-end wall time.
 
 The next implementation boundary is therefore a broader native fused
 score/posterior/noise path with a deliberately small executable-shape palette,
