@@ -1014,6 +1014,11 @@ def _run_sparse_k_class_adaptive_pass2(
         fused_common.pop("relion_exact_fine_normalized_cc", None)
         fused_common.pop("relion_fine_diff2_fused_ffi", None)
         fused_common.pop("relion_f32_fine_posterior", None)
+        # The separate model-coordinate cutoff is currently qualified only
+        # for the K=1 sparse adapters.  Keep the fused K>1 path on its
+        # historical score-space cutoff until Class3D is diagnosed.
+        fused_common.pop("reconstruction_current_size", None)
+        fused_common.pop("source_faithful_spectrum_norm", None)
         fused_common["relion_projector_half"] = relion_projector_half_by_class
         fused_common["relion_projector_r_max"] = relion_projector_r_max
         try:
@@ -2050,6 +2055,12 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         relion_half_volume_mstep=bool(pass2_kwargs.get("relion_half_volume_mstep", False)),
         relion_x_half_mstep=bool(pass2_kwargs.get("mstep_relion_x_half", False)),
         relion_firstiter_score_mode="normalized_cc",
+        # This adapter is the production fresh-K=1 ``--firstiter_cc`` route.
+        # Keep its fine pass on the same source-faithful 256-lane CUDA tree as
+        # the general K=1 sparse adapter.  Omitting this argument silently
+        # selected the historical algebraic scorer because the lower-level
+        # default is deliberately conservative for K>1.
+        relion_exact_fine_normalized_cc=n_classes == 1,
         relion_firstiter_winner_take_all=True,
         bpref_device_signature_active=bool(
             pass2_kwargs.get("bpref_device_signature_active", False)

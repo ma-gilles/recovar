@@ -344,11 +344,12 @@ def test_sparse_pass2_preserves_relion_projector_api_and_forwarding():
 
 
 def test_sparse_firstiter_k1_forwards_source_faithful_spectrum_norm():
-    """The firstiter global-winner adapter must retain the fresh K=1 flag."""
+    """The firstiter global-winner adapter must retain fresh K=1 parity flags."""
 
     source = inspect.getsource(k_class_mod._run_sparse_firstiter_global_winner_subset_pass2)
     assert 'pass2_kwargs.get("source_faithful_spectrum_norm", False)' in source
     assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in source
+    assert "relion_exact_fine_normalized_cc=n_classes == 1" in source
     assert "source-faithful powerClass normalization is K=1-only" in source
 
 

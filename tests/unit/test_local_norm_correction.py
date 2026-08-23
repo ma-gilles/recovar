@@ -190,7 +190,15 @@ def test_local_norm_correction_can_use_relion_powerclass_spectrum_tail():
         current_size=current_size,
     )
     np.testing.assert_array_equal(np.asarray(historical), np.asarray(expected_historical))
-    np.testing.assert_array_equal(np.asarray(source_faithful), np.asarray(expected_source))
+    # The source-faithful powerClass spectrum is binned with GPU scatter-adds.
+    # Independent invocations can differ by a few float32 ULPs even though the
+    # final accumulated value is float64.
+    np.testing.assert_allclose(
+        np.asarray(source_faithful),
+        np.asarray(expected_source),
+        rtol=2 * np.finfo(np.float32).eps,
+        atol=0.0,
+    )
     assert np.asarray(source_faithful).dtype == np.float64
     assert np.any(np.asarray(source_faithful) != np.asarray(historical, dtype=np.float64))
 

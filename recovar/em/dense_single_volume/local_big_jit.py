@@ -179,6 +179,19 @@ def _norm_correction_image_power_per_image(
         current_size=current_size,
     ).astype(norm_dtype)
     full_mass = jnp.asarray(valid_image_mask, dtype=norm_dtype)
+    if source_faithful_spectrum_norm:
+        # RELION accumulates the modeled Wavg residual and the independently
+        # binned powerClass high-shell spectrum as separate terms.  Form that
+        # split directly: subtracting a generic high-shell sum from a full
+        # image sum leaves an avoidable float64 cancellation residue and can
+        # cross the subsequent float32 normalization boundary.
+        modeled_mass = jnp.where(unmodeled_shell[None, :], 0.0, power_mass)
+        modeled_power = jnp.sum(
+            (pixel_power * modeled_mass).astype(norm_dtype),
+            axis=-1,
+        ).astype(norm_dtype)
+        modeled_power = jax.lax.optimization_barrier(modeled_power)
+        return modeled_power + full_mass * relion_high
     per_image = jax.lax.optimization_barrier(per_image)
     return per_image + full_mass * (relion_high - generic_high)
 

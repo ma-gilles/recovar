@@ -212,8 +212,9 @@ def _support_mismatch_panel(
     recovar_norm: np.ndarray,
     recovar_cross: np.ndarray,
     recovar_significant: np.ndarray,
+    support_mismatches_only: bool = True,
 ) -> list[dict[str, Any]]:
-    """Emit component values at every captured support-membership mismatch."""
+    """Emit captured component values, optionally only at support mismatches."""
 
     arrays = (
         native_raw,
@@ -227,9 +228,13 @@ def _support_mismatch_panel(
     )
     expected_shape = (len(rotation_ids), native_raw.shape[1])
     _require(all(np.asarray(value).shape == expected_shape for value in arrays), "support panel topology mismatch")
-    mismatch_positions = np.argwhere(native_significant != recovar_significant)
+    selected_positions = (
+        np.argwhere(native_significant != recovar_significant)
+        if support_mismatches_only
+        else np.argwhere(np.ones(expected_shape, dtype=bool))
+    )
     rows = []
-    for rotation_position, translation_id in mismatch_positions:
+    for rotation_position, translation_id in selected_positions:
         rows.append(
             {
                 "rotation_id": int(rotation_ids[rotation_position]),
@@ -265,6 +270,153 @@ def _support_mismatch_panel(
     return rows
 
 
+def _complete_support_mismatch_records(
+    *,
+    native_significant: np.ndarray,
+    recovar_significant: np.ndarray,
+    native_raw_diff2: np.ndarray,
+    recovar_raw_score: np.ndarray,
+    native_posterior: np.ndarray,
+    recovar_posterior: np.ndarray,
+    limit: int = 64,
+) -> list[dict[str, Any]]:
+    """Describe support flips without requiring optional projection captures."""
+
+    arrays = (
+        native_significant,
+        recovar_significant,
+        native_raw_diff2,
+        recovar_raw_score,
+        native_posterior,
+        recovar_posterior,
+    )
+    shape = np.asarray(native_significant).shape
+    _require(len(shape) == 2, "coarse support table must be rotation by translation")
+    _require(all(np.asarray(value).shape == shape for value in arrays), "coarse support topology mismatch")
+    _require(limit > 0, "support mismatch record limit must be positive")
+    positions = np.argwhere(native_significant != recovar_significant)
+    records = []
+    for rotation_id, translation_id in positions[:limit]:
+        records.append(
+            {
+                "rotation_id": int(rotation_id),
+                "translation_id": int(translation_id),
+                "native_significant": bool(native_significant[rotation_id, translation_id]),
+                "recovar_significant": bool(recovar_significant[rotation_id, translation_id]),
+                "native_raw_score": float(-native_raw_diff2[rotation_id, translation_id]),
+                "recovar_raw_score": float(recovar_raw_score[rotation_id, translation_id]),
+                "native_posterior": float(native_posterior[rotation_id, translation_id]),
+                "recovar_posterior": float(recovar_posterior[rotation_id, translation_id]),
+            }
+        )
+    return records
+
+
+def _top_posterior_records(
+    *,
+    native_raw_score: np.ndarray,
+    recovar_raw_score: np.ndarray,
+    native_log_weight: np.ndarray,
+    recovar_log_weight: np.ndarray,
+    native_posterior: np.ndarray,
+    recovar_posterior: np.ndarray,
+    native_significant: np.ndarray,
+    recovar_significant: np.ndarray,
+    limit: int = 16,
+) -> dict[str, list[dict[str, Any]]]:
+    """Record the leading cutoff operands in each engine's posterior order."""
+
+    arrays = [
+        np.asarray(value)
+        for value in (
+            native_raw_score,
+            recovar_raw_score,
+            native_log_weight,
+            recovar_log_weight,
+            native_posterior,
+            recovar_posterior,
+            native_significant,
+            recovar_significant,
+        )
+    ]
+    _require(all(value.shape == arrays[0].shape for value in arrays), "top-posterior topology mismatch")
+    _require(arrays[0].ndim == 2, "top-posterior tables must be rotation x translation")
+    native_prob = arrays[4].reshape(-1)
+    recovar_prob = arrays[5].reshape(-1)
+    native_order = np.argsort(-native_prob, kind="stable")
+    recovar_order = np.argsort(-recovar_prob, kind="stable")
+    n_translations = arrays[0].shape[1]
+
+    def ordered_rows(order: np.ndarray, engine: str) -> list[dict[str, Any]]:
+        cumulative = np.float64(0.0)
+        rows = []
+        for rank, flat_index in enumerate(order[: max(1, int(limit))], start=1):
+            rotation_id, translation_id = divmod(int(flat_index), n_translations)
+            cumulative += np.float64(
+                native_prob[flat_index] if engine == "native" else recovar_prob[flat_index]
+            )
+            rows.append(
+                {
+                    "rank": rank,
+                    "rotation_id": rotation_id,
+                    "translation_id": translation_id,
+                    "ordered_engine_cumulative_posterior": float(cumulative),
+                    "native": {
+                        "raw_score": float(arrays[0][rotation_id, translation_id]),
+                        "log_weight": float(arrays[2][rotation_id, translation_id]),
+                        "posterior": float(arrays[4][rotation_id, translation_id]),
+                        "significant": bool(arrays[6][rotation_id, translation_id]),
+                    },
+                    "recovar": {
+                        "raw_score": float(arrays[1][rotation_id, translation_id]),
+                        "log_weight": float(arrays[3][rotation_id, translation_id]),
+                        "posterior": float(arrays[5][rotation_id, translation_id]),
+                        "significant": bool(arrays[7][rotation_id, translation_id]),
+                    },
+                }
+            )
+        return rows
+
+    return {
+        "native_order": ordered_rows(native_order, "native"),
+        "recovar_order": ordered_rows(recovar_order, "recovar"),
+    }
+
+
+def _float32_table_bitwise_report(
+    reference: np.ndarray,
+    candidate: np.ndarray,
+    mask: np.ndarray,
+) -> dict[str, Any]:
+    """Report exact binary32 equality and the first unequal table coordinate."""
+
+    left = np.asarray(reference, dtype=np.float32)
+    right = np.asarray(candidate, dtype=np.float32)
+    selected = np.asarray(mask, dtype=bool)
+    _require(left.shape == right.shape == selected.shape, "float32 table topology mismatch")
+    _require(np.any(selected), "float32 table comparison mask is empty")
+    unequal = selected & (left.view(np.uint32) != right.view(np.uint32))
+    first = None
+    if np.any(unequal):
+        coordinate = tuple(int(value) for value in np.argwhere(unequal)[0])
+        first = {
+            "coordinate": list(coordinate),
+            "reference": float(left[coordinate]),
+            "reference_bits": int(left[coordinate].view(np.uint32)),
+            "candidate": float(right[coordinate]),
+            "candidate_bits": int(right[coordinate].view(np.uint32)),
+        }
+    selected_count = int(np.count_nonzero(selected))
+    unequal_count = int(np.count_nonzero(unequal))
+    return {
+        "selected_count": selected_count,
+        "bitwise_equal_count": selected_count - unequal_count,
+        "bitwise_unequal_count": unequal_count,
+        "bitwise_equal_fraction": float((selected_count - unequal_count) / selected_count),
+        "first_bitwise_unequal": first,
+    }
+
+
 def _rotation_key_to_recovar(rotation_key: int, n_directions: int, n_psi: int) -> int:
     direction, psi = divmod(int(rotation_key), int(n_psi))
     _require(direction < n_directions, "native rotation key is out of range")
@@ -288,17 +440,64 @@ def _compact_to_native_full_order(
     rows = score_indices // physical_half_width
     columns = score_indices % physical_half_width
     ky = rows - physical_image_size // 2
-    _require(np.all(np.abs(ky) <= current_size // 2), "score row is outside current size")
-    _require(np.all(columns < current_half_width), "score column is outside current size")
-    native_rows = np.where(ky >= 0, ky, current_size + ky)
-    native_positions = native_rows * current_half_width + columns
+    inside = (
+        (ky > -(current_size // 2))
+        & (ky <= current_size // 2)
+        & (columns <= current_size // 2)
+    )
+    if np.any(~inside):
+        _require(
+            np.all(values[..., ~inside] == 0),
+            "nonzero compact operands lie outside the native scoring grid",
+        )
+    native_rows = np.where(ky[inside] >= 0, ky[inside], current_size + ky[inside])
+    native_positions = native_rows * current_half_width + columns[inside]
     native_pixel_count = current_size * current_half_width
     _require(
         np.array_equal(np.sort(native_positions), np.arange(native_pixel_count)),
         "score indices do not bijectively cover the native current-size grid",
     )
     result = np.empty((*values.shape[:-1], native_pixel_count), dtype=values.dtype)
-    result[..., native_positions] = values
+    result[..., native_positions] = values[..., inside]
+    return result
+
+
+def _native_fftw_values_on_recovar_grid(
+    values: np.ndarray,
+    score_indices: np.ndarray,
+    *,
+    physical_image_size: int,
+    native_current_size: int,
+) -> np.ndarray:
+    """Gather a native FFTW grid onto RECOVAR's possibly +2 optics grid.
+
+    The extra outer row/column in RECOVAR's even optics FFT size is outside
+    RELION's scored 56x29 grid and is represented by exact zeros.  The active
+    circular score support is wholly contained in the common coordinates.
+    """
+
+    values = np.asarray(values)
+    score_indices = np.asarray(score_indices, dtype=np.int64)
+    _require(values.ndim >= 1, "native FFTW values must have a pixel axis")
+    physical_half_width = physical_image_size // 2 + 1
+    native_half_width = native_current_size // 2 + 1
+    native_pixel_count = native_current_size * native_half_width
+    _require(
+        values.shape[-1] == native_pixel_count,
+        "native FFTW value topology mismatch",
+    )
+    rows = score_indices // physical_half_width
+    columns = score_indices % physical_half_width
+    ky = rows - physical_image_size // 2
+    inside = (
+        (ky > -(native_current_size // 2))
+        & (ky <= native_current_size // 2)
+        & (columns <= native_current_size // 2)
+    )
+    native_rows = np.where(ky[inside] >= 0, ky[inside], native_current_size + ky[inside])
+    native_positions = native_rows * native_half_width + columns[inside]
+    result = np.zeros((*values.shape[:-1], score_indices.size), dtype=values.dtype)
+    result[..., inside] = values[..., native_positions]
     return result
 
 
@@ -409,6 +608,16 @@ def _native_coarse_image_size(
         "native component/operand model current-size mismatch",
     )
     return int(operand_header[18])
+
+
+def _score_size_relation(native_coarse_image_size: int, recovar_score_size: int) -> str:
+    """Classify the exact or optics-FFT-equivalent coarse score window."""
+
+    if native_coarse_image_size == recovar_score_size:
+        return "exact"
+    if recovar_score_size == native_coarse_image_size + 2:
+        return "recovar_optics_fft_size_plus_two"
+    return "mismatch"
 
 
 def _matched_operand_rotation_panel(
@@ -566,9 +775,14 @@ def _compare(
         components.header,
         operand.header,
     )
+    recovar_score_size = int(recovar["current_size"])
+    score_size_relation = _score_size_relation(
+        native_coarse_image_size,
+        recovar_score_size,
+    )
     _require(
-        native_coarse_image_size == recovar["current_size"],
-        "native coarse image/RECOVAR current-size mismatch",
+        score_size_relation != "mismatch",
+        "native coarse image/RECOVAR scoring-size mismatch",
     )
     n_directions, n_psi, _ = components.header[10:13]
     translation_permutation, translation_mapping = _translation_permutation(
@@ -615,6 +829,28 @@ def _compare(
         - _center_max(-mapped_raw[common_prior_support])
     )
     raw_stats = _stats(raw_residual)
+    raw_bitwise = _float32_table_bitwise_report(
+        -mapped_raw,
+        recovar["scores"],
+        common_prior_support,
+    )
+    native_raw_score_f32 = np.asarray(-mapped_raw, dtype=np.float32)
+    recovar_raw_score_f32 = np.asarray(recovar["scores"], dtype=np.float32)
+    native_raw_centered_f32 = np.subtract(
+        native_raw_score_f32,
+        np.max(native_raw_score_f32[common_prior_support]),
+        dtype=np.float32,
+    )
+    recovar_raw_centered_f32 = np.subtract(
+        recovar_raw_score_f32,
+        np.max(recovar_raw_score_f32[common_prior_support]),
+        dtype=np.float32,
+    )
+    raw_centered_bitwise = _float32_table_bitwise_report(
+        native_raw_centered_f32,
+        recovar_raw_centered_f32,
+        common_prior_support,
+    )
     relion_probabilities = mapped_weights / np.sum(mapped_weights)
     recovar_probabilities = recovar["weights"].reshape(mapped_weights.shape)
     recovar_probabilities = recovar_probabilities / np.sum(recovar_probabilities)
@@ -659,6 +895,8 @@ def _compare(
             np.count_nonzero(relion_prior_support != recovar_prior_support)
         ),
         "raw_centered_score_diff": raw_stats,
+        "raw_score_bitwise": raw_bitwise,
+        "raw_score_centered_bitwise": raw_centered_bitwise,
         "with_prior_centered_score_diff": with_prior_stats,
         "posterior_total_variation": posterior_tv,
         "posterior_max_abs": float(
@@ -668,6 +906,122 @@ def _compare(
         "significant_parent_mismatch_count": parent_mismatch_count,
         "relion_significant_count": int(np.count_nonzero(mapped_significant)),
         "recovar_significant_count": int(np.count_nonzero(recovar_significant)),
+        "top_posterior_records": _top_posterior_records(
+            native_raw_score=-mapped_raw,
+            recovar_raw_score=recovar["scores"],
+            native_log_weight=relion_with_prior,
+            recovar_log_weight=recovar["scores_with_prior"],
+            native_posterior=relion_probabilities,
+            recovar_posterior=recovar_probabilities,
+            native_significant=mapped_significant,
+            recovar_significant=recovar_significant,
+        ),
+        "significant_mismatch_records_first_64": _complete_support_mismatch_records(
+            native_significant=mapped_significant,
+            recovar_significant=recovar_significant,
+            native_raw_diff2=mapped_raw,
+            recovar_raw_score=recovar["scores"],
+            native_posterior=relion_probabilities,
+            recovar_posterior=recovar_probabilities,
+        ),
+    }
+
+    # These live inputs are present even when the optional RECOVAR projected-
+    # reference quartet was not captured.  Compare them before that optional
+    # gate so a bounded run can still localize a discrepancy to particle
+    # preprocessing, translation, pixel weighting, or the initial diff2 term.
+    score_indices = recovar["exact_score_indices"]
+    native_exact_shifted = -np.float64(physical_image_size**2) * _native_fftw_values_on_recovar_grid(
+        live.shifted_real.astype(np.float64)
+        + 1j * live.shifted_imag.astype(np.float64),
+        score_indices,
+        physical_image_size=physical_image_size,
+        native_current_size=native_coarse_image_size,
+    ).astype(np.complex64)
+    native_exact_shifted_ordered = np.empty_like(native_exact_shifted)
+    native_exact_shifted_ordered[translation_permutation] = native_exact_shifted
+    native_exact_unshifted = (
+        _native_fftw_values_on_recovar_grid(
+            (
+                operand.image_real.astype(np.float64)
+                + 1j * operand.image_imag.astype(np.float64)
+            )[np.newaxis, :],
+            score_indices,
+            physical_image_size=physical_image_size,
+            native_current_size=native_coarse_image_size,
+        )[0].astype(np.complex64)
+        * np.float32(-(physical_image_size**2))
+    )
+    native_exact_pixel_weight = _native_fftw_values_on_recovar_grid(
+        (np.float32(2.0) * live.correction_half)[np.newaxis, :],
+        score_indices,
+        physical_image_size=physical_image_size,
+        native_current_size=native_coarse_image_size,
+    )[0].real.astype(np.float32) / np.float32(physical_image_size**4)
+    recovar_exact_shifted = recovar["exact_shifted"]
+    recovar_exact_pixel_weight = recovar["exact_pixel_weight"]
+    _require(
+        recovar_exact_shifted.shape == native_exact_shifted_ordered.shape,
+        "exact shifted-image topology mismatch",
+    )
+    _require(
+        recovar["exact_unshifted"].shape == native_exact_unshifted.shape,
+        "exact unshifted-image topology mismatch",
+    )
+    _require(
+        recovar_exact_pixel_weight.shape == native_exact_pixel_weight.shape,
+        "exact pixel-weight topology mismatch",
+    )
+    active_exact_pixels = recovar_exact_pixel_weight != 0.0
+    _require(np.any(active_exact_pixels), "exact pixel-weight operand is empty")
+    shifted_comparison = _active_pixel_operand_comparison(
+        native_exact_shifted_ordered,
+        recovar_exact_shifted,
+        active_exact_pixels,
+    )
+    unshifted_comparison = _active_pixel_operand_comparison(
+        native_exact_unshifted,
+        recovar["exact_unshifted"],
+        active_exact_pixels,
+    )
+    pixel_weight_comparison = _operand_comparison(
+        native_exact_pixel_weight,
+        recovar_exact_pixel_weight,
+    )
+    native_initial_diff2 = np.asarray(np.uint32(lanes.header[20])).view(np.float32).item()
+    recovar_initial_diff2 = np.float32(recovar["exact_initial_diff2"])
+    exact_input_stage = {
+        "unshifted_corrected_active_pixels": (
+            unshifted_comparison["bitwise_equal_count"] == unshifted_comparison["value_count"]
+        ),
+        "shifted_corrected_active_pixels": (
+            shifted_comparison["bitwise_equal_count"] == shifted_comparison["value_count"]
+        ),
+        "pixel_weight": (
+            pixel_weight_comparison["bitwise_equal_count"]
+            == pixel_weight_comparison["value_count"]
+        ),
+        "initial_diff2": bool(
+            np.asarray(native_initial_diff2, dtype=np.float32).view(np.uint32)
+            == np.asarray(recovar_initial_diff2, dtype=np.float32).view(np.uint32)
+        ),
+    }
+    exact_input_boundary = {
+        "stage_order": list(exact_input_stage),
+        "stage_exact": exact_input_stage,
+        "first_exact_unequal_boundary": next(
+            (name for name, equal in exact_input_stage.items() if not equal),
+            "all_exact_input_operands_equal",
+        ),
+        "unshifted_corrected_active_pixels": unshifted_comparison,
+        "shifted_corrected_active_pixels": shifted_comparison,
+        "pixel_weight": pixel_weight_comparison,
+        "initial_diff2": {
+            "native": float(native_initial_diff2),
+            "native_bits": int(lanes.header[20]),
+            "recovar": float(recovar_initial_diff2),
+            "recovar_bits": int(np.asarray(recovar_initial_diff2).view(np.uint32)),
+        },
     }
     if not recovar["projection_capture_available"]:
         return {
@@ -675,6 +1029,7 @@ def _compare(
             "original_index_zero_based": recovar["original_index"],
             "relion_part_id": components.part_id,
             "complete_coarse_boundary": complete_coarse_boundary,
+            "exact_input_operand_boundary": exact_input_boundary,
             "operand_decomposition": {
                 "status": "not_captured",
                 "reason": (
@@ -698,6 +1053,40 @@ def _compare(
         }
     rotation_ids = recovar["rotation_ids"]
     active = np.all(mapped_raw[rotation_ids] != RELION_INVALID_DIFF2, axis=1)
+    _require(np.any(active), "no active requested component rotations")
+    component_request_positions = np.flatnonzero(active)
+    component_ids = rotation_ids[component_request_positions]
+    component_recovar_norm = recovar["norms"][component_request_positions]
+    component_recovar_cross = recovar["crosses"][component_request_positions]
+    component_recovar_total = recovar["scores"][component_ids]
+    component_decomposition = _component_decomposition(
+        component_recovar_total + mapped_raw[component_ids],
+        component_recovar_norm + mapped_norm[component_ids],
+        component_recovar_cross + mapped_cross[component_ids],
+    )
+    component_support_mismatches = _support_mismatch_panel(
+        rotation_ids=component_ids,
+        native_raw=mapped_raw[component_ids],
+        native_norm=mapped_norm[component_ids],
+        native_cross=mapped_cross[component_ids],
+        native_significant=mapped_significant[component_ids],
+        recovar_raw=component_recovar_total,
+        recovar_norm=component_recovar_norm,
+        recovar_cross=component_recovar_cross,
+        recovar_significant=recovar_significant[component_ids],
+    )
+    component_rows = _support_mismatch_panel(
+        rotation_ids=component_ids,
+        native_raw=mapped_raw[component_ids],
+        native_norm=mapped_norm[component_ids],
+        native_cross=mapped_cross[component_ids],
+        native_significant=mapped_significant[component_ids],
+        recovar_raw=component_recovar_total,
+        recovar_norm=component_recovar_norm,
+        recovar_cross=component_recovar_cross,
+        recovar_significant=recovar_significant[component_ids],
+        support_mismatches_only=False,
+    )
     mapped_operand_ids = np.asarray(
         [
             _rotation_key_to_recovar(key, n_directions, n_psi)
@@ -705,6 +1094,44 @@ def _compare(
         ],
         dtype=np.int64,
     )
+    active_operand_overlap = np.isin(rotation_ids, mapped_operand_ids) & active
+    if not np.any(active_operand_overlap):
+        return {
+            "stack_index_one_based": components.stack_index,
+            "original_index_zero_based": recovar["original_index"],
+            "relion_part_id": components.part_id,
+            "active_requested_rotation_count": int(np.count_nonzero(active)),
+            "requested_rotation_count": int(rotation_ids.size),
+            "matched_active_operand_rotation_count": 0,
+            "matched_recovar_rotation_ids": [],
+            "recovar_only_requested_rotation_ids": sorted(rotation_ids.tolist()),
+            "native_only_captured_rotation_ids": sorted(mapped_operand_ids.tolist()),
+            "component_rotation_ids": component_ids.tolist(),
+            "complete_coarse_boundary": complete_coarse_boundary,
+            "exact_input_operand_boundary": exact_input_boundary,
+            "component_decomposition": component_decomposition,
+            "captured_component_rows": component_rows,
+            "captured_support_mismatches": component_support_mismatches,
+            "operand_texture_panel": {
+                "status": "not_captured",
+                "reason": (
+                    "native texture rotation keys do not overlap the active "
+                    "RECOVAR projected-reference panel"
+                ),
+            },
+            "artifacts": {
+                "components": str(components_path.resolve()),
+                "components_sha256": components.sha256,
+                "operands": str(operand_path.resolve()),
+                "operands_sha256": operand.sha256,
+                "lanes": str(lane_path.resolve()),
+                "lanes_sha256": lanes.sha256,
+                "live": str(live_path.resolve()),
+                "live_sha256": live.sha256,
+                "recovar": str(recovar["path"]),
+                "recovar_sha256": recovar["sha256"],
+            },
+        }
     (
         selected_ids,
         selected_request_positions,
@@ -716,11 +1143,6 @@ def _compare(
     recovar_cross = recovar["crosses"][selected_request_positions]
     recovar_references = recovar["references"][selected_request_positions]
     recovar_total = recovar["scores"][selected_ids]
-    decomposition = _component_decomposition(
-        recovar_total + mapped_raw[selected_ids],
-        recovar_norm + mapped_norm[selected_ids],
-        recovar_cross + mapped_cross[selected_ids],
-    )
     native_reference = relion_reference_on_recovar_window(
         (
             operand.reference_real.astype(np.float64)
@@ -728,14 +1150,14 @@ def _compare(
         )[operand_order],
         recovar["window_indices"],
         full_image_size=physical_image_size,
-        current_size=recovar["current_size"],
+        current_size=native_coarse_image_size,
     )
     native_shifted = relion_values_on_recovar_window(
         operand.shifted_real.astype(np.float64)
         + 1j * operand.shifted_imag.astype(np.float64),
         recovar["window_indices"],
         full_image_size=physical_image_size,
-        current_size=recovar["current_size"],
+        current_size=native_coarse_image_size,
     )
     native_shifted_ordered = np.empty_like(native_shifted)
     native_shifted_ordered[translation_permutation] = native_shifted
@@ -743,62 +1165,17 @@ def _compare(
         operand.correction[np.newaxis, :],
         recovar["window_indices"],
         full_image_size=physical_image_size,
-        current_size=recovar["current_size"],
+        current_size=native_coarse_image_size,
     )[0].real
-    score_indices = recovar["exact_score_indices"]
-    native_exact_reference = relion_reference_on_recovar_window(
+    native_exact_reference = -np.float64(physical_image_size**2) * _native_fftw_values_on_recovar_grid(
         (
             live.reference_real.astype(np.float64)
             + 1j * live.reference_imag.astype(np.float64)
         )[np.newaxis, :],
         score_indices,
-        full_image_size=physical_image_size,
-        current_size=recovar["current_size"],
+        physical_image_size=physical_image_size,
+        native_current_size=native_coarse_image_size,
     ).astype(np.complex64)
-    native_exact_shifted = relion_reference_on_recovar_window(
-        live.shifted_real.astype(np.float64)
-        + 1j * live.shifted_imag.astype(np.float64),
-        score_indices,
-        full_image_size=physical_image_size,
-        current_size=recovar["current_size"],
-    ).astype(np.complex64)
-    native_exact_shifted_ordered = np.empty_like(native_exact_shifted)
-    native_exact_shifted_ordered[translation_permutation] = native_exact_shifted
-    native_exact_unshifted = (
-        relion_values_on_recovar_window(
-            (
-                operand.image_real.astype(np.float64)
-                + 1j * operand.image_imag.astype(np.float64)
-            )[np.newaxis, :],
-            score_indices,
-            full_image_size=physical_image_size,
-            current_size=recovar["current_size"],
-        )[0].astype(np.complex64)
-        * np.float32(-(physical_image_size**2))
-    )
-    native_exact_pixel_weight = relion_values_on_recovar_window(
-        (np.float32(2.0) * live.correction_half)[np.newaxis, :],
-        score_indices,
-        full_image_size=physical_image_size,
-        current_size=recovar["current_size"],
-    )[0].real.astype(np.float32) / np.float32(physical_image_size**4)
-    recovar_exact_shifted = recovar["exact_shifted"]
-    recovar_exact_pixel_weight = recovar["exact_pixel_weight"]
-    _require(
-        recovar_exact_shifted.shape == native_exact_shifted_ordered.shape,
-        "exact shifted-image topology mismatch",
-    )
-    _require(
-        recovar["exact_unshifted"].shape == native_exact_unshifted.shape,
-        "exact unshifted-image topology mismatch",
-    )
-    _require(
-        recovar_exact_pixel_weight.shape == native_exact_pixel_weight.shape,
-        "exact pixel-weight topology mismatch",
-    )
-    active_exact_pixels = recovar_exact_pixel_weight != 0.0
-    _require(np.any(active_exact_pixels), "exact pixel-weight operand is empty")
-
     score_position = {int(index): position for position, index in enumerate(score_indices)}
     _require(
         all(int(index) in score_position for index in recovar["window_indices"]),
@@ -830,13 +1207,13 @@ def _compare(
             recovar_exact_reference,
             score_indices,
             physical_image_size=physical_image_size,
-            current_size=recovar["current_size"],
+            current_size=native_coarse_image_size,
         )
         recovar_shifted_native_order = _compact_to_native_full_order(
             recovar_exact_shifted,
             score_indices,
             physical_image_size=physical_image_size,
-            current_size=recovar["current_size"],
+            current_size=native_coarse_image_size,
         )
         recovar_shifted_native_order = recovar_shifted_native_order[
             translation_permutation
@@ -845,7 +1222,7 @@ def _compare(
             recovar_exact_pixel_weight,
             score_indices,
             physical_image_size=physical_image_size,
-            current_size=recovar["current_size"],
+            current_size=native_coarse_image_size,
         )
         image_normalization_f32 = np.float32(physical_image_size**2)
         recovar_reference_live_units = np.asarray(
@@ -1030,25 +1407,21 @@ def _compare(
         "stack_index_one_based": components.stack_index,
         "original_index_zero_based": recovar["original_index"],
         "relion_part_id": components.part_id,
+        "native_coarse_image_size": native_coarse_image_size,
+        "recovar_score_size": recovar_score_size,
+        "score_size_relation": score_size_relation,
         "active_requested_rotation_count": int(np.count_nonzero(active)),
         "requested_rotation_count": int(rotation_ids.size),
         "matched_active_operand_rotation_count": int(selected_ids.size),
         "matched_recovar_rotation_ids": selected_ids.tolist(),
         "recovar_only_requested_rotation_ids": recovar_only_rotation_ids,
         "native_only_captured_rotation_ids": native_only_rotation_ids,
+        "component_rotation_ids": component_ids.tolist(),
         "complete_coarse_boundary": complete_coarse_boundary,
-        "component_decomposition": decomposition,
-        "captured_support_mismatches": _support_mismatch_panel(
-            rotation_ids=selected_ids,
-            native_raw=mapped_raw[selected_ids],
-            native_norm=mapped_norm[selected_ids],
-            native_cross=mapped_cross[selected_ids],
-            native_significant=mapped_significant[selected_ids],
-            recovar_raw=recovar_total,
-            recovar_norm=recovar_norm,
-            recovar_cross=recovar_cross,
-            recovar_significant=recovar_significant[selected_ids],
-        ),
+        "exact_input_operand_boundary": exact_input_boundary,
+        "component_decomposition": component_decomposition,
+        "captured_component_rows": component_rows,
+        "captured_support_mismatches": component_support_mismatches,
         "recovar_component_replay": {
             "p95_abs": float(np.percentile(np.abs(replay_error), 95)),
             "max_abs": float(np.max(np.abs(replay_error))),

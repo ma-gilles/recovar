@@ -313,12 +313,25 @@ def analyze(
     recovar_total_probability_mass = float(
         np.sum(dense_posterior_float64[recovar_active_mask], dtype=np.float64)
     )
-    posterior_algorithm_decomposition = None
+    native_common_conditional = native_posterior[comparable]
+    native_common_conditional /= np.sum(native_common_conditional, dtype=np.float64)
+    recovar_common_conditional = recovar_posterior[comparable]
+    recovar_common_conditional /= np.sum(recovar_common_conditional, dtype=np.float64)
+    posterior_algorithm_decomposition = {
+        "qualified_candidate_set_exact": candidate_set_equal and bool(np.all(comparable)),
+        "production_posterior_conditional_on_common_candidates": _metric(
+            native_common_conditional,
+            recovar_common_conditional,
+        ),
+        "float64_softmax_conditional_on_common_candidates": _metric(
+            _softmax_float64(native_combined[comparable]),
+            _softmax_float64(recovar_combined_float64[comparable]),
+        ),
+    }
     if candidate_set_equal and bool(np.all(comparable)):
         native_mathematical_posterior = _softmax_float64(native_combined)
         recovar_mathematical_posterior = _softmax_float64(recovar_combined_float64)
-        posterior_algorithm_decomposition = {
-            "qualified_candidate_set_exact": True,
+        posterior_algorithm_decomposition.update({
             "native_production_vs_native_float64_softmax": _metric(
                 native_posterior,
                 native_mathematical_posterior,
@@ -331,7 +344,7 @@ def analyze(
                 recovar_mathematical_posterior,
                 recovar_posterior,
             ),
-        }
+        })
     del (
         candidate_mask,
         dense_combined_float64,

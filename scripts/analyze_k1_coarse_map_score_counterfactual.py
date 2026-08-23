@@ -45,6 +45,61 @@ def _score_margin(diff2: np.ndarray, *, winner: tuple[int, int], target: tuple[i
     return float(-(values[target] - values[winner]))
 
 
+def _scores_with_priors(
+    diff2: np.ndarray,
+    *,
+    class_log_prior: float,
+    rotation_log_prior: np.ndarray,
+    translation_log_prior: np.ndarray,
+) -> np.ndarray:
+    """Apply priors in the same float32 order as coarse pass 1."""
+
+    scores = -np.asarray(diff2, dtype=np.float32)
+    scores = scores + np.float32(class_log_prior)
+    scores = scores + np.asarray(rotation_log_prior, dtype=np.float32)[:, None]
+    return scores + np.asarray(translation_log_prior, dtype=np.float32)[None, :]
+
+
+def _posterior_summary(
+    scores_with_priors: np.ndarray,
+    *,
+    adaptive_fraction: float,
+    max_significants: int,
+) -> tuple[dict[str, object], np.ndarray, np.ndarray]:
+    """Run the production RELION-f32 posterior and return a compact audit."""
+
+    from recovar.em.dense_single_volume.helpers.oversampling import (
+        relion_cuda_f32_coarse_posterior,
+    )
+
+    shape = np.asarray(scores_with_priors).shape
+    if len(shape) != 2:
+        raise ValueError(f"coarse score table must be 2-D, got {shape}")
+    posterior = relion_cuda_f32_coarse_posterior(
+        jnp.asarray(scores_with_priors, dtype=jnp.float32).reshape(1, -1),
+        adaptive_fraction=float(adaptive_fraction),
+        max_significants=int(max_significants),
+    )
+    weights, mask, n_significant, cutoff_count, sum_weight, threshold = (
+        np.asarray(jax.block_until_ready(value)) for value in posterior
+    )
+    weights = weights.reshape(shape)
+    mask = mask.reshape(shape)
+    hard = np.unravel_index(int(np.argmax(weights)), shape)
+    return (
+        {
+            "pmax": float(weights[hard]),
+            "hard_assignment": [int(hard[0]), int(hard[1])],
+            "n_significant": int(n_significant[0]),
+            "cutoff_count": int(cutoff_count[0]),
+            "sum_weight": float(sum_weight[0]),
+            "threshold": float(threshold[0]),
+        },
+        weights,
+        mask,
+    )
+
+
 def _project(
     reference: np.ndarray,
     rotations: np.ndarray,
@@ -74,12 +129,22 @@ def _project(
     return np.asarray(jax.block_until_ready(projected), dtype=np.complex64)
 
 
+def _load_map(path: Path, *, convention: str) -> np.ndarray:
+    if convention == "relion":
+        return np.asarray(helpers.load_relion_volume(str(path)), dtype=np.float32)
+    if convention == "recovar":
+        return np.asarray(helpers.load_mrc(str(path)), dtype=np.float32)
+    raise ValueError(f"unknown map convention {convention!r}")
+
+
 def analyze(
     *,
     native_capture_path: Path,
     recovar_capture_path: Path,
     native_map_path: Path,
     recovar_map_path: Path,
+    native_map_convention: str,
+    recovar_map_convention: str,
     winner: tuple[int, int],
     target: tuple[int, int],
     native_directions: int,
@@ -99,6 +164,11 @@ def analyze(
         initial_diff2 = np.asarray(payload["coarse_gaussian_initial_diff2"], dtype=np.float32).reshape(1)
         translation_source = np.asarray(payload["translation_phase_source"], dtype=np.float64)
         captured_scores = np.asarray(payload["scores_pre_prior_per_class"], dtype=np.float32)[0]
+        class_log_prior = float(np.asarray(payload["class_log_priors"], dtype=np.float32)[0])
+        rotation_log_prior = np.asarray(payload["rotation_log_prior"], dtype=np.float32)[0]
+        translation_log_prior = np.asarray(payload["translation_log_prior"], dtype=np.float32)
+        adaptive_fraction = float(np.asarray(payload["adaptive_fraction"]).item())
+        max_significants = int(np.asarray(payload["max_significants"]).item())
         n_trans = int(payload["n_trans"])
     if n_trans != shifted.shape[0]:
         raise ValueError("RECOVAR translation topology changed")
@@ -112,8 +182,8 @@ def analyze(
     selected_rotation_ids = np.asarray([winner[0], target[0]], dtype=np.int64)
     selected_rotations = rotations[selected_rotation_ids]
 
-    native_map = np.asarray(helpers.load_relion_volume(str(native_map_path)), dtype=np.float32)
-    recovar_map = np.asarray(helpers.load_mrc(str(recovar_map_path)), dtype=np.float32)
+    native_map = _load_map(native_map_path, convention=native_map_convention)
+    recovar_map = _load_map(recovar_map_path, convention=recovar_map_convention)
     if native_map.shape != recovar_map.shape:
         raise ValueError("incoming native and RECOVAR map shapes differ")
 
@@ -176,6 +246,44 @@ def analyze(
 
     native_texture_recovar_map_diff2 = native_texture_score(recovar_map)
     native_texture_native_map_diff2 = native_texture_score(native_map)
+    recovar_map_scores_with_priors = _scores_with_priors(
+        native_texture_recovar_map_diff2,
+        class_log_prior=class_log_prior,
+        rotation_log_prior=rotation_log_prior,
+        translation_log_prior=translation_log_prior,
+    )
+    native_map_scores_with_priors = _scores_with_priors(
+        native_texture_native_map_diff2,
+        class_log_prior=class_log_prior,
+        rotation_log_prior=rotation_log_prior,
+        translation_log_prior=translation_log_prior,
+    )
+    recovar_map_posterior, recovar_map_weights, recovar_map_mask = _posterior_summary(
+        recovar_map_scores_with_priors,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
+    native_map_posterior, native_map_weights, native_map_mask = _posterior_summary(
+        native_map_scores_with_priors,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
+    changed_support = np.argwhere(recovar_map_mask != native_map_mask)
+    support_change_records = [
+        {
+            "rotation": int(rotation),
+            "translation": int(translation),
+            "recovar_map_selected": bool(recovar_map_mask[rotation, translation]),
+            "native_map_selected": bool(native_map_mask[rotation, translation]),
+            "recovar_map_weight": float(recovar_map_weights[rotation, translation]),
+            "native_map_weight": float(native_map_weights[rotation, translation]),
+            "raw_log_score_delta_native_minus_recovar_map": float(
+                -native_texture_native_map_diff2[rotation, translation]
+                + native_texture_recovar_map_diff2[rotation, translation]
+            ),
+        }
+        for rotation, translation in changed_support[:64]
+    ]
     local_winner = (0, winner[1])
     local_target = (1, target[1])
     native_margin = _score_margin(native_raw, winner=winner, target=target)
@@ -214,7 +322,7 @@ def analyze(
         else float(1.0 - abs(counterfactual_error) / abs(baseline_error))
     )
     return {
-        "schema": "recovar.em.k1_coarse_map_score_counterfactual.v1",
+        "schema": "recovar.em.k1_coarse_map_score_counterfactual.v2",
         "status": "complete",
         "device": str(jax.devices()[0]),
         "coordinates": {"winner": list(winner), "target": list(target)},
@@ -234,6 +342,19 @@ def analyze(
             "counterfactual_minus_native": counterfactual_error,
             "absolute_error_removal_fraction": removal_fraction,
         },
+        "complete_candidate_posterior": {
+            "recovar_map": recovar_map_posterior,
+            "native_map": native_map_posterior,
+            "support_symmetric_difference_count": int(changed_support.shape[0]),
+            "support_changes": support_change_records,
+            "posterior_relative_l2_native_from_recovar_map": float(
+                np.linalg.norm(
+                    native_map_weights.astype(np.float64)
+                    - recovar_map_weights.astype(np.float64)
+                )
+                / np.linalg.norm(recovar_map_weights.astype(np.float64))
+            ),
+        },
         "classification": (
             "incoming map closes the raw score margin"
             if abs(counterfactual_error) <= np.finfo(np.float32).eps * max(1.0, abs(native_margin))
@@ -250,8 +371,10 @@ def analyze(
             "recovar_capture_sha256": _sha256(recovar_capture_path),
             "native_map": str(native_map_path.resolve()),
             "native_map_sha256": _sha256(native_map_path),
+            "native_map_convention": native_map_convention,
             "recovar_map": str(recovar_map_path.resolve()),
             "recovar_map_sha256": _sha256(recovar_map_path),
+            "recovar_map_convention": recovar_map_convention,
         },
     }
 
@@ -269,6 +392,16 @@ def main() -> None:
     parser.add_argument("--recovar-capture", type=Path, required=True)
     parser.add_argument("--native-map", type=Path, required=True)
     parser.add_argument("--recovar-map", type=Path, required=True)
+    parser.add_argument(
+        "--native-map-convention",
+        choices=("relion", "recovar"),
+        default="relion",
+    )
+    parser.add_argument(
+        "--recovar-map-convention",
+        choices=("relion", "recovar"),
+        default="recovar",
+    )
     parser.add_argument("--winner", type=_pair, required=True)
     parser.add_argument("--target", type=_pair, required=True)
     parser.add_argument("--native-directions", type=int, required=True)
@@ -282,6 +415,8 @@ def main() -> None:
         recovar_capture_path=args.recovar_capture,
         native_map_path=args.native_map,
         recovar_map_path=args.recovar_map,
+        native_map_convention=args.native_map_convention,
+        recovar_map_convention=args.recovar_map_convention,
         winner=args.winner,
         target=args.target,
         native_directions=args.native_directions,

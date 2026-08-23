@@ -254,6 +254,43 @@ def _texture_centered_crop_to_full(
     return full.at[:, full_indices].set(crop.reshape((projection_crop.shape[0], -1)))
 
 
+def _texture_centered_crop_at_indices(
+    projection_crop,
+    pixel_indices,
+    *,
+    image_shape,
+    projector_output_size: int,
+):
+    """Gather centered full-image pixels directly from a CUDA projection crop."""
+
+    image_size = int(image_shape[0])
+    crop_size = int(projector_output_size)
+    full_x_half = image_size // 2 + 1
+    crop_x_half = crop_size // 2 + 1
+    indices = jnp.asarray(pixel_indices, dtype=jnp.int32)
+    full_rows = indices // full_x_half
+    cols = indices - full_rows * full_x_half
+
+    if crop_size == image_size:
+        crop_rows = full_rows
+        ky = jnp.where(
+            full_rows == 0,
+            crop_size // 2,
+            full_rows - crop_size // 2,
+        )
+    else:
+        ky = full_rows - image_size // 2
+        crop_rows = jnp.where(
+            ky == crop_size // 2,
+            0,
+            ky + crop_size // 2,
+        )
+    crop_indices = crop_rows * crop_x_half + cols
+    selected = projection_crop.reshape((projection_crop.shape[0], -1))[:, crop_indices]
+    output_disk = ky * ky + cols * cols <= (crop_size // 2) ** 2
+    return jnp.where(output_disk[None, :], selected, jnp.zeros((), dtype=selected.dtype))
+
+
 def _project_relion_projector_texture(
     volume_relion_half,
     rotations_block,
@@ -261,6 +298,7 @@ def _project_relion_projector_texture(
     *,
     r_max: int,
     projector_output_size: int,
+    pixel_indices=None,
 ):
     """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic."""
 
@@ -275,6 +313,13 @@ def _project_relion_projector_texture(
         max_r=float(r_max),
         relion_texture_interp=True,
     )
+    if pixel_indices is not None:
+        return _texture_centered_crop_at_indices(
+            projection_crop,
+            pixel_indices,
+            image_shape=image_shape,
+            projector_output_size=int(projector_output_size),
+        )
     return _texture_centered_crop_to_full(
         projection_crop,
         image_shape=image_shape,
@@ -324,15 +369,20 @@ def compute_relion_projector_projections_block(
                 image_shape=image_shape,
                 projector_output_size=resolved_output_size,
             )
+        texture_kwargs = {
+            "r_max": int(r_max),
+            "projector_output_size": resolved_output_size,
+        }
+        if centered_rows and pixel_indices is not None:
+            texture_kwargs["pixel_indices"] = pixel_indices
         proj_centered = _project_relion_projector_texture(
             volume_relion_half,
             rotations_block,
             image_shape,
-            r_max=int(r_max),
-            projector_output_size=resolved_output_size,
+            **texture_kwargs,
         )
         if centered_rows:
-            proj_half = proj_centered if pixel_indices is None else proj_centered[:, pixel_indices]
+            proj_half = proj_centered
         else:
             proj_half = jnp.fft.ifftshift(
                 proj_centered.reshape((proj_centered.shape[0], image_size, image_size // 2 + 1)),

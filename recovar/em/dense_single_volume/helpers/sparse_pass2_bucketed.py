@@ -239,6 +239,7 @@ _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
     "RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE"
 )
 _RELION_POWERCLASS_SPECTRUM_NORM_ENV = "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM"
+_RELION_EXACT_BPREF_OPERANDS_ENV = "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS"
 _RELION_TRANSLATED_WAVG_NORM_ENV = "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM"
 _BPREF_CONTRIBUTION_DUMP_CLASS_ENV = "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS"
 _BPREF_CONTRIBUTION_STOP_AFTER_TARGET_ENV = (
@@ -2984,6 +2985,19 @@ def _relion_powerclass_spectrum_norm_enabled(
     )
 
 
+def _relion_exact_bpref_operands_enabled(
+    *,
+    fresh_k1_guard: bool,
+    source_faithful_spectrum_norm: bool,
+) -> bool:
+    """Pair exact BPref with the qualified fresh-K=1 spectrum path."""
+
+    return _env_flag_enabled(
+        _RELION_EXACT_BPREF_OPERANDS_ENV,
+        default=bool(fresh_k1_guard and source_faithful_spectrum_norm),
+    )
+
+
 def _relion_wavg_direct_modes(
     *,
     accumulate_noise: bool,
@@ -4651,11 +4665,29 @@ def _make_relion_wavg_rectangle(
     image_shape,
     current_size,
     recon_window_indices,
+    *,
+    reconstruction_current_size=None,
 ):
-    """Map exact BPref pixels into RELION's complete FFTW-ordered Wavg crop."""
+    """Map model BPref pixels into RELION's complete particle Wavg crop.
+
+    RELION may remap the particle-image ``current_size`` for an optics group
+    while retaining the model-coordinate radius for Projector/BackProjector.
+    The rectangle and its rounded noise-shell mask therefore use the particle
+    size, while the exact projected terms use ``reconstruction_current_size``.
+    """
 
     image_shape = tuple(int(value) for value in image_shape)
     current_size = int(current_size)
+    model_current_size = (
+        current_size
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
+    if model_current_size > current_size:
+        raise ValueError(
+            "RELION Wavg model support cannot exceed the particle-image crop: "
+            f"model={model_current_size}, image={current_size}"
+        )
     rectangle_indices, _ = make_fourier_window_indices_np(
         image_shape,
         current_size,
@@ -4676,7 +4708,7 @@ def _make_relion_wavg_rectangle(
     )
     exact_indices, _ = make_fourier_window_indices_np(
         image_shape,
-        current_size,
+        model_current_size,
         include_dc=True,
         exact_radius=True,
     )
@@ -10728,7 +10760,16 @@ def _prepare_bucket_io(
     if use_normalized_cc:
         # RELION firstiter_cc uses unweighted image power over the same Fourier
         # window as the score denominator, with no Hermitian doubling.
-        abs2_half = jnp.abs(processed_score_half_raw) ** 2
+        if relion_exact_normalized_cc_operands:
+            # ``exp_local_sqrtXi2`` is formed from an RFLOAT (float64) serial
+            # sum before RELION casts its reciprocal to XFLOAT.  A float32 XLA
+            # reduction can move that reciprocal by one ULP, which is enough
+            # to erase demonstrated fine-translation score margins.
+            norm_real = processed_score_half_raw.real.astype(jnp.float64)
+            norm_imag = processed_score_half_raw.imag.astype(jnp.float64)
+            abs2_half = norm_real * norm_real + norm_imag * norm_imag
+        else:
+            abs2_half = jnp.abs(processed_score_half_raw) ** 2
         if window_indices is not None:
             abs2_half = abs2_half[:, window_indices]
         batch_norm = jnp.sum(abs2_half, axis=-1, keepdims=True).real
@@ -11010,7 +11051,23 @@ def _prepare_bucket_io(
         )
         if folded_normalized_cc_operands:
             shifted_corrected_score_half = shifted_corrected_score_half * jnp.repeat(inv_xi2, n_trans, axis=0)
-        ctf2_over_nv_half = ctf2_score_half * inv_xi2
+            ctf2_over_nv_half = ctf2_score_half * inv_xi2
+        else:
+            # buildCorrImage evaluates CTF * CTF in RFLOAT and casts the full
+            # product to XFLOAT once.  Reusing the generic float32 CTF-square
+            # path changes most corr_img pixels by one or two ULPs.  Preserve
+            # the source order here; the existing RECOVAR FFT normalization
+            # is already encoded in ``inv_xi2``.
+            corr_ctf_rfloat = (
+                ctf_half.astype(jnp.float64)
+                if ctf_half_rfloat is None
+                else ctf_half_rfloat
+            )
+            ctf2_over_nv_half = _relion_cuda_corr_img_from_rfloat_ctf(
+                inv_xi2,
+                corr_ctf_rfloat,
+                batch_scale[:, None] if scale_corrections is not None else None,
+            )
     if return_windowed_shifted:
         score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
         ctf2_over_nv_half = ctf2_over_nv_half[:, score_indices]
@@ -11780,12 +11837,13 @@ def compute_pass2_stats_sparse_bucketed(
     )
 
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
-    relion_exact_bpref_operands = _env_flag_enabled(
-        "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS",
-        default=False,
-    )
+    fresh_k1_guard = bool(source_faithful_spectrum_norm)
     source_faithful_spectrum_norm = _relion_powerclass_spectrum_norm_enabled(
-        fresh_k1_guard=source_faithful_spectrum_norm,
+        fresh_k1_guard=fresh_k1_guard,
+    )
+    relion_exact_bpref_operands = _relion_exact_bpref_operands_enabled(
+        fresh_k1_guard=fresh_k1_guard,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
     if relion_exact_bpref_operands:
         if use_float64_scoring:
@@ -12385,6 +12443,7 @@ def compute_pass2_stats_sparse_bucketed(
                 image_shape,
                 current_size,
                 recon_window_indices,
+                reconstruction_current_size=mstep_current_size,
             )
             raw_translated_wavg_rectangle = _relion_cuda_translate_wavg_norm_images(
                 processed_score_half_for_noise,
@@ -16616,10 +16675,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 current_size=current_size,
             )
         if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
-            if _env_flag_enabled(
-                _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
-                default=False,
-            ):
+            if source_faithful_spectrum_norm:
                 relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
                     processed_score_half_for_noise,
                     image_shape=image_shape,

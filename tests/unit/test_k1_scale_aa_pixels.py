@@ -13,6 +13,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _fresh_k1_direct_noise_default,
     _make_relion_wavg_rectangle,
     _prioritize_stopped_pass2_dump_buckets,
+    _relion_exact_bpref_operands_enabled,
     _relion_powerclass_spectrum_norm_enabled,
     _relion_wavg_atomic_triplet_terms,
     _relion_wavg_direct_modes,
@@ -101,6 +102,45 @@ def test_powerclass_spectrum_norm_explicit_env_overrides_guard(monkeypatch):
 
     monkeypatch.setenv("RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM", "1")
     assert _relion_powerclass_spectrum_norm_enabled(fresh_k1_guard=False)
+
+
+@pytest.mark.parametrize(
+    ("fresh_k1_guard", "spectrum_norm", "expected"),
+    [
+        (True, True, True),
+        (True, False, False),
+        (False, True, False),
+        (False, False, False),
+    ],
+)
+def test_exact_bpref_defaults_only_with_fresh_k1_spectrum(
+    monkeypatch,
+    fresh_k1_guard,
+    spectrum_norm,
+    expected,
+):
+    monkeypatch.delenv("RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS", raising=False)
+
+    assert (
+        _relion_exact_bpref_operands_enabled(
+            fresh_k1_guard=fresh_k1_guard,
+            source_faithful_spectrum_norm=spectrum_norm,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(("override", "expected"), [("0", False), ("1", True)])
+def test_exact_bpref_explicit_env_overrides_default(monkeypatch, override, expected):
+    monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS", override)
+
+    assert (
+        _relion_exact_bpref_operands_enabled(
+            fresh_k1_guard=True,
+            source_faithful_spectrum_norm=True,
+        )
+        is expected
+    )
 
 
 def test_wavg_direct_modes_reject_overlapping_factorial_arms(monkeypatch):
@@ -383,6 +423,39 @@ def test_relion_wavg_rectangle_matches_native_size60_topology_and_order():
         layout.centered_indices[layout.exact_positions],
         exact_indices,
     )
+
+
+def test_relion_wavg_rectangle_separates_optics_image_and_model_sizes():
+    image_shape = (384, 384)
+    image_current_size = 58
+    model_current_size = 56
+    model_indices, _ = make_fourier_window_indices_np(
+        image_shape,
+        model_current_size,
+        include_dc=True,
+        exact_radius=True,
+    )
+
+    layout = _make_relion_wavg_rectangle(
+        image_shape,
+        image_current_size,
+        model_indices,
+        reconstruction_current_size=model_current_size,
+    )
+
+    assert layout.centered_indices.size == 58 * 30 == 1740
+    assert layout.exact_positions.size == 1227
+    np.testing.assert_array_equal(
+        layout.centered_indices[layout.exact_positions],
+        model_indices,
+    )
+    # The particle rectangle retains the image-only rounded cutoff shell for
+    # Wavg noise accumulation even though BPref projection terms stop at the
+    # smaller model-coordinate radius.
+    assert np.max(layout.shell_indices) == image_current_size // 2
+    image_only = np.ones(layout.centered_indices.size, dtype=bool)
+    image_only[layout.exact_positions] = False
+    assert np.count_nonzero((layout.shell_indices >= 0) & image_only) > 0
 
 
 def test_relion_wavg_rectangle_terms_keep_image_only_pixels_in_issue_stream():

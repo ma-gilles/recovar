@@ -716,6 +716,7 @@ def _validate_bpref_particle_order_scope(
     sealed_sampling_state,
     sealed_scoring_context,
     allow_replayed_bpref_particle_order: bool = False,
+    allow_state_swap_fresh_bpref_particle_order: bool = False,
 ) -> None:
     """Fail closed unless RELION physical order starts an unsealed fresh K=1 run."""
 
@@ -723,6 +724,24 @@ def _validate_bpref_particle_order_scope(
         return
     if int(n_classes) != 1:
         raise ValueError("RELION BPref particle-order preservation is K=1-only")
+    if allow_state_swap_fresh_bpref_particle_order:
+        if int(init_relion_iteration) != 0:
+            raise ValueError(
+                "state-swap RELION BPref particle-order preservation requires a fresh iteration-0 run"
+            )
+        if perturb_replay_relion_dir is None:
+            raise ValueError(
+                "state-swap RELION BPref particle-order preservation requires perturbation replay"
+            )
+        if not _has_numbered_replay_iteration_overrides(replay_iteration_overrides):
+            raise ValueError(
+                "state-swap RELION BPref particle-order preservation requires numbered replay state"
+            )
+        if sealed_sampling_state is not None or sealed_scoring_context is not None:
+            raise ValueError(
+                "state-swap RELION BPref particle-order preservation cannot alter a sealed boundary"
+            )
+        return
     if allow_replayed_bpref_particle_order:
         if int(init_relion_iteration) <= 0:
             raise ValueError(
@@ -5052,6 +5071,7 @@ def _run_relion_iteration_loop(
         sealed_sampling_state=sealed_sampling_state,
         sealed_scoring_context=sealed_scoring_context,
         allow_replayed_bpref_particle_order=allow_replayed_bpref_particle_order,
+        allow_state_swap_fresh_bpref_particle_order=state_swap_probe is not None,
     )
     source_faithful_spectrum_norm = _fresh_k1_spectrum_norm_default(
         preserve_bpref_particle_order=preserve_bpref_particle_order,

@@ -3858,6 +3858,119 @@ def test_texture_centered_crop_masks_current_image_disk():
     np.testing.assert_array_equal(got, expected)
 
 
+@pytest.mark.parametrize(
+    ("image_size", "crop_size"),
+    [(8, 6), (8, 8)],
+)
+def test_texture_centered_crop_direct_indices_match_full_scatter(
+    rng,
+    image_size,
+    crop_size,
+):
+    from recovar.em.dense_single_volume.helpers.projection import (
+        _texture_centered_crop_at_indices,
+        _texture_centered_crop_to_full,
+    )
+
+    crop_pixels = crop_size * (crop_size // 2 + 1)
+    crop = (
+        rng.standard_normal((3, crop_pixels))
+        + 1j * rng.standard_normal((3, crop_pixels))
+    ).astype(np.complex64)
+    full = np.asarray(
+        _texture_centered_crop_to_full(
+            jnp.asarray(crop),
+            image_shape=(image_size, image_size),
+            projector_output_size=crop_size,
+        )
+    )
+
+    if crop_size == image_size:
+        indices = np.arange(full.shape[1], dtype=np.int32)
+    else:
+        crop_rows = np.arange(crop_size, dtype=np.int32)
+        crop_ky = np.where(crop_rows == 0, crop_size // 2, crop_rows - crop_size // 2)
+        crop_cols = np.arange(crop_size // 2 + 1, dtype=np.int32)
+        full_rows = crop_ky + image_size // 2
+        indices = (
+            full_rows[:, None] * (image_size // 2 + 1) + crop_cols[None, :]
+        ).reshape(-1)
+
+    direct = np.asarray(
+        _texture_centered_crop_at_indices(
+            jnp.asarray(crop),
+            jnp.asarray(indices),
+            image_shape=(image_size, image_size),
+            projector_output_size=crop_size,
+        )
+    )
+    np.testing.assert_array_equal(direct, full[:, indices])
+
+
+def test_texture_projector_compact_indices_bypass_full_scatter(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+
+    requested = jnp.asarray([6, 7, 9], dtype=jnp.int32)
+    monkeypatch.setattr(projection_helpers, "_relion_projector_texture_enabled", lambda *args, **kwargs: True)
+
+    def fake_texture(projector, rotations, image_shape, **kwargs):
+        np.testing.assert_array_equal(np.asarray(kwargs.pop("pixel_indices")), np.asarray(requested))
+        assert kwargs == {"r_max": 1, "projector_output_size": 2}
+        return jnp.full((rotations.shape[0], requested.size), 3.0 + 2.0j, dtype=jnp.complex64)
+
+    monkeypatch.setattr(projection_helpers, "_project_relion_projector_texture", fake_texture)
+    got, _ = projection_helpers.compute_relion_projector_projections_block(
+        jnp.ones((5, 5, 3), dtype=jnp.complex64),
+        jnp.eye(3, dtype=jnp.float32)[None],
+        (4, 4),
+        r_max=1,
+        padding_factor=1,
+        return_abs2=False,
+        centered_rows=True,
+        projector_output_size=2,
+        pixel_indices=requested,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(got),
+        np.full((1, requested.size), 3.0 + 2.0j, dtype=np.complex64),
+    )
+
+
+def test_texture_projector_compact_implementation_never_builds_full_box(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+
+    crop = jnp.asarray([[0.0 + 1.0j, 1.0 + 2.0j, 2.0 + 3.0j, 3.0 + 4.0j]])
+    requested = jnp.asarray([6, 7, 9], dtype=jnp.int32)
+    monkeypatch.setattr(
+        projection_helpers,
+        "relion_projector_half_to_texture_full",
+        lambda value: jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+    )
+    monkeypatch.setattr(
+        projection_helpers,
+        "project_half_spectrum",
+        lambda *args, **kwargs: crop,
+    )
+    monkeypatch.setattr(
+        projection_helpers,
+        "_texture_centered_crop_to_full",
+        lambda *args, **kwargs: pytest.fail("compact projection built the full image box"),
+    )
+
+    got = projection_helpers._project_relion_projector_texture(
+        jnp.zeros((5, 5, 3), dtype=jnp.complex64),
+        jnp.eye(3, dtype=jnp.float32)[None],
+        (4, 4),
+        r_max=1,
+        projector_output_size=2,
+        pixel_indices=requested,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(got),
+        np.asarray(crop)[:, [2, 3, 0]],
+    )
+
+
 def test_local_big_jit_relion_projector_matches_helper(rng):
     from recovar.em.dense_single_volume.helpers.projection import compute_relion_projector_projections_block
     from recovar.em.dense_single_volume.local_big_jit import _project_local_half_spectrum
@@ -10987,6 +11100,70 @@ class TestRelionModeSmokeTest:
 
         assert manual_calls
 
+    def test_k_class_significance_texture_ppref_requests_compact_score_rows(
+        self,
+        half_datasets,
+        monkeypatch,
+    ):
+        """Windowed texture scoring must not materialize full projection rows."""
+        from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+        from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+
+        calls = []
+
+        def fake_texture(projector_half, rotations, image_shape, **kwargs):
+            pixel_indices = kwargs.get("pixel_indices")
+            assert pixel_indices is not None
+            calls.append(np.asarray(pixel_indices, dtype=np.int32))
+            n_pixels = int(pixel_indices.shape[0])
+            projection = jnp.ones(
+                (rotations.shape[0], n_pixels),
+                dtype=jnp.complex64,
+            )
+            return projection, jnp.ones(projection.shape, dtype=jnp.float32)
+
+        monkeypatch.setattr(
+            projection_helpers,
+            "compute_relion_projector_projections_block",
+            fake_texture,
+        )
+
+        dataset = half_datasets[0]
+        rotations = _make_rotations(3, seed=201)
+        current_size = 6
+        _compute_k_class_significance_batched(
+            dataset,
+            jnp.zeros((1, VOLUME_SIZE), dtype=jnp.complex64),
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            rotations,
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
+            adaptive_fraction=1.0,
+            max_significants=1,
+            image_batch_size=dataset.n_units,
+            rotation_block_size=2,
+            current_size=current_size,
+            half_spectrum_scoring=True,
+            relion_projector_half=jnp.zeros((1, 3, 3, 2), dtype=jnp.complex64),
+            relion_projector_r_max=1,
+            relion_projector_texture_interp=True,
+            collect_significance=False,
+            return_class_best=True,
+        )
+
+        expected = np.asarray(
+            make_fourier_window_spec(
+                IMAGE_SHAPE,
+                current_size,
+                IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1),
+            ).score_indices,
+            dtype=np.int32,
+        )
+        assert calls
+        for requested in calls:
+            np.testing.assert_array_equal(requested, expected)
+
     @pytest.mark.gpu
     def test_k1_coarse_gaussian_ffi_runs_significance_path(
         self,
@@ -11557,7 +11734,12 @@ class TestRelionModeSmokeTest:
 
         def fake_projector(_ppref, rots, image_shape, **_kwargs):
             n_rot = int(rots.shape[0])
-            n_half = int(image_shape[0] * (image_shape[1] // 2 + 1))
+            pixel_indices = _kwargs.get("pixel_indices")
+            n_half = (
+                int(image_shape[0] * (image_shape[1] // 2 + 1))
+                if pixel_indices is None
+                else int(np.asarray(pixel_indices).size)
+            )
             projection = jnp.ones((n_rot, n_half), dtype=jnp.complex64)
             return projection, jnp.ones((n_rot, n_half), dtype=jnp.float32)
 

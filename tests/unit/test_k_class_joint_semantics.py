@@ -1299,7 +1299,7 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
     )
 
 
-def test_sparse_firstiter_k1_adapter_forwards_source_faithful_spectrum_norm(monkeypatch):
+def test_sparse_firstiter_k1_adapter_forwards_exact_cc_and_spectrum_norm(monkeypatch):
     from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
 
     calls = []
@@ -1383,6 +1383,7 @@ def test_sparse_firstiter_k1_adapter_forwards_source_faithful_spectrum_norm(monk
 
     assert len(calls) == 1
     assert calls[0]["source_faithful_spectrum_norm"] is True
+    assert calls[0]["relion_exact_fine_normalized_cc"] is True
 
 
 def test_lazy_k_class_adaptive_mask_matches_dense_blocks_without_materializing():

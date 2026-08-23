@@ -101,7 +101,7 @@ _STATE_SWAP_FORCE_FRESH_PARTICLE_ORDER_ENV = (
 def _k1_relion_live_initial_noise_enabled(
     environ: MutableMapping[str, str] | None = None,
 ) -> bool:
-    """Return whether the diagnostic fresh-K=1 live-noise bootstrap is active."""
+    """Return whether the source-faithful fresh-K=1 noise diagnostic is active."""
 
     environment = os.environ if environ is None else environ
     token = environment.get(_K1_RELION_LIVE_INITIAL_NOISE_ENV, "0").strip().lower()
@@ -3273,7 +3273,21 @@ def main():
                 half1_idx.size,
                 dtype=np.int64,
             )
-        if use_relion_live_initial_noise:
+        live_initial_noise_layout_candidate = bool(
+            use_fresh_auto_refine_order
+            and args.perturb_replay_relion_dir is None
+            and args.relion_init_dir is not None
+            and relion_mask_params is not None
+        )
+        if live_initial_noise_layout_candidate:
+            (
+                relion_fresh_initial_noise_source_rows,
+                relion_fresh_initial_noise_optics_group_ids,
+            ) = _relion_fresh_initial_noise_layout(our_particles, relion_particles)
+        if (
+            use_relion_live_initial_noise
+            and relion_fresh_initial_noise_source_rows is None
+        ):
             (
                 relion_fresh_initial_noise_source_rows,
                 relion_fresh_initial_noise_optics_group_ids,
@@ -4000,7 +4014,7 @@ def main():
             ),
         )
         logger.warning(
-            "Opt-in fresh K=1 RELION live initial noise enabled: particles=%d "
+            "STRICT-PARITY: fresh K=1 RELION live initial noise enabled: particles=%d "
             "source_rows_head=%s sigma2_head=%s",
             min(1000, int(np.asarray(relion_fresh_initial_noise_source_rows).size)),
             np.asarray(relion_fresh_initial_noise_source_rows, dtype=np.int64)[:5].tolist(),

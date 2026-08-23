@@ -29,11 +29,13 @@ LAUNCHER=${REPO}/scripts/run_k1_case04_coarse_map_score_counterfactual.sbatch
 ANALYZER=${REPO}/scripts/analyze_k1_coarse_map_score_counterfactual.py
 NATIVE_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_native_coarse_stack68695_20260821T1010ET
 RECOVAR_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_recovar_fresh_coarse_stack68695_20260821T1035ET
-NATIVE_CAPTURE=${NATIVE_ROOT}/capture/part65218_stack68695.coarse-v1.bin
-RECOVAR_CAPTURE=${RECOVAR_ROOT}/coarse/significance_orig068694_it002_cs100.npz
-NATIVE_MAP=${NATIVE_ROOT}/relion/run_it001_half2_class001.mrc
-RECOVAR_MAP=${RECOVAR_ROOT}/output/intermediates/it000_half2_reg.mrc
-OUTPUT=${ROOT}/analysis/COARSE_MAP_SCORE_COUNTERFACTUAL.json
+NATIVE_CAPTURE=${K1_CASE04_MAP_SCORE_NATIVE_CAPTURE:-${NATIVE_ROOT}/capture/part65218_stack68695.coarse-v1.bin}
+RECOVAR_CAPTURE=${K1_CASE04_MAP_SCORE_RECOVAR_CAPTURE:-${RECOVAR_ROOT}/coarse/significance_orig068694_it002_cs100.npz}
+NATIVE_MAP=${K1_CASE04_MAP_SCORE_NATIVE_MAP:-${NATIVE_ROOT}/relion/run_it001_half2_class001.mrc}
+RECOVAR_MAP=${K1_CASE04_MAP_SCORE_RECOVAR_MAP:-${RECOVAR_ROOT}/output/intermediates/it000_half2_reg.mrc}
+NATIVE_MAP_CONVENTION=${K1_CASE04_MAP_SCORE_NATIVE_MAP_CONVENTION:-relion}
+RECOVAR_MAP_CONVENTION=${K1_CASE04_MAP_SCORE_RECOVAR_MAP_CONVENTION:-recovar}
+OUTPUT=${K1_CASE04_MAP_SCORE_OUTPUT:-${ROOT}/analysis/COARSE_MAP_SCORE_COUNTERFACTUAL.json}
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -77,6 +79,8 @@ sha256sum "${LAUNCHER}" "${ANALYZER}" "${CUDA_LIB}" \
 command=("${PYTHON}" -m scripts.analyze_k1_coarse_map_score_counterfactual
   --native-capture "${NATIVE_CAPTURE}" --recovar-capture "${RECOVAR_CAPTURE}"
   --native-map "${NATIVE_MAP}" --recovar-map "${RECOVAR_MAP}"
+  --native-map-convention "${NATIVE_MAP_CONVENTION}"
+  --recovar-map-convention "${RECOVAR_MAP_CONVENTION}"
   --winner 26325,19 --target 27095,14
   --native-directions 768 --native-psi 48 --output-json "${OUTPUT}")
 printf '%q ' "${command[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"

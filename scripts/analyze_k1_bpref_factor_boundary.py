@@ -29,7 +29,11 @@ else:
 SELECTION_SCHEMA = "recovar.em.k1_bpref_factor_panel.v1"
 INERTNESS_SCHEMA = "recovar.em.k1_bpref_factor_capture_inertness.v1"
 REPORT_SCHEMA = "recovar.em.k1_bpref_factor_boundary.v1"
-RELATIVE_L2_BOUND = 1.0e-5
+# The qualified case-4 passive factor observer differs from RELION's live
+# pre-scatter numerator by at most 3.51e-8 relative L2 and is exact for the
+# denominator.  Keep margin above that observer floor without classifying the
+# demonstrated 1.1e-7--2.7e-7 operand residual as closed.
+RELATIVE_L2_BOUND = 1.0e-7
 
 
 def _require(condition: bool, message: str) -> None:
@@ -190,6 +194,59 @@ def _classify_localization(
     return "translation_reduction_or_unmeasured_operand_mismatch"
 
 
+def _first_primitive_boundary(comparisons: dict[str, dict[str, Any]]) -> str:
+    for name in (
+        "ctf_with_scale",
+        "inverse_noise",
+        "weighted_ctf",
+        "translated_fourier_image",
+        "same_posterior_numerator_terms",
+        "same_posterior_denominator_terms",
+    ):
+        if float(comparisons[name]["relative_l2_over_reference"]) > RELATIVE_L2_BOUND:
+            return name
+    return "particle_prescatter_boundary_closes"
+
+
+def _first_cross_engine_boundary(particles: list[dict[str, Any]]) -> str:
+    """Report the earliest unequal boundary represented by the fixed panel."""
+
+    if any(not bool(particle["support_exact"]) for particle in particles):
+        return "support"
+    if any(
+        float(
+            particle["comparisons"]["posterior_common_support"][
+                "relative_l2_over_reference"
+            ]
+        )
+        > RELATIVE_L2_BOUND
+        for particle in particles
+    ):
+        return "posterior"
+    if any(not bool(particle["same_posterior_operands_close"]) for particle in particles):
+        boundaries = sorted(
+            {
+                str(particle["first_primitive_boundary"])
+                for particle in particles
+                if not bool(particle["same_posterior_operands_close"])
+            }
+        )
+        return "bpref_primitive:" + ",".join(boundaries)
+    if any(
+        not bool(particle["sequential_summary_closes"])
+        and not bool(particle["highest_summary_closes"])
+        for particle in particles
+    ):
+        return "translation_reduction_or_unmeasured_operand"
+    if any(
+        bool(particle["sequential_summary_closes"])
+        and not bool(particle["highest_summary_closes"])
+        for particle in particles
+    ):
+        return "translation_reduction_order"
+    return "accumulator_destination_and_inter_particle_reduction"
+
+
 def _recovar_capture_path(directory: Path, original_index: int, current_size: int) -> Path:
     matches = sorted(directory.glob(f"pass2_orig{original_index:06d}_cs{current_size:03d}.npz"))
     matches += sorted(
@@ -270,6 +327,18 @@ def _compare_particle(
         f"stack {stack_index}: native pixel panel does not contain RECOVAR reconstruction window",
     )
     pixel_rows = np.asarray([native_pixel_lookup[coordinate] for coordinate in coordinates], dtype=np.int64)
+    score_coordinates = _pixel_coordinates(recovar["window_indices"], physical_image_size)
+    score_coordinate_lookup = {
+        coordinate: row for row, coordinate in enumerate(score_coordinates)
+    }
+    _require(
+        all(coordinate in score_coordinate_lookup for coordinate in coordinates),
+        f"stack {stack_index}: reconstruction window is not contained in the score window",
+    )
+    score_rows = np.asarray(
+        [score_coordinate_lookup[coordinate] for coordinate in coordinates],
+        dtype=np.int64,
+    )
 
     accepted_flat = np.flatnonzero((factor.hypotheses["flags"] & 1) != 0)
     _require(accepted_flat.size > 0, f"stack {stack_index}: native accepted support is empty")
@@ -302,6 +371,35 @@ def _compare_particle(
     recovar_term_den = posterior[:, None] * ctf2[None]
     native_base_num = native_term_num / posterior[:, None]
     native_base_den = native_term_den / posterior[:, None]
+
+    native_ctf = factor.pixels["ctf"][pixel_rows].astype(np.float32)
+    native_inverse_noise = factor.pixels["minvsigma2"][pixel_rows].astype(np.float32)
+    recovar_ctf = (
+        np.asarray(recovar["direct_ctf_rfloat_score"], dtype=np.float64)[score_rows]
+        * np.float64(np.asarray(recovar["batch_scale_correction"]).item())
+    ).astype(np.float32)
+    recovar_inverse_noise = np.asarray(
+        recovar["direct_inverse_noise_score"], dtype=np.float32
+    )[score_rows]
+    recovar_inverse_noise_native = (recovar_inverse_noise * scale_den).astype(np.float32)
+    native_weighted_ctf = (
+        -terms["weighted_ctf"] / posterior[:, None] / scale_den
+    ).astype(np.float32)
+    recovar_weighted_ctf = (recovar_ctf * recovar_inverse_noise).astype(np.float32)
+    recovar_weighted_ctf_grid = np.broadcast_to(
+        recovar_weighted_ctf,
+        native_weighted_ctf.shape,
+    )
+    native_translated = (
+        terms["translated_re"] + np.complex64(1j) * terms["translated_im"]
+    ).astype(np.complex64) * scale_num
+    recovar_shifted = shifted[mapped_translation]
+    valid_weight = np.abs(recovar_weighted_ctf_grid) > np.float32(1.0e-20)
+    _require(np.any(valid_weight), f"stack {stack_index}: weighted CTF is zero on the full window")
+    recovar_translated = np.zeros_like(recovar_shifted)
+    recovar_translated[valid_weight] = (
+        recovar_shifted[valid_weight] / recovar_weighted_ctf_grid[valid_weight]
+    ).astype(np.complex64)
 
     native_term_num_grid = np.zeros((recovar_prob.shape[0], shifted.shape[1]), dtype=np.complex64)
     native_term_den_grid = np.zeros((recovar_prob.shape[0], shifted.shape[1]), dtype=np.float32)
@@ -344,6 +442,12 @@ def _compare_particle(
     _require(np.any(common_support), f"stack {stack_index}: native/RECOVAR support intersection is empty")
     comparisons = {
         "posterior_common_support": _metric(native_prob[common_support], recovar_prob[common_support]),
+        "ctf_with_scale": _metric(native_ctf, -recovar_ctf),
+        "inverse_noise": _metric(native_inverse_noise, recovar_inverse_noise_native),
+        "weighted_ctf": _metric(native_weighted_ctf, recovar_weighted_ctf_grid),
+        "translated_fourier_image": _metric(
+            native_translated[valid_weight], recovar_translated[valid_weight]
+        ),
         "same_posterior_numerator_terms": _metric(native_term_num, recovar_term_num),
         "same_posterior_denominator_terms": _metric(native_term_den, recovar_term_den),
         "base_numerator_operand": _metric(native_base_num, shifted[mapped_translation]),
@@ -365,6 +469,18 @@ def _compare_particle(
         ),
         "relion_summary_to_recovar_sequential_denominator": _metric(
             native_summary_den[support], sequential_den[support]
+        ),
+        "native_translated_with_recovar_weighted_ctf": _metric(
+            native_base_num,
+            (native_translated * recovar_weighted_ctf_grid).astype(np.complex64),
+        ),
+        "recovar_translated_with_native_weighted_ctf": _metric(
+            native_base_num,
+            (recovar_translated * native_weighted_ctf).astype(np.complex64),
+        ),
+        "native_internal_numerator": _metric(
+            native_base_num,
+            (native_translated * native_weighted_ctf).astype(np.complex64),
         ),
     }
     capture_self_closes = all(
@@ -396,6 +512,9 @@ def _compare_particle(
         "original_index_zero_based": original_index,
         "stack_index_one_based": stack_index,
         "role": str(target["role"]),
+        "native_part_id": int(factor.header[11]),
+        "native_mpi_rank": int(factor.header[14]),
+        "native_thread_id": int(factor.header[15]),
         "factor_path": str(factor.path.resolve()),
         "factor_sha256": factor.sha256,
         "recovar_capture_path": str(Path(str(recovar["_path"])).resolve()),
@@ -415,6 +534,7 @@ def _compare_particle(
         "same_posterior_operands_close": same_posterior_operands_close,
         "sequential_summary_closes": sequential_summary_closes,
         "highest_summary_closes": highest_summary_closes,
+        "first_primitive_boundary": _first_primitive_boundary(comparisons),
         "classification": _classify_localization(
             capture_self_closes=capture_self_closes,
             same_posterior_operands_close=same_posterior_operands_close,
@@ -552,11 +672,7 @@ def analyze(
             ]
         ),
         "classification": aggregate,
-        "first_cross_engine_boundary": (
-            "posterior_or_support"
-            if support_exact_count != len(particles) or posterior_close_count != len(particles)
-            else "accumulator_destination_and_inter_particle_reduction"
-        ),
+        "first_cross_engine_boundary": _first_cross_engine_boundary(particles),
         "next_boundary": (
             "conditional_on_matched_posterior__accumulator_destination_and_inter_particle_reduction"
             if aggregate == "fixed_panel_particle_prescatter_boundary_closes"

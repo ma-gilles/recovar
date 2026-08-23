@@ -394,3 +394,28 @@ def test_bpref_order_scope_is_dormant_when_preservation_is_disabled():
         sealed_sampling_state=object(),
         sealed_scoring_context=object(),
     )
+
+
+def test_state_swap_fresh_k1_bpref_order_scope_requires_complete_unsealed_replay():
+    kwargs = {
+        "preserve_bpref_particle_order": True,
+        "n_classes": 1,
+        "init_relion_iteration": 0,
+        "perturb_replay_relion_dir": "relion",
+        "replay_iteration_overrides": [None, {"state": 1}],
+        "sealed_sampling_state": None,
+        "sealed_scoring_context": None,
+        "allow_state_swap_fresh_bpref_particle_order": True,
+    }
+    _validate_bpref_particle_order_scope(**kwargs)
+
+    for override, match in (
+        ({"init_relion_iteration": 1}, "fresh iteration-0"),
+        ({"perturb_replay_relion_dir": None}, "requires perturbation replay"),
+        ({"replay_iteration_overrides": [None]}, "requires numbered replay state"),
+        ({"sealed_sampling_state": object()}, "cannot alter a sealed boundary"),
+    ):
+        invalid = dict(kwargs)
+        invalid.update(override)
+        with pytest.raises(ValueError, match=match):
+            _validate_bpref_particle_order_scope(**invalid)

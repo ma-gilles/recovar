@@ -203,6 +203,35 @@ def test_relion_corr_img_squares_rfloat_ctf_before_xfloat_cast():
     np.testing.assert_array_equal(actual, expected)
 
 
+def test_relion_corr_img_applies_xfloat_scale_square_after_rfloat_ctf_cast():
+    inverse_noise = np.asarray([0.7455480098724365], dtype=np.float32)
+    ctf_rfloat = np.asarray([-0.48569034637572805], dtype=np.float64)
+    scale = np.asarray([[0.30007338523864746]], dtype=np.float32)
+    corr_unscaled = np.asarray(
+        inverse_noise.astype(np.float64) * (ctf_rfloat * ctf_rfloat),
+        dtype=np.float32,
+    )
+    scale_squared = np.asarray(scale * scale, dtype=np.float32)
+    expected = np.asarray(corr_unscaled * scale_squared, dtype=np.float32)
+    rejected_fused_rfloat_path = np.asarray(
+        inverse_noise.astype(np.float64)
+        * (ctf_rfloat * ctf_rfloat)
+        * scale.astype(np.float64)
+        * scale.astype(np.float64),
+        dtype=np.float32,
+    )
+    assert np.any(expected != rejected_fused_rfloat_path)
+
+    actual = np.asarray(
+        _relion_cuda_corr_img_from_rfloat_ctf(
+            inverse_noise,
+            ctf_rfloat,
+            scale,
+        )
+    )
+    np.testing.assert_array_equal(actual, expected)
+
+
 def test_relion_pixel_correction_divides_by_rfloat_ctf_before_xfloat_cast():
     scale = np.asarray([[1.0]], dtype=np.float32)
     ctf_rfloat = np.asarray(
@@ -5789,6 +5818,7 @@ def test_prepare_bucket_io_exact_cc_keeps_relion_image_and_corr_operands_separat
     corrected_image = np.asarray(exact[7]).reshape(batch_indices.size, 1, n_half)
     corr_image = np.asarray(exact[3])[:, None, :]
 
+    assert np.asarray(exact[2]).dtype == np.float64
     assert not np.array_equal(corrected_image, folded_image)
     np.testing.assert_allclose(
         corrected_image * corr_image,

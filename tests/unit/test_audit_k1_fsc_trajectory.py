@@ -330,6 +330,71 @@ def test_numbered_only_explicitly_ignores_partial_final_products(tmp_path, monke
 
 
 @pytest.mark.unit
+def test_final_only_scores_complete_final_products_without_numbered_maps(tmp_path, monkeypatch):
+    case_root, arrays = _make_case(
+        tmp_path,
+        monkeypatch,
+        recovar_indices=(0,),
+        relion_iterations=(1,),
+        include_final=True,
+    )
+    for path in (case_root / "recovar" / "intermediates").glob("*.mrc"):
+        arrays.pop(path.resolve())
+        path.unlink()
+    (case_root / "recovar" / "intermediates").rmdir()
+    for path in (case_root / "relion_ref").glob("run_it*_half*_class001.mrc"):
+        arrays.pop(path.resolve())
+        path.unlink()
+
+    status, report, output_npz = _run(case_root, tmp_path, "--final-only")
+
+    assert status == 0
+    assert report["status"] == "pass"
+    assert report["trajectory_scope"] == "final_products_only"
+    assert report["completion_claim"] is False
+    assert report["final_policy"] == "final_products_only"
+    assert report["numbered_iteration_count"] == 0
+    assert report["numbered_iterations"] == []
+    assert report["final"]["cross_engine"]["merged"]["fsc_auc"] == pytest.approx(
+        1.0, abs=1e-12
+    )
+    with np.load(output_npz, allow_pickle=False) as curves:
+        assert "final_cross_merged" in curves.files
+        assert not any(name.startswith("it") for name in curves.files)
+
+
+@pytest.mark.unit
+def test_final_only_fails_closed_when_final_products_are_absent(tmp_path, monkeypatch):
+    case_root, _ = _make_case(tmp_path, monkeypatch)
+
+    status, report, _ = _run(case_root, tmp_path, "--final-only")
+
+    assert status == 2
+    assert report["status"] == "error"
+    assert report["earliest_failure"] == (
+        "--final-only requires complete RECOVAR and RELION final products"
+    )
+
+
+@pytest.mark.unit
+def test_final_only_and_numbered_only_are_mutually_exclusive(tmp_path, monkeypatch):
+    case_root, _ = _make_case(tmp_path, monkeypatch, include_final=True)
+
+    status, report, _ = _run(
+        case_root,
+        tmp_path,
+        "--final-only",
+        "--numbered-only",
+    )
+
+    assert status == 2
+    assert report["status"] == "error"
+    assert report["earliest_failure"] == (
+        "--final-only and --numbered-only are mutually exclusive"
+    )
+
+
+@pytest.mark.unit
 def test_allow_incomplete_audits_available_numbered_prefix_without_results(tmp_path, monkeypatch):
     case_root, _ = _make_case(
         tmp_path,

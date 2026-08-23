@@ -70,6 +70,24 @@ def test_rotation_map_uses_exact_transposed_matrix_permutation():
 
 
 @pytest.mark.unit
+def test_rotation_map_accepts_native_subset_of_recovar_candidates():
+    recovar = np.asarray(
+        [
+            np.eye(3, dtype=np.float32),
+            np.asarray([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float32),
+            np.asarray([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float32),
+        ]
+    )
+    factor = np.empty(2, dtype=[("matrix", np.float32, (9,))])
+    factor["matrix"] = recovar[[2, 0]].transpose(0, 2, 1).reshape(2, 9)
+
+    mapping, error = _rotation_map(factor, recovar)
+
+    np.testing.assert_array_equal(mapping, np.asarray([2, 0]))
+    assert error == 0.0
+
+
+@pytest.mark.unit
 def test_geometry_only_support_uses_native_bpref_header_count():
     header = np.zeros(54, dtype=np.uint64)
     header[45] = 227

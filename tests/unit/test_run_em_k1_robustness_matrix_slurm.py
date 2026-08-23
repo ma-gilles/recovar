@@ -876,6 +876,26 @@ def test_k1_legacy_translation_grid_diagnostic_env_is_forwarded(tmp_path):
     ).read_text()
 
 
+def test_k1_selected_treatment_env_is_forwarded_and_recorded(tmp_path):
+    treatment = {
+        "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM": "1",
+        "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS": "1",
+        "RECOVAR_K1_RELION_LIVE_INITIAL_NOISE": "0",
+    }
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="4",
+        extra_env=treatment,
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    script = next((scratch / "jobs").glob("em_k1_matrix_4_*.sh")).read_text()
+    submission = (scratch / "submission.env").read_text()
+    for name, value in treatment.items():
+        assert f"export {name}={value}" in script
+        assert f"{name}={value}" in submission
+
+
 def test_k1_relion_x_half_mstep_diagnostic_env_is_forwarded(tmp_path):
     proc, scratch = _dry_run_launcher(
         tmp_path,
@@ -1182,3 +1202,14 @@ def test_case_time_limit_override_updates_script_and_case_table(tmp_path):
     assert selected["time_limit"].tolist() == ["36:00:00"]
     submission = (scratch / "submission.env").read_text()
     assert "EM_K1_MATRIX_TIME_LIMIT=36:00:00" in submission
+
+
+def test_existing_relion_prefix_exposes_scoped_native_texture_diagnostic():
+    launcher = (REPO_ROOT / "scripts" / "run_k1_existing_relion_prefix.sbatch").read_text()
+
+    assert "ENABLE_NATIVE_TEXTURE=${ENABLE_NATIVE_TEXTURE:-0}" in launcher
+    assert 'case "${ENABLE_NATIVE_TEXTURE}" in 0|1)' in launcher
+    assert (
+        "export RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=${ENABLE_NATIVE_TEXTURE}"
+        in launcher
+    )

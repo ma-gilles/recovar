@@ -184,6 +184,16 @@ def test_native_coarse_image_size_distinguishes_model_and_scoring_sizes():
     assert analyzer._native_coarse_image_size(component_header, operand_header) == 100
 
 
+def test_score_size_relation_accepts_optics_fft_plus_two_only():
+    assert analyzer._score_size_relation(56, 56) == "exact"
+    assert (
+        analyzer._score_size_relation(56, 58)
+        == "recovar_optics_fft_size_plus_two"
+    )
+    assert analyzer._score_size_relation(56, 60) == "mismatch"
+    assert analyzer._score_size_relation(58, 56) == "mismatch"
+
+
 def test_stage_only_recovar_capture_marks_projection_fields_unavailable(tmp_path: Path):
     path = tmp_path / "stage_only.npz"
     np.savez(
@@ -247,6 +257,94 @@ def test_support_mismatch_panel_preserves_native_score_sign():
     assert report[0]["recovar_minus_native"]["raw_score"] == -0.25
     assert report[1]["recovar_minus_native"]["cross_score"] == 0.25
 
+    complete = analyzer._support_mismatch_panel(
+        rotation_ids=np.asarray([28138]),
+        native_raw=np.asarray([[10.0, 11.0]]),
+        native_norm=np.asarray([[4.0, 4.0]]),
+        native_cross=np.asarray([[6.0, 7.0]]),
+        native_significant=np.asarray([[False, True]]),
+        recovar_raw=np.asarray([[-10.25, -10.75]]),
+        recovar_norm=np.asarray([[-4.0, -4.0]]),
+        recovar_cross=np.asarray([[-6.25, -6.75]]),
+        recovar_significant=np.asarray([[False, True]]),
+        support_mismatches_only=False,
+    )
+    assert [row["translation_id"] for row in complete] == [0, 1]
+
+
+def test_complete_support_mismatch_records_do_not_require_projection_panel():
+    native_significant = np.asarray([[False, True], [False, False]])
+    recovar_significant = np.asarray([[True, False], [False, False]])
+    records = analyzer._complete_support_mismatch_records(
+        native_significant=native_significant,
+        recovar_significant=recovar_significant,
+        native_raw_diff2=np.asarray([[10.0, 11.0], [12.0, 13.0]]),
+        recovar_raw_score=np.asarray([[-10.25, -10.75], [-12.0, -13.0]]),
+        native_posterior=np.asarray([[0.1, 0.2], [0.3, 0.4]]),
+        recovar_posterior=np.asarray([[0.11, 0.19], [0.3, 0.4]]),
+    )
+
+    assert [(row["rotation_id"], row["translation_id"]) for row in records] == [
+        (0, 0),
+        (0, 1),
+    ]
+    assert records[0]["native_raw_score"] == -10.0
+    assert records[0]["recovar_raw_score"] == -10.25
+    assert records[0]["native_posterior"] == 0.1
+    assert records[0]["recovar_posterior"] == 0.11
+
+
+def test_top_posterior_records_preserve_each_engine_order_and_cutoff_sum():
+    native_posterior = np.asarray([[0.60, 0.25], [0.10, 0.05]])
+    recovar_posterior = np.asarray([[0.55, 0.30], [0.05, 0.10]])
+    native_raw = np.arange(4, dtype=np.float64).reshape(2, 2)
+    recovar_raw = native_raw + 0.125
+    report = analyzer._top_posterior_records(
+        native_raw_score=native_raw,
+        recovar_raw_score=recovar_raw,
+        native_log_weight=np.log(native_posterior),
+        recovar_log_weight=np.log(recovar_posterior),
+        native_posterior=native_posterior,
+        recovar_posterior=recovar_posterior,
+        native_significant=native_posterior >= 0.10,
+        recovar_significant=recovar_posterior >= 0.10,
+        limit=3,
+    )
+
+    assert [
+        (row["rotation_id"], row["translation_id"])
+        for row in report["native_order"]
+    ] == [(0, 0), (0, 1), (1, 0)]
+    assert [
+        (row["rotation_id"], row["translation_id"])
+        for row in report["recovar_order"]
+    ] == [(0, 0), (0, 1), (1, 1)]
+    np.testing.assert_allclose(
+        report["native_order"][2]["ordered_engine_cumulative_posterior"], 0.95
+    )
+    np.testing.assert_allclose(
+        report["recovar_order"][2]["ordered_engine_cumulative_posterior"], 0.95
+    )
+    assert report["native_order"][0]["recovar"]["raw_score"] == 0.125
+
+
+def test_float32_table_bitwise_report_records_raw_bits_and_coordinate():
+    native = np.asarray([[1.0, -0.0], [3.0, 4.0]], dtype=np.float32)
+    recovar = native.copy()
+    recovar[0, 1] = np.float32(0.0)
+    recovar[1, 0] = np.nextafter(np.float32(3.0), np.float32(4.0))
+    report = analyzer._float32_table_bitwise_report(
+        native,
+        recovar,
+        np.asarray([[True, True], [True, False]]),
+    )
+
+    assert report["selected_count"] == 3
+    assert report["bitwise_unequal_count"] == 2
+    assert report["first_bitwise_unequal"]["coordinate"] == [0, 1]
+    assert report["first_bitwise_unequal"]["reference"] == 0.0
+    assert report["first_bitwise_unequal"]["reference_bits"] != report["first_bitwise_unequal"]["candidate_bits"]
+
 
 def test_operand_comparison_checks_complex_float32_bits():
     native = np.asarray([1.0 + 2.0j, 3.0 + 4.0j], dtype=np.complex64)
@@ -282,7 +380,7 @@ def test_active_pixel_operand_comparison_ignores_zero_weight_pixels():
 
 def test_compact_to_native_full_order_is_a_scatter():
     score_indices = np.asarray(
-        [20, 21, 22, 25, 26, 27, 10, 11, 12, 15, 16, 17],
+        [20, 21, 22, 25, 26, 27, 30, 31, 32, 15, 16, 17],
         dtype=np.int64,
     )
     permutation = np.asarray([7, 2, 10, 0, 11, 4, 6, 1, 8, 5, 3, 9])
@@ -296,6 +394,63 @@ def test_compact_to_native_full_order_is_a_scatter():
     )
 
     np.testing.assert_array_equal(restored, values)
+
+
+def test_optics_plus_two_grid_maps_native_values_and_zero_outer_border():
+    physical_image_size = 12
+    native_current_size = 4
+    physical_half = physical_image_size // 2 + 1
+    native_half = native_current_size // 2 + 1
+    # RECOVAR's +2 optics grid has ky=-2..3 and kx=0..3. RELION's native
+    # cropped FFTW grid has ky=-1..2 and kx=0..2.
+    score_indices = np.asarray(
+        [
+            (physical_image_size // 2 + ky) * physical_half + kx
+            for ky in range(-2, 4)
+            for kx in range(4)
+        ],
+        dtype=np.int64,
+    )
+    native = np.arange(native_current_size * native_half, dtype=np.float32)
+
+    optics = analyzer._native_fftw_values_on_recovar_grid(
+        native,
+        score_indices,
+        physical_image_size=physical_image_size,
+        native_current_size=native_current_size,
+    )
+    restored = analyzer._compact_to_native_full_order(
+        optics,
+        score_indices,
+        physical_image_size=physical_image_size,
+        current_size=native_current_size,
+    )
+
+    np.testing.assert_array_equal(restored, native)
+    assert np.count_nonzero(optics == 0) > 1
+
+
+def test_optics_plus_two_scatter_rejects_nonzero_outer_border():
+    physical_image_size = 12
+    physical_half = physical_image_size // 2 + 1
+    score_indices = np.asarray(
+        [
+            (physical_image_size // 2 + ky) * physical_half + kx
+            for ky in range(-2, 4)
+            for kx in range(4)
+        ],
+        dtype=np.int64,
+    )
+    values = np.zeros(score_indices.size, dtype=np.float32)
+    values[0] = 1.0
+
+    with np.testing.assert_raises_regex(ValueError, "outside the native scoring grid"):
+        analyzer._compact_to_native_full_order(
+            values,
+            score_indices,
+            physical_image_size=physical_image_size,
+            current_size=4,
+        )
 
 
 def test_log_scores_from_lane_partials_uses_thread_order():
