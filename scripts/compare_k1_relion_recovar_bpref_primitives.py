@@ -27,12 +27,14 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
 
 if __package__:
     from .analyze_k1_bpref_factor_boundary import _pixel_coordinates, _translation_map
+    from .parse_relion_dump_dir import _read_real_2d
     from .validate_relion_bpref_factor_capture import load_factor_capture
 else:
     from analyze_k1_bpref_factor_boundary import (  # type: ignore[no-redef]
         _pixel_coordinates,
         _translation_map,
     )
+    from parse_relion_dump_dir import _read_real_2d  # type: ignore[no-redef]
     from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
         load_factor_capture,
     )
@@ -52,6 +54,30 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(8 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _load_live_initial_sigma2(path: Path) -> np.ndarray:
+    """Load the sealed RELION spectrum or its lossless NumPy equivalent."""
+
+    if path.suffix == ".npy":
+        sigma2 = np.load(path, allow_pickle=False)
+    elif path.suffix == ".bin":
+        matrix = _read_real_2d(path)
+        _require(
+            matrix.ndim == 2 and matrix.shape[0] == 1,
+            "RELION sigma2_noise.bin must contain exactly one spectrum row",
+        )
+        sigma2 = matrix[0]
+    else:
+        raise ValueError("live initial sigma2 must be a .npy or RELION .bin file")
+    sigma2 = np.asarray(sigma2)
+    _require(
+        sigma2.ndim == 1 and sigma2.dtype == np.float64 and sigma2.size > 0,
+        "live initial sigma2 must be a nonempty one-dimensional float64 array",
+    )
+    _require(np.all(np.isfinite(sigma2)), "live initial sigma2 must be finite")
+    _require(np.all(sigma2 > 0.0), "live initial sigma2 must be strictly positive")
+    return sigma2
 
 
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
@@ -532,7 +558,12 @@ def main() -> None:
     parser.add_argument("--dump-directory", type=Path, required=True)
     parser.add_argument("--source-star", type=Path, required=True)
     parser.add_argument("--relion-bind-directory", type=Path, required=True)
-    parser.add_argument("--live-initial-sigma2", type=Path, required=True)
+    parser.add_argument(
+        "--live-initial-sigma2",
+        type=Path,
+        required=True,
+        help="Sealed RELION sigma2_noise.bin or its lossless float64 .npy equivalent",
+    )
     args = parser.parse_args()
     _require(not args.output_json.exists(), f"refusing to overwrite {args.output_json}")
     selection = json.loads(args.selection_json.read_text())
@@ -547,11 +578,7 @@ def main() -> None:
     source_particles, source_optics_by_id, relion_bind = _load_relion_ctf_inputs(
         args.source_star, args.relion_bind_directory
     )
-    live_initial_sigma2 = np.load(args.live_initial_sigma2, allow_pickle=False)
-    _require(
-        live_initial_sigma2.ndim == 1 and live_initial_sigma2.dtype == np.float64,
-        "live initial sigma2 must be a one-dimensional float64 array",
-    )
+    live_initial_sigma2 = _load_live_initial_sigma2(args.live_initial_sigma2)
     args.dump_directory.mkdir(parents=True, exist_ok=False)
     particles = []
     for target in selection["targets"]:
