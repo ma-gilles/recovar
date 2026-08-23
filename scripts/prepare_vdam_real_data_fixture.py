@@ -30,6 +30,13 @@ def _column(table, name: str):
     raise ValueError(f"particle STAR is missing {name}")
 
 
+def _optional_column(table, name: str):
+    for candidate in (name, f"_{name}"):
+        if candidate in table.columns:
+            return candidate
+    return None
+
+
 def select_balanced_half_indices(particles, *, particles_per_half: int, seed: int) -> np.ndarray:
     if int(particles_per_half) <= 0:
         raise ValueError("particles_per_half must be positive")
@@ -111,6 +118,27 @@ def promote_legacy_optics(particles, *, image_size: int):
         "rlnAmplitudeContrast": [_constant_particle_value(particles, "rlnAmplitudeContrast")],
     }
     promoted = particles.copy()
+    origin_x = _optional_column(promoted, "rlnOriginX")
+    origin_y = _optional_column(promoted, "rlnOriginY")
+    if (origin_x is None) != (origin_y is None):
+        raise ValueError("legacy STAR must provide both rlnOriginX and rlnOriginY")
+    origin_x_angst = _optional_column(promoted, "rlnOriginXAngst")
+    origin_y_angst = _optional_column(promoted, "rlnOriginYAngst")
+    if (origin_x_angst is None) != (origin_y_angst is None):
+        raise ValueError("legacy STAR must provide both rlnOriginXAngst and rlnOriginYAngst")
+    if origin_x_angst is None and origin_x is not None:
+        # Once an optics table is present RELION uses the Angstrom origin
+        # columns. Merely retaining the legacy pixel columns silently resets
+        # the active offsets to zero, so preserve their physical meaning.
+        promoted["rlnOriginXAngst"] = np.asarray(promoted[origin_x], dtype=np.float64) * image_pixel_size
+        promoted["rlnOriginYAngst"] = np.asarray(promoted[origin_y], dtype=np.float64) * image_pixel_size
+
+    pmax_column = _optional_column(promoted, "rlnMaxValueProbDistribution")
+    if pmax_column is not None:
+        # This is a fresh InitialModel run. Old optimizer posteriors are not
+        # acquisition metadata and make unvisited rows look active in RELION's
+        # trajectory STAR files.
+        promoted[pmax_column] = np.zeros(len(promoted), dtype=np.float64)
     for name in (
         "rlnDetectorPixelSize",
         "rlnMagnification",
@@ -196,6 +224,14 @@ def prepare_fixture(
         "particles_per_half": int(particles_per_half),
         "image_size": int(image_size),
         "legacy_optics_promoted": bool(optics_promoted),
+        "legacy_origins_converted_to_angstrom": bool(
+            optics_promoted
+            and _optional_column(subset, "rlnOriginX") is not None
+            and _optional_column(subset, "rlnOriginXAngst") is None
+        ),
+        "stale_max_posterior_reset": bool(
+            optics_promoted and _optional_column(subset, "rlnMaxValueProbDistribution") is not None
+        ),
         "selected_particle_count": int(indices.size),
         "selected_random_subset_counts": {
             str(half): int(np.sum(subset_ids == half)) for half in (1, 2)

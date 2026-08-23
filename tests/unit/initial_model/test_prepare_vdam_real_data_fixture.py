@@ -51,6 +51,9 @@ def test_promote_legacy_optics_preserves_particles_and_computes_pixel_size():
     particles["rlnDetectorPixelSize"] = 5.0
     particles["rlnMagnification"] = 35714.0
     particles["rlnDefocusU"] = [10_000.0, 11_000.0]
+    particles["rlnOriginX"] = [2.0, -3.0]
+    particles["rlnOriginY"] = [-1.0, 4.0]
+    particles["rlnMaxValueProbDistribution"] = [0.9, 0.7]
 
     promoted = promote_legacy_optics(particles, image_size=256)
 
@@ -61,6 +64,15 @@ def test_promote_legacy_optics_preserves_particles_and_computes_pixel_size():
     np.testing.assert_array_equal(output_particles["rlnOpticsGroup"], [1, 1])
     np.testing.assert_array_equal(output_particles["rlnPhaseShift"], [0.0, 0.0])
     np.testing.assert_array_equal(output_particles["rlnDefocusU"], [10_000.0, 11_000.0])
+    np.testing.assert_allclose(
+        output_particles["rlnOriginXAngst"],
+        np.asarray([2.0, -3.0]) * optics.loc[0, "rlnImagePixelSize"],
+    )
+    np.testing.assert_allclose(
+        output_particles["rlnOriginYAngst"],
+        np.asarray([-1.0, 4.0]) * optics.loc[0, "rlnImagePixelSize"],
+    )
+    np.testing.assert_array_equal(output_particles["rlnMaxValueProbDistribution"], [0.0, 0.0])
     assert "rlnDetectorPixelSize" not in output_particles
     assert "rlnMagnification" not in output_particles
 
@@ -74,4 +86,17 @@ def test_promote_legacy_optics_rejects_unrepresented_microscope_groups():
     particles["rlnMagnification"] = 35714.0
 
     with pytest.raises(ValueError, match="rlnVoltage varies"):
+        promote_legacy_optics(particles, image_size=256)
+
+
+def test_promote_legacy_optics_rejects_incomplete_origin_pairs():
+    particles = _particles([1, 2])
+    particles["rlnVoltage"] = 300.0
+    particles["rlnSphericalAberration"] = 2.7
+    particles["rlnAmplitudeContrast"] = 0.1
+    particles["rlnDetectorPixelSize"] = 5.0
+    particles["rlnMagnification"] = 35714.0
+    particles["rlnOriginX"] = [1.0, 2.0]
+
+    with pytest.raises(ValueError, match="both rlnOriginX and rlnOriginY"):
         promote_legacy_optics(particles, image_size=256)
