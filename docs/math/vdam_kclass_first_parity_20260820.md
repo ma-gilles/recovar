@@ -288,3 +288,26 @@ run-to-run variation rather than attributable speedup.  Moreover, when
 external absolute evidence is supplied, class-local log-Z remains observable
 in the returned per-class statistics.  The diagnostic patch was reverted and
 no performance claim is made from these jobs.
+
+## Whole-run GPU trace (2026-08-23)
+
+Nsight Systems job `12813510` traced the accepted clean K=4 default over all
+eight iterations.  The complete CUDA-kernel table accounts for only about
+`5.25 s` of device work.  The largest kernels were indexed backprojection
+(`32.5%` combined), coarse projector/diff2 (`22.7%` combined), posterior CUB
+radix sort (`7.4%`), the accepted dual weighted sums (`5.0%`), and compact
+fine diff2 (`2.7%`).  Optimizing any one of those kernels cannot explain or
+close a roughly 140-second process runtime.
+
+The launch/API topology is instead dominant: the trace observes 303,975
+runtime-level `cudaLaunchKernel` calls, 205,588 driver-level `cuLaunchKernel`
+calls, 222,569 device-to-device copies, 33,024 stream synchronizations, and
+5,478 fatbinary loads.  These API layers overlap and must not be summed as
+independent launches, but they expose the executable/dispatch fragmentation.
+The posterior alone launched 20,800 exponentiation kernels, 20,800 division
+kernels, 20,800 scans, and more than 53,000 radix-sort kernels.  Nsight may
+disable some XLA command-buffer execution while profiling, so the trace is not
+a timing baseline; its kernel totals and call multiplicities are the causal
+result.  The next runtime boundary must collapse complete bucket-group graphs
+and shape-specific executable/module loads, not micro-optimize another device
+kernel.
