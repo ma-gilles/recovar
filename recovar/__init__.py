@@ -9,6 +9,8 @@ def _initial_model_cli_requested(argv=None, orig_argv=None) -> bool:
 
     argv = tuple(sys.argv if argv is None else argv)
     orig_argv = tuple(getattr(sys, "orig_argv", ()) if orig_argv is None else orig_argv)
+    if argv and os.path.basename(argv[0]) == "run_ab_initio.py":
+        return True
     if len(argv) > 1 and argv[1] == "initial_model":
         return True
     return any(
