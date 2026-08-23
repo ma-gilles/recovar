@@ -67,6 +67,7 @@ the fixed `0.999` per-class FSC-AUC and `0.995` class-assignment thresholds.
 | K=4, 25 iterations, clean native-dual qualification | PASS | 0.9999998963 | 1.0000 | 42.55 s | 387.07 s | 9.10x |
 | K=4, real 10076, 10,000 particles | PASS | 0.9999987694 | 0.9988 | 71.65 s | 705.67 s | 9.85x |
 | K=4, real 10076, fresh-reference native-dual replay | FAIL | 0.9999625893 | 0.9949 | 156.85 s | 544.00 s | 3.47x |
+| K=4, real 10076, frozen-oracle native-dual replay | PASS | 0.9999987693 | 0.9988 | frozen | 502.13 s | not comparable |
 | K=4, 100,000 particles, 256 pixels | PASS | 0.9999851527 | 0.9998 | 267.06 s | 1960.97 s | 7.34x |
 | K=4, 100,000 particles, 256 pixels, native dual | PASS | 0.9999996968 | 1.0000 | 268.79 s | 1590.93 s | 5.92x |
 | K=2 seed 7 | PASS | 0.9999999996 | 1.0000 | 25.65 s | 313.97 s | 12.24x |
@@ -247,3 +248,10 @@ replays use one frozen oracle so a runtime change cannot pass or fail because
 RELION generated a different atomic-reduction realization.  Native
 repeatability remains a separate visible audit; no threshold or baseline is
 changed.
+
+The first clean frozen-oracle replay is job `12812053` at `40f355d6`.  It
+passes every checkpoint with minimum FSC-AUC `0.9999987693` and minimum
+assignment accuracy `0.9988095`.  Its report explicitly records
+`reference_mode=frozen_pair_report`, `runtime_comparable=false`, and a null
+runtime ratio.  RECOVAR itself took `502.13 s`; that standalone duration is
+not divided by the historical oracle duration.
