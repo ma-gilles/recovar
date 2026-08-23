@@ -8811,15 +8811,10 @@ def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
     return full[1:]
 
 
-def relion_x_half_f32_fine_posterior_enabled(*, default: bool = False) -> bool:
-    """Return whether the RELION float32 fine posterior is enabled.
+def relion_x_half_f32_fine_posterior_enabled() -> bool:
+    """Return whether the opt-in RELION float32 fine posterior is enabled."""
 
-    Supplied-map EM keeps its established opt-in default.  InitialModel passes
-    ``default=True`` because its K=1 exact scorer and x-half reconstruction
-    have both been qualified against the numbered RELION trajectory.
-    """
-
-    return _env_flag_enabled(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, default=default)
+    return _env_flag_enabled(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, default=False)
 
 
 def _relion_fine_parent_execution_order_enabled(
