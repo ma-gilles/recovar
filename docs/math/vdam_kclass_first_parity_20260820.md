@@ -781,3 +781,52 @@ fixture, and GUI command-builder validation passed 79 tests, followed by the
 two direct schedule-routing tests.  Frontend compilation could not run in the
 current worktree because Node/npm is not installed; no repo-wide RECOVAR or
 GUI acceptance suite was substituted for the VDAM-focused validation.
+
+### Filtered EMPIAR-10180 K=1 trajectory and Pmax arithmetic
+
+The fourth frozen real-data case is a deterministic balanced 10,000-particle
+selection from the canonical filtered EMPIAR-10180 indices (5,000 particles
+per synthetic halfset, seed `20260823`).  Its cryoDRGN pose translations are
+converted from box fractions to RELION Angstrom origins before freezing the
+STAR.  The final input STAR SHA-256 is
+`91027ae7b4ef30b8ebd36e6bd57b9a56154319bc998dd2332c2ce9d3e34d051b`;
+the source-index file SHA-256 is
+`3f71ae4b36e7abedceb98a5622c3719d1806f2bb4d2883a5953d343ff7a9b384`.
+
+The first paired trajectory (`12840465`) already had exact selected-particle
+topology and exact winning pose/translation at every checkpoint, with minimum
+map FSC-AUC `0.9999999988031133`.  Its strict result was **FAIL** only because
+iteration-8 Pmax error p95 was `0.00521805` (limit `0.005`); maximum error was
+`0.00705`.  A matched RELION repeat (`12840869`) was exact in every winning
+state and changed iteration-8 Pmax by only `0.000005` p95 and `0.000151` max,
+so this was a cross-engine arithmetic discrepancy rather than reference
+nondeterminism.
+
+RECOVAR exposed only 161 distinct iteration-8 Pmax values, each on the
+`exp(-n / 128)` grid, while RELION exposed 993.  The exact fine kernel was
+already computing the source-faithful float32 exp/sort/scan/divide result, but
+the shared K-class assembler discarded it for K=1 and reconstructed Pmax by
+subtracting separately offset, large absolute best-score and log-evidence
+values.  At the observed magnitude that subtraction has a `1/128` float32
+spacing.  K=1 now preserves the kernel Pmax; K>1 deliberately retains joint
+class normalization for its later phase.  InitialModel enables the qualified
+float32 posterior path by default, while supplied-map EM retains its existing
+opt-in default and the environment switch can explicitly disable either use.
+
+Strict confirmation `12844116` passes all checkpoints with zero winning-state
+mismatches, minimum map FSC-AUC `0.9999999988031133`, and iteration-8 Pmax
+error p95 `0.000068`, maximum `0.000221`.  No threshold changed.  Focused
+assembler, posterior-gate, first-iteration, and merge-guard validation passed
+6 tests in Slurm job `12843934`.  The confirmation still copied the 80 GB
+source stack because the real-data runner put a shared-scratch path in
+`TMPDIR`, which RECOVAR interpreted as an implicit local staging cache; its
+RECOVAR/RELION walls were `265/79 s` (`3.35x`).  The runner now reuses the EM
+benchmark policy and disables implicit staging unless an explicit cache path
+is supplied.  Independent confirmation `12844517` also passes every science
+gate (minimum FSC-AUC `0.9999999988031124`, zero winning-state mismatches,
+iteration-8 Pmax p95 `0.00006605`, maximum `0.000263`).  Batch disk reads fell
+from `87,329.78 MiB` to `4,612.27 MiB` and writes from `84,902.49 MiB` to
+`2,898.64 MiB`; RECOVAR wall fell from `265 s` to `212 s`.  The matched RELION
+wall also varied from `79 s` to `65 s`, leaving the normalized ratio nearly
+unchanged at `3.26x`.  Thus the accidental full-stack copy is closed, while
+the remaining compute/runtime gap remains an explicit open gate.
