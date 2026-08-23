@@ -818,9 +818,18 @@ def write_starfile_from_cryodrgn_format(
     ctf = pickle_load(ctf_path)
     poses = pickle_load(pose_path)
     rots = poses[0]
-    trans = poses[1]
+    # cryoDRGN pose pickles store translations as fractions of the box width,
+    # while RELION 3.1 STAR origin columns are in Angstroms.
+    trans = np.asarray(poses[1]) * float(ctf[0, 0]) * float(ctf[0, 1])
     write_starfile(
-        ctf[:, 2:], rots, trans, ctf[0, 1], ctf[0, 0], particles_file_path, output_filename, halfset_indices=None
+        ctf[:, 2:],
+        rots,
+        trans,
+        ctf[0, 1],
+        ctf[0, 0],
+        particles_file_path,
+        output_filename,
+        halfset_indices=halfset_indices,
     )
 
 
