@@ -145,7 +145,7 @@ def test_dry_run_prints_resolved_native_options(capsys):
 
 
 @pytest.mark.unit
-def test_module_entrypoint_selects_allocator_before_jax_initialization():
+def test_module_entrypoint_keeps_default_allocator_without_override():
     environ = dict(os.environ)
     environ["JAX_PLATFORMS"] = "cpu"
     environ.pop("TF_GPU_ALLOCATOR", None)
@@ -166,7 +166,7 @@ def test_module_entrypoint_selects_allocator_before_jax_initialization():
         env=environ,
     )
 
-    assert json.loads(completed.stdout)["resolved_cuda_allocator"] == "cuda_malloc_async"
+    assert json.loads(completed.stdout)["resolved_cuda_allocator"] == "default"
 
 
 @pytest.mark.unit
@@ -223,12 +223,26 @@ def test_rejects_mpi_before_cuda_runtime_gate(monkeypatch):
         ),
     ],
 )
-def test_initial_model_bootstrap_defaults_to_cuda_malloc_async(argv, orig_argv):
+def test_initial_model_bootstrap_keeps_default_allocator(argv, orig_argv):
     environ = {}
 
     resolved = recovar._configure_initial_model_cuda_allocator(
         argv=argv,
         orig_argv=orig_argv,
+        environ=environ,
+    )
+
+    assert resolved is None
+    assert "TF_GPU_ALLOCATOR" not in environ
+
+
+@pytest.mark.unit
+def test_initial_model_bootstrap_applies_requested_allocator():
+    environ = {"RECOVAR_INITIAL_MODEL_CUDA_ALLOCATOR": "cuda_malloc_async"}
+
+    resolved = recovar._configure_initial_model_cuda_allocator(
+        argv=["recovar", "initial_model"],
+        orig_argv=(),
         environ=environ,
     )
 

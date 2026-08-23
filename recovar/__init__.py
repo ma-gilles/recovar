@@ -20,14 +20,14 @@ def _initial_model_cli_requested(argv=None, orig_argv=None) -> bool:
 
 
 def _configure_initial_model_cuda_allocator(*, argv=None, orig_argv=None, environ=None):
-    """Select the qualified InitialModel allocator before JAX initializes."""
+    """Apply an InitialModel allocator override before JAX initializes."""
 
     environ = os.environ if environ is None else environ
     if not _initial_model_cli_requested(argv=argv, orig_argv=orig_argv):
         return environ.get("TF_GPU_ALLOCATOR")
     requested = environ.get(
         "RECOVAR_INITIAL_MODEL_CUDA_ALLOCATOR",
-        "cuda_malloc_async",
+        "default",
     ).strip()
     if requested.lower() not in {"", "default", "none", "off"}:
         environ.setdefault("TF_GPU_ALLOCATOR", requested)
