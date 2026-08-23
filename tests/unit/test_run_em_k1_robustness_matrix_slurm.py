@@ -1213,3 +1213,15 @@ def test_existing_relion_prefix_exposes_scoped_native_texture_diagnostic():
         "export RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=${ENABLE_NATIVE_TEXTURE}"
         in launcher
     )
+
+
+def test_case05_bpref_pool_launcher_pins_overridable_cuda_library():
+    launcher = (REPO_ROOT / "scripts" / "run_k1_case05_it1_bpref_pool3.sbatch").read_text()
+
+    assert ': "${EXPECTED_CUDA_LIB_SHA256:?pin the selected CUDA library}"' in launcher
+    assert "CUDA_LIB=${CUDA_LIB_OVERRIDE:-" in launcher
+    assert (
+        'test "$(sha256sum "${CUDA_LIB}" | awk \'{print $1}\')" = '
+        '"${EXPECTED_CUDA_LIB_SHA256}"'
+        in launcher
+    )

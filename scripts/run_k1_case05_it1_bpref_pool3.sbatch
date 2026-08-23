@@ -17,6 +17,7 @@ set -euo pipefail
 : "${EXPECTED_SOURCE_DIFF_SHA256:?pin RECOVAR source diff}"
 : "${EXPECTED_LAUNCHER_SHA256:?pin this launcher}"
 : "${EXPECTED_ANALYZER_SHA256:?pin the raw-accumulator analyzer}"
+: "${EXPECTED_CUDA_LIB_SHA256:?pin the selected CUDA library}"
 : "${PARTICLE_POOL_SIZE:?set the positive RELION-style particle launch pool size}"
 test "${PARTICLE_POOL_SIZE}" -gt 0
 
@@ -28,7 +29,7 @@ CONTROL=${CASE}/relion_ref
 NATIVE_DUMP=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_it1_bpref_boundary_retry_20260822T1515ET/native/raw_bpref
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
-CUDA_LIB=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_preprocess_stage_split_20260821T1600ET/cuda/libcuda_backproject.so
+CUDA_LIB=${CUDA_LIB_OVERRIDE:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_preprocess_stage_split_20260821T1600ET/cuda/libcuda_backproject.so}
 RELION_BIND=${SOURCE_ROOT}/relion_bind_build/shared
 LAUNCHER=${REPO}/scripts/run_k1_case05_it1_bpref_pool3.sbatch
 ANALYZER=${REPO}/scripts/analyze_k1_half1_raw_accumulator.py
@@ -45,7 +46,7 @@ test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO}" diff --binary -- recovar/em scripts/run_full_refinement.py | sha256sum | awk '{print $1}')" = "${EXPECTED_SOURCE_DIFF_SHA256}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(sha256sum "${ANALYZER}" | awk '{print $1}')" = "${EXPECTED_ANALYZER_SHA256}"
-test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = b5178b902aafaa945bf7271421edab28bd75f0291484006833e0da0ebc91494b
+test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_LIB_SHA256}"
 RELION_BIND_LIB=$(find "${RELION_BIND}" -maxdepth 1 -type f -name '_relion_bind_core*.so' -print -quit)
 test "$(sha256sum "${RELION_BIND_LIB}" | awk '{print $1}')" = 56acdddab6d25bd83aac5e338162c4819f85ec26f68511458618f143c2b604b7
 
