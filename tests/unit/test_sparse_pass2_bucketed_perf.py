@@ -1409,10 +1409,10 @@ def test_compact_pair_projection_gather_budget_splits_large_bucket():
     assert all(int(chunk["pair_bucket_size"]) == bucket_size for chunk in split)
 
 
-def test_compact_pair_projection_budget_can_group_rotation_signatures(monkeypatch):
-    monkeypatch.setenv(
+def test_compact_pair_projection_budget_groups_rotation_signatures_by_default(monkeypatch):
+    monkeypatch.delenv(
         "RECOVAR_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE",
-        "1",
+        raising=False,
     )
     rotation_counts_by_class = (
         tuple([100] * 38 + [300, 100]),

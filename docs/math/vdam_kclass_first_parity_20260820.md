@@ -482,13 +482,23 @@ the substantially stronger `0.9999999995298583` full-trajectory FSC boundary
 and exact assignments.  A default-route probe (`12824580`) passed one-iteration
 parity at minimum FSC-AUC `0.9999999962612028`, assignment `1.0`.
 
-The subsequent full qualification did not support making it the default:
-the 25-iteration run (`12824959`) remained scientifically strong at minimum
-FSC-AUC `0.9999998919425003` and exact assignments, but took `527.83 s` versus
-the accepted warm `354.33 s`.  The first post-change fast suite also exposed
-downstream default-planner assumptions.  Commit `92a14815` therefore retains
-the implementation and focused tests only as an explicit experiment under
-`RECOVAR_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE=1`; the
-environment-unset production planner remains unchanged while a lower-cost
-adaptive selector is developed.
+Full qualification supports making the palette the default.  The cold,
+concurrently executed 25-iteration pair (`12824959`) remained scientifically
+strong at minimum FSC-AUC `0.9999998919425003` and exact assignments.  A
+source-matched explicit-library warm replay (`12825285`) took `344.07 s`,
+versus `354.33 s` for the accepted planner.  The 10k real-data pair
+(`12825021`) passed at `0.9999620906` / `0.9955` and took `453.62 s`, versus
+the prior `536.08 s`.  Most importantly, the 100k-particle/256-pixel gate
+(`12825039`) passed at `0.9999981063` / `0.99999` and fell from `1474.53 s`
+to `1083.94 s` (runtime ratio `4.32x`).  All nine K=4 parameter cases passed;
+the K=2 default passed at `0.9999999999` / `1.0`; and the repeatability audit
+showed RECOVAR repeat-vs-repeat `0.9999999996` / `1.0` (the weaker fresh
+cross-engine repeat was caused by the independently measured RELION reference
+variation).
+
+The initial fast-suite failures were an invalid CPU-node qualification whose
+traceback was a missing `nvidia-smi`, not a planner regression.  The palette is
+therefore default-on in the tracking branch; setting
+`RECOVAR_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE=0` restores the
+prior planner.  Fixed image-axis padding remains rejected and absent.
 shape.
