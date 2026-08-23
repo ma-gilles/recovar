@@ -217,6 +217,12 @@ _SPARSE_KCLASS_COMPACT_PAIRS_THRESHOLD_REPORT_ENV = (
     "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_THRESHOLD_REPORT"
 )
 _SPARSE_KCLASS_GROUP_TIMING_ENV = "RECOVAR_SPARSE_KCLASS_GROUP_TIMING"
+_SPARSE_KCLASS_EXECUTION_SIGNATURES_ENV = (
+    "RECOVAR_SPARSE_KCLASS_EXECUTION_SIGNATURES"
+)
+_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV = (
+    "RECOVAR_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE"
+)
 _SPARSE_KCLASS_RECTANGULAR_ACTIVE_ROWS_ENV = "RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_ROWS"
 _SPARSE_KCLASS_RECTANGULAR_ACTIVE_ROWS_MIN_BUCKET_SIZE_ENV = (
     "RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_ROWS_MIN_BUCKET_SIZE"
@@ -5863,8 +5869,87 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
 ):
     """Split compact-pair execution buckets by gather/prep/dense-M-step memory."""
 
-    if max_gather_bytes is None and max_prepare_images_per_microbatch is None and max_dense_mstep_bytes is None:
+    group_by_rotation_signature = _env_flag_enabled(
+        _SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV,
+        default=True,
+    )
+    if (
+        not group_by_rotation_signature
+        and max_gather_bytes is None
+        and max_prepare_images_per_microbatch is None
+        and max_dense_mstep_bytes is None
+    ):
         return list(compact_buckets)
+    ungrouped_bucket_count = len(compact_buckets)
+    original_pair_bucket_max_images: dict[int, int] = {}
+    for bucket in compact_buckets:
+        pair_bucket_size = int(bucket["pair_bucket_size"])
+        original_pair_bucket_max_images[pair_bucket_size] = max(
+            original_pair_bucket_max_images.get(pair_bucket_size, 0),
+            len(bucket["image_indices"]),
+        )
+    if group_by_rotation_signature:
+        image_indices_by_pair_bucket: dict[int, list[int]] = {}
+        for bucket in compact_buckets:
+            image_indices_by_pair_bucket.setdefault(
+                int(bucket["pair_bucket_size"]),
+                [],
+            ).extend(
+                np.asarray(bucket["image_indices"], dtype=np.int64).tolist(),
+            )
+        signature_floors_by_pair_bucket: dict[int, int] = {}
+        for pair_bucket_size, pair_image_indices in image_indices_by_pair_bucket.items():
+            percentile_index = max(
+                0,
+                int(np.ceil(0.95 * len(pair_image_indices))) - 1,
+            )
+            signature_floors_by_pair_bucket[pair_bucket_size] = sorted(
+                max(
+                    _exact_bucket_rotation_size(
+                        int(per_image_inputs["oversampled_rots"][image_idx].shape[0]),
+                        rotation_block_size_for_quantization,
+                    )
+                    for per_image_inputs in per_image_inputs_by_class
+                )
+                for image_idx in pair_image_indices
+            )[percentile_index]
+        grouped_image_indices: dict[tuple[int, tuple[int, ...]], list[int]] = {}
+        for bucket in compact_buckets:
+            pair_bucket_size = int(bucket["pair_bucket_size"])
+            signature_floor = signature_floors_by_pair_bucket[pair_bucket_size]
+            for image_idx in np.asarray(bucket["image_indices"], dtype=np.int64).tolist():
+                exact_rotation_signature = tuple(
+                    _exact_bucket_rotation_size(
+                        int(per_image_inputs["oversampled_rots"][image_idx].shape[0]),
+                        rotation_block_size_for_quantization,
+                    )
+                    for per_image_inputs in per_image_inputs_by_class
+                )
+                outlier_bucket_size = max(exact_rotation_signature)
+                rotation_signature = (
+                    (outlier_bucket_size,) * len(exact_rotation_signature)
+                    if outlier_bucket_size > signature_floor
+                    else (signature_floor,) * len(exact_rotation_signature)
+                )
+                grouped_image_indices.setdefault(
+                    (pair_bucket_size, rotation_signature),
+                    [],
+                ).append(int(image_idx))
+        compact_buckets = [
+            {
+                "pair_bucket_size": pair_bucket_size,
+                "image_indices": np.asarray(image_indices, dtype=np.int64),
+                "class_bucket_sizes": _rotation_signature,
+            }
+            for (pair_bucket_size, _rotation_signature), image_indices in grouped_image_indices.items()
+        ]
+        logger.info(
+            "Sparse fused K-class compact-pair rotation-signature grouping: "
+            "buckets %d -> %d (default on; set %s=0 to opt out)",
+            ungrouped_bucket_count,
+            len(compact_buckets),
+            _SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV,
+        )
     max_gather_bytes = None if max_gather_bytes is None else int(max_gather_bytes)
     if max_gather_bytes is not None and max_gather_bytes <= 0:
         max_gather_bytes = None
@@ -5904,15 +5989,22 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
             split_max_images = max(split_max_images, int(image_indices.size))
             continue
         max_images = int(image_indices.size)
+        max_images = min(
+            max_images,
+            original_pair_bucket_max_images[int(bucket["pair_bucket_size"])],
+        )
         if max_gather_bytes is not None or max_dense_mstep_bytes is not None:
-            max_class_bucket_size = max(
-                _compact_bucket_size_for_class(
-                    bucket,
-                    per_image_inputs,
-                    rotation_block_size_for_quantization,
+            if "class_bucket_sizes" in bucket:
+                max_class_bucket_size = max(int(value) for value in bucket["class_bucket_sizes"])
+            else:
+                max_class_bucket_size = max(
+                    _compact_bucket_size_for_class(
+                        bucket,
+                        per_image_inputs,
+                        rotation_block_size_for_quantization,
+                    )
+                    for per_image_inputs in per_image_inputs_by_class
                 )
-                for per_image_inputs in per_image_inputs_by_class
-            )
         if max_gather_bytes is not None:
             per_image_bytes = max(1, int(max_class_bucket_size) * row_bytes)
             max_images = min(max_images, max(1, max_gather_bytes // per_image_bytes))
@@ -6074,12 +6166,17 @@ def _build_k_class_bucket_arrays(
         ]
 
     class_arrays = []
-    for per_image_inputs in per_image_inputs_by_class:
+    forced_class_bucket_sizes = bucket.get("class_bucket_sizes")
+    for class_index, per_image_inputs in enumerate(per_image_inputs_by_class):
         class_bucket = dict(bucket)
-        class_bucket["bucket_size"] = _compact_bucket_size_for_class(
-            bucket,
-            per_image_inputs,
-            rotation_block_size_for_quantization,
+        class_bucket["bucket_size"] = (
+            int(forced_class_bucket_sizes[class_index])
+            if forced_class_bucket_sizes is not None
+            else _compact_bucket_size_for_class(
+                bucket,
+                per_image_inputs,
+                rotation_block_size_for_quantization,
+            )
         )
         class_arrays.append(
             _build_bucket_arrays(
@@ -16751,6 +16848,18 @@ def compute_k_class_pass2_stats_sparse_fused(
             include_dense_score_fields=not bucket_uses_compact_pairs,
             rotation_block_size_for_quantization=rotation_block_size_for_quantization,
         )
+        if _env_flag_enabled(
+            _SPARSE_KCLASS_EXECUTION_SIGNATURES_ENV,
+            default=False,
+        ):
+            print(
+                "VDAM_EXECUTION_SIGNATURE "
+                f"mode={execution_mode} {execution_bucket_size_key}={bucket_size} "
+                f"batch={int(image_indices.shape[0])} "
+                "class_bucket_sizes="
+                f"{tuple(int(arrays['bucket_size']) for arrays in class_bucket_arrays)}",
+                flush=True,
+            )
         compact_pair_arrays_by_class = None
         if bucket_uses_compact_pairs:
             compact_pair_arrays_by_class = [

@@ -1409,6 +1409,81 @@ def test_compact_pair_projection_gather_budget_splits_large_bucket():
     assert all(int(chunk["pair_bucket_size"]) == bucket_size for chunk in split)
 
 
+def test_compact_pair_projection_budget_groups_rotation_signatures_by_default(monkeypatch):
+    monkeypatch.delenv(
+        "RECOVAR_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE",
+        raising=False,
+    )
+    rotation_counts_by_class = (
+        tuple([100] * 38 + [300, 100]),
+        tuple([100] * 39 + [300]),
+    )
+    per_image_inputs_by_class = [
+        {
+            "oversampled_rots": [
+                np.zeros((count, 3, 3), dtype=np.float32)
+                for count in rotation_counts
+            ],
+        }
+        for rotation_counts in rotation_counts_by_class
+    ]
+    compact_buckets = [
+        {"pair_bucket_size": 512, "image_indices": np.arange(20, dtype=np.int64)},
+        {"pair_bucket_size": 512, "image_indices": np.arange(20, 40, dtype=np.int64)},
+    ]
+
+    grouped = _split_compact_pair_buckets_by_projection_gather_budget(
+        compact_buckets,
+        per_image_inputs_by_class,
+        n_score_pixels=17,
+        n_recon_pixels=19,
+        projection_complex_dtype=np.complex64,
+        max_gather_bytes=10**18,
+        max_prepare_images_per_microbatch=100,
+        rotation_block_size_for_quantization=5000,
+    )
+
+    assert [chunk["image_indices"].tolist() for chunk in grouped] == [
+        list(range(20)),
+        list(range(20, 38)),
+        [38, 39],
+    ]
+    np.testing.assert_array_equal(
+        np.sort(np.concatenate([chunk["image_indices"] for chunk in grouped])),
+        np.arange(40, dtype=np.int64),
+    )
+    assert [tuple(chunk["class_bucket_sizes"]) for chunk in grouped] == [
+        (128, 128),
+        (128, 128),
+        (512, 512),
+    ]
+
+
+def test_compact_pair_rotation_signature_grouping_can_be_disabled(monkeypatch):
+    monkeypatch.setenv(
+        "RECOVAR_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE",
+        "0",
+    )
+    bucket = {
+        "pair_bucket_size": 512,
+        "image_indices": np.arange(3, dtype=np.int64),
+    }
+
+    result = _split_compact_pair_buckets_by_projection_gather_budget(
+        [bucket],
+        [{"oversampled_rots": [np.zeros((10, 3, 3), dtype=np.float32)] * 3}],
+        n_score_pixels=17,
+        n_recon_pixels=19,
+        projection_complex_dtype=np.complex64,
+        max_gather_bytes=None,
+        max_prepare_images_per_microbatch=None,
+        rotation_block_size_for_quantization=5000,
+    )
+
+    assert len(result) == 1
+    assert result[0] is bucket
+
+
 def test_relion_windowed_projection_budget_accounts_for_centered_full_half_transient(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTED_ROTATIONS", raising=False)
     monkeypatch.delenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE_MAX_BYTES", raising=False)
