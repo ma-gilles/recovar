@@ -1225,3 +1225,22 @@ def test_case05_bpref_pool_launcher_pins_overridable_cuda_library():
         '"${EXPECTED_CUDA_LIB_SHA256}"'
         in launcher
     )
+
+
+def test_case05_bpref_primitive_launcher_requires_inert_native_capture_and_pinned_inputs():
+    launcher = (REPO_ROOT / "scripts" / "run_k1_case05_it1_bpref_primitives.sbatch").read_text()
+
+    assert 'test -f "${CAPTURE_SUCCESS}"' in launcher
+    assert 'assert all(row["map_stable"] for row in report["iterations"])' in launcher
+    assert 'assert all(row["selected_topology_exact"] for row in report["iterations"])' in launcher
+    for variable in (
+        "EXPECTED_ANALYZER_SHA256",
+        "EXPECTED_SELECTION_SHA256",
+        "EXPECTED_SOURCE_STAR_SHA256",
+        "EXPECTED_SIGMA2_SHA256",
+        "EXPECTED_PASS2_SHA256",
+        "EXPECTED_CONTRIBUTION_SHA256",
+        "EXPECTED_CUDA_LIB_SHA256",
+    ):
+        assert f': "${{{variable}:?' in launcher
+    assert "scripts.compare_k1_relion_recovar_bpref_primitives" in launcher
