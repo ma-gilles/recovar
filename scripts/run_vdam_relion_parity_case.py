@@ -354,6 +354,8 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "CUDA_LAUNCH_BLOCKING",
         "JAX_PLATFORMS",
         "JAX_PLATFORM_NAME",
+        "JAX_COMPILATION_CACHE_DIR",
+        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS",
         "RECOVAR_CUDA_LIB",
         "RECOVAR_DISABLE_CUDA",
         "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB",
