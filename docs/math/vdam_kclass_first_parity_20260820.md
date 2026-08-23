@@ -652,3 +652,48 @@ and noise operand needed to preserve the RELION trajectory) or ordered,
 bounded asynchronous prefetch.  Each candidate will be rejected immediately
 unless it passes a small complete trajectory followed by the independent
 100k/256 iteration-1 audit before any longer scale run.
+
+### Rejected bounded bucket-prefetch probe
+
+A one-bucket asynchronous prefetch kept exact requested particle order and at
+most one additional batch resident.  Its small complete K=4 trajectory
+(`12836093`) passed checkpoints 0/1/2/4/8 with minimum FSC-AUC
+`0.999979226703295`, minimum assignment accuracy `0.9998`, and exact artifact
+topology.  Wall time improved only from `428.12 s` to `418.79 s` (`2.2%`).
+The scale job `12836388` then made the rejection unambiguous: its first
+50,000-particle pass-2 half took `369.88 s`, versus the frozen `325.1 s`
+control (`+13.8%`).  It was canceled during half two after `13:43` and peaked
+at `35,129,516 KiB` RSS; dependent audit `12836389` was canceled.  The probe
+was reverted in the isolated runtime worktree and is not present here.
+
+## Real-data expansion and configurable surfaces (2026-08-23)
+
+The second frozen real-data case uses 10,000 balanced EMPIAR-10073 particles.
+The source is a legacy single-table STAR, so fixture preparation now promotes
+its microscope metadata to a RELION 3.1 optics table.  The first promoted
+fixture exposed an important conversion bug: legacy pixel origins were left
+in deprecated columns.  RELION ignored those columns once optics existed and
+searched around zero, while RECOVAR preserved centers as large as 55 pixels.
+Job `12836331` therefore matched bootstrap (`0.9999999667` FSC-AUC) but
+diverged at iteration 1 (`0.6215650`) and later.  This is an understood fixture
+contract failure, not an accepted parity result.
+
+The immutable v3 fixture converts legacy pixel origins to active Angstrom
+columns using the derived `1.400011 A/px` optics value and resets stale
+posteriors from the prior refinement.  It retains the identical balanced
+source-index selection.  Its STAR SHA-256 is
+`eb15efcb63d3496c6a7b39e966ec3a0d992b78223c7b11ef1c5cbdd61355ee1a`;
+the source-index file SHA-256 remains
+`4417136987d8c2501bcac53b795d25aa7821d0b4f2a09ac91d385d8224a15bea`.
+The corrected full trajectory is the next real-data gate.
+
+The public CLI and GUI continue to resolve defaults from one
+`GuiInitialModelDefaults` object.  The previously hard-coded scientific
+schedule is now configurable end to end with `--grad-ini-frac`,
+`--grad-fin-frac`, `--grad-em-iters`, `--stepsize`, and `--mu`; the GUI shows
+the same controls under Advanced InitialModel controls.  Defaults remain the
+RELION GUI values `0.3`, `0.2`, `0`, `0.5`, and `0.9`.  Focused CLI, schedule,
+fixture, and GUI command-builder validation passed 79 tests, followed by the
+two direct schedule-routing tests.  Frontend compilation could not run in the
+current worktree because Node/npm is not installed; no repo-wide RECOVAR or
+GUI acceptance suite was substituted for the VDAM-focused validation.
