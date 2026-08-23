@@ -288,6 +288,54 @@ def test_vdam_long_trajectory_suite_freezes_all_late_checkpoints():
     assert "VDAM_SCORECARD" in matrix
 
 
+def test_vdam_robustness_suite_covers_em_outlier_pose_and_noise_matrix():
+    suite = json.loads((REPO_ROOT / "docs/math/vdam_k1_robustness_suite_v1.json").read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_robustness_suite.sbatch").read_text()
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-robustness-v1"
+    assert suite["acceptance_contract"] == {
+        "cross_engine_fsc_auc_min": 0.999,
+        "recovar_minus_relion_gt_fsc_auc_min": -0.002,
+        "required_checkpoints": [0, 1, 2, 4, 8],
+        "exact_schedule": True,
+        "exact_artifact_topology": True,
+        "same_physical_gpu_per_pair": True,
+        "correlation_used": False,
+    }
+    cases = suite["cases"]
+    assert [case["id"] for case in cases] == [f"vdam-b{index:02d}" for index in range(1, 13)]
+    assert [case["definition"]["source_em_case_id"] for case in cases] == [
+        "k1-15", "k1-16", "k1-17", "k1-21", "k1-23", "k1-24",
+        "k1-26", "k1-27", "k1-28", "k1-29", "k1-30", "k1-32",
+    ]
+    assert all(case["definition"]["nr_iter"] == 8 for case in cases)
+    assert all(case["definition"]["nr_classes"] == 1 for case in cases)
+    coverage = {axis for case in cases for axis in case["coverage"]}
+    assert {
+        "outliers",
+        "extreme_outliers",
+        "junk_particles",
+        "uniform_poses",
+        "anisotropic_poses",
+        "kent_poses",
+        "white_noise",
+        "radial_noise",
+        "low_noise",
+        "high_noise",
+        "no_ctf",
+        "contrast_noise_scale",
+        "translations",
+        "small_n",
+        "midscale",
+    } <= coverage
+    assert "#SBATCH --array=1-12%4" in matrix
+    assert "printf 'vdam-b%02d'" in matrix
+    assert "VDAM_SCORECARD" in matrix
+    assert "run_vdam_relion_parity_case.sbatch" in matrix
+    assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
+
+
 def test_vdam_case_runner_uses_job_scoped_runtime_roots():
     runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
     expected_tokens = [
