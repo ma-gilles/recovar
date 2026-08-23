@@ -706,6 +706,17 @@ synthetic halves and records the explicit canonical CTF pixel size
 `e5d9f77ff38d0e5137412892e7cc7591ba09265fb928b649cdeab58208a540f5`;
 the selected-index file SHA-256 is
 `9f812a7bfd6bb9dd071786143a501c6803f6c05541faee36c7d6e07f0aa787a3`.
+Strict pair `12837220` passed bootstrap and iterations 1, 2, and 4 with exact
+selected-particle topology and zero winning pose/translation mismatches. At
+iteration 8, 999 of 1,000 selected particles still agree, but
+`3138@particles.256.mrcs` selects a different pose and translation and reaches
+`0.014321` absolute Pmax error. The minimum map FSC-AUC remains
+`0.9999974063783914`, so the map contract passes while the particle-state
+contract correctly keeps the overall result at **FAIL**. RECOVAR took `178 s`
+versus RELION's `22 s` (`8.09x`). Together with the single late boundary in
+EMPIAR-10073, this independently reproduces a rare iteration-8 decision-boundary
+problem on two real datasets; the next diagnostic captures the exact pass-2
+operands for those particles rather than weakening the state thresholds.
 
 The public CLI and GUI continue to resolve defaults from one
 `GuiInitialModelDefaults` object.  The previously hard-coded scientific
