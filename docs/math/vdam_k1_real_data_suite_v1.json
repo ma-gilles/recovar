@@ -44,9 +44,9 @@
       "id": "vdam-r02",
       "name": "empiar10073_deterministic_10k",
       "dataset": "EMPIAR-10073",
-      "input_star": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10073_10k_fixture_20260823/data/particles.star",
-      "input_star_sha256": "aab03a37b98dfe0605a967ffe2dbb0924c1320147f136ceb0a442c7b3352d10b",
-      "data_dir": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10073_10k_fixture_20260823/data",
+      "input_star": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10073_10k_fixture_v2_20260823/data/particles.star",
+      "input_star_sha256": "ecb823a05a16c1bf60b001c180db64447ef050fb44a95c01095fadf04f3a4d9f",
+      "data_dir": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10073_10k_fixture_v2_20260823/data",
       "source_indices_sha256": "4417136987d8c2501bcac53b795d25aa7821d0b4f2a09ac91d385d8224a15bea",
       "particle_count": 10000,
       "definition": {

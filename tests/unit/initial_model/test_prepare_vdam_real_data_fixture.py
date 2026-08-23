@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.prepare_vdam_real_data_fixture import select_balanced_half_indices
+from scripts.prepare_vdam_real_data_fixture import promote_legacy_optics, select_balanced_half_indices
 
 
 def _particles(halves):
@@ -41,3 +41,37 @@ def test_balanced_half_selection_rejects_invalid_subset_identifiers():
 
     with pytest.raises(ValueError, match="only RELION half identifiers 1 and 2"):
         select_balanced_half_indices(particles, particles_per_half=1, seed=0)
+
+
+def test_promote_legacy_optics_preserves_particles_and_computes_pixel_size():
+    particles = _particles([1, 2])
+    particles["rlnVoltage"] = 300.0
+    particles["rlnSphericalAberration"] = 2.7
+    particles["rlnAmplitudeContrast"] = 0.1
+    particles["rlnDetectorPixelSize"] = 5.0
+    particles["rlnMagnification"] = 35714.0
+    particles["rlnDefocusU"] = [10_000.0, 11_000.0]
+
+    promoted = promote_legacy_optics(particles, image_size=256)
+
+    optics = promoted["optics"]
+    output_particles = promoted["particles"]
+    assert optics.loc[0, "rlnImagePixelSize"] == pytest.approx(5.0 * 10_000.0 / 35714.0)
+    assert optics.loc[0, "rlnImageSize"] == 256
+    np.testing.assert_array_equal(output_particles["rlnOpticsGroup"], [1, 1])
+    np.testing.assert_array_equal(output_particles["rlnPhaseShift"], [0.0, 0.0])
+    np.testing.assert_array_equal(output_particles["rlnDefocusU"], [10_000.0, 11_000.0])
+    assert "rlnDetectorPixelSize" not in output_particles
+    assert "rlnMagnification" not in output_particles
+
+
+def test_promote_legacy_optics_rejects_unrepresented_microscope_groups():
+    particles = _particles([1, 2])
+    particles["rlnVoltage"] = [300.0, 200.0]
+    particles["rlnSphericalAberration"] = 2.7
+    particles["rlnAmplitudeContrast"] = 0.1
+    particles["rlnDetectorPixelSize"] = 5.0
+    particles["rlnMagnification"] = 35714.0
+
+    with pytest.raises(ValueError, match="rlnVoltage varies"):
+        promote_legacy_optics(particles, image_size=256)

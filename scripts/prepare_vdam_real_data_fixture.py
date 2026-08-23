@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import starfile
 
 
@@ -81,6 +82,66 @@ def _link_relative_stacks(particles, *, source_dir: Path, output_dir: Path) -> l
     return linked
 
 
+def _constant_particle_value(particles, name: str) -> float:
+    column = _column(particles, name)
+    values = np.asarray(particles[column], dtype=np.float64)
+    if values.size == 0 or not np.all(np.isfinite(values)):
+        raise ValueError(f"legacy STAR column {name} must be finite and nonempty")
+    if not np.allclose(values, values[0], rtol=0.0, atol=1e-6):
+        raise ValueError(f"legacy STAR column {name} varies; explicit optics grouping is required")
+    return float(values[0])
+
+
+def promote_legacy_optics(particles, *, image_size: int):
+    """Return a RELION 3.1 optics/particles pair from a legacy single table."""
+
+    detector_pixel_um = _constant_particle_value(particles, "rlnDetectorPixelSize")
+    magnification = _constant_particle_value(particles, "rlnMagnification")
+    if detector_pixel_um <= 0.0 or magnification <= 0.0:
+        raise ValueError("legacy detector pixel size and magnification must be positive")
+    image_pixel_size = detector_pixel_um * 10_000.0 / magnification
+    optics_values = {
+        "rlnOpticsGroup": [1],
+        "rlnOpticsGroupName": ["opticsGroup1"],
+        "rlnImagePixelSize": [image_pixel_size],
+        "rlnImageSize": [int(image_size)],
+        "rlnImageDimensionality": [2],
+        "rlnVoltage": [_constant_particle_value(particles, "rlnVoltage")],
+        "rlnSphericalAberration": [_constant_particle_value(particles, "rlnSphericalAberration")],
+        "rlnAmplitudeContrast": [_constant_particle_value(particles, "rlnAmplitudeContrast")],
+    }
+    promoted = particles.copy()
+    for name in (
+        "rlnDetectorPixelSize",
+        "rlnMagnification",
+        "rlnVoltage",
+        "rlnSphericalAberration",
+        "rlnAmplitudeContrast",
+    ):
+        for candidate in (name, f"_{name}"):
+            if candidate in promoted.columns:
+                promoted = promoted.drop(columns=candidate)
+    promoted["rlnOpticsGroup"] = np.ones(len(promoted), dtype=np.int64)
+    if not any(candidate in promoted.columns for candidate in ("rlnPhaseShift", "_rlnPhaseShift")):
+        promoted["rlnPhaseShift"] = np.zeros(len(promoted), dtype=np.float64)
+    return {"optics": pd.DataFrame(optics_values), "particles": promoted}
+
+
+def _stack_image_size(linked_stacks: list[dict[str, str]]) -> int:
+    import mrcfile
+
+    sizes = set()
+    for linked in linked_stacks:
+        with mrcfile.open(linked["source_path"], mode="r", header_only=True, permissive=True) as mrc:
+            sizes.add((int(mrc.header.ny), int(mrc.header.nx)))
+    if len(sizes) != 1:
+        raise ValueError(f"fixture particle stacks must share one image shape; got {sorted(sizes)}")
+    image_h, image_w = next(iter(sizes))
+    if image_h != image_w:
+        raise ValueError(f"fixture particle images must be square; got {(image_h, image_w)}")
+    return image_h
+
+
 def prepare_fixture(
     *,
     source_star: Path,
@@ -104,15 +165,20 @@ def prepare_fixture(
         seed=int(seed),
     )
     subset = particles.iloc[indices].reset_index(drop=True)
-    output_star_data = dict(star_data) if isinstance(star_data, dict) else subset
-    if isinstance(output_star_data, dict):
-        if "particles" in output_star_data:
-            output_star_data["particles"] = subset
-        else:
-            only_key = next(iter(output_star_data))
-            output_star_data[only_key] = subset
-
     linked_stacks = _link_relative_stacks(subset, source_dir=source_star.parent, output_dir=output_dir)
+    image_size = _stack_image_size(linked_stacks)
+    if isinstance(star_data, dict) and "optics" in star_data:
+        output_star_data = dict(star_data)
+        output_star_data["particles"] = subset.copy()
+        if not any(
+            candidate in output_star_data["particles"].columns
+            for candidate in ("rlnPhaseShift", "_rlnPhaseShift")
+        ):
+            output_star_data["particles"]["rlnPhaseShift"] = np.zeros(len(subset), dtype=np.float64)
+        optics_promoted = False
+    else:
+        output_star_data = promote_legacy_optics(subset, image_size=image_size)
+        optics_promoted = True
     output_star = output_dir / "particles.star"
     source_indices = output_dir / "source_indices.npy"
     starfile.write(output_star_data, output_star, overwrite=False)
@@ -128,6 +194,8 @@ def prepare_fixture(
         "source_particle_count": int(len(particles)),
         "selection_seed": int(seed),
         "particles_per_half": int(particles_per_half),
+        "image_size": int(image_size),
+        "legacy_optics_promoted": bool(optics_promoted),
         "selected_particle_count": int(indices.size),
         "selected_random_subset_counts": {
             str(half): int(np.sum(subset_ids == half)) for half in (1, 2)
