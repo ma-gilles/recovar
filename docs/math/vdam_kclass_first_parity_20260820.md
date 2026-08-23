@@ -255,3 +255,24 @@ assignment accuracy `0.9988095`.  Its report explicitly records
 `reference_mode=frozen_pair_report`, `runtime_comparable=false`, and a null
 runtime ratio.  RECOVAR itself took `502.13 s`; that standalone duration is
 not divided by the historical oracle duration.
+
+## Fused sparse M-step diagnostic (2026-08-23)
+
+A broader native M-step prototype kept the compact posterior internal to one
+custom call: it allocated private dense scratch, scattered each unique compact
+pair once, ran the accepted ordered reconstruction/noise contractions, and
+returned only the five M-step statistics consumed by Python.  Focused H100
+tests covered `complex64`/`complex128` images and `float32`/`float64` CTF
+weights; the final test job `12812588` passed all seven cases.  An initial
+production run (`12812361`) also exposed and closed the missing `float64` CTF
+contract before the timed replay.
+
+The complete retry `12812440` took 142 seconds, indistinguishable from the
+accepted native-dual run rather than faster than it.  Its audit `12812586`
+passed every checkpoint with exact class assignments, exact artifact topology,
+and minimum FSC-AUC `0.9999999996`.  Thus the private scratch did preserve the
+scientific trajectory, but allocation, scatter, and extra native reductions
+only moved work across the boundary; they did not reduce end-to-end runtime.
+The prototype is retained as a diagnostic commit/revert on the isolated probe
+branch and is not promoted.  Runtime work should remain focused on the much
+larger scoring/posterior/noise path and executable-shape/compilation costs.
