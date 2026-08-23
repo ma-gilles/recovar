@@ -5314,7 +5314,7 @@ def test_native_dual_weighted_sums_defaults_only_on_exact_gpu_contract(monkeypat
     assert _native_dual_weighted_sums_enabled_for_pass(**kwargs)
 
 
-def test_fused_mstep_noise_defaults_off_and_rejects_incompatible_contracts(monkeypatch):
+def test_fused_mstep_noise_defaults_on_and_rejects_incompatible_contracts(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE", raising=False)
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED", raising=False)
     kwargs = dict(
@@ -5324,8 +5324,10 @@ def test_fused_mstep_noise_defaults_off_and_rejects_incompatible_contracts(monke
         accumulate_noise=True,
         compact_noise_sums_match_mstep=False,
     )
-    assert not _fused_mstep_noise_enabled_for_pass(**kwargs)
+    assert _fused_mstep_noise_enabled_for_pass(**kwargs)
 
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE", "0")
+    assert not _fused_mstep_noise_enabled_for_pass(**kwargs)
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE", "1")
     assert _fused_mstep_noise_enabled_for_pass(**kwargs)
     for disabled_contract_key in (

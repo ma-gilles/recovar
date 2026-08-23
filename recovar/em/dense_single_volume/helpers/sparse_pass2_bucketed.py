@@ -3008,7 +3008,7 @@ def _fused_mstep_noise_enabled_for_pass(
         and _env_flag_enabled(_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV, default=True)
     ):
         return False
-    return _env_flag_enabled(_SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV, default=False)
+    return _env_flag_enabled(_SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV, default=True)
 
 
 def _fresh_k1_direct_noise_default(

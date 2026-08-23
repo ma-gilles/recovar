@@ -388,3 +388,38 @@ but regressed warm wall to `142.38 s` (`12817124`, versus the same-node
 adds memory pressure without removing the downstream orchestration.  A useful
 native boundary must consume score operands through weighted/noise statistics,
 not just relocate raw intermediates.
+
+## Fused M-step/noise promotion boundary (2026-08-23)
+
+The accepted next boundary combines the two native compact weighted-sum calls
+with the dense residual-noise and norm reduction in one JIT region.  It also
+keeps the active-row mask on device and reuses the resulting shell sums in the
+later noise update.  The path is deliberately narrow: it requires native dual
+weighted sums, exact RELION Gaussian scoring, x-half M-step accumulation,
+noise accumulation, the residual-term formulation, and no competing compact
+noise reuse.  `RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE=0` remains an explicit
+diagnostic opt-out.
+
+Focused H100 tests established exact equality for all seven returned arrays
+(`12817496`, 8 passed), and the primary implementation passed its focused GPU
+suite (`12818513`, 4 passed).  The following end-to-end gates used the same
+RELION trajectory audit as the earlier parity work:
+
+| Gate | Result | RECOVAR wall | Comparison |
+| --- | --- | ---: | --- |
+| K=4 promoted default, environment unset (`12819567`) | minimum FSC-AUC `0.9999999972918416`, assignment `1.0` | `132.58 s` | both halfsets recorded `sparse_kclass_fused_mstep_noise: true` |
+| K=4 same-node A/B (`12817941`) | minimum FSC-AUC `0.9999999996693576`, assignment `1.0` | `133.97 s` | `6.60%` faster than the `143.43 s` control |
+| K=4 isolated cache (`12818120`) | minimum FSC-AUC `0.9999999972527686`, assignment `1.0` | `497.82 s` | `4.8-5.0%` faster than the established isolated controls |
+| K=2 warm (`12818196`) | minimum FSC-AUC `0.9999999994495288`, assignment `1.0` | `112.95 s` | `7.92%` faster than the prior native-dual baseline |
+| K=4 parameter matrix (`12818160`) | all 9 cases passed | `112.83-308.33 s` | diameter, healpix, offset, oversampling, seed, and tau2-fudge variants |
+| K=4 repeatability (`12818404`) | RECOVAR repeat minimum FSC-AUC `0.9999999972264677`, assignment `1.0` | `132.14-133.65 s` | both cross-engine audits passed |
+| K=4, 25 iterations, warm (`12818736`) | minimum FSC-AUC `0.999999899069889`, assignment `1.0` | `354.33 s` | `12.0%` faster than the prior qualified run |
+| 10076, 10k particles (`12818403`) | minimum FSC-AUC `0.9999979947608962`, assignment `0.997619` | `536.08 s` | `24.0%` faster than the prior qualified run |
+| 100k particles at 256 px (`12818405`) | minimum FSC-AUC `0.9999981078201251`, assignment `0.99999` | `1474.53 s` | `24.8%` faster than the prior qualified run |
+
+The first long-trajectory invocation paid a new-shape compilation cost
+(`471.66 s`, `12818402`), while its warm replay produced the improvement above.
+The isolated-cache gate nevertheless improved, so the boundary does not trade
+warm speed for a general cold-start regression.  Direct-scatter, posterior-only
+FFI, raw-diff2 retention, and dense-active-row alternatives remain rejected;
+none of those diagnostic implementations is present in the promoted path.
