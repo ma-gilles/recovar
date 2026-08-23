@@ -305,6 +305,12 @@ def _score_normalize_support(
     scores = jnp.where(valid_sample_mask, scores, -jnp.inf)
     scores = jnp.where(valid_image_mask[:, None, None], scores, -jnp.inf)
     scores = jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
+    # Keep the score tensor as an explicit float32 rounding boundary before
+    # the max/log-sum-exp reductions. Without this barrier, asking the same
+    # fused JIT to return scores for diagnostics can change XLA fusion and
+    # flip near-tied VDAM winners. The sparse RELION-exact path uses the same
+    # boundary before posterior normalization.
+    scores = jax.lax.optimization_barrier(scores)
 
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)

@@ -735,6 +735,42 @@ only `0.000097`, and repeat map FSC-AUC is `0.99999999805772`.  The 10345
 particle therefore remains a genuine RECOVAR-vs-RELION fine-score boundary,
 not a reference-repeatability exception.
 
+The boundary was traced to compiler fusion across the local fine-score tensor
+and its max/log-sum-exp normalization.  Returning the materialized local scores
+from the otherwise identical fused JIT (`12838005`) made all 1,000 iteration-8
+winners exact, reduced maximum Pmax error to `0.006057`, and produced
+`0.9999999978042775` iteration-8 map FSC-AUC.  Capturing the production fused
+posterior instead (`12838114`) preserved the original one-particle failure:
+the native winner had probability `0.08620585`, while RECOVAR assigned
+`0.07194030` to a different sample and only `0.00861246` to the native winner.
+An explicit JAX optimization barrier after the finite-score mask now establishes
+the same float32 score boundary used by the sparse RELION-exact path before
+posterior normalization.  The strict confirmation run (`12838727`) has zero
+winning-state mismatches at every checkpoint, maximum Pmax error `0.006055`,
+minimum map FSC-AUC `0.9999998131188906`, and runtime `172 s` versus RELION's
+`21 s`; the prior failing run took `178 s`, so no slowdown was observed in this
+paired case.  Focused score/preprocessing validation passed 10 tests in Slurm
+job `12839130`.
+
+The barrier was then qualified from frozen source head
+`be1bab59acf8229f17e869f88f22491a29d89edb` across two full-trajectory
+suites.  Eight-iteration array `12839524` passed all 12 cases, covering
+uniform and Kent pose distributions; white, radial, and anisotropic noise;
+no-CTF data; low and high noise; changed particle counts and contrast; and
+20--70% outliers.  Its minimum cross-engine FSC-AUC is
+`0.9999999918773999`, and its worst RECOVAR-minus-RELION ground-truth FSC-AUC
+delta is `-1.329324083941541e-06`; the aggregate report SHA-256 is
+`79f86248cb274f74494ae7b5ca8611976adc0651239a1dc124cb980a89e8980e`.
+The independent 25-iteration array `12839393` passed all four long cases
+(anisotropic 25% outliers, Kent poses with 20% outliers, extreme 70% outliers,
+and mid-scale Kent poses with radial noise).  Its minimum cross-engine FSC-AUC
+is `0.9999967136890615`, worst ground-truth delta is
+`-1.8636516485731613e-06`, and aggregate report SHA-256 is
+`34280f9cd778c6c22e22b72581fad3cd58a111efa03fc0ed2280b79af745eab7`.
+No parity thresholds were changed.  Runtime remains open: the long cases are
+`7.60--8.40x` RELION and the short cases are `4.10--12.32x` at these small
+scales, where fixed JAX compilation costs dominate.
+
 The public CLI and GUI continue to resolve defaults from one
 `GuiInitialModelDefaults` object.  The previously hard-coded scientific
 schedule is now configurable end to end with `--grad-ini-frac`,
