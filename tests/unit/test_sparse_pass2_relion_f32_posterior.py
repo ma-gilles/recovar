@@ -12,9 +12,20 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_f32_fine_reconstruction_probs,
     _relion_pass2_reconstruction_probs,
     _relion_pass2_reconstruction_probs_for_mstep,
+    relion_x_half_f32_fine_posterior_enabled,
 )
 
 pytestmark = pytest.mark.unit
+
+
+def test_relion_f32_fine_posterior_gate_supports_initial_model_default(monkeypatch):
+    monkeypatch.delenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, raising=False)
+
+    assert relion_x_half_f32_fine_posterior_enabled() is False
+    assert relion_x_half_f32_fine_posterior_enabled(default=True) is True
+
+    monkeypatch.setenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, "0")
+    assert relion_x_half_f32_fine_posterior_enabled(default=True) is False
 
 
 def _numpy_relion_f32_reference(scores, adaptive_fraction):

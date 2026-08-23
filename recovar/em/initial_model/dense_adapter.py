@@ -1071,7 +1071,9 @@ def _run_sparse_pass2_initial_model_estep(
                     relion_f32_fine_posterior=bool(
                         state.K == 1
                         and config.relion_bpref_frame
-                        and sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled()
+                        and sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled(
+                            default=True,
+                        )
                     ),
                     # RELION's symbolic pass 2 at os0 retains every sample selected
                     # by pass 1. It does not apply another adaptive-fraction prune.

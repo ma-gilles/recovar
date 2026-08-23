@@ -1430,6 +1430,18 @@ def _assemble_result(
         # best scores above come from different score surfaces and cannot be
         # subtracted to reconstruct this probability.
         joint_pmax[np.isfinite(global_best_scores)] = 1.0
+    elif len(per_class_stats) == 1:
+        # The single-class kernel is the authoritative source for Pmax.  In
+        # RELION-exact mode it obtains this value from the float32
+        # exp/sort/scan/divide path, before converting scores back to absolute
+        # log-evidence coordinates.  Recomputing ``best - logZ`` here loses
+        # that arithmetic boundary (and at real-data score magnitudes visibly
+        # quantizes Pmax to exp(-n / 128)).  K>1 still needs the joint-class
+        # normalization below.
+        joint_pmax = np.asarray(
+            per_class_stats[0].max_posterior_per_image,
+            dtype=np.float64,
+        ).copy()
     else:
         finite_joint_best = np.isfinite(global_best_scores) & np.isfinite(global_log_evidence)
         joint_log_pmax = global_best_scores[finite_joint_best] - global_log_evidence[finite_joint_best]

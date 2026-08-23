@@ -275,6 +275,28 @@ def test_k_class_assemble_result_reports_joint_pmax_not_per_class_pmax():
     )
 
 
+def test_single_class_assemble_result_preserves_authoritative_kernel_pmax():
+    kernel_pmax = np.float32(0.97628003)
+    result = _assemble_result(
+        class_log_evidence=np.asarray([[-100000.0]], dtype=np.float64),
+        new_means=[jnp.zeros(2)],
+        Ft_y=[jnp.zeros(2)],
+        Ft_ctf=[jnp.zeros(2)],
+        per_class_hard_assignments=np.asarray([[3]], dtype=np.int32),
+        per_class_stats=(
+            _stats([-100000.0], [-100000.03125], [kernel_pmax]),
+        ),
+        noise_stats=None,
+    )
+
+    recomputed = np.exp(-100000.03125 - (-100000.0))
+    assert abs(float(kernel_pmax) - recomputed) > 5e-3
+    np.testing.assert_array_equal(
+        np.asarray(result.stats.max_posterior_per_image),
+        np.asarray([kernel_pmax], dtype=np.float32),
+    )
+
+
 def test_k_class_assemble_result_clips_inconsistent_pmax_before_exp_overflow():
     with np.errstate(over="raise"):
         result = _assemble_result(
