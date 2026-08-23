@@ -451,7 +451,7 @@ Several apparent ways to reduce that fragmentation were measured and rejected:
 | Residual-subtraction JIT (`12820809`) | `49.13 s`; warm pass 2 `12.0 s` | statistically neutral to the `48.43 s` control |
 | Residual subtraction inside fused M-step/noise (`12821679`, `12821729`) | `123.76 s` without a barrier; `122.96 s` with an exactness barrier | warm pass 2 regressed from `11.40 s` to `32.17 s`; the unbarriered graph also changed five shell sums by up to `1.91e-6` (`12821680`), while the barrier restored exactness (`12821713`) but not runtime |
 | Exact/per-class rotation-signature grouping (`12822101`, `12822200`) | cancelled after only 7 chunks in `49 s` and 9 chunks in `57 s` | rare one-particle and class-specific shapes expanded the compile palette |
-| Joint-p95 two-palette grouping (`12822398`, `12822531`, `12822806`) | one iteration `49.57 s`; default-8 cold `379.07 s`, warm `120.26 s` | reduced compact chunks from 86 to 38 and warm pass 2 from `11.60 s` to `8.86 s`, but data-dependent remainder batches recompiled every iteration; science passed at minimum FSC-AUC `0.9999999995298583` and exact assignments |
+| Joint-p95 two-palette grouping (`12822398`, `12822531`, `12822806`) | one iteration `49.57 s`; default-8 isolated `379.07 s`, warm `120.26 s` | reduced compact chunks from 86 to 38 and warm pass 2 from `11.60 s` to `8.86 s`; science passed at minimum FSC-AUC `0.9999999995298583` and exact assignments |
 
 The EM-style coarse score/prior/evidence JIT boundary also preserved the full
 trajectory (`12821223`; minimum FSC-AUC `0.9999792267663643`, assignment
@@ -462,15 +462,28 @@ current memory planner; simply wrapping individual eager regions in JIT or
 changing bucket size does not improve end-to-end wall time.
 
 The promoted source also completed the full fast suite after these runtime
-probes (`12819918`): `7002 passed, 109 skipped` in `45:32`.  Every rejected
-probe above was isolated to the diagnostic worktree; none is present in the
-tracking branch.
+probes (`12819918`): `7002 passed, 109 skipped` in `45:32`.
 
-The two-palette result identifies the next actionable boundary despite being
-rejected as an implementation: its warm default-8 replay was `9.3%` faster
-than the promoted `132.58 s` run.  The EM stack already has a static image-axis
-padding contract (`pad_batch_data_ctf_and_valid_mask` plus unpadded
-postprocessing in `local_em_engine.py`).  The next VDAM probe should reuse that
-contract so common, remainder, and outlier chunks keep a fixed batch dimension
-from the first trajectory, rather than compiling each data-dependent remainder
+The EM-style fixed-image-axis follow-up was then tested in three progressively
+narrower forms.  Padding the complete sparse pass (`12823711`, `12823776`)
+took `74.04 s` for one iteration and `306.43 s` for default-8.  Deriving the
+fixed capacity only from the memory planner (`12824076`, `12824126`) took
+`79.51 s` and `289.28 s`.  Padding only scoring/posterior and removing dummy
+rows before the scientific reductions (`12824324`, `12824380`) took `87.40 s`
+and `364.99 s`.  All three full trajectories converged to the same weaker
+boundary (minimum FSC-AUC about `0.99997923`, assignment `0.9998`), so every
+padding variant was rejected and removed.
+
+The no-padding two-palette grouping was reassessed against the appropriate
+isolated and warm controls.  Its `379.07 s` isolated run is about `24%` faster
+than the accepted implementation's `497.82 s` isolated run, and its `120.26 s`
+warm replay is `9.3%` faster than the accepted `132.58 s` run, while preserving
+the substantially stronger `0.9999999995298583` full-trajectory FSC boundary
+and exact assignments.  It is therefore promoted as the default in
+`92a14815`; setting
+`RECOVAR_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE=0` restores the
+prior planner.  An environment-unset proof (`12824580`) confirmed the default
+route and passed one-iteration parity at minimum FSC-AUC
+`0.9999999962612028`, assignment `1.0`.  Broader K=2/K=4 and parameter-suite
+qualification follows this checkpoint.
 shape.
