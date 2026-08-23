@@ -232,6 +232,7 @@ _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT
 _SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV = (
     "RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS"
 )
+_SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE"
 _SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTEP"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
@@ -7847,6 +7848,73 @@ def _compact_pair_weighted_rotation_and_image_sums_native(
     ctf_probs = compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, ctf2_over_nv_recon)
     translation_posterior = jnp.sum(dense_probs, axis=1)
     return summed, summed_image, ctf_probs, probs_sum_t, translation_posterior
+
+
+@partial(
+    jax.jit,
+    static_argnames=("n_rotation_rows", "shell_count", "batch_size"),
+)
+def _compact_pair_weighted_sums_and_noise_native(
+    pair_probs,
+    local_rotation_row,
+    translation_idx,
+    pair_mask,
+    shifted_recon_split,
+    shifted_image_split,
+    ctf2_over_nv_recon,
+    proj_for_noise,
+    proj_abs2_for_noise,
+    noise_variance_half,
+    shell_indices,
+    *,
+    n_rotation_rows: int,
+    shell_count: int,
+    batch_size: int,
+):
+    """Fuse compact weighted sums with dense noise/norm sufficient statistics."""
+
+    (
+        summed,
+        summed_image,
+        ctf_probs,
+        probs_sum_t,
+        translation_posterior,
+    ) = _compact_pair_weighted_rotation_and_image_sums_native(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        shifted_recon_split,
+        shifted_image_split,
+        ctf2_over_nv_recon,
+        n_rotation_rows=n_rotation_rows,
+    )
+    flat_image_indices = jnp.broadcast_to(
+        jnp.arange(int(batch_size), dtype=jnp.int32)[:, None],
+        (int(batch_size), int(n_rotation_rows)),
+    ).reshape(-1)
+    block_noise_shells, block_norm_residual = (
+        _compute_noise_block_and_norm_residual_from_flat_rows_residual_terms(
+            proj_for_noise.reshape((-1, proj_for_noise.shape[-1])),
+            proj_abs2_for_noise.reshape((-1, proj_abs2_for_noise.shape[-1])),
+            summed_image.reshape((-1, summed_image.shape[-1])),
+            ctf_probs.reshape((-1, ctf_probs.shape[-1])),
+            noise_variance_half,
+            shell_indices,
+            flat_image_indices,
+            shell_count=int(shell_count),
+            batch_size=int(batch_size),
+        )
+    )
+    return (
+        summed,
+        summed_image,
+        ctf_probs,
+        probs_sum_t,
+        translation_posterior,
+        block_noise_shells,
+        block_norm_residual,
+    )
 
 
 def _compact_pair_weighted_rotation_and_image_sums(
@@ -15895,6 +15963,13 @@ def compute_k_class_pass2_stats_sparse_fused(
         use_relion_x_half_mstep=use_relion_x_half_mstep,
         accumulate_noise=accumulate_noise,
     )
+    fused_mstep_noise = bool(
+        native_dual_weighted_sums
+        and _env_flag_enabled(
+            _SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV,
+            default=False,
+        )
+    )
     compact_noise_sums_match_mstep = bool(
         reuse_compact_noise_sums
         and half_spectrum_scoring
@@ -16147,6 +16222,12 @@ def compute_k_class_pass2_stats_sparse_fused(
                 "Sparse fused K-class compact-pair M-step/noise image sums use the "
                 "guarded native dual reduction (%s=1)",
                 _SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV,
+            )
+        if fused_mstep_noise:
+            logger.info(
+                "Sparse fused K-class compact-pair weighted sums and dense "
+                "noise/norm statistics share one JIT boundary (%s=1)",
+                _SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV,
             )
         if _env_flag_enabled(_COMPACT_KCLASS_PAIRS_CHECK_ENV, default=False):
             raise ValueError(
@@ -16599,6 +16680,10 @@ def compute_k_class_pass2_stats_sparse_fused(
         bucket_uses_active_rows = (
             compact_active_rows and bucket_uses_compact_pairs
         ) or bucket_uses_rectangular_active_rows
+        if fused_mstep_noise and bucket_uses_compact_pairs:
+            # The fused wrapper consumes dense rotation rows before any host
+            # materialization of the active-row index set.
+            bucket_uses_active_rows = False
         if mstep_subtract_ctf_projection:
             # Residual VDAM accumulation needs the dense projected-reference
             # row tensor before adjoint packing.
@@ -17830,6 +17915,8 @@ def compute_k_class_pass2_stats_sparse_fused(
             mstep_active_mask = None
             mstep_active_count = 0
             summed_masked_noise_precomputed = None
+            block_noise_shells_precomputed = None
+            block_norm_residual_precomputed = None
             if bucket_uses_compact_pairs:
                 pair_arrays = compact_pair_arrays_by_class[class_index]
                 pair_mask = jnp.asarray(pair_arrays["pair_mask"])
@@ -17915,14 +18002,16 @@ def compute_k_class_pass2_stats_sparse_fused(
                     and not compact_noise_sums_match_mstep
                 ):
                     compact_pair_noise_image_sum_precomputes += 1
-                    (
-                        summed,
-                        summed_masked_noise_precomputed,
-                        ctf_probs,
-                        probs_sum_t_jax,
-                        translation_posterior_jax,
-                    ) = (
-                        _compact_pair_weighted_rotation_and_image_sums_native(
+                    if fused_mstep_noise:
+                        (
+                            summed,
+                            summed_masked_noise_precomputed,
+                            ctf_probs,
+                            probs_sum_t_jax,
+                            translation_posterior_jax,
+                            block_noise_shells_precomputed,
+                            block_norm_residual_precomputed,
+                        ) = _compact_pair_weighted_sums_and_noise_native(
                             mstep_probs,
                             jnp.asarray(pair_arrays["local_rotation_row"]),
                             jnp.asarray(pair_arrays["translation_idx"]),
@@ -17930,21 +18019,45 @@ def compute_k_class_pass2_stats_sparse_fused(
                             shifted_recon_split,
                             shifted_noise_split,
                             ctf2_over_nv_recon,
+                            proj_for_noise_by_class[class_index],
+                            proj_abs2_by_class[class_index],
+                            noise_variance_for_noise,
+                            shell_indices_noise,
                             n_rotation_rows=class_bucket_size,
+                            shell_count=n_shells,
+                            batch_size=batch,
                         )
-                        if native_dual_weighted_sums
-                        else _compact_pair_weighted_rotation_and_image_sums(
-                            mstep_probs,
-                            jnp.asarray(pair_arrays["local_rotation_row"]),
-                            jnp.asarray(pair_arrays["translation_idx"]),
-                            pair_mask,
-                            shifted_recon_split,
-                            shifted_noise_split,
-                            ctf2_over_nv_recon,
-                            n_rotation_rows=class_bucket_size,
-                            allow_pair_sparse=compact_pair_pair_sparse_effective,
+                    else:
+                        (
+                            summed,
+                            summed_masked_noise_precomputed,
+                            ctf_probs,
+                            probs_sum_t_jax,
+                            translation_posterior_jax,
+                        ) = (
+                            _compact_pair_weighted_rotation_and_image_sums_native(
+                                mstep_probs,
+                                jnp.asarray(pair_arrays["local_rotation_row"]),
+                                jnp.asarray(pair_arrays["translation_idx"]),
+                                pair_mask,
+                                shifted_recon_split,
+                                shifted_noise_split,
+                                ctf2_over_nv_recon,
+                                n_rotation_rows=class_bucket_size,
+                            )
+                            if native_dual_weighted_sums
+                            else _compact_pair_weighted_rotation_and_image_sums(
+                                mstep_probs,
+                                jnp.asarray(pair_arrays["local_rotation_row"]),
+                                jnp.asarray(pair_arrays["translation_idx"]),
+                                pair_mask,
+                                shifted_recon_split,
+                                shifted_noise_split,
+                                ctf2_over_nv_recon,
+                                n_rotation_rows=class_bucket_size,
+                                allow_pair_sparse=compact_pair_pair_sparse_effective,
+                            )
                         )
-                    )
                 else:
                     summed, ctf_probs, probs_sum_t_jax, translation_posterior_jax = (
                         _compact_pair_weighted_rotation_sums(
@@ -18633,7 +18746,12 @@ def compute_k_class_pass2_stats_sparse_fused(
                         np.asarray(bucket_group_ids, dtype=np.int64),
                         np.asarray(scale_aa_per_image, dtype=np.float64),
                     )
-                if bucket_uses_active_rows:
+                if block_noise_shells_precomputed is not None:
+                    flat_proj_for_noise = None
+                    flat_proj_abs2_for_noise = None
+                    flat_summed_masked_noise = None
+                    flat_ctf_probs_for_noise = None
+                elif bucket_uses_active_rows:
                     flat_image_indices = None
                     if mstep_active_indices is None:
                         noise_active_indices, noise_active_mask, noise_active_count = (
@@ -18700,7 +18818,16 @@ def compute_k_class_pass2_stats_sparse_fused(
                     flat_proj_abs2_for_noise = flatten_bucket_rows(proj_abs2_by_class[class_index])
                     flat_summed_masked_noise = flatten_bucket_rows(summed_masked_noise)
                     flat_ctf_probs_for_noise = flatten_bucket_rows(ctf_probs_for_noise)
-                if bucket_uses_active_rows and bucket_uses_compact_pairs:
+                if block_noise_shells_precomputed is not None:
+                    noise_wsum_total[class_index] += np.asarray(
+                        block_noise_shells_precomputed,
+                        dtype=np.float64,
+                    )
+                    noise_norm_correction_total[class_index][image_indices] += np.asarray(
+                        block_norm_residual_precomputed,
+                        dtype=np.float64,
+                    )
+                elif bucket_uses_active_rows and bucket_uses_compact_pairs:
                     block_noise_shells, block_norm_residual = _compute_active_noise_rows_chunked(
                         proj_for_noise_by_class[class_index],
                         proj_abs2_by_class[class_index],
@@ -19140,6 +19267,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         "sparse_kclass_mstep_class_posterior_sum_total": np.float64(np.sum(class_posterior_sums_mstep)),
         "sparse_kclass_compact_pairs": bool(compact_pairs),
         "sparse_kclass_native_dual_weighted_sums": bool(native_dual_weighted_sums),
+        "sparse_kclass_fused_mstep_noise": bool(fused_mstep_noise),
         "sparse_kclass_compact_pair_mstep_pair_sparse_requested": bool(
             compact_pair_pair_sparse_requested,
         ),
