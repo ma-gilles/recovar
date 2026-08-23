@@ -49,6 +49,8 @@ FINE_OPERAND_ROTATION_LOCAL=${FINE_OPERAND_ROTATION_LOCAL:-}
 FINE_OPERAND_TRANSLATIONS=${FINE_OPERAND_TRANSLATIONS:-}
 FINE_OPERAND_TRANSLATIONS=${FINE_OPERAND_TRANSLATIONS//:/,}
 CAPTURE_PPREF=${CAPTURE_PPREF:-0}
+BPRE_GEOMETRY_ONLY=${BPRE_GEOMETRY_ONLY:-1}
+REQUIRE_FINE_SCORE_CAPTURE=${REQUIRE_FINE_SCORE_CAPTURE:-1}
 
 CAPTURE=${RUN_ROOT}/capture
 RELION_OUT=${RUN_ROOT}/relion
@@ -65,6 +67,8 @@ test "${TARGET_COUNT}" -gt 0
 test "$(printf '%s\n' "${target_stack_values[@]}" | sort -u | wc -l)" -eq "${TARGET_COUNT}"
 [[ "${TARGET_ITERATION}" =~ ^[1-9][0-9]*$ ]]
 case "${CAPTURE_PPREF}" in 0|1) ;; *) echo "CAPTURE_PPREF must be 0 or 1" >&2; exit 2 ;; esac
+case "${BPRE_GEOMETRY_ONLY}" in 0|1) ;; *) echo "BPRE_GEOMETRY_ONLY must be 0 or 1" >&2; exit 2 ;; esac
+case "${REQUIRE_FINE_SCORE_CAPTURE}" in 0|1) ;; *) echo "REQUIRE_FINE_SCORE_CAPTURE must be 0 or 1" >&2; exit 2 ;; esac
 if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" || -n "${FINE_OPERAND_TRANSLATIONS}" ]]; then
   test "${TARGET_COUNT}" -eq 1
   [[ "${FINE_OPERAND_ROTATION_LOCAL}" =~ ^[0-9]+$ ]]
@@ -138,7 +142,11 @@ export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=${TARGET_COUNT}
 export RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=2
 export RELION_BPRE_CAPTURE_MAX_BYTES=2000000000
 export RELION_BPRE_CAPTURE_STACKS=${TARGET_STACKS_ONE_BASED}
-export RELION_BPRE_CAPTURE_GEOMETRY_ONLY=1
+if [[ "${BPRE_GEOMETRY_ONLY}" = 1 ]]; then
+  export RELION_BPRE_CAPTURE_GEOMETRY_ONLY=1
+else
+  unset RELION_BPRE_CAPTURE_GEOMETRY_ONLY
+fi
 if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" ]]; then
   export RELION_FINE_OPERAND_CAPTURE=1
   export RELION_FINE_OPERAND_CAPTURE_ROTATION_LOCAL=${FINE_OPERAND_ROTATION_LOCAL}
@@ -175,7 +183,12 @@ start_epoch=$(date +%s)
 ) > "${RELION_OUT}/runner.stdout" 2> "${RELION_OUT}/runner.stderr"
 wall_s=$(( $(date +%s) - start_epoch ))
 
-test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-score-v1.bin' | wc -l)" -eq "${TARGET_COUNT}"
+fine_score_count=$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-score-v1.bin' | wc -l)
+if [[ "${REQUIRE_FINE_SCORE_CAPTURE}" = 1 ]]; then
+  test "${fine_score_count}" -eq "${TARGET_COUNT}"
+else
+  test "${fine_score_count}" -eq 0
+fi
 test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.bpre-v2.bin' | wc -l)" -eq "${TARGET_COUNT}"
 if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" ]]; then
   test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-operand-v1.bin' | wc -l)" -eq 1
@@ -189,7 +202,8 @@ else
 fi
 printf -v target_iteration_label '%03d' "${TARGET_ITERATION}"
 test -s "${RELION_OUT}/run_it${target_iteration_label}_data.star"
-"${PYTHON}" - "${CAPTURE}" "${TARGET_STACKS_ONE_BASED}" "${TARGET_ITERATION}" "${CAPTURE_PPREF}" <<'PY'
+"${PYTHON}" - "${CAPTURE}" "${TARGET_STACKS_ONE_BASED}" "${TARGET_ITERATION}" \
+  "${CAPTURE_PPREF}" "${BPRE_GEOMETRY_ONLY}" "${REQUIRE_FINE_SCORE_CAPTURE}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -201,14 +215,21 @@ capture = Path(sys.argv[1])
 expected_stacks = {int(value) for value in sys.argv[2].split(",")}
 expected_iteration = int(sys.argv[3])
 capture_ppref = bool(int(sys.argv[4]))
+geometry_only = bool(int(sys.argv[5]))
+require_fine = bool(int(sys.argv[6]))
 fine = [load_fine_score_capture(path) for path in sorted(capture.glob("*.fine-score-v1.bin"))]
 factor = [load_factor_capture(path) for path in sorted(capture.glob("*.bpre-v2.bin"))]
-assert {item.stack_index for item in fine} == expected_stacks
+if require_fine:
+    assert {item.stack_index for item in fine} == expected_stacks
+else:
+    assert not fine
 assert {item.stack_index for item in factor} == expected_stacks
-assert {item.header[4] for item in fine} == {expected_iteration}
+if require_fine:
+    assert {item.header[4] for item in fine} == {expected_iteration}
 assert {item.header[9] for item in factor} == {expected_iteration}
-assert all(item.geometry_only for item in factor)
-assert all((item.candidates["flags"] & ACTIVE).any() for item in fine)
+assert all(item.geometry_only is geometry_only for item in factor)
+if require_fine:
+    assert all((item.candidates["flags"] & ACTIVE).any() for item in fine)
 if capture_ppref:
     ppref = [_load_ppref(path)[1] for path in sorted(capture.glob("ppref_iter*_rank*_model*.bin"))]
     assert {int(item["iteration"]) for item in ppref} == {expected_iteration}
@@ -235,7 +256,8 @@ PY
 find "${CAPTURE}" "${RELION_OUT}" "${RUN_ROOT}/analysis" -type f -print0 \
   | sort -z | xargs -0 sha256sum > "${RUN_ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
 iteration_csv=$(seq -s, 1 "${TARGET_ITERATION}")
-printf '{"job_id":"%s","wall_s":%d,"iterations":[%s],"stack_indices_one_based":"%s","fresh_uninterrupted":true}\n' \
+printf '{"job_id":"%s","wall_s":%d,"iterations":[%s],"stack_indices_one_based":"%s","fresh_uninterrupted":true,"bpref_geometry_only":%s,"fine_score_required":%s}\n' \
   "${SLURM_JOB_ID}" "${wall_s}" "${iteration_csv}" "${TARGET_STACKS_ONE_BASED}" \
+  "${BPRE_GEOMETRY_ONLY}" "${REQUIRE_FINE_SCORE_CAPTURE}" \
   > "${RUN_ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${RUN_ROOT}/SUCCESS_${SLURM_JOB_ID}"
