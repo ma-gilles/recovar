@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import pickle
+
 import numpy as np
 import pandas as pd
 import pytest
+import starfile
 
 from scripts.prepare_vdam_real_data_fixture import (
+    materialize_cryodrgn_source_star,
     promote_legacy_optics,
     select_balanced_half_indices,
     select_synthetic_half_indices,
@@ -136,3 +140,53 @@ def test_promote_legacy_optics_requires_explicit_pixel_size_without_scale_column
 
     with pytest.raises(ValueError, match="provide an explicit positive pixel size"):
         promote_legacy_optics(particles, image_size=256)
+
+
+def test_materialize_cryodrgn_source_star_preserves_indexed_identity_and_units(tmp_path):
+    n_images = 5
+    grid_size = 64
+    voxel_size = 1.5
+    particles_path = tmp_path / "particles.mrcs"
+    particles_path.touch()
+    poses_path = tmp_path / "poses.pkl"
+    ctf_path = tmp_path / "ctf.pkl"
+    indices_path = tmp_path / "ind.pkl"
+    output_star = tmp_path / "source" / "particles.star"
+
+    rotations = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
+    translations = np.array(
+        [[0.0, 0.0], [0.125, -0.25], [0.0, 0.0], [-0.0625, 0.03125], [0.0, 0.0]],
+        dtype=np.float32,
+    )
+    ctf = np.zeros((n_images, 9), dtype=np.float32)
+    ctf[:, 0] = grid_size
+    ctf[:, 1] = voxel_size
+    ctf[:, 2:5] = np.array([10_000.0, 11_000.0, 15.0], dtype=np.float32)
+    ctf[:, 5:8] = np.array([300.0, 2.7, 0.1], dtype=np.float32)
+    with poses_path.open("wb") as handle:
+        pickle.dump((rotations, translations), handle)
+    with ctf_path.open("wb") as handle:
+        pickle.dump(ctf, handle)
+    with indices_path.open("wb") as handle:
+        pickle.dump(np.array([3, 1], dtype=np.int64), handle)
+
+    manifest = materialize_cryodrgn_source_star(
+        particles_path=particles_path,
+        poses_path=poses_path,
+        ctf_path=ctf_path,
+        output_star=output_star,
+        source_indices_path=indices_path,
+    )
+
+    particles = starfile.read(output_star)["particles"]
+    assert particles["rlnImageName"].tolist() == [
+        f"4@{particles_path}",
+        f"2@{particles_path}",
+    ]
+    expected_angstrom = translations[[3, 1]] * grid_size * voxel_size
+    np.testing.assert_allclose(particles["rlnOriginXAngst"], expected_angstrom[:, 0])
+    np.testing.assert_allclose(particles["rlnOriginYAngst"], expected_angstrom[:, 1])
+    assert manifest["source_particle_count"] == 5
+    assert manifest["selected_particle_count"] == 2
+    assert manifest["output_star_sha256"]
+    assert output_star.with_suffix(".materialization.json").is_file()

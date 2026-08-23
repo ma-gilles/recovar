@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import pickle
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -88,6 +90,89 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def materialize_cryodrgn_source_star(
+    *,
+    particles_path: Path,
+    poses_path: Path,
+    ctf_path: Path,
+    output_star: Path,
+    source_indices_path: Path | None = None,
+) -> dict:
+    """Materialize an optional indexed cryoDRGN dataset as a RELION STAR."""
+
+    from recovar.utils.helpers import write_starfile_from_cryodrgn_format
+
+    particles_path = particles_path.expanduser().resolve(strict=True)
+    poses_path = poses_path.expanduser().resolve(strict=True)
+    ctf_path = ctf_path.expanduser().resolve(strict=True)
+    output_star = output_star.expanduser().resolve()
+    if output_star.exists():
+        raise FileExistsError(f"refusing to overwrite materialized STAR: {output_star}")
+    output_star.parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="vdam-source-star-", dir=output_star.parent) as tmp_dir:
+        full_star = Path(tmp_dir) / "particles.star"
+        write_starfile_from_cryodrgn_format(
+            ctf_path,
+            poses_path,
+            particles_path,
+            full_star,
+        )
+        star_data = starfile.read(full_star)
+
+    particles = _particles_table(star_data)
+    source_particle_count = len(particles)
+    source_indices = None
+    if source_indices_path is not None:
+        source_indices_path = source_indices_path.expanduser().resolve(strict=True)
+        with source_indices_path.open("rb") as handle:
+            source_indices = np.asarray(pickle.load(handle))
+        if source_indices.ndim != 1 or not np.issubdtype(source_indices.dtype, np.integer):
+            raise ValueError("source index file must contain a one-dimensional integer array")
+        source_indices = source_indices.astype(np.int64, copy=False)
+        if source_indices.size == 0:
+            raise ValueError("source index file must not be empty")
+        if np.any(source_indices < 0) or np.any(source_indices >= source_particle_count):
+            raise ValueError("source index file contains an out-of-range particle index")
+        if np.unique(source_indices).size != source_indices.size:
+            raise ValueError("source index file contains duplicate particle indices")
+        selected = particles.iloc[source_indices].reset_index(drop=True)
+    else:
+        selected = particles.copy().reset_index(drop=True)
+
+    if isinstance(star_data, dict):
+        output_data = dict(star_data)
+        output_data["particles"] = selected
+    else:
+        output_data = selected
+    starfile.write(output_data, output_star, overwrite=False)
+
+    manifest = {
+        "schema": "recovar.vdam_cryodrgn_source_star.v1",
+        "particles_path": str(particles_path),
+        "poses_path": str(poses_path),
+        "ctf_path": str(ctf_path),
+        "particles_sha256": _sha256(particles_path),
+        "poses_sha256": _sha256(poses_path),
+        "ctf_sha256": _sha256(ctf_path),
+        "source_particle_count": int(source_particle_count),
+        "selected_particle_count": int(len(selected)),
+        "source_indices_path": None if source_indices_path is None else str(source_indices_path),
+        "source_indices_file_sha256": (
+            None if source_indices_path is None else _sha256(source_indices_path)
+        ),
+        "selected_source_indices_sha256": (
+            None if source_indices is None else hashlib.sha256(source_indices.tobytes()).hexdigest()
+        ),
+        "output_star": str(output_star),
+        "output_star_sha256": _sha256(output_star),
+        "translation_contract": "cryoDRGN box fractions converted to RELION Angstrom origins",
+    }
+    manifest_path = output_star.with_suffix(".materialization.json")
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return manifest
 
 
 def _link_relative_stacks(particles, *, source_dir: Path, output_dir: Path) -> list[dict[str, str]]:
@@ -309,7 +394,13 @@ def prepare_fixture(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-star", required=True, type=Path)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--source-star", type=Path)
+    source.add_argument("--particles", type=Path)
+    parser.add_argument("--poses", type=Path)
+    parser.add_argument("--ctf", type=Path)
+    parser.add_argument("--source-ind", type=Path)
+    parser.add_argument("--materialized-source-star", type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--particles-per-half", type=int, default=5000)
@@ -317,8 +408,25 @@ def main() -> int:
     parser.add_argument("--pixel-size", type=float)
     parser.add_argument("--synthesize-random-subsets", action="store_true")
     args = parser.parse_args()
+    source_star = args.source_star
+    if args.particles is not None:
+        if args.poses is None or args.ctf is None:
+            parser.error("--particles requires both --poses and --ctf")
+        source_star = args.materialized_source_star
+        if source_star is None:
+            source_star = args.output_dir.resolve().parent / "source" / "particles.star"
+        materialize_cryodrgn_source_star(
+            particles_path=args.particles,
+            poses_path=args.poses,
+            ctf_path=args.ctf,
+            output_star=source_star,
+            source_indices_path=args.source_ind,
+        )
+    elif any(value is not None for value in (args.poses, args.ctf, args.source_ind, args.materialized_source_star)):
+        parser.error("cryoDRGN source options require --particles")
+    assert source_star is not None
     manifest = prepare_fixture(
-        source_star=args.source_star,
+        source_star=source_star,
         output_dir=args.output_dir,
         dataset=args.dataset,
         particles_per_half=args.particles_per_half,
