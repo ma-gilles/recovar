@@ -5871,7 +5871,7 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
 
     group_by_rotation_signature = _env_flag_enabled(
         _SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV,
-        default=True,
+        default=False,
     )
     if (
         not group_by_rotation_signature
@@ -5945,7 +5945,7 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
         ]
         logger.info(
             "Sparse fused K-class compact-pair rotation-signature grouping: "
-            "buckets %d -> %d (default on; set %s=0 to opt out)",
+            "buckets %d -> %d (%s=1)",
             ungrouped_bucket_count,
             len(compact_buckets),
             _SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV,

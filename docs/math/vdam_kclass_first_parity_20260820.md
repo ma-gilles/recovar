@@ -479,11 +479,16 @@ isolated and warm controls.  Its `379.07 s` isolated run is about `24%` faster
 than the accepted implementation's `497.82 s` isolated run, and its `120.26 s`
 warm replay is `9.3%` faster than the accepted `132.58 s` run, while preserving
 the substantially stronger `0.9999999995298583` full-trajectory FSC boundary
-and exact assignments.  It is therefore promoted as the default in
-`92a14815`; setting
-`RECOVAR_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE=0` restores the
-prior planner.  An environment-unset proof (`12824580`) confirmed the default
-route and passed one-iteration parity at minimum FSC-AUC
-`0.9999999962612028`, assignment `1.0`.  Broader K=2/K=4 and parameter-suite
-qualification follows this checkpoint.
+and exact assignments.  A default-route probe (`12824580`) passed one-iteration
+parity at minimum FSC-AUC `0.9999999962612028`, assignment `1.0`.
+
+The subsequent full qualification did not support making it the default:
+the 25-iteration run (`12824959`) remained scientifically strong at minimum
+FSC-AUC `0.9999998919425003` and exact assignments, but took `527.83 s` versus
+the accepted warm `354.33 s`.  The first post-change fast suite also exposed
+downstream default-planner assumptions.  Commit `92a14815` therefore retains
+the implementation and focused tests only as an explicit experiment under
+`RECOVAR_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE=1`; the
+environment-unset production planner remains unchanged while a lower-cost
+adaptive selector is developed.
 shape.
