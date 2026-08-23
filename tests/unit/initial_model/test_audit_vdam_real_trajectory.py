@@ -11,6 +11,9 @@ from scripts.audit_vdam_real_trajectory import (
 )
 
 SBATCH_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_vdam_relion_real_data_case.sbatch"
+SUITE_SBATCH_PATH = (
+    Path(__file__).resolve().parents[3] / "scripts" / "run_vdam_relion_real_data_suite.sbatch"
+)
 
 
 def _acceptance() -> dict[str, float]:
@@ -49,6 +52,17 @@ def test_real_data_sbatch_sets_paired_launch_mode_before_gpu_gate():
     assert 'export RECOVAR_CACHE_DIR="${RECOVAR_CACHE_DIR-}"' in text
     assert '"recovar_cache_dir": os.environ.get("RECOVAR_CACHE_DIR")' in text
     assert '"jax_compilation_cache_dir": os.environ.get("JAX_COMPILATION_CACHE_DIR")' in text
+
+
+def test_real_data_suite_maps_array_tasks_to_frozen_case_ids_and_isolated_roots():
+    text = SUITE_SBATCH_PATH.read_text()
+
+    assert "#SBATCH --array=1-4%4" in text
+    assert "SLURM_ARRAY_TASK_ID < 1" in text
+    assert "SLURM_ARRAY_TASK_ID > 4" in text
+    assert "printf 'vdam-r%02d'" in text
+    assert 'OUTPUT_ROOT="${SUITE_OUTPUT_ROOT}/${CASE_ID}"' in text
+    assert "run_vdam_relion_real_data_case.sbatch" in text
 
 
 def test_particle_state_gate_rejects_topology_or_pmax_drift():
