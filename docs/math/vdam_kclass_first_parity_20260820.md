@@ -596,10 +596,16 @@ bucket-ordered particle reads.  Each one-iteration job used the same
 | Sort each bucket fetch into source order | `12829984` | `861.05 s` | rejected: only `5.4%` faster and changes accumulation order |
 | Direct indexed source fetch | `12831416` | `811.37 s` | rejected: `10.8%` faster is insufficient for the product runtime target |
 | Direct fetch plus bulk MRCS memmap gather | `12831942` | `956.81 s` | rejected: `5.2%` slower than control |
+| Monotonic/coalesced MRC reads with exact output-order restore | `12835500` | stopped after half 1 | rejected: first-half pass 2 regressed from `325.1 s` to `406.4 s` (`+25.0%`) |
 | Existing eager mode (`--no-lazy`) | `12829869` | `424.32 s` | diagnostic only: substantially faster for iteration 1 but high host-memory cost |
 
-The direct and memmap implementations were reverted in the isolated runtime
-worktree after measurement and were never promoted to the tracking branch.
+The direct, memmap, and monotonic-read implementations were reverted in the
+isolated runtime worktree after measurement and were never promoted to the
+tracking branch.  The monotonic reader kept returned arrays in the exact
+requested order and passed all 54 focused image-loader tests, but scattering
+the sorted reads back into that order cost more than the seek locality saved
+on the locally staged stack.  Its dependent science audit was canceled because
+the performance gate had already failed.
 The complete eight-iteration eager run (`12830515`) took `1406 s` wall and
 peaked at `94,388,912 KiB` RSS.  Its eight profiled iterations summed to
 `1330.67 s`; the final iteration alone took `423.19 s`.  Against the matched
