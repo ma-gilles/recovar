@@ -8,6 +8,11 @@ export const tooltips: Record<string, string> = {
     "Number of independent 3D classes. Start with K=1; K>1 jointly estimates class assignments and volumes.",
   "initial_model.tau2_fudge":
     "Regularization multiplier for the signal prior. The RELION InitialModel default is 4.",
+  "initial_model.grad_ini_frac": "Fraction of iterations in the initial VDAM phase. The RELION default is 0.3.",
+  "initial_model.grad_fin_frac": "Fraction of iterations in the final VDAM phase. The RELION default is 0.2.",
+  "initial_model.grad_em_iters": "Number of terminal iterations that switch from VDAM to ordinary EM. The RELION default is 0.",
+  "initial_model.stepsize": "Base gradient step size used by the VDAM schedule. The RELION InitialModel default is 0.5.",
+  "initial_model.mu": "VDAM momentum/forgetting factor for probability and noise updates. The RELION default is 0.9.",
   "initial_model.particle_diameter":
     "Particle diameter in Angstroms used to construct the spherical solvent mask.",
   "initial_model.sym_name":

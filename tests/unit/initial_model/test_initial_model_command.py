@@ -27,6 +27,11 @@ def test_public_defaults_match_native_option_defaults():
         "nr_iter",
         "nr_classes",
         "tau2_fudge",
+        "grad_ini_frac",
+        "grad_fin_frac",
+        "grad_em_iters",
+        "stepsize",
+        "mu",
         "sym_name",
         "do_run_C1",
         "particle_diameter",
@@ -79,6 +84,16 @@ def test_parser_accepts_important_overrides():
             "3",
             "--tau2-fudge",
             "2.5",
+            "--grad-ini-frac",
+            "0.4",
+            "--grad-fin-frac",
+            "0.1",
+            "--grad-em-iters",
+            "2",
+            "--stepsize",
+            "0.3",
+            "--mu",
+            "0.7",
             "--sym",
             "C3",
             "--no-run-in-c1",
@@ -114,6 +129,11 @@ def test_parser_accepts_important_overrides():
     assert options["nr_iter"] == 17
     assert options["nr_classes"] == 3
     assert options["tau2_fudge"] == 2.5
+    assert options["grad_ini_frac"] == 0.4
+    assert options["grad_fin_frac"] == 0.1
+    assert options["grad_em_iters"] == 2
+    assert options["stepsize"] == 0.3
+    assert options["mu"] == 0.7
     assert options["sym_name"] == "C3"
     assert options["do_run_C1"] is False
     assert options["particle_diameter"] == 280.0

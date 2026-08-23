@@ -75,6 +75,11 @@ class TestCommandBuilders:
                 "nr_classes": 2,
                 "do_solvent": False,
                 "padding_factor": 2,
+                "grad_ini_frac": 0.4,
+                "grad_fin_frac": 0.1,
+                "grad_em_iters": 3,
+                "stepsize": 0.3,
+                "mu": 0.7,
             }
         )
         assert cmd[:2] == [cmd[0], "initial_model"]
@@ -87,6 +92,11 @@ class TestCommandBuilders:
         assert "--require-custom-cuda" in cmd
         assert cmd[cmd.index("--padding-factor") + 1] == "2"
         assert cmd[cmd.index("--pass2-engine") + 1] == "auto"
+        assert cmd[cmd.index("--grad-ini-frac") + 1] == "0.4"
+        assert cmd[cmd.index("--grad-fin-frac") + 1] == "0.1"
+        assert cmd[cmd.index("--grad-em-iters") + 1] == "3"
+        assert cmd[cmd.index("--stepsize") + 1] == "0.3"
+        assert cmd[cmd.index("--mu") + 1] == "0.7"
 
     def test_pipeline_command_minimal(self):
         cmd = build_pipeline_command({

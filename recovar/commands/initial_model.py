@@ -33,6 +33,27 @@ def _nonnegative_int(value: str) -> int:
     return parsed
 
 
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0.0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return parsed
+
+
+def _open_unit_float(value: str) -> float:
+    parsed = float(value)
+    if not 0.0 < parsed < 1.0:
+        raise argparse.ArgumentTypeError("must be between 0 and 1 (exclusive)")
+    return parsed
+
+
+def _closed_unit_float(value: str) -> float:
+    parsed = float(value)
+    if not 0.0 <= parsed <= 1.0:
+        raise argparse.ArgumentTypeError("must be between 0 and 1 (inclusive)")
+    return parsed
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run RECOVAR's RELION-equivalent InitialModel/VDAM refinement.",
@@ -56,6 +77,42 @@ def make_parser() -> argparse.ArgumentParser:
         dest="tau2_fudge",
         type=float,
         default=DEFAULTS.tau2_fudge,
+    )
+    parser.add_argument(
+        "--grad-ini-frac",
+        "--grad_ini_frac",
+        dest="grad_ini_frac",
+        type=_open_unit_float,
+        default=DEFAULTS.grad_ini_frac,
+        help="Fraction of iterations in the initial VDAM phase",
+    )
+    parser.add_argument(
+        "--grad-fin-frac",
+        "--grad_fin_frac",
+        dest="grad_fin_frac",
+        type=_open_unit_float,
+        default=DEFAULTS.grad_fin_frac,
+        help="Fraction of iterations in the final VDAM phase",
+    )
+    parser.add_argument(
+        "--grad-em-iters",
+        "--grad_em_iters",
+        dest="grad_em_iters",
+        type=_nonnegative_int,
+        default=DEFAULTS.grad_em_iters,
+        help="Number of terminal iterations using ordinary EM instead of VDAM",
+    )
+    parser.add_argument(
+        "--stepsize",
+        type=_positive_float,
+        default=DEFAULTS.stepsize,
+        help="Base VDAM gradient step size",
+    )
+    parser.add_argument(
+        "--mu",
+        type=_closed_unit_float,
+        default=DEFAULTS.mu,
+        help="VDAM momentum/forgetting factor",
     )
     parser.add_argument("--sym", dest="sym_name", default=DEFAULTS.sym_name)
     parser.add_argument(
@@ -263,6 +320,11 @@ def _native_options_dict(args: argparse.Namespace) -> dict[str, object]:
         "nr_iter": args.nr_iter,
         "nr_classes": args.nr_classes,
         "tau2_fudge": args.tau2_fudge,
+        "grad_ini_frac": args.grad_ini_frac,
+        "grad_fin_frac": args.grad_fin_frac,
+        "grad_em_iters": args.grad_em_iters,
+        "stepsize": args.stepsize,
+        "mu": args.mu,
         "sym_name": args.sym_name,
         "do_run_C1": args.run_in_c1,
         "particle_diameter": args.particle_diameter,

@@ -105,6 +105,11 @@ function InitialModelFormLoaded({
   const [gradWriteIter, setGradWriteIter] = useState(String(pick("grad_write_iter", defaults.grad_write_iter)));
   const [nrClasses, setNrClasses] = useState(String(pick("nr_classes", defaults.nr_classes)));
   const [tau2Fudge, setTau2Fudge] = useState(String(pick("tau2_fudge", defaults.tau2_fudge)));
+  const [gradIniFrac, setGradIniFrac] = useState(String(pick("grad_ini_frac", defaults.grad_ini_frac)));
+  const [gradFinFrac, setGradFinFrac] = useState(String(pick("grad_fin_frac", defaults.grad_fin_frac)));
+  const [gradEmIters, setGradEmIters] = useState(String(pick("grad_em_iters", defaults.grad_em_iters)));
+  const [stepsize, setStepsize] = useState(String(pick("stepsize", defaults.stepsize)));
+  const [mu, setMu] = useState(String(pick("mu", defaults.mu)));
   const [symName, setSymName] = useState(String(pick("sym_name", defaults.sym_name)));
   const [particleDiameter, setParticleDiameter] = useState(String(pick("particle_diameter", defaults.particle_diameter)));
   const [runInC1, setRunInC1] = useState(Boolean(pick("do_run_C1", defaults.do_run_C1)));
@@ -151,6 +156,11 @@ function InitialModelFormLoaded({
       grad_write_iter: parseInt(gradWriteIter),
       nr_classes: parseInt(nrClasses),
       tau2_fudge: parseFloat(tau2Fudge),
+      grad_ini_frac: parseFloat(gradIniFrac),
+      grad_fin_frac: parseFloat(gradFinFrac),
+      grad_em_iters: parseInt(gradEmIters),
+      stepsize: parseFloat(stepsize),
+      mu: parseFloat(mu),
       sym_name: symName,
       particle_diameter: parseFloat(particleDiameter),
       do_run_C1: runInC1,
@@ -184,7 +194,8 @@ function InitialModelFormLoaded({
     if (localOpts && executorMode === "local") params.local_opts = localOpts;
     return params;
   }, [
-    inputStar, nrIter, gradWriteIter, nrClasses, tau2Fudge, symName, particleDiameter,
+    inputStar, nrIter, gradWriteIter, nrClasses, tau2Fudge, gradIniFrac, gradFinFrac,
+    gradEmIters, stepsize, mu, symName, particleDiameter,
     runInC1, doSolvent, doZeroMask, doCtf, randomSeed, healpixOrder, oversampling,
     offsetRange, offsetStep, perturbationFactor, imageBatchSize, rotationBlockSize, pass2Engine,
     bootstrapMin, sigma2Min, paddingFactor, imageBackend, gpuIds, lazy, writeArtifacts,
@@ -274,6 +285,11 @@ function InitialModelFormLoaded({
             <NumberField label="Sigma2 Minimum" tooltip="initial_model.sigma2_min" value={sigma2Min} onChange={setSigma2Min} />
             <NumberField label="Translation Sigma (Å)" tooltip="initial_model.translation_sigma" value={translationSigma} onChange={setTranslationSigma} step="0.1" />
             <NumberField label="Padding Factor" tooltip="initial_model.padding_factor" value={paddingFactor} onChange={setPaddingFactor} />
+            <NumberField label="Initial Phase Fraction" tooltip="initial_model.grad_ini_frac" value={gradIniFrac} onChange={setGradIniFrac} step="0.01" />
+            <NumberField label="Final Phase Fraction" tooltip="initial_model.grad_fin_frac" value={gradFinFrac} onChange={setGradFinFrac} step="0.01" />
+            <NumberField label="Terminal EM Iterations" tooltip="initial_model.grad_em_iters" value={gradEmIters} onChange={setGradEmIters} />
+            <NumberField label="VDAM Step Size" tooltip="initial_model.stepsize" value={stepsize} onChange={setStepsize} step="0.01" />
+            <NumberField label="VDAM Momentum (μ)" tooltip="initial_model.mu" value={mu} onChange={setMu} step="0.01" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">

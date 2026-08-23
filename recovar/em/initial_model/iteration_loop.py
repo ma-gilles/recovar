@@ -295,6 +295,7 @@ def default_schedule_update(
     nr_particles: int,
     tau2_fudge_arg: float,
     grad_em_iters: int = DEFAULT_GRAD_EM_ITERS,
+    grad_stepsize: float | None = None,
 ) -> InitialModelState:
     """Apply the three VDAM schedules to `state.iter=iter`."""
     subset_size = compute_subset_size(
@@ -314,6 +315,7 @@ def default_schedule_update(
         phase_lengths=phase_lengths,
         is_3d_model=True,
         ref_dim=3,
+        grad_stepsize=grad_stepsize,
     )
     tau2_fudge = compute_tau2_fudge(
         iter=iter,
@@ -588,6 +590,7 @@ def run_vdam_iterations(
     particle_order: Sequence[int] | None = None,
     grad_ini_frac: float = 0.3,
     grad_fin_frac: float = 0.2,
+    grad_stepsize: float | None = None,
     mu: float = DEFAULT_GRAD_MU,
     refresh_tau2_from_projector: bool = True,
     projector_padding_factor: int = 1,
@@ -620,6 +623,7 @@ def run_vdam_iterations(
             nr_particles=nr_particles,
             tau2_fudge_arg=tau2_fudge_arg,
             grad_em_iters=grad_em_iters,
+            grad_stepsize=grad_stepsize,
         )
         if profile_iterations:
             _record_stage("schedule")

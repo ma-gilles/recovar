@@ -102,6 +102,11 @@ class NativeInitialModelOptions:
     nr_iter: int = INITIAL_MODEL_GUI_DEFAULTS.nr_iter
     nr_classes: int = INITIAL_MODEL_GUI_DEFAULTS.nr_classes
     tau2_fudge: float = INITIAL_MODEL_GUI_DEFAULTS.tau2_fudge
+    grad_ini_frac: float = INITIAL_MODEL_GUI_DEFAULTS.grad_ini_frac
+    grad_fin_frac: float = INITIAL_MODEL_GUI_DEFAULTS.grad_fin_frac
+    grad_em_iters: int = INITIAL_MODEL_GUI_DEFAULTS.grad_em_iters
+    stepsize: float = INITIAL_MODEL_GUI_DEFAULTS.stepsize
+    mu: float = INITIAL_MODEL_GUI_DEFAULTS.mu
     sym_name: str = INITIAL_MODEL_GUI_DEFAULTS.sym_name
     do_run_C1: bool = INITIAL_MODEL_GUI_DEFAULTS.do_run_C1
     particle_diameter: float = INITIAL_MODEL_GUI_DEFAULTS.particle_diameter
@@ -507,8 +512,13 @@ def _initial_sampling_state(opts: NativeInitialModelOptions, *, pixel_size: floa
     )
 
 
-def _native_initialmodel_do_grad(state: InitialModelState, iteration: int) -> bool:
-    return ((int(state.nr_iter) - int(iteration)) >= DEFAULT_GRAD_EM_ITERS) and not bool(state.has_converged)
+def _native_initialmodel_do_grad(
+    state: InitialModelState,
+    iteration: int,
+    *,
+    grad_em_iters: int = DEFAULT_GRAD_EM_ITERS,
+) -> bool:
+    return ((int(state.nr_iter) - int(iteration)) >= int(grad_em_iters)) and not bool(state.has_converged)
 
 
 def _active_relion_initialmodel_max_significants(state: InitialModelState, *, do_grad: bool) -> int:
@@ -1127,7 +1137,11 @@ def _native_expectation_step(
 
     def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
         iteration = max(1, int(state.iter))
-        do_grad = _native_initialmodel_do_grad(state, iteration)
+        do_grad = _native_initialmodel_do_grad(
+            state,
+            iteration,
+            grad_em_iters=int(opts.grad_em_iters),
+        )
         sampling_updated = False
         accuracy_meta = None
         pass1_healpix_order = (
@@ -1757,14 +1771,17 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         grad_ini_subset_size=grad_ini_subset_size,
         grad_fin_subset_size=grad_fin_subset_size,
         tau2_fudge_arg=float(opts.tau2_fudge),
-        grad_em_iters=DEFAULT_GRAD_EM_ITERS,
+        grad_em_iters=int(opts.grad_em_iters),
         random_seed=int(opts.random_seed),
         rnd_unif_factory=_relion_rnd_unif_factory,
         expectation_step=expectation_step,
         iter_artifact_sink=artifact_sink,
         post_mstep_update=post_mstep_update,
         particle_order=particle_order,
-        mu=DEFAULT_GRAD_MU,
+        grad_ini_frac=float(opts.grad_ini_frac),
+        grad_fin_frac=float(opts.grad_fin_frac),
+        grad_stepsize=float(opts.stepsize),
+        mu=float(opts.mu),
         projector_padding_factor=int(opts.padding_factor),
     )
     final_mrc, class_mrcs = _write_final_outputs(opts.outputname, final_state)

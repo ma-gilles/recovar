@@ -841,6 +841,7 @@ class TestRunVdamIterations:
             rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=_stub_estep_factory(ori),
             iter_artifact_sink=sink,
+            grad_stepsize=0.25,
         )
         assert final.iter == nr_iter
         assert len(iter_log) == nr_iter
@@ -855,6 +856,7 @@ class TestRunVdamIterations:
         last = iter_log[-1]
         assert np.isnan(first["tau"])
         assert last["tau"] == pytest.approx(4.0)
+        assert last["stepsize"] == pytest.approx(0.25)
 
     def test_respects_grad_em_tail(self, bind):
         ori = 16
