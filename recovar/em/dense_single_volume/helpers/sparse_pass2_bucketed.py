@@ -4684,7 +4684,21 @@ def _weighted_image_power_shells_and_per_image(
         norm_mass = jnp.where(unweighted_shell[None, :], high_shell_mass[:, None], norm_mass)
     weighted_pixel_power = pixel_power * shell_mass
     weighted_half = jnp.sum(weighted_pixel_power, axis=0).astype(jnp.float32)
-    weighted_shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
+    if _env_flag_enabled("RECOVAR_DISABLE_CUDA", default=False):
+        # ``bins.at[indices].add`` lowers to unordered GPU atomics even when
+        # RECOVAR's custom CUDA path is explicitly disabled.  Keep this
+        # fallback repeatable by reducing each shell independently instead.
+        shell_ids = jnp.arange(int(shell_count), dtype=shell_indices_half.dtype)
+        weighted_shells = jnp.sum(
+            jnp.where(
+                shell_indices_half[None, :] == shell_ids[:, None],
+                weighted_half[None, :],
+                0.0,
+            ),
+            axis=1,
+        )
+    else:
+        weighted_shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
     source_faithful_spectrum_norm = _env_flag_enabled(
         _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
         default=False,
