@@ -62,7 +62,7 @@ done
 TARGET_COUNT=${#target_stack_values[@]}
 test "${TARGET_COUNT}" -gt 0
 test "$(printf '%s\n' "${target_stack_values[@]}" | sort -u | wc -l)" -eq "${TARGET_COUNT}"
-test "${TARGET_ITERATION}" -eq 2
+[[ "${TARGET_ITERATION}" =~ ^[1-9][0-9]*$ ]]
 if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" || -n "${FINE_OPERAND_TRANSLATIONS}" ]]; then
   test "${TARGET_COUNT}" -eq 1
   [[ "${FINE_OPERAND_ROTATION_LOCAL}" =~ ^[0-9]+$ ]]
@@ -176,8 +176,9 @@ if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" ]]; then
 else
   test -z "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-operand-v1.bin' -print -quit)"
 fi
-test -s "${RELION_OUT}/run_it002_data.star"
-"${PYTHON}" - "${CAPTURE}" "${TARGET_STACKS_ONE_BASED}" <<'PY'
+printf -v target_iteration_label '%03d' "${TARGET_ITERATION}"
+test -s "${RELION_OUT}/run_it${target_iteration_label}_data.star"
+"${PYTHON}" - "${CAPTURE}" "${TARGET_STACKS_ONE_BASED}" "${TARGET_ITERATION}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -186,19 +187,22 @@ from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_c
 
 capture = Path(sys.argv[1])
 expected_stacks = {int(value) for value in sys.argv[2].split(",")}
+expected_iteration = int(sys.argv[3])
 fine = [load_fine_score_capture(path) for path in sorted(capture.glob("*.fine-score-v1.bin"))]
 factor = [load_factor_capture(path) for path in sorted(capture.glob("*.bpre-v2.bin"))]
 assert {item.stack_index for item in fine} == expected_stacks
 assert {item.stack_index for item in factor} == expected_stacks
-assert {item.header[4] for item in fine} == {2}
-assert {item.header[9] for item in factor} == {2}
+assert {item.header[4] for item in fine} == {expected_iteration}
+assert {item.header[9] for item in factor} == {expected_iteration}
 assert all(item.geometry_only for item in factor)
 assert all((item.candidates["flags"] & ACTIVE).any() for item in fine)
 PY
 ! rg -qi 'Traceback|Out of memory|CUDA_ERROR_OUT_OF_MEMORY' "${RELION_OUT}/runner.stderr"
 
+mapfile -t audit_iterations < <(seq 1 "${TARGET_ITERATION}")
 "${PYTHON}" "${AUDIT_REPO}/scripts/audit_relion_control_reproducibility.py" \
-  --control-dir "${CONTROL_DIR}" --candidate-dir "${RELION_OUT}" --iterations 1 2 \
+  --control-dir "${CONTROL_DIR}" --candidate-dir "${RELION_OUT}" \
+  --iterations "${audit_iterations[@]}" \
   --map-fsc-auc-threshold 0.999999 \
   --output-json "${RUN_ROOT}/analysis/RELION_FRESH_CAPTURE_INERTNESS.json" \
   --output-markdown "${RUN_ROOT}/analysis/RELION_FRESH_CAPTURE_INERTNESS.md"
@@ -213,7 +217,8 @@ PY
 
 find "${CAPTURE}" "${RELION_OUT}" "${RUN_ROOT}/analysis" -type f -print0 \
   | sort -z | xargs -0 sha256sum > "${RUN_ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
-printf '{"job_id":"%s","wall_s":%d,"iterations":[1,2],"stack_indices_one_based":"%s","fresh_uninterrupted":true}\n' \
-  "${SLURM_JOB_ID}" "${wall_s}" "${TARGET_STACKS_ONE_BASED}" \
+iteration_csv=$(seq -s, 1 "${TARGET_ITERATION}")
+printf '{"job_id":"%s","wall_s":%d,"iterations":[%s],"stack_indices_one_based":"%s","fresh_uninterrupted":true}\n' \
+  "${SLURM_JOB_ID}" "${wall_s}" "${iteration_csv}" "${TARGET_STACKS_ONE_BASED}" \
   > "${RUN_ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${RUN_ROOT}/SUCCESS_${SLURM_JOB_ID}"
