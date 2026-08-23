@@ -21,6 +21,7 @@ set -euo pipefail
 : "${EXPECTED_REPO_HEAD:?submission must pin repository HEAD}"
 : "${EXPECTED_SOURCE_DIFF_SHA256:?submission must pin the RECOVAR source diff}"
 : "${EXPECTED_LAUNCHER_SHA256:?submission must pin this launcher}"
+: "${EXPECTED_CUDA_LIB_SHA256:?submission must pin the CUDA library}"
 
 MAX_ITER=${K1_MAX_ITER:-1}
 SKIP_FINAL=${K1_SKIP_FINAL:-1}
@@ -58,7 +59,7 @@ RELION=${CASE}/relion_ref
 OUTPUT=${ROOT}/output
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
-CUDA_LIB=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_preprocess_stage_split_20260821T1600ET/cuda/libcuda_backproject.so
+CUDA_LIB=${CUDA_LIB_OVERRIDE:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_preprocess_stage_split_20260821T1600ET/cuda/libcuda_backproject.so}
 RELION_BIND=${FIXED_ROOT}/relion_bind_build/shared
 LAUNCHER=${REPO}/scripts/run_k1_remaining_it1_exact_corr_img.sbatch
 
@@ -67,7 +68,7 @@ test -z "$(find "${OUTPUT}" -mindepth 1 -print -quit)"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO}" diff --binary -- recovar/em scripts/run_full_refinement.py | sha256sum | awk '{print $1}')" = "${EXPECTED_SOURCE_DIFF_SHA256}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
-test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = b5178b902aafaa945bf7271421edab28bd75f0291484006833e0da0ebc91494b
+test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_LIB_SHA256}"
 RELION_BIND_LIB=$(find "${RELION_BIND}" -maxdepth 1 -type f -name '_relion_bind_core*.so' -print -quit)
 test "$(sha256sum "${RELION_BIND_LIB}" | awk '{print $1}')" = 56acdddab6d25bd83aac5e338162c4819f85ec26f68511458618f143c2b604b7
 STACK=$(find -L "${DATA}" -maxdepth 1 -type f -name 'particles.*.mrcs' -print -quit)
