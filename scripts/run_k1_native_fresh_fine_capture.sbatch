@@ -48,6 +48,7 @@ OVERSAMPLING=${OVERSAMPLING:-1}
 FINE_OPERAND_ROTATION_LOCAL=${FINE_OPERAND_ROTATION_LOCAL:-}
 FINE_OPERAND_TRANSLATIONS=${FINE_OPERAND_TRANSLATIONS:-}
 FINE_OPERAND_TRANSLATIONS=${FINE_OPERAND_TRANSLATIONS//:/,}
+CAPTURE_PPREF=${CAPTURE_PPREF:-0}
 
 CAPTURE=${RUN_ROOT}/capture
 RELION_OUT=${RUN_ROOT}/relion
@@ -63,6 +64,7 @@ TARGET_COUNT=${#target_stack_values[@]}
 test "${TARGET_COUNT}" -gt 0
 test "$(printf '%s\n' "${target_stack_values[@]}" | sort -u | wc -l)" -eq "${TARGET_COUNT}"
 [[ "${TARGET_ITERATION}" =~ ^[1-9][0-9]*$ ]]
+case "${CAPTURE_PPREF}" in 0|1) ;; *) echo "CAPTURE_PPREF must be 0 or 1" >&2; exit 2 ;; esac
 if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" || -n "${FINE_OPERAND_TRANSLATIONS}" ]]; then
   test "${TARGET_COUNT}" -eq 1
   [[ "${FINE_OPERAND_ROTATION_LOCAL}" =~ ^[0-9]+$ ]]
@@ -99,7 +101,7 @@ unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
 while IFS='=' read -r variable_name _; do
   case "${variable_name}" in
-    RECOVAR_*|RELION_BPRE_*|RELION_FINE_*|RELION_PREITER_*|RELION_SAMPLING_PERTURBATION_*)
+    RECOVAR_*|RELION_BPRE_*|RELION_FINE_*|RELION_PPREF_*|RELION_PREITER_*|RELION_SAMPLING_PERTURBATION_*)
       unset "${variable_name}"
       ;;
   esac
@@ -144,6 +146,10 @@ if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" ]]; then
   export RELION_FINE_OPERAND_CAPTURE_EXPECTED_CANDIDATES=${#fine_operand_translation_values[@]}
   export RELION_FINE_OPERAND_CAPTURE_MAX_BYTES=2000000000
 fi
+if [[ "${CAPTURE_PPREF}" = 1 ]]; then
+  export RELION_PPREF_CAPTURE_DIR=${CAPTURE}
+  export RELION_PPREF_CAPTURE_ITER=${TARGET_ITERATION}
+fi
 
 command=(srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
   --i particles.star --ref reference_init_relion.mrc --o "${RELION_OUT}/run"
@@ -176,18 +182,25 @@ if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" ]]; then
 else
   test -z "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-operand-v1.bin' -print -quit)"
 fi
+if [[ "${CAPTURE_PPREF}" = 1 ]]; then
+  test "$(find "${CAPTURE}" -maxdepth 1 -type f -name 'ppref_iter*_rank*_model*.bin' | wc -l)" -eq 2
+else
+  test -z "$(find "${CAPTURE}" -maxdepth 1 -type f -name 'ppref_iter*_rank*_model*.bin' -print -quit)"
+fi
 printf -v target_iteration_label '%03d' "${TARGET_ITERATION}"
 test -s "${RELION_OUT}/run_it${target_iteration_label}_data.star"
-"${PYTHON}" - "${CAPTURE}" "${TARGET_STACKS_ONE_BASED}" "${TARGET_ITERATION}" <<'PY'
+"${PYTHON}" - "${CAPTURE}" "${TARGET_STACKS_ONE_BASED}" "${TARGET_ITERATION}" "${CAPTURE_PPREF}" <<'PY'
 import sys
 from pathlib import Path
 
+from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
 capture = Path(sys.argv[1])
 expected_stacks = {int(value) for value in sys.argv[2].split(",")}
 expected_iteration = int(sys.argv[3])
+capture_ppref = bool(int(sys.argv[4]))
 fine = [load_fine_score_capture(path) for path in sorted(capture.glob("*.fine-score-v1.bin"))]
 factor = [load_factor_capture(path) for path in sorted(capture.glob("*.bpre-v2.bin"))]
 assert {item.stack_index for item in fine} == expected_stacks
@@ -196,6 +209,10 @@ assert {item.header[4] for item in fine} == {expected_iteration}
 assert {item.header[9] for item in factor} == {expected_iteration}
 assert all(item.geometry_only for item in factor)
 assert all((item.candidates["flags"] & ACTIVE).any() for item in fine)
+if capture_ppref:
+    ppref = [_load_ppref(path)[1] for path in sorted(capture.glob("ppref_iter*_rank*_model*.bin"))]
+    assert {int(item["iteration"]) for item in ppref} == {expected_iteration}
+    assert {int(item["rank"]) for item in ppref} == {1, 2}
 PY
 ! rg -qi 'Traceback|Out of memory|CUDA_ERROR_OUT_OF_MEMORY' "${RELION_OUT}/runner.stderr"
 

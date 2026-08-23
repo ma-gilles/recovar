@@ -29,3 +29,14 @@ def test_native_fresh_launcher_supports_sealed_later_iteration_prefixes() -> Non
     assert "run_it${target_iteration_label}_data.star" in source
     assert '--iterations "${audit_iterations[@]}"' in source
     assert "expected_iteration = int(sys.argv[3])" in source
+
+
+@pytest.mark.unit
+def test_native_fresh_launcher_can_capture_same_run_ppref() -> None:
+    source = LAUNCHER.read_text()
+    assert "CAPTURE_PPREF=${CAPTURE_PPREF:-0}" in source
+    assert 'case "${CAPTURE_PPREF}" in 0|1)' in source
+    assert "RELION_PPREF_CAPTURE_DIR=${CAPTURE}" in source
+    assert "RELION_PPREF_CAPTURE_ITER=${TARGET_ITERATION}" in source
+    assert "ppref_iter*_rank*_model*.bin" in source
+    assert 'assert {int(item["rank"]) for item in ppref} == {1, 2}' in source
