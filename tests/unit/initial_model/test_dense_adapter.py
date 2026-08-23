@@ -17,6 +17,7 @@ from recovar.em.initial_model.dense_adapter import (
     _relion_projector_to_dense_volume,
     _resolve_class_inputs,
     _resolve_sparse_pass1_current_size,
+    _safe_coarse_significance_image_batch_size,
     class_log_priors_from_state,
     reference_to_dense_means,
     reference_to_relion_projector_dense_means,
@@ -25,6 +26,46 @@ from recovar.em.initial_model.dense_adapter import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def test_coarse_significance_batch_is_unchanged_for_small_pose_grids():
+    assert _safe_coarse_significance_image_batch_size(
+        500,
+        n_classes=1,
+        n_rotations=4608,
+        n_translations=45,
+    ) == 500
+
+
+@pytest.mark.parametrize(
+    ("n_translations", "expected"),
+    [(37, 146), (45, 120)],
+)
+def test_coarse_significance_batch_caps_gui_default_oom_grids(
+    n_translations,
+    expected,
+):
+    assert _safe_coarse_significance_image_batch_size(
+        500,
+        n_classes=1,
+        n_rotations=36864,
+        n_translations=n_translations,
+    ) == expected
+
+
+def test_coarse_significance_batch_respects_smaller_user_request_and_k_axis():
+    assert _safe_coarse_significance_image_batch_size(
+        64,
+        n_classes=1,
+        n_rotations=36864,
+        n_translations=45,
+    ) == 64
+    assert _safe_coarse_significance_image_batch_size(
+        500,
+        n_classes=4,
+        n_rotations=36864,
+        n_translations=45,
+    ) == 30
 
 
 class _Dataset:
@@ -768,6 +809,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["pass1_prior"] = np.asarray(kwargs["translation_log_prior"], dtype=np.float32).copy()
         calls["pass1_current_size"] = kwargs["current_size"]
         calls["pass1_max_significants"] = kwargs["max_significants"]
+        calls["pass1_image_batch_size"] = kwargs["image_batch_size"]
         calls["pass1_debug_iteration"] = kwargs["debug_iteration"]
         calls["pass1_relion_coarse_gaussian_default"] = kwargs[
             "relion_coarse_gaussian_default"
@@ -839,6 +881,10 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     monkeypatch.setattr(
         "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
         fake_significance,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._safe_coarse_significance_image_batch_size",
+        lambda *_args, **_kwargs: 7,
     )
     monkeypatch.setattr(
         "recovar.em.initial_model.dense_adapter.build_pass2_hypothesis_layout",
@@ -933,6 +979,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     np.testing.assert_allclose(calls["pass1_prior"], coarse_prior[[1, 3]])
     assert calls["pass1_current_size"] == 6
     assert calls["pass1_max_significants"] == 100
+    assert calls["pass1_image_batch_size"] == 7
     assert calls["pass1_debug_iteration"] == 7
     assert calls["pass1_relion_coarse_gaussian_default"] is True
     assert calls["pass1_pad_final_image_batch"] is True

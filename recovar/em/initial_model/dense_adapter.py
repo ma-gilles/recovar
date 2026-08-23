@@ -7,6 +7,7 @@ duplicated while the VDAM M-step still gets independent halfset BackProjectors.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import dataclass, field, replace
@@ -16,6 +17,7 @@ from typing import Any, Callable
 import numpy as np
 
 from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_step
+from recovar.em.dense_single_volume.batch_planning import RELION_SCORE_TENSOR_FLOAT_BUDGET
 from recovar.em.dense_single_volume.helpers.resolution import compute_coarse_image_size
 from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
 from recovar.em.dense_single_volume.k_class import (
@@ -64,6 +66,34 @@ _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
 _UNIFY_LOCAL_BUCKET_SIZES_ENV = "RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES"
 _COMPACT_SPARSE_PASS2_ENV = "RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2"
 _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_coarse_significance_image_batch_size(
+    requested_image_batch_size: int,
+    *,
+    n_classes: int,
+    n_rotations: int,
+    n_translations: int,
+) -> int:
+    """Cap InitialModel pass-1 batches by their materialized pose tensor.
+
+    The RELION float32 coarse-posterior kernel consumes a dense
+    ``image x class x rotation x translation`` tensor.  VDAM can increase its
+    coarse Healpix order late in a run, so a batch that was safe on the
+    previous iteration can otherwise become several times larger without any
+    change to the user-selected image batch size.  Splitting only the image
+    axis leaves every particle's score and reduction order unchanged.
+    """
+
+    requested = max(1, int(requested_image_batch_size))
+    poses_per_image = max(
+        1,
+        int(n_classes) * int(n_rotations) * int(n_translations),
+    )
+    pose_tensor_cap = max(1, RELION_SCORE_TENSOR_FLOAT_BUDGET // poses_per_image)
+    return min(requested, pose_tensor_cap)
 
 
 def _exact_relion_fine_diff2_enabled() -> bool:
@@ -788,6 +818,24 @@ def _run_sparse_pass2_initial_model_estep(
         coarse_rotations_for_dense = _relion_projector_dense_rotations(coarse_rotations)
     accumulators: list[VdamAccumulator] = []
     halfset_results: dict[int, Any] = {}
+    significance_image_batch_size = _safe_coarse_significance_image_batch_size(
+        config.image_batch_size,
+        n_classes=state.K,
+        n_rotations=int(coarse_rotations_for_dense.shape[0]),
+        n_translations=int(coarse_translations.shape[0]),
+    )
+    if significance_image_batch_size != int(config.image_batch_size):
+        logger.info(
+            "InitialModel coarse significance batch sizing: requested "
+            "image_batch_size=%d; using image_batch_size=%d "
+            "(rotations=%d translations=%d K=%d, pose-float budget=%.1fM)",
+            int(config.image_batch_size),
+            significance_image_batch_size,
+            int(coarse_rotations_for_dense.shape[0]),
+            int(coarse_translations.shape[0]),
+            int(state.K),
+            RELION_SCORE_TENSOR_FLOAT_BUDGET / 1e6,
+        )
 
     for halfset_idx, image_indices in groups:
         image_indices = np.asarray(image_indices, dtype=np.int64)
@@ -835,7 +883,7 @@ def _run_sparse_pass2_initial_model_estep(
             class_log_priors=class_log_priors,
             adaptive_fraction=adaptive_fraction,
             max_significants=max_significants,
-            image_batch_size=config.image_batch_size,
+            image_batch_size=significance_image_batch_size,
             rotation_block_size=config.rotation_block_size,
             current_size=pass1_current_size,
             score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
