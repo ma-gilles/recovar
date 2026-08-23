@@ -423,3 +423,37 @@ The isolated-cache gate nevertheless improved, so the boundary does not trade
 warm speed for a general cold-start regression.  Direct-scatter, posterior-only
 FFI, raw-diff2 retention, and dense-active-row alternatives remain rejected;
 none of those diagnostic implementations is present in the promoted path.
+
+## Post-promotion host/runtime probes (2026-08-23)
+
+The promoted default's one-iteration stage profile (`12819946`) took
+`48.43 s`.  Its warm second half spent `11.9 s` in compact pass 2: `2.98 s`
+scoring, `4.55 s` M-step/noise, `1.70 s` preparation, and `0.97 s` image
+fetching across the three pair-size groups.  The matching Python profile
+(`12820244`) took `56.91 s` under profiling and found 1,851 top-level JAX
+cache misses.  They accounted for `22.15 s` cumulatively, including `11.18 s`
+lowering, `5.06 s` compile/cache loading, and `7.86 s` waiting on internal
+locks.  Compact pass 2 accounted for `36.58 s`, initial-state construction
+`7.56 s`, and coarse significance `6.74 s`.  This confirms that the remaining
+gap is fragmented host/XLA orchestration across several stages, not one
+dominant GPU kernel.
+
+Several apparent ways to reduce that fragmentation were measured and rejected:
+
+| Probe | Result | Reason rejected |
+| --- | ---: | --- |
+| 1 GiB projection-gather cap (`12820124`) | `82.53 s`; warm pass 2 `23.5 s` | split execution into 72-75 buckets |
+| 4 GiB cap (`12820075`) | `68.09 s`; warm pass 2 `16.8 s` | fewer buckets but more padded rotation work |
+| 8 GiB cap (`12820074`) | `70.45 s`; warm pass 2 `25.9 s` | still greater padding and adjoint work |
+| 2048-row bucket quantum (`12820193`) | `64.50 s`; warm pass 2 `14.1 s` | extra executable shapes outweighed reduced padding |
+| Image power inside the fused M-step graph (`12820428`) | `65.58 s`; warm pass 2 `17.1 s` | enlarged graph increased compile and memory pressure |
+| Image-power-only JIT (`12820650`) | `53.12 s`; warm pass 2 `12.6 s` | synchronization/shape overhead exceeded saved dispatch |
+| Residual-subtraction JIT (`12820809`) | `49.13 s`; warm pass 2 `12.0 s` | statistically neutral to the `48.43 s` control |
+
+The EM-style coarse score/prior/evidence JIT boundary also preserved the full
+trajectory (`12821223`; minimum FSC-AUC `0.9999792267663643`, assignment
+`0.9998`) but took `133.47 s`, versus `132.58 s` for the promoted default.
+It was therefore reverted along with the smaller diagnostic JITs.  The next
+runtime boundary must remove a larger serial host region while retaining the
+current memory planner; simply wrapping individual eager regions in JIT or
+changing bucket size does not improve end-to-end wall time.
