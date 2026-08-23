@@ -100,6 +100,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _exact_raw_diff2_cache_estimated_bytes,
     _exact_raw_diff2_cache_fits_budget,
     _exact_raw_diff2_cache_limit_bytes,
+    _fine_class_log_z_required,
     _flat_image_indices_for_rotation_rows,
     _half_translation_phase_table_for_indices,
     _hybrid_k_class_compact_pair_execution_buckets,
@@ -4847,6 +4848,11 @@ def test_k1_relion_fine_mstep_prune_keeps_unweighted_high_shell_image_power(monk
     assert np.all(np.asarray(pruned_noise.wsum_norm_correction) >= 0.0)
     np.testing.assert_allclose(np.asarray(pruned_noise.wsum_scale_correction_xa), 0.0, rtol=0, atol=0)
     np.testing.assert_allclose(np.asarray(pruned_noise.wsum_scale_correction_aa), 0.0, rtol=0, atol=0)
+
+
+def test_fine_class_log_z_is_skipped_only_with_external_normalization():
+    assert _fine_class_log_z_required(None)
+    assert not _fine_class_log_z_required(np.asarray([1.25], dtype=np.float64))
 
 
 def test_compact_pair_score_only_normalization_ignores_padding():

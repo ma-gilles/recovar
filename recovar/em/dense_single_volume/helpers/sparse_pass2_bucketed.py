@@ -8407,6 +8407,12 @@ def _logsumexp_class_log_z(class_log_z):
     return jnp.where(has_finite & (sum_exp > 0.0), max_value + jnp.log(sum_exp), -jnp.inf)
 
 
+def _fine_class_log_z_required(normalization_log_evidence) -> bool:
+    """Return whether fine class-local evidence is consumed by this pass."""
+
+    return normalization_log_evidence is None
+
+
 @jax.jit
 def _winner_take_all_bucket_probs(scores, best_argmax, best_log_score):
     """One-hot sparse bucket probabilities for RELION firstiter_cc."""
@@ -17420,13 +17426,20 @@ def compute_k_class_pass2_stats_sparse_fused(
                 scores_by_class.append(score)
                 bucket_raw_host_staging_bytes -= int(raw_diff2.nbytes)
                 raw_diff2_by_class[class_index] = None
-                if bucket_uses_compact_pairs:
-                    class_log_z_for_bucket = _logsumexp_pass2_pairs_score_only(
-                        score,
-                        raw_diff2_masks_by_class[class_index],
-                    )
+                if _fine_class_log_z_required(normalization_log_evidence_np):
+                    if bucket_uses_compact_pairs:
+                        class_log_z_for_bucket = _logsumexp_pass2_pairs_score_only(
+                            score,
+                            raw_diff2_masks_by_class[class_index],
+                        )
+                    else:
+                        class_log_z_for_bucket = _logsumexp_pass2_bucket_score_only(score)
                 else:
-                    class_log_z_for_bucket = _logsumexp_pass2_bucket_score_only(score)
+                    # Oversampling-zero InitialModel reuses the absolute coarse
+                    # evidence below.  The class-local fine log-Z values are
+                    # otherwise discarded, so avoid four float64 exp/reduction
+                    # graphs per K=4 bucket group.
+                    class_log_z_for_bucket = None
                 class_score_log_z_bucket.append(class_log_z_for_bucket)
 
                 if compact_pair_inputs_by_class_for_check is not None:
