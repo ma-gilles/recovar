@@ -501,4 +501,37 @@ traceback was a missing `nvidia-smi`, not a planner regression.  The palette is
 therefore default-on in the tracking branch; setting
 `RECOVAR_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE=0` restores the
 prior planner.  Fixed image-axis padding remains rejected and absent.
-shape.
+
+The warm long-run artifact was subsequently audited at all 26 written
+checkpoints, not only at the summary boundary.  Every checkpoint passed, with
+minimum FSC-AUC `0.9999998915607998` at iteration 25 and exact hard-class
+assignments and topology throughout.  Expanding the common palette cutoff
+from joint p95 to p100 was rejected in job `12826199`: it changed the common
+high-rotation group from 23 chunks at batch 72 to 98 chunks at batch 18 plus
+tails (110 signatures total), increasing fragmentation instead of removing
+it.  The accepted joint-p95 source-matched one-iteration replay (`12826387`)
+took `43.92 s` and `43.05 s` on its two passes.
+
+## InitialModel allocator qualification and deterministic fallback (2026-08-23)
+
+An eight-iteration profile (`12826561`) isolated an iteration-8 allocator
+pressure spike: expectation time reached `28.93 s`, including `13.05 s` and
+`8.72 s` in the two fused sparse pass-2 halves, while all non-expectation
+stages remained near one second per iteration.  On the same H100,
+`TF_GPU_ALLOCATOR=cuda_malloc_async` reduced end-to-end wall from `124.65 s`
+to `120.12 s` (`12826886`).  The scoped command-bootstrap implementation then
+completed in `119.18 s` (`12827578`, `4.4%` faster than control); its full
+trajectory audit passed with minimum FSC-AUC `0.999999999601246` and exact
+assignments.  InitialModel therefore selects the async allocator before JAX
+initialization, while an existing caller `TF_GPU_ALLOCATOR` still wins and
+`RECOVAR_INITIAL_MODEL_CUDA_ALLOCATOR=default` restores the prior behavior.
+The resolved allocator is recorded in both dry-run and native-options JSON.
+
+The exact pre-allocator fast suite (`12825815`) found one intermittent
+CUDA-disabled test difference: two of five image-power shells differed by at
+most `0.00048828`.  The test explicitly disables RECOVAR's custom CUDA path,
+but its fallback shell binning still lowered to unordered GPU scatter atomics.
+The fallback now performs a fixed per-shell reduction only when
+`RECOVAR_DISABLE_CUDA=1`; production CUDA execution is unchanged.  The
+original test plus 20 repetitions passed (`12828060`), and the complete
+sparse-pass2 test file passed with `173 passed, 1 skipped` (`12828073`).
