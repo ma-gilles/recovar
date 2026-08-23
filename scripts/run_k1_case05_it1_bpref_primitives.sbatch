@@ -27,6 +27,13 @@ set -euo pipefail
 : "${EXPECTED_CONTRIBUTION_SHA256:?pin the RECOVAR contribution bundle}"
 : "${EXPECTED_CUDA_LIB_SHA256:?pin the selected CUDA library}"
 
+# A geometry-only firstiter-CC capture can finish and validate its requested
+# BPref artifact even when the generic producer wrapper rejects the absence of
+# an unrelated fine-score artifact.  In that case, point this launcher at an
+# independently sealed qualification directory instead of manufacturing a
+# producer success marker.
+CAPTURE_QUALIFICATION_DIR=${CAPTURE_QUALIFICATION_DIR:-}
+
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820
 SOURCE_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET
 CASE=${SOURCE_ROOT}/cases/5_very_high_noise_100k_g256_white_noise10_bf80
@@ -48,11 +55,25 @@ PROVENANCE=${RUN_ROOT}/provenance
 CAPTURE_SUCCESS=${NATIVE_CAPTURE_ROOT}/SUCCESS_${EXPECTED_CAPTURE_JOB_ID}
 CAPTURE_INERTNESS=${NATIVE_CAPTURE_ROOT}/analysis/RELION_FRESH_CAPTURE_INERTNESS.json
 CAPTURE_RESULTS=${NATIVE_CAPTURE_ROOT}/provenance/results_${EXPECTED_CAPTURE_JOB_ID}.sha256
+CAPTURE_FACTOR_VALIDATION=
+if [[ -n "${CAPTURE_QUALIFICATION_DIR}" ]]; then
+    CAPTURE_INERTNESS=${CAPTURE_QUALIFICATION_DIR}/inertness.json
+    CAPTURE_RESULTS=${CAPTURE_QUALIFICATION_DIR}/results.sha256
+    CAPTURE_FACTOR_VALIDATION=${CAPTURE_QUALIFICATION_DIR}/factor_validation.json
+fi
 
 test "${RUN_ROOT#/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/}" != "${RUN_ROOT}"
 test "${RUNTIME_ROOT#/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/}" != "${RUNTIME_ROOT}"
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
-test -f "${CAPTURE_SUCCESS}" -a -s "${CAPTURE_INERTNESS}" -a -s "${CAPTURE_RESULTS}"
+if [[ -n "${CAPTURE_QUALIFICATION_DIR}" ]]; then
+    case "${CAPTURE_QUALIFICATION_DIR}" in
+        "${NATIVE_CAPTURE_ROOT}"/analysis/*) ;;
+        *) echo "qualification directory must be inside the native capture analysis root" >&2; exit 2 ;;
+    esac
+    test -s "${CAPTURE_FACTOR_VALIDATION}" -a -s "${CAPTURE_INERTNESS}" -a -s "${CAPTURE_RESULTS}"
+else
+    test -f "${CAPTURE_SUCCESS}" -a -s "${CAPTURE_INERTNESS}" -a -s "${CAPTURE_RESULTS}"
+fi
 test -s "${SELECTION}" -a -s "${SOURCE_STAR}" -a -s "${SIGMA2}"
 test -s "${PASS2}" -a -s "${CONTRIBUTION}"
 test -x "${PYTHON}" -a -d "${RELION_BIND}"
@@ -69,7 +90,7 @@ test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_LIB_SHA2
 RELION_BIND_LIB=$(find "${RELION_BIND}" -maxdepth 1 -type f -name '_relion_bind_core*.so' -print -quit)
 test "$(sha256sum "${RELION_BIND_LIB}" | awk '{print $1}')" = 56acdddab6d25bd83aac5e338162c4819f85ec26f68511458618f143c2b604b7
 
-"${PYTHON}" - "${CAPTURE_INERTNESS}" <<'PY'
+"${PYTHON}" - "${CAPTURE_INERTNESS}" "${CAPTURE_FACTOR_VALIDATION}" <<'PY'
 import json
 import sys
 
@@ -77,6 +98,10 @@ report = json.load(open(sys.argv[1]))
 assert report["iterations"]
 assert all(row["map_stable"] for row in report["iterations"])
 assert all(row["selected_topology_exact"] for row in report["iterations"])
+if sys.argv[2]:
+    factor = json.load(open(sys.argv[2]))
+    assert factor["capture_ready"] is True
+    assert factor["particle_count"] == 1
 PY
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV CONDA_EXE CONDA_PYTHON_EXE
@@ -153,6 +178,9 @@ PY
 printf '{"job_id":"%s","wall_s":%d,"capture_job_id":"%s"}\n' \
     "${SLURM_JOB_ID}" "${wall_s}" "${EXPECTED_CAPTURE_JOB_ID}" \
     > "${PROVENANCE}/walltime_${SLURM_JOB_ID}.json"
-sha256sum "${OUTPUT}" "${DUMPS}"/*.npz "${CAPTURE_INERTNESS}" "${CAPTURE_RESULTS}" \
-    > "${PROVENANCE}/results_${SLURM_JOB_ID}.sha256"
+result_inputs=("${OUTPUT}" "${DUMPS}"/*.npz "${CAPTURE_INERTNESS}" "${CAPTURE_RESULTS}")
+if [[ -n "${CAPTURE_FACTOR_VALIDATION}" ]]; then
+    result_inputs+=("${CAPTURE_FACTOR_VALIDATION}")
+fi
+sha256sum "${result_inputs[@]}" > "${PROVENANCE}/results_${SLURM_JOB_ID}.sha256"
 touch "${RUN_ROOT}/SUCCESS_${SLURM_JOB_ID}"
