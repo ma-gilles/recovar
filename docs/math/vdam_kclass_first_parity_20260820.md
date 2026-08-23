@@ -694,8 +694,20 @@ different particle reaches `0.043531` absolute Pmax error (limit `0.01`).
 RECOVAR took `197 s` versus RELION's `22 s` (`8.95x`).  The audit now derives
 visited topology from the frozen selected identities and RELION's selected
 output prefix, rather than stale positive class labels retained on unvisited
-legacy rows.  This leaves a narrow, genuine iteration-8 winning-state/Pmax
-boundary to diagnose; no threshold was relaxed.
+legacy rows.  This leaves a narrow iteration-8 point-reference winning-state/
+Pmax boundary to diagnose; no threshold was relaxed.
+
+The first matched full-from-seed RELION repeat (`12837509`) shows that both
+10073 exceptions are inside RELION's own repeatability boundary.  Relative to
+the canonical RELION run, the repeat changes exactly the same
+`71231@particles.256.mrcs` winner by one `1.40001 A` translation pixel, and
+the largest Pmax change (`0.043372`) occurs on the same
+`73054@particles.256.mrcs` particle flagged by the RECOVAR comparison.  The
+repeat map FSC-AUC is `0.9999998168949595`.  The repeated RELION translation
+is the RECOVAR-selected translation to output precision.  This result does not
+retroactively weaken the point-reference audit: it establishes that a robust
+real-data gate must separately report exact point-reference agreement and
+agreement within a measured RELION self-repeatability envelope.
 
 A third real-data fixture is now frozen from the 64,174-particle filtered
 EMPIAR-10345 STAR and its canonical 256-pixel stack.  The source contains
@@ -717,6 +729,11 @@ versus RELION's `22 s` (`8.09x`). Together with the single late boundary in
 EMPIAR-10073, this independently reproduces a rare iteration-8 decision-boundary
 problem on two real datasets; the next diagnostic captures the exact pass-2
 operands for those particles rather than weakening the state thresholds.
+Unlike 10073, the matched full-from-seed RELION repeat (`12837510`) is exact in
+all 1,000 selected poses and translations at iteration 8; maximum Pmax drift is
+only `0.000097`, and repeat map FSC-AUC is `0.99999999805772`.  The 10345
+particle therefore remains a genuine RECOVAR-vs-RELION fine-score boundary,
+not a reference-repeatability exception.
 
 The public CLI and GUI continue to resolve defaults from one
 `GuiInitialModelDefaults` object.  The previously hard-coded scientific
