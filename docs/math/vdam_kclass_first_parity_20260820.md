@@ -685,7 +685,27 @@ source-index selection.  Its STAR SHA-256 is
 `eb15efcb63d3496c6a7b39e966ec3a0d992b78223c7b11ef1c5cbdd61355ee1a`;
 the source-index file SHA-256 remains
 `4417136987d8c2501bcac53b795d25aa7821d0b4f2a09ac91d385d8224a15bea`.
-The corrected full trajectory is the next real-data gate.
+Corrected pair `12836889` then passed the map and subset contracts at every
+checkpoint: minimum FSC-AUC was `0.9999998165326929`, and the iteration-1
+200-particle subset was exact.  Winning poses/translations were exact at
+iterations 1, 2, and 4.  The strict overall result remains **FAIL** because
+iteration 8 has one of 1,000 selected particles displaced by one pixel and a
+different particle reaches `0.043531` absolute Pmax error (limit `0.01`).
+RECOVAR took `197 s` versus RELION's `22 s` (`8.95x`).  The audit now derives
+visited topology from the frozen selected identities and RELION's selected
+output prefix, rather than stale positive class labels retained on unvisited
+legacy rows.  This leaves a narrow, genuine iteration-8 winning-state/Pmax
+boundary to diagnose; no threshold was relaxed.
+
+A third real-data fixture is now frozen from the 64,174-particle filtered
+EMPIAR-10345 STAR and its canonical 256-pixel stack.  The source contains
+complete pose/CTF metadata but no halfset or pixel-size column.  Fixture
+preparation therefore requires explicit opt-in to deterministic balanced
+synthetic halves and records the explicit canonical CTF pixel size
+`1.345 A/px`.  The 10,000-particle STAR SHA-256 is
+`e5d9f77ff38d0e5137412892e7cc7591ba09265fb928b649cdeab58208a540f5`;
+the selected-index file SHA-256 is
+`9f812a7bfd6bb9dd071786143a501c6803f6c05541faee36c7d6e07f0aa787a3`.
 
 The public CLI and GUI continue to resolve defaults from one
 `GuiInitialModelDefaults` object.  The previously hard-coded scientific

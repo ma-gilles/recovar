@@ -102,3 +102,43 @@ def test_active_particle_comparison_uses_selected_subset_and_checks_topology():
     assert report["evaluated_particle_count"] == 1
     assert report["visited_topology_exact"] is True
     assert report["pmax_absolute_error"]["max"] == pytest.approx(0.01)
+
+
+def test_active_particle_comparison_ignores_stale_relion_classes_outside_selected_prefix():
+    columns = (
+        "_rlnImageName",
+        "_rlnClassNumber",
+        "_rlnAngleRot",
+        "_rlnAngleTilt",
+        "_rlnAnglePsi",
+        "_rlnOriginXAngst",
+        "_rlnOriginYAngst",
+        "_rlnMaxValueProbDistribution",
+    )
+    recovar = pd.DataFrame(
+        [
+            ("1@stack.mrcs", 0, 90, 90, 90, 10, 10, 1),
+            ("2@stack.mrcs", 1, 0, 0, 0, 0, 0, 0.4),
+        ],
+        columns=columns,
+    )
+    relion = pd.DataFrame(
+        [
+            ("2@stack.mrcs", 1, 0, 0, 0, 0, 0, 0.41),
+            ("1@stack.mrcs", 1, -90, -90, -90, -10, -10, 0),
+        ],
+        columns=columns,
+    )
+
+    report = _compare_active_particle_state(
+        recovar,
+        relion,
+        iteration=1,
+        pose_tolerance_deg=1e-3,
+        translation_tolerance_angst=1e-4,
+        active_image_ids={"2@stack.mrcs"},
+    )
+
+    assert report["evaluated_particle_count"] == 1
+    assert report["relion_visited_particle_count"] == 1
+    assert report["visited_topology_exact"] is True

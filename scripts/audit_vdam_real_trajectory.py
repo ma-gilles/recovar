@@ -98,6 +98,7 @@ def _compare_active_particle_state(
     iteration: int,
     pose_tolerance_deg: float,
     translation_tolerance_angst: float,
+    active_image_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Compare the exact selected subset while checking full visited topology."""
 
@@ -117,9 +118,29 @@ def _compare_active_particle_state(
 
     rec_class_col = _one_column(aligned_recovar, CLASS_NAMES, label="RECOVAR table")
     rel_class_col = _one_column(aligned_relion, CLASS_NAMES, label="RELION table")
-    rec_active = aligned_recovar[rec_class_col].astype(int).to_numpy() > 0
-    rel_active = aligned_relion[rel_class_col].astype(int).to_numpy() > 0
-    active = rec_active | rel_active
+    rec_class_active = aligned_recovar[rec_class_col].astype(int).to_numpy() > 0
+    rel_class_active = aligned_relion[rel_class_col].astype(int).to_numpy() > 0
+    if active_image_ids is None:
+        active = rec_class_active | rel_class_active
+        topology_exact = bool(np.array_equal(rec_class_active, rel_class_active))
+        rec_visited_count = int(np.count_nonzero(rec_class_active))
+        rel_visited_count = int(np.count_nonzero(rel_class_active))
+    else:
+        active = np.asarray([identity in active_image_ids for identity in rec_ids], dtype=bool)
+        if int(np.count_nonzero(active)) != len(active_image_ids):
+            raise RealDataAuditError(
+                f"iteration {iteration} selected identities are not all present in the trajectory tables"
+            )
+        # RECOVAR writes class zero for unvisited rows. RELION can preserve a
+        # stale positive input class on unvisited rows, so its authoritative
+        # visited topology is the selected prefix of its iteration data table.
+        relion_prefix_ids = set(rel_ids[: len(active_image_ids)].tolist())
+        topology_exact = bool(
+            set(rec_ids[rec_class_active].tolist()) == active_image_ids
+            and relion_prefix_ids == active_image_ids
+        )
+        rec_visited_count = int(np.count_nonzero(rec_class_active))
+        rel_visited_count = len(relion_prefix_ids)
     if not np.any(active):
         raise RealDataAuditError(f"iteration {iteration} has no selected particles")
     state = compare_particle_tables(
@@ -132,9 +153,9 @@ def _compare_active_particle_state(
     state.update(
         full_particle_count=int(rec_ids.size),
         evaluated_particle_count=int(np.count_nonzero(active)),
-        recovar_visited_particle_count=int(np.count_nonzero(rec_active)),
-        relion_visited_particle_count=int(np.count_nonzero(rel_active)),
-        visited_topology_exact=bool(np.array_equal(rec_active, rel_active)),
+        recovar_visited_particle_count=rec_visited_count,
+        relion_visited_particle_count=rel_visited_count,
+        visited_topology_exact=topology_exact,
     )
     return state
 
@@ -161,6 +182,8 @@ def audit(
     source_indices = input_star.with_name("source_indices.npy")
     if hashlib.sha256(source_indices.read_bytes()).hexdigest() != case["source_indices_sha256"]:
         raise RealDataAuditError("source-index digest differs from the frozen real-data suite")
+    fixture_table, _ = read_star(str(input_star))
+    fixture_id_col = _one_column(fixture_table, IDENTITY_NAMES, label="frozen particle STAR")
 
     run_contract = _validate_run_contract(
         definition,
@@ -193,6 +216,18 @@ def audit(
         if iteration > 0:
             recovar_table, _ = read_star(str(rec_paths["data.star"]))
             relion_table, _ = read_star(str(rel_paths["data.star"]))
+            recovar_meta = _load_json(
+                recovar_dir / f"run_it{iteration:03d}_recovar_meta.json",
+                label="RECOVAR iteration metadata",
+            )
+            selected_ids = np.asarray(recovar_meta.get("selected_particle_ids", []), dtype=np.int64)
+            if selected_ids.size == 0 or np.any(selected_ids < 0) or np.any(selected_ids >= len(fixture_table)):
+                raise RealDataAuditError(f"iteration {iteration} has invalid selected_particle_ids")
+            active_image_ids = set(
+                fixture_table.iloc[selected_ids][fixture_id_col].astype(str).tolist()
+            )
+            if len(active_image_ids) != selected_ids.size:
+                raise RealDataAuditError(f"iteration {iteration} selected particle identities are not unique")
             particle_state = _particle_state_gate(
                 _compare_active_particle_state(
                     recovar_table,
@@ -202,6 +237,7 @@ def audit(
                     translation_tolerance_angst=float(
                         acceptance["translation_tolerance_angst"]
                     ),
+                    active_image_ids=active_image_ids,
                 ),
                 acceptance,
             )

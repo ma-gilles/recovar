@@ -4,7 +4,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.prepare_vdam_real_data_fixture import promote_legacy_optics, select_balanced_half_indices
+from scripts.prepare_vdam_real_data_fixture import (
+    promote_legacy_optics,
+    select_balanced_half_indices,
+    select_synthetic_half_indices,
+)
 
 
 def _particles(halves):
@@ -41,6 +45,17 @@ def test_balanced_half_selection_rejects_invalid_subset_identifiers():
 
     with pytest.raises(ValueError, match="only RELION half identifiers 1 and 2"):
         select_balanced_half_indices(particles, particles_per_half=1, seed=0)
+
+
+def test_synthetic_half_selection_is_deterministic_sorted_and_balanced():
+    first_indices, first_halves = select_synthetic_half_indices(20, particles_per_half=4, seed=23)
+    second_indices, second_halves = select_synthetic_half_indices(20, particles_per_half=4, seed=23)
+
+    np.testing.assert_array_equal(first_indices, second_indices)
+    np.testing.assert_array_equal(first_halves, second_halves)
+    assert np.all(np.diff(first_indices) > 0)
+    assert np.count_nonzero(first_halves == 1) == 4
+    assert np.count_nonzero(first_halves == 2) == 4
 
 
 def test_promote_legacy_optics_preserves_particles_and_computes_pixel_size():
@@ -99,4 +114,25 @@ def test_promote_legacy_optics_rejects_incomplete_origin_pairs():
     particles["rlnOriginX"] = [1.0, 2.0]
 
     with pytest.raises(ValueError, match="both rlnOriginX and rlnOriginY"):
+        promote_legacy_optics(particles, image_size=256)
+
+
+def test_promote_legacy_optics_accepts_explicit_pixel_size_when_scale_columns_are_absent():
+    particles = _particles([1, 2])
+    particles["rlnVoltage"] = 300.0
+    particles["rlnSphericalAberration"] = 2.7
+    particles["rlnAmplitudeContrast"] = 0.1
+
+    promoted = promote_legacy_optics(particles, image_size=256, pixel_size=1.345)
+
+    assert promoted["optics"].loc[0, "rlnImagePixelSize"] == pytest.approx(1.345)
+
+
+def test_promote_legacy_optics_requires_explicit_pixel_size_without_scale_columns():
+    particles = _particles([1, 2])
+    particles["rlnVoltage"] = 300.0
+    particles["rlnSphericalAberration"] = 2.7
+    particles["rlnAmplitudeContrast"] = 0.1
+
+    with pytest.raises(ValueError, match="provide an explicit positive pixel size"):
         promote_legacy_optics(particles, image_size=256)

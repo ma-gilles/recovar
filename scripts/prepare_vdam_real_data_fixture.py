@@ -58,6 +58,30 @@ def select_balanced_half_indices(particles, *, particles_per_half: int, seed: in
     return np.sort(np.concatenate(selected)).astype(np.int64)
 
 
+def select_synthetic_half_indices(
+    particle_count: int,
+    *,
+    particles_per_half: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Select particles and assign deterministic balanced pseudo-halfsets."""
+
+    requested = 2 * int(particles_per_half)
+    if int(particles_per_half) <= 0:
+        raise ValueError("particles_per_half must be positive")
+    if requested > int(particle_count):
+        raise ValueError(f"source contains {int(particle_count)} particles; requested {requested}")
+    rng = np.random.RandomState(int(seed))
+    unsorted = rng.choice(int(particle_count), size=requested, replace=False).astype(np.int64)
+    half_by_source = {
+        int(source_index): 1 if rank < int(particles_per_half) else 2
+        for rank, source_index in enumerate(unsorted)
+    }
+    indices = np.sort(unsorted)
+    subset_ids = np.asarray([half_by_source[int(index)] for index in indices], dtype=np.int64)
+    return indices, subset_ids
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -99,14 +123,30 @@ def _constant_particle_value(particles, name: str) -> float:
     return float(values[0])
 
 
-def promote_legacy_optics(particles, *, image_size: int):
+def promote_legacy_optics(particles, *, image_size: int, pixel_size: float | None = None):
     """Return a RELION 3.1 optics/particles pair from a legacy single table."""
 
-    detector_pixel_um = _constant_particle_value(particles, "rlnDetectorPixelSize")
-    magnification = _constant_particle_value(particles, "rlnMagnification")
-    if detector_pixel_um <= 0.0 or magnification <= 0.0:
-        raise ValueError("legacy detector pixel size and magnification must be positive")
-    image_pixel_size = detector_pixel_um * 10_000.0 / magnification
+    detector_column = _optional_column(particles, "rlnDetectorPixelSize")
+    magnification_column = _optional_column(particles, "rlnMagnification")
+    if (detector_column is None) != (magnification_column is None):
+        raise ValueError("legacy STAR must provide both detector pixel size and magnification")
+    if detector_column is not None:
+        detector_pixel_um = _constant_particle_value(particles, "rlnDetectorPixelSize")
+        magnification = _constant_particle_value(particles, "rlnMagnification")
+        if detector_pixel_um <= 0.0 or magnification <= 0.0:
+            raise ValueError("legacy detector pixel size and magnification must be positive")
+        derived_pixel_size = detector_pixel_um * 10_000.0 / magnification
+        if pixel_size is not None and not np.isclose(float(pixel_size), derived_pixel_size, rtol=0.0, atol=1e-6):
+            raise ValueError(
+                f"explicit pixel size {float(pixel_size)} disagrees with legacy metadata {derived_pixel_size}"
+            )
+        image_pixel_size = derived_pixel_size
+    else:
+        if pixel_size is None or float(pixel_size) <= 0.0:
+            raise ValueError(
+                "legacy STAR has no detector pixel size/magnification; provide an explicit positive pixel size"
+            )
+        image_pixel_size = float(pixel_size)
     optics_values = {
         "rlnOpticsGroup": [1],
         "rlnOpticsGroupName": ["opticsGroup1"],
@@ -177,6 +217,8 @@ def prepare_fixture(
     dataset: str,
     particles_per_half: int,
     seed: int,
+    pixel_size: float | None = None,
+    synthesize_random_subsets: bool = False,
 ) -> dict:
     source_star = source_star.expanduser().resolve(strict=True)
     output_dir = output_dir.expanduser().resolve()
@@ -187,12 +229,27 @@ def prepare_fixture(
 
     star_data = starfile.read(source_star)
     particles = _particles_table(star_data)
-    indices = select_balanced_half_indices(
-        particles,
-        particles_per_half=int(particles_per_half),
-        seed=int(seed),
-    )
+    source_subset_column = _optional_column(particles, "rlnRandomSubset")
+    synthetic_subset_ids = None
+    if source_subset_column is None:
+        if not synthesize_random_subsets:
+            raise ValueError(
+                "particle STAR has no rlnRandomSubset; pass --synthesize-random-subsets to create deterministic halves"
+            )
+        indices, synthetic_subset_ids = select_synthetic_half_indices(
+            len(particles),
+            particles_per_half=int(particles_per_half),
+            seed=int(seed),
+        )
+    else:
+        indices = select_balanced_half_indices(
+            particles,
+            particles_per_half=int(particles_per_half),
+            seed=int(seed),
+        )
     subset = particles.iloc[indices].reset_index(drop=True)
+    if synthetic_subset_ids is not None:
+        subset["rlnRandomSubset"] = synthetic_subset_ids
     linked_stacks = _link_relative_stacks(subset, source_dir=source_star.parent, output_dir=output_dir)
     image_size = _stack_image_size(linked_stacks)
     if isinstance(star_data, dict) and "optics" in star_data:
@@ -205,7 +262,7 @@ def prepare_fixture(
             output_star_data["particles"]["rlnPhaseShift"] = np.zeros(len(subset), dtype=np.float64)
         optics_promoted = False
     else:
-        output_star_data = promote_legacy_optics(subset, image_size=image_size)
+        output_star_data = promote_legacy_optics(subset, image_size=image_size, pixel_size=pixel_size)
         optics_promoted = True
     output_star = output_dir / "particles.star"
     source_indices = output_dir / "source_indices.npy"
@@ -224,6 +281,8 @@ def prepare_fixture(
         "particles_per_half": int(particles_per_half),
         "image_size": int(image_size),
         "legacy_optics_promoted": bool(optics_promoted),
+        "explicit_pixel_size": None if pixel_size is None else float(pixel_size),
+        "random_subsets_synthesized": synthetic_subset_ids is not None,
         "legacy_origins_converted_to_angstrom": bool(
             optics_promoted
             and _optional_column(subset, "rlnOriginX") is not None
@@ -255,6 +314,8 @@ def main() -> int:
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--particles-per-half", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=20260823)
+    parser.add_argument("--pixel-size", type=float)
+    parser.add_argument("--synthesize-random-subsets", action="store_true")
     args = parser.parse_args()
     manifest = prepare_fixture(
         source_star=args.source_star,
@@ -262,6 +323,8 @@ def main() -> int:
         dataset=args.dataset,
         particles_per_half=args.particles_per_half,
         seed=args.seed,
+        pixel_size=args.pixel_size,
+        synthesize_random_subsets=args.synthesize_random_subsets,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0

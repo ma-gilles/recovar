@@ -64,6 +64,31 @@
         "particle_diameter_angstrom": 200.0,
         "image_batch_size": 128
       }
+    },
+    {
+      "id": "vdam-r03",
+      "name": "empiar10345_deterministic_10k",
+      "dataset": "EMPIAR-10345",
+      "input_star": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data/particles.star",
+      "input_star_sha256": "e5d9f77ff38d0e5137412892e7cc7591ba09265fb928b649cdeab58208a540f5",
+      "data_dir": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data",
+      "source_indices_sha256": "9f812a7bfd6bb9dd071786143a501c6803f6c05541faee36c7d6e07f0aa787a3",
+      "particle_count": 10000,
+      "definition": {
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6,
+        "offset_step_px": 2,
+        "padding_factor": 1,
+        "symmetry": "C1",
+        "do_run_C1": true,
+        "particle_diameter_angstrom": 200,
+        "image_batch_size": 128
+      }
     }
   ]
 }
