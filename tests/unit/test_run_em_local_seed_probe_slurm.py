@@ -18,6 +18,9 @@ def test_local_seed_probe_defaults_stay_memory_safe_for_exact_local(tmp_path):
     sbatch.chmod(0o755)
 
     env = os.environ.copy()
+    # Exercise the launcher's own explicit qualification default rather than
+    # inheriting recovar.jax_config's process-wide user default from pytest.
+    env.pop("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", None)
     env.update(
         {
             "PATH": f"{fake_bin}:{env['PATH']}",

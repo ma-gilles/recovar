@@ -120,6 +120,19 @@ job `12801958` completed in 150 seconds versus 154 seconds for control job
 `0.9999999973`, exact assignments, and exact artifact topology.  The focused
 unit file passed 169 tests with one skip.
 
+The persistent-cache write policy is also narrowed from every executable to
+executables taking at least 10 ms to compile.  The prior zero-second policy had
+grown the default cache to 382,428 files.  A staged threshold qualification
+retained 8,162 files at 10 ms and its complete warm K=4 replay (`12805441`)
+finished in 150 seconds, equal to accepted job `12801958`.  Its eight-iteration
+trajectory audit (`12805777`) passed with exact artifact topology, exact class
+assignments, and minimum matched FSC-AUC `0.9999999996`.  Higher thresholds
+lost too much reuse: a 100 ms cold fill (`12804725`) took 559 seconds and its
+warm replay was only halfway through after 191 seconds (`12804793`); a 50 ms
+fill took 400 seconds (`12805102`) and its warm replay was only through
+iteration 6 after 220 seconds (`12805118`).  Explicit user cache settings
+continue to override the default threshold.
+
 The following same-contract experiments were rejected rather than promoted:
 
 - Increasing `--image-batch-size` from 500 to 2500 slowed RECOVAR from
@@ -145,6 +158,12 @@ The following same-contract experiments were rejected rather than promoted:
   FSC-AUC `0.9999999996`, exact assignments), but shape-specific cold
   compilation raised end-to-end time from 150 to 157 seconds in job
   `12803430`.  The source experiment was removed; its audit was job `12803697`.
+- Routing compact noise and norm-residual statistics through the existing
+  combined JAX graph passed three focused math/path tests (`12804345`), but the
+  enlarged graph spent more than 220 seconds compiling before reaching the
+  first sparse pass.  Job `12804329` was cancelled after the one-time CUDA
+  rebuild plus 235 seconds of candidate execution, and the route change was
+  removed.
 
 The next implementation boundary is therefore a broader native fused
 score/posterior/noise path with a deliberately small executable-shape palette,
