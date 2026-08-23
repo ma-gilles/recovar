@@ -615,3 +615,34 @@ startup and bounded memory, but cache the much smaller current-size
 preprocessed Fourier representation used repeatedly by coarse/fine bucket
 passes.  Any such cache must first prove exact trajectory parity and a clear
 end-to-end gain in the isolated runtime worktree before promotion.
+
+### Rejected full-resolution host-cache probes
+
+Two follow-up probes tested whether retaining full-resolution particle and CTF
+arrays on the host could remove repeated lazy reads.  They were implemented
+only in the isolated runtime worktree and were never promoted.
+
+| Probe | Slurm jobs | Iteration wall | Peak RSS | Science audit |
+| --- | --- | ---: | ---: | --- |
+| Cache only the fine pass | `12832948`, `12832949` | `656.73 s` | `69,987,588 KiB` | **fail** at iteration 1: minimum FSC-AUC `0.22945024013005907`; sampled assignments `1.0` |
+| Share one cache across coarse and fine passes | `12834534`, `12834535` | `567.30 s` | `89,282,364 KiB` | **fail** at iteration 1: minimum FSC-AUC `0.2294502570722795`; sampled assignments `1.0` |
+
+The shared-cache implementation first passed a complete small K=4 trajectory
+(`12834179`) at checkpoints 0 through 8 with minimum FSC-AUC
+`0.999999999568837`, exact assignments, and exact artifact topology.  The
+100k/256 audit nevertheless demonstrated that this small test was not a
+sufficient scale qualification.  Deterministic 256-row image/CTF sentinels
+also matched fresh source reads, which localizes the failure beyond simple
+cache indexing or sampled pose/class selection and into scale-dependent image
+or reconstruction state.  The full-resolution cache is rejected regardless of
+that root cause: the shared variant still takes `2.13x` RELION's complete
+eight-iteration wall for only one RECOVAR iteration and reaches `89.28 GB`
+RSS, close to eager mode's `94.39 GB`.
+
+The next runtime candidate must remain bounded-memory and must avoid retaining
+the full-resolution raw dataset.  The leading options are a scientifically
+complete current-size processed-Fourier cache (including every normalization
+and noise operand needed to preserve the RELION trajectory) or ordered,
+bounded asynchronous prefetch.  Each candidate will be rejected immediately
+unless it passes a small complete trajectory followed by the independent
+100k/256 iteration-1 audit before any longer scale run.
