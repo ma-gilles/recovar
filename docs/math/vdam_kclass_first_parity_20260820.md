@@ -565,3 +565,21 @@ startup/JIT overhead visible rather than establishing scale throughput, so
 runtime remains open and is evaluated separately on the 100k/256 paired gate.
 Per the EM-only validation contract, the unrelated repo-wide long-test shards
 were stopped and will not be used as VDAM acceptance evidence.
+
+Four complementary stress cells were then extended to 25 complete iterations
+in suite `vdam-k1-robustness-long-v1`: anisotropic poses with 25% outliers,
+Kent poses with 20% outliers, 70% outliers, and the 10k Kent/radial-noise
+fixture.  Slurm array `12831621` passed all four cells from source head
+`f783c977` at checkpoints 0/1/2/4/8/12/16/20/25.  The minimum cross-engine
+FSC-AUC was `0.999994364355`, and the worst GT FSC-AUC delta was
+`-6.356e-6`.  The aggregate report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_robustness_long_f783c977_20260823/robustness_long_suite_summary.json`
+(SHA-256 `6ba86baab4873c8347ca744f040896a57a70078ba1a1c8a312e03f14495a133d`).
+
+The final default-allocator 100k/256 K=4 pair (`12830078`) also passed all
+nine checkpoints with exact assignments and minimum per-class FSC-AUC
+`0.9999995483248948`.  Its runtime was not acceptable: RECOVAR took
+`1952.44 s` versus RELION's `266.60 s` (`7.32x`).  This is materially slower
+than the earlier qualified `1083.94 s` RECOVAR run on the same fixture, so
+large-scale throughput is both the remaining product gap and a variability
+problem.  Correctness is not the blocker at this boundary.
