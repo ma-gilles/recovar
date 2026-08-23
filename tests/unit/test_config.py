@@ -1,5 +1,6 @@
-import importlib
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -11,14 +12,26 @@ from recovar import jax_config
 pytestmark = pytest.mark.unit
 
 
-def test_config_sets_expected_jax_defaults(monkeypatch):
-    # Import side-effects in recovar.jax_config use ``os.environ.setdefault``,
-    # so they only fire when the env var is unset on import. Reload with the
-    # var cleared to verify the default propagates as expected. This makes the
-    # test robust against shells/CI envs that pre-set XLA_PYTHON_CLIENT_MEM_FRACTION
-    # (e.g. via an sbatch wrapper that wanted a smaller fraction for a slice GPU).
-    monkeypatch.delenv("XLA_PYTHON_CLIENT_MEM_FRACTION", raising=False)
-    importlib.reload(jax_config)
-    assert os.environ.get("XLA_PYTHON_CLIENT_MEM_FRACTION") == ".90"
+def test_config_sets_expected_jax_defaults():
+    # Import side-effects in recovar.jax_config should set these defaults,
+    # but must not clobber an explicit parent shell override.
+    assert os.environ.get("XLA_PYTHON_CLIENT_MEM_FRACTION") is not None
     assert jax.config.read("jax_enable_x64") is True
     assert jax_config is not None
+
+
+def test_config_sets_mem_fraction_default_in_clean_process():
+    env = dict(os.environ)
+    env.pop("XLA_PYTHON_CLIENT_MEM_FRACTION", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os; import recovar.jax_config; print(os.environ.get('XLA_PYTHON_CLIENT_MEM_FRACTION'))",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == ".90"

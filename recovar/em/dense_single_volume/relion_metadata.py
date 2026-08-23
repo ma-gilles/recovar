@@ -50,17 +50,22 @@ def _relion_half_plane_shell_counts(image_shape):
 
 
 def _relion_rotation_grid_float32(healpix_order: int):
-    """Return RELION rotation matrices/eulers using the loop's float32 policy."""
+    """Return scorer matrices/eulers using RELION's accelerated-path policy."""
     # Indirection through iteration_loop module so test monkeypatches on
     # ``iteration_loop.get_relion_rotation_grid`` / ``get_relion_rotation_grid_eulers``
     # win at the call site.
     from recovar.em.dense_single_volume import iteration_loop as _il
 
     order = int(healpix_order)
-    return (
-        _il.get_relion_rotation_grid(order).astype(np.float32),
-        _il.get_relion_rotation_grid_eulers(order).astype(np.float32),
-    )
+    source_eulers = _il._get_relion_rotation_grid_eulers_float64(order)
+    eulers = source_eulers.astype(np.float32)
+    # RELION's accelerated expectation path constructs inverse projector
+    # matrices on the host in RFLOAT precision, casts to XFLOAT, then copies
+    # them to the device.  Preserve source Euler precision until that cast.
+    from recovar.em.sampling import _relion_mstep_rotations_from_eulers
+
+    rotations = _relion_mstep_rotations_from_eulers(source_eulers)
+    return rotations, eulers
 
 
 def _rotation_eulers_for_canonical_or_custom_grid(rotations: np.ndarray, healpix_order: int) -> np.ndarray:

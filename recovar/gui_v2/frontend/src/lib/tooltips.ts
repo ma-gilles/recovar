@@ -1,7 +1,7 @@
 /** Tooltip text for job form parameters. Single source of truth per PHASE1.md. */
 export const tooltips: Record<string, string> = {
   "pipeline.particles":
-    "Input particle images. Accepts .star (RELION), .cs (cryoSPARC), .mrcs/.mrc (cryoDRGN format \u2014 requires passing CTF and Poses .pkl files separately), or .txt (list of .mrcs paths).",
+    "Input particle images. Accepts .star (RELION), .cs (cryoSPARC), .mrcs (cryoDRGN format \u2014 requires passing CTF and Poses .pkl files separately), or .txt (list of .mrcs paths).",
   "pipeline.mask":
     "Solvent mask defining the molecular envelope. Use 'from_halfmaps' to auto-generate from consensus reconstruction, 'sphere' for a spherical mask, or provide a .mrc file.",
   "pipeline.zdim":
@@ -21,13 +21,21 @@ export const tooltips: Record<string, string> = {
   "pipeline.n_images":
     "Limit the number of images to use. Useful for quick tests with a subset of the data.",
   "pipeline.halfsets":
-    "Column name for halfset assignment in the .star file.",
+    "Optional .pkl file with halfset indices (--halfsets). If omitted, reads _rlnRandomSubset from the star file, or splits the particles randomly.",
   "pipeline.poses":
     "Pre-computed poses in .pkl format (legacy). Usually auto-extracted from .star/.cs files.",
   "pipeline.ctf":
     "Pre-computed CTF parameters in .pkl format (legacy). Usually auto-extracted from .star/.cs files.",
+  "pipeline.ind":
+    "Optional indices .pkl selecting a subset of particles to use (--ind). Leave blank to use all particles.",
+  "pipeline.do_over_with_contrast":
+    "When correcting contrast, re-run the pipeline a second time using the estimated contrast (default). Turn off for a single, faster pass (--no-do-over-with-contrast).",
+  "analyze.no_z_regularization":
+    "Use the unregularized latent coordinates (--no-z-regularization) instead of the regularized embedding.",
   "pipeline.tilt_series":
-    "Enable tilt-series mode for cryo-ET data.",
+    "Enable tilt-series mode for cryo-ET data. Input should be a RELION5 2D-tilt star (from `recovar parse_relion5_tomo`); per-tilt dose, angles, and CTF are read automatically from it.",
+  "pipeline.ntilts":
+    "Maximum number of tilts per tilt series to use (--ntilts). Leave blank to use all tilts; lower it to drop poor-quality high-tilt images.",
   "pipeline.strip_prefix":
     "Prefix to strip from particle image paths in the .star file.",
   "analyze.result_dir":
@@ -35,13 +43,17 @@ export const tooltips: Record<string, string> = {
   "analyze.zdim":
     "Which latent dimension to analyze. Must be one of the zdim values computed by the pipeline.",
   "analyze.n_clusters":
-    "Number of k-means clusters for partitioning the latent space. Default 40. More clusters = finer partitioning but smaller per-cluster particle counts.",
+    "Number of k-means centers used to sample the latent space (default 20). Each center yields one reconstructed volume; more centers sample the space more finely but take longer. Cluster labels are not used for the volumes themselves.",
   "analyze.n_trajectories":
     "Number of linear trajectories to compute through the latent space. Default 0 (skip). Each trajectory generates a series of volumes.",
+  "analyze.n_bins":
+    "Number of bins for kernel regression (default 50). Lower values produce faster but lower-resolution volumes. Quick Analyze uses 10 (~5x faster).",
+  "analyze.maskrad_fraction":
+    "Kernel-regression mask radius = grid_size / this value in voxels (= grid_size × voxel_size / this value in Angstroms), default 20. Lower values use a larger radius — faster but lower-resolution volumes. Quick Analyze uses 10 (~8x faster).",
   "compute_state.result_dir":
     "Pipeline output directory containing the model to use for volume reconstruction.",
   "compute_state.zdim":
-    "Latent dimension to use for reconstruction.",
+    "The latent dimension of the embedding you are reconstructing from. It must equal the number of latent coordinates you enter; for higher dimensions the value is inferred from the coordinate vector, and for a 1-D embedding it disambiguates the single-coordinate case.",
   "compute_state.latent_coords":
     "Comma-separated latent coordinates specifying the point in z-space to reconstruct.",
   "compute_trajectory.result_dir":
@@ -54,6 +66,8 @@ export const tooltips: Record<string, string> = {
     "Comma-separated latent coordinates for the trajectory end point.",
   "compute_trajectory.n_vols":
     "Number of volumes to compute along the trajectory path. Default 6.",
+  "compute_trajectory.density":
+    "Pass a deconvolved density .pkl from a Density job. The trajectory will follow the density manifold instead of a straight line in z-space. Leave empty for linear interpolation.",
   "density.result_dir":
     "Pipeline output directory containing results to estimate density from.",
   "density.pca_dim":
@@ -111,7 +125,7 @@ export const tooltips: Record<string, string> = {
   "slurm.cpus":
     "Number of CPU cores to request. Default 4 is sufficient for most jobs. Increase for large lazy-loading jobs.",
   "slurm.memory":
-    "Memory to request (e.g., '300G', '64G'). Pipeline jobs on large datasets may need 300G+. Analyze jobs typically need less.",
+    "Memory to request (e.g., '400G', '64G'). Pipeline jobs on large datasets may need 400G+. Analyze jobs typically need less.",
   "slurm.time":
     "Wall-time limit in HH:MM:SS format. Job is killed if it exceeds this. Pipeline: 6-12h typical. Analyze: 1-4h typical.",
 };

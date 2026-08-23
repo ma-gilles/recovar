@@ -1,5 +1,104 @@
 # RELION instrumentation patches
 
+## Case-22 coarse component and operand series
+
+The numbered `0001`--`0005` patches form a diagnostic-only series on top of
+detached RELION commit
+`bc319d0b3ca063de4a9c8b66da6e5b4d9f618630`:
+
+1. `0001` captures raw coarse diff2, production weights, significance, and
+   separately expanded reference-norm/cross components.
+2. `0002` widens only those passive component accumulators to FP64 while
+   leaving production float32 diff2 unchanged.
+3. `0003` captures a bounded set of live projected references, corrected
+   Fourier images, correction weights, Euler matrices, and translations.
+4. `0004` adds the exact GPU `translatePixel` outputs and CUDA coarse-launch
+   topology needed to replay the original float32 squared-difference path
+   directly.
+5. `0005` copies the live Euler matrices from device memory instead of an
+   unsynchronised host-side `AccPtr` buffer.
+
+Apply them in order.  Exact SHA-256 values are
+`84a41aa04d8eae11512fe7728b482eb539844c06ac5be62e39218ee863e17631`,
+`5d946b88ed75a46d2ecbe6bdf037414fd4581ae61337b91e691d7ae08f3e7be0`,
+`a00ad73ac496be4b2cc0513ee7aa2fd0dd8de137927db66b4d80420d0b06ad1e`,
+`3d090744381306bdccc3be641834909286355f2bc15abc707053ad48d95f3b21`,
+and
+`c7a27cb9467103b4cea840ce7a36c9bfd11ad1a46263f824d2baa5d04d8f5e0c`.
+All paths are default-off and bounded by the existing capture particle/byte
+caps.  They do not modify a production score, weight, projector, map, or
+model buffer.
+
+## relion_bpref_membership_chunked_bc319d0.patch
+
+Adds a compact, passive `RELION_BPM_CAPTURE_*` diagnostic that copies the
+exact float32 fine-posterior table and rotation identities for an explicit
+particle-ID cohort after the untouched production backprojection launch.
+Unlike the pre-scatter row capture below, its storage is proportional to
+orientation/translation hypotheses rather than hypothesis/pixel products.
+The same patch retains the checked explicit part-ID filter and bounded
+pre-scatter capture.
+
+Apply only to detached RELION commit
+`bc319d0b3ca063de4a9c8b66da6e5b4d9f618630`:
+
+```bash
+git apply --check \
+  /absolute/path/to/recovar/docs/patches/relion_bpref_membership_chunked_bc319d0.patch
+git apply \
+  /absolute/path/to/recovar/docs/patches/relion_bpref_membership_chunked_bc319d0.patch
+```
+
+The exact patch SHA-256 is
+`30c2d2f7d7bdd34312ed792b86cdc1aaf3976b4ffe8cd64828def0add1f79a76`.
+It is diagnostic-only and must not be treated as a production RELION change.
+
+## relion_bpref_prescatter_chunked_capture_bc319d0.patch
+
+Combines the explicit `RELION_BPRE_CAPTURE_PART_IDS` filter with a required
+`RELION_BPRE_CAPTURE_DEVICE_BYTES` cap for passive BPref pre-scatter capture.
+The diagnostic walks orientation rows in ordered chunks, preserves each row's
+global `orientation_local` identity, and leaves production backprojection
+unchanged. It is based on RELION commit
+`bc319d0b3ca063de4a9c8b66da6e5b4d9f618630`.
+
+The patch SHA-256 is
+`1a9680d93ae6ab0577a7901999dca464c7929ed10b36c36744fc87672889668f`.
+The case-22 physical-iteration-2 one-particle probe used a 512 MiB requested
+device cap. Its 145,568 orientations were captured as 19 ordered chunks
+instead of one 10,131,532,800-byte temporary allocation.
+
+Apply this combined patch directly to a clean matching RELION tree. Do not
+apply the part-ID-only patch first:
+
+```bash
+git -C /absolute/path/to/relion rev-parse HEAD
+git -C /absolute/path/to/relion apply \
+  /absolute/path/to/recovar/docs/patches/relion_bpref_prescatter_chunked_capture_bc319d0.patch
+```
+
+## relion_bpref_prescatter_part_id_filter_bc319d0.patch
+
+Adds an optional, fail-closed `RELION_BPRE_CAPTURE_PART_IDS` CSV filter to
+the passive BPref pre-scatter capture instrumentation based on RELION commit
+`bc319d0b3ca063de4a9c8b66da6e5b4d9f618630`. Unset preserves the existing
+all-particle diagnostic behavior. When set, the explicit ID count must equal
+`RELION_BPRE_CAPTURE_EXPECTED_PARTICLES`, malformed or duplicate identities
+fail closed, and unselected particles return before passive capture
+allocation. Production backprojection is unchanged.
+
+The patch SHA-256 is
+`82e79e3e07079e553280e2089d2fc5c4887fb43a27c032ee6df3228eb789bd21`.
+It is used by the frozen case-22 physical-iteration-2 bounded cohort.
+
+Apply it only to the matching instrumented RELION tree:
+
+```bash
+git -C /absolute/path/to/relion rev-parse HEAD
+git -C /absolute/path/to/relion apply \
+  /absolute/path/to/recovar/docs/patches/relion_bpref_prescatter_part_id_filter_bc319d0.patch
+```
+
 ## relion_ml_optimiser_debug_dump.patch
 
 Adds `RECOVAR_DEBUG_DUMP_DIR`-gated dumps to

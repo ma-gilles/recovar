@@ -17,7 +17,7 @@
 
 # ── Environment ──
 export PYTHONNOUSERSITE=1
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_PREALLOCATE=true
 
 # Most PBS sites expose $TMPDIR per-job; only fall back if absent.
 if [ -z "${TMPDIR:-}" ]; then

@@ -1,15 +1,16 @@
-import { useState, useCallback } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useCallback, useMemo } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
+import { PipelineOutputPicker } from "./PipelineOutputPicker";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
-import { submitJob } from "../../lib/api/client";
+import { submitJob, getProject, type ProjectDetail } from "../../lib/api/client";
 
 interface ComputeTrajectoryFormProps {
   projectId: string;
@@ -17,6 +18,7 @@ interface ComputeTrajectoryFormProps {
   prefilledZdim?: number;
   prefilledStart?: number[];
   prefilledEnd?: number[];
+  prefilledDensity?: string;
   onSubmitted?: (jobId: string) => void;
 }
 
@@ -26,6 +28,7 @@ export function ComputeTrajectoryForm({
   prefilledZdim,
   prefilledStart,
   prefilledEnd,
+  prefilledDensity,
   onSubmitted,
 }: ComputeTrajectoryFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
@@ -34,9 +37,36 @@ export function ComputeTrajectoryForm({
   const [zStart, setZStart] = useState(prefilledStart?.join(", ") ?? "");
   const [zEnd, setZEnd] = useState(prefilledEnd?.join(", ") ?? "");
   const [nVols, setNVols] = useState("6");
+  const [densityPath, setDensityPath] = useState<string>(prefilledDensity ?? "");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
   const [executorMode, setExecutorMode] = useState<string | null>(null);
   const [localOpts, setLocalOpts] = useState<LocalOpts | null>(null);
+
+  // Find Density jobs in this project; only the ones whose result_dir
+  // (i.e. the input pipeline result directory) matches the trajectory's
+  // result_dir are valid candidates.
+  const { data: project } = useQuery<ProjectDetail>({
+    queryKey: ["project", projectId],
+    queryFn: () => getProject(projectId),
+  });
+  const densityJobs = useMemo(() => {
+    if (!project) return [];
+    return project.jobs.filter(
+      (j) => j.type === "Density" && j.status === "completed"
+    );
+  }, [project]);
+  // Build the canonical density-knee path for each density job. The
+  // estimate_conformational_density command writes
+  // ``data/deconv_density_knee.pkl`` (the auto-selected knee point).
+  const densityChoices = useMemo(
+    () =>
+      densityJobs.map((j) => ({
+        id: j.id,
+        label: j.output_dir.split("/").slice(-2).join("/"),
+        path: `${j.output_dir}/data/deconv_density_knee.pkl`,
+      })),
+    [densityJobs]
+  );
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const parseCoords = (s: string) => s.split(",").map((v) => parseFloat(v.trim()));
@@ -46,10 +76,13 @@ export function ComputeTrajectoryForm({
   const countCoords = (s: string): number =>
     s.split(",").filter((v) => v.trim().length > 0).length;
   const zdimNum = parseInt(zdim);
+  const zdimValid = !isNaN(zdimNum) && zdimNum > 0;
   const zStartCount = zStart.length > 0 ? countCoords(zStart) : 0;
   const zEndCount = zEnd.length > 0 ? countCoords(zEnd) : 0;
-  const zStartMismatch = isValidCoords(zStart) && !isNaN(zdimNum) && zdimNum > 0 && zStartCount !== zdimNum;
-  const zEndMismatch = isValidCoords(zEnd) && !isNaN(zdimNum) && zdimNum > 0 && zEndCount !== zdimNum;
+  const zStartMismatch = isValidCoords(zStart) && zdimValid && zStartCount !== zdimNum;
+  const zEndMismatch = isValidCoords(zEnd) && zdimValid && zEndCount !== zdimNum;
+  const nVolsNum = parseInt(nVols);
+  const nVolsValid = !isNaN(nVolsNum) && nVolsNum > 0;
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -60,6 +93,7 @@ export function ComputeTrajectoryForm({
         z_end: parseCoords(zEnd),
         n_vols_along_path: parseInt(nVols),
       };
+      if (densityPath.trim()) params.density = densityPath.trim();
       if (slurmOpts) params.slurm_opts = slurmOpts;
       if (localOpts && executorMode === "local") params.local_opts = localOpts;
       return submitJob(projectId, "compute_trajectory", params, executorMode);
@@ -72,27 +106,24 @@ export function ComputeTrajectoryForm({
 
   const canSubmit =
     resultDir.length > 0 &&
-    zdim.length > 0 &&
+    zdimValid &&
     isValidCoords(zStart) &&
     isValidCoords(zEnd) &&
     !zStartMismatch &&
-    !zEndMismatch;
+    !zEndMismatch &&
+    nVolsValid;
+
+  const missingFields = [
+    !resultDir.length && "Result Directory",
+    !zdimValid && "zdim",
+    !isValidCoords(zStart) && "Start Coordinates",
+    !isValidCoords(zEnd) && "End Coordinates",
+    !nVolsValid && "Volumes Along Path",
+  ].filter(Boolean) as string[];
 
   return (
     <div className="space-y-4">
-      <div className="space-y-1">
-        <div className="flex items-center gap-1">
-          <Label>Result Directory</Label>
-          <TooltipIcon text={tooltips["compute_trajectory.result_dir"]} />
-        </div>
-        <PathInput
-          value={resultDir}
-          onChange={setResultDir}
-          directoryOnly
-          placeholder="/path/to/pipeline/output"
-          className="font-mono"
-        />
-      </div>
+      <PipelineOutputPicker value={resultDir} onChange={setResultDir} tooltip={tooltips["compute_trajectory.result_dir"]} />
 
       <div className="space-y-1">
         <div className="flex items-center gap-1">
@@ -146,6 +177,57 @@ export function ComputeTrajectoryForm({
           <TooltipIcon text={tooltips["compute_trajectory.n_vols"]} />
         </div>
         <Input type="number" value={nVols} onChange={(e) => setNVols(e.target.value)} placeholder="6" />
+        {nVols.length > 0 && !nVolsValid && (
+          <p className="text-xs text-red-400">Enter a positive integer</p>
+        )}
+      </div>
+
+      {/* Density (optional) — when provided, the trajectory follows the
+          density landscape via the CLI's --density flag instead of doing
+          a straight-line interpolation in z-space. */}
+      <div className="space-y-1">
+        <div className="flex items-center gap-1">
+          <Label>Density (optional)</Label>
+          <TooltipIcon text={tooltips["compute_trajectory.density"]} />
+        </div>
+        {densityChoices.length > 0 && (
+          <select
+            value={
+              densityChoices.find((c) => c.path === densityPath)?.id ??
+              (densityPath.trim() ? "__custom__" : "")
+            }
+            onChange={(e) => {
+              if (e.target.value === "__custom__") return;
+              const sel = densityChoices.find((c) => c.id === e.target.value);
+              setDensityPath(sel?.path ?? "");
+            }}
+            className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-200"
+          >
+            <option value="">— None (linear interpolation) —</option>
+            {densityChoices.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.label}
+              </option>
+            ))}
+            {densityPath.trim() &&
+              !densityChoices.some((c) => c.path === densityPath) && (
+                <option value="__custom__">Custom path (set below)</option>
+              )}
+          </select>
+        )}
+        <PathInput
+          value={densityPath}
+          onChange={setDensityPath}
+          accept={[".pkl"]}
+          placeholder="/path/to/deconv_density_knee.pkl (or leave empty)"
+          className="font-mono"
+        />
+        {densityChoices.length === 0 && (
+          <p className="text-xs text-zinc-600">
+            No completed Density jobs found in this project — pick one from the
+            list, or enter a density .pkl path manually above.
+          </p>
+        )}
       </div>
 
       {/* SLURM Settings */}
@@ -156,10 +238,15 @@ export function ComputeTrajectoryForm({
         <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
       )}
 
-      <div className="flex justify-end pt-2">
-        <Button onClick={() => mutation.mutate()} disabled={!canSubmit} loading={mutation.isPending}>
-          {mutation.isPending ? "Submitting..." : "Compute Trajectory"}
-        </Button>
+      <div className="space-y-2 pt-2">
+        {missingFields.length > 0 && (
+          <p className="text-xs text-amber-400">Required to submit: {missingFields.join(", ")}</p>
+        )}
+        <div className="flex justify-end">
+          <Button onClick={() => mutation.mutate()} disabled={!canSubmit} loading={mutation.isPending}>
+            {mutation.isPending ? "Submitting..." : "Compute Trajectory"}
+          </Button>
+        </div>
       </div>
       {mutation.isError && (
         <p className="text-sm text-red-400">{(mutation.error as Error).message}</p>

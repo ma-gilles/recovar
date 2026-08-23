@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import re
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -27,8 +30,190 @@ def stack_index_from_image_name(name: str) -> int:
     return int(match.group(1)) - 1 if match else -1
 
 
+def _positive_one_based_class(value: str) -> int:
+    """Parse an explicit one-based class selector for diagnostic captures."""
+
+    try:
+        class_one_based = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("class must be a positive integer") from exc
+    if class_one_based < 1:
+        raise argparse.ArgumentTypeError("class must be a positive integer")
+    return class_one_based
+
+
 def _star_particles(star_data):
     return star_data["particles"] if isinstance(star_data, dict) and "particles" in star_data else star_data
+
+
+@dataclass(frozen=True)
+class _ReplayBatchPlan:
+    image_batch_size: int
+    rotation_block_size: int
+    requested_image_batch_size: int
+    requested_rotation_block_size: int
+
+
+def _safe_k_class_replay_batch_plan(
+    *,
+    requested_image_batch_size: int,
+    requested_rotation_block_size: int,
+    n_rot: int,
+    n_trans: int,
+    n_classes: int,
+    image_shape,
+    volume_shape,
+    padding_factor: int,
+    current_size: int | None,
+) -> _ReplayBatchPlan:
+    """Mirror the main RELION replay loop's K-class microbatch planner."""
+
+    from recovar.em.dense_single_volume.batch_planning import _estimate_relion_em_batch_sizes
+    from recovar.em.dense_single_volume.firstiter_cc import (
+        _safe_dense_k_class_rotation_block_size,
+        _safe_firstiter_cc_image_batch_size,
+    )
+
+    plan = _estimate_relion_em_batch_sizes(
+        requested_image_batch_size=requested_image_batch_size,
+        requested_rotation_block_size=requested_rotation_block_size,
+        n_rot=n_rot,
+        n_trans=n_trans,
+        image_shape=image_shape,
+        volume_shape=volume_shape,
+        padding_factor=padding_factor,
+        n_classes=n_classes,
+        current_size=current_size,
+    )
+    image_batch_size = min(
+        int(plan.image_batch_size),
+        _safe_firstiter_cc_image_batch_size(n_trans, image_shape),
+    )
+    rotation_block_size = min(
+        int(plan.rotation_block_size),
+        _safe_dense_k_class_rotation_block_size(n_trans, image_batch_size),
+    )
+    return _ReplayBatchPlan(
+        image_batch_size=max(1, int(image_batch_size)),
+        rotation_block_size=max(1, int(rotation_block_size)),
+        requested_image_batch_size=max(1, int(requested_image_batch_size)),
+        requested_rotation_block_size=max(1, int(requested_rotation_block_size)),
+    )
+
+
+def _batch_plan_note(label: str, plan: _ReplayBatchPlan) -> str:
+    return (
+        f"{label}: image_batch_size={plan.image_batch_size}"
+        f"/{plan.requested_image_batch_size}, rotation_block_size={plan.rotation_block_size}"
+        f"/{plan.requested_rotation_block_size}"
+    )
+
+
+def _relion_adaptive_coarse_image_size(
+    *,
+    healpix_order: int,
+    pixel_size: float,
+    grid_size: int,
+    particle_diameter: float,
+    current_size: int,
+) -> int:
+    """Return RELION's adaptive pass-1 ``image_coarse_size``."""
+
+    from recovar.em.dense_single_volume.helpers.resolution import (
+        clamp_relion_coarse_image_size,
+        compute_coarse_image_size,
+    )
+    from recovar.em.sampling import relion_angular_sampling_deg
+
+    coarse_size = compute_coarse_image_size(
+        relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0),
+        pixel_size,
+        grid_size,
+        particle_diameter=particle_diameter,
+    )
+    return int(
+        clamp_relion_coarse_image_size(
+            coarse_size,
+            current_size=current_size,
+            ori_size=grid_size,
+        )
+    )
+
+
+def _relion_adaptive_fine_translation_grid(
+    base_translations: np.ndarray,
+    offset_step_px: float,
+    adaptive_oversampling: int,
+    random_perturbation: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return RELION pass-2 fine translations and fine-to-coarse parent map."""
+
+    from recovar.em.sampling import (
+        apply_relion_translation_perturbation,
+        get_oversampled_translation_grid,
+    )
+
+    fine_base_translations, trans_parent_map = get_oversampled_translation_grid(
+        np.asarray(base_translations, dtype=np.float32),
+        float(offset_step_px),
+        oversampling_order=int(adaptive_oversampling),
+    )
+    # RELION applies SamplingPerturbation in units of the original coarse
+    # offset step even for oversampled pass-2 children.
+    fine_translations = apply_relion_translation_perturbation(
+        fine_base_translations,
+        float(random_perturbation),
+        float(offset_step_px),
+    ).astype(np.float32)
+    return fine_translations, np.asarray(trans_parent_map, dtype=np.int64)
+
+
+def _resolve_target_random_perturbation(
+    *,
+    star_value: float,
+    perturbation_factor: float,
+    random_seed: int | None,
+    target_iteration: int,
+    restart_state_iteration: int | None,
+    precision_mode: str,
+) -> tuple[float, str]:
+    """Recover the live RELION perturbation used at a replay boundary."""
+    if precision_mode == "star":
+        return float(star_value), "star-rounded"
+    if precision_mode != "seed_exact":
+        raise ValueError(f"Unsupported perturbation precision mode: {precision_mode!r}")
+    if random_seed is None:
+        raise ValueError(
+            "seed-exact perturbation replay requires _rlnRandomSeed in the "
+            "previous optimiser STAR"
+        )
+
+    from recovar.em.sampling import relion_sampling_perturbation_for_iteration
+
+    exact = relion_sampling_perturbation_for_iteration(
+        float(perturbation_factor),
+        int(random_seed),
+        int(target_iteration),
+        restart_state_iteration=restart_state_iteration,
+    )
+    if not np.isclose(exact, float(star_value), rtol=0.0, atol=5.1e-6):
+        restart_note = (
+            "none"
+            if restart_state_iteration is None
+            else str(int(restart_state_iteration))
+        )
+        raise ValueError(
+            "Seed-reconstructed SamplingPerturbation disagrees with the target "
+            "sampling STAR; if this target was produced by a RELION continuation, "
+            "pass --perturb-restart-state-iteration. "
+            f"target_iteration={int(target_iteration)} seed={int(random_seed)} "
+            f"restart_state_iteration={restart_note} exact={exact:+.12g} "
+            f"star={float(star_value):+.12g}"
+        )
+    source = "seed-exact"
+    if restart_state_iteration is not None:
+        source = f"seed-exact-restart@{int(restart_state_iteration)}"
+    return float(exact), source
 
 
 def _scalar(table_or_dict, name: str, default=None):
@@ -88,6 +273,74 @@ def _read_particle_diameter(relion_dir: Path, prev_iter: int) -> float:
     return float(match.group(1))
 
 
+def _read_relion_optimiser_cli_flags(relion_dir: Path, prev_iter: int) -> dict[str, object]:
+    """Extract first-iteration mode flags from RELION's optimiser STAR header."""
+
+    optimiser_path = relion_dir / f"run_it{prev_iter:03d}_optimiser.star"
+    text = optimiser_path.read_text()
+    cli_line = next(
+        (line.lstrip("#").strip() for line in text.splitlines() if line.lstrip().startswith("# --")),
+        "",
+    )
+    ini_high_match = re.search(r"(?:^|\s)--ini_high\s+(\S+)", cli_line)
+    return {
+        "path": str(optimiser_path),
+        "cli_line": cli_line,
+        "do_firstiter_cc": bool(re.search(r"(?:^|\s)--firstiter_cc(?:\s|$)", cli_line)),
+        "ini_high_angstrom": float(ini_high_match.group(1)) if ini_high_match else None,
+    }
+
+
+def _resolve_firstiter_cc_mode(args, relion_cli_flags: dict[str, object]) -> dict[str, object]:
+    relion_requested = (
+        int(args.prev_iter) == 0
+        and int(args.target_iter) == 1
+        and bool(relion_cli_flags.get("do_firstiter_cc", False))
+    )
+    mode = str(args.firstiter_cc_mode)
+    forced_by_legacy_flag = bool(args.winner_take_all_mstep)
+    if forced_by_legacy_flag:
+        mode = "force"
+    if mode == "auto":
+        emulate = relion_requested
+    elif mode == "force":
+        emulate = True
+    elif mode == "off":
+        emulate = False
+    else:  # pragma: no cover - argparse choices should prevent this.
+        raise ValueError(f"Unknown firstiter CC mode: {mode}")
+    return {
+        "requested_mode": str(args.firstiter_cc_mode),
+        "effective_mode": mode,
+        "forced_by_winner_take_all_mstep": forced_by_legacy_flag,
+        "relion_requested": bool(relion_requested),
+        "emulate": bool(emulate),
+        "score_mode": "normalized_cc" if emulate else "gaussian",
+    }
+
+
+def _resolve_firstiter_lowpass_ini_high_angstrom(args, relion_cli_flags: dict[str, object], firstiter_cc_mode):
+    """Return the effective RELION iter-1 low-pass cutoff, or ``None``.
+
+    RELION only reapplies ``initialLowPassFilterReferences`` after the
+    firstiter-CC iteration when the original command included a positive
+    ``--ini_high``. Class3D GUI runs commonly have ``--firstiter_cc`` without
+    ``--ini_high``; defaulting those to 30 A silently over-filters iter-1.
+    """
+
+    if not bool(firstiter_cc_mode.get("emulate", False)):
+        return None
+    override = getattr(args, "firstiter_cc_ini_high_angstrom", None)
+    if override is not None:
+        value = float(override)
+        return value if value > 0.0 else None
+    value = relion_cli_flags.get("ini_high_angstrom")
+    if value is None:
+        return None
+    value = float(value)
+    return value if value > 0.0 else None
+
+
 def _class_distributions(model) -> np.ndarray:
     classes = model["model_classes"]
     return np.asarray(classes["rlnClassDistribution"], dtype=np.float64)
@@ -101,6 +354,25 @@ def _read_class_direction_priors(model, n_classes: int) -> np.ndarray:
             raise ValueError(f"Missing {key} in RELION model STAR")
         priors.append(np.asarray(model[key]["rlnOrientationDistribution"], dtype=np.float32))
     return np.stack(priors, axis=0)
+
+
+def _split_class_direction_prior_for_replay(direction_prior, n_classes: int):
+    """Mirror production's conditional direction prior plus class-prior split."""
+    arr = np.asarray(direction_prior, dtype=np.float32)
+    if arr.ndim != 2 or arr.shape[0] != int(n_classes):
+        raise ValueError(f"class direction prior must have shape ({int(n_classes)}, n_dirs), got {arr.shape}")
+    if np.any(arr < 0.0) or not np.all(np.isfinite(arr)):
+        raise ValueError("class direction prior entries must be finite and non-negative")
+    row_sums = arr.sum(axis=1, dtype=np.float64)
+    if np.any(row_sums <= 0.0):
+        raise ValueError("each class direction prior row must have positive mass")
+    total = float(row_sums.sum())
+    if total <= 0.0 or not np.isfinite(total):
+        raise ValueError("class direction prior row sums must have positive finite total mass")
+    conditional = (arr / row_sums[:, None].astype(np.float32)).astype(np.float32)
+    class_weights = (row_sums / total).astype(np.float64)
+    class_log_priors = np.log(class_weights).astype(np.float32)
+    return conditional, class_log_priors, class_weights.astype(np.float32)
 
 
 def _image_name_order(data_star: Path, starfile):
@@ -140,6 +412,58 @@ def _image_and_scale_corrections(model, relion_df_ordered) -> tuple[np.ndarray, 
         group_numbers = np.ones(len(relion_df_ordered), dtype=np.int64)
     scale = group_scales[np.clip(group_numbers - 1, 0, len(group_scales) - 1)]
     return ((avg_norm / normcorr) * scale).astype(np.float32), scale.astype(np.float32)
+
+
+def _apply_runtime_scale_dump_override(
+    image_corrections: np.ndarray,
+    scale_corrections: np.ndarray,
+    relion_df_ordered,
+    dump_dir: Path | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Override one image's scale with the value dumped from RELION scoring."""
+    if dump_dir is None:
+        return image_corrections, scale_corrections
+    stack_path = dump_dir / "pass0_acc_stack_index.bin"
+    scale_path = dump_dir / "pass0_img0_scale_correction.bin"
+    if not stack_path.exists() or not scale_path.exists():
+        raise FileNotFoundError(
+            f"--runtime-scale-dump-dir must contain {stack_path.name} and {scale_path.name}: {dump_dir}"
+        )
+    stack_values = np.fromfile(stack_path, dtype=np.float64)
+    scale_values = np.fromfile(scale_path, dtype=np.float64)
+    if stack_values.size != 1 or scale_values.size != 1:
+        raise ValueError(
+            f"Expected one dumped stack/scale value in {dump_dir}, got "
+            f"{stack_values.size} and {scale_values.size}"
+        )
+    relion_stack = int(round(float(stack_values[0])))
+    target_stack = relion_stack - 1
+    runtime_scale = float(scale_values[0])
+    stack_indices = np.asarray(
+        [stack_index_from_image_name(name) for name in relion_df_ordered["rlnImageName"]],
+        dtype=np.int64,
+    )
+    matches = np.flatnonzero(stack_indices == target_stack)
+    if matches.size != 1:
+        raise ValueError(
+            f"Expected exactly one dataset image with RELION stack index {target_stack}, got {matches.size}"
+        )
+    idx = int(matches[0])
+    old_scale = float(scale_corrections[idx])
+    old_image_corr = float(image_corrections[idx])
+    if old_scale == 0.0:
+        raise ValueError(f"Cannot rescale image_corrections for zero old scale at dataset row {idx}")
+    out_scale = np.array(scale_corrections, copy=True)
+    out_image = np.array(image_corrections, copy=True)
+    out_scale[idx] = np.float32(runtime_scale)
+    out_image[idx] = np.float32(out_image[idx] * (runtime_scale / old_scale))
+    print(
+        "  runtime scale override: "
+        f"relion_stack={relion_stack}, zero_based_stack={target_stack}, dataset_row={idx}, "
+        f"scale {old_scale:.9g}->{runtime_scale:.9g}, "
+        f"image_corr {old_image_corr:.9g}->{float(out_image[idx]):.9g}"
+    )
+    return out_image, out_scale
 
 
 def _previous_translations_pixels(relion_df_ordered, pixel_size: float) -> np.ndarray | None:
@@ -264,6 +588,7 @@ def _relion_bpref_maps_from_sparse_support(
     tau2_spectra,
     tau2_fudge,
     minres_map,
+    max_images_per_microbatch,
 ):
     """Diagnostic: use RELION BackProjector with RECOVAR's joint posterior."""
 
@@ -397,6 +722,7 @@ def _relion_bpref_maps_from_sparse_support(
             n_fine_trans=n_fine_trans,
             rotation_block_size_for_quantization=5000,
             max_hypotheses_per_microbatch=100_000,
+            max_images_per_microbatch=max_images_per_microbatch,
         )
         row_image_chunks = []
         row_weight_chunks = []
@@ -576,11 +902,33 @@ def _relion_bpref_maps_from_sparse_support(
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--relion-dir", required=True, type=Path)
     parser.add_argument("--data-star", required=True, type=Path)
     parser.add_argument("--prev-iter", type=int, default=0)
     parser.add_argument("--target-iter", type=int, default=1)
+    parser.add_argument(
+        "--perturb-replay-precision",
+        choices=("seed_exact", "star"),
+        default="seed_exact",
+        help=(
+            "Use the optimiser seed to recover RELION's live perturbation by "
+            "default. star is a rounded diagnostic fallback and is not suitable "
+            "for strict boundary parity."
+        ),
+    )
+    parser.add_argument(
+        "--perturb-restart-state-iteration",
+        type=int,
+        default=None,
+        help=(
+            "Saved iteration used to start a RELION continuation that produced "
+            "the target iteration. Required for seed-exact replay across an "
+            "explicit restart boundary."
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--image-batch-size", type=int, default=250)
     parser.add_argument("--rotation-block-size", type=int, default=5000)
@@ -591,7 +939,39 @@ def main() -> None:
     parser.add_argument(
         "--winner-take-all-mstep",
         action="store_true",
-        help="Use RELION first-iteration winner-take-all reconstruction weights while keeping soft evidence stats.",
+        help=(
+            "Deprecated diagnostic alias for --firstiter-cc-mode force. "
+            "Use RELION first-iteration winner-take-all reconstruction weights "
+            "while keeping soft evidence stats."
+        ),
+    )
+    parser.add_argument(
+        "--firstiter-cc-mode",
+        choices=("auto", "force", "off"),
+        default="auto",
+        help=(
+            "First-iteration CC emulation policy. auto reads RELION's optimiser "
+            "CLI and only emulates --firstiter_cc when that command actually "
+            "requested it; force is for diagnostics; off disables it."
+        ),
+    )
+    parser.add_argument(
+        "--no-firstiter-cc-pass2-only-best-coarse",
+        action="store_true",
+        help=(
+            "Deprecated no-op retained for old diagnostics. The replay harness now keeps "
+            "normalized-CC firstiter scoring on the regular adaptive significance support "
+            "by default."
+        ),
+    )
+    parser.add_argument(
+        "--firstiter-cc-pass2-only-best-coarse",
+        action="store_true",
+        help=(
+            "Diagnostic legacy shortcut: with firstiter_cc emulation, restrict pass-2 to "
+            "the single best coarse pose's fine children. Patched RELION storeWavg dumps "
+            "show this is not the production parity path."
+        ),
     )
     parser.add_argument(
         "--significant-mstep",
@@ -602,6 +982,16 @@ def main() -> None:
         "--relion-bpref-mstep",
         action="store_true",
         help="Diagnostic: reconstruct using RELION BackProjector fed by RECOVAR's joint posterior.",
+    )
+    parser.add_argument(
+        "--relion-bpref-max-images-per-microbatch",
+        type=int,
+        default=32,
+        help=(
+            "Maximum images per microbatch for the optional RELION BPref diagnostic. "
+            "Lower values reduce direct translation-IO memory without changing the "
+            "main RECOVAR replay."
+        ),
     )
     parser.add_argument(
         "--significance-adaptive-fraction",
@@ -625,20 +1015,188 @@ def main() -> None:
         help="HEALPix subdivision and translation subdivision passes used by --adaptive-2pass.",
     )
     parser.add_argument(
+        "--accumulate-noise",
+        action="store_true",
+        help="Accumulate RELION-style noise statistics during the replay E/M step.",
+    )
+    parser.add_argument(
+        "--sparse-pass2",
+        action="store_true",
+        help="Use the sparse bucketed adaptive pass-2 path instead of dense pass-2.",
+    )
+    parser.add_argument(
+        "--relion-x-half-mstep",
+        action="store_true",
+        help=(
+            "Use the RELION Class3D x-half BPref accumulation layout in the "
+            "replay M-step. Required for device-signature contribution audits."
+        ),
+    )
+    parser.add_argument(
+        "--square-window",
+        dest="square_window",
+        action="store_true",
+        default=True,
+        help=(
+            "Use square Fourier scoring support for the main replay. This "
+            "preserves the historical run_k_class_parity.py behavior."
+        ),
+    )
+    parser.add_argument(
+        "--radial-window",
+        dest="square_window",
+        action="store_false",
+        help=(
+            "Use the radial Fourier scoring support used by the full "
+            "RELION/default refinement path."
+        ),
+    )
+    parser.add_argument(
         "--firstiter-cc-ini-high-angstrom",
         type=float,
-        default=30.0,
+        default=None,
         help=(
-            "Apply RELION's initialLowPassFilterReferences (ml_optimiser.cpp:6348-6378) "
-            "to the iter-1 firstiter_cc M-step output at this resolution. RELION "
-            "always re-applies its --ini_high low-pass filter to the iter-1 "
-            "references before feeding them to iter 2; without it, recovar's "
-            "iter-1 maps retain high-frequency content that biases iter-2 Pmax "
-            "(K=4 chained iter-2 Pmax 0.91 vs RELION 0.77). Set to 0 to disable. "
-            "Only applied with --winner-take-all-mstep."
+            "Override RELION's iter-1 firstiter_cc low-pass cutoff. By default "
+            "the replay reads --ini_high from the RELION optimiser CLI and "
+            "applies no low-pass when that command did not include a positive "
+            "--ini_high. Set to 0 to disable even when RELION had --ini_high; "
+            "set to a positive value only for diagnostics."
+        ),
+    )
+    parser.add_argument(
+        "--runtime-scale-dump-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Diagnostic parity aid: override the dumped RELION stack index's "
+            "scale correction with pass0_img0_scale_correction.bin from this dump directory."
+        ),
+    )
+    parser.add_argument(
+        "--image-pre-shift-mode",
+        choices=("relion", "flip", "none"),
+        default="relion",
+        help=(
+            "Diagnostic parity aid for old-offset handling. relion uses the "
+            "rounded previous offset; flip negates it; none disables image "
+            "pre-shifts. Default matches the current production path."
+        ),
+    )
+    parser.add_argument(
+        "--image-fourier-backend",
+        choices=("host_numpy", "jax_gpu", "relion_cuda"),
+        default="host_numpy",
+        help=(
+            "Select the packed-half image preprocessing backend. The default "
+            "preserves the production host NumPy path; alternate modes are "
+            "intended for bounded parity diagnostics."
+        ),
+    )
+    parser.add_argument(
+        "--relion-native-lane-softmask-reduction",
+        action="store_true",
+        help=(
+            "Diagnostic only: with --image-fourier-backend relion_cuda, "
+            "use the native observer's lane-across-blocks soft-mask addition "
+            "tree instead of RECOVAR's accepted block-first tree."
+        ),
+    )
+    parser.add_argument(
+        "--stop-after-pass2-dump",
+        action="store_true",
+        help=(
+            "Diagnostic-only: stop successfully as soon as RECOVAR_PASS2_DUMP_DIR "
+            "has written the requested sparse pass-2 target dump. This avoids "
+            "running the rest of the replay M-step when only score tensors are needed."
+        ),
+    )
+    parser.add_argument(
+        "--pass2-dump-class",
+        type=_positive_one_based_class,
+        help=(
+            "One-based K-class selector for --stop-after-pass2-dump. This sets "
+            "RECOVAR_PASS2_DUMP_CLASS inside the replay process so the capture "
+            "does not depend on launcher environment propagation."
+        ),
+    )
+    parser.add_argument(
+        "--stop-after-contribution-dump",
+        action="store_true",
+        help=(
+            "Diagnostic-only: stop successfully after the exactly targeted BPref "
+            "contribution bundle and any requested device signature are written. "
+            "This avoids reconstructing a current-size diagnostic accumulator."
         ),
     )
     args = parser.parse_args()
+    if args.relion_native_lane_softmask_reduction and args.image_fourier_backend != "relion_cuda":
+        parser.error(
+            "--relion-native-lane-softmask-reduction requires "
+            "--image-fourier-backend relion_cuda"
+        )
+    if args.stop_after_pass2_dump and args.stop_after_contribution_dump:
+        parser.error(
+            "--stop-after-pass2-dump and --stop-after-contribution-dump "
+            "are mutually exclusive"
+        )
+    if args.pass2_dump_class is not None:
+        if not args.stop_after_pass2_dump:
+            parser.error("--pass2-dump-class requires --stop-after-pass2-dump")
+        os.environ["RECOVAR_PASS2_DUMP_CLASS"] = str(args.pass2_dump_class)
+    if args.stop_after_pass2_dump:
+        if not os.environ.get("RECOVAR_PASS2_DUMP_DIR"):
+            parser.error("--stop-after-pass2-dump requires RECOVAR_PASS2_DUMP_DIR")
+        if not (
+            os.environ.get("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES")
+            or os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
+        ):
+            parser.error(
+                "--stop-after-pass2-dump requires RECOVAR_PASS2_DUMP_ORIGINAL_INDICES "
+                "or RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES"
+            )
+        if os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "").strip():
+            parser.error(
+                "--stop-after-pass2-dump is incompatible with "
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR because contribution "
+                "capture runs during the M-step"
+            )
+        os.environ["RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"] = "1"
+        os.environ["RECOVAR_K_CLASS_PARITY_STOP_AFTER_PASS2_DUMP"] = "1"
+        print(
+            "  pass2 dump class filter: "
+            f"{os.environ.get('RECOVAR_PASS2_DUMP_CLASS', 'all')}"
+        )
+    if args.stop_after_contribution_dump:
+        required_filters = (
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE",
+        )
+        missing_filters = [
+            name for name in required_filters if not os.environ.get(name, "").strip()
+        ]
+        if missing_filters:
+            parser.error(
+                "--stop-after-contribution-dump requires exact target filters: "
+                + ", ".join(missing_filters)
+            )
+        target_indices = {
+            value.strip()
+            for value in os.environ[
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES"
+            ].split(",")
+            if value.strip()
+        }
+        if len(target_indices) != 1:
+            parser.error(
+                "--stop-after-contribution-dump requires exactly one "
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES target"
+            )
+        os.environ["RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET"] = "1"
+        os.environ["RECOVAR_K_CLASS_PARITY_STOP_AFTER_CONTRIBUTION_DUMP"] = "1"
 
     import jax
     import jax.numpy as jnp
@@ -660,11 +1218,13 @@ def main() -> None:
     from recovar.em.dense_single_volume.k_class import (
         run_dense_k_class_em,
     )
+    from recovar.em.initial_model.dense_adapter import reference_to_relion_projector_half_maps
     from recovar.em.sampling import (
         apply_relion_rotation_perturbation_to_eulers,
         apply_relion_translation_perturbation,
         get_relion_rotation_grid_eulers,
         get_translation_grid,
+        read_relion_optimiser_metadata,
         read_relion_sampling_metadata,
         relion_angular_sampling_deg,
     )
@@ -694,11 +1254,36 @@ def main() -> None:
     current_size = int(_scalar(target_model["model_general"], "rlnCurrentImageSize"))
     tau2_fudge = float(args.tau2_fudge or _scalar(prev_model["model_general"], "rlnTau2FudgeFactor", 4.0))
     particle_diameter = _read_particle_diameter(relion_dir, args.prev_iter)
+    relion_cli_flags = _read_relion_optimiser_cli_flags(relion_dir, args.prev_iter)
+    firstiter_cc_mode = _resolve_firstiter_cc_mode(args, relion_cli_flags)
+    firstiter_lowpass_ini_high = _resolve_firstiter_lowpass_ini_high_angstrom(
+        args,
+        relion_cli_flags,
+        firstiter_cc_mode,
+    )
 
     print(f"RELION K-class replay: K={n_classes}, N={grid_size}, prev={args.prev_iter}, target={args.target_iter}")
     print(f"  current_size={current_size}, pixel_size={pixel_size}, tau2_fudge={tau2_fudge}")
     print(f"  output_dir={output_dir}")
     print(f"  JAX devices: {jax.devices()}")
+    print(
+        "  firstiter_cc: "
+        f"relion_requested={firstiter_cc_mode['relion_requested']}, "
+        f"mode={firstiter_cc_mode['effective_mode']}, "
+        f"emulate={firstiter_cc_mode['emulate']}, "
+        f"score_mode={firstiter_cc_mode['score_mode']}"
+    )
+    print(
+        "  firstiter_cc lowpass: "
+        f"relion_ini_high={relion_cli_flags.get('ini_high_angstrom')}, "
+        f"override={args.firstiter_cc_ini_high_angstrom}, "
+        f"effective={firstiter_lowpass_ini_high}"
+    )
+    if firstiter_cc_mode["effective_mode"] == "force" and not firstiter_cc_mode["relion_requested"]:
+        print(
+            "  WARNING: forcing firstiter_cc emulation even though the RELION optimiser "
+            "CLI did not contain --firstiter_cc; use only for diagnostics."
+        )
 
     ds = load_dataset(str(args.data_star))
     backend = getattr(getattr(ds, "image_source", None), "backend", None)
@@ -711,6 +1296,17 @@ def main() -> None:
 
         backend.image_mask = relion_soft_image_mask(grid_size, ds.voxel_size, particle_diameter, 5)
         backend.image_mask_mode = "relion_background_fill"
+    if not hasattr(backend, "set_relion_fourier_backend"):
+        raise ValueError("Dataset backend does not support image Fourier backend selection")
+    backend.set_relion_fourier_backend(args.image_fourier_backend)
+    print(f"  image Fourier backend: {args.image_fourier_backend}")
+    if not hasattr(backend, "set_relion_native_lane_reduction"):
+        raise ValueError("Dataset backend does not support native-lane soft-mask selection")
+    backend.set_relion_native_lane_reduction(args.relion_native_lane_softmask_reduction)
+    print(
+        "  RELION native-lane soft-mask reduction: "
+        f"{args.relion_native_lane_softmask_reduction}"
+    )
 
     n4 = grid_size**4
     noise_spectrum = np.asarray(prev_model["model_optics_group_1"]["rlnSigma2Noise"], dtype=np.float64)
@@ -733,19 +1329,32 @@ def main() -> None:
         ],
         axis=0,
     )
-    means = jnp.stack(
+    prev_reference_real = np.stack(
         [
-            jnp.asarray(
-                ftu.get_dft3(jnp.asarray(helpers.load_relion_volume(str(prev_prefix) + f"_class{k + 1:03d}.mrc")))
-            ).reshape(-1)
+            np.asarray(helpers.load_relion_volume(str(prev_prefix) + f"_class{k + 1:03d}.mrc"), dtype=np.float64)
             for k in range(n_classes)
         ],
+        axis=0,
+    )
+    means = jnp.stack(
+        [jnp.asarray(ftu.get_dft3(jnp.asarray(prev_reference_real[k]))).reshape(-1) for k in range(n_classes)],
         axis=0,
     )
 
     sampling = read_relion_sampling_metadata(str(target_prefix) + "_sampling.star")
     healpix_order = int(sampling["healpix_order"])
-    random_perturbation = float(sampling["random_perturbation"])
+    star_random_perturbation = float(sampling["random_perturbation"])
+    optimiser = read_relion_optimiser_metadata(str(prev_prefix) + "_optimiser.star")
+    random_perturbation, random_perturbation_source = (
+        _resolve_target_random_perturbation(
+            star_value=star_random_perturbation,
+            perturbation_factor=float(sampling["perturbation_factor"]),
+            random_seed=optimiser.get("random_seed"),
+            target_iteration=args.target_iter,
+            restart_state_iteration=args.perturb_restart_state_iteration,
+            precision_mode=args.perturb_replay_precision,
+        )
+    )
     offset_range_px = float(sampling["offset_range"]) / pixel_size
     offset_step_px = float(sampling["offset_step"]) / pixel_size
     rotations, _ = apply_relion_rotation_perturbation_to_eulers(
@@ -762,17 +1371,61 @@ def main() -> None:
     print(
         "  sampling: "
         f"healpix={healpix_order}, rotations={rotations.shape[0]}, translations={translations.shape[0]}, "
-        f"rp={random_perturbation:+.5f}, offset_range_px={offset_range_px:.3f}, offset_step_px={offset_step_px:.3f}"
+        f"rp={random_perturbation:+.12g} source={random_perturbation_source}, "
+        f"star_rp={star_random_perturbation:+.12g}, "
+        f"offset_range_px={offset_range_px:.3f}, offset_step_px={offset_step_px:.3f}"
+    )
+    coarse_current_size = None
+    coarse_engine_current_size = current_size
+    if args.adaptive_2pass:
+        coarse_current_size = _relion_adaptive_coarse_image_size(
+            healpix_order=healpix_order,
+            pixel_size=pixel_size,
+            grid_size=grid_size,
+            particle_diameter=particle_diameter,
+            current_size=current_size,
+        )
+        coarse_engine_current_size = coarse_current_size if coarse_current_size < grid_size else None
+        print(
+            "  adaptive pass sizes: "
+            f"coarse_current_size={coarse_engine_current_size}, fine_current_size={current_size}"
+        )
+    projector_current_size = current_size
+    relion_projector_half_by_class, relion_projector_r_max = reference_to_relion_projector_half_maps(
+        prev_reference_real,
+        current_size=projector_current_size,
+        padding_factor=args.projection_padding_factor,
+    )
+    print(
+        "  exact RELION Projector::data: "
+        f"current_size={projector_current_size}, r_max={relion_projector_r_max}, "
+        f"shape={tuple(relion_projector_half_by_class.shape)}"
     )
 
     direction_prior = _read_class_direction_priors(prev_model, n_classes)
+    direction_prior_conditional, class_log_priors, class_prior_weights = _split_class_direction_prior_for_replay(
+        direction_prior,
+        n_classes,
+    )
     class_rotation_log_prior = np.stack(
-        [make_relion_direction_log_prior(direction_prior[k], healpix_order) for k in range(n_classes)],
+        [make_relion_direction_log_prior(direction_prior_conditional[k], healpix_order) for k in range(n_classes)],
         axis=0,
     )
     image_corrections, scale_corrections = _image_and_scale_corrections(prev_model, prev_data_ordered)
+    image_corrections, scale_corrections = _apply_runtime_scale_dump_override(
+        image_corrections,
+        scale_corrections,
+        prev_data_ordered,
+        args.runtime_scale_dump_dir,
+    )
     previous_translations = _previous_translations_pixels(prev_data_ordered, pixel_size)
     image_pre_shifts = relion_translation_search_base(previous_translations)
+    if args.image_pre_shift_mode == "flip" and image_pre_shifts is not None:
+        image_pre_shifts = (-np.asarray(image_pre_shifts, dtype=np.float32)).astype(np.float32)
+        print("  diagnostic image pre-shift mode: flip")
+    elif args.image_pre_shift_mode == "none":
+        image_pre_shifts = None
+        print("  diagnostic image pre-shift mode: none")
     sigma_offset_angstrom = float(_scalar(prev_model["model_general"], "rlnSigmaOffsetsAngst"))
     translation_prior_centers = relion_translation_prior_center(previous_translations, pixel_size)
     translation_log_prior = make_relion_translation_log_prior(
@@ -785,18 +1438,46 @@ def main() -> None:
     print(
         "  priors/corrections: "
         f"pdf_row_sums={direction_prior.sum(axis=1).round(6).tolist()}, "
+        f"class_priors={class_prior_weights.round(6).tolist()}, "
         f"sigma_offset={sigma_offset_angstrom:.6f}A, "
         f"image_corr_mean={float(image_corrections.mean()):.6f}, scale_mean={float(scale_corrections.mean()):.6f}"
     )
+    image_shape = tuple(int(s) for s in getattr(ds, "image_shape", (grid_size, grid_size)))
+    volume_shape = tuple(int(s) for s in getattr(ds, "volume_shape", (grid_size, grid_size, grid_size)))
+    base_batch_plan = _safe_k_class_replay_batch_plan(
+        requested_image_batch_size=args.image_batch_size,
+        requested_rotation_block_size=args.rotation_block_size,
+        n_rot=int(rotations.shape[0]),
+        n_trans=int(translations.shape[0]),
+        n_classes=n_classes,
+        image_shape=image_shape,
+        volume_shape=volume_shape,
+        padding_factor=args.reconstruction_padding_factor,
+        current_size=coarse_engine_current_size if args.adaptive_2pass else current_size,
+    )
+    significance_support_batch_plan = base_batch_plan
+    print("  batch sizing: " + _batch_plan_note("coarse", base_batch_plan))
 
     t0 = time.time()
+    from recovar.em.dense_single_volume.helpers import (
+        sparse_pass2_bucketed as _sparse_pass2_diagnostics,
+    )
+
+    # Mirror the numbered-half context supplied by the production iteration
+    # loop so opt-in contribution/device-signature captures from this
+    # one-boundary replay retain exact target-iteration provenance.
+    _sparse_pass2_diagnostics.set_bpref_contribution_dump_context(
+        iteration=args.target_iter,
+        half=1,
+    )
     common_em_kwargs = dict(
-        class_log_priors=np.zeros(n_classes, dtype=np.float32),
-        accumulate_noise=False,
-        image_batch_size=args.image_batch_size,
-        rotation_block_size=args.rotation_block_size,
+        class_log_priors=class_log_priors,
+        accumulate_noise=bool(args.accumulate_noise),
+        image_batch_size=base_batch_plan.image_batch_size,
+        rotation_block_size=base_batch_plan.rotation_block_size,
         class_rotation_log_prior=class_rotation_log_prior,
         translation_log_prior=translation_log_prior,
+        translation_prior_centers=translation_prior_centers,
         score_with_masked_images=True,
         half_spectrum_scoring=True,
         projection_padding_factor=args.projection_padding_factor,
@@ -807,14 +1488,16 @@ def main() -> None:
         use_float64_scoring=False,
         use_float64_projections=False,
         do_gridding_correction=True,
-        square_window=True,
-        sparse_pass2=False,
-        relion_firstiter_winner_take_all=args.winner_take_all_mstep,
-        # RELION fixture used --firstiter_cc (run_it000_optimiser.star command);
-        # match CC scoring at iter 1 when winner-take-all is on, per
-        # ml_optimiser.cpp:8758-8774 (do_firstiter_cc branch in
-        # getAllSquaredDifferences).
-        relion_firstiter_score_mode=("normalized_cc" if args.winner_take_all_mstep else "gaussian"),
+        square_window=bool(args.square_window),
+        sparse_pass2=bool(args.sparse_pass2),
+        relion_firstiter_winner_take_all=bool(firstiter_cc_mode["emulate"]),
+        # Match RELION's do_firstiter_cc branch in getAllSquaredDifferences
+        # only when the optimiser CLI requested --firstiter_cc, unless the
+        # caller explicitly forces the diagnostic mode.
+        relion_firstiter_score_mode=str(firstiter_cc_mode["score_mode"]),
+        relion_projector_half=relion_projector_half_by_class,
+        relion_projector_r_max=relion_projector_r_max,
+        mstep_relion_x_half=bool(args.relion_x_half_mstep),
     )
     if args.adaptive_2pass:
         # Build pass-2 fine grid (oversampled) using RELION-parity HEALPix children.
@@ -826,7 +1509,6 @@ def main() -> None:
         from recovar.em.dense_single_volume.k_class import run_dense_k_class_em_adaptive
         from recovar.em.sampling import (
             get_oversampled_rotation_grid_from_samples,
-            get_oversampled_translation_grid,
         )
 
         adaptive_os = int(args.adaptive_oversampling)
@@ -842,18 +1524,24 @@ def main() -> None:
         # Translations: oversample base_translations (pre-perturbation) and
         # apply RELION's per-iteration perturbation to the fine grid the same
         # way as the coarse path.
-        fine_base_translations, trans_parent_map = get_oversampled_translation_grid(
+        fine_translations, trans_parent_map = _relion_adaptive_fine_translation_grid(
             base_translations,
             offset_step_px,
-            oversampling_order=adaptive_os,
-        )
-        fine_translation_step = offset_step_px / (2**adaptive_os)
-        fine_translations = apply_relion_translation_perturbation(
-            fine_base_translations,
+            adaptive_os,
             random_perturbation,
-            fine_translation_step,
-        ).astype(np.float32)
-        trans_parent_map = np.asarray(trans_parent_map, dtype=np.int64)
+        )
+        fine_batch_plan = _safe_k_class_replay_batch_plan(
+            requested_image_batch_size=args.image_batch_size,
+            requested_rotation_block_size=args.rotation_block_size,
+            n_rot=int(fine_rotations.shape[0]),
+            n_trans=int(fine_translations.shape[0]),
+            n_classes=n_classes,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            padding_factor=args.reconstruction_padding_factor,
+            current_size=current_size,
+        )
+        significance_support_batch_plan = base_batch_plan
         print(
             "  adaptive 2-pass: fine grid "
             f"rotations={fine_rotations.shape[0]} (parents {rotations.shape[0]}, "
@@ -862,15 +1550,22 @@ def main() -> None:
             f"max children/parent={int(np.bincount(trans_parent_map).max())}), "
             f"adaptive_fraction={args.significance_adaptive_fraction:.4f}"
         )
-        # When --winner-take-all-mstep is on (RELION's --firstiter_cc behavior at
-        # iter 1), pass-1 binarizes weights so exp_Mcoarse_significant has a
-        # single True entry per particle (the global best coarse pose). Pass-2
-        # then only evaluates that pose's children. The
-        # ``firstiter_cc_pass2_only_best_coarse`` flag wires this: pass-1 picks
-        # the best coarse pose, pass-2 mask = True only at its 8 rot × 4 trans
-        # children. RELION ml_optimiser.cpp:9181-9207 binarization → 9628
-        # significant flag.
-        firstiter_cc = bool(args.winner_take_all_mstep)
+        print(
+            "  adaptive batch sizing: "
+            + _batch_plan_note("coarse_pass1", base_batch_plan)
+            + "; "
+            + _batch_plan_note("fine_pass2", fine_batch_plan)
+        )
+        # RELION firstiter_cc uses normalized-CC scoring, but patched storeWavg
+        # dumps retain a small adaptive pass-2 posterior support. The legacy
+        # single-best-coarse shortcut is kept only as an explicit diagnostic.
+        firstiter_cc = bool(firstiter_cc_mode["emulate"]) and bool(
+            args.firstiter_cc_pass2_only_best_coarse
+        ) and not bool(args.no_firstiter_cc_pass2_only_best_coarse)
+        adaptive_em_kwargs = dict(common_em_kwargs)
+        adaptive_em_kwargs["image_batch_size"] = fine_batch_plan.image_batch_size
+        adaptive_em_kwargs["rotation_block_size"] = fine_batch_plan.rotation_block_size
+        adaptive_em_kwargs["relion_fine_mstep_prune"] = bool(args.sparse_pass2)
         result = run_dense_k_class_em_adaptive(
             ds,
             means,
@@ -884,11 +1579,16 @@ def main() -> None:
             trans_parent_map,
             args.disc_type,
             adaptive_fraction=args.significance_adaptive_fraction,
-            coarse_current_size=current_size,
+            coarse_current_size=coarse_engine_current_size,
             fine_current_size=current_size,
             current_size=current_size,
             firstiter_cc_pass2_only_best_coarse=firstiter_cc,
-            **common_em_kwargs,
+            significance_image_batch_size=base_batch_plan.image_batch_size,
+            significance_rotation_block_size=base_batch_plan.rotation_block_size,
+            bpref_device_signature_active=bool(
+                os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR")
+            ),
+            **adaptive_em_kwargs,
         )
     else:
         result = run_dense_k_class_em(
@@ -902,12 +1602,16 @@ def main() -> None:
             current_size=current_size,
             **common_em_kwargs,
         )
+    _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
     elapsed_s = time.time() - t0
     print(f"  RECOVAR K-class E/M step completed in {elapsed_s:.1f}s")
 
     significant_summary = None
     significant_sample_indices = None
     significant_full_stats = None
+    bpref_significant_sample_indices = None
+    bpref_full_stats = None
+    bpref_significant_summary = None
     need_significant_support = args.significant_mstep or args.relion_bpref_mstep
     if need_significant_support:
         sig_t0 = time.time()
@@ -925,12 +1629,12 @@ def main() -> None:
             rotations.astype(np.float32),
             translations.astype(np.float32),
             args.disc_type,
-            class_log_priors=np.zeros(n_classes, dtype=np.float32),
+            class_log_priors=class_log_priors,
             adaptive_fraction=args.significance_adaptive_fraction,
             max_significants=-1,
-            image_batch_size=args.image_batch_size,
-            rotation_block_size=args.rotation_block_size,
-            current_size=current_size,
+            image_batch_size=significance_support_batch_plan.image_batch_size,
+            rotation_block_size=significance_support_batch_plan.rotation_block_size,
+            current_size=coarse_engine_current_size if args.adaptive_2pass else current_size,
             score_with_masked_images=True,
             rotation_log_prior=class_rotation_log_prior,
             translation_log_prior=translation_log_prior,
@@ -942,9 +1646,17 @@ def main() -> None:
             do_gridding_correction=True,
             square_window=False,
             use_float64_scoring=False,
+            relion_projector_half=relion_projector_half_by_class,
+            relion_projector_r_max=relion_projector_r_max,
         )
         normalization_log_z = significant_full_stats["normalization_log_z"]
-        if args.significant_mstep:
+        significant_mstep_applied = bool(args.significant_mstep and not args.adaptive_2pass)
+        if args.significant_mstep and args.adaptive_2pass:
+            print(
+                "  significant support: adaptive replay keeps pass-2 accumulators; "
+                "coarse support is used only for RELION rlnNrOfSignificantSamples diagnostics"
+            )
+        if significant_mstep_applied:
             sparse_Ft_y = []
             sparse_Ft_ctf = []
             for class_index in range(n_classes):
@@ -976,6 +1688,9 @@ def main() -> None:
                     square_window=False,
                     random_perturbation=random_perturbation,
                     normalization_log_z=normalization_log_z,
+                    normalization_score_mode="gaussian",
+                    relion_projector_half=relion_projector_half_by_class[class_index],
+                    relion_projector_r_max=relion_projector_r_max,
                 )[:2]
                 sparse_Ft_y.append(class_Ft_y)
                 sparse_Ft_ctf.append(class_Ft_ctf)
@@ -1006,6 +1721,68 @@ def main() -> None:
             f"n_sig abs mean={significant_summary['abs_mean']:.3g}, "
             f"p95={significant_summary['abs_p95']:.3g}, max={significant_summary['abs_max']:.3g}"
         )
+        bpref_significant_sample_indices = significant_sample_indices
+        bpref_full_stats = significant_full_stats
+
+    if args.relion_bpref_mstep and args.adaptive_2pass:
+        # The adaptive significant-sample diagnostic above intentionally uses
+        # RELION's coarse pass-1 current_size.  BPref rows are scored at the
+        # reconstruction current_size, so reusing the coarse logZ here makes
+        # exp(score - logZ) overflow and produces meaningless diagnostic maps.
+        bpref_sig_t0 = time.time()
+        print(
+            "  RELION BPref diagnostic: recomputing same-window support "
+            f"at current_size={current_size} (coarse support used current_size={coarse_engine_current_size})"
+        )
+        (
+            _bpref_sig_rot_any,
+            bpref_n_sig_all,
+            _bpref_hard_assignment,
+            _bpref_class_assignment,
+            bpref_significant_sample_indices,
+            bpref_full_stats,
+        ) = _compute_k_class_significance_batched(
+            ds,
+            means,
+            noise_variance,
+            rotations.astype(np.float32),
+            translations.astype(np.float32),
+            args.disc_type,
+            class_log_priors=class_log_priors,
+            adaptive_fraction=args.significance_adaptive_fraction,
+            max_significants=-1,
+            image_batch_size=significance_support_batch_plan.image_batch_size,
+            rotation_block_size=significance_support_batch_plan.rotation_block_size,
+            current_size=current_size,
+            score_with_masked_images=True,
+            rotation_log_prior=class_rotation_log_prior,
+            translation_log_prior=translation_log_prior,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            half_spectrum_scoring=True,
+            projection_padding_factor=args.projection_padding_factor,
+            do_gridding_correction=True,
+            square_window=False,
+            use_float64_scoring=False,
+            relion_projector_half=relion_projector_half_by_class,
+            relion_projector_r_max=relion_projector_r_max,
+        )
+        bpref_significant_summary = {
+            "adaptive_fraction": float(args.significance_adaptive_fraction),
+            "elapsed_s": float(time.time() - bpref_sig_t0),
+            "current_size": int(current_size),
+            "coarse_current_size": int(coarse_engine_current_size),
+            "recovar_mean": float(np.mean(bpref_n_sig_all)),
+            "recovar_min": int(np.min(bpref_n_sig_all)),
+            "recovar_max": int(np.max(bpref_n_sig_all)),
+        }
+        print(
+            "  RELION BPref diagnostic support completed in "
+            f"{bpref_significant_summary['elapsed_s']:.1f}s; "
+            f"n_sig mean={bpref_significant_summary['recovar_mean']:.3g}, "
+            f"max={bpref_significant_summary['recovar_max']}"
+        )
 
     relion_real = [helpers.load_relion_volume(str(target_prefix) + f"_class{k + 1:03d}.mrc") for k in range(n_classes)]
     solvent_mask = mask.raised_cosine_mask(
@@ -1015,13 +1792,11 @@ def main() -> None:
         offset=jnp.zeros(3),
     )
 
-    # RELION ml_optimiser.cpp:6348-6378: at iter 1 with --firstiter_cc, RELION
-    # reapplies the ini_high low-pass filter to all reconstructed references
-    # before they propagate to iter 2. The filter is the same one used at the
-    # very start (initialLowPassFilterReferences). Without it, recovar's iter-1
-    # maps retain high-frequency content that drives iter-2 Pmax sharper than
-    # RELION's (K=4 chained iter-2: recovar Pmax 0.91 vs RELION 0.77).
-    apply_firstiter_lowpass = args.winner_take_all_mstep and float(args.firstiter_cc_ini_high_angstrom) > 0.0
+    # RELION ml_optimiser.cpp:6389-6418: at iter 1 with --firstiter_cc,
+    # RELION reapplies the ini_high low-pass filter only when ini_high > 0.
+    # Class3D GUI-default commands often request --firstiter_cc without
+    # --ini_high; those must not inherit a synthetic 30 A low-pass.
+    apply_firstiter_lowpass = firstiter_lowpass_ini_high is not None
 
     def reconstruct_variant(
         tau_by_class, *, use_spherical_mask: bool, apply_solvent_mask: bool, grid_correct: bool, minres_map: int
@@ -1048,17 +1823,15 @@ def main() -> None:
                 current_size=current_size,
             ).reshape(-1)
             if apply_firstiter_lowpass:
-                from recovar.heterogeneity import locres
+                from recovar.em.dense_single_volume.mean_helpers import _apply_relion_initial_lowpass_filter
 
-                class_ft = locres.low_pass_filter_map(
-                    class_ft.reshape(ds.volume_shape),
-                    ds.volume_shape[0],
-                    float(args.firstiter_cc_ini_high_angstrom),
+                class_ft = _apply_relion_initial_lowpass_filter(
+                    class_ft,
+                    ds.volume_shape,
                     float(ds.voxel_size),
-                    5,
-                    do_highpass_instead=False,
-                    volume_shape=ds.volume_shape,
-                ).reshape(-1)
+                    float(firstiter_lowpass_ini_high),
+                    filter_edgewidth=2.0,
+                )
             class_real = ftu.get_idft3(class_ft.reshape(ds.volume_shape)).real
             if apply_solvent_mask:
                 class_real = class_real * solvent_mask
@@ -1088,49 +1861,61 @@ def main() -> None:
 
     relion_bpref_summary = None
     if args.relion_bpref_mstep:
-        if significant_sample_indices is None or significant_full_stats is None:
-            raise RuntimeError("RELION BPref diagnostic requires significant support")
         bpref_t0 = time.time()
-        bpref_maps, relion_bpref_summary = _relion_bpref_maps_from_sparse_support(
-            ds,
-            means,
-            noise_variance,
-            translations.astype(np.float32),
-            significant_sample_indices,
-            significant_full_stats["normalization_log_z"],
-            nside_level=healpix_order,
-            disc_type=args.disc_type,
-            current_size=current_size,
-            translation_step=offset_step_px,
-            class_rotation_log_prior=class_rotation_log_prior,
-            translation_log_prior=translation_log_prior,
-            score_with_masked_images=True,
-            half_spectrum_scoring=True,
-            projection_padding_factor=args.projection_padding_factor,
-            reconstruction_padding_factor=args.reconstruction_padding_factor,
-            image_corrections=image_corrections,
-            scale_corrections=scale_corrections,
-            image_pre_shifts=image_pre_shifts,
-            use_float64_scoring=False,
-            do_gridding_correction=True,
-            square_window=False,
-            random_perturbation=random_perturbation,
-            tau2_spectra=[_tau_spectrum(target_model, class_index) for class_index in range(n_classes)],
-            tau2_fudge=tau2_fudge,
-            minres_map=RELION_MINRES_MAP,
-        )
-        bpref_maps = [np.asarray(class_map) * np.asarray(solvent_mask) for class_map in bpref_maps]
-        variant_maps["relion_bpref_sparse_solvent"] = bpref_maps
-        variant_results["relion_bpref_sparse_solvent"] = _best_class_permutation(bpref_maps, relion_real)
-        relion_bpref_summary = {
-            "elapsed_s": float(time.time() - bpref_t0),
-            "classes": relion_bpref_summary,
-        }
-        print(
-            "  RELION BPref diagnostic completed in "
-            f"{relion_bpref_summary['elapsed_s']:.1f}s; "
-            f"mean_corr={variant_results['relion_bpref_sparse_solvent']['mean_corr']:.6f}"
-        )
+        try:
+            if bpref_significant_sample_indices is None or bpref_full_stats is None:
+                raise RuntimeError("RELION BPref diagnostic requires significant support")
+            bpref_maps, relion_bpref_class_summary = _relion_bpref_maps_from_sparse_support(
+                ds,
+                means,
+                noise_variance,
+                translations.astype(np.float32),
+                bpref_significant_sample_indices,
+                bpref_full_stats["normalization_log_z"],
+                nside_level=healpix_order,
+                disc_type=args.disc_type,
+                current_size=current_size,
+                translation_step=offset_step_px,
+                class_rotation_log_prior=class_rotation_log_prior,
+                translation_log_prior=translation_log_prior,
+                score_with_masked_images=True,
+                half_spectrum_scoring=True,
+                projection_padding_factor=args.projection_padding_factor,
+                reconstruction_padding_factor=args.reconstruction_padding_factor,
+                image_corrections=image_corrections,
+                scale_corrections=scale_corrections,
+                image_pre_shifts=image_pre_shifts,
+                use_float64_scoring=False,
+                do_gridding_correction=True,
+                square_window=False,
+                random_perturbation=random_perturbation,
+                tau2_spectra=[_tau_spectrum(target_model, class_index) for class_index in range(n_classes)],
+                tau2_fudge=tau2_fudge,
+                minres_map=RELION_MINRES_MAP,
+                max_images_per_microbatch=args.relion_bpref_max_images_per_microbatch,
+            )
+            bpref_maps = [np.asarray(class_map) * np.asarray(solvent_mask) for class_map in bpref_maps]
+            variant_maps["relion_bpref_sparse_solvent"] = bpref_maps
+            variant_results["relion_bpref_sparse_solvent"] = _best_class_permutation(bpref_maps, relion_real)
+            relion_bpref_summary = {
+                "elapsed_s": float(time.time() - bpref_t0),
+                "classes": relion_bpref_class_summary,
+                "support": bpref_significant_summary,
+                "max_images_per_microbatch": int(args.relion_bpref_max_images_per_microbatch),
+            }
+            print(
+                "  RELION BPref diagnostic completed in "
+                f"{relion_bpref_summary['elapsed_s']:.1f}s; "
+                f"mean_corr={variant_results['relion_bpref_sparse_solvent']['mean_corr']:.6f}"
+            )
+        except Exception as exc:
+            relion_bpref_summary = {
+                "elapsed_s": float(time.time() - bpref_t0),
+                "support": bpref_significant_summary,
+                "max_images_per_microbatch": int(args.relion_bpref_max_images_per_microbatch),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            print(f"  RELION BPref diagnostic failed: {relion_bpref_summary['error']}")
 
     default_variant = "target_tau_sphere_solvent"
     best_variant = max(variant_results, key=lambda key: variant_results[key]["mean_corr"])
@@ -1145,11 +1930,20 @@ def main() -> None:
     best_perm = variant_results[default_variant]
     perm = np.asarray(best_perm["recovar_to_relion"], dtype=np.int64)
 
-    recovar_weights = np.asarray(result.class_posterior_sums, dtype=np.float64) / float(ds.n_images)
+    recovar_full_posterior_weights = np.asarray(result.class_posterior_sums, dtype=np.float64) / float(ds.n_images)
+    recovar_mstep_class_mass = getattr(result, "class_mstep_posterior_sums", None)
+    if recovar_mstep_class_mass is None:
+        recovar_mstep_class_mass = result.class_posterior_sums
+    recovar_weights = np.asarray(recovar_mstep_class_mass, dtype=np.float64) / float(ds.n_images)
     relion_weights = _class_distributions(target_model)
     target_class = np.asarray(target_data_ordered["rlnClassNumber"], dtype=np.int64)
     mapped_recovar_class = perm[np.asarray(result.class_assignments, dtype=np.int64)] + 1
     class_accuracy = float(np.mean(mapped_recovar_class == target_class))
+    recovar_class_responsibilities = np.asarray(result.class_responsibilities, dtype=np.float64)
+    recovar_class_by_responsibility = np.argmax(recovar_class_responsibilities, axis=0).astype(np.int64)
+    mapped_recovar_class_by_responsibility = perm[recovar_class_by_responsibility] + 1
+    class_accuracy_by_responsibility = float(np.mean(mapped_recovar_class_by_responsibility == target_class))
+    assignment_disagreement = np.asarray(result.class_assignments, dtype=np.int64) != recovar_class_by_responsibility
     recovar_pmax = np.asarray(result.stats.max_posterior_per_image, dtype=np.float64)
     relion_pmax = np.asarray(target_data_ordered["rlnMaxValueProbDistribution"], dtype=np.float64)
     pmax_abs = np.abs(recovar_pmax - relion_pmax)
@@ -1166,17 +1960,47 @@ def main() -> None:
         "n_rotations": int(rotations.shape[0]),
         "n_translations": int(translations.shape[0]),
         "random_perturbation": float(random_perturbation),
+        "random_perturbation_star": float(star_random_perturbation),
+        "random_perturbation_source": random_perturbation_source,
+        "perturb_restart_state_iteration": args.perturb_restart_state_iteration,
         "elapsed_s": float(elapsed_s),
+        "image_fourier_backend": args.image_fourier_backend,
+        "relion_native_lane_softmask_reduction": bool(
+            args.relion_native_lane_softmask_reduction
+        ),
+        "relion_optimiser_cli": relion_cli_flags,
+        "firstiter_cc_mode": firstiter_cc_mode,
+        "firstiter_cc_pass2_only_best_coarse": bool(
+            firstiter_cc_mode["emulate"]
+            and args.firstiter_cc_pass2_only_best_coarse
+            and not args.no_firstiter_cc_pass2_only_best_coarse
+        ),
+        "firstiter_cc_ini_high_override_angstrom": (
+            None
+            if args.firstiter_cc_ini_high_angstrom is None
+            else float(args.firstiter_cc_ini_high_angstrom)
+        ),
+        "firstiter_cc_ini_high_angstrom": (
+            None if firstiter_lowpass_ini_high is None else float(firstiter_lowpass_ini_high)
+        ),
+        "firstiter_cc_lowpass_applied": bool(apply_firstiter_lowpass),
         "recovar_class_weights": recovar_weights,
+        "recovar_full_posterior_class_weights": recovar_full_posterior_weights,
         "relion_class_weights": relion_weights,
         "relion_class_weights_in_recovar_order": relion_weights[perm],
         "class_weight_abs_diff_in_recovar_order": np.abs(recovar_weights - relion_weights[perm]),
         "class_assignment_accuracy_after_permutation": class_accuracy,
+        "class_assignment_by_responsibility_accuracy_after_permutation": class_accuracy_by_responsibility,
+        "class_assignment_best_vs_responsibility_disagreement_fraction": float(np.mean(assignment_disagreement)),
+        "class_assignment_best_vs_responsibility_disagreement_count": int(np.count_nonzero(assignment_disagreement)),
         "best_permutation": best_perm,
         "reconstruction_variants": variant_results,
         "best_reconstruction_variant": best_variant,
         "significant_mstep": bool(args.significant_mstep),
+        "significant_mstep_applied": bool(args.significant_mstep and not args.adaptive_2pass),
         "significant_samples": significant_summary,
+        "relion_bpref_significant_samples": bpref_significant_summary,
+        "adaptive_coarse_current_size": None if coarse_current_size is None else int(coarse_current_size),
         "relion_bpref_mstep": bool(args.relion_bpref_mstep),
         "relion_bpref_summary": relion_bpref_summary,
         "pmax": {
@@ -1190,17 +2014,28 @@ def main() -> None:
         "output_maps": [str(output_dir / f"recovar_class{k + 1:03d}.mrc") for k in range(n_classes)],
     }
 
-    np.savez(
-        output_dir / "k_class_parity_arrays.npz",
-        recovar_class_assignments=np.asarray(result.class_assignments, dtype=np.int32),
-        mapped_recovar_class=mapped_recovar_class,
-        relion_class=target_class,
-        recovar_pmax=recovar_pmax,
-        relion_pmax=relion_pmax,
-        recovar_class_weights=recovar_weights,
-        relion_class_weights=relion_weights,
-        recovar_to_relion=perm,
-    )
+    parity_arrays = {
+        "recovar_class_assignments": np.asarray(result.class_assignments, dtype=np.int32),
+        "mapped_recovar_class": mapped_recovar_class,
+        "recovar_class_assignments_by_responsibility": recovar_class_by_responsibility.astype(np.int32),
+        "mapped_recovar_class_by_responsibility": mapped_recovar_class_by_responsibility,
+        "recovar_class_responsibilities": recovar_class_responsibilities,
+        "relion_class": target_class,
+        "recovar_pmax": recovar_pmax,
+        "relion_pmax": relion_pmax,
+        "recovar_class_weights": recovar_weights,
+        "relion_class_weights": relion_weights,
+        "recovar_to_relion": perm,
+    }
+    if significant_summary is not None:
+        parity_arrays["recovar_significant_samples"] = np.asarray(n_sig_all, dtype=np.int32)
+        parity_arrays["relion_significant_samples"] = np.asarray(
+            target_data_ordered["rlnNrOfSignificantSamples"],
+            dtype=np.int32,
+        )
+    if bpref_significant_summary is not None:
+        parity_arrays["recovar_bpref_significant_samples"] = np.asarray(bpref_n_sig_all, dtype=np.int32)
+    np.savez(output_dir / "k_class_parity_arrays.npz", **parity_arrays)
     with (output_dir / "summary.json").open("w") as f:
         json.dump(_jsonable(summary), f, indent=2, sort_keys=True)
 
@@ -1208,6 +2043,11 @@ def main() -> None:
     print(f"  recovar weights: {recovar_weights.round(6).tolist()}")
     print(f"  relion weights in recovar order: {relion_weights[perm].round(6).tolist()}")
     print(f"  class assignment accuracy after permutation: {class_accuracy:.4f}")
+    print(
+        "  class assignment by responsibility accuracy after permutation: "
+        f"{class_accuracy_by_responsibility:.4f} "
+        f"(best-vs-responsibility disagreements={int(np.count_nonzero(assignment_disagreement))})"
+    )
     print(
         "  Pmax abs diff: "
         f"mean={summary['pmax']['abs_mean']:.6g}, p95={summary['pmax']['abs_p95']:.6g}, max={summary['pmax']['abs_max']:.6g}"
@@ -1223,4 +2063,25 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as exc:
+        if (
+            exc.__class__.__name__ == "Pass2DumpComplete"
+            and os.environ.get("RECOVAR_K_CLASS_PARITY_STOP_AFTER_PASS2_DUMP") == "1"
+        ):
+            print(f"RECOVAR pass-2 dump completed; stopping replay before remaining M-step work: {exc}")
+            sys.exit(0)
+        if (
+            exc.__class__.__name__ == "BPrefContributionDumpComplete"
+            and os.environ.get(
+                "RECOVAR_K_CLASS_PARITY_STOP_AFTER_CONTRIBUTION_DUMP"
+            )
+            == "1"
+        ):
+            print(
+                "RECOVAR BPref contribution dump completed; stopping replay "
+                f"before reconstruction: {exc}"
+            )
+            sys.exit(0)
+        raise

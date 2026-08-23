@@ -18,12 +18,140 @@ logger = logging.getLogger(__name__)
 # NVTX domain for regularization operations
 NVTX_DOMAIN_REG = "regularization"
 _RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS = 200_000_000
+_LOW_RESOLUTION_JOIN_HOST_FALLBACK_MIN_ELEMENTS = 200_000_000
 
 
 def _relion_round_away_from_zero(x):
     """Mirror RELION's ``ROUND`` macro for NumPy arrays."""
     x = np.asarray(x)
     return np.trunc(np.where(x > 0, x + 0.5, x - 0.5)).astype(np.int64)
+
+
+def _unscaled_fft_frequency_grid_np(n):
+    half = int(n) // 2
+    return np.arange(-half, int(n) - half, dtype=np.int64)
+
+
+def _unscaled_rfft_frequency_grid_np(n):
+    return np.arange(0, int(n) // 2 + 1, dtype=np.int64)
+
+
+@functools.lru_cache(maxsize=64)
+def _low_resolution_join_flat_indices(volume_shape, half_layout, lowres_r2_max):
+    """Return flat Fourier voxels inside RELION's low-resolution join sphere."""
+    volume_shape = tuple(int(s) for s in volume_shape)
+    if half_layout:
+        layout_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+        x_coords = _unscaled_rfft_frequency_grid_np(volume_shape[2])
+    else:
+        layout_shape = volume_shape
+        x_coords = _unscaled_fft_frequency_grid_np(volume_shape[2])
+
+    z_coords = _unscaled_fft_frequency_grid_np(volume_shape[0])
+    y_coords = _unscaled_fft_frequency_grid_np(volume_shape[1])
+    y2 = y_coords * y_coords
+    x2 = x_coords * x_coords
+    lowres_r2_max = int(lowres_r2_max)
+    ny = int(layout_shape[1])
+    nx = int(layout_shape[2])
+
+    flat_chunks = []
+    for zi, z_coord in enumerate(z_coords):
+        remaining_after_z = lowres_r2_max - int(z_coord * z_coord)
+        if remaining_after_z < 0:
+            continue
+        y_indices = np.nonzero(y2 <= remaining_after_z)[0]
+        z_offset = zi * ny * nx
+        for yi in y_indices:
+            remaining_after_y = remaining_after_z - int(y2[yi])
+            x_indices = np.nonzero(x2 <= remaining_after_y)[0]
+            if x_indices.size:
+                flat_chunks.append((z_offset + int(yi) * nx + x_indices).astype(np.int32, copy=False))
+
+    if not flat_chunks:
+        return np.empty((0,), dtype=np.int32)
+    return np.concatenate(flat_chunks).astype(np.int32, copy=False)
+
+
+def _low_resolution_join_host_fallback_enabled_for_size(values_size, join_size):
+    mode = os.environ.get("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "auto").strip().lower()
+    if mode in {"0", "false", "no", "off", "never"}:
+        return False
+    if mode in {"1", "true", "yes", "on", "always"}:
+        return True
+    if mode != "auto":
+        logger.warning(
+            "Unrecognised RECOVAR_LOWRES_JOIN_HOST_FALLBACK=%r; using auto",
+            mode,
+        )
+    if int(join_size) >= int(values_size):
+        return False
+    threshold = int(
+        os.environ.get(
+            "RECOVAR_LOWRES_JOIN_HOST_FALLBACK_MIN_ELEMENTS",
+            _LOW_RESOLUTION_JOIN_HOST_FALLBACK_MIN_ELEMENTS,
+        )
+    )
+    return int(values_size) >= threshold
+
+
+def _low_resolution_join_host_fallback_enabled(values_0, flat_indices):
+    return _low_resolution_join_host_fallback_enabled_for_size(np.size(values_0), np.size(flat_indices))
+
+
+def _delete_if_jax_array(value):
+    delete = getattr(value, "delete", None)
+    if callable(delete):
+        try:
+            delete()
+        except RuntimeError:
+            pass
+
+
+def _join_half_pair_at_indices_host(values_0, values_1, flat_indices):
+    values_0_np = np.array(jax.device_get(values_0), copy=True)
+    values_1_np = np.array(jax.device_get(values_1), copy=True)
+    flat_indices_np = np.asarray(jax.device_get(flat_indices), dtype=np.intp)
+
+    values_0_flat = values_0_np.reshape(-1)
+    values_1_flat = values_1_np.reshape(-1)
+    half_scalar = np.asarray(0.5, dtype=values_0_flat.real.dtype)
+    if int(flat_indices_np.size) >= int(values_0_flat.size):
+        average = ((values_0_flat + values_1_flat) * half_scalar).astype(values_0_flat.dtype, copy=False)
+        values_0_np = average.reshape(values_0_np.shape)
+        values_1_np = average.reshape(values_1_np.shape).copy()
+    else:
+        average_at_join = (
+            (values_0_flat[flat_indices_np] + values_1_flat[flat_indices_np]) * half_scalar
+        ).astype(values_0_flat.dtype, copy=False)
+        values_0_flat[flat_indices_np] = average_at_join
+        values_1_flat[flat_indices_np] = average_at_join
+
+    _delete_if_jax_array(values_0)
+    _delete_if_jax_array(values_1)
+    return values_0_np, values_1_np
+
+
+def _join_half_pair_at_indices(values_0, values_1, flat_indices):
+    values_0_flat = values_0.reshape(-1)
+    values_1_flat = values_1.reshape(-1)
+    if int(flat_indices.size) >= int(values_0_flat.size):
+        average = 0.5 * (values_0_flat + values_1_flat)
+        return average.reshape(values_0.shape), average.reshape(values_1.shape)
+
+    if _low_resolution_join_host_fallback_enabled(values_0_flat, flat_indices):
+        logger.info(
+            "Low-resolution half-join using host fallback: elements=%d joined=%d dtype=%s",
+            int(values_0_flat.size),
+            int(flat_indices.size),
+            values_0.dtype,
+        )
+        return _join_half_pair_at_indices_host(values_0, values_1, flat_indices)
+
+    average_at_join = 0.5 * (values_0_flat[flat_indices] + values_1_flat[flat_indices])
+    joined_0 = values_0_flat.at[flat_indices].set(average_at_join)
+    joined_1 = values_1_flat.at[flat_indices].set(average_at_join)
+    return joined_0.reshape(values_0.shape), joined_1.reshape(values_1.shape)
 
 ## Mean prior computation
 
@@ -233,8 +361,11 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean=False, frequency_
     bot = jnp.sqrt(bot1 * bot2)
     fsc = top_avg / bot
     fsc = jnp.where(~jnp.isfinite(fsc), 0, fsc)
-    # RELION sets fsc(0) = 1.0 in calculateDownSampledFourierShellCorrelation
-    fsc = fsc.at[0].set(1.0)
+    # The generic RECOVAR estimator extends the first measured shell through
+    # DC. RELION-specific estimators set FSC[0] = 1 explicitly in their own
+    # helpers.
+    if fsc.shape[0] > 1:
+        fsc = fsc.at[0].set(fsc[1])
     return fsc
 
 
@@ -578,6 +709,8 @@ def _compute_relion_weight_shell_stats(
     padding_factor=1,
     r_max=None,
     shell_rounding="round",
+    full_half_axis=-1,
+    accumulator_volume_shape=None,
 ):
     """Match RELION's shell-wise weight averaging for tau2 diagnostics.
 
@@ -599,6 +732,12 @@ def _compute_relion_weight_shell_stats(
     shell_rounding : {"round", "floor"}
         Shell binning rule. RELION's SSNR/tau2 update path uses ``round``
         while the Wiener reconstruct / current-size path uses ``floor``.
+    full_half_axis : {-3, -2, -1, 0, 1, 2}
+        Axis that corresponds to the RELION half-complex packed dimension
+        when ``weight`` is a full Hermitian-expanded volume. Native RECOVAR
+        full volumes use the last axis (default). Full volumes expanded from
+        RELION x-half storage and transposed into RECOVAR public layout use
+        axis 0.
 
     Returns
     -------
@@ -610,7 +749,11 @@ def _compute_relion_weight_shell_stats(
     ori_half = volume_shape[0] // 2
     n_shells = ori_half + 1
 
-    grid_shape = tuple(d * padding_factor for d in volume_shape) if padding_factor > 1 else volume_shape
+    grid_shape = (
+        tuple(d * padding_factor for d in volume_shape)
+        if accumulator_volume_shape is None
+        else tuple(int(s) for s in accumulator_volume_shape)
+    )
     native_full_size = int(np.prod(volume_shape))
     half_grid_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(grid_shape)
     full_size = int(np.prod(grid_shape))
@@ -650,10 +793,38 @@ def _compute_relion_weight_shell_stats(
 
     if shell_rounding not in {"round", "floor"}:
         raise ValueError(f"shell_rounding must be 'round' or 'floor', got {shell_rounding!r}")
+    full_half_axis = int(full_half_axis)
+    if full_half_axis < 0:
+        full_half_axis += 3
+    if full_half_axis not in {0, 1, 2}:
+        raise ValueError(f"full_half_axis must identify one Fourier axis, got {full_half_axis!r}")
 
-    round_fn = jnp.round if shell_rounding == "round" else jnp.floor
+    round_fn = (lambda values: jnp.floor(values + 0.5)) if shell_rounding == "round" else jnp.floor
     shell_sum_np = None
     shell_count_np = None
+
+    def _centered_full_half_axis_mask_np(shape, axis):
+        axis = int(axis)
+        size = int(shape[axis])
+        coords = np.arange(-(size // 2), size - size // 2, dtype=np.int64)
+        keep = coords >= 0
+        if size % 2 == 0:
+            keep = keep | (coords == -(size // 2))
+        mask_shape = [1] * len(shape)
+        mask_shape[axis] = size
+        return np.broadcast_to(keep.reshape(mask_shape), shape)
+
+    def _centered_full_half_axis_mask_jax(shape, axis, dtype):
+        axis = int(axis)
+        size = int(shape[axis])
+        idx = jnp.arange(size)
+        keep = idx >= size // 2
+        if size % 2 == 0:
+            keep = keep | (idx == 0)
+        keep = keep.astype(dtype)
+        mask_shape = [1] * len(shape)
+        mask_shape[axis] = size
+        return jnp.broadcast_to(keep.reshape(mask_shape), shape)
 
     def _numpy_bincount_shell_stats(labels, values, mask):
         labels_np = np.asarray(labels, dtype=np.int64).reshape(-1)
@@ -698,16 +869,15 @@ def _compute_relion_weight_shell_stats(
                 max_r_pad = int(_relion_round_away_from_zero(np.asarray(float(r_max) * padding_factor)))
                 radius_included_np = padded_dist_np * padded_dist_np < float(max_r_pad * max_r_pad)
             if shell_rounding == "round":
-                shell_index_np = np.rint(padded_dist_np / padding_factor).astype(np.int32)
+                shell_index_np = np.floor(padded_dist_np / padding_factor + 0.5).astype(np.int32)
             else:
                 shell_index_np = np.floor(padded_dist_np / padding_factor).astype(np.int32)
             shell_index_np = np.minimum(shell_index_np, ori_half)
             if not is_half_layout:
-                x_coord = coords[-1]
-                half_complex_included_np = (x_coord == -(int(radial_volume_shape[-1]) // 2)) | (x_coord >= 0)
-                shape = [1] * len(radial_shape)
-                shape[-1] = x_coord.shape[0]
-                radius_included_np = radius_included_np & half_complex_included_np.reshape(shape)
+                radius_included_np = radius_included_np & _centered_full_half_axis_mask_np(
+                    radial_shape,
+                    full_half_axis,
+                )
             shell_sum_np, shell_count_np = _numpy_bincount_shell_stats(
                 shell_index_np,
                 np.asarray(weight).reshape(radial_shape),
@@ -732,10 +902,15 @@ def _compute_relion_weight_shell_stats(
             if is_half_layout:
                 included = radius_included
             else:
-                # RELION iterates the half-complex x-axis (kx >= 0) only.
-                pf_n = relion_grid_shape[-1]
-                kx_idx = jnp.arange(weight.size) % pf_n
-                half_complex_included = ((kx_idx == 0) | (kx_idx >= pf_n // 2)).astype(jnp.float64)
+                # RELION iterates the stored half-complex axis only. For
+                # native RECOVAR full volumes that axis is last; for full
+                # volumes expanded from RELION x-half storage and transposed
+                # to public layout it is axis 0.
+                half_complex_included = _centered_full_half_axis_mask_jax(
+                    radial_shape,
+                    full_half_axis,
+                    jnp.float64,
+                ).reshape(-1)
                 included = half_complex_included * radius_included
     else:
         radial_fn = (
@@ -743,27 +918,25 @@ def _compute_relion_weight_shell_stats(
             if is_half_layout
             else fourier_transform_utils.get_grid_of_radial_distances
         )
-        shell_index = (
-            radial_fn(
-                volume_shape,
-                scaled=False,
-                frequency_shift=0,
-            )
-            .astype(jnp.int32)
-            .reshape(-1)
-        )
+        radial_raw = radial_fn(
+            volume_shape,
+            scaled=False,
+            frequency_shift=0,
+            rounded=False,
+        ).reshape(-1)
+        shell_index = round_fn(radial_raw).astype(jnp.int32)
         shell_index = jnp.minimum(shell_index, ori_half)
         if r_max is None:
             included = jnp.ones(weight.shape[0], dtype=jnp.float64)
         else:
-            radial_raw = radial_fn(
-                volume_shape,
-                scaled=False,
-                frequency_shift=0,
-                rounded=False,
-            ).reshape(-1)
             max_r_native = int(_relion_round_away_from_zero(np.asarray(float(r_max))))
             included = (radial_raw * radial_raw < float(max_r_native * max_r_native)).astype(jnp.float64)
+        if not is_half_layout:
+            included = included * _centered_full_half_axis_mask_jax(
+                relion_grid_shape,
+                full_half_axis,
+                jnp.float64,
+            ).reshape(-1)
 
     if shell_sum_np is None:
         shell_sum = jnp.bincount(shell_index, weights=weight * included, length=n_shells).astype(jnp.float64)
@@ -788,7 +961,11 @@ def compute_relion_tau2_from_weights(
     tau2_fudge=1.0,
     padding_factor=1,
     r_max=None,
+    is_whole_instead_of_half=False,
     return_details=False,
+    full_half_axis=-1,
+    accumulator_volume_shape=None,
+    weight_combination="average",
 ):
     """Compute tau2 from CTF weights and external FSC (RELION's updateSSNRarrays).
 
@@ -807,10 +984,26 @@ def compute_relion_tau2_from_weights(
         ``r2 >= ROUND(r_max * padding_factor)^2`` in
         ``BackProjector::updateSSNRarrays``; pass the current iteration
         ``current_size // 2`` for auto-refine parity.
+    weight_combination : {"average", "sum"}
+        How to combine the two input weight arrays before shell averaging.
+        Numbered split-half iterations pass one half twice, so the default
+        average preserves legacy behavior. RELION's final joined all-data
+        iteration first adds the two half BackProjectors, then calls
+        ``updateSSNRarrays`` on the combined BackProjector; pass ``"sum"`` for
+        that path.
     """
     prior_dtype = jnp.float32
+    if weight_combination not in {"average", "sum"}:
+        raise ValueError(
+            "weight_combination must be 'average' or 'sum', "
+            f"got {weight_combination!r}"
+        )
 
-    padded_shape = tuple(int(s) * int(padding_factor) for s in volume_shape)
+    padded_shape = (
+        tuple(int(s) * int(padding_factor) for s in volume_shape)
+        if accumulator_volume_shape is None
+        else tuple(int(s) for s in accumulator_volume_shape)
+    )
     half_padded_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(padded_shape)
     large_weight_size = max(int(np.prod(padded_shape)), int(np.prod(half_padded_shape)))
     use_host_shell_stats = (
@@ -821,16 +1014,22 @@ def compute_relion_tau2_from_weights(
     if use_host_shell_stats:
         H0 = np.asarray(Ft_ctf_0).real.astype(np.float32, copy=False)
         H1 = np.asarray(Ft_ctf_1).real.astype(np.float32, copy=False)
-        H_comb = ((H0 + H1) * np.float32(0.5)).astype(np.float32, copy=False)
+        H_comb = H0 + H1
+        if weight_combination == "average":
+            H_comb = (H_comb * np.float32(0.5)).astype(np.float32, copy=False)
     else:
         H0 = jnp.asarray(Ft_ctf_0).real.astype(prior_dtype)
         H1 = jnp.asarray(Ft_ctf_1).real.astype(prior_dtype)
-        H_comb = (H0 + H1) / jnp.asarray(2.0, dtype=prior_dtype)
+        H_comb = H0 + H1
+        if weight_combination == "average":
+            H_comb = H_comb / jnp.asarray(2.0, dtype=prior_dtype)
     shell_stats = _compute_relion_weight_shell_stats(
         H_comb,
         volume_shape,
         padding_factor=padding_factor,
         r_max=r_max,
+        full_half_axis=full_half_axis,
+        accumulator_volume_shape=accumulator_volume_shape,
     )
     shell_sum = shell_stats["shell_sum"]
     shell_count = shell_stats["shell_count"]
@@ -844,7 +1043,10 @@ def compute_relion_tau2_from_weights(
     fsc_indices = jnp.minimum(jnp.arange(n_shells), fsc_raw.shape[0] - 1)
     fsc_arr = fsc_raw[fsc_indices]
     epsilon = jax_config.FSC_ZERO_THRESHOLD
-    fsc_clamped = jnp.clip(fsc_arr, epsilon, 1.0 - epsilon)
+    fsc_clamped = jnp.maximum(fsc_arr, epsilon)
+    if is_whole_instead_of_half:
+        fsc_clamped = jnp.sqrt(2.0 * fsc_clamped / (fsc_clamped + 1.0))
+    fsc_clamped = jnp.minimum(fsc_clamped, 1.0 - epsilon)
     ssnr = fsc_clamped / (1.0 - fsc_clamped) * tau2_fudge
 
     # RELION backprojector.cpp:1061,1075 — updateSSNRarrays multiplies each
@@ -873,6 +1075,8 @@ def compute_relion_tau2_from_weights(
         "fsc_shells": fsc_clamped,
         "ssnr_shells": ssnr.astype(prior_dtype),
         "oversampling_correction": jnp.asarray(oversampling_correction, dtype=prior_dtype),
+        "is_whole_instead_of_half": jnp.asarray(bool(is_whole_instead_of_half)),
+        "weight_combination": np.asarray(str(weight_combination)),
     }
     return prior, fsc_clamped, details
 
@@ -886,6 +1090,7 @@ def compute_relion_fsc_from_backprojector(
     *,
     padding_factor=1,
     r_max=None,
+    accumulator_volume_shape=None,
 ):
     """Compute RELION's gold-standard FSC from backprojector accumulators.
 
@@ -907,7 +1112,11 @@ def compute_relion_fsc_from_backprojector(
     pf = int(padding_factor)
     if pf <= 0:
         raise ValueError(f"padding_factor must be positive, got {padding_factor}")
-    padded_shape = tuple(d * pf for d in volume_shape)
+    padded_shape = (
+        tuple(d * pf for d in volume_shape)
+        if accumulator_volume_shape is None
+        else tuple(int(s) for s in accumulator_volume_shape)
+    )
     full_size = int(np.prod(padded_shape))
     half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(padded_shape)
     half_size = int(np.prod(half_shape))
@@ -1067,6 +1276,149 @@ def compute_relion_fsc_from_backprojector(
     return jnp.asarray(fsc, dtype=jnp.float32)
 
 
+@functools.lru_cache(maxsize=16)
+def _relion_rfft_shell_grid(volume_shape):
+    """Return RELION-style shell labels for NumPy ``rfftn`` volume spectra."""
+    volume_shape = tuple(int(s) for s in volume_shape)
+    if len(volume_shape) != 3 or len(set(volume_shape)) != 1:
+        raise ValueError(f"Expected cubic 3-D volume_shape, got {volume_shape}")
+    z = np.fft.fftfreq(volume_shape[0]) * volume_shape[0]
+    y = np.fft.fftfreq(volume_shape[1]) * volume_shape[1]
+    x = np.fft.rfftfreq(volume_shape[2]) * volume_shape[2]
+    zz, yy, xx = np.meshgrid(z, y, x, indexing="ij")
+    radius_sq = zz * zz + yy * yy + xx * xx
+    shell = _relion_round_away_from_zero(np.sqrt(radius_sq))
+    shell_count = volume_shape[2] // 2 + 1
+    valid = shell < shell_count
+    return shell.astype(np.int64), valid, radius_sq
+
+
+def _relion_fsc_from_real_maps_numpy(map0, map1):
+    """Mirror RELION ``getFSC`` for two real-space maps using NumPy FFTs."""
+    map0 = np.asarray(map0, dtype=np.float64)
+    map1 = np.asarray(map1, dtype=np.float64)
+    if map0.shape != map1.shape:
+        raise ValueError(f"map shapes must match, got {map0.shape} and {map1.shape}")
+    shell, valid, _ = _relion_rfft_shell_grid(tuple(map0.shape))
+    shell_count = map0.shape[-1] // 2 + 1
+
+    fft_axes = (0, 1, 2)
+    ft0 = np.fft.rfftn(map0, axes=fft_axes)
+    ft1 = np.fft.rfftn(map1, axes=fft_axes)
+    labels = shell[valid].reshape(-1)
+    ft0_flat = ft0[valid].reshape(-1)
+    ft1_flat = ft1[valid].reshape(-1)
+    numerator = np.bincount(labels, weights=(np.conj(ft0_flat) * ft1_flat).real, minlength=shell_count)
+    denom0 = np.bincount(labels, weights=np.abs(ft0_flat) ** 2, minlength=shell_count)
+    denom1 = np.bincount(labels, weights=np.abs(ft1_flat) ** 2, minlength=shell_count)
+    fsc = np.zeros(shell_count, dtype=np.float64)
+    nonzero = (denom0 * denom1) > 0.0
+    fsc[nonzero] = numerator[nonzero] / np.sqrt(denom0[nonzero] * denom1[nonzero])
+    fsc = np.where(np.isfinite(fsc), fsc, 0.0)
+    if fsc.size:
+        fsc[0] = 1.0
+    return fsc
+
+
+def _relion_randomize_phases_beyond_numpy(map_real, index, rng):
+    """Mirror RELION ``randomizePhasesBeyond`` for a real-space map."""
+    map_real = np.asarray(map_real, dtype=np.float64)
+    _, _, radius_sq = _relion_rfft_shell_grid(tuple(map_real.shape))
+    fft_axes = (0, 1, 2)
+    ft = np.fft.rfftn(map_real, axes=fft_axes)
+    randomize = radius_sq >= int(index) * int(index)
+    phases = rng.uniform(0.0, 2.0 * np.pi, size=ft.shape)
+    randomized = np.abs(ft) * (np.cos(phases) + 1j * np.sin(phases))
+    ft = np.where(randomize, randomized, ft)
+    return np.fft.irfftn(ft, s=map_real.shape, axes=fft_axes).real
+
+
+def compute_relion_solvent_corrected_true_fsc(
+    half_map0_real,
+    half_map1_real,
+    solvent_mask,
+    *,
+    current_size=None,
+    randomize_fsc_at=0.8,
+    rng_seed=0,
+    return_details=False,
+):
+    """Compute RELION's solvent-corrected gold-standard FSC for auto-refine.
+
+    RELION writes unfiltered split-half maps, computes their unmasked FSC,
+    masks both maps with the solvent mask, randomizes phases beyond the first
+    unmasked shell below 0.8, and then applies Richard Henderson's corrected
+    FSC formula before feeding the curve to ``updateSSNRarrays``.
+    """
+    half_map0_real = np.asarray(half_map0_real, dtype=np.float64)
+    half_map1_real = np.asarray(half_map1_real, dtype=np.float64)
+    if half_map0_real.shape != half_map1_real.shape:
+        raise ValueError(
+            f"half-map shapes must match, got {half_map0_real.shape} and {half_map1_real.shape}"
+        )
+    if solvent_mask is not None:
+        solvent_mask = np.asarray(solvent_mask, dtype=np.float64)
+        if solvent_mask.shape != half_map0_real.shape:
+            raise ValueError(
+                f"solvent_mask shape {solvent_mask.shape} does not match half-map shape {half_map0_real.shape}"
+            )
+
+    fsc_unmasked = _relion_fsc_from_real_maps_numpy(half_map0_real, half_map1_real)
+    randomize_at = -1
+    for idx in range(1, fsc_unmasked.size):
+        if fsc_unmasked[idx] < float(randomize_fsc_at):
+            randomize_at = idx
+            break
+
+    if solvent_mask is None or randomize_at <= 0:
+        fsc_masked = fsc_unmasked.copy()
+        fsc_random_masked = np.zeros_like(fsc_unmasked)
+        fsc_true = fsc_unmasked.copy()
+    else:
+        masked0 = half_map0_real * solvent_mask
+        masked1 = half_map1_real * solvent_mask
+        fsc_masked = _relion_fsc_from_real_maps_numpy(masked0, masked1)
+
+        rng = np.random.default_rng(int(rng_seed))
+        randomized0 = _relion_randomize_phases_beyond_numpy(half_map0_real, randomize_at, rng)
+        randomized1 = _relion_randomize_phases_beyond_numpy(half_map1_real, randomize_at, rng)
+        fsc_random_masked = _relion_fsc_from_real_maps_numpy(randomized0 * solvent_mask, randomized1 * solvent_mask)
+
+        if fsc_masked[0] <= 0.0:
+            fsc_masked[0] = 1.0
+        if fsc_unmasked[0] <= 0.0:
+            fsc_unmasked[0] = 1.0
+        if fsc_random_masked[0] <= 0.0:
+            fsc_random_masked[0] = 1.0
+
+        fsc_true = np.empty_like(fsc_masked)
+        handoff = int(randomize_at) + 2
+        fsc_true[:handoff] = fsc_masked[:handoff]
+        fsct = fsc_masked[handoff:]
+        fscn = fsc_random_masked[handoff:]
+        denom = 1.0 - fscn
+        corrected = np.where((fscn > fsct) | (denom <= 0.0), 0.0, (fsct - fscn) / denom)
+        fsc_true[handoff:] = corrected
+
+    fsc_true = np.where(np.isfinite(fsc_true), fsc_true, 0.0)
+    if current_size is not None:
+        zero_start = int(current_size) // 2 + 1
+        if zero_start < fsc_true.size:
+            fsc_true[zero_start:] = 0.0
+
+    out = jnp.asarray(fsc_true, dtype=jnp.float32)
+    if not return_details:
+        return out
+    details = {
+        "randomize_at": int(randomize_at),
+        "fsc_unmasked": fsc_unmasked.astype(np.float32),
+        "fsc_masked": fsc_masked.astype(np.float32),
+        "fsc_random_masked": fsc_random_masked.astype(np.float32),
+        "fsc_true": fsc_true.astype(np.float32),
+    }
+    return out, details
+
+
 def downsample_from_fsc(array, fsc, volume_shape):
     from recovar.heterogeneity import locres
 
@@ -1096,6 +1448,8 @@ def compute_data_vs_prior(
     padding_factor=1,
     tau2_fudge=1.0,
     current_size=None,
+    full_half_axis=-1,
+    accumulator_volume_shape=None,
 ):
     """Compute RELION's data_vs_prior ratio per radial shell.
 
@@ -1140,6 +1494,8 @@ def compute_data_vs_prior(
         padding_factor=padding_factor,
         r_max=current_size // 2 if current_size is not None else None,
         shell_rounding="round",
+        full_half_axis=full_half_axis,
+        accumulator_volume_shape=accumulator_volume_shape,
     )["avg_weight_shells"].astype(jnp.asarray(tau2).dtype)
     tau2 = jnp.asarray(tau2)
     if tau2.shape[0] != avg_weight.shape[0]:
@@ -1224,9 +1580,10 @@ def fsc_to_relion_ssnr(fsc, tau2_fudge=1.0, is_whole_instead_of_half=False):
     """
     fsc = jnp.asarray(fsc)
     epsilon = jax_config.FSC_ZERO_THRESHOLD
-    myfsc = jnp.clip(fsc, epsilon, 1.0 - epsilon)
+    myfsc = jnp.maximum(fsc, epsilon)
     if is_whole_instead_of_half:
         myfsc = jnp.sqrt(2.0 * myfsc / (myfsc + 1.0))
+    myfsc = jnp.minimum(myfsc, 1.0 - epsilon)
     return tau2_fudge * myfsc / (1.0 - myfsc)
 
 
@@ -1351,6 +1708,7 @@ def join_halves_at_low_resolution(
     grid_size,
     low_resol_join_halves_angstrom,
     current_resolution_angstrom=None,
+    padding_factor=None,
 ):
     """RELION's ``--low_resol_join_halves`` operation on Fourier accumulators.
 
@@ -1406,6 +1764,11 @@ def join_halves_at_low_resolution(
         joining radius is the LOWER frequency (LARGER Å) of this and
         ``low_resol_join_halves_angstrom``. Pass ``None`` (the default)
         to ignore (equivalent to passing ``+inf``).
+    padding_factor : int or None
+        RELION backprojector padding factor used to convert native-shell
+        join radii to accumulator-space coordinates. If omitted, falls back
+        to the legacy shape-based inference, which is only reliable for full
+        padded accumulators and not current-size BPref grids.
 
     Returns
     -------
@@ -1432,48 +1795,57 @@ def join_halves_at_low_resolution(
     #   if (k*k + i*i + j*j <= lowres_r2_max) ...
     # Using rounded radial shells joins extra boundary voxels and changes the
     # downsampled half-map FSC near the 40 A join cutoff.
-    pf = volume_shape[0] // grid_size if volume_shape[0] > grid_size else 1
+    if padding_factor is None:
+        pf = volume_shape[0] // grid_size if volume_shape[0] > grid_size else 1
+    else:
+        pf = int(padding_factor)
+        if pf <= 0:
+            raise ValueError(f"padding_factor must be positive, got {padding_factor}")
     lowres_r_max_padded = int(_relion_round_away_from_zero(float(pf) * lowres_r_max))
     lowres_r2_max = lowres_r_max_padded * lowres_r_max_padded
+
+    volume_shape = tuple(int(s) for s in volume_shape)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    full_size = int(np.prod(volume_shape))
+    half_size = int(np.prod(half_shape))
+    ft_y_size = int(np.size(Ft_y_0))
+    if ft_y_size == full_size:
+        half_layout = False
+    elif ft_y_size == half_size:
+        half_layout = True
+    else:
+        raise ValueError(
+            f"Could not infer Fourier layout for join_halves_at_low_resolution with shape {np.shape(Ft_y_0)} "
+            f"and volume_shape={volume_shape}"
+        )
+
+    join_indices_np = _low_resolution_join_flat_indices(volume_shape, half_layout, lowres_r2_max)
+    if join_indices_np.size == 0:
+        return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
+
+    max_input_size = max(
+        ft_y_size,
+        int(np.size(Ft_y_1)),
+        int(np.size(Ft_ctf_0)),
+        int(np.size(Ft_ctf_1)),
+    )
+    if _low_resolution_join_host_fallback_enabled_for_size(max_input_size, join_indices_np.size):
+        logger.info(
+            "Low-resolution half join using host fallback: size=%d join_voxels=%d",
+            max_input_size,
+            int(join_indices_np.size),
+        )
+        Ft_y_0_joined, Ft_y_1_joined = _join_half_pair_at_indices_host(Ft_y_0, Ft_y_1, join_indices_np)
+        Ft_ctf_0_joined, Ft_ctf_1_joined = _join_half_pair_at_indices_host(Ft_ctf_0, Ft_ctf_1, join_indices_np)
+        return Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined
 
     Ft_y_0_arr = jnp.asarray(Ft_y_0)
     Ft_y_1_arr = jnp.asarray(Ft_y_1)
     Ft_ctf_0_arr = jnp.asarray(Ft_ctf_0)
     Ft_ctf_1_arr = jnp.asarray(Ft_ctf_1)
+    join_indices = jnp.asarray(join_indices_np)
 
-    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
-    full_size = int(np.prod(volume_shape))
-    half_size = int(np.prod(half_shape))
-    if Ft_y_0_arr.size == full_size:
-        axes = [
-            jnp.asarray(fourier_transform_utils.get_1d_frequency_grid(s, scaled=False), dtype=jnp.float32)
-            for s in volume_shape
-        ]
-        kz, ky, kx = jnp.meshgrid(axes[0], axes[1], axes[2], indexing="ij")
-        radius2_3d = kz * kz + ky * ky + kx * kx
-    elif Ft_y_0_arr.size == half_size:
-        axes = [
-            jnp.asarray(fourier_transform_utils.get_1d_frequency_grid(volume_shape[0], scaled=False), dtype=jnp.float32),
-            jnp.asarray(fourier_transform_utils.get_1d_frequency_grid(volume_shape[1], scaled=False), dtype=jnp.float32),
-            jnp.asarray(fourier_transform_utils.get_1d_frequency_grid_rfft(volume_shape[2], scaled=False), dtype=jnp.float32),
-        ]
-        kz, ky, kx = jnp.meshgrid(axes[0], axes[1], axes[2], indexing="ij")
-        radius2_3d = kz * kz + ky * ky + kx * kx
-    else:
-        raise ValueError(
-            f"Could not infer Fourier layout for join_halves_at_low_resolution with shape {Ft_y_0_arr.shape} "
-            f"and volume_shape={volume_shape}"
-        )
-
-    join_mask_3d = radius2_3d <= lowres_r2_max
-    join_mask_flat = join_mask_3d.reshape(-1)
-
-    avg_Ft_y = 0.5 * (Ft_y_0_arr + Ft_y_1_arr)
-    avg_Ft_ctf = 0.5 * (Ft_ctf_0_arr + Ft_ctf_1_arr)
-
-    Ft_y_0_joined = jnp.where(join_mask_flat, avg_Ft_y, Ft_y_0_arr)
-    Ft_y_1_joined = jnp.where(join_mask_flat, avg_Ft_y, Ft_y_1_arr)
-    Ft_ctf_0_joined = jnp.where(join_mask_flat, avg_Ft_ctf, Ft_ctf_0_arr)
-    Ft_ctf_1_joined = jnp.where(join_mask_flat, avg_Ft_ctf, Ft_ctf_1_arr)
+    Ft_y_0_joined, Ft_y_1_joined = _join_half_pair_at_indices(Ft_y_0_arr, Ft_y_1_arr, join_indices)
+    Ft_ctf_0_joined, Ft_ctf_1_joined = _join_half_pair_at_indices(Ft_ctf_0_arr, Ft_ctf_1_arr, join_indices)
 
     return Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined

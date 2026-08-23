@@ -1090,15 +1090,17 @@ def test_slice_from_half_volume_to_half_image_cuda_vs_jax(gpu_device):
     uses column-major from xy-meshgrid, CUDA uses row-major rfft format), so the
     comparison is CUDA half_vol vs CUDA full_vol (both on GPU).
 
-    CUDA half-vol kernel limitation: for odd N2, N2_full = 2*(N2//2) ≠ N2, causing
-    boundary errors near kz=N2//2. Only even-N2 volume shapes are tested here.
+    Arbitrary odd-N2 rectangular shapes remain ambiguous from the packed shape
+    alone. Odd cubic shapes are unambiguous and cover RELION BackProjector
+    accumulators, so test them alongside even cubic and rectangular grids.
     """
     device = gpu_device
     rng = np.random.default_rng(2020)
-    # image_shape H must divide volume_shape[0] (CUDA upsampling constraint)
+    # Even standard grids use integer axis-0 upsampling; odd cubic RELION grids
+    # use their explicit pad-size relation.
     image_shape = (4, 8)
 
-    for volume_shape in [(8, 8, 8), (8, 10, 12)]:
+    for volume_shape in [(8, 8, 8), (8, 10, 12), (19, 19, 19)]:
         rots = np.concatenate(
             [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 3)],
             axis=0,

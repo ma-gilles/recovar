@@ -34,6 +34,110 @@ logger = logging.getLogger(__name__)
 _FAST_SIGNIFICANCE_TOPK = 64
 
 
+def _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction: float):
+    """Match RELION's parsed adaptive-fraction arithmetic at the CUDA cutoff.
+
+    RELION initializes ``adaptive_fraction`` with ``textToFloat`` even when
+    ``RFLOAT`` is double.  The resulting float32 value is widened for the host
+    product with ``op.sum_weight`` and finally narrowed to the CUDA ``XFLOAT``
+    threshold argument.  Starting from Python's float64 value can move a fine
+    significance cutoff across one or more nearly tied candidates.
+    """
+
+    parsed_fraction = jnp.asarray(adaptive_fraction, dtype=jnp.float32)
+    return jnp.asarray(
+        (jnp.float64(1.0) - parsed_fraction.astype(jnp.float64))
+        * jnp.asarray(sum_weight, dtype=jnp.float32).astype(jnp.float64),
+        dtype=jnp.float32,
+    )
+
+
+@partial(jax.jit, static_argnames=("adaptive_fraction", "max_significants"))
+def relion_cuda_f32_coarse_posterior(
+    scores_flat,
+    *,
+    adaptive_fraction=0.999,
+    max_significants=500,
+):
+    """Reproduce RELION CUDA coarse-weight and significance arithmetic.
+
+    RELION's accelerated coarse pass stores log weights in ``XFLOAT``
+    (float32 in the deployed build), shifts their maximum to 50, applies
+    ``expf``, radix-sorts positive weights in ascending order, and uses an
+    inclusive float32 scan to select the lower-tail cutoff.  The surviving
+    weights remain normalized by the full, pre-pruning sum.
+
+    ``cutoff_count`` is the pre-tie rank serialized by RELION.  ``mask`` and
+    ``n_significant`` include every positive weight tied at the cutoff.
+    """
+
+    scores_f32 = jnp.asarray(scores_flat, dtype=jnp.float32)
+    finite = jnp.isfinite(scores_f32)
+    best = jnp.max(jnp.where(finite, scores_f32, -jnp.inf), axis=1)
+    has_finite = jnp.isfinite(best)
+    safe_best = jnp.where(has_finite, best, jnp.float32(0.0))
+    shifted = jnp.where(
+        finite,
+        scores_f32 - safe_best[:, None] + jnp.float32(50.0),
+        -jnp.inf,
+    )
+    raw_weights = jnp.where(
+        shifted < jnp.float32(-88.0),
+        jnp.float32(0.0),
+        jnp.exp(shifted),
+    )
+    raw_weights = jnp.where(
+        finite & jnp.isfinite(raw_weights),
+        raw_weights,
+        jnp.float32(0.0),
+    )
+
+    if jax.default_backend() == "gpu":
+        from recovar.cuda_backproject import relion_cub_sort_scan_f32
+
+        sorted_weights, cumulative = jax.vmap(relion_cub_sort_scan_f32)(raw_weights)
+    else:
+        # Keep a CPU reference path for isolated unit tests. The live opt-in
+        # route is CUDA-only and uses RELION's exact CUB primitives above.
+        sorted_weights = jnp.sort(raw_weights, axis=1)
+        cumulative = jnp.cumsum(sorted_weights, axis=1, dtype=jnp.float32)
+    sum_weight = cumulative[:, -1]
+    has_mass = has_finite & jnp.isfinite(sum_weight) & (sum_weight > jnp.float32(0.0))
+    tail_target = _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction)
+    threshold_idx = jax.vmap(
+        lambda row, target: jnp.searchsorted(row, target, side="right"),
+    )(cumulative, tail_target)
+
+    n_samples = scores_f32.shape[1]
+    positive_count = jnp.sum(raw_weights > jnp.float32(0.0), axis=1).astype(jnp.int32)
+    first_positive = jnp.asarray(n_samples, dtype=jnp.int32) - positive_count
+    threshold_idx = jnp.maximum(threshold_idx.astype(jnp.int32), first_positive)
+    threshold_idx = jnp.minimum(threshold_idx, jnp.asarray(n_samples - 1, dtype=jnp.int32))
+    if max_significants is not None and int(max_significants) > 0:
+        threshold_idx = jnp.maximum(
+            threshold_idx,
+            jnp.asarray(n_samples - int(max_significants), dtype=jnp.int32),
+        )
+
+    threshold = sorted_weights[jnp.arange(scores_f32.shape[0]), threshold_idx]
+    mask = has_mass[:, None] & (raw_weights > jnp.float32(0.0)) & (
+        raw_weights >= threshold[:, None]
+    )
+    safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
+    probabilities = jnp.where(
+        has_mass[:, None],
+        raw_weights / safe_sum_weight[:, None],
+        jnp.float32(0.0),
+    )
+    n_significant = jnp.sum(mask, axis=1).astype(jnp.int32)
+    cutoff_count = jnp.where(
+        has_mass,
+        jnp.asarray(n_samples, dtype=jnp.int32) - threshold_idx,
+        jnp.int32(0),
+    )
+    return probabilities, mask, n_significant, cutoff_count, sum_weight, threshold
+
+
 def map_translation_log_prior_to_fine_grid(
     translation_log_prior,
     fine_translation_parent,
@@ -57,8 +161,13 @@ def map_translation_log_prior_to_fine_grid(
 # ---------------------------------------------------------------------------
 
 
-@partial(jax.jit, static_argnums=(1, 2))
-def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_significants=500):
+@partial(jax.jit, static_argnums=(1, 2, 3))
+def _find_significant_mask_full_sort(
+    weights_flat,
+    adaptive_fraction=0.999,
+    max_significants=500,
+    return_cutoff_count=False,
+):
     """Find significant orientation x translation pairs per image.
 
     For each image, identifies the smallest set of (rotation, translation)
@@ -83,14 +192,22 @@ def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_
     mask : jnp.ndarray, shape (n_images, n_rot * n_trans), dtype bool
         True for significant samples.
     n_significant : jnp.ndarray, shape (n_images,), dtype int32
-        Number of significant samples per image (after capping).
+        Number of significant samples per image after expanding cutoff ties.
+    cutoff_count : jnp.ndarray, shape (n_images,), dtype int32, optional
+        Pre-tie cutoff rank, returned only when ``return_cutoff_count=True``.
+        This is the count RELION serializes as ``rlnNrOfSignificantSamples``;
+        the threshold-expanded mask remains the support used by pass 2.
     """
     n_images, _ = weights_flat.shape
 
-    # Sort descending per image
+    # Sort descending per image. RELION only adds strictly positive weights to
+    # its sorted significant-pose list; zero-probability samples must not become
+    # significant if the threshold falls through to the tail.
     sorted_w = jnp.sort(weights_flat, axis=-1)[:, ::-1]
     cumsum = jnp.cumsum(sorted_w, axis=-1)
     total = weights_flat.sum(axis=-1, keepdims=True)
+    positive_counts = jnp.sum(weights_flat > 0.0, axis=-1)
+    last_positive_idx = jnp.maximum(positive_counts - 1, 0)
 
     # Fraction of total weight accumulated so far
     frac = cumsum / jnp.maximum(total, 1e-30)
@@ -102,8 +219,9 @@ def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_
     threshold_idx = jnp.where(
         jnp.any(crosses, axis=-1),
         jnp.argmax(crosses, axis=-1),
-        weights_flat.shape[-1] - 1,
+        last_positive_idx,
     )
+    threshold_idx = jnp.minimum(threshold_idx, last_positive_idx)
 
     # RELION treats maximum_significants <= 0 as "no cap".
     if max_significants is not None and int(max_significants) > 0:
@@ -112,17 +230,27 @@ def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_
     # Get the threshold value: the weight at the threshold index
     threshold_val = sorted_w[jnp.arange(n_images), threshold_idx]
 
-    # Mask: keep all samples with weight >= threshold
-    mask = weights_flat >= threshold_val[:, None]
+    # Mask: keep all positive samples with weight >= threshold. The positive
+    # guard matches RELION's nonzero sorted list while preserving threshold ties.
+    mask = (weights_flat > 0.0) & (weights_flat >= threshold_val[:, None])
 
     # Count significant samples per image
     n_significant = jnp.sum(mask, axis=-1).astype(jnp.int32)
+    cutoff_count = jnp.minimum(threshold_idx + 1, positive_counts).astype(jnp.int32)
 
+    if return_cutoff_count:
+        return mask, n_significant, cutoff_count
     return mask, n_significant
 
 
-@partial(jax.jit, static_argnums=(1, 2, 3))
-def _find_significant_mask_topk(weights_flat, adaptive_fraction=0.999, max_significants=500, topk=64):
+@partial(jax.jit, static_argnums=(1, 2, 3, 4))
+def _find_significant_mask_topk(
+    weights_flat,
+    adaptive_fraction=0.999,
+    max_significants=500,
+    topk=64,
+    return_cutoff_count=False,
+):
     """Fast exact significance thresholding when the cutoff lives in the top-k.
 
     This mirrors RELION semantics exactly when the significant-weight threshold
@@ -134,35 +262,52 @@ def _find_significant_mask_topk(weights_flat, adaptive_fraction=0.999, max_signi
     top_weights, _ = jax.lax.top_k(weights_flat, topk)
     cumsum = jnp.cumsum(top_weights, axis=-1)
     total = weights_flat.sum(axis=-1, keepdims=True)
+    positive_counts = jnp.sum(weights_flat > 0.0, axis=-1)
+    positive_counts_in_top = jnp.sum(top_weights > 0.0, axis=-1)
+    last_top_positive_idx = jnp.maximum(positive_counts_in_top - 1, 0)
     frac = cumsum / jnp.maximum(total, 1e-30)
     crosses = frac > adaptive_fraction
     threshold_idx = jnp.where(
         jnp.any(crosses, axis=-1),
         jnp.argmax(crosses, axis=-1),
-        int(topk) - 1,
+        last_top_positive_idx,
     )
+    threshold_idx = jnp.minimum(threshold_idx, last_top_positive_idx)
 
     if max_significants is not None and int(max_significants) > 0:
         threshold_idx = jnp.minimum(threshold_idx, int(max_significants) - 1)
-        topk_covers_threshold = jnp.full(
-            (n_images,),
-            int(max_significants) <= int(topk),
-            dtype=bool,
+        topk_covers_threshold = (
+            jnp.any(crosses, axis=-1)
+            | jnp.full((n_images,), int(max_significants) <= int(topk), dtype=bool)
+            | (positive_counts <= int(topk))
         )
     else:
-        topk_covers_threshold = jnp.any(crosses, axis=-1) | jnp.full(
-            (n_images,),
-            int(topk) == int(weights_flat.shape[-1]),
-            dtype=bool,
+        topk_covers_threshold = (
+            jnp.any(crosses, axis=-1)
+            | (positive_counts <= int(topk))
+            | jnp.full(
+                (n_images,),
+                int(topk) == int(weights_flat.shape[-1]),
+                dtype=bool,
+            )
         )
 
     threshold_val = top_weights[jnp.arange(n_images), threshold_idx]
-    mask = weights_flat >= threshold_val[:, None]
+    mask = (weights_flat > 0.0) & (weights_flat >= threshold_val[:, None])
     n_significant = jnp.sum(mask, axis=-1).astype(jnp.int32)
+    cutoff_count = jnp.minimum(threshold_idx + 1, positive_counts).astype(jnp.int32)
+    if return_cutoff_count:
+        return mask, n_significant, topk_covers_threshold, cutoff_count
     return mask, n_significant, topk_covers_threshold
 
 
-def find_significant_mask(weights_flat, adaptive_fraction=0.999, max_significants=500):
+def find_significant_mask(
+    weights_flat,
+    adaptive_fraction=0.999,
+    max_significants=500,
+    *,
+    return_cutoff_count=False,
+):
     """Find significant orientation x translation pairs per image.
 
     Uses an exact top-k threshold when possible and falls back to the original
@@ -176,24 +321,41 @@ def find_significant_mask(weights_flat, adaptive_fraction=0.999, max_significant
             weights_flat,
             adaptive_fraction=adaptive_fraction,
             max_significants=max_significants,
+            return_cutoff_count=return_cutoff_count,
         )
 
-    fast_mask, fast_n_significant, topk_covers_threshold = _find_significant_mask_topk(
+    fast_result = _find_significant_mask_topk(
         weights_flat,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
         topk=topk,
+        return_cutoff_count=return_cutoff_count,
     )
+    if return_cutoff_count:
+        fast_mask, fast_n_significant, topk_covers_threshold, fast_cutoff_count = fast_result
+    else:
+        fast_mask, fast_n_significant, topk_covers_threshold = fast_result
     if bool(np.all(np.asarray(topk_covers_threshold))):
+        if return_cutoff_count:
+            return fast_mask, fast_n_significant, fast_cutoff_count
         return fast_mask, fast_n_significant
     return _find_significant_mask_full_sort(
         weights_flat,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        return_cutoff_count=return_cutoff_count,
     )
 
 
-def find_significant_rotations(weights_flat, n_rot, n_trans, adaptive_fraction=0.999, max_significants=500):
+def find_significant_rotations(
+    weights_flat,
+    n_rot,
+    n_trans,
+    adaptive_fraction=0.999,
+    max_significants=500,
+    *,
+    return_cutoff_count=False,
+):
     """Find significant coarse rotations per image from (rot x trans) weights.
 
     This extracts the unique rotation indices that have at least one
@@ -221,18 +383,27 @@ def find_significant_rotations(weights_flat, n_rot, n_trans, adaptive_fraction=0
         True for rotations that have at least one significant translation.
     n_significant : jnp.ndarray, shape (n_images,), dtype int32
         Total significant (rot x trans) samples per image.
+    cutoff_count : jnp.ndarray, shape (n_images,), dtype int32, optional
+        Pre-tie cutoff rank, returned only when ``return_cutoff_count=True``.
     """
-    sig_mask, n_significant = find_significant_mask(
+    significance_result = find_significant_mask(
         weights_flat,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        return_cutoff_count=return_cutoff_count,
     )
+    if return_cutoff_count:
+        sig_mask, n_significant, cutoff_count = significance_result
+    else:
+        sig_mask, n_significant = significance_result
 
     # Reshape to (n_images, n_rot, n_trans) and check if any translation
     # is significant for each rotation
     sig_2d = sig_mask.reshape(-1, n_rot, n_trans)
     sig_rot_mask = jnp.any(sig_2d, axis=-1)  # (n_images, n_rot)
 
+    if return_cutoff_count:
+        return sig_mask, sig_rot_mask, n_significant, cutoff_count
     return sig_mask, sig_rot_mask, n_significant
 
 
@@ -268,6 +439,7 @@ def compute_pass2_stats(
     reconstruction_padding_factor=1,
     image_corrections=None,
     scale_corrections=None,
+    group_ids=None,
     image_pre_shifts=None,
     use_float64_scoring=False,
     do_gridding_correction=False,
@@ -552,6 +724,7 @@ def compute_pass2_stats_sparse(
     disc_type,
     oversampling_order=1,
     current_size=None,
+    reconstruction_current_size=None,
     translation_step=None,
     *,
     rotation_log_prior=None,
@@ -564,6 +737,9 @@ def compute_pass2_stats_sparse(
     reconstruction_padding_factor=1,
     image_corrections=None,
     scale_corrections=None,
+    group_ids=None,
+    scale_correction_group_count=None,
+    scale_correction_data_vs_prior=None,
     image_pre_shifts=None,
     use_float64_scoring=False,
     do_gridding_correction=False,
@@ -572,18 +748,34 @@ def compute_pass2_stats_sparse(
     translation_prior_centers=None,
     normalization_log_z=None,
     normalization_other_score_log_z=None,
+    normalization_score_mode=None,
     return_score_log_z=False,
     return_score_log_z_only=False,
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
     fine_rotations_override=None,
+    fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
     fine_translations_override=None,
     fine_translation_parent_override=None,
     relion_half_volume_mstep=False,
+    relion_x_half_mstep=False,
+    relion_fine_mstep_prune=False,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
+    relion_exact_fine_gaussian=True,
+    relion_fine_diff2_fused_ffi=False,
+    relion_f32_fine_posterior=False,
+    relion_exact_fine_normalized_cc=False,
+    relion_projector_half=None,
+    relion_projector_r_max=None,
+    adaptive_fraction=0.999,
     use_perimage_reference=False,
+    bpref_device_signature_active: bool = False,
+    bpref_class_index: int = 0,
+    include_unweighted_norm_high_shell: bool = True,
+    preserve_bpref_particle_order: bool = False,
+    source_faithful_spectrum_norm: bool = False,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -603,21 +795,75 @@ def compute_pass2_stats_sparse(
     :func:`_compute_pass2_stats_sparse_perimage_reference` for testing
     parity; it can be selected by setting ``use_perimage_reference=True``.
     The two paths must produce identical outputs (modulo float rounding).
+
+    ``relion_exact_fine_gaussian`` selects the float32 scorer that follows
+    RELION's fine-search diff2/minimum ordering. Float64 diagnostics retain
+    the historical algebraic scorer so they do not silently downcast.
     """
+    has_external_score_normalization = (
+        normalization_log_z is not None or normalization_other_score_log_z is not None
+    )
+    if has_external_score_normalization and normalization_score_mode is None:
+        raise ValueError(
+            "external sparse pass-2 score normalization requires normalization_score_mode; "
+            "Gaussian logZ is absolute while normalized-CC logZ is centered"
+        )
+    if normalization_score_mode is not None and not has_external_score_normalization:
+        raise ValueError("normalization_score_mode requires an external score normalization")
+    if (
+        normalization_score_mode is not None
+        and normalization_score_mode != relion_firstiter_score_mode
+    ):
+        raise ValueError(
+            "external score normalization mode does not match this pass: "
+            f"external={normalization_score_mode!r}, pass={relion_firstiter_score_mode!r}"
+        )
     if use_perimage_reference and (return_score_log_z or return_score_log_z_only):
         raise NotImplementedError("score-logZ returns are only implemented for the bucketed sparse pass-2 path")
+    if (
+        use_perimage_reference
+        and relion_exact_fine_gaussian
+        and relion_firstiter_score_mode == "gaussian"
+        and not use_float64_scoring
+    ):
+        raise NotImplementedError(
+            "exact RELION fine Gaussian scoring requires the bucketed sparse pass-2 path"
+        )
+    if use_perimage_reference and group_ids is not None:
+        logger.warning(
+            "Sparse per-image reference pass-2 does not accumulate native group-scale correction stats; "
+            "use the bucketed sparse pass-2 path for native scale updates."
+        )
+    if use_perimage_reference and fine_mstep_rotations_override is not None:
+        raise NotImplementedError(
+            "fine_mstep_rotations_override is only implemented for the bucketed sparse pass-2 path",
+        )
     full_grid_reference = (
         all(samples is None for samples in significant_sample_indices)
         and not return_score_log_z
         and not return_score_log_z_only
         and normalization_log_z is None
         and normalization_other_score_log_z is None
+        and normalization_score_mode is None
+        and group_ids is None
+        and scale_correction_group_count is None
+        and scale_correction_data_vs_prior is None
         and fine_rotations_override is None
+        and fine_mstep_rotations_override is None
         and fine_rotation_parent_override is None
         and fine_translations_override is None
         and fine_translation_parent_override is None
+        and not relion_x_half_mstep
+        and not relion_fine_mstep_prune
         and relion_firstiter_score_mode == "gaussian"
         and not relion_firstiter_winner_take_all
+        and include_unweighted_norm_high_shell
+        and not preserve_bpref_particle_order
+        and reconstruction_current_size is None
+        and not (
+            relion_exact_fine_gaussian
+            and not use_float64_scoring
+        )
     )
     if not use_perimage_reference and not full_grid_reference:
         from .sparse_pass2_bucketed import compute_pass2_stats_sparse_bucketed
@@ -633,6 +879,7 @@ def compute_pass2_stats_sparse(
             disc_type,
             oversampling_order=oversampling_order,
             current_size=current_size,
+            reconstruction_current_size=reconstruction_current_size,
             translation_step=translation_step,
             rotation_log_prior=rotation_log_prior,
             score_with_masked_images=score_with_masked_images,
@@ -644,6 +891,9 @@ def compute_pass2_stats_sparse(
             reconstruction_padding_factor=reconstruction_padding_factor,
             image_corrections=image_corrections,
             scale_corrections=scale_corrections,
+            group_ids=group_ids,
+            scale_correction_group_count=scale_correction_group_count,
+            scale_correction_data_vs_prior=scale_correction_data_vs_prior,
             image_pre_shifts=image_pre_shifts,
             use_float64_scoring=use_float64_scoring,
             translation_prior_centers=translation_prior_centers,
@@ -652,17 +902,40 @@ def compute_pass2_stats_sparse(
             random_perturbation=random_perturbation,
             normalization_log_z=normalization_log_z,
             normalization_other_score_log_z=normalization_other_score_log_z,
+            normalization_score_mode=normalization_score_mode,
             return_score_log_z=return_score_log_z,
             return_score_log_z_only=return_score_log_z_only,
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
             fine_rotations_override=fine_rotations_override,
+            fine_mstep_rotations_override=fine_mstep_rotations_override,
             fine_rotation_parent_override=fine_rotation_parent_override,
             fine_translations_override=fine_translations_override,
             fine_translation_parent_override=fine_translation_parent_override,
             relion_half_volume_mstep=relion_half_volume_mstep,
+            relion_x_half_mstep=relion_x_half_mstep,
+            relion_fine_mstep_prune=relion_fine_mstep_prune,
             relion_firstiter_score_mode=relion_firstiter_score_mode,
             relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+            relion_exact_fine_gaussian=relion_exact_fine_gaussian,
+            relion_fine_diff2_fused_ffi=relion_fine_diff2_fused_ffi,
+            relion_f32_fine_posterior=relion_f32_fine_posterior,
+            relion_exact_fine_normalized_cc=relion_exact_fine_normalized_cc,
+            relion_projector_half=relion_projector_half,
+            relion_projector_r_max=relion_projector_r_max,
+            adaptive_fraction=adaptive_fraction,
+            bpref_device_signature_active=bpref_device_signature_active,
+            bpref_class_index=bpref_class_index,
+            include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
+            preserve_bpref_particle_order=preserve_bpref_particle_order,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        )
+
+    if relion_projector_half is not None:
+        raise NotImplementedError("RELION projector sparse pass-2 requires the bucketed implementation")
+    if reconstruction_current_size is not None:
+        raise NotImplementedError(
+            "separate score/reconstruction current sizes require the bucketed sparse pass-2 path",
         )
 
     return _compute_pass2_stats_sparse_perimage_reference(
@@ -687,6 +960,7 @@ def compute_pass2_stats_sparse(
         reconstruction_padding_factor=reconstruction_padding_factor,
         image_corrections=image_corrections,
         scale_corrections=scale_corrections,
+        group_ids=group_ids,
         image_pre_shifts=image_pre_shifts,
         translation_prior_centers=translation_prior_centers,
         use_float64_scoring=use_float64_scoring,
@@ -726,6 +1000,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
     reconstruction_padding_factor=1,
     image_corrections=None,
     scale_corrections=None,
+    group_ids=None,
     image_pre_shifts=None,
     translation_prior_centers=None,
     use_float64_scoring=False,

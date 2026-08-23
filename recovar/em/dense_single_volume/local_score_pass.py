@@ -11,6 +11,7 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
     _find_significant_mask_full_sort,
     find_significant_mask,
 )
+from recovar.em.dense_single_volume.local_backprojection import compute_local_weighted_sums
 
 
 def _local_scores_from_weighted_abs2(
@@ -253,17 +254,7 @@ def _compute_reconstruction_support_full_sort_jit(probs, adaptive_fraction=0.999
     return significant_samples, significant_rotations, n_significant_samples
 
 
-@partial(
-    jax.jit,
-    static_argnames=(
-        "half_spectrum_scoring",
-        "use_float64_normalization",
-        "reconstruct_significant_only",
-        "adaptive_fraction",
-        "max_significants",
-    ),
-)
-def fused_score_normalize_mstep_abs2_on_demand(
+def _fused_score_normalize_support_abs2_on_demand_impl(
     shifted_score_split,
     ctf2_over_nv_score,
     proj_weighted,
@@ -272,8 +263,6 @@ def fused_score_normalize_mstep_abs2_on_demand(
     translation_log_prior,
     rotation_mask,
     sample_mask,
-    shifted_recon_split,
-    ctf2_over_nv_recon,
     reconstruction_probability_threshold=None,
     *,
     half_spectrum_scoring: bool,
@@ -282,14 +271,6 @@ def fused_score_normalize_mstep_abs2_on_demand(
     adaptive_fraction: float,
     max_significants: int,
 ):
-    """Fuse exact-local score, posterior, support, and M-step reductions.
-
-    This intentionally covers the common on-demand ``|projection|^2`` path.
-    Keeping projection and backprojection outside the fused block preserves the
-    existing custom-kernel boundaries while removing intermediate score/posterior
-    launch and materialization overhead.
-    """
-
     scores = _local_scores_from_weighted_abs2(
         shifted_score_split,
         ctf2_over_nv_score,
@@ -342,7 +323,443 @@ def fused_score_normalize_mstep_abs2_on_demand(
 
     probs_sum_t = jnp.sum(probs, axis=-1)
     reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
-    summed = jnp.matmul(reconstruction_probs, shifted_recon_split)
+    return (
+        log_Z,
+        probs,
+        best_log_score,
+        best_argmax,
+        max_posterior,
+        reconstruction_sample_mask,
+        reconstruction_rotation_mask,
+        n_significant_samples,
+        reconstruction_probs,
+        probs_sum_t,
+        reconstruction_probs_sum_t,
+    )
+
+
+def _support_from_local_probs(
+    probs,
+    rotation_mask,
+    reconstruction_probability_threshold=None,
+    *,
+    reconstruct_significant_only: bool,
+    adaptive_fraction: float,
+    max_significants: int,
+):
+    if reconstruct_significant_only:
+        if reconstruction_probability_threshold is None:
+            (
+                reconstruction_sample_mask,
+                reconstruction_rotation_mask,
+                n_significant_samples,
+            ) = _compute_reconstruction_support_full_sort_jit(
+                probs,
+                adaptive_fraction=adaptive_fraction,
+                max_significants=max_significants,
+            )
+        else:
+            (
+                reconstruction_sample_mask,
+                reconstruction_rotation_mask,
+                n_significant_samples,
+            ) = compute_reconstruction_support_from_threshold(
+                probs,
+                reconstruction_probability_threshold,
+            )
+        reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
+    else:
+        reconstruction_rotation_mask = rotation_mask
+        reconstruction_sample_mask = jnp.broadcast_to(
+            reconstruction_rotation_mask[:, :, None],
+            probs.shape,
+        )
+        n_significant_samples = jnp.sum(reconstruction_rotation_mask, axis=1).astype(jnp.int32) * probs.shape[-1]
+        reconstruction_probs = probs
+    return (
+        reconstruction_sample_mask,
+        reconstruction_rotation_mask,
+        n_significant_samples,
+        reconstruction_probs,
+    )
+
+
+def _fused_score_normalize_support_abs2_with_log_z_on_demand_impl(
+    shifted_score_split,
+    ctf2_over_nv_score,
+    proj_weighted,
+    half_weights,
+    rotation_log_prior,
+    translation_log_prior,
+    rotation_mask,
+    sample_mask,
+    log_z,
+    *,
+    half_spectrum_scoring: bool,
+    reconstruct_significant_only: bool,
+    adaptive_fraction: float,
+    max_significants: int,
+):
+    scores = _local_scores_from_weighted_abs2(
+        shifted_score_split,
+        ctf2_over_nv_score,
+        proj_weighted,
+        _weighted_abs2_from_weighted_projection(
+            proj_weighted,
+            half_weights,
+            weights_absorbed_once=not half_spectrum_scoring,
+        ),
+        rotation_log_prior,
+        translation_log_prior,
+        rotation_mask,
+        sample_mask,
+    )
+    log_Z, probs, best_log_score, best_argmax, max_posterior = _normalize_scores_with_log_z(
+        scores,
+        log_z,
+    )
+    (
+        reconstruction_sample_mask,
+        reconstruction_rotation_mask,
+        n_significant_samples,
+        reconstruction_probs,
+    ) = _support_from_local_probs(
+        probs,
+        rotation_mask,
+        None,
+        reconstruct_significant_only=reconstruct_significant_only,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
+    probs_sum_t = jnp.sum(probs, axis=-1)
+    reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
+    return (
+        log_Z,
+        probs,
+        best_log_score,
+        best_argmax,
+        max_posterior,
+        reconstruction_sample_mask,
+        reconstruction_rotation_mask,
+        n_significant_samples,
+        reconstruction_probs,
+        probs_sum_t,
+        reconstruction_probs_sum_t,
+    )
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "half_spectrum_scoring",
+        "use_float64_normalization",
+        "reconstruct_significant_only",
+        "adaptive_fraction",
+        "max_significants",
+    ),
+)
+def fused_score_normalize_support_abs2_on_demand(
+    shifted_score_split,
+    ctf2_over_nv_score,
+    proj_weighted,
+    half_weights,
+    rotation_log_prior,
+    translation_log_prior,
+    rotation_mask,
+    sample_mask,
+    reconstruction_probability_threshold=None,
+    *,
+    half_spectrum_scoring: bool,
+    use_float64_normalization: bool,
+    reconstruct_significant_only: bool,
+    adaptive_fraction: float,
+    max_significants: int,
+):
+    """Fuse exact-local score, posterior, and support without M-step tensors."""
+
+    (
+        log_Z,
+        probs,
+        best_log_score,
+        best_argmax,
+        max_posterior,
+        reconstruction_sample_mask,
+        reconstruction_rotation_mask,
+        n_significant_samples,
+        _reconstruction_probs,
+        probs_sum_t,
+        reconstruction_probs_sum_t,
+    ) = _fused_score_normalize_support_abs2_on_demand_impl(
+        shifted_score_split,
+        ctf2_over_nv_score,
+        proj_weighted,
+        half_weights,
+        rotation_log_prior,
+        translation_log_prior,
+        rotation_mask,
+        sample_mask,
+        reconstruction_probability_threshold,
+        half_spectrum_scoring=half_spectrum_scoring,
+        use_float64_normalization=use_float64_normalization,
+        reconstruct_significant_only=reconstruct_significant_only,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
+    return (
+        log_Z,
+        probs,
+        best_log_score,
+        best_argmax,
+        max_posterior,
+        reconstruction_sample_mask,
+        reconstruction_rotation_mask,
+        n_significant_samples,
+        probs_sum_t,
+        reconstruction_probs_sum_t,
+    )
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "half_spectrum_scoring",
+        "use_float64_normalization",
+        "reconstruct_significant_only",
+        "adaptive_fraction",
+        "max_significants",
+    ),
+)
+def fused_score_normalize_support_probs_abs2_on_demand(
+    shifted_score_split,
+    ctf2_over_nv_score,
+    proj_weighted,
+    half_weights,
+    rotation_log_prior,
+    translation_log_prior,
+    rotation_mask,
+    sample_mask,
+    reconstruction_probability_threshold=None,
+    *,
+    half_spectrum_scoring: bool,
+    use_float64_normalization: bool,
+    reconstruct_significant_only: bool,
+    adaptive_fraction: float,
+    max_significants: int,
+):
+    """Fuse exact-local score/posterior/support without M-step reductions."""
+
+    return _fused_score_normalize_support_abs2_on_demand_impl(
+        shifted_score_split,
+        ctf2_over_nv_score,
+        proj_weighted,
+        half_weights,
+        rotation_log_prior,
+        translation_log_prior,
+        rotation_mask,
+        sample_mask,
+        reconstruction_probability_threshold,
+        half_spectrum_scoring=half_spectrum_scoring,
+        use_float64_normalization=use_float64_normalization,
+        reconstruct_significant_only=reconstruct_significant_only,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "half_spectrum_scoring",
+        "reconstruct_significant_only",
+        "adaptive_fraction",
+        "max_significants",
+    ),
+)
+def fused_score_normalize_support_probs_abs2_with_log_z_on_demand(
+    shifted_score_split,
+    ctf2_over_nv_score,
+    proj_weighted,
+    half_weights,
+    rotation_log_prior,
+    translation_log_prior,
+    rotation_mask,
+    sample_mask,
+    log_z,
+    *,
+    half_spectrum_scoring: bool,
+    reconstruct_significant_only: bool,
+    adaptive_fraction: float,
+    max_significants: int,
+):
+    """Fuse exact-local score/posterior/support using an external log normalizer.
+
+    Unlike ``fused_score_normalize_mstep_abs2_with_log_z_on_demand``, this does
+    not form per-rotation image reductions.  Callers can pack significant rows
+    first, then run the M-step matmul only on those rows.
+    """
+
+    return _fused_score_normalize_support_abs2_with_log_z_on_demand_impl(
+        shifted_score_split,
+        ctf2_over_nv_score,
+        proj_weighted,
+        half_weights,
+        rotation_log_prior,
+        translation_log_prior,
+        rotation_mask,
+        sample_mask,
+        log_z,
+        half_spectrum_scoring=half_spectrum_scoring,
+        reconstruct_significant_only=reconstruct_significant_only,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "half_spectrum_scoring",
+        "use_float64_normalization",
+        "reconstruct_significant_only",
+        "adaptive_fraction",
+        "max_significants",
+    ),
+)
+def fused_score_normalize_mstep_abs2_on_demand(
+    shifted_score_split,
+    ctf2_over_nv_score,
+    proj_weighted,
+    half_weights,
+    rotation_log_prior,
+    translation_log_prior,
+    rotation_mask,
+    sample_mask,
+    shifted_recon_split,
+    ctf2_over_nv_recon,
+    reconstruction_probability_threshold=None,
+    *,
+    half_spectrum_scoring: bool,
+    use_float64_normalization: bool,
+    reconstruct_significant_only: bool,
+    adaptive_fraction: float,
+    max_significants: int,
+):
+    """Fuse exact-local score, posterior, support, and M-step reductions.
+
+    This intentionally covers the common on-demand ``|projection|^2`` path.
+    Keeping projection and backprojection outside the fused block preserves the
+    existing custom-kernel boundaries while removing intermediate score/posterior
+    launch and materialization overhead.
+    """
+
+    (
+        log_Z,
+        probs,
+        best_log_score,
+        best_argmax,
+        max_posterior,
+        reconstruction_sample_mask,
+        reconstruction_rotation_mask,
+        n_significant_samples,
+        reconstruction_probs,
+        probs_sum_t,
+        reconstruction_probs_sum_t,
+    ) = _fused_score_normalize_support_abs2_on_demand_impl(
+        shifted_score_split,
+        ctf2_over_nv_score,
+        proj_weighted,
+        half_weights,
+        rotation_log_prior,
+        translation_log_prior,
+        rotation_mask,
+        sample_mask,
+        reconstruction_probability_threshold,
+        half_spectrum_scoring=half_spectrum_scoring,
+        use_float64_normalization=use_float64_normalization,
+        reconstruct_significant_only=reconstruct_significant_only,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
+    summed = compute_local_weighted_sums(reconstruction_probs, shifted_recon_split)
+    ctf_probs = jnp.where(
+        reconstruction_probs_sum_t[..., None] != 0.0,
+        reconstruction_probs_sum_t[..., None] * ctf2_over_nv_recon[:, None, :],
+        0.0,
+    )
+    return (
+        log_Z,
+        probs,
+        best_log_score,
+        best_argmax,
+        max_posterior,
+        reconstruction_sample_mask,
+        reconstruction_rotation_mask,
+        n_significant_samples,
+        reconstruction_probs,
+        probs_sum_t,
+        reconstruction_probs_sum_t,
+        summed,
+        ctf_probs,
+    )
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "half_spectrum_scoring",
+        "reconstruct_significant_only",
+        "adaptive_fraction",
+        "max_significants",
+    ),
+)
+def fused_score_normalize_mstep_abs2_with_log_z_on_demand(
+    shifted_score_split,
+    ctf2_over_nv_score,
+    proj_weighted,
+    half_weights,
+    rotation_log_prior,
+    translation_log_prior,
+    rotation_mask,
+    sample_mask,
+    log_z,
+    shifted_recon_split,
+    ctf2_over_nv_recon,
+    *,
+    half_spectrum_scoring: bool,
+    reconstruct_significant_only: bool,
+    adaptive_fraction: float,
+    max_significants: int,
+):
+    """Fuse exact-local score/M-step using an externally computed log normalizer."""
+
+    (
+        log_Z,
+        probs,
+        best_log_score,
+        best_argmax,
+        max_posterior,
+        reconstruction_sample_mask,
+        reconstruction_rotation_mask,
+        n_significant_samples,
+        reconstruction_probs,
+        probs_sum_t,
+        reconstruction_probs_sum_t,
+    ) = _fused_score_normalize_support_abs2_with_log_z_on_demand_impl(
+        shifted_score_split,
+        ctf2_over_nv_score,
+        proj_weighted,
+        half_weights,
+        rotation_log_prior,
+        translation_log_prior,
+        rotation_mask,
+        sample_mask,
+        log_z,
+        half_spectrum_scoring=half_spectrum_scoring,
+        reconstruct_significant_only=reconstruct_significant_only,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
+    summed = compute_local_weighted_sums(reconstruction_probs, shifted_recon_split)
     ctf_probs = jnp.where(
         reconstruction_probs_sum_t[..., None] != 0.0,
         reconstruction_probs_sum_t[..., None] * ctf2_over_nv_recon[:, None, :],

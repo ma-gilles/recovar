@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, CheckCircle, Info, Plus, Trash2 } from "lucide-react";
 import { Input } from "../components/ui/input";
@@ -12,9 +12,7 @@ import {
   updateUserLocalDefaults,
   updateProjectLocalDefaults,
   getSystemInfo,
-  type SlurmDefaultsLayered,
   type SlurmDefaultsUpdate,
-  type LocalDefaultsLayered,
   type LocalDefaultsUpdate,
   type SystemInfo,
 } from "../lib/api/client";
@@ -26,8 +24,8 @@ const SLURM_FIELDS: { key: keyof SlurmDefaultsUpdate; label: string; type: strin
   { key: "account", label: "Account", type: "text", placeholder: "leave blank for cluster default" },
   { key: "gpus", label: "GPUs", type: "number", placeholder: "1" },
   { key: "cpus", label: "CPUs", type: "number", placeholder: "4" },
-  { key: "memory", label: "Memory", type: "text", placeholder: "300G" },
-  { key: "time", label: "Time Limit", type: "text", placeholder: "12:00:00" },
+  { key: "memory", label: "Memory", type: "text", placeholder: "400G" },
+  { key: "time", label: "Time Limit", type: "text", placeholder: "08:00:00" },
 ];
 
 function provenance(
@@ -90,7 +88,7 @@ function LocalDefaultsForm({ title, description, filePath, values, onChange, onS
     queryFn: getSystemInfo,
     staleTime: 60_000,
   });
-  const gpuList = (sysInfo as any)?.gpu_list as { index: number; name: string }[] | undefined;
+  const gpuList = sysInfo?.gpu_list;
   const envEntries = Object.entries(values.env_vars ?? {});
 
   return (
@@ -148,6 +146,20 @@ function LocalDefaultsForm({ title, description, filePath, values, onChange, onS
             );
           })}
         </div>
+      </div>
+
+      {/* Preallocate GPU memory */}
+      <div className="mt-3 space-y-1">
+        <label className="flex items-center gap-2 text-xs text-zinc-400">
+          <input
+            type="checkbox"
+            checked={values.preallocate_gpu !== false}
+            onChange={(e) => onChange({ ...values, preallocate_gpu: e.target.checked })}
+            className="rounded border-zinc-600 bg-zinc-800"
+          />
+          Preallocate GPU memory
+        </label>
+        <p className="text-[10px] text-zinc-600">Reserve one contiguous block of GPU memory up front (XLA_PYTHON_CLIENT_PREALLOCATE). Recommended ON for a dedicated GPU; turn OFF only to share the GPU with other processes.</p>
       </div>
 
       {/* Setup command */}
@@ -223,6 +235,14 @@ export function SettingsPage(): React.JSX.Element {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<"slurm" | "local">("slurm");
 
+  // Track save-confirmation timers so they can be cleared on unmount.
+  const savedTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => savedTimers.current.forEach(clearTimeout), []);
+  const flashSaved = (setSaved: (v: boolean) => void) => {
+    setSaved(true);
+    savedTimers.current.push(setTimeout(() => setSaved(false), 3000));
+  };
+
   // SLURM data
   const { data: slurmData, isLoading: slurmLoading } = useQuery({
     queryKey: ["slurm-defaults-layered", project?.path],
@@ -246,6 +266,17 @@ export function SettingsPage(): React.JSX.Element {
   const [localUserSaved, setLocalUserSaved] = useState(false);
   const [localProjectValues, setLocalProjectValues] = useState<LocalDefaultsUpdate | null>(null);
   const [localProjectSaved, setLocalProjectSaved] = useState(false);
+
+  // Reset form state when the active project changes so the null-guarded
+  // initializers below re-seed from the freshly fetched layered data. Without
+  // this, switching projects would leave the editable forms frozen at the
+  // previous project's values while the heading/summary show the new project.
+  useEffect(() => {
+    setSlurmUserValues(null);
+    setSlurmProjectValues(null);
+    setLocalUserValues(null);
+    setLocalProjectValues(null);
+  }, [project?.path]);
 
   // Initialize SLURM form values
   if (slurmData && slurmUserValues === null) {
@@ -275,6 +306,7 @@ export function SettingsPage(): React.JSX.Element {
       gpus: String(localData.user.gpus ?? ""),
       setup_command: String(localData.user.setup_command ?? ""),
       env_vars: (localData.user.env_vars as Record<string, string>) ?? {},
+      preallocate_gpu: localData.user.preallocate_gpu as boolean | undefined,
     });
   }
   if (localData && project && localProjectValues === null) {
@@ -282,6 +314,7 @@ export function SettingsPage(): React.JSX.Element {
       gpus: String(localData.project.gpus ?? ""),
       setup_command: String(localData.project.setup_command ?? ""),
       env_vars: (localData.project.env_vars as Record<string, string>) ?? {},
+      preallocate_gpu: localData.project.preallocate_gpu as boolean | undefined,
     });
   }
 
@@ -291,8 +324,7 @@ export function SettingsPage(): React.JSX.Element {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["slurm-defaults"] });
       queryClient.invalidateQueries({ queryKey: ["slurm-defaults-layered"] });
-      setSlurmUserSaved(true);
-      setTimeout(() => setSlurmUserSaved(false), 3000);
+      flashSaved(setSlurmUserSaved);
     },
   });
   const slurmProjectMutation = useMutation({
@@ -300,24 +332,21 @@ export function SettingsPage(): React.JSX.Element {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["slurm-defaults"] });
       queryClient.invalidateQueries({ queryKey: ["slurm-defaults-layered"] });
-      setSlurmProjectSaved(true);
-      setTimeout(() => setSlurmProjectSaved(false), 3000);
+      flashSaved(setSlurmProjectSaved);
     },
   });
   const localUserMutation = useMutation({
     mutationFn: (vals: LocalDefaultsUpdate) => updateUserLocalDefaults(vals, project?.path),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["local-defaults-layered"] });
-      setLocalUserSaved(true);
-      setTimeout(() => setLocalUserSaved(false), 3000);
+      flashSaved(setLocalUserSaved);
     },
   });
   const localProjectMutation = useMutation({
     mutationFn: (vals: LocalDefaultsUpdate) => updateProjectLocalDefaults(project!.path, vals),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["local-defaults-layered"] });
-      setLocalProjectSaved(true);
-      setTimeout(() => setLocalProjectSaved(false), 3000);
+      flashSaved(setLocalProjectSaved);
     },
   });
 
@@ -364,6 +393,9 @@ export function SettingsPage(): React.JSX.Element {
       </div>
 
       {/* ── SLURM tab ── */}
+      {tab === "slurm" && !slurmData && (
+        <p className="text-sm text-zinc-500">Loading...</p>
+      )}
       {tab === "slurm" && slurmData && (
         <div className="space-y-4">
           {/* Effective summary */}
@@ -400,12 +432,7 @@ export function SettingsPage(): React.JSX.Element {
               <div className="grid grid-cols-2 gap-3">
                 {SLURM_FIELDS.slice(0, 2).map(({ key, label, placeholder }) => (
                   <div key={key} className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <Label className="text-xs">{label}</Label>
-                      <span className={`rounded px-1.5 py-0.5 text-[10px] ${BADGE_STYLES[provenance(key, slurmData)]}`}>
-                        {provenance(key, slurmData)}
-                      </span>
-                    </div>
+                    <Label className="text-xs">{label}</Label>
                     <Input value={String(slurmUserValues[key] ?? "")} placeholder={placeholder} onChange={(e) => setSlurmUserValues({ ...slurmUserValues, [key]: e.target.value })} />
                   </div>
                 ))}
@@ -414,7 +441,7 @@ export function SettingsPage(): React.JSX.Element {
                 {SLURM_FIELDS.slice(2).map(({ key, label, type, placeholder }) => (
                   <div key={key} className="space-y-1">
                     <Label className="text-xs">{label}</Label>
-                    <Input type={type} value={String(slurmUserValues[key] ?? "")} placeholder={placeholder} onChange={(e) => setSlurmUserValues({ ...slurmUserValues, [key]: type === "number" ? parseInt(e.target.value) || undefined : e.target.value })} />
+                    <Input type={type} value={String(slurmUserValues[key] ?? "")} placeholder={placeholder} onChange={(e) => { const n = parseInt(e.target.value, 10); setSlurmUserValues({ ...slurmUserValues, [key]: type === "number" ? (e.target.value === "" ? undefined : (Number.isNaN(n) ? undefined : n)) : e.target.value }); }} />
                   </div>
                 ))}
               </div>
@@ -443,7 +470,7 @@ export function SettingsPage(): React.JSX.Element {
                 {SLURM_FIELDS.slice(2).map(({ key, label, type, placeholder }) => (
                   <div key={key} className="space-y-1">
                     <Label className="text-xs">{label}</Label>
-                    <Input type={type} value={String(slurmProjectValues[key] ?? "")} placeholder={placeholder} onChange={(e) => setSlurmProjectValues({ ...slurmProjectValues, [key]: type === "number" ? parseInt(e.target.value) || undefined : e.target.value })} />
+                    <Input type={type} value={String(slurmProjectValues[key] ?? "")} placeholder={placeholder} onChange={(e) => { const n = parseInt(e.target.value, 10); setSlurmProjectValues({ ...slurmProjectValues, [key]: type === "number" ? (e.target.value === "" ? undefined : (Number.isNaN(n) ? undefined : n)) : e.target.value }); }} />
                   </div>
                 ))}
               </div>
@@ -461,7 +488,10 @@ export function SettingsPage(): React.JSX.Element {
       )}
 
       {/* ── Local GPU tab ── */}
-      {tab === "local" && (
+      {tab === "local" && !localData && (
+        <p className="text-sm text-zinc-500">Loading...</p>
+      )}
+      {tab === "local" && localData && (
         <div className="space-y-4">
           {/* Effective summary */}
           {localData && (
@@ -478,6 +508,10 @@ export function SettingsPage(): React.JSX.Element {
                 <span>
                   <span className="text-zinc-500">Setup:</span>{" "}
                   <span className="text-zinc-200">{localData.effective.setup_command ? String(localData.effective.setup_command) : "(none)"}</span>
+                </span>
+                <span>
+                  <span className="text-zinc-500">Preallocate GPU:</span>{" "}
+                  <span className="text-zinc-200">{localData.effective.preallocate_gpu === false ? "off" : "on"}</span>
                 </span>
                 {Object.keys(localData.effective.env_vars as Record<string, string> ?? {}).length > 0 && (
                   <span>

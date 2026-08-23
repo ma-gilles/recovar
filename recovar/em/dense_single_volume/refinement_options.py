@@ -14,7 +14,7 @@ across iterations without copy-on-write surprises.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from recovar.em.dense_single_volume.helpers.convergence import LOCAL_SEARCH_HEALPIX_ORDER
 
@@ -49,6 +49,7 @@ class AdaptiveOptions:
     nside_level: int | None = None
     translation_pixel_offset: float | None = None
     relion_current_sizes: tuple[int, ...] | None = None
+    relion_healpix_orders: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -60,10 +61,16 @@ class RelionParityOptions:
     perturb_factor: float = 0.0
     perturb_seed: int | None = None
     perturb_replay_relion_dir: str | None = None
+    perturb_replay_relion_prefix: str = "run"
+    perturb_replay_precision: Literal["auto", "seed_exact", "star"] = "auto"
+    perturb_replay_restart_state_iterations: tuple[int, ...] = ()
+    final_sampling_replay_relion_dir: str | None = None
     emulate_relion_firstiter_cc: bool = False
     relion_firstiter_ini_high_angstrom: float | None = None
+    do_solvent_fsc_correction: bool = False
     first_iteration_score_mode: str = "gaussian"
     first_iteration_reconstruction_mode: str = "soft"
+    image_fourier_backend: Literal["host_numpy", "jax_gpu", "relion_cuda"] = "host_numpy"
 
 
 @dataclass(frozen=True)
@@ -103,10 +110,15 @@ class ReplayState:
 
     init_image_corrections: Any | None = None
     init_scale_corrections: Any | None = None
+    init_group_ids: Any | None = None
+    init_group_count: Any | None = None
     init_direction_prior: Any | None = None
     init_previous_best_translations: Any | None = None
     init_previous_best_rotation_eulers: Any | None = None
     replay_iteration_overrides: Any | None = None
+    final_replay_override: Any | None = None
+    final_replay_reference_maps: Any | None = None
+    final_replay_source_iteration: int | None = None
 
 
 @dataclass(frozen=True)

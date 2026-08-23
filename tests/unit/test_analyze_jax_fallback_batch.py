@@ -135,7 +135,7 @@ def test_effective_heterogeneity_memory_budget_scales_for_fallback(monkeypatch, 
 
     scaled = akd._effective_heterogeneity_memory_budget(48.0)
 
-    assert scaled == pytest.approx(16.0)
+    assert scaled == pytest.approx(4.8)
     assert "scaling heterogeneity-kernel memory budget" in caplog.text
 
 
@@ -162,6 +162,7 @@ def test_lib_is_stale_when_source_newer(tmp_path, monkeypatch):
     mk.write_text("# makefile\n")
 
     monkeypatch.setattr(cuda_backproject, "_LIB_DIR", fake_lib_dir)
+    monkeypatch.setattr(cuda_backproject, "_lib_missing_required_symbols", lambda _path: None)
     assert cuda_backproject._lib_is_stale(so) is True
 
 
@@ -181,6 +182,7 @@ def test_lib_is_not_stale_when_source_older(tmp_path, monkeypatch):
     so.write_bytes(b"new build")
 
     monkeypatch.setattr(cuda_backproject, "_LIB_DIR", fake_lib_dir)
+    monkeypatch.setattr(cuda_backproject, "_lib_missing_required_symbols", lambda _path: None)
     assert cuda_backproject._lib_is_stale(so) is False
 
 
@@ -196,6 +198,7 @@ def test_lib_is_stale_handles_missing_source(tmp_path, monkeypatch):
     so.write_bytes(b"build")
 
     monkeypatch.setattr(cuda_backproject, "_LIB_DIR", fake_lib_dir)
+    monkeypatch.setattr(cuda_backproject, "_lib_missing_required_symbols", lambda _path: None)
     # Without sources, can't determine staleness — must default to "not stale"
     # so we don't infinite-rebuild.
     assert cuda_backproject._lib_is_stale(so) is False

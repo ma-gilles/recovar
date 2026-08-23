@@ -37,6 +37,15 @@ def _python() -> str:
     return sys.executable
 
 
+def _default_output_root() -> Path:
+    override = os.environ.get("VDAM_ABINITIO_GUARD_OUTPUT_ROOT") or os.environ.get(
+        "RECOVAR_AGENT_SCRATCH_ROOT"
+    )
+    if override:
+        return Path(override).expanduser()
+    return DEFAULT_OUTPUT_ROOT
+
+
 def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[GuardCommand]:
     """Return the command plan for the requested merge-guard tier."""
     if tier not in {"cpu", "gpu", "all"}:
@@ -263,6 +272,14 @@ def run_guard(
 
         env = _env_for(command)
         env["VDAM_ABINITIO_GUARD_OUTPUT_DIR"] = str(output_dir)
+        pytest_cache_dir = output_dir / "pytest_cache"
+        pycache_dir = output_dir / "pycache"
+        pytest_cache_dir.mkdir(exist_ok=True)
+        pycache_dir.mkdir(exist_ok=True)
+        if "cache_dir" not in env.get("PYTEST_ADDOPTS", ""):
+            cache_opt = f"-o cache_dir={pytest_cache_dir}"
+            env["PYTEST_ADDOPTS"] = f"{cache_opt} {env.get('PYTEST_ADDOPTS', '')}".strip()
+        env["PYTHONPYCACHEPREFIX"] = str(pycache_dir)
         log_path = output_dir / f"{command.name}.log"
         t0 = time.perf_counter()
         proc = subprocess.run(
@@ -323,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
     output_dir = (
         Path(args.output_dir)
         if args.output_dir
-        else DEFAULT_OUTPUT_ROOT / f"vdam_abinitio_merge_guard_{timestamp}_{os.getpid()}"
+        else _default_output_root() / f"vdam_abinitio_merge_guard_{timestamp}_{os.getpid()}"
     )
     ledger = run_guard(
         tier=args.tier,

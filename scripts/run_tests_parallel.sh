@@ -17,7 +17,9 @@ MODE="${1:-full}"
 WORKDIR="$(cd "$(dirname "$0")/.." && pwd)"
 SLURMO_DIR="${SLURMO_DIR:-${WORKDIR}/logs}"
 RESULTS_DIR="${WORKDIR}/.test_results"
-mkdir -p "$SLURMO_DIR" "$RESULTS_DIR"
+RUNTIME_ROOT="${RECOVAR_TEST_RUNTIME_ROOT:-${WORKDIR}/.tmp}"
+RELION_BIND_BUILD_DIR="${RECOVAR_TEST_RELION_BIND_BUILD_DIR:-}"
+mkdir -p "$SLURMO_DIR" "$RESULTS_DIR" "$RUNTIME_ROOT"
 
 TAG="parallel_$(date +%Y%m%d_%H%M%S)_${RANDOM}"
 
@@ -139,13 +141,30 @@ cd ${WORKDIR}
 
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_MEM_FRACTION=.90
 export RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1
-export TMPDIR="${WORKDIR}/.tmp/slurm_\${SLURM_JOB_ID}"
-export PIXI_HOME="${WORKDIR}/.tmp/pixi_home_\${SLURM_JOB_ID}"
-export RATTLER_CACHE_DIR="${WORKDIR}/.tmp/rattler_cache_\${SLURM_JOB_ID}"
+export TMPDIR="${RUNTIME_ROOT}/slurm_\${SLURM_JOB_ID}"
+export PIXI_HOME="${RUNTIME_ROOT}/pixi_home_\${SLURM_JOB_ID}"
+export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/rattler_cache_\${SLURM_JOB_ID}"
+export RECOVAR_RELION_BIND_BUILD_DIR="${RELION_BIND_BUILD_DIR}"
 mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
+
+# Della may leave every device on an exclusive node visible even when this
+# job requested --gres=gpu:1.  Non-exclusive jobs may instead cgroup-remap the
+# assigned physical GPU to logical device zero.  Preserve Slurm's existing
+# CUDA_VISIBLE_DEVICES mapping when present, and use its physical assignment
+# only as a fallback, so JAX and perf telemetry remain genuinely single-GPU.
+CUDA_FIRST_GPU="\${CUDA_VISIBLE_DEVICES:-}"
+CUDA_FIRST_GPU="\${CUDA_FIRST_GPU%%,*}"
+if [[ -z "\${CUDA_FIRST_GPU}" ]]; then
+    SLURM_VISIBLE_GPUS="\${SLURM_STEP_GPUS:-\${SLURM_JOB_GPUS:-}}"
+    CUDA_FIRST_GPU="\${SLURM_VISIBLE_GPUS%%,*}"
+fi
+if [[ -n "\${CUDA_FIRST_GPU}" ]]; then
+    export CUDA_VISIBLE_DEVICES="\${CUDA_FIRST_GPU}"
+fi
 
 # Prefer the pre-installed env to avoid ``pixi run`` triggering a fresh
 # pixi install on every Slurm worker (Della cryoem-partition compute nodes
@@ -161,14 +180,19 @@ export PATH="\$(dirname "\$PIXI_PY"):\$PATH"
 
 # Provenance gate
 "\$PIXI_PY" -c "
-import pathlib, recovar, jax
+import os, pathlib, recovar, jax
 repo = pathlib.Path.cwd().resolve()
 assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo)+'/'), 'WRONG recovar'
 assert '.pixi/envs/default/' in str(pathlib.Path(jax.__file__).resolve()), 'WRONG jax'
-print('ENV_OK — devices:', jax.devices())
+devices = jax.devices()
+assert len(devices) == 1 and devices[0].platform == 'gpu', f'EXPECTED ONE GPU, GOT {devices}'
+print('ENV_OK — devices:', devices)
+if os.environ.get('RECOVAR_RELION_BIND_BUILD_DIR'):
+    from recovar.relion_bind import _relion_bind_core
+    print('RELION_BIND_OK —', _relion_bind_core.__file__)
 "
 
-"\$PIXI_PY" -m pytest ${pytest_args} --junitxml=${XML_OUT} || true
+"\$PIXI_PY" -m pytest ${pytest_args} --junitxml=${XML_OUT}
 EOF
 
     chmod +x "$SCRIPT"
@@ -199,9 +223,9 @@ set -euo pipefail
 cd ${WORKDIR}
 
 export PYTHONNOUSERSITE=1
-export TMPDIR="${WORKDIR}/.tmp/slurm_\${SLURM_JOB_ID}"
-export PIXI_HOME="${WORKDIR}/.tmp/pixi_home_\${SLURM_JOB_ID}"
-export RATTLER_CACHE_DIR="${WORKDIR}/.tmp/rattler_cache_\${SLURM_JOB_ID}"
+export TMPDIR="${RUNTIME_ROOT}/slurm_\${SLURM_JOB_ID}"
+export PIXI_HOME="${RUNTIME_ROOT}/pixi_home_\${SLURM_JOB_ID}"
+export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/rattler_cache_\${SLURM_JOB_ID}"
 mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 

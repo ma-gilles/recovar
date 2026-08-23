@@ -23,6 +23,51 @@ def shell_index_to_resolution_angstrom(shell_index, ori_size, voxel_size):
     return float(ori_size) * float(voxel_size) / shell_index
 
 
+def relion_optics_image_current_sizes(
+    model_current_size,
+    *,
+    model_ori_size,
+    model_pixel_size,
+    optics_image_sizes,
+    optics_pixel_sizes,
+):
+    """Return RELION's per-optics particle-image Fourier window sizes.
+
+    RELION keeps ``mymodel.current_size`` in reference-map coordinates, but
+    remaps the particle window separately for each optics group::
+
+        remap = (image_pixel_size * image_size) /
+                (model_pixel_size * model_ori_size)
+        image_current_size = 2 * ceil(0.5 * remap * model_current_size)
+
+    The distinction matters even when the nominal fields print identically in
+    STAR files.  For example, an MRC voxel size stored as float32 may be
+    1.4166666269 while the optics STAR stores 1.416667.  At model size 56 the
+    upward ``ceil`` then produces a 58-pixel particle window, while the
+    Projector and BackProjector retain radius 28 from the 56-pixel model size.
+    """
+
+    model_current_size = int(model_current_size)
+    model_ori_size = int(model_ori_size)
+    model_pixel_size = float(model_pixel_size)
+    image_sizes = np.asarray(optics_image_sizes, dtype=np.int64).reshape(-1)
+    pixel_sizes = np.asarray(optics_pixel_sizes, dtype=np.float64).reshape(-1)
+    if image_sizes.shape != pixel_sizes.shape or image_sizes.size == 0:
+        raise ValueError(
+            "optics image sizes and pixel sizes must be non-empty arrays with identical shapes",
+        )
+    if model_current_size <= 0 or model_ori_size <= 0 or model_pixel_size <= 0.0:
+        raise ValueError("model current size, original size, and pixel size must be positive")
+    if np.any(image_sizes <= 0) or np.any(pixel_sizes <= 0.0):
+        raise ValueError("optics image sizes and pixel sizes must be positive")
+
+    remap_sizes = (
+        pixel_sizes * image_sizes.astype(np.float64)
+    ) / (model_pixel_size * float(model_ori_size))
+    current_sizes = 2 * np.ceil(0.5 * remap_sizes * float(model_current_size))
+    return np.minimum(current_sizes.astype(np.int64), image_sizes)
+
+
 # Default threshold for when adaptive pass 2 is skipped.
 ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION = 0.5
 
@@ -79,7 +124,10 @@ def clamp_relion_coarse_image_size(coarse_size, current_size, ori_size):
     ``image_coarse_size = XMIPP_MIN(image_current_size, image_coarse_size)``
     update.
     """
-    coarse_size = quantize_current_size(int(coarse_size), ori_size=ori_size)
+    coarse_size = int(coarse_size)
+    if coarse_size % 2 != 0:
+        coarse_size += 1
+    coarse_size = max(8, min(coarse_size, int(ori_size)))
     if current_size is None:
         return coarse_size
     return min(int(current_size), coarse_size)

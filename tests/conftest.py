@@ -61,13 +61,16 @@ def gpu_subprocess_env():
     - Prepends the repo root to PYTHONPATH so the subprocess imports the
       local ``recovar`` package rather than whatever is ``pip install -e``'d.
     - Sets ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` so the subprocess does
-      not try to grab 75 % of GPU memory (the main pytest process may
+      not try to grab most of GPU memory (the main pytest process may
       already hold a large chunk).
+    - Pins ``XLA_PYTHON_CLIENT_MEM_FRACTION=.90`` so regression baselines
+      are not perturbed by a developer shell override such as ``.50``.
     """
     env = dict(os.environ)
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing if existing else "")
     env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    env["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".90"
     env["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
     # Ensure subprocesses prefer CUDA backend for custom-call kernels.
     env["JAX_PLATFORMS"] = "cuda,cpu"
@@ -79,7 +82,11 @@ def gpu_subprocess_env():
         if gpu_idx is not None:
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
 
-    if not _env_flag("RECOVAR_DISABLE_CUDA"):
+    if _env_flag("RECOVAR_DISABLE_CUDA"):
+        # An explicit disable must override inherited custom-CUDA settings.
+        env.pop("RECOVAR_CUDA_LIB", None)
+        env.pop("RECOVAR_ENABLE_CUSTOM_CUDA", None)
+    else:
         lib_path = _resolve_custom_cuda_test_lib(require=_env_flag(_REQUIRE_CUSTOM_CUDA_FOR_TESTS_ENV))
         if lib_path is not None:
             env["RECOVAR_CUDA_LIB"] = str(lib_path)
@@ -230,6 +237,7 @@ def _candidate_nvcc_paths():
         os.environ.get("NVCC"),
         shutil.which("nvcc"),
         "/usr/local/cuda-13.1/bin/nvcc",
+        "/usr/local/cuda-12.8/bin/nvcc",
         "/usr/local/cuda-12.6/bin/nvcc",
         "/usr/local/cuda/bin/nvcc",
     ):

@@ -299,6 +299,44 @@ def test_build_relion_recovar_candidate_mapping_uses_candidate_translation_pixel
     assert mapping.denominator_mask[0, 1]
 
 
+def test_build_relion_recovar_candidate_mapping_skips_coarse_affine_when_candidate_translations_exist():
+    relion = {
+        "exp_Mweight_posterior": np.array([3.0], dtype=np.float64),
+        "exp_sum_weight": np.array(3.0, dtype=np.float64),
+        "Pmax": np.array(1.0, dtype=np.float64),
+        "pointer_dir_nonzeroprior": np.array([10], dtype=np.int32),
+        "pointer_psi_nonzeroprior": np.array([20], dtype=np.int32),
+        "acc_rot_id": np.array([0], dtype=np.int32),
+        "acc_trans_idx": np.array([2], dtype=np.int32),
+        "candidate_coarse_trans_idx": np.array([2], dtype=np.int32),
+        "candidate_in_denominator_set": np.array([1], dtype=np.int32),
+        "candidate_in_fine_threshold_set": np.array([1], dtype=np.int32),
+        "candidate_in_reconstruction_set": np.array([1], dtype=np.int32),
+        "translations_x": np.array([-2.0, 0.0, 2.0], dtype=np.float64),
+        "translations_y": np.array([-2.0, 0.0, 2.0], dtype=np.float64),
+        "candidate_translation_x": np.array([0.5], dtype=np.float64),
+        "candidate_translation_y": np.array([-0.5], dtype=np.float64),
+    }
+    recovar = {
+        "selected_global_image_indices": np.array([4], dtype=np.int64),
+        "local_rotation_pixel_indices": np.array([10], dtype=np.int64),
+        "local_rotation_psi_indices": np.array([20], dtype=np.int64),
+        "grid_n_psi": np.array(1, dtype=np.int32),
+        "rotation_candidate_mask": np.array([[True]], dtype=bool),
+        "pass2_scores_total": np.zeros((1, 1, 4), dtype=np.float32),
+        "translations": np.array(
+            [[0.0, 0.0], [0.5, -0.5], [1.0, -1.0], [1.5, -1.5]],
+            dtype=np.float32,
+        ),
+    }
+
+    mapping = parity.build_relion_recovar_candidate_mapping(relion, recovar, image_position=0)
+
+    np.testing.assert_array_equal(mapping.recovar_trans_idx, np.array([1], dtype=np.int64))
+    np.testing.assert_allclose(mapping.relion_translation_x, np.array([0.5], dtype=np.float64))
+    np.testing.assert_allclose(mapping.relion_translation_y, np.array([-0.5], dtype=np.float64))
+
+
 def test_align_mask_to_score_shape_pads_trailing_rotation_rows():
     mask = np.array([[True, False], [False, True]], dtype=bool)
 

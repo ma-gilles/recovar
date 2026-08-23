@@ -11,7 +11,7 @@ import { clsx } from "clsx";
 import { getVolumeInfo, type VolumeEntry } from "../../lib/api/client";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
-import { MAX_PINNED_VOLUMES } from "../../lib/constants";
+import { MAX_PINNED_VOLUMES, VIEW_DIMS, DEFAULT_VIEW_DIM } from "../../lib/constants";
 import { VtkErrorBoundary } from "./VtkErrorBoundary";
 import type { DownsampleInfo } from "./VtkViewer";
 
@@ -64,7 +64,18 @@ export function VolumeViewer({
   const [internalPinned, setInternalPinned] = useState<PinnedVolume[]>([]);
   // Use controlled state if provided, otherwise internal
   const pinnedVolumes = controlledPinned ?? internalPinned;
-  const setPinnedVolumes = onPinnedVolumesChange ?? setInternalPinned;
+  const setPinnedVolumes = useCallback(
+    (next: PinnedVolume[] | ((prev: PinnedVolume[]) => PinnedVolume[])) => {
+      if (onPinnedVolumesChange) {
+        // Controlled: resolve the functional-updater form against current
+        // value before handing a plain array to the parent callback.
+        onPinnedVolumesChange(typeof next === "function" ? next(pinnedVolumes) : next);
+      } else {
+        setInternalPinned(next);
+      }
+    },
+    [onPinnedVolumesChange, pinnedVolumes],
+  );
   const [activeVolume, setActiveVolume] = useState<string | null>(initialVolumePath ?? null);
 
   // Sync activeVolume when the parent changes initialVolumePath (e.g. user
@@ -78,9 +89,23 @@ export function VolumeViewer({
   const [axis, setAxis] = useState<0 | 1 | 2>(2); // Z axis default
   const [sliceIdx, setSliceIdx] = useState(0);
   const [viewMode, setViewMode] = useState<"slice" | "3d">("3d");
+  // Live slider value (drives the label, updates every onChange) and the
+  // debounced value that actually drives marching-cubes re-meshing. Debouncing
+  // avoids a synchronous main-thread re-mesh + render on every slider tick.
   const [activeSigma, setActiveSigma] = useState(3.0);
+  const [committedSigma, setCommittedSigma] = useState(3.0);
   const [maxSlice, setMaxSlice] = useState(128);
   const [downsampleInfo, setDownsampleInfo] = useState<DownsampleInfo | null>(null);
+  // Selected view resolution (downsample target). Defaults to 128 so volumes
+  // load fast over slow/SSH links; users can switch to 256/Full for detail.
+  const [viewDim, setViewDim] = useState<number | null>(DEFAULT_VIEW_DIM);
+
+  // Debounce the sigma slider: commit the value to the renderer ~140ms after
+  // the user stops dragging so re-meshing runs once instead of per tick.
+  useEffect(() => {
+    const id = window.setTimeout(() => setCommittedSigma(activeSigma), 140);
+    return () => window.clearTimeout(id);
+  }, [activeSigma]);
 
   const activeCategory = volumes?.find((v) => v.path === activeVolume)?.category;
 
@@ -121,6 +146,10 @@ export function VolumeViewer({
     enabled: !!activeVolume,
   });
 
+  // Largest box dimension of the active volume (for disabling resolution
+  // options that exceed it and for resolving the "Full" option).
+  const maxVolDim = volInfo ? Math.max(...volInfo.shape) : null;
+
   useEffect(() => {
     if (volInfo) {
       setMaxSlice(volInfo.shape[axis] - 1);
@@ -143,6 +172,11 @@ export function VolumeViewer({
       setSliceIdx(0);
       setTrajectoryActive(false);
       setDownsampleInfo(null); // clear until new volume reports back
+      // Keep the fast downsampled default for every volume (the server clamps
+      // it up to the original size when the new volume is smaller, so it is
+      // always safe). Resetting to Auto here would silently make each
+      // subsequent volume load at full server resolution — slower over SSH.
+      setViewDim(DEFAULT_VIEW_DIM);
     },
     []
   );
@@ -152,18 +186,26 @@ export function VolumeViewer({
       if (pinnedVolumes.length >= MAX_PINNED_VOLUMES) return;
       if (pinnedVolumes.some((v) => v.path === path)) return;
       const category = volumes?.find((v) => v.path === path)?.category;
-      setPinnedVolumes((prev) => [
-        ...prev,
-        {
-          path,
-          name,
-          threshold: 3.0,
-          opacity: 0.8,
-          visible: true,
-          colorIndex: prev.length,
-          category,
-        },
-      ]);
+      setPinnedVolumes((prev) => {
+        // Pick the lowest unused color index rather than prev.length, so that
+        // after an unpin + re-pin we never collide with a still-pinned volume's
+        // color (prev.length is not necessarily a free slot).
+        const used = new Set(prev.map((v) => v.colorIndex));
+        let colorIndex = 0;
+        while (used.has(colorIndex)) colorIndex++;
+        return [
+          ...prev,
+          {
+            path,
+            name,
+            threshold: 3.0,
+            opacity: 0.8,
+            visible: true,
+            colorIndex,
+            category,
+          },
+        ];
+      });
     },
     [pinnedVolumes, volumes]
   );
@@ -244,30 +286,83 @@ export function VolumeViewer({
 
           {viewMode === "3d" && activeVolume && (
             <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-400">Threshold</span>
-              <input
-                type="range"
-                min={0}
-                max={10}
-                step={0.1}
-                value={activeSigma}
-                onChange={(e) => setActiveSigma(parseFloat(e.target.value))}
-                className="w-40"
-              />
-              <span className="text-xs text-zinc-300 w-10">{activeSigma.toFixed(1)}σ</span>
+              {/* The toolbar contour slider only drives the active (unpinned)
+                  volume. Once any volume is pinned, VtkViewer renders the
+                  pinned set and the per-pin sliders take over, so hide this
+                  control to avoid a no-op slider. */}
+              {pinnedVolumes.length === 0 && (
+                <>
+                  <span className="text-xs text-zinc-400">Contour (σ)</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={10}
+                    step={0.1}
+                    value={activeSigma}
+                    onChange={(e) => setActiveSigma(parseFloat(e.target.value))}
+                    className="w-40"
+                  />
+                  <span className="text-xs text-zinc-300 w-10">{activeSigma.toFixed(1)}σ</span>
+                </>
+              )}
+              <span className="text-xs text-zinc-400">Resolution</span>
+              <select
+                value={
+                  viewDim == null
+                    ? "auto"
+                    : // Use strict ">" so an exact-size selection (e.g. picking
+                      // 256 for a 256³ box) keeps its numeric label instead of
+                      // collapsing to "Full". A target above the box size means
+                      // the server serves full resolution, which is "Full".
+                      maxVolDim != null && viewDim > maxVolDim
+                      ? "full"
+                      : VIEW_DIMS.includes(viewDim)
+                        ? String(viewDim)
+                        : "full"
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "auto") {
+                    // Auto: server default (MAX_SERVE_DIM).
+                    setViewDim(null);
+                  } else if (v === "full") {
+                    // Full: request a target >= the original box size so the
+                    // server serves it via the fast path (max_dim <= target).
+                    // Round up to even because the server only accepts an even
+                    // `dim`; an odd box (e.g. 255) would otherwise 400.
+                    setViewDim(maxVolDim != null ? maxVolDim + (maxVolDim % 2) : null);
+                  } else {
+                    setViewDim(parseInt(v));
+                  }
+                }}
+                className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-1 text-xs text-zinc-300 outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                aria-label="View resolution"
+              >
+                <option value="auto">Auto</option>
+                {VIEW_DIMS.map((d) => (
+                  <option key={d} value={d} disabled={maxVolDim != null && d > maxVolDim}>
+                    {d}
+                  </option>
+                ))}
+                <option value="full">Full</option>
+              </select>
             </div>
           )}
 
-          <div className="ml-auto">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setSliceIdx(Math.floor(maxSlice / 2))}
-              aria-label="Reset view"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+          {/* Reset view only recenters the slice, so hide it in 3D mode where
+              camera control lives in the viewport (drag to rotate). */}
+          {viewMode === "slice" && (
+            <div className="ml-auto">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setSliceIdx(Math.floor(maxSlice / 2))}
+                aria-label="Reset view"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Viewport */}
@@ -287,11 +382,12 @@ export function VolumeViewer({
                 <VtkViewer
                   activeVolume={activeVolume}
                   pinnedVolumes={pinnedVolumes}
-                  activeSigma={activeSigma}
+                  activeSigma={committedSigma}
                   activeCategory={activeCategory}
                   preserveCamera={trajectoryActive}
                   prefetchPaths={prefetchPaths}
                   onDownsampleInfo={handleDownsampleInfo}
+                  viewDim={viewDim}
                 />
               </Suspense>
             </VtkErrorBoundary>
@@ -313,13 +409,28 @@ export function VolumeViewer({
         {volInfo && (
           <div className="flex items-center gap-4 text-xs text-zinc-500">
             <span>Shape: {volInfo.shape.join(" x ")}</span>
-            <span>Voxel: {volInfo.voxel_size.toFixed(2)} A</span>
+            {/* When the 3D view is downsampled, the effective voxel size of what
+                is rendered grows by originalDim/servedDim; otherwise show the
+                source file's voxel size. */}
+            <span>
+              Voxel:{" "}
+              {(viewMode === "3d" && downsampleInfo
+                ? (volInfo.voxel_size * downsampleInfo.originalDim) /
+                  downsampleInfo.servedDim
+                : volInfo.voxel_size
+              ).toFixed(2)}{" "}
+              Å
+            </span>
             <span>
               Range: [{volInfo.min.toFixed(3)}, {volInfo.max.toFixed(3)}]
             </span>
-            {downsampleInfo && (
+            {/* Downsampling only happens in the 3D view; slices are always
+                served at full resolution, so hide the badge in slice mode. Show
+                the true per-axis original shape so non-cubic boxes are not
+                mislabeled as a cube. */}
+            {viewMode === "3d" && downsampleInfo && (
               <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-amber-400">
-                Viewing at {downsampleInfo.servedDim}&sup3; (original: {downsampleInfo.originalDim}&sup3;)
+                Viewing at {downsampleInfo.servedDim}&sup3; (original: {volInfo.shape.join("×")})
               </span>
             )}
           </div>
@@ -340,7 +451,7 @@ export function VolumeViewer({
                   <div className="flex items-center gap-1">
                     <span
                       className="h-2 w-2 rounded-full"
-                      style={{ backgroundColor: VOLUME_COLOR_HEX[pv.colorIndex] }}
+                      style={{ backgroundColor: VOLUME_COLOR_HEX[pv.colorIndex % VOLUME_COLOR_HEX.length] }}
                     />
                     <span className="flex-1 truncate text-xs">{pv.name}</span>
                     <button
@@ -360,7 +471,7 @@ export function VolumeViewer({
                   </div>
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-1 text-xs text-zinc-500">
-                      <span className="w-12">Sigma</span>
+                      <span className="w-12">Contour</span>
                       <input
                         type="range"
                         min={0}
@@ -370,7 +481,7 @@ export function VolumeViewer({
                         onChange={(e) => updatePinned(pv.path, { threshold: parseFloat(e.target.value) })}
                         className="flex-1"
                       />
-                      <span className="w-8 text-right">{pv.threshold.toFixed(1)}</span>
+                      <span className="w-8 text-right">{pv.threshold.toFixed(1)}σ</span>
                     </div>
                     <div className="flex items-center gap-1 text-xs text-zinc-500">
                       <span className="w-12">Opacity</span>

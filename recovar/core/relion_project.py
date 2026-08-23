@@ -65,7 +65,7 @@ def relion_project_half(
     r_max_ref = r_max * padding_factor
     r_max_ref_2 = r_max_ref * r_max_ref
 
-    Ainv = jnp.linalg.inv(R_relion).astype(jnp.float64) * float(padding_factor)
+    A = jnp.asarray(R_relion, dtype=jnp.float64) * float(padding_factor)
 
     # FFTW-natural y indexing: y = i if i <= r_max_out else i - out_h
     i_arr = jnp.arange(out_h, dtype=jnp.int32)
@@ -76,10 +76,11 @@ def relion_project_half(
     Xf = X.astype(jnp.float64)
     Yf = Y.astype(jnp.float64)
 
-    # (xp, yp, zp) = Ainv @ (x, y, 0)
-    xp = Ainv[0, 0] * Xf + Ainv[0, 1] * Yf
-    yp = Ainv[1, 0] * Xf + Ainv[1, 1] * Yf
-    zp = Ainv[2, 0] * Xf + Ainv[2, 1] * Yf
+    # RELION's accelerator Projector uses the matrix entries directly:
+    # xp = e0*x + e1*y, yp = e3*x + e4*y, zp = e6*x + e7*y.
+    xp = A[0, 0] * Xf + A[0, 1] * Yf
+    yp = A[1, 0] * Xf + A[1, 1] * Yf
+    zp = A[2, 0] * Xf + A[2, 1] * Yf
 
     # Hermitian flip for negative xp
     is_neg_x = xp < 0

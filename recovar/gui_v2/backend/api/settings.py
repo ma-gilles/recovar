@@ -108,6 +108,7 @@ class LocalDefaultsUpdate(BaseModel):
     gpus: str | None = None  # "all", "0", "0,1", etc.
     setup_command: str | None = None
     env_vars: dict[str, str] | None = None
+    preallocate_gpu: bool | None = None
 
 
 class ProjectLocalDefaultsUpdate(LocalDefaultsUpdate):

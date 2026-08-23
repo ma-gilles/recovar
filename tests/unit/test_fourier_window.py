@@ -25,6 +25,8 @@ from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
+    make_scoring_half_image_weights,
+    mask_relion_noise_shell_indices_to_current_window,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     preprocess_batch as _preprocess_batch,
@@ -39,11 +41,12 @@ from recovar.em.dense_single_volume.helpers.scoring import (
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     ALLOWED_CURRENT_SIZES,
-    make_fourier_window_spec,
-    make_fourier_window_indices_np,
     make_frequency_coords_half_np,
     make_frequency_radius_map_half,
+    make_fourier_window_indices_np,
+    make_fourier_window_spec,
     quantize_current_size,
+    relion_fftw_order_for_square_score_window,
 )
 
 pytestmark = pytest.mark.unit
@@ -374,6 +377,53 @@ class TestWindowIndicesSubset:
         counts = np.bincount(shell_indices[shell_indices <= shape[0] // 2], minlength=shape[0] // 2 + 1)
         assert counts[:5].tolist() == [1, 4, 6, 8, 16]
 
+    @pytest.mark.parametrize("square", [False, True])
+    def test_relion_noise_shell_indices_follow_asymmetric_current_crop(self, square):
+        shape = (128, 128)
+        current_size = 56
+        window_indices, _ = make_fourier_window_indices_np(
+            shape,
+            current_size=current_size,
+            square=square,
+            include_dc=True,
+        )
+        shell_indices = mask_relion_noise_shell_indices_to_current_window(
+            make_relion_noise_shell_indices_half(shape),
+            shape,
+            current_size,
+            window_indices,
+        )
+        shell_indices = np.asarray(shell_indices).reshape(shape[0], shape[1] // 2 + 1)
+        sentinel = shape[0] // 2 + 1
+
+        # RECOVAR's centered crop keeps ky=+28. The opposite boundary row is
+        # outside RELION's 56x29 rectangle even where rounded radius is 28.
+        assert np.all(shell_indices[36, 1:6] == sentinel)
+        assert np.all(shell_indices[92, 1:6] == 28)
+        assert int(np.count_nonzero(shell_indices <= current_size // 2)) == 1276
+
+    def test_relion_noise_crop_removes_case25_shell25_five_pixel_excess(self):
+        shape = (128, 128)
+        current_size = 50
+        window_indices, _ = make_fourier_window_indices_np(
+            shape,
+            current_size=current_size,
+            square=False,
+            include_dc=True,
+        )
+        unmasked = np.asarray(make_relion_noise_shell_indices_half(shape))
+        masked = np.asarray(
+            mask_relion_noise_shell_indices_to_current_window(
+                unmasked,
+                shape,
+                current_size,
+                window_indices,
+            ),
+        )
+
+        assert np.count_nonzero(unmasked == 25) == 84
+        assert np.count_nonzero(masked == 25) == 79
+
     def test_square_window_matches_relion_downsized_half_shape(self):
         """Square mode matches RELION windowFourierTransform's FFTW crop size."""
         shape = (64, 64)
@@ -570,6 +620,106 @@ class TestFourierWindowSpec:
         assert spec.dense_big_jit_projection_max_r() == 13.0
         assert spec.dense_big_jit_backprojection_max_r() == 13.0
         assert set(np.asarray(spec.recon_indices_np)).issubset(set(np.asarray(spec.score_indices_np)))
+
+    def test_optics_remap_can_use_larger_score_window_than_model_reconstruction(self):
+        shape = (128, 128)
+        spec = make_fourier_window_spec(
+            shape,
+            current_size=58,
+            reconstruction_current_size=56,
+            n_half=shape[0] * (shape[1] // 2 + 1),
+            score_square=True,
+            score_include_dc=True,
+            include_recon_window=True,
+        )
+
+        assert spec.n_score == 58 * (58 // 2 + 1)
+        assert spec.max_r == 28.0
+        assert spec.projection_kwargs()["max_r"] == 28.0
+        model_spec = make_fourier_window_spec(
+            shape,
+            current_size=56,
+            n_half=shape[0] * (shape[1] // 2 + 1),
+            include_recon_window=True,
+        )
+        np.testing.assert_array_equal(spec.recon_indices_np, model_spec.recon_indices_np)
+
+    def test_firstiter_cc_rectangular_score_keeps_both_x0_axis_sides(self):
+        """CC keeps the full FFTW rectangle; Gaussian drops its redundant x0 side."""
+        shape = (128, 128)
+        n_half = shape[0] * (shape[1] // 2 + 1)
+        spec = make_fourier_window_spec(
+            shape,
+            current_size=56,
+            n_half=n_half,
+            score_square=True,
+            score_include_dc=True,
+            include_recon_window=True,
+        )
+        gaussian_weights = make_scoring_half_image_weights(shape, relion_half_sum=True)
+        cc_weights = make_scoring_half_image_weights(
+            shape,
+            relion_half_sum=True,
+            exclude_relion_redundant_x0=False,
+        )
+
+        assert spec.n_score == 56 * (56 // 2 + 1)
+        assert np.count_nonzero(np.asarray(spec.score_values(gaussian_weights)) == 0.0) == 27
+        np.testing.assert_array_equal(
+            np.asarray(spec.score_values(cc_weights)),
+            np.ones(spec.n_score, dtype=np.float32),
+        )
+
+    @pytest.mark.parametrize("full_size,current_size", [(128, 56), (128, 128)])
+    def test_firstiter_cc_score_order_maps_to_relion_fftw_crop(self, full_size, current_size):
+        shape = (full_size, full_size)
+        spec = make_fourier_window_spec(
+            shape,
+            current_size=current_size,
+            n_half=full_size * (full_size // 2 + 1),
+            score_square=True,
+            score_include_dc=True,
+            include_recon_window=False,
+        )
+        score_indices = (
+            np.arange(spec.n_score, dtype=np.int32)
+            if spec.score_indices_np is None
+            else spec.score_indices_np
+        )
+        order = relion_fftw_order_for_square_score_window(shape, current_size, score_indices)
+        full_half_width = full_size // 2 + 1
+        rows = score_indices[order] // full_half_width
+        cols = score_indices[order] % full_half_width
+        ky = rows - full_size // 2
+        kx = np.where(cols == full_size // 2, -full_size // 2, cols)
+        radius = current_size // 2
+        if current_size < full_size:
+            expected_ky = np.concatenate(
+                [
+                    np.arange(radius + 1, dtype=np.int64),
+                    np.arange(-(radius - 1), 0, dtype=np.int64),
+                ]
+            )
+        else:
+            expected_ky = np.concatenate(
+                [
+                    np.arange(radius, dtype=np.int64),
+                    np.arange(-radius, 0, dtype=np.int64),
+                ]
+            )
+        expected_kx = np.arange(current_size // 2 + 1)
+
+        np.testing.assert_array_equal(
+            ky.reshape(current_size, current_size // 2 + 1)[:, 0],
+            expected_ky,
+        )
+        np.testing.assert_array_equal(
+            np.where(kx < 0, current_size // 2, kx).reshape(
+                current_size,
+                current_size // 2 + 1,
+            )[0],
+            expected_kx,
+        )
 
 
 # ===========================================================================

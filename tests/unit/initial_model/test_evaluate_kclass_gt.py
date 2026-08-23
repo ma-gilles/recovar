@@ -27,10 +27,60 @@ import mrcfile
 import numpy as np
 import pytest
 
+from scripts import evaluate_kclass_gt as evaluator
+
 pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts" / "evaluate_kclass_gt.py"
+
+
+def test_kclass_best_permutation_assignment_handles_k16_without_factorial_search():
+    perm = tuple((i * 5 + 3) % 16 for i in range(16))
+    scores = np.zeros((16, 16), dtype=np.float64)
+    for i, j in enumerate(perm):
+        scores[i, j] = 10.0 + i / 100.0
+
+    best_perm, best_score = evaluator._best_permutation_from_score_matrix(scores)
+
+    assert best_perm == perm
+    assert best_score == pytest.approx(np.mean([10.0 + i / 100.0 for i in range(16)]))
+
+
+def test_normalized_fsc_auc_ignores_shell_zero_and_integrates_curve():
+    fsc = np.asarray([1.0, 0.2, 0.6, 0.6], dtype=np.float64)
+
+    assert evaluator._normalized_fsc_auc(fsc) == pytest.approx(0.5)
+
+
+def test_kclass_fsc_uses_canonical_non_nyquist_shell_range():
+    rng = np.random.default_rng(0)
+    volume = rng.standard_normal((16, 16, 16))
+
+    fsc = evaluator._fsc(volume, volume)
+
+    assert fsc.shape == (16 // 2 - 1,)
+    np.testing.assert_allclose(fsc, 1.0, atol=1e-12)
+
+
+def test_kclass_assignment_summary_uses_auc_not_early_shell_mean():
+    early_only = np.asarray([1.0] + [0.95] * 7 + [0.0] * 32, dtype=np.float64)
+    broad_lower_peak = np.asarray([1.0] + [0.75] * 39, dtype=np.float64)
+    fsc_table = [
+        [early_only, broad_lower_peak],
+        [broad_lower_peak, early_only],
+    ]
+
+    summary = evaluator._assignment_summary_from_fsc_table(fsc_table)
+
+    assert tuple(summary["best_perm"]) == (1, 0)
+    assert summary["best_perm_score_key"] == "fsc_auc"
+    assert tuple(summary["best_perm_by_mean_fsc_1_8"]) == (0, 1)
+    assert summary["best_mean_fsc_auc"] == pytest.approx(0.75)
+    assert summary["best_mean_fsc_1_8"] == pytest.approx(0.75)
+    assert summary["best_mean_fsc_1_8_by_mean_fsc_1_8"] == pytest.approx(0.95)
+    assert np.asarray(summary["pairwise_fsc_auc"]).shape == (2, 2)
+    assert np.asarray(summary["pairwise_mean_fsc_1_8"]).shape == (2, 2)
 
 
 def _make_synthetic_volume(seed: int, ori: int = 32) -> np.ndarray:
@@ -105,6 +155,10 @@ def test_kclass_eval_identity_permutation(tmp_path):
     assert summary["K"] == 2
     primary = summary["primary"]
     assert tuple(primary["best_perm"]) == (0, 1)
+    assert primary["mean_fsc_auc"] == pytest.approx(
+        np.mean([entry["fsc_auc"] for entry in primary["per_class"]])
+    )
+    assert primary["mean_fsc_auc_1_nyquist"] == pytest.approx(primary["mean_fsc_auc"])
     assert summary["comparisons"] == []  # no --compare_with → empty list
     # Even for a perfect (recovar = GT) input the alignment goes through
     # HEALPix-2 coarse + HEALPix-(3, 4) refinement, neither of which contains
@@ -257,6 +311,7 @@ def test_kclass_eval_compare_with_produces_delta_table(tmp_path):
     cmp = summary["comparisons"][0]
     assert cmp["label"] == "RELION"
     assert tuple(cmp["best_perm"]) == (0, 1)
+    assert "mean fsc_auc" in proc.stdout
     # primary class 0 should match the comparison closely (same vol_a);
     # primary class 1 should beat comparison c1 because comparison c1 is
     # the noisy copy.

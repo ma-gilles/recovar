@@ -7,6 +7,7 @@ import os
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import mrcfile
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
@@ -190,6 +191,94 @@ def get_pose_ctf_generator(option):
         return get_params_generator(load_second_dataset_params)
 
 
+def _normalized_vector(vector, *, name):
+    vector = np.asarray(vector, dtype=float)
+    if vector.shape != (3,):
+        raise ValueError(f"{name} must have shape (3,), got {vector.shape}")
+    norm = np.linalg.norm(vector)
+    if norm == 0:
+        raise ValueError(f"{name} must be nonzero")
+    return vector / norm
+
+
+def _orthogonal_unit_vector(vector):
+    vector = _normalized_vector(vector, name="vector")
+    ref = np.array([1.0, 0.0, 0.0]) if abs(vector[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    out = ref - vector * float(ref @ vector)
+    return out / np.linalg.norm(out)
+
+
+def _kent_frame(mu, mu0):
+    gamma1 = _normalized_vector(mu0, name="mu0")
+    mu = _normalized_vector(mu, name="mu")
+    gamma2 = mu - gamma1 * float(mu @ gamma1)
+    gamma2_norm = np.linalg.norm(gamma2)
+    if gamma2_norm == 0:
+        gamma2 = _orthogonal_unit_vector(gamma1)
+    else:
+        gamma2 = gamma2 / gamma2_norm
+    gamma3 = np.cross(gamma1, gamma2)
+    gamma3 = gamma3 / np.linalg.norm(gamma3)
+    return gamma1, gamma2, gamma3
+
+
+def _sample_kent_points_fallback(n_images, alpha, beta, mu, mu0, rng):
+    """Sample Kent-like viewing directions without the optional sphstat package."""
+    n_images = int(n_images)
+    if n_images < 0:
+        raise ValueError("n_images must be nonnegative")
+    if n_images == 0:
+        return np.empty((0, 3), dtype=float)
+
+    gamma1, gamma2, gamma3 = _kent_frame(mu, mu0)
+    envelope_log_density = abs(float(alpha)) + abs(float(beta))
+    accepted = []
+    accepted_count = 0
+    batch_size = max(4096, min(max(4 * n_images, 4096), 262144))
+    max_draws = max(100000, 500 * n_images)
+    draws = 0
+
+    while accepted_count < n_images and draws < max_draws:
+        candidates = rng.normal(size=(batch_size, 3))
+        candidates /= np.linalg.norm(candidates, axis=1, keepdims=True)
+        coord1 = candidates @ gamma1
+        coord2 = candidates @ gamma2
+        coord3 = candidates @ gamma3
+        log_density = float(alpha) * coord1 + float(beta) * (coord2**2 - coord3**2)
+        keep = np.log(rng.random(batch_size)) <= (log_density - envelope_log_density)
+        if np.any(keep):
+            block = candidates[keep]
+            need = n_images - accepted_count
+            accepted.append(block[:need])
+            accepted_count += min(block.shape[0], need)
+        draws += batch_size
+
+    if accepted_count < n_images:
+        logger.warning(
+            "Kent rejection fallback accepted %d/%d samples after %d draws; filling the tail with tangent-normal samples",
+            accepted_count,
+            n_images,
+            draws,
+        )
+        need = n_images - accepted_count
+        kappa = max(abs(float(alpha)), 1e-6)
+        ovalness = min(abs(float(beta)), 0.49 * kappa)
+        sigma_major = 1.0 / np.sqrt(max(kappa - 2.0 * ovalness, 1e-3))
+        sigma_minor = 1.0 / np.sqrt(max(kappa + 2.0 * ovalness, 1e-3))
+        if beta < 0:
+            sigma_major, sigma_minor = sigma_minor, sigma_major
+        center = gamma1 if alpha >= 0 else -gamma1
+        tangent = (
+            rng.normal(scale=sigma_major, size=(need, 1)) * gamma2[None, :]
+            + rng.normal(scale=sigma_minor, size=(need, 1)) * gamma3[None, :]
+        )
+        tail = center[None, :] + tangent
+        tail /= np.linalg.norm(tail, axis=1, keepdims=True)
+        accepted.append(tail)
+
+    return np.concatenate(accepted, axis=0)[:n_images]
+
+
 def kent_sampling_scheme(n_images, grid_size, seed=0, arguments=None):
     """
     Generate Kent (5-parameter Fisher-Bingham - FB5) distributed data on the unit sphere
@@ -207,13 +296,8 @@ def kent_sampling_scheme(n_images, grid_size, seed=0, arguments=None):
     """
 
     np.random.seed(seed)
+    rng = np.random.default_rng(seed)
     ctf_params, _, _ = generate_simulated_params_from_real(n_images, load_second_dataset_params, grid_size)
-    try:
-        import sphstat
-
-    except ImportError:
-        raise ImportError("sphstat is not installed. Please install it with `pip install sphstat`")
-
     if arguments is not None:
         alpha = float(arguments[0])
         beta = float(arguments[1])
@@ -226,10 +310,16 @@ def kent_sampling_scheme(n_images, grid_size, seed=0, arguments=None):
         mu = np.array([1.0, 1.0, 0.0])
         mu = mu / np.linalg.norm(mu)
 
-    sample = sphstat.distributions.kent(n_images, alpha, beta, mu, mu0)
+    try:
+        import sphstat
 
-    unit_vectors = sample["points"]
-    theta = np.random.rand(n_images) * 2 * np.pi
+        sample = sphstat.distributions.kent(n_images, alpha, beta, mu, mu0)
+        unit_vectors = sample["points"]
+    except ImportError:
+        logger.warning("sphstat is not installed; using internal Kent/Fisher-Bingham fallback sampler")
+        unit_vectors = _sample_kent_points_fallback(n_images, alpha, beta, mu, mu0, rng)
+
+    theta = rng.random(n_images) * 2 * np.pi
     rotations = cryo_rotation_batch(unit_vectors, theta)
 
     translations = np.zeros([n_images, 2])
@@ -595,7 +685,7 @@ def generate_synthetic_dataset(
         Batch size used only to advance the random-noise stream. When omitted,
         it matches the image processing batch size. Supplying a fixed value
         keeps generated noise independent of GPU-memory-driven processing
-        batch changes.
+        batch changes (issue #148 fix).
     """
     from recovar.output import output
 
@@ -797,7 +887,14 @@ def generate_synthetic_dataset(
     # Save outputs
     particles_file = output_folder + f"/particles.{grid_size}.mrcs"
 
-    utils.write_mrc_stack(particles_file, main_image_stack, voxel_size=voxel_size, dtype=image_dtype)
+    if streaming_mmap:
+        if mrc_file is not None:
+            if hasattr(mrc_file, "flush"):
+                mrc_file.flush()
+        if hasattr(main_image_stack, "flush"):
+            main_image_stack.flush()
+    else:
+        utils.write_mrc_stack(particles_file, main_image_stack, voxel_size=voxel_size, dtype=image_dtype)
     poses = (rots.astype(np.float32), trans.astype(np.float32))
     utils.pickle_dump(poses, output_folder + "/poses.pkl")
     save_ctf_params(output_folder, grid_size, ctf_params, voxel_size)
@@ -981,13 +1078,18 @@ def generate_simulated_dataset(
     # cubic interpolation uses ~4x more GPU memory per image than linear
     mult = 0.5 if "cubic" in disc_type else 5
     batch_size = int(mult * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total()))
+    use_fixed_noise_rng_stream = noise_rng_batch_size is not None
     if noise_rng_batch_size is None:
         noise_rng_batch_size = batch_size
     noise_rng_batch_size = utils.safe_batch_size(noise_rng_batch_size)
+    noise_transform_batch_size = (
+        min(noise_rng_batch_size, FIXED_NOISE_TRANSFORM_BATCH_SIZE) if use_fixed_noise_rng_stream else None
+    )
     logger.info(
-        "Simulation batch sizes: processing=%d, noise_rng=%d",
+        "Simulation batch sizes: processing=%d, noise_rng=%d, noise_transform=%s",
         batch_size,
         noise_rng_batch_size,
+        noise_transform_batch_size,
     )
 
     main_image_stack = simulate_data(
@@ -1003,6 +1105,7 @@ def generate_simulated_dataset(
         mrc_file=mrc_file,
         premultiplied_ctf=premultiplied_ctf,
         noise_rng_batch_size=noise_rng_batch_size,
+        noise_transform_batch_size=noise_transform_batch_size,
     )
 
     image_means = np.mean(main_image_stack, axis=(-1, -2))
@@ -1044,6 +1147,7 @@ def generate_simulated_dataset(
             pad_before_translate=True,
             premultiplied_ctf=premultiplied_ctf,
             noise_rng_batch_size=noise_rng_batch_size,
+            noise_transform_batch_size=noise_transform_batch_size,
         )
 
         main_image_stack += extra_particles_image_stack
@@ -1083,6 +1187,7 @@ def generate_simulated_dataset(
             mrc_file=None,
             premultiplied_ctf=premultiplied_ctf,
             noise_rng_batch_size=noise_rng_batch_size,
+            noise_transform_batch_size=noise_transform_batch_size,
         )
 
         ind_outliers = np.random.choice(n_images, n_outlier_images, replace=False)
@@ -1136,6 +1241,7 @@ def generate_simulated_dataset(
             mrc_file=None,
             premultiplied_ctf=premultiplied_ctf,
             noise_rng_batch_size=noise_rng_batch_size,
+            noise_transform_batch_size=noise_transform_batch_size,
         )
         main_image_stack[image_indices_tilt_series_outliers] = tilt_outlier_image_stack
 
@@ -1164,6 +1270,7 @@ def generate_simulated_dataset(
         "n_tilts": n_tilts if n_tilts > 0 else None,
         "simulation_batch_size": batch_size,
         "simulation_noise_rng_batch_size": noise_rng_batch_size,
+        "simulation_noise_transform_batch_size": noise_transform_batch_size,
     }
 
     return main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups
@@ -1181,6 +1288,7 @@ def save_ctf_params(outdir, D: int, ctf_params, voxel_size):
 
 
 roll_batch = jax.vmap(lambda x, y, z: jax.numpy.roll(x, y, axis=z), in_axes=(0, 0, None))
+FIXED_NOISE_TRANSFORM_BATCH_SIZE = 256
 
 
 def simulate_data(
@@ -1198,6 +1306,7 @@ def simulate_data(
     Bfactor=100,
     premultiplied_ctf=False,
     noise_rng_batch_size=None,
+    noise_transform_batch_size=None,
 ):
 
     if disc_type == "pdb":
@@ -1367,9 +1476,8 @@ def simulate_data(
                 ## AND THE MAGIC NUMBER IS... (to make things consistent with the non-premultiplied CTF case)
                 noise_image = noise_image * upsample_factor**2
 
-                # Make big noise. The RNG stream can be tied to a fixed
-                # reference chunk size so generated datasets do not change
-                # when GPU-memory-driven processing batches change.
+                # Make big noise from a fixed-chunk RNG stream so that
+                # processing-batch changes (GPU memory) don't perturb noise.
                 noise_batch = make_noise_batch_from_rng_stream(
                     noise_subkeys,
                     noise_rng_batch_size,
@@ -1378,6 +1486,7 @@ def simulate_data(
                     n_images,
                     noise_image,
                     images_batch.shape,
+                    noise_transform_batch_size=noise_transform_batch_size,
                 )
                 noise_batch *= per_image_noise_scale[indices][..., None, None]
                 images_batch *= per_image_contrast[indices][..., None, None]
@@ -1422,6 +1531,7 @@ def simulate_data(
                     n_images,
                     noise_image,
                     images_batch.shape,
+                    noise_transform_batch_size=noise_transform_batch_size,
                 )
                 noise_batch *= per_image_noise_scale[indices][..., None, None]
                 images_batch *= per_image_contrast[indices][..., None, None]
@@ -1441,9 +1551,37 @@ def simulate_data(
     return output_array
 
 
-def make_noise_batch(subkey, noise_image, images_batch_shape):
+def _normal_from_random_bits(bits, dtype):
+    """Reproduce JAX's real normal transform from pre-generated RNG bits."""
+    np_dtype = np.dtype(dtype)
+    uint_dtype = jnp.uint64 if np_dtype.itemsize == 8 else jnp.uint32
+    nbits = np_dtype.itemsize * 8
+    nmant = np.finfo(np_dtype).nmant
+    float_bits = jax.lax.shift_right_logical(bits, jnp.array(nbits - nmant, uint_dtype))
+    one_bits = np.array(1.0, dtype=np_dtype).view(np.uint64 if nbits == 64 else np.uint32)
+    float_bits = jax.lax.bitwise_or(float_bits, jnp.asarray(one_bits, dtype=uint_dtype))
+    floats = jax.lax.bitcast_convert_type(float_bits, dtype) - jnp.array(1.0, dtype)
+    lo = np.nextafter(np.array(-1.0, dtype=np_dtype), np.array(0.0, dtype=np_dtype), dtype=np_dtype)
+    hi = np.array(1.0, dtype=np_dtype)
+    minval = jnp.asarray(lo, dtype=dtype)
+    maxval = jnp.asarray(hi, dtype=dtype)
+    uniform = jax.lax.max(minval, floats * (maxval - minval) + minval)
+    return jnp.array(np.sqrt(2.0), dtype) * jax.lax.erf_inv(uniform)
+
+
+def _make_host_random_bits(subkey, shape, dtype):
+    """Generate shape-dependent JAX RNG bits on CPU without GPU intermediates."""
+    uint_dtype = jnp.uint64 if np.dtype(dtype).itemsize == 8 else jnp.uint32
+    cpu_device = jax.devices("cpu")[0]
+    with jax.default_device(cpu_device):
+        bits = jax.random.bits(subkey, shape=shape, dtype=uint_dtype)
+    return np.asarray(bits)
+
+
+def _color_white_noise_batch(noise_batch, noise_image):
+    images_batch_shape = noise_batch.shape
     image_size = images_batch_shape[-1] * images_batch_shape[-2]
-    noise_batch = jax.random.normal(subkey, images_batch_shape) / jnp.sqrt(image_size)
+    noise_batch = noise_batch / jnp.sqrt(image_size)
 
     noise_batch_ft = fourier_transform_utils.get_dft2(noise_batch.reshape(images_batch_shape))
     noise_batch_ft *= jnp.sqrt(noise_image)
@@ -1451,6 +1589,9 @@ def make_noise_batch(subkey, noise_image, images_batch_shape):
     return noise_batch
 
 
+def make_noise_batch(subkey, noise_image, images_batch_shape):
+    noise_batch = jax.random.normal(subkey, images_batch_shape)
+    return _color_white_noise_batch(noise_batch, noise_image)
 def make_noise_batch_from_rng_stream(
     noise_subkeys,
     noise_rng_batch_size,
@@ -1459,25 +1600,55 @@ def make_noise_batch_from_rng_stream(
     n_images,
     noise_image,
     images_batch_shape,
+    noise_transform_batch_size=None,
 ):
-    """Return noise for a processing batch from a fixed reference RNG stream."""
+    """Return noise for a processing batch from a fixed reference RNG stream.
+
+    The RNG stream is chunked by ``noise_rng_batch_size`` (independent
+    of the processing ``batch_size``). For a processing batch spanning
+    [batch_st, batch_end), pulls the corresponding pieces from one or
+    more RNG chunks and concatenates them. This decouples generated
+    noise from GPU-memory-driven processing-batch shape changes
+    (issue #148 fix).
+    """
     if batch_end <= batch_st:
         raise ValueError("batch_end must be greater than batch_st")
 
     first_rng_batch = batch_st // noise_rng_batch_size
     last_rng_batch = (batch_end - 1) // noise_rng_batch_size
     image_shape = tuple(images_batch_shape[-2:])
+    normal_dtype = jnp.float64 if jax.config.x64_enabled else jnp.float32
+    target_device = jax.devices()[0]
+    if noise_transform_batch_size is not None:
+        noise_transform_batch_size = utils.safe_batch_size(noise_transform_batch_size)
     pieces = []
 
     for rng_batch_idx in range(first_rng_batch, last_rng_batch + 1):
         rng_st = rng_batch_idx * noise_rng_batch_size
         rng_end = min((rng_batch_idx + 1) * noise_rng_batch_size, n_images)
         rng_shape = (rng_end - rng_st, *image_shape)
-        rng_noise = make_noise_batch(noise_subkeys[rng_batch_idx], noise_image, rng_shape)
-
         slice_st = max(batch_st, rng_st) - rng_st
         slice_end = min(batch_end, rng_end) - rng_st
-        pieces.append(rng_noise[slice_st:slice_end])
+        if noise_transform_batch_size is not None:
+            # Preserve the full reference RNG shape on CPU, then transform and
+            # filter fixed, reference-anchored chunks on the accelerator. Both
+            # RNG and FFT shapes are therefore independent of the processing
+            # batch while GPU intermediates remain bounded.
+            host_bits = _make_host_random_bits(noise_subkeys[rng_batch_idx], rng_shape, normal_dtype)
+            first_transform_batch = slice_st // noise_transform_batch_size
+            last_transform_batch = (slice_end - 1) // noise_transform_batch_size
+            for transform_batch_idx in range(first_transform_batch, last_transform_batch + 1):
+                transform_st = transform_batch_idx * noise_transform_batch_size
+                transform_end = min(transform_st + noise_transform_batch_size, rng_shape[0])
+                transform_bits = jax.device_put(host_bits[transform_st:transform_end], target_device)
+                white_noise = _normal_from_random_bits(transform_bits, normal_dtype)
+                transformed_noise = _color_white_noise_batch(white_noise, noise_image)
+                overlap_st = max(slice_st, transform_st) - transform_st
+                overlap_end = min(slice_end, transform_end) - transform_st
+                pieces.append(transformed_noise[overlap_st:overlap_end])
+        else:
+            rng_noise = make_noise_batch(noise_subkeys[rng_batch_idx], noise_image, rng_shape)
+            pieces.append(rng_noise[slice_st:slice_end])
 
     if len(pieces) == 1:
         return pieces[0]

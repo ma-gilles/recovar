@@ -8,6 +8,8 @@ routes.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from recovar.em.sampling import (
@@ -23,7 +25,21 @@ from recovar.em.sampling import (
 # K-class first-iteration runs and made 100k/256 completion benchmarks
 # several-fold slower than RELION despite ample A100/H100 memory.
 RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 268_435_456
+RELION_FIRSTITER_RECON_COMPLEX_BUDGET_ENV = "RECOVAR_RELION_FIRSTITER_RECON_COMPLEX_BUDGET"
 RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET = 2_000_000
+
+
+def _firstiter_cc_recon_complex_budget() -> int:
+    raw = os.environ.get(RELION_FIRSTITER_RECON_COMPLEX_BUDGET_ENV)
+    if raw is None or raw.strip() == "":
+        return int(RELION_FIRSTITER_RECON_COMPLEX_BUDGET)
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{RELION_FIRSTITER_RECON_COMPLEX_BUDGET_ENV} must be a positive integer") from exc
+    if value <= 0:
+        raise ValueError(f"{RELION_FIRSTITER_RECON_COMPLEX_BUDGET_ENV} must be a positive integer")
+    return value
 
 
 def _safe_firstiter_cc_image_batch_size(n_trans, image_shape):
@@ -40,7 +56,7 @@ def _safe_firstiter_cc_image_batch_size(n_trans, image_shape):
     """
 
     n_half = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
-    return max(1, RELION_FIRSTITER_RECON_COMPLEX_BUDGET // max(int(n_trans) * n_half, 1))
+    return max(1, _firstiter_cc_recon_complex_budget() // max(int(n_trans) * n_half, 1))
 
 
 def _safe_dense_k_class_rotation_block_size(n_trans, image_batch_size):
@@ -67,6 +83,9 @@ def _build_firstiter_cc_pass2_grids(
     adaptive_oversampling: int,
     translation_step_px: float,
     random_perturbation: float,
+    *,
+    return_mstep_rotations: bool = False,
+    coarse_rotation_ids=None,
 ):
     """Build (coarse, fine, parent_map) pose grids for K-class iter-1 firstiter_cc adaptive engine.
 
@@ -82,33 +101,55 @@ def _build_firstiter_cc_pass2_grids(
     """
     coarse_rot_np = np.asarray(coarse_rotations, dtype=np.float32)
     coarse_trans_np = np.asarray(coarse_translations, dtype=np.float32)
+    base_translations_f64 = np.asarray(base_translations, dtype=np.float64)
     if int(adaptive_oversampling) <= 0:
         n_rot = int(coarse_rot_np.shape[0])
         n_trans = int(coarse_trans_np.shape[0])
         rot_parent_map = np.arange(n_rot, dtype=np.int64)
         trans_parent_map = np.arange(n_trans, dtype=np.int64)
-        return (
+        fine_translations = apply_relion_translation_perturbation(
+            base_translations_f64,
+            float(random_perturbation),
+            float(translation_step_px),
+        )
+        outputs = (
             coarse_rot_np,
             coarse_trans_np,
             coarse_rot_np,
-            coarse_trans_np,
+            fine_translations,
             rot_parent_map,
             trans_parent_map,
         )
+        if return_mstep_rotations:
+            return (*outputs, coarse_rot_np.copy())
+        return outputs
 
     adaptive_os = int(adaptive_oversampling)
-    all_coarse_rot_indices = np.arange(int(coarse_rot_np.shape[0]), dtype=np.int64)
-    fine_rotations, rot_parent_map = get_oversampled_rotation_grid_from_samples(
+    all_coarse_rot_indices = (
+        np.arange(int(coarse_rot_np.shape[0]), dtype=np.int64)
+        if coarse_rotation_ids is None
+        else np.asarray(coarse_rotation_ids, dtype=np.int64)
+    )
+    if all_coarse_rot_indices.shape != (int(coarse_rot_np.shape[0]),):
+        raise ValueError(
+            "coarse_rotation_ids must identify every supplied coarse rotation exactly once"
+        )
+    fine_rotation_outputs = get_oversampled_rotation_grid_from_samples(
         all_coarse_rot_indices,
         parent_nside_level=int(coarse_healpix_order),
         oversampling_order=adaptive_os,
         random_perturbation=float(random_perturbation),
+        return_mstep_rotations=return_mstep_rotations,
     )
+    fine_rotations, rot_parent_map = fine_rotation_outputs[:2]
+    fine_mstep_rotations = fine_rotation_outputs[2] if return_mstep_rotations else None
     fine_rotations = np.asarray(fine_rotations, dtype=np.float32)
+    if fine_mstep_rotations is not None:
+        fine_mstep_rotations = np.asarray(fine_mstep_rotations, dtype=np.float32)
     rot_parent_map = np.asarray(rot_parent_map, dtype=np.int64)
 
     fine_base_translations, trans_parent_map = get_oversampled_translation_grid(
-        np.asarray(base_translations, dtype=np.float32),
+        base_translations_f64,
         float(translation_step_px),
         oversampling_order=adaptive_os,
     )
@@ -116,10 +157,10 @@ def _build_firstiter_cc_pass2_grids(
         fine_base_translations,
         float(random_perturbation),
         float(translation_step_px),
-    ).astype(np.float32)
+    )
     trans_parent_map = np.asarray(trans_parent_map, dtype=np.int64)
 
-    return (
+    outputs = (
         coarse_rot_np,
         coarse_trans_np,
         fine_rotations,
@@ -127,3 +168,6 @@ def _build_firstiter_cc_pass2_grids(
         rot_parent_map,
         trans_parent_map,
     )
+    if return_mstep_rotations:
+        return (*outputs, fine_mstep_rotations)
+    return outputs

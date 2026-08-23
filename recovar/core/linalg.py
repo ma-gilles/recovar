@@ -176,8 +176,8 @@ def dft3(x, vec_shape):
     return x
 
 
-def batch_idft3(x, vec_shape, batch_size):
-    x_out = np.empty_like(x)
+def batch_idft3(x, vec_shape, batch_size, *, overwrite=False):
+    x_out = x if overwrite else np.empty_like(x)
     n_tot = x.shape[-1]
     n_blocks = int(np.ceil(n_tot / batch_size))
     logger.info("batch_idft3 in %d blocks", n_blocks)

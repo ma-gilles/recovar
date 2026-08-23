@@ -1,0 +1,172 @@
+{
+  "schema": "recovar.em_k4_native_softmask_repeatability_scorecard.v1",
+  "suite_id": "k4-it2-fixed-a100-native-softmask-observer-repeatability",
+  "suite_version": 1,
+  "classification": "native_softmask_observer_highres_xi2_residual",
+  "frozen_denominator": 14,
+  "scorecard_change_admissible": false,
+  "correlation_used": false,
+  "fsc_auc_evaluated": true,
+  "acceptance_contract": {
+    "science_job_id": 11990914,
+    "science_state": "COMPLETED",
+    "science_exit_code": "0:0",
+    "postterminal_analysis_completed": true,
+    "accepted": false
+  },
+  "cases": [
+    {
+      "id": "artifact_bytes_exact",
+      "name": "Selected native observer artifacts are byte-identical",
+      "result": "fail",
+      "checked": false
+    },
+    {
+      "id": "auxiliary_reduction_stream_markers_exact",
+      "name": "Auxiliary reduction-stream markers are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "capture_headers_mpi2_openmp1_exact",
+      "name": "Capture headers identify MPI rank 2 and OpenMP thread 1",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "capture_validators_passed",
+      "name": "All native capture validators pass",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "class_map_fsc_auc_at_least_threshold",
+      "name": "All signed class-map FSC-AUC values meet threshold",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "current_size_and_sampling_topology_exact",
+      "name": "Current size and sampling topology are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "dispatch_bytes_exact",
+      "name": "Dispatch logs are byte-identical",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "dispatch_row_count_exact",
+      "name": "Dispatch row counts are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "no_fatal_runtime_pattern",
+      "name": "No fatal runtime pattern is present",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "particle_count_exact",
+      "name": "Particle count is exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "powerclass_stream_markers_exact",
+      "name": "PowerClass stream markers are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "softmask_block_partial_markers_exact",
+      "name": "Soft-mask block-partial markers are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "target_state_exact",
+      "name": "Target iteration, half, and observer state are exact",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "thread_replay_markers_exact",
+      "name": "Thread replay markers are exact",
+      "result": "pass",
+      "checked": true
+    }
+  ],
+  "summary": {
+    "pass": 13,
+    "evaluated": 14
+  },
+  "artifact_exactness": {
+    "fine_score": true,
+    "fine_operand": false,
+    "bpref": true,
+    "fine_operand_differing_bytes": 3
+  },
+  "class_map_fsc_auc": {
+    "metric": "signed normalized non-DC FSC-AUC",
+    "threshold": 0.999999,
+    "values": [
+      0.9999999942598741,
+      0.9999999806617705,
+      0.9999999895280383,
+      0.999999986692646
+    ]
+  },
+  "first_unequal_boundary": {
+    "boundary": "cuda_powerclass_highres_xi2_interblock_atomic",
+    "sum_init_expression": "op.highres_Xi2_img[img_id] / 2",
+    "arm_a": 0.07816566526889801,
+    "arm_b": 0.07816564291715622,
+    "absolute_delta": 2.2351741790771484e-08,
+    "ulp_delta": 3,
+    "candidate_sum_init_mismatches": 2,
+    "pixel_fields_compared": 1520,
+    "pixel_field_mismatches": 0,
+    "lane_partials_exact": true,
+    "production_raw_diff2_exact": true,
+    "replay_raw_diff2_exact": true
+  },
+  "evidence": {
+    "analysis_result": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_softmask_partials_pair_51a9392_20260804T0410ET/analysis/SOFTMASK_PAIR_RESULT_11990914.json",
+      "sha256": "2a84d68edfb4067cfbe653f70df8a3ca3373a263e27fbc34281553699c55e724"
+    },
+    "residual_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_softmask_partials_pair_51a9392_20260804T0410ET/analysis/SOFTMASK_RESIDUAL_11990914.json",
+      "sha256": "1ae4303e5ca9713b387a465bccd02a3ea3b64aeeccb5b165348a871a3759fc15"
+    },
+    "analyzer": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_softmask_partials_pair_51a9392_20260804T0410ET/provenance/analyze_softmask_pair.py",
+      "sha256": "244680137df5bd73f679c669e510881fbcd5a03274cacc090f6adc67c474a7ce"
+    },
+    "residual_analyzer": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_softmask_partials_pair_51a9392_20260804T0410ET/provenance/analyze_softmask_residual.py",
+      "sha256": "576c4fdf0e66cd9d5e3e0d32ce0322d178c3ff6303b932a5cd6336f81d404ac9"
+    },
+    "science_completion": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_softmask_partials_pair_51a9392_20260804T0410ET/provenance/SCIENCE_PAIR_COMPLETE_11990914.json",
+      "sha256": "aff22e261093e5226a438c9e9f9baecfd2486efe5a443b2ac222196fb1afcb2e"
+    },
+    "science_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_softmask_partials_pair_51a9392_20260804T0410ET/provenance/science_outputs_11990914.sha256",
+      "sha256": "b4028eff1e26f063cc5bdbc40546c1c40a7da015db847d44e316a5d779edbe20"
+    },
+    "static_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_softmask_partials_pair_51a9392_20260804T0410ET/provenance/static_inputs_11990914.sha256",
+      "sha256": "8365d276f13567490ff04a9f43595bd874a911c1fe85939654e079fe397297d5"
+    },
+    "postterminal_audit": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_softmask_partials_pair_51a9392_20260804T0410ET/provenance/POSTTERMINAL_AUDIT_11990914.md",
+      "sha256": "976606b3d421010200dab9e5c5e4779ad36e68280df87f26cec076b1368f34df"
+    }
+  },
+  "metric_policy": "Exact byte, identity, dispatch, topology, and runtime gates plus signed shellwise normalized non-DC FSC-AUC; raw deltas are localization telemetry only; no correlation"
+}

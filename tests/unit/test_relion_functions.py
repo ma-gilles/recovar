@@ -29,12 +29,124 @@ def test_gridding_correct_variants_return_finite():
     assert np.isfinite(np.asarray(s1)).all()
 
 
+def test_gridding_correct_matches_relion_binding():
+    relion_bind = pytest.importorskip("recovar.relion_bind._relion_bind_core")
+    rng = np.random.default_rng(0)
+    vol = rng.normal(size=(8, 8, 8)).astype(np.float64)
+
+    ours, _ = rf.griddingCorrect(vol, ori_size=8, padding_factor=2, order=1)
+    relion = relion_bind.gridding_correct(vol, 8, 2, 1)
+
+    # XLA and the RELION C++ binding use different libm implementations for
+    # sqrt/sin; require agreement to a few binary64 ulps rather than bitwise
+    # identity across those compiler boundaries.
+    np.testing.assert_allclose(np.asarray(ours), np.asarray(relion), rtol=5e-16, atol=1e-15)
+
+
 def test_upscale_tau_shape_and_values():
     tau_1d = np.linspace(1.0, 2.0, 16, dtype=np.float32)
     out = rf.upscale_tau(tau_1d, padding_factor=2, volume_shape=(4, 4, 4), tau_is_1d=True)
     assert out.shape == (8 * 8 * 8,)
     assert float(np.min(np.asarray(out))) >= 1.0
     assert float(np.max(np.asarray(out))) <= 2.0
+
+
+def test_upscale_tau_from_volume_preserves_relion_nyquist_shell():
+    import recovar.core.fourier_transform_utils as ftu
+
+    volume_shape = (4, 4, 4)
+    n_shells = volume_shape[0] // 2 + 1
+    shell = np.floor(
+        np.asarray(ftu.get_grid_of_radial_distances(volume_shape, scaled=False, rounded=False)) + 0.5
+    ).astype(np.int32)
+    shell = np.minimum(shell, n_shells - 1)
+    tau_volume = np.asarray(shell, dtype=np.float32)
+
+    out = np.asarray(rf.upscale_tau(jnp.asarray(tau_volume.reshape(-1)), 1, volume_shape, tau_is_1d=False))
+    assert out.reshape(volume_shape)[0, 2, 2] == pytest.approx(2.0)
+
+
+def test_upscale_tau_uses_relion_half_up_shell_rounding():
+    tau_shells = np.asarray([1.0, 10.0, 20.0], dtype=np.float32)
+    volume_shape = (4, 4, 4)
+
+    full = np.asarray(rf.upscale_tau(jnp.asarray(tau_shells), 2, volume_shape, tau_is_1d=True)).reshape((8, 8, 8))
+    half = np.asarray(rf._upscale_tau_half(jnp.asarray(tau_shells), 2, volume_shape, tau_is_1d=True)).reshape(
+        (8, 8, 5)
+    )
+
+    assert full[3, 4, 4] == pytest.approx(10.0)  # padded radius 1 / pf 2 = shell 0.5 -> 1.
+    assert half[4, 4, 1] == pytest.approx(10.0)
+
+
+def test_adjust_regularization_accepts_tau_shells_without_volume_roundtrip():
+    import recovar.core.fourier_transform_utils as ftu
+
+    volume_shape = (8, 8, 8)
+    tau_shells = np.asarray([1.0, 10.0, 100.0, 1000.0, 10000.0], dtype=np.float32)
+    filt = np.ones(volume_shape, dtype=np.float32)
+
+    radial = np.asarray(ftu.get_grid_of_radial_distances(volume_shape, scaled=False, rounded=False))
+    rounded_shell = np.floor(radial + 0.5).astype(np.int32)
+    floor_shell = np.floor(radial).astype(np.int32)
+    idx = int(np.flatnonzero((rounded_shell.reshape(-1) == 2) & (floor_shell.reshape(-1) == 1))[0])
+
+    direct = np.asarray(
+        rf.adjust_regularization_relion_style(
+            filt,
+            volume_shape=volume_shape,
+            tau=jnp.asarray(tau_shells),
+            padding_factor=1,
+            relion_native_shell_floor=True,
+            max_res_shell=4,
+            tau_is_1d=True,
+        )
+    ).reshape(-1)
+
+    tau_floor_volume = tau_shells[np.minimum(floor_shell, tau_shells.shape[0] - 1)]
+    roundtripped = np.asarray(
+        rf.adjust_regularization_relion_style(
+            filt,
+            volume_shape=volume_shape,
+            tau=jnp.asarray(tau_floor_volume.reshape(-1)),
+            padding_factor=1,
+            relion_native_shell_floor=True,
+            max_res_shell=4,
+            tau_is_1d=False,
+        )
+    ).reshape(-1)
+
+    assert direct[idx] == pytest.approx(1.0 + 1.0 / tau_shells[2])
+    assert not np.isclose(direct[idx], roundtripped[idx])
+
+
+@pytest.mark.parametrize("layout", ["full", "half"])
+@pytest.mark.parametrize("force_host", [False, True])
+def test_relion_weight_shell_stats_uses_relion_half_up_rounding(monkeypatch, layout, force_host):
+    import recovar.core.fourier_transform_utils as ftu
+
+    volume_shape = (4, 4, 4)
+    padding_factor = 2
+    padded_shape = tuple(dim * padding_factor for dim in volume_shape)
+    if force_host:
+        monkeypatch.setattr(regularization, "_RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS", 1)
+
+    if layout == "half":
+        weight = np.zeros(ftu.volume_shape_to_half_volume_shape(padded_shape), dtype=np.float32)
+        weight[4, 4, 1] = 1.0  # padded radius 1 / pf 2 = shell 0.5 -> RELION shell 1.
+    else:
+        weight = np.zeros(padded_shape, dtype=np.float32)
+        weight[4, 4, 5] = 1.0  # centered full-grid x index 5 is Fourier coordinate +1.
+
+    stats = regularization._compute_relion_weight_shell_stats(
+        jnp.asarray(weight).reshape(-1),
+        volume_shape,
+        padding_factor=padding_factor,
+    )
+    shell_sum = np.asarray(stats["shell_sum"])
+
+    assert shell_sum[0] == pytest.approx(0.0)
+    assert shell_sum[1] == pytest.approx(1.0)
 
 
 def test_zero_pad_fourier_volume_maps_centered_frequencies():
@@ -96,6 +208,218 @@ def test_projection_padding_host_path_matches_device_path(monkeypatch):
     )
 
 
+def test_post_process_current_size_includes_exact_relion_decenter_boundary_full_and_half():
+    import recovar.core.fourier_transform_utils as ftu
+
+    volume_shape = (4, 4, 4)
+    padding_factor = 1
+    padded_shape = tuple(dim * padding_factor for dim in volume_shape)
+
+    full_weight = np.ones(padded_shape, dtype=np.float32)
+    full_inside = np.zeros(padded_shape, dtype=np.complex64)
+    full_inside[2, 2, 2] = 3.0
+    full_with_boundary = full_inside.copy()
+    full_with_boundary[1, 2, 2] = 7.0  # Projector::decenter includes r2 == max_r2.
+
+    common_kwargs = dict(
+        og_volume_shape=volume_shape,
+        volume_upsampling_factor=padding_factor,
+        tau=None,
+        use_spherical_mask=False,
+        grid_correct=False,
+        return_real_space=True,
+        current_size=2,
+    )
+    full_out_inside = rf.post_process_from_filter_v2(
+        jnp.asarray(full_weight.reshape(-1)),
+        jnp.asarray(full_inside.reshape(-1)),
+        input_half_volume=False,
+        **common_kwargs,
+    )
+    full_out_boundary = rf.post_process_from_filter_v2(
+        jnp.asarray(full_weight.reshape(-1)),
+        jnp.asarray(full_with_boundary.reshape(-1)),
+        input_half_volume=False,
+        **common_kwargs,
+    )
+    assert float(jnp.linalg.norm(full_out_boundary - full_out_inside)) > 1e-3
+
+    half_shape = ftu.volume_shape_to_half_volume_shape(padded_shape)
+    half_weight = np.ones(half_shape, dtype=np.float32)
+    half_inside = np.zeros(half_shape, dtype=np.complex64)
+    half_inside[2, 2, 0] = 3.0
+    half_with_boundary = half_inside.copy()
+    half_with_boundary[2, 2, 1] = 7.0  # packed exact padded radius 1.
+
+    half_out_inside = rf.post_process_from_filter_v2(
+        jnp.asarray(half_weight.reshape(-1)),
+        jnp.asarray(half_inside.reshape(-1)),
+        input_half_volume=True,
+        **common_kwargs,
+    )
+    half_out_boundary = rf.post_process_from_filter_v2(
+        jnp.asarray(half_weight.reshape(-1)),
+        jnp.asarray(half_with_boundary.reshape(-1)),
+        input_half_volume=True,
+        **common_kwargs,
+    )
+    assert float(jnp.linalg.norm(half_out_boundary - half_out_inside)) > 1e-3
+
+
+def test_relion_decenter_mask_includes_boundary_and_excludes_outside():
+    full = np.asarray(rf._relion_current_size_decenter_mask((5, 5, 5), 1, half_volume=False))
+    half = np.asarray(rf._relion_current_size_decenter_mask((5, 5, 5), 1, half_volume=True))
+
+    assert full[2, 2, 2]
+    assert full[1, 2, 2]
+    assert not full[0, 2, 2]
+    assert half[2, 2, 0]
+    assert half[2, 2, 1]
+    assert not half[2, 2, 2]
+
+
+def test_half_tau_shell_mapping_rounds_only_after_padding_scale():
+    tau_shells = jnp.arange(16, dtype=jnp.float64)
+    mapped = np.asarray(
+        rf._upscale_tau_to_accumulator_layout(
+            tau_shells,
+            2,
+            (8, 8, 8),
+            (11, 11, 11),
+            half_volume=True,
+            tau_is_1d=True,
+        )
+    ).reshape(11, 11, 6)
+
+    # Centered coordinates (-4, -2, 1) have radius sqrt(21). RELION uses
+    # ROUND(sqrt(21) / 2) = 2; pre-rounding sqrt(21) would incorrectly give 3.
+    assert mapped[1, 3, 1] == 2
+
+
+def test_relion_current_size_map_prior_excludes_exact_boundary():
+    shape = (5, 5, 5)
+    half_shape = (5, 5, 3)
+    tau = jnp.ones(4, dtype=jnp.float64)
+
+    half_regularized = np.asarray(
+        rf.adjust_regularization_relion_style(
+            jnp.ones(half_shape, dtype=jnp.float64),
+            shape,
+            tau=tau,
+            padding_factor=1,
+            max_res_shell=1,
+            half_volume=True,
+            relion_native_shell_floor=True,
+            native_volume_shape=shape,
+            tau_is_1d=True,
+        )
+    )
+    full_regularized = np.asarray(
+        rf.adjust_regularization_relion_style(
+            jnp.ones(shape, dtype=jnp.float64),
+            shape,
+            tau=tau,
+            padding_factor=1,
+            max_res_shell=1,
+            half_volume=False,
+            relion_native_shell_floor=True,
+            native_volume_shape=shape,
+            tau_is_1d=True,
+        )
+    )
+
+    assert half_regularized[2, 2, 0] > 1.0
+    assert half_regularized[2, 2, 1] == 1.0
+    assert full_regularized[2, 2, 2] > 1.0
+    assert full_regularized[1, 2, 2] == 1.0
+
+
+def test_post_process_large_grid_guard_avoids_complex128_padded_volume(monkeypatch):
+    clear_cache = getattr(rf.post_process_from_filter_v2, "clear_cache", None)
+    if callable(clear_cache):
+        clear_cache()
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "1")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "auto")
+
+    volume_shape = (6, 6, 6)
+    n_voxels = int(np.prod(volume_shape))
+    Ft_ctf = np.ones(n_voxels, dtype=np.float64)
+    F_ty = np.zeros(n_voxels, dtype=np.complex128)
+    F_ty[n_voxels // 2] = 1.0 + 0.25j
+    tau = np.ones(n_voxels, dtype=np.float64)
+
+    out = rf.post_process_from_filter_v2(
+        jnp.asarray(Ft_ctf),
+        jnp.asarray(F_ty),
+        volume_shape,
+        1,
+        tau=jnp.asarray(tau),
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=False,
+        current_size=4,
+    )
+
+    assert np.asarray(out).dtype == np.complex64
+    if callable(clear_cache):
+        clear_cache()
+
+
+def test_zero_tau_fallback_respects_relion_filter_normalization():
+    shape = (4, 4, 4)
+    filt = jnp.ones(np.prod(shape), dtype=jnp.float32)
+    tau = jnp.zeros(np.prod(shape), dtype=jnp.float64)
+    scale = 16.0
+
+    regularized = np.asarray(
+        rf.adjust_regularization_relion_style(
+            filt,
+            volume_shape=shape,
+            tau=tau,
+            padding_factor=1,
+            relion_filter_scale=scale,
+        )
+    )
+
+    expected_fallback = 1.0 / (0.001 * scale * scale)
+    np.testing.assert_allclose(regularized, 1.0 + expected_fallback, rtol=0, atol=1e-12)
+
+
+def test_post_process_can_preserve_double_reconstruction_output():
+    volume_shape = (6, 6, 6)
+    n_voxels = int(np.prod(volume_shape))
+    Ft_ctf = np.ones(n_voxels, dtype=np.float32)
+    F_ty = np.zeros(n_voxels, dtype=np.complex64)
+    F_ty[n_voxels // 2] = 1.0 + 0.25j
+    tau = np.ones(n_voxels, dtype=np.float64)
+
+    common = dict(
+        tau=jnp.asarray(tau),
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=False,
+        current_size=4,
+    )
+    compact = rf.post_process_from_filter_v2(
+        jnp.asarray(Ft_ctf),
+        jnp.asarray(F_ty),
+        volume_shape,
+        1,
+        **common,
+    )
+    preserved = rf.post_process_from_filter_v2(
+        jnp.asarray(Ft_ctf),
+        jnp.asarray(F_ty),
+        volume_shape,
+        1,
+        preserve_output_precision=True,
+        **common,
+    )
+
+    assert np.asarray(compact).dtype == np.complex64
+    assert np.asarray(preserved).dtype == np.complex128
+
+
 def test_adjust_regularization_relion_style_lower_bounded():
     filt = np.zeros((4, 4, 4), dtype=np.float32)
     reg = rf.adjust_regularization_relion_style(filt, volume_shape=(4, 4, 4))
@@ -125,6 +449,91 @@ def test_adjust_regularization_relion_style_respects_minres_map():
 
     np.testing.assert_allclose(reg[shell < 2], 1.0, rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(reg[shell >= 2], 3.0, rtol=1e-6, atol=1e-6)
+
+
+def test_adjust_regularization_relion_style_native_shell_floor_under_padding():
+    import recovar.core.fourier_transform_utils as ftu
+
+    padded_shape = (8, 8, 8)
+    padding_factor = 2
+    max_res_shell = 2
+    pixels = np.asarray(
+        ftu.get_k_coordinate_of_each_pixel(
+            np.asarray(padded_shape),
+            1,
+            scaled=False,
+        )
+    )
+    native_floor_shell_grid = np.floor(np.linalg.norm(pixels, axis=-1) / padding_factor).astype(np.int32)
+    native_floor_shell_grid = native_floor_shell_grid.reshape(padded_shape)
+    native_floor_shell = native_floor_shell_grid.reshape(-1)
+    packed_x = np.asarray(ftu.get_real_fft_packed_last_axis_indices(padded_shape[0]))
+    native_storage_shell = native_floor_shell_grid[packed_x, :, :]
+    shell_values = np.asarray([2.0, 7.0], dtype=np.float32)
+    filt_grid = np.zeros(padded_shape, dtype=np.float32)
+    for shell, value in enumerate(shell_values):
+        members = np.argwhere(native_storage_shell == shell)
+        assert members.shape[0] > 0
+        packed_i, y, z = members[0]
+        filt_grid[packed_x[packed_i], y, z] = np.float32(value * 1000.0 * members.shape[0])
+    filt = filt_grid.reshape(-1)
+
+    reg = np.asarray(
+        rf.adjust_regularization_relion_style(
+            filt,
+            volume_shape=padded_shape,
+            padding_factor=padding_factor,
+            max_res_shell=max_res_shell,
+            relion_native_shell_floor=True,
+        )
+    ).reshape(-1)
+
+    expected_floor = shell_values[np.minimum(native_floor_shell, max_res_shell - 1)]
+    expected = np.maximum(filt, expected_floor)
+    np.testing.assert_allclose(reg, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_adjust_regularization_relion_style_native_shell_floor_half_layout():
+    import recovar.core.fourier_transform_utils as ftu
+
+    padded_shape = (8, 8, 8)
+    padding_factor = 2
+    max_res_shell = 2
+    half_shape = ftu.volume_shape_to_half_volume_shape(padded_shape)
+    native_floor_shell = np.floor(
+        np.asarray(
+            ftu.get_grid_of_radial_distances_real(
+                padded_shape,
+                scaled=False,
+                frequency_shift=0,
+                rounded=False,
+            )
+        ).reshape(-1)
+        / padding_factor
+    ).astype(np.int32)
+    shell_values = np.asarray([3.0, 11.0], dtype=np.float32)
+    filt_half = np.zeros(int(np.prod(half_shape)), dtype=np.float32)
+    for shell, value in enumerate(shell_values):
+        members = np.flatnonzero(native_floor_shell == shell)
+        assert members.size > 0
+        filt_half[members[0]] = np.float32(value * 1000.0 * members.size)
+
+    cpu_device = jax.devices("cpu")[0]
+    with jax.default_device(cpu_device):
+        reg_half = np.asarray(
+            rf.adjust_regularization_relion_style(
+                jnp.asarray(filt_half),
+                volume_shape=padded_shape,
+                padding_factor=padding_factor,
+                max_res_shell=max_res_shell,
+                half_volume=True,
+                relion_native_shell_floor=True,
+            )
+        ).reshape(-1)
+
+    expected_floor = shell_values[np.minimum(native_floor_shell, max_res_shell - 1)]
+    expected = np.maximum(filt_half, expected_floor)
+    np.testing.assert_allclose(reg_half, expected, rtol=1e-6, atol=1e-6)
 
 
 def test_adjust_regularization_relion_style_half_matches_full():
@@ -259,6 +668,170 @@ def test_post_process_from_filter_v2_half_matches_full():
     np.testing.assert_allclose(out_real_from_packed, out_real_full, atol=1e-4, rtol=1e-4)
 
 
+def test_post_process_from_filter_v2_accepts_relion_odd_accumulator_shape():
+    import recovar.core.fourier_transform_utils as ftu
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf = np.ones(half_shape, dtype=np.float32)
+    f_ty = np.zeros(half_shape, dtype=np.complex64)
+    f_ty[5, 5, 0] = 1.0
+    tau = np.ones(int(np.prod(volume_shape)), dtype=np.float32)
+
+    out = rf.post_process_from_filter_v2(
+        jnp.asarray(ft_ctf).reshape(-1),
+        jnp.asarray(f_ty).reshape(-1),
+        volume_shape,
+        2,
+        tau=jnp.asarray(tau),
+        kernel="triangular",
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=True,
+        return_real_space=True,
+        accumulator_volume_shape=accumulator_shape,
+    )
+
+    assert np.asarray(out).shape == volume_shape
+    assert np.all(np.isfinite(np.asarray(out)))
+
+
+def test_relion_wiener_boundary_dump_records_pre_ifft_operands(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECOVAR_RELION_WIENER_BOUNDARY_DUMP_DIR", str(tmp_path))
+    monkeypatch.setattr(rf, "_RELION_WIENER_BOUNDARY_DUMP_CALL", 0)
+    numerator = jnp.asarray([1.0 + 2.0j, 3.0 + 4.0j], dtype=jnp.complex64)
+    raw_filter = jnp.asarray([5.0, 6.0], dtype=jnp.float32)
+    regularized_filter = jnp.asarray([7.0, 8.0], dtype=jnp.float64)
+    support = jnp.asarray([1.0, 0.0], dtype=jnp.float32)
+    divided = numerator * support / regularized_filter
+    tau = jnp.asarray([9.0, 10.0], dtype=jnp.float64)
+
+    @jax.jit
+    def dump_inside_jit(raw_filter, numerator, regularized_filter, support, divided, tau, tau2_fudge):
+        rf._maybe_dump_relion_wiener_boundary(
+            Ft_ctf_input=raw_filter,
+            F_ty_input=numerator,
+            regularized_filter=regularized_filter,
+            valid_indices=support,
+            divided_volume=divided,
+            tau=tau,
+            input_half_volume=True,
+            accumulator_volume_shape=(3, 3, 3),
+            reconstruction_volume_shape=(2, 2, 2),
+            current_size=2,
+            padding_factor=2,
+            tau2_fudge=tau2_fudge,
+            minres_map=5,
+            tau_is_1d=False,
+        )
+        return divided
+
+    dump_inside_jit(
+        raw_filter,
+        numerator,
+        regularized_filter,
+        support,
+        divided,
+        tau,
+        jnp.asarray(1.5, dtype=jnp.float64),
+    ).block_until_ready()
+    jax.effects_barrier()
+
+    with np.load(tmp_path / "recovar_wiener_boundary_0000.npz") as capture:
+        assert str(capture["schema"]) == "recovar-relion-wiener-boundary-v1"
+        assert bool(capture["input_half_volume"])
+        assert int(capture["current_size"]) == 2
+        assert int(capture["padding_factor"]) == 2
+        assert float(capture["tau2_fudge"]) == 1.5
+        assert int(capture["minres_map"]) == 5
+        assert not bool(capture["tau_is_1d"])
+        assert capture["regularized_filter"].dtype == np.float64
+        assert capture["tau"].dtype == np.float64
+        np.testing.assert_array_equal(capture["F_ty_input"], np.asarray(numerator))
+        np.testing.assert_array_equal(capture["divided_volume"], np.asarray(divided))
+
+
+@pytest.mark.parametrize(("old_dim", "new_dim"), [(11, 8), (7, 10)])
+def test_relion_window_centered_half_fourier_matches_binding(old_dim, new_dim):
+    relion_bind = pytest.importorskip("recovar.relion_bind._relion_bind_core")
+
+    rng = np.random.default_rng(188)
+    fftw_half = (
+        rng.standard_normal((old_dim, old_dim, old_dim // 2 + 1))
+        + 1j * rng.standard_normal((old_dim, old_dim, old_dim // 2 + 1))
+    ).astype(np.complex128)
+    centered_half = np.fft.fftshift(fftw_half, axes=(0, 1))
+
+    ours = np.asarray(
+        rf._relion_window_centered_half_fourier(
+            jnp.asarray(centered_half),
+            (old_dim, old_dim, old_dim),
+            (new_dim, new_dim, new_dim),
+        )
+    )
+    relion = relion_bind.window_fourier_transform_3d(fftw_half, new_dim)
+    relion_centered = np.fft.fftshift(relion, axes=(0, 1))
+
+    np.testing.assert_allclose(ours, relion_centered, atol=1e-12, rtol=1e-12)
+
+
+def test_relion_odd_accumulator_postprocess_windows_to_even_padded_grid():
+    import recovar.core.fourier_transform_utils as ftu
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    reconstruction_shape = rf._relion_reconstruction_padded_shape(volume_shape, 2)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf = np.ones(half_shape, dtype=np.float32)
+    f_ty = np.zeros(half_shape, dtype=np.complex64)
+    f_ty[5, 5, 0] = 1.0
+    tau = np.ones(int(np.prod(volume_shape)), dtype=np.float32)
+
+    post = rf.post_process_from_filter_v2(
+        jnp.asarray(ft_ctf).reshape(-1),
+        jnp.asarray(f_ty).reshape(-1),
+        volume_shape,
+        2,
+        tau=jnp.asarray(tau),
+        kernel="triangular",
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=True,
+        return_real_space=True,
+        accumulator_volume_shape=accumulator_shape,
+    )
+
+    ft_ctf2 = rf.adjust_regularization_relion_style(
+        jnp.asarray(ft_ctf).reshape(-1),
+        accumulator_shape,
+        tau=jnp.asarray(tau),
+        padding_factor=2,
+        half_volume=True,
+        minres_map=0,
+        max_res_shell=None,
+        relion_native_shell_floor=False,
+        native_volume_shape=volume_shape,
+    )
+    full_valid = ftu.full_volume_to_half_volume(
+        rf.mask.get_radial_mask(accumulator_shape, radius=accumulator_shape[0] // 2 - 1),
+        accumulator_shape,
+    ).reshape(-1)
+    vol_half = (jnp.asarray(f_ty).reshape(-1) * full_valid) / ft_ctf2
+    vol_half = rf._relion_window_centered_half_fourier(
+        vol_half,
+        accumulator_shape,
+        reconstruction_shape,
+    )
+    expected = ftu.get_idft3_real(
+        vol_half.reshape(ftu.volume_shape_to_half_volume_shape(reconstruction_shape)),
+        volume_shape=reconstruction_shape,
+    )
+    expected = rf.padding.unpad_volume_spatial_domain(expected, reconstruction_shape[0] - volume_shape[0])
+
+    np.testing.assert_allclose(np.asarray(post), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
 def test_join_halves_at_low_resolution_half_matches_full():
     import recovar.core.fourier_transform_utils as ftu
 
@@ -345,6 +918,80 @@ def test_join_halves_at_low_resolution_uses_relion_squared_radius_boundary():
     np.testing.assert_allclose(joined1[idx_boundary], 4.0, atol=1e-6)
 
 
+def test_join_halves_at_low_resolution_host_fallback_matches_join(monkeypatch):
+    volume_shape = (8, 8, 8)
+    idx_inside = (6, 4, 4)
+    idx_outside = (7, 7, 7)
+
+    ft_y_0 = np.zeros(volume_shape, dtype=np.complex64)
+    ft_y_1 = np.zeros(volume_shape, dtype=np.complex64)
+    ft_ctf_0 = np.ones(volume_shape, dtype=np.float32)
+    ft_ctf_1 = np.full(volume_shape, 3.0, dtype=np.float32)
+
+    ft_y_0[idx_inside] = 12.0 + 4.0j
+    ft_y_1[idx_inside] = 2.0 + 10.0j
+    ft_y_0[idx_outside] = 20.0
+    ft_y_1[idx_outside] = 4.0
+
+    kwargs = dict(
+        volume_shape=volume_shape,
+        voxel_size=10.0,
+        grid_size=4,
+        low_resol_join_halves_angstrom=40.0,
+    )
+    monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "never")
+    device_joined = regularization.join_halves_at_low_resolution(
+        jnp.array(ft_y_0.reshape(-1)),
+        jnp.array(ft_y_1.reshape(-1)),
+        jnp.array(ft_ctf_0.reshape(-1)),
+        jnp.array(ft_ctf_1.reshape(-1)),
+        **kwargs,
+    )
+
+    monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
+    host_joined = regularization.join_halves_at_low_resolution(
+        jnp.array(ft_y_0.reshape(-1)),
+        jnp.array(ft_y_1.reshape(-1)),
+        jnp.array(ft_ctf_0.reshape(-1)),
+        jnp.array(ft_ctf_1.reshape(-1)),
+        **kwargs,
+    )
+
+    assert all(isinstance(arr, np.ndarray) for arr in host_joined)
+    for host_arr, device_arr in zip(host_joined, device_joined):
+        np.testing.assert_allclose(host_arr, np.asarray(device_arr), atol=1e-6, rtol=1e-6)
+
+    joined0, joined1, joined_ctf0, joined_ctf1 = host_joined
+    joined0 = np.asarray(joined0).reshape(volume_shape)
+    joined1 = np.asarray(joined1).reshape(volume_shape)
+    joined_ctf0 = np.asarray(joined_ctf0).reshape(volume_shape)
+    joined_ctf1 = np.asarray(joined_ctf1).reshape(volume_shape)
+
+    np.testing.assert_allclose(joined0[idx_inside], 7.0 + 7.0j, atol=1e-6)
+    np.testing.assert_allclose(joined1[idx_inside], 7.0 + 7.0j, atol=1e-6)
+    np.testing.assert_allclose(joined_ctf0[idx_inside], 2.0, atol=1e-6)
+    np.testing.assert_allclose(joined_ctf1[idx_inside], 2.0, atol=1e-6)
+    np.testing.assert_allclose(joined0[idx_outside], 20.0, atol=1e-6)
+    np.testing.assert_allclose(joined1[idx_outside], 4.0, atol=1e-6)
+
+
+def test_low_resolution_join_host_fallback_auto_catches_padded_384(monkeypatch):
+    monkeypatch.delenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", raising=False)
+    monkeypatch.delenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK_MIN_ELEMENTS", raising=False)
+
+    unpadded_384_half_size = 384 * 384 * (384 // 2 + 1)
+    padded_384_half_size = (2 * 384) * (2 * 384) * (384 + 1)
+
+    assert not regularization._low_resolution_join_host_fallback_enabled_for_size(
+        unpadded_384_half_size,
+        1,
+    )
+    assert regularization._low_resolution_join_host_fallback_enabled_for_size(
+        padded_384_half_size,
+        1,
+    )
+
+
 def test_relion_weight_shell_stats_half_matches_full():
     import recovar.core.fourier_transform_utils as ftu
 
@@ -389,6 +1036,89 @@ def test_relion_weight_shell_stats_half_matches_full():
     np.testing.assert_allclose(np.asarray(prior_half), np.asarray(prior_full), atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(np.asarray(fsc_half), np.asarray(fsc_full), atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(np.asarray(dvp_half), np.asarray(dvp_full), atol=1e-5, rtol=1e-5)
+
+
+def test_relion_tau2_final_join_uses_summed_half_weights():
+    """Final all-data joins BackProjector weights before updateSSNRarrays."""
+
+    volume_shape = (6, 6, 6)
+    weight = jnp.ones(volume_shape, dtype=jnp.float32).reshape(-1)
+    fsc = jnp.full(volume_shape[0] // 2 + 1, 0.5, dtype=jnp.float32)
+
+    _, _, avg_details = regularization.compute_relion_tau2_from_weights(
+        weight,
+        weight,
+        fsc,
+        volume_shape,
+        return_details=True,
+        weight_combination="average",
+    )
+    _, _, sum_details = regularization.compute_relion_tau2_from_weights(
+        weight,
+        weight,
+        fsc,
+        volume_shape,
+        return_details=True,
+        weight_combination="sum",
+    )
+
+    shell_count = np.asarray(avg_details["shell_count"])
+    valid = shell_count > 0
+    np.testing.assert_allclose(
+        np.asarray(sum_details["avg_weight_shells"])[valid],
+        2.0 * np.asarray(avg_details["avg_weight_shells"])[valid],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        np.asarray(sum_details["prior_shells"])[valid],
+        0.5 * np.asarray(avg_details["prior_shells"])[valid],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    assert np.asarray(sum_details["weight_combination"]).item() == "sum"
+
+
+def test_relion_weight_shell_stats_accepts_odd_accumulator_shape_half_and_full():
+    import recovar.core.fourier_transform_utils as ftu
+
+    rng = np.random.default_rng(291)
+    volume_shape = (8, 8, 8)
+    padding_factor = 2
+    accumulator_shape = (19, 19, 19)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    weight_half = rng.uniform(0.1, 2.0, size=half_shape).astype(np.float32)
+    weight_full = np.asarray(
+        ftu.half_volume_to_full_volume(jnp.asarray(weight_half), accumulator_shape)
+    ).reshape(-1).real
+    fsc = np.linspace(0.9, 0.2, volume_shape[0] // 2 + 1, dtype=np.float32)
+
+    _, _, half_details = regularization.compute_relion_tau2_from_weights(
+        jnp.asarray(weight_half).reshape(-1),
+        jnp.asarray(weight_half).reshape(-1),
+        jnp.asarray(fsc),
+        volume_shape,
+        padding_factor=padding_factor,
+        accumulator_volume_shape=accumulator_shape,
+        return_details=True,
+    )
+    _, _, full_details = regularization.compute_relion_tau2_from_weights(
+        jnp.asarray(weight_full),
+        jnp.asarray(weight_full),
+        jnp.asarray(fsc),
+        volume_shape,
+        padding_factor=padding_factor,
+        accumulator_volume_shape=accumulator_shape,
+        return_details=True,
+        full_half_axis=-1,
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(full_details["avg_weight_shells"]),
+        np.asarray(half_details["avg_weight_shells"]),
+        atol=1e-6,
+        rtol=1e-6,
+    )
 
 
 def test_relion_kernel_batch_normalizes_noise_variance_shapes():

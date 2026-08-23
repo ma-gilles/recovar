@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 #include <stdexcept>
@@ -976,6 +977,99 @@ static py::array_t<double> vdam_rnd_unif_sequence(
 
 
 /**
+ * Return the first `n_draws` values of RELION's `rnd_unif(low, high)` after
+ * `init_random_generator(seed)`.  Calling the scaled source function is
+ * intentionally distinct from scaling `rnd_unif(0, 1)` after it returns:
+ * both paths round in float, but at different operation boundaries.
+ */
+static py::array_t<double> vdam_rnd_unif_range_sequence(
+    int seed,
+    long n_draws,
+    double low,
+    double high
+) {
+    init_random_generator(seed);
+    py::array_t<double> out((py::ssize_t)n_draws);
+    double* p = (double*)out.request().ptr;
+    for (long i = 0; i < n_draws; i++)
+        p[i] = (double)rnd_unif((float)low, (float)high);
+    return out;
+}
+
+
+/**
+ * RELION AutoRefine's one-time randomisation of a single half-set.
+ *
+ * Experiment::randomiseParticlesOrder seeds libc rand() and then calls
+ * std::random_shuffle on half 1 before half 2.  AutoRefine only performs the
+ * full-data shuffle once, during iteration 1.  Returning half-1 local indices
+ * from this helper lets native refinement select the same first 100 particles
+ * used by calculateExpectedAngularErrors.
+ */
+static py::array_t<long> auto_refine_randomise_half_order(
+    long nr_particles,
+    int seed
+) {
+    if (nr_particles < 0)
+        throw std::runtime_error("nr_particles must be non-negative");
+    std::vector<long> order((size_t)nr_particles);
+    for (long i = 0; i < nr_particles; i++)
+        order[(size_t)i] = i;
+    std::srand(seed);
+    std::random_shuffle(order.begin(), order.end());
+    py::array_t<long> out((py::ssize_t)nr_particles);
+    if (nr_particles > 0)
+        std::memcpy(out.request().ptr, order.data(), (size_t)nr_particles * sizeof(long));
+    return out;
+}
+
+
+/**
+ * RELION AutoRefine's paired one-time randomisation of both half-sets.
+ *
+ * Experiment::randomiseParticlesOrder calls srand(seed) once, then applies
+ * std::random_shuffle to half 1 and half 2 without reseeding between them.
+ * Keeping both shuffles in one binding call preserves the process-global
+ * libc rand() state consumed by the first half.
+ */
+static py::tuple auto_refine_randomise_half_orders(
+    long nr_particles_half1,
+    long nr_particles_half2,
+    int seed
+) {
+    if (nr_particles_half1 < 0 || nr_particles_half2 < 0)
+        throw std::runtime_error("half particle counts must be non-negative");
+
+    std::vector<long> order_half1((size_t)nr_particles_half1);
+    std::vector<long> order_half2((size_t)nr_particles_half2);
+    for (long i = 0; i < nr_particles_half1; i++)
+        order_half1[(size_t)i] = i;
+    for (long i = 0; i < nr_particles_half2; i++)
+        order_half2[(size_t)i] = i;
+
+    std::srand(seed);
+    std::random_shuffle(order_half1.begin(), order_half1.end());
+    std::random_shuffle(order_half2.begin(), order_half2.end());
+
+    py::array_t<long> out_half1((py::ssize_t)nr_particles_half1);
+    py::array_t<long> out_half2((py::ssize_t)nr_particles_half2);
+    if (nr_particles_half1 > 0)
+        std::memcpy(
+            out_half1.request().ptr,
+            order_half1.data(),
+            (size_t)nr_particles_half1 * sizeof(long)
+        );
+    if (nr_particles_half2 > 0)
+        std::memcpy(
+            out_half2.request().ptr,
+            order_half2.data(),
+            (size_t)nr_particles_half2 * sizeof(long)
+        );
+    return py::make_tuple(out_half1, out_half2);
+}
+
+
+/**
  * RELION InitialModel expected angular/translation accuracy estimator.
  *
  * This is the SPA 3D-reference-to-2D-image subset loop from
@@ -1005,7 +1099,8 @@ static py::dict vdam_expected_angular_errors(
     double sigma2_fudge,
     int random_seed,
     bool do_ctf_correction,
-    bool do_ctf_padding
+    bool do_ctf_padding,
+    py::object random_seed_particle_ids_obj
 ) {
     auto refs_buf = references.request();
     auto euler_buf = eulers_deg.request();
@@ -1017,6 +1112,17 @@ static py::dict vdam_expected_angular_errors(
     auto defV_buf = defV.request();
     auto defA_buf = defAngle.request();
     auto phase_buf = phase_shift.request();
+    py::array_t<long, py::array::c_style | py::array::forcecast> random_seed_particle_ids;
+    const long* random_seed_particle_ptr = nullptr;
+    if (!random_seed_particle_ids_obj.is_none()) {
+        random_seed_particle_ids = random_seed_particle_ids_obj.cast<
+            py::array_t<long, py::array::c_style | py::array::forcecast>
+        >();
+        auto random_seed_particle_buf = random_seed_particle_ids.request();
+        if (random_seed_particle_buf.ndim != 1 || random_seed_particle_buf.shape[0] != euler_buf.shape[0])
+            throw std::runtime_error("random_seed_particle_ids must have shape (n_trials,)");
+        random_seed_particle_ptr = static_cast<long*>(random_seed_particle_buf.ptr);
+    }
 
     if (refs_buf.ndim != 4)
         throw std::runtime_error("references must have shape (K, N, N, N)");
@@ -1084,29 +1190,31 @@ static py::dict vdam_expected_angular_errors(
         double trans_sum = 0.0;
         long count = 0;
 
+        // RELION evaluates every trial particle against every non-empty
+        // candidate class.  The particle's current class assignment is not
+        // consulted; only its current Euler angles are reused for the active
+        // class projector (ml_optimiser.cpp:9300-9648).
         for (long trial = 0; trial < n_trials; trial++) {
-            if (class_ptr[trial] != k)
-                continue;
             const long part_id = particle_ptr[trial];
             if (part_id < 0 || part_id >= n_particles)
                 throw std::runtime_error("particle_ids contains an entry outside the CTF parameter arrays");
 
-            CTF ctf;
-            ctf.setValues(
-                defU_ptr[part_id],
-                defV_ptr[part_id],
-                defA_ptr[part_id],
-                voltage,
-                Cs,
-                Q0,
-                0.0,
-                1.0,
-                phase_ptr[part_id],
-                -1.0
-            );
             MultidimArray<RFLOAT> Fctf(current_image_size, current_image_size / 2 + 1);
             Fctf.initConstant(1.0);
             if (do_ctf_correction) {
+                CTF ctf;
+                ctf.setValues(
+                    defU_ptr[part_id],
+                    defV_ptr[part_id],
+                    defA_ptr[part_id],
+                    voltage,
+                    Cs,
+                    Q0,
+                    0.0,
+                    1.0,
+                    phase_ptr[part_id],
+                    -1.0
+                );
                 ctf.getFftwImage(
                     Fctf,
                     ori_size,
@@ -1159,7 +1267,10 @@ static py::dict vdam_expected_angular_errors(
                     if ((imode == 0 && ang_error > 30.0) || (imode == 1 && sh_error > 10.0))
                         break;
 
-                    init_random_generator(random_seed + (int)part_id);
+                    const long seed_part_id = random_seed_particle_ptr == nullptr
+                        ? part_id
+                        : random_seed_particle_ptr[trial];
+                    init_random_generator(random_seed + (int)seed_part_id);
 
                     const double rot1 = eulers_ptr[trial * 3 + 0];
                     const double tilt1 = eulers_ptr[trial * 3 + 1];
@@ -1217,7 +1328,16 @@ static py::dict vdam_expected_angular_errors(
                             ? iy_linear
                             : (iy_linear - current_image_size);
                         const int ires = ROUND(std::sqrt((double)(iy * iy + ix * ix)));
-                        if (ires > 0 && ires < sigma_buf.shape[0]) {
+                        // Match Mresol_fine/Mresol_coarse: the packed x=0
+                        // Fourier column stores both Hermitian y halves, so
+                        // RELION counts only y>=0.  It also excludes shells
+                        // beyond the current image Nyquist boundary.
+                        if (
+                            ires > 0
+                            && ires < current_image_size / 2 + 1
+                            && !(ix == 0 && iy < 0)
+                            && ires < sigma_buf.shape[0]
+                        ) {
                             const double sigma = sigma_ptr[ires];
                             if (sigma > 0.0) {
                                 const Complex diff = DIRECT_MULTIDIM_ELEM(F1, n) - DIRECT_MULTIDIM_ELEM(F2, n);
@@ -1423,9 +1543,21 @@ Returns -1 when subset should span all particles.
           py::arg("nr_particles"), py::arg("seed"),
           "Experiment::randomiseParticlesOrder (non-halves) via RELION rnd_unif.");
 
+    m.def("auto_refine_randomise_half_order", &auto_refine_randomise_half_order,
+          py::arg("nr_particles"), py::arg("seed"),
+          "AutoRefine's one-time libc-rand/std::random_shuffle order for half 1.");
+
+    m.def("auto_refine_randomise_half_orders", &auto_refine_randomise_half_orders,
+          py::arg("nr_particles_half1"), py::arg("nr_particles_half2"), py::arg("seed"),
+          "AutoRefine's paired one-time half orders with libc rand state preserved.");
+
     m.def("vdam_rnd_unif_sequence", &vdam_rnd_unif_sequence,
           py::arg("seed"), py::arg("n_draws"),
           "Return the first n_draws of rnd_unif() after init_random_generator(seed).");
+
+    m.def("vdam_rnd_unif_range_sequence", &vdam_rnd_unif_range_sequence,
+          py::arg("seed"), py::arg("n_draws"), py::arg("low"), py::arg("high"),
+          "Return the first n_draws of rnd_unif(low, high) after seeding.");
 
     m.def("vdam_expected_angular_errors", &vdam_expected_angular_errors,
           py::arg("references"),
@@ -1445,6 +1577,7 @@ Returns -1 when subset should span all particles.
           py::arg("random_seed") = 0,
           py::arg("do_ctf_correction") = true,
           py::arg("do_ctf_padding") = false,
+          py::arg("random_seed_particle_ids") = py::none(),
           R"doc(
 SPA 3D InitialModel accuracy estimator from
 MlOptimiser::calculateExpectedAngularErrors. Returns acc_rot/acc_trans plus

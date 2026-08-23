@@ -18,6 +18,40 @@
 namespace py = pybind11;
 
 
+static MultidimArray<Complex> numpy_to_complex_3d(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> arr
+) {
+    auto buf = arr.request();
+    if (buf.ndim != 3)
+        throw std::runtime_error("expected 3D complex array (k, i, j)");
+    long kdim = buf.shape[0];
+    long idim = buf.shape[1];
+    long jdim = buf.shape[2];
+    MultidimArray<Complex> out(kdim, idim, jdim);
+    std::memcpy(out.data, buf.ptr, kdim * idim * jdim * sizeof(Complex));
+    out.setXmippOrigin();
+    out.xinit = 0;
+    return out;
+}
+
+
+static MultidimArray<RFLOAT> numpy_to_real_3d(
+    py::array_t<double, py::array::c_style | py::array::forcecast> arr
+) {
+    auto buf = arr.request();
+    if (buf.ndim != 3)
+        throw std::runtime_error("expected 3D real array (k, i, j)");
+    long kdim = buf.shape[0];
+    long idim = buf.shape[1];
+    long jdim = buf.shape[2];
+    MultidimArray<RFLOAT> out(kdim, idim, jdim);
+    std::memcpy(out.data, buf.ptr, kdim * idim * jdim * sizeof(RFLOAT));
+    out.setXmippOrigin();
+    out.xinit = 0;
+    return out;
+}
+
+
 /**
  * Backproject a set of 2D Fourier images into 3D, then reconstruct.
  *
@@ -114,6 +148,136 @@ static py::array_t<double> backproject_and_reconstruct(
 
 
 /**
+ * Reconstruct directly from already accumulated BackProjector data/weight.
+ *
+ * This is a diagnostic parity hook for EM/InitialModel debugging.  It avoids
+ * rerunning an E-step and routes dumped BPref buffers through RELION's real
+ * BackProjector::reconstruct implementation.
+ */
+static py::array_t<double> reconstruct_from_bpref(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> data,
+    py::array_t<double, py::array::c_style | py::array::forcecast> weight,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tau2,
+    int ori_size,
+    int padding_factor,
+    int interpolator,
+    bool do_map,
+    int max_iter_preweight,
+    RFLOAT tau2_fudge,
+    bool skip_gridding,
+    int current_size,
+    int r_max,
+    RFLOAT normalise,
+    RFLOAT minres_map
+) {
+    auto data_buf = data.request();
+    auto weight_buf = weight.request();
+    if (data_buf.ndim != 3 || weight_buf.ndim != 3)
+        throw std::runtime_error("data and weight must be 3D arrays");
+    if (data_buf.shape[0] != weight_buf.shape[0] ||
+        data_buf.shape[1] != weight_buf.shape[1] ||
+        data_buf.shape[2] != weight_buf.shape[2])
+        throw std::runtime_error("data and weight shapes must match");
+
+    BackProjector bp(ori_size, 3, "C1", interpolator, (float)padding_factor,
+                     10, 0, 1.9, 15, 2, skip_gridding);
+    bp.initZeros(current_size);
+    bp.data = numpy_to_complex_3d(data);
+    bp.weight = numpy_to_real_3d(weight);
+    if (r_max > 0) {
+        bp.r_max = r_max;
+        bp.pad_size = 2 * ((int)(padding_factor * r_max + 0.5) + 1) + 1;
+    }
+
+    long n_shells = tau2.request().shape[0];
+    MultidimArray<RFLOAT> tau2_arr(n_shells);
+    double* tau_ptr = (double*)tau2.request().ptr;
+    for (long s = 0; s < n_shells; s++)
+        DIRECT_A1D_ELEM(tau2_arr, s) = tau_ptr[s];
+
+    MultidimArray<RFLOAT> vol_out;
+    bp.reconstruct(vol_out, max_iter_preweight, do_map, tau2_arr,
+                   tau2_fudge, normalise, minres_map, false);
+
+    long nz = ZSIZE(vol_out);
+    long out_ny = YSIZE(vol_out);
+    long out_nx = XSIZE(vol_out);
+    py::array_t<double> result({nz, out_ny, out_nx});
+    std::memcpy(result.request().ptr, vol_out.data,
+                nz * out_ny * out_nx * sizeof(double));
+    return result;
+}
+
+
+/**
+ * Compute FSC directly from two already accumulated BackProjectors.
+ *
+ * This diagnostic hook routes identical compact-half data/weight arrays
+ * through RELION's getDownsampledAverage and
+ * calculateDownSampledFourierShellCorrelation implementations.  It permits
+ * exact validation of RECOVAR's NumPy scheduler-FSC emulation without
+ * rerunning an E-step.
+ */
+static py::array_t<double> compute_fsc_from_bpref(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> data_h1,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> data_h2,
+    py::array_t<double, py::array::c_style | py::array::forcecast> weight_h1,
+    py::array_t<double, py::array::c_style | py::array::forcecast> weight_h2,
+    int ori_size,
+    int padding_factor,
+    int current_size,
+    int r_max
+) {
+    auto data1_buf = data_h1.request();
+    auto data2_buf = data_h2.request();
+    auto weight1_buf = weight_h1.request();
+    auto weight2_buf = weight_h2.request();
+    if (data1_buf.ndim != 3 || data2_buf.ndim != 3 ||
+        weight1_buf.ndim != 3 || weight2_buf.ndim != 3)
+        throw std::runtime_error("data and weight inputs must be 3D arrays");
+    for (int axis = 0; axis < 3; axis++) {
+        if (data1_buf.shape[axis] != data2_buf.shape[axis] ||
+            data1_buf.shape[axis] != weight1_buf.shape[axis] ||
+            data1_buf.shape[axis] != weight2_buf.shape[axis])
+            throw std::runtime_error("all data and weight input shapes must match");
+    }
+
+    auto initialise = [&](BackProjector& bp,
+                          py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>& data,
+                          py::array_t<double, py::array::c_style | py::array::forcecast>& weight) {
+        bp.initZeros(current_size);
+        if (ZSIZE(bp.data) != data.request().shape[0] ||
+            YSIZE(bp.data) != data.request().shape[1] ||
+            XSIZE(bp.data) != data.request().shape[2])
+            throw std::runtime_error("input shape does not match RELION BackProjector shape");
+        bp.data = numpy_to_complex_3d(data);
+        bp.weight = numpy_to_real_3d(weight);
+        if (r_max > 0)
+            bp.r_max = r_max;
+    };
+
+    BackProjector bp1(ori_size, 3, "C1", TRILINEAR, (float)padding_factor,
+                      10, 0, 1.9, 15, 2, false);
+    BackProjector bp2(ori_size, 3, "C1", TRILINEAR, (float)padding_factor,
+                      10, 0, 1.9, 15, 2, false);
+    initialise(bp1, data_h1, weight_h1);
+    initialise(bp2, data_h2, weight_h2);
+
+    MultidimArray<Complex> avg1, avg2;
+    bp1.getDownsampledAverage(avg1);
+    bp2.getDownsampledAverage(avg2);
+
+    MultidimArray<RFLOAT> fsc;
+    bp1.calculateDownSampledFourierShellCorrelation(avg1, avg2, fsc);
+
+    long n_shells = XSIZE(fsc);
+    py::array_t<double> result(n_shells);
+    std::memcpy(result.request().ptr, fsc.data, n_shells * sizeof(double));
+    return result;
+}
+
+
+/**
  * Compute FSC between two sets of backprojected images.
  *
  * Each set is backprojected separately, then getDownsampledAverage is
@@ -193,7 +357,8 @@ get_backprojector_data(
     py::array_t<double, py::array::c_style | py::array::forcecast> weights,
     int ori_size,
     int padding_factor,
-    int interpolator
+    int interpolator,
+    int current_size
 ) {
     auto img_buf = images.request();
     auto rot_buf = rotations.request();
@@ -207,7 +372,7 @@ get_backprojector_data(
 
     BackProjector bp(ori_size, 3, "C1", interpolator, (float)padding_factor,
                      10, 0, 1.9, 15, 2, false);
-    bp.initZeros(-1);
+    bp.initZeros(current_size);
 
     for (long i = 0; i < n_images; i++) {
         MultidimArray<Complex> img_arr(ny, nx);
@@ -434,6 +599,29 @@ minres_map: RELION reconstruct minimum-resolution shell for solvent masking
 Returns: (ori_size, ori_size, ori_size) real-space volume
 )doc");
 
+    m.def("reconstruct_from_bpref", &reconstruct_from_bpref,
+          py::arg("data"),
+          py::arg("weight"),
+          py::arg("tau2"),
+          py::arg("ori_size"),
+          py::arg("padding_factor") = 2,
+          py::arg("interpolator") = TRILINEAR,
+          py::arg("do_map") = true,
+          py::arg("max_iter_preweight") = 10,
+          py::arg("tau2_fudge") = 1.0,
+          py::arg("skip_gridding") = true,
+          py::arg("current_size") = -1,
+          py::arg("r_max") = -1,
+          py::arg("normalise") = 1.0,
+          py::arg("minres_map") = -1.0,
+          R"doc(
+Reconstruct a real-space volume from already accumulated BPref data/weight.
+data, weight: RELION BackProjector arrays with shape
+    (pad_size, pad_size, pad_size//2+1)
+tau2: per-shell regularization values
+Returns: (ori_size, ori_size, ori_size) real-space volume
+)doc");
+
     m.def("compute_fsc_from_halfsets", &compute_fsc_from_halfsets,
           py::arg("images_h1"),
           py::arg("rotations_h1"),
@@ -447,6 +635,22 @@ Compute FSC between two half-set backprojections.
 Returns per-shell FSC values.
 )doc");
 
+    m.def("compute_fsc_from_bpref", &compute_fsc_from_bpref,
+          py::arg("data_h1"),
+          py::arg("data_h2"),
+          py::arg("weight_h1"),
+          py::arg("weight_h2"),
+          py::arg("ori_size"),
+          py::arg("padding_factor") = 2,
+          py::arg("current_size") = -1,
+          py::arg("r_max") = -1,
+          R"doc(
+Compute FSC from two already accumulated RELION BackProjectors.
+All inputs use RELION's compact-half shape
+    (pad_size, pad_size, pad_size//2+1).
+Returns per-shell FSC values from RELION's native downsampling and shell loops.
+)doc");
+
     m.def("get_backprojector_data", &get_backprojector_data,
           py::arg("images"),
           py::arg("rotations"),
@@ -454,10 +658,12 @@ Returns per-shell FSC values.
           py::arg("ori_size"),
           py::arg("padding_factor") = 2,
           py::arg("interpolator") = TRILINEAR,
+          py::arg("current_size") = -1,
           R"doc(
 Raw backprojection: returns (data, weight) arrays before Wiener solve.
-data: complex (pf*ori_size, pf*ori_size, pf*ori_size/2+1) projector-centered
+data: complex (pad_size, pad_size, pad_size//2+1) projector-centered
 weight: real, same shape
+current_size: optional RELION current image size used for initZeros()
 )doc");
 
     m.def("get_downsampled_average", &get_downsampled_average,

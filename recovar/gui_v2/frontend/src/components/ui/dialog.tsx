@@ -8,13 +8,59 @@ interface DialogProps {
   className?: string;
 }
 
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function Dialog({ open, onClose, children, className }: DialogProps): React.JSX.Element | null {
   const overlayRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
+  // Move focus into the dialog on open and restore it to the previously
+  // focused element on close/unmount, as aria-modal implies.
+  useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    if (panel) {
+      const firstFocusable = panel.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
+      (firstFocusable ?? panel).focus();
+    }
+    return () => {
+      previouslyFocused?.focus?.();
+    };
+  }, [open]);
+
+  // Handle Escape to close and trap Tab focus within the dialog.
   useEffect(() => {
     if (!open) return;
     function handleKey(e: KeyboardEvent): void {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+        (el) => el.offsetParent !== null || el === document.activeElement
+      );
+      if (focusable.length === 0) {
+        e.preventDefault();
+        panel.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !panel.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !panel.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
     }
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
@@ -31,8 +77,10 @@ export function Dialog({ open, onClose, children, className }: DialogProps): Rea
       }}
     >
       <div
+        ref={panelRef}
+        tabIndex={-1}
         className={clsx(
-          "relative max-h-[85vh] w-full max-w-md overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 p-5 shadow-xl",
+          "relative max-h-[85vh] w-full max-w-md overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 p-5 shadow-xl outline-none",
           className
         )}
         role="dialog"

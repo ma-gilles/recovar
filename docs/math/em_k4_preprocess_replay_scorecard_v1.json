@@ -1,0 +1,123 @@
+{
+  "schema": "recovar.em_k4_preprocess_replay_scorecard.v1",
+  "suite_id": "k4-it2-h1-orig53722-class1-preprocess-replay",
+  "suite_version": 1,
+  "frozen_denominator": 9,
+  "material_relative_l2_threshold": 5e-07,
+  "classification": "softmask_background_reduction_drift_within_fixed_material_floor",
+  "metric_policy": "Bitwise equality plus scale-sensitive relative-L2 and maximum absolute error against the fixed 5e-7 material floor; no correlation or map surrogate.",
+  "scorecard_change_admissible": false,
+  "correlation_used": false,
+  "fsc_auc_evaluated": false,
+  "evidence": {
+    "report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_preprocess_replay_retry2_f6b69788_20260731T1013ET/analysis/PREPROCESS_REPLAY.json",
+      "sha256": "2059de0e8487e2b7dc7f13f94fffe87bdb801c17ccc377924ec297ea783de146"
+    },
+    "replay_arrays": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_preprocess_replay_retry2_f6b69788_20260731T1013ET/analysis/PREPROCESS_REPLAY_ARRAYS.npz",
+      "sha256": "123c51379bd563d9b22f45d7a797dc3cc6949f93d4f71ec376c347d71429fd74"
+    },
+    "sealed_input": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_sameallocation_dynamicref_retry2_20260731T0520ET/reference_continue/capture/contribution/bpref_contribution_rows_it002_h1_call000000_dump000000_cs038.npz",
+      "sha256": "98c8642d7b85645f6416aa834eef931d3561e3db651111cd5d22cbd6ff7e5c0b"
+    }
+  },
+  "cases": [
+    {
+      "id": "normalized-shifted-repeat-1",
+      "stage": "normalized_shifted_real",
+      "comparison_to_first_execution": 1,
+      "bitwise_equal": true,
+      "relative_l2": 0.0,
+      "max_abs": 0.0,
+      "within_material_floor": true,
+      "checked": true
+    },
+    {
+      "id": "normalized-shifted-repeat-2",
+      "stage": "normalized_shifted_real",
+      "comparison_to_first_execution": 2,
+      "bitwise_equal": true,
+      "relative_l2": 0.0,
+      "max_abs": 0.0,
+      "within_material_floor": true,
+      "checked": true
+    },
+    {
+      "id": "normalized-shifted-repeat-3",
+      "stage": "normalized_shifted_real",
+      "comparison_to_first_execution": 3,
+      "bitwise_equal": true,
+      "relative_l2": 0.0,
+      "max_abs": 0.0,
+      "within_material_floor": true,
+      "checked": true
+    },
+    {
+      "id": "masked-real-repeat-1",
+      "stage": "masked_real",
+      "comparison_to_first_execution": 1,
+      "bitwise_equal": false,
+      "relative_l2": 4.258122254207966e-10,
+      "max_abs": 1.4901161193847656e-08,
+      "within_material_floor": true,
+      "checked": true
+    },
+    {
+      "id": "masked-real-repeat-2",
+      "stage": "masked_real",
+      "comparison_to_first_execution": 2,
+      "bitwise_equal": false,
+      "relative_l2": 7.400069142606838e-10,
+      "max_abs": 2.9802322387695312e-08,
+      "within_material_floor": true,
+      "checked": true
+    },
+    {
+      "id": "masked-real-repeat-3",
+      "stage": "masked_real",
+      "comparison_to_first_execution": 3,
+      "bitwise_equal": false,
+      "relative_l2": 5.969952614903309e-10,
+      "max_abs": 1.4901161193847656e-08,
+      "within_material_floor": true,
+      "checked": true
+    },
+    {
+      "id": "masked-fourier-repeat-1",
+      "stage": "masked_fourier",
+      "comparison_to_first_execution": 1,
+      "bitwise_equal": false,
+      "relative_l2": 4.2525044018765545e-08,
+      "max_abs": 6.291359902370698e-05,
+      "within_material_floor": true,
+      "checked": true
+    },
+    {
+      "id": "masked-fourier-repeat-2",
+      "stage": "masked_fourier",
+      "comparison_to_first_execution": 2,
+      "bitwise_equal": false,
+      "relative_l2": 2.33415553366361e-08,
+      "max_abs": 4.315837287515549e-05,
+      "within_material_floor": true,
+      "checked": true
+    },
+    {
+      "id": "masked-fourier-repeat-3",
+      "stage": "masked_fourier",
+      "comparison_to_first_execution": 3,
+      "bitwise_equal": false,
+      "relative_l2": 4.559462426669312e-08,
+      "max_abs": 6.291359902370698e-05,
+      "within_material_floor": true,
+      "checked": true
+    }
+  ],
+  "summary": {
+    "bitwise_equal": 3,
+    "within_material_floor": 9,
+    "evaluated": 9
+  }
+}

@@ -403,8 +403,12 @@ been refined to the finest level (i.e., there's nothing left to try).
   images whose best rotation changed by more than one HEALPix angular step.
 - [`convergence.py:333`](../../recovar/em/dense_single_volume/helpers/convergence.py#L333) -- `compute_translation_changes()`: computes RMS change in
   best translations between iterations.
-- [`convergence.py:546`](../../recovar/em/dense_single_volume/helpers/convergence.py#L546) -- `compute_ave_Pmax()`: mean of per-image maximum posterior
-  probability. Used by RELION to modulate `current_size` growth.
+- [`mean_helpers.py`](../../recovar/em/dense_single_volume/mean_helpers.py) --
+  `_relion_optimizer_average_pmax()`: in split-half refinement, sums half 1's
+  per-image maxima, divides by half 1's retained M-step posterior mass, and
+  supplies the scalar that RELION broadcasts for `current_size` growth.
+  `compute_ave_Pmax()` remains a raw-array helper, not the split-half optimizer
+  oracle.
 - [`convergence.py:500`](../../recovar/em/dense_single_volume/helpers/convergence.py#L500) -- `calculate_expected_angular_errors()`: estimates angular
   and translational accuracy from the posterior distribution. Used for local
   search sigma estimation.

@@ -11,13 +11,15 @@ Those live in ``image_metadata.py``, ``halfsets.py``, and
 """
 
 import logging
+import os
 import queue
 import threading
 import time
 from collections import Counter, OrderedDict
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 import grain.python as grain
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -30,6 +32,9 @@ from recovar.utils.nvtx_shim import nvtx
 logger = logging.getLogger(__name__)
 
 NVTX_DOMAIN_DATA_IO = "data_io"
+
+RelionFourierBackend = Literal["host_numpy", "jax_gpu", "relion_cuda"]
+_RELION_FOURIER_BACKENDS = frozenset(("host_numpy", "jax_gpu", "relion_cuda"))
 
 
 def _apply_relion_soft_image_mask_numpy(images: np.ndarray, image_mask: np.ndarray) -> np.ndarray:
@@ -86,6 +91,40 @@ def _centered_rfft2_numpy(images: np.ndarray) -> np.ndarray:
     shifted = np.fft.fftshift(images_np, axes=(-2, -1))
     transformed = np.fft.rfft2(shifted, axes=(-2, -1))
     return np.fft.fftshift(transformed, axes=(-2,))
+
+
+def _centered_rfft2_jax(images):
+    """Centered packed 2-D real FFT using JAX's active accelerator backend.
+
+    RELION's accelerated preprocessing uses cuFFT.  On the captured case-20
+    particles, JAX/cuFFT is bit-exact with RELION for all 1300 packed Fourier
+    pixels when both start from the same float32 masked real-space image.
+    """
+
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION jax_gpu Fourier preprocessing requires a JAX GPU backend")
+    images_jax = jnp.asarray(images, dtype=jnp.float32)
+    if images_jax.ndim == 2:
+        images_jax = images_jax[None, ...]
+    shifted = jnp.fft.fftshift(images_jax, axes=(-2, -1))
+    transformed = jnp.fft.rfft2(shifted, axes=(-2, -1))
+    return jnp.fft.fftshift(transformed, axes=(-2,))
+
+
+@jax.jit
+def _centered_rfft2_jax_per_image(images):
+    """Run one cuFFT plan per image so arithmetic is independent of batch size."""
+
+    images_jax = jnp.asarray(images, dtype=jnp.float32)
+    if images_jax.ndim == 2:
+        images_jax = images_jax[None, ...]
+
+    def transform(image):
+        shifted = jnp.fft.fftshift(image, axes=(-2, -1))
+        transformed = jnp.fft.rfft2(shifted, axes=(-2, -1))
+        return jnp.fft.fftshift(transformed, axes=(-2,))
+
+    return jax.lax.map(transform, images_jax)
 
 
 class _SimpleSubset:
@@ -181,6 +220,14 @@ class ParticleImageDataset:
         self.total_pixels = self.image_size * self.image_size
         self.image_mask = np.array(mask.window_mask(self.image_size, 0.85, 0.99))
         self.image_mask_mode = "multiply"
+        # Keep the established host preprocessing path unless RELION strict
+        # parity is requested explicitly.  The strict path uses JAX/cuFFT for
+        # the packed rFFT; the real-space mask remains host-side until the
+        # source-faithful CUDA reduction/cospif kernel is available.
+        self.relion_fourier_backend: RelionFourierBackend = "host_numpy"
+        # Diagnostic-only alternative for the strict CUDA backend. The
+        # accepted block-first reduction remains the default.
+        self.relion_native_lane_reduction = False
         # When the user calls `set_relion_image_mask`, the mask geometry +
         # bg-fill + bg-std normalize chain matches RELION's normalize.cpp
         # exactly. Per-pixel preprocessed-Fimg CC vs RELION's exp_Fimg
@@ -253,6 +300,21 @@ class ParticleImageDataset:
         self.image_mask_mode = "relion_background_fill"
         self._relion_image_mask_params = (pixel_size, particle_diameter_ang, width_mask_edge_px)
 
+    def set_relion_fourier_backend(self, backend: RelionFourierBackend) -> None:
+        """Select the Fourier implementation for RELION background-fill images."""
+
+        if backend not in _RELION_FOURIER_BACKENDS:
+            raise ValueError(
+                f"Unsupported RELION Fourier backend {backend!r}; "
+                f"expected one of {sorted(_RELION_FOURIER_BACKENDS)}"
+            )
+        self.relion_fourier_backend = backend
+
+    def set_relion_native_lane_reduction(self, enabled: bool) -> None:
+        """Select the source-faithful native-observer soft-mask addition tree."""
+
+        self.relion_native_lane_reduction = bool(enabled)
+
     @nvtx.annotate("ParticleImageDataset.__getitem__", color="yellow", domain=NVTX_DOMAIN_DATA_IO)
     def __getitem__(self, index):
         images = self.source.images(index)
@@ -291,10 +353,72 @@ class ParticleImageDataset:
         images = pad.padded_dft(images * self.data_multiplier, self.D, self.padding)
         return images.astype(self.dtype, copy=False)
 
-    def process_images_half(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
+    def process_images_half(
+        self,
+        images: np.ndarray,
+        apply_image_mask: bool = False,
+        *,
+        relion_normalization_factors=None,
+        relion_integer_shifts=None,
+        relion_fft_per_image: bool = False,
+    ) -> np.ndarray:
         """Return preprocessed images directly in packed half-spectrum layout."""
 
         if self.image_mask_mode == "relion_background_fill":
+            if self.relion_fourier_backend == "relion_cuda":
+                if self._relion_image_mask_params is None:
+                    raise RuntimeError(
+                        "relion_cuda preprocessing requires set_relion_image_mask() "
+                        "so radius and cosine width are explicit"
+                    )
+                if relion_normalization_factors is None or relion_integer_shifts is None:
+                    raise RuntimeError(
+                        "relion_cuda preprocessing requires per-image float32 normalization "
+                        "factors and int32 integer shifts"
+                    )
+                if self.mult != 1:
+                    raise RuntimeError(
+                        "relion_cuda preprocessing requires data_multiplier=1; "
+                        "folding an additional multiplier into RELION's stored float32 stage is unsupported"
+                    )
+                from recovar.cuda_backproject import relion_preprocess_real_f32
+
+                native_atomic_value = os.environ.get(
+                    "RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION",
+                    "0",
+                )
+                if native_atomic_value not in {"0", "1"}:
+                    raise ValueError(
+                        "RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION must be 0 or 1"
+                    )
+                native_atomic_reduction = native_atomic_value == "1"
+                if self.relion_native_lane_reduction and native_atomic_reduction:
+                    raise ValueError(
+                        "deterministic native-lane and native-atomic soft-mask reductions "
+                        "are mutually exclusive"
+                    )
+
+                pixel_size, particle_diameter_ang, width_mask_edge_px = self._relion_image_mask_params
+                radius = float(particle_diameter_ang) / (2.0 * float(pixel_size))
+                images_f32 = jnp.asarray(images, dtype=jnp.float32)
+                factors_f32 = jnp.asarray(relion_normalization_factors)
+                shifts_i32 = jnp.asarray(relion_integer_shifts)
+                _normalized_shifted, preprocessed = relion_preprocess_real_f32(
+                    images_f32,
+                    factors_f32,
+                    shifts_i32,
+                    radius,
+                    float(width_mask_edge_px),
+                    apply_image_mask,
+                    native_lane_reduction=self.relion_native_lane_reduction,
+                    native_atomic_reduction=native_atomic_reduction,
+                )
+                transformed = (
+                    _centered_rfft2_jax_per_image(preprocessed)
+                    if relion_fft_per_image
+                    else _centered_rfft2_jax(preprocessed)
+                )
+                return transformed.reshape((transformed.shape[0], -1)).astype(jnp.complex64)
             try:
                 images_np = np.asarray(images)
             except Exception as exc:
@@ -306,6 +430,14 @@ class ParticleImageDataset:
                     images_np = images_np[np.newaxis, ...]
                 if apply_image_mask:
                     images_np = _apply_relion_soft_image_mask_numpy(images_np, self.image_mask)
+                if self.relion_fourier_backend == "jax_gpu":
+                    transformed = _centered_rfft2_jax(images_np * np.float32(self.mult))
+                    return transformed.reshape((transformed.shape[0], -1)).astype(jnp.complex64)
+                if self.relion_fourier_backend != "host_numpy":
+                    raise ValueError(
+                        f"Unsupported RELION Fourier backend {self.relion_fourier_backend!r}; "
+                        f"expected one of {sorted(_RELION_FOURIER_BACKENDS)}"
+                    )
                 transformed = _centered_rfft2_numpy(images_np * self.mult)
                 return transformed.reshape((transformed.shape[0], -1)).astype(self.dtype, copy=False)
 

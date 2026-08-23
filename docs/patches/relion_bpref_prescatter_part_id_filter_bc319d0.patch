@@ -1,0 +1,82 @@
+diff --git a/src/acc/acc_ml_optimiser_impl.h b/src/acc/acc_ml_optimiser_impl.h
+index a44104c..945683e 100644
+--- a/src/acc/acc_ml_optimiser_impl.h
++++ b/src/acc/acc_ml_optimiser_impl.h
+@@ -43,6 +43,7 @@ struct RelionBprefPreScatterConfigV1
+ 	std::uint64_t max_particles_per_rank;
+ 	std::uint64_t expected_followers;
+ 	std::uint64_t max_bytes;
++	std::vector<std::uint64_t> part_ids;
+ };
+ 
+ std::uint64_t relion_bpre_required_u64(const char *name)
+@@ -58,6 +59,50 @@ std::uint64_t relion_bpre_required_u64(const char *name)
+ 	return static_cast<std::uint64_t>(value);
+ }
+ 
++std::vector<std::uint64_t> relion_bpre_optional_u64_csv(const char *name)
++{
++	const char *text = std::getenv(name);
++	if (text == nullptr)
++		return {};
++	if (text[0] == '\0')
++		REPORT_ERROR(std::string("Empty particle identity list in ") + name);
++
++	std::vector<std::uint64_t> values;
++	const char *cursor = text;
++	while (*cursor != '\0')
++	{
++		if (*cursor < '0' || *cursor > '9')
++			REPORT_ERROR(std::string("Invalid comma-separated particle identity list in ") + name + ": " + text);
++		char *end = nullptr;
++		errno = 0;
++		unsigned long long value = std::strtoull(cursor, &end, 10);
++		if (errno != 0 || end == cursor || (*end != '\0' && *end != ','))
++			REPORT_ERROR(std::string("Invalid comma-separated particle identity list in ") + name + ": " + text);
++		for (std::uint64_t existing : values)
++			if (existing == static_cast<std::uint64_t>(value))
++				REPORT_ERROR(std::string("Duplicate particle identity in ") + name + ": " + text);
++		values.push_back(static_cast<std::uint64_t>(value));
++		if (*end == '\0')
++			break;
++		cursor = end + 1;
++		if (*cursor == '\0')
++			REPORT_ERROR(std::string("Trailing comma in particle identity list ") + name + ": " + text);
++	}
++	return values;
++}
++
++bool relion_bpre_part_id_selected(
++	const RelionBprefPreScatterConfigV1 &config,
++	std::uint64_t part_id)
++{
++	if (config.part_ids.empty())
++		return true;
++	for (std::uint64_t selected : config.part_ids)
++		if (selected == part_id)
++			return true;
++	return false;
++}
++
+ const RelionBprefPreScatterConfigV1 &relion_bpre_config_v1()
+ {
+ 	static const RelionBprefPreScatterConfigV1 config = []()
+@@ -76,6 +121,9 @@ const RelionBprefPreScatterConfigV1 &relion_bpre_config_v1()
+ 		result.max_particles_per_rank = relion_bpre_required_u64("RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK");
+ 		result.expected_followers = relion_bpre_required_u64("RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS");
+ 		result.max_bytes = relion_bpre_required_u64("RELION_BPRE_CAPTURE_MAX_BYTES");
++		result.part_ids = relion_bpre_optional_u64_csv("RELION_BPRE_CAPTURE_PART_IDS");
++		if (!result.part_ids.empty() && result.expected_particles != result.part_ids.size())
++			REPORT_ERROR("RELION_BPRE_CAPTURE_EXPECTED_PARTICLES must equal the explicit PART_IDS count");
+ 		if (result.expected_particles > result.max_particles_per_rank * result.expected_followers)
+ 			REPORT_ERROR("RELION BPref capture cannot fit EXPECTED_PARTICLES within the explicit per-rank/follower cap");
+ 		struct stat status;
+@@ -144,6 +192,8 @@ void relion_capture_bpref_prescatter_v1(
+ 	if (!config.enabled || static_cast<std::uint64_t>(baseMLO->iter) != config.iteration
+ 		|| iclass + 1 != config.class_one_based)
+ 		return;
++	if (!relion_bpre_part_id_selected(config, static_cast<std::uint64_t>(op.part_id)))
++		return;
+ 	if (data_is_3d)
+ 		REPORT_ERROR("RELION BPref pre-scatter schema v1 currently supports 2D particle images only");
+ 	if (orientation_num == 0 || image_size == 0)

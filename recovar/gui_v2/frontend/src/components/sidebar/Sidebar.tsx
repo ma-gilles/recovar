@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   Plus,
   ChevronDown,
@@ -17,14 +17,21 @@ import {
   FolderPlus,
   AlertTriangle,
   Settings,
+  Wand2,
+  Search,
 } from "lucide-react";
 import { clsx } from "clsx";
-import { getProject, createProject, ApiError, type ProjectDetail, type JobSummary } from "../../lib/api/client";
+import { getProject, createProject, listProjects, ApiError, type ProjectDetail, type JobSummary } from "../../lib/api/client";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { isEphemeralPath, EPHEMERAL_PATH_WARNING } from "../../lib/constants";
+
+// Viewport width (px) below which the sidebar auto-collapses. Single source of
+// truth for both the initial state and the matchMedia listener.
+const COLLAPSE_BREAKPOINT = 768;
+const COLLAPSE_MEDIA_QUERY = `(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`;
 
 // Status icon mapping per DESIGN-SYSTEM.md
 function StatusIcon({ status }: { status: string }): React.JSX.Element {
@@ -179,13 +186,15 @@ interface SidebarProps {
 }
 
 export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: SidebarProps): React.JSX.Element {
-  const [collapsed, setCollapsed] = useState(() => window.innerWidth < 768);
+  const [collapsed, setCollapsed] = useState(() => window.innerWidth < COLLAPSE_BREAKPOINT);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showOpenForm, setShowOpenForm] = useState(false);
+  const [showSwitcher, setShowSwitcher] = useState(false);
+  const navigate = useNavigate();
 
   // Auto-collapse on narrow viewports
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)");
+    const mq = window.matchMedia(COLLAPSE_MEDIA_QUERY);
     const handler = (e: MediaQueryListEvent): void => {
       setCollapsed(e.matches);
     };
@@ -212,6 +221,14 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
       onProjectNotFound?.();
     }
   }, [projectError, onProjectNotFound]);
+
+  // All registered projects — powers the in-sidebar project switcher.
+  const { data: allProjects } = useQuery({
+    queryKey: ["projects-list"],
+    queryFn: listProjects,
+    enabled: !!projectId,
+    refetchInterval: 15000,
+  });
 
   const knownTypes = ["Pipeline", "Analyze", "ComputeState", "ReconstructState", "StableStates", "ComputeTrajectory", "ReconstructTrajectory", "Density"];
   const pipelineJobs = project?.jobs.filter((j) => j.type === "Pipeline") ?? [];
@@ -287,15 +304,82 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
               <Plus className="h-4 w-4" />
               New Job
             </Link>
+            {/* Command-palette trigger (also opens with Cmd/Ctrl+K). Dispatches
+                the same keydown the global listener handles, so no shared state. */}
+            <button
+              type="button"
+              onClick={() =>
+                window.dispatchEvent(
+                  new KeyboardEvent("keydown", { key: "k", metaKey: true, ctrlKey: true, bubbles: true })
+                )
+              }
+              className="mt-2 flex w-full items-center gap-2 rounded-md border border-zinc-800 px-3 py-1.5 text-xs text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"
+              title="Search jobs, masks, and actions"
+            >
+              <Search className="h-3.5 w-3.5" />
+              <span>Search…</span>
+              <kbd className="ml-auto rounded border border-zinc-700 px-1 text-[10px] text-zinc-500">⌘K</kbd>
+            </button>
           </div>
 
           {/* Job tree */}
           <nav className="flex-1 overflow-y-auto py-2">
             {project ? (
               <div className="space-y-1">
-                <div className="flex items-center gap-2 px-3 py-1 text-xs text-zinc-500">
-                  <FolderOpen className="h-3 w-3" />
-                  <span className="truncate">{project.name}</span>
+                <div className="relative px-3 py-1">
+                  <button
+                    onClick={() => setShowSwitcher((s) => !s)}
+                    className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                    title="Switch project"
+                  >
+                    <FolderOpen className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{project.name}</span>
+                    <ChevronDown className="ml-auto h-3 w-3 shrink-0" />
+                  </button>
+                  {showSwitcher && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-20"
+                        onClick={() => setShowSwitcher(false)}
+                      />
+                      <div className="absolute left-2 right-2 z-30 mt-1 max-h-72 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
+                        {(allProjects ?? []).map((p) => {
+                          const nm = p.name || p.path.split("/").filter(Boolean).pop() || p.path;
+                          const active = p.id === projectId;
+                          return (
+                            <button
+                              key={p.id}
+                              onClick={() => {
+                                setShowSwitcher(false);
+                                if (!active) {
+                                  onProjectCreated?.({ id: p.id, path: p.path, name: nm });
+                                  navigate({ to: "/" });
+                                }
+                              }}
+                              className={clsx(
+                                "block w-full truncate px-3 py-1.5 text-left text-xs hover:bg-zinc-800",
+                                active ? "text-blue-400" : "text-zinc-300"
+                              )}
+                              title={p.path}
+                            >
+                              {active ? "● " : ""}
+                              {nm}
+                            </button>
+                          );
+                        })}
+                        <button
+                          onClick={() => {
+                            setShowSwitcher(false);
+                            setShowCreateForm(false);
+                            setShowOpenForm(true);
+                          }}
+                          className="block w-full border-t border-zinc-800 px-3 py-1.5 text-left text-xs text-zinc-400 hover:bg-zinc-800"
+                        >
+                          + Open another project…
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
                 <div className="border-t border-zinc-800 pt-1">
                   <JobSection title="Pipeline" jobs={pipelineJobs} alwaysShow />
@@ -349,8 +433,18 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
         </>
       )}
 
-      {/* Settings link */}
+      {/* Masks + Settings links */}
       <div className="border-t border-zinc-800 p-2">
+        {projectId && (
+          <Link
+            to="/masks"
+            className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
+            activeProps={{ className: "bg-zinc-700/50 text-zinc-50" }}
+          >
+            <Wand2 className="h-3.5 w-3.5" />
+            Masks
+          </Link>
+        )}
         <Link
           to="/settings"
           className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
@@ -439,7 +533,7 @@ function ProjectFormOverlay({
 
           {showBrowser && (
             <FileBrowser
-              initialPath="/scratch/gpfs/GILLES/mg6942"
+              initialPath={path || "~"}
               selectDirectory
               onSelect={(selectedPath) => {
                 setPath(selectedPath);

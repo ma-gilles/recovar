@@ -33,9 +33,11 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     effective_angular_step,
     healpix_angular_step,
     refine_angular_sampling,
+    relion_mpi_hidden_variable_change_is_small,
     resolution_required_angular_sampling,
     resolution_triggers_angular_refinement,
     should_refine_angular_sampling,
+    update_angular_sampling,
     update_refinement_state,
 )
 from recovar.em.sampling import (
@@ -84,12 +86,19 @@ class TestRefinementStateConstruction:
         state = RefinementState(healpix_order=3, max_healpix_order=7)
         assert state.has_fine_enough_angular_sampling is False
 
-    def test_has_fine_enough_from_acc_rot(self):
-        state = RefinementState(healpix_order=7, max_healpix_order=7, acc_rot=1.0)
-        assert state.has_fine_enough_angular_sampling is True
+    def test_has_fine_enough_is_latched_at_sampling_boundary(self):
+        state = RefinementState(
+            healpix_order=7,
+            max_healpix_order=7,
+            acc_rot=1.0,
+            nr_iter_wo_resol_gain=1,
+            nr_iter_wo_assignment_changes=1,
+        )
+        assert state.has_fine_enough_angular_sampling is False
+        assert update_angular_sampling(state).has_fine_enough_angular_sampling is True
 
-    def test_resolution_required_sampling_caps_loose_acc_rot(self):
-        """Do not stop at order 2 when high resolution requires a finer grid."""
+    def test_resolution_required_sampling_does_not_replace_measured_acc_rot(self):
+        """RELION's fine-enough decision uses acc_rot, not resolution."""
         state = RefinementState(
             healpix_order=2,
             adaptive_oversampling=1,
@@ -99,7 +108,9 @@ class TestRefinementStateConstruction:
         )
 
         assert resolution_required_angular_sampling(4.86, 544.0) == pytest.approx(1.0227, rel=1e-3)
-        assert state.has_fine_enough_angular_sampling is False
+        state.nr_iter_wo_resol_gain = 1
+        state.nr_iter_wo_assignment_changes = 1
+        assert update_angular_sampling(state).has_fine_enough_angular_sampling is True
 
     def test_loose_acc_rot_still_applies_without_particle_diameter(self):
         state = RefinementState(
@@ -110,7 +121,22 @@ class TestRefinementStateConstruction:
             particle_diameter_angstrom=0.0,
         )
 
-        assert state.has_fine_enough_angular_sampling is True
+        state.nr_iter_wo_resol_gain = 1
+        state.nr_iter_wo_assignment_changes = 1
+        assert update_angular_sampling(state).has_fine_enough_angular_sampling is True
+
+    def test_resolution_required_sampling_cannot_replace_missing_acc_rot(self):
+        """A resolution-derived step must not terminate without acc_rot."""
+        state = RefinementState(
+            healpix_order=7,
+            adaptive_oversampling=1,
+            acc_rot=float("inf"),
+            current_resolution=15.11,
+            particle_diameter_angstrom=200.0,
+        )
+
+        assert resolution_required_angular_sampling(15.11, 200.0) == pytest.approx(8.5714, rel=1e-3)
+        assert state.has_fine_enough_angular_sampling is False
 
     def test_should_do_local_search_at_order_4(self):
         state = RefinementState(healpix_order=4)
@@ -293,6 +319,7 @@ class TestCheckConvergence:
             nr_iter_wo_resol_gain=MAX_NR_ITER_WO_RESOL_GAIN,
             nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
             acc_rot=1.0,
+            has_fine_enough_angular_sampling=True,
         )
         assert check_convergence(state) is True
 
@@ -304,6 +331,7 @@ class TestCheckConvergence:
             nr_iter_wo_resol_gain=10,
             nr_iter_wo_assignment_changes=10,
             acc_rot=1.0,
+            has_fine_enough_angular_sampling=True,
         )
         assert check_convergence(state) is True
 
@@ -313,6 +341,19 @@ class TestCheckConvergence:
             max_healpix_order=7,
             nr_iter_wo_resol_gain=MAX_NR_ITER_WO_RESOL_GAIN,
             nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+        )
+        assert check_convergence(state) is False
+
+    def test_not_converged_when_resolution_fine_enough_without_acc_rot(self):
+        state = RefinementState(
+            healpix_order=7,
+            adaptive_oversampling=1,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=MAX_NR_ITER_WO_RESOL_GAIN,
+            nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+            acc_rot=float("inf"),
+            current_resolution=15.11,
+            particle_diameter_angstrom=200.0,
         )
         assert check_convergence(state) is False
 
@@ -407,7 +448,7 @@ class TestShouldRefineAngularSampling:
         # 0.9375 < 1.5, so RELION considers angular sampling fine enough.
         assert should_refine_angular_sampling(state4) is False
 
-    def test_refines_when_resolution_requires_finer_sampling_despite_loose_acc_rot(self):
+    def test_does_not_refine_when_measured_acc_rot_is_already_fine_enough(self):
         state = RefinementState(
             healpix_order=2,
             adaptive_oversampling=1,
@@ -419,7 +460,8 @@ class TestShouldRefineAngularSampling:
             particle_diameter_angstrom=544.0,
         )
 
-        assert should_refine_angular_sampling(state) is True
+        assert resolution_triggers_angular_refinement(state) is False
+        assert should_refine_angular_sampling(state) is False
 
     def test_resolution_based_trigger_requires_relion_auto_resol_angles_flag(self):
         state = RefinementState(
@@ -428,7 +470,7 @@ class TestShouldRefineAngularSampling:
             max_healpix_order=7,
             nr_iter_wo_resol_gain=0,
             nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
-            acc_rot=12.247,
+            acc_rot=1.0,
             current_resolution=4.86,
             particle_diameter_angstrom=544.0,
             auto_resolution_based_angles=False,
@@ -449,7 +491,7 @@ class TestShouldRefineAngularSampling:
             auto_local_healpix_order=4,
             nr_iter_wo_resol_gain=0,
             nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
-            acc_rot=12.247,
+            acc_rot=1.0,
             current_resolution=4.86,
             particle_diameter_angstrom=544.0,
             auto_resolution_based_angles=True,
@@ -594,6 +636,24 @@ class TestUpdateRefinementState:
         )
         assert updated.iteration == 1
 
+    def test_explicit_average_pmax_overrides_raw_particle_mean(self):
+        state = self._make_base_state()
+        assignments = np.zeros(4, dtype=np.int32)
+
+        updated = update_refinement_state(
+            state,
+            assignments,
+            None,
+            10,
+            1,
+            np.zeros((1, 2), dtype=np.float32),
+            new_resolution=4.5,
+            max_posterior_per_image=np.asarray([0.1, 0.2, 0.3, 0.4]),
+            ave_pmax_override=0.75,
+        )
+
+        assert updated.ave_Pmax == pytest.approx(0.75)
+
     def test_resolution_improvement_resets_stall(self):
         state = self._make_base_state(
             current_resolution=5.0,
@@ -632,6 +692,28 @@ class TestUpdateRefinementState:
             translations,
             new_resolution=5.5,  # worse than 5.0
         )
+        assert updated.nr_iter_wo_resol_gain == 1
+
+    def test_resolution_gain_uses_relion_reciprocal_tolerance(self):
+        state = self._make_base_state(
+            current_resolution=5.0,
+            nr_iter_wo_resol_gain=0,
+        )
+        assignments = np.zeros(50, dtype=np.int32)
+        translations = np.zeros((5, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state,
+            assignments,
+            None,
+            100,
+            5,
+            translations,
+            new_resolution=4.999,
+        )
+
+        assert 1.0 / 4.999 > 1.0 / 5.0
+        assert 1.0 / 4.999 <= 1.0 / 5.0 + 0.0001
         assert updated.nr_iter_wo_resol_gain == 1
 
     def test_stable_assignments_increment_counter(self):
@@ -748,6 +830,56 @@ class TestUpdateRefinementState:
         )
         assert updated.has_converged is True
 
+    def test_post_m_update_defers_sampling_and_convergence_to_next_boundary(self):
+        """Native AutoRefine records M-step observations without acting on them."""
+        state = self._make_base_state(
+            healpix_order=3,
+            nr_iter_wo_resol_gain=0,
+            nr_iter_wo_assignment_changes=0,
+            acc_rot=999.0,
+        )
+        assignments = np.arange(50, dtype=np.int32) * 5
+        translations = np.zeros((5, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state,
+            assignments,
+            assignments,
+            100,
+            5,
+            translations,
+            new_resolution=5.5,
+            update_sampling=False,
+            check_convergence_now=False,
+        )
+
+        assert updated.healpix_order == 3
+        assert updated.nr_iter_wo_resol_gain == 1
+        assert updated.nr_iter_wo_assignment_changes == 1
+        assert updated.has_converged is False
+        boundary_state = update_angular_sampling(updated)
+        assert boundary_state.has_fine_enough_angular_sampling is True
+        assert check_convergence(boundary_state) is True
+
+    def test_refined_step_does_not_dynamically_become_fine_enough(self):
+        """RELION latches against the old step, then runs the refined grid once."""
+        state = self._make_base_state(
+            healpix_order=3,
+            nr_iter_wo_resol_gain=1,
+            nr_iter_wo_assignment_changes=1,
+            acc_rot=6.0,
+        )
+
+        refined = update_angular_sampling(state)
+
+        assert refined.healpix_order == 4
+        assert refined.effective_step < 0.75 * refined.acc_rot
+        assert refined.has_fine_enough_angular_sampling is False
+        refined.nr_iter_wo_resol_gain = 1
+        refined.nr_iter_wo_assignment_changes = 1
+        assert check_convergence(refined) is False
+        assert update_angular_sampling(refined).has_fine_enough_angular_sampling is True
+
     def test_pmax_tracking(self):
         state = self._make_base_state()
         n_rot, n_trans = 100, 5
@@ -784,8 +916,8 @@ class TestUpdateRefinementState:
             current_classes=np.array([0, 0, 1, 1, 2], dtype=np.int32),
             previous_classes=np.array([0, 1, 1, 0, 2], dtype=np.int32),
         )
-        assert updated.current_changes_optimal_classes == 2.0
-        assert updated.smallest_changes_optimal_classes == 2
+        assert updated.current_changes_optimal_classes == pytest.approx(0.4)
+        assert updated.smallest_changes_optimal_classes == 0
 
     def test_single_class_change_tracking_remains_zero_when_classes_omitted(self):
         state = self._make_base_state()
@@ -804,7 +936,7 @@ class TestUpdateRefinementState:
         )
         assert updated.current_changes_optimal_classes == 0.0
 
-    def test_hidden_variable_translation_ratio_uses_effective_oversampled_step(self):
+    def test_hidden_variable_translation_ratio_uses_initial_mpi_leader_effective_step(self):
         state = self._make_base_state(
             healpix_order=2,
             adaptive_oversampling=1,
@@ -822,7 +954,7 @@ class TestUpdateRefinementState:
         previous_trans = np.zeros((5, 2), dtype=np.float32)
         current_trans = np.column_stack(
             [
-                np.full(5, 0.55, dtype=np.float32),
+                np.full(5, 0.25, dtype=np.float32),
                 np.zeros(5, dtype=np.float32),
             ]
         )
@@ -842,8 +974,234 @@ class TestUpdateRefinementState:
             voxel_size_angstrom=1.0,
         )
 
-        assert updated.current_changes_optimal_offsets_angstrom == pytest.approx(0.55 / np.sqrt(2.0))
-        assert updated.nr_iter_wo_large_hidden_variable_changes == 0
+        assert updated.current_changes_optimal_offsets_angstrom == pytest.approx(0.25 / np.sqrt(2.0))
+        assert updated.nr_iter_wo_large_hidden_variable_changes == 1
+
+    def test_relion_mpi_case13_it8_star_values_reset_hidden_change_counter(self):
+        """Case 13 STAR values require the stale MPI-leader translation step."""
+        # run_it000_sampling.star: order=3, offset_step=4.25 A, oversampling=1.
+        # run_it007/008_optimiser.star provide the smallest/current changes.
+        assert not relion_mpi_hidden_variable_change_is_small(
+            current_classes=0.0,
+            current_offsets_angstrom=0.984143,
+            current_orientations_deg=1.054518,
+            smallest_classes=0.0,
+            smallest_offsets_angstrom=1.035820,
+            smallest_orientations_deg=1.136805,
+            mpi_leader_angular_step_deg=7.5 / 2.0,
+            mpi_leader_translation_step_angstrom=4.25 / 2.0,
+        )
+
+    def test_relion_mpi_case15_it7_star_values_increment_hidden_change_counter(self):
+        """Case 15 STAR values also match the fixed process-initial sampling."""
+        # run_it000_sampling.star: order=3, offset_step=4.25 A, oversampling=1.
+        # run_it006/007_optimiser.star provide the smallest/current changes.
+        assert relion_mpi_hidden_variable_change_is_small(
+            current_classes=0.0,
+            current_offsets_angstrom=0.575090,
+            current_orientations_deg=1.266198,
+            smallest_classes=0.0,
+            smallest_offsets_angstrom=1.112159,
+            smallest_orientations_deg=2.265981,
+            mpi_leader_angular_step_deg=7.5 / 2.0,
+            mpi_leader_translation_step_angstrom=4.25 / 2.0,
+        )
+
+    @staticmethod
+    def _rotation_delta(n_images, relion_mean_angle_deg):
+        # A z rotation changes two of three matrix rows by theta, so RELION's
+        # row-mean angular distance is 2*theta/3.
+        theta = np.deg2rad(1.5 * relion_mean_angle_deg)
+        rotation = np.array(
+            [
+                [np.cos(theta), -np.sin(theta), 0.0],
+                [np.sin(theta), np.cos(theta), 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        return np.repeat(rotation[None, :, :], n_images, axis=0)
+
+    @staticmethod
+    def _translation_delta(n_images, relion_rms_angstrom, voxel_size):
+        # RELION divides the summed x/y squared displacement by 2*N.
+        delta_x_pixel = np.sqrt(2.0) * relion_rms_angstrom / voxel_size
+        return np.column_stack(
+            [
+                np.full(n_images, delta_x_pixel, dtype=np.float64),
+                np.zeros(n_images, dtype=np.float64),
+            ]
+        )
+
+    def _record_relion_hidden_change(self, state, angle_deg, offset_angstrom):
+        n_images = 8
+        identity = np.repeat(np.eye(3, dtype=np.float64)[None, :, :], n_images, axis=0)
+        zeros = np.zeros((n_images, 2), dtype=np.float64)
+        assignments = np.zeros(n_images, dtype=np.int32)
+        return update_refinement_state(
+            state,
+            assignments,
+            assignments,
+            n_rotations=1,
+            n_translations=1,
+            translations=zeros[:1],
+            new_resolution=22.6667,
+            current_rotation_matrices=self._rotation_delta(n_images, angle_deg),
+            previous_rotation_matrices=identity,
+            current_translations_pixel=self._translation_delta(
+                n_images,
+                offset_angstrom,
+                state.voxel_size_angstrom,
+            ),
+            previous_translations_pixel=zeros,
+            voxel_size_angstrom=state.voxel_size_angstrom,
+            update_sampling=False,
+            check_convergence_now=False,
+        )
+
+    def test_relion_order4_to_order5_hidden_change_boundary(self):
+        state = RefinementState(
+            healpix_order=4,
+            adaptive_oversampling=1,
+            translation_step=1.87425 / 4.25,
+            current_resolution=22.6667,
+            voxel_size_angstrom=4.25,
+            acc_rot=1.065,
+            smallest_changes_optimal_classes=0.0,
+            smallest_changes_optimal_orientations=1.996281,
+            smallest_changes_optimal_offsets_angstrom=0.810118,
+            mpi_leader_hidden_variable_angular_step_deg=7.5 / 2.0,
+            mpi_leader_hidden_variable_translation_step_angstrom=4.25 / 2.0,
+        )
+
+        state = self._record_relion_hidden_change(state, 1.309840, 0.730098)
+
+        assert state.nr_iter_wo_resol_gain == 1
+        assert state.nr_iter_wo_large_hidden_variable_changes == 1
+        assert update_angular_sampling(state).healpix_order == 5
+        refined = update_angular_sampling(state)
+        assert refined.mpi_leader_hidden_variable_angular_step_deg == pytest.approx(7.5 / 2.0)
+        assert refined.mpi_leader_hidden_variable_translation_step_angstrom == pytest.approx(4.25 / 2.0)
+
+    def test_real10076_relion_hidden_change_sequence_refines_at_iteration_10(self):
+        state = RefinementState(
+            healpix_order=3,
+            adaptive_oversampling=1,
+            translation_range=3.0,
+            translation_step=1.0,
+            current_resolution=14.4552,
+            voxel_size_angstrom=1.6375,
+            acc_rot=1.397,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            nr_iter_wo_resol_gain=3,
+            smallest_changes_optimal_classes=0.0,
+            smallest_changes_optimal_orientations=4.901576,
+            smallest_changes_optimal_offsets_angstrom=0.932432,
+            mpi_leader_hidden_variable_angular_step_deg=3.75,
+            mpi_leader_hidden_variable_translation_step_angstrom=0.81875,
+        )
+
+        for iteration, angle, offset in (
+            (7, 4.743451, 0.928163),
+            (8, 4.595795, 0.896570),
+        ):
+            state = self._record_relion_hidden_change(state, angle, offset)
+            assert state.nr_iter_wo_large_hidden_variable_changes == 0
+            state = update_angular_sampling(state)
+            assert state.healpix_order == 3, iteration
+
+        state = self._record_relion_hidden_change(state, 4.503409, 0.896290)
+        assert state.nr_iter_wo_large_hidden_variable_changes == 1
+        state = update_angular_sampling(state)
+        assert state.healpix_order == 4
+
+    def test_real10076_recovar_hidden_change_sequence_refines_at_iteration_8(self):
+        state = RefinementState(
+            healpix_order=3,
+            adaptive_oversampling=1,
+            translation_range=3.0,
+            translation_step=1.0,
+            current_resolution=14.4552,
+            voxel_size_angstrom=1.6375,
+            acc_rot=1.393,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            nr_iter_wo_resol_gain=3,
+            smallest_changes_optimal_classes=0.0,
+            smallest_changes_optimal_orientations=4.838344,
+            smallest_changes_optimal_offsets_angstrom=0.929794,
+            mpi_leader_hidden_variable_angular_step_deg=3.75,
+            mpi_leader_hidden_variable_translation_step_angstrom=0.81875,
+        )
+
+        state = self._record_relion_hidden_change(state, 4.836995, 0.933869)
+        assert state.nr_iter_wo_large_hidden_variable_changes == 1
+        state = update_angular_sampling(state)
+        assert state.healpix_order == 4
+
+    @pytest.mark.parametrize(
+        "previous_angle,previous_offset,current_angle,current_offset",
+        [
+            (4.897129, 0.932674, 4.759138, 0.929399),
+            (4.873165, 0.931514, 4.790615, 0.930203),
+        ],
+    )
+    def test_real10076_native_relion_repeat_sequences_refine_at_iteration_8(
+        self,
+        previous_angle,
+        previous_offset,
+        current_angle,
+        current_offset,
+    ):
+        """Both sealed native RELION repeats take the same branch as RECOVAR."""
+        state = RefinementState(
+            healpix_order=3,
+            adaptive_oversampling=1,
+            translation_range=3.0,
+            translation_step=1.0,
+            current_resolution=14.4552,
+            voxel_size_angstrom=1.6375,
+            acc_rot=1.392,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            nr_iter_wo_resol_gain=3,
+            smallest_changes_optimal_classes=0.0,
+            smallest_changes_optimal_orientations=previous_angle,
+            smallest_changes_optimal_offsets_angstrom=previous_offset,
+            mpi_leader_hidden_variable_angular_step_deg=3.75,
+            mpi_leader_hidden_variable_translation_step_angstrom=0.81875,
+        )
+
+        state = self._record_relion_hidden_change(state, current_angle, current_offset)
+        assert state.nr_iter_wo_large_hidden_variable_changes == 1
+        assert update_angular_sampling(state).healpix_order == 4
+
+    def test_relion_order5_to_order6_hidden_change_boundary(self):
+        state = RefinementState(
+            healpix_order=4,
+            adaptive_oversampling=1,
+            translation_step=1.87425 / 4.25,
+            current_resolution=22.6667,
+            voxel_size_angstrom=4.25,
+            acc_rot=1.030,
+            acc_trans=1.122,
+            mpi_leader_hidden_variable_angular_step_deg=7.5 / 2.0,
+            mpi_leader_hidden_variable_translation_step_angstrom=4.25 / 2.0,
+        )
+        state = refine_angular_sampling(state)
+
+        assert state.healpix_order == 5
+        assert state.suppress_hidden_variable_increment_once is True
+
+        state = self._record_relion_hidden_change(state, 0.908481, 0.722427)
+        assert state.nr_iter_wo_large_hidden_variable_changes == 0
+        assert state.suppress_hidden_variable_increment_once is False
+        state = self._record_relion_hidden_change(state, 0.600638, 0.606800)
+
+        assert state.nr_iter_wo_resol_gain >= 1
+        assert state.nr_iter_wo_large_hidden_variable_changes == 1
+        assert update_angular_sampling(state).healpix_order == 6
 
 
 # =========================================================================
