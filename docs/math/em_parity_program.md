@@ -21928,3 +21928,52 @@ correction plus its focused unit test.  No CUDA scorer, tolerance change,
 threshold change, final-grid override, or K=4 behavior is included.  The next
 acceptance step is a complete fixed case-10 trajectory followed by the frozen
 K=1 failure set.
+
+## 2026-08-23 11:08 EDT — checkpoint pushed and fixed-prefix validation active
+
+The accepted source and audit checkpoint is commit `f1f2f68b8`, pushed to PR
+158's `codex/em-parity-checkpoint-20260711` head.  Commit `dfbae6cd7` then
+changed the terminal launcher from a mutable hard-coded CUDA-library checksum
+to an explicitly supplied path and checksum.  Commit `df974cc05` adds bounded
+two-iteration state capture for fixed cases 4 and 5.  The branch already
+contains the current `github/dev` tip; no rebase or history rewrite was used.
+
+The focused CPU gate at the checkpoint passes four tests covering the
+score-window/model-radius split and native-unit `corr_img` construction:
+`4 passed, 169 deselected in 36.73s`.  Python compilation, every new sbatch
+`bash -n` check, and `git diff --check` also pass.  The fixed denominator is
+still `31/34` strict FSC/FSC-AUC and `34/34` topology until a terminal audit
+finishes.
+
+Terminal case-10 submission `12829049` failed preflight in two seconds before
+Python or GPU science because an older launcher still pinned a shared CUDA
+path whose binary had changed.  Both Slurm logs are empty and the output root
+contains no scientific product.  The fail-closed result is retained under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_full_crop58_f1f2f68b_20260823T1105ET`.
+
+Replacement full case-10 job `12829239` is running from commit `dfbae6cd7`
+under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_full_crop58_dfbae6cd_retry_20260823T1120ET`.
+Its preflight loaded CUDA library SHA-256
+`8d05d6a9a154c70f732fc3ac39252df03712db7823c2b359759bddaccd99abcd`.
+The backing shared path was rebuilt after the process started, so the running
+process retains the already-loaded image but the terminal result must record
+that later path mutation as a reproducibility qualification.  No job was
+cancelled or altered.
+
+Static inspection rejects blind crop reruns for cases 4 and 5: both score at
+`current_size=56` from a model with `r_max=28`, so the new explicit projector
+box is the same size as the historical inferred box.  Instead, jobs
+`12829442` and `12829443` run only physical iterations 1 and 2 for cases 4
+and 5, save regularized maps, and dump particle-aligned posterior, pose,
+support, normalization, noise, scale, FSC, and downsampled map state at both
+boundaries.  Their roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_prefix2_state_df974cc0_20260823T1140ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_prefix2_state_df974cc0_20260823T1140ET`.
+Both use CUDA SHA-256
+`e17e9156cc1b98cb090a5f37965c762dae5b6699b2dc62ae62f3b0801f6624dc`,
+and each run root contains a copied checksum-pinned binary plus
+`SAFE_TO_DELETE`; the runtime roots use the corresponding basenames below
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/` and also contain
+`SAFE_TO_DELETE`.
