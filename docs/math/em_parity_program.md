@@ -21977,3 +21977,28 @@ and each run root contains a copied checksum-pinned binary plus
 `SAFE_TO_DELETE`; the runtime roots use the corresponding basenames below
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/` and also contain
 `SAFE_TO_DELETE`.
+
+## 2026-08-23 11:26 EDT — all three production iteration-1 map gates pass
+
+The first regularized half maps are durable in all three active runs and were
+audited immediately with signed shellwise FSC and normalized non-DC FSC-AUC.
+No completion claim is attached to these in-progress prefixes.
+
+| Case | Half-1 FSC-AUC | Half-2 FSC-AUC | Merged FSC-AUC | Merged GT delta |
+| ---: | ---: | ---: | ---: | ---: |
+| 4 | `0.9999999999836741` | `0.9999999999836684` | `0.9999999999911812` | `+5.1112593e-9` |
+| 5 | `0.9999999999901631` | `0.9999999999902704` | `0.9999999999944092` | `+2.6040076e-10` |
+| 10 | `0.9999999994665336` | `0.9999999994675448` | `0.9999999994934777` | `+2.5891943e-8` |
+
+Direct half-map relative-L2 values against frozen RELION are respectively
+`(9.6784041e-8, 9.6815690e-8)`, `(1.0038732e-7, 1.0042945e-7)`, and
+`(1.4815364e-6, 1.4805605e-6)` for cases 4, 5, and 10.  Case 10 therefore
+reproduces the focused crop A/B from the uninterrupted terminal producer;
+cases 4 and 5 establish their common approximately `1e-7` first-map floor.
+
+The machine-readable reports are `analysis/prefix_it001/fsc.json` beneath
+each run root, with the adjacent Markdown and shellwise NPZ.  Every prefix has
+no FSC or topology failure and a positive RECOVAR-minus-RELION merged GT
+FSC-AUC delta.  Cases 4 and 5 have entered physical iteration 2; the next
+decision is reserved for their complete map and source-ID-aligned particle
+state, not for a live-log or aggregate-only inference.
