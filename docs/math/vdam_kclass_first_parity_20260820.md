@@ -276,3 +276,14 @@ only moved work across the boundary; they did not reduce end-to-end runtime.
 The prototype is retained as a diagnostic commit/revert on the isolated probe
 branch and is not promoted.  Runtime work should remain focused on the much
 larger scoring/posterior/noise path and executable-shape/compilation costs.
+
+When oversampling-zero InitialModel supplies the coarse pass's absolute
+normalization evidence, the four class-local fine log-Z values are never
+consumed.  Skipping those discarded float64 exponentiation/reduction graphs
+is accepted: focused normalization tests passed `4/4` in job `12813292`, and
+the complete K=4 audit `12813192` retained exact assignments/topology with
+minimum FSC-AUC `0.9999999996`.  The first changed-graph replay `12812973`
+also makes the compilation cost visible, taking 300 seconds while populating
+new persistent-cache entries.  Its controlled warm replay `12813191` took
+`140.60 s`, down from the `144.14 s` clean default.  This is a modest 2.5%
+warm-path gain; it does not solve the larger cold-compilation/runtime gap.
