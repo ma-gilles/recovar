@@ -367,3 +367,11 @@ iteration.  In contrast, all ten fine-posterior compilations summed to only
 `3.09 s`.  The next runtime target is therefore a whole bucket-group
 preparation/M-step boundary (or an equivalently coarse JIT/native region),
 with runtime extents, rather than another isolated scoring primitive.
+
+Disabling compact active-row extraction was tested as a synchronization
+ablation because it removes data-dependent host materialization at the cost of
+more dense GPU arithmetic.  The trajectory remained qualified (`12816709`;
+minimum FSC-AUC `0.9999999971650473`, assignment accuracy `1.0`), but a
+same-node warm pair (`12816795`) was conclusive: active rows took `139.30 s`
+and dense rows took `139.38 s`.  The saved synchronization and added dense work
+cancel, so the existing active-row default remains unchanged.
