@@ -323,3 +323,20 @@ through serial Python bucket boundaries.  Summed CUDA-API time is not directly
 comparable because RELION's calls overlap across threads.  The actionable gap
 is therefore executable construction/loading and serial host orchestration,
 not device arithmetic or the mere existence of many CUDA launches.
+
+An isolated-cache control quantifies the first-run penalty directly.  Job
+`12814306` populated 8,102 cache files and took `523.91 s`, versus roughly
+144 seconds after the shape executables are warm.  Per-iteration times ranged
+from 37.95 to 118.33 seconds as new current-size/bucket shapes appeared.
+Forcing eight-way LLVM module compilation (`12814307`) was rejected and
+cancelled: iteration 1 regressed from `57.69 s` to `62.66 s`, because these
+modules are too small for within-module splitting to amortize its overhead.
+
+Holding pass-2 at the full 8,320-pixel half spectrum (`12814575`) was also
+rejected.  It attempted to reuse one pixel shape across iterations, but the
+extra arithmetic and the remaining current-size/bucket axes made iteration 1
+slower (`60.01` versus `57.69 s`) and iteration 2 substantially slower
+(`62.95` versus `52.17 s`); it was cancelled during an already-slower
+iteration 3.  A useful executable palette must therefore preserve bounded
+windowed work and make variable scientific extents runtime metadata inside a
+broader native boundary, rather than padding JAX arrays to the full image.
