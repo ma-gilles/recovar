@@ -158,6 +158,8 @@ def build_initial_model_command(params: dict[str, Any]) -> list[str]:
         _add_boolean_option(cmd, flag, bool(value(name)))
 
     cmd.append("--deterministic-cuda" if bool(value("deterministic_cuda")) else "--allow-async-cuda")
+    _add_boolean_option(cmd, "--jax-compilation-cache", bool(value("use_jax_compilation_cache")))
+    _add_optional(cmd, "--jax-compilation-cache-dir", params.get("jax_compilation_cache_dir"))
     _add_optional(cmd, "--random-perturbation", params.get("random_perturbation"))
     _add_optional(cmd, "--translation-sigma-angstrom", params.get("translation_sigma_angstrom"))
     _add_optional(cmd, "--datadir", params.get("datadir"))

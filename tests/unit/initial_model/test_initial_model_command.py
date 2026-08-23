@@ -70,6 +70,8 @@ def test_parser_resolves_gui_defaults_and_auto_gpu_backend():
     assert options["image_fourier_backend"] == "relion_cuda"
     assert args.require_custom_cuda is True
     assert args.gpu_ids == "0"
+    assert args.jax_compilation_cache is True
+    assert args.jax_compilation_cache_dir == ""
 
 
 @pytest.mark.unit
@@ -153,7 +155,9 @@ def test_parser_accepts_important_overrides():
 
 
 @pytest.mark.unit
-def test_dry_run_prints_resolved_native_options(capsys):
+def test_dry_run_prints_resolved_native_options(capsys, monkeypatch, tmp_path):
+    monkeypatch.delenv("JAX_COMPILATION_CACHE_DIR", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     rc = initial_model.main(["--i", "particles.star", "--dry-run"])
 
     assert rc == 0
@@ -162,6 +166,44 @@ def test_dry_run_prints_resolved_native_options(capsys):
     assert payload["nr_classes"] == 1
     assert payload["image_fourier_backend"] == "relion_cuda"
     assert "resolved_cuda_allocator" in payload
+    assert payload["jax_compilation_cache"]["enabled"] is True
+    assert payload["jax_compilation_cache"]["directory"].endswith("/recovar/jax/initial_model")
+
+
+@pytest.mark.unit
+def test_jax_compilation_cache_respects_override_environment_and_disable(monkeypatch, tmp_path):
+    environment_cache = tmp_path / "environment"
+    command_cache = tmp_path / "command"
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(environment_cache))
+
+    report = initial_model._configure_jax_compilation_cache(enabled=True, requested_dir="")
+    assert report == {
+        "enabled": True,
+        "directory": str(environment_cache.resolve()),
+        "source": "environment",
+    }
+    import jax
+
+    assert jax.config.jax_compilation_cache_dir == str(environment_cache.resolve())
+    assert jax.config.jax_persistent_cache_min_compile_time_secs == float(
+        os.environ["JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS"]
+    )
+
+    report = initial_model._configure_jax_compilation_cache(
+        enabled=True,
+        requested_dir=str(command_cache),
+    )
+    assert report == {
+        "enabled": True,
+        "directory": str(command_cache.resolve()),
+        "source": "command_line",
+    }
+    assert os.environ["JAX_COMPILATION_CACHE_DIR"] == str(command_cache.resolve())
+
+    report = initial_model._configure_jax_compilation_cache(enabled=False, requested_dir="")
+    assert report == {"enabled": False, "directory": None, "source": "disabled"}
+    assert "JAX_COMPILATION_CACHE_DIR" not in os.environ
+    assert jax.config.jax_compilation_cache_dir is None
 
 
 @pytest.mark.unit

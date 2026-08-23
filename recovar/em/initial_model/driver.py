@@ -1719,6 +1719,15 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             "TF_GPU_ALLOCATOR",
             "default",
         )
+        native_options["jax_compilation_cache_enabled"] = bool(
+            os.environ.get("JAX_COMPILATION_CACHE_DIR")
+        )
+        native_options["jax_compilation_cache_dir"] = os.environ.get(
+            "JAX_COMPILATION_CACHE_DIR"
+        )
+        native_options["jax_persistent_cache_min_compile_time_secs"] = os.environ.get(
+            "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS"
+        )
         with open(config_path, "w") as f:
             json.dump(native_options, f, indent=2, sort_keys=True)
         _write_iteration_artifacts(

@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 from dataclasses import asdict
+from pathlib import Path
 from typing import Sequence
 
 from recovar.em.initial_model.schedules import GuiInitialModelDefaults
@@ -278,6 +279,20 @@ def make_parser() -> argparse.ArgumentParser:
         help="Serialize CUDA launches for diagnostics",
     )
     cuda_mode.add_argument("--allow-async-cuda", action="store_true", help="Explicitly select normal asynchronous CUDA")
+    parser.add_argument(
+        "--jax-compilation-cache",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULTS.use_jax_compilation_cache,
+        help="Reuse shape-specialized JAX executables across InitialModel runs",
+    )
+    parser.add_argument(
+        "--jax-compilation-cache-dir",
+        default=DEFAULTS.jax_compilation_cache_dir,
+        help=(
+            "Shared JAX compilation-cache directory. Empty uses "
+            "$JAX_COMPILATION_CACHE_DIR or the platform user cache."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print the resolved native options without running")
     return parser
 
@@ -286,6 +301,49 @@ def _configure_cuda_launch_blocking(*, deterministic_cuda: bool) -> str:
     value = "1" if bool(deterministic_cuda) else "0"
     os.environ["CUDA_LAUNCH_BLOCKING"] = value
     return value
+
+
+def _configure_jax_compilation_cache(*, enabled: bool, requested_dir: str) -> dict[str, object]:
+    """Resolve and activate the persistent InitialModel compilation cache."""
+
+    if not enabled:
+        os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
+        import jax
+
+        jax.config.update("jax_compilation_cache_dir", None)
+        return {"enabled": False, "directory": None, "source": "disabled"}
+
+    requested_dir = str(requested_dir).strip()
+    environment_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR", "").strip()
+    if requested_dir:
+        directory = Path(requested_dir).expanduser().resolve()
+        source = "command_line"
+    elif environment_dir:
+        directory = Path(environment_dir).expanduser().resolve()
+        source = "environment"
+    else:
+        cache_home = os.environ.get("XDG_CACHE_HOME", "").strip()
+        base = Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
+        directory = (base / "recovar" / "jax" / "initial_model").resolve()
+        source = "automatic_user_cache"
+
+    os.environ["JAX_COMPILATION_CACHE_DIR"] = str(directory)
+    min_compile_time_secs = os.environ.setdefault(
+        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS",
+        "0",
+    )
+    # Importing ``recovar.em.initial_model.schedules`` executes the package
+    # initializer, which may import JAX before CLI parsing reaches this point.
+    # Update the live config as well as the environment so the cache is active
+    # for this process, not merely its children.
+    import jax
+
+    jax.config.update("jax_compilation_cache_dir", str(directory))
+    jax.config.update(
+        "jax_persistent_cache_min_compile_time_secs",
+        float(min_compile_time_secs),
+    )
+    return {"enabled": True, "directory": str(directory), "source": source}
 
 
 def _require_custom_cuda_runtime() -> dict[str, object]:
@@ -361,6 +419,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("ERROR: Gradient refinement is not supported together with MPI.")
     if args.gpu_ids:
         _configure_cuda_launch_blocking(deterministic_cuda=args.deterministic_cuda)
+    cache_report = _configure_jax_compilation_cache(
+        enabled=args.jax_compilation_cache,
+        requested_dir=args.jax_compilation_cache_dir,
+    )
     options_dict = _native_options_dict(args)
     if args.dry_run:
         dry_run_payload = dict(options_dict)
@@ -368,6 +430,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "TF_GPU_ALLOCATOR",
             "default",
         )
+        dry_run_payload["jax_compilation_cache"] = cache_report
         print(json.dumps(dry_run_payload, indent=2, sort_keys=True))
         return 0
     if args.require_custom_cuda:

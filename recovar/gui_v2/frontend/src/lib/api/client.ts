@@ -232,6 +232,8 @@ export interface InitialModelDefaults {
   lazy: boolean;
   write_iter_artifacts: boolean;
   deterministic_cuda: boolean;
+  use_jax_compilation_cache: boolean;
+  jax_compilation_cache_dir: string;
   random_perturbation: number | null;
   translation_sigma_angstrom: number | null;
   grad_ini_frac: number;

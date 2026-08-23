@@ -58,6 +58,8 @@ class GuiInitialModelDefaults:
     lazy: bool = True
     write_iter_artifacts: bool = True
     deterministic_cuda: bool = False
+    use_jax_compilation_cache: bool = True
+    jax_compilation_cache_dir: str = ""
     random_perturbation: float | None = None
     translation_sigma_angstrom: float | None = None
     grad_ini_frac: float = DEFAULT_GRAD_INI_FRAC

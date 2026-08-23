@@ -140,6 +140,8 @@ function InitialModelFormLoaded({
   const [writeArtifacts, setWriteArtifacts] = useState(Boolean(pick("write_iter_artifacts", defaults.write_iter_artifacts)));
   const [requireCuda, setRequireCuda] = useState(Boolean(pick("require_custom_cuda", defaults.require_custom_cuda)));
   const [deterministicCuda, setDeterministicCuda] = useState(Boolean(pick("deterministic_cuda", defaults.deterministic_cuda)));
+  const [useJaxCache, setUseJaxCache] = useState(Boolean(pick("use_jax_compilation_cache", defaults.use_jax_compilation_cache)));
+  const [jaxCacheDir, setJaxCacheDir] = useState(String(pick("jax_compilation_cache_dir", defaults.jax_compilation_cache_dir)));
   const [datadir, setDatadir] = useState(String(p.datadir ?? ""));
   const [stripPrefix, setStripPrefix] = useState(String(p.strip_prefix ?? ""));
   const [executorMode, setExecutorMode] = useState<string | null>(null);
@@ -185,6 +187,8 @@ function InitialModelFormLoaded({
       write_iter_artifacts: writeArtifacts,
       require_custom_cuda: requireCuda,
       deterministic_cuda: deterministicCuda,
+      use_jax_compilation_cache: useJaxCache,
+      jax_compilation_cache_dir: jaxCacheDir,
     };
     if (randomPerturbation) params.random_perturbation = parseFloat(randomPerturbation);
     if (translationSigma) params.translation_sigma_angstrom = parseFloat(translationSigma);
@@ -199,7 +203,7 @@ function InitialModelFormLoaded({
     runInC1, doSolvent, doZeroMask, doCtf, randomSeed, healpixOrder, oversampling,
     offsetRange, offsetStep, perturbationFactor, imageBatchSize, rotationBlockSize, pass2Engine,
     bootstrapMin, sigma2Min, paddingFactor, imageBackend, gpuIds, lazy, writeArtifacts,
-    requireCuda, deterministicCuda, randomPerturbation, translationSigma, datadir,
+    requireCuda, deterministicCuda, useJaxCache, jaxCacheDir, randomPerturbation, translationSigma, datadir,
     stripPrefix, slurmOpts, localOpts, executorMode,
   ]);
 
@@ -318,6 +322,11 @@ function InitialModelFormLoaded({
             <CheckField label="Write iteration artifacts" tooltip="initial_model.write_artifacts" checked={writeArtifacts} onChange={setWriteArtifacts} />
             <CheckField label="Require custom CUDA" tooltip="initial_model.require_cuda" checked={requireCuda} onChange={setRequireCuda} />
             <CheckField label="Deterministic CUDA diagnostics" tooltip="initial_model.deterministic_cuda" checked={deterministicCuda} onChange={setDeterministicCuda} />
+            <CheckField label="Reuse JAX compilation cache" tooltip="initial_model.jax_cache" checked={useJaxCache} onChange={setUseJaxCache} />
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-1"><Label>JAX Compilation Cache</Label><TooltipIcon text={tooltips["initial_model.jax_cache_dir"]} /></div>
+            <PathInput value={jaxCacheDir} onChange={setJaxCacheDir} directoryOnly placeholder="Automatic user cache" className="font-mono" />
           </div>
           <div className="space-y-1"><Label>Data Directory</Label><PathInput value={datadir} onChange={setDatadir} directoryOnly placeholder="Optional image path override" className="font-mono" /></div>
           <div className="space-y-1"><Label>Strip Prefix</Label><Input value={stripPrefix} onChange={(event) => setStripPrefix(event.target.value)} placeholder="Optional STAR path prefix" /></div>

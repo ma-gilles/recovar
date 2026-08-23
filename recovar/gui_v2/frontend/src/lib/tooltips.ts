@@ -45,6 +45,8 @@ export const tooltips: Record<string, string> = {
   "initial_model.write_artifacts": "Write the full iteration trajectory for RELION parity audits and restart diagnostics.",
   "initial_model.require_cuda": "Fail early unless RECOVAR's custom CUDA backprojection path is available.",
   "initial_model.deterministic_cuda": "Serialize CUDA launches for repeatability diagnosis; slower than normal asynchronous execution.",
+  "initial_model.jax_cache": "Reuse compiled InitialModel GPU programs across runs. This substantially reduces repeated current-size compilation time.",
+  "initial_model.jax_cache_dir": "Optional shared compilation-cache directory. Empty uses JAX_COMPILATION_CACHE_DIR or the platform user cache.",
   "pipeline.particles":
     "Input particle images. Accepts .star (RELION), .cs (cryoSPARC), .mrcs (cryoDRGN format \u2014 requires passing CTF and Poses .pkl files separately), or .txt (list of .mrcs paths).",
   "pipeline.mask":

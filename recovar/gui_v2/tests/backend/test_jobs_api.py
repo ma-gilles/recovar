@@ -80,6 +80,7 @@ class TestCommandBuilders:
                 "grad_em_iters": 3,
                 "stepsize": 0.3,
                 "mu": 0.7,
+                "jax_compilation_cache_dir": "/shared/jax-cache",
             }
         )
         assert cmd[:2] == [cmd[0], "initial_model"]
@@ -97,6 +98,8 @@ class TestCommandBuilders:
         assert cmd[cmd.index("--grad-em-iters") + 1] == "3"
         assert cmd[cmd.index("--stepsize") + 1] == "0.3"
         assert cmd[cmd.index("--mu") + 1] == "0.7"
+        assert "--jax-compilation-cache" in cmd
+        assert cmd[cmd.index("--jax-compilation-cache-dir") + 1] == "/shared/jax-cache"
 
     def test_pipeline_command_minimal(self):
         cmd = build_pipeline_command({
@@ -232,6 +235,8 @@ class TestJobsAPI:
         assert defaults_response.json()["nr_iter"] == 200
         assert defaults_response.json()["nr_classes"] == 1
         assert defaults_response.json()["require_custom_cuda"] is True
+        assert defaults_response.json()["use_jax_compilation_cache"] is True
+        assert defaults_response.json()["jax_compilation_cache_dir"] == ""
 
         project_dir = str(tmp_path / "initial_model_project")
         response = await client.post("/api/projects", json={"path": project_dir, "name": "InitialModel"})
