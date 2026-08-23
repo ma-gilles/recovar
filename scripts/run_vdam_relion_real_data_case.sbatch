@@ -20,6 +20,11 @@ CASE_ID="${CASE_ID:-vdam-r01}"
 RELION_REFINE="${RELION_REFINE:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}"
 PIXI_PY="${REPO_ROOT}/.pixi/envs/default/bin/python"
 cd "${REPO_ROOT}"
+SOURCE_GIT_HEAD="$(git rev-parse HEAD)"
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+  echo "VDAM real-data qualification requires a clean tracked worktree" >&2
+  exit 2
+fi
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA RECOVAR_CUDA_DISABLE
@@ -160,7 +165,13 @@ GPU_UUID_AFTER_RECOVAR="$(nvidia-smi --query-gpu=uuid --format=csv,noheader | tr
 test "${GPU_UUID_BEFORE}" = "${GPU_UUID_AFTER_RELION}"
 test "${GPU_UUID_BEFORE}" = "${GPU_UUID_AFTER_RECOVAR}"
 
-"${PIXI_PY}" - "${OUTPUT_ROOT}" "${SCORECARD}" "${CASE_ID}" "${RELION_WALL_S}" "${RECOVAR_WALL_S}" "${GPU_UUID_BEFORE}" "${RELION_REFINE}" <<'PY'
+if [[ "$(git rev-parse HEAD)" != "${SOURCE_GIT_HEAD}" ]] ||
+   [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+  echo "VDAM real-data qualification worktree changed during execution" >&2
+  exit 2
+fi
+
+"${PIXI_PY}" - "${OUTPUT_ROOT}" "${SCORECARD}" "${CASE_ID}" "${RELION_WALL_S}" "${RECOVAR_WALL_S}" "${GPU_UUID_BEFORE}" "${RELION_REFINE}" "${SOURCE_GIT_HEAD}" <<'PY'
 import hashlib
 import json
 import os
@@ -201,7 +212,13 @@ report = {
     "case_id": case_id.name,
     "scorecard": str(scorecard),
     "scorecard_sha256": hashlib.sha256(scorecard.read_bytes()).hexdigest(),
-    "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+    "git_head": sys.argv[8],
+    "git_head_at_provenance": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+    "tracked_worktree_clean_at_provenance": not bool(
+        subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=no"], text=True
+        ).strip()
+    ),
     "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
     "physical_gpu_uuid": sys.argv[6],
     "relion_reference": relion_reference,
@@ -211,6 +228,9 @@ report = {
     "cuda_launch_blocking_value": os.environ.get("CUDA_LAUNCH_BLOCKING"),
     "recovar_cache_dir": os.environ.get("RECOVAR_CACHE_DIR"),
     "jax_compilation_cache_dir": os.environ.get("JAX_COMPILATION_CACHE_DIR"),
+    "relion_x_half_f32_fine_posterior": os.environ.get(
+        "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
+    ),
 }
 (root / "run_provenance.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY

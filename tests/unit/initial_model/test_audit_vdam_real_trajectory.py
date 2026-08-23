@@ -52,6 +52,11 @@ def test_real_data_sbatch_sets_paired_launch_mode_before_gpu_gate():
     assert 'export RECOVAR_CACHE_DIR="${RECOVAR_CACHE_DIR-}"' in text
     assert '"recovar_cache_dir": os.environ.get("RECOVAR_CACHE_DIR")' in text
     assert '"jax_compilation_cache_dir": os.environ.get("JAX_COMPILATION_CACHE_DIR")' in text
+    assert 'SOURCE_GIT_HEAD="$(git rev-parse HEAD)"' in text
+    assert "qualification worktree changed during execution" in text
+    assert '"git_head": sys.argv[8]' in text
+    assert '"tracked_worktree_clean_at_provenance"' in text
+    assert '"RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"' in text
 
 
 def test_real_data_suite_maps_array_tasks_to_frozen_case_ids_and_isolated_roots():

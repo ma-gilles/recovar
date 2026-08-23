@@ -14,6 +14,7 @@ AUDIT_SCHEMAS = {
     "recovar.vdam_relion_fsc_trajectory_audit.v1",
     "recovar.vdam_relion_real_data_trajectory_audit.v2",
 }
+REPEATABILITY_ENVELOPE_SCHEMA = "recovar.vdam_real_repeatability_envelope.v1"
 
 
 class SummaryError(RuntimeError):
@@ -77,7 +78,7 @@ def summarize(suite_path: Path, report_root: Path) -> dict[str, Any]:
             "case_id": case_id,
             "name": str(case["name"]),
             "dataset": case.get("dataset"),
-            "result": str(audit["result"]),
+            "strict_point_reference_result": str(audit["result"]),
             "minimum_cross_engine_fsc_auc": float(audit["minimum_cross_engine_fsc_auc"]),
             "recovar_wall_s": recovar_wall_s,
             "relion_wall_s": relion_wall_s,
@@ -105,10 +106,27 @@ def summarize(suite_path: Path, report_root: Path) -> dict[str, Any]:
                     float(state["pmax_absolute_error"]["max"]) for state in particle_states
                 ),
             )
+        envelope_path = case_root / "repeatability_envelope.json"
+        calibrated_result = str(audit["result"])
+        if envelope_path.is_file():
+            envelope = _load(envelope_path, "repeatability envelope")
+            if envelope.get("schema") != REPEATABILITY_ENVELOPE_SCHEMA:
+                raise SummaryError(f"{case_id}: repeatability envelope schema differs")
+            if envelope.get("strict_point_reference_is_preserved") is not True:
+                raise SummaryError(f"{case_id}: repeatability envelope rewrites strict status")
+            if envelope.get("strict_point_reference_result") != audit.get("result"):
+                raise SummaryError(f"{case_id}: strict audit and repeatability envelope disagree")
+            calibrated_result = str(envelope["repeatability_calibrated_result"])
+            row["repeatability_envelope"] = str(envelope_path)
+        row["repeatability_calibrated_result"] = calibrated_result
+        row["result"] = calibrated_result
         rows.append(row)
     if len(source_heads) != 1:
         raise SummaryError(f"suite reports contain mixed source heads: {sorted(source_heads)}")
-    failures = [row["case_id"] for row in rows if row["result"] != "pass"]
+    strict_failures = [
+        row["case_id"] for row in rows if row["strict_point_reference_result"] != "pass"
+    ]
+    failures = [row["case_id"] for row in rows if row["repeatability_calibrated_result"] != "pass"]
     runtime_ratios = [row["runtime_ratio_recovar_over_relion"] for row in rows]
     return {
         "schema": SCHEMA,
@@ -117,6 +135,14 @@ def summarize(suite_path: Path, report_root: Path) -> dict[str, Any]:
         "result": "pass" if not failures else "fail",
         "counts": {"pass": len(rows) - len(failures), "fail": len(failures), "total": len(rows)},
         "failure_case_ids": failures,
+        "strict_point_reference_result": "pass" if not strict_failures else "fail",
+        "strict_point_reference_counts": {
+            "pass": len(rows) - len(strict_failures),
+            "fail": len(strict_failures),
+            "total": len(rows),
+        },
+        "strict_point_reference_failure_case_ids": strict_failures,
+        "repeatability_calibrated_result": "pass" if not failures else "fail",
         "minimum_cross_engine_fsc_auc": min(row["minimum_cross_engine_fsc_auc"] for row in rows),
         "runtime_ratio_recovar_over_relion": {
             "min": min(runtime_ratios),

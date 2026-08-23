@@ -58,6 +58,7 @@ def test_summarize_complete_suite_tracks_quality_runtime_and_failures(tmp_path):
     assert result["result"] == "fail"
     assert result["counts"] == {"pass": 1, "fail": 1, "total": 2}
     assert result["failure_case_ids"] == ["case-2"]
+    assert result["strict_point_reference_failure_case_ids"] == ["case-2"]
     assert result["cases"][0]["runtime_ratio_recovar_over_relion"] == pytest.approx(2.0)
 
 
@@ -125,3 +126,29 @@ def test_summarize_real_data_suite_uses_provenance_runtime_and_particle_gates(tm
     assert result["cases"][0]["maximum_divergent_particle_count"] == 0
     assert result["cases"][0]["maximum_pmax_absolute_error_p95"] == pytest.approx(3e-4)
     assert result["cases"][0]["maximum_pmax_absolute_error"] == pytest.approx(4e-4)
+
+
+def test_summarize_preserves_strict_failure_but_accepts_repeatability_envelope(tmp_path):
+    suite = _suite(tmp_path)
+    root = tmp_path / "reports"
+    _case(root, "case-1", result="fail")
+    _case(root, "case-2")
+    _write_json(
+        root / "case-1" / "repeatability_envelope.json",
+        {
+            "schema": "recovar.vdam_real_repeatability_envelope.v1",
+            "strict_point_reference_is_preserved": True,
+            "strict_point_reference_result": "fail",
+            "repeatability_calibrated_result": "pass",
+        },
+    )
+
+    result = summarize(suite, root)
+
+    assert result["strict_point_reference_result"] == "fail"
+    assert result["strict_point_reference_failure_case_ids"] == ["case-1"]
+    assert result["repeatability_calibrated_result"] == "pass"
+    assert result["result"] == "pass"
+    assert result["failure_case_ids"] == []
+    assert result["cases"][0]["strict_point_reference_result"] == "fail"
+    assert result["cases"][0]["repeatability_calibrated_result"] == "pass"
