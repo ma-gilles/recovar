@@ -522,10 +522,13 @@ stages remained near one second per iteration.  On the same H100,
 to `120.12 s` (`12826886`).  The scoped command-bootstrap implementation then
 completed in `119.18 s` (`12827578`, `4.4%` faster than control); its full
 trajectory audit passed with minimum FSC-AUC `0.999999999601246` and exact
-assignments.  InitialModel therefore selects the async allocator before JAX
-initialization, while an existing caller `TF_GPU_ALLOCATOR` still wins and
-`RECOVAR_INITIAL_MODEL_CUDA_ALLOCATOR=default` restores the prior behavior.
-The resolved allocator is recorded in both dry-run and native-options JSON.
+assignments.  The scale gate rejected making this the default: 100k/256 job
+`12828312` exceeded 33 minutes in RECOVAR without reaching iteration 8, more
+than twice the prior qualified `1083.94 s` wall.  InitialModel therefore keeps
+the existing allocator by default.  An existing caller `TF_GPU_ALLOCATOR`
+still wins, and `RECOVAR_INITIAL_MODEL_CUDA_ALLOCATOR=cuda_malloc_async`
+selects the scoped experimental allocator before JAX initialization.  The
+resolved allocator is recorded in both dry-run and native-options JSON.
 
 The exact pre-allocator fast suite (`12825815`) found one intermittent
 CUDA-disabled test difference: two of five image-power shells differed by at
@@ -535,3 +538,30 @@ The fallback now performs a fixed per-shell reduction only when
 `RECOVAR_DISABLE_CUDA=1`; production CUDA execution is unchanged.  The
 original test plus 20 repetitions passed (`12828060`), and the complete
 sparse-pass2 test file passed with `173 passed, 1 skipped` (`12828073`).
+
+## Default-GUI robustness trajectory expansion (2026-08-23)
+
+The original fixed-12 scorecard already covered baseline, very high noise,
+anisotropic poses, no-CTF, contrast/noise-scale variation, image offsets,
+severe outliers, high resolution, 10k, and production-scale inputs.  A new
+independent 12-cell suite, `vdam-k1-robustness-v1`, reuses the remaining
+immutable EM fixtures and keeps the same default K=1 InitialModel parameters.
+Every cell runs a complete eight-iteration RELION/RECOVAR pair on one physical
+GPU and audits checkpoints 0/1/2/4/8.  It adds 20%, 25%, 30%, and 70% outlier
+fractions; junk particles; uniform, anisotropic, and Kent pose distributions;
+white, radial, low, and high noise; no-CTF; combined contrast/shift stress;
+small-N; and a 10k Kent/radial cell.
+
+Slurm array `12831190` passed all 12 cells from source head `4c3d44ed`.  Across
+all cases and checkpoints, the minimum cross-engine signed FSC-AUC was
+`0.9999999916047712` (gate `0.999`), and the worst RECOVAR-minus-RELION GT
+FSC-AUC delta was `-1.3592646956467336e-6` (gate `-0.002`).  Schedules and
+artifact topology were exact throughout.  The immutable aggregate report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_robustness_4c3d44ed_20260823/robustness_suite_summary.json`
+(SHA-256 `1e2f68e21a0e2fe5c7416b59eea7148bdde938610f2ff904091f6f776aee41a8`).
+
+The small-cell runtime ratios ranged from `3.84x` to `11.70x`.  These jobs make
+startup/JIT overhead visible rather than establishing scale throughput, so
+runtime remains open and is evaluated separately on the 100k/256 paired gate.
+Per the EM-only validation contract, the unrelated repo-wide long-test shards
+were stopped and will not be used as VDAM acceptance evidence.
