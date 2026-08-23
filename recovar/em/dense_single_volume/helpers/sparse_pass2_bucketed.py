@@ -1260,6 +1260,14 @@ def _maybe_dump_bpref_contribution_rows(
         class_index=np.int32(class_index),
         run_id=np.asarray(run_id),
         current_size=np.int64(current_size),
+        # ``current_size`` is the scoring window. During fresh firstiter-CC,
+        # RELION may keep the BPref/model support one shell smaller. Persist
+        # the actual scatter radius so focused replay never infers it from the
+        # score window or the odd accumulator shape.
+        mstep_max_r=np.float64(np.nan if max_r is None else float(max_r)),
+        mstep_current_size=np.int64(
+            -1 if max_r is None else 2 * int(round(float(max_r)))
+        ),
         image_shape=np.asarray(image_shape, dtype=np.int32),
         volume_shape=np.asarray(volume_shape, dtype=np.int32),
         window_indices=np.asarray(window_indices, dtype=np.int32),
@@ -4246,6 +4254,31 @@ def _compute_sparse_pass2_projections_block(
     return proj_half, jnp.concatenate(abs2_chunks, axis=0)
 
 
+def _projection_kwargs_for_relion_score_window(
+    projection_kwargs,
+    *,
+    use_relion_projector: bool,
+    current_size: int | None,
+):
+    """Keep the RELION projector crop large enough for the particle image.
+
+    ``r_max`` describes the model sphere, but it does not always describe the
+    particle-image crop.  In particular, fresh first-iteration CC can score a
+    size-58 particle image from a projector whose model ``r_max`` is 28.  A
+    crop inferred as ``2 * r_max == 56`` drops the valid ``ky=-28`` row before
+    the score window gathers it.  RELION projects into the particle-image box
+    and clips samples independently to the model sphere, so preserve that
+    distinction here.
+    """
+
+    kwargs = dict(projection_kwargs)
+    if use_relion_projector:
+        if current_size is None:
+            raise ValueError("windowed RELION projection requires current_size")
+        kwargs["projector_output_size"] = int(current_size)
+    return kwargs
+
+
 def _compute_sparse_pass2_windowed_projections_block(
     mean_for_proj,
     rotations_block,
@@ -6485,6 +6518,46 @@ def _relion_cuda_corr_img_from_rfloat_ctf(inverse_noise, ctf_rfloat, scale=None)
         scale_squared = jax.lax.optimization_barrier(scale * scale)
         corr_img = corr_img * scale_squared
     return corr_img
+
+
+def _relion_cuda_corr_img_from_native_noise_variance(
+    noise_variance,
+    ctf_rfloat,
+    image_shape,
+    scale=None,
+):
+    """Form score-unit ``corr_img`` with RELION's native-FFT cast order.
+
+    RECOVAR stores the noise variance in its normalized-FFT units, larger than
+    RELION's variance by ``N**4``.  Reciprocating that value into float32 and
+    then applying the compensating Fourier scale is algebraically correct but
+    changes ``Minvsigma2`` by one ULP on real parity fixtures.  RELION first
+    reciprocates its native-unit binary64 variance into XFLOAT, forms the
+    CTF-square product, and only then does RECOVAR need to convert the completed
+    XFLOAT operand back to normalized-FFT score units.
+    """
+
+    image_size = int(image_shape[0])
+    if tuple(image_shape) != (image_size, image_size):
+        raise ValueError(f"RELION corr_img requires a square image, got {image_shape}")
+    native_fourier_scale_rfloat = jnp.asarray(image_size**4, dtype=jnp.float64)
+    native_variance = (
+        jnp.asarray(noise_variance, dtype=jnp.float64)
+        / native_fourier_scale_rfloat
+    )
+    native_inverse_noise = jnp.reciprocal(native_variance).astype(jnp.float32)
+    native_corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
+        native_inverse_noise,
+        ctf_rfloat,
+        scale,
+    )
+    # XLA's float32 division may lower to a reciprocal multiply and differs
+    # from correctly rounded division by one ULP.  This conversion is not a
+    # RELION operation, so perform it in binary64 and cast once to preserve the
+    # native XFLOAT operand under RECOVAR's Fourier normalization.
+    return (
+        native_corr_img.astype(jnp.float64) / native_fourier_scale_rfloat
+    ).astype(jnp.float32)
 
 
 def _relion_cuda_pixel_correction_from_rfloat_ctf(scale, ctf_rfloat):
@@ -8795,6 +8868,7 @@ def _maybe_dump_pass2_bucket(
     relion_min_diff2=None,
     relion_raw_diff2=None,
     relion_full_to_compact=None,
+    raw_score_mode="gaussian",
 ):
     """Env-gated sparse pass-2 dump for RELION operand parity debugging."""
     dump_dir = os.environ.get("RECOVAR_PASS2_DUMP_DIR")
@@ -8830,9 +8904,19 @@ def _maybe_dump_pass2_bucket(
     raw_highres_np = None
     if raw_operands_requested:
         if relion_raw_diff2 is None:
-            raise ValueError(
-                f"{_PASS2_DUMP_RAW_OPERANDS_ENV}=1 requires the production "
-                "K=1 RELION raw-diff2 tensor"
+            if raw_score_mode != "normalized_cc":
+                raise ValueError(
+                    f"{_PASS2_DUMP_RAW_OPERANDS_ENV}=1 requires the production "
+                    "K=1 RELION raw-diff2 tensor"
+                )
+            # Fresh firstiter-CC produces a score tensor directly rather than
+            # a Gaussian ``raw_diff2`` tensor. Preserve the effective
+            # float32 kernel result by removing the additive priors here;
+            # this is capture-only and does not alter scoring or selection.
+            relion_raw_diff2 = (
+                jnp.asarray(scores)
+                - jnp.asarray(rotation_log_prior)[:, :, None]
+                - jnp.asarray(translation_log_prior)[:, None, :]
             )
         if shifted_corrected_score_split is None:
             raise ValueError(
@@ -10727,9 +10811,10 @@ def _prepare_bucket_io(
         ).astype(jnp.float32)
         weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
         ctf2_over_nv_half = weighted_ctf_half * ctf_half
-        relion_score_corr_img_half = _relion_cuda_corr_img_from_rfloat_ctf(
-            inverse_noise_half[None, :],
+        relion_score_corr_img_half = _relion_cuda_corr_img_from_native_noise_variance(
+            noise_variance_half[None, :],
             ctf_half_rfloat,
+            image_shape,
             batch_scale[:, None] if scale_corrections is not None else None,
         )
     else:
@@ -11928,7 +12013,11 @@ def compute_pass2_stats_sparse_bucketed(
         if _projection_cache_fits_budget(transient_projection_bytes, max_projection_cache_bytes):
             cache_t0 = time.time()
             if use_window:
-                projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
+                projection_kwargs = _projection_kwargs_for_relion_score_window(
+                    window_spec.projection_kwargs(return_abs2=False),
+                    use_relion_projector=use_relion_projector,
+                    current_size=current_size,
+                )
                 score_cache, recon_cache, recon_abs2_cache = _compute_sparse_pass2_windowed_projections_block(
                     mean_for_proj,
                     jnp.asarray(fine_rotations_override, dtype=jnp.float32),
@@ -12588,7 +12677,11 @@ def compute_pass2_stats_sparse_bucketed(
                 if projection_cache is None:
                     rotations_chunk = jnp.asarray(rotations[:, start:stop])
                     flat_rotations_chunk = flatten_bucket_rotations(rotations_chunk)
-                    projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
+                    projection_kwargs = _projection_kwargs_for_relion_score_window(
+                        window_spec.projection_kwargs(return_abs2=False),
+                        use_relion_projector=use_relion_projector,
+                        current_size=current_size,
+                    )
                     score_flat, recon_flat, recon_abs2_flat = _compute_sparse_pass2_windowed_projections_block(
                         mean_for_proj,
                         flat_rotations_chunk,
@@ -13990,8 +14083,15 @@ def compute_pass2_stats_sparse_bucketed(
                 proj_abs2_for_noise = projection_cache["recon_abs2"][rotation_indices_jax]
         else:
             # Project (B*R, 3, 3) -> (B*R, n_half) -> reshape (B, R, n_half)
-            projection_kwargs = window_spec.projection_kwargs(return_abs2=False if (use_window or score_only) else None)
+            projection_kwargs = window_spec.projection_kwargs(
+                return_abs2=False if (use_window or score_only) else None
+            )
             if use_window:
+                projection_kwargs = _projection_kwargs_for_relion_score_window(
+                    projection_kwargs,
+                    use_relion_projector=use_relion_projector,
+                    current_size=current_size,
+                )
                 proj_half_flat, proj_for_noise_flat, proj_abs2_for_noise_flat = (
                     _compute_sparse_pass2_windowed_projections_block(
                         mean_for_proj,
@@ -14387,6 +14487,7 @@ def compute_pass2_stats_sparse_bucketed(
                 relion_min_diff2=min_diff2,
                 relion_raw_diff2=raw_diff2,
                 relion_full_to_compact=relion_score_full_to_compact,
+                raw_score_mode=relion_firstiter_score_mode,
             )
             if pass2_dump_count and _env_flag_enabled(
                 _PASS2_DUMP_STOP_AFTER_TARGET_ENV,

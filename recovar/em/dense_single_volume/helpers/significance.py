@@ -2207,6 +2207,7 @@ def _compute_k_class_significance_batched(
             )
         from recovar import cuda_backproject
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+            _relion_cuda_corr_img_from_native_noise_variance,
             _relion_cuda_corr_img_from_rfloat_ctf,
             _relion_cuda_fine_full_to_compact_lookup,
             _relion_cuda_pixel_correction_from_rfloat_ctf,
@@ -3042,12 +3043,10 @@ def _compute_k_class_significance_batched(
                     coarse_gaussian_score_indices,
                     image_shape,
                 ).reshape(batch_size, n_trans, -1)
-                inverse_noise_half = jnp.reciprocal(
-                    jnp.asarray(noise_variance_half, dtype=jnp.float64),
-                ).astype(jnp.float32)
-                exact_corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
-                    inverse_noise_half[None, :],
+                exact_corr_img = _relion_cuda_corr_img_from_native_noise_variance(
+                    noise_variance_half[None, :],
                     ctf_half_rfloat,
+                    image_shape,
                     batch_scale_f32[:, None] if scale_corrections is not None else None,
                 )
                 exact_square_corr_img = exact_corr_img[:, coarse_gaussian_score_indices]

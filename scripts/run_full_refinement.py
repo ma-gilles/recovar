@@ -786,6 +786,34 @@ def _parse_relion_cli_ini_high(text):
     return val
 
 
+def _read_relion_mrc_model_pixel_size(path):
+    """Read RELION's binary64 sampling rate from MRC cell length/grid size.
+
+    ``mrcfile.voxel_size`` performs the division in float32.  RELION retains
+    the float32 header cell length and integer grid size, then divides them in
+    ``RFLOAT`` (binary64 in the parity build).  Keeping that division boundary
+    matters for marginal first-iteration normalized-CC winners.
+    """
+
+    import mrcfile
+
+    with mrcfile.open(path, permissive=False, header_only=True) as handle:
+        cell_lengths = np.asarray(
+            [handle.header.cella.x, handle.header.cella.y, handle.header.cella.z],
+            dtype=np.float64,
+        )
+        grid_sizes = np.asarray(
+            [handle.header.mx, handle.header.my, handle.header.mz],
+            dtype=np.int64,
+        )
+    if np.any(grid_sizes <= 0) or not np.all(np.isfinite(cell_lengths)):
+        raise ValueError(f"invalid MRC sampling header: {path}")
+    sampling = cell_lengths / grid_sizes.astype(np.float64)
+    if np.any(sampling <= 0.0) or not np.allclose(sampling, sampling[0], rtol=0.0, atol=1e-12):
+        raise ValueError(f"K=1 RELION model requires isotropic MRC sampling: {path}")
+    return float(sampling[0])
+
+
 def _parse_relion_tau2_fudge(text):
     """Extract RELION's tau2_fudge from a model or optimiser STAR text block.
 
@@ -3742,12 +3770,9 @@ def main():
         )
     elif args.n_classes == 1:
         init_mrc_path = args.init_volume or os.path.join(args.data_dir, "reference_init.mrc")
-        init_vol_real, init_mrc_voxel_size = _load_mrc(
-            init_mrc_path,
-            return_voxel_size=True,
-        )
+        init_vol_real = _load_mrc(init_mrc_path)
         init_vol_real = init_vol_real.astype(np.float32)
-        relion_model_pixel_size = float(init_mrc_voxel_size.x)
+        relion_model_pixel_size = _read_relion_mrc_model_pixel_size(init_mrc_path)
         if not np.isfinite(relion_model_pixel_size) or relion_model_pixel_size <= 0.0:
             raise SystemExit(
                 f"Initial RELION reference has invalid voxel size {relion_model_pixel_size}: "
@@ -3757,8 +3782,16 @@ def main():
             f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
         )
         if _ini_high_for_lowpass is not None:
+            # RELION filters ``mymodel.Iref`` in model coordinates.  The
+            # particle STAR optics pixel size can be a rounded serialization
+            # (for example 1.416667 versus the MRC header ratio
+            # 544.0 / 384 = 1.4166666666666667 A/px),
+            # which is enough to flip marginal firstiter-CC winners.
             filtered_real = _apply_ini_high_lowpass_real(
-                init_vol_real, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
+                init_vol_real,
+                ds.volume_shape,
+                relion_model_pixel_size,
+                _ini_high_for_lowpass,
             )
             if _use_initial_projector_real:
                 init_reference_real_for_projector = filtered_real

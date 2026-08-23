@@ -725,6 +725,11 @@ def test_retain_group_scale_update_state_only_omits_terminal_one_step():
         skip_final_iteration=False,
     )
     assert retain_group_scale_update_state(
+        max_iter=1,
+        skip_final_iteration=True,
+        diagnostic_retain_terminal_state=True,
+    )
+    assert retain_group_scale_update_state(
         max_iter=2,
         skip_final_iteration=True,
     )

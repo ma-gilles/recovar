@@ -1284,6 +1284,53 @@ def test_sparse_pass2_raw_operand_dump_fails_closed_without_raw_diff2(
         )
 
 
+def test_sparse_pass2_raw_operand_dump_uses_normalized_cc_score_without_diff2(
+    monkeypatch,
+    tmp_path,
+):
+    experiment_dataset = SimpleNamespace(
+        dataset_indices=np.asarray([42], dtype=np.int64)
+    )
+    per_image_inputs = {
+        "oversampled_rots": [np.eye(3, dtype=np.float32)[None]],
+        "oversampled_rot_indices": [np.asarray([7], dtype=np.int64)],
+        "parent_map": [np.asarray([0], dtype=np.int32)],
+    }
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ROTATION_ROWS", "0")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_RAW_OPERANDS", "1")
+    score = np.asarray([[[0.25, 0.5]]], dtype=np.float32)
+    rotation_prior = np.asarray([[0.125]], dtype=np.float32)
+    translation_prior = np.asarray([[0.0, -0.25]], dtype=np.float32)
+
+    sparse_pass2_mod._maybe_dump_pass2_bucket(
+        experiment_dataset=experiment_dataset,
+        image_indices=np.asarray([0], dtype=np.int64),
+        per_image_inputs=per_image_inputs,
+        current_size=14,
+        n_fine_trans=2,
+        fine_translations=np.zeros((2, 2), dtype=np.float32),
+        scores=score,
+        probs=np.ones((1, 1, 2), dtype=np.float32) * 0.5,
+        rotation_log_prior=rotation_prior,
+        translation_log_prior=translation_prior,
+        candidate_mask=np.ones((1, 1, 2), dtype=bool),
+        ctf2_over_nv_score=np.ones((1, 2), dtype=np.float32),
+        proj_half=np.ones((1, 1, 2), dtype=np.complex64),
+        half_weights_used=np.ones(2, dtype=np.float32),
+        window_indices=np.arange(2, dtype=np.int32),
+        shifted_corrected_score_split=np.ones((1, 2, 2), dtype=np.complex64),
+        raw_score_mode="normalized_cc",
+    )
+
+    with np.load(tmp_path / "pass2_orig000042_cs014.npz", allow_pickle=False) as payload:
+        np.testing.assert_array_equal(
+            payload["raw_operand_raw_diff2"],
+            score[0] - rotation_prior[0, :, None] - translation_prior[0, None, :],
+        )
+
+
 def test_sparse_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_path):
     """Sparse pass-2 dumps use the same original-id targeting as pass1."""
 
