@@ -449,6 +449,7 @@ Several apparent ways to reduce that fragmentation were measured and rejected:
 | Image power inside the fused M-step graph (`12820428`) | `65.58 s`; warm pass 2 `17.1 s` | enlarged graph increased compile and memory pressure |
 | Image-power-only JIT (`12820650`) | `53.12 s`; warm pass 2 `12.6 s` | synchronization/shape overhead exceeded saved dispatch |
 | Residual-subtraction JIT (`12820809`) | `49.13 s`; warm pass 2 `12.0 s` | statistically neutral to the `48.43 s` control |
+| Residual subtraction inside fused M-step/noise (`12821679`, `12821729`) | `123.76 s` without a barrier; `122.96 s` with an exactness barrier | warm pass 2 regressed from `11.40 s` to `32.17 s`; the unbarriered graph also changed five shell sums by up to `1.91e-6` (`12821680`), while the barrier restored exactness (`12821713`) but not runtime |
 
 The EM-style coarse score/prior/evidence JIT boundary also preserved the full
 trajectory (`12821223`; minimum FSC-AUC `0.9999792267663643`, assignment
@@ -457,3 +458,8 @@ It was therefore reverted along with the smaller diagnostic JITs.  The next
 runtime boundary must remove a larger serial host region while retaining the
 current memory planner; simply wrapping individual eager regions in JIT or
 changing bucket size does not improve end-to-end wall time.
+
+The promoted source also completed the full fast suite after these runtime
+probes (`12819918`): `7002 passed, 109 skipped` in `45:32`.  Every rejected
+probe above was isolated to the diagnostic worktree and reverted; none is
+present in the tracking branch.
