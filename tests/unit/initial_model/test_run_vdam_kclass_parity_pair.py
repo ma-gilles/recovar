@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from scripts import run_vdam_kclass_parity_pair as runner
 
@@ -66,6 +69,7 @@ def test_default_checkpoints_cover_every_written_iteration(tmp_path: Path):
 
     assert args.checkpoint == list(range(9))
     assert args.minimum_assignment_accuracy == 0.995
+    assert args.reference_pair_report is None
 
 
 def test_pair_report_records_only_recovar_environment():
@@ -120,3 +124,93 @@ def test_required_fixture_paths_reject_star_without_stack_reference(tmp_path: Pa
         assert "no particle stacks" in str(error)
     else:
         raise AssertionError("expected a stack-free particle STAR to be rejected")
+
+
+def _write_frozen_reference(tmp_path: Path):
+    fixture_dir = tmp_path / "fixture"
+    fixture_dir.mkdir()
+    stack = fixture_dir / "particles.mrcs"
+    stack.write_bytes(b"stack")
+    star = fixture_dir / "particles.star"
+    star.write_text("data_particles\nloop_\n_rlnImageName #1\n1@particles.mrcs\n")
+    executable = tmp_path / "relion_refine"
+    executable.write_bytes(b"relion")
+    executable.chmod(0o755)
+    pair_root = tmp_path / "frozen-pair"
+    reference_dir = pair_root / "relion"
+    reference_dir.mkdir(parents=True)
+    report_path = pair_root / "pair_report.json"
+    args = runner._parse_args(
+        [
+            "--fixture-dir",
+            str(fixture_dir),
+            "--output-root",
+            str(tmp_path / "candidate"),
+            "--relion-refine",
+            str(executable),
+            "--reference-pair-report",
+            str(report_path),
+            "--K",
+            "4",
+            "--nr-iter",
+            "2",
+        ]
+    )
+    (reference_dir / "command.json").write_text(
+        json.dumps(runner.build_relion_command(args, reference_dir / "run"))
+    )
+    required = runner._required_fixture_paths(fixture_dir)
+    report = {
+        "schema": "recovar.vdam_kclass_pair.v1",
+        "git_dirty": False,
+        "physical_gpu_uuid": "GPU-frozen",
+        "fixture_sha256": {
+            runner._fixture_source_name(path, fixture_dir): runner._sha256(path)
+            for path in required
+        },
+        "relion_executable": str(executable),
+        "relion_sha256": runner._sha256(executable),
+        "relion_timing": {"wall_s": 12.0, "exit_code": 0},
+        "audit": {
+            "K": 4,
+            "checkpoints": [0, 1, 2],
+            "thresholds": {
+                "minimum_per_class_fsc_auc": 0.999,
+                "minimum_class_assignment_accuracy": 0.995,
+            },
+        },
+    }
+    report_path.write_text(json.dumps(report))
+    return args, report["fixture_sha256"], report, reference_dir
+
+
+def test_frozen_reference_validates_full_scientific_contract(tmp_path: Path):
+    args, fixture_sha256, expected_report, expected_dir = _write_frozen_reference(tmp_path)
+
+    report, reference_dir = runner._validated_frozen_reference(args, fixture_sha256)
+
+    assert report == expected_report
+    assert reference_dir == expected_dir
+
+
+def test_frozen_reference_rejects_threshold_drift(tmp_path: Path):
+    args, fixture_sha256, report, _reference_dir = _write_frozen_reference(tmp_path)
+    report["audit"]["thresholds"]["minimum_class_assignment_accuracy"] = 0.99
+    args.reference_pair_report.write_text(json.dumps(report))
+
+    with pytest.raises(runner.PairRunError, match="audit contract differs"):
+        runner._validated_frozen_reference(args, fixture_sha256)
+
+
+def test_frozen_reference_rejects_fixture_drift(tmp_path: Path):
+    args, fixture_sha256, _report, _reference_dir = _write_frozen_reference(tmp_path)
+    (args.fixture_dir / "particles.mrcs").write_bytes(b"changed")
+    changed_fixture_sha256 = {
+        runner._fixture_source_name(path, args.fixture_dir): runner._sha256(path)
+        for path in runner._required_fixture_paths(args.fixture_dir)
+    }
+
+    with pytest.raises(runner.PairRunError, match="fixture hashes differ"):
+        runner._validated_frozen_reference(args, changed_fixture_sha256)
+
+    assert changed_fixture_sha256 != fixture_sha256

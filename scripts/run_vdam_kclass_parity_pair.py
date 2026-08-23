@@ -75,6 +75,88 @@ def _fixture_source_name(path: Path, fixture_dir: Path) -> str:
         return str(resolved)
 
 
+def _load_json_object(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PairRunError(f"cannot read {label} {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise PairRunError(f"{label} must contain a JSON object: {path}")
+    return value
+
+
+def _validated_frozen_reference(
+    args: argparse.Namespace,
+    fixture_sha256: dict[str, str],
+) -> tuple[dict[str, Any], Path]:
+    """Validate and resolve an immutable RELION reference pair.
+
+    A frozen reference makes correctness replays independent of RELION's
+    nondeterministic GPU atomics. Runtime comparisons continue to use the
+    default fresh, same-GPU pair mode.
+    """
+
+    report_path = args.reference_pair_report.resolve()
+    report = _load_json_object(report_path, label="reference pair report")
+    if report.get("schema") != "recovar.vdam_kclass_pair.v1":
+        raise PairRunError("frozen reference does not use the K-class pair schema")
+    if bool(report.get("git_dirty")):
+        raise PairRunError("frozen reference was generated from a dirty source tree")
+
+    audit = report.get("audit")
+    if not isinstance(audit, dict):
+        raise PairRunError("frozen reference pair report has no audit object")
+    thresholds = audit.get("thresholds")
+    expected_contract = {
+        "K": int(args.K),
+        "checkpoints": [int(value) for value in args.checkpoint],
+        "minimum_per_class_fsc_auc": float(args.minimum_fsc_auc),
+        "minimum_class_assignment_accuracy": float(args.minimum_assignment_accuracy),
+    }
+    actual_contract = {
+        "K": int(audit.get("K", 0)),
+        "checkpoints": [int(value) for value in audit.get("checkpoints", ())],
+        "minimum_per_class_fsc_auc": float(
+            (thresholds or {}).get("minimum_per_class_fsc_auc", np.nan)
+        ),
+        "minimum_class_assignment_accuracy": float(
+            (thresholds or {}).get("minimum_class_assignment_accuracy", np.nan)
+        ),
+    }
+    if actual_contract != expected_contract:
+        raise PairRunError(
+            f"frozen reference audit contract differs: {actual_contract} != {expected_contract}"
+        )
+
+    if report.get("fixture_sha256") != fixture_sha256:
+        raise PairRunError("frozen reference fixture hashes differ from the requested fixture")
+
+    reference_dir = report_path.parent / "relion"
+    command_path = reference_dir / "command.json"
+    try:
+        recorded_command = json.loads(command_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PairRunError(f"cannot read frozen RELION command {command_path}: {exc}") from exc
+    expected_command = build_relion_command(args, reference_dir / "run")
+    if recorded_command != expected_command:
+        raise PairRunError("frozen RELION command differs from the requested scientific contract")
+
+    relion_sha256 = str(report.get("relion_sha256", ""))
+    if len(relion_sha256) != 64:
+        raise PairRunError("frozen reference RELION SHA-256 is invalid")
+    recorded_executable = Path(str(report.get("relion_executable", "")))
+    if not recorded_executable.is_file() or _sha256(recorded_executable) != relion_sha256:
+        raise PairRunError("frozen reference RELION executable is missing or has changed")
+    relion_timing = report.get("relion_timing")
+    if (
+        not isinstance(relion_timing, dict)
+        or int(relion_timing.get("exit_code", -1)) != 0
+        or float(relion_timing.get("wall_s", 0.0)) <= 0.0
+    ):
+        raise PairRunError("frozen reference has no successful RELION timing record")
+    return report, reference_dir
+
+
 def build_relion_command(args: argparse.Namespace, output_prefix: Path) -> list[str]:
     return [
         str(args.relion_refine),
@@ -190,8 +272,7 @@ def run_pair(args: argparse.Namespace) -> dict[str, Any]:
     if args.output_root.exists() and any(args.output_root.iterdir()):
         raise PairRunError(f"refusing to reuse non-empty output root: {args.output_root}")
     candidate_dir = args.output_root / "recovar"
-    reference_dir = args.output_root / "relion"
-    for directory in (args.output_root, candidate_dir, reference_dir):
+    for directory in (args.output_root, candidate_dir):
         directory.mkdir(parents=True, exist_ok=True)
     (args.output_root / "SAFE_TO_DELETE").touch()
 
@@ -199,12 +280,27 @@ def run_pair(args: argparse.Namespace) -> dict[str, Any]:
     missing = [str(path) for path in required_fixture if not path.is_file()]
     if missing:
         raise PairRunError(f"missing K-class fixture paths: {missing}")
-    if not args.relion_refine.is_file() or not os.access(args.relion_refine, os.X_OK):
-        raise PairRunError(f"RELION executable is unavailable: {args.relion_refine}")
-
-    relion_command = build_relion_command(args, reference_dir / "run")
+    fixture_sha256 = {
+        _fixture_source_name(path, args.fixture_dir): _sha256(path) for path in required_fixture
+    }
+    frozen_reference_report = None
+    if args.reference_pair_report is None:
+        reference_mode = "fresh_same_gpu"
+        reference_dir = args.output_root / "relion"
+        reference_dir.mkdir(parents=True, exist_ok=True)
+        if not args.relion_refine.is_file() or not os.access(args.relion_refine, os.X_OK):
+            raise PairRunError(f"RELION executable is unavailable: {args.relion_refine}")
+        relion_command = build_relion_command(args, reference_dir / "run")
+        (reference_dir / "command.json").write_text(json.dumps(relion_command, indent=2) + "\n")
+    else:
+        reference_mode = "frozen_pair_report"
+        frozen_reference_report, reference_dir = _validated_frozen_reference(
+            args,
+            fixture_sha256,
+        )
+        (args.output_root / "relion").symlink_to(reference_dir, target_is_directory=True)
+        relion_command = None
     recovar_command = build_recovar_command(args, candidate_dir / "run")
-    (reference_dir / "command.json").write_text(json.dumps(relion_command, indent=2) + "\n")
     (candidate_dir / "command.json").write_text(json.dumps(recovar_command, indent=2) + "\n")
     env = dict(os.environ)
     env.pop("JAX_PLATFORM_NAME", None)
@@ -217,13 +313,17 @@ def run_pair(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     gpu_before = _gpu_uuid()
-    relion_timing = _run(
-        relion_command,
-        cwd=args.fixture_dir,
-        env=env,
-        log_path=reference_dir / "run.log",
-    )
-    gpu_between = _gpu_uuid()
+    if relion_command is None:
+        relion_timing = frozen_reference_report.get("relion_timing")
+        gpu_between = gpu_before
+    else:
+        relion_timing = _run(
+            relion_command,
+            cwd=args.fixture_dir,
+            env=env,
+            log_path=reference_dir / "run.log",
+        )
+        gpu_between = _gpu_uuid()
     recovar_timing = _run(
         recovar_command,
         cwd=repo_root,
@@ -242,6 +342,17 @@ def run_pair(args: argparse.Namespace) -> dict[str, Any]:
         minimum_fsc_auc=args.minimum_fsc_auc,
         minimum_assignment_accuracy=args.minimum_assignment_accuracy,
     )
+    runtime_comparable = reference_mode == "fresh_same_gpu"
+    relion_executable = (
+        str(args.relion_refine.resolve())
+        if frozen_reference_report is None
+        else str(frozen_reference_report["relion_executable"])
+    )
+    relion_sha256 = (
+        _sha256(args.relion_refine)
+        if frozen_reference_report is None
+        else str(frozen_reference_report["relion_sha256"])
+    )
     provenance = {
         "schema": "recovar.vdam_kclass_pair.v1",
         "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip(),
@@ -249,15 +360,30 @@ def run_pair(args: argparse.Namespace) -> dict[str, Any]:
         "recovar_environment": _recovar_environment(env),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "physical_gpu_uuid": gpu_before,
+        "reference_mode": reference_mode,
+        "reference_pair_report": (
+            None if args.reference_pair_report is None else str(args.reference_pair_report.resolve())
+        ),
+        "reference_pair_report_sha256": (
+            None if args.reference_pair_report is None else _sha256(args.reference_pair_report.resolve())
+        ),
+        "reference_physical_gpu_uuid": (
+            gpu_before
+            if frozen_reference_report is None
+            else str(frozen_reference_report.get("physical_gpu_uuid", ""))
+        ),
+        "runtime_comparable": runtime_comparable,
         "fixture_dir": str(args.fixture_dir),
-        "fixture_sha256": {
-            _fixture_source_name(path, args.fixture_dir): _sha256(path) for path in required_fixture
-        },
-        "relion_executable": str(args.relion_refine.resolve()),
-        "relion_sha256": _sha256(args.relion_refine),
+        "fixture_sha256": fixture_sha256,
+        "relion_executable": relion_executable,
+        "relion_sha256": relion_sha256,
         "relion_timing": relion_timing,
         "recovar_timing": recovar_timing,
-        "runtime_ratio_recovar_over_relion": recovar_timing["wall_s"] / relion_timing["wall_s"],
+        "runtime_ratio_recovar_over_relion": (
+            recovar_timing["wall_s"] / relion_timing["wall_s"]
+            if runtime_comparable
+            else None
+        ),
         "audit": report,
     }
     (args.output_root / "pair_report.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
@@ -272,6 +398,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fixture-dir", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--relion-refine", type=Path, default=DEFAULT_RELION)
+    parser.add_argument(
+        "--reference-pair-report",
+        type=Path,
+        default=None,
+        help=(
+            "Reuse the immutable RELION artifacts and contract from a prior pair report. "
+            "This is a correctness replay; runtime ratios are intentionally omitted."
+        ),
+    )
     parser.add_argument("--K", type=int, default=2)
     parser.add_argument("--nr-iter", type=int, default=8)
     parser.add_argument("--checkpoint", type=int, action="append", default=None)

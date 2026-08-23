@@ -62,9 +62,13 @@ the fixed `0.999` per-class FSC-AUC and `0.995` class-assignment thresholds.
 | K=2 default, native dual replay | PASS | 0.9999999999 | 1.0000 | 14.34 s | 122.67 s | 8.55x |
 | K=4 default, clean post-fix | PASS | 0.9999999972 | 1.0000 | 17.34 s | 156.06 s | 9.00x |
 | K=4 default, native dual replay | PASS | 0.9999999996 | 1.0000 | 17.34 s | 144.00 s | 8.31x |
+| K=4 default, clean native-dual qualification | PASS | 0.9999999972 | 1.0000 | 17.24 s | 144.14 s | 8.36x |
 | K=4, 25 iterations | PASS | 0.9999999679 | 1.0000 | 41.47 s | 402.48 s | 9.71x |
+| K=4, 25 iterations, clean native-dual qualification | PASS | 0.9999998963 | 1.0000 | 42.55 s | 387.07 s | 9.10x |
 | K=4, real 10076, 10,000 particles | PASS | 0.9999987694 | 0.9988 | 71.65 s | 705.67 s | 9.85x |
+| K=4, real 10076, fresh-reference native-dual replay | FAIL | 0.9999625893 | 0.9949 | 156.85 s | 544.00 s | 3.47x |
 | K=4, 100,000 particles, 256 pixels | PASS | 0.9999851527 | 0.9998 | 267.06 s | 1960.97 s | 7.34x |
+| K=4, 100,000 particles, 256 pixels, native dual | PASS | 0.9999996968 | 1.0000 | 268.79 s | 1590.93 s | 5.92x |
 | K=2 seed 7 | PASS | 0.9999999996 | 1.0000 | 25.65 s | 313.97 s | 12.24x |
 | K=2 Healpix 0 | PASS | 0.9999999995 | 1.0000 | 20.19 s | 366.77 s | 18.16x |
 | K=2 tau2 fudge 2 | PASS | 0.9999999999 | 1.0000 | 28.59 s | 228.09 s | 7.98x |
@@ -212,3 +216,34 @@ or ahead-of-time/persistent compilation reuse across recurring bucket shapes.
 Either candidate must beat the clean 500-image control including cold startup,
 preserve the unchanged FSC/assignment gates, and then pass the real and
 100,000-particle scale gates before becoming the default.
+
+## Clean native-dual qualification and immutable-reference policy (2026-08-23)
+
+The isolated clean-head qualification at `4c908639` passed the default, long,
+and scale gates in jobs `12809684`, `12809685`, and `12809687`.  The scale run
+is the material performance result: RECOVAR fell from `1960.97 s` to
+`1590.93 s`, and the same-GPU ratio fell from `7.34x` to `5.92x`, while minimum
+FSC-AUC improved to `0.9999996968` and minimum hard-class agreement to
+`0.99999`.
+
+The fresh real-data pair `12809686` exposed a reference-repeatability problem,
+not a hidden candidate-state change.  RECOVAR's hard-class arrays are exactly
+the same as the earlier passing run at every written iteration.  The two
+independent eight-thread RELION references differ in 47 of 10,000 final class
+labels; the four stable candidate/reference disagreements and those 47 native
+repeat disagreements are disjoint, producing the observed 51-label
+`0.9949` result.  Both map trajectories remain above the fixed `0.999` FSC-AUC
+gate.  Two one-thread RELION repeats in job `12811072` reduce the final native
+label variation to one particle but do not make the GPU maps bytewise
+deterministic, confirming that GPU accumulation, not only host threading,
+belongs to the oracle variance.
+
+The pair harness therefore supports `--reference-pair-report`.  This mode
+validates the complete scientific command, fixture hashes, executable hash,
+checkpoints, and unchanged `0.999`/`0.995` thresholds before reusing immutable
+RELION artifacts.  It deliberately records no runtime ratio.  Fresh
+same-physical-GPU pairs remain the performance protocol, while correctness
+replays use one frozen oracle so a runtime change cannot pass or fail because
+RELION generated a different atomic-reduction realization.  Native
+repeatability remains a separate visible audit; no threshold or baseline is
+changed.
