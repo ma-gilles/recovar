@@ -42,6 +42,12 @@ RUNTIME_ROOT="/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${SLURM_JOB_I
 export TMPDIR="${RUNTIME_ROOT}/tmp"
 export PIXI_HOME="${RUNTIME_ROOT}/pixi_home"
 export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/rattler_cache"
+# This runner's TMPDIR is shared scratch, not node-local storage.  RECOVAR's
+# generic loader otherwise stages the entire source stack there before a
+# bootstrap run that touches only a small random subset (80 GB for the frozen
+# EMPIAR-10180 case).  Match the EM benchmark runner: disable implicit staging
+# unless the submitter explicitly supplies a cache location.
+export RECOVAR_CACHE_DIR="${RECOVAR_CACHE_DIR-}"
 export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${OUTPUT_ROOT}/jax_cache}"
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS="${JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS:-0}"
 export RECOVAR_CUDA_LIB="${REPO_ROOT}/recovar/cuda/libcuda_backproject.so"
@@ -203,6 +209,7 @@ report = {
     "recovar_wall_s": int(sys.argv[5]),
     "cuda_launch_blocking": os.environ.get("CUDA_LAUNCH_BLOCKING") == "1",
     "cuda_launch_blocking_value": os.environ.get("CUDA_LAUNCH_BLOCKING"),
+    "recovar_cache_dir": os.environ.get("RECOVAR_CACHE_DIR"),
 }
 (root / "run_provenance.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
