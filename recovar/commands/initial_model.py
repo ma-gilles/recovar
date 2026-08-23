@@ -301,7 +301,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         _configure_cuda_launch_blocking(deterministic_cuda=args.deterministic_cuda)
     options_dict = _native_options_dict(args)
     if args.dry_run:
-        print(json.dumps(options_dict, indent=2, sort_keys=True))
+        dry_run_payload = dict(options_dict)
+        dry_run_payload["resolved_cuda_allocator"] = os.environ.get(
+            "TF_GPU_ALLOCATOR",
+            "default",
+        )
+        print(json.dumps(dry_run_payload, indent=2, sort_keys=True))
         return 0
     if args.require_custom_cuda:
         _require_custom_cuda_runtime()

@@ -1700,8 +1700,13 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     if opts.write_iter_artifacts:
         _output_dir_from_prefix(opts.outputname).mkdir(parents=True, exist_ok=True)
         config_path = f"{opts.outputname}_native_options.json"
+        native_options = asdict(opts)
+        native_options["resolved_cuda_allocator"] = os.environ.get(
+            "TF_GPU_ALLOCATOR",
+            "default",
+        )
         with open(config_path, "w") as f:
-            json.dump(asdict(opts), f, indent=2, sort_keys=True)
+            json.dump(native_options, f, indent=2, sort_keys=True)
         _write_iteration_artifacts(
             opts.outputname,
             state,

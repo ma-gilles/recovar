@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from dataclasses import fields
 from types import SimpleNamespace
 
 import pytest
 
+import recovar
 from recovar.commands import initial_model
 from recovar.em.initial_model import driver
 from recovar.em.initial_model.schedules import GuiInitialModelDefaults
@@ -137,6 +141,32 @@ def test_dry_run_prints_resolved_native_options(capsys):
     assert payload["fn_img"] == "particles.star"
     assert payload["nr_classes"] == 1
     assert payload["image_fourier_backend"] == "relion_cuda"
+    assert "resolved_cuda_allocator" in payload
+
+
+@pytest.mark.unit
+def test_module_entrypoint_selects_allocator_before_jax_initialization():
+    environ = dict(os.environ)
+    environ["JAX_PLATFORMS"] = "cpu"
+    environ.pop("TF_GPU_ALLOCATOR", None)
+    environ.pop("RECOVAR_INITIAL_MODEL_CUDA_ALLOCATOR", None)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "recovar.commands.initial_model",
+            "--i",
+            "particles.star",
+            "--dry-run",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environ,
+    )
+
+    assert json.loads(completed.stdout)["resolved_cuda_allocator"] == "cuda_malloc_async"
 
 
 @pytest.mark.unit
@@ -176,3 +206,70 @@ def test_rejects_mpi_before_cuda_runtime_gate(monkeypatch):
     monkeypatch.setattr(initial_model, "_require_custom_cuda_runtime", lambda: pytest.fail("CUDA gate called"))
     with pytest.raises(SystemExit, match="not supported together with MPI"):
         initial_model.main(["--i", "particles.star", "--nr-mpi", "2"])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("argv", "orig_argv"),
+    [
+        (["recovar", "initial_model", "--i", "particles.star"], ["python", "recovar"]),
+        (
+            ["recovar.commands.initial_model", "--i", "particles.star"],
+            ["python", "-m", "recovar.commands.initial_model", "--i", "particles.star"],
+        ),
+    ],
+)
+def test_initial_model_bootstrap_defaults_to_cuda_malloc_async(argv, orig_argv):
+    environ = {}
+
+    resolved = recovar._configure_initial_model_cuda_allocator(
+        argv=argv,
+        orig_argv=orig_argv,
+        environ=environ,
+    )
+
+    assert resolved == "cuda_malloc_async"
+    assert environ["TF_GPU_ALLOCATOR"] == "cuda_malloc_async"
+
+
+@pytest.mark.unit
+def test_initial_model_bootstrap_respects_allocator_override_and_optout():
+    argv = ["recovar", "initial_model"]
+    caller_selected = {
+        "TF_GPU_ALLOCATOR": "platform",
+        "RECOVAR_INITIAL_MODEL_CUDA_ALLOCATOR": "cuda_malloc_async",
+    }
+    assert (
+        recovar._configure_initial_model_cuda_allocator(
+            argv=argv,
+            orig_argv=(),
+            environ=caller_selected,
+        )
+        == "platform"
+    )
+
+    opted_out = {"RECOVAR_INITIAL_MODEL_CUDA_ALLOCATOR": "default"}
+    assert (
+        recovar._configure_initial_model_cuda_allocator(
+            argv=argv,
+            orig_argv=(),
+            environ=opted_out,
+        )
+        is None
+    )
+    assert "TF_GPU_ALLOCATOR" not in opted_out
+
+
+@pytest.mark.unit
+def test_initial_model_allocator_bootstrap_is_scoped_to_initial_model():
+    environ = {}
+
+    assert (
+        recovar._configure_initial_model_cuda_allocator(
+            argv=["recovar", "pipeline"],
+            orig_argv=["python", "-m", "pytest"],
+            environ=environ,
+        )
+        is None
+    )
+    assert environ == {}
