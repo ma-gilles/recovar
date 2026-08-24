@@ -22,6 +22,7 @@ PART_ID=${VDAM_PREPROCESS_PART_ID:-69}
 PART_IDS=${VDAM_PREPROCESS_PART_IDS:-}
 PART_IDS=${PART_IDS//:/,}
 CAPTURE_ITERATION=${VDAM_PREPROCESS_ITERATION:-1}
+NR_ITER_SCHEDULE=${VDAM_PREPROCESS_NR_ITER_SCHEDULE:-${CAPTURE_ITERATION}}
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 LAUNCHER=${REPO_ROOT}/scripts/run_vdam_relion_preprocess_capture.sbatch
 RELION_SOURCE=${VDAM_RELION_SOURCE:-/scratch/gpfs/GILLES/mg6942/relion}
@@ -45,6 +46,7 @@ if [[ -n "${PART_IDS}" ]]; then
     test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
     test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 fi
+test "${NR_ITER_SCHEDULE}" -ge "${CAPTURE_ITERATION}"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 while IFS='=' read -r variable_name _; do
@@ -83,7 +85,7 @@ export RELION_ACC_DUMP_VERBOSE=1
 
 COMMAND=(
     srun --ntasks=1 --cpus-per-task=8 --cpu-bind=none "${RELION_BINARY}"
-    --o "${OUTPUT}/run" --iter "${CAPTURE_ITERATION}" --grad --denovo_3dref
+    --o "${OUTPUT}/run" --iter "${NR_ITER_SCHEDULE}" --grad --denovo_3dref
     --grad_write_iter 1 --i particles.star --ctf --K 1 --sym C1
     --flatten_solvent --zero_mask --dont_combine_weights_via_disc --pool 3 --pad 1
     --particle_diameter 200 --oversampling 1 --healpix_order 1 --offset_range 6.0
@@ -96,10 +98,38 @@ git -C "${RELION_SOURCE}" diff --binary | sha256sum > "${ROOT}/provenance/relion
 sha256sum "${LAUNCHER}" "${RELION_BINARY}" > "${ROOT}/provenance/relion_binary.sha256"
 
 start_epoch=$(date +%s)
-(
-    cd "${INPUT}"
-    "${COMMAND[@]}"
-) > "${OUTPUT}/runner.stdout" 2> "${OUTPUT}/runner.stderr"
+if [[ "${NR_ITER_SCHEDULE}" -gt "${CAPTURE_ITERATION}" ]]; then
+    set +e
+    (
+        cd "${INPUT}"
+        "${COMMAND[@]}"
+    ) > "${OUTPUT}/runner.stdout" 2> "${OUTPUT}/runner.stderr" &
+    runner_pid=$!
+    set -e
+    target_tag=$(printf '%03d' "${CAPTURE_ITERATION}")
+    target_complete=0
+    for _poll_index in $(seq 1 600); do
+        if [[ -s "${OUTPUT}/run_it${target_tag}_sampling.star" ]]; then
+            target_complete=1
+            break
+        fi
+        if ! kill -0 "${runner_pid}" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+    test "${target_complete}" -eq 1
+    scancel "${SLURM_JOB_ID}.0" || kill "${runner_pid}" 2>/dev/null || true
+    set +e
+    wait "${runner_pid}"
+    set -e
+    touch "${ROOT}/CAPTURE_STOPPED_AFTER_IT${target_tag}"
+else
+    (
+        cd "${INPUT}"
+        "${COMMAND[@]}"
+    ) > "${OUTPUT}/runner.stdout" 2> "${OUTPUT}/runner.stderr"
+fi
 wall_s=$(( $(date +%s) - start_epoch ))
 
 for required in normalized_shifted_real masked_real masked_fourier_pre_optics_real masked_fourier_pre_optics_imag; do
@@ -114,7 +144,7 @@ if [[ -n "${PART_IDS}" ]]; then
         done
     done
 fi
-printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"part_id":%d,"part_ids":"%s"}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${PART_ID}" "${PART_IDS}" \
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"part_ids":"%s"}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${PART_IDS}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
