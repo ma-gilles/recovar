@@ -7489,10 +7489,7 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
     if f32_fine_posterior:
         monkeypatch.setenv("RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR", "1")
     else:
-        monkeypatch.delenv(
-            "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR",
-            raising=False,
-        )
+        monkeypatch.setenv("RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR", "0")
     monkeypatch.setenv(
         "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR",
         str(tmp_path / "contributions"),

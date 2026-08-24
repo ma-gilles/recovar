@@ -8854,9 +8854,14 @@ def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
 
 
 def relion_x_half_f32_fine_posterior_enabled() -> bool:
-    """Return whether the opt-in RELION float32 fine posterior is enabled."""
+    """Return whether the RELION float32 fine posterior is enabled.
 
-    return _env_flag_enabled(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, default=False)
+    K=1 RELION x-half reconstruction uses this source-matched path by default.
+    The environment switch remains available as an explicit ``0`` rollback
+    control for boundary experiments.
+    """
+
+    return _env_flag_enabled(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, default=True)
 
 
 def _relion_fine_parent_execution_order_enabled(

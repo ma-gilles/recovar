@@ -1,4 +1,4 @@
-"""Focused tests for the opt-in RELION float32 fine-posterior diagnostic."""
+"""Focused tests for the RELION float32 fine-posterior path."""
 
 import numpy as np
 import pytest
@@ -153,8 +153,8 @@ def test_relion_f32_fine_posterior_reuses_external_coarse_sum_and_keeps_support(
     np.testing.assert_array_equal(reused[5], np.zeros(1, dtype=np.float32))
 
 
-def test_relion_f32_fine_posterior_gate_off_preserves_default(monkeypatch):
-    monkeypatch.delenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, raising=False)
+def test_relion_f32_fine_posterior_explicit_gate_off_preserves_legacy(monkeypatch):
+    monkeypatch.setenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, "0")
     scores = jnp.asarray([[[0.0, -0.2, -1.7], [-2.1, -3.5, -np.inf]]], dtype=jnp.float32)
     probs = jnp.asarray([[[0.52, 0.31, 0.09], [0.05, 0.03, 0.0]]], dtype=jnp.float64)
 
@@ -171,7 +171,7 @@ def test_relion_f32_fine_posterior_gate_off_preserves_default(monkeypatch):
 
 
 def test_relion_f32_fine_posterior_explicit_k1_route(monkeypatch):
-    monkeypatch.delenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, raising=False)
+    monkeypatch.setenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, "0")
     scores = jnp.asarray([[[0.0, -0.2, -1.7], [-2.1, -3.5, -np.inf]]], dtype=jnp.float32)
     probs = jnp.asarray([[[0.52, 0.31, 0.09], [0.05, 0.03, 0.0]]], dtype=jnp.float64)
 
@@ -182,6 +182,23 @@ def test_relion_f32_fine_posterior_explicit_k1_route(monkeypatch):
         adaptive_fraction=0.9,
         use_relion_x_half_mstep=True,
         use_relion_f32_fine_posterior=True,
+    )
+
+    for actual_value, expected_value in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(np.asarray(actual_value), np.asarray(expected_value))
+
+
+def test_relion_f32_fine_posterior_is_default_for_xhalf(monkeypatch):
+    monkeypatch.delenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, raising=False)
+    scores = jnp.asarray([[[0.0, -0.2, -1.7], [-2.1, -3.5, -np.inf]]], dtype=jnp.float32)
+    probs = jnp.asarray([[[0.52, 0.31, 0.09], [0.05, 0.03, 0.0]]], dtype=jnp.float64)
+
+    expected = _relion_f32_fine_reconstruction_probs(scores, adaptive_fraction=0.9)[:3]
+    actual = _relion_pass2_reconstruction_probs_for_mstep(
+        scores,
+        probs,
+        adaptive_fraction=0.9,
+        use_relion_x_half_mstep=True,
     )
 
     for actual_value, expected_value in zip(actual, expected, strict=True):

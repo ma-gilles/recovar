@@ -37,6 +37,37 @@ respectively, while the
 20,000-particle `vdam-gf20` case takes `7.07x`.  The earlier completed small
 cases span `2.36--2.88x`.
 
+### 2026-08-24 VDAM float32 fine-posterior default boundary
+
+The complete eight-repeat, 200-particle native ensemble invalidated the earlier
+two-repeat classification of 33 stable scoring defects: pooled RECOVAR
+posterior error is within the native repeat diameter in both halves, with
+`99.43%`/`99.62%` of coordinates inside the native envelope.  Two genuine
+stable-repeat outliers, `144@1127` and `179@115`, then closed projected
+references, score weights, priors, raw-particle preprocessing/translation,
+fine diff2, and the final float32 log-weight table to the live RECOVAR scores.
+
+The production BPref captures exposed the missing wiring: InitialModel saved
+float64 reconstruction probabilities and never enabled
+`RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR`; the adapter left the already
+qualified EM CUDA posterior behind a default-off diagnostic switch.  Focused
+H100 jobs `12910179` and `12910180` passed 14/14 tests and replayed the saved
+candidate scores through RELION's exact float32 `expf`, Policy800 CUB
+sort/scan, divide, and significance path.  For both stable outliers, raw
+weights, sum weight, threshold, normalized posterior, reconstruction mask,
+and pruned reconstruction probabilities are bitwise identical to native
+RELION (2,720/2,720 and 512/512 values).  The existing float64 production
+probabilities remain nonexact at 868 and 113 active rows respectively.
+Padding the candidate tables to 118,784 slots does not change any native
+result, so candidate order/zero padding are excluded at this boundary.
+
+The accepted bounded change makes the source-matched float32 posterior the
+default for K=1 RELION x-half reconstruction while retaining the environment
+switch as an explicit `0` rollback.  Next gates are a fresh iteration-1
+all-particle capture, the iteration-2 noise/cutoff boundary, and only then one
+representative 0..200 trajectory before promoting the change to the full
+22-cell trajectory matrix.  No generic RECOVAR suite is part of this gate.
+
 Source statement order alone is now rejected as sufficient.  Isolated commit
 `99681a33b` completed all 200 frozen `vdam-gf01` iterations (Slurm
 `12879549_1`): first strict failure is iteration 73, minimum/final cross-engine

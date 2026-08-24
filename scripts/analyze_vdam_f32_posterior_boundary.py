@@ -292,11 +292,28 @@ def analyze(
         native_log_weights = np.asarray(_flat_memmap(native_log_path), dtype=np.float32)
         if native_log_weights.shape != compact_scores.reshape(-1).shape:
             raise ValueError("native pre-exp log-weight capture has an unexpected shape")
+        candidate_log_weights = compact_scores.reshape(-1)
+        native_centered = native_log_weights.astype(np.float64) - float(
+            np.mean(native_log_weights, dtype=np.float64)
+        )
+        candidate_centered = candidate_log_weights.astype(np.float64) - float(
+            np.mean(candidate_log_weights, dtype=np.float64)
+        )
         log_weight_comparison = {
             "status": "captured",
-            "candidate_compact_vs_native": _metric(
-                native_log_weights,
-                compact_scores.reshape(-1),
+            # RELION adds op.min_diff2 before exponentiation; RECOVAR's
+            # combined scores omit that candidate-independent constant.  The
+            # later max shift cancels it, so only centered spacing is causal.
+            "candidate_minus_native_common_offset": float(
+                np.mean(
+                    candidate_log_weights.astype(np.float64)
+                    - native_log_weights.astype(np.float64),
+                    dtype=np.float64,
+                )
+            ),
+            "candidate_compact_centered_vs_native": _metric(
+                native_centered,
+                candidate_centered,
             ),
         }
     else:

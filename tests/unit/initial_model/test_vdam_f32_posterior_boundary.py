@@ -22,6 +22,20 @@ def test_metric_reports_float32_bit_mismatch_without_tolerance():
     assert report["max_abs"] > 0.0
 
 
+def test_metric_accepts_exact_centered_log_weight_spacing():
+    native = np.array([3.0, 2.5, -1.0], dtype=np.float32)
+    candidate = native + np.float32(7.25)
+    native_centered = native.astype(np.float64) - np.mean(native, dtype=np.float64)
+    candidate_centered = candidate.astype(np.float64) - np.mean(
+        candidate, dtype=np.float64
+    )
+
+    report = _metric(native_centered, candidate_centered)
+
+    assert report["bitwise_equal"]
+    assert report["max_abs"] == 0.0
+
+
 def test_scalar_metric_records_float32_bits():
     reference = np.float32(3.0)
     candidate = np.nextafter(reference, np.float32(np.inf))
