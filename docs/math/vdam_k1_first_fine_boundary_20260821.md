@@ -806,6 +806,7 @@ and the fixed RECOVAR-minus-RELION GT FSC-AUC floor remains -0.002.
 | gf14 | 82 | 0.673242209 | -0.002398550 |
 | gf15 | 77 | 0.658667288 | -0.007948350 |
 | gf16 | 76 | 0.957551841 | -0.000651299 |
+| gf17 | 69 | 0.236270982 | -0.000836103 |
 | gf18 | 31 | 0.675630118 | -0.003830814 |
 | gf19 | 65 | 0.681088003 | -0.001006762 |
 | gf21 | 84 | 0.719066226 | -0.001117729 |
@@ -817,6 +818,13 @@ fails.  Exact RELION dynamics and output quality are therefore separate open
 requirements.  The gf10 two-native/two-candidate same-GPU panel also fails its
 repeat envelope from iteration 13 through 200, so that late divergence is not
 accepted as stock RELION multimodality.
+
+The final long-running gf17 contrast/noise-scale cell is also complete.  Its
+particle state first differs at iteration 25, its strict FSC-AUC gate first
+fails at iteration 69, and its iteration-200 cross-engine FSC-AUC is
+`0.236270982`.  RECOVAR takes `8035.53 s` versus RELION's `1169.54 s`, a
+`6.87x` runtime ratio.  The full 22-case suite has therefore finished; every
+completed cell is a tracked parity failure, not an infrastructure failure.
 
 For gf01, all 3,000 poses and translations agree through iteration 32.  At
 iteration 33 exactly one particle, `1003@particles.128.mrcs`, chooses a
@@ -914,3 +922,30 @@ native and candidate posteriors on the same captured operands for the largest
 `XA` contributors (beginning with parts `27`, `65`, `175`, `96`, and `123`)
 to separate posterior error from cross-term operand/reduction error before any
 production change.
+
+That bounded replay is complete.  Slurm `12899028` serially captured parts
+`5`, `27`, `28`, `65`, `96`, `123`, `138`, and `175` in independent j8 RELION
+runs using the true 200-iteration schedule, stopping only after iteration 2.
+All eight runs reproduce the frozen iteration-1/2 hard pose and translation
+states exactly.  Serial capture is required: an earlier multi-target attempt
+is quarantined because RELION's shared diagnostic prefix is not thread-safe.
+
+The fail-closed reference decomposition reuses the EM Wavg component replay
+and closes both cutoff terms.  Across the eight largest contributors, the
+candidate-posterior change on native operands sums to only `+4.65e-11` for
+`XA` and `+2.58e-12` for `AA`.  Replacing only the native reference projection
+with the production RECOVAR projection accounts for `-2.2125802e-6` of `XA`
+and `-5.6053283e-7` of `AA`; the unexplained residuals are only
+`-3.63e-13` and `-4.00e-15`.  Per-particle reference-projection relative L2 is
+`4.21e-7`--`1.52e-6`.  Thus the candidate projection plus native masked image,
+CTF, translations, posterior, and Wavg reduction reproduces the production
+candidate `XA/AA` to about `4.1e-13`/`2.3e-14` absolute.
+
+The iteration-2 cutoff failure is therefore propagated reference-state error,
+not a posterior, image-power, masked-image, CTF, translation, or Wavg-reduction
+defect.  The causal search moves back to the iteration-1 BPref/M-step
+accumulator mismatch already observed before reconstruction.  Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_it02_native_xa_top8_serial_40076ddd_20260824/analysis/state_audit.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_it02_native_xa_top8_serial_40076ddd_20260824/analysis/posterior_panel.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_it02_native_xa_top8_serial_40076ddd_20260824/analysis/reference_decomposition.json`

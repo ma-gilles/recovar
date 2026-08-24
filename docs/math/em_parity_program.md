@@ -213,6 +213,17 @@ next bounded experiment replays native versus candidate posteriors against
 the same captured operands for the largest `XA` contributors before changing
 production arithmetic.
 
+The replay closes that question.  Serial full-schedule native panel
+`12899028` captures the eight largest contributors without the shared-prefix
+race and reproduces every iteration-1/2 hard particle state.  Candidate versus
+native posterior changes on identical native operands sum to only `4.65e-11`
+for `XA` and `2.58e-12` for `AA`.  Substituting the production RECOVAR
+reference projection accounts for `-2.2125802e-6` and `-5.6053283e-7`, while
+the remaining replay residuals are `-3.63e-13` and `-4.00e-15`.  The
+iteration-2 cutoff error is therefore propagated reference-state error.  The
+active boundary moves back to the iteration-1 BPref/M-step accumulator, not
+posterior formation or Wavg image/CTF/translation/reduction arithmetic.
+
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired
 full-schedule job `12889537_1` follows a different native trajectory by
