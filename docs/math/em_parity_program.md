@@ -79,6 +79,21 @@ GT delta `-0.00068389`), materially earlier than the fused preprojected
 control's iteration-73 failure.  It continues only to collect terminal and
 runtime evidence.  The experimental commits remain unpushed until their
 complete 0--200 audits and runtime measurements finish.
+
+The terminal fused particle-state audit gives the next exact boundary:
+pose and translation assignments match for all 3,000 particles through
+iteration 32, then iteration 33 first differs only for
+`1003@particles.128.mrcs` (pose error `3.75` degrees, translation error
+`3.00` Angstrom, Pmax absolute error `1.8e-5`).  A first capture submission
+`12889423` failed its intentionally exact source-head provenance check before
+science, and retry `12889446` was rejected by the fail-closed native replay
+gate because the RELION continuation did not reproduce the sealed iteration-33
+particle state.  Neither is parity evidence.  Fresh paired full-schedule job
+`12889537_1` now captures native raw scores/posterior and RECOVAR's fused
+posterior plus score operands for that particle at iteration 33; it also
+produces an independent complete 0--200 trajectory rather than changing the
+scientific schedule with a shortened `--iter` value.
+
 In parallel, the immutable 22-case
 matrix, severe-memory case, and controlled same-GPU repeat panel continue as
 evidence collection; generic RECOVAR full/long tests are deliberately outside
