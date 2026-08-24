@@ -23000,3 +23000,53 @@ fields.  Retry `12886385` completed with the enriched immutable selection,
 but that source capture had explicitly set live initial noise off and is a
 valid rounded-noise control rather than evidence about the remaining live
 boundary.
+
+## 2026-08-24 12:38 EDT — integrated firstiter BPref closes the dominant K=1 boundary
+
+Focused H100 job `12889294` tested a new default-unrouted CUDA target against
+RELION's passive factor capture and independent zero-prefix shadow
+accumulators.  The target forms native-unit translated-image and CTF-squared
+operands and immediately scatters them in the same 128-thread,
+orientation-owned block.  All `16/16` fixed particles, eight from each half,
+are byte-exact for both the complex numerator and float32 denominator; two
+RECOVAR repeats are also byte-exact.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it1_bpref_integrated_kernel_20260824T1225ET/analysis/K1_CASE10_IT1_BPREF_INTEGRATED_KERNEL.json`,
+SHA-256 `e8426ecc9215ead392e28bd0e8fe77acaabb0555e4c0c551afa7e05bf771fc3a`.
+
+The production candidate is guarded by all of: fresh K=1 state, physical
+iteration 1, winner-take-all firstiter-CC, source-faithful spectrum, exact
+BPref operands, preserved physical particle order, and RELION x-half
+accumulators.  It retains native units through the entire half-particle
+sequence and converts once to RECOVAR's public FFT normalization afterward.
+Continuation, frozen-boundary replay, perturbation replay, later numbered
+iterations, score-only paths, and K>1 do not enter the target.  Environment
+variable `RECOVAR_K1_RELION_FIRSTITER_FUSED_BPREF=0` supplies the causal
+control without broadening the default scope.
+
+Full 100k-particle iteration-1 boundary job `12889779` completed `0:0` in
+`00:13:50`.  Relative to the previous production control, the raw pre-join
+numerator relative L2 improves from `1.09271e-6` to `2.35739e-7` in half 1
+and from `1.09478e-6` to `2.36377e-7` in half 2: `4.64x` and `4.63x`, or
+approximately `78.4%` residual reduction.  The raw denominator improves from
+`8.67910e-7` to `3.32451e-8` and from `8.70638e-7` to `3.34073e-8`:
+`26.11x` and `26.06x`, or approximately `96.2%` residual reduction.  Support
+remains exact in both halves.  In public layout, numerator relative L2 is
+`1.09135e-7` and `1.08494e-7`; denominator is `1.39976e-8` and
+`1.40067e-8`.  These numerator discrepancies are far below the independently
+observed native repeat excursion caused by the one-particle branch.
+
+The production run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it1_bpref_integrated_production_60684c558_20260824T1245ET`;
+its matching runtime root is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/` with the same suffix.
+Both contain `SAFE_TO_DELETE`.  The two authoritative reports are
+`analysis/PREJOIN_HALF1.json` (SHA-256
+`e007e9b72a2c615292097d0e9018c7f27628d6eb643edb6bd67ab200646485b0`)
+and `analysis/PREJOIN_HALF2.json` (SHA-256
+`7cb104a53f4eb472b545fd22d798eaa12aeac2c74dcb64348e67d189de659072`).
+
+This accepts fused native-unit operand formation plus immediate scatter as a
+causal K=1 correction.  The remaining raw numerator is approximately
+`2.36e-7`, while the denominator is approximately `3.33e-8`; the next gate is
+a short numbered-trajectory comparison before spending on the complete
+remaining-case scorecard.

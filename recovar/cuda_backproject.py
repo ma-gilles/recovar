@@ -508,6 +508,9 @@ _TARGET_FUSED_BP = "cuda_fused_bp"
 _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
 _TARGET_RELION_FUSED_X_HALF_BP = "cuda_relion_fused_x_half_bp"
 _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE = "cuda_relion_fused_x_half_bp_signature"
+_TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF = (
+    "cuda_relion_firstiter_bpref_fused_x_half"
+)
 _TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
 _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE = (
     "cuda_relion_preprocess_real_f32_native_lane"
@@ -564,6 +567,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_FUSED_BP, "FusedBackproject"),
     (_TARGET_PER_IMAGE_BP, "PerImageBackproject"),
     (_TARGET_RELION_FUSED_X_HALF_BP, "RelionFusedXHalfBackproject"),
+    (
+        _TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF,
+        "RelionFirstiterBprefFusedXHalf",
+    ),
     (
         _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE,
         "RelionFusedXHalfBackprojectSignature",
@@ -2437,6 +2444,123 @@ def relion_fused_x_half_backproject_indexed(
         dense_weight_rows,
         dense_indices,
         rot6,
+        data_volume,
+        weight_volume,
+        **kw,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(10, 11, 12))
+def relion_firstiter_bpref_fused_x_half(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    image: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    native_euler_matrices: jax.Array,
+    significant_weight: jax.Array,
+    weight_norm: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, jax.Array]:
+    """Form native-unit firstiter BPref operands and scatter in one CUDA block.
+
+    Inputs are the exact arrays consumed by RELION ``BP.cuh`` after its image
+    crop: one dense current-size FFTW half image, native CTF and Minvsigma2,
+    the rotation/translation posterior matrix, native translation angles, and
+    native Euler matrices.  The output remains in RELION accumulator units;
+    callers must not fold RECOVAR's N²/N⁴ normalization into these operands.
+    """
+
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(
+            f"RELION firstiter fused BPref requires an odd BPref grid, got {volume_shape}"
+        )
+    expected_pixels = int(image_shape[0] * (image_shape[1] // 2 + 1))
+    expected_volume_size = int(
+        volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    )
+    if image.dtype != jnp.dtype(jnp.complex64) or image.shape != (expected_pixels,):
+        raise TypeError(
+            "RELION firstiter fused BPref image must be a dense complex64 FFTW half row, "
+            f"got {image.shape}/{image.dtype}"
+        )
+    for label, value in (("ctf", ctf), ("minvsigma2", minvsigma2)):
+        if value.dtype != jnp.dtype(jnp.float32) or value.shape != (expected_pixels,):
+            raise TypeError(
+                f"RELION firstiter fused BPref {label} must be float32 shape "
+                f"{(expected_pixels,)}, got {value.shape}/{value.dtype}"
+            )
+    if posterior.dtype != jnp.dtype(jnp.float32) or posterior.ndim != 2:
+        raise TypeError(
+            "RELION firstiter fused BPref posterior must be a float32 rotation/translation matrix"
+        )
+    if posterior.shape[0] <= 0 or posterior.shape[1] <= 0:
+        raise ValueError("RELION firstiter fused BPref posterior must be nonempty")
+    if (
+        translation_angles.dtype != jnp.dtype(jnp.float32)
+        or translation_angles.shape != (posterior.shape[1], 2)
+    ):
+        raise TypeError(
+            "RELION firstiter fused BPref translation angles must be float32 shape "
+            f"{(posterior.shape[1], 2)}, got {translation_angles.shape}/{translation_angles.dtype}"
+        )
+    if (
+        native_euler_matrices.dtype != jnp.dtype(jnp.float32)
+        or native_euler_matrices.shape != (posterior.shape[0], 3, 3)
+    ):
+        raise TypeError(
+            "RELION firstiter fused BPref Euler matrices must be native-convention float32 "
+            f"shape {(posterior.shape[0], 3, 3)}, got "
+            f"{native_euler_matrices.shape}/{native_euler_matrices.dtype}"
+        )
+    for label, value in (
+        ("significant_weight", significant_weight),
+        ("weight_norm", weight_norm),
+    ):
+        if value.dtype != jnp.dtype(jnp.float32) or value.shape != (1,):
+            raise TypeError(
+                f"RELION firstiter fused BPref {label} must be a one-element float32 vector"
+            )
+    if data_volume.dtype != jnp.dtype(jnp.complex64) or data_volume.shape != (
+        expected_volume_size,
+    ):
+        raise TypeError(
+            "RELION firstiter fused BPref data accumulator must be flat complex64 shape "
+            f"{(expected_volume_size,)}, got {data_volume.shape}/{data_volume.dtype}"
+        )
+    if weight_volume.dtype != jnp.dtype(jnp.float32) or weight_volume.shape != (
+        expected_volume_size,
+    ):
+        raise TypeError(
+            "RELION firstiter fused BPref weight accumulator must be flat float32 shape "
+            f"{(expected_volume_size,)}, got {weight_volume.shape}/{weight_volume.dtype}"
+        )
+
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    out_types = (
+        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF,
+        out_types,
+        input_output_aliases={8: 0, 9: 1},
+        vmap_method="sequential",
+    )(
+        image,
+        ctf,
+        minvsigma2,
+        posterior,
+        translation_angles,
+        native_euler_matrices.reshape(posterior.shape[0], 9),
+        significant_weight,
+        weight_norm,
         data_volume,
         weight_volume,
         **kw,

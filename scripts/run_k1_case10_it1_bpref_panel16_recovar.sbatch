@@ -58,7 +58,7 @@ CONTROL=${CASE}/relion_ref
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
 LAUNCHER=${REPO}/scripts/run_k1_case10_it1_bpref_panel16_recovar.sbatch
-CUDA_LIB=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_it1_bpref_fma_44d770de3_20260823T1938ET/cuda/libcuda_backproject.so
+CUDA_LIB=${CUDA_LIB_OVERRIDE:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_it1_bpref_fma_44d770de3_20260823T1938ET/cuda/libcuda_backproject.so}
 RELION_BIND=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET/relion_bind_build/shared
 ORIGINAL_INDICES=0,14275,28628,42698,57062,71399,85827,99997,3,14301,28522,43039,57231,71452,85593,99999
 CONTRIBUTIONS=${ROOT}/recovar/contributions
@@ -70,7 +70,7 @@ IMAGE_NAMES=${ROOT}/provenance/image_names.npy
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
-test "$(git -C "${REPO}" diff --binary -- recovar/em scripts/run_full_refinement.py | sha256sum | awk '{print $1}')" = "${EXPECTED_SOURCE_DIFF_SHA256}"
+test "$(git -C "${REPO}" diff --binary -- recovar/em recovar/cuda/cuda_backproject.cu recovar/cuda_backproject.py scripts/run_full_refinement.py | sha256sum | awk '{print $1}')" = "${EXPECTED_SOURCE_DIFF_SHA256}"
 test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_LIB_SHA256}"
 test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = 3be82df3627e0d6c3c12d1eb42e1ab0c7feb09117bb66a38cc53c0621e9f8436
 test "$(stat -Lc %s "${DATA}/particles.384.mrcs")" = 58982401024
@@ -119,6 +119,7 @@ export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=${ENABLE_LIVE_INITIAL_NOISE}
 export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
+export RECOVAR_K1_RELION_FIRSTITER_FUSED_BPREF=${FIRSTITER_FUSED_BPREF:-1}
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
 export RECOVAR_PASS2_DUMP_DIR=${ROOT}/recovar/pass2
 export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${ORIGINAL_INDICES}
@@ -165,7 +166,7 @@ unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 
 cd "${REPO}"
 git -C "${REPO}" status --short --branch > "${ROOT}/provenance/repo_status_${SLURM_JOB_ID}.txt"
-git -C "${REPO}" diff --binary -- recovar/em scripts/run_full_refinement.py \
+git -C "${REPO}" diff --binary -- recovar/em recovar/cuda/cuda_backproject.cu recovar/cuda_backproject.py scripts/run_full_refinement.py \
     > "${ROOT}/provenance/recovar_source_diff_${SLURM_JOB_ID}.patch"
 sha256sum "${LAUNCHER}" "${CUDA_LIB}" > "${ROOT}/provenance/static_inputs_${SLURM_JOB_ID}.sha256"
 nvidia-smi -q > "${ROOT}/provenance/nvidia_smi_${SLURM_JOB_ID}.txt"

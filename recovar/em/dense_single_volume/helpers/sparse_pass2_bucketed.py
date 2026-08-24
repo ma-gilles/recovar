@@ -240,6 +240,7 @@ _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
 )
 _RELION_POWERCLASS_SPECTRUM_NORM_ENV = "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM"
 _RELION_EXACT_BPREF_OPERANDS_ENV = "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS"
+_RELION_FIRSTITER_FUSED_BPREF_ENV = "RECOVAR_K1_RELION_FIRSTITER_FUSED_BPREF"
 _RELION_TRANSLATED_WAVG_NORM_ENV = "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM"
 _BPREF_CONTRIBUTION_DUMP_CLASS_ENV = "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS"
 _BPREF_CONTRIBUTION_STOP_AFTER_TARGET_ENV = (
@@ -3016,6 +3017,39 @@ def _relion_exact_bpref_operands_enabled(
     )
 
 
+def _relion_firstiter_fused_bpref_enabled(
+    *,
+    fresh_k1_guard: bool,
+    winner_take_all: bool,
+    preserve_bpref_particle_order: bool,
+    relion_exact_bpref_operands: bool,
+    use_relion_x_half_mstep: bool,
+    score_only: bool,
+) -> bool:
+    """Route only fresh single-class firstiter BPref through its native kernel."""
+
+    supported = bool(
+        fresh_k1_guard
+        and winner_take_all
+        and preserve_bpref_particle_order
+        and relion_exact_bpref_operands
+        and use_relion_x_half_mstep
+        and not score_only
+        and int(_bpref_contribution_context["iteration"]) == 1
+        and int(_bpref_contribution_context["half"]) in {1, 2}
+    )
+    raw = os.environ.get(_RELION_FIRSTITER_FUSED_BPREF_ENV)
+    if raw is None or not raw.strip():
+        return supported
+    requested = _env_flag_enabled(_RELION_FIRSTITER_FUSED_BPREF_ENV)
+    if requested and not supported:
+        raise ValueError(
+            f"{_RELION_FIRSTITER_FUSED_BPREF_ENV}=1 requires the fresh K=1 "
+            "iteration-1 winner-take-all x-half path"
+        )
+    return bool(requested and supported)
+
+
 def _relion_wavg_direct_modes(
     *,
     accumulate_noise: bool,
@@ -5550,6 +5584,109 @@ def _write_bpref_accumulator_delta_v1(
         )
     os.replace(temporary, path)
     return path
+
+
+def _accumulate_relion_firstiter_bpref_fused(
+    raw_images,
+    raw_ctf,
+    raw_minvsigma2,
+    posterior,
+    rotations,
+    actual_counts,
+    data_volume,
+    weight_volume,
+    *,
+    centered_pixel_indices,
+    fftw_pixel_indices,
+    translation_angles,
+    physical_image_shape,
+    volume_shape,
+    max_r: float,
+    adaptive_fraction: float,
+):
+    """Accumulate fresh firstiter BPref in RELION native units."""
+
+    from recovar import cuda_backproject
+
+    actual_counts = np.asarray(actual_counts, dtype=np.int64)
+    if actual_counts.shape != (int(posterior.shape[0]),):
+        raise ValueError("firstiter fused BPref particle counts do not match posterior rows")
+    if raw_images.shape != raw_ctf.shape or raw_images.ndim != 2:
+        raise ValueError("firstiter fused BPref image/CTF rows must be aligned")
+    if raw_minvsigma2.shape != (int(raw_images.shape[1]),):
+        raise ValueError("firstiter fused BPref inverse-noise row is not pixel-aligned")
+
+    centered_pixel_indices = jnp.asarray(centered_pixel_indices, dtype=jnp.int32)
+    fftw_pixel_indices = jnp.asarray(fftw_pixel_indices, dtype=jnp.int32)
+    source_images = jnp.asarray(raw_images[:, centered_pixel_indices], dtype=jnp.complex64)
+    source_ctf = jnp.asarray(raw_ctf[:, centered_pixel_indices], dtype=jnp.float32)
+    source_minvsigma2 = jnp.broadcast_to(
+        jnp.asarray(raw_minvsigma2[centered_pixel_indices], dtype=jnp.float32)[None, :],
+        source_ctf.shape,
+    )
+    dense_images, dense_indices, current_height, current_half_width = (
+        cuda_backproject._prepare_relion_x_half_block_topology_operands(
+            source_images,
+            fftw_pixel_indices,
+            physical_image_shape,
+            max_r,
+        )
+    )
+    dense_ctf, ctf_indices, ctf_height, ctf_half_width = (
+        cuda_backproject._prepare_relion_x_half_block_topology_operands(
+            source_ctf,
+            fftw_pixel_indices,
+            physical_image_shape,
+            max_r,
+        )
+    )
+    dense_minvsigma2, noise_indices, noise_height, noise_half_width = (
+        cuda_backproject._prepare_relion_x_half_block_topology_operands(
+            source_minvsigma2,
+            fftw_pixel_indices,
+            physical_image_shape,
+            max_r,
+        )
+    )
+    topology = (current_height, current_half_width, dense_indices.shape)
+    if topology != (ctf_height, ctf_half_width, ctf_indices.shape) or topology != (
+        noise_height,
+        noise_half_width,
+        noise_indices.shape,
+    ):
+        raise RuntimeError("firstiter fused BPref dense operand topologies differ")
+    if current_half_width != current_height // 2 + 1:
+        raise RuntimeError("firstiter fused BPref did not form an FFTW half square")
+
+    threshold = jnp.asarray([np.float32(adaptive_fraction)], dtype=jnp.float32)
+    weight_norm = jnp.ones((1,), dtype=jnp.float32)
+    translation_angles = jnp.asarray(translation_angles, dtype=jnp.float32)
+    current_image_shape = (int(current_height), int(current_height))
+    for particle_index, count in enumerate(actual_counts.tolist()):
+        if count <= 0:
+            continue
+        particle_posterior = jnp.asarray(
+            posterior[particle_index, :count], dtype=jnp.float32
+        )
+        native_eulers = jnp.asarray(
+            rotations[particle_index, :count], dtype=jnp.float32
+        ).transpose(0, 2, 1)
+        data_volume, weight_volume = cuda_backproject.relion_firstiter_bpref_fused_x_half(
+            data_volume,
+            weight_volume,
+            dense_images[particle_index],
+            dense_ctf[particle_index],
+            dense_minvsigma2[particle_index],
+            particle_posterior,
+            translation_angles,
+            native_eulers,
+            threshold,
+            weight_norm,
+            current_image_shape,
+            volume_shape,
+            max_r,
+        )
+    return data_volume, weight_volume
 
 
 def _accumulate_relion_x_half_per_particle_launches(
@@ -11449,6 +11586,24 @@ def _prepare_bucket_io(
             precision_policy.score_complex_dtype,
         )
 
+    direct_bpref_image_half = None
+    direct_bpref_ctf_half = None
+    direct_bpref_minvsigma2_half = None
+    if relion_exact_bpref_operands and not score_only:
+        # Keep the three source operands in the units consumed by BP.cuh.
+        # RECOVAR's stored variance carries the squared FFT normalization, so
+        # remove it in binary64 before taking RELION's float32 reciprocal.
+        fft_size = float(np.prod(image_shape))
+        direct_bpref_image_half = jnp.asarray(
+            recon_bpref_input_half * np.float32(1.0 / fft_size),
+            dtype=jnp.complex64,
+        )
+        direct_bpref_ctf_half = jnp.asarray(ctf_half, dtype=jnp.float32)
+        direct_bpref_minvsigma2_half = jnp.reciprocal(
+            jnp.asarray(noise_variance_half, dtype=jnp.float64)
+            / np.float64(fft_size * fft_size)
+        ).astype(jnp.float32)
+
     return (
         shifted_score_half,
         shifted_recon_half,
@@ -11471,6 +11626,9 @@ def _prepare_bucket_io(
         batch_scale_np,
         inverse_noise_half,
         ctf_half_rfloat,
+        direct_bpref_image_half,
+        direct_bpref_ctf_half,
+        direct_bpref_minvsigma2_half,
     )
 
 
@@ -12205,12 +12363,25 @@ def compute_pass2_stats_sparse_bucketed(
         fresh_k1_guard=fresh_k1_guard,
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
+    relion_firstiter_fused_bpref = _relion_firstiter_fused_bpref_enabled(
+        fresh_k1_guard=fresh_k1_guard,
+        winner_take_all=bool(relion_firstiter_winner_take_all),
+        preserve_bpref_particle_order=bool(preserve_bpref_particle_order),
+        relion_exact_bpref_operands=bool(relion_exact_bpref_operands),
+        use_relion_x_half_mstep=bool(use_relion_x_half_mstep),
+        score_only=bool(score_only),
+    )
     if relion_exact_bpref_operands:
         if use_float64_scoring:
             raise ValueError("exact RELION BPref operands require the native float32 path")
         logger.info(
             "STRICT-PARITY: using RELION binary64-to-float32 inverse-noise and "
             "fused translate-then-weight BPref operands"
+        )
+    if relion_firstiter_fused_bpref:
+        logger.info(
+            "STRICT-PARITY: fresh K=1 iteration-1 forms native-unit BPref "
+            "operands and scatters them in one RELION-topology CUDA kernel"
         )
     if source_faithful_spectrum_norm:
         logger.info(
@@ -12670,6 +12841,9 @@ def compute_pass2_stats_sparse_bucketed(
             direct_batch_scale_corrections,
             direct_inverse_noise_half,
             direct_ctf_rfloat_half,
+            direct_bpref_image_half,
+            direct_bpref_ctf_half,
+            direct_bpref_minvsigma2_half,
         ) = _prepare_bucket_io(
             experiment_dataset,
             batch_data,
@@ -12901,6 +13075,11 @@ def compute_pass2_stats_sparse_bucketed(
             bucket_size=bucket_size,
             target_particle_rows=target_particle_rows,
         )
+        if relion_firstiter_fused_bpref:
+            # RELION owns every firstiter orientation for one particle in a
+            # single BP.cuh launch. Splitting that orientation axis would
+            # change the atomic prefix even when every operand is identical.
+            rotation_chunk_size = None
         if bucket_device_signature_requested:
             logger.info(
                 "Scoped BPref device capture preserves production rotation planning: "
@@ -14990,7 +15169,34 @@ def compute_pass2_stats_sparse_bucketed(
                     diagnostic_owners,
                     device_signature_requested=bucket_device_signature_requested,
                 )
-            if live_per_particle_launches:
+            if relion_firstiter_fused_bpref:
+                if (
+                    direct_bpref_image_half is None
+                    or direct_bpref_ctf_half is None
+                    or direct_bpref_minvsigma2_half is None
+                    or relion_score_translation_angles is None
+                ):
+                    raise RuntimeError(
+                        "fresh firstiter fused BPref is missing native source operands"
+                    )
+                Ft_y_total, Ft_ctf_total = _accumulate_relion_firstiter_bpref_fused(
+                    direct_bpref_image_half,
+                    direct_bpref_ctf_half,
+                    direct_bpref_minvsigma2_half,
+                    mstep_probs,
+                    jnp.asarray(mstep_rotations),
+                    actual_counts,
+                    Ft_y_total,
+                    Ft_ctf_total,
+                    centered_pixel_indices=centered_recon_indices,
+                    fftw_pixel_indices=relion_x_half_recon_indices,
+                    translation_angles=relion_score_translation_angles,
+                    physical_image_shape=image_shape,
+                    volume_shape=recon_volume_shape,
+                    max_r=float(mstep_current_size // 2),
+                    adaptive_fraction=float(adaptive_fraction),
+                )
+            elif live_per_particle_launches:
                 mstep_window_indices = (
                     relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
                 )
@@ -15460,6 +15666,12 @@ def compute_pass2_stats_sparse_bucketed(
         Ft_y_total = jnp.zeros(full_volume_size, dtype=recon_y_accum_dtype)
         Ft_ctf_total = jnp.zeros(full_volume_size, dtype=recon_ctf_accum_dtype)
     elif use_half_volume_mstep:
+        if relion_firstiter_fused_bpref:
+            # Preserve the native atomic prefix across the entire half, then
+            # convert once to RECOVAR's public FFT normalization and CTF sign.
+            fft_size = np.float32(np.prod(image_shape))
+            Ft_y_total = -Ft_y_total / fft_size
+            Ft_ctf_total = Ft_ctf_total / np.float32(fft_size * fft_size)
         _maybe_dump_native_half_mstep(
             Ft_y_total,
             Ft_ctf_total,
@@ -17019,6 +17231,9 @@ def compute_k_class_pass2_stats_sparse_fused(
             _direct_batch_scale_corrections,
             _direct_inverse_noise_half,
             _direct_ctf_rfloat_half,
+            _direct_bpref_image_half,
+            _direct_bpref_ctf_half,
+            _direct_bpref_minvsigma2_half,
         ) = _prepare_bucket_io(
             experiment_dataset,
             batch_data,

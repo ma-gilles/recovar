@@ -1464,6 +1464,90 @@ relion_fused_x_half_backproject_kernel(
     }
 }
 
+/* Fresh firstiter-CC BPref discriminator.  Unlike the ordinary fused x-half
+ * target, this kernel preserves RELION's native-unit operand formation and
+ * scatter in one orientation-owned block.  It is intentionally limited to
+ * 2-D images, float32 CUDA accumulators, and externally supplied posterior
+ * weights/thresholds; production routing remains guarded in Python. */
+__global__ void __launch_bounds__(128)
+relion_firstiter_bpref_fused_x_half_kernel(
+    float2* __restrict__ data_volume,
+    float* __restrict__ weight_volume,
+    const float2* __restrict__ image,
+    const float* __restrict__ ctf,
+    const float* __restrict__ minvsigma2,
+    const float* __restrict__ posterior,
+    const float* __restrict__ translation_angles,
+    const float* __restrict__ rot,
+    const float* __restrict__ significant_weight_buffer,
+    const float* __restrict__ weight_norm_buffer,
+    int n_rotations, int n_translations,
+    int image_h, int image_w,
+    int N0, int N1, int N2_eff,
+    float c0, float c1, float c2,
+    int upsampling, float max_r2)
+{
+    const int orientation = (int)blockIdx.x;
+    if (orientation >= n_rotations) return;
+    __shared__ float R[9];
+    if (threadIdx.x < 9) R[threadIdx.x] = rot[orientation * 9 + threadIdx.x];
+    __syncthreads();
+
+    const float significant_weight = significant_weight_buffer[0];
+    const float weight_norm = weight_norm_buffer[0];
+    const int n_pixels = image_h * image_w;
+    const int stride1 = N2_eff;
+    const int stride0 = N1 * N2_eff;
+    for (int pixel = (int)threadIdx.x; pixel < n_pixels; pixel += 128) {
+        int x = pixel % image_w;
+        int y = pixel / image_w;
+        if (y > image_h / 2) y -= image_h;
+
+        const float pixel_minvsigma2 = __ldg(&minvsigma2[pixel]);
+        const float pixel_ctf = __ldg(&ctf[pixel]);
+        const float2 pixel_image = __ldg(&image[pixel]);
+        float Fweight = 0.0f;
+        float real = 0.0f;
+        float imag = 0.0f;
+        for (int translation = 0; translation < n_translations; ++translation) {
+            float weight = posterior[orientation * n_translations + translation];
+            if (weight >= significant_weight) {
+                weight = (weight / weight_norm) * pixel_ctf * pixel_minvsigma2;
+                Fweight += weight * pixel_ctf;
+                const float tx = translation_angles[2 * translation];
+                const float ty = translation_angles[2 * translation + 1];
+                float sine;
+                float cosine;
+                sincosf(x * tx + y * ty, &sine, &cosine);
+                const float translated_real = cosine * pixel_image.x - sine * pixel_image.y;
+                const float translated_imag = cosine * pixel_image.y + sine * pixel_image.x;
+                real += translated_real * weight;
+                imag += translated_imag * weight;
+            }
+        }
+        if (!(Fweight > 0.0f)) continue;
+
+        const float xp = (R[0] * (float)x + R[1] * (float)y) * (float)upsampling;
+        const float yp = (R[3] * (float)x + R[4] * (float)y) * (float)upsampling;
+        const float zp = (R[6] * (float)x + R[7] * (float)y) * (float)upsampling;
+        float rk0 = zp;
+        float rk1 = yp;
+        float rk2 = xp;
+        if (relion_radius_squared(rk0, rk1, rk2) > max_r2) continue;
+        if (rk2 < 0.0f) {
+            rk0 = -rk0;
+            rk1 = -rk1;
+            rk2 = -rk2;
+            imag = -imag;
+        }
+        scatter_trilinear_relion_fused_x_half<false, true>(
+            data_volume, weight_volume,
+            rk0, rk1, rk2, real, imag, Fweight,
+            c0, c1, c2, N0, N1, N2_eff, stride0, stride1,
+            0, nullptr, nullptr, nullptr);
+    }
+}
+
 /* ================================================================== */
 /*                    Project kernel                                   */
 /* ================================================================== */
@@ -2428,6 +2512,46 @@ cudaError_t launch_relion_fused_x_half_backproject(
         (int)n_pixels, (int)image_h, (int)image_w,
         (int)N0, (int)N1, N2_eff, c0, c1, c2,
         (int)upsampling, max_r2, (int)n_rows);
+    return cudaGetLastError();
+}
+
+cudaError_t launch_relion_firstiter_bpref_fused_x_half(
+    cudaStream_t stream,
+    float2* data_volume,
+    float* weight_volume,
+    const float2* image,
+    const float* ctf,
+    const float* minvsigma2,
+    const float* posterior,
+    const float* translation_angles,
+    const float* native_eulers,
+    const float* significant_weight,
+    const float* weight_norm,
+    int64_t n_rotations,
+    int64_t n_translations,
+    int64_t image_h,
+    int64_t image_w,
+    int64_t N0,
+    int64_t N1,
+    int64_t N2,
+    int64_t upsampling,
+    int64_t max_r2_x4)
+{
+    const int N2_eff = (int)(N2 / 2 + 1);
+    const float c0 = (float)(N0 / 2);
+    const float c1 = (float)(N1 / 2);
+    const float c2 = (float)(N2 / 2);
+    const float max_r2 = (float)max_r2_x4 / 4.0f;
+    dim3 grid((unsigned)n_rotations, 1);
+    dim3 block(128);
+    relion_firstiter_bpref_fused_x_half_kernel<<<grid, block, 0, stream>>>(
+        data_volume, weight_volume,
+        image, ctf, minvsigma2, posterior, translation_angles, native_eulers,
+        significant_weight, weight_norm,
+        (int)n_rotations, (int)n_translations,
+        (int)image_h, (int)image_w,
+        (int)N0, (int)N1, N2_eff,
+        c0, c1, c2, (int)upsampling, max_r2);
     return cudaGetLastError();
 }
 
@@ -7638,6 +7762,114 @@ ffi::Error RelionFusedXHalfBackprojectImpl(
     return ffi::Error::Success();
 }
 
+ffi::Error RelionFirstiterBprefFusedXHalfImpl(
+    cudaStream_t stream,
+    int64_t image_h, int64_t image_w,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t upsampling, int64_t order,
+    int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer ctf,
+    ffi::AnyBuffer minvsigma2,
+    ffi::AnyBuffer posterior,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer native_eulers,
+    ffi::AnyBuffer significant_weight,
+    ffi::AnyBuffer weight_norm,
+    ffi::AnyBuffer data_volume_in,
+    ffi::AnyBuffer weight_volume_in,
+    ffi::Result<ffi::AnyBuffer> data_volume_out,
+    ffi::Result<ffi::AnyBuffer> weight_volume_out)
+{
+    if (image.element_type() != ffi::DataType::C64 ||
+        data_volume_in.element_type() != ffi::DataType::C64 ||
+        data_volume_out->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: image and data volumes must be complex64");
+    if (ctf.element_type() != ffi::DataType::F32 ||
+        minvsigma2.element_type() != ffi::DataType::F32 ||
+        posterior.element_type() != ffi::DataType::F32 ||
+        translation_angles.element_type() != ffi::DataType::F32 ||
+        native_eulers.element_type() != ffi::DataType::F32 ||
+        significant_weight.element_type() != ffi::DataType::F32 ||
+        weight_norm.element_type() != ffi::DataType::F32 ||
+        weight_volume_in.element_type() != ffi::DataType::F32 ||
+        weight_volume_out->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: scalar operands and weight volumes must be float32");
+    if (order != 1 || half_volume != 1 || half_image != 1)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: requires order=1 and half image/volume");
+    if (N0 <= 0 || N0 != N1 || N1 != N2 || (N2 & 1) == 0)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: volume must be positive, cubic, and odd-sized");
+    if (image_h <= 0 || image_w != image_h / 2 + 1 || full_image_w != image_h)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: image attrs must describe a native FFTW half square");
+    if (upsampling <= 0 || max_r2_x4 < 0)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: requires positive upsampling and an explicit radius");
+
+    const auto image_dims = image.dimensions();
+    const auto ctf_dims = ctf.dimensions();
+    const auto minv_dims = minvsigma2.dimensions();
+    const auto posterior_dims = posterior.dimensions();
+    const auto translation_dims = translation_angles.dimensions();
+    const auto euler_dims = native_eulers.dimensions();
+    const auto significant_dims = significant_weight.dimensions();
+    const auto norm_dims = weight_norm.dimensions();
+    const int64_t n_pixels = image_h * image_w;
+    if (image_dims.size() != 1 || ctf_dims.size() != 1 || minv_dims.size() != 1 ||
+        image_dims[0] != n_pixels || ctf_dims[0] != n_pixels || minv_dims[0] != n_pixels)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: image/CTF/noise rows must match the dense FFTW square");
+    if (posterior_dims.size() != 2 || posterior_dims[0] <= 0 || posterior_dims[1] <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: posterior must be a nonempty rotation/translation matrix");
+    if (translation_dims.size() != 2 || translation_dims[0] != posterior_dims[1] ||
+        translation_dims[1] != 2)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: translation angles must have shape (n_translations, 2)");
+    if (euler_dims.size() != 2 || euler_dims[0] != posterior_dims[0] || euler_dims[1] != 9)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: native Euler matrices must have shape (n_rotations, 9)");
+    if (significant_dims.size() != 1 || significant_dims[0] != 1 ||
+        norm_dims.size() != 1 || norm_dims[0] != 1)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: threshold and weight norm must be one-element vectors");
+
+    const int64_t expected_volume_size = N0 * N1 * (N2 / 2 + 1);
+    const auto data_in_dims = data_volume_in.dimensions();
+    const auto weight_in_dims = weight_volume_in.dimensions();
+    const auto data_out_dims = data_volume_out->dimensions();
+    const auto weight_out_dims = weight_volume_out->dimensions();
+    if (data_in_dims.size() != 1 || weight_in_dims.size() != 1 ||
+        data_out_dims.size() != 1 || weight_out_dims.size() != 1 ||
+        data_in_dims[0] != expected_volume_size || weight_in_dims[0] != expected_volume_size ||
+        data_out_dims[0] != expected_volume_size || weight_out_dims[0] != expected_volume_size)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: accumulator sizes do not match the half volume");
+
+    cudaError_t err = launch_relion_firstiter_bpref_fused_x_half(
+        stream,
+        reinterpret_cast<float2*>(data_volume_out->untyped_data()),
+        static_cast<float*>(weight_volume_out->untyped_data()),
+        reinterpret_cast<const float2*>(image.untyped_data()),
+        static_cast<const float*>(ctf.untyped_data()),
+        static_cast<const float*>(minvsigma2.untyped_data()),
+        static_cast<const float*>(posterior.untyped_data()),
+        static_cast<const float*>(translation_angles.untyped_data()),
+        static_cast<const float*>(native_eulers.untyped_data()),
+        static_cast<const float*>(significant_weight.untyped_data()),
+        static_cast<const float*>(weight_norm.untyped_data()),
+        posterior_dims[0], posterior_dims[1], image_h, image_w,
+        N0, N1, N2, upsampling, max_r2_x4);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
 ffi::Error RelionFusedXHalfBackprojectSignatureImpl(
     cudaStream_t stream,
     int64_t image_h, int64_t image_w,
@@ -7912,6 +8144,35 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()           /* pixel_indices   */
         .Arg<ffi::AnyBuffer>()           /* rot             */
         .Arg<ffi::AnyBuffer>()           /* data_volume_in  */
+        .Arg<ffi::AnyBuffer>()           /* weight_volume_in */
+        .Ret<ffi::AnyBuffer>()           /* data_volume_out (aliased) */
+        .Ret<ffi::AnyBuffer>()           /* weight_volume_out (aliased) */
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFirstiterBprefFusedXHalf, RelionFirstiterBprefFusedXHalfImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("N0")
+        .Attr<int64_t>("N1")
+        .Attr<int64_t>("N2")
+        .Attr<int64_t>("upsampling")
+        .Attr<int64_t>("order")
+        .Attr<int64_t>("half_volume")
+        .Attr<int64_t>("half_image")
+        .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
+        .Arg<ffi::AnyBuffer>()           /* image */
+        .Arg<ffi::AnyBuffer>()           /* ctf */
+        .Arg<ffi::AnyBuffer>()           /* minvsigma2 */
+        .Arg<ffi::AnyBuffer>()           /* posterior */
+        .Arg<ffi::AnyBuffer>()           /* translation_angles */
+        .Arg<ffi::AnyBuffer>()           /* native_eulers */
+        .Arg<ffi::AnyBuffer>()           /* significant_weight */
+        .Arg<ffi::AnyBuffer>()           /* weight_norm */
+        .Arg<ffi::AnyBuffer>()           /* data_volume_in */
         .Arg<ffi::AnyBuffer>()           /* weight_volume_in */
         .Ret<ffi::AnyBuffer>()           /* data_volume_out (aliased) */
         .Ret<ffi::AnyBuffer>()           /* weight_volume_out (aliased) */
