@@ -1090,6 +1090,9 @@ def analyze(
                 comparisons[
                     f"native_raw_diff2_vs_{mode}_{lookup_name}_direct_replay"
                 ] = centered_direct_residual
+                comparisons[
+                    f"live_raw_diff2_vs_{mode}_{lookup_name}_direct_replay"
+                ] = _centered_diff2_replay_stats(-live_raw, direct_cost)
 
     return {
         "schema": "recovar.vdam_native_translation_boundary.v1",
