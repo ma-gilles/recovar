@@ -7,7 +7,7 @@ import numpy as np
 from recovar.em.dense_single_volume import iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume import relion_metadata
 from recovar.em.sampling import (
-    _relion_adaptive_pass1_rotations_f32,
+    _relion_adaptive_pass1_rotations,
     _relion_mstep_rotations_from_eulers,
     apply_relion_rotation_perturbation_to_eulers,
     get_oversampled_rotation_grid_from_samples,
@@ -27,7 +27,7 @@ def test_adaptive_pass1_routes_source_eulers_and_host_right_matrix_to_cuda_build
         return sentinel
 
     monkeypatch.setattr(sampling_module, "_relion_device_scoring_rotations_f32", fake_builder)
-    result = _relion_adaptive_pass1_rotations_f32(
+    result = _relion_adaptive_pass1_rotations(
         source_eulers,
         random_perturbation=-0.455874443054,
         angular_sampling_deg=7.5,
@@ -53,8 +53,75 @@ def test_adaptive_pass1_omits_right_matrix_without_perturbation(monkeypatch):
         return np.zeros((len(eulers_deg), 3, 3), dtype=np.float32)
 
     monkeypatch.setattr(sampling_module, "_relion_device_scoring_rotations_f32", fake_builder)
-    _relion_adaptive_pass1_rotations_f32(_UNPERTURBED_FINE_EULERS_F64[:1], 0.0, 7.5)
+    _relion_adaptive_pass1_rotations(_UNPERTURBED_FINE_EULERS_F64[:1], 0.0, 7.5)
     assert seen == [None]
+
+
+def test_adaptive_pass1_float64_routes_to_double_precision_builder(monkeypatch):
+    """``use_float64=True`` must dispatch to the double-precision builder, not the CUDA f32 one."""
+    from recovar.em import sampling as sampling_module
+
+    source_eulers = _UNPERTURBED_FINE_EULERS_F64[:2]
+    sentinel = np.arange(18, dtype=np.float64).reshape(2, 3, 3)
+    f32_calls = []
+    f64_calls = []
+
+    monkeypatch.setattr(
+        sampling_module,
+        "_relion_device_scoring_rotations_f32",
+        lambda *a, **k: f32_calls.append((a, k)) or None,
+    )
+
+    def fake_f64_builder(eulers_deg, right_matrix=None):
+        f64_calls.append((np.asarray(eulers_deg), np.asarray(right_matrix) if right_matrix is not None else None))
+        return sentinel
+
+    monkeypatch.setattr(sampling_module, "_relion_device_scoring_rotations_f64", fake_f64_builder)
+    result = _relion_adaptive_pass1_rotations(
+        source_eulers,
+        random_perturbation=-0.455874443054,
+        angular_sampling_deg=7.5,
+        use_float64=True,
+    )
+
+    np.testing.assert_array_equal(result, sentinel)
+    assert len(f64_calls) == 1
+    assert len(f32_calls) == 0
+    np.testing.assert_array_equal(f64_calls[0][0], source_eulers)
+
+
+def test_relion_device_scoring_rotations_f64_matches_euler_matrix_port():
+    """No perturbation: f64 builder must reduce to ``_relion_euler_angles_to_matrix`` exactly."""
+    from recovar.em.sampling import (
+        _relion_device_scoring_rotations_f64,
+        _relion_euler_angles_to_matrix,
+    )
+
+    source_eulers = _UNPERTURBED_FINE_EULERS_F64
+    result = _relion_device_scoring_rotations_f64(source_eulers, right_matrix=None)
+    expected = _relion_euler_angles_to_matrix(source_eulers)
+
+    assert result.dtype == np.float64
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_relion_device_scoring_rotations_f64_right_multiplies_perturbation_matrix():
+    """With a perturbation: f64 builder must right-multiply, matching ``B = A @ right_matrix``
+    from ``cuda_kernel_make_eulers_3D`` (``recovar/cuda/cuda_backproject.cu``)."""
+    from recovar.em.sampling import (
+        _relion_device_scoring_rotations_f64,
+        _relion_euler_angles_to_matrix,
+    )
+
+    source_eulers = _UNPERTURBED_FINE_EULERS_F64[:2]
+    right_matrix = _relion_euler_angles_to_matrix(np.asarray([[1.5, 1.5, 1.5]], dtype=np.float64))[0]
+
+    result = _relion_device_scoring_rotations_f64(source_eulers, right_matrix=right_matrix)
+    expected = _relion_euler_angles_to_matrix(source_eulers) @ right_matrix
+
+    assert result.dtype == np.float64
+    np.testing.assert_allclose(result, expected, rtol=0.0, atol=0.0)
+
 
 # Five captured RELION iteration-1 winner rows that previously changed the
 # outer-radius predicate. These are host RFLOAT Euler rows before the final
@@ -182,7 +249,18 @@ def test_relion_mstep_rotation_helper_preserves_matrix2d_inverse_source_order():
     assert all(assignment in source for assignment in cofactor_assignments)
     assert "np.linalg" not in source
     assert source.index("determinant = (") < source.index("inverse /= determinant")
-    assert source.index("inverse /= determinant") < source.index("return np.swapaxes(inverse, 1, 2).astype(np.float32)")
+    assert source.index("inverse /= determinant") < source.index("return np.swapaxes(inverse, 1, 2).astype(dtype)")
+
+
+def test_relion_mstep_rotation_helper_defaults_to_float32_but_accepts_float64():
+    """``dtype`` only changes the final cast -- default stays bit-identical to before."""
+    default_result = _relion_mstep_rotations_from_eulers(_RELION_FINE_EULERS_F64)
+    assert default_result.dtype == np.float32
+    np.testing.assert_array_equal(default_result.view(np.uint32), _RELION_MSTEP_ROTATION_BITS)
+
+    f64_result = _relion_mstep_rotations_from_eulers(_RELION_FINE_EULERS_F64, dtype=np.float64)
+    assert f64_result.dtype == np.float64
+    np.testing.assert_allclose(f64_result.astype(np.float32), default_result, rtol=0.0, atol=1e-6)
 
 
 def test_perturbation_optional_mstep_return_keeps_legacy_tuple_and_float64_working_eulers():

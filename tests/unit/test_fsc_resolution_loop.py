@@ -224,7 +224,8 @@ def translations():
 def generated_relion_rotation_grid(monkeypatch):
     """Keep loop tests independent of the optional compiled RELION binding."""
 
-    def fake_relion_rotation_grid_float32(order):
+    def fake_relion_rotation_grid_float32(order, dtype=None):
+        del dtype
         n_rotations = iteration_loop_module.rotation_grid_size(order)
         rotations = np.repeat(np.eye(3, dtype=np.float32)[None], n_rotations, axis=0)
         eulers = np.zeros((n_rotations, 3), dtype=np.float32)

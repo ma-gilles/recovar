@@ -291,6 +291,7 @@ def _build_parent_expanded_local_entries(
     rotation_log_prior: np.ndarray | None = None,
     random_perturbation: float = 0.0,
     generate_relion_mstep_rotations: bool = False,
+    dtype: np.dtype = np.float32,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     """Build RELION-style local support by expanding selected coarse parents.
 
@@ -315,7 +316,7 @@ def _build_parent_expanded_local_entries(
     parent_metadata = build_local_search_grid_metadata(parent_order)
     rotation_log_prior_np = None
     if rotation_log_prior is not None:
-        rotation_log_prior_np = np.asarray(rotation_log_prior, dtype=np.float32)
+        rotation_log_prior_np = np.asarray(rotation_log_prior, dtype=dtype)
         expected_parent_size = rotation_grid_size(parent_order)
         if rotation_log_prior_np.shape[0] != expected_parent_size:
             raise ValueError(
@@ -343,7 +344,7 @@ def _build_parent_expanded_local_entries(
         start = int(parent_offsets[image_idx])
         stop = int(parent_offsets[image_idx + 1])
         parent_ids = np.asarray(parent_ids_flat[start:stop], dtype=np.int64)
-        parent_log_prior = np.asarray(parent_log_priors_flat[start:stop], dtype=np.float32)
+        parent_log_prior = np.asarray(parent_log_priors_flat[start:stop], dtype=dtype)
         if rotation_log_prior_np is not None:
             parent_log_prior = parent_log_prior + rotation_log_prior_np[parent_ids]
         oversampled = get_oversampled_rotation_grid_from_samples(
@@ -354,35 +355,36 @@ def _build_parent_expanded_local_entries(
             return_rotation_indices=True,
             return_mstep_rotations=bool(generate_relion_mstep_rotations),
             rotation_index_order="recovar",
+            dtype=dtype,
         )
         child_rotations, parent_map, child_ids = oversampled[:3]
         child_mstep_rotations = oversampled[3] if bool(generate_relion_mstep_rotations) else None
         parent_map = np.asarray(parent_map, dtype=np.int64)
         child_ids = np.asarray(child_ids, dtype=np.int32)
-        child_log_prior = parent_log_prior[parent_map].astype(np.float32, copy=False)
+        child_log_prior = parent_log_prior[parent_map].astype(dtype, copy=False)
 
         counts[image_idx] = int(child_ids.shape[0])
         running_offset += int(child_ids.shape[0])
         offsets[image_idx + 1] = running_offset
         rotation_ids_parts.append(child_ids)
         log_prior_parts.append(child_log_prior)
-        rotations_parts.append(np.asarray(child_rotations, dtype=np.float32))
+        rotations_parts.append(np.asarray(child_rotations, dtype=dtype))
         if child_mstep_rotations is not None:
-            mstep_rotations_parts.append(np.asarray(child_mstep_rotations, dtype=np.float32))
+            mstep_rotations_parts.append(np.asarray(child_mstep_rotations, dtype=dtype))
 
     rotation_ids_flat = (
         np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
     )
     rotation_log_priors_flat = (
-        np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
+        np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=dtype)
     )
     rotations_flat = (
-        np.concatenate(rotations_parts, axis=0) if rotations_parts else np.zeros((0, 3, 3), dtype=np.float32)
+        np.concatenate(rotations_parts, axis=0) if rotations_parts else np.zeros((0, 3, 3), dtype=dtype)
     )
     mstep_rotations_flat = (
         np.concatenate(mstep_rotations_parts, axis=0)
         if mstep_rotations_parts
-        else (np.zeros((0, 3, 3), dtype=np.float32) if generate_relion_mstep_rotations else None)
+        else (np.zeros((0, 3, 3), dtype=dtype) if generate_relion_mstep_rotations else None)
     )
     return offsets, counts, rotation_ids_flat, rotation_log_priors_flat, rotations_flat, mstep_rotations_flat
 
@@ -422,16 +424,23 @@ def _selected_rotation_matrices(
     *,
     random_perturbation: float = 0.0,
     angular_sampling_deg: float | None = None,
+    dtype: np.dtype = np.float32,
 ) -> np.ndarray:
     """Build matrices for selected local ids without materializing the full grid."""
 
     rotation_ids = np.asarray(rotation_ids, dtype=np.int64).reshape(-1)
     if rotation_ids.size == 0:
-        return np.zeros((0, 3, 3), dtype=np.float32)
+        return np.zeros((0, 3, 3), dtype=dtype)
     if rotation_grid_rotations is not None:
-        return np.asarray(rotation_grid_rotations, dtype=np.float32).reshape(-1, 3, 3)[rotation_ids]
+        return np.asarray(rotation_grid_rotations, dtype=dtype).reshape(-1, 3, 3)[rotation_ids]
     unique_ids, inverse = np.unique(rotation_ids, return_inverse=True)
-    selected_eulers = _rotation_eulers_from_grid_metadata(unique_ids, grid_metadata)
+    # Stage eulers at the requested dtype before apply_relion_rotation_perturbation_to_eulers
+    # re-derives float64 internally regardless; truncating to float32 here
+    # first (the previous unconditional default) would discard precision
+    # that a dtype=float64 caller asked to keep, even though it leaves the
+    # existing float32 default path's output bit-for-bit unchanged. Matches
+    # the mstep sibling below, which already does this.
+    selected_eulers = _rotation_eulers_from_grid_metadata(unique_ids, grid_metadata, dtype=dtype)
     if abs(float(random_perturbation)) > 1e-12:
         if angular_sampling_deg is None:
             raise ValueError("angular_sampling_deg is required when random_perturbation is nonzero")
@@ -439,16 +448,19 @@ def _selected_rotation_matrices(
             selected_eulers,
             float(random_perturbation),
             float(angular_sampling_deg),
+            dtype=dtype,
         )
     else:
         # Preserve RELION's accelerated-path handoff: host RFLOAT inverse
-        # matrices are cast to XFLOAT before scoring on the device.
+        # matrices are cast to XFLOAT before scoring on the device (a no-op
+        # cast under ACC_DOUBLE_PRECISION, when dtype=float64).
         rotations, _ = apply_relion_rotation_perturbation_to_eulers(
             selected_eulers,
             0.0,
             0.0,
+            dtype=dtype,
         )
-    return rotations.astype(np.float32, copy=False)[inverse]
+    return rotations.astype(dtype, copy=False)[inverse]
 
 
 def _selected_mstep_rotation_matrices(
@@ -458,14 +470,15 @@ def _selected_mstep_rotation_matrices(
     *,
     random_perturbation: float = 0.0,
     angular_sampling_deg: float | None = None,
+    dtype: np.dtype = np.float32,
 ) -> np.ndarray:
     """Build RELION host-path adjoint matrices for selected local ids."""
 
     rotation_ids = np.asarray(rotation_ids, dtype=np.int64).reshape(-1)
     if rotation_ids.size == 0:
-        return np.zeros((0, 3, 3), dtype=np.float32)
+        return np.zeros((0, 3, 3), dtype=dtype)
     if rotation_grid_mstep_rotations is not None:
-        return np.asarray(rotation_grid_mstep_rotations, dtype=np.float32).reshape(-1, 3, 3)[rotation_ids]
+        return np.asarray(rotation_grid_mstep_rotations, dtype=dtype).reshape(-1, 3, 3)[rotation_ids]
     unique_ids, inverse = np.unique(rotation_ids, return_inverse=True)
     selected_eulers = _rotation_eulers_from_grid_metadata(unique_ids, grid_metadata, dtype=np.float64)
     if angular_sampling_deg is None:
@@ -477,8 +490,9 @@ def _selected_mstep_rotation_matrices(
         float(random_perturbation),
         float(angular_sampling_deg),
         return_mstep_rotations=True,
+        dtype=dtype,
     )
-    return np.asarray(mstep_rotations, dtype=np.float32)[inverse]
+    return np.asarray(mstep_rotations, dtype=dtype)[inverse]
 
 
 def build_local_hypothesis_layout(
@@ -554,6 +568,7 @@ def build_local_hypothesis_layout(
             rotation_log_prior=rotation_log_prior_np,
             random_perturbation=float(rotation_grid_random_perturbation),
             generate_relion_mstep_rotations=generate_relion_mstep_rotations,
+            dtype=dtype,
         )
     elif str(grid_metadata["mode"]) == "factorized":
         offsets, counts, rotation_ids_flat, rotation_log_priors_flat = _build_factorized_local_entries(
@@ -581,7 +596,7 @@ def build_local_hypothesis_layout(
                 grid_metadata=grid_metadata,
             )
             local_ids = np.asarray(local_ids, dtype=np.int32).reshape(-1)
-            local_log_prior = np.asarray(local_log_prior[0], dtype=np.float32).reshape(-1)
+            local_log_prior = np.asarray(local_log_prior[0], dtype=dtype).reshape(-1)
             counts[image_idx] = int(local_ids.shape[0])
             offsets[image_idx + 1] = offsets[image_idx] + local_ids.shape[0]
             rotation_ids_parts.append(local_ids)
@@ -591,7 +606,7 @@ def build_local_hypothesis_layout(
             np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
         )
         rotation_log_priors_flat = (
-            np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
+            np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=dtype)
         )
     if rotation_log_prior_np is not None and int(local_parent_oversampling_order) <= 0:
         if rotation_log_prior_np.shape[0] != int(grid_metadata["n_pixels"]) * int(grid_metadata["n_psi"]):
@@ -612,6 +627,7 @@ def build_local_hypothesis_layout(
             grid_metadata,
             random_perturbation=rotation_grid_random_perturbation,
             angular_sampling_deg=rotation_grid_angular_sampling_deg,
+            dtype=dtype,
         )
     )
     mstep_rotations_flat = None
@@ -625,6 +641,7 @@ def build_local_hypothesis_layout(
                 grid_metadata,
                 random_perturbation=rotation_grid_random_perturbation,
                 angular_sampling_deg=rotation_grid_angular_sampling_deg,
+                dtype=dtype,
             )
         )
     translation_grid = translations
@@ -789,6 +806,7 @@ def build_local_adaptive_pass2_hypothesis_layout(
                 return_rotation_indices=True,
                 return_mstep_rotations=True,
                 rotation_index_order="recovar",
+                dtype=dtype,
             )
         )
         oversampled_rots = np.asarray(oversampled_rots, dtype=dtype)
