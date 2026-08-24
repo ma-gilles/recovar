@@ -200,6 +200,37 @@ def test_relion_reference_provenance_fingerprints_exact_binary(tmp_path):
     }
 
 
+def test_recovar_native_extension_provenance_fingerprints_exact_binaries(tmp_path):
+    repo = tmp_path / "repo"
+    bind_dir = repo / "recovar" / "relion_bind"
+    bind_dir.mkdir(parents=True)
+    bind = bind_dir / "_relion_bind_core.cpython-test.so"
+    cuda = tmp_path / "libcuda_backproject.so"
+    bind.write_bytes(b"relion-bind-test\n")
+    cuda.write_bytes(b"cuda-backproject-test\n")
+
+    report = runner._recovar_native_extension_provenance(
+        repo,
+        {"RECOVAR_CUDA_LIB": str(cuda)},
+    )
+
+    assert report["cuda_backproject"] == {
+        "path": str(cuda.resolve()),
+        "sha256": hashlib.sha256(cuda.read_bytes()).hexdigest(),
+        "size_bytes": cuda.stat().st_size,
+    }
+    assert report["relion_bind_core"] == {
+        "path": str(bind.resolve()),
+        "sha256": hashlib.sha256(bind.read_bytes()).hexdigest(),
+        "size_bytes": bind.stat().st_size,
+    }
+
+
+def test_recovar_native_extension_provenance_fails_closed_without_cuda(tmp_path):
+    with pytest.raises(runner.RunError, match="RECOVAR_CUDA_LIB"):
+        runner._recovar_native_extension_provenance(tmp_path, {})
+
+
 def test_recovar_child_environment_requires_cuda_without_legacy_platform_override():
     repo = Path("/active/worktree")
     env = runner._recovar_gpu_env(

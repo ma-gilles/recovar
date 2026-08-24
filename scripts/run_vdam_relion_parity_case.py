@@ -111,6 +111,40 @@ def _relion_reference_provenance(executable: Path) -> dict[str, Any]:
     return report
 
 
+def _recovar_native_extension_provenance(
+    repo: Path,
+    environ: dict[str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Fingerprint the exact CUDA and RELION-bind binaries used by a run."""
+    env = os.environ if environ is None else environ
+    cuda_value = env.get("RECOVAR_CUDA_LIB")
+    if not cuda_value:
+        raise RunError("RECOVAR_CUDA_LIB is required for VDAM parity provenance")
+    cuda_path = Path(cuda_value).expanduser().resolve()
+    if not cuda_path.is_file():
+        raise RunError(f"RECOVAR_CUDA_LIB does not name a file: {cuda_path}")
+
+    bind_matches = sorted((repo / "recovar" / "relion_bind").glob("_relion_bind_core*.so"))
+    if len(bind_matches) != 1:
+        raise RunError(
+            "expected exactly one local _relion_bind_core extension, found "
+            f"{[str(path) for path in bind_matches]}"
+        )
+    bind_path = bind_matches[0].resolve()
+    return {
+        "cuda_backproject": {
+            "path": str(cuda_path),
+            "sha256": sha256_file(cuda_path),
+            "size_bytes": cuda_path.stat().st_size,
+        },
+        "relion_bind_core": {
+            "path": str(bind_path),
+            "sha256": sha256_file(bind_path),
+            "size_bytes": bind_path.stat().st_size,
+        },
+    }
+
+
 def build_relion_command(
     *, input_star: Path, output_prefix: Path, definition: dict[str, Any], relion_refine: Path, threads: int
 ) -> list[str]:
@@ -328,6 +362,7 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "relion_reference": _relion_reference_provenance(args.relion_refine),
+        "recovar_native_extensions": _recovar_native_extension_provenance(repo),
         "recovar_image_batch_size": image_batch_size,
         "recovar_sparse_big_jit_mstep_max_gb": os.environ.get(
             "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB"
