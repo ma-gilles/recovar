@@ -33,12 +33,17 @@ NATIVE_COMPONENTS=${NATIVE_COMPONENTS:-/scratch/gpfs/CRYOEM/gilleslab/em_work/co
 RECOVAR_CAPTURE=${RECOVAR_CAPTURE:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row94083_recovar_projection_winner_it2_20260822T1227ET/pass1/significance_orig094083_it002_cs056.npz}
 NATIVE_MAP=${NATIVE_MAP:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row94083_native_fresh_winner_lane_it2_20260822T1220ET/relion/run_it001_half1_class001.mrc}
 RECOVAR_MAP=${RECOVAR_MAP:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row94083_recovar_projection_winner_it2_20260822T1227ET/output/intermediates/it000_half1_reg.mrc}
+RECOVAR_MAP_CONVENTION=${K1_MAP_PPREF_CANDIDATE_CONVENTION:-recovar}
+CURRENT_SIZE=${K1_MAP_PPREF_CURRENT_SIZE:-56}
 NATIVE_PPREF=${RUN_ROOT}/ppref/native_numbered_map_ppref.bin
 RECOVAR_PPREF=${RUN_ROOT}/ppref/recovar_numbered_map_ppref.bin
 NATIVE_REPORT=${RUN_ROOT}/analysis/K1_NATIVE_NUMBERED_MAP_PPREF_COARSE_BOUNDARY.json
 RECOVAR_REPORT=${RUN_ROOT}/analysis/K1_RECOVAR_NUMBERED_MAP_PPREF_COARSE_BOUNDARY.json
 
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
+case "${CURRENT_SIZE}" in ''|*[!0-9]*) echo "K1_MAP_PPREF_CURRENT_SIZE must be a positive integer" >&2; exit 2 ;; esac
+test "${CURRENT_SIZE}" -gt 0
+case "${RECOVAR_MAP_CONVENTION}" in relion|recovar) ;; *) echo "K1_MAP_PPREF_CANDIDATE_CONVENTION must be relion or recovar" >&2; exit 2 ;; esac
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(sha256sum "${BUILDER}" | awk '{print $1}')" = "${EXPECTED_BUILDER_SHA256}"
@@ -76,11 +81,11 @@ case "${GPU_NAME}" in *H100*) ;; *) echo "Expected H100, got ${GPU_NAME}" >&2; e
 cd "${REPO}"
 "${PYTHON}" -m scripts.build_k1_ppref_capture_from_map \
   --map "${NATIVE_MAP}" --map-convention relion \
-  --current-size 56 --padding-factor 2 --iteration 2 --rank 1 \
+  --current-size "${CURRENT_SIZE}" --padding-factor 2 --iteration 2 --rank 1 \
   --output "${NATIVE_PPREF}"
 "${PYTHON}" -m scripts.build_k1_ppref_capture_from_map \
-  --map "${RECOVAR_MAP}" --map-convention recovar \
-  --current-size 56 --padding-factor 2 --iteration 2 --rank 1 \
+  --map "${RECOVAR_MAP}" --map-convention "${RECOVAR_MAP_CONVENTION}" \
+  --current-size "${CURRENT_SIZE}" --padding-factor 2 --iteration 2 --rank 1 \
   --output "${RECOVAR_PPREF}"
 
 "${PYTHON}" -m scripts.analyze_k1_exact_ppref_coarse_boundary \

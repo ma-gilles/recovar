@@ -124,6 +124,29 @@ def _parse_native_norm_operands(path: Path, *, part_id: int) -> dict[str, object
     }
 
 
+def _load_native_factor_report(path: Path, *, source_index: int) -> dict[str, object]:
+    report = json.loads(path.read_text())
+    _require(
+        report.get("schema") == "recovar.em.k1_native_normalization_factor.v1",
+        "native factor report schema changed",
+    )
+    _require(
+        int(report["source_index_zero_based"]) == source_index,
+        "native factor report source identity changed",
+    )
+    recovered = report["recovered"]
+    factor = np.float32(recovered["factor_float32"])
+    bits = f"0x{factor.view(np.uint32).item():08x}"
+    _require(bits == recovered["factor_float32_bits"], "native factor value and bits differ")
+    _require(int(recovered["mismatch_count"]) == 0, "native factor report is not byte exact")
+    return {
+        "normalization_factor_float32": float(factor),
+        "normalization_factor_bits": bits,
+        "factor_report": str(path.resolve()),
+        "factor_report_sha256": _sha256(path),
+    }
+
+
 def _model_tables(path: Path) -> tuple[dict[str, Any], Any]:
     document = starfile.read(path)
     _require(isinstance(document, dict), "RELION model STAR must contain named tables")
@@ -140,6 +163,7 @@ def main() -> None:
     parser.add_argument("--operand-dump", type=Path)
     parser.add_argument("--relion-native-preprocess-capture", type=Path)
     parser.add_argument("--relion-native-operands-log", type=Path)
+    parser.add_argument("--relion-native-factor-report", type=Path)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     if (args.relion_native_preprocess_capture is None) != (
@@ -148,6 +172,10 @@ def main() -> None:
         raise ValueError(
             "--relion-native-preprocess-capture and --relion-native-operands-log "
             "must be supplied together"
+        )
+    if args.relion_native_factor_report is not None and args.relion_native_preprocess_capture is not None:
+        raise ValueError(
+            "--relion-native-factor-report is mutually exclusive with the native capture/log pair"
         )
 
     stack_index = args.source_index + 1
@@ -226,7 +254,12 @@ def main() -> None:
             )
 
     relion_native = None
-    if args.relion_native_preprocess_capture is not None:
+    if args.relion_native_factor_report is not None:
+        relion_native = _load_native_factor_report(
+            args.relion_native_factor_report,
+            source_index=args.source_index,
+        )
+    elif args.relion_native_preprocess_capture is not None:
         native_capture = load_preprocess_capture(args.relion_native_preprocess_capture)
         _require(native_capture.stack_index == stack_index, "native capture stack identity changed")
         native_operands = _parse_native_norm_operands(
@@ -336,14 +369,25 @@ def main() -> None:
                 if args.relion_native_operands_log is None
                 else str(args.relion_native_operands_log.resolve())
             ),
+            "relion_native_factor_report": (
+                None
+                if args.relion_native_factor_report is None
+                else str(args.relion_native_factor_report.resolve())
+            ),
         },
         "interpretation_limit": (
             "Serialized RELION norm fields remain decimal STAR values. "
             + (
                 "No native in-memory operand capture was supplied."
                 if relion_native is None
-                else "The optional selected-particle native section contains exact hex-float "
-                "in-memory operands and the captured float32 accelerator quotient."
+                else (
+                    "The optional native section contains the byte-exact float32 factor recovered "
+                    "from RELION's captured normalized real image; it does not contain the host "
+                    "update numerator or denominator."
+                    if args.relion_native_factor_report is not None
+                    else "The optional selected-particle native section contains exact hex-float "
+                    "in-memory operands and the captured float32 accelerator quotient."
+                )
             )
         ),
     }

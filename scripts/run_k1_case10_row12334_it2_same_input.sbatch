@@ -22,6 +22,25 @@ set -euo pipefail
 
 STAGE=${K1_ROW12334_STAGE:-fine}
 case "${STAGE}" in fine|coarse) ;; *) echo "K1_ROW12334_STAGE must be fine or coarse" >&2; exit 2 ;; esac
+TARGET_SOURCE_ROW=${K1_CASE10_TARGET_SOURCE_ROW:-12334}
+case "${TARGET_SOURCE_ROW}" in
+  ''|*[!0-9]*) echo "K1_CASE10_TARGET_SOURCE_ROW must be a non-negative integer" >&2; exit 2 ;;
+esac
+TARGET_STACK_INDEX=$((TARGET_SOURCE_ROW + 1))
+INITIAL_HALF1_MRC=${K1_CASE10_INITIAL_HALF1_MRC:-}
+INITIAL_HALF2_MRC=${K1_CASE10_INITIAL_HALF2_MRC:-}
+if [[ -n "${INITIAL_HALF1_MRC}" || -n "${INITIAL_HALF2_MRC}" ]]; then
+    if [[ -z "${INITIAL_HALF1_MRC}" || -z "${INITIAL_HALF2_MRC}" ]]; then
+        echo "K1_CASE10_INITIAL_HALF1_MRC and K1_CASE10_INITIAL_HALF2_MRC must be supplied together" >&2
+        exit 2
+    fi
+    test "${INITIAL_HALF1_MRC:0:1}" = / -a -s "${INITIAL_HALF1_MRC}"
+    test "${INITIAL_HALF2_MRC:0:1}" = / -a -s "${INITIAL_HALF2_MRC}"
+fi
+if [[ "${STAGE}" = coarse && "${TARGET_SOURCE_ROW}" != 12334 ]]; then
+    echo "The coarse diagnostic's fixed target tuple is only defined for source row 12334" >&2
+    exit 2
+fi
 ROOT=${RUN_ROOT}
 RUNTIME=${RUNTIME_ROOT}
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820
@@ -33,9 +52,11 @@ PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
 CUDA_LIB=${K1_ROW12334_CUDA_LIB:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_preprocess_stage_split_20260821T1600ET/cuda/libcuda_backproject.so}
 RELION_BIND=${FIXED_ROOT}/relion_bind_build/shared
-NATIVE_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_fine_stack12335_it2_20260821T2200ET
-NATIVE_FACTOR=${NATIVE_ROOT}/capture/part2598_stack12335_img0_class1.bpre-v2.bin
-NATIVE_FINE=${NATIVE_ROOT}/capture/part2598_stack12335_class1.fine-score-v1.bin
+NATIVE_ROOT=${K1_CASE10_NATIVE_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_fine_stack12335_it2_20260821T2200ET}
+NATIVE_FACTOR=$(find "${NATIVE_ROOT}/capture" -maxdepth 1 -type f \
+    -name "*stack${TARGET_STACK_INDEX}_img0_class1.bpre-v2.bin" -print -quit)
+NATIVE_FINE=$(find "${NATIVE_ROOT}/capture" -maxdepth 1 -type f \
+    -name "*stack${TARGET_STACK_INDEX}_class1.fine-score-v1.bin" -print -quit)
 LAUNCHER=${REPO}/scripts/run_k1_case10_row12334_it2_same_input.sbatch
 OUTPUT=${ROOT}/output
 PASS2=${ROOT}/pass2
@@ -104,7 +125,7 @@ export RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS=1
 export RECOVAR_K1_RELION_F32_COARSE_SUPPORT=1
 if [[ "${STAGE}" = fine ]]; then
     export RECOVAR_PASS2_DUMP_DIR=${PASS2}
-    export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=12334
+    export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${TARGET_SOURCE_ROW}
     export RECOVAR_PASS2_DUMP_CURRENT_SIZE=58
     export RECOVAR_PASS2_DUMP_ITERATION=1
     export RECOVAR_PASS2_DUMP_CLASS=1
@@ -153,6 +174,12 @@ command=("${PYTHON}" -m scripts.run_multi_iter_parity
     --rotation_block_size 8192
     --output_dir "${OUTPUT}"
     --save_intermediates_dir "${OUTPUT}/intermediates")
+if [[ -n "${INITIAL_HALF1_MRC}" ]]; then
+    command+=(
+        --initial-half1-mrc "${INITIAL_HALF1_MRC}"
+        --initial-half2-mrc "${INITIAL_HALF2_MRC}"
+    )
+fi
 if [[ -n "${K1_ROW12334_NORMALIZATION_OVERRIDE_SPEC:-}" ]]; then
     command+=(
         --normalization-factor-override-at-iteration
@@ -179,8 +206,9 @@ wall_s=$(( $(date +%s) - start_epoch ))
 
 if [[ "${STAGE}" = fine ]]; then
     test "${command_status}" -ne 0
-    capture=${PASS2}/pass2_orig012334_cs058.npz
-    report=${ANALYSIS}/K1_CASE10_ROW12334_IT2_FINE_STAGES.json
+    printf -v target_source_padded '%06d' "${TARGET_SOURCE_ROW}"
+    capture=${PASS2}/pass2_orig${target_source_padded}_cs058.npz
+    report=${ANALYSIS}/K1_CASE10_ROW${target_source_padded}_IT2_FINE_STAGES.json
     test -s "${capture}"
     test "$(find "${PASS2}" -maxdepth 1 -type f -name 'pass2_orig*_cs058.npz' | wc -l)" -eq 1
     rg -q 'Sparse K=1 pass-2 stop-after-dump requested .*target-set progress 1/1' \
@@ -197,6 +225,10 @@ if [[ "${STAGE}" = fine ]]; then
         > "${ROOT}/logs/analyze_${SLURM_JOB_ID}.log" 2>&1
     sha256sum "${capture}" "${NATIVE_FACTOR}" "${NATIVE_FINE}" "${report}" \
         > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
+    if [[ -n "${INITIAL_HALF1_MRC}" ]]; then
+        sha256sum "${INITIAL_HALF1_MRC}" "${INITIAL_HALF2_MRC}" \
+            >> "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
+    fi
 else
     test "${command_status}" -eq 0
     capture=${COARSE}/significance_orig012334_it002_cs058.npz

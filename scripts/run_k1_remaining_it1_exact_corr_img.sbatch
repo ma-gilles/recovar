@@ -29,12 +29,29 @@ BPREF_NOISE_OVERRIDE=${BPREF_NOISE_VARIANCE_OVERRIDE_PATH:-}
 PASS2_DUMP_ORIGINAL_INDICES=${K1_PASS2_DUMP_ORIGINAL_INDICES:-}
 BPREF_PARTICLE_POOL_SIZE=${K1_BPREF_PARTICLE_POOL_SIZE:-1}
 BPREF_EXECUTION_ORDER_CHUNK_SIZE=${K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE:-220}
+ENABLE_LIVE_INITIAL_NOISE=${K1_ENABLE_LIVE_INITIAL_NOISE:-0}
+ENABLE_PARITY_DUMP=${K1_ENABLE_PARITY_DUMP:-}
+if [[ -z "${ENABLE_PARITY_DUMP}" ]]; then
+    if [[ "${MAX_ITER}" == 2 ]]; then
+        ENABLE_PARITY_DUMP=1
+    else
+        ENABLE_PARITY_DUMP=0
+    fi
+fi
 if [[ "${MAX_ITER}" != 1 && "${MAX_ITER}" != 2 && "${MAX_ITER}" != 999 ]]; then
     echo "K1_MAX_ITER must be 1, 2, or 999" >&2
     exit 2
 fi
 if [[ "${SKIP_FINAL}" != 0 && "${SKIP_FINAL}" != 1 ]]; then
     echo "K1_SKIP_FINAL must be 0 or 1" >&2
+    exit 2
+fi
+if [[ "${ENABLE_LIVE_INITIAL_NOISE}" != 0 && "${ENABLE_LIVE_INITIAL_NOISE}" != 1 ]]; then
+    echo "K1_ENABLE_LIVE_INITIAL_NOISE must be 0 or 1" >&2
+    exit 2
+fi
+if [[ "${ENABLE_PARITY_DUMP}" != 0 && "${ENABLE_PARITY_DUMP}" != 1 ]]; then
+    echo "K1_ENABLE_PARITY_DUMP must be 0 or 1" >&2
     exit 2
 fi
 if [[ -n "${PASS2_DUMP_ORIGINAL_INDICES}" && "${MAX_ITER}" != 2 ]]; then
@@ -140,7 +157,7 @@ export RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0
 export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0
 export RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=0
 export RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN=4e-6
-export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=0
+export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=${ENABLE_LIVE_INITIAL_NOISE}
 export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
@@ -154,7 +171,7 @@ if [[ "${MAX_ITER}" != 1 ]]; then
     export RECOVAR_SAVE_INTERMEDIATES_DIR=1
     export RECOVAR_SAVE_INTERMEDIATES_SKIP_UNREGULARIZED=1
 fi
-if [[ "${MAX_ITER}" == 2 ]]; then
+if [[ "${ENABLE_PARITY_DUMP}" == 1 ]]; then
     export RECOVAR_PARITY_DUMP_DIR=${ROOT}/parity
     export RECOVAR_PARITY_DUMP_VOLUME_DOWNSAMPLE=8
     mkdir -p "${RECOVAR_PARITY_DUMP_DIR}"
@@ -228,9 +245,11 @@ wall_s=$(( $(date +%s) - start_epoch ))
 test -s "${OUTPUT}/refinement_results.npz"
 rg -q 'Refinement complete' "${OUTPUT}/run_full_refinement.log"
 ! rg -q 'Traceback|RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' "${OUTPUT}/run_full_refinement.log"
-if [[ "${MAX_ITER}" == 2 ]]; then
-    test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
-    test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_002.npz"
+if [[ "${ENABLE_PARITY_DUMP}" == 1 ]]; then
+    for ((iteration = 1; iteration <= MAX_ITER; iteration++)); do
+        printf -v iteration_tag '%03d' "${iteration}"
+        test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_${iteration_tag}.npz"
+    done
 fi
 if [[ -n "${PASS2_DUMP_ORIGINAL_INDICES}" ]]; then
     "${PYTHON}" - "${RECOVAR_PASS2_DUMP_DIR}" \
@@ -259,7 +278,8 @@ if [[ -n "${PASS2_DUMP_ORIGINAL_INDICES}" ]]; then
     find "${RECOVAR_PASS2_DUMP_DIR}" -type f -print0 \
         | sort -z | xargs -0 sha256sum >> "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
 fi
-printf '{"job_id":"%s","wall_s":%d,"case_index":%d,"max_iter":%d,"skip_final":%d}\n' \
+printf '{"job_id":"%s","wall_s":%d,"case_index":%d,"max_iter":%d,"skip_final":%d,"live_initial_noise":%d,"parity_dump":%d}\n' \
     "${SLURM_JOB_ID}" "${wall_s}" "${K1_CASE_INDEX}" "${MAX_ITER}" "${SKIP_FINAL}" \
+    "${ENABLE_LIVE_INITIAL_NOISE}" "${ENABLE_PARITY_DUMP}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/SUCCESS_${SLURM_JOB_ID}"

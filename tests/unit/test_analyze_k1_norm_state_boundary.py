@@ -2,6 +2,7 @@ import numpy as np
 
 from scripts.analyze_k1_norm_state_boundary import (
     _complex_scale,
+    _load_native_factor_report,
     _parse_native_norm_operands,
     _positive_float32_ulp_distance,
 )
@@ -50,3 +51,23 @@ def test_parse_native_norm_operands_filters_particle_and_decodes_hex(tmp_path):
     assert len(result["updates"]) == 1
     assert result["updates"][0]["iteration"] == 1
     assert result["updates"][0]["wsum_norm"] == 12.0
+
+
+def test_load_native_factor_report_requires_exact_source_aligned_factor(tmp_path):
+    report = tmp_path / "factor.json"
+    report.write_text(
+        """{
+  "schema": "recovar.em.k1_native_normalization_factor.v1",
+  "source_index_zero_based": 68955,
+  "recovered": {
+    "factor_float32": 1.0047231912612915,
+    "factor_float32_bits": "0x3f809ac5",
+    "mismatch_count": 0
+  }
+}\n"""
+    )
+
+    result = _load_native_factor_report(report, source_index=68955)
+
+    assert result["normalization_factor_float32"] == 1.0047231912612915
+    assert result["normalization_factor_bits"] == "0x3f809ac5"
