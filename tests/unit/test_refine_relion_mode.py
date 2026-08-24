@@ -4334,7 +4334,8 @@ def test_exact_local_fused_posterior_missing_warning_respects_filters():
     ) in src
 
 
-def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
+def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", "1")
     class _Dataset:
         def original_image_indices_from_local(self, indices):
             _ = indices
@@ -4378,6 +4379,7 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
             reconstruction_sample_mask=np.ones((1, 2, 3), dtype=bool),
             reconstruction_rotation_mask=np.ones((1, 2), dtype=bool),
             n_significant_samples=np.array([6], dtype=np.int32),
+            wavg_cutoff_triplet=np.array([[1.25, 2.5, 3.75]], dtype=np.float64),
             current_size=current_size,
             debug_iteration=9,
             dump_dir=tmp_path,
@@ -4395,6 +4397,10 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
     with np.load(tmp_path / "local_score_it009_image_123.npz") as dump:
         np.testing.assert_array_equal(dump["local_rotation_indices"], np.array([5, 7], dtype=np.int32))
         np.testing.assert_array_equal(dump["debug_iteration"], np.array([9], dtype=np.int32))
+        np.testing.assert_array_equal(
+            dump["debug_wavg_cutoff_triplet_xa_aa_diff2"],
+            np.array([1.25, 2.5, 3.75], dtype=np.float64),
+        )
         assert dump["local_rotation_eulers"].shape == (2, 3)
         assert dump["local_rotation_matrices"].shape == (2, 3, 3)
         np.testing.assert_array_equal(

@@ -3385,6 +3385,7 @@ def run_local_em_exact(
             debug_ctf2_over_nv_recon = None
             debug_proj_weighted = None
             debug_proj_for_noise = None
+            debug_wavg_cutoff_triplet = None
             if return_big_jit_debug_arrays:
                 if return_big_jit_debug_operands:
                     (
@@ -3397,11 +3398,13 @@ def run_local_em_exact(
                         debug_ctf2_over_nv_recon,
                         debug_proj_weighted,
                         debug_proj_for_noise,
+                        debug_wavg_cutoff_triplet,
                     ) = big_jit_result
                     if score_only:
                         debug_shifted_recon_split = None
                         debug_ctf2_over_nv_recon = None
                         debug_proj_for_noise = None
+                        debug_wavg_cutoff_triplet = None
                 else:
                     *big_jit_result, debug_scores, debug_probs = big_jit_result
             if return_big_jit_deferred_mstep_inputs:
@@ -3591,6 +3594,7 @@ def run_local_em_exact(
                         proj_weighted=debug_proj_weighted,
                         proj_for_noise=debug_proj_for_noise,
                         proj_abs2_weighted=None,
+                        wavg_cutoff_triplet=debug_wavg_cutoff_triplet,
                         dump_dir=debug_score_dump_dir,
                         pending_targets=debug_score_dump_targets,
                         requested_current_sizes=debug_score_dump_current_sizes,

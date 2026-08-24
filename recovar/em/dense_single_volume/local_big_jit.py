@@ -285,8 +285,10 @@ def _relion_wavg_direct_triplet_shells(
     *,
     image_shape,
     shell_count,
+    cutoff_shell,
+    return_per_image_cutoff=False,
 ):
-    """Return RELION Wavg [XA, AA, diff2] shells from its native issue stream."""
+    """Return RELION Wavg shells and optional per-image cutoff triplets."""
 
     from recovar import cuda_backproject
 
@@ -316,14 +318,30 @@ def _relion_wavg_direct_triplet_shells(
         jnp.zeros(rectangle_terms.shape[:1] + rectangle_terms.shape[2:], dtype=jnp.float32),
     )
     atomic = jnp.where(valid_image_mask[:, None, None], atomic, 0.0)
-    pixel_triplets = jnp.sum(atomic.astype(jnp.float64), axis=0)
-    return jnp.stack(
+    atomic_f64 = atomic.astype(jnp.float64)
+    pixel_triplets = jnp.sum(atomic_f64, axis=0)
+    shell_triplets = jnp.stack(
         [
             bin_shell_values_jax(pixel_triplets[:, component], rectangle_shell_indices, shell_count)
             for component in range(3)
         ],
         axis=0,
     )
+    if return_per_image_cutoff:
+        cutoff_mask = jnp.asarray(rectangle_shell_indices) == int(cutoff_shell)
+
+        def _add_pixel(pixel, value):
+            return value + jnp.where(cutoff_mask[pixel], atomic_f64[:, pixel, :], 0.0)
+
+        per_image_cutoff = jax.lax.fori_loop(
+            0,
+            int(atomic.shape[1]),
+            _add_pixel,
+            jnp.zeros((atomic.shape[0], 3), dtype=jnp.float64),
+        )
+    else:
+        per_image_cutoff = jnp.zeros((1, 3), dtype=jnp.float64)
+    return shell_triplets, per_image_cutoff
 
 
 def _exact_local_mstep_should_split_adjoints(recon_volume_shape, *arrays) -> bool:
@@ -1358,6 +1376,7 @@ def run_local_bucket_big_jit(
         shifted_recon_split=None,
         ctf2_over_nv_recon=None,
         proj_for_noise=None,
+        wavg_cutoff_triplet=None,
     ):
         if not return_debug_arrays:
             return result
@@ -1383,6 +1402,11 @@ def run_local_bucket_big_jit(
             if proj_for_noise is not None
             else jnp.zeros((1, 1, 1), dtype=proj_weighted.dtype)
         )
+        debug_wavg_cutoff_triplet = (
+            wavg_cutoff_triplet
+            if wavg_cutoff_triplet is not None
+            else jnp.zeros((1, 3), dtype=jnp.float64)
+        )
         return result + (
             debug_scores_for_return,
             debug_probs,
@@ -1392,6 +1416,7 @@ def run_local_bucket_big_jit(
             debug_ctf2_over_nv_recon,
             proj_weighted,
             debug_proj_for_noise,
+            debug_wavg_cutoff_triplet,
         )
 
     if score_only:
@@ -1654,6 +1679,7 @@ def run_local_bucket_big_jit(
     )
 
     bucket_norm_correction = jnp.zeros((batch_size,), dtype=jnp.float32)
+    debug_wavg_cutoff_triplet = jnp.zeros((1, 3), dtype=jnp.float64)
     if accumulate_noise:
         support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
         support_mass = jnp.where(valid_image_mask, support_mass, 0.0)
@@ -1701,7 +1727,7 @@ def run_local_bucket_big_jit(
             relion_exact_fine_diff2 and use_window and norm_current_size is not None
         )
         if use_relion_wavg_cutoff:
-            direct_triplet_shells = _relion_wavg_direct_triplet_shells(
+            direct_triplet_shells, debug_wavg_cutoff_triplet = _relion_wavg_direct_triplet_shells(
                 processed_score_half,
                 relion_score_translation_angles,
                 relion_wavg_rectangle_indices,
@@ -1715,6 +1741,8 @@ def run_local_bucket_big_jit(
                 valid_image_mask,
                 image_shape=image_shape,
                 shell_count=n_shells,
+                cutoff_shell=int(norm_current_size) // 2,
+                return_per_image_cutoff=return_debug_operands,
             )
             cutoff_mask = jnp.arange(n_shells, dtype=jnp.int32) == int(norm_current_size) // 2
             block_noise_shells = jnp.where(cutoff_mask, direct_triplet_shells[2], block_noise_shells)
@@ -1789,6 +1817,7 @@ def run_local_bucket_big_jit(
             shifted_recon_split=shifted_recon_split,
             ctf2_over_nv_recon=ctf2_over_nv_recon,
             proj_for_noise=proj_for_noise,
+            wavg_cutoff_triplet=debug_wavg_cutoff_triplet,
         )
     result = (
         Ft_y,
@@ -1824,4 +1853,5 @@ def run_local_bucket_big_jit(
         shifted_recon_split=shifted_recon_split,
         ctf2_over_nv_recon=ctf2_over_nv_recon,
         proj_for_noise=proj_for_noise,
+        wavg_cutoff_triplet=debug_wavg_cutoff_triplet,
     )

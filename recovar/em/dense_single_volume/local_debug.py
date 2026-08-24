@@ -661,6 +661,7 @@ def maybe_write_debug_score_dump(
     proj_weighted=None,
     proj_for_noise=None,
     proj_abs2_weighted=None,
+    wavg_cutoff_triplet=None,
     dump_dir: Path | None,
     pending_targets: set[int],
     requested_current_sizes: set[int] | None = None,
@@ -755,6 +756,15 @@ def maybe_write_debug_score_dump(
     proj_abs2_weighted_np = (
         _target_rows_to_numpy(proj_abs2_weighted, target_rows, _debug_capture_dtype(proj_abs2_weighted))
         if dump_operands and proj_abs2_weighted is not None
+        else None
+    )
+    wavg_cutoff_triplet_np = (
+        _target_rows_to_numpy(
+            wavg_cutoff_triplet,
+            target_rows,
+            _debug_capture_dtype(wavg_cutoff_triplet),
+        )
+        if dump_operands and wavg_cutoff_triplet is not None
         else None
     )
 
@@ -933,6 +943,11 @@ def maybe_write_debug_score_dump(
                 payload["debug_proj_abs2_weighted"] = np.asarray(
                     proj_abs2_weighted_np[compact_row, :actual_count, :],
                     dtype=proj_abs2_weighted_np.dtype,
+                )
+            if wavg_cutoff_triplet_np is not None:
+                payload["debug_wavg_cutoff_triplet_xa_aa_diff2"] = np.asarray(
+                    wavg_cutoff_triplet_np[compact_row],
+                    dtype=np.float64,
                 )
         np.savez_compressed(dump_path, **payload)
         if requested_iterations is None:
