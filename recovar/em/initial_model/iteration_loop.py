@@ -174,6 +174,8 @@ def _maybe_dump_noise_update_boundary(
     wsum_sigma2_noise: np.ndarray,
     wsum_img_power: np.ndarray,
     noise_sumw: float,
+    wsum_noise_a2: np.ndarray | None = None,
+    wsum_noise_xa: np.ndarray | None = None,
 ) -> str | None:
     """Write VDAM noise sufficient statistics only when explicitly requested."""
 
@@ -215,6 +217,15 @@ def _maybe_dump_noise_update_boundary(
         "half0_previous_sigma2_noise": old_noise,
         "half0_sigma2_noise": new_noise,
     }
+    if wsum_noise_a2 is not None or wsum_noise_xa is not None:
+        if wsum_noise_a2 is None or wsum_noise_xa is None:
+            raise ValueError("noise split diagnostics require both wsum_noise_a2 and wsum_noise_xa")
+        noise_a2 = np.asarray(wsum_noise_a2, dtype=np.float64)
+        noise_xa = np.asarray(wsum_noise_xa, dtype=np.float64)
+        if noise_a2.shape != residual.shape or noise_xa.shape != residual.shape:
+            raise ValueError("noise split diagnostics must match the noise shell topology")
+        payload["half0_wsum_noise_a2"] = noise_a2
+        payload["half0_wsum_noise_xa"] = noise_xa
     np.savez_compressed(dump_path, **payload)
     return str(dump_path)
 
@@ -229,6 +240,8 @@ def update_noise_from_estep_meta(
     """Update ``sigma2_noise`` from E-step weighted sums (engine units → RELION /N⁴)."""
     wsum_sigma2_noise = _posterior_sums_from_meta(meta, "wsum_sigma2_noise")
     wsum_img_power = _posterior_sums_from_meta(meta, "wsum_img_power")
+    wsum_noise_a2 = _posterior_sums_from_meta(meta, "wsum_noise_a2")
+    wsum_noise_xa = _posterior_sums_from_meta(meta, "wsum_noise_xa")
     noise_sumw = _scalar_sum_from_meta(meta, "noise_sumw")
     if wsum_sigma2_noise is None or wsum_img_power is None or noise_sumw is None:
         return state
@@ -275,6 +288,8 @@ def update_noise_from_estep_meta(
         wsum_sigma2_noise=wsum_sigma2_noise,
         wsum_img_power=wsum_img_power,
         noise_sumw=float(noise_sumw),
+        wsum_noise_a2=wsum_noise_a2,
+        wsum_noise_xa=wsum_noise_xa,
     )
     return new_state
 

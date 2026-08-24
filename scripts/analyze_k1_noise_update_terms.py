@@ -221,6 +221,11 @@ def analyze(
         rec_npix = np.asarray(payload["relion_half_plane_shell_counts"], dtype=np.float64)
         rec_old = np.asarray(payload[f"{prefix}_previous_sigma2_noise"], dtype=np.float64)
         rec_new = np.asarray(payload[f"{prefix}_sigma2_noise"], dtype=np.float64)
+        a2_key = f"{prefix}_wsum_noise_a2"
+        xa_key = f"{prefix}_wsum_noise_xa"
+        _require((a2_key in payload) == (xa_key in payload), "RECOVAR A2/XA split is incomplete")
+        rec_a2 = np.asarray(payload[a2_key], dtype=np.float64) if a2_key in payload else None
+        rec_xa = np.asarray(payload[xa_key], dtype=np.float64) if xa_key in payload else None
         current_size = int(np.asarray(payload["current_size"]).reshape(-1)[0])
     count = int(np.asarray(native["shell"]).size)
     for name, values in (
@@ -339,6 +344,22 @@ def analyze(
             "image_power_fraction_of_signed_raw_delta": image_delta_sum / raw_delta_sum,
             "a2_minus_2xa_fraction_of_signed_raw_delta": residual_delta_sum / raw_delta_sum,
         }
+        if rec_a2 is not None and rec_xa is not None:
+            _require(rec_a2.shape == (count,) and rec_xa.shape == (count,), "RECOVAR A2/XA topology changed")
+            comparisons.update(
+                {
+                    "low_shell_a2_recovar_vs_native_components": _metric(
+                        rec_a2[low] / n4, np.asarray(detailed["aa"])[low]
+                    ),
+                    "low_shell_xa_recovar_vs_native_components": _metric(
+                        rec_xa[low] / n4, np.asarray(detailed["xa"])[low]
+                    ),
+                    "recovar_a2_minus_2xa_split_closure": _metric(
+                        rec_a2 - 2.0 * rec_xa,
+                        rec_residual,
+                    ),
+                }
+            )
 
     report = {
         "schema": "recovar.em.k1_noise_update_terms.v1",

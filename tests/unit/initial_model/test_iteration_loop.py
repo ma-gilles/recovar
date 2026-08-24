@@ -647,6 +647,8 @@ class TestRunVdamIterations:
         meta = {
             "wsum_sigma2_noise": np.asarray([10.0, 12.0, 14.0, 16.0, 18.0]),
             "wsum_img_power": np.asarray([5.0, 6.0, 7.0, 8.0, 9.0]),
+            "wsum_noise_a2": np.asarray([20.0, 24.0, 28.0, 32.0, 36.0]),
+            "wsum_noise_xa": np.asarray([5.0, 6.0, 7.0, 8.0, 9.0]),
             "noise_sumw": 4.0,
         }
         monkeypatch.setenv("RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_DIR", str(tmp_path))
@@ -661,6 +663,8 @@ class TestRunVdamIterations:
             assert int(payload["current_size"][0]) == 6
             np.testing.assert_array_equal(payload["half0_wsum_sigma2_noise"], meta["wsum_sigma2_noise"])
             np.testing.assert_array_equal(payload["half0_wsum_img_power"], meta["wsum_img_power"])
+            np.testing.assert_array_equal(payload["half0_wsum_noise_a2"], meta["wsum_noise_a2"])
+            np.testing.assert_array_equal(payload["half0_wsum_noise_xa"], meta["wsum_noise_xa"])
             np.testing.assert_allclose(payload["half0_sigma2_noise"] / 8**4, out.sigma2_noise[0])
 
     def test_iteration_loop_feeds_updated_sigma2_noise_to_next_estep(self, monkeypatch):

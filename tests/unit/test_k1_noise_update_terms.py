@@ -28,6 +28,8 @@ def test_noise_update_terms_replay_equal_sufficient_statistics(tmp_path):
     new = raw / (2.0 * sumw * npix)
     residual = np.asarray([3.0, 7.0, 11.0], dtype=np.float64) * n4
     image_power = raw * n4 - residual
+    xa = np.asarray([1.0, 2.0, 3.0], dtype=np.float64)
+    aa = residual / n4 + 2.0 * xa
     native_path = tmp_path / "sigma2_noise_raw.tsv"
     native_path.write_text(
         "".join(
@@ -48,6 +50,16 @@ def test_noise_update_terms_replay_equal_sufficient_statistics(tmp_path):
             for shell in range(3)
         )
     )
+    native_components_path = tmp_path / "sigma2_noise_components.tsv"
+    native_components_path.write_text(
+        "".join(
+            "acc_components\titer=2\tpart_id=17\thalfset=1\trandom_subset=1"
+            f"\toptics_group=0\tshell={shell}\tdirect_residual={residual[shell] / n4}"
+            f"\taa={aa[shell]}\txa={xa[shell]}"
+            f"\tinferred_image_power={image_power[shell] / n4}\n"
+            for shell in range(3)
+        )
+    )
     recovar_path = tmp_path / "recovar_noise_update_it002.npz"
     np.savez(
         recovar_path,
@@ -55,6 +67,8 @@ def test_noise_update_terms_replay_equal_sufficient_statistics(tmp_path):
         relion_half_plane_shell_counts=npix,
         half1_wsum_sigma2_noise=residual,
         half1_wsum_img_power=image_power,
+        half1_wsum_noise_a2=aa * n4,
+        half1_wsum_noise_xa=xa * n4,
         half1_wsum_total=raw * n4,
         half1_sumw=np.asarray([sumw]),
         half1_previous_sigma2_noise=np.ones(3) * n4,
@@ -67,6 +81,7 @@ def test_noise_update_terms_replay_equal_sufficient_statistics(tmp_path):
         iteration=2,
         half=1,
         image_size=image_size,
+        native_components_tsv=native_components_path,
         recovar_prefix="half1",
     )
 
@@ -79,6 +94,9 @@ def test_noise_update_terms_replay_equal_sufficient_statistics(tmp_path):
     assert report["comparisons"]["new_noise_recovar_vs_native"]["max_abs"] == 0.0
     assert report["comparisons"]["native_formula_replay"]["max_abs"] == 0.0
     assert report["comparisons"]["recovar_formula_replay"]["max_abs"] == 0.0
+    assert report["comparisons"]["low_shell_a2_recovar_vs_native_components"]["max_abs"] == 0.0
+    assert report["comparisons"]["low_shell_xa_recovar_vs_native_components"]["max_abs"] == 0.0
+    assert report["comparisons"]["recovar_a2_minus_2xa_split_closure"]["max_abs"] == 0.0
 
 
 @pytest.mark.unit
