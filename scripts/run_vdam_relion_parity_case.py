@@ -16,9 +16,11 @@ import numpy as np
 
 if __package__:
     from scripts.audit_vdam_fsc_trajectory import audit
+    from scripts.audit_vdam_particle_state_trajectory import audit_trajectory as audit_particle_states
     from scripts.materialize_em_k1_fixture import load_case, materialize, sha256_file
 else:
     from audit_vdam_fsc_trajectory import audit
+    from audit_vdam_particle_state_trajectory import audit_trajectory as audit_particle_states
     from materialize_em_k1_fixture import load_case, materialize, sha256_file
 
 DEFAULT_FIXTURE_ROOT = Path("/scratch/gpfs/CRYOEM/gilleslab/em_work/codex")
@@ -299,6 +301,42 @@ def _definition_with_iteration_override(definition: dict[str, Any]) -> dict[str,
     return result
 
 
+def _write_particle_state_audit(
+    *,
+    recovar_dir: Path,
+    relion_dir: Path,
+    case_root: Path,
+    nr_iter: int,
+) -> dict[str, Any]:
+    """Audit every numbered particle checkpoint and persist a compact summary."""
+
+    iterations = tuple(range(1, int(nr_iter) + 1))
+    particle_report = audit_particle_states(
+        recovar_dir,
+        relion_dir,
+        iterations=iterations,
+    )
+    output_path = case_root / "particle_state_trajectory_audit.json"
+    output_path.write_text(json.dumps(particle_report, indent=2, sort_keys=True) + "\n")
+    first_iteration = particle_report["first_divergent_iteration"]
+    first_row = next(
+        (
+            row
+            for row in particle_report["iterations"]
+            if row["divergent_particle_count"] > 0
+        ),
+        None,
+    )
+    return {
+        "artifact": output_path.name,
+        "audited_iteration_count": len(iterations),
+        "first_divergent_iteration": first_iteration,
+        "first_divergent_particle_count": (
+            None if first_row is None else int(first_row["divergent_particle_count"])
+        ),
+    }
+
+
 def _run_logged(argv: list[str], *, cwd: Path, log_path: Path, env: dict[str, str]) -> dict[str, Any]:
     start = time.time()
     with log_path.open("w") as log:
@@ -517,6 +555,12 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         missing = [str(path) for path in required if not path.is_file()]
         if missing:
             raise RunError(f"bounded trajectory is missing terminal artifacts: {missing}")
+        particle_summary = _write_particle_state_audit(
+            recovar_dir=recovar_dir,
+            relion_dir=relion_dir,
+            case_root=case_root,
+            nr_iter=final_iteration,
+        )
         report = {
             "schema": "recovar.vdam_bounded_parity_run.v1",
             "status": "diagnostic_complete",
@@ -525,7 +569,13 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
             "physical_gpu_uuid": gpu_uuid,
             "relion_dir": str(relion_dir),
             "recovar_dir": str(recovar_dir),
-            "quality_gate": "none; bounded diagnostic intentionally skips frozen full-trajectory gates",
+            "particle_state_trajectory": particle_summary,
+            "scientific_schedule_changed_by_nr_iter_override": True,
+            "frozen_nr_iter": int(case["definition"]["nr_iter"]),
+            "quality_gate": (
+                "none; changing nr_iter changes the InitialModel scientific schedule, so this "
+                "bounded diagnostic is not default-trajectory parity evidence"
+            ),
         }
         (case_root / "bounded_run_report.json").write_text(
             json.dumps(report, indent=2, sort_keys=True) + "\n"
@@ -540,6 +590,12 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         recovar_dir=recovar_dir,
         relion_dir=relion_dir,
         paired_gpu_report_path=paired_gpu_report,
+    )
+    report["particle_state_trajectory"] = _write_particle_state_audit(
+        recovar_dir=recovar_dir,
+        relion_dir=relion_dir,
+        case_root=case_root,
+        nr_iter=int(definition["nr_iter"]),
     )
     report_path = case_root / "trajectory_audit.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

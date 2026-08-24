@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 import types
 from pathlib import Path
@@ -174,6 +175,52 @@ def test_iteration_override_is_explicit_bounded_and_non_mutating(monkeypatch):
     monkeypatch.setenv("VDAM_NR_ITER_OVERRIDE", "not-an-integer")
     with pytest.raises(runner.RunError, match="must be an integer"):
         runner._definition_with_iteration_override(DEFINITION)
+
+
+def test_particle_state_audit_covers_every_numbered_checkpoint(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_audit(recovar_dir, relion_dir, *, iterations):
+        captured.update(
+            recovar_dir=recovar_dir,
+            relion_dir=relion_dir,
+            iterations=iterations,
+        )
+        return {
+            "schema": "recovar.vdam_particle_state_trajectory_audit.v1",
+            "first_divergent_iteration": 2,
+            "iterations": [
+                {"iteration": 1, "divergent_particle_count": 0},
+                {"iteration": 2, "divergent_particle_count": 3},
+                {"iteration": 3, "divergent_particle_count": 4},
+            ],
+        }
+
+    monkeypatch.setattr(runner, "audit_particle_states", fake_audit)
+    summary = runner._write_particle_state_audit(
+        recovar_dir=tmp_path / "recovar",
+        relion_dir=tmp_path / "relion",
+        case_root=tmp_path,
+        nr_iter=3,
+    )
+
+    assert captured["iterations"] == (1, 2, 3)
+    assert summary == {
+        "artifact": "particle_state_trajectory_audit.json",
+        "audited_iteration_count": 3,
+        "first_divergent_iteration": 2,
+        "first_divergent_particle_count": 3,
+    }
+    payload = json.loads((tmp_path / summary["artifact"]).read_text())
+    assert payload["first_divergent_iteration"] == 2
+
+
+def test_bounded_report_is_marked_as_schedule_changing():
+    source = (Path(__file__).resolve().parents[3] / "scripts" / "run_vdam_relion_parity_case.py").read_text()
+
+    assert '"scientific_schedule_changed_by_nr_iter_override": True' in source
+    assert '"frozen_nr_iter": int(case["definition"]["nr_iter"])' in source
+    assert "not default-trajectory parity evidence" in source
 
 
 def test_gpu_capture_requires_exactly_one_visible_uuid(monkeypatch):
