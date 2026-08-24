@@ -221,6 +221,293 @@ def test_relion_translate_bpref_f32_validates_weight_shape(monkeypatch):
         )
 
 
+def test_relion_vdam_mstep_sums_f32_validates_reference_shape():
+    import recovar.cuda_backproject as cuda_backproject
+
+    with pytest.raises(ValueError, match="reference must have shape"):
+        cuda_backproject.relion_vdam_mstep_sums_f32.__wrapped__(
+            jnp.zeros((2, 3), dtype=jnp.complex64),
+            jnp.ones((2, 3), dtype=jnp.float32),
+            jnp.ones((2, 3), dtype=jnp.float32),
+            jnp.ones((2, 4, 5), dtype=jnp.float32),
+            jnp.zeros((5, 2), dtype=jnp.float32),
+            jnp.arange(3, dtype=jnp.int32),
+            jnp.zeros((2, 3, 3), dtype=jnp.complex64),
+            (8, 8),
+        )
+
+
+def test_relion_vdam_mstep_fused_x_half_validates_reference_shape():
+    import recovar.cuda_backproject as cuda_backproject
+
+    with pytest.raises(ValueError, match="reference must have shape"):
+        cuda_backproject.relion_vdam_mstep_fused_x_half.__wrapped__(
+            jnp.zeros((196,), dtype=jnp.complex64),
+            jnp.zeros((196,), dtype=jnp.float32),
+            jnp.zeros((1, 3), dtype=jnp.complex64),
+            jnp.ones((1, 3), dtype=jnp.float32),
+            jnp.ones((1, 3), dtype=jnp.float32),
+            jnp.ones((1, 2, 2), dtype=jnp.float32),
+            jnp.zeros((2, 2), dtype=jnp.float32),
+            jnp.arange(3, dtype=jnp.int32),
+            jnp.zeros((1, 2, 2), dtype=jnp.complex64),
+            jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (1, 2, 3, 3)),
+            (8, 8),
+            (7, 7, 7),
+            2.0,
+        )
+
+
+@pytest.mark.gpu
+def test_relion_vdam_mstep_sums_f32_matches_source_order_and_translation(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    images = np.asarray(
+        [[1.25 - 0.5j, -2.0 + 0.125j, 0.75 + 3.0j]],
+        dtype=np.complex64,
+    )
+    ctf = np.asarray([[0.75, -1.5, 0.25]], dtype=np.float32)
+    minvsigma2 = np.asarray([[2.0, 0.125, 4.0]], dtype=np.float32)
+    posterior = np.asarray(
+        [[[0.125, 0.25, 0.5], [0.0, 0.75, 0.0625]]],
+        dtype=np.float32,
+    )
+    reference = np.asarray(
+        [[[0.5 + 0.25j, 1.0 - 2.0j, -0.125 + 0.5j],
+          [-1.0 + 0.75j, 0.25 + 0.5j, 2.0 - 0.25j]]],
+        dtype=np.complex64,
+    )
+    translation_angles = np.asarray(
+        [[0.0, 0.0], [0.01831252, -0.006231174], [-0.03125, 0.015625]],
+        dtype=np.float32,
+    )
+    pixel_indices = np.asarray([0, 1, 2], dtype=np.int32)
+
+    with jax.default_device(gpu_device):
+        actual_num, actual_den = cuda_backproject.relion_vdam_mstep_sums_f32(
+            jnp.asarray(images),
+            jnp.asarray(ctf),
+            jnp.asarray(minvsigma2),
+            jnp.asarray(posterior),
+            jnp.asarray(translation_angles),
+            jnp.asarray(pixel_indices),
+            jnp.asarray(reference),
+            (8, 8),
+        )
+        translated = cuda_backproject.relion_translate_bpref_f32(
+            jnp.asarray(images),
+            jnp.ones_like(jnp.asarray(ctf)),
+            jnp.asarray(translation_angles),
+            jnp.asarray(pixel_indices),
+            (8, 8),
+        )
+    translated = np.asarray(translated).reshape(1, posterior.shape[2], -1)
+
+    expected_num = np.zeros_like(reference)
+    expected_den = np.zeros(reference.shape, dtype=np.float32)
+    for rotation in range(posterior.shape[1]):
+        for pixel in range(images.shape[1]):
+            ref_real = np.float32(reference[0, rotation, pixel].real * ctf[0, pixel])
+            ref_imag = np.float32(reference[0, rotation, pixel].imag * ctf[0, pixel])
+            sum_real = np.float32(0.0)
+            sum_imag = np.float32(0.0)
+            fweight = np.float32(0.0)
+            for translation in range(posterior.shape[2]):
+                weight = np.float32(posterior[0, rotation, translation] * ctf[0, pixel])
+                weight = np.float32(weight * minvsigma2[0, pixel])
+                fweight = np.float32(fweight + np.float32(weight * ctf[0, pixel]))
+                sum_real = np.float32(
+                    sum_real
+                    + np.float32(
+                        (translated[0, translation, pixel].real - ref_real) * weight
+                    )
+                )
+                sum_imag = np.float32(
+                    sum_imag
+                    + np.float32(
+                        (translated[0, translation, pixel].imag - ref_imag) * weight
+                    )
+                )
+            expected_num[0, rotation, pixel] = np.complex64(sum_real + 1j * sum_imag)
+            expected_den[0, rotation, pixel] = fweight
+
+    np.testing.assert_allclose(np.asarray(actual_num), expected_num, rtol=0.0, atol=2e-6)
+    np.testing.assert_allclose(np.asarray(actual_den), expected_den, rtol=0.0, atol=2e-6)
+
+
+@pytest.mark.gpu
+def test_relion_vdam_mstep_fused_x_half_matches_two_stage_interior_source_order(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(6217)
+    image_shape = (8, 8)
+    max_r = 4.0
+    volume_shape = (11, 11, 11)
+    n_pixels = image_shape[0] * (image_shape[1] // 2 + 1)
+    n_particles, n_rotations, n_translations = 1, 2, 3
+    images = (
+        rng.normal(size=(n_particles, n_pixels))
+        + 1j * rng.normal(size=(n_particles, n_pixels))
+    ).astype(np.complex64)
+    ctf = rng.uniform(0.25, 1.5, size=images.shape).astype(np.float32)
+    # The generic EM x-half scatter and VDAM's SGD kernel intentionally have
+    # different y-Nyquist and negative-y/x=0 boundary conventions. Compare
+    # their shared interior here; the VDAM-native boundaries have a dedicated
+    # behavioral test below.
+    ctf[:, [0, 1, 2, 3, 4, 5, 10, 15]] = 0.0
+    minvsigma2 = rng.uniform(0.5, 2.0, size=images.shape).astype(np.float32)
+    posterior = rng.uniform(
+        0.0, 0.5, size=(n_particles, n_rotations, n_translations)
+    ).astype(np.float32)
+    angles = np.asarray(
+        [[0.0, 0.0], [0.01831252, -0.006231174], [-0.03125, 0.015625]],
+        dtype=np.float32,
+    )
+    reference = (
+        rng.normal(size=(n_particles, n_rotations, n_pixels))
+        + 1j * rng.normal(size=(n_particles, n_rotations, n_pixels))
+    ).astype(np.complex64)
+    rotations = np.broadcast_to(
+        np.eye(3, dtype=np.float32),
+        (n_particles, n_rotations, 3, 3),
+    ).copy()
+    rotations[0, 1] = np.asarray(
+        [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float32,
+    )
+    centered_indices = np.arange(n_pixels, dtype=np.int32)
+    centered_rows = centered_indices // (image_shape[1] // 2 + 1)
+    columns = centered_indices % (image_shape[1] // 2 + 1)
+    fftw_rows = (centered_rows - image_shape[0] // 2) % image_shape[0]
+    pixel_indices = (fftw_rows * (image_shape[1] // 2 + 1) + columns).astype(np.int32)
+    volume_size = volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    expected_data0 = jnp.zeros((volume_size,), dtype=jnp.complex64)
+    expected_weight0 = jnp.zeros((volume_size,), dtype=jnp.float32)
+    actual_data0 = jnp.zeros((volume_size,), dtype=jnp.complex64)
+    actual_weight0 = jnp.zeros((volume_size,), dtype=jnp.float32)
+
+    with jax.default_device(gpu_device):
+        sums, denominator = cuda_backproject.relion_vdam_mstep_sums_f32(
+            jnp.asarray(images),
+            jnp.asarray(ctf),
+            jnp.asarray(minvsigma2),
+            jnp.asarray(posterior),
+            jnp.asarray(angles),
+            jnp.asarray(centered_indices),
+            jnp.asarray(reference),
+            image_shape,
+        )
+        expected_data, expected_weight = (
+            cuda_backproject.relion_fused_x_half_backproject_particle_grid_indexed(
+                expected_data0,
+                expected_weight0,
+                sums,
+                denominator,
+                jnp.asarray(pixel_indices),
+                jnp.asarray(rotations),
+                image_shape,
+                volume_shape,
+                max_r,
+            )
+        )
+        jax.block_until_ready((expected_data, expected_weight, denominator))
+        actual_data, actual_weight, actual_denominator = (
+            cuda_backproject.relion_vdam_mstep_fused_x_half(
+                actual_data0,
+                actual_weight0,
+                jnp.asarray(images),
+                jnp.asarray(ctf),
+                jnp.asarray(minvsigma2),
+                jnp.asarray(posterior),
+                jnp.asarray(angles),
+                jnp.asarray(pixel_indices),
+                jnp.asarray(reference),
+                jnp.asarray(rotations),
+                image_shape,
+                volume_shape,
+                max_r,
+            )
+        )
+    actual_data_np = np.asarray(actual_data)
+    expected_data_np = np.asarray(expected_data)
+    close_data = np.isclose(actual_data_np, expected_data_np, rtol=2e-6, atol=2e-5)
+    if not np.all(close_data):
+        bad = np.flatnonzero(~close_data)
+        diagnostic = [
+            (
+                tuple(np.unravel_index(int(index), (volume_shape[0], volume_shape[1], volume_shape[2] // 2 + 1))),
+                actual_data_np[index],
+                expected_data_np[index],
+            )
+            for index in bad
+        ]
+        print(f"fused VDAM data mismatches: {diagnostic}")
+    np.testing.assert_allclose(np.asarray(actual_denominator), np.asarray(denominator), rtol=0.0, atol=2e-6)
+    np.testing.assert_allclose(actual_data_np, expected_data_np, rtol=2e-6, atol=2e-5)
+    np.testing.assert_allclose(np.asarray(actual_weight), np.asarray(expected_weight), rtol=2e-6, atol=2e-5)
+
+
+@pytest.mark.gpu
+def test_relion_vdam_mstep_fused_x_half_uses_native_sgd_y_boundaries(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    image_shape = (8, 8)
+    volume_shape = (11, 11, 11)
+    half_width = image_shape[1] // 2 + 1
+    fftw_rows = np.asarray([image_shape[0] // 2, image_shape[0] // 2 + 1], dtype=np.int32)
+    pixel_indices = fftw_rows * half_width
+    volume_size = volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+
+    with jax.default_device(gpu_device):
+        actual_data, actual_weight, actual_denominator = (
+            cuda_backproject.relion_vdam_mstep_fused_x_half(
+                jnp.zeros((volume_size,), dtype=jnp.complex64),
+                jnp.zeros((volume_size,), dtype=jnp.float32),
+                jnp.ones((1, 2), dtype=jnp.complex64),
+                jnp.ones((1, 2), dtype=jnp.float32),
+                jnp.ones((1, 2), dtype=jnp.float32),
+                jnp.ones((1, 1, 1), dtype=jnp.float32),
+                jnp.asarray([[0.0, 0.1]], dtype=jnp.float32),
+                jnp.asarray(pixel_indices),
+                jnp.zeros((1, 1, 2), dtype=jnp.complex64),
+                jnp.eye(3, dtype=jnp.float32)[None, None],
+                image_shape,
+                volume_shape,
+                4.0,
+            )
+        )
+
+    actual_data_np = np.asarray(actual_data).reshape(11, 11, 6)
+    actual_weight_np = np.asarray(actual_weight).reshape(11, 11, 6)
+    np.testing.assert_allclose(actual_denominator, np.ones((1, 1, 2), dtype=np.float32), rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(actual_data_np[5, 9, 0], np.exp(0.4j), rtol=2e-6, atol=2e-6)
+    np.testing.assert_allclose(actual_data_np[5, 2, 0], np.exp(-0.3j), rtol=2e-6, atol=2e-6)
+    np.testing.assert_allclose(actual_weight_np[[5, 5], [9, 2], [0, 0]], np.ones(2), rtol=0.0, atol=0.0)
+    assert np.count_nonzero(actual_data_np) == 2
+
+
 @pytest.mark.gpu
 def test_relion_translate_bpref_f32_matches_translate_then_weight(
     monkeypatch,

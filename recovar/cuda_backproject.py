@@ -522,6 +522,8 @@ _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32 = "cuda_relion_make_scoring_rotations_
 _TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
 _TARGET_RELION_TRANSLATE_BPREF_F32 = "cuda_relion_translate_bpref_f32"
 _TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
+_TARGET_RELION_VDAM_MSTEP_SUMS_F32 = "cuda_relion_vdam_mstep_sums_f32"
+_TARGET_RELION_VDAM_MSTEP_FUSED_X_HALF = "cuda_relion_vdam_mstep_fused_x_half"
 _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_rectangular_f32"
 )
@@ -598,6 +600,8 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_RELION_TRANSLATE_SCORE_F32, "RelionTranslateScoreF32"),
     (_TARGET_RELION_TRANSLATE_BPREF_F32, "RelionTranslateBprefF32"),
     (_TARGET_RELION_BPREF_OPERANDS_F32, "RelionBprefOperandsF32"),
+    (_TARGET_RELION_VDAM_MSTEP_SUMS_F32, "RelionVdamMstepSumsF32"),
+    (_TARGET_RELION_VDAM_MSTEP_FUSED_X_HALF, "RelionVdamMstepFusedXHalf"),
     (
         _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
         "RelionCoarseDiff2RectangularF32",
@@ -1516,6 +1520,207 @@ def relion_bpref_operands_f32(
         image_half_width=np.int64(half_width),
         arithmetic_variant=np.int64(arithmetic_variant),
     )
+
+
+@functools.partial(jax.jit, static_argnums=(7,))
+def relion_vdam_mstep_sums_f32(
+    images: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior_over_weight_norm: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    reference: jax.Array,
+    image_shape: Tuple[int, int],
+) -> tuple[jax.Array, jax.Array]:
+    """Reduce RELION VDAM BPref residual operands in native statement order.
+
+    The returned arrays have shape ``(batch, rotations, pixels)``.  Translation
+    weights are consumed sequentially inside the CUDA kernel, matching
+    ``cuda_kernel_backproject3D_SGD`` before its particle-grid scatter.
+    """
+
+    if images.dtype != jnp.complex64 or reference.dtype != jnp.complex64:
+        raise TypeError("images and reference must be complex64")
+    for name, value in (
+        ("ctf", ctf),
+        ("minvsigma2", minvsigma2),
+        ("posterior_over_weight_norm", posterior_over_weight_norm),
+        ("translation_angles", translation_angles),
+    ):
+        if value.dtype != jnp.float32:
+            raise TypeError(f"{name} must be float32, got {value.dtype}")
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError(f"pixel_indices must be int32, got {pixel_indices.dtype}")
+    if images.ndim != 2:
+        raise ValueError(f"images must have shape (batch, pixels), got {images.shape}")
+    if ctf.shape != images.shape or minvsigma2.shape != images.shape:
+        raise ValueError("ctf and minvsigma2 must have the same shape as images")
+    if posterior_over_weight_norm.ndim != 3:
+        raise ValueError("posterior_over_weight_norm must have shape (batch, rotations, translations)")
+    if posterior_over_weight_norm.shape[0] != images.shape[0]:
+        raise ValueError("posterior batch dimension must match images")
+    if reference.shape != (
+        images.shape[0],
+        posterior_over_weight_norm.shape[1],
+        images.shape[1],
+    ):
+        raise ValueError(
+            "reference must have shape (batch, rotations, pixels), got "
+            f"{reference.shape}"
+        )
+    if translation_angles.shape != (posterior_over_weight_norm.shape[2], 2):
+        raise ValueError("translation_angles must have shape (translations, 2)")
+    if pixel_indices.shape != (images.shape[1],):
+        raise ValueError(f"pixel_indices must have shape ({images.shape[1]},)")
+    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
+        raise ValueError(f"image_shape must contain two positive sizes, got {image_shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION VDAM M-step sums require a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION VDAM M-step sums were explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    image_h, image_w = (int(size) for size in image_shape)
+    output_shape = reference.shape
+    output_types = (
+        jax.ShapeDtypeStruct(output_shape, jnp.complex64),
+        jax.ShapeDtypeStruct(output_shape, jnp.float32),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_VDAM_MSTEP_SUMS_F32,
+        output_types,
+        vmap_method="sequential",
+    )(
+        images,
+        ctf,
+        minvsigma2,
+        posterior_over_weight_norm,
+        translation_angles,
+        pixel_indices,
+        reference,
+        image_h=np.int64(image_h),
+        image_half_width=np.int64(image_w // 2 + 1),
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(10, 11, 12))
+def relion_vdam_mstep_fused_x_half(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    images: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior_over_weight_norm: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    reference: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Form and scatter VDAM residual rows in RELION's particle launch topology."""
+
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(f"RELION fused VDAM M-step requires an odd BPref grid, got {volume_shape}")
+    if images.dtype != jnp.complex64 or reference.dtype != jnp.complex64:
+        raise TypeError("images and reference must be complex64")
+    if data_volume.dtype != jnp.complex64 or weight_volume.dtype != jnp.float32:
+        raise TypeError("VDAM accumulators must be complex64/float32")
+    for name, value in (
+        ("ctf", ctf),
+        ("minvsigma2", minvsigma2),
+        ("posterior_over_weight_norm", posterior_over_weight_norm),
+        ("translation_angles", translation_angles),
+        ("rotation_matrices", rotation_matrices),
+    ):
+        if value.dtype != jnp.float32:
+            raise TypeError(f"{name} must be float32, got {value.dtype}")
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError("pixel_indices must be int32")
+    if images.ndim != 2 or ctf.shape != images.shape or minvsigma2.shape != images.shape:
+        raise ValueError("images, ctf, and minvsigma2 must have matching (particle,pixel) shapes")
+    if posterior_over_weight_norm.ndim != 3 or posterior_over_weight_norm.shape[0] != images.shape[0]:
+        raise ValueError("posterior must have shape (particle,rotation,translation)")
+    n_particles, n_rotations, n_translations = map(int, posterior_over_weight_norm.shape)
+    if reference.shape != (n_particles, n_rotations, images.shape[1]):
+        raise ValueError("reference must have shape (particle,rotation,pixel)")
+    if rotation_matrices.shape != (n_particles, n_rotations, 3, 3):
+        raise ValueError("rotation_matrices must have shape (particle,rotation,3,3)")
+    if translation_angles.shape != (n_translations, 2):
+        raise ValueError("translation_angles must have shape (translation,2)")
+    if pixel_indices.shape != (images.shape[1],):
+        raise ValueError("pixel_indices must match the compact pixel dimension")
+    _ensure_ffi()
+
+    dense_images, dense_indices, current_h, current_w = _prepare_relion_x_half_block_topology_operands(
+        images, pixel_indices, image_shape, max_r
+    )
+    dense_ctf, ctf_indices, ctf_h, ctf_w = _prepare_relion_x_half_block_topology_operands(
+        ctf, pixel_indices, image_shape, max_r
+    )
+    dense_minvsigma2, noise_indices, noise_h, noise_w = _prepare_relion_x_half_block_topology_operands(
+        minvsigma2, pixel_indices, image_shape, max_r
+    )
+    flat_reference = reference.reshape(n_particles * n_rotations, images.shape[1])
+    dense_reference, reference_indices, reference_h, reference_w = (
+        _prepare_relion_x_half_block_topology_operands(
+            flat_reference, pixel_indices, image_shape, max_r
+        )
+    )
+    dense_reference = dense_reference.reshape(n_particles, n_rotations, -1)
+    if (ctf_h, ctf_w) != (current_h, current_w) or (noise_h, noise_w) != (current_h, current_w):
+        raise ValueError("VDAM fused operand topology metadata mismatch")
+    if (reference_h, reference_w) != (current_h, current_w):
+        raise ValueError("VDAM fused reference topology metadata mismatch")
+    if not (ctf_indices.shape == noise_indices.shape == reference_indices.shape == dense_indices.shape):
+        raise ValueError("VDAM fused dense pixel topology mismatch")
+
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(
+        rotation_matrices.reshape(n_particles * n_rotations, 3, 3), jnp.float32
+    )
+    rot6 = _rot_to_compact(kernel_rotations, jnp.float32).reshape(n_particles, n_rotations, 6)
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    output_types = (
+        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+        jax.ShapeDtypeStruct(dense_reference.shape, jnp.float32),
+    )
+    fused_data, fused_weight, dense_denominator = jax.ffi.ffi_call(
+        _TARGET_RELION_VDAM_MSTEP_FUSED_X_HALF,
+        output_types,
+        input_output_aliases={7: 0, 8: 1},
+        vmap_method="sequential",
+    )(
+        dense_images,
+        dense_ctf,
+        dense_minvsigma2,
+        posterior_over_weight_norm,
+        translation_angles,
+        dense_reference,
+        rot6,
+        data_volume,
+        weight_volume,
+        image_h=np.int64(current_h),
+        image_w=np.int64(current_w),
+        N0=kw["N0"],
+        N1=kw["N1"],
+        N2=kw["N2"],
+        upsampling=kw["upsampling"],
+        max_r2_x4=kw["max_r2_x4"],
+    )
+    full_h, full_w = map(int, image_shape)
+    full_half_w = full_w // 2 + 1
+    full_rows = pixel_indices // full_half_w
+    columns = pixel_indices % full_half_w
+    signed_rows = jnp.where(full_rows <= full_h // 2, full_rows, full_rows - full_h)
+    current_indices = jnp.mod(signed_rows, current_h) * current_w + columns
+    compact_denominator = jnp.take(dense_denominator, current_indices, axis=-1)
+    return fused_data, fused_weight, compact_denominator
 
 
 def _validate_relion_fine_diff2_inputs(

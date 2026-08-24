@@ -1657,7 +1657,69 @@ def run_local_bucket_big_jit(
         sequential_translation_reduction=relion_sequential_mstep_reduction,
         scores_override=direct_scores,
     )
-    if mstep_subtract_ctf_projection:
+    source_ordered_vdam_mstep = bool(
+        relion_sequential_mstep_reduction
+        and mstep_subtract_ctf_projection
+        and relion_exact_bpref_operands
+        and use_relion_cuda_preprocess
+        and not apply_fourier_pre_shift
+        and relion_score_translation_angles is not None
+    )
+    source_ordered_vdam_scattered = bool(
+        source_ordered_vdam_mstep
+        and not return_mstep_tensors
+        and not disable_adjoint_y
+        and not disable_adjoint_ctf
+    )
+    if source_ordered_vdam_mstep:
+        from recovar import cuda_backproject
+
+        bpref_pixel_indices = (
+            recon_window_indices
+            if use_window
+            else jnp.arange(processed_recon_half.shape[1], dtype=jnp.int32)
+        )
+        bpref_ctf = (
+            ctf_half[:, bpref_pixel_indices] * batch_scale[:, None]
+        ).astype(jnp.float32)
+        bpref_minvsigma2 = jnp.broadcast_to(
+            inverse_noise_half[bpref_pixel_indices][None, :],
+            bpref_ctf.shape,
+        )
+        if source_ordered_vdam_scattered:
+            Ft_y, Ft_ctf, ctf_probs = cuda_backproject.relion_vdam_mstep_fused_x_half(
+                Ft_y,
+                Ft_ctf,
+                jnp.asarray(
+                    processed_recon_half[:, bpref_pixel_indices],
+                    dtype=jnp.complex64,
+                ),
+                bpref_ctf,
+                jnp.asarray(bpref_minvsigma2, dtype=jnp.float32),
+                jnp.asarray(reconstruction_probs, dtype=jnp.float32),
+                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                jnp.asarray(mstep_recon_window_indices, dtype=jnp.int32),
+                jnp.asarray(proj_for_noise, dtype=jnp.complex64),
+                jnp.asarray(local_mstep_rotations, dtype=jnp.float32),
+                image_shape,
+                recon_volume_shape,
+                float(mstep_max_r),
+            )
+        else:
+            summed, ctf_probs = cuda_backproject.relion_vdam_mstep_sums_f32(
+                jnp.asarray(
+                    processed_recon_half[:, bpref_pixel_indices],
+                    dtype=jnp.complex64,
+                ),
+                bpref_ctf,
+                jnp.asarray(bpref_minvsigma2, dtype=jnp.float32),
+                jnp.asarray(reconstruction_probs, dtype=jnp.float32),
+                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                jnp.asarray(bpref_pixel_indices, dtype=jnp.int32),
+                jnp.asarray(proj_for_noise, dtype=jnp.complex64),
+                image_shape,
+            )
+    elif mstep_subtract_ctf_projection:
         # RELION's VDAM/--grad storeWeightedSums backprojects
         # (Fimg_shift_nomask - Frefctf) * CTF / sigma2.
         frefctf_weighted = proj_for_noise * ctf2_over_nv_recon[:, None, :]
@@ -1668,24 +1730,25 @@ def run_local_bucket_big_jit(
         )
         summed = summed - frefctf_delta
 
-    flat_summed = summed.reshape(batch_size * local_rotations.shape[1], summed.shape[-1])
     flat_ctf_probs = ctf_probs.reshape(batch_size * local_rotations.shape[1], ctf_probs.shape[-1])
-    Ft_y, Ft_ctf = _adjoint_local_mstep_volumes(
-        flat_summed,
-        flat_ctf_probs,
-        mstep_recon_window_indices,
-        flat_mstep_rotations,
-        Ft_y,
-        Ft_ctf,
-        image_shape,
-        recon_volume_shape,
-        disc_type,
-        use_window=use_window,
-        max_r=mstep_max_r,
-        disable_adjoint_y=disable_adjoint_y,
-        disable_adjoint_ctf=disable_adjoint_ctf,
-        relion_x_half_mstep=mstep_relion_x_half,
-    )
+    if not source_ordered_vdam_scattered:
+        flat_summed = summed.reshape(batch_size * local_rotations.shape[1], summed.shape[-1])
+        Ft_y, Ft_ctf = _adjoint_local_mstep_volumes(
+            flat_summed,
+            flat_ctf_probs,
+            mstep_recon_window_indices,
+            flat_mstep_rotations,
+            Ft_y,
+            Ft_ctf,
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            use_window=use_window,
+            max_r=mstep_max_r,
+            disable_adjoint_y=disable_adjoint_y,
+            disable_adjoint_ctf=disable_adjoint_ctf,
+            relion_x_half_mstep=mstep_relion_x_half,
+        )
 
     bucket_norm_correction = jnp.zeros((batch_size,), dtype=jnp.float32)
     debug_wavg_cutoff_triplet = jnp.zeros((1, 3), dtype=jnp.float64)
