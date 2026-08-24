@@ -78,17 +78,48 @@ rg -q "_rlnSamplingPerturbInstance[[:space:]]+${TARGET_RELION_PERTURBATION}" \
   --recovar-dir "${REFERENCE_RELION_DIR}" --relion-dir "${NATIVE_ROOT}/relion" \
   --iterations "${TARGET_ITERATION}" \
   --output "${PROVENANCE}/native_replay_state_audit.json"
-"${PIXI_PY}" - "${PROVENANCE}/native_replay_state_audit.json" <<'PY'
+"${PIXI_PY}" - "${PROVENANCE}/native_replay_state_audit.json" \
+  "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star" \
+  "${NATIVE_ROOT}/relion/run_it${iteration_tag}_data.star" \
+  "${TARGET_STACK_INDEX}" <<'PY'
 import json
 import sys
 from pathlib import Path
+
+import starfile
 
 report = json.loads(Path(sys.argv[1]).read_text())
 row = report["iterations"][0]
 if int(row["divergent_particle_count"]) != 0:
     raise SystemExit("forced native continuation did not reproduce the sealed particle states")
-if float(row["pmax_absolute_error"]["max"]) > 5.0e-4:
-    raise SystemExit("forced native continuation Pmax differs from the sealed trajectory")
+
+
+def particles(path):
+    value = starfile.read(path)
+    return value["particles"] if isinstance(value, dict) else value
+
+
+reference = particles(sys.argv[2])
+replay = particles(sys.argv[3])
+image_prefix = f"{int(sys.argv[4])}@"
+name_column = "rlnImageName"
+pmax_column = "rlnMaxValueProbDistribution"
+reference_row = reference[reference[name_column].astype(str).str.startswith(image_prefix)]
+replay_row = replay[replay[name_column].astype(str).str.startswith(image_prefix)]
+if len(reference_row) != 1 or len(replay_row) != 1:
+    raise SystemExit("target stack identity is not unique in native replay audit")
+reference_pmax = float(reference_row.iloc[0][pmax_column])
+replay_pmax = float(replay_row.iloc[0][pmax_column])
+target_error = abs(replay_pmax - reference_pmax)
+report["target_pmax"] = {
+    "image_name": str(reference_row.iloc[0][name_column]),
+    "reference": reference_pmax,
+    "replay": replay_pmax,
+    "absolute_error": target_error,
+}
+Path(sys.argv[1]).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+if target_error > 5.0e-4:
+    raise SystemExit("forced native continuation target Pmax differs from the sealed trajectory")
 PY
 
 gpu_uuid_after_relion=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
