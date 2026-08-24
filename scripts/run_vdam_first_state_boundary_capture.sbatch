@@ -28,7 +28,9 @@ TARGET_ITERATION=${TARGET_ITERATION:-33}
 TARGET_ORIGINAL_INDEX=${TARGET_ORIGINAL_INDEX:-1002}
 TARGET_RELION_PART_ID=${TARGET_RELION_PART_ID:-6}
 TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-1003}
+TARGET_RELION_PERTURBATION=${TARGET_RELION_PERTURBATION:-0.322510}
 RELION_BINARY=${RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
+REFERENCE_RELION_DIR=${REFERENCE_RELION_DIR:-$(dirname "${RELION_OPTIMISER}")}
 NATIVE_ROOT=${OUTPUT_ROOT}/native_continuation
 RECOVAR_ROOT=${OUTPUT_ROOT}/recovar_prefix
 RECOVAR_CAPTURE=${OUTPUT_ROOT}/recovar_fused
@@ -40,6 +42,9 @@ RELION_BIND_BINARY=${REPO_ROOT}/recovar/relion_bind/_relion_bind_core.cpython-31
 test -f "${OUTPUT_ROOT}/SAFE_TO_DELETE"
 test -s "${DATA_DIR}/particles.star"
 test -s "${RELION_OPTIMISER}"
+iteration_tag=$(printf '%03d' "${TARGET_ITERATION}")
+test -s "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star"
+test -s "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_sampling.star"
 test -x "${RELION_BINARY}"
 test -x "${PIXI_PY}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
@@ -60,8 +65,28 @@ VDAM_RELION_CONT_ITERATION=${TARGET_ITERATION} \
 VDAM_RELION_CONT_PART_ID=${TARGET_RELION_PART_ID} \
 VDAM_RELION_CONT_STACK_INDEX=${TARGET_STACK_INDEX} \
 VDAM_RELION_CONT_CAPTURE=1 \
+VDAM_RELION_CONT_PERTURBATION=${TARGET_RELION_PERTURBATION} \
 VDAM_RELION_BINARY=${RELION_BINARY} \
 bash "${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch"
+
+rg -q "_rlnSamplingPerturbInstance[[:space:]]+${TARGET_RELION_PERTURBATION}" \
+  "${NATIVE_ROOT}/relion/run_it${iteration_tag}_sampling.star"
+"${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_particle_state_trajectory.py" \
+  --recovar-dir "${REFERENCE_RELION_DIR}" --relion-dir "${NATIVE_ROOT}/relion" \
+  --iterations "${TARGET_ITERATION}" \
+  --output "${PROVENANCE}/native_replay_state_audit.json"
+"${PIXI_PY}" - "${PROVENANCE}/native_replay_state_audit.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(Path(sys.argv[1]).read_text())
+row = report["iterations"][0]
+if int(row["divergent_particle_count"]) != 0:
+    raise SystemExit("forced native continuation did not reproduce the sealed particle states")
+if float(row["pmax_absolute_error"]["max"]) > 5.0e-4:
+    raise SystemExit("forced native continuation Pmax differs from the sealed trajectory")
+PY
 
 gpu_uuid_after_relion=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 test "${gpu_uuid_after_relion}" = "${gpu_uuid_before}"
@@ -110,7 +135,9 @@ printf '%q ' "${COMMAND[@]}" > "${PROVENANCE}/recovar_command.sh"
 printf '\n' >> "${PROVENANCE}/recovar_command.sh"
 sha256sum "${REPO_ROOT}/scripts/run_vdam_first_state_boundary_capture.sbatch" \
   "${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch" \
-  "${DATA_DIR}/particles.star" "${RELION_OPTIMISER}" "${CUDA_BINARY}" \
+  "${DATA_DIR}/particles.star" "${RELION_OPTIMISER}" \
+  "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star" \
+  "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_sampling.star" "${CUDA_BINARY}" \
   "${RELION_BIND_BINARY}" "${RELION_BINARY}" > "${PROVENANCE}/static_inputs.sha256"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 
@@ -121,7 +148,6 @@ start_epoch=$(date +%s)
 ) > "${RECOVAR_ROOT}/runner.stdout" 2> "${RECOVAR_ROOT}/runner.stderr"
 wall_s=$(( $(date +%s) - start_epoch ))
 
-iteration_tag=$(printf '%03d' "${TARGET_ITERATION}")
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_class001.mrc"
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_data.star"
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_model.star"
