@@ -248,6 +248,16 @@ _BPREF_CONTRIBUTION_STOP_AFTER_TARGET_ENV = (
 _BPREF_MEMBERSHIP_DUMP_DIR_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR"
 _BPREF_MEMBERSHIP_DUMP_ITERATION_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_ITERATION"
 _BPREF_MEMBERSHIP_DUMP_HALF_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_HALF"
+_BPREF_ACCUMULATOR_DELTA_DUMP_DIR_ENV = "RECOVAR_BPREF_ACCUMULATOR_DELTA_DUMP_DIR"
+_BPREF_ACCUMULATOR_DELTA_ORIGINAL_INDICES_ENV = (
+    "RECOVAR_BPREF_ACCUMULATOR_DELTA_ORIGINAL_INDICES"
+)
+_BPREF_ACCUMULATOR_DELTA_ITERATION_ENV = "RECOVAR_BPREF_ACCUMULATOR_DELTA_ITERATION"
+_BPREF_ACCUMULATOR_DELTA_HALF_ENV = "RECOVAR_BPREF_ACCUMULATOR_DELTA_HALF"
+_BPREF_ACCUMULATOR_DELTA_MAX_PARTICLES_ENV = (
+    "RECOVAR_BPREF_ACCUMULATOR_DELTA_MAX_PARTICLES"
+)
+_BPREF_ACCUMULATOR_DELTA_MAX_BYTES_ENV = "RECOVAR_BPREF_ACCUMULATOR_DELTA_MAX_BYTES"
 _BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV = "RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE"
 _BPREF_REVERSE_PHYSICAL_ORDER_ENV = "RECOVAR_K1_BPREF_REVERSE_PHYSICAL_ORDER"
 _BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV = "RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE"
@@ -5397,6 +5407,151 @@ def _require_bpref_device_soft_particle_arm(*, use_relion_x_half_mstep: bool) ->
         )
 
 
+def _bpref_accumulator_delta_config() -> dict[str, object] | None:
+    """Resolve a bounded, source-row-scoped production accumulator capture."""
+
+    raw_directory = os.environ.get(_BPREF_ACCUMULATOR_DELTA_DUMP_DIR_ENV, "").strip()
+    if not raw_directory:
+        return None
+    directory = Path(raw_directory).expanduser()
+    if not directory.is_absolute() or not directory.is_dir():
+        raise ValueError(
+            f"{_BPREF_ACCUMULATOR_DELTA_DUMP_DIR_ENV} must name an existing absolute directory"
+        )
+    original_indices = parse_env_int_set(
+        _BPREF_ACCUMULATOR_DELTA_ORIGINAL_INDICES_ENV
+    )
+    if not original_indices or min(original_indices) < 0:
+        raise ValueError(
+            f"{_BPREF_ACCUMULATOR_DELTA_ORIGINAL_INDICES_ENV} must contain "
+            "explicit nonnegative source-row indices"
+        )
+    iteration = _optional_positive_int_env(_BPREF_ACCUMULATOR_DELTA_ITERATION_ENV)
+    half = _optional_positive_int_env(_BPREF_ACCUMULATOR_DELTA_HALF_ENV)
+    max_particles = _optional_positive_int_env(
+        _BPREF_ACCUMULATOR_DELTA_MAX_PARTICLES_ENV
+    )
+    max_bytes = _optional_positive_int_env(_BPREF_ACCUMULATOR_DELTA_MAX_BYTES_ENV)
+    if iteration is None or half not in {1, 2}:
+        raise ValueError(
+            "BPref accumulator-delta capture requires a positive iteration and half 1 or 2"
+        )
+    if max_particles is None or max_bytes is None:
+        raise ValueError(
+            "BPref accumulator-delta capture requires explicit positive particle and byte caps"
+        )
+    if len(original_indices) > max_particles:
+        raise ValueError(
+            "BPref accumulator-delta target count exceeds its explicit particle cap"
+        )
+    return {
+        "directory": directory,
+        "original_indices": frozenset(int(value) for value in original_indices),
+        "iteration": int(iteration),
+        "half": int(half),
+        "max_particles": int(max_particles),
+        "max_bytes": int(max_bytes),
+    }
+
+
+def _write_bpref_accumulator_delta_v1(
+    *,
+    config: dict[str, object],
+    original_index: int,
+    particle_launch_ordinal: int,
+    particle_rotation_count: int,
+    before_data: np.ndarray,
+    before_weight: np.ndarray,
+    after_data: np.ndarray,
+    after_weight: np.ndarray,
+    isolated_data: np.ndarray,
+    isolated_weight: np.ndarray,
+    isolated_layout: str,
+    volume_shape,
+    max_r: float | None,
+) -> Path:
+    """Atomically write one production boundary and its zero-prefix replay."""
+
+    before_data = np.asarray(before_data)
+    before_weight = np.asarray(before_weight)
+    after_data = np.asarray(after_data)
+    after_weight = np.asarray(after_weight)
+    isolated_data = np.asarray(isolated_data)
+    isolated_weight = np.asarray(isolated_weight)
+    if not all(
+        array.dtype == np.complex64
+        for array in (before_data, after_data, isolated_data)
+    ):
+        raise RuntimeError("BPref accumulator-delta data arrays must be complex64")
+    if not all(
+        array.dtype == np.float32
+        for array in (before_weight, after_weight, isolated_weight)
+    ):
+        raise RuntimeError("BPref accumulator-delta weight arrays must be float32")
+    if not (
+        before_data.shape
+        == after_data.shape
+        == isolated_data.shape
+        == before_weight.shape
+        == after_weight.shape
+        == isolated_weight.shape
+    ):
+        raise RuntimeError("BPref accumulator-delta stage shapes are inconsistent")
+    artifact_bytes = int(
+        before_data.nbytes
+        + before_weight.nbytes
+        + after_data.nbytes
+        + after_weight.nbytes
+        + isolated_data.nbytes
+        + isolated_weight.nbytes
+    )
+    if artifact_bytes * int(config["max_particles"]) > int(config["max_bytes"]):
+        raise RuntimeError(
+            "BPref accumulator-delta runtime shape exceeds its explicit byte cap"
+        )
+
+    iteration = int(config["iteration"])
+    half = int(config["half"])
+    path = Path(config["directory"]) / (
+        f"bpref_accumulator_delta_it{iteration:03d}_h{half}_orig{int(original_index):06d}.npz"
+    )
+    temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    if path.exists() or temporary.exists():
+        raise RuntimeError(
+            f"BPref accumulator-delta capture refuses to overwrite {path}"
+        )
+    image_identity = _bpref_image_identities_for_original_indices(
+        np.asarray([original_index], dtype=np.int64)
+    )[0]
+    with temporary.open("xb") as handle:
+        np.savez(
+            handle,
+            schema=np.asarray("recovar-bpref-accumulator-delta-v2"),
+            iteration=np.int64(iteration),
+            half=np.int64(half),
+            original_index=np.int64(original_index),
+            stack_index_1based=np.int64(original_index + 1),
+            image_identity=np.asarray(image_identity),
+            particle_launch_ordinal=np.int64(particle_launch_ordinal),
+            particle_rotation_count=np.int64(particle_rotation_count),
+            volume_shape=np.asarray(volume_shape, dtype=np.int64),
+            flat_accumulator_size=np.int64(before_data.size),
+            max_r=np.float64(np.nan if max_r is None else max_r),
+            data_dtype=np.asarray("complex64"),
+            weight_dtype=np.asarray("float32"),
+            isolated_layout=np.asarray(isolated_layout),
+            layout=np.asarray("RELION x-half flat C order before public-layout conversion"),
+            before_data=before_data,
+            before_weight=before_weight,
+            after_data=after_data,
+            after_weight=after_weight,
+            isolated_data=isolated_data,
+            isolated_weight=isolated_weight,
+        )
+    os.replace(temporary, path)
+    return path
+
+
 def _accumulate_relion_x_half_per_particle_launches(
     values,
     ctf_values,
@@ -5412,6 +5567,7 @@ def _accumulate_relion_x_half_per_particle_launches(
     half_volume,
     max_r,
     log_label_prefix: str,
+    particle_original_indices=None,
     winner_take_all: bool = False,
     strict_particle_order: bool = False,
 ):
@@ -5484,6 +5640,31 @@ def _accumulate_relion_x_half_per_particle_launches(
     particle_pool_size = (
         _optional_positive_int_env(_RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV) or 1
     )
+    delta_config = _bpref_accumulator_delta_config()
+    if delta_config is not None:
+        context_iteration = int(_bpref_contribution_context["iteration"])
+        context_half = int(_bpref_contribution_context["half"])
+        if (
+            context_iteration != int(delta_config["iteration"])
+            or context_half != int(delta_config["half"])
+        ):
+            delta_config = None
+        elif particle_pool_size != 1:
+            raise RuntimeError(
+                "BPref accumulator-delta capture requires one production particle per launch"
+            )
+        elif particle_original_indices is None:
+            raise RuntimeError(
+                "BPref accumulator-delta capture requires immutable source-row identities"
+            )
+    if particle_original_indices is not None:
+        particle_original_indices = np.asarray(
+            particle_original_indices, dtype=np.int64
+        ).reshape(-1)
+        if particle_original_indices.shape != actual_counts.shape:
+            raise ValueError(
+                "per-particle x-half source identity shape does not match particle rows"
+            )
     if particle_pool_size > 1:
         if not (winner_take_all and strict_particle_order and use_fused_atomics):
             raise RuntimeError(
@@ -5531,6 +5712,14 @@ def _accumulate_relion_x_half_per_particle_launches(
         particle_values = jnp.concatenate(value_rows, axis=0)
         particle_ctf_values = jnp.concatenate(ctf_rows, axis=0)
         particle_rotations = jnp.concatenate(rotation_rows, axis=0)
+        capture_original_index = None
+        before_data = None
+        before_weight = None
+        if delta_config is not None:
+            capture_original_index = int(particle_original_indices[pool_start])
+            if capture_original_index in delta_config["original_indices"]:
+                before_data = np.asarray(y_volume).copy()
+                before_weight = np.asarray(ctf_volume).copy()
         if use_fused_atomics:
             if disc_type != "linear_interp" or not half_volume:
                 raise RuntimeError(
@@ -5573,6 +5762,68 @@ def _accumulate_relion_x_half_per_particle_launches(
                 half_volume,
                 max_r,
                 True,
+            )
+        if before_data is not None:
+            # Match the native diagnostic's independent zeroed shadow
+            # accumulator. Subtracting production before/after arrays also
+            # includes prefix-dependent float32 rounding and cancellation.
+            if use_fused_atomics:
+                isolated_data, isolated_weight = (
+                    cuda_backproject.relion_fused_x_half_backproject_indexed(
+                        jnp.zeros_like(y_volume),
+                        jnp.zeros_like(ctf_volume),
+                        particle_values,
+                        particle_ctf_values,
+                        window_indices,
+                        particle_rotations,
+                        image_shape=image_shape,
+                        volume_shape=volume_shape,
+                        max_r=max_r,
+                    )
+                )
+                isolated_layout = "RECOVAR interleaved complex64 data plus float32 weight"
+            else:
+                isolated_data = _adjoint_slice_volume_windowed(
+                    particle_values,
+                    window_indices,
+                    particle_rotations,
+                    jnp.zeros_like(y_volume),
+                    image_shape,
+                    volume_shape,
+                    disc_type,
+                    True,
+                    half_volume,
+                    max_r,
+                    True,
+                )
+                isolated_weight = _adjoint_slice_volume_windowed(
+                    particle_ctf_values,
+                    window_indices,
+                    particle_rotations,
+                    jnp.zeros_like(ctf_volume),
+                    image_shape,
+                    volume_shape,
+                    disc_type,
+                    True,
+                    half_volume,
+                    max_r,
+                    True,
+                )
+                isolated_layout = "ordinary RECOVAR adjoint arrays"
+            _write_bpref_accumulator_delta_v1(
+                config=delta_config,
+                original_index=capture_original_index,
+                particle_launch_ordinal=pool_start,
+                particle_rotation_count=int(particle_rotations.shape[0]),
+                before_data=before_data,
+                before_weight=before_weight,
+                after_data=np.asarray(y_volume).copy(),
+                after_weight=np.asarray(ctf_volume).copy(),
+                isolated_data=np.asarray(isolated_data).copy(),
+                isolated_weight=np.asarray(isolated_weight).copy(),
+                isolated_layout=isolated_layout,
+                volume_shape=volume_shape,
+                max_r=max_r,
             )
     return y_volume, ctf_volume
 
@@ -10965,6 +11216,13 @@ def _prepare_bucket_io(
 
     if translation_phases_half is None and not return_windowed_shifted:
         translation_phases_half = half_translation_phase_table(fine_translations, image_shape)
+    # RELION's accelerated transform scales the cuFFT output by 1/N^2 before
+    # its BPref translation kernel.  The kernel then multiplies the translated
+    # image by the raw CTF/noise weight.  Restore RECOVAR's unnormalised output
+    # coordinates only after that multiplication; folding N^2 into the weight
+    # moves the float32 rounding boundary and no longer matches RELION.
+    relion_fft_normalization = np.float32(1.0 / float(np.prod(image_shape)))
+    relion_fft_denormalization = np.float32(np.prod(image_shape))
     if score_only:
         shifted_score_half = None
         shifted_recon_half = None
@@ -11010,12 +11268,19 @@ def _prepare_bucket_io(
                 from recovar import cuda_backproject
 
                 shifted_recon_half = cuda_backproject.relion_translate_bpref_f32(
-                    jnp.asarray(recon_bpref_input_half[:, recon_indices], dtype=jnp.complex64),
-                    jnp.asarray(weighted_ctf_half[:, recon_indices], dtype=jnp.float32),
+                    jnp.asarray(
+                        recon_bpref_input_half[:, recon_indices]
+                        * relion_fft_normalization,
+                        dtype=jnp.complex64,
+                    ),
+                    jnp.asarray(
+                        weighted_ctf_half[:, recon_indices],
+                        dtype=jnp.float32,
+                    ),
                     jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
                     recon_indices,
                     image_shape,
-                )
+                ) * relion_fft_denormalization
             else:
                 shifted_recon_half = apply_half_translation_phases(
                     recon_weighted_half[:, recon_indices],
@@ -11037,12 +11302,18 @@ def _prepare_bucket_io(
                 from recovar import cuda_backproject
 
                 exact_shifted_recon_half = cuda_backproject.relion_translate_bpref_f32(
-                    jnp.asarray(recon_bpref_input_half, dtype=jnp.complex64),
-                    jnp.asarray(weighted_ctf_half, dtype=jnp.float32),
+                    jnp.asarray(
+                        recon_bpref_input_half * relion_fft_normalization,
+                        dtype=jnp.complex64,
+                    ),
+                    jnp.asarray(
+                        weighted_ctf_half,
+                        dtype=jnp.float32,
+                    ),
                     jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
                     jnp.arange(recon_bpref_input_half.shape[1], dtype=jnp.int32),
                     image_shape,
-                )
+                ) * relion_fft_denormalization
             else:
                 exact_shifted_recon_half = None
             shifted_score_half = (
@@ -14738,6 +15009,9 @@ def compute_pass2_stats_sparse_bucketed(
                     max_r=float(mstep_current_size // 2) if use_window else None,
                     winner_take_all=winner_take_all,
                     strict_particle_order=preserve_bpref_particle_order,
+                    particle_original_indices=_original_indices_for_local(
+                        experiment_dataset, image_indices
+                    ),
                     log_label_prefix="single-particle-xhalf",
                 )
 
@@ -16780,17 +17054,12 @@ def compute_k_class_pass2_stats_sparse_fused(
                 current_size=current_size,
             )
         if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
-            if source_faithful_spectrum_norm:
-                relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
-                    processed_score_half_for_noise,
-                    image_shape=image_shape,
-                    current_size=current_size,
-                )
-            else:
-                relion_norm_high_shell = _relion_powerclass_highres_xi2_half_to_norm_units(
-                    relion_highres_xi2_half,
-                    image_shape,
-                )
+            # The source-faithful high-shell norm is deliberately scoped to
+            # fresh K=1.  Preserve the established Class3D normalization path.
+            relion_norm_high_shell = _relion_powerclass_highres_xi2_half_to_norm_units(
+                relion_highres_xi2_half,
+                image_shape,
+            )
         else:
             relion_norm_high_shell = None
         if use_window:

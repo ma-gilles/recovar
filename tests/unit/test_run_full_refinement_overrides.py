@@ -192,6 +192,7 @@ def test_compute_relion_fresh_k1_initial_sigma2_preserves_source_order():
         dataset,
         source_rows=source_rows,
         optics_group_ids=np.asarray([7, 7, 7], dtype=np.int64),
+        image_pixel_size=2.0,
         particle_diameter_ang=8.0,
         width_mask_edge_px=2,
         minimum_nr_particles=2,
@@ -222,9 +223,53 @@ def test_compute_relion_fresh_k1_initial_sigma2_rejects_duplicate_rows():
             dataset,
             source_rows=np.asarray([1, 1], dtype=np.int64),
             optics_group_ids=np.asarray([1, 1], dtype=np.int64),
+            image_pixel_size=2.0,
             particle_diameter_ang=8.0,
             width_mask_edge_px=2,
         )
+
+
+def test_compute_relion_fresh_k1_initial_sigma2_uses_optics_pixel_size():
+    rng = np.random.default_rng(23)
+    images = rng.normal(size=(3, 16, 16)).astype(np.float32)
+    dataset = SimpleNamespace(
+        n_units=images.shape[0],
+        grid_size=16,
+        voxel_size=1.999,
+        image_source=_FakeImageSource(images),
+    )
+    source_rows = np.asarray([0, 1, 2], dtype=np.int64)
+    got = _compute_relion_fresh_k1_initial_sigma2(
+        dataset,
+        source_rows=source_rows,
+        optics_group_ids=np.asarray([1, 1, 1], dtype=np.int64),
+        image_pixel_size=2.0,
+        particle_diameter_ang=12.0,
+        width_mask_edge_px=2,
+        minimum_nr_particles=3,
+    )
+    _average, expected = compute_avg_unaligned_and_sigma2(
+        iter((0, image) for image in images),
+        ori_size=16,
+        pixel_size=2.0,
+        particle_diameter_ang=12.0,
+        width_mask_edge_px=2,
+        do_zero_mask=True,
+        nr_optics_groups=1,
+        minimum_nr_particles=3,
+    )
+    np.testing.assert_array_equal(got, expected)
+    _average, model_pixel_result = compute_avg_unaligned_and_sigma2(
+        iter((0, image) for image in images),
+        ori_size=16,
+        pixel_size=dataset.voxel_size,
+        particle_diameter_ang=12.0,
+        width_mask_edge_px=2,
+        do_zero_mask=True,
+        nr_optics_groups=1,
+        minimum_nr_particles=3,
+    )
+    assert not np.array_equal(got, model_pixel_result)
 
 
 def test_relion_sigma2_to_native_noise_variance_keeps_float32_scoring_dtype():

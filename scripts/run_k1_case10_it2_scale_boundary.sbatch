@@ -42,7 +42,7 @@ DATA=${CASE}/data
 RELION=${CASE}/relion_ref
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
-CUDA_LIB=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_exact_it15_final_20260823T0230ET/cuda/libcuda_backproject.so
+CUDA_LIB=${CUDA_LIB_OVERRIDE:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_exact_it15_final_20260823T0230ET/cuda/libcuda_backproject.so}
 RELION_BIND=${FIXED_ROOT}/relion_bind_build/shared
 LAUNCHER=${REPO}/scripts/run_k1_case10_it2_scale_boundary.sbatch
 OUTPUT=${ROOT}/output
@@ -113,7 +113,9 @@ unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 
 if [[ -n "${CAPTURE_ORIGINAL_INDICES}" ]]; then
     export RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR=${ROOT}/contributions
-    export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=${PHYSICAL_ITER}
+    # The one-step continuation reports START_ITER to the contribution hook;
+    # PHYSICAL_ITER is used only for the saved parity/output iteration tag.
+    export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=${START_ITER}
     # Case 10 firstiter scores at 58 but BPref scatters at model size 56.
     # The hook receives the score size and records the exact M-step radius.
     export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=58
@@ -128,7 +130,9 @@ if [[ "${CAPTURE_RAW_SCORE_OPERANDS}" = 1 ]]; then
     export RECOVAR_PASS2_DUMP_DIR=${ROOT}/pass2
     export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${CAPTURE_ORIGINAL_INDICES}
     export RECOVAR_PASS2_DUMP_CURRENT_SIZE=58
-    export RECOVAR_PASS2_DUMP_ITERATION=${PHYSICAL_ITER}
+    # run_multi_iter_parity exposes the one-step continuation's local loop
+    # index to the pass-2 capture hook; START_ITER is also that local index.
+    export RECOVAR_PASS2_DUMP_ITERATION=${START_ITER}
     export RECOVAR_PASS2_DUMP_CLASS=1
     export RECOVAR_PASS2_DUMP_RAW_OPERANDS=1
     mkdir -p "${RECOVAR_PASS2_DUMP_DIR}"

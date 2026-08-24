@@ -7,6 +7,7 @@ from scripts.analyze_em_k1_native_fine_operands import (
     _full_to_compact,
     _infer_float32_common_addend,
     _tree_sum,
+    _winner_boundary,
 )
 
 pytestmark = pytest.mark.unit
@@ -44,3 +45,29 @@ def test_infer_float32_common_addend_replays_large_costs():
 
     np.testing.assert_array_equal(base + inferred, target)
     assert exact == base.size
+
+
+def test_winner_boundary_reports_opposite_native_and_recovar_preferences():
+    report = _winner_boundary(
+        native_raw_cost=np.asarray([10.0, 9.5]),
+        native_log_prior=np.asarray([0.0, 0.0]),
+        native_probability=np.asarray([0.4, 0.6]),
+        native_significant=np.asarray([False, True]),
+        recovar_preprior_score=np.asarray([-9.4, -9.5]),
+        recovar_log_prior=np.asarray([0.0, 0.0]),
+        recovar_total_score=np.asarray([-9.4, -9.5]),
+        recovar_probability=np.asarray([0.525, 0.475]),
+        recovar_significant=np.asarray([True, False]),
+        recovar_rotation_row=np.asarray([3, 7]),
+        translation_row=np.asarray([107, 110]),
+    )
+
+    assert report["same_winner"] is False
+    assert report["native_winner"]["translation_row"] == 110
+    assert report["recovar_winner"]["translation_row"] == 107
+    assert report["native_top_preprior_score_margin"] == pytest.approx(0.5)
+    assert report["native_top_log_prior_margin"] == pytest.approx(0.0)
+    assert report["recovar_top_preprior_score_margin"] == pytest.approx(0.1)
+    assert report["recovar_top_log_prior_margin"] == pytest.approx(0.0)
+    assert report["native_preference_native_minus_recovar_winner"] == pytest.approx(0.5)
+    assert report["recovar_preference_recovar_minus_native_winner"] == pytest.approx(0.1)

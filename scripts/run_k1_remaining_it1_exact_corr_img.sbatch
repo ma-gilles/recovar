@@ -25,12 +25,30 @@ set -euo pipefail
 
 MAX_ITER=${K1_MAX_ITER:-1}
 SKIP_FINAL=${K1_SKIP_FINAL:-1}
+BPREF_NOISE_OVERRIDE=${BPREF_NOISE_VARIANCE_OVERRIDE_PATH:-}
+PASS2_DUMP_ORIGINAL_INDICES=${K1_PASS2_DUMP_ORIGINAL_INDICES:-}
+BPREF_PARTICLE_POOL_SIZE=${K1_BPREF_PARTICLE_POOL_SIZE:-1}
+BPREF_EXECUTION_ORDER_CHUNK_SIZE=${K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE:-220}
 if [[ "${MAX_ITER}" != 1 && "${MAX_ITER}" != 2 && "${MAX_ITER}" != 999 ]]; then
     echo "K1_MAX_ITER must be 1, 2, or 999" >&2
     exit 2
 fi
 if [[ "${SKIP_FINAL}" != 0 && "${SKIP_FINAL}" != 1 ]]; then
     echo "K1_SKIP_FINAL must be 0 or 1" >&2
+    exit 2
+fi
+if [[ -n "${PASS2_DUMP_ORIGINAL_INDICES}" && "${MAX_ITER}" != 2 ]]; then
+    echo "K1_PASS2_DUMP_ORIGINAL_INDICES requires K1_MAX_ITER=2" >&2
+    exit 2
+fi
+case "${BPREF_PARTICLE_POOL_SIZE}" in
+    ''|*[!0-9]*|0*) echo "K1_BPREF_PARTICLE_POOL_SIZE must be a canonical positive integer" >&2; exit 2 ;;
+esac
+case "${BPREF_EXECUTION_ORDER_CHUNK_SIZE}" in
+    ''|*[!0-9]*|0*) echo "K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE must be a canonical positive integer" >&2; exit 2 ;;
+esac
+if (( BPREF_PARTICLE_POOL_SIZE > 1 )) && [[ "${MAX_ITER}" != 1 ]]; then
+    echo "K1_BPREF_PARTICLE_POOL_SIZE > 1 is qualified only for K1_MAX_ITER=1" >&2
     exit 2
 fi
 
@@ -73,6 +91,11 @@ test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO}" diff --binary -- recovar/em scripts/run_full_refinement.py | sha256sum | awk '{print $1}')" = "${EXPECTED_SOURCE_DIFF_SHA256}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_LIB_SHA256}"
+if [[ -n "${BPREF_NOISE_OVERRIDE}" ]]; then
+    : "${EXPECTED_BPREF_NOISE_SHA256:?BPref noise override must pin its SHA-256}"
+    test "${BPREF_NOISE_OVERRIDE:0:1}" = / -a -s "${BPREF_NOISE_OVERRIDE}"
+    test "$(sha256sum "${BPREF_NOISE_OVERRIDE}" | awk '{print $1}')" = "${EXPECTED_BPREF_NOISE_SHA256}"
+fi
 RELION_BIND_LIB=$(find "${RELION_BIND}" -maxdepth 1 -type f -name '_relion_bind_core*.so' -print -quit)
 test "$(sha256sum "${RELION_BIND_LIB}" | awk '{print $1}')" = 56acdddab6d25bd83aac5e338162c4819f85ec26f68511458618f143c2b604b7
 STACK=$(find -L "${DATA}" -maxdepth 1 -type f -name 'particles.*.mrcs' -print -quit)
@@ -122,7 +145,11 @@ export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
-export RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE=220
+export RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE=${BPREF_EXECUTION_ORDER_CHUNK_SIZE}
+export RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE=${BPREF_PARTICLE_POOL_SIZE}
+if [[ -n "${BPREF_NOISE_OVERRIDE}" ]]; then
+    export RECOVAR_K1_BPREF_NOISE_VARIANCE_OVERRIDE_PATH=${BPREF_NOISE_OVERRIDE}
+fi
 if [[ "${MAX_ITER}" != 1 ]]; then
     export RECOVAR_SAVE_INTERMEDIATES_DIR=1
     export RECOVAR_SAVE_INTERMEDIATES_SKIP_UNREGULARIZED=1
@@ -131,6 +158,19 @@ if [[ "${MAX_ITER}" == 2 ]]; then
     export RECOVAR_PARITY_DUMP_DIR=${ROOT}/parity
     export RECOVAR_PARITY_DUMP_VOLUME_DOWNSAMPLE=8
     mkdir -p "${RECOVAR_PARITY_DUMP_DIR}"
+fi
+if [[ -n "${PASS2_DUMP_ORIGINAL_INDICES}" ]]; then
+    if [[ "${K1_CASE_INDEX}" != 10 ]]; then
+        echo "Focused pass-2 capture is currently qualified only for case 10" >&2
+        exit 2
+    fi
+    export RECOVAR_PASS2_DUMP_DIR=${ROOT}/pass2
+    export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${PASS2_DUMP_ORIGINAL_INDICES}
+    export RECOVAR_PASS2_DUMP_CURRENT_SIZE=58
+    export RECOVAR_PASS2_DUMP_ITERATION=2
+    export RECOVAR_PASS2_DUMP_CLASS=1
+    export RECOVAR_PASS2_DUMP_RAW_OPERANDS=1
+    mkdir -p "${RECOVAR_PASS2_DUMP_DIR}"
 fi
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 
@@ -192,7 +232,33 @@ if [[ "${MAX_ITER}" == 2 ]]; then
     test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_001.npz"
     test -s "${RECOVAR_PARITY_DUMP_DIR}/iter_002.npz"
 fi
+if [[ -n "${PASS2_DUMP_ORIGINAL_INDICES}" ]]; then
+    "${PYTHON}" - "${RECOVAR_PASS2_DUMP_DIR}" \
+        "${PASS2_DUMP_ORIGINAL_INDICES}" <<'PY'
+import sys
+from pathlib import Path
+
+import numpy as np
+
+root = Path(sys.argv[1])
+expected = {int(value) for value in sys.argv[2].split(",") if value}
+observed = set()
+for path in sorted(root.glob("pass2_orig*_cs058.npz")):
+    with np.load(path, allow_pickle=False) as archive:
+        if "raw_operand_schema" not in archive:
+            raise RuntimeError(f"raw score operands missing from {path}")
+        observed.add(int(archive["original_index"]))
+if observed != expected:
+    raise RuntimeError(
+        f"raw-score source rows {sorted(observed)} != expected {sorted(expected)}"
+    )
+PY
+fi
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
+if [[ -n "${PASS2_DUMP_ORIGINAL_INDICES}" ]]; then
+    find "${RECOVAR_PASS2_DUMP_DIR}" -type f -print0 \
+        | sort -z | xargs -0 sha256sum >> "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
+fi
 printf '{"job_id":"%s","wall_s":%d,"case_index":%d,"max_iter":%d,"skip_final":%d}\n' \
     "${SLURM_JOB_ID}" "${wall_s}" "${K1_CASE_INDEX}" "${MAX_ITER}" "${SKIP_FINAL}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"

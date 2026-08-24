@@ -15,7 +15,14 @@ set -euo pipefail
 
 : "${RUN_ROOT:?RUN_ROOT is required}"
 : "${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
+: "${EXPECTED_REPO_HEAD:?EXPECTED_REPO_HEAD is required}"
 : "${EXPECTED_LAUNCHER_SHA256:?EXPECTED_LAUNCHER_SHA256 is required}"
+
+TARGET_SOURCE_ROW=${K1_NATIVE_TARGET_SOURCE_ROW:-12334}
+case "${TARGET_SOURCE_ROW}" in
+  ''|*[!0-9]*) echo "K1_NATIVE_TARGET_SOURCE_ROW must be a non-negative integer" >&2; exit 2 ;;
+esac
+TARGET_STACK_INDEX=$((TARGET_SOURCE_ROW + 1))
 
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820
 CASE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0
@@ -28,7 +35,7 @@ CAPTURE=${RUN_ROOT}/capture
 OUT=${RUN_ROOT}/relion
 
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
-test "$(git -C "${REPO}" rev-parse HEAD)" = 223e28fd5339eb037250e78384e52652d406fcf1
+test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(sha256sum "${BINARY}" | awk '{print $1}')" = a9a961340af621d1cd581ccea2e96274f978b53213f9606c9f0e30d271903b8c
 test "$(sha256sum "${CASE}/data/particles.star" | awk '{print $1}')" = 3be82df3627e0d6c3c12d1eb42e1ab0c7feb09117bb66a38cc53c0621e9f8436
@@ -61,7 +68,7 @@ case "${GPU_NAME}" in *H100*) ;; *) echo "Expected H100, got ${GPU_NAME}" >&2; e
 nvidia-smi -q > "${RUN_ROOT}/provenance/nvidia_smi_${SLURM_JOB_ID}.txt"
 
 export RELION_ACC_DUMP_DIR=${CAPTURE}
-export RELION_ACC_DUMP_STACK_INDEX=12335
+export RELION_ACC_DUMP_STACK_INDEX=${TARGET_STACK_INDEX}
 export RELION_ACC_DUMP_ITER=2
 export RELION_ACC_DUMP_VERBOSE=1
 export RELION_ACC_DUMP_CC_COMPONENTS=1
@@ -115,6 +122,7 @@ PY
 
 find "${CAPTURE}" "${OUT}" "${RUN_ROOT}/analysis" -type f -print0 | sort -z | xargs -0 sha256sum \
   > "${RUN_ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
-printf '{"job_id":"%s","wall_s":%d,"fresh_iterations":[1,2],"stack_index_one_based":12335,"binary_sha256":"a9a961340af621d1cd581ccea2e96274f978b53213f9606c9f0e30d271903b8c"}\n' \
-  "${SLURM_JOB_ID}" "${wall_s}" > "${RUN_ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
+printf '{"job_id":"%s","wall_s":%d,"fresh_iterations":[1,2],"source_row_zero_based":%d,"stack_index_one_based":%d,"binary_sha256":"a9a961340af621d1cd581ccea2e96274f978b53213f9606c9f0e30d271903b8c"}\n' \
+  "${SLURM_JOB_ID}" "${wall_s}" "${TARGET_SOURCE_ROW}" "${TARGET_STACK_INDEX}" \
+  > "${RUN_ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${RUN_ROOT}/SUCCESS_${SLURM_JOB_ID}"

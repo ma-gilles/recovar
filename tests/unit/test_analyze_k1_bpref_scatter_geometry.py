@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import numpy as np
 
-from scripts.analyze_k1_bpref_scatter_geometry import _fma_rn_f32, _mul_rn_f32
+from types import SimpleNamespace
+
+import pytest
+
+from scripts.analyze_k1_bpref_scatter_geometry import (
+    _factor_runtime_geometry,
+    _fma_rn_f32,
+    _mul_rn_f32,
+)
 
 
 def _bits(value) -> int:
@@ -49,3 +57,28 @@ def test_coordinate_oracle_preserves_vector_shape_and_float32_dtype():
             dtype=np.float32,
         ),
     )
+
+
+def test_factor_runtime_geometry_supports_case10_score_and_bpref_sizes():
+    header = [0] * 64
+    header[16:19] = [30, 58, 1]
+    header[22] = 28
+    header[37:40] = [58, 115, 115]
+
+    current_size, accumulator_shape, max_r = _factor_runtime_geometry(
+        SimpleNamespace(header=tuple(header))
+    )
+
+    assert current_size == 58
+    assert accumulator_shape == (115, 115, 115)
+    assert max_r == 28.0
+
+
+def test_factor_runtime_geometry_rejects_non_cubic_half_layout():
+    header = [0] * 64
+    header[16:19] = [30, 58, 1]
+    header[22] = 28
+    header[37:40] = [58, 115, 113]
+
+    with pytest.raises(ValueError, match="cubic x-half accumulator"):
+        _factor_runtime_geometry(SimpleNamespace(header=tuple(header)))

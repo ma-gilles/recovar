@@ -64,13 +64,31 @@ def _winner(scores: np.ndarray, candidate_mask: np.ndarray) -> list[int]:
     return [int(value) for value in np.unravel_index(int(np.argmax(masked)), values.shape)]
 
 
-def analyze(*, control_path: Path, candidate_path: Path) -> dict[str, object]:
+def analyze(
+    *,
+    control_path: Path,
+    candidate_path: Path,
+    allow_iteration_mismatch: bool = False,
+) -> dict[str, object]:
     with np.load(control_path, allow_pickle=False) as control, np.load(
         candidate_path,
         allow_pickle=False,
     ) as candidate:
-        for scalar in ("iteration", "half", "original_index", "current_size", "n_fine_trans"):
-            if _scalar(control, scalar) != _scalar(candidate, scalar):
+        scalar_names = ("iteration", "half", "original_index", "current_size", "n_fine_trans")
+        scalar_context = {
+            scalar: {
+                "control": _scalar(control, scalar),
+                "candidate": _scalar(candidate, scalar),
+            }
+            for scalar in scalar_names
+        }
+        for scalar in scalar_names:
+            if (
+                scalar == "iteration"
+                and allow_iteration_mismatch
+            ):
+                continue
+            if scalar_context[scalar]["control"] != scalar_context[scalar]["candidate"]:
                 raise ValueError(f"capture scalar {scalar} differs")
         missing = [
             field
@@ -118,6 +136,8 @@ def analyze(*, control_path: Path, candidate_path: Path) -> dict[str, object]:
         "schema": "recovar.em.k1_fine_capture_ab.v1",
         "status": "complete",
         "metric_policy": "exact ordered intermediates and relative L2; no correlation",
+        "scalar_context": scalar_context,
+        "iteration_mismatch_allowed": bool(allow_iteration_mismatch),
         "first_non_bit_exact_field": first_unequal,
         "summary": summary,
         "fields": fields,
@@ -134,11 +154,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--control", type=Path, required=True)
     parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument(
+        "--allow-iteration-mismatch",
+        action="store_true",
+        help=(
+            "Compare a fresh and continuation capture of the same physical boundary "
+            "even when their local iteration labels differ"
+        ),
+    )
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     if args.output_json.exists():
         raise FileExistsError(f"refusing to overwrite {args.output_json}")
-    report = analyze(control_path=args.control, candidate_path=args.candidate)
+    report = analyze(
+        control_path=args.control,
+        candidate_path=args.candidate,
+        allow_iteration_mismatch=args.allow_iteration_mismatch,
+    )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
     args.output_json.write_text(encoded)

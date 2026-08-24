@@ -241,6 +241,7 @@ def _compare_particle(
     centered = np.asarray(pass2["recon_window_indices"], dtype=np.int32)
     standard = np.asarray(contribution["window_indices"], dtype=np.int32)
     coordinates = _pixel_coordinates(centered, image_size)
+    coordinates_array = np.asarray(coordinates, dtype=np.int64)
     half_width = image_size // 2 + 1
     standard_rows = standard // half_width
     standard_coordinates = np.column_stack(
@@ -254,7 +255,7 @@ def _compare_particle(
         )
     )
     _require(
-        np.array_equal(np.asarray(coordinates, dtype=np.int64), standard_coordinates),
+        np.array_equal(coordinates_array, standard_coordinates),
         f"stack {stack}: pass-2/contribution physical Fourier window changed",
     )
     native_lookup = {
@@ -393,7 +394,7 @@ def _compare_particle(
     ).astype(np.complex64)
     rel_denominator = (terms["weight_term"] / n4).astype(np.float32)
 
-    shells = np.rint(np.linalg.norm(coordinates, axis=1)).astype(np.int64)
+    shells = np.rint(np.linalg.norm(coordinates_array, axis=1)).astype(np.int64)
     _require(int(shells.max(initial=0)) < live_initial_sigma2.size, "noise shell is out of range")
     native_inverse_noise_replay = (
         np.float64(1.0) / live_initial_sigma2[shells]
@@ -405,8 +406,10 @@ def _compare_particle(
     native_replay_weighted_ctf = (
         -native_ctf_replay * native_inverse_noise_replay / n4
     ).astype(np.float32)
+    # RELION's BPref kernel evaluates weight*CTF*CTF from left to right in
+    # float32.  Squaring CTF first changes hundreds of pixels by one ULP.
     native_replay_denominator = (
-        native_ctf_replay**2 * native_inverse_noise_replay / n4
+        (native_inverse_noise_replay * native_ctf_replay) * native_ctf_replay / n4
     ).astype(np.float32)
     from recovar import cuda_backproject
 
@@ -423,6 +426,91 @@ def _compare_particle(
     cuda_translated_replay = np.asarray(jax.block_until_ready(cuda_translated_all))[
         rec_translation
     ].astype(np.complex64)
+    native_translation_angles = np.stack(
+        (factor.translations["x"], factor.translations["y"]),
+        axis=1,
+    ).astype(np.float32)
+    cuda_native_angle_translated_all = cuda_backproject.relion_translate_score_f32(
+        jnp.asarray(rec_processed[None, :], dtype=jnp.complex64),
+        jnp.asarray(native_translation_angles, dtype=jnp.float32),
+        jnp.asarray(centered, dtype=jnp.int32),
+        (image_size, image_size),
+    )
+    cuda_native_angle_translated_replay = np.asarray(
+        jax.block_until_ready(cuda_native_angle_translated_all)
+    )[int(accepted["translation"])].astype(np.complex64)
+    relion_normalized_rec_processed = (
+        rec_processed * np.float32(1.0 / float(image_size**2))
+    ).astype(np.complex64)
+    relion_normalized_native_angle_translated_all = (
+        cuda_backproject.relion_translate_score_f32(
+            jnp.asarray(relion_normalized_rec_processed[None, :], dtype=jnp.complex64),
+            jnp.asarray(native_translation_angles, dtype=jnp.float32),
+            jnp.asarray(centered, dtype=jnp.int32),
+            (image_size, image_size),
+        )
+    )
+    relion_normalized_native_angle_translated_replay = (
+        np.asarray(
+            jax.block_until_ready(relion_normalized_native_angle_translated_all)
+        )[int(accepted["translation"])].astype(np.complex64)
+        * n2
+    )
+    relion_normalized_native_weight_bpref_all = (
+        cuda_backproject.relion_translate_bpref_f32(
+            jnp.asarray(relion_normalized_rec_processed[None, :], dtype=jnp.complex64),
+            jnp.asarray((rel_weighted_ctf * n2)[None, :], dtype=jnp.float32),
+            jnp.asarray(native_translation_angles, dtype=jnp.float32),
+            jnp.asarray(centered, dtype=jnp.int32),
+            (image_size, image_size),
+        )
+    )
+    relion_normalized_native_weight_bpref_replay = np.asarray(
+        jax.block_until_ready(relion_normalized_native_weight_bpref_all)
+    )[int(accepted["translation"])].astype(np.complex64)
+    native_raw_weight_bpref_all = cuda_backproject.relion_translate_bpref_f32(
+        jnp.asarray(relion_normalized_rec_processed[None, :], dtype=jnp.complex64),
+        jnp.asarray(
+            (-native_ctf_replay * native_inverse_noise_replay)[None, :],
+            dtype=jnp.float32,
+        ),
+        jnp.asarray(native_translation_angles, dtype=jnp.float32),
+        jnp.asarray(centered, dtype=jnp.int32),
+        (image_size, image_size),
+    )
+    native_raw_weight_then_scaled_bpref_replay = (
+        np.asarray(jax.block_until_ready(native_raw_weight_bpref_all))[
+            int(accepted["translation"])
+        ].astype(np.complex64)
+        / n2
+    ).astype(np.complex64)
+    native_scaled_weight_bpref_all = cuda_backproject.relion_translate_bpref_f32(
+        jnp.asarray(relion_normalized_rec_processed[None, :], dtype=jnp.complex64),
+        jnp.asarray(
+            (
+                (-native_ctf_replay * native_inverse_noise_replay) / n2
+            )[None, :],
+            dtype=jnp.float32,
+        ),
+        jnp.asarray(native_translation_angles, dtype=jnp.float32),
+        jnp.asarray(centered, dtype=jnp.int32),
+        (image_size, image_size),
+    )
+    native_scaled_weight_bpref_replay = np.asarray(
+        jax.block_until_ready(native_scaled_weight_bpref_all)
+    )[int(accepted["translation"])].astype(np.complex64)
+    relion_normalized_recovar_weight_bpref_all = (
+        cuda_backproject.relion_translate_bpref_f32(
+            jnp.asarray(relion_normalized_rec_processed[None, :], dtype=jnp.complex64),
+            jnp.asarray((rec_weighted_ctf * n2)[None, :], dtype=jnp.float32),
+            jnp.asarray(native_translation_angles, dtype=jnp.float32),
+            jnp.asarray(centered, dtype=jnp.int32),
+            (image_size, image_size),
+        )
+    )
+    relion_normalized_recovar_weight_bpref_replay = np.asarray(
+        jax.block_until_ready(relion_normalized_recovar_weight_bpref_all)
+    )[int(accepted["translation"])].astype(np.complex64)
     phase_valid = (
         (np.abs(rel_processed) > np.float32(1.0e-12))
         & (np.abs(rec_processed) > np.float32(1.0e-12))
@@ -441,6 +529,10 @@ def _compare_particle(
         "inverse_noise": _metric(rel_inverse_noise_native, rec_inverse_noise_native),
         "weighted_ctf": _metric(rel_weighted_ctf, rec_weighted_ctf),
         "processed_fourier_image": _metric(rel_processed[valid_weight], rec_processed[valid_weight]),
+        "processed_fourier_image_relion_normalization_roundtrip": _metric(
+            rel_processed[valid_weight],
+            (relion_normalized_rec_processed * n2)[valid_weight],
+        ),
         "translated_fourier_image": _metric(rel_translated[valid_weight], rec_translated[valid_weight]),
         "numerator_operand": _metric(rel_numerator, rec_numerator),
         "denominator_operand": _metric(rel_denominator, rec_denominator),
@@ -454,11 +546,15 @@ def _compare_particle(
         ),
         "relion_internal_denominator": _metric(
             rel_denominator,
-            (rel_ctf_aligned**2 * rel_inverse_noise_native / n4).astype(np.float32),
+            (
+                (rel_inverse_noise_native * rel_ctf_aligned) * rel_ctf_aligned / n4
+            ).astype(np.float32),
         ),
         "recovar_internal_denominator": _metric(
             rec_denominator,
-            (rec_ctf_aligned**2 * rec_inverse_noise_native / n4).astype(np.float32),
+            (
+                (rec_inverse_noise_native * rec_ctf_aligned) * rec_ctf_aligned / n4
+            ).astype(np.float32),
         ),
         "relion_ctf_replayed_from_source_star": _metric(
             rel_ctf_aligned,
@@ -483,6 +579,14 @@ def _compare_particle(
         "relion_translated_image_replayed_with_cuda_sincosf": _metric(
             rel_translated,
             cuda_translated_replay,
+        ),
+        "relion_translated_image_replayed_with_native_angles": _metric(
+            rel_translated,
+            cuda_native_angle_translated_replay,
+        ),
+        "relion_translated_image_replayed_with_normalization_and_native_angles": _metric(
+            rel_translated,
+            relion_normalized_native_angle_translated_replay,
         ),
     }
     counterfactuals = {
@@ -528,6 +632,36 @@ def _compare_particle(
                 * native_replay_weighted_ctf
             ).astype(np.complex64),
         ),
+        "cuda_fft_native_angles_with_native_ctf_noise": _metric(
+            rel_numerator,
+            (
+                cuda_native_angle_translated_replay
+                * native_replay_weighted_ctf
+            ).astype(np.complex64),
+        ),
+        "relion_normalized_cuda_fft_native_angles_with_native_ctf_noise": _metric(
+            rel_numerator,
+            (
+                relion_normalized_native_angle_translated_replay
+                * native_replay_weighted_ctf
+            ).astype(np.complex64),
+        ),
+        "relion_normalized_fft_native_angles_native_weight_bpref_kernel": _metric(
+            rel_numerator,
+            relion_normalized_native_weight_bpref_replay,
+        ),
+        "relion_normalized_fft_native_raw_weight_then_output_scale": _metric(
+            rel_numerator,
+            native_raw_weight_then_scaled_bpref_replay,
+        ),
+        "relion_normalized_fft_direct_scaled_native_weight": _metric(
+            rel_numerator,
+            native_scaled_weight_bpref_replay,
+        ),
+        "relion_normalized_fft_native_angles_recovar_weight_bpref_kernel": _metric(
+            rel_numerator,
+            relion_normalized_recovar_weight_bpref_replay,
+        ),
     }
 
     dump_path = dump_directory / f"stack{stack}_it1_bpref_primitives.npz"
@@ -560,6 +694,18 @@ def _compare_particle(
         cuda_fft_replay=cuda_fft_replay,
         production_backend_fft_replay=rec_processed,
         cuda_sincosf_translated_replay=cuda_translated_replay,
+        cuda_native_angle_translated_replay=cuda_native_angle_translated_replay,
+        relion_normalized_rec_processed=relion_normalized_rec_processed,
+        relion_normalized_native_angle_translated_replay=(
+            relion_normalized_native_angle_translated_replay
+        ),
+        relion_normalized_native_weight_bpref_replay=(
+            relion_normalized_native_weight_bpref_replay
+        ),
+        relion_normalized_recovar_weight_bpref_replay=(
+            relion_normalized_recovar_weight_bpref_replay
+        ),
+        native_translation_angles=native_translation_angles,
         phase_valid=phase_valid,
         relion_translation_phase_observed=relion_phase_observed,
         recovar_translation_phase_observed=recovar_phase_observed,

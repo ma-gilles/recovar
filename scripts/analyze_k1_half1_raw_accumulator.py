@@ -84,6 +84,276 @@ def _metric(source: np.ndarray, target: np.ndarray, *, allow_sign: bool) -> dict
     }
 
 
+def _centered_real_inner_correlation(
+    source: np.ndarray,
+    target: np.ndarray,
+    *,
+    mask: np.ndarray | None = None,
+) -> float:
+    """Return a diagnostic centered correlation using the real inner product."""
+
+    source = np.asarray(source).reshape(-1)
+    target = np.asarray(target).reshape(-1)
+    _require(source.shape == target.shape and source.size > 0, "correlation topology mismatch")
+    if mask is not None:
+        mask = np.asarray(mask, dtype=bool).reshape(-1)
+        _require(mask.shape == source.shape and np.any(mask), "correlation mask mismatch")
+        source = source[mask]
+        target = target[mask]
+    _require(
+        np.all(np.isfinite(source)) and np.all(np.isfinite(target)),
+        "non-finite correlation values",
+    )
+    source = source - np.mean(source)
+    target = target - np.mean(target)
+    denominator = np.sqrt(
+        np.vdot(source, source).real * np.vdot(target, target).real
+    )
+    _require(denominator > 0.0, "correlation has zero centered energy")
+    return float(np.vdot(source, target).real / denominator)
+
+
+def _paired_raw_residual_structure(
+    recovar_numerator1: np.ndarray,
+    native_numerator1: np.ndarray,
+    recovar_denominator1: np.ndarray,
+    native_denominator1: np.ndarray,
+    recovar_numerator2: np.ndarray,
+    native_numerator2: np.ndarray,
+    recovar_denominator2: np.ndarray,
+    native_denominator2: np.ndarray,
+) -> dict[str, Any]:
+    """Distinguish cross-half signal coherence from residual coherence."""
+
+    numerator = _paired_field_residual_structure(
+        recovar_numerator1,
+        native_numerator1,
+        recovar_numerator2,
+        native_numerator2,
+        allow_sign=True,
+        support_union=(native_numerator1 != 0) | (native_numerator2 != 0),
+    )
+    denominator = _paired_field_residual_structure(
+        recovar_denominator1,
+        native_denominator1,
+        recovar_denominator2,
+        native_denominator2,
+        allow_sign=False,
+        support_union=(native_denominator1 != 0) | (native_denominator2 != 0),
+    )
+    return {
+        "policy": (
+            "diagnostic centered real-inner-product correlation; acceptance remains "
+            "scale-sensitive relative-L2/FSC-AUC"
+        ),
+        "numerator_sign_applied_to_recovar": numerator["sign_applied_to_recovar"],
+        "native_signal": {
+            "numerator_centered_correlation": numerator[
+                "native_signal_centered_correlation"
+            ],
+            "denominator_centered_correlation": denominator[
+                "native_signal_centered_correlation"
+            ],
+        },
+        "recovar_minus_native_residual": {
+            "numerator_centered_correlation": numerator[
+                "residual_centered_correlation"
+            ],
+            "numerator_centered_correlation_on_support_union": numerator[
+                "residual_centered_correlation_on_support_union"
+            ],
+            "denominator_centered_correlation": denominator[
+                "residual_centered_correlation"
+            ],
+            "denominator_centered_correlation_on_support_union": denominator[
+                "residual_centered_correlation_on_support_union"
+            ],
+        },
+    }
+
+
+def _raw_accumulator_region_metrics(
+    recovar_numerator: np.ndarray,
+    native_numerator: np.ndarray,
+    recovar_denominator: np.ndarray,
+    native_denominator: np.ndarray,
+    *,
+    accumulator_shape: tuple[int, int, int],
+) -> dict[str, Any]:
+    """Partition raw residual energy into the public x=0 plane and its complement."""
+
+    expected_size = int(np.prod(accumulator_shape, dtype=np.int64))
+    fields = {
+        "numerator": (
+            np.asarray(recovar_numerator).reshape(-1),
+            np.asarray(native_numerator).reshape(-1),
+            True,
+        ),
+        "denominator": (
+            np.asarray(recovar_denominator).reshape(-1),
+            np.asarray(native_denominator).reshape(-1),
+            False,
+        ),
+    }
+    x0 = np.zeros(accumulator_shape, dtype=bool)
+    x0[accumulator_shape[0] // 2, :, :] = True
+    masks = {"x0": x0.reshape(-1), "off_x0": (~x0).reshape(-1)}
+    report: dict[str, Any] = {
+        "x0_public_axis": 0,
+        "x0_public_index": accumulator_shape[0] // 2,
+        "coordinate_count": {
+            name: int(np.count_nonzero(mask)) for name, mask in masks.items()
+        },
+        "regions": {},
+    }
+    for field, (recovar, native, allow_sign) in fields.items():
+        _require(
+            recovar.size == native.size == expected_size,
+            f"{field} raw-region topology mismatch",
+        )
+        sign = _metric(recovar, native, allow_sign=allow_sign)[
+            "sign_applied_to_source"
+        ]
+        aligned = sign * recovar
+        total_residual_l2 = float(np.linalg.norm(aligned - native))
+        _require(total_residual_l2 > 0.0, f"{field} raw residual has zero energy")
+        report["regions"][field] = {
+            name: {
+                **_metric(aligned[mask], native[mask], allow_sign=False),
+                "residual_l2_fraction_of_total": float(
+                    np.linalg.norm((aligned - native)[mask]) / total_residual_l2
+                ),
+            }
+            for name, mask in masks.items()
+        }
+    return report
+
+
+def _intervention_projection_on_gap(
+    recovar: np.ndarray,
+    native_control: np.ndarray,
+    native_intervention: np.ndarray,
+    *,
+    allow_sign: bool,
+) -> dict[str, Any]:
+    """Measure whether a native intervention moves along the RECOVAR-native gap."""
+
+    recovar = np.asarray(recovar).reshape(-1)
+    native_control = np.asarray(native_control).reshape(-1)
+    native_intervention = np.asarray(native_intervention).reshape(-1)
+    _require(
+        recovar.shape == native_control.shape == native_intervention.shape,
+        "intervention projection topology mismatch",
+    )
+    sign = _metric(recovar, native_control, allow_sign=allow_sign)[
+        "sign_applied_to_source"
+    ]
+    gap = sign * recovar - native_control
+    intervention = native_intervention - native_control
+    gap_norm = float(np.linalg.norm(gap))
+    intervention_norm = float(np.linalg.norm(intervention))
+    _require(gap_norm > 0.0, "RECOVAR-native gap has zero energy")
+    if intervention_norm == 0.0:
+        cosine = 0.0
+        projection_scale = 0.0
+    else:
+        inner = float(np.vdot(intervention, gap).real)
+        cosine = inner / (intervention_norm * gap_norm)
+        projection_scale = inner / (intervention_norm * intervention_norm)
+    residual_ratio = float(
+        np.linalg.norm(sign * recovar - native_intervention) / gap_norm
+    )
+    return {
+        "sign_applied_to_recovar": sign,
+        "intervention_to_gap_norm_ratio": intervention_norm / gap_norm,
+        "real_inner_product_cosine": cosine,
+        "least_squares_intervention_scale_to_gap": projection_scale,
+        "gap_norm_ratio_after_full_intervention": residual_ratio,
+        "squared_gap_fraction_removed_by_full_intervention": 1.0
+        - residual_ratio * residual_ratio,
+    }
+
+
+def _paired_field_residual_structure(
+    recovar1: np.ndarray,
+    native1: np.ndarray,
+    recovar2: np.ndarray,
+    native2: np.ndarray,
+    *,
+    allow_sign: bool,
+    support_union: np.ndarray,
+) -> dict[str, Any]:
+    """Compare cross-half signal and aligned residual correlations for one field."""
+
+    sign1 = _metric(recovar1, native1, allow_sign=allow_sign)[
+        "sign_applied_to_source"
+    ]
+    sign2 = _metric(recovar2, native2, allow_sign=allow_sign)[
+        "sign_applied_to_source"
+    ]
+    residual1 = sign1 * np.asarray(recovar1) - native1
+    residual2 = sign2 * np.asarray(recovar2) - native2
+    return {
+        "sign_applied_to_recovar": [sign1, sign2],
+        "native_signal_centered_correlation": _centered_real_inner_correlation(
+            native1, native2
+        ),
+        "residual_centered_correlation": _centered_real_inner_correlation(
+            residual1, residual2
+        ),
+        "residual_centered_correlation_on_support_union": (
+            _centered_real_inner_correlation(
+                residual1, residual2, mask=support_union
+            )
+        ),
+    }
+
+
+def _paired_downsampled_residual_structure(
+    recovar_average1: np.ndarray,
+    recovar_weight1: np.ndarray,
+    native_average1: np.ndarray,
+    native_weight1: np.ndarray,
+    recovar_average2: np.ndarray,
+    recovar_weight2: np.ndarray,
+    native_average2: np.ndarray,
+    native_weight2: np.ndarray,
+) -> dict[str, Any]:
+    """Locate residual coherence after BPref downsampling and division."""
+
+    support_union = (native_weight1 > 0) | (native_weight2 > 0)
+    return {
+        "policy": (
+            "diagnostic centered real-inner-product correlation; acceptance remains "
+            "scale-sensitive relative-L2/FSC-AUC"
+        ),
+        "average": _paired_field_residual_structure(
+            recovar_average1,
+            native_average1,
+            recovar_average2,
+            native_average2,
+            allow_sign=True,
+            support_union=support_union,
+        ),
+        "numerator": _paired_field_residual_structure(
+            recovar_average1 * recovar_weight1,
+            native_average1 * native_weight1,
+            recovar_average2 * recovar_weight2,
+            native_average2 * native_weight2,
+            allow_sign=True,
+            support_union=support_union,
+        ),
+        "denominator": _paired_field_residual_structure(
+            recovar_weight1,
+            native_weight1,
+            recovar_weight2,
+            native_weight2,
+            allow_sign=False,
+            support_union=support_union,
+        ),
+    }
+
+
 def _load_recovar(path: Path, *, half: int = 1) -> dict[str, Any]:
     _require(half in (1, 2), "half must be 1 or 2")
     half_index = half - 1
@@ -340,6 +610,13 @@ def main() -> None:
                 recovar["weight"], native_denominator, allow_sign=False
             ),
         },
+        "raw_accumulator_regions": _raw_accumulator_region_metrics(
+            recovar["numerator"],
+            native_numerator,
+            recovar["weight"],
+            native_denominator,
+            accumulator_shape=recovar["accumulator_shape"],
+        ),
         "recovar_vs_native": _comparison(
             rec_average,
             rec_weight,
@@ -384,7 +661,17 @@ def main() -> None:
         native_numerator2, native_denominator2 = relion_raw_to_recovar_full(
             native_data2, native_weight2, grid_size=recovar["grid_size"]
         )
-        rec_average2, _, rec_radius2 = _downsample(
+        report["paired_raw_residual_structure"] = _paired_raw_residual_structure(
+            recovar["numerator"],
+            native_numerator,
+            recovar["weight"],
+            native_denominator,
+            recovar_half2["numerator"],
+            native_numerator2,
+            recovar_half2["weight"],
+            native_denominator2,
+        )
+        rec_average2, rec_weight2, rec_radius2 = _downsample(
             recovar_half2["numerator"],
             recovar_half2["weight"],
             max_shell=max_shell,
@@ -393,7 +680,7 @@ def main() -> None:
                 for key in ("grid_size", "volume_shape", "accumulator_shape", "padding_factor")
             },
         )
-        native_average2, _, native_radius2 = _downsample(
+        native_average2, native_down_weight2, native_radius2 = _downsample(
             native_numerator2,
             native_denominator2,
             max_shell=max_shell,
@@ -406,6 +693,103 @@ def main() -> None:
             radius == rec_radius2 == native_radius2,
             "paired FSC downsample radii differ",
         )
+        report["paired_downsampled_residual_structure"] = (
+            _paired_downsampled_residual_structure(
+                rec_average,
+                rec_weight,
+                native_average,
+                native_down_weight,
+                rec_average2,
+                rec_weight2,
+                native_average2,
+                native_down_weight2,
+            )
+        )
+        accumulator_shape = tuple(int(value) for value in recovar["accumulator_shape"])
+        x0_mask = np.zeros(accumulator_shape, dtype=bool)
+        x0_mask[accumulator_shape[0] // 2, :, :] = True
+        x0_mask = x0_mask.reshape(-1)
+        denominator_factorial: dict[str, Any] = {}
+        for arm, replacement_mask in (
+            ("control", None),
+            ("native_denominator_x0_only", x0_mask),
+            ("native_denominator_off_x0", ~x0_mask),
+        ):
+            denominator1 = np.asarray(recovar["weight"], dtype=np.float64).copy()
+            denominator2 = np.asarray(recovar_half2["weight"], dtype=np.float64).copy()
+            if replacement_mask is not None:
+                denominator1[replacement_mask] = native_denominator[replacement_mask]
+                denominator2[replacement_mask] = native_denominator2[replacement_mask]
+            arm_average1, arm_weight1, arm_radius1 = _downsample(
+                recovar["numerator"],
+                denominator1,
+                max_shell=max_shell,
+                **{
+                    key: recovar[key]
+                    for key in (
+                        "grid_size",
+                        "volume_shape",
+                        "accumulator_shape",
+                        "padding_factor",
+                    )
+                },
+            )
+            arm_average2, arm_weight2, arm_radius2 = _downsample(
+                recovar_half2["numerator"],
+                denominator2,
+                max_shell=max_shell,
+                **{
+                    key: recovar_half2[key]
+                    for key in (
+                        "grid_size",
+                        "volume_shape",
+                        "accumulator_shape",
+                        "padding_factor",
+                    )
+                },
+            )
+            _require(
+                radius == arm_radius1 == arm_radius2,
+                "x0 denominator factorial downsample radii differ",
+            )
+            denominator_factorial[arm] = {
+                "half1": _comparison(
+                    arm_average1,
+                    arm_weight1,
+                    native_average,
+                    native_down_weight,
+                    radius=radius,
+                    first_shell=args.first_shell,
+                    max_shell=max_shell,
+                ),
+                "half2": _comparison(
+                    arm_average2,
+                    arm_weight2,
+                    native_average2,
+                    native_down_weight2,
+                    radius=radius,
+                    first_shell=args.first_shell,
+                    max_shell=max_shell,
+                ),
+                "paired_average_residual": _paired_field_residual_structure(
+                    arm_average1,
+                    native_average,
+                    arm_average2,
+                    native_average2,
+                    allow_sign=True,
+                    support_union=(native_down_weight > 0)
+                    | (native_down_weight2 > 0),
+                ),
+            }
+        report["x0_denominator_factorial"] = {
+            "intervention": (
+                "replace only the named RECOVAR raw denominator region with "
+                "source-aligned native values before downsampling/division"
+            ),
+            "x0_public_axis": 0,
+            "x0_public_index": accumulator_shape[0] // 2,
+            "arms": denominator_factorial,
+        }
         shell_count = recovar["grid_size"] // 2 + 1
         recovar_fsc_float64 = _fsc_float64_from_downsampled_average(
             rec_average,
@@ -566,6 +950,36 @@ def main() -> None:
             first_shell=args.first_shell,
             max_shell=max_shell,
         )
+        report["native_raw_vs_native_repeat"] = {
+            "numerator": _metric(
+                repeat_numerator,
+                native_numerator,
+                allow_sign=True,
+            ),
+            "denominator": _metric(
+                repeat_denominator,
+                native_denominator,
+                allow_sign=False,
+            ),
+        }
+        report["native_repeat_projection_on_recovar_gap"] = {
+            "policy": (
+                "raw-field real-inner-product projection; positive removed-gap "
+                "fraction means the native alternate moves toward RECOVAR"
+            ),
+            "numerator": _intervention_projection_on_gap(
+                recovar["numerator"],
+                native_numerator,
+                repeat_numerator,
+                allow_sign=True,
+            ),
+            "denominator": _intervention_projection_on_gap(
+                recovar["weight"],
+                native_denominator,
+                repeat_denominator,
+                allow_sign=False,
+            ),
+        }
         report["native_vs_native_repeat"] = _comparison(
             repeat_average,
             repeat_down_weight,

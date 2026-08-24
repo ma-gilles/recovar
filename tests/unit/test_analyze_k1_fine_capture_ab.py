@@ -66,3 +66,29 @@ def test_fine_capture_ab_fails_closed_on_missing_field(tmp_path):
 
     with pytest.raises(ValueError, match="missing ordered fields:.*probs"):
         analyze(control_path=control, candidate_path=candidate)
+
+
+def test_fine_capture_ab_can_allow_only_iteration_context_mismatch(tmp_path):
+    control = tmp_path / "control.npz"
+    candidate = tmp_path / "candidate.npz"
+    _write_capture(control)
+    _write_capture(candidate)
+    with np.load(candidate, allow_pickle=False) as archive:
+        values = {name: archive[name] for name in archive.files}
+    values["iteration"] = np.asarray(2, dtype=np.int64)
+    np.savez(candidate, **values)
+
+    with pytest.raises(ValueError, match="capture scalar iteration differs"):
+        analyze(control_path=control, candidate_path=candidate)
+
+    report = analyze(
+        control_path=control,
+        candidate_path=candidate,
+        allow_iteration_mismatch=True,
+    )
+    assert report["first_non_bit_exact_field"] is None
+    assert report["iteration_mismatch_allowed"] is True
+    assert report["scalar_context"]["iteration"] == {
+        "control": 1,
+        "candidate": 2,
+    }

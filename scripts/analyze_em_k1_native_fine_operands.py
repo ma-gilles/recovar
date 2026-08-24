@@ -67,6 +67,122 @@ def _relative_l2(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.linalg.norm((np.asarray(left) - np.asarray(right)).reshape(-1)) / denominator)
 
 
+def _winner_boundary(
+    *,
+    native_raw_cost: np.ndarray,
+    native_log_prior: np.ndarray,
+    native_probability: np.ndarray,
+    native_significant: np.ndarray,
+    recovar_preprior_score: np.ndarray,
+    recovar_log_prior: np.ndarray,
+    recovar_total_score: np.ndarray,
+    recovar_probability: np.ndarray,
+    recovar_significant: np.ndarray,
+    recovar_rotation_row: np.ndarray,
+    translation_row: np.ndarray,
+) -> dict:
+    """Describe the native and RECOVAR winner boundary on aligned candidates."""
+
+    arrays = {
+        "native_raw_cost": np.asarray(native_raw_cost, dtype=np.float64),
+        "native_log_prior": np.asarray(native_log_prior, dtype=np.float64),
+        "native_probability": np.asarray(native_probability, dtype=np.float64),
+        "native_significant": np.asarray(native_significant, dtype=bool),
+        "recovar_preprior_score": np.asarray(recovar_preprior_score, dtype=np.float64),
+        "recovar_log_prior": np.asarray(recovar_log_prior, dtype=np.float64),
+        "recovar_total_score": np.asarray(recovar_total_score, dtype=np.float64),
+        "recovar_probability": np.asarray(recovar_probability, dtype=np.float64),
+        "recovar_significant": np.asarray(recovar_significant, dtype=bool),
+        "recovar_rotation_row": np.asarray(recovar_rotation_row, dtype=np.int64),
+        "translation_row": np.asarray(translation_row, dtype=np.int64),
+    }
+    lengths = {name: value.size for name, value in arrays.items()}
+    if len(set(lengths.values())) != 1 or not lengths["native_raw_cost"]:
+        raise ValueError(f"winner-boundary arrays have incompatible lengths: {lengths}")
+
+    native_total = -arrays["native_raw_cost"] + arrays["native_log_prior"]
+    native_order = np.argsort(-arrays["native_probability"], kind="stable")
+    recovar_order = np.argsort(-arrays["recovar_probability"], kind="stable")
+    native_winner = int(native_order[0])
+    native_runner_up = int(native_order[1]) if native_order.size > 1 else native_winner
+    recovar_winner = int(recovar_order[0])
+    recovar_runner_up = int(recovar_order[1]) if recovar_order.size > 1 else recovar_winner
+
+    def record(row: int) -> dict:
+        return {
+            "native_candidate_row": row,
+            "recovar_rotation_row": int(arrays["recovar_rotation_row"][row]),
+            "translation_row": int(arrays["translation_row"][row]),
+            "native_raw_cost": float(arrays["native_raw_cost"][row]),
+            "native_log_prior": float(arrays["native_log_prior"][row]),
+            "native_total_log_weight": float(native_total[row]),
+            "native_probability": float(arrays["native_probability"][row]),
+            "native_significant": bool(arrays["native_significant"][row]),
+            "recovar_preprior_score": float(arrays["recovar_preprior_score"][row]),
+            "recovar_log_prior": float(arrays["recovar_log_prior"][row]),
+            "recovar_total_score": float(arrays["recovar_total_score"][row]),
+            "recovar_probability": float(arrays["recovar_probability"][row]),
+            "recovar_significant": bool(arrays["recovar_significant"][row]),
+        }
+
+    return {
+        "same_winner": native_winner == recovar_winner,
+        "native_exact_probability_tie_count": int(
+            np.count_nonzero(
+                arrays["native_probability"] == arrays["native_probability"][native_winner]
+            )
+        ),
+        "recovar_exact_probability_tie_count": int(
+            np.count_nonzero(
+                arrays["recovar_probability"]
+                == arrays["recovar_probability"][recovar_winner]
+            )
+        ),
+        "native_winner": record(native_winner),
+        "native_runner_up": record(native_runner_up),
+        "recovar_winner": record(recovar_winner),
+        "recovar_runner_up": record(recovar_runner_up),
+        "native_top_probability_margin": float(
+            arrays["native_probability"][native_winner]
+            - arrays["native_probability"][native_runner_up]
+        ),
+        "native_top_preprior_score_margin": float(
+            -arrays["native_raw_cost"][native_winner]
+            + arrays["native_raw_cost"][native_runner_up]
+        ),
+        "native_top_log_prior_margin": float(
+            arrays["native_log_prior"][native_winner]
+            - arrays["native_log_prior"][native_runner_up]
+        ),
+        "native_top_total_log_weight_margin": float(
+            native_total[native_winner] - native_total[native_runner_up]
+        ),
+        "recovar_top_probability_margin": float(
+            arrays["recovar_probability"][recovar_winner]
+            - arrays["recovar_probability"][recovar_runner_up]
+        ),
+        "recovar_top_preprior_score_margin": float(
+            arrays["recovar_preprior_score"][recovar_winner]
+            - arrays["recovar_preprior_score"][recovar_runner_up]
+        ),
+        "recovar_top_log_prior_margin": float(
+            arrays["recovar_log_prior"][recovar_winner]
+            - arrays["recovar_log_prior"][recovar_runner_up]
+        ),
+        "recovar_top_total_score_margin": float(
+            arrays["recovar_total_score"][recovar_winner]
+            - arrays["recovar_total_score"][recovar_runner_up]
+        ),
+        "native_preference_native_minus_recovar_winner": float(
+            native_total[native_winner] - native_total[recovar_winner]
+        ),
+        "recovar_preference_recovar_minus_native_winner": float(
+            arrays["recovar_total_score"][recovar_winner]
+            - arrays["recovar_total_score"][native_winner]
+        ),
+    }
+
+
 def _infer_float32_common_addend(base: np.ndarray, target: np.ndarray) -> tuple[np.float32, int]:
     """Infer a common addend applied by one final float32 addition."""
 
@@ -140,8 +256,28 @@ def analyze(
     translation = np.asarray(_flat_memmap(dump_dir / "pass1_acc_trans_idx.bin", np.int32))
     rec_rotation_row = nearest[native_rotation_row]
     native_raw = np.asarray(_flat_memmap(dump_dir / "pass1_exp_Mweight_raw_preprior.bin"))
+    native_prior = np.asarray(
+        _flat_memmap(dump_dir / "pass1_candidate_combined_log_prior.bin")
+    )
+    native_probability = np.asarray(
+        _flat_memmap(dump_dir / "pass1_candidate_weight_normalized.bin")
+    )
+    native_significant = np.asarray(
+        _flat_memmap(
+            dump_dir / "pass1_candidate_in_reconstruction_set.bin",
+            np.int32,
+        ),
+        dtype=bool,
+    )
     candidate_count = native_raw.size
-    if not (native_rotation_row.size == translation.size == candidate_count):
+    if not (
+        native_rotation_row.size
+        == translation.size
+        == native_prior.size
+        == native_probability.size
+        == native_significant.size
+        == candidate_count
+    ):
         raise ValueError("native candidate arrays have different lengths")
 
     rec_mask = np.asarray(rec["candidate_mask"], dtype=bool)
@@ -260,6 +396,22 @@ def analyze(
         costs[label] = np.asarray(costs[label] + highres, dtype=np.float32)
 
     rec_score = np.asarray(rec["scores_pre_prior"], dtype=np.float64)[rec_rotation_row, translation]
+    rec_prior = (
+        np.asarray(rec["rotation_log_prior"], dtype=np.float64)[rec_rotation_row]
+        + np.asarray(rec["translation_log_prior"], dtype=np.float64)[translation]
+    )
+    rec_total = np.asarray(rec["scores_with_prior"], dtype=np.float64)[
+        rec_rotation_row,
+        translation,
+    ]
+    rec_probability = np.asarray(rec["probs"], dtype=np.float64)[
+        rec_rotation_row,
+        translation,
+    ]
+    rec_significant = np.asarray(rec["reconstruction_mask"], dtype=bool)[
+        rec_rotation_row,
+        translation,
+    ]
     captured_residual = _center(rec_score + native_raw)
     native_replay_error = _center(costs["native"] - native_raw)
     recovar_replay_error = _center(-costs["recovar_all"] - rec_score)
@@ -287,7 +439,7 @@ def analyze(
     )
     rec_translation = np.asarray(rec["fine_translations"])[translation]
     return {
-        "schema": "em-k1-native-fine-operands-v1",
+        "schema": "em-k1-native-fine-operands-v2",
         "status": "complete",
         "relion_part_id": int(np.fromfile(dump_dir / "pass1_acc_part_id.bin", dtype=np.float64, count=1)[0]),
         "recovar_original_index": int(rec["original_index"]),
@@ -308,6 +460,19 @@ def analyze(
             "pixel_weight": _relative_l2(native_weight, rec_weight),
         },
         "captured_centered_score_residual": _stats(captured_residual),
+        "winner_boundary": _winner_boundary(
+            native_raw_cost=native_raw,
+            native_log_prior=native_prior,
+            native_probability=native_probability,
+            native_significant=native_significant,
+            recovar_preprior_score=rec_score,
+            recovar_log_prior=rec_prior,
+            recovar_total_score=rec_total,
+            recovar_probability=rec_probability,
+            recovar_significant=rec_significant,
+            recovar_rotation_row=rec_rotation_row,
+            translation_row=translation,
+        ),
         "native_cost_replay_error": _stats(native_replay_error),
         "recovar_cost_replay_error": _stats(recovar_replay_error),
         "interventions": interventions,

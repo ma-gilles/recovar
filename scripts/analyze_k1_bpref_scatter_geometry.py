@@ -157,8 +157,9 @@ def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
     left = np.asarray(reference)
     right = np.asarray(candidate)
     _require(left.shape == right.shape and left.size > 0, "metric arrays differ or are empty")
-    delta = right.astype(np.float64) - left.astype(np.float64)
-    denominator = max(float(np.linalg.norm(left.astype(np.float64))), np.finfo(np.float64).tiny)
+    comparison_dtype = np.complex128 if (np.iscomplexobj(left) or np.iscomplexobj(right)) else np.float64
+    delta = right.astype(comparison_dtype) - left.astype(comparison_dtype)
+    denominator = max(float(np.linalg.norm(left.astype(comparison_dtype))), np.finfo(np.float64).tiny)
     return {
         "shape": list(left.shape),
         "reference_dtype": str(left.dtype),
@@ -180,6 +181,7 @@ def _first_coordinate_mismatches(
     candidate_coordinates: np.ndarray,
     active: np.ndarray,
     factor_rows: np.ndarray,
+    factor_pixel_positions: np.ndarray,
     contributor_rows: np.ndarray,
     factor,
     recovar_rotations: np.ndarray,
@@ -192,6 +194,8 @@ def _first_coordinate_mismatches(
     for contributor_local, pixel, axis_zyx in np.argwhere(mismatch)[:limit]:
         factor_row = int(factor_rows[contributor_local])
         recovar_row = int(contributor_rows[contributor_local])
+        factor_pixel = int(factor_pixel_positions[pixel])
+        _require(factor_pixel >= 0, "active dense pixel has no RELION factor identity")
         expected = np.float32(expected_coordinates[contributor_local, pixel, axis_zyx])
         candidate = np.float32(candidate_coordinates[contributor_local, pixel, axis_zyx])
         matrix = np.asarray(factor.rotations["matrix"][factor_row], dtype=np.float32).reshape(3, 3)
@@ -200,9 +204,10 @@ def _first_coordinate_mismatches(
                 "contributor_local": int(contributor_local),
                 "factor_orientation_local": factor_row,
                 "recovar_rotation_row": recovar_row,
-                "pixel": int(pixel),
-                "pixel_x": int(factor.pixels["x"][pixel]),
-                "pixel_y": int(factor.pixels["y"][pixel]),
+                "dense_pixel": int(pixel),
+                "factor_pixel": factor_pixel,
+                "pixel_x": int(factor.pixels["x"][factor_pixel]),
+                "pixel_y": int(factor.pixels["y"][factor_pixel]),
                 "axis_zyx": int(axis_zyx),
                 "native_coordinate": float(expected),
                 "native_coordinate_bits": _float32_bits(expected),
@@ -364,7 +369,34 @@ def _captured_native_geometry(factor) -> dict[str, np.ndarray] | None:
     }
 
 
-def _analyze_particle(factor_path: Path, pass2_path: Path) -> dict[str, Any]:
+def _factor_runtime_geometry(factor) -> tuple[int, tuple[int, int, int], float]:
+    """Resolve the runtime Fourier box and full cubic BPref accumulator."""
+
+    current_size = int(factor.header[17])
+    _require(current_size > 0 and current_size % 2 == 0, "invalid factor current size")
+    _require(
+        tuple(int(v) for v in factor.header[16:19])
+        == (current_size // 2 + 1, current_size, 1),
+        "unexpected factor Fourier layout",
+    )
+    model_x_half, model_y, model_z = (int(v) for v in factor.header[37:40])
+    _require(
+        model_x_half > 0
+        and model_y == model_z
+        and model_y == 2 * model_x_half - 1,
+        "factor BPref model layout is not a cubic x-half accumulator",
+    )
+    max_r = float(int(factor.header[22]))
+    _require(max_r > 0, "factor BPref radius is invalid")
+    return current_size, (model_z, model_y, 2 * model_x_half - 1), max_r
+
+
+def _analyze_particle(
+    factor_path: Path,
+    pass2_path: Path,
+    *,
+    physical_image_size: int,
+) -> dict[str, Any]:
     import jax
     import jax.numpy as jnp
 
@@ -375,8 +407,12 @@ def _analyze_particle(factor_path: Path, pass2_path: Path) -> dict[str, Any]:
         recovar_rotations = np.asarray(archive["rotations"], dtype=np.float32)
         recon_indices = np.asarray(archive["recon_window_indices"], dtype=np.int32)
         current_size = int(np.asarray(archive["current_size"]).item())
-    _require(current_size == int(factor.header[17]), "current-size mismatch")
-    _require(tuple(int(v) for v in factor.header[16:19]) == (31, 60, 1), "unexpected factor layout")
+    factor_current_size, accumulator_shape, max_r = _factor_runtime_geometry(factor)
+    _require(current_size == factor_current_size, "current-size mismatch")
+    _require(
+        physical_image_size >= current_size and physical_image_size % 2 == 0,
+        "physical image size is incompatible with the factor box",
+    )
     rotation_map, rotation_error = _rotation_map(factor.rotations, recovar_rotations)
     native_rotations = np.asarray(factor.rotations["matrix"], dtype=np.float32).reshape(-1, 3, 3)
     _require(
@@ -387,10 +423,10 @@ def _analyze_particle(factor_path: Path, pass2_path: Path) -> dict[str, Any]:
     native_data, native_weight, native_support = _factor_native_rows(factor)
     # RECOVAR accepts physical-box packed indices and expands them to the
     # native current-size square internally.  Map factor current-size pixels
-    # to the corresponding physical 128-pixel packed positions.
+    # to the corresponding physical packed positions.
     factor_x = np.asarray(factor.pixels["x"], dtype=np.int32)
     factor_y = np.asarray(factor.pixels["y"], dtype=np.int32)
-    physical_size = 128
+    physical_size = int(physical_image_size)
     physical_indices = (factor_y % physical_size) * (physical_size // 2 + 1) + factor_x
     recovar_centered_rows = recon_indices // (physical_size // 2 + 1)
     recovar_x = recon_indices % (physical_size // 2 + 1)
@@ -398,45 +434,145 @@ def _analyze_particle(factor_path: Path, pass2_path: Path) -> dict[str, Any]:
     recovar_fftw_indices = (
         (recovar_y % physical_size) * (physical_size // 2 + 1) + recovar_x
     )
+    compact_factor_pixels = np.isin(physical_indices, recovar_fftw_indices)
     _require(
         np.array_equal(
             np.sort(recovar_fftw_indices),
-            np.sort(physical_indices[native_support.any(axis=0)]),
+            np.sort(physical_indices[compact_factor_pixels]),
         ),
         "factor/RECOVAR reconstruction pixel support changed",
     )
 
-    # Reorder native rows into RECOVAR's rotation order.  Every dense pixel is
-    # retained so the signature uses RELION's exact current-size block topology.
+    # Reorder native rows into RECOVAR's rotation order, then retain the union
+    # of real circular-support pixels.  The production helper expands this
+    # compact set into RELION's exact current-size block topology.  Passing the
+    # serialized zero-only boundary rectangle would be incorrect: omitted
+    # +x/-y lanes alias retained FFTW positions during the cropped expansion.
     data_rows = np.zeros_like(native_data)
     weight_rows = np.zeros_like(native_weight)
     data_rows[rotation_map] = native_data
     weight_rows[rotation_map] = native_weight
+    compact_data_rows = data_rows[:, compact_factor_pixels]
+    compact_weight_rows = weight_rows[:, compact_factor_pixels]
+    compact_physical_indices = physical_indices[compact_factor_pixels]
     contributor_rows = np.flatnonzero(np.any(weight_rows > 0, axis=1)).astype(np.int32)
-    accumulator_shape = (123, 123, 123)
     accumulator_size = accumulator_shape[0] * accumulator_shape[1] * (accumulator_shape[2] // 2 + 1)
     with jax.default_device(jax.devices("gpu")[0]):
-        outputs = cuda_backproject.relion_fused_x_half_backproject_signature_indexed(
+        # Use the private diagnostic primitive so we can report the two input
+        # shadow fields independently.  The public wrapper deliberately fails
+        # closed when *any* shadow differs, which prevents inspection of the
+        # otherwise inert accumulator and geometry outputs.  Keep every
+        # geometry-relevant inertness check strict below and retain the two
+        # source-row shadow comparisons as explicit telemetry.
+        outputs = cuda_backproject._relion_fused_x_half_backproject_signature_indexed_impl(
             jnp.zeros(accumulator_size, dtype=jnp.complex64),
             jnp.zeros(accumulator_size, dtype=jnp.float32),
-            jnp.asarray(data_rows),
-            jnp.asarray(weight_rows),
-            jnp.asarray(physical_indices, dtype=jnp.int32),
+            jnp.asarray(compact_data_rows),
+            jnp.asarray(compact_weight_rows),
+            jnp.asarray(compact_physical_indices, dtype=jnp.int32),
             jnp.asarray(recovar_rotations),
             jnp.arange(recovar_rotations.shape[0], dtype=jnp.int32),
             jnp.asarray(contributor_rows, dtype=jnp.int32),
             (physical_size, physical_size),
             accumulator_shape,
-            30.0,
+            max_r,
         )
-        device = [np.asarray(value) for value in outputs[:9]]
+        all_device = [np.asarray(value) for value in outputs]
+
+    dense_data_rows, dense_indices, _, _ = (
+        cuda_backproject._prepare_relion_x_half_block_topology_operands(
+            jnp.asarray(compact_data_rows),
+            jnp.asarray(compact_physical_indices, dtype=jnp.int32),
+            (physical_size, physical_size),
+            max_r,
+        )
+    )
+    dense_weight_rows, weight_dense_indices, _, _ = (
+        cuda_backproject._prepare_relion_x_half_block_topology_operands(
+            jnp.asarray(compact_weight_rows),
+            jnp.asarray(compact_physical_indices, dtype=jnp.int32),
+            (physical_size, physical_size),
+            max_r,
+        )
+    )
+    kernel_rotations = cuda_backproject._relion_x_half_backproject_rotation_to_kernel(
+        jnp.asarray(recovar_rotations),
+        jnp.float32,
+    )
+    rot6 = cuda_backproject._rot_to_compact(kernel_rotations, jnp.float32)
+    strict_inertness_pairs = {
+        "data_accumulator": (all_device[0], all_device[9]),
+        "weight_accumulator": (all_device[1], all_device[10]),
+        "pixel_indices": (np.asarray(dense_indices), all_device[13]),
+        "rot6": (np.asarray(rot6), all_device[14]),
+        "canonical_rotation_keys": (
+            np.arange(recovar_rotations.shape[0], dtype=np.int32),
+            all_device[15],
+        ),
+        "signature_row_indices": (contributor_rows, all_device[16]),
+    }
+    strict_inertness = {
+        name: _metric(expected, observed)
+        for name, (expected, observed) in strict_inertness_pairs.items()
+    }
+    unequal_strict = [
+        name for name, metric in strict_inertness.items() if not metric["exact_equal"]
+    ]
+    _require(
+        not unequal_strict,
+        "signature capture changed strict inertness fields: " + ", ".join(unequal_strict),
+    )
+    shadow_source_rows = {
+        "data_rows": _metric(np.asarray(dense_data_rows), all_device[11]),
+        "weight_rows": _metric(np.asarray(dense_weight_rows), all_device[12]),
+        "dense_pixel_indices_agree_by_operand": bool(
+            np.array_equal(np.asarray(dense_indices), np.asarray(weight_dense_indices))
+        ),
+    }
+    _require(
+        shadow_source_rows["dense_pixel_indices_agree_by_operand"],
+        "data/weight dense pixel indices differ",
+    )
+    device = all_device[:9]
 
     rotation_keys, pixel_ids, row_flags, source_values, neighbor_indices, coefficients, neighbor_flags = device[2:]
     _require(np.array_equal(rotation_keys[:, 0], contributor_rows), "signature rotation identity changed")
-    _require(np.array_equal(pixel_ids, np.broadcast_to(np.arange(current_size * (current_size // 2 + 1)), pixel_ids.shape)), "signature pixel order changed")
+    _require(
+        np.array_equal(pixel_ids, np.broadcast_to(np.asarray(dense_indices), pixel_ids.shape)),
+        "signature pixel order changed",
+    )
     recovar_support = (row_flags & np.int32(64)) != 0
     factor_rows = np.asarray([np.flatnonzero(rotation_map == row)[0] for row in contributor_rows], dtype=np.int64)
-    selected_native_support = native_support[factor_rows]
+    # RELION's serialized source square is ``2 * (max_r + 1)`` high/wide,
+    # whereas the scatter launch enumerates the cropped ``2 * max_r`` by
+    # ``max_r + 1`` topology.  The omitted positive boundary rows and last-x
+    # column have no supported terms.  Build the explicit factor-to-dense map
+    # so support and captured geometry are compared in the kernel's coordinate
+    # system rather than assuming the two rectangular arrays have equal size.
+    dense_height = 2 * int(round(max_r))
+    dense_half_width = dense_height // 2 + 1
+    dense_pixel_count = dense_height * dense_half_width
+    factor_y = np.asarray(factor.pixels["y"], dtype=np.int32)
+    factor_x = np.asarray(factor.pixels["x"], dtype=np.int32)
+    factor_in_dense_topology = (
+        # FFTW rows for an even height retain +Nyquist and omit its redundant
+        # -Nyquist counterpart: [0, ..., +H/2, -(H/2-1), ..., -1].
+        (factor_y > -(dense_height // 2))
+        & (factor_y <= dense_height // 2)
+        & (factor_x < dense_half_width)
+    )
+    _require(
+        not np.any(native_support[:, ~factor_in_dense_topology]),
+        "RELION factor has supported terms outside the scatter topology",
+    )
+    dense_ids = (factor_y[factor_in_dense_topology] % dense_height) * dense_half_width + factor_x[
+        factor_in_dense_topology
+    ]
+    _require(np.unique(dense_ids).size == dense_ids.size, "RELION factor-to-dense pixel map is not injective")
+    factor_pixel_positions = np.full(dense_pixel_count, -1, dtype=np.int64)
+    factor_pixel_positions[dense_ids] = np.flatnonzero(factor_in_dense_topology)
+    selected_native_support = np.zeros((factor_rows.size, dense_pixel_count), dtype=bool)
+    selected_native_support[:, dense_ids] = native_support[factor_rows][:, factor_in_dense_topology]
     _require(np.array_equal(recovar_support, selected_native_support), "RELION/RECOVAR scatter support differs")
 
     captured_geometry = _captured_native_geometry(factor)
@@ -445,10 +581,16 @@ def _analyze_particle(factor_path: Path, pass2_path: Path) -> dict[str, Any]:
         if captured_geometry is not None
         else _native_geometry(factor, accumulator_shape=accumulator_shape)
     )
-    expected_coordinates = native_geometry["coordinates_zyx"][factor_rows]
-    expected_fold = native_geometry["folded"][factor_rows]
-    expected_indices = native_geometry["neighbor_indices"][factor_rows]
-    expected_coefficients = native_geometry["neighbor_coefficients"][factor_rows]
+    def dense_geometry(field: str, *, dtype) -> np.ndarray:
+        source = native_geometry[field][factor_rows]
+        result = np.zeros((factor_rows.size, dense_pixel_count, *source.shape[2:]), dtype=dtype)
+        result[:, dense_ids] = source[:, factor_in_dense_topology]
+        return result
+
+    expected_coordinates = dense_geometry("coordinates_zyx", dtype=np.float32)
+    expected_fold = dense_geometry("folded", dtype=bool)
+    expected_indices = dense_geometry("neighbor_indices", dtype=np.int32)
+    expected_coefficients = dense_geometry("neighbor_coefficients", dtype=np.float32)
     active = selected_native_support
     live_neighbors = active[..., None] & ((neighbor_flags & np.int32(1)) != 0)
     _require(np.all(live_neighbors[active]), "active scatter row has an invalid neighbor")
@@ -464,6 +606,8 @@ def _analyze_particle(factor_path: Path, pass2_path: Path) -> dict[str, Any]:
         "contributor_rotation_count": int(contributor_rows.size),
         "active_scatter_row_count": int(np.count_nonzero(active)),
         "support_exact": True,
+        "signature_strict_inertness": strict_inertness,
+        "signature_shadow_source_rows": shadow_source_rows,
         "native_geometry_oracle": (
             "passive_relion_device_capture"
             if captured_geometry is not None
@@ -473,20 +617,24 @@ def _analyze_particle(factor_path: Path, pass2_path: Path) -> dict[str, Any]:
         "source_data": _metric(
             np.stack(
                 (
-                    data_rows[contributor_rows].real,
-                    data_rows[contributor_rows].imag,
+                    np.asarray(dense_data_rows)[contributor_rows].real,
+                    np.asarray(dense_data_rows)[contributor_rows].imag,
                 ),
                 axis=-1,
             )[active],
             source_values[..., :2][active],
         ),
-        "source_weight": _metric(weight_rows[contributor_rows][active], source_values[..., 2][active]),
+        "source_weight": _metric(
+            np.asarray(dense_weight_rows)[contributor_rows][active],
+            source_values[..., 2][active],
+        ),
         "coordinates_zyx": _metric(expected_coordinates[active], source_values[..., 3:6][active]),
         "first_coordinate_mismatches": _first_coordinate_mismatches(
             expected_coordinates=expected_coordinates,
             candidate_coordinates=source_values[..., 3:6],
             active=active,
             factor_rows=factor_rows,
+            factor_pixel_positions=factor_pixel_positions,
             contributor_rows=contributor_rows,
             factor=factor,
             recovar_rotations=recovar_rotations,
@@ -502,6 +650,7 @@ def main() -> None:
     parser.add_argument("--factor-directory", type=Path, required=True)
     parser.add_argument("--pass2-directory", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
+    parser.add_argument("--physical-image-size", type=int, default=128)
     args = parser.parse_args()
     _require(not args.output_json.exists(), f"refusing to overwrite {args.output_json}")
 
@@ -511,13 +660,22 @@ def main() -> None:
         # The frozen panel records zero-based original index in the pass-2 file;
         # identify it through the immutable one-based stack index used here.
         candidates = []
-        for pass2_path in sorted(args.pass2_directory.glob("pass2_orig*_cs060.npz")):
+        current_size, _, _ = _factor_runtime_geometry(factor)
+        for pass2_path in sorted(
+            args.pass2_directory.glob(f"pass2_orig*_cs{current_size:03d}.npz")
+        ):
             with np.load(pass2_path, allow_pickle=False) as archive:
                 original = int(np.asarray(archive["original_index"]).item())
             if original + 1 == factor.stack_index:
                 candidates.append(pass2_path)
         _require(len(candidates) == 1, f"stack {factor.stack_index}: pass-2 capture identity is ambiguous")
-        particles.append(_analyze_particle(factor_path, candidates[0]))
+        particles.append(
+            _analyze_particle(
+                factor_path,
+                candidates[0],
+                physical_image_size=int(args.physical_image_size),
+            )
+        )
 
     geometry_closes = all(
         particle["support_exact"]
@@ -531,6 +689,7 @@ def main() -> None:
         "schema": SCHEMA,
         "status": "complete",
         "metric_policy": "exact/relative-L2 intermediates; no correlation; FSC/FSC-AUC remain map acceptance",
+        "physical_image_size": int(args.physical_image_size),
         "particle_count": len(particles),
         "classification": (
             "fixed_panel_scatter_geometry_closes"

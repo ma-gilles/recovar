@@ -2316,6 +2316,107 @@ def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monk
     np.testing.assert_allclose(np.asarray(ctf_volume), expected_ctf)
 
 
+def test_bpref_accumulator_delta_captures_exact_selected_launch(monkeypatch, tmp_path):
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    values = jnp.asarray(
+        [[[1.0 + 2.0j, 3.0 + 4.0j]], [[5.0 + 6.0j, 7.0 + 8.0j]]],
+        dtype=jnp.complex64,
+    )
+    ctf_values = jnp.asarray([[[2.0, 4.0]], [[6.0, 8.0]]], dtype=jnp.float32)
+    rotations = jnp.broadcast_to(
+        jnp.eye(3, dtype=jnp.float32), (2, 1, 3, 3)
+    )
+
+    def fake_fused(
+        y_volume,
+        ctf_volume,
+        particle_values,
+        particle_ctf_values,
+        window_indices,
+        particle_rotations,
+        **kwargs,
+    ):
+        del window_indices, particle_rotations, kwargs
+        return (
+            y_volume + jnp.sum(particle_values),
+            ctf_volume + jnp.sum(particle_ctf_values),
+        )
+
+    monkeypatch.setattr(
+        cuda_backproject, "relion_fused_x_half_backproject_indexed", fake_fused
+    )
+    monkeypatch.setattr(
+        bucketed_mod,
+        "_bpref_image_identities_for_original_indices",
+        lambda indices: np.asarray([f"{int(index) + 1}@stack.mrcs" for index in indices]),
+    )
+    monkeypatch.setenv("RECOVAR_BPREF_ACCUMULATOR_DELTA_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_BPREF_ACCUMULATOR_DELTA_ORIGINAL_INDICES", "7")
+    monkeypatch.setenv("RECOVAR_BPREF_ACCUMULATOR_DELTA_ITERATION", "1")
+    monkeypatch.setenv("RECOVAR_BPREF_ACCUMULATOR_DELTA_HALF", "1")
+    monkeypatch.setenv("RECOVAR_BPREF_ACCUMULATOR_DELTA_MAX_PARTICLES", "1")
+    monkeypatch.setenv("RECOVAR_BPREF_ACCUMULATOR_DELTA_MAX_BYTES", "1000000")
+    bucketed_mod.set_bpref_contribution_dump_context(iteration=1, half=1)
+    try:
+        bucketed_mod._accumulate_relion_x_half_per_particle_launches(
+            values,
+            ctf_values,
+            rotations,
+            np.asarray([1, 1], dtype=np.int32),
+            jnp.zeros(2, dtype=jnp.complex64),
+            jnp.zeros(2, dtype=jnp.float32),
+            window_indices=jnp.asarray([0, 1], dtype=jnp.int32),
+            image_shape=(8, 8),
+            volume_shape=(7, 7, 7),
+            disc_type="linear_interp",
+            half_volume=True,
+            max_r=2.0,
+            log_label_prefix="test-accumulator-delta",
+            particle_original_indices=np.asarray([3, 7], dtype=np.int64),
+            winner_take_all=True,
+            strict_particle_order=True,
+        )
+    finally:
+        bucketed_mod.clear_bpref_contribution_dump_context()
+
+    path = tmp_path / "bpref_accumulator_delta_it001_h1_orig000007.npz"
+    with np.load(path, allow_pickle=False) as capture:
+        assert capture["schema"].item() == "recovar-bpref-accumulator-delta-v2"
+        assert int(capture["original_index"]) == 7
+        assert int(capture["particle_launch_ordinal"]) == 1
+        assert capture["image_identity"].item() == "8@stack.mrcs"
+        assert (
+            capture["isolated_layout"].item()
+            == "RECOVAR interleaved complex64 data plus float32 weight"
+        )
+        np.testing.assert_array_equal(
+            capture["before_data"],
+            np.full(2, np.sum(np.asarray(values[0])), dtype=np.complex64),
+        )
+        np.testing.assert_array_equal(
+            capture["after_data"] - capture["before_data"],
+            np.full(2, np.sum(np.asarray(values[1])), dtype=np.complex64),
+        )
+        np.testing.assert_array_equal(
+            capture["before_weight"],
+            np.full(2, np.sum(np.asarray(ctf_values[0])), dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            capture["after_weight"] - capture["before_weight"],
+            np.full(2, np.sum(np.asarray(ctf_values[1])), dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            capture["isolated_data"],
+            np.full(2, np.sum(np.asarray(values[1])), dtype=np.complex64),
+        )
+        np.testing.assert_array_equal(
+            capture["isolated_weight"],
+            np.full(2, np.sum(np.asarray(ctf_values[1])), dtype=np.float32),
+        )
+
+
 def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
@@ -5942,6 +6043,74 @@ def test_prepare_bucket_io_routes_relion_cuda_operands_to_score_and_reconstructi
 
     expected_recon = _raw_real_process_half(batch) * jnp.asarray(image_corrections)[:, None]
     np.testing.assert_allclose(np.asarray(result[1]), np.asarray(expected_recon), rtol=1e-6, atol=1e-6)
+
+
+def test_prepare_bucket_io_normalizes_fft_and_scales_after_exact_bpref_translation(monkeypatch):
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    ds = MockDataset(n_images=1, seed=1701)
+
+    class _Backend:
+        image_mask_mode = "relion_background_fill"
+        relion_fourier_backend = "relion_cuda"
+
+    ds.image_source.backend = _Backend()
+
+    def process_half(batch, apply_image_mask=False, **kwargs):
+        del apply_image_mask
+        processed = _raw_real_process_half(batch)
+        factors = jnp.asarray(kwargs["relion_normalization_factors"], dtype=processed.real.dtype)
+        return processed * factors[:, None]
+
+    ds.process_images_half = process_half
+    batch_indices = np.asarray([0], dtype=np.int64)
+    batch = jnp.asarray(ds._images[batch_indices])
+    config = ForwardModelConfig.from_dataset(ds, disc_type="linear_interp", process_fn=ds.process_images)
+    n_half = IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1)
+    ctf_half = np.linspace(0.5, 1.5, n_half, dtype=np.float64)[None, :]
+    monkeypatch.setattr(
+        bucketed_mod,
+        "_relion_exact_ctf_half_from_source_star",
+        lambda *args, **kwargs: ctf_half,
+    )
+    calls = []
+
+    def fake_translate(images, weights, angles, pixel_indices, image_shape):
+        calls.append((np.asarray(images), np.asarray(weights)))
+        del pixel_indices, image_shape
+        return jnp.repeat(images * weights, int(angles.shape[0]), axis=0)
+
+    monkeypatch.setattr(cuda_backproject, "relion_translate_bpref_f32", fake_translate)
+    result = _prepare_bucket_io(
+        experiment_dataset=ds,
+        batch=batch,
+        ctf_params=jnp.asarray(ds.CTF_params[batch_indices]),
+        image_indices=batch_indices,
+        noise_variance_half=jnp.ones(n_half, dtype=jnp.float64),
+        fine_translations=jnp.zeros((1, 2), dtype=jnp.float32),
+        config=config,
+        n_trans=1,
+        score_with_masked_images=False,
+        half_spectrum_scoring=False,
+        image_corrections=np.ones(1, dtype=np.float32),
+        scale_corrections=np.ones(1, dtype=np.float32),
+        image_pre_shifts=None,
+        use_float64_scoring=False,
+        relion_score_translation_angles=jnp.zeros((1, 2), dtype=jnp.float32),
+        relion_exact_bpref_operands=True,
+    )
+
+    assert len(calls) == 1
+    fft_scale = np.float32(1.0 / np.prod(IMAGE_SHAPE))
+    expected_image = np.asarray(_raw_real_process_half(batch)) * fft_scale
+    expected_weight = ctf_half.astype(np.float32)
+    np.testing.assert_array_equal(calls[0][0], expected_image)
+    np.testing.assert_array_equal(calls[0][1], expected_weight)
+    np.testing.assert_array_equal(
+        np.asarray(result[1]),
+        np.asarray(_raw_real_process_half(batch)) * expected_weight,
+    )
 
 
 def test_prepare_bucket_io_windowed_reuses_unmasked_recon_shift_for_noise(monkeypatch):
