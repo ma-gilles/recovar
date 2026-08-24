@@ -453,9 +453,10 @@ def test_vdam_relion_continuation_can_capture_noise_sufficient_statistics():
     expected_tokens = [
         "VDAM_RELION_CONT_SIGMA2_NOISE_DUMP_DIR",
         'export RELION_DUMP_SIGMA2_NOISE_DIR=${SIGMA2_NOISE_DUMP_DIR}',
+        '--iter "${ITERATION}"',
     ]
     missing = [token for token in expected_tokens if token not in continuation]
-    assert not missing, f"VDAM continuation lost sigma2-noise capture wiring: {missing}"
+    assert not missing, f"VDAM continuation lost capture/target-iteration wiring: {missing}"
 
 
 def test_native_vdam_tau2_refresh_and_ssnr_diagnostics_are_merge_guarded():

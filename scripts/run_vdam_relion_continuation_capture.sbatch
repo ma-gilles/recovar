@@ -81,6 +81,7 @@ fi
 COMMAND=(
     srun --ntasks=1 --cpus-per-task=8 --cpu-bind=none "${RELION_BINARY}"
     --continue "${CONTINUE}" --o "${OUTPUT}/run"
+    --iter "${ITERATION}"
     --pool 3 --gpu 0 --j 8
 )
 printf '%q ' "${COMMAND[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
