@@ -777,3 +777,63 @@ an InitialModel form assertion. Its legacy full-journey portion cannot run on
 this machine because both hard-coded `old_regression_scores_v2` fixture roots
 are absent; the focused live-browser check covers the changed InitialModel
 surface independently.
+
+## Default-GUI 200-iteration expansion
+
+The earlier 25-iteration qualification does not establish parity across the
+full default InitialModel schedule.  The frozen
+`vdam-k1-gui-default-full-v1` suite now covers 22 small- and midscale fixtures
+and requires every artifact from iteration 0 through 200.  It spans uniform,
+Kent, and anisotropic poses; white and radial noise over low through very-high
+noise levels; no-CTF, contrast/noise scaling, translations, resolution and
+scale changes; junk particles; and outlier fractions through 70 percent.
+
+The first terminal tranche contains no passes.  These are strict
+point-reference failures; the fixed cross-engine FSC-AUC gate remains 0.999
+and the fixed RECOVAR-minus-RELION GT FSC-AUC floor remains -0.002.
+
+| Case | First failing iteration | Minimum cross-engine FSC-AUC | Minimum GT delta |
+|---|---:|---:|---:|
+| gf01 | 73 | 0.821270076 | -0.002129885 |
+| gf05 | 73 | 0.724679574 | -0.004098185 |
+| gf06 | 72 | 0.532028366 | -0.020190610 |
+| gf07 | 37 | 0.537170303 | -0.000228475 |
+| gf08 | 93 | 0.938161585 | -0.001214697 |
+| gf10 | 13 | 0.508864782 | -0.004549611 |
+| gf11 | 94 | 0.606768758 | -0.003905791 |
+| gf12 | 74 | 0.511178696 | -0.018881116 |
+| gf13 | 59 | 0.721548645 | -0.000959252 |
+| gf14 | 82 | 0.673242209 | -0.002398550 |
+| gf15 | 77 | 0.658667288 | -0.007948350 |
+| gf16 | 76 | 0.957551712 | -0.000651271 |
+
+The no-CTF gf16 row is an important discriminator: its GT-quality delta stays
+inside the frozen nondegradation gate while its cross-engine trajectory still
+fails.  Exact RELION dynamics and output quality are therefore separate open
+requirements.  The gf10 two-native/two-candidate same-GPU panel also fails its
+repeat envelope from iteration 13 through 200, so that late divergence is not
+accepted as stock RELION multimodality.
+
+For gf01, all 3,000 poses and translations agree through iteration 32.  At
+iteration 33 exactly one particle, `1003@particles.128.mrcs`, chooses a
+different fine pose.  Capturing that boundary required keeping three identity
+spaces separate: RECOVAR original row 1002, RELION shuffled internal particle
+6, and stack index 1003.  RELION continuation also regenerates the sampling
+perturbation unless it is forced; the sealed full run used 0.322510.  The
+capture harness now pins that perturbation, requires all replayed poses and
+translations to match the sealed iteration-33 state, and gates the target
+particle's Pmax independently of unrelated native Pmax variability.
+
+A preliminary corrected A100 comparison has exact 298-sample reconstruction
+support but reverses a two-candidate posterior near tie.  Native favors mapped
+key `[53, 58]` at 0.110033609 over `[52, 54]` at 0.109983251; RECOVAR favors
+`[52, 54]` at 0.110071361 over `[53, 58]` at 0.110054567.  Posterior relative
+L2 is 9.93e-4 and the maximum probability residual is 1.11e-4.  This localizes
+the first discrete split to fine-score/posterior arithmetic rather than
+significance support.  Same-GPU production and raw-score operand captures
+`12862068` and `12862069` are the acceptance evidence; no source fix is
+authorized from the preliminary cross-job comparison alone.
+
+The generic RECOVAR full/long suite is intentionally not part of this
+campaign.  Validation is the focused VDAM unit and merge guards plus frozen
+trajectory, repeat-envelope, parameter, scale, K>1, and real-data evidence.
