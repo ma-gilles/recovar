@@ -30,7 +30,10 @@ former iteration-110 OOM boundary through all 200 iterations at about 12.5 GB
 RSS.  Its frozen audit is a real parity failure: first failure at iteration 30
 (`0.99127` cross-engine FSC-AUC), minimum/final cross-engine FSC-AUC `0.15622`,
 and final RECOVAR-minus-RELION GT FSC-AUC `-0.01207`.  Runtime remains
-2.36--2.88x RELION on the completed small production cases.
+an independent failure: `vdam-gf06`, `vdam-gf09`, and `vdam-gf10` take
+`5.61x`, `6.51x`, and `2.91x` RELION wall time, respectively, while the
+20,000-particle `vdam-gf20` case takes `7.07x`.  The earlier completed small
+cases span `2.36--2.88x`.
 
 Source statement order alone is now rejected as sufficient.  Isolated commit
 `99681a33b` completed all 200 frozen `vdam-gf01` iterations (Slurm
