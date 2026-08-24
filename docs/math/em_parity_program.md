@@ -159,8 +159,19 @@ error.  The first causal operation is therefore the CUDA soft-mask background
 reduction.  Private build attempts `12893019`, `12893150`, `12893173`,
 `12893203`, and `12893255` all stopped during CMake dependency discovery and
 produced no executable or scientific evidence; that branch is abandoned.
-Same-GPU native repeat panel `12893600` now calibrates this atomic reduction
-before selecting a production topology.
+Failed setup jobs `12893490`, `12893600`, `12893669`, `12893744`, and
+`12894645` produced no science.  Valid same-H100 panels `12893945` and
+`12894797`, with audits `12894421`, `12894863`, and `12895553`, establish the
+repeat boundary.  For exact iteration-1 normalized input, stock RELION spans
+15 float32 ULP in the soft-mask background.  The deterministic block-first
+value is inside that range and one ULP from its nearest sampled value.  Across
+all 480 candidate scores, RECOVAR's nearest centered native RMS is `1.5012e-5`
+versus native/native maximum `2.7816e-5`; 296 candidates are inside the
+coordinatewise native envelope and 184 remain outside.  Native atomics add
+schedule dependence without guaranteeing a closer trajectory, so no
+production topology change is accepted.  The next discriminator is the
+aggregate iteration-2 noise update under deterministic-lane and native-atomic
+modes.
 
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired

@@ -805,7 +805,8 @@ and the fixed RECOVAR-minus-RELION GT FSC-AUC floor remains -0.002.
 | gf13 | 59 | 0.721548645 | -0.000959252 |
 | gf14 | 82 | 0.673242209 | -0.002398550 |
 | gf15 | 77 | 0.658667288 | -0.007948350 |
-| gf16 | 76 | 0.957551712 | -0.000651271 |
+| gf16 | 76 | 0.957551841 | -0.000651299 |
+| gf18 | 31 | 0.675630118 | -0.003830814 |
 
 The no-CTF gf16 row is an important discriminator: its GT-quality delta stays
 inside the frozen nondegradation gate while its cross-engine trajectory still
@@ -837,3 +838,16 @@ authorized from the preliminary cross-job comparison alone.
 The generic RECOVAR full/long suite is intentionally not part of this
 campaign.  Validation is the focused VDAM unit and merge guards plus frozen
 trajectory, repeat-envelope, parameter, scale, K>1, and real-data evidence.
+
+The exact-from-zero same-H100 iteration-1 soft-mask panel `12894797` and GPU
+audits `12894863` and `12895553` calibrate the first image boundary without
+changing that strict status.  All eight normalized/shifted inputs are
+bit-identical, while stock RELION's background spans 15 float32 ULP.  The
+current deterministic block-first result lies inside that range and one ULP
+from its nearest sampled value.  Across all 480 score candidates, RECOVAR's
+nearest centered native RMS is `1.5012e-5`, below the native/native maximum
+`2.7816e-5`; 296 candidates are inside the coordinatewise native envelope and
+184 remain outside.  Native atomics add schedule dependence without
+guaranteeing a closer trajectory, so no production topology change is
+accepted.  The next discriminator is the aggregate iteration-2 noise update
+under deterministic-lane and native-atomic modes.
