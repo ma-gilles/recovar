@@ -53,8 +53,12 @@ target; those maps are quarantined as a source-order repeat.  Follow-up commit
 `f98530a42` carries raw VDAM operands through the established physical-particle
 sparse packing boundary.  Bounded job `12885370_1` completes with exact
 iteration-1 particle state and three compiled fused-target executables; the
-discriminating full frozen trajectory is `12885473_1`.  Both commits remain
-unpushed until that audit completes.  In parallel, the immutable 22-case
+discriminating full frozen trajectory is `12885473_1`.  Executable inspection
+confirms three compiled `cuda_relion_vdam_mstep_fused_x_half` targets.  Its
+partial audit remains essentially exact through the old iteration-31 failure
+boundary (cross-engine FSC-AUC `0.999999999878`) with zero divergent particle
+states at iterations 1, 8, 16, 20, 24, and 31.  Both commits remain unpushed
+until the complete 0--200 audit and runtime measurement finish.  In parallel, the immutable 22-case
 matrix, severe-memory case, and controlled same-GPU repeat panel continue as
 evidence collection; generic RECOVAR full/long tests are deliberately outside
 this EM-only validation scope.
