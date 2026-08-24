@@ -233,6 +233,10 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         '--threads "${RELION_THREADS:-8}"',
         '--relion-refine "${RELION_REFINE}"',
         'mkdir -p "${RELION_ACC_DUMP_DIR}"',
+        "export RELION_DUMP_DIR=",
+        "export RELION_DUMP_PART_ID=",
+        "export RELION_DUMP_ITER=",
+        "store_Fimg_unweighted_nomask store_Minvsigma2 sigma2_noise sigma2_fudge",
     ]
     haystack = "\n".join([guard, runner, auditor, sbatch])
     missing = [token for token in expected_tokens if token not in haystack]
