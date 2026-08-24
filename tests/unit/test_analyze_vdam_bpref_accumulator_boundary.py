@@ -3,7 +3,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from scripts.analyze_vdam_bpref_accumulator_boundary import _geometry, _rank_particle_sources
+from recovar.em.bpref_contribution_replay import BPrefAccumulatorReplay
+from scripts.analyze_vdam_bpref_accumulator_boundary import (
+    _geometry,
+    _rank_particle_sources,
+    _to_relion_bpref_frame,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -36,6 +41,27 @@ def test_geometry_separates_parallel_and_orthogonal_candidate_error():
         "candidate_projection_on_native_delta": 0.5,
         "candidate_orthogonal_over_native_delta": 1.5,
     }
+
+
+@pytest.mark.unit
+def test_relion_bpref_frame_conversion_applies_fft_sign_and_scales():
+    replay = BPrefAccumulatorReplay(
+        data=np.asarray([1 + 2j], dtype=np.complex128),
+        weight=np.asarray([3.0], dtype=np.float64),
+        backend="raw",
+        order="execution",
+        precision="complex128/float64",
+        launch_topology="fixture",
+    )
+
+    converted = _to_relion_bpref_frame(replay, ori_size=4)
+
+    np.testing.assert_array_equal(converted.data, np.asarray([-16 - 32j]))
+    np.testing.assert_array_equal(converted.weight, np.asarray([768.0]))
+    assert converted.backend == "raw_relion_bpref_frame"
+    assert converted.order == replay.order
+    assert converted.precision == replay.precision
+    assert converted.launch_topology == replay.launch_topology
 
 
 @pytest.mark.unit

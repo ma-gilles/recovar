@@ -16,7 +16,12 @@ from recovar.em.bpref_contribution_replay import (
     replay_relion_double,
     summarize_bpref_contribution_bundle,
 )
-from scripts.analyze_vdam_mstep_boundary import _read_relion_array
+from recovar.em.initial_model.layout import relion_bpref_frame_scales
+
+if __package__:
+    from scripts.analyze_vdam_mstep_boundary import _read_relion_array
+else:
+    from analyze_vdam_mstep_boundary import _read_relion_array
 
 SCHEMA = "recovar.vdam_bpref_accumulator_boundary.v1"
 
@@ -87,6 +92,24 @@ def _geometry(candidate: np.ndarray, native: np.ndarray, control: np.ndarray) ->
     }
 
 
+def _to_relion_bpref_frame(
+    replay: BPrefAccumulatorReplay,
+    *,
+    ori_size: int,
+) -> BPrefAccumulatorReplay:
+    """Convert a raw scatter replay to RELION's stored BPref FFT frame."""
+
+    data_scale, weight_scale = relion_bpref_frame_scales(ori_size)
+    return BPrefAccumulatorReplay(
+        data=np.asarray(replay.data) * data_scale,
+        weight=np.asarray(replay.weight) * weight_scale,
+        backend=f"{replay.backend}_relion_bpref_frame",
+        order=replay.order,
+        precision=replay.precision,
+        launch_topology=replay.launch_topology,
+    )
+
+
 def analyze(
     contribution_paths: list[Path],
     native_directory: Path,
@@ -119,12 +142,16 @@ def analyze(
     )
     from recovar.relion_bind._relion_bind_core import TRILINEAR, get_backprojector_data
 
+    ori_size = int(np.asarray(bundle.boundary_values["image_shape"])[0])
     deterministic = {
-        order: replay_relion_double(
-            bundle,
-            order=order,
-            get_backprojector_data=get_backprojector_data,
-            interpolator=TRILINEAR,
+        order: _to_relion_bpref_frame(
+            replay_relion_double(
+                bundle,
+                order=order,
+                get_backprojector_data=get_backprojector_data,
+                interpolator=TRILINEAR,
+            ),
+            ori_size=ori_size,
         )
         for order in ("execution", "canonical")
     }
