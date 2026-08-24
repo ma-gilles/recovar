@@ -16,13 +16,14 @@ as the next product milestone rather than mixing it into the first closure.
 
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
-`vdam-gf01`--`vdam-gf05`, `vdam-gf07`, and `vdam-gf08` all fail the unchanged
-`0.999` cross-engine FSC-AUC gate, first at iterations 31, 82, 68, 72, 33, 57,
-and 93.  Their minimum cross-engine FSC-AUC values are `0.66914`, `0.68797`,
-`0.55649`, `0.49680`, `0.66096`, `0.57190`, and `0.94109`.  Independent
+`vdam-gf01`--`vdam-gf08` and `vdam-gf10` all fail the unchanged `0.999`
+cross-engine FSC-AUC gate, first at iterations 31, 82, 68, 72, 33, 72, 57,
+93, and 73.  Their minimum cross-engine FSC-AUC values are `0.66914`,
+`0.68797`, `0.55649`, `0.49680`, `0.66096`, `0.53190`, `0.57190`, `0.94109`,
+and `0.72508`.  Independent
 native-RELION triplets show that `vdam-gf02`, `vdam-gf03`, and `vdam-gf05`
 leave their sampled native-repeat envelopes; `vdam-gf03`, `vdam-gf04`, and
-`vdam-gf07` also miss the `-0.002` GT-delta gate.  These are active parity
+`vdam-gf06`, and `vdam-gf07` also miss the `-0.002` GT-delta gate.  These are active parity
 failures, not tolerance candidates.  A bounded-memory change carried the
 20,000-particle severe-outlier/radial-noise `vdam-gf20` trajectory beyond its
 former iteration-110 OOM boundary through all 200 iterations at about 12.5 GB
