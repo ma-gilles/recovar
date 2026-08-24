@@ -17,16 +17,16 @@ REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 LAUNCHER=${REPO}/scripts/run_k1_case10_it1_bpref_particle_delta_compare.sbatch
 ANALYZER=${REPO}/scripts/analyze_k1_bpref_particle_deltas.py
-NATIVE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_it1_bpref_particle_delta_20260824T0635ET
-RECOVAR_H1=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it1_bpref_particle_delta_recovar_h1_4a3a34bd7_20260824T0615ET
-RECOVAR_H2=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it1_bpref_particle_delta_recovar_h2_4a3a34bd7_20260824T0615ET
+NATIVE=${NATIVE_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_it1_bpref_particle_delta_20260824T0635ET}
+RECOVAR_H1=${RECOVAR_H1_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it1_bpref_particle_delta_recovar_h1_4a3a34bd7_20260824T0615ET}
+RECOVAR_H2=${RECOVAR_H2_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it1_bpref_particle_delta_recovar_h2_4a3a34bd7_20260824T0615ET}
 OUTPUT=${ROOT}/analysis/K1_CASE10_BPREF_PARTICLE_DELTA.json
 
 test -f "${ROOT}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
-test -f "${NATIVE}/SUCCESS_12875097"
-test -f "${RECOVAR_H1}/SUCCESS_12874191"
-test -f "${RECOVAR_H2}/SUCCESS_12874192"
+test -n "$(find "${NATIVE}" -maxdepth 1 -name 'SUCCESS_*' -print -quit)"
+test -n "$(find "${RECOVAR_H1}" -maxdepth 1 -name 'SUCCESS_*' -print -quit)"
+test -n "$(find "${RECOVAR_H2}" -maxdepth 1 -name 'SUCCESS_*' -print -quit)"
 mkdir -p "${ROOT}/analysis" "${ROOT}/provenance"
 test -z "$(find "${ROOT}/analysis" -mindepth 1 -print -quit)"
 

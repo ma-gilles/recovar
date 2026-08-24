@@ -22677,11 +22677,13 @@ scatter-geometry audit injected native factor rows into RECOVAR's kernel and
 proved that the FFI preserves those rows and produces exact support,
 coordinates, folds, destinations, and interpolation coefficients.  It did not
 prove that RECOVAR's live production pre-scatter rows were bitwise equal to
-native.  The primitive panel measures the live production operand residual at
-approximately `1e-7`--`2e-7`.  A counterfactual native raw-weight/output-scale
-operand is bitwise exact, but its full-population production A/B already
-slightly regressed both half accumulators.  Thus small operand differences are
-real but are not sufficient to explain or repair the roughly `1e-6` complete
+native.  The primitive panel measures a single-run live production residual at
+approximately `1e-7`--`2e-7`.  The independent replay below shows that this is
+not distinguishable from the fused atomic kernel's isolated-particle repeat
+floor.  A counterfactual native raw-weight/output-scale operand is bitwise
+exact, but its full-population production A/B already slightly regressed both
+half accumulators.  Thus the primitive panel does not establish a systematic
+operand defect and does not explain or repair the roughly `1e-6` complete
 pre-join gap.
 
 The next focused discriminator is therefore the shared production reduction
@@ -22695,6 +22697,18 @@ the same assignment and merge sequence in RECOVAR.  Compare numerator and
 denominator prefixes before reconstruction.  A terminal K=1 trajectory remains
 unauthorized until this focused intervention moves both half accumulators in
 the same direction.
+
+Source audit of the rejected four-stream patch makes the mismatch more exact:
+the patch iterated over the concatenated rotation-row axis and selected
+`stream_index = row % child_stream_count`.  A fresh case-10 particle owns eight
+rotation rows, so this split one particle across all four streams.  RELION
+instead assigns the complete particle to one `MlOptimiserCuda`, launches its
+complete rotation grid on that optimiser's class stream, synchronizes that
+stream after the particle, and only then claims another particle from the
+shared task distributor.  A valid RECOVAR concurrency discriminator must
+therefore pass explicit particle row offsets into CUDA and schedule whole
+particle grids with at most four particles in flight.  The rejected row-level
+round-robin result cannot falsify that whole-particle schedule.
 
 ## 2026-08-24 08:17 EDT — cross-half signal coherence is not residual coherence
 
@@ -22852,3 +22866,137 @@ Both run and runtime roots contain `SAFE_TO_DELETE`.  If the native j=1
 denominator moves materially toward RECOVAR, inter-stream atomic order is
 causal.  If it remains near the j=4 native value, the search returns to the
 live denominator operands/kernel rather than scheduling.
+
+## 2026-08-24 10:04 EDT — isolated particle residual is inside RECOVAR's atomic repeat floor
+
+Independent H100 capture jobs `12881270` and `12881271` and comparison job
+`12881293` completed `0:0`.  They repeated the same fixed eight-particle panel
+per half from the same `5b4e1e731` source and native reference.  The second
+native-comparison panel scores `9/16` numerator, `16/16` denominator, and
+`9/16` joint at the fixed `2e-7` bound.  Numerator relative L2 spans
+`1.32718e-7`--`2.41903e-7` with median `1.88784e-7`; denominator spans
+`1.03768e-7`--`1.27448e-7` with median `1.16792e-7`.
+
+More importantly, direct RECOVAR-repeat comparison of the stored zero-prefix
+arrays gives isolated-numerator relative L2
+`1.100e-7`--`1.373e-7` (median `1.203e-7`) and isolated-denominator relative
+L2 `8.942e-8`--`1.278e-7` (median `1.059e-7`).  None of the `16` numerator or
+denominator arrays is bit-exact across the two H100 runs.  The per-particle
+RECOVAR-to-native residual is therefore within RECOVAR's own nondeterministic
+atomic repeat floor and cannot support an operand-formula diagnosis.  In
+contrast, the complete RECOVAR accumulator repeats at approximately `3e-9`
+while its denominator gap to native remains approximately `8.7e-7`.  The
+stable discrepancy is created by the all-particle accumulation history, not
+by a stable isolated-particle delta.
+
+The checked comparison is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it1_bpref_particle_delta_v2_compare_5b4e1e731_20260824T0948ET/analysis/K1_CASE10_BPREF_PARTICLE_DELTA.json`,
+SHA-256 `5039e1317573252f6ae52360cefb865fa6c344122d1e1a7d689111e3e6dc2078`.
+All three run roots and both runtime roots contain `SAFE_TO_DELETE`.  This
+strengthens the pending whole-particle concurrency/reduction discriminator and
+rejects further scalar live-operand tuning without a lower-noise native
+operand capture.
+
+## 2026-08-24 10:43 EDT — native thread/stream concurrency is rejected
+
+Native job `12880304` completed its required physical-iteration-1 BPref
+boundary under `--j 1 --pool 12`; it then continued naturally into iteration
+2 because the launcher used `--auto_iter_max 2`.  The running job was not
+cancelled or modified.  Its complete iteration-1 artifacts were analyzed
+read-only before job termination and compared with the deployed `--j 4 --pool
+3` control.
+
+At pre-low-resolution join, changing native concurrency alters the raw
+denominator by only `1.84608e-8` and `1.89012e-8` relative L2 in halves 1 and
+2, essentially the measured native repeat floor.  RECOVAR remains
+`8.67962e-7` and `8.70683e-7` from the serial native result.  Substituting the
+serial-to-control native intervention removes only `0.011965%` and `0.010507%`
+of the squared RECOVAR gap; the residual norm ratios remain `0.9999402` and
+`0.9999475`.  The intervention is therefore both too small and almost
+orthogonal to the cross-engine residual.
+
+The authoritative reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_it1_bpref_j1_early_compare_20260824T1025ET/analysis/PREJOIN_HALF1_WITH_NATIVE_CONTROL.json`
+(SHA-256 `8708b22ebe4e059726845f795496a8adeaa56a4368c7d8eb5ef5ced79e494aa2`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_it1_bpref_j1_early_compare_20260824T1025ET/analysis/PREJOIN_HALF2_WITH_NATIVE_CONTROL.json`
+(SHA-256 `8957d1c70f51b189b7dc9160fcfec8dfc00fff6fe82de7849da2377280d2f4a3`).
+Both manual analysis and runtime roots contain `SAFE_TO_DELETE`.
+
+This falsifies native inter-thread/inter-stream atomic ordering as the missing
+K=1 correction.  The corrected whole-particle RECOVAR scheduler was compiled
+and smoke-tested only as a default-off diagnostic, never used for a science
+claim, and removed after this gate failed.  No trajectory is authorized.  The
+next first-divergence test must compare the live denominator kernel boundary
+under identical source rows and destinations, including native launch/block
+topology and accumulator-update arithmetic; another thread-count or scalar
+operand arm is not justified.
+
+## 2026-08-24 11:52 EDT — live source rows localize the remaining fused-kernel boundary
+
+RECOVAR live-source capture job `12886469` completed naturally (`0:0`,
+`00:13:06`) and its dependent primitive comparison `12886488` completed
+`0:0` in twelve seconds.  The run roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it1_bpref_prescatter_live1_recovar_5b4e1e731_20260824T1130ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it1_bpref_prescatter_live1_compare_5b4e1e731_20260824T1132ET`;
+their runtime roots and every run root contain `SAFE_TO_DELETE`.
+
+The corrected arm explicitly enabled the guarded live binary64 startup
+spectrum.  Its variance array is byte-exact to the sealed source-faithful
+spectrum and remains float64 in the high-precision contribution bundle.  CTF
+including scale is bit-exact for `16/16` particles.  Replaying RELION's native
+unit order is also bit-exact for all `16/16` particles for:
+
+- `CTF * Minvsigma2`;
+- `(Minvsigma2 * CTF) * CTF`;
+- normalized cuFFT image, native translation angles, raw native weight, and
+  output scale.
+
+The primitive report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it1_bpref_prescatter_live1_compare_5b4e1e731_20260824T1132ET/analysis/K1_CASE10_IT1_BPREF_PRIMITIVES.json`,
+SHA-256 `07c3496b2bd2dd10e7be1593aab34b812dea113c2d7cd3ffa1dea7448c2517de`.
+Its legacy `inverse_noise` label reconstructs the reciprocal after converting
+the saved variance to RECOVAR-normalized coordinates and therefore is not the
+authoritative live source-row boundary.
+
+A new deterministic analyzer instead joins the values that production
+actually handed to RECOVAR's scatter kernel with RELION's passive in-kernel
+pre-scatter summaries.  Particle identity, the eight rotation matrices, and
+the rotation-row gather are exact for all `16/16`; every gather is the identity
+`[0,1,2,3,4,5,6,7]`.  Across the eight-particle panel in each half, live
+pre-scatter numerator relative L2 has minimum/median/maximum
+`8.45127e-8 / 1.65682e-7 / 2.12375e-7`; denominator has
+`6.56967e-8 / 6.95519e-8 / 7.76159e-8`.  No row array is bit-exact.  The
+authoritative source-row report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_it1_bpref_live_source_rows_5b4e1e731_20260824T1150ET/analysis/K1_CASE10_IT1_BPREF_LIVE_SOURCE_ROWS.json`,
+SHA-256 `10c623a6ca65452070c8c79fee4e4b02e1f3ef976bfe4ce453b69b61bd614d93`.
+The focused analyzer suite passes `14/14` with CPU-forced JAX.
+
+This resolves an important distinction.  The startup spectrum, CTF, particle
+order, rotation order, scatter destinations, Hermitian folds, and trilinear
+coefficients are closed.  The remaining live row residual is caused by
+moving RELION's native-unit float32 rounding boundary into RECOVAR-normalized
+coordinates and by forming translation/weight rows in a separate kernel.
+The already tested raw-native-weight/output-scale arm made the fixed-panel
+operand exact but slightly regressed the complete accumulators, so changing
+only that scalar order is insufficient.  RELION forms `Fweight`, translated
+data, and the scatter atomics inside one orientation-owned CUDA block;
+RECOVAR currently precomputes source rows, then launches a separate scatter
+kernel.  Native CPU thread/stream scheduling is independently rejected above.
+
+The next focused candidate is therefore a fresh-K=1 firstiter-only fused CUDA
+diagnostic that consumes the live binary64-derived native inverse noise,
+native CTF, posterior/translation table, processed image, and rotation grid,
+then executes RELION's translation loop and eight neighbor atomics in one
+block-owned kernel.  Its first gate is the same fixed 16-particle isolated
+accumulator and complete iteration-1 pre-join numerator/denominator.  A
+multi-iteration trajectory is authorized only if both halves improve
+materially in the same direction.
+
+Comparison job `12885737` is retained as a harness-only failure: it used the
+panel's structural selection file without the later preprocessing-geometry
+fields.  Retry `12886385` completed with the enriched immutable selection,
+but that source capture had explicitly set live initial noise off and is a
+valid rounded-noise control rather than evidence about the remaining live
+boundary.

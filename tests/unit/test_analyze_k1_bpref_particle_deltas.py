@@ -117,3 +117,74 @@ def test_particle_delta_analyzer_closes_exact_scaled_panel(tmp_path, monkeypatch
         for particle in report["particles"]
         for field in ("numerator", "denominator")
     )
+
+
+def test_particle_delta_analyzer_measures_recovar_repeat_floor(tmp_path, monkeypatch):
+    native = tmp_path / "native"
+    half1 = tmp_path / "half1"
+    half2 = tmp_path / "half2"
+    repeat1 = tmp_path / "repeat1"
+    repeat2 = tmp_path / "repeat2"
+    for path in (native, half1, half2, repeat1, repeat2):
+        path.mkdir()
+    native_data = np.ones(18, dtype=np.complex64)
+    native_weight = np.ones(18, dtype=np.float32)
+    for half, original_index in ((1, 0), (2, 3)):
+        _write_native_particle(
+            native,
+            rank=half,
+            part_id=original_index,
+            stack_index=original_index + 1,
+            data=native_data,
+            weight=native_weight,
+        )
+        data = -native_data / np.float32(4**2)
+        weight = native_weight / np.float32(4**4)
+        _write_recovar_particle(
+            half1 if half == 1 else half2,
+            half=half,
+            original_index=original_index,
+            data=data,
+            weight=weight,
+        )
+        repeat_data = data.copy()
+        repeat_data[0] = np.complex64(
+            np.nextafter(repeat_data[0].real, np.float32(0.0))
+            + 1j * repeat_data[0].imag
+        )
+        _write_recovar_particle(
+            repeat1 if half == 1 else repeat2,
+            half=half,
+            original_index=original_index,
+            data=repeat_data,
+            weight=weight,
+        )
+
+    output = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "analyze_k1_bpref_particle_deltas.py",
+            "--native-directory",
+            str(native),
+            "--recovar-directory-half1",
+            str(half1),
+            "--recovar-directory-half2",
+            str(half2),
+            "--recovar-repeat-directory-half1",
+            str(repeat1),
+            "--recovar-repeat-directory-half2",
+            str(repeat2),
+            "--grid-size",
+            "4",
+            "--output-json",
+            str(output),
+        ],
+    )
+    analyzer.main()
+    repeat = json.loads(output.read_text())["recovar_repeat"]["summary"]
+    assert repeat["isolated_numerator"]["bit_exact_count"] == 0
+    assert repeat["isolated_numerator"]["relative_l2_max"] > 0.0
+    assert repeat["isolated_denominator"]["bit_exact_count"] == 2
+    assert repeat["isolated_denominator"]["relative_l2_max"] == 0.0
