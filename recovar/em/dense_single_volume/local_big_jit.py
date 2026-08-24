@@ -46,6 +46,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_powerclass_highres_xi2_half,
     _relion_cuda_powerclass_highres_xi2_half_atomic,
     _relion_cuda_powerclass_highres_norm_units,
+    _relion_cuda_powerclass_spectrum_norm_units,
     _relion_f32_fine_reconstruction_probs,
 )
 from recovar.em.dense_single_volume.local_backprojection import compute_local_weighted_sums
@@ -215,6 +216,7 @@ def _noise_image_power_shells_and_per_image(
     image_shape,
     current_size,
     include_unweighted_high_shell: bool = True,
+    use_relion_cuda_powerclass_spectrum: bool = False,
 ):
     """Return RELION's noise-spectrum and norm-correction image power.
 
@@ -236,6 +238,21 @@ def _noise_image_power_shells_and_per_image(
     )
     weighted_half = jnp.sum(pixel_power * power_mass, axis=0).astype(jnp.float32)
     shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
+    if (
+        use_relion_cuda_powerclass_spectrum
+        and current_size is not None
+        and projection_max_r not in ("auto", None)
+        and include_unweighted_high_shell
+    ):
+        exact_spectra = _relion_cuda_powerclass_spectrum_norm_units(
+            processed_noise_power_half,
+            image_shape=image_shape,
+            current_size=current_size,
+        )
+        exact_spectra = jnp.where(valid_image_mask[:, None], exact_spectra, 0.0)
+        exact_shells = jnp.sum(exact_spectra, axis=0).astype(jnp.float32)
+        shell_ids = jnp.arange(shell_count, dtype=jnp.int32)
+        shells = jnp.where(shell_ids > int(projection_max_r), exact_shells, shells)
     per_image = _norm_correction_image_power_per_image(
         processed_noise_power_half,
         support_mass,
@@ -1591,6 +1608,7 @@ def run_local_bucket_big_jit(
             image_shape=image_shape,
             current_size=norm_current_size,
             include_unweighted_high_shell=include_unweighted_norm_high_shell,
+            use_relion_cuda_powerclass_spectrum=relion_exact_fine_diff2,
         )
         noise_img_power = noise_img_power + batch_img_power_shells
         noise_sumw = noise_sumw + jnp.sum(support_mass)

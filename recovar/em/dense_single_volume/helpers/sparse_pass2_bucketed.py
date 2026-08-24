@@ -6883,6 +6883,48 @@ def _relion_cuda_powerclass_spectrum_highres_norm_units(
     return high_shell * jnp.asarray((image_height * image_width) ** 2, dtype=jnp.float64)
 
 
+@partial(jax.jit, static_argnames=("image_shape", "current_size"))
+def _relion_cuda_powerclass_spectrum_norm_units(
+    processed_score_half,
+    *,
+    image_shape,
+    current_size,
+):
+    """Return RELION's atomically binned per-image power spectrum in N^4 units."""
+
+    from recovar import cuda_backproject
+
+    image_height = int(image_shape[0])
+    image_width = int(image_shape[1])
+    if image_height != image_width:
+        raise ValueError(f"RELION powerClass parity requires square images, got {image_shape}")
+    half_width = image_width // 2 + 1
+    processed_score_half = jnp.asarray(processed_score_half, dtype=jnp.complex64)
+    if processed_score_half.ndim != 2 or processed_score_half.shape[-1] != image_height * half_width:
+        raise ValueError(
+            "RELION powerClass input must be flattened centred rfft images, got "
+            f"{processed_score_half.shape} for image_shape={image_shape}"
+        )
+    relion_image = jnp.roll(
+        processed_score_half.reshape((-1, image_height, half_width)),
+        -(image_height // 2),
+        axis=1,
+    ).reshape((processed_score_half.shape[0], -1))
+    relion_image = (
+        relion_image / jnp.asarray(image_height * image_width, dtype=jnp.float32)
+    ).astype(jnp.complex64)
+    spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
+        relion_image,
+        xdim=half_width,
+        ydim=image_height,
+        resolution_limit=int(current_size) // 2 + 1,
+    )
+    return spectrum_and_highres[:, :half_width] * jnp.asarray(
+        (image_height * image_width) ** 2,
+        dtype=jnp.float32,
+    )
+
+
 def _relion_cuda_fine_diff2_min(diff2, candidate_mask):
     """Return one finite float32 minimum per image over a raw diff2 tensor."""
 
