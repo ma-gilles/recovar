@@ -285,6 +285,12 @@ def test_parity_sbatch_sets_launch_mode_before_gpu_provenance_gate():
     assert launch_mode < gpu_gate
 
 
+def test_runner_records_native_atomic_softmask_counterfactual():
+    source = (Path(__file__).resolve().parents[3] / "scripts" / "run_vdam_relion_parity_case.py").read_text()
+
+    assert '"RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION"' in source
+
+
 def test_native_cli_custom_cuda_gate_primes_shared_slicing_dispatch(monkeypatch):
     import jax
 
