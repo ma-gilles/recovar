@@ -29,6 +29,7 @@ from typing import Callable, Sequence
 
 import numpy as np
 
+from ..dense_single_volume.mean_helpers import _relion_optimizer_average_pmax
 from .m_step import vdam_m_step
 from .schedules import (
     DEFAULT_GRAD_EM_ITERS,
@@ -390,9 +391,21 @@ def update_image_size_and_resolution_pointers(state: InitialModelState) -> Initi
 def _ave_pmax_from_meta(meta: dict) -> float | None:
     pmax = meta.get("max_posterior_per_image")
     if pmax is not None:
-        arr = np.asarray(pmax, dtype=np.float64)
+        arr = np.asarray(pmax, dtype=np.float32)
         if arr.size:
-            return float(np.mean(arr))
+            # RELION accumulates Pmax over all VDAM pseudo-halfsets, then
+            # divides by the retained M-step posterior mass (rather than the
+            # particle count).  Treat the two pseudo-halfsets as one optimiser
+            # population when reusing the Class3D normalization helper.
+            normalization_mass = meta.get("class_posterior_sums")
+            if normalization_mass is not None:
+                normalization_mass = float(np.sum(np.asarray(normalization_mass, dtype=np.float64)))
+            elif meta.get("noise_sumw") is not None:
+                normalization_mass = float(meta["noise_sumw"])
+            if normalization_mass is not None:
+                _, average, _ = _relion_optimizer_average_pmax([arr], [normalization_mass])
+                return average
+            return float(np.mean(arr, dtype=np.float64))
 
     weighted_sum = 0.0
     count = 0

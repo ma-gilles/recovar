@@ -13,6 +13,7 @@ import pytest
 
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.iteration_loop import (
+    _ave_pmax_from_meta,
     refresh_tau2_from_projector_power,
     relion_solvent_flatten_state,
     relion_solvent_mask,
@@ -27,6 +28,37 @@ from recovar.em.initial_model.m_step import VdamAccumulator
 from recovar.em.initial_model.subset import numpy_rnd_unif_factory
 
 pytestmark = pytest.mark.unit
+
+
+def test_ave_pmax_uses_combined_vdam_retained_posterior_mass():
+    pmax = np.asarray([0.25, 0.5, 0.75, 1.0], dtype=np.float32)
+    retained_mass = np.asarray([3.5], dtype=np.float64)
+
+    actual = _ave_pmax_from_meta(
+        {
+            "max_posterior_per_image": pmax,
+            "class_posterior_sums": retained_mass,
+            "noise_sumw": 1.0,
+        }
+    )
+
+    assert actual == pytest.approx(float(np.sum(pmax, dtype=np.float64)) / 3.5)
+
+
+def test_ave_pmax_uses_noise_mass_when_class_mass_is_unavailable():
+    pmax = np.asarray([0.2, 0.4], dtype=np.float32)
+
+    actual = _ave_pmax_from_meta({"max_posterior_per_image": pmax, "noise_sumw": 1.5})
+
+    assert actual == pytest.approx(float(np.sum(pmax, dtype=np.float64)) / 1.5)
+
+
+def test_ave_pmax_retains_plain_mean_fallback_for_minimal_callbacks():
+    pmax = np.asarray([0.2, 0.4], dtype=np.float32)
+
+    actual = _ave_pmax_from_meta({"max_posterior_per_image": pmax})
+
+    assert actual == pytest.approx(float(np.mean(pmax, dtype=np.float64)))
 
 
 @pytest.fixture(scope="module")
