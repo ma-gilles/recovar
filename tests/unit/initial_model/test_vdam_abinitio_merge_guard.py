@@ -472,6 +472,7 @@ def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
         'RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE}',
         "RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY",
         "RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256",
+        "resolved_image_names = np.asarray(",
         "bpref_contribution_rows_it001_h*.npz",
         '"nr_iter_schedule":%d',
         '"stopped_after_iteration":%d',

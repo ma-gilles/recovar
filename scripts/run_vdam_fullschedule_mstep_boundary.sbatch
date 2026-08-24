@@ -197,17 +197,22 @@ image_names = np.asarray(particles["rlnImageName"].astype(str).tolist())
 if image_names.ndim != 1 or image_names.size == 0:
     raise SystemExit("VDAM BPref capture requires nonempty rlnImageName metadata")
 stack_paths = []
+image_numbers = []
 for image_name in image_names.tolist():
-    _index, separator, stack_name = image_name.partition("@")
-    if separator != "@" or not stack_name:
+    image_number, separator, stack_name = image_name.partition("@")
+    if separator != "@" or not stack_name or int(image_number) <= 0:
         raise SystemExit(f"invalid rlnImageName: {image_name}")
+    image_numbers.append(int(image_number))
     stack_path = Path(stack_name)
     if not stack_path.is_absolute():
         stack_path = Path(data_directory) / stack_path
     stack_paths.append(stack_path.resolve())
 if len(set(stack_paths)) != 1 or not stack_paths[0].is_file():
     raise SystemExit("VDAM BPref capture requires one resolved particle stack")
-np.save(output_path, image_names)
+resolved_image_names = np.asarray(
+    [f"{image_number}@{stack_path}" for image_number, stack_path in zip(image_numbers, stack_paths)]
+)
+np.save(output_path, resolved_image_names)
 print(stack_paths[0])
 print(image_names.size)
 PY
