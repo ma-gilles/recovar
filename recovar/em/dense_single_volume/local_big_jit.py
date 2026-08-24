@@ -41,6 +41,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_cuda_translate_wavg_norm_images,
     _relion_cuda_fine_diff2_to_scores,
     _relion_cuda_pixel_correction_from_rfloat_ctf,
     _relion_cuda_powerclass_highres_xi2_half,
@@ -48,6 +49,8 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_powerclass_highres_norm_units,
     _relion_cuda_powerclass_spectrum_norm_units,
     _relion_f32_fine_reconstruction_probs,
+    _relion_wavg_rectangle_triplet_terms,
+    _relion_wavg_sequential_triplet_terms,
 )
 from recovar.em.dense_single_volume.local_backprojection import compute_local_weighted_sums
 
@@ -265,6 +268,62 @@ def _noise_image_power_shells_and_per_image(
         include_unweighted_high_shell=include_unweighted_high_shell,
     )
     return shells, per_image
+
+
+def _relion_wavg_direct_triplet_shells(
+    processed_score_half,
+    relion_score_translation_angles,
+    rectangle_indices,
+    exact_positions,
+    rectangle_shell_indices,
+    recon_window_indices,
+    proj_for_noise,
+    ctf_rfloat_half,
+    batch_scale,
+    reconstruction_probs,
+    valid_image_mask,
+    *,
+    image_shape,
+    shell_count,
+):
+    """Return RELION Wavg [XA, AA, diff2] shells from its native issue stream."""
+
+    from recovar import cuda_backproject
+
+    raw_rectangle = _relion_cuda_translate_wavg_norm_images(
+        processed_score_half,
+        relion_score_translation_angles,
+        rectangle_indices,
+        image_shape,
+    )
+    raw_exact = raw_rectangle[:, :, exact_positions]
+    raw_ctf_exact = jnp.asarray(ctf_rfloat_half, dtype=jnp.float64)[:, recon_window_indices]
+    exact_terms = _relion_wavg_sequential_triplet_terms(
+        proj_for_noise,
+        raw_ctf_exact,
+        batch_scale,
+        raw_exact,
+        reconstruction_probs,
+    )
+    rectangle_terms = _relion_wavg_rectangle_triplet_terms(
+        exact_terms,
+        raw_rectangle,
+        reconstruction_probs,
+        exact_positions,
+    )
+    atomic = cuda_backproject.relion_wavg_rotation_atomic_triplet_add_f32(
+        rectangle_terms,
+        jnp.zeros(rectangle_terms.shape[:1] + rectangle_terms.shape[2:], dtype=jnp.float32),
+    )
+    atomic = jnp.where(valid_image_mask[:, None, None], atomic, 0.0)
+    pixel_triplets = jnp.sum(atomic.astype(jnp.float64), axis=0)
+    return jnp.stack(
+        [
+            bin_shell_values_jax(pixel_triplets[:, component], rectangle_shell_indices, shell_count)
+            for component in range(3)
+        ],
+        axis=0,
+    )
 
 
 def _exact_local_mstep_should_split_adjoints(recon_volume_shape, *arrays) -> bool:
@@ -810,6 +869,9 @@ def run_local_bucket_big_jit(
     window_indices,
     relion_fine_full_to_compact,
     recon_window_indices,
+    relion_wavg_rectangle_indices,
+    relion_wavg_exact_positions,
+    relion_wavg_rectangle_shell_indices,
     mstep_recon_window_indices,
     shell_indices_half,
     shell_indices_noise,
@@ -1610,7 +1672,6 @@ def run_local_bucket_big_jit(
             include_unweighted_high_shell=include_unweighted_norm_high_shell,
             use_relion_cuda_powerclass_spectrum=relion_exact_fine_diff2,
         )
-        noise_img_power = noise_img_power + batch_img_power_shells
         noise_sumw = noise_sumw + jnp.sum(support_mass)
 
         shifted_noise_split = shifted_noise.reshape(batch_size, n_trans, -1)
@@ -1636,7 +1697,33 @@ def run_local_bucket_big_jit(
             n_shells,
             return_noise_split,
         )
+        use_relion_wavg_cutoff = bool(
+            relion_exact_fine_diff2 and use_window and norm_current_size is not None
+        )
+        if use_relion_wavg_cutoff:
+            direct_triplet_shells = _relion_wavg_direct_triplet_shells(
+                processed_score_half,
+                relion_score_translation_angles,
+                relion_wavg_rectangle_indices,
+                relion_wavg_exact_positions,
+                relion_wavg_rectangle_shell_indices,
+                recon_window_indices,
+                proj_for_noise,
+                ctf_rfloat_half,
+                batch_scale,
+                reconstruction_probs,
+                valid_image_mask,
+                image_shape=image_shape,
+                shell_count=n_shells,
+            )
+            cutoff_mask = jnp.arange(n_shells, dtype=jnp.int32) == int(norm_current_size) // 2
+            block_noise_shells = jnp.where(cutoff_mask, direct_triplet_shells[2], block_noise_shells)
+            batch_img_power_shells = jnp.where(cutoff_mask, 0.0, batch_img_power_shells)
+            if return_noise_split:
+                block_a2_shells = jnp.where(cutoff_mask, direct_triplet_shells[1], block_a2_shells)
+                block_xa_shells = jnp.where(cutoff_mask, direct_triplet_shells[0], block_xa_shells)
         noise_wsum = noise_wsum + block_noise_shells
+        noise_img_power = noise_img_power + batch_img_power_shells
         if return_noise_split:
             noise_a2 = noise_a2 + block_a2_shells
             noise_xa = noise_xa + block_xa_shells

@@ -106,6 +106,9 @@ from recovar.em.dense_single_volume.helpers.projection import (
 from recovar.em.dense_single_volume.helpers.projection import (
     project_indexed_half_spectrum as _project_indexed_half_spectrum,
 )
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _make_relion_wavg_rectangle,
+)
 from recovar.em.dense_single_volume.helpers.timing import TimingAccumulator
 from recovar.em.dense_single_volume.helpers.translation_prior import (
     translation_prior_centers_for_images,
@@ -2706,6 +2709,19 @@ def run_local_em_exact(
 
     big_jit_window_indices_arg = window_spec.score_or_full_indices(n_half)
     big_jit_recon_window_indices_arg = window_spec.recon_or_full_indices(n_half)
+    if relion_exact_fine_diff2 and accumulate_noise and use_window:
+        relion_wavg_rectangle = _make_relion_wavg_rectangle(
+            image_shape,
+            current_size,
+            big_jit_recon_window_indices_arg,
+        )
+        big_jit_relion_wavg_rectangle_indices_arg = relion_wavg_rectangle.centered_indices
+        big_jit_relion_wavg_exact_positions_arg = relion_wavg_rectangle.exact_positions
+        big_jit_relion_wavg_rectangle_shell_indices_arg = relion_wavg_rectangle.shell_indices
+    else:
+        big_jit_relion_wavg_rectangle_indices_arg = np.zeros(1, dtype=np.int32)
+        big_jit_relion_wavg_exact_positions_arg = np.zeros(1, dtype=np.int32)
+        big_jit_relion_wavg_rectangle_shell_indices_arg = np.zeros(1, dtype=np.int32)
     big_jit_mstep_recon_window_indices_arg = (
         mstep_recon_window_indices if mstep_relion_x_half else big_jit_recon_window_indices_arg
     )
@@ -3282,6 +3298,9 @@ def run_local_em_exact(
                 big_jit_window_indices_arg,
                 jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
                 big_jit_recon_window_indices_arg,
+                jnp.asarray(big_jit_relion_wavg_rectangle_indices_arg, dtype=jnp.int32),
+                jnp.asarray(big_jit_relion_wavg_exact_positions_arg, dtype=jnp.int32),
+                jnp.asarray(big_jit_relion_wavg_rectangle_shell_indices_arg, dtype=jnp.int32),
                 big_jit_mstep_recon_window_indices_arg,
                 shell_indices_half_arg,
                 shell_indices_noise_arg,
