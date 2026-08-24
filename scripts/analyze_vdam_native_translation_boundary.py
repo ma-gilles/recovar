@@ -83,6 +83,36 @@ def _centered_diff2_replay_stats(
     return result
 
 
+def _diff2_replay_boundary(
+    native_raw_diff2: np.ndarray,
+    replay_diff2: np.ndarray,
+    native_posterior: np.ndarray,
+) -> dict[str, float | int]:
+    """Report centered and native-top-pair errors for one diff2 replay."""
+
+    native_raw = np.asarray(native_raw_diff2, dtype=np.float32).reshape(-1)
+    replay_raw = np.asarray(replay_diff2, dtype=np.float32).reshape(-1)
+    native_prob = np.asarray(native_posterior, dtype=np.float64).reshape(-1)
+    if native_raw.size < 2 or replay_raw.shape != native_raw.shape:
+        raise ValueError("diff2 replay boundary requires at least two aligned scores")
+    if native_prob.shape != native_raw.shape or not np.all(np.isfinite(native_prob)):
+        raise ValueError("diff2 replay boundary requires aligned finite probabilities")
+    first, second = np.argsort(-native_prob, kind="stable")[:2]
+    native_delta = float(native_raw[first] - native_raw[second])
+    replay_delta = float(replay_raw[first] - replay_raw[second])
+    result = _centered_diff2_replay_stats(native_raw, replay_raw)
+    result.update(
+        {
+            "native_best_row": int(first),
+            "native_second_row": int(second),
+            "native_best_minus_second": native_delta,
+            "replay_best_minus_second": replay_delta,
+            "replay_minus_native_pair_delta": replay_delta - native_delta,
+        }
+    )
+    return result
+
+
 def _top_pair_score_boundary(
     *,
     native_raw_diff2: np.ndarray,
@@ -494,6 +524,54 @@ def analyze(
         translation,
     ]
 
+    # Reconstruct the exact-path live operands from the generic debug values.
+    # ``debug_shifted_score`` is the translated corrected image multiplied by
+    # ctf^2/noise, while the exact fine kernel receives those two factors
+    # separately.  Rows excluded from RELION's half-plane have zero direct
+    # weight, so their arbitrary quotient is immaterial.
+    live_shifted_unweighted = np.zeros_like(live_shifted_weighted)
+    np.divide(
+        live_shifted_weighted,
+        live_weight[None],
+        out=live_shifted_unweighted,
+        where=live_weight[None] != 0.0,
+    )
+    live_direct_weight = np.multiply(
+        live_weight,
+        score_half_weights,
+        dtype=np.float32,
+    )
+
+    def _pair_diff2(reference, shifted_image, weight):
+        value = cuda_backproject.relion_fine_diff2_pairs_f32(
+            jnp.asarray(reference[None], dtype=jnp.complex64),
+            jnp.asarray(shifted_image[None], dtype=jnp.complex64),
+            jnp.asarray(weight[None], dtype=jnp.float32),
+            jnp.asarray(full_to_compact, dtype=jnp.int32),
+        )[0]
+        return np.asarray(jax.block_until_ready(value), dtype=np.float32)
+
+    live_operand_diff2 = _pair_diff2(
+        live_reference,
+        live_shifted_unweighted,
+        live_direct_weight,
+    )
+    live_reference_only_diff2 = _pair_diff2(
+        live_reference,
+        native_shifted,
+        direct_weight,
+    )
+    live_image_only_diff2 = _pair_diff2(
+        direct_reference,
+        live_shifted_unweighted,
+        direct_weight,
+    )
+    live_weight_only_diff2 = _pair_diff2(
+        direct_reference,
+        native_shifted,
+        live_direct_weight,
+    )
+
     expected_weighted = (native_shifted * native_weight[None]).astype(np.complex64)
     comparisons = {
         "top_pair_score_boundary": _top_pair_score_boundary(
@@ -515,6 +593,26 @@ def analyze(
         ),
         "native_shifted_pair_vs_fused_translate_replay": _stats(
             _center(fused_translate_selected - native_shifted_pair_diff2)
+        ),
+        "live_raw_score_vs_live_operand_pair_replay": _diff2_replay_boundary(
+            -live_raw,
+            live_operand_diff2,
+            native_posterior,
+        ),
+        "native_raw_diff2_with_live_reference_only": _diff2_replay_boundary(
+            native_raw,
+            live_reference_only_diff2,
+            native_posterior,
+        ),
+        "native_raw_diff2_with_live_image_only": _diff2_replay_boundary(
+            native_raw,
+            live_image_only_diff2,
+            native_posterior,
+        ),
+        "native_raw_diff2_with_live_weight_only": _diff2_replay_boundary(
+            native_raw,
+            live_weight_only_diff2,
+            native_posterior,
         ),
         "live_projected_reference": _metric(native_reference, live_reference),
         "live_score_weight": _metric(native_weight, live_weight),

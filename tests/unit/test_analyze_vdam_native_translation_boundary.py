@@ -7,6 +7,7 @@ from scripts.analyze_vdam_native_translation_boundary import (
     _captured_native_current_size,
     _centered_diff2_replay_stats,
     _current_crop_to_compact,
+    _diff2_replay_boundary,
     _flat_real_dump,
     _metric,
     _native_crop_rows,
@@ -70,6 +71,20 @@ def test_centered_diff2_replay_factors_out_constant_highres_addend():
     assert result["inferred_highres_mode"] == pytest.approx(0.25)
     assert result["inferred_highres_mode_count"] == 3
     assert result["inferred_highres_unique_count"] == 1
+
+
+def test_diff2_replay_boundary_reports_native_top_pair_error():
+    native = np.asarray([10.0, 12.0, 15.0], dtype=np.float32)
+    replay = np.asarray([10.5, 12.25, 15.5], dtype=np.float32)
+    posterior = np.asarray([0.51, 0.48, 0.01])
+
+    result = _diff2_replay_boundary(native, replay, posterior)
+
+    assert result["native_best_row"] == 0
+    assert result["native_second_row"] == 1
+    assert result["native_best_minus_second"] == pytest.approx(-2.0)
+    assert result["replay_best_minus_second"] == pytest.approx(-1.75)
+    assert result["replay_minus_native_pair_delta"] == pytest.approx(0.25)
 
 
 def test_top_pair_score_boundary_reports_reversed_near_tie():
