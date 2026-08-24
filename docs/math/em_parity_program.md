@@ -143,9 +143,24 @@ Reconstructing RELION's XFLOAT correction from its captured RFLOAT CTF, with
 the established RECOVAR sign conversion, leaves 114 one-ULP differences
 (relative L2 `3.86e-8`, maximum `9.54e-7`).  The pre-correction and correction
 errors partially cancel, so changing the reciprocal path alone is not yet an
-accepted fix.  A private RELION worktree at `193fe7e` adds the missing
-uncorrected `Fimg` operand; CPU build `12893019` is the next fail-closed
-capture dependency.
+accepted fix.
+
+The same sealed native artifact already contains the missing uncorrected
+post-optics Fourier image, so no rebuilt RELION executable is required.
+Direct comparison finds 115/596 pre-correction score pixels unequal
+(relative L2 `2.61e-8`, maximum `1.53e-5`).  Audit `12893369` makes the
+upstream boundary exact: normalized/shifted real pixels match 16,384/16,384;
+native pre- and post-optics Fourier arrays match 760/760; and applying
+RECOVAR's FFT to the captured native masked real image matches native
+760/760.  The current deterministic block-first soft mask instead matches
+only 2,454/16,384 masked pixels (relative L2 `1.21e-9`), with its background
+mean two float32 ULP below native; that alone becomes a `2.92e-8` Fourier
+error.  The first causal operation is therefore the CUDA soft-mask background
+reduction.  Private build attempts `12893019`, `12893150`, `12893173`,
+`12893203`, and `12893255` all stopped during CMake dependency discovery and
+produced no executable or scientific evidence; that branch is abandoned.
+Same-GPU native repeat panel `12893600` now calibrates this atomic reduction
+before selecting a production topology.
 
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired
