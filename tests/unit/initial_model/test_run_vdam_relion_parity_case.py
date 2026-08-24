@@ -200,6 +200,27 @@ def test_relion_reference_provenance_fingerprints_exact_binary(tmp_path):
     }
 
 
+def test_git_source_guard_accepts_clean_head_and_rejects_tracked_changes(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "vdam-test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "VDAM Test"], cwd=repo, check=True)
+    tracked = repo / "tracked.txt"
+    tracked.write_text("frozen\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "frozen"], cwd=repo, check=True)
+
+    head, dirty = runner._git_source_state(repo)
+    assert len(head) == 40
+    assert dirty is False
+    runner._assert_git_source_unchanged(repo, head)
+
+    tracked.write_text("changed\n")
+    with pytest.raises(runner.RunError, match="source changed during execution"):
+        runner._assert_git_source_unchanged(repo, head)
+
+
 def test_recovar_native_extension_provenance_fingerprints_exact_binaries(tmp_path):
     repo = tmp_path / "repo"
     bind_dir = repo / "recovar" / "relion_bind"

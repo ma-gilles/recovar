@@ -36,6 +36,30 @@ def _load_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def _git_source_state(repo: Path) -> tuple[str, bool]:
+    """Return the exact source head and tracked-dirty flag for a parity run."""
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    dirty = bool(
+        subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=repo,
+            text=True,
+        ).strip()
+    )
+    return head, dirty
+
+
+def _assert_git_source_unchanged(repo: Path, expected_head: str) -> None:
+    """Reject evidence produced while tracked source changed under the run."""
+    current_head, dirty = _git_source_state(repo)
+    if current_head != expected_head or dirty:
+        raise RunError(
+            "VDAM parity source changed during execution: "
+            f"expected head {expected_head} with a clean tracked worktree, "
+            f"found head {current_head}, tracked_dirty={dirty}"
+        )
+
+
 def _scorecard_case(scorecard: dict[str, Any], case_id: str) -> dict[str, Any]:
     matches = [row for row in scorecard.get("cases", []) if row.get("id") == case_id]
     if len(matches) != 1:
@@ -290,6 +314,9 @@ def _recovar_gpu_env(base: dict[str, str], *, repo: Path) -> dict[str, str]:
 
 def run_case(args: argparse.Namespace) -> dict[str, Any]:
     repo = args.repo.resolve()
+    source_git_head, source_tracked_dirty = _git_source_state(repo)
+    if source_tracked_dirty:
+        raise RunError("VDAM parity requires a clean tracked worktree at launch")
     scorecard_path = args.scorecard.resolve()
     scorecard = _load_json(scorecard_path)
     case = _scorecard_case(scorecard, args.case_id)
@@ -359,7 +386,8 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "case_id": args.case_id,
         "source_em_case_id": definition["source_em_case_id"],
         "repo": str(repo),
-        "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
+        "git_head": source_git_head,
+        "tracked_worktree_clean_at_launch": True,
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "relion_reference": _relion_reference_provenance(args.relion_refine),
         "recovar_native_extensions": _recovar_native_extension_provenance(repo),
@@ -433,6 +461,12 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
     )
     _run_logged(recovar_argv, cwd=repo, log_path=recovar_dir / "recovar.log", env=recovar_env)
     recovar_gpu_uuid = _physical_gpu_uuid()
+    _assert_git_source_unchanged(repo, source_git_head)
+    provenance.update(
+        git_head_at_completion=source_git_head,
+        tracked_worktree_clean_at_completion=True,
+    )
+    (case_root / "run_provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
     paired_gpu_report = case_root / "paired_gpu_uuid.json"
     paired_gpu_report.write_text(
         json.dumps(
