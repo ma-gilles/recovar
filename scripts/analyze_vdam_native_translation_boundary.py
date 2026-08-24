@@ -241,6 +241,60 @@ def _centered_residual_decomposition(
     }
 
 
+def _centered_score_stage_boundary(
+    *,
+    native_diff2: np.ndarray,
+    native_orientation_prior: np.ndarray,
+    native_translation_prior: np.ndarray,
+    candidate_raw_score: np.ndarray,
+    candidate_orientation_prior: np.ndarray,
+    candidate_translation_prior: np.ndarray,
+    candidate_total_score: np.ndarray,
+) -> dict[str, object]:
+    """Separate fine likelihood-score error from orientation/translation priors."""
+
+    arrays = [
+        np.asarray(value, dtype=np.float32).reshape(-1)
+        for value in (
+            native_diff2,
+            native_orientation_prior,
+            native_translation_prior,
+            candidate_raw_score,
+            candidate_orientation_prior,
+            candidate_translation_prior,
+            candidate_total_score,
+        )
+    ]
+    if arrays[0].size == 0 or any(value.shape != arrays[0].shape for value in arrays[1:]):
+        raise ValueError("score stage boundary requires aligned nonempty vectors")
+    (
+        native_diff2_f32,
+        native_orientation_f32,
+        native_translation_f32,
+        candidate_raw_f32,
+        candidate_orientation_f32,
+        candidate_translation_f32,
+        candidate_total_f32,
+    ) = arrays
+    native_total = -native_diff2_f32 + native_orientation_f32 + native_translation_f32
+    candidate_reconstructed = (
+        candidate_raw_f32 + candidate_orientation_f32 + candidate_translation_f32
+    )
+    return {
+        "raw_likelihood_score": _stats(_center(candidate_raw_f32 + native_diff2_f32)),
+        "orientation_log_prior": _stats(
+            _center(candidate_orientation_f32 - native_orientation_f32)
+        ),
+        "translation_log_prior": _stats(
+            _center(candidate_translation_f32 - native_translation_f32)
+        ),
+        "total_log_score": _stats(_center(candidate_total_f32 - native_total)),
+        "candidate_total_reconstruction_closure": _stats(
+            _center(candidate_total_f32 - candidate_reconstructed)
+        ),
+    }
+
+
 def _top_pair_score_boundary(
     *,
     native_raw_diff2: np.ndarray,
@@ -506,6 +560,21 @@ def analyze(
             raise ValueError("formal fine-score translation order differs from verbose capture")
         native_raw = np.asarray(selected["raw_diff2"], dtype=np.float64)
     live_raw = np.asarray(live["pass2_scores_raw"])[0, rotation, translation]
+    live_total = np.asarray(live["pass2_scores_total"])[0, rotation, translation]
+    native_orientation_prior = np.asarray(
+        _flat_memmap(native_dir / "pass1_candidate_orientation_log_prior.bin"),
+        dtype=np.float32,
+    )
+    native_translation_prior = np.asarray(
+        _flat_memmap(native_dir / "pass1_candidate_offset_log_prior.bin"),
+        dtype=np.float32,
+    )
+    live_orientation_prior = np.asarray(live["rotation_log_prior"], dtype=np.float32)[
+        0, rotation
+    ]
+    live_translation_prior = np.asarray(live["translation_log_prior"], dtype=np.float32)[
+        0, translation
+    ]
     native_posterior = np.asarray(
         _flat_memmap(native_dir / "pass1_exp_Mweight_posterior.bin"),
         dtype=np.float64,
@@ -733,6 +802,15 @@ def analyze(
             native_raw,
             -live_raw,
             live_operand_diff2,
+        ),
+        "candidate_score_stage_boundary": _centered_score_stage_boundary(
+            native_diff2=native_raw,
+            native_orientation_prior=native_orientation_prior,
+            native_translation_prior=native_translation_prior,
+            candidate_raw_score=live_raw,
+            candidate_orientation_prior=live_orientation_prior,
+            candidate_translation_prior=live_translation_prior,
+            candidate_total_score=live_total,
         ),
         "native_raw_diff2_with_live_reference_only": _diff2_replay_boundary(
             native_raw,

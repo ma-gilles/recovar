@@ -7,6 +7,7 @@ from scripts.analyze_vdam_native_translation_boundary import (
     _captured_native_current_size,
     _centered_diff2_replay_stats,
     _centered_residual_decomposition,
+    _centered_score_stage_boundary,
     _current_crop_to_compact,
     _diff2_replay_boundary,
     _flat_real_dump,
@@ -139,6 +140,29 @@ def test_centered_score_residual_decomposition_closes_operand_and_topology():
     assert result["operand_geometry"]["projection_on_total"] + result[
         "production_topology_geometry"
     ]["projection_on_total"] == pytest.approx(1.0)
+
+
+def test_centered_score_stage_boundary_excludes_exact_priors():
+    native_diff2 = np.asarray([10.0, 12.0, 15.0], dtype=np.float32)
+    orientation_prior = np.asarray([-1.0, -2.0, -3.0], dtype=np.float32)
+    translation_prior = np.asarray([-0.5, -0.25, -0.75], dtype=np.float32)
+    candidate_raw = -native_diff2 + np.asarray([0.0, 0.25, -0.25], dtype=np.float32)
+    candidate_total = candidate_raw + orientation_prior + translation_prior
+
+    result = _centered_score_stage_boundary(
+        native_diff2=native_diff2,
+        native_orientation_prior=orientation_prior,
+        native_translation_prior=translation_prior,
+        candidate_raw_score=candidate_raw,
+        candidate_orientation_prior=orientation_prior,
+        candidate_translation_prior=translation_prior,
+        candidate_total_score=candidate_total,
+    )
+
+    assert result["raw_likelihood_score"]["rms"] > 0.0
+    assert result["orientation_log_prior"]["rms"] == 0.0
+    assert result["translation_log_prior"]["rms"] == 0.0
+    assert result["candidate_total_reconstruction_closure"]["rms"] == 0.0
 
 
 def test_top_pair_score_boundary_reports_reversed_near_tie():
