@@ -19,8 +19,6 @@ set -euo pipefail
 ROOT=${VDAM_PREPROCESS_ROOT}
 INPUT=${VDAM_PREPROCESS_INPUT_DIR}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-69}
-PART_IDS=${VDAM_PREPROCESS_PART_IDS:-}
-PART_IDS=${PART_IDS//:/,}
 CAPTURE_ITERATION=${VDAM_PREPROCESS_ITERATION:-1}
 NR_ITER_SCHEDULE=${VDAM_PREPROCESS_NR_ITER_SCHEDULE:-${CAPTURE_ITERATION}}
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
@@ -37,15 +35,6 @@ test -s "${INPUT}/particles.star"
 test -x "${RELION_BINARY}"
 mkdir -p "${OUTPUT}" "${CAPTURE}"
 test -z "$(find "${OUTPUT}" "${CAPTURE}" -mindepth 1 -print -quit)"
-if [[ -n "${PART_IDS}" && ! "${PART_IDS}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
-    echo "VDAM_PREPROCESS_PART_IDS must be a comma- or colon-separated integer list" >&2
-    exit 2
-fi
-if [[ -n "${PART_IDS}" ]]; then
-    : "${EXPECTED_REPO_HEAD:?multi-particle capture must pin the repository head}"
-    test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
-    test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
-fi
 test "${NR_ITER_SCHEDULE}" -ge "${CAPTURE_ITERATION}"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
@@ -77,9 +66,6 @@ export CUDA_VISIBLE_DEVICES=0
 
 export RELION_ACC_DUMP_DIR=${CAPTURE}
 export RELION_ACC_DUMP_PART_ID=${PART_ID}
-if [[ -n "${PART_IDS}" ]]; then
-    export RELION_ACC_DUMP_PART_IDS=${PART_IDS}
-fi
 export RELION_ACC_DUMP_ITER=${CAPTURE_ITERATION}
 export RELION_ACC_DUMP_VERBOSE=1
 
@@ -119,7 +105,15 @@ if [[ "${NR_ITER_SCHEDULE}" -gt "${CAPTURE_ITERATION}" ]]; then
         sleep 1
     done
     test "${target_complete}" -eq 1
-    scancel "${SLURM_JOB_ID}.0" || kill "${runner_pid}" 2>/dev/null || true
+    active_step=$(
+        squeue --steps -j "${SLURM_JOB_ID}" -h -o '%i' \
+            | awk -v job="${SLURM_JOB_ID}" '$0 ~ "^" job "\\.[0-9]+$" {step=$0} END {print step}'
+    )
+    if [[ -n "${active_step}" ]]; then
+        scancel "${active_step}"
+    else
+        kill "${runner_pid}" 2>/dev/null || true
+    fi
     set +e
     wait "${runner_pid}"
     set -e
@@ -136,15 +130,10 @@ for required in normalized_shifted_real masked_real masked_fourier_pre_optics_re
     test -s "${CAPTURE}/preprocess_img0_${required}.bin"
 done
 test -s "${CAPTURE}/preprocess_img0_softmask_background.bin"
-if [[ -n "${PART_IDS}" ]]; then
-    IFS=',' read -r -a capture_part_ids <<< "${PART_IDS}"
-    for part_id in "${capture_part_ids[@]}"; do
-        for suffix in sorted_weights sum_weight significant_weight eulers trans_xyz ctfs; do
-            test -s "${CAPTURE}/img0_part${part_id}_storeWavg_${suffix}.bin"
-        done
-    done
-fi
-printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"part_ids":"%s"}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${PART_IDS}" \
+for suffix in sorted_weights sum_weight significant_weight eulers trans_xyz ctfs; do
+    test -s "${CAPTURE}/img0_part${PART_ID}_storeWavg_${suffix}.bin"
+done
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
