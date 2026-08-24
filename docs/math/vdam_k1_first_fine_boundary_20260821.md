@@ -809,6 +809,7 @@ and the fixed RECOVAR-minus-RELION GT FSC-AUC floor remains -0.002.
 | gf18 | 31 | 0.675630118 | -0.003830814 |
 | gf19 | 65 | 0.681088003 | -0.001006762 |
 | gf21 | 84 | 0.719066226 | -0.001117729 |
+| gf22 | 75 | 0.868005545 | -0.004747162 |
 
 The no-CTF gf16 row is an important discriminator: its GT-quality delta stays
 inside the frozen nondegradation gate while its cross-engine trajectory still
@@ -894,8 +895,22 @@ absolute-script import error; the preserved artifacts were analyzed by module
 invocation, and `d8314fb27` repairs that setup path.
 
 This rejects iteration 1 cutoff aggregation as the already-full-size source
-of the iteration-2 shell-15 `+1.55e-5` error.  The next bounded experiment is
-the identical 200-particle decomposition at iteration 2, shell 15.  It will
-show whether image power, posterior-supported `XA`/`AA`, or their coupling
-creates the first material aggregate divergence before any hot-path change is
-considered.
+of the iteration-2 shell-15 `+1.55e-5` error.  The identical iteration-2
+panel `12897664` completes cleanly at tracking head `be6ee1f13` and reproduces
+the defect: its direct-residual sum error is `+1.6006e-5`.  The `AA` sum error
+is `-3.8716e-6` and is negative for 197/200 particles.  The `XA` sum error is
+`-9.9872e-6`; through `AA - 2*XA`, it contributes about `+1.9974e-5` and is
+the dominant term.  Inferred image-power sum error is only `-8.64e-8`.
+Per-particle direct error correlates `-0.9979` with `XA` error and `0.1355`
+with image-power error.  A single support-mass outlier at native part `59` has
+error `+2.11e-5` but contributes only `-1.10e-7` direct error; removing it
+slightly increases the aggregate residual mismatch.
+
+The first material aggregate boundary is therefore posterior-weighted
+image/reference cross correlation, with a smaller systematic reference-power
+deficit.  Image-power formation, soft-mask topology, and total support mass
+are rejected as dominant causes.  The next bounded experiment will replay
+native and candidate posteriors on the same captured operands for the largest
+`XA` contributors (beginning with parts `27`, `65`, `175`, `96`, and `123`)
+to separate posterior error from cross-term operand/reduction error before any
+production change.

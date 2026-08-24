@@ -193,11 +193,25 @@ while `XA` and inferred image-power sum errors are `+3.05e-7` and `+9.96e-7`;
 those terms substantially cancel in the coupled direct residual.  Retained
 support mass has relative L2 `2.90e-7`.  The known `+1.55e-5` iteration-2
 shell-15 aggregate defect is therefore not already present at comparable
-scale in iteration 1.  The active experiment repeats this exact decomposition
-at iteration 2, shell 15, where the failure is known to exist.  Job `12897360`
+scale in iteration 1.  Job `12897360`
 captured all 200 production dumps before a post-analysis module-invocation
 setup error; the preserved artifacts analyzed successfully, and `d8314fb27`
 repairs the runner without changing science.
+
+The exact iteration-2 panel `12897664` completes cleanly and reproduces the
+material shell-15 defect: direct-residual sum error is `+1.6006e-5`.  Its
+`AA` error is `-3.8716e-6` and is negative for 197/200 particles; its `XA`
+error is `-9.9872e-6`.  Because the coupled residual is `AA - 2*XA`, the
+cross term contributes about `+1.9974e-5` and dominates, partly offset by
+`AA`.  Inferred image-power error is only `-8.64e-8`.  Per-particle direct
+error correlates `-0.9979` with `XA` error, while the one `2.11e-5`
+support-mass outlier contributes only `-1.10e-7` direct error.  The first
+material aggregate boundary is therefore the posterior-weighted
+image/reference cross term, with a smaller systematic reference-power
+deficit—not image-power formation, soft masking, or total support mass.  The
+next bounded experiment replays native versus candidate posteriors against
+the same captured operands for the largest `XA` contributors before changing
+production arithmetic.
 
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired
