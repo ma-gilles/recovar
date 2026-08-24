@@ -211,6 +211,9 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
     runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.py").read_text()
     auditor = (REPO_ROOT / "scripts/audit_vdam_fsc_trajectory.py").read_text()
     sbatch = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+    preprocess_sbatch = (
+        REPO_ROOT / "scripts/run_vdam_relion_preprocess_capture.sbatch"
+    ).read_text()
     expected_tokens = [
         "test_audit_vdam_fsc_trajectory.py",
         "test_run_vdam_relion_parity_case.py",
@@ -239,12 +242,15 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "VDAM_PREPROCESS_PART_IDS",
         "VDAM_PREPROCESS_EXPECTED_PART_COUNT",
         "VDAM_PREPROCESS_THREADS",
+        "VDAM_PREPROCESS_CAPTURE_MSTEP",
         'test "${actual_part_count}" -eq "${EXPECTED_PART_COUNT}"',
         "export RELION_ACC_DUMP_PART_IDS=",
+        "export RECOVAR_DEBUG_DUMP_DIR=",
+        "pipe_it1_c0_bp_data_h_pre_reweight.bin",
         "img0_part${capture_part_id}_storeWavg_${suffix}.bin",
         "Minvsigma2 sigma2_noise sigma2_fudge",
     ]
-    haystack = "\n".join([guard, runner, auditor, sbatch])
+    haystack = "\n".join([guard, runner, auditor, sbatch, preprocess_sbatch])
     missing = [token for token in expected_tokens if token not in haystack]
     assert not missing, f"VDAM trajectory runner/auditor lost required wiring: {missing}"
 

@@ -24,6 +24,7 @@ EXPECTED_PART_COUNT=${VDAM_PREPROCESS_EXPECTED_PART_COUNT:-}
 CAPTURE_ITERATION=${VDAM_PREPROCESS_ITERATION:-1}
 NR_ITER_SCHEDULE=${VDAM_PREPROCESS_NR_ITER_SCHEDULE:-${CAPTURE_ITERATION}}
 THREADS=${VDAM_PREPROCESS_THREADS:-8}
+CAPTURE_MSTEP=${VDAM_PREPROCESS_CAPTURE_MSTEP:-0}
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 LAUNCHER=${REPO_ROOT}/scripts/run_vdam_relion_preprocess_capture.sbatch
 RELION_SOURCE=${VDAM_RELION_SOURCE:-/scratch/gpfs/GILLES/mg6942/relion}
@@ -40,6 +41,10 @@ mkdir -p "${OUTPUT}" "${CAPTURE}"
 test -z "$(find "${OUTPUT}" "${CAPTURE}" -mindepth 1 -print -quit)"
 test "${NR_ITER_SCHEDULE}" -ge "${CAPTURE_ITERATION}"
 test "${THREADS}" -ge 1
+case "${CAPTURE_MSTEP}" in 0|1) ;; *) echo "VDAM_PREPROCESS_CAPTURE_MSTEP must be 0 or 1" >&2; exit 2 ;; esac
+if [[ "${CAPTURE_MSTEP}" = 1 ]]; then
+    test "${CAPTURE_ITERATION}" -eq 1
+fi
 if [[ -n "${PART_IDS}" ]]; then
     test "${PART_IDS}" = "$(printf '%s' "${PART_IDS}" | tr -cd '0-9,')"
 fi
@@ -88,6 +93,10 @@ fi
 export RELION_DUMP_DIR=${CAPTURE}
 export RELION_DUMP_PART_ID=${PART_ID}
 export RELION_DUMP_ITER=${CAPTURE_ITERATION}
+if [[ "${CAPTURE_MSTEP}" = 1 ]]; then
+    export RECOVAR_DEBUG_DUMP_DIR=${CAPTURE}
+    export RECOVAR_DEBUG_DUMP_MSTEP_ITER=${CAPTURE_ITERATION}
+fi
 
 COMMAND=(
     srun --ntasks=1 --cpus-per-task=8 --cpu-bind=none "${RELION_BINARY}"
@@ -161,7 +170,14 @@ done
 for required in Minvsigma2 sigma2_noise sigma2_fudge; do
     test -s "${CAPTURE}/${required}.bin"
 done
-printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"part_ids":"%s","part_count":%d,"threads":%d}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${PART_IDS}" "$(tr ',' '\n' <<<"${PART_IDS}" | wc -l)" "${THREADS}" \
+if [[ "${CAPTURE_MSTEP}" = 1 ]]; then
+    for required in \
+        pipe_it1_c0_bp_data_pre_reweight.bin pipe_it1_c0_bp_weight.bin \
+        pipe_it1_c0_bp_data_h_pre_reweight.bin pipe_it1_c0_bp_weight_h.bin; do
+        test -s "${CAPTURE}/${required}"
+    done
+fi
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"part_ids":"%s","part_count":%d,"threads":%d,"capture_mstep":%d}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${PART_IDS}" "$(tr ',' '\n' <<<"${PART_IDS}" | wc -l)" "${THREADS}" "${CAPTURE_MSTEP}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"

@@ -224,6 +224,41 @@ iteration-2 cutoff error is therefore propagated reference-state error.  The
 active boundary moves back to the iteration-1 BPref/M-step accumulator, not
 posterior formation or Wavg image/CTF/translation/reduction arithmetic.
 
+The full iteration-1 M-step pair (`12901975`) makes that boundary quantitative.
+Incoming `Igrad1` for both pseudo-halfsets and `Igrad2` are bitwise exact, while
+the first nonexact state is the raw BPref accumulator: data relative L2 is
+`9.0248e-6`/`9.8267e-6` and weight relative L2 is
+`1.9306e-6`/`1.8982e-6`.  Independent native repeat `12902211` spans comparable
+data differences (`8.406e-6`/`1.071e-5`), so magnitude alone cannot identify a
+stable candidate defect.  Complete candidate contribution captures
+`12904449` and `12904491` contain all `20,856`/`27,264` active rows.  A native
+top-eight StoreWavg operand panel (`12906791`, `12906964`, and
+`12907034`--`12907045`) has exact support for every particle; substituting the
+candidate posterior into native image/CTF/translation/projector operands
+closes data rows to `7.52e-8`--`1.24e-7` and weight rows to
+`6.74e-8`--`9.69e-8`.  Fused StoreWavg arithmetic is therefore excluded for
+those sources.
+
+Native job `12907252` extends that panel to every one of the 200 selected
+particles in one three-second, one-thread, true-200-iteration-schedule capture.
+It records exactly 200 posterior tables, 200 rotation/translation/CTF bundles,
+and 200 uniquely named accelerated unmasked Fourier images; the comma-truncated
+predecessor `12907201` is rejected.  Complete aggregate replay `12907855`
+passes 22/22 focused tests and covers all 200 identities with no incomplete
+capture, no support mismatch, and no posterior argmax mismatch.  The native
+versus candidate pre-scatter data error is `1.06453e-5`/`1.02516e-5`; using the
+candidate posterior with otherwise native operands reduces it to
+`9.75268e-8`/`9.76784e-8`.  Through the same RELION-double scatter, data closes
+from `9.08620e-6`/`9.00707e-6` to `7.97858e-8`/`8.31516e-8`, and weight closes
+to `1.47e-8`/`1.52e-8`.  This excludes residual formation and scatter as the
+source of the panel gap and localizes it to posterior history.  Because this
+panel and the saved production accumulator are different native repeats, it
+does not yet distinguish a stable RECOVAR posterior error from native
+accelerator variability.  The next exact discriminator is one uninterrupted
+native iteration-1 run that captures both all 200 StoreWavg rows and its own
+two raw BPref accumulators; the runner now has a fail-closed combined-capture
+mode for that experiment.
+
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired
 full-schedule job `12889537_1` follows a different native trajectory by
