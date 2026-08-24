@@ -22,6 +22,7 @@ INPUT=${VDAM_RELION_CONT_INPUT_DIR}
 CONTINUE=${VDAM_RELION_CONT_OPTIMISER}
 ITERATION=${VDAM_RELION_CONT_ITERATION:-3}
 PART_ID=${VDAM_RELION_CONT_PART_ID:-9}
+PART_IDS=${VDAM_RELION_CONT_PART_IDS:-}
 STACK_INDEX=${VDAM_RELION_CONT_STACK_INDEX:-}
 CAPTURE_ENABLED=${VDAM_RELION_CONT_CAPTURE:-0}
 PERTURBATION=${VDAM_RELION_CONT_PERTURBATION:-}
@@ -36,6 +37,10 @@ test -s "${INPUT}/particles.star"
 test -s "${CONTINUE}"
 test -x "${RELION_BINARY}"
 case "${CAPTURE_ENABLED}" in 0|1) ;; *) echo "VDAM_RELION_CONT_CAPTURE must be 0 or 1" >&2; exit 2 ;; esac
+if [[ -n "${PART_IDS}" && ! "${PART_IDS}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+    echo "VDAM_RELION_CONT_PART_IDS must be a comma-separated integer list" >&2
+    exit 2
+fi
 mkdir -p "${OUTPUT}" "${CAPTURE}" "${ROOT}/provenance"
 test -z "$(find "${OUTPUT}" "${CAPTURE}" -mindepth 1 -print -quit)"
 
@@ -71,6 +76,9 @@ fi
 if [[ "${CAPTURE_ENABLED}" == 1 ]]; then
     export RELION_ACC_DUMP_DIR=${CAPTURE}
     export RELION_ACC_DUMP_PART_ID=${PART_ID}
+    if [[ -n "${PART_IDS}" ]]; then
+        export RELION_ACC_DUMP_PART_IDS=${PART_IDS}
+    fi
     if [[ -n "${STACK_INDEX}" ]]; then
         export RELION_ACC_DUMP_STACK_INDEX=${STACK_INDEX}
     fi
@@ -102,9 +110,17 @@ if [[ "${CAPTURE_ENABLED}" == 1 ]]; then
     test -s "${CAPTURE}/Pmax.bin"
     test -s "${CAPTURE}/pass0_coarse_raw_diff2.bin"
     test -s "${CAPTURE}/pass1_exp_Mweight_posterior.bin"
+    if [[ -n "${PART_IDS}" ]]; then
+        IFS=',' read -r -a capture_part_ids <<< "${PART_IDS}"
+        for part_id in "${capture_part_ids[@]}"; do
+            for suffix in sorted_weights sum_weight significant_weight eulers trans_xyz ctfs; do
+                test -s "${CAPTURE}/img0_part${part_id}_storeWavg_${suffix}.bin"
+            done
+        done
+    fi
 fi
 ! rg -qi 'Traceback|Out of memory|CUDA_ERROR_OUT_OF_MEMORY' "${OUTPUT}/runner.stderr"
-printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"part_id":%d,"stack_index":"%s","capture":%s,"continued_from":"%s","forced_perturbation":"%s"}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${ITERATION}" "${PART_ID}" "${STACK_INDEX}" "${CAPTURE_ENABLED}" "${CONTINUE}" "${PERTURBATION}" \
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"part_id":%d,"part_ids":"%s","stack_index":"%s","capture":%s,"continued_from":"%s","forced_perturbation":"%s"}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${ITERATION}" "${PART_ID}" "${PART_IDS}" "${STACK_INDEX}" "${CAPTURE_ENABLED}" "${CONTINUE}" "${PERTURBATION}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
