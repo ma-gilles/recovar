@@ -5398,7 +5398,13 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     assert np.all(np.isfinite(np.asarray(noise_exact.wsum_sigma2_noise)))
 
 
-def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(monkeypatch, rng):
+@pytest.mark.parametrize("score_with_masked_images", [False, True])
+def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
+    monkeypatch,
+    rng,
+    score_with_masked_images,
+):
+    import recovar.cuda_backproject as cuda_backproject
     import recovar.em.dense_single_volume.local_em_engine as local_engine_module
 
     dataset = MockDataset(1, rng)
@@ -5430,6 +5436,29 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(monkey
         "_big_jit_preprocess_half",
         lambda *_args, **_kwargs: jnp.asarray(processed),
     )
+    captured_bpref = {}
+
+    def fake_relion_translate_bpref(
+        images,
+        weighted_ctf,
+        translation_angles,
+        pixel_indices,
+        image_shape,
+    ):
+        captured_bpref.update(
+            images=np.asarray(images),
+            weighted_ctf=np.asarray(weighted_ctf),
+            translation_angles=np.asarray(translation_angles),
+            pixel_indices=np.asarray(pixel_indices),
+            image_shape=tuple(image_shape),
+        )
+        return (images[:, None, :] * weighted_ctf[:, None, :]).reshape(-1, images.shape[1])
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_bpref_f32",
+        fake_relion_translate_bpref,
+    )
 
     (
         shifted_score,
@@ -5448,7 +5477,8 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(monkey
         jnp.zeros((1, 2), dtype=jnp.float32),
         config,
         make_half_image_weights(dataset.image_shape),
-        score_with_masked_images=False,
+        score_with_masked_images=score_with_masked_images,
+        relion_score_translation_angles=np.zeros((1, 2), dtype=np.float32),
         relion_exact_bpref_operands=True,
     )
 
@@ -5464,6 +5494,11 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(monkey
     np.testing.assert_array_equal(np.asarray(shifted_recon), processed * expected_weighted_ctf)
     np.testing.assert_array_equal(np.asarray(score_weight), expected_score_weight)
     np.testing.assert_array_equal(np.asarray(recon_weight), expected_recon_weight)
+    np.testing.assert_array_equal(captured_bpref["images"], processed)
+    np.testing.assert_array_equal(captured_bpref["weighted_ctf"], expected_weighted_ctf)
+    np.testing.assert_array_equal(captured_bpref["translation_angles"], np.zeros((1, 2), np.float32))
+    np.testing.assert_array_equal(captured_bpref["pixel_indices"], np.arange(n_half, dtype=np.int32))
+    assert captured_bpref["image_shape"] == dataset.image_shape
     expected_norm = np.sum(
         np.abs(processed) ** 2
         * inverse_noise[None, :]

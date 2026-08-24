@@ -1874,17 +1874,47 @@ def _prepare_local_exact_bucket(
             if relion_exact_bpref_operands
             else shift_processed_recon_half * shift_ctf_half / shift_noise_half
         )
-        shifted_recon_half = _apply_half_translation_phases(recon_weighted_half, shift_phases_half)
+        if relion_exact_bpref_operands:
+            if relion_score_translation_angles is None:
+                raise ValueError(
+                    "exact RELION BPref operands require RELION translation angles"
+                )
+            from recovar import cuda_backproject
+
+            shifted_recon_half = cuda_backproject.relion_translate_bpref_f32(
+                jnp.asarray(processed_recon_half, dtype=jnp.complex64),
+                jnp.asarray(weighted_ctf_half, dtype=jnp.float32),
+                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                jnp.arange(processed_recon_half.shape[1], dtype=jnp.int32),
+                config.image_shape,
+            )
+        else:
+            shifted_recon_half = _apply_half_translation_phases(
+                recon_weighted_half,
+                shift_phases_half,
+            )
         if synchronize_profile:
             _block_until_ready(shifted_recon_half)
         if timer is not None:
             timer["tile_shift_recon_s"] += time.time() - shift_recon_t0
     else:
-        if relion_score_translation_angles is None:
+        if relion_exact_bpref_operands:
+            if relion_score_translation_angles is None:
+                raise ValueError(
+                    "exact RELION BPref operands require RELION translation angles"
+                )
+            from recovar import cuda_backproject
+
+            shifted_recon_half = cuda_backproject.relion_translate_bpref_f32(
+                jnp.asarray(processed_score_half, dtype=jnp.complex64),
+                jnp.asarray(weighted_ctf_half, dtype=jnp.float32),
+                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                jnp.arange(processed_score_half.shape[1], dtype=jnp.int32),
+                config.image_shape,
+            )
+        elif relion_score_translation_angles is None:
             shifted_recon_half = shifted_score_half
         else:
-            # Exact RELION arithmetic applies only to score translation.
-            # Reconstruction retains the ordinary JAX phase table.
             shifted_recon_half = _apply_half_translation_phases(
                 score_weighted_half,
                 shift_phases_half,
