@@ -398,6 +398,23 @@ def test_vdam_gui_default_full_suite_audits_every_200_iteration_checkpoint():
     assert "run_vdam_relion_parity_case.sbatch" in matrix
 
 
+def test_vdam_gui_default_boundary_suite_stops_at_first_state_split():
+    suite = json.loads(
+        (REPO_ROOT / "docs/math/vdam_k1_gui_default_boundary_suite_v1.json").read_text()
+    )
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-gui-default-boundary-v1"
+    assert suite["acceptance_contract"]["required_checkpoints"] == list(range(34))
+    assert suite["acceptance_contract"]["correlation_used"] is False
+    assert len(suite["cases"]) == 1
+    case = suite["cases"][0]
+    assert case["id"] == "vdam-gfb01"
+    assert case["definition"]["source_em_case_id"] == "k1-11"
+    assert case["definition"]["nr_iter"] == 33
+    assert "first_state_boundary" in case["coverage"]
+
+
 def test_vdam_case_runner_uses_job_scoped_runtime_roots():
     runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
     expected_tokens = [
