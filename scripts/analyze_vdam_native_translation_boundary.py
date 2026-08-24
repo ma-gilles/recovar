@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 import mrcfile
 import numpy as np
+import starfile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -23,6 +24,7 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_indices_np,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
+    make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
@@ -84,6 +86,58 @@ def _positive_weight_metric(reference: np.ndarray, candidate: np.ndarray) -> dic
         "least_squares_scale": scale,
         "relative_l2_after_common_scale": float(np.linalg.norm(scaled_residual) / denominator),
     }
+
+
+def _noise_weight_ratio_boundary(
+    native_weight: np.ndarray,
+    live_weight: np.ndarray,
+    shell_indices: np.ndarray,
+    native_sigma2_noise: np.ndarray,
+    recovar_sigma2_noise: np.ndarray,
+) -> dict[str, float | int]:
+    """Test whether the live/native weight ratio is explained by noise state."""
+
+    native_weight = np.asarray(native_weight, dtype=np.float64).reshape(-1)
+    live_weight = np.asarray(live_weight, dtype=np.float64).reshape(-1)
+    shells = np.asarray(shell_indices, dtype=np.int64).reshape(-1)
+    native_noise = np.asarray(native_sigma2_noise, dtype=np.float64).reshape(-1)
+    recovar_noise = np.asarray(recovar_sigma2_noise, dtype=np.float64).reshape(-1)
+    if native_weight.shape != live_weight.shape or shells.shape != native_weight.shape:
+        raise ValueError("noise ratio boundary requires aligned score pixels")
+    if np.any(shells < 0) or np.any(shells >= min(native_noise.size, recovar_noise.size)):
+        raise ValueError("score shell lies outside the model noise spectrum")
+    valid = (
+        (native_weight > 0.0)
+        & (live_weight > 0.0)
+        & (native_noise[shells] > 0.0)
+        & (recovar_noise[shells] > 0.0)
+    )
+    if not np.any(valid):
+        raise ValueError("noise ratio boundary has no positive score pixels")
+    actual = live_weight[valid] / native_weight[valid]
+    predicted = native_noise[shells[valid]] / recovar_noise[shells[valid]]
+    residual = actual - predicted
+    return {
+        "positive_count": int(actual.size),
+        "actual_ratio_min": float(np.min(actual)),
+        "actual_ratio_max": float(np.max(actual)),
+        "predicted_ratio_min": float(np.min(predicted)),
+        "predicted_ratio_max": float(np.max(predicted)),
+        "ratio_residual_rms": float(np.sqrt(np.mean(residual * residual))),
+        "ratio_residual_max_abs": float(np.max(np.abs(residual))),
+    }
+
+
+def _sigma2_noise(model_path: Path) -> np.ndarray:
+    blocks = starfile.read(Path(model_path), always_dict=True)
+    try:
+        table = blocks["model_optics_group_1"]
+        values = np.asarray(table["rlnSigma2Noise"], dtype=np.float64)
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"model STAR has no optics-group noise spectrum: {model_path}") from exc
+    if values.ndim != 1 or values.size == 0 or np.any(values <= 0.0):
+        raise ValueError(f"model STAR has an invalid noise spectrum: {model_path}")
+    return values
 
 
 def _centered_diff2_replay_stats(
@@ -326,6 +380,8 @@ def analyze(
     native_preprocess_dir: Path | None = None,
     native_fine_score_path: Path | None = None,
     native_fine_operand_path: Path | None = None,
+    native_model_path: Path | None = None,
+    recovar_model_path: Path | None = None,
 ) -> dict[str, object]:
     native_dir = Path(native_dir)
     with np.load(live_score_path, allow_pickle=False) as payload:
@@ -661,6 +717,25 @@ def analyze(
             live_shifted_weighted,
         ),
     }
+    if (native_model_path is None) != (recovar_model_path is None):
+        raise ValueError("native and RECOVAR model paths must be provided together")
+    if native_model_path is not None:
+        native_noise = _sigma2_noise(native_model_path)
+        recovar_noise = _sigma2_noise(recovar_model_path)
+        score_shells = np.asarray(
+            make_relion_noise_shell_indices_half((full_size, full_size)),
+            dtype=np.int32,
+        )[score_indices]
+        comparisons["model_sigma2_noise"] = _metric(native_noise, recovar_noise)
+        comparisons["live_score_weight_ratio_from_model_noise"] = (
+            _noise_weight_ratio_boundary(
+                native_weight,
+                live_weight,
+                score_shells,
+                native_noise,
+                recovar_noise,
+            )
+        )
     storewavg_paths = {
         "image": native_dir / "Fimg_unweighted.bin",
         "ctf": native_dir / "Fctf.bin",
@@ -916,6 +991,16 @@ def analyze(
                 if native_fine_operand_path is not None
                 else None
             ),
+            "native_model": (
+                str(Path(native_model_path).resolve())
+                if native_model_path is not None
+                else None
+            ),
+            "recovar_model": (
+                str(Path(recovar_model_path).resolve())
+                if recovar_model_path is not None
+                else None
+            ),
         },
     }
 
@@ -934,6 +1019,8 @@ def main() -> None:
     parser.add_argument("--native-preprocess-directory", type=Path)
     parser.add_argument("--native-fine-score", type=Path)
     parser.add_argument("--native-fine-operand", type=Path)
+    parser.add_argument("--native-model", type=Path)
+    parser.add_argument("--recovar-model", type=Path)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     if args.output_json.exists():
@@ -951,6 +1038,8 @@ def main() -> None:
         native_preprocess_dir=args.native_preprocess_directory,
         native_fine_score_path=args.native_fine_score,
         native_fine_operand_path=args.native_fine_operand,
+        native_model_path=args.native_model,
+        recovar_model_path=args.recovar_model,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

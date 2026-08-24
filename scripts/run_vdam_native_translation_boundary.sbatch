@@ -82,4 +82,10 @@ fi
 if [[ -n "${NATIVE_FINE_OPERAND:-}" ]]; then
   ANALYZER_ARGS+=(--native-fine-operand "${NATIVE_FINE_OPERAND}")
 fi
+if [[ -n "${NATIVE_MODEL:-}" || -n "${RECOVAR_MODEL:-}" ]]; then
+  ANALYZER_ARGS+=(
+    --native-model "${NATIVE_MODEL:?set NATIVE_MODEL with RECOVAR_MODEL}"
+    --recovar-model "${RECOVAR_MODEL:?set RECOVAR_MODEL with NATIVE_MODEL}"
+  )
+fi
 "${PIXI_PY}" scripts/analyze_vdam_native_translation_boundary.py "${ANALYZER_ARGS[@]}"

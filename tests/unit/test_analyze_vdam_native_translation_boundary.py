@@ -12,6 +12,7 @@ from scripts.analyze_vdam_native_translation_boundary import (
     _metric,
     _native_crop_rows,
     _native_current_fft_rows,
+    _noise_weight_ratio_boundary,
     _positive_weight_metric,
     _preprocess_capture,
     _top_pair_score_boundary,
@@ -72,6 +73,26 @@ def test_positive_weight_metric_factors_out_common_scale():
     assert result["ratio_std"] == pytest.approx(0.0)
     assert result["least_squares_scale"] == pytest.approx(1.5)
     assert result["relative_l2_after_common_scale"] == pytest.approx(0.0)
+
+
+def test_noise_weight_ratio_boundary_matches_inverse_noise_state():
+    native_noise = np.asarray([2.0, 4.0, 8.0])
+    recovar_noise = np.asarray([2.0, 5.0, 10.0])
+    shells = np.asarray([0, 1, 2, 2])
+    native_weight = np.asarray([0.5, 0.25, 0.125, 0.25])
+    live_weight = native_weight * native_noise[shells] / recovar_noise[shells]
+
+    result = _noise_weight_ratio_boundary(
+        native_weight,
+        live_weight,
+        shells,
+        native_noise,
+        recovar_noise,
+    )
+
+    assert result["positive_count"] == 4
+    assert result["ratio_residual_rms"] == pytest.approx(0.0)
+    assert result["ratio_residual_max_abs"] == pytest.approx(0.0)
 
 
 def test_centered_diff2_replay_factors_out_constant_highres_addend():
