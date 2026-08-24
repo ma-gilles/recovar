@@ -25,7 +25,7 @@ leave their sampled native-repeat envelopes; `vdam-gf03`, `vdam-gf04`, and
 `vdam-gf07` also miss the `-0.002` GT-delta gate.  These are active parity
 failures, not tolerance candidates.  A bounded-memory change has carried the
 severe `vdam-gf20` trajectory beyond its former iteration-110 OOM boundary and
-past iteration 177.  Runtime remains 2.36--2.88x RELION on the completed
+through all 200 iterations; its frozen audit is running.  Runtime remains 2.36--2.88x RELION on the completed
 production cases.
 
 Source statement order alone is now rejected as sufficient.  Isolated commit
@@ -43,8 +43,14 @@ forms the VDAM residual and scatters BPref in the same per-particle
 negative-y/x=0 semantics rather than inheriting the generic EM scatter's
 boundary convention, and removes the complex residual intermediate.  Focused
 CUDA build `12883311` and source/interior/native-boundary GPU gates `12883340`
-pass; full frozen `vdam-gf01` trajectory `12883623_1` is running.  It remains
-unpushed until the audit completes.  In parallel, the immutable 22-case
+pass.  Executable inspection stopped the first full submission `12883623_1`
+at iteration 73 because its sparse buckets had never selected the fused
+target; those maps are quarantined as a source-order repeat.  Follow-up commit
+`f98530a42` carries raw VDAM operands through the established physical-particle
+sparse packing boundary.  Bounded job `12885370_1` completes with exact
+iteration-1 particle state and three compiled fused-target executables; the
+discriminating full frozen trajectory is `12885473_1`.  Both commits remain
+unpushed until that audit completes.  In parallel, the immutable 22-case
 matrix, severe-memory case, and controlled same-GPU repeat panel continue as
 evidence collection; generic RECOVAR full/long tests are deliberately outside
 this EM-only validation scope.
