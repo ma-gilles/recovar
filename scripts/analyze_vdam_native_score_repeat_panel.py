@@ -15,6 +15,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.analyze_vdam_native_translation_boundary import analyze  # noqa: E402
+from scripts.analyze_em_k1_native_fine_operands import _center, _flat_memmap  # noqa: E402
+from scripts.compare_relion_recovar_estep_dump import (  # noqa: E402
+    _nearest_rotation_rows_by_matrix,
+)
 
 
 def summarize_reports(reports: list[dict[str, object]]) -> dict[str, object]:
@@ -50,6 +54,65 @@ def summarize_reports(reports: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+def aligned_score_vectors(native_dir: Path, live: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    native_rotation = np.asarray(
+        _flat_memmap(Path(native_dir) / "pass1_acc_rot_idx.bin", np.int32), dtype=np.int32
+    )
+    native_translation = np.asarray(
+        _flat_memmap(Path(native_dir) / "pass1_acc_trans_idx.bin", np.int32), dtype=np.int32
+    )
+    native_eulers = np.asarray(
+        _flat_memmap(Path(native_dir) / "pass1_class0_fine_eulers.bin")
+    ).reshape(-1, 3, 3)
+    nearest, _, _ = _nearest_rotation_rows_by_matrix(
+        native_eulers, live["local_rotation_matrices"]
+    )
+    rotation = nearest[native_rotation]
+    native_raw = np.asarray(
+        _flat_memmap(Path(native_dir) / "pass1_exp_Mweight_raw_preprior.bin"),
+        dtype=np.float64,
+    )
+    live_raw = np.asarray(live["pass2_scores_raw"], dtype=np.float64)[
+        0, rotation, native_translation
+    ]
+    return native_raw, -live_raw
+
+
+def summarize_score_vectors(
+    native_vectors: np.ndarray, candidate_vector: np.ndarray
+) -> dict[str, object]:
+    native = np.asarray(native_vectors, dtype=np.float64)
+    candidate = np.asarray(candidate_vector, dtype=np.float64)
+    if native.ndim != 2 or native.shape[0] < 2 or candidate.shape != native.shape[1:]:
+        raise ValueError("score vectors must have shape (repeat, candidate) and (candidate,)")
+    native_centered = np.asarray([_center(row) for row in native], dtype=np.float64)
+    candidate_centered = np.asarray(_center(candidate), dtype=np.float64)
+    lower = native_centered.min(axis=0)
+    upper = native_centered.max(axis=0)
+    outside = np.maximum(lower - candidate_centered, candidate_centered - upper)
+    outside = np.maximum(outside, 0.0)
+    candidate_residuals = native_centered - candidate_centered[None]
+    native_pair_rms = [
+        float(np.sqrt(np.mean((native_centered[left] - native_centered[right]) ** 2)))
+        for left in range(native.shape[0])
+        for right in range(left + 1, native.shape[0])
+    ]
+    return {
+        "candidate_count": int(candidate.size),
+        "candidate_inside_native_envelope_count": int(np.count_nonzero(outside == 0.0)),
+        "candidate_inside_native_envelope_fraction": float(np.mean(outside == 0.0)),
+        "candidate_max_distance_outside_native_envelope": float(outside.max()),
+        "candidate_rms_distance_outside_native_envelope": float(
+            np.sqrt(np.mean(outside * outside))
+        ),
+        "candidate_nearest_native_centered_rms": float(
+            np.min(np.sqrt(np.mean(candidate_residuals * candidate_residuals, axis=1)))
+        ),
+        "native_pair_centered_rms_min": float(min(native_pair_rms)),
+        "native_pair_centered_rms_max": float(max(native_pair_rms)),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--panel-root", type=Path, required=True)
@@ -71,12 +134,28 @@ def main() -> None:
         )
         for index in range(1, args.repeat_count + 1)
     ]
+    with np.load(args.live_score, allow_pickle=False) as payload:
+        live = {name: np.asarray(payload[name]) for name in payload.files}
+    aligned = [
+        aligned_score_vectors(
+            args.panel_root / f"repeat-{index:02d}" / "capture",
+            live,
+        )
+        for index in range(1, args.repeat_count + 1)
+    ]
+    candidate_vectors = [item[1] for item in aligned]
+    if any(not np.array_equal(candidate_vectors[0], item) for item in candidate_vectors[1:]):
+        raise ValueError("native repeat mappings did not preserve one RECOVAR candidate vector")
     payload = {
         "schema": "recovar.vdam_native_score_repeat_panel.v1",
         "status": "complete",
         "panel_root": str(args.panel_root.resolve()),
         "repeat_count": args.repeat_count,
         "summary": summarize_reports(reports),
+        "score_vector_envelope": summarize_score_vectors(
+            np.asarray([item[0] for item in aligned], dtype=np.float64),
+            candidate_vectors[0],
+        ),
         "reports": reports,
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)

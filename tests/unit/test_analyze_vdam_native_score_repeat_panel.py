@@ -1,6 +1,9 @@
 import pytest
 
-from scripts.analyze_vdam_native_score_repeat_panel import summarize_reports
+from scripts.analyze_vdam_native_score_repeat_panel import (
+    summarize_reports,
+    summarize_score_vectors,
+)
 
 
 def _report(native_log_odds: float, recovar_log_odds: float = 0.25) -> dict[str, object]:
@@ -34,3 +37,15 @@ def test_summarize_reports_rejects_native_top_pair_change() -> None:
 
     with pytest.raises(ValueError, match="top-pair identity"):
         summarize_reports([_report(0.2), changed])
+
+
+@pytest.mark.unit
+def test_summarize_score_vectors_measures_native_envelope() -> None:
+    summary = summarize_score_vectors(
+        native_vectors=[[10.0, 20.0, 30.0], [11.0, 19.0, 30.0]],
+        candidate_vector=[0.0, 9.0, 21.0],
+    )
+
+    assert summary["candidate_inside_native_envelope_count"] == 2
+    assert summary["candidate_inside_native_envelope_fraction"] == pytest.approx(2 / 3)
+    assert summary["candidate_max_distance_outside_native_envelope"] == pytest.approx(1.0)
