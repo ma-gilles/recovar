@@ -75,12 +75,15 @@ per-particle CUDA launch.  Isolated commit `c80a1b754` passes its CUDA build
 bounded iteration-1 diagnostic (`12887823`: exact particle state,
 cross-engine FSC-AUC `0.999999999959`, GT delta `-1.50e-8`).  Its full frozen
 gf01 discriminator is Slurm `12887981_1`.  The executable cache contains the
-inline-projector target, but this variant is already rejected as a parity fix:
-its first strict failure is iteration 31 (cross-engine FSC-AUC `0.99756656`,
+inline-projector target, and its complete 0--200 audit rejects this variant.
+Its first strict failure is iteration 31 (cross-engine FSC-AUC `0.99756656`,
 GT delta `-0.00068389`), materially earlier than the fused preprojected
-control's iteration-73 failure.  It continues only to collect terminal and
-runtime evidence.  The experimental commits remain unpushed until their
-complete 0--200 audits and runtime measurements finish.
+control's iteration-73 failure.  Minimum/final cross-engine FSC-AUC is
+`0.66418465`/`0.85468779`; minimum GT delta is `-0.00496323`; hard-state
+divergence begins at iteration 19.  RECOVAR takes `2931.63` seconds versus
+RELION's `810.62` seconds (`3.62x`).  Inline projection therefore worsens both
+trajectory stability and quality without resolving runtime.  The
+experimental commits remain unpushed.
 
 The authoritative full-schedule boundary is the sealed job `12869234`, not a
 continuation.  It used RELION's true 200-iteration schedule and exact
