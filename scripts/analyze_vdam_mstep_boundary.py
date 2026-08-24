@@ -9,7 +9,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 SCHEMA = "recovar.vdam_mstep_boundary.v1"
 
 

@@ -447,6 +447,29 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
     assert "--nr_iter 33" not in capture
 
 
+def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
+    capture = (REPO_ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
+
+    expected_tokens = [
+        "NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}",
+        '--iter "${NR_ITER_SCHEDULE}"',
+        '--nr_iter "${NR_ITER_SCHEDULE}"',
+        '--diagnostic_stop_after_iteration "${TARGET_ITERATION}"',
+        'RECOVAR_DEBUG_DUMP_DIR=${NATIVE_MSTEP}',
+        'RECOVAR_MSTEP_DUMP_DIR=${RECOVAR_MSTEP}',
+        'run_it${target_tag}_sampling.star',
+        'touch "${OUTPUT_ROOT}/NATIVE_STOPPED_AFTER_IT${target_tag}"',
+        'test "${gpu_uuid_after_relion}" = "${gpu_uuid_before}"',
+        'test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"',
+        "scripts.analyze_vdam_mstep_boundary",
+        '"nr_iter_schedule":%d',
+        '"stopped_after_iteration":%d',
+    ]
+    missing = [token for token in expected_tokens if token not in capture]
+    assert not missing, f"VDAM M-step capture lost full-schedule isolation: {missing}"
+    assert "VDAM_NR_ITER_OVERRIDE" not in capture
+
+
 def test_vdam_relion_continuation_can_capture_noise_sufficient_statistics():
     continuation = (REPO_ROOT / "scripts/run_vdam_relion_continuation_capture.sbatch").read_text()
 
