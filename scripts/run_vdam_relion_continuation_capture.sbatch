@@ -25,6 +25,9 @@ LAUNCHER=${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch
 ITERATION=${VDAM_RELION_CONT_ITERATION:-3}
 PART_ID=${VDAM_RELION_CONT_PART_ID:-9}
 PART_IDS=${VDAM_RELION_CONT_PART_IDS:-}
+# Slurm uses commas to delimit --export entries, so submitters may use colons
+# and let this runner normalize to RELION's comma-separated list syntax.
+PART_IDS=${PART_IDS//:/,}
 STACK_INDEX=${VDAM_RELION_CONT_STACK_INDEX:-}
 CAPTURE_ENABLED=${VDAM_RELION_CONT_CAPTURE:-0}
 PERTURBATION=${VDAM_RELION_CONT_PERTURBATION:-}
@@ -40,7 +43,7 @@ test -s "${CONTINUE}"
 test -x "${RELION_BINARY}"
 case "${CAPTURE_ENABLED}" in 0|1) ;; *) echo "VDAM_RELION_CONT_CAPTURE must be 0 or 1" >&2; exit 2 ;; esac
 if [[ -n "${PART_IDS}" && ! "${PART_IDS}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
-    echo "VDAM_RELION_CONT_PART_IDS must be a comma-separated integer list" >&2
+    echo "VDAM_RELION_CONT_PART_IDS must be a comma- or colon-separated integer list" >&2
     exit 2
 fi
 if [[ -n "${PART_IDS}" ]]; then
