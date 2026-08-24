@@ -1130,6 +1130,7 @@ def bucket_local_hypothesis_layout(
     max_hypotheses_per_microbatch: int = 32768,
     unify_bucket_sizes: bool | None = None,
     large_bucket_quantum: int | None = None,
+    preserve_image_order: bool = False,
 ) -> list[LocalBucketSpec]:
     """Bucket images by exact local-rotation count for static-shape execution."""
 
@@ -1167,15 +1168,31 @@ def bucket_local_hypothesis_layout(
         unify_bucket_sizes = os.environ.get("RECOVAR_LOCAL_BUCKET_UNIFY", "").lower() in {"1", "true", "yes", "on"}
     if bucket_sizes.size and bool(unify_bucket_sizes):
         bucket_sizes = np.full_like(bucket_sizes, int(bucket_sizes.max()))
-    processing_order = np.lexsort((layout.rotation_counts, bucket_sizes)).astype(np.int32)
+    processing_order = (
+        np.arange(layout.n_images, dtype=np.int32)
+        if preserve_image_order
+        else np.lexsort((layout.rotation_counts, bucket_sizes)).astype(np.int32)
+    )
     bucket_specs: list[LocalBucketSpec] = []
 
     if processing_order.size == 0:
         return bucket_specs
 
-    unique_bucket_sizes = np.unique(bucket_sizes[processing_order])
-    for bucket_size in unique_bucket_sizes:
-        bucket_images = processing_order[bucket_sizes[processing_order] == bucket_size]
+    if preserve_image_order:
+        boundaries = np.flatnonzero(
+            np.r_[True, bucket_sizes[processing_order][1:] != bucket_sizes[processing_order][:-1], True]
+        )
+        bucket_groups = [
+            processing_order[start:stop]
+            for start, stop in zip(boundaries[:-1], boundaries[1:], strict=True)
+        ]
+    else:
+        bucket_groups = [
+            processing_order[bucket_sizes[processing_order] == bucket_size]
+            for bucket_size in np.unique(bucket_sizes[processing_order])
+        ]
+    for bucket_images in bucket_groups:
+        bucket_size = int(bucket_sizes[int(bucket_images[0])])
         max_images = max(1, min(image_batch_size, max_hypotheses_per_microbatch // int(bucket_size)))
         for start in range(0, bucket_images.shape[0], max_images):
             image_indices = np.asarray(bucket_images[start : start + max_images], dtype=np.int32)

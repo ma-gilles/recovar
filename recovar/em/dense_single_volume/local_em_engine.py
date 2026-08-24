@@ -119,6 +119,7 @@ from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_ctf_sums_from_probs_sum_t,
+    compute_local_mstep_sums,
     compute_local_weighted_sums,
     flatten_bucket_rotations,
     flatten_bucket_rows,
@@ -424,6 +425,60 @@ def _local_mstep_adjoint_window(
         mstep_current_size = int(current_size) if current_size is not None else int(image_shape[0])
         mstep_adjoint_max_r = float(mstep_current_size // 2)
     return mstep_recon_window_indices, mstep_adjoint_max_r
+
+
+def _accumulate_relion_physical_particle_grid(
+    summed,
+    ctf_probs,
+    rotations,
+    row_mask,
+    Ft_y,
+    Ft_ctf,
+    *,
+    pixel_indices,
+    image_shape,
+    volume_shape,
+    max_r,
+):
+    """Scatter one physically ordered VDAM bucket with RELION fused atomics."""
+
+    if max_r is None:
+        raise ValueError("RELION physical particle-grid accumulation requires max_r")
+    summed = jnp.asarray(summed, dtype=jnp.complex64)
+    ctf_probs = jnp.asarray(ctf_probs, dtype=jnp.float32)
+    rotations = jnp.asarray(rotations, dtype=jnp.float32)
+    row_mask = jnp.asarray(row_mask, dtype=bool)
+    if summed.shape != ctf_probs.shape:
+        raise ValueError(
+            "RELION physical particle-grid data/weight shapes differ: "
+            f"{summed.shape} vs {ctf_probs.shape}"
+        )
+    if row_mask.shape != summed.shape[:2]:
+        raise ValueError(
+            "RELION physical particle-grid row mask must match particle/rotation axes: "
+            f"{row_mask.shape} vs {summed.shape[:2]}"
+        )
+    if rotations.shape != (*summed.shape[:2], 3, 3):
+        raise ValueError(
+            "RELION physical particle-grid rotations must match particle/rotation axes: "
+            f"{rotations.shape} vs {(*summed.shape[:2], 3, 3)}"
+        )
+    summed = jnp.where(row_mask[..., None], summed, 0.0)
+    ctf_probs = jnp.where(row_mask[..., None], ctf_probs, 0.0)
+
+    from recovar import cuda_backproject
+
+    return cuda_backproject.relion_fused_x_half_backproject_particle_grid_indexed(
+        Ft_y,
+        Ft_ctf,
+        summed,
+        ctf_probs,
+        jnp.asarray(pixel_indices, dtype=jnp.int32),
+        rotations,
+        tuple(int(value) for value in image_shape),
+        tuple(int(value) for value in volume_shape),
+        float(max_r),
+    )
 
 
 def _packed_noise_projection_chunk_rows(n_recon_pixels: int, *, batch_size: int = 1) -> int:
@@ -2039,6 +2094,7 @@ def run_local_em_exact(
     normalization_max_posterior: np.ndarray | None = None,
     translation_prior_centers: np.ndarray | None = None,
     unify_local_bucket_sizes: bool | None = None,
+    preserve_bpref_particle_order: bool = False,
     stats_use_reconstruction_probs: bool = False,
     relion_f32_fine_posterior: bool = False,
     include_unweighted_norm_high_shell: bool = True,
@@ -2066,6 +2122,18 @@ def run_local_em_exact(
     relion_exact_score_translation = bool(relion_exact_score_translation)
     relion_exact_bpref_operands = bool(relion_exact_bpref_operands)
     relion_exact_fine_diff2 = bool(relion_exact_fine_diff2)
+    preserve_bpref_particle_order = bool(preserve_bpref_particle_order)
+    source_faithful_bpref = bool(
+        preserve_bpref_particle_order and relion_exact_bpref_operands
+    )
+    if preserve_bpref_particle_order and not mstep_relion_x_half:
+        raise ValueError("BPref particle-order preservation requires the RELION x-half M-step")
+    if preserve_bpref_particle_order and not relion_exact_bpref_operands:
+        raise ValueError("BPref particle-order preservation requires exact RELION BPref operands")
+    if source_faithful_bpref and (disable_adjoint_y or disable_adjoint_ctf):
+        raise ValueError(
+            "source-faithful BPref accumulation requires both data and weight adjoints"
+        )
     if relion_exact_score_translation and not half_spectrum_scoring:
         raise ValueError("exact RELION score translation requires half_spectrum_scoring=True")
     if relion_exact_score_translation and use_float64_scoring:
@@ -2542,6 +2610,7 @@ def run_local_em_exact(
         rotation_block_size=rotation_block_size,
         max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
         unify_bucket_sizes=unify_local_bucket_sizes,
+        preserve_image_order=source_faithful_bpref,
     )
     timing.bucket_build_s += time.time() - bucket_build_t0
     debug_target_only_targets: set[int] = set()
@@ -3036,6 +3105,12 @@ def run_local_em_exact(
                 sparse_big_jit_mstep_cap_gb > 0.0
                 and sparse_big_jit_mstep_estimated_gb <= sparse_big_jit_mstep_cap_gb
             )
+        if source_faithful_bpref and use_big_jit_buckets_for_bucket:
+            # RELION's particle-owned fused scatter consumes both reduced
+            # operands together after scoring. Keep those tensors visible
+            # outside the bucket JIT so one ordered CUDA handler can issue
+            # the interleaved data/weight atomic stream.
+            sparse_big_jit_backprojection = True
         can_defer_big_jit_backprojection = (
             use_big_jit_buckets_for_bucket
             and significant_backprojection_candidate
@@ -3385,6 +3460,7 @@ def run_local_em_exact(
                 relion_cuda_preprocess_cosine_width=relion_cuda_preprocess_cosine_width,
                 mstep_subtract_ctf_projection=bool(mstep_subtract_ctf_projection),
                 mstep_relion_x_half=bool(mstep_relion_x_half),
+                relion_sequential_mstep_reduction=source_faithful_bpref,
                 disable_adjoint_y=big_jit_disable_adjoint_y,
                 disable_adjoint_ctf=big_jit_disable_adjoint_ctf,
                 accumulate_noise=accumulate_noise and not return_big_jit_deferred_mstep_inputs,
@@ -3748,7 +3824,11 @@ def run_local_em_exact(
 
             flat_packed_summed = None
             flat_packed_ctf_probs = None
-            if sparse_big_jit_backprojection and (not disable_adjoint_y or not disable_adjoint_ctf):
+            if (
+                not source_faithful_bpref
+                and sparse_big_jit_backprojection
+                and (not disable_adjoint_y or not disable_adjoint_ctf)
+            ):
                 flat_packed_summed = flatten_bucket_rows(packed_summed)
                 flat_packed_ctf_probs = flatten_bucket_rows(packed_ctf_probs)
 
@@ -3870,7 +3950,26 @@ def run_local_em_exact(
                         sparse_adjoint_chunk_count += int(n_adjoint_chunks)
                         timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
 
-            if sparse_big_jit_backprojection and (not disable_adjoint_y or not disable_adjoint_ctf):
+            if source_faithful_bpref and sparse_big_jit_backprojection:
+                adjoint_t0 = time.time()
+                Ft_y, Ft_ctf = _accumulate_relion_physical_particle_grid(
+                    packed_summed,
+                    packed_ctf_probs,
+                    packed_mstep_rotations_np,
+                    reconstruction_pack_mask_jnp,
+                    Ft_y,
+                    Ft_ctf,
+                    pixel_indices=mstep_recon_window_indices,
+                    image_shape=image_shape,
+                    volume_shape=recon_volume_shape,
+                    max_r=mstep_adjoint_max_r,
+                )
+                if return_profile:
+                    _block_until_ready(Ft_y, Ft_ctf)
+                timing.adjoint_y_s += time.time() - adjoint_t0
+            elif sparse_big_jit_backprojection and (
+                not disable_adjoint_y or not disable_adjoint_ctf
+            ):
                 if not disable_adjoint_y:
                     adjoint_y_t0 = time.time()
                     Ft_y, n_adjoint_chunks = _adjoint_slice_volume_maybe_windowed_row_chunks(
@@ -4787,6 +4886,32 @@ def run_local_em_exact(
                 )
             scores = None
 
+        if source_faithful_bpref and not score_only:
+            # RELION carries one float32 numerator and denominator through the
+            # translation loop for every orientation/pixel. Recompute this
+            # narrow boundary after any fused score path so GEMM/reduce_sum
+            # ordering cannot leak into the physical particle scatter.
+            mstep_t0 = time.time()
+            summed, ctf_probs = compute_local_mstep_sums(
+                reconstruction_probs,
+                shifted_recon_split,
+                ctf2_over_nv_recon,
+                relion_x_half=True,
+                sequential_translation_reduction=True,
+            )
+            if mstep_subtract_ctf_projection:
+                if proj_for_noise is None:
+                    raise RuntimeError(
+                        "Residual local M-step requires materialized recon projections"
+                    )
+                reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
+                frefctf_weighted = proj_for_noise * ctf2_over_nv_recon[:, None, :]
+                summed = summed - reconstruction_probs_sum_t[..., None] * frefctf_weighted
+            defer_packed_mstep_reduction = False
+            if return_profile:
+                _block_until_ready(summed, ctf_probs)
+            timing.mstep_s += time.time() - mstep_t0
+
         _collect_reconstruction_probability_values(bucket.image_indices, probs)
 
         pack_t0 = time.time()
@@ -4861,7 +4986,26 @@ def run_local_em_exact(
             packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_mstep_rotations_np))
         timing.pack_s += time.time() - pack_t0
 
-        if defer_packed_mstep_reduction and not score_only and (not disable_adjoint_y or not disable_adjoint_ctf):
+        if source_faithful_bpref and not score_only:
+            adjoint_t0 = time.time()
+            Ft_y, Ft_ctf = _accumulate_relion_physical_particle_grid(
+                packed_summed,
+                packed_ctf_probs,
+                packed_mstep_rotations_np,
+                reconstruction_pack_mask_jnp,
+                Ft_y,
+                Ft_ctf,
+                pixel_indices=mstep_recon_window_indices,
+                image_shape=image_shape,
+                volume_shape=recon_volume_shape,
+                max_r=mstep_adjoint_max_r,
+            )
+            if return_profile:
+                _block_until_ready(Ft_y, Ft_ctf)
+            timing.adjoint_y_s += time.time() - adjoint_t0
+        elif defer_packed_mstep_reduction and not score_only and (
+            not disable_adjoint_y or not disable_adjoint_ctf
+        ):
             if packed_reconstruction_probs is None:
                 raise RuntimeError("packed posterior rows are required for deferred local M-step")
             packed_rotation_count = int(packed_rotations_np.shape[1])
@@ -4974,7 +5118,11 @@ def run_local_em_exact(
                 _block_until_ready(Ft_y)
             timing.adjoint_y_s += time.time() - adjoint_y_t0
 
-        if (not defer_packed_mstep_reduction) and not disable_adjoint_ctf:
+        if (
+            not source_faithful_bpref
+            and not defer_packed_mstep_reduction
+            and not disable_adjoint_ctf
+        ):
             adjoint_ctf_t0 = time.time()
             Ft_ctf = _adjoint_slice_volume_maybe_windowed(
                 flatten_bucket_rows(packed_ctf_probs),

@@ -52,7 +52,10 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_wavg_rectangle_triplet_terms,
     _relion_wavg_sequential_triplet_terms,
 )
-from recovar.em.dense_single_volume.local_backprojection import compute_local_weighted_sums
+from recovar.em.dense_single_volume.local_backprojection import (
+    compute_local_mstep_sums,
+    compute_local_weighted_sums,
+)
 
 
 def _validate_relion_exact_fine_diff2_preconditions(
@@ -561,6 +564,7 @@ def _score_normalize_mstep(
     use_relion_f32_fine_posterior: bool = False,
     adaptive_fraction: float,
     max_significants: int,
+    sequential_translation_reduction: bool = False,
     scores_override=None,
 ):
     """Score, normalize, and form M-step tensors inside the fused bucket JIT."""
@@ -600,11 +604,13 @@ def _score_normalize_mstep(
         max_significants=max_significants,
         scores_override=scores_override,
     )
-    summed = compute_local_weighted_sums(reconstruction_probs, shifted_recon_split)
-    ctf_probs = jnp.where(
-        reconstruction_probs_sum_t[..., None] != 0.0,
-        reconstruction_probs_sum_t[..., None] * ctf2_over_nv_recon[:, None, :],
-        0.0,
+    summed, ctf_probs = compute_local_mstep_sums(
+        reconstruction_probs,
+        shifted_recon_split,
+        ctf2_over_nv_recon,
+        relion_x_half=sequential_translation_reduction,
+        default_probs_sum_t=reconstruction_probs_sum_t,
+        sequential_translation_reduction=sequential_translation_reduction,
     )
     return (
         log_Z,
@@ -831,6 +837,7 @@ def _project_local_half_spectrum(
         "relion_cuda_preprocess_cosine_width",
         "mstep_subtract_ctf_projection",
         "mstep_relion_x_half",
+        "relion_sequential_mstep_reduction",
         "disable_adjoint_y",
         "disable_adjoint_ctf",
         "accumulate_noise",
@@ -945,6 +952,7 @@ def run_local_bucket_big_jit(
     relion_cuda_preprocess_cosine_width: float = 0.0,
     mstep_subtract_ctf_projection: bool,
     mstep_relion_x_half: bool,
+    relion_sequential_mstep_reduction: bool = False,
     disable_adjoint_y: bool,
     disable_adjoint_ctf: bool,
     accumulate_noise: bool,
@@ -1646,6 +1654,7 @@ def run_local_bucket_big_jit(
         use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        sequential_translation_reduction=relion_sequential_mstep_reduction,
         scores_override=direct_scores,
     )
     if mstep_subtract_ctf_projection:

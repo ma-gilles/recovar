@@ -872,6 +872,9 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["local_relion_exact_bpref_operands"] = kwargs[
             "relion_exact_bpref_operands"
         ]
+        calls["local_preserve_bpref_particle_order"] = kwargs[
+            "preserve_bpref_particle_order"
+        ]
         calls["local_relion_exact_fine_diff2"] = kwargs["relion_exact_fine_diff2"]
         calls["local_relion_exact_score_translation"] = kwargs[
             "relion_exact_score_translation"
@@ -1009,6 +1012,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_relion_f32_fine_posterior"] is False
     assert calls["local_projection_mask_current_image_disk"] is False
     assert calls["local_relion_exact_bpref_operands"] is True
+    assert calls["local_preserve_bpref_particle_order"] is False
     assert calls["local_relion_exact_fine_diff2"] is True
     assert calls["local_relion_exact_score_translation"] is True
     assert calls["diagnostic_context"] == [{"iteration": 7, "half": 1}, "clear"]

@@ -125,6 +125,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
     EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV,
     LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
+    _accumulate_relion_physical_particle_grid,
     _build_reconstruction_pack_indices,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_max_hypotheses_per_microbatch,
@@ -3587,6 +3588,104 @@ def test_bucket_local_hypothesis_layout_unify_argument_collapses_shape_classes(m
         np.sort(np.concatenate([b.image_indices for b in explicit_buckets])),
         np.arange(len(rotation_counts), dtype=np.int32),
     )
+
+
+def test_bucket_local_hypothesis_layout_can_preserve_physical_image_order(monkeypatch):
+    monkeypatch.delenv("RECOVAR_LOCAL_BUCKET_UNIFY", raising=False)
+    rotation_counts = np.array([16, 64, 16, 64], dtype=np.int32)
+    rotation_offsets = np.concatenate([[0], np.cumsum(rotation_counts)]).astype(np.int64)
+    n_total = int(rotation_counts.sum())
+    layout = LocalHypothesisLayout(
+        n_global_rotations=n_total,
+        n_pixels=16,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=np.arange(n_total, dtype=np.int32),
+        rotations_flat=np.broadcast_to(
+            np.eye(3, dtype=np.float32),
+            (n_total, 3, 3),
+        ).copy(),
+        rotation_log_priors_flat=np.zeros(n_total, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((rotation_counts.size, 1), dtype=np.float32),
+    )
+
+    buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=4,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=1024,
+        unify_bucket_sizes=False,
+        preserve_image_order=True,
+    )
+
+    np.testing.assert_array_equal(
+        np.concatenate([bucket.image_indices for bucket in buckets]),
+        np.arange(rotation_counts.size, dtype=np.int32),
+    )
+    assert [bucket.bucket_rotation_count for bucket in buckets] == [16, 64, 16, 64]
+
+
+def test_relion_physical_particle_grid_fuses_masked_data_and_weight(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    captured = {}
+
+    def fake_particle_grid(
+        data_volume,
+        weight_volume,
+        data_rows,
+        weight_rows,
+        pixel_indices,
+        rotations,
+        image_shape,
+        volume_shape,
+        max_r,
+    ):
+        captured.update(
+            data_rows=np.asarray(data_rows),
+            weight_rows=np.asarray(weight_rows),
+            pixel_indices=np.asarray(pixel_indices),
+            rotations=np.asarray(rotations),
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            max_r=max_r,
+        )
+        return data_volume + 1, weight_volume + 2
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_fused_x_half_backproject_particle_grid_indexed",
+        fake_particle_grid,
+    )
+    data_rows = np.arange(24, dtype=np.float32).reshape(2, 3, 4).astype(np.complex64)
+    weight_rows = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    rotations = np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3, 3)).copy()
+    row_mask = np.array([[True, False, True], [False, True, True]])
+
+    data_out, weight_out = _accumulate_relion_physical_particle_grid(
+        data_rows,
+        weight_rows,
+        rotations,
+        row_mask,
+        np.zeros(32, dtype=np.complex64),
+        np.zeros(32, dtype=np.float32),
+        pixel_indices=np.arange(4, dtype=np.int32),
+        image_shape=(8, 8),
+        volume_shape=(7, 7, 7),
+        max_r=3.0,
+    )
+
+    np.testing.assert_array_equal(captured["data_rows"], data_rows * row_mask[..., None])
+    np.testing.assert_array_equal(captured["weight_rows"], weight_rows * row_mask[..., None])
+    np.testing.assert_array_equal(captured["pixel_indices"], np.arange(4, dtype=np.int32))
+    np.testing.assert_array_equal(captured["rotations"], rotations)
+    assert captured["image_shape"] == (8, 8)
+    assert captured["volume_shape"] == (7, 7, 7)
+    assert captured["max_r"] == 3.0
+    np.testing.assert_array_equal(np.asarray(data_out), np.ones(32, dtype=np.complex64))
+    np.testing.assert_array_equal(np.asarray(weight_out), np.full(32, 2, dtype=np.float32))
 
 
 def test_pad_local_big_jit_image_axis_masks_dummy_rows():

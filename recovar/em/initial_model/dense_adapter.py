@@ -1142,6 +1142,9 @@ def _run_sparse_pass2_initial_model_estep(
                         group_kwargs.get("projection_mask_current_image_disk", True)
                     ),
                     relion_exact_bpref_operands=bool(use_exact_local_relion_operands),
+                    preserve_bpref_particle_order=bool(
+                        use_exact_local_relion_operands and config.relion_bpref_frame
+                    ),
                     relion_exact_fine_diff2=use_exact_fine_diff2,
                     relion_exact_score_translation=use_exact_fine_diff2,
                 )
