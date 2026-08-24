@@ -60,6 +60,32 @@ def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | i
     }
 
 
+def _positive_weight_metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | int]:
+    """Separate a common multiplicative scale from positive score weights."""
+
+    reference = np.asarray(reference, dtype=np.float64).reshape(-1)
+    candidate = np.asarray(candidate, dtype=np.float64).reshape(-1)
+    valid = (reference > 0.0) & (candidate > 0.0)
+    if reference.shape != candidate.shape or not np.any(valid):
+        raise ValueError("positive weight metric requires aligned positive values")
+    ref = reference[valid]
+    cand = candidate[valid]
+    ratio = cand / ref
+    scale = float(np.dot(ref, cand) / np.dot(ref, ref))
+    scaled_residual = cand - scale * ref
+    denominator = max(float(np.linalg.norm(cand)), np.finfo(np.float64).tiny)
+    return {
+        "positive_count": int(ref.size),
+        "ratio_min": float(np.min(ratio)),
+        "ratio_max": float(np.max(ratio)),
+        "ratio_mean": float(np.mean(ratio)),
+        "ratio_median": float(np.median(ratio)),
+        "ratio_std": float(np.std(ratio)),
+        "least_squares_scale": scale,
+        "relative_l2_after_common_scale": float(np.linalg.norm(scaled_residual) / denominator),
+    }
+
+
 def _centered_diff2_replay_stats(
     native_raw: np.ndarray,
     replay_raw: np.ndarray,
@@ -616,6 +642,7 @@ def analyze(
         ),
         "live_projected_reference": _metric(native_reference, live_reference),
         "live_score_weight": _metric(native_weight, live_weight),
+        "live_score_weight_scale": _positive_weight_metric(native_weight, live_weight),
         "live_weighted_shifted_image": _metric(expected_weighted, live_shifted_weighted),
         "native_base_then_translate": _metric(
             native_shifted,

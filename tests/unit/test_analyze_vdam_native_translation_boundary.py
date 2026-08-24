@@ -12,6 +12,7 @@ from scripts.analyze_vdam_native_translation_boundary import (
     _metric,
     _native_crop_rows,
     _native_current_fft_rows,
+    _positive_weight_metric,
     _preprocess_capture,
     _top_pair_score_boundary,
 )
@@ -58,6 +59,19 @@ def test_metric_reports_exact_complex_values_and_residual():
     assert result["exact_count"] == 1
     assert result["value_count"] == 2
     assert result["max_abs"] == pytest.approx(1.0)
+
+
+def test_positive_weight_metric_factors_out_common_scale():
+    reference = np.asarray([1.0, 2.0, 0.0, 4.0], dtype=np.float32)
+    candidate = np.asarray([1.5, 3.0, 0.0, 6.0], dtype=np.float32)
+
+    result = _positive_weight_metric(reference, candidate)
+
+    assert result["positive_count"] == 3
+    assert result["ratio_mean"] == pytest.approx(1.5)
+    assert result["ratio_std"] == pytest.approx(0.0)
+    assert result["least_squares_scale"] == pytest.approx(1.5)
+    assert result["relative_l2_after_common_scale"] == pytest.approx(0.0)
 
 
 def test_centered_diff2_replay_factors_out_constant_highres_addend():
