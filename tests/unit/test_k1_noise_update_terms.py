@@ -79,3 +79,57 @@ def test_noise_update_terms_replay_equal_sufficient_statistics(tmp_path):
     assert report["comparisons"]["new_noise_recovar_vs_native"]["max_abs"] == 0.0
     assert report["comparisons"]["native_formula_replay"]["max_abs"] == 0.0
     assert report["comparisons"]["recovar_formula_replay"]["max_abs"] == 0.0
+
+
+@pytest.mark.unit
+def test_noise_update_terms_replays_vdam_momentum(tmp_path):
+    image_size = 4
+    n4 = float(image_size**4)
+    raw = np.asarray([8.0, 20.0, 36.0], dtype=np.float64)
+    npix = np.asarray([1.0, 2.0, 3.0], dtype=np.float64)
+    sumw = 2.0
+    old = np.asarray([1.0, 2.0, 3.0])
+    mu = 0.9
+    new = mu * old + (1.0 - mu) * raw / (2.0 * sumw * npix)
+    native_path = tmp_path / "sigma2_noise_raw.tsv"
+    native_path.write_text(
+        "".join(
+            "acc_particle\titer=1\tpart_id=17\thalfset=-1\trandom_subset=-1"
+            f"\toptics_group=0\tshell={shell}\traw_sigma2_accum={raw[shell]}"
+            f"\tsumw_group={sumw}\tNpix_per_shell={npix[shell]}"
+            f"\told_sigma2={old[shell]}\tnew_sigma2=0.0\tmy_mu={mu}"
+            f"\timage_power={raw[shell]}\tdirect_residual=0.0\n"
+            for shell in range(3)
+        )
+        + "".join(
+            "final\titer=1\tpart_id=-1\thalfset=-1\trandom_subset=-1"
+            f"\toptics_group=0\tshell={shell}\traw_sigma2_accum={raw[shell]}"
+            f"\tsumw_group={sumw}\tNpix_per_shell={npix[shell]}"
+            f"\told_sigma2={old[shell]}\tnew_sigma2={new[shell]}\tmy_mu={mu}"
+            "\timage_power=0.0\tdirect_residual=0.0\n"
+            for shell in range(3)
+        )
+    )
+    recovar_path = tmp_path / "initialmodel_noise_update_it001.npz"
+    np.savez(
+        recovar_path,
+        current_size=np.asarray([2], dtype=np.int32),
+        relion_half_plane_shell_counts=npix,
+        half0_wsum_sigma2_noise=np.zeros(3),
+        half0_wsum_img_power=raw * n4,
+        half0_wsum_total=raw * n4,
+        half0_sumw=np.asarray([sumw]),
+        half0_previous_sigma2_noise=old * n4,
+        half0_sigma2_noise=new * n4,
+    )
+
+    report = analyze(
+        native_path,
+        recovar_path,
+        iteration=1,
+        half=-1,
+        image_size=image_size,
+        recovar_prefix="half0",
+    )
+
+    assert report["comparisons"]["recovar_formula_replay"]["max_abs"] == pytest.approx(0.0)

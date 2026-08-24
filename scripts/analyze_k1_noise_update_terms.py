@@ -248,7 +248,9 @@ def analyze(
     native_sumw = float(native["sumw"])
     mu = float(native["mu"])
     native_formula = mu * native_old + (1.0 - mu) * native_raw / (2.0 * native_sumw * native_npix)
-    rec_formula = rec_raw_relion / (2.0 * rec_sumw * rec_npix)
+    rec_formula = mu * rec_old_relion + (1.0 - mu) * rec_raw_relion / (
+        2.0 * rec_sumw * rec_npix
+    )
     native_raw_rec_denominator = mu * native_old + (1.0 - mu) * native_raw / (
         2.0 * rec_sumw * rec_npix
     )
