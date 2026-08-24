@@ -443,6 +443,17 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
     assert "--nr_iter 33" not in capture
 
 
+def test_vdam_relion_continuation_can_capture_noise_sufficient_statistics():
+    continuation = (REPO_ROOT / "scripts/run_vdam_relion_continuation_capture.sbatch").read_text()
+
+    expected_tokens = [
+        "VDAM_RELION_CONT_SIGMA2_NOISE_DUMP_DIR",
+        'export RELION_DUMP_SIGMA2_NOISE_DIR=${SIGMA2_NOISE_DUMP_DIR}',
+    ]
+    missing = [token for token in expected_tokens if token not in continuation]
+    assert not missing, f"VDAM continuation lost sigma2-noise capture wiring: {missing}"
+
+
 def test_native_vdam_tau2_refresh_and_ssnr_diagnostics_are_merge_guarded():
     """Protect the K=1 current-size parity fix.
 
