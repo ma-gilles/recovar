@@ -719,6 +719,24 @@ def test_normalize_wsum_to_sigma2_noise_drops_relion_shell_sentinels(monkeypatch
     )
 
 
+@pytest.mark.parametrize("box_size", [32, 64, 100, 128, 256])
+def test_relion_noise_shell_indices_include_horizontal_nyquist(box_size):
+    from recovar.em.dense_single_volume.helpers.half_spectrum import (
+        make_relion_noise_shell_indices_half,
+    )
+    from recovar.em.dense_single_volume.relion_metadata import (
+        _relion_half_plane_shell_counts,
+    )
+
+    image_shape = (box_size, box_size)
+    shell_indices = np.asarray(make_relion_noise_shell_indices_half(image_shape), dtype=np.int32)
+    n_shells = box_size // 2 + 1
+    counts = np.bincount(shell_indices[shell_indices < n_shells], minlength=n_shells)
+
+    assert shell_indices.reshape(box_size, n_shells)[0, box_size // 2] == box_size // 2
+    np.testing.assert_array_equal(counts, _relion_half_plane_shell_counts(image_shape))
+
+
 def test_estimate_initial_noise_spectrum_matches_image_power_scale():
     """The returned sigma² must agree with mean |F|² for noise-only images.
 
