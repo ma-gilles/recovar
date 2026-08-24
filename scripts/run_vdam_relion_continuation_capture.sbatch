@@ -20,6 +20,8 @@ set -euo pipefail
 ROOT=${VDAM_RELION_CONT_ROOT}
 INPUT=${VDAM_RELION_CONT_INPUT_DIR}
 CONTINUE=${VDAM_RELION_CONT_OPTIMISER}
+REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
+LAUNCHER=${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch
 ITERATION=${VDAM_RELION_CONT_ITERATION:-3}
 PART_ID=${VDAM_RELION_CONT_PART_ID:-9}
 PART_IDS=${VDAM_RELION_CONT_PART_IDS:-}
@@ -40,6 +42,11 @@ case "${CAPTURE_ENABLED}" in 0|1) ;; *) echo "VDAM_RELION_CONT_CAPTURE must be 0
 if [[ -n "${PART_IDS}" && ! "${PART_IDS}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
     echo "VDAM_RELION_CONT_PART_IDS must be a comma-separated integer list" >&2
     exit 2
+fi
+if [[ -n "${PART_IDS}" ]]; then
+    : "${EXPECTED_REPO_HEAD:?multi-particle capture must pin the repository head}"
+    test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
+    test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 fi
 mkdir -p "${OUTPUT}" "${CAPTURE}" "${ROOT}/provenance"
 test -z "$(find "${OUTPUT}" "${CAPTURE}" -mindepth 1 -print -quit)"
@@ -94,7 +101,7 @@ COMMAND=(
 )
 printf '%q ' "${COMMAND[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
-sha256sum "${RELION_BINARY}" "${CONTINUE}" \
+sha256sum "${LAUNCHER}" "${RELION_BINARY}" "${CONTINUE}" \
     > "${ROOT}/provenance/static_inputs_${SLURM_JOB_ID}.sha256"
 nvidia-smi -q > "${ROOT}/provenance/nvidia_smi_${SLURM_JOB_ID}.txt"
 
