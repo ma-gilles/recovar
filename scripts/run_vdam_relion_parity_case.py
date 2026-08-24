@@ -455,6 +455,8 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES",
         "RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2",
         "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR",
+        "RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_DIR",
+        "RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_ITERATION",
         "RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION",
         "RECOVAR_DISABLE_LOCAL_BIG_JIT",
         "RECOVAR_PASS2_DUMP_DIR",
@@ -501,6 +503,34 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         )
         + "\n"
     )
+
+    if os.environ.get("VDAM_NR_ITER_OVERRIDE") is not None:
+        final_iteration = int(definition["nr_iter"])
+        iteration_tag = f"{final_iteration:03d}"
+        required = [
+            relion_dir / f"run_it{iteration_tag}_model.star",
+            relion_dir / f"run_it{iteration_tag}_data.star",
+            recovar_dir / f"run_it{iteration_tag}_model.star",
+            recovar_dir / f"run_it{iteration_tag}_data.star",
+        ]
+        missing = [str(path) for path in required if not path.is_file()]
+        if missing:
+            raise RunError(f"bounded trajectory is missing terminal artifacts: {missing}")
+        report = {
+            "schema": "recovar.vdam_bounded_parity_run.v1",
+            "status": "diagnostic_complete",
+            "case_id": args.case_id,
+            "effective_definition": definition,
+            "physical_gpu_uuid": gpu_uuid,
+            "relion_dir": str(relion_dir),
+            "recovar_dir": str(recovar_dir),
+            "quality_gate": "none; bounded diagnostic intentionally skips frozen full-trajectory gates",
+        }
+        (case_root / "bounded_run_report.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n"
+        )
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return report
 
     report, shellwise = audit(
         scorecard_path=scorecard_path,
