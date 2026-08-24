@@ -23050,3 +23050,56 @@ causal K=1 correction.  The remaining raw numerator is approximately
 `2.36e-7`, while the denominator is approximately `3.33e-8`; the next gate is
 a short numbered-trajectory comparison before spending on the complete
 remaining-case scorecard.
+
+## 2026-08-24 13:25 EDT — iteration-2 trajectory gate validates the fused BPref fix
+
+The focused two-numbered-iteration case-10 job `12890726` used the unchanged
+committed candidate `6fec69da3` and the same H100 CUDA library as the isolated
+and complete-iteration-1 gates.  Iteration topology remains exact: both
+engines use current size `56` and HEALPix order `3`, and iteration 1 retains
+exact per-particle Pmax `1`.  The production log explicitly records the new
+native-unit, immediate-scatter kernel in both iteration-1 halves; later
+iterations remain on the existing soft-posterior path.
+
+The fixed intermediate audit shows that iteration-2 per-particle Pmax relative
+L2 falls from the previous control's `5.0369950e-3` to `1.7644868e-4`, a
+`28.55x` improvement and `96.50%` residual reduction.  Maximum absolute Pmax
+error falls from `0.240073` to `0.0100252` (`23.95x`).  The displayed average
+Pmax remains `0.2368`; at full precision the RECOVAR-minus-RELION mean is only
+`-1.38206e-7`.
+
+The improvement propagates through the model state.  The relative L2 error in
+the stored signed gold-standard FSC vector improves `90.37x` at iteration 1
+and `42.15x` at iteration 2.  Iteration-2 tau2 and half-1 direction-prior
+errors improve `3.49x` and `3.53x`.  The manual intermediate report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_fused_bpref_prefix2_6fec69da3_20260824T1300ET/analysis/prefix_intermediates_manual.json`.
+
+An independent iteration-1 map audit gives merged cross-engine FSC-AUC
+`0.999999999494236`, versus `0.999999998735045` for the fixed control.  This
+is a `2.50x` or `60.0%` reduction in the remaining FSC-AUC deficit.  Every one
+of the `190` non-DC shells improves in both halves and in the merged map; the
+merged shell-band deficit reduction ranges from `102x` in shells `1:32` to
+`1.46x` in shells `160:192`.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_fused_bpref_prefix2_6fec69da3_20260824T1300ET/analysis/prefix_it1_early_fsc.json`,
+SHA-256 `e6b2eb6935f0ef1d9956e6472e60db6b263a8a2113d55f486d3f499e18ab6db6`.
+
+The completed fixed audit strengthens this at the first posterior-divergent
+iteration.  Iteration-2 merged cross-engine FSC-AUC improves from
+`0.999999988917232` to `0.999999999437738`, a `19.71x` reduction in the
+remaining deficit.  The half-1 and half-2 deficit reductions are `24.60x` and
+`34.81x`.  Job `12890726` completed `0:0` in `00:46:43`, and the audit reports
+no topology or numeric-artifact failure.  The authoritative completed reports
+are `analysis/prefix_fsc.json` (SHA-256
+`3b47beed032c56d94f850a0c9f8c42e611b6fe3df09f409b1d6f6db21ec9fdcd`)
+and `analysis/prefix_intermediates.json` (SHA-256
+`9bbb54c8c8f904eb28e33337097d6825a559e7539e877472699ddbefefacfd91`).
+
+The two-iteration runtime is `2439.2s` inside the refinement loop.  Iteration 2
+takes `1827.9s`, versus `1802.2s` for the fixed control (`1.4%` slower), while
+preserving the same support topology.  This accepts the fused firstiter BPref
+path as a trajectory-level K=1 correction.  Matching two-iteration
+generalization gates were therefore submitted for the other remaining strict
+failures: case 4 as job `12892505` and case 5 as job `12892506`.  Both use the
+same commit, CUDA-library SHA-256
+`a8ecc841c0327d9e2a6b014ac710cbfeb6f7c479957ca47b466c4440e0e35884`,
+live startup spectrum, exact BPref operands, and fixed audit scripts.
