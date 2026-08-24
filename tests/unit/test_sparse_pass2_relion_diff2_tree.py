@@ -34,6 +34,10 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _score_pass2_pairs_relion_gpu_diff2,
     _score_pass2_pairs_relion_gpu_diff2_raw,
 )
+from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.dense_single_volume.local_em_engine import (
+    _relion_exact_fine_full_to_compact_lookup,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -615,11 +619,14 @@ def test_case20_current_grid_lookup_has_relion_56_by_29_topology():
 def test_full_size_lookup_is_a_bijection_of_the_complete_half_spectrum():
     image_shape = (8, 8)
     n_half = image_shape[0] * (image_shape[1] // 2 + 1)
+    window_spec = make_fourier_window_spec(image_shape, image_shape[0], n_half)
 
-    lookup = _relion_cuda_fine_full_to_compact_lookup(
+    assert window_spec.use_window is False
+    lookup = _relion_exact_fine_full_to_compact_lookup(
         image_shape,
         image_shape[0],
-        np.arange(n_half, dtype=np.int32),
+        n_half,
+        window_spec,
     )
 
     assert lookup.shape == (n_half,)

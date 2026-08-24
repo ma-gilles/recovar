@@ -165,6 +165,25 @@ from recovar.utils.nvtx_shim import nvtx
 logger = logging.getLogger(__name__)
 
 
+def _relion_exact_fine_full_to_compact_lookup(
+    image_shape,
+    current_size,
+    n_half,
+    window_spec,
+):
+    """Build RELION fine-score row mapping for cropped or full-size images."""
+    compact_indices = (
+        window_spec.score_indices_np
+        if window_spec.use_window
+        else np.arange(int(n_half), dtype=np.int32)
+    )
+    return _sparse_pass2_diagnostics._relion_cuda_fine_full_to_compact_lookup(
+        image_shape,
+        int(current_size),
+        compact_indices,
+    )
+
+
 def _maybe_dump_exact_local_bpref_contribution_rows(**kwargs) -> None:
     """Write exact-local pre-scatter rows without claiming device geometry.
 
@@ -2233,16 +2252,11 @@ def run_local_em_exact(
     use_window = window_spec.use_window
     window_indices = window_spec.score_indices
     if relion_exact_fine_diff2:
-        relion_fine_full_to_compact = (
-            _sparse_pass2_diagnostics._relion_cuda_fine_full_to_compact_lookup(
-                image_shape,
-                int(current_size),
-                (
-                    window_spec.score_indices_np
-                    if use_window
-                    else np.arange(int(n_half), dtype=np.int32)
-                ),
-            )
+        relion_fine_full_to_compact = _relion_exact_fine_full_to_compact_lookup(
+            image_shape,
+            current_size,
+            n_half,
+            window_spec,
         )
     else:
         relion_fine_full_to_compact = np.zeros(1, dtype=np.int32)
