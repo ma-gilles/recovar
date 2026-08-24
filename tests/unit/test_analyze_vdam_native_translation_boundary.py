@@ -5,6 +5,7 @@ import pytest
 
 from scripts.analyze_vdam_native_translation_boundary import (
     _captured_native_current_size,
+    _centered_diff2_replay_stats,
     _current_crop_to_compact,
     _flat_real_dump,
     _metric,
@@ -55,6 +56,19 @@ def test_metric_reports_exact_complex_values_and_residual():
     assert result["exact_count"] == 1
     assert result["value_count"] == 2
     assert result["max_abs"] == pytest.approx(1.0)
+
+
+def test_centered_diff2_replay_factors_out_constant_highres_addend():
+    replay = np.asarray([10.0, 11.5, 13.0], dtype=np.float32)
+    native = np.add(replay, np.float32(0.25), dtype=np.float32)
+
+    result = _centered_diff2_replay_stats(native, replay)
+
+    assert result["rms"] == 0.0
+    assert result["max_abs"] == 0.0
+    assert result["inferred_highres_mode"] == pytest.approx(0.25)
+    assert result["inferred_highres_mode_count"] == 3
+    assert result["inferred_highres_unique_count"] == 1
 
 
 def _write_flat_real(path, values):

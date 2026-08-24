@@ -22,6 +22,9 @@ from recovar.em.dense_single_volume.local_big_jit import _centered_rfft2_per_ima
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_indices_np,
 )
+from recovar.em.dense_single_volume.helpers.half_spectrum import (
+    make_scoring_half_image_weights,
+)
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_cuda_pixel_correction_from_rfloat_ctf,
@@ -55,6 +58,29 @@ def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | i
         "relative_l2": float(np.linalg.norm(residual.reshape(-1)) / denominator),
         "max_abs": float(np.max(np.abs(residual))),
     }
+
+
+def _centered_diff2_replay_stats(
+    native_raw: np.ndarray,
+    replay_raw: np.ndarray,
+) -> dict[str, float | int]:
+    """Compare positive diff2 arrays while factoring out native high-res Xi2."""
+
+    native_f32 = np.asarray(native_raw, dtype=np.float32)
+    replay_f32 = np.asarray(replay_raw, dtype=np.float32)
+    result = _stats(_center(replay_f32 - native_f32))
+    inferred_highres = np.subtract(native_f32, replay_f32, dtype=np.float32)
+    inferred_bits, inferred_counts = np.unique(inferred_highres.view(np.uint32), return_counts=True)
+    inferred_mode_index = int(np.argmax(inferred_counts))
+    result.update(
+        {
+            "raw_exact_count": int(np.count_nonzero(replay_f32 == native_f32)),
+            "inferred_highres_mode": float(inferred_bits[inferred_mode_index].view(np.float32)),
+            "inferred_highres_mode_count": int(inferred_counts[inferred_mode_index]),
+            "inferred_highres_unique_count": int(inferred_bits.size),
+        }
+    )
+    return result
 
 
 def _flat_real_dump(path: Path) -> np.ndarray:
@@ -339,9 +365,73 @@ def analyze(
         )
     )
 
+    # Replay the production fine-score reduction twice from the same native
+    # operands.  The pair replay consumes RELION's already-translated image;
+    # the fused replay starts from the unshifted corrected image and performs
+    # translation inside RECOVAR's production score kernel.  Their centered
+    # residuals separate translation arithmetic from the reduction tree while
+    # ignoring the candidate-independent high-resolution Xi2 addend.
+    score_half_weights = np.asarray(
+        make_scoring_half_image_weights(
+            (full_size, full_size),
+            relion_half_sum=True,
+        ),
+        dtype=np.float32,
+    )[score_indices]
+    direct_reference = np.where(
+        score_half_weights[None] > 0.0,
+        native_reference,
+        np.complex64(0.0),
+    ).astype(np.complex64)
+    direct_weight = np.multiply(
+        native_weight,
+        score_half_weights,
+        dtype=np.float32,
+    )
+    full_to_compact = _relion_cuda_fine_full_to_compact_lookup(
+        (full_size, full_size),
+        current_size,
+        score_indices,
+    )
+    native_shifted_pair_diff2 = cuda_backproject.relion_fine_diff2_pairs_f32(
+        jnp.asarray(direct_reference[None], dtype=jnp.complex64),
+        jnp.asarray(native_shifted[None], dtype=jnp.complex64),
+        jnp.asarray(direct_weight[None], dtype=jnp.float32),
+        jnp.asarray(full_to_compact, dtype=jnp.int32),
+    )[0]
+    fused_translate_diff2 = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+        jnp.asarray(direct_reference[None], dtype=jnp.complex64),
+        jnp.asarray(base_corrected[None], dtype=jnp.complex64),
+        translation_angles,
+        jnp.asarray(direct_weight[None], dtype=jnp.float32),
+        jnp.asarray(full_to_compact, dtype=jnp.int32),
+        current_size=current_size,
+    )[0]
+    native_shifted_pair_diff2, fused_translate_diff2 = (
+        np.asarray(value, dtype=np.float32)
+        for value in jax.block_until_ready(
+            (native_shifted_pair_diff2, fused_translate_diff2)
+        )
+    )
+    fused_translate_selected = fused_translate_diff2[
+        np.arange(candidate_count, dtype=np.int64),
+        translation,
+    ]
+
     expected_weighted = (native_shifted * native_weight[None]).astype(np.complex64)
     comparisons = {
         "live_centered_raw_score_residual": _stats(_center(live_raw + native_raw)),
+        "native_raw_diff2_vs_native_shifted_pair_replay": _centered_diff2_replay_stats(
+            native_raw,
+            native_shifted_pair_diff2,
+        ),
+        "native_raw_diff2_vs_fused_translate_replay": _centered_diff2_replay_stats(
+            native_raw,
+            fused_translate_selected,
+        ),
+        "native_shifted_pair_vs_fused_translate_replay": _stats(
+            _center(fused_translate_selected - native_shifted_pair_diff2)
+        ),
         "live_projected_reference": _metric(native_reference, live_reference),
         "live_score_weight": _metric(native_weight, live_weight),
         "live_weighted_shifted_image": _metric(expected_weighted, live_shifted_weighted),
@@ -409,10 +499,10 @@ def analyze(
             native_production_weighted,
         )
     if particle_stack is not None:
-        if native_processed is None:
+        if native_processed is None and native_preprocess_dir is None:
             raise ValueError(
-                "particle preprocessing replay requires Fimg_unweighted.bin, "
-                "Fctf.bin, and Minvsigma2.bin from a StoreWavg capture"
+                "particle preprocessing replay requires either a verbose preprocessing "
+                "capture or Fimg_unweighted.bin, Fctf.bin, and Minvsigma2.bin"
             )
         if particle_index is None or mask_radius is None:
             raise ValueError("particle preprocessing replay requires particle_index and mask_radius")
@@ -454,10 +544,11 @@ def analyze(
             normalized_real = np.asarray(normalized_real, dtype=np.float32)[0]
             masked_real = np.asarray(masked_real, dtype=np.float32)[0]
             replay_half = np.asarray(replay_half, dtype=np.complex64)[0]
-            comparisons[f"native_masked_fourier_vs_{mode}_preprocess_replay"] = _metric(
-                -native_processed,
-                replay_half[score_indices],
-            )
+            if native_processed is not None:
+                comparisons[f"native_masked_fourier_vs_{mode}_preprocess_replay"] = _metric(
+                    -native_processed,
+                    replay_half[score_indices],
+                )
             if captured_preprocess is not None:
                 comparisons[f"native_normalized_real_vs_{mode}_preprocess_replay"] = _metric(
                     captured_preprocess["normalized_shifted"],
@@ -467,6 +558,16 @@ def analyze(
                     captured_preprocess["masked"],
                     masked_real,
                 )
+                native_background = np.float32(captured_preprocess["background"])
+                replay_background = np.float32(masked_real[0, 0])
+                comparisons[f"native_background_vs_{mode}_preprocess_replay"] = {
+                    "native": float(native_background),
+                    "replay": float(replay_background),
+                    "difference": float(np.float32(replay_background - native_background)),
+                    "exact": bool(replay_background == native_background),
+                    "native_bits": int(native_background.view(np.uint32)),
+                    "replay_bits": int(replay_background.view(np.uint32)),
+                }
                 native_preoptics = np.asarray(
                     captured_preprocess["masked_fourier_pre_optics"], dtype=np.complex64
                 )
@@ -493,6 +594,8 @@ def analyze(
                         native_masked_fft.reshape(-1)[current_fft_rows] / scale
                     ).astype(np.complex64),
                 )
+            if not (native_dir / "Fctf.bin").is_file():
+                continue
             pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
                 jnp.asarray([1.0], dtype=jnp.float32),
                 jnp.asarray(
