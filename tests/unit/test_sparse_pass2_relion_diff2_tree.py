@@ -612,6 +612,20 @@ def test_case20_current_grid_lookup_has_relion_56_by_29_topology():
     np.testing.assert_array_equal(np.sort(lookup[lookup >= 0]), np.arange(count, dtype=np.int32))
 
 
+def test_full_size_lookup_is_a_bijection_of_the_complete_half_spectrum():
+    image_shape = (8, 8)
+    n_half = image_shape[0] * (image_shape[1] // 2 + 1)
+
+    lookup = _relion_cuda_fine_full_to_compact_lookup(
+        image_shape,
+        image_shape[0],
+        np.arange(n_half, dtype=np.int32),
+    )
+
+    assert lookup.shape == (n_half,)
+    np.testing.assert_array_equal(np.sort(lookup), np.arange(n_half, dtype=np.int32))
+
+
 def test_dense_cached_and_compact_gaussian_routes_use_same_exact_scores():
     rng = np.random.default_rng(469)
     batch, rotations, translations, pixels = 2, 4, 3, 513

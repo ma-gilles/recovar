@@ -2233,13 +2233,15 @@ def run_local_em_exact(
     use_window = window_spec.use_window
     window_indices = window_spec.score_indices
     if relion_exact_fine_diff2:
-        if not use_window:
-            raise ValueError("exact RELION fine diff2 currently requires a current-size score window")
         relion_fine_full_to_compact = (
             _sparse_pass2_diagnostics._relion_cuda_fine_full_to_compact_lookup(
                 image_shape,
                 int(current_size),
-                window_spec.score_indices_np,
+                (
+                    window_spec.score_indices_np
+                    if use_window
+                    else np.arange(int(n_half), dtype=np.int32)
+                ),
             )
         )
     else:
