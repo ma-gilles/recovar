@@ -19,7 +19,11 @@ set -euo pipefail
 ROOT=${VDAM_PREPROCESS_ROOT}
 INPUT=${VDAM_PREPROCESS_INPUT_DIR}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-69}
+PART_IDS=${VDAM_PREPROCESS_PART_IDS:-}
+PART_IDS=${PART_IDS//:/,}
 CAPTURE_ITERATION=${VDAM_PREPROCESS_ITERATION:-1}
+REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
+LAUNCHER=${REPO_ROOT}/scripts/run_vdam_relion_preprocess_capture.sbatch
 RELION_SOURCE=${VDAM_RELION_SOURCE:-/scratch/gpfs/GILLES/mg6942/relion}
 : "${VDAM_RELION_BINARY:?set the isolated non-MPI RELION capture binary}"
 RELION_BINARY=${VDAM_RELION_BINARY}
@@ -32,6 +36,15 @@ test -s "${INPUT}/particles.star"
 test -x "${RELION_BINARY}"
 mkdir -p "${OUTPUT}" "${CAPTURE}"
 test -z "$(find "${OUTPUT}" "${CAPTURE}" -mindepth 1 -print -quit)"
+if [[ -n "${PART_IDS}" && ! "${PART_IDS}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+    echo "VDAM_PREPROCESS_PART_IDS must be a comma- or colon-separated integer list" >&2
+    exit 2
+fi
+if [[ -n "${PART_IDS}" ]]; then
+    : "${EXPECTED_REPO_HEAD:?multi-particle capture must pin the repository head}"
+    test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
+    test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
+fi
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 while IFS='=' read -r variable_name _; do
@@ -62,6 +75,9 @@ export CUDA_VISIBLE_DEVICES=0
 
 export RELION_ACC_DUMP_DIR=${CAPTURE}
 export RELION_ACC_DUMP_PART_ID=${PART_ID}
+if [[ -n "${PART_IDS}" ]]; then
+    export RELION_ACC_DUMP_PART_IDS=${PART_IDS}
+fi
 export RELION_ACC_DUMP_ITER=${CAPTURE_ITERATION}
 export RELION_ACC_DUMP_VERBOSE=1
 
@@ -77,7 +93,7 @@ printf '%q ' "${COMMAND[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 git -C "${RELION_SOURCE}" rev-parse HEAD > "${ROOT}/provenance/relion_head.txt"
 git -C "${RELION_SOURCE}" diff --binary | sha256sum > "${ROOT}/provenance/relion_diff.sha256"
-sha256sum "${RELION_BINARY}" > "${ROOT}/provenance/relion_binary.sha256"
+sha256sum "${LAUNCHER}" "${RELION_BINARY}" > "${ROOT}/provenance/relion_binary.sha256"
 
 start_epoch=$(date +%s)
 (
@@ -90,7 +106,15 @@ for required in normalized_shifted_real masked_real masked_fourier_pre_optics_re
     test -s "${CAPTURE}/preprocess_img0_${required}.bin"
 done
 test -s "${CAPTURE}/preprocess_img0_softmask_background.bin"
-printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"part_id":%d}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${PART_ID}" \
+if [[ -n "${PART_IDS}" ]]; then
+    IFS=',' read -r -a capture_part_ids <<< "${PART_IDS}"
+    for part_id in "${capture_part_ids[@]}"; do
+        for suffix in sorted_weights sum_weight significant_weight eulers trans_xyz ctfs; do
+            test -s "${CAPTURE}/img0_part${part_id}_storeWavg_${suffix}.bin"
+        done
+    done
+fi
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"part_id":%d,"part_ids":"%s"}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${PART_ID}" "${PART_IDS}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
