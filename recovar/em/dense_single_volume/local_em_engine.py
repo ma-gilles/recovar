@@ -515,6 +515,74 @@ def _accumulate_relion_physical_particle_grid(
     )
 
 
+def _accumulate_relion_vdam_physical_particle_grid(
+    images,
+    ctf,
+    minvsigma2,
+    posterior_over_weight_norm,
+    translation_angles,
+    reference,
+    rotations,
+    row_mask,
+    Ft_y,
+    Ft_ctf,
+    *,
+    pixel_indices,
+    image_shape,
+    volume_shape,
+    max_r,
+):
+    """Form and scatter VDAM residuals in physical particle order."""
+
+    if max_r is None:
+        raise ValueError("RELION VDAM physical particle-grid accumulation requires max_r")
+    images = jnp.asarray(images, dtype=jnp.complex64)
+    ctf = jnp.asarray(ctf, dtype=jnp.float32)
+    minvsigma2 = jnp.asarray(minvsigma2, dtype=jnp.float32)
+    posterior_over_weight_norm = jnp.asarray(
+        posterior_over_weight_norm,
+        dtype=jnp.float32,
+    )
+    reference = jnp.asarray(reference, dtype=jnp.complex64)
+    rotations = jnp.asarray(rotations, dtype=jnp.float32)
+    row_mask = jnp.asarray(row_mask, dtype=bool)
+    if ctf.shape != images.shape or minvsigma2.shape != images.shape:
+        raise ValueError("RELION VDAM image/CTF/noise operands must have matching shapes")
+    if posterior_over_weight_norm.ndim != 3:
+        raise ValueError("RELION VDAM posterior operands must be particle/rotation/translation")
+    particle_count, rotation_count, _ = posterior_over_weight_norm.shape
+    if reference.shape != (particle_count, rotation_count, images.shape[1]):
+        raise ValueError("RELION VDAM reference operands must match particle/rotation/pixel axes")
+    if rotations.shape != (particle_count, rotation_count, 3, 3):
+        raise ValueError("RELION VDAM rotations must match particle/rotation axes")
+    if row_mask.shape != (particle_count, rotation_count):
+        raise ValueError("RELION VDAM row mask must match particle/rotation axes")
+    posterior_over_weight_norm = jnp.where(
+        row_mask[..., None],
+        posterior_over_weight_norm,
+        0.0,
+    )
+
+    from recovar import cuda_backproject
+
+    Ft_y, Ft_ctf, _ = cuda_backproject.relion_vdam_mstep_fused_x_half(
+        Ft_y,
+        Ft_ctf,
+        images,
+        ctf,
+        minvsigma2,
+        posterior_over_weight_norm,
+        jnp.asarray(translation_angles, dtype=jnp.float32),
+        jnp.asarray(pixel_indices, dtype=jnp.int32),
+        reference,
+        rotations,
+        tuple(int(value) for value in image_shape),
+        tuple(int(value) for value in volume_shape),
+        float(max_r),
+    )
+    return Ft_y, Ft_ctf
+
+
 def _packed_noise_projection_chunk_rows(n_recon_pixels: int, *, batch_size: int = 1) -> int:
     """Return packed local noise-projection rows per chunk."""
 
@@ -3401,6 +3469,12 @@ def run_local_em_exact(
             return_big_jit_mstep_tensors = sparse_big_jit_backprojection and (
                 not disable_adjoint_y or not disable_adjoint_ctf
             )
+            return_source_vdam_operands = bool(
+                return_big_jit_mstep_tensors
+                and source_faithful_bpref
+                and not disable_adjoint_y
+                and not disable_adjoint_ctf
+            )
             return_big_jit_deferred_mstep_inputs = (
                 deferred_big_jit_backprojection and not return_big_jit_mstep_tensors
             )
@@ -3520,6 +3594,7 @@ def run_local_em_exact(
                 accumulate_scale_correction=group_ids_np is not None,
                 return_noise_split=return_noise_split,
                 return_mstep_tensors=return_big_jit_mstep_tensors,
+                return_source_vdam_operands=return_source_vdam_operands,
                 return_deferred_mstep_inputs=return_big_jit_deferred_mstep_inputs,
                 return_deferred_noise_inputs=bool(return_big_jit_deferred_mstep_inputs and accumulate_noise),
                 n_shells=n_shells_arg,
@@ -3598,6 +3673,38 @@ def run_local_em_exact(
                 ) = big_jit_result
                 summed = None
                 ctf_probs = None
+            elif return_big_jit_mstep_tensors and return_source_vdam_operands:
+                (
+                    Ft_y,
+                    Ft_ctf,
+                    noise_wsum,
+                    noise_img_power,
+                    noise_a2,
+                    noise_xa,
+                    noise_scale_xa,
+                    noise_scale_aa,
+                    bucket_norm_correction,
+                    noise_sigma2_offset,
+                    noise_sumw,
+                    batch_norm,
+                    log_Z,
+                    best_log_score,
+                    best_argmax,
+                    max_posterior,
+                    probs_sum_t,
+                    reconstruction_probs_sum_t,
+                    n_significant_samples,
+                    reconstruction_sample_mask,
+                    reconstruction_rotation_mask,
+                    reconstruction_row_count_jax,
+                    source_vdam_images,
+                    source_vdam_ctf,
+                    source_vdam_minvsigma2,
+                    source_vdam_posterior,
+                    source_vdam_reference,
+                    ctf_probs,
+                ) = big_jit_result
+                summed = None
             elif return_big_jit_mstep_tensors:
                 (
                     Ft_y,
@@ -3891,6 +3998,11 @@ def run_local_em_exact(
             # them).
             packed_reconstruction_probs = None
             packed_reconstruction_probs_sum_t = None
+            packed_source_vdam_images = None
+            packed_source_vdam_ctf = None
+            packed_source_vdam_minvsigma2 = None
+            packed_source_vdam_posterior = None
+            packed_source_vdam_reference = None
             if return_big_jit_deferred_mstep_inputs:
                 probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
                 (
@@ -3934,6 +4046,60 @@ def run_local_em_exact(
                 packed_reconstruction_probs_sum_t = jnp.where(
                     reconstruction_pack_mask_jnp,
                     packed_reconstruction_probs_sum_t,
+                    0.0,
+                )
+                packed_summed = None
+                packed_ctf_probs = None
+                packed_flat_rotations = None
+            elif return_source_vdam_operands:
+                probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                (
+                    reconstruction_take_indices,
+                    reconstruction_pack_mask_np,
+                    _,
+                    reconstruction_row_count,
+                ) = _build_nonzero_reconstruction_pack_indices(
+                    reconstruction_rotation_mask_np,
+                    local_mask_np,
+                    probs_sum_t_np,
+                    rotation_block_size,
+                )
+                reconstruction_take_indices_jnp = jnp.asarray(
+                    reconstruction_take_indices,
+                    dtype=jnp.int32,
+                )
+                reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
+                packed_rotations_np = np.take_along_axis(
+                    np.asarray(bucket.local_rotations[:unpadded_batch_size], dtype=np.float32),
+                    reconstruction_take_indices[:, :, None, None],
+                    axis=1,
+                )
+                packed_mstep_rotations_np = np.take_along_axis(
+                    _local_mstep_rotations(bucket)[:unpadded_batch_size],
+                    reconstruction_take_indices[:, :, None, None],
+                    axis=1,
+                )
+                packed_source_vdam_images = source_vdam_images[:unpadded_batch_size]
+                packed_source_vdam_ctf = source_vdam_ctf[:unpadded_batch_size]
+                packed_source_vdam_minvsigma2 = source_vdam_minvsigma2[:unpadded_batch_size]
+                packed_source_vdam_posterior = jnp.take_along_axis(
+                    source_vdam_posterior[:unpadded_batch_size],
+                    reconstruction_take_indices_jnp[:, :, None],
+                    axis=1,
+                )
+                packed_source_vdam_posterior = jnp.where(
+                    reconstruction_pack_mask_jnp[:, :, None],
+                    packed_source_vdam_posterior,
+                    0.0,
+                )
+                packed_source_vdam_reference = jnp.take_along_axis(
+                    source_vdam_reference[:unpadded_batch_size],
+                    reconstruction_take_indices_jnp[:, :, None],
+                    axis=1,
+                )
+                packed_source_vdam_reference = jnp.where(
+                    reconstruction_pack_mask_jnp[:, :, None],
+                    packed_source_vdam_reference,
                     0.0,
                 )
                 packed_summed = None
@@ -4178,7 +4344,39 @@ def run_local_em_exact(
                         sparse_adjoint_chunk_count += int(n_adjoint_chunks)
                         timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
 
-            if source_faithful_bpref and sparse_big_jit_backprojection:
+            if return_source_vdam_operands:
+                if any(
+                    value is None
+                    for value in (
+                        packed_source_vdam_images,
+                        packed_source_vdam_ctf,
+                        packed_source_vdam_minvsigma2,
+                        packed_source_vdam_posterior,
+                        packed_source_vdam_reference,
+                    )
+                ):
+                    raise RuntimeError("source VDAM physical operands were not packed")
+                adjoint_t0 = time.time()
+                Ft_y, Ft_ctf = _accumulate_relion_vdam_physical_particle_grid(
+                    packed_source_vdam_images,
+                    packed_source_vdam_ctf,
+                    packed_source_vdam_minvsigma2,
+                    packed_source_vdam_posterior,
+                    relion_score_translation_angles,
+                    packed_source_vdam_reference,
+                    packed_mstep_rotations_np,
+                    reconstruction_pack_mask_jnp,
+                    Ft_y,
+                    Ft_ctf,
+                    pixel_indices=mstep_recon_window_indices,
+                    image_shape=image_shape,
+                    volume_shape=recon_volume_shape,
+                    max_r=mstep_adjoint_max_r,
+                )
+                if return_profile:
+                    _block_until_ready(Ft_y, Ft_ctf)
+                timing.adjoint_y_s += time.time() - adjoint_t0
+            elif source_faithful_bpref and sparse_big_jit_backprojection:
                 adjoint_t0 = time.time()
                 Ft_y, Ft_ctf = _accumulate_relion_physical_particle_grid(
                     packed_summed,

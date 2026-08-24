@@ -8015,7 +8015,7 @@ def test_local_big_jit_relion_translation_is_scoped_to_score_operand():
 
 
 def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
-    from recovar.em.dense_single_volume import local_big_jit
+    from recovar.em.dense_single_volume import local_big_jit, local_em_engine
 
     src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
     source_ordered_block = src[
@@ -8040,6 +8040,17 @@ def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
     assert "cuda_backproject.relion_vdam_mstep_fused_x_half(" in source_ordered_block
     assert "cuda_backproject.relion_vdam_mstep_sums_f32(" in source_ordered_block
     assert "elif mstep_subtract_ctf_projection:" in source_ordered_block
+
+    engine_src = inspect.getsource(local_em_engine.run_local_em_exact)
+    for route_guard in (
+        "return_source_vdam_operands = bool(",
+        "return_big_jit_mstep_tensors",
+        "source_faithful_bpref",
+        "not disable_adjoint_y",
+        "not disable_adjoint_ctf",
+        "_accumulate_relion_vdam_physical_particle_grid(",
+    ):
+        assert route_guard in engine_src
 
 
 def test_local_exact_relion_translation_requires_half_spectrum_scoring():

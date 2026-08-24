@@ -844,6 +844,7 @@ def _project_local_half_spectrum(
         "accumulate_scale_correction",
         "return_noise_split",
         "return_mstep_tensors",
+        "return_source_vdam_operands",
         "return_deferred_mstep_inputs",
         "return_deferred_noise_inputs",
         "n_shells",
@@ -959,6 +960,7 @@ def run_local_bucket_big_jit(
     accumulate_scale_correction: bool,
     return_noise_split: bool,
     return_mstep_tensors: bool,
+    return_source_vdam_operands: bool = False,
     return_deferred_mstep_inputs: bool,
     return_deferred_noise_inputs: bool,
     n_shells: int,
@@ -1003,6 +1005,8 @@ def run_local_bucket_big_jit(
             "deferred local big-JIT M-step returns posterior/preprocessed inputs only; "
             "disable in-kernel adjoints, residual subtraction, full M-step tensors, and in-kernel noise"
         )
+    if return_source_vdam_operands and not return_mstep_tensors:
+        raise ValueError("source VDAM operands require return_mstep_tensors=True")
 
     use_relion_cuda_preprocess = bool(
         relion_exact_bpref_operands and relion_cuda_preprocess_radius > 0.0
@@ -1671,6 +1675,8 @@ def run_local_bucket_big_jit(
         and not disable_adjoint_y
         and not disable_adjoint_ctf
     )
+    if return_source_vdam_operands and not source_ordered_vdam_mstep:
+        raise ValueError("source VDAM operands require the guarded RELION VDAM M-step route")
     if source_ordered_vdam_mstep:
         from recovar import cuda_backproject
 
@@ -1876,9 +1882,21 @@ def run_local_bucket_big_jit(
             reconstruction_sample_mask,
             reconstruction_rotation_mask,
             reconstruction_row_count,
-            summed,
-            ctf_probs,
         )
+        if return_source_vdam_operands:
+            result = result + (
+                jnp.asarray(
+                    processed_recon_half[:, bpref_pixel_indices],
+                    dtype=jnp.complex64,
+                ),
+                bpref_ctf,
+                jnp.asarray(bpref_minvsigma2, dtype=jnp.float32),
+                jnp.asarray(reconstruction_probs, dtype=jnp.float32),
+                jnp.asarray(proj_for_noise, dtype=jnp.complex64),
+                ctf_probs,
+            )
+        else:
+            result = result + (summed, ctf_probs)
         return _append_debug_outputs(
             result,
             debug_scores,
