@@ -63,8 +63,13 @@ fix: the first strict map failure is iteration 73 (`0.99878735`, GT delta
 while RECOVAR remains better against GT there by `+0.00455`.  The complete run
 continues for final/runtime evidence.  A second isolated worktree now tests
 the remaining shared boundary by projecting the reference inline in the same
-per-particle CUDA launch.  Both fused commits remain unpushed until the complete
-0--200 audit and runtime measurement finish.  In parallel, the immutable 22-case
+per-particle CUDA launch.  Isolated commit `c80a1b754` passes its CUDA build
+(`12887299`), focused zero-projector GPU equivalence gate (`12887554`), and
+bounded iteration-1 diagnostic (`12887823`: exact particle state,
+cross-engine FSC-AUC `0.999999999959`, GT delta `-1.50e-8`).  Its full frozen
+gf01 discriminator is Slurm `12887981_1`.  The experimental commits remain
+unpushed until their complete 0--200 audits and runtime measurements finish.
+In parallel, the immutable 22-case
 matrix, severe-memory case, and controlled same-GPU repeat panel continue as
 evidence collection; generic RECOVAR full/long tests are deliberately outside
 this EM-only validation scope.
