@@ -51,6 +51,22 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
 from recovar.em.dense_single_volume.local_backprojection import compute_local_weighted_sums
 
 
+def _validate_relion_exact_fine_diff2_preconditions(
+    *,
+    relion_exact_fine_diff2: bool,
+    relion_exact_bpref_operands: bool,
+    use_relion_cuda_preprocess: bool,
+) -> None:
+    """Validate inputs shared by compact-window and full-size fine scoring."""
+
+    if relion_exact_fine_diff2 and not (
+        relion_exact_bpref_operands and use_relion_cuda_preprocess
+    ):
+        raise ValueError(
+            "RELION exact fine diff2 requires exact operands and CUDA preprocessing"
+        )
+
+
 def _apply_integer_pre_shifts(images, shifts):
     """Apply RELION-style integer real-space pre-shifts with zero fill."""
 
@@ -886,12 +902,11 @@ def run_local_bucket_big_jit(
     use_relion_cuda_preprocess = bool(
         relion_exact_bpref_operands and relion_cuda_preprocess_radius > 0.0
     )
-    if relion_exact_fine_diff2 and not (
-        relion_exact_bpref_operands and use_relion_cuda_preprocess and use_window
-    ):
-        raise ValueError(
-            "RELION exact fine diff2 requires exact operands, CUDA preprocessing, and a score window"
-        )
+    _validate_relion_exact_fine_diff2_preconditions(
+        relion_exact_fine_diff2=relion_exact_fine_diff2,
+        relion_exact_bpref_operands=relion_exact_bpref_operands,
+        use_relion_cuda_preprocess=use_relion_cuda_preprocess,
+    )
     if use_relion_cuda_preprocess and relion_cuda_preprocess_cosine_width <= 0.0:
         raise ValueError("RELION CUDA preprocessing requires a positive cosine width")
     if use_relion_cuda_preprocess and apply_fourier_pre_shift:

@@ -38,6 +38,9 @@ from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_w
 from recovar.em.dense_single_volume.local_em_engine import (
     _relion_exact_fine_full_to_compact_lookup,
 )
+from recovar.em.dense_single_volume.local_big_jit import (
+    _validate_relion_exact_fine_diff2_preconditions,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -631,6 +634,24 @@ def test_full_size_lookup_is_a_bijection_of_the_complete_half_spectrum():
 
     assert lookup.shape == (n_half,)
     np.testing.assert_array_equal(np.sort(lookup), np.arange(n_half, dtype=np.int32))
+
+    # At full size ``use_window`` is false, but the identity lookup above is a
+    # valid exact-fine representation. The big-JIT gate must therefore depend
+    # only on the exact operand/preprocessing contract.
+    _validate_relion_exact_fine_diff2_preconditions(
+        relion_exact_fine_diff2=True,
+        relion_exact_bpref_operands=True,
+        use_relion_cuda_preprocess=True,
+    )
+
+
+def test_exact_fine_big_jit_still_rejects_missing_exact_preprocessing():
+    with pytest.raises(ValueError, match="exact operands and CUDA preprocessing"):
+        _validate_relion_exact_fine_diff2_preconditions(
+            relion_exact_fine_diff2=True,
+            relion_exact_bpref_operands=True,
+            use_relion_cuda_preprocess=False,
+        )
 
 
 def test_dense_cached_and_compact_gaussian_routes_use_same_exact_scores():
