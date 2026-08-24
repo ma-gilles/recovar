@@ -808,6 +808,7 @@ and the fixed RECOVAR-minus-RELION GT FSC-AUC floor remains -0.002.
 | gf16 | 76 | 0.957551841 | -0.000651299 |
 | gf18 | 31 | 0.675630118 | -0.003830814 |
 | gf19 | 65 | 0.681088003 | -0.001006762 |
+| gf21 | 84 | 0.719066226 | -0.001117729 |
 
 The no-CTF gf16 row is an important discriminator: its GT-quality delta stays
 inside the frozen nondegradation gate while its cross-engine trajectory still
@@ -871,3 +872,30 @@ iteration 200 the candidate repeat floor is `0.8348111` versus native
 `0.8753012`.  Candidate/native matching and GT quality later fail as well.
 The long-run instability is therefore not only a choice among stock RELION
 modes; RECOVAR's own repeat spread is materially larger.
+
+## Per-particle cutoff-shell noise boundary
+
+Tracking commit `f343c5bb3` adds a fail-closed analyzer and targeted runner for
+the already-qualified production big-JIT debug triplet.  It maps native
+RELION `part_id` through stable STAR image identities, requires complete
+particle coverage and one common cutoff shell, converts by the exact `N^4`
+frame factor, and reports direct residual, `AA`, `XA`, inferred image power,
+and retained support mass independently.  Its two focused unit tests, Ruff,
+and shell syntax checks pass; no generic RECOVAR suite ran.
+
+Slurm `12897360` captured all 200 frozen gf01 iteration-1 particles at shell
+19.  RECOVAR/native aggregate direct residual is
+`0.1293679055`/`0.1293675770`, a `+3.28e-7` difference.  `AA` is lower for
+all 200 particles (sum error `-5.77e-8`); `XA` and inferred image-power sum
+errors are `+3.05e-7` and `+9.96e-7`, so the coupled terms substantially
+cancel.  Support-mass relative L2 is `2.90e-7`.  The job's production capture
+is complete and valid, although its post-run analyzer initially exited on an
+absolute-script import error; the preserved artifacts were analyzed by module
+invocation, and `d8314fb27` repairs that setup path.
+
+This rejects iteration 1 cutoff aggregation as the already-full-size source
+of the iteration-2 shell-15 `+1.55e-5` error.  The next bounded experiment is
+the identical 200-particle decomposition at iteration 2, shell 15.  It will
+show whether image power, posterior-supported `XA`/`AA`, or their coupling
+creates the first material aggregate divergence before any hot-path change is
+considered.

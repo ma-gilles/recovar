@@ -185,17 +185,19 @@ and the iteration-200 candidate/native repeat floors are `0.8348111` and
 `0.8753012`.  RECOVAR repeat instability is therefore materially larger than
 stock RELION's sampled repeat spread.
 
-The next bounded diagnostic reuses the production big-JIT score dump rather
-than changing its arithmetic.  At iteration 1 the existing dump for native
-part ID `159` / source row `1140` exposes cutoff shell `19`; its direct
-residual is `0.00065082768` after the exact `128^4` frame conversion, versus
-native `0.000650762`, a positive error of about `6.57e-8` from one particle.
-The dump also carries the coupled `XA`, `AA`, and direct-residual triplet, so
-the inferred image-power term closes algebraically.  The active experiment is
-an exact 200-particle capture at this same frozen iteration-1 boundary.  It
-will measure whether the aggregate numerator excess is a coherent per-particle
-bias and separate posterior-supported `XA`/`AA` error from image-power error;
-no soft-mask or hot-path counterfactual is active.
+The 200-particle production big-JIT cutoff audit is complete for iteration 1
+(Slurm `12897360`, commit `f343c5bb3`).  At shell 19, RECOVAR's direct
+residual sums to `0.1293679055` versus native `0.1293675770`, only
+`+3.28e-7`.  Its `AA` is lower for all 200 particles (sum error `-5.77e-8`),
+while `XA` and inferred image-power sum errors are `+3.05e-7` and `+9.96e-7`;
+those terms substantially cancel in the coupled direct residual.  Retained
+support mass has relative L2 `2.90e-7`.  The known `+1.55e-5` iteration-2
+shell-15 aggregate defect is therefore not already present at comparable
+scale in iteration 1.  The active experiment repeats this exact decomposition
+at iteration 2, shell 15, where the failure is known to exist.  Job `12897360`
+captured all 200 production dumps before a post-analysis module-invocation
+setup error; the preserved artifacts analyzed successfully, and `d8314fb27`
+repairs the runner without changing science.
 
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired
