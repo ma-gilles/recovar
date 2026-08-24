@@ -19,8 +19,11 @@ set -euo pipefail
 ROOT=${VDAM_PREPROCESS_ROOT}
 INPUT=${VDAM_PREPROCESS_INPUT_DIR}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-69}
+PART_IDS=${VDAM_PREPROCESS_PART_IDS:-}
+EXPECTED_PART_COUNT=${VDAM_PREPROCESS_EXPECTED_PART_COUNT:-}
 CAPTURE_ITERATION=${VDAM_PREPROCESS_ITERATION:-1}
 NR_ITER_SCHEDULE=${VDAM_PREPROCESS_NR_ITER_SCHEDULE:-${CAPTURE_ITERATION}}
+THREADS=${VDAM_PREPROCESS_THREADS:-8}
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 LAUNCHER=${REPO_ROOT}/scripts/run_vdam_relion_preprocess_capture.sbatch
 RELION_SOURCE=${VDAM_RELION_SOURCE:-/scratch/gpfs/GILLES/mg6942/relion}
@@ -36,6 +39,15 @@ test -x "${RELION_BINARY}"
 mkdir -p "${OUTPUT}" "${CAPTURE}"
 test -z "$(find "${OUTPUT}" "${CAPTURE}" -mindepth 1 -print -quit)"
 test "${NR_ITER_SCHEDULE}" -ge "${CAPTURE_ITERATION}"
+test "${THREADS}" -ge 1
+if [[ -n "${PART_IDS}" ]]; then
+    test "${PART_IDS}" = "$(printf '%s' "${PART_IDS}" | tr -cd '0-9,')"
+fi
+if [[ -n "${EXPECTED_PART_COUNT}" ]]; then
+    test "${EXPECTED_PART_COUNT}" -ge 1
+    actual_part_count=$(tr ',' '\n' <<<"${PART_IDS:-${PART_ID}}" | wc -l)
+    test "${actual_part_count}" -eq "${EXPECTED_PART_COUNT}"
+fi
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 while IFS='=' read -r variable_name _; do
@@ -67,7 +79,12 @@ export CUDA_VISIBLE_DEVICES=0
 export RELION_ACC_DUMP_DIR=${CAPTURE}
 export RELION_ACC_DUMP_PART_ID=${PART_ID}
 export RELION_ACC_DUMP_ITER=${CAPTURE_ITERATION}
-export RELION_ACC_DUMP_VERBOSE=1
+if [[ -n "${PART_IDS}" ]]; then
+    export RELION_ACC_DUMP_PART_IDS=${PART_IDS}
+    export RELION_ACC_DUMP_VERBOSE=0
+else
+    export RELION_ACC_DUMP_VERBOSE=1
+fi
 export RELION_DUMP_DIR=${CAPTURE}
 export RELION_DUMP_PART_ID=${PART_ID}
 export RELION_DUMP_ITER=${CAPTURE_ITERATION}
@@ -78,7 +95,7 @@ COMMAND=(
     --grad_write_iter 1 --i particles.star --ctf --K 1 --sym C1
     --flatten_solvent --zero_mask --dont_combine_weights_via_disc --pool 3 --pad 1
     --particle_diameter 200 --oversampling 1 --healpix_order 1 --offset_range 6.0
-    --offset_step 2.0 --auto_sampling --tau2_fudge 4.0 --random_seed 0 --j 8 --gpu 0
+    --offset_step 2.0 --auto_sampling --tau2_fudge 4.0 --random_seed 0 --j "${THREADS}" --gpu 0
 )
 printf '%q ' "${COMMAND[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
@@ -129,17 +146,22 @@ else
 fi
 wall_s=$(( $(date +%s) - start_epoch ))
 
-for required in normalized_shifted_real masked_real masked_fourier_pre_optics_real masked_fourier_pre_optics_imag; do
-    test -s "${CAPTURE}/preprocess_img0_${required}.bin"
+if [[ -z "${PART_IDS}" ]]; then
+    for required in normalized_shifted_real masked_real masked_fourier_pre_optics_real masked_fourier_pre_optics_imag; do
+        test -s "${CAPTURE}/preprocess_img0_${required}.bin"
+    done
+    test -s "${CAPTURE}/preprocess_img0_softmask_background.bin"
+    PART_IDS=${PART_ID}
+fi
+for capture_part_id in ${PART_IDS//,/ }; do
+    for suffix in sorted_weights sum_weight significant_weight eulers trans_xyz ctfs Fimg_unweighted_nomask; do
+        test -s "${CAPTURE}/img0_part${capture_part_id}_storeWavg_${suffix}.bin"
+    done
 done
-test -s "${CAPTURE}/preprocess_img0_softmask_background.bin"
-for suffix in sorted_weights sum_weight significant_weight eulers trans_xyz ctfs; do
-    test -s "${CAPTURE}/img0_part${PART_ID}_storeWavg_${suffix}.bin"
-done
-for required in store_Fimg_unweighted_nomask Minvsigma2 sigma2_noise sigma2_fudge; do
+for required in Minvsigma2 sigma2_noise sigma2_fudge; do
     test -s "${CAPTURE}/${required}.bin"
 done
-printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" \
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"part_ids":"%s","part_count":%d,"threads":%d}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${PART_IDS}" "$(tr ',' '\n' <<<"${PART_IDS}" | wc -l)" "${THREADS}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"

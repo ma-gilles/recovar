@@ -236,7 +236,13 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "export RELION_DUMP_DIR=",
         "export RELION_DUMP_PART_ID=",
         "export RELION_DUMP_ITER=",
-        "store_Fimg_unweighted_nomask Minvsigma2 sigma2_noise sigma2_fudge",
+        "VDAM_PREPROCESS_PART_IDS",
+        "VDAM_PREPROCESS_EXPECTED_PART_COUNT",
+        "VDAM_PREPROCESS_THREADS",
+        'test "${actual_part_count}" -eq "${EXPECTED_PART_COUNT}"',
+        "export RELION_ACC_DUMP_PART_IDS=",
+        "img0_part${capture_part_id}_storeWavg_${suffix}.bin",
+        "Minvsigma2 sigma2_noise sigma2_fudge",
     ]
     haystack = "\n".join([guard, runner, auditor, sbatch])
     missing = [token for token in expected_tokens if token not in haystack]
