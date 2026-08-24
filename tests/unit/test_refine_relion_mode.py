@@ -3690,6 +3690,7 @@ def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypat
                 "centered_rows": True,
                 "dense_scale": True,
                 "relion_texture_interp": False,
+                "relion_acc_double_floorf_quirk": False,
             },
         )
     ]
@@ -4121,6 +4122,7 @@ def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
                 "centered_rows": True,
                 "dense_scale": True,
                 "relion_texture_interp": True,
+                "relion_acc_double_floorf_quirk": False,
             },
         )
     ]
