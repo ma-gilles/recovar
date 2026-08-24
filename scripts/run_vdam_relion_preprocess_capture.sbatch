@@ -71,6 +71,9 @@ export RELION_ACC_DUMP_VERBOSE=1
 export RELION_DUMP_DIR=${CAPTURE}
 export RELION_DUMP_PART_ID=${PART_ID}
 export RELION_DUMP_ITER=${CAPTURE_ITERATION}
+export RECOVAR_DEBUG_ESTEP_DIR=${CAPTURE}
+export RECOVAR_DEBUG_ESTEP_PARTIDS=${PART_ID}
+export RECOVAR_DEBUG_ESTEP_ITER=${CAPTURE_ITERATION}
 
 COMMAND=(
     srun --ntasks=1 --cpus-per-task=8 --cpu-bind=none "${RELION_BINARY}"
@@ -136,7 +139,7 @@ test -s "${CAPTURE}/preprocess_img0_softmask_background.bin"
 for suffix in sorted_weights sum_weight significant_weight eulers trans_xyz ctfs; do
     test -s "${CAPTURE}/img0_part${PART_ID}_storeWavg_${suffix}.bin"
 done
-for required in store_Fimg_unweighted_nomask store_Minvsigma2 sigma2_noise sigma2_fudge; do
+for required in p${PART_ID}_Fimg_nomask Minvsigma2 sigma2_noise sigma2_fudge; do
     test -s "${CAPTURE}/${required}.bin"
 done
 printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d}\n' \
