@@ -44,7 +44,13 @@ mkdir -p "${TMPDIR}" "${ROOT}/provenance"
 source /etc/profile.d/modules.sh
 set +u
 module purge
+set +e
 module load relion/5.0.0/gcc-11.5.0
+module_status=$?
+set -e
+if [[ "${module_status}" -ne 0 ]]; then
+    echo "RELION module returned ${module_status}; using the pinned runtime overlay" >&2
+fi
 set -u
 MPI_ROOT=/usr/local/openmpi/cuda-12.6/4.1.6/gcc
 CUDA_HOME=/usr/local/cuda-12.6
