@@ -193,6 +193,54 @@ def _diff2_replay_boundary(
     return result
 
 
+def _centered_residual_decomposition(
+    native_diff2: np.ndarray,
+    candidate_diff2: np.ndarray,
+    candidate_operand_pair_replay: np.ndarray,
+) -> dict[str, object]:
+    """Split candidate score error into operand and production-topology terms."""
+
+    native = np.asarray(native_diff2, dtype=np.float32).reshape(-1)
+    candidate = np.asarray(candidate_diff2, dtype=np.float32).reshape(-1)
+    operand_replay = np.asarray(candidate_operand_pair_replay, dtype=np.float32).reshape(-1)
+    if native.size == 0 or candidate.shape != native.shape or operand_replay.shape != native.shape:
+        raise ValueError("score residual decomposition requires aligned nonempty vectors")
+    total = np.asarray(_center(candidate - native), dtype=np.float64)
+    operand = np.asarray(_center(operand_replay - native), dtype=np.float64)
+    topology = np.asarray(_center(candidate - operand_replay), dtype=np.float64)
+    closure = total - operand - topology
+    total_norm = float(np.linalg.norm(total))
+    total_norm2 = float(np.vdot(total, total).real)
+
+    def geometry(component: np.ndarray) -> dict[str, float]:
+        norm = float(np.linalg.norm(component))
+        denominator = max(total_norm * norm, np.finfo(np.float64).tiny)
+        projection = float(
+            np.vdot(total, component).real
+            / max(total_norm2, np.finfo(np.float64).tiny)
+        )
+        orthogonal = component - projection * total
+        return {
+            "norm_over_total": norm / max(total_norm, np.finfo(np.float64).tiny),
+            "cosine_with_total": float(np.vdot(total, component).real / denominator),
+            "projection_on_total": projection,
+            "orthogonal_over_total": float(
+                np.linalg.norm(orthogonal)
+                / max(total_norm, np.finfo(np.float64).tiny)
+            ),
+        }
+
+    return {
+        "total_candidate_minus_native": _stats(total),
+        "operand_pair_replay_minus_native": _stats(operand),
+        "production_topology_candidate_minus_operand_pair_replay": _stats(topology),
+        "operand_geometry": geometry(operand),
+        "production_topology_geometry": geometry(topology),
+        "closure_rms": float(np.sqrt(np.mean(closure * closure))),
+        "closure_max_abs": float(np.max(np.abs(closure))),
+    }
+
+
 def _top_pair_score_boundary(
     *,
     native_raw_diff2: np.ndarray,
@@ -680,6 +728,11 @@ def analyze(
             -live_raw,
             live_operand_diff2,
             native_posterior,
+        ),
+        "candidate_score_residual_decomposition": _centered_residual_decomposition(
+            native_raw,
+            -live_raw,
+            live_operand_diff2,
         ),
         "native_raw_diff2_with_live_reference_only": _diff2_replay_boundary(
             native_raw,

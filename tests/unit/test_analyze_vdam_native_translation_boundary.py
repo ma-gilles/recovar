@@ -6,6 +6,7 @@ import pytest
 from scripts.analyze_vdam_native_translation_boundary import (
     _captured_native_current_size,
     _centered_diff2_replay_stats,
+    _centered_residual_decomposition,
     _current_crop_to_compact,
     _diff2_replay_boundary,
     _flat_real_dump,
@@ -120,6 +121,24 @@ def test_diff2_replay_boundary_reports_native_top_pair_error():
     assert result["native_best_minus_second"] == pytest.approx(-2.0)
     assert result["replay_best_minus_second"] == pytest.approx(-1.75)
     assert result["replay_minus_native_pair_delta"] == pytest.approx(0.25)
+
+
+def test_centered_score_residual_decomposition_closes_operand_and_topology():
+    native = np.asarray([10.0, 20.0, 30.0], dtype=np.float32)
+    operand_replay = native + np.asarray([2.0, -1.0, 2.0], dtype=np.float32)
+    candidate = operand_replay + np.asarray([-1.0, 3.0, 1.0], dtype=np.float32)
+
+    result = _centered_residual_decomposition(native, candidate, operand_replay)
+
+    assert result["closure_rms"] == 0.0
+    assert result["closure_max_abs"] == 0.0
+    assert result["operand_pair_replay_minus_native"]["rms"] > 0.0
+    assert result[
+        "production_topology_candidate_minus_operand_pair_replay"
+    ]["rms"] > 0.0
+    assert result["operand_geometry"]["projection_on_total"] + result[
+        "production_topology_geometry"
+    ]["projection_on_total"] == pytest.approx(1.0)
 
 
 def test_top_pair_score_boundary_reports_reversed_near_tie():
