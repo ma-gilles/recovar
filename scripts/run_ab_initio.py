@@ -23,14 +23,48 @@ with the VDAM iteration loop.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional
 
 from recovar.em.initial_model.schedules import GuiInitialModelDefaults
 
 INITIAL_MODEL_GUI_DEFAULTS = GuiInitialModelDefaults()
+
+_CONCRETE_RECOVAR_PROVENANCE_MODULES = (
+    "recovar.em.initial_model.schedules",
+    "recovar.em.initial_model.driver",
+    "recovar.em.initial_model.iteration_loop",
+    "recovar.em.initial_model.dense_adapter",
+)
+
+
+def _assert_expected_repo_imports() -> dict[str, str]:
+    """Fail fast when InitialModel resolves through another editable checkout."""
+    expected_root_value = os.environ.get("RECOVAR_EXPECTED_REPO_ROOT")
+    if not expected_root_value:
+        return {}
+
+    expected_root = Path(expected_root_value).expanduser().resolve()
+    imported: dict[str, str] = {}
+    failures: list[str] = []
+    for module_name in _CONCRETE_RECOVAR_PROVENANCE_MODULES:
+        module = importlib.import_module(module_name)
+        module_file_value = getattr(module, "__file__", None)
+        module_file = Path(module_file_value).resolve() if module_file_value else None
+        imported[module_name] = str(module_file)
+        print(f"InitialModel import provenance: {module_name}={module_file}", flush=True)
+        if module_file is None or not module_file.is_relative_to(expected_root):
+            failures.append(f"{module_name}={module_file}")
+    if failures:
+        raise RuntimeError(
+            "RECOVAR InitialModel import provenance failure: expected every concrete module under "
+            f"{expected_root}, found " + ", ".join(failures)
+        )
+    return imported
 
 
 def _reject_mpi() -> None:
@@ -332,6 +366,7 @@ def _require_custom_cuda_runtime() -> dict:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    _assert_expected_repo_imports()
     args = _parse_args(argv)
     opts = InitialModelJobOptions(
         fn_img=args.fn_img,

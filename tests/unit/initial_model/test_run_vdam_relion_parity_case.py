@@ -69,7 +69,7 @@ def test_recovar_command_maps_the_same_frozen_definition(monkeypatch):
         definition=DEFINITION,
     )
 
-    assert argv[:2] == ["/env/python", "scripts/run_ab_initio.py"]
+    assert argv[:3] == ["/env/python", "-m", "scripts.run_ab_initio"]
     assert _value(argv, "--nr_iter") == "8"
     assert _value(argv, "--grad_write_iter") == "1"
     assert _value(argv, "--K") == "1"
@@ -201,11 +201,33 @@ def test_relion_reference_provenance_fingerprints_exact_binary(tmp_path):
 
 
 def test_recovar_child_environment_requires_cuda_without_legacy_platform_override():
-    env = runner._recovar_gpu_env({"JAX_PLATFORMS": "cpu", "JAX_PLATFORM_NAME": "cpu", "KEEP": "yes"})
+    repo = Path("/active/worktree")
+    env = runner._recovar_gpu_env(
+        {"JAX_PLATFORMS": "cpu", "JAX_PLATFORM_NAME": "cpu", "KEEP": "yes"},
+        repo=repo,
+    )
 
     assert env["JAX_PLATFORMS"] == "cuda,cpu"
     assert "JAX_PLATFORM_NAME" not in env
     assert env["KEEP"] == "yes"
+    assert env["PYTHONPATH"] == str(repo.resolve())
+    assert env["RECOVAR_EXPECTED_REPO_ROOT"] == str(repo.resolve())
+
+
+def test_initial_model_import_provenance_accepts_active_checkout(monkeypatch):
+    repo = Path(__file__).resolve().parents[3]
+    monkeypatch.setenv("RECOVAR_EXPECTED_REPO_ROOT", str(repo))
+
+    imported = run_ab_initio._assert_expected_repo_imports()
+
+    assert set(imported) == set(run_ab_initio._CONCRETE_RECOVAR_PROVENANCE_MODULES)
+
+
+def test_initial_model_import_provenance_rejects_sibling_checkout(monkeypatch, tmp_path):
+    monkeypatch.setenv("RECOVAR_EXPECTED_REPO_ROOT", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="InitialModel import provenance failure"):
+        run_ab_initio._assert_expected_repo_imports()
 
 
 def test_parity_cuda_environment_supports_explicit_deterministic_launches():

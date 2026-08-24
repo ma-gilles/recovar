@@ -179,7 +179,8 @@ def build_recovar_command(
     particle_diameter = float(definition.get("particle_diameter_angstrom", 200.0))
     return [
         sys.executable,
-        "scripts/run_ab_initio.py",
+        "-m",
+        "scripts.run_ab_initio",
         "--i",
         str(input_star),
         "--o",
@@ -239,12 +240,17 @@ def _run_logged(argv: list[str], *, cwd: Path, log_path: Path, env: dict[str, st
     return timing
 
 
-def _recovar_gpu_env(base: dict[str, str]) -> dict[str, str]:
+def _recovar_gpu_env(base: dict[str, str], *, repo: Path) -> dict[str, str]:
     env = dict(base)
     env.pop("JAX_PLATFORM_NAME", None)
     # RECOVAR's JAX configuration uses a CPU device for explicit host-side
     # work, so keep CPU available while making CUDA the first/default backend.
     env["JAX_PLATFORMS"] = "cuda,cpu"
+    # Bind the actual InitialModel subprocess to this checkout.  Pixi may keep
+    # an editable-install link to a sibling worktree, and direct script
+    # execution puts only ``scripts/`` ahead of that link on sys.path.
+    env["PYTHONPATH"] = str(repo.resolve())
+    env["RECOVAR_EXPECTED_REPO_ROOT"] = str(repo.resolve())
     return env
 
 
@@ -348,7 +354,7 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
     relion_gpu_uuid = _physical_gpu_uuid()
     if relion_gpu_uuid != gpu_uuid:
         raise RunError("physical GPU changed during RELION execution")
-    recovar_env = _recovar_gpu_env(env)
+    recovar_env = _recovar_gpu_env(env, repo=repo)
     recorded_env_keys = (
         "CUDA_VISIBLE_DEVICES",
         "CUDA_LAUNCH_BLOCKING",
@@ -356,7 +362,9 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "JAX_PLATFORM_NAME",
         "JAX_COMPILATION_CACHE_DIR",
         "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS",
+        "PYTHONPATH",
         "RECOVAR_CUDA_LIB",
+        "RECOVAR_EXPECTED_REPO_ROOT",
         "RECOVAR_DISABLE_CUDA",
         "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB",
         "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2",
