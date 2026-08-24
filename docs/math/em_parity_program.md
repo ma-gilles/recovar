@@ -16,22 +16,24 @@ as the next product milestone rather than mixing it into the first closure.
 
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
-`vdam-gf01`--`vdam-gf10` all fail the unchanged `0.999` cross-engine FSC-AUC
-gate, first at iterations 31, 82, 68, 72, 33, 72, 57, 93, 35, and 73.  Their
+`vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC
+gate, first at iterations 31, 82, 68, 72, 33, 72, 57, 93, 35, 73, and 93.  Their
 minimum cross-engine FSC-AUC values are `0.66914`,
 `0.68797`, `0.55649`, `0.49680`, `0.66096`, `0.53190`, `0.57190`, `0.94109`,
-`0.04739`, and `0.72508`.  Independent
+`0.04739`, `0.72508`, and `0.61528`.  Independent
 native-RELION triplets show that `vdam-gf02`, `vdam-gf03`, and `vdam-gf05`
 leave their sampled native-repeat envelopes; `vdam-gf03`, `vdam-gf04`, and
-`vdam-gf06`, `vdam-gf07`, and `vdam-gf09` also miss the `-0.002` GT-delta gate.  These are active parity
+`vdam-gf06`, `vdam-gf07`, `vdam-gf09`, and `vdam-gf11` also miss the `-0.002`
+GT-delta gate.  These are active parity
 failures, not tolerance candidates.  A bounded-memory change carried the
 20,000-particle severe-outlier/radial-noise `vdam-gf20` trajectory beyond its
 former iteration-110 OOM boundary through all 200 iterations at about 12.5 GB
 RSS.  Its frozen audit is a real parity failure: first failure at iteration 30
 (`0.99127` cross-engine FSC-AUC), minimum/final cross-engine FSC-AUC `0.15622`,
 and final RECOVAR-minus-RELION GT FSC-AUC `-0.01207`.  Runtime remains
-an independent failure: `vdam-gf06`, `vdam-gf09`, and `vdam-gf10` take
-`5.61x`, `6.51x`, and `2.91x` RELION wall time, respectively, while the
+an independent failure: `vdam-gf06`, `vdam-gf09`, `vdam-gf10`, and
+`vdam-gf11` take `5.61x`, `6.51x`, `2.91x`, and `4.29x` RELION wall time,
+respectively, while the
 20,000-particle `vdam-gf20` case takes `7.07x`.  The earlier completed small
 cases span `2.36--2.88x`.
 
