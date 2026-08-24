@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=vdam-first-boundary
+#SBATCH --account=amits
+#SBATCH --partition=cryoem
+#SBATCH --gres=gpu:1
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=180G
+#SBATCH --time=00:45:00
+#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-first-boundary-%j.out
+
+set -euo pipefail
+
+: "${OUTPUT_ROOT:?set a new SAFE_TO_DELETE output root}"
+: "${DATA_DIR:?set the frozen materialized fixture data directory}"
+: "${RELION_OPTIMISER:?set the exact incoming full-schedule optimiser.star}"
+: "${EXPECTED_REPO_HEAD:?pin the tracked source head}"
+: "${EXPECTED_CUDA_SHA256:?pin the qualified RECOVAR CUDA binary}"
+: "${EXPECTED_RELION_BIND_SHA256:?pin the qualified RELION binding binary}"
+
+REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
+TARGET_ITERATION=${TARGET_ITERATION:-33}
+TARGET_ORIGINAL_INDEX=${TARGET_ORIGINAL_INDEX:-6}
+TARGET_RELION_PART_ID=${TARGET_RELION_PART_ID:-6}
+RELION_BINARY=${RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
+NATIVE_ROOT=${OUTPUT_ROOT}/native_continuation
+RECOVAR_ROOT=${OUTPUT_ROOT}/recovar_prefix
+RECOVAR_CAPTURE=${OUTPUT_ROOT}/recovar_fused
+PROVENANCE=${OUTPUT_ROOT}/provenance
+PIXI_PY=${REPO_ROOT}/.pixi/envs/default/bin/python
+CUDA_BINARY=${REPO_ROOT}/recovar/cuda/libcuda_backproject.so
+RELION_BIND_BINARY=${REPO_ROOT}/recovar/relion_bind/_relion_bind_core.cpython-311-x86_64-linux-gnu.so
+
+test -f "${OUTPUT_ROOT}/SAFE_TO_DELETE"
+test -s "${DATA_DIR}/particles.star"
+test -s "${RELION_OPTIMISER}"
+test -x "${RELION_BINARY}"
+test -x "${PIXI_PY}"
+test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
+test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
+test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
+test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = "${EXPECTED_RELION_BIND_SHA256}"
+mkdir -p "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${PROVENANCE}"
+test -z "$(find "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${PROVENANCE}" -mindepth 1 -print -quit)"
+touch "${NATIVE_ROOT}/SAFE_TO_DELETE"
+
+gpu_uuid_before=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
+case "${gpu_uuid_before}" in GPU-*) ;; *) echo "invalid GPU UUID: ${gpu_uuid_before}" >&2; exit 2 ;; esac
+
+VDAM_RELION_CONT_ROOT=${NATIVE_ROOT} \
+VDAM_RELION_CONT_INPUT_DIR=${DATA_DIR} \
+VDAM_RELION_CONT_OPTIMISER=${RELION_OPTIMISER} \
+VDAM_RELION_CONT_ITERATION=${TARGET_ITERATION} \
+VDAM_RELION_CONT_PART_ID=${TARGET_RELION_PART_ID} \
+VDAM_RELION_CONT_CAPTURE=1 \
+VDAM_RELION_BINARY=${RELION_BINARY} \
+bash "${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch"
+
+gpu_uuid_after_relion=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
+test "${gpu_uuid_after_relion}" = "${gpu_uuid_before}"
+
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV JAX_PLATFORMS JAX_PLATFORM_NAME
+export PYTHONNOUSERSITE=1
+export PYTHONUNBUFFERED=1
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export CUDA_LAUNCH_BLOCKING=0
+export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
+export RECOVAR_CUDA_LIB=${CUDA_BINARY}
+export JAX_COMPILATION_CACHE_DIR=${OUTPUT_ROOT}/jax_cache
+export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
+export TMPDIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/tmp
+export PIXI_HOME=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/pixi_home
+export RATTLER_CACHE_DIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/rattler_cache
+export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR=${RECOVAR_CAPTURE}
+export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}
+export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION=${TARGET_ITERATION}
+mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
+
+COMMAND=(
+  "${PIXI_PY}" -m scripts.run_ab_initio
+  --i "${DATA_DIR}/particles.star"
+  --o "${RECOVAR_ROOT}/run"
+  --nr_iter 200
+  --grad_write_iter 1
+  --K 1
+  --tau2_fudge 4
+  --sym C1
+  --do_run_C1 1
+  --particle_diameter 200
+  --random_seed 0
+  --healpix_order 1
+  --oversampling 1
+  --offset_range 6
+  --offset_step 2
+  --padding_factor 1
+  --image_batch_size 500
+  --datadir "${DATA_DIR}"
+  --gpu 0
+  --require_custom_cuda
+  --diagnostic_stop_after_iteration "${TARGET_ITERATION}"
+)
+printf '%q ' "${COMMAND[@]}" > "${PROVENANCE}/recovar_command.sh"
+printf '\n' >> "${PROVENANCE}/recovar_command.sh"
+sha256sum "${REPO_ROOT}/scripts/run_vdam_first_state_boundary_capture.sbatch" \
+  "${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch" \
+  "${DATA_DIR}/particles.star" "${RELION_OPTIMISER}" "${CUDA_BINARY}" \
+  "${RELION_BIND_BINARY}" "${RELION_BINARY}" > "${PROVENANCE}/static_inputs.sha256"
+nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
+
+start_epoch=$(date +%s)
+(
+  cd "${REPO_ROOT}"
+  "${COMMAND[@]}"
+) > "${RECOVAR_ROOT}/runner.stdout" 2> "${RECOVAR_ROOT}/runner.stderr"
+wall_s=$(( $(date +%s) - start_epoch ))
+
+iteration_tag=$(printf '%03d' "${TARGET_ITERATION}")
+test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_class001.mrc"
+test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_data.star"
+test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_model.star"
+test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_recovar_meta.json"
+test "$(find "${RECOVAR_CAPTURE}" -maxdepth 1 -type f -name 'local_fused_posterior_*.npz' | wc -l)" -eq 1
+test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
+test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
+gpu_uuid_after_recovar=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
+test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":200,"stopped_after_iteration":%d,"target_original_index":%d,"target_relion_part_id":%d,"recovar_wall_s":%d}\n' \
+  "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_ITERATION}" \
+  "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" "${wall_s}" \
+  > "${PROVENANCE}/run.json"
+touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"

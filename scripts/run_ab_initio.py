@@ -326,6 +326,15 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     p.add_argument("--dry_run", action="store_true", help="Only print the assembled command(s)")
     p.add_argument(
+        "--diagnostic_stop_after_iteration",
+        type=int,
+        default=None,
+        help=(
+            "Stop a diagnostic replay after this numbered iteration while retaining --nr_iter "
+            "for every RELION schedule calculation"
+        ),
+    )
+    p.add_argument(
         "--padding_factor",
         type=int,
         default=INITIAL_MODEL_GUI_DEFAULTS.padding_factor,
@@ -441,6 +450,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         ),
         deterministic_cuda=bool(args.deterministic_cuda),
+        diagnostic_stop_after_iteration=args.diagnostic_stop_after_iteration,
     )
     result = run_native_initial_model(native_opts)
     print(f"recovar InitialModel complete: {result.final_mrc}")

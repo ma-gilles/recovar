@@ -136,6 +136,7 @@ class NativeInitialModelOptions:
     write_iter_artifacts: bool = INITIAL_MODEL_GUI_DEFAULTS.write_iter_artifacts
     grad_write_iter: int = INITIAL_MODEL_GUI_DEFAULTS.grad_write_iter
     run_relion_align_symmetry: bool = False
+    diagnostic_stop_after_iteration: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1667,6 +1668,10 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         raise ValueError("nr_iter must be >= 1")
     if opts.grad_write_iter < 1:
         raise ValueError("grad_write_iter must be >= 1")
+    if opts.diagnostic_stop_after_iteration is not None and not (
+        1 <= int(opts.diagnostic_stop_after_iteration) <= int(opts.nr_iter)
+    ):
+        raise ValueError("diagnostic_stop_after_iteration must be between 1 and nr_iter")
     if opts.padding_factor not in (1, 2):
         raise NotImplementedError("native InitialModel currently supports RELION GUI --pad 1 or 2 only")
     if opts.run_relion_align_symmetry:
@@ -1792,6 +1797,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         grad_stepsize=float(opts.stepsize),
         mu=float(opts.mu),
         projector_padding_factor=int(opts.padding_factor),
+        diagnostic_stop_after_iteration=opts.diagnostic_stop_after_iteration,
     )
     final_mrc, class_mrcs = _write_final_outputs(opts.outputname, final_state)
     final_model_star = f"{opts.outputname}_it{final_state.iter:03d}_model.star"

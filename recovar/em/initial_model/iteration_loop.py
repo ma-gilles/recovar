@@ -608,13 +608,21 @@ def run_vdam_iterations(
     refresh_tau2_from_projector: bool = True,
     projector_padding_factor: int = 1,
     projector_interpolator: int = 1,
+    diagnostic_stop_after_iteration: int | None = None,
 ) -> InitialModelState:
     """Full VDAM loop; ``state`` must come from ``initialise_denovo_state`` + ``seed_noise_from_mavg``."""
     phase_lengths = compute_phase_lengths(state.nr_iter, grad_ini_frac, grad_fin_frac)
+    final_iteration = int(state.nr_iter)
+    if diagnostic_stop_after_iteration is not None:
+        final_iteration = int(diagnostic_stop_after_iteration)
+        if final_iteration < 1 or final_iteration > int(state.nr_iter):
+            raise ValueError(
+                "diagnostic_stop_after_iteration must be between 1 and state.nr_iter"
+            )
     current = state
     profile_iterations = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
 
-    for it in range(1, state.nr_iter + 1):
+    for it in range(1, final_iteration + 1):
         iteration_started = time.perf_counter()
         stage_started = iteration_started
         iteration_profile: dict[str, float] = {}

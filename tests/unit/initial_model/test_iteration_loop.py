@@ -241,6 +241,68 @@ class TestRunVdamIterations:
         assert seen_current_sizes == [28, 60]
         assert final.current_resolution_shell == 20
 
+    def test_diagnostic_stop_keeps_full_relion_schedule_denominator(self, monkeypatch):
+        import recovar.em.initial_model.iteration_loop as loop
+
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=200,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        seen = []
+
+        def estep(current, particle_ids, halfset_ids):
+            seen.append((int(current.iter), int(current.subset_size)))
+            return [], {}
+
+        monkeypatch.setattr(loop, "vdam_m_step", lambda current, accumulators, **kwargs: current)
+
+        final = run_vdam_iterations(
+            state,
+            nr_particles=3000,
+            optics_group_by_particle=[0] * 3000,
+            grad_ini_subset_size=200,
+            grad_fin_subset_size=1000,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=0,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=estep,
+            refresh_tau2_from_projector=False,
+            diagnostic_stop_after_iteration=2,
+        )
+
+        assert seen == [(1, 200), (2, 200)]
+        assert final.iter == 2
+        assert final.nr_iter == 200
+
+    def test_diagnostic_stop_rejects_iteration_outside_full_schedule(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=200,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        with pytest.raises(ValueError, match="between 1 and state.nr_iter"):
+            run_vdam_iterations(
+                state,
+                nr_particles=1,
+                optics_group_by_particle=[0],
+                grad_ini_subset_size=1,
+                grad_fin_subset_size=1,
+                tau2_fudge_arg=4.0,
+                grad_em_iters=0,
+                random_seed=0,
+                rnd_unif_factory=numpy_rnd_unif_factory,
+                expectation_step=lambda current, particle_ids, halfset_ids: ([], {}),
+                diagnostic_stop_after_iteration=201,
+            )
+
     def test_iteration_loop_refreshes_tau2_before_estep(self, monkeypatch):
         import recovar.em.initial_model.iteration_loop as loop
 
