@@ -1657,7 +1657,43 @@ def run_local_bucket_big_jit(
         sequential_translation_reduction=relion_sequential_mstep_reduction,
         scores_override=direct_scores,
     )
-    if mstep_subtract_ctf_projection:
+    source_ordered_vdam_mstep = bool(
+        relion_sequential_mstep_reduction
+        and mstep_subtract_ctf_projection
+        and relion_exact_bpref_operands
+        and use_relion_cuda_preprocess
+        and not apply_fourier_pre_shift
+        and relion_score_translation_angles is not None
+    )
+    if source_ordered_vdam_mstep:
+        from recovar import cuda_backproject
+
+        bpref_pixel_indices = (
+            recon_window_indices
+            if use_window
+            else jnp.arange(processed_recon_half.shape[1], dtype=jnp.int32)
+        )
+        bpref_ctf = (
+            ctf_half[:, bpref_pixel_indices] * batch_scale[:, None]
+        ).astype(jnp.float32)
+        bpref_minvsigma2 = jnp.broadcast_to(
+            inverse_noise_half[bpref_pixel_indices][None, :],
+            bpref_ctf.shape,
+        )
+        summed, ctf_probs = cuda_backproject.relion_vdam_mstep_sums_f32(
+            jnp.asarray(
+                processed_recon_half[:, bpref_pixel_indices],
+                dtype=jnp.complex64,
+            ),
+            bpref_ctf,
+            jnp.asarray(bpref_minvsigma2, dtype=jnp.float32),
+            jnp.asarray(reconstruction_probs, dtype=jnp.float32),
+            jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+            jnp.asarray(bpref_pixel_indices, dtype=jnp.int32),
+            jnp.asarray(proj_for_noise, dtype=jnp.complex64),
+            image_shape,
+        )
+    elif mstep_subtract_ctf_projection:
         # RELION's VDAM/--grad storeWeightedSums backprojects
         # (Fimg_shift_nomask - Frefctf) * CTF / sigma2.
         frefctf_weighted = proj_for_noise * ctf2_over_nv_recon[:, None, :]

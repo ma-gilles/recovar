@@ -221,6 +221,107 @@ def test_relion_translate_bpref_f32_validates_weight_shape(monkeypatch):
         )
 
 
+def test_relion_vdam_mstep_sums_f32_validates_reference_shape():
+    import recovar.cuda_backproject as cuda_backproject
+
+    with pytest.raises(ValueError, match="reference must have shape"):
+        cuda_backproject.relion_vdam_mstep_sums_f32.__wrapped__(
+            jnp.zeros((2, 3), dtype=jnp.complex64),
+            jnp.ones((2, 3), dtype=jnp.float32),
+            jnp.ones((2, 3), dtype=jnp.float32),
+            jnp.ones((2, 4, 5), dtype=jnp.float32),
+            jnp.zeros((5, 2), dtype=jnp.float32),
+            jnp.arange(3, dtype=jnp.int32),
+            jnp.zeros((2, 3, 3), dtype=jnp.complex64),
+            (8, 8),
+        )
+
+
+@pytest.mark.gpu
+def test_relion_vdam_mstep_sums_f32_matches_source_order_and_translation(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    images = np.asarray(
+        [[1.25 - 0.5j, -2.0 + 0.125j, 0.75 + 3.0j]],
+        dtype=np.complex64,
+    )
+    ctf = np.asarray([[0.75, -1.5, 0.25]], dtype=np.float32)
+    minvsigma2 = np.asarray([[2.0, 0.125, 4.0]], dtype=np.float32)
+    posterior = np.asarray(
+        [[[0.125, 0.25, 0.5], [0.0, 0.75, 0.0625]]],
+        dtype=np.float32,
+    )
+    reference = np.asarray(
+        [[[0.5 + 0.25j, 1.0 - 2.0j, -0.125 + 0.5j],
+          [-1.0 + 0.75j, 0.25 + 0.5j, 2.0 - 0.25j]]],
+        dtype=np.complex64,
+    )
+    translation_angles = np.asarray(
+        [[0.0, 0.0], [0.01831252, -0.006231174], [-0.03125, 0.015625]],
+        dtype=np.float32,
+    )
+    pixel_indices = np.asarray([0, 1, 2], dtype=np.int32)
+
+    with jax.default_device(gpu_device):
+        actual_num, actual_den = cuda_backproject.relion_vdam_mstep_sums_f32(
+            jnp.asarray(images),
+            jnp.asarray(ctf),
+            jnp.asarray(minvsigma2),
+            jnp.asarray(posterior),
+            jnp.asarray(translation_angles),
+            jnp.asarray(pixel_indices),
+            jnp.asarray(reference),
+            (8, 8),
+        )
+        translated = cuda_backproject.relion_translate_bpref_f32(
+            jnp.asarray(images),
+            jnp.ones_like(jnp.asarray(ctf)),
+            jnp.asarray(translation_angles),
+            jnp.asarray(pixel_indices),
+            (8, 8),
+        )
+    translated = np.asarray(translated).reshape(1, posterior.shape[2], -1)
+
+    expected_num = np.zeros_like(reference)
+    expected_den = np.zeros(reference.shape, dtype=np.float32)
+    for rotation in range(posterior.shape[1]):
+        for pixel in range(images.shape[1]):
+            ref_real = np.float32(reference[0, rotation, pixel].real * ctf[0, pixel])
+            ref_imag = np.float32(reference[0, rotation, pixel].imag * ctf[0, pixel])
+            sum_real = np.float32(0.0)
+            sum_imag = np.float32(0.0)
+            fweight = np.float32(0.0)
+            for translation in range(posterior.shape[2]):
+                weight = np.float32(posterior[0, rotation, translation] * ctf[0, pixel])
+                weight = np.float32(weight * minvsigma2[0, pixel])
+                fweight = np.float32(fweight + np.float32(weight * ctf[0, pixel]))
+                sum_real = np.float32(
+                    sum_real
+                    + np.float32(
+                        (translated[0, translation, pixel].real - ref_real) * weight
+                    )
+                )
+                sum_imag = np.float32(
+                    sum_imag
+                    + np.float32(
+                        (translated[0, translation, pixel].imag - ref_imag) * weight
+                    )
+                )
+            expected_num[0, rotation, pixel] = np.complex64(sum_real + 1j * sum_imag)
+            expected_den[0, rotation, pixel] = fweight
+
+    np.testing.assert_allclose(np.asarray(actual_num), expected_num, rtol=0.0, atol=2e-6)
+    np.testing.assert_allclose(np.asarray(actual_den), expected_den, rtol=0.0, atol=2e-6)
+
+
 @pytest.mark.gpu
 def test_relion_translate_bpref_f32_matches_translate_then_weight(
     monkeypatch,

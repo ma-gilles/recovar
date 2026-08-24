@@ -522,6 +522,7 @@ _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32 = "cuda_relion_make_scoring_rotations_
 _TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
 _TARGET_RELION_TRANSLATE_BPREF_F32 = "cuda_relion_translate_bpref_f32"
 _TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
+_TARGET_RELION_VDAM_MSTEP_SUMS_F32 = "cuda_relion_vdam_mstep_sums_f32"
 _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_rectangular_f32"
 )
@@ -598,6 +599,7 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_RELION_TRANSLATE_SCORE_F32, "RelionTranslateScoreF32"),
     (_TARGET_RELION_TRANSLATE_BPREF_F32, "RelionTranslateBprefF32"),
     (_TARGET_RELION_BPREF_OPERANDS_F32, "RelionBprefOperandsF32"),
+    (_TARGET_RELION_VDAM_MSTEP_SUMS_F32, "RelionVdamMstepSumsF32"),
     (
         _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
         "RelionCoarseDiff2RectangularF32",
@@ -1515,6 +1517,90 @@ def relion_bpref_operands_f32(
         image_h=np.int64(image_h),
         image_half_width=np.int64(half_width),
         arithmetic_variant=np.int64(arithmetic_variant),
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(7,))
+def relion_vdam_mstep_sums_f32(
+    images: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior_over_weight_norm: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    reference: jax.Array,
+    image_shape: Tuple[int, int],
+) -> tuple[jax.Array, jax.Array]:
+    """Reduce RELION VDAM BPref residual operands in native statement order.
+
+    The returned arrays have shape ``(batch, rotations, pixels)``.  Translation
+    weights are consumed sequentially inside the CUDA kernel, matching
+    ``cuda_kernel_backproject3D_SGD`` before its particle-grid scatter.
+    """
+
+    if images.dtype != jnp.complex64 or reference.dtype != jnp.complex64:
+        raise TypeError("images and reference must be complex64")
+    for name, value in (
+        ("ctf", ctf),
+        ("minvsigma2", minvsigma2),
+        ("posterior_over_weight_norm", posterior_over_weight_norm),
+        ("translation_angles", translation_angles),
+    ):
+        if value.dtype != jnp.float32:
+            raise TypeError(f"{name} must be float32, got {value.dtype}")
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError(f"pixel_indices must be int32, got {pixel_indices.dtype}")
+    if images.ndim != 2:
+        raise ValueError(f"images must have shape (batch, pixels), got {images.shape}")
+    if ctf.shape != images.shape or minvsigma2.shape != images.shape:
+        raise ValueError("ctf and minvsigma2 must have the same shape as images")
+    if posterior_over_weight_norm.ndim != 3:
+        raise ValueError("posterior_over_weight_norm must have shape (batch, rotations, translations)")
+    if posterior_over_weight_norm.shape[0] != images.shape[0]:
+        raise ValueError("posterior batch dimension must match images")
+    if reference.shape != (
+        images.shape[0],
+        posterior_over_weight_norm.shape[1],
+        images.shape[1],
+    ):
+        raise ValueError(
+            "reference must have shape (batch, rotations, pixels), got "
+            f"{reference.shape}"
+        )
+    if translation_angles.shape != (posterior_over_weight_norm.shape[2], 2):
+        raise ValueError("translation_angles must have shape (translations, 2)")
+    if pixel_indices.shape != (images.shape[1],):
+        raise ValueError(f"pixel_indices must have shape ({images.shape[1]},)")
+    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
+        raise ValueError(f"image_shape must contain two positive sizes, got {image_shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION VDAM M-step sums require a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION VDAM M-step sums were explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    image_h, image_w = (int(size) for size in image_shape)
+    output_shape = reference.shape
+    output_types = (
+        jax.ShapeDtypeStruct(output_shape, jnp.complex64),
+        jax.ShapeDtypeStruct(output_shape, jnp.float32),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_VDAM_MSTEP_SUMS_F32,
+        output_types,
+        vmap_method="sequential",
+    )(
+        images,
+        ctf,
+        minvsigma2,
+        posterior_over_weight_norm,
+        translation_angles,
+        pixel_indices,
+        reference,
+        image_h=np.int64(image_h),
+        image_half_width=np.int64(image_w // 2 + 1),
     )
 
 

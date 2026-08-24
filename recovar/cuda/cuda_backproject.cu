@@ -4064,6 +4064,115 @@ cudaError_t launch_relion_bpref_operands_f32(
     return cudaGetLastError();
 }
 
+__global__ void relion_vdam_mstep_sums_f32_kernel(
+    const float2* images,
+    const float* ctf,
+    const float* minvsigma2,
+    const float* posterior_over_weight_norm,
+    const float* translation_angles,
+    const int32_t* pixel_indices,
+    const float2* reference,
+    float2* numerator_sum,
+    float* denominator_sum,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pixel_count,
+    int image_h,
+    int image_half_width)
+{
+    int64_t image_rotation = static_cast<int64_t>(blockIdx.x);
+    if (image_rotation >= batch_size * rotation_count) return;
+    int64_t image = image_rotation / rotation_count;
+    const int passes = ceilf(
+        static_cast<float>(pixel_count) /
+        static_cast<float>(kRelionBprefOperandsBlockSize));
+    for (unsigned pass = 0; pass < static_cast<unsigned>(passes); ++pass)
+    {
+        int64_t pixel_row =
+            static_cast<int64_t>(pass) * kRelionBprefOperandsBlockSize +
+            threadIdx.x;
+        if (pixel_row >= pixel_count) continue;
+
+        int64_t image_pixel = image * pixel_count + pixel_row;
+        int64_t output = image_rotation * pixel_count + pixel_row;
+        int pixel_index = pixel_indices[pixel_row];
+        int x = pixel_index % image_half_width;
+        // RECOVAR's centered half-rFFT stores ky=0 in row image_h/2,
+        // exactly as relion_translate_bpref_f32_kernel expects.
+        int y = pixel_index / image_half_width - image_h / 2;
+
+        float2 image_value = images[image_pixel];
+        float image_ctf = ctf[image_pixel];
+        float image_minvsigma2 = minvsigma2[image_pixel];
+        float2 reference_value = reference[output];
+        // BP.cuh multiplies Fref by CTF once, before its translation loop.
+        float reference_real = reference_value.x;
+        float reference_imag = reference_value.y;
+        reference_real *= image_ctf;
+        reference_imag *= image_ctf;
+
+        float sum_real = 0.0f;
+        float sum_imag = 0.0f;
+        float fweight = 0.0f;
+        int64_t posterior_base = image_rotation * translation_count;
+        for (int64_t translation = 0; translation < translation_count;
+             ++translation)
+        {
+            // Keep these as separate source statements: this is the exact
+            // left-associated order used by cuda_kernel_backproject3D_SGD.
+            float weight = posterior_over_weight_norm[
+                posterior_base + translation];
+            weight = weight * image_ctf * image_minvsigma2;
+            fweight += weight * image_ctf;
+
+            float tx = translation_angles[2 * translation];
+            float ty = translation_angles[2 * translation + 1];
+            float phase = x * tx + y * ty;
+            float sine;
+            float cosine;
+            sincosf(phase, &sine, &cosine);
+            float translated_real =
+                cosine * image_value.x - sine * image_value.y;
+            float translated_imag =
+                cosine * image_value.y + sine * image_value.x;
+            sum_real += (translated_real - reference_real) * weight;
+            sum_imag += (translated_imag - reference_imag) * weight;
+        }
+        numerator_sum[output] = make_float2(sum_real, sum_imag);
+        denominator_sum[output] = fweight;
+    }
+}
+
+cudaError_t launch_relion_vdam_mstep_sums_f32(
+    cudaStream_t stream,
+    const float2* images,
+    const float* ctf,
+    const float* minvsigma2,
+    const float* posterior_over_weight_norm,
+    const float* translation_angles,
+    const int32_t* pixel_indices,
+    const float2* reference,
+    float2* numerator_sum,
+    float* denominator_sum,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pixel_count,
+    int image_h,
+    int image_half_width)
+{
+    if (batch_size * rotation_count * pixel_count == 0) return cudaSuccess;
+    int blocks = static_cast<int>(batch_size * rotation_count);
+    relion_vdam_mstep_sums_f32_kernel<<<
+        blocks, kRelionBprefOperandsBlockSize, 0, stream>>>(
+            images, ctf, minvsigma2, posterior_over_weight_norm,
+            translation_angles, pixel_indices, reference, numerator_sum,
+            denominator_sum, batch_size, rotation_count, translation_count,
+            pixel_count, image_h, image_half_width);
+    return cudaGetLastError();
+}
+
 __device__ __forceinline__ float relion_fine_diff2_update_f32(
     float2 reference,
     float2 shifted_image,
@@ -6827,6 +6936,116 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionVdamMstepSumsF32Impl(
+    cudaStream_t stream,
+    int64_t image_h,
+    int64_t image_half_width,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer ctf,
+    ffi::AnyBuffer minvsigma2,
+    ffi::AnyBuffer posterior_over_weight_norm,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer pixel_indices,
+    ffi::AnyBuffer reference,
+    ffi::Result<ffi::AnyBuffer> numerator_sum,
+    ffi::Result<ffi::AnyBuffer> denominator_sum)
+{
+    if (images.element_type() != ffi::DataType::C64 ||
+        reference.element_type() != ffi::DataType::C64 ||
+        numerator_sum->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepSumsF32: complex inputs/outputs must be C64");
+    if (ctf.element_type() != ffi::DataType::F32 ||
+        minvsigma2.element_type() != ffi::DataType::F32 ||
+        posterior_over_weight_norm.element_type() != ffi::DataType::F32 ||
+        translation_angles.element_type() != ffi::DataType::F32 ||
+        denominator_sum->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepSumsF32: scalar inputs/denominator must be F32");
+    if (pixel_indices.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepSumsF32: pixel indices must be S32");
+    if (image_h <= 0 || image_half_width <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepSumsF32: image dimensions must be positive");
+
+    auto image_dims = images.dimensions();
+    auto ctf_dims = ctf.dimensions();
+    auto noise_dims = minvsigma2.dimensions();
+    auto posterior_dims = posterior_over_weight_norm.dimensions();
+    auto translation_dims = translation_angles.dimensions();
+    auto pixel_dims = pixel_indices.dimensions();
+    auto reference_dims = reference.dimensions();
+    auto numerator_dims = numerator_sum->dimensions();
+    auto denominator_dims = denominator_sum->dimensions();
+    if (image_dims.size() != 2)
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepSumsF32: images must have shape (B,P)");
+    if (ctf_dims.size() != 2 || noise_dims.size() != 2 ||
+        ctf_dims[0] != image_dims[0] || ctf_dims[1] != image_dims[1] ||
+        noise_dims[0] != image_dims[0] || noise_dims[1] != image_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepSumsF32: ctf/minvsigma2 must match images");
+    if (posterior_dims.size() != 3 || posterior_dims[0] != image_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepSumsF32: posterior must have shape (B,R,T)");
+    if (translation_dims.size() != 2 || translation_dims[1] != 2 ||
+        translation_dims[0] != posterior_dims[2])
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepSumsF32: translations must have shape (T,2)");
+    if (pixel_dims.size() != 1 || pixel_dims[0] != image_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepSumsF32: pixel indices must have shape (P,)");
+    if (reference_dims.size() != 3 ||
+        reference_dims[0] != posterior_dims[0] ||
+        reference_dims[1] != posterior_dims[1] ||
+        reference_dims[2] != image_dims[1] ||
+        numerator_dims.size() != 3 || denominator_dims.size() != 3 ||
+        numerator_dims[0] != reference_dims[0] ||
+        numerator_dims[1] != reference_dims[1] ||
+        numerator_dims[2] != reference_dims[2] ||
+        denominator_dims[0] != reference_dims[0] ||
+        denominator_dims[1] != reference_dims[1] ||
+        denominator_dims[2] != reference_dims[2])
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepSumsF32: references/outputs must have shape (B,R,P)");
+
+    cudaError_t err = launch_relion_vdam_mstep_sums_f32(
+        stream,
+        reinterpret_cast<const float2*>(images.untyped_data()),
+        static_cast<const float*>(ctf.untyped_data()),
+        static_cast<const float*>(minvsigma2.untyped_data()),
+        static_cast<const float*>(posterior_over_weight_norm.untyped_data()),
+        static_cast<const float*>(translation_angles.untyped_data()),
+        static_cast<const int32_t*>(pixel_indices.untyped_data()),
+        reinterpret_cast<const float2*>(reference.untyped_data()),
+        reinterpret_cast<float2*>(numerator_sum->untyped_data()),
+        static_cast<float*>(denominator_sum->untyped_data()),
+        image_dims[0], posterior_dims[1], posterior_dims[2], image_dims[1],
+        static_cast<int>(image_h), static_cast<int>(image_half_width));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionVdamMstepSumsF32, RelionVdamMstepSumsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_half_width")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
 );

@@ -7978,6 +7978,27 @@ def test_local_big_jit_relion_translation_is_scoped_to_score_operand():
     assert "shifted_recon_half = (" in shift_block
 
 
+def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
+    from recovar.em.dense_single_volume import local_big_jit
+
+    src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
+    source_ordered_block = src[
+        src.index("source_ordered_vdam_mstep = bool(") :
+        src.index("flat_summed = summed.reshape(")
+    ]
+    for guard in (
+        "relion_sequential_mstep_reduction",
+        "mstep_subtract_ctf_projection",
+        "relion_exact_bpref_operands",
+        "use_relion_cuda_preprocess",
+        "not apply_fourier_pre_shift",
+        "relion_score_translation_angles is not None",
+    ):
+        assert guard in source_ordered_block
+    assert "cuda_backproject.relion_vdam_mstep_sums_f32(" in source_ordered_block
+    assert "elif mstep_subtract_ctf_projection:" in source_ordered_block
+
+
 def test_local_exact_relion_translation_requires_half_spectrum_scoring():
     with pytest.raises(
         ValueError,
