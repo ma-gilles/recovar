@@ -23,10 +23,13 @@ and 93.  Their minimum cross-engine FSC-AUC values are `0.66914`, `0.68797`,
 native-RELION triplets show that `vdam-gf02`, `vdam-gf03`, and `vdam-gf05`
 leave their sampled native-repeat envelopes; `vdam-gf03`, `vdam-gf04`, and
 `vdam-gf07` also miss the `-0.002` GT-delta gate.  These are active parity
-failures, not tolerance candidates.  A bounded-memory change has carried the
-severe `vdam-gf20` trajectory beyond its former iteration-110 OOM boundary and
-through all 200 iterations; its frozen audit is running.  Runtime remains 2.36--2.88x RELION on the completed
-production cases.
+failures, not tolerance candidates.  A bounded-memory change carried the
+20,000-particle severe-outlier/radial-noise `vdam-gf20` trajectory beyond its
+former iteration-110 OOM boundary through all 200 iterations at about 12.5 GB
+RSS.  Its frozen audit is a real parity failure: first failure at iteration 30
+(`0.99127` cross-engine FSC-AUC), minimum/final cross-engine FSC-AUC `0.15622`,
+and final RECOVAR-minus-RELION GT FSC-AUC `-0.01207`.  Runtime remains
+2.36--2.88x RELION on the completed small production cases.
 
 Source statement order alone is now rejected as sufficient.  Isolated commit
 `99681a33b` completed all 200 frozen `vdam-gf01` iterations (Slurm
