@@ -466,6 +466,13 @@ def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
         "unset MPI_ROOT CUDA_HOME",
         'test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"',
         "scripts.analyze_vdam_mstep_boundary",
+        "BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}",
+        'RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=1',
+        'RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF=${BPREF_CONTRIBUTION_HALF}',
+        'RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE}',
+        "RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY",
+        "RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256",
+        "bpref_contribution_rows_it001_h*.npz",
         '"nr_iter_schedule":%d',
         '"stopped_after_iteration":%d',
     ]

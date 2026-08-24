@@ -25,6 +25,8 @@ REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/
 TARGET_ITERATION=${TARGET_ITERATION:-2}
 NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-0}
+BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}
+BPREF_CONTRIBUTION_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE:-}
 RELION_SOURCE=${VDAM_RELION_SOURCE:-/scratch/gpfs/GILLES/mg6942/relion}
 RELION_RUNTIME=${VDAM_RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
 PIXI_PY=${REPO_ROOT}/.pixi/envs/default/bin/python
@@ -37,6 +39,7 @@ RECOVAR_MSTEP=${OUTPUT_ROOT}/recovar_mstep
 NATIVE_CAPTURE=${OUTPUT_ROOT}/native_capture
 PROVENANCE=${OUTPUT_ROOT}/provenance
 ANALYSIS=${OUTPUT_ROOT}/analysis
+CONTRIBUTIONS=${OUTPUT_ROOT}/recovar_bpref_contributions
 
 test -f "${OUTPUT_ROOT}/SAFE_TO_DELETE"
 test -s "${DATA_DIR}/particles.star"
@@ -44,14 +47,21 @@ test -x "${VDAM_RELION_BINARY}"
 test -x "${PIXI_PY}"
 test "${TARGET_ITERATION}" -ge 1
 test "${TARGET_ITERATION}" -le "${NR_ITER_SCHEDULE}"
+if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
+  test "${BPREF_CONTRIBUTION_HALF}" = 1 -o "${BPREF_CONTRIBUTION_HALF}" = 2
+  test -n "${BPREF_CONTRIBUTION_CURRENT_SIZE}"
+  test "${BPREF_CONTRIBUTION_CURRENT_SIZE}" -ge 1
+fi
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = "${EXPECTED_RELION_BIND_SHA256}"
 mkdir -p "${RELION_OUTPUT}" "${RECOVAR_OUTPUT}" "${NATIVE_MSTEP}" \
-  "${RECOVAR_MSTEP}" "${NATIVE_CAPTURE}" "${PROVENANCE}" "${ANALYSIS}"
+  "${RECOVAR_MSTEP}" "${NATIVE_CAPTURE}" "${PROVENANCE}" "${ANALYSIS}" \
+  "${CONTRIBUTIONS}"
 for directory in "${RELION_OUTPUT}" "${RECOVAR_OUTPUT}" "${NATIVE_MSTEP}" \
-  "${RECOVAR_MSTEP}" "${NATIVE_CAPTURE}" "${PROVENANCE}" "${ANALYSIS}"; do
+  "${RECOVAR_MSTEP}" "${NATIVE_CAPTURE}" "${PROVENANCE}" "${ANALYSIS}" \
+  "${CONTRIBUTIONS}"; do
   test -z "$(find "${directory}" -mindepth 1 -print -quit)"
 done
 
@@ -170,6 +180,51 @@ unset RECOVAR_DEBUG_DUMP_DIR RECOVAR_DEBUG_DUMP_MSTEP_ITER
 unset RELION_ACC_DUMP_DIR RELION_ACC_DUMP_PART_ID RELION_ACC_DUMP_ITER RELION_ACC_DUMP_VERBOSE
 export RECOVAR_MSTEP_DUMP_DIR=${RECOVAR_MSTEP}
 export RECOVAR_MSTEP_DUMP_ITER=1
+if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
+  mapfile -t contribution_metadata < <(
+    "${PIXI_PY}" - "${DATA_DIR}/particles.star" \
+      "${PROVENANCE}/bpref_image_names.npy" "${DATA_DIR}" <<'PY'
+import sys
+from pathlib import Path
+
+import numpy as np
+import starfile
+
+star_path, output_path, data_directory = map(Path, sys.argv[1:])
+star = starfile.read(star_path)
+particles = star["particles"] if isinstance(star, dict) else star
+image_names = np.asarray(particles["rlnImageName"].astype(str).tolist())
+if image_names.ndim != 1 or image_names.size == 0:
+    raise SystemExit("VDAM BPref capture requires nonempty rlnImageName metadata")
+stack_paths = []
+for image_name in image_names.tolist():
+    _index, separator, stack_name = image_name.partition("@")
+    if separator != "@" or not stack_name:
+        raise SystemExit(f"invalid rlnImageName: {image_name}")
+    stack_path = Path(stack_name)
+    if not stack_path.is_absolute():
+        stack_path = Path(data_directory) / stack_path
+    stack_paths.append(stack_path.resolve())
+if len(set(stack_paths)) != 1 or not stack_paths[0].is_file():
+    raise SystemExit("VDAM BPref capture requires one resolved particle stack")
+np.save(output_path, image_names)
+print(stack_paths[0])
+print(image_names.size)
+PY
+  )
+  test "${#contribution_metadata[@]}" -eq 2
+  contribution_stack=${contribution_metadata[0]}
+  contribution_particle_count=${contribution_metadata[1]}
+  test "${contribution_particle_count}" -ge 1
+  export RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR=${CONTRIBUTIONS}
+  export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=1
+  export RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF=${BPREF_CONTRIBUTION_HALF}
+  export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE}
+  export RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID=vdam-gf01-it1-half${BPREF_CONTRIBUTION_HALF}
+  export RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY=${PROVENANCE}/bpref_image_names.npy
+  export RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256
+  RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256=$(sha256sum "${contribution_stack}" | awk '{print $1}')
+fi
 
 RECOVAR_COMMAND=(
   "${PIXI_PY}" -m scripts.run_ab_initio
@@ -204,6 +259,10 @@ printf '\n' >> "${PROVENANCE}/recovar_command.sh"
 test -s "${RECOVAR_OUTPUT}/run_it${target_tag}_class001.mrc"
 test -s "${RECOVAR_MSTEP}/accum_h0_data.npy"
 test -s "${RECOVAR_MSTEP}/iref_out_relion_frame.npy"
+if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
+  test "$(find "${CONTRIBUTIONS}" -maxdepth 1 -type f \
+    -name 'bpref_contribution_rows_it001_h*.npz' | wc -l)" -ge 1
+fi
 (
   cd "${REPO_ROOT}"
   "${PIXI_PY}" -m scripts.analyze_vdam_mstep_boundary \
@@ -223,7 +282,8 @@ sha256sum "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
   "${REPO_ROOT}/scripts/analyze_vdam_mstep_boundary.py" "${DATA_DIR}/particles.star" \
   "${CUDA_BINARY}" "${RELION_BIND_BINARY}" "${VDAM_RELION_BINARY}" \
   > "${PROVENANCE}/static_inputs.sha256"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"bpref_contribution_half":"%s","bpref_contribution_current_size":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" \
-  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" > "${PROVENANCE}/run.json"
+  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${BPREF_CONTRIBUTION_HALF}" \
+  "${BPREF_CONTRIBUTION_CURRENT_SIZE}" > "${PROVENANCE}/run.json"
 touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
