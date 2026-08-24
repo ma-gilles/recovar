@@ -147,13 +147,16 @@ iteration_tag=$(printf '%03d' "${TARGET_ITERATION}")
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_class001.mrc"
 test "$(find "${SCORE_ROOT}" -maxdepth 1 -type f -name 'local_score_*.npz' | wc -l)" \
   -eq "${EXPECTED_PARTICLE_COUNT}"
-"${PIXI_PY}" "${REPO_ROOT}/scripts/analyze_vdam_cutoff_particle_panel.py" \
+(
+cd "${REPO_ROOT}"
+"${PIXI_PY}" -m scripts.analyze_vdam_cutoff_particle_panel \
   --native-components-tsv "${NATIVE_COMPONENTS_TSV}" \
   --score-directory "${SCORE_ROOT}" \
   --relion-data-star "${RELION_DATA_STAR}" \
   --iteration "${TARGET_ITERATION}" --half "${TARGET_HALF}" \
   --image-size "${IMAGE_SIZE}" --expected-particle-count "${EXPECTED_PARTICLE_COUNT}" \
   --output "${ANALYSIS}/cutoff_particle_panel.json"
+)
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 printf '{"job_id":"%s","git_head":"%s","iteration":%d,"particle_count":%d,"recovar_wall_s":%d}\n' \
