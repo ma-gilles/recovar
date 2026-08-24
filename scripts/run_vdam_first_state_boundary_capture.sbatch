@@ -21,8 +21,13 @@ set -euo pipefail
 
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 TARGET_ITERATION=${TARGET_ITERATION:-33}
-TARGET_ORIGINAL_INDEX=${TARGET_ORIGINAL_INDEX:-6}
+# These are deliberately different identity spaces for the sealed gf01
+# boundary: RECOVAR selects the zero-based source STAR row, while RELION's
+# capture selects its shuffled internal particle id and verifies the 1-based
+# stack index independently.
+TARGET_ORIGINAL_INDEX=${TARGET_ORIGINAL_INDEX:-1002}
 TARGET_RELION_PART_ID=${TARGET_RELION_PART_ID:-6}
+TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-1003}
 RELION_BINARY=${RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
 NATIVE_ROOT=${OUTPUT_ROOT}/native_continuation
 RECOVAR_ROOT=${OUTPUT_ROOT}/recovar_prefix
@@ -53,6 +58,7 @@ VDAM_RELION_CONT_INPUT_DIR=${DATA_DIR} \
 VDAM_RELION_CONT_OPTIMISER=${RELION_OPTIMISER} \
 VDAM_RELION_CONT_ITERATION=${TARGET_ITERATION} \
 VDAM_RELION_CONT_PART_ID=${TARGET_RELION_PART_ID} \
+VDAM_RELION_CONT_STACK_INDEX=${TARGET_STACK_INDEX} \
 VDAM_RELION_CONT_CAPTURE=1 \
 VDAM_RELION_BINARY=${RELION_BINARY} \
 bash "${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch"
@@ -125,8 +131,8 @@ test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 gpu_uuid_after_recovar=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":200,"stopped_after_iteration":%d,"target_original_index":%d,"target_relion_part_id":%d,"recovar_wall_s":%d}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":200,"stopped_after_iteration":%d,"target_original_index":%d,"target_relion_part_id":%d,"target_stack_index":%d,"recovar_wall_s":%d}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_ITERATION}" \
-  "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" "${wall_s}" \
+  "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" "${TARGET_STACK_INDEX}" "${wall_s}" \
   > "${PROVENANCE}/run.json"
 touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
