@@ -47,6 +47,12 @@ mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CA
 if [[ -n "${RELION_ACC_DUMP_DIR:-}" ]]; then
   mkdir -p "${RELION_ACC_DUMP_DIR}"
 fi
+if [[ -n "${RELION_DUMP_SIGMA2_NOISE_DIR:-}" ]]; then
+  mkdir -p "${RELION_DUMP_SIGMA2_NOISE_DIR}"
+fi
+if [[ -n "${RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_DIR:-}" ]]; then
+  mkdir -p "${RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_DIR}"
+fi
 
 PIXI_PY="${REPO_ROOT}/.pixi/envs/default/bin/python"
 test -x "${PIXI_PY}"

@@ -630,6 +630,39 @@ class TestRunVdamIterations:
         expected_relion_units = np.asarray(expected_engine_units, dtype=np.float64) / float(8**4)
         np.testing.assert_allclose(out.sigma2_noise[0], 0.9 * 0.01 + 0.1 * expected_relion_units, rtol=1.0e-6)
 
+    def test_noise_update_boundary_dump_is_opt_in_and_analyzer_compatible(
+        self, monkeypatch, tmp_path
+    ):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.iter = 1
+        state.current_size = 6
+        state.sigma2_noise[:] = 0.01
+        meta = {
+            "wsum_sigma2_noise": np.asarray([10.0, 12.0, 14.0, 16.0, 18.0]),
+            "wsum_img_power": np.asarray([5.0, 6.0, 7.0, 8.0, 9.0]),
+            "noise_sumw": 4.0,
+        }
+        monkeypatch.setenv("RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_DIR", str(tmp_path))
+        monkeypatch.setenv("RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_ITERATION", "1")
+
+        out = update_noise_from_estep_meta(state, meta, do_grad=False)
+
+        dump_path = tmp_path / "initialmodel_noise_update_it001.npz"
+        with np.load(dump_path, allow_pickle=False) as payload:
+            assert str(payload["schema"]) == "recovar.initialmodel.noise_update_boundary.v1"
+            assert int(payload["iteration"][0]) == 1
+            assert int(payload["current_size"][0]) == 6
+            np.testing.assert_array_equal(payload["half0_wsum_sigma2_noise"], meta["wsum_sigma2_noise"])
+            np.testing.assert_array_equal(payload["half0_wsum_img_power"], meta["wsum_img_power"])
+            np.testing.assert_allclose(payload["half0_sigma2_noise"] / 8**4, out.sigma2_noise[0])
+
     def test_iteration_loop_feeds_updated_sigma2_noise_to_next_estep(self, monkeypatch):
         import recovar.em.initial_model.iteration_loop as loop
 

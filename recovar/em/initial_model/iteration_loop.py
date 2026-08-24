@@ -167,6 +167,58 @@ def _dump_noise_failure_meta(state: InitialModelState, meta: dict, summaries: Se
     return str(dump_path)
 
 
+def _maybe_dump_noise_update_boundary(
+    state: InitialModelState,
+    updated_state: InitialModelState,
+    *,
+    wsum_sigma2_noise: np.ndarray,
+    wsum_img_power: np.ndarray,
+    noise_sumw: float,
+) -> str | None:
+    """Write VDAM noise sufficient statistics only when explicitly requested."""
+
+    dump_root = os.environ.get("RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_DIR")
+    if not dump_root:
+        return None
+    requested = os.environ.get("RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_ITERATION")
+    if requested:
+        requested_iterations = {int(token.strip()) for token in requested.split(",") if token.strip()}
+        if int(state.iter) not in requested_iterations:
+            return None
+
+    from recovar.em.dense_single_volume.relion_metadata import (
+        _relion_half_plane_shell_counts,
+    )
+
+    dump_dir = Path(dump_root)
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    dump_path = dump_dir / f"initialmodel_noise_update_it{int(state.iter):03d}.npz"
+    if dump_path.exists():
+        raise ValueError(f"refusing to overwrite {dump_path}")
+    n4 = float(int(state.ori_size) ** 4)
+    old_noise = np.asarray(state.sigma2_noise, dtype=np.float64)[0] * n4
+    new_noise = np.asarray(updated_state.sigma2_noise, dtype=np.float64)[0] * n4
+    residual = np.asarray(wsum_sigma2_noise, dtype=np.float64)
+    image_power = np.asarray(wsum_img_power, dtype=np.float64)
+    payload = {
+        "schema": np.asarray("recovar.initialmodel.noise_update_boundary.v1"),
+        "iteration": np.asarray([int(state.iter)], dtype=np.int32),
+        "current_size": np.asarray([int(state.current_size)], dtype=np.int32),
+        "image_shape": np.asarray([int(state.ori_size), int(state.ori_size)], dtype=np.int32),
+        "relion_half_plane_shell_counts": _relion_half_plane_shell_counts(
+            (int(state.ori_size), int(state.ori_size))
+        ),
+        "half0_wsum_sigma2_noise": residual,
+        "half0_wsum_img_power": image_power,
+        "half0_wsum_total": residual + image_power,
+        "half0_sumw": np.asarray([float(noise_sumw)], dtype=np.float64),
+        "half0_previous_sigma2_noise": old_noise,
+        "half0_sigma2_noise": new_noise,
+    }
+    np.savez_compressed(dump_path, **payload)
+    return str(dump_path)
+
+
 def update_noise_from_estep_meta(
     state: InitialModelState,
     meta: dict,
@@ -217,6 +269,13 @@ def update_noise_from_estep_meta(
     if new_sigma2.ndim != 2 or new_sigma2.shape[1] != expected_shells:
         raise ValueError(f"sigma2_noise must have shape (G, {expected_shells}), got {new_sigma2.shape}")
     new_state.sigma2_noise = new_sigma2 * my_mu + (1.0 - my_mu) * sigma2_relion_units[None, :]
+    _maybe_dump_noise_update_boundary(
+        state,
+        new_state,
+        wsum_sigma2_noise=wsum_sigma2_noise,
+        wsum_img_power=wsum_img_power,
+        noise_sumw=float(noise_sumw),
+    )
     return new_state
 
 

@@ -279,6 +279,26 @@ def build_recovar_command(
     ]
 
 
+def _definition_with_iteration_override(definition: dict[str, Any]) -> dict[str, Any]:
+    """Apply an explicit bounded-trajectory diagnostic override."""
+
+    result = dict(definition)
+    raw = os.environ.get("VDAM_NR_ITER_OVERRIDE")
+    if raw is None:
+        return result
+    try:
+        nr_iter = int(raw)
+    except ValueError as exc:
+        raise RunError("VDAM_NR_ITER_OVERRIDE must be an integer") from exc
+    frozen_nr_iter = int(result["nr_iter"])
+    if nr_iter <= 0 or nr_iter > frozen_nr_iter:
+        raise RunError(
+            f"VDAM_NR_ITER_OVERRIDE must be in [1, {frozen_nr_iter}], got {nr_iter}"
+        )
+    result["nr_iter"] = nr_iter
+    return result
+
+
 def _run_logged(argv: list[str], *, cwd: Path, log_path: Path, env: dict[str, str]) -> dict[str, Any]:
     start = time.time()
     with log_path.open("w") as log:
@@ -320,7 +340,7 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
     scorecard_path = args.scorecard.resolve()
     scorecard = _load_json(scorecard_path)
     case = _scorecard_case(scorecard, args.case_id)
-    definition = case["definition"]
+    definition = _definition_with_iteration_override(case["definition"])
     manifest_path = (repo / scorecard["source_fixture_manifest"]["path"]).resolve()
     if sha256_file(manifest_path) != scorecard["source_fixture_manifest"]["sha256"]:
         raise RunError("source fixture manifest digest differs from the frozen scorecard")
@@ -392,6 +412,7 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         "relion_reference": _relion_reference_provenance(args.relion_refine),
         "recovar_native_extensions": _recovar_native_extension_provenance(repo),
         "recovar_image_batch_size": image_batch_size,
+        "nr_iter_override": os.environ.get("VDAM_NR_ITER_OVERRIDE"),
         "recovar_sparse_big_jit_mstep_max_gb": os.environ.get(
             "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB"
         ),

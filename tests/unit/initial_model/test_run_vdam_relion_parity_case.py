@@ -161,6 +161,21 @@ def test_recovar_command_accepts_resource_only_batch_override(monkeypatch):
         )
 
 
+def test_iteration_override_is_explicit_bounded_and_non_mutating(monkeypatch):
+    monkeypatch.setenv("VDAM_NR_ITER_OVERRIDE", "2")
+
+    result = runner._definition_with_iteration_override(DEFINITION)
+
+    assert result["nr_iter"] == 2
+    assert DEFINITION["nr_iter"] == 8
+    monkeypatch.setenv("VDAM_NR_ITER_OVERRIDE", "9")
+    with pytest.raises(runner.RunError, match="must be in"):
+        runner._definition_with_iteration_override(DEFINITION)
+    monkeypatch.setenv("VDAM_NR_ITER_OVERRIDE", "not-an-integer")
+    with pytest.raises(runner.RunError, match="must be an integer"):
+        runner._definition_with_iteration_override(DEFINITION)
+
+
 def test_gpu_capture_requires_exactly_one_visible_uuid(monkeypatch):
     monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
     monkeypatch.setattr(
