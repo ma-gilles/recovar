@@ -29,11 +29,14 @@ TARGET_ORIGINAL_INDEX=${TARGET_ORIGINAL_INDEX:-1002}
 TARGET_RELION_PART_ID=${TARGET_RELION_PART_ID:-6}
 TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-1003}
 TARGET_RELION_PERTURBATION=${TARGET_RELION_PERTURBATION:-0.322510}
+CAPTURE_LOCAL_SCORE=${CAPTURE_LOCAL_SCORE:-0}
+case "${CAPTURE_LOCAL_SCORE}" in 0|1) ;; *) echo "CAPTURE_LOCAL_SCORE must be 0 or 1" >&2; exit 2 ;; esac
 RELION_BINARY=${RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
 REFERENCE_RELION_DIR=${REFERENCE_RELION_DIR:-$(dirname "${RELION_OPTIMISER}")}
 NATIVE_ROOT=${OUTPUT_ROOT}/native_continuation
 RECOVAR_ROOT=${OUTPUT_ROOT}/recovar_prefix
 RECOVAR_CAPTURE=${OUTPUT_ROOT}/recovar_fused
+RECOVAR_SCORE_CAPTURE=${OUTPUT_ROOT}/recovar_score
 PROVENANCE=${OUTPUT_ROOT}/provenance
 PIXI_PY=${REPO_ROOT}/.pixi/envs/default/bin/python
 CUDA_BINARY=${REPO_ROOT}/recovar/cuda/libcuda_backproject.so
@@ -51,8 +54,8 @@ test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = "${EXPECTED_RELION_BIND_SHA256}"
-mkdir -p "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${PROVENANCE}"
-test -z "$(find "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${PROVENANCE}" -mindepth 1 -print -quit)"
+mkdir -p "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${PROVENANCE}"
+test -z "$(find "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${PROVENANCE}" -mindepth 1 -print -quit)"
 touch "${NATIVE_ROOT}/SAFE_TO_DELETE"
 
 gpu_uuid_before=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
@@ -106,6 +109,16 @@ export RATTLER_CACHE_DIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/rattler_cache
 export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR=${RECOVAR_CAPTURE}
 export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}
 export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION=${TARGET_ITERATION}
+unset RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY
+if [[ "${CAPTURE_LOCAL_SCORE}" == 1 ]]; then
+  export RECOVAR_LOCAL_SCORE_DUMP_DIR=${RECOVAR_SCORE_CAPTURE}
+  export RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}
+  export RECOVAR_LOCAL_SCORE_DUMP_ITERATION=${TARGET_ITERATION}
+  export RECOVAR_LOCAL_SCORE_DUMP_OPERANDS=1
+else
+  unset RECOVAR_LOCAL_SCORE_DUMP_DIR RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES
+  unset RECOVAR_LOCAL_SCORE_DUMP_ITERATION RECOVAR_LOCAL_SCORE_DUMP_OPERANDS
+fi
 mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
 
 COMMAND=(
@@ -153,12 +166,18 @@ test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_data.star"
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_model.star"
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_recovar_meta.json"
 test "$(find "${RECOVAR_CAPTURE}" -maxdepth 1 -type f -name 'local_fused_posterior_*.npz' | wc -l)" -eq 1
+if [[ "${CAPTURE_LOCAL_SCORE}" == 1 ]]; then
+  test "$(find "${RECOVAR_SCORE_CAPTURE}" -maxdepth 1 -type f -name 'local_score_*.npz' | wc -l)" -eq 1
+else
+  test -z "$(find "${RECOVAR_SCORE_CAPTURE}" -mindepth 1 -print -quit)"
+fi
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 gpu_uuid_after_recovar=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":200,"stopped_after_iteration":%d,"target_original_index":%d,"target_relion_part_id":%d,"target_stack_index":%d,"recovar_wall_s":%d}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":200,"stopped_after_iteration":%d,"target_original_index":%d,"target_relion_part_id":%d,"target_stack_index":%d,"capture_local_score":%s,"recovar_wall_s":%d}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_ITERATION}" \
-  "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" "${TARGET_STACK_INDEX}" "${wall_s}" \
+  "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" "${TARGET_STACK_INDEX}" \
+  "${CAPTURE_LOCAL_SCORE}" "${wall_s}" \
   > "${PROVENANCE}/run.json"
 touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
