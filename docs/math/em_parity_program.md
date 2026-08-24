@@ -300,6 +300,42 @@ controls) and replays image, reference, CTF/noise, translation, and reduction
 one at a time.  No production arithmetic change is justified before that
 operand split.
 
+The four-source operand panel and broader repeat calibration supersede that
+two-repeat inference.  Provenance typo job `12908715` stopped before science;
+corrected native panel `12908730` and GPU audits `12908752`--`12908755`,
+`12908853`--`12908856`, and `12909056`--`12909059` all complete.  Across parts
+138, 82, 171, and 125, projected references, score weights, and
+orientation/translation log priors are exact.  Candidate likelihood-score RMS
+is `1.54e-5`--`3.04e-5`.  Raw-particle replay `12909124`/`12909176` closes the
+part-82 live centered score exactly after normalization, block-first soft
+masking, FFT, correction, translation, and the fused scorer; only a constant
+high-resolution offset remains.  Thus the saved preweighted debug image was
+not an exact fused-score input and its apparent topology component is rejected.
+
+Eight independent native part-82 captures (`12909205`) show why two repeats
+were insufficient.  Native top-pair log odds span `6.109e-5`; RECOVAR is inside
+that range and only `2.999e-8` from a sampled native value.  Its nearest
+centered-score RMS is `2.953e-6`, versus native/native maximum `3.217e-5`, and
+85.4% of coordinates lie inside the native envelope.  The deterministic
+block-first background is one of the observed native values; native backgrounds
+span four float32 ULP.
+
+The complete eight-repeat, 200-particle, one-thread native ensemble
+(`12909370`) and audit `12909383` now provide the authoritative iteration-1
+calibration.  Pooled candidate posterior error is inside the native pair range
+for both halves: nearest/max ratios `0.7459`/`0.7566`, with 99.43%/99.62% of
+posterior coordinates inside the native envelope and 94/100 and 95/100
+particles individually inside the native maximum.  Centered log-score pooled
+nearest/max is `1.0118`/`0.9489`; the half-1 excess is only 1.18%, while 93/100
+and 92/100 particles pass individually.  Raw support is exact for every
+particle.  Therefore no global iteration-1 scoring change is justified.  The
+active stable outliers are native part 144/original 1127 and native part
+179/original 115 (zero sampled native score spread but nonzero candidate
+error), followed by parts 2 and 3.  Detailed raw-particle replays for those
+outliers are the next bounded discriminator.  Partial eight-thread panel
+`12909277` is rejected because its marker raced 32 asynchronous dumps; it
+contains only 168/200 particles and is excluded.
+
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired
 full-schedule job `12889537_1` follows a different native trajectory by
