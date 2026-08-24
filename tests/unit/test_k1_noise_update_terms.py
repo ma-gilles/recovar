@@ -67,8 +67,11 @@ def test_noise_update_terms_replay_equal_sufficient_statistics(tmp_path):
         iteration=2,
         half=1,
         image_size=image_size,
+        recovar_prefix="half1",
     )
 
+    assert report["identity"]["native_halfset"] == 1
+    assert report["identity"]["recovar_prefix"] == "half1"
     assert report["denominator"]["recovar_over_native_sumw"] == 1.0
     assert report["comparisons"]["raw_total_recovar_vs_native"]["max_abs"] == 0.0
     assert report["comparisons"]["residual_recovar_vs_native_particles"]["max_abs"] == 0.0

@@ -202,6 +202,7 @@ def analyze(
     half: int,
     image_size: int,
     native_components_tsv: Path | None = None,
+    recovar_prefix: str | None = None,
 ) -> dict[str, object]:
     rows = _parse_native_rows(native_tsv, iteration=iteration, half=half)
     native = _native_final_arrays(rows, iteration=iteration, half=half)
@@ -212,7 +213,7 @@ def analyze(
         shell_count=int(np.asarray(native["shell"]).size),
     )
     with np.load(recovar_npz, allow_pickle=False) as payload:
-        prefix = f"half{half}"
+        prefix = recovar_prefix or f"half{half}"
         rec_raw = np.asarray(payload[f"{prefix}_wsum_total"], dtype=np.float64)
         rec_residual = np.asarray(payload[f"{prefix}_wsum_sigma2_noise"], dtype=np.float64)
         rec_image_power = np.asarray(payload[f"{prefix}_wsum_img_power"], dtype=np.float64)
@@ -347,6 +348,8 @@ def analyze(
             "active_shell_stop_exclusive": active_stop,
             "shell_count": count,
             "native_particle_count": int(native_components["particle_count"]),
+            "native_halfset": int(half),
+            "recovar_prefix": prefix,
         },
         "denominator": {
             "native_sumw": native_sumw,
@@ -393,7 +396,8 @@ def main() -> None:
     parser.add_argument("--native-components-tsv", type=Path)
     parser.add_argument("--recovar-npz", type=Path, required=True)
     parser.add_argument("--iteration", type=int, required=True)
-    parser.add_argument("--half", type=int, choices=(1, 2), required=True)
+    parser.add_argument("--half", type=int, choices=(-1, 0, 1, 2), required=True)
+    parser.add_argument("--recovar-prefix")
     parser.add_argument("--image-size", type=int, default=128)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
@@ -406,6 +410,7 @@ def main() -> None:
         half=args.half,
         image_size=args.image_size,
         native_components_tsv=args.native_components_tsv,
+        recovar_prefix=args.recovar_prefix,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
