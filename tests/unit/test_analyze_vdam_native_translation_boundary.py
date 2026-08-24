@@ -12,6 +12,7 @@ from scripts.analyze_vdam_native_translation_boundary import (
     _native_crop_rows,
     _native_current_fft_rows,
     _preprocess_capture,
+    _top_pair_score_boundary,
 )
 
 pytestmark = pytest.mark.unit
@@ -69,6 +70,28 @@ def test_centered_diff2_replay_factors_out_constant_highres_addend():
     assert result["inferred_highres_mode"] == pytest.approx(0.25)
     assert result["inferred_highres_mode_count"] == 3
     assert result["inferred_highres_unique_count"] == 1
+
+
+def test_top_pair_score_boundary_reports_reversed_near_tie():
+    native_raw = np.asarray([10.0, 10.1, 12.0])
+    recovar_raw = np.asarray([-10.0002, -10.0997, -12.0])
+    native_posterior = np.asarray([0.5001, 0.4999, 1.0e-6])
+    recovar_posterior = np.asarray([0.4998, 0.5002, 1.0e-6])
+
+    result = _top_pair_score_boundary(
+        native_raw_diff2=native_raw,
+        recovar_raw_score=recovar_raw,
+        native_posterior=native_posterior,
+        recovar_posterior=recovar_posterior,
+        mapped_rotations=np.asarray([7, 8, 9]),
+        translation_ids=np.asarray([2, 3, 4]),
+    )
+
+    assert result["native_best"]["mapped_key"] == [7, 2]
+    assert result["native_second"]["mapped_key"] == [8, 3]
+    assert result["native_log_odds_best_over_second"] > 0.0
+    assert result["recovar_log_odds_same_order"] < 0.0
+    assert result["raw_pair_delta_sign_convention_residual"] == pytest.approx(-5.0e-4)
 
 
 def _write_flat_real(path, values):

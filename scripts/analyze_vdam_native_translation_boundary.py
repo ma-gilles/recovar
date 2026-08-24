@@ -83,6 +83,75 @@ def _centered_diff2_replay_stats(
     return result
 
 
+def _top_pair_score_boundary(
+    *,
+    native_raw_diff2: np.ndarray,
+    recovar_raw_score: np.ndarray,
+    native_posterior: np.ndarray,
+    recovar_posterior: np.ndarray,
+    mapped_rotations: np.ndarray,
+    translation_ids: np.ndarray,
+) -> dict[str, object]:
+    """Report the native top-two odds in one common candidate order."""
+
+    arrays = [
+        np.asarray(native_raw_diff2, dtype=np.float64).reshape(-1),
+        np.asarray(recovar_raw_score, dtype=np.float64).reshape(-1),
+        np.asarray(native_posterior, dtype=np.float64).reshape(-1),
+        np.asarray(recovar_posterior, dtype=np.float64).reshape(-1),
+        np.asarray(mapped_rotations, dtype=np.int64).reshape(-1),
+        np.asarray(translation_ids, dtype=np.int64).reshape(-1),
+    ]
+    if arrays[0].size < 2 or any(value.shape != arrays[0].shape for value in arrays[1:]):
+        raise ValueError("top-pair score boundary requires at least two aligned candidates")
+    native_raw, recovar_raw, native_prob, recovar_prob, rotations, translations = arrays
+    if not np.all(np.isfinite(native_raw)) or not np.all(np.isfinite(recovar_raw)):
+        raise ValueError("top-pair raw scores must be finite")
+    if (
+        not np.all(np.isfinite(native_prob))
+        or not np.all(np.isfinite(recovar_prob))
+        or np.any(native_prob < 0.0)
+        or np.any(recovar_prob < 0.0)
+    ):
+        raise ValueError("top-pair posterior comparison requires finite nonnegative probabilities")
+
+    first, second = np.argsort(-native_prob, kind="stable")[:2]
+    top_probabilities = (
+        native_prob[first],
+        native_prob[second],
+        recovar_prob[first],
+        recovar_prob[second],
+    )
+    if min(top_probabilities) <= 0.0:
+        raise ValueError("top-pair posterior probabilities must be positive in both engines")
+
+    def _row(index: int) -> dict[str, object]:
+        return {
+            "native_candidate_row": int(index),
+            "mapped_key": [int(rotations[index]), int(translations[index])],
+            "native_probability": float(native_prob[index]),
+            "recovar_probability": float(recovar_prob[index]),
+            "native_raw_diff2": float(native_raw[index]),
+            "recovar_raw_score": float(recovar_raw[index]),
+            "raw_sign_convention_residual": float(recovar_raw[index] + native_raw[index]),
+        }
+
+    native_log_odds = float(np.log(native_prob[first]) - np.log(native_prob[second]))
+    recovar_log_odds = float(np.log(recovar_prob[first]) - np.log(recovar_prob[second]))
+    native_raw_delta = float(native_raw[first] - native_raw[second])
+    recovar_raw_delta = float(recovar_raw[first] - recovar_raw[second])
+    return {
+        "native_best": _row(int(first)),
+        "native_second": _row(int(second)),
+        "native_log_odds_best_over_second": native_log_odds,
+        "recovar_log_odds_same_order": recovar_log_odds,
+        "recovar_minus_native_log_odds": recovar_log_odds - native_log_odds,
+        "native_raw_diff2_best_minus_second": native_raw_delta,
+        "recovar_raw_score_best_minus_second": recovar_raw_delta,
+        "raw_pair_delta_sign_convention_residual": recovar_raw_delta + native_raw_delta,
+    }
+
+
 def _flat_real_dump(path: Path) -> np.ndarray:
     """Read RELION's count-prefixed ``__relion_acc_dump_flat_real`` format."""
 
@@ -277,6 +346,13 @@ def analyze(
             raise ValueError("formal fine-score translation order differs from verbose capture")
         native_raw = np.asarray(selected["raw_diff2"], dtype=np.float64)
     live_raw = np.asarray(live["pass2_scores_raw"])[0, rotation, translation]
+    native_posterior = np.asarray(
+        _flat_memmap(native_dir / "pass1_exp_Mweight_posterior.bin"),
+        dtype=np.float64,
+    ) / float(_scalar(native_dir / "pass1_exp_sum_weight.bin"))
+    live_posterior = np.asarray(live["posterior"], dtype=np.float64)[
+        0, rotation, translation
+    ]
 
     native_fine_operand = None
     captured_highres_xi2_half = None
@@ -420,6 +496,14 @@ def analyze(
 
     expected_weighted = (native_shifted * native_weight[None]).astype(np.complex64)
     comparisons = {
+        "top_pair_score_boundary": _top_pair_score_boundary(
+            native_raw_diff2=native_raw,
+            recovar_raw_score=live_raw,
+            native_posterior=native_posterior,
+            recovar_posterior=live_posterior,
+            mapped_rotations=rotation,
+            translation_ids=translation,
+        ),
         "live_centered_raw_score_residual": _stats(_center(live_raw + native_raw)),
         "native_raw_diff2_vs_native_shifted_pair_replay": _centered_diff2_replay_stats(
             native_raw,
