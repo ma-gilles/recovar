@@ -167,6 +167,24 @@ def _local_debug_dump_label_suffix() -> str:
     return f"_{label}" if label else ""
 
 
+def _pass_label_suffix(debug_pass_label: str | None) -> str:
+    """Return a sanitized filename suffix identifying the calling pass.
+
+    Distinct from ``_local_debug_dump_label_suffix`` (a user-supplied,
+    env-driven label): this one is set by the caller in code, one per
+    logical call site, specifically so that two calls sharing the same
+    (image, current_size, debug_iteration) triple in one run -- e.g. local
+    search's pass-1 "parent" probe and its pass-2 fine call -- write to
+    distinct paths instead of the later one silently overwriting the
+    earlier one.
+    """
+
+    if not debug_pass_label:
+        return ""
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(debug_pass_label).strip())
+    return f"_{label}" if label else ""
+
+
 def _target_rows_to_numpy(array, target_rows: list[int], dtype):
     rows = np.asarray(target_rows, dtype=np.intp)
     try:
@@ -654,6 +672,7 @@ def maybe_write_debug_score_dump(
     n_significant_samples,
     current_size,
     debug_iteration,
+    debug_pass_label: str | None = None,
     shifted_score_split=None,
     shifted_recon_split=None,
     ctf2_over_nv_score=None,
@@ -666,7 +685,16 @@ def maybe_write_debug_score_dump(
     requested_current_sizes: set[int] | None = None,
     requested_iterations: set[int] | None = None,
 ):
-    """Dump one-image local score tensors for the requested original ids."""
+    """Dump one-image local score tensors for the requested original ids.
+
+    ``debug_pass_label``, when given, is sanitized and appended to the dump
+    filename (and stored in the payload). Pass a distinct label per logical
+    call site (e.g. local search's pass-1 "parent" probe vs. its pass-2 fine
+    call) whenever more than one call can share the same
+    (image, current_size, debug_iteration) triple in one run -- otherwise
+    the later call's ``np.savez_compressed`` silently overwrites the
+    earlier one at the same path.
+    """
 
     if dump_dir is None or not pending_targets:
         return pending_targets
@@ -809,8 +837,12 @@ def maybe_write_debug_score_dump(
 
         iteration_label = int(debug_iteration or -1)
         label_suffix = _local_debug_dump_label_suffix()
-        dump_path = dump_dir / f"local_score_it{iteration_label:03d}_image_{original_idx}{label_suffix}.npz"
+        pass_suffix = _pass_label_suffix(debug_pass_label)
+        dump_path = (
+            dump_dir / f"local_score_it{iteration_label:03d}_image_{original_idx}{pass_suffix}{label_suffix}.npz"
+        )
         payload = {
+            "debug_pass_label": np.array([str(debug_pass_label or "")]),
             "selected_global_image_indices": np.array([original_idx], dtype=np.int64),
             "selected_local_image_indices": np.array([local_idx], dtype=np.int64),
             "pass2_scores_raw": raw_scores[None, :, :],

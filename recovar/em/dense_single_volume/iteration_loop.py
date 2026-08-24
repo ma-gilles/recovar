@@ -172,7 +172,7 @@ from recovar.em.dense_single_volume.relion_worker_scale import (  # noqa: F401 -
 )
 from recovar.em.sampling import (  # noqa: F401  -- monkeypatched by tests/unit/test_refine_relion_mode.py
     _get_relion_rotation_grid_eulers_float64,
-    _relion_adaptive_pass1_rotations_f32,
+    _relion_adaptive_pass1_rotations,
     advance_relion_perturbation,
     advance_relion_perturbation_from_seed,
     apply_relion_rotation_perturbation,
@@ -1492,6 +1492,21 @@ def _diagnostic_float64_pass2_matches(debug_iteration: int | None) -> bool:
             "RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS must be comma-separated integers"
         ) from exc
     return int(debug_iteration) in requested
+
+
+def _coarse_rotation_grid_dtype() -> np.dtype:
+    """Dtype for ``_relion_rotation_grid_float32``'s pass-1 scorer matrices.
+
+    Pass 1 has no per-iteration diagnostic override (see
+    ``_local_search_precision_flags``), so this collapses the global
+    float64-scoring/-projections switches directly, matching RELION's
+    ``ACC_DOUBLE_PRECISION`` build where the host ``RFLOAT`` rotation
+    matrices are never narrowed to float before the (no-op) ``XFLOAT`` cast.
+    """
+
+    if _DENSE_EM_STATIC_KWARGS["use_float64_scoring"] or _DENSE_EM_STATIC_KWARGS["use_float64_projections"]:
+        return np.float64
+    return np.float32
 
 
 def _local_search_precision_flags(
@@ -3280,6 +3295,7 @@ def _score_half_local(
             reconstruct_significant_only=True,
             translation_prior_reference_translations=translation_prior_reference_translations,
             debug_iteration=local_debug_iteration,
+            debug_pass_label="pass1_parent",
             pass2_layout=parent_layout,
             return_best_pose_details=False,
             translation_prior_centers=trans_prior_center_for_engine,
@@ -3583,6 +3599,7 @@ def _score_half_local(
         stats_use_reconstruction_probs=local_reconstruct_significant_only,
         translation_prior_reference_translations=translation_prior_reference_translations,
         debug_iteration=local_debug_iteration,
+        debug_pass_label="pass2_final",
         pass2_layout=pass2_layout,
         return_best_pose_details=True,
         normalization_log_evidence=local_normalization_log_evidence,
@@ -4411,8 +4428,14 @@ def _apply_relion_healpix_order_oracle(state, target_order, *, iteration_number)
     return state
 
 
-def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom):
-    """Construct scorer grids directly from a schema-v3 captured sampling state."""
+def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom, dtype: np.dtype = np.float32):
+    """Construct scorer grids directly from a schema-v3 captured sampling state.
+
+    ``dtype`` controls only the returned rotation matrices, matching
+    ``_relion_rotation_grid_float32``'s policy: pass ``np.float64`` under
+    float64 scoring/projections so a restart from a sealed boundary keeps the
+    same coarse-grid precision as a fresh (non-restarted) run.
+    """
 
     state = sealed_sampling_state
     directions = np.asarray(state["directions_ipix"], dtype=np.int64)
@@ -4433,7 +4456,7 @@ def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom):
     )
     from recovar.em.sampling import _relion_mstep_rotations_from_eulers
 
-    rotations = _relion_mstep_rotations_from_eulers(source_eulers)
+    rotations = _relion_mstep_rotations_from_eulers(source_eulers, dtype=dtype)
     eulers = source_eulers.astype(np.float32)
     voxel_size = float(voxel_size_angstrom)
     if not np.isfinite(voxel_size) or voxel_size <= 0.0:
@@ -4762,6 +4785,7 @@ def _run_relion_iteration_loop(
         current_rotations, current_rotation_eulers, current_translations = _sealed_sampling_base_grids(
             sealed_sampling_state,
             voxel_size_angstrom=cryo.voxel_size,
+            dtype=_coarse_rotation_grid_dtype(),
         )
         base_translations = np.asarray(current_translations, dtype=np.float64)
         current_healpix_order = int(sealed_sampling_state["healpix_order_original"])
@@ -4776,7 +4800,9 @@ def _run_relion_iteration_loop(
             int(current_translations.shape[0]),
         )
     elif translations is None:
-        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
+        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(
+            current_healpix_order, dtype=_coarse_rotation_grid_dtype()
+        )
         base_translations = _translation_grid_for_class_count(
             schedule.init_translation_range,
             schedule.init_translation_step,
@@ -4787,7 +4813,9 @@ def _run_relion_iteration_loop(
             dtype=jnp.float32,
         )
     else:
-        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
+        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(
+            current_healpix_order, dtype=_coarse_rotation_grid_dtype()
+        )
         base_translations = np.asarray(translations, dtype=np.float64)
         current_translations = jnp.asarray(translations, dtype=jnp.float32)
     # Unperturbed base grid — `current_translations` may be replaced per-iter by
@@ -5743,7 +5771,9 @@ def _run_relion_iteration_loop(
                     current_healpix_order,
                     new_order,
                 )
-                current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(new_order)
+                current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(
+                    new_order, dtype=_coarse_rotation_grid_dtype()
+                )
                 current_healpix_order = new_order
             else:
                 logger.info(
@@ -5911,15 +5941,18 @@ def _run_relion_iteration_loop(
                 if _replay_meta is not None
                 else int(current_healpix_order)
             )
-            adaptive_pass1_rotations = _relion_adaptive_pass1_rotations_f32(
+            adaptive_pass1_use_float64 = bool(_DENSE_EM_STATIC_KWARGS["use_float64_scoring"])
+            adaptive_pass1_rotations = _relion_adaptive_pass1_rotations(
                 adaptive_pass1_source_eulers,
                 random_perturbation if (_replay_meta is not None or parity.perturb_factor > 0) else 0.0,
                 relion_angular_sampling_deg(adaptive_pass1_order, adaptive_oversampling=0),
+                use_float64=adaptive_pass1_use_float64,
             )
             if adaptive_pass1_rotations is not None:
                 logger.info(
-                    "RELION adaptive pass 1: using CUDA-built coarse scorer rotations; "
-                    "fine/M-step rotations remain host-generated"
+                    "RELION adaptive pass 1: using %s-built coarse scorer rotations; "
+                    "fine/M-step rotations remain host-generated",
+                    "double-precision host" if adaptive_pass1_use_float64 else "CUDA",
                 )
         # NOTE: previously this branch restricted the translation grid to a single
         # perturbed shift at iter 1 with --firstiter_cc. That was a misguided
@@ -8794,7 +8827,7 @@ def _run_relion_iteration_loop(
         final_current_rotation_eulers = current_rotation_eulers
     else:
         final_current_rotations, final_current_rotation_eulers = _relion_rotation_grid_float32(
-            final_current_healpix_order
+            final_current_healpix_order, dtype=_coarse_rotation_grid_dtype()
         )
     final_effective_rotations = final_current_rotations
     final_effective_rotation_eulers = np.asarray(final_current_rotation_eulers, dtype=np.float32)
@@ -9078,8 +9111,16 @@ def _run_relion_iteration_loop(
             if (not use_parent_expanded_final_local) and _precompute_exact_local_fine_grid_enabled(
                 final_local_search_order
             ):
+                _final_local_search_use_float64_scoring, _final_local_search_use_float64_projections = (
+                    _local_search_precision_flags(final_sampling_relion_iteration, pass_index=2)
+                )
                 final_local_search_rotations, final_local_search_rotation_eulers = _relion_rotation_grid_float32(
-                    final_local_search_order
+                    final_local_search_order,
+                    dtype=(
+                        np.float64
+                        if (_final_local_search_use_float64_scoring or _final_local_search_use_float64_projections)
+                        else np.float32
+                    ),
                 )
                 if final_perturbation_applied:
                     final_local_search_rotations, final_local_search_rotation_eulers = (

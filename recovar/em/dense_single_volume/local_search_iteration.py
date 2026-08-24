@@ -204,6 +204,7 @@ def _run_local_search_iteration(
     reconstruct_significant_only=True,
     translation_prior_reference_translations=None,
     debug_iteration=None,
+    debug_pass_label=None,
     pass2_layout=None,
     return_best_pose_details=False,
     normalization_log_z=None,
@@ -223,7 +224,16 @@ def _run_local_search_iteration(
     rotation_grid_mstep_rotations=None,
     generate_relion_mstep_rotations=False,
 ):
-    """Run exact local search over image-specific rotation neighborhoods."""
+    """Run exact local search over image-specific rotation neighborhoods.
+
+    ``debug_pass_label`` is diagnostic-only and forwarded verbatim to
+    ``run_local_em_exact``: pass a distinct label per call site whenever a
+    caller invokes this function more than once for the same image at the
+    same ``current_size``/``debug_iteration`` (e.g. local search's pass-1
+    "parent" probe vs. its pass-2 fine call), or the later call's
+    ``RECOVAR_LOCAL_SCORE_DUMP_*`` output silently overwrites the earlier
+    one at the same path.
+    """
     # Indirection through the iteration_loop module so test monkeypatches that
     # target ``iteration_loop.build_local_hypothesis_layout``,
     # ``iteration_loop.run_local_em_exact``, etc. continue to win at the call
@@ -494,6 +504,7 @@ def _run_local_search_iteration(
             # governed by adaptive_fraction only; do not reapply the cap there.
             max_significants=max_significants if apply_max_significants_to_support else -1,
             debug_iteration=debug_iteration,
+            debug_pass_label=debug_pass_label,
             return_best_pose_details=return_best_pose_details,
             normalization_log_z=normalization_log_z,
             normalization_log_evidence=normalization_log_evidence,

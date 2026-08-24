@@ -49,8 +49,17 @@ def _relion_half_plane_shell_counts(image_shape):
     return counts
 
 
-def _relion_rotation_grid_float32(healpix_order: int):
-    """Return scorer matrices/eulers using RELION's accelerated-path policy."""
+def _relion_rotation_grid_float32(healpix_order: int, *, dtype: np.dtype = np.float32):
+    """Return scorer matrices/eulers using RELION's accelerated-path policy.
+
+    ``dtype`` controls only the returned rotation *matrices*. Under
+    ``ACC_DOUBLE_PRECISION`` RELION's host-side ``RFLOAT -> XFLOAT`` cast is a
+    no-op, so a caller running float64 scoring should pass ``dtype=np.float64``
+    here to keep the coarse scorer matrices at full precision instead of the
+    single-precision default. The returned ``eulers`` stay float32 regardless
+    -- they are RELION's public per-particle metadata angles, not scoring
+    operands, and RELION always serializes them as float.
+    """
     # Indirection through iteration_loop module so test monkeypatches on
     # ``iteration_loop.get_relion_rotation_grid`` / ``get_relion_rotation_grid_eulers``
     # win at the call site.
@@ -64,7 +73,7 @@ def _relion_rotation_grid_float32(healpix_order: int):
     # them to the device.  Preserve source Euler precision until that cast.
     from recovar.em.sampling import _relion_mstep_rotations_from_eulers
 
-    rotations = _relion_mstep_rotations_from_eulers(source_eulers)
+    rotations = _relion_mstep_rotations_from_eulers(source_eulers, dtype=dtype)
     return rotations, eulers
 
 

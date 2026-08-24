@@ -252,6 +252,76 @@ def test_local_search_precision_global_switches_upgrade_both_passes(monkeypatch)
     assert iteration_loop_module._local_search_precision_flags(12, pass_index=2) == (True, True)
 
 
+def test_coarse_rotation_grid_dtype_tracks_global_float64_switches(monkeypatch):
+    """The coarse pass-1 scorer grid has no per-iteration diagnostic path.
+
+    Unlike ``_local_search_precision_flags``, this dtype selector must react
+    to either global switch alone -- there is no pass-2-only diagnostic
+    override to reason about at pass 1.
+    """
+
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", False)
+    assert iteration_loop_module._coarse_rotation_grid_dtype() == np.float32
+
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
+    assert iteration_loop_module._coarse_rotation_grid_dtype() == np.float64
+
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", True)
+    assert iteration_loop_module._coarse_rotation_grid_dtype() == np.float64
+
+
+def test_relion_rotation_grid_float32_honors_explicit_float64_dtype():
+    """``_relion_rotation_grid_float32``'s scorer matrices, not its eulers, follow ``dtype``.
+
+    Regression for the bug the coarse pass-1 grid shared with the already-fixed
+    ``_relion_adaptive_pass1_rotations``/``_relion_mstep_rotations_from_eulers``:
+    an unconditional ``.astype(np.float32)`` on the scorer rotation matrices
+    even when the caller runs float64 scoring, though RELION's own
+    ``ACC_DOUBLE_PRECISION`` build never narrows this matrix.
+    """
+
+    rotations_f32, eulers_f32 = iteration_loop_module._relion_rotation_grid_float32(2)
+    rotations_f64, eulers_f64 = iteration_loop_module._relion_rotation_grid_float32(2, dtype=np.float64)
+
+    assert rotations_f32.dtype == np.float32
+    assert rotations_f64.dtype == np.float64
+    np.testing.assert_allclose(rotations_f32, rotations_f64, atol=1e-6, rtol=0.0)
+    # The "public" eulers are RELION metadata, not a scoring operand -- they
+    # stay float32 regardless of the scorer-matrix dtype.
+    assert eulers_f32.dtype == np.float32
+    assert eulers_f64.dtype == np.float32
+    np.testing.assert_array_equal(eulers_f32, eulers_f64)
+
+
+def test_sealed_sampling_base_grids_honors_explicit_float64_dtype():
+    """A restart from a schema-v3 sealed boundary gets the same dtype control."""
+
+    sealed_state = {
+        "directions_ipix": np.array([0, 1], dtype=np.int64),
+        "rot_angles_deg": np.array([10.0, 190.0], dtype=np.float64),
+        "tilt_angles_deg": np.array([37.0, 63.0], dtype=np.float64),
+        "psi_angles_deg": np.array([0.0, 120.0, 240.0], dtype=np.float64),
+        "translations_x_angstrom": np.array([0.0, 1.5], dtype=np.float64),
+        "translations_y_angstrom": np.array([0.0, -1.5], dtype=np.float64),
+    }
+
+    rotations_f32, eulers_f32, _ = iteration_loop_module._sealed_sampling_base_grids(
+        sealed_state, voxel_size_angstrom=1.0
+    )
+    rotations_f64, eulers_f64, _ = iteration_loop_module._sealed_sampling_base_grids(
+        sealed_state, voxel_size_angstrom=1.0, dtype=np.float64
+    )
+
+    assert rotations_f32.dtype == np.float32
+    assert rotations_f64.dtype == np.float64
+    np.testing.assert_allclose(rotations_f32, rotations_f64, atol=1e-6, rtol=0.0)
+    assert eulers_f32.dtype == np.float32
+    assert eulers_f64.dtype == np.float32
+    np.testing.assert_array_equal(eulers_f32, eulers_f64)
+
+
 def test_local_search_precision_rejects_unknown_pass(monkeypatch):
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
     with pytest.raises(ValueError, match="pass_index"):
@@ -9733,7 +9803,7 @@ class TestRelionModeSmokeTest:
         monkeypatch.setattr(
             iteration_loop_module,
             "_relion_rotation_grid_float32",
-            lambda _order: (
+            lambda _order, dtype=None: (
                 np.asarray(rotations, dtype=np.float32),
                 custom_eulers,
             ),
@@ -9915,7 +9985,8 @@ class TestRelionModeSmokeTest:
         def fake_rotation_grid_n_in_planes(_order):
             return 1
 
-        def fake_relion_rotation_grid_float32(order):
+        def fake_relion_rotation_grid_float32(order, dtype=None):
+            del dtype
             n_rotations = fake_rotation_grid_size(order)
             return (
                 np.repeat(np.eye(3, dtype=np.float32)[None, :, :], n_rotations, axis=0),
@@ -12889,7 +12960,7 @@ class TestRelionModeSmokeTest:
         monkeypatch.setattr(
             refine_mod,
             "_relion_rotation_grid_float32",
-            lambda _order: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
+            lambda _order, dtype=None: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
         )
         monkeypatch.setattr(
             refine_mod,
@@ -13040,7 +13111,7 @@ class TestRelionModeSmokeTest:
         monkeypatch.setattr(
             refine_mod,
             "_relion_rotation_grid_float32",
-            lambda _order: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
+            lambda _order, dtype=None: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
         )
 
         result = refine_single_volume(

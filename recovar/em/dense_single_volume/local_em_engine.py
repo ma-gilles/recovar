@@ -1890,6 +1890,7 @@ def run_local_em_exact(
     adaptive_fraction: float = 0.999,
     max_significants: int = -1,
     debug_iteration: int | None = None,
+    debug_pass_label: str | None = None,
     return_best_pose_details: bool = False,
     normalization_log_z: np.ndarray | None = None,
     class_log_prior: float = 0.0,
@@ -1904,7 +1905,16 @@ def run_local_em_exact(
     return_significant_counts: bool = False,
     score_only: bool = False,
 ):
-    """Run exact local EM over per-image local hypothesis sets."""
+    """Run exact local EM over per-image local hypothesis sets.
+
+    ``debug_pass_label`` is diagnostic-only: it is appended verbatim to
+    ``RECOVAR_LOCAL_SCORE_DUMP_*`` filenames (see
+    ``local_debug.maybe_write_debug_score_dump``). Callers that invoke this
+    function more than once per iteration for the *same* image/current_size/
+    debug_iteration (e.g. local search's pass-1 "parent" probe followed by
+    its pass-2 fine call) must pass distinct labels, or the later call's
+    dump silently overwrites the earlier one at the same path.
+    """
 
     score_only = bool(score_only)
     include_unweighted_norm_high_shell = bool(include_unweighted_norm_high_shell)
@@ -3328,6 +3338,7 @@ def run_local_em_exact(
                         n_significant_samples=n_significant_samples_unpadded,
                         current_size=current_size,
                         debug_iteration=debug_iteration,
+                        debug_pass_label=debug_pass_label,
                         shifted_score_split=debug_shifted_score_split,
                         shifted_recon_split=debug_shifted_recon_split,
                         ctf2_over_nv_score=debug_ctf2_over_nv_score,
@@ -4312,6 +4323,7 @@ def run_local_em_exact(
                 n_significant_samples=n_significant_samples,
                 current_size=current_size,
                 debug_iteration=debug_iteration,
+                debug_pass_label=debug_pass_label,
                 shifted_score_split=shifted_score.reshape(batch_size, n_trans, -1),
                 shifted_recon_split=shifted_recon_split,
                 ctf2_over_nv_score=ctf2_over_nv_score,
