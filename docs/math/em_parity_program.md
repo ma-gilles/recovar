@@ -14,6 +14,28 @@ as the next product milestone rather than mixing it into the first closure.
 
 ## VDAM active experiment — 2026-08-20
 
+Current continuation (2026-08-24): K=1 GUI-default qualification is running
+from immutable production head `1e499798c`.  The first completed 200-iteration
+cases (`vdam-gf01`, `vdam-gf02`, `vdam-gf03`, and `vdam-gf05`) all fail the
+unchanged `0.999` cross-engine FSC-AUC gate, first at iterations 31, 82, 68,
+and 33.  Independent native-RELION triplets show that `vdam-gf02`,
+`vdam-gf03`, and `vdam-gf05` leave their sampled native-repeat envelopes;
+`vdam-gf03` also misses the `-0.002` GT-delta gate.  These are active parity
+failures, not tolerance candidates.  A bounded-memory change has carried the
+severe `vdam-gf20` trajectory beyond its former iteration-110 OOM boundary.
+Runtime remains 2.36--2.88x RELION on the latest completed cases.
+
+The one active numerical hypothesis is that VDAM's residual BPref numerator
+must form and reduce the source operands in RELION CUDA order rather than
+subtracting a separately reduced projected-reference term.  Isolated commit
+`99681a33b` implements that source-order CUDA reduction on top of the accepted
+memory head and is undergoing a full 200-iteration `vdam-gf01` frozen audit
+(Slurm `12879549_1`).  It must improve the frozen trajectory without losing
+the memory bound before it can replace production `1e499798c`.  In parallel,
+the immutable 22-case matrix, severe-memory case, and controlled same-GPU
+repeat panel continue as evidence collection; generic RECOVAR full/long tests
+are deliberately outside this EM-only validation scope.
+
 The native InitialModel/VDAM implementation checkpoint is
 `5a4c57839e50a46e47b2d25efb8d55744db04871`, on top of PR #158 head
 `b10412ca`.  Iteration-0 bootstrap state is exact, and identity-aligned
