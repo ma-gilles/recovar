@@ -82,19 +82,44 @@ control's iteration-73 failure.  It continues only to collect terminal and
 runtime evidence.  The experimental commits remain unpushed until their
 complete 0--200 audits and runtime measurements finish.
 
-The terminal fused particle-state audit gives the next exact boundary:
-pose and translation assignments match for all 3,000 particles through
-iteration 32, then iteration 33 first differs only for
-`1003@particles.128.mrcs` (pose error `3.75` degrees, translation error
-`3.00` Angstrom, Pmax absolute error `1.8e-5`).  A first capture submission
-`12889423` failed its intentionally exact source-head provenance check before
-science, and retry `12889446` was rejected by the fail-closed native replay
-gate because the RELION continuation did not reproduce the sealed iteration-33
-particle state.  Neither is parity evidence.  Fresh paired full-schedule job
-`12889537_1` now captures native raw scores/posterior and RECOVAR's fused
-posterior plus score operands for that particle at iteration 33; it also
-produces an independent complete 0--200 trajectory rather than changing the
-scientific schedule with a shortened `--iter` value.
+The authoritative full-schedule boundary is the sealed job `12869234`, not a
+continuation.  It used RELION's true 200-iteration schedule and exact
+iteration-32 optimiser plus the pinned `0.322510` perturbation.  Pose and
+translation assignments match for all 3,000 particles through iteration 32;
+iteration 33 first differs only for `1003@particles.128.mrcs` (pose error
+`3.75` degrees, translation error `3.00` Angstrom, Pmax absolute error about
+`2e-5`).  Its native and candidate posterior supports are exactly the same
+298 tuples.  The native top-pair log odds are `+0.0004577651`, while RECOVAR
+reverses their order at `-0.0001525879` (error `-0.000610353`).  Replaying
+only the live noise-derived score weights moves that pair by
+`+0.00048828125`; replaying only the live reference moves it by
+`+0.0001220703125`; the live image contributes exactly zero to the pair.
+Incoming iteration-32 `sigma2_noise` relative L2 is `1.994818e-5`, and the
+top-pair raw-score residual is `-0.0005912781`.  Noise accumulation is
+therefore the dominant causal defect, with a smaller inherited reference-map
+contribution.  This also explains why fused scatter and inline projection do
+not close the trajectory.
+
+The earliest deterministic precursor is already visible at iteration 2,
+shell 15: native raw numerator `0.124609` versus candidate
+`0.1246245131`, a `+1.55e-5` error, while the candidate sum-weight ratio is
+`0.999999589`.  Independent native repeat `12890438` follows the same true
+200-iteration schedule.  Audit `12890696` confirms all 3,000 poses and
+translations are identical between the two native runs through iterations 1
+and 2.  Their iteration-2 shell-15 raw totals are identical at the native
+capture's printed precision; across per-particle direct-residual rows the
+relative L2 is `4.80e-7`, but signed shell-15 differences cancel to less than
+`1.1e-19`.  The RECOVAR numerator error is consequently outside the observed
+native-repeat floor.  The next implementation target is source-faithful
+per-particle Wavg noise sufficient-statistic formation and accumulation, not
+another projector/scatter composition.
+
+Capture submissions `12889423` and `12889446` remain rejected by fail-closed
+provenance/native-state gates and provide no parity evidence.  Fresh paired
+full-schedule job `12889537_1` follows a different native trajectory by
+iteration 33 (its target posterior has 1,280 rather than 298 candidates), so
+it is retained only as an independent 0--200 repeat, not as causal evidence
+for the sealed particle-1003 boundary.
 
 In parallel, the immutable 22-case
 matrix, severe-memory case, and controlled same-GPU repeat panel continue as
