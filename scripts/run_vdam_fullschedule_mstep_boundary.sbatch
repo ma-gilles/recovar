@@ -72,6 +72,8 @@ mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CA
 
 gpu_uuid_before=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
+ORIGINAL_PATH=${PATH}
+ORIGINAL_LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}
 
 source /etc/profile.d/modules.sh
 set +u
@@ -154,6 +156,16 @@ done
 gpu_uuid_after_relion=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 test "${gpu_uuid_after_relion}" = "${gpu_uuid_before}"
 
+set +u
+module purge
+set -u
+export PATH=${ORIGINAL_PATH}
+if [[ -n "${ORIGINAL_LD_LIBRARY_PATH}" ]]; then
+  export LD_LIBRARY_PATH=${ORIGINAL_LD_LIBRARY_PATH}
+else
+  unset LD_LIBRARY_PATH
+fi
+unset MPI_ROOT CUDA_HOME OMPI_MCA_orte_tmpdir_base OMPI_MCA_shmem_mmap_enable_nfs_warning
 unset RECOVAR_DEBUG_DUMP_DIR RECOVAR_DEBUG_DUMP_MSTEP_ITER
 unset RELION_ACC_DUMP_DIR RELION_ACC_DUMP_PART_ID RELION_ACC_DUMP_ITER RELION_ACC_DUMP_VERBOSE
 export RECOVAR_MSTEP_DUMP_DIR=${RECOVAR_MSTEP}
