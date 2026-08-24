@@ -18,13 +18,14 @@ DEFAULT_PROJECTION_MAX_R = object()
 _RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP"
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4))
+@partial(jax.jit, static_argnums=(2, 3, 4, 5))
 def project_relion_projector_half_spectrum(
     volume_relion_half,
     rotations_block,
     image_shape,
     r_max: int,
     padding_factor: int = 1,
+    relion_acc_double_floorf_quirk: bool = False,
 ):
     """Forward-project RELION Projector storage into full half-image layout.
 
@@ -32,6 +33,10 @@ def project_relion_projector_half_spectrum(
     recovar's centered full Fourier volume. This path is used by InitialModel
     parity code where RELION's pass-1/pass-2 scores must consume the exact
     ``PPref`` representation.
+
+    ``relion_acc_double_floorf_quirk`` reproduces RELION's GPU-accelerated
+    projector's float32-narrowing floor (see ``recovar.core.relion_project``
+    module docstring); it is off by default.
     """
 
     from recovar.core.relion_project import relion_project_half
@@ -43,13 +48,14 @@ def project_relion_projector_half_spectrum(
         image_size,
         int(r_max),
         int(padding_factor),
+        relion_acc_double_floorf_quirk,
     )
     proj_fftw = jax.vmap(project_one)(rotations_block)
 
     return proj_fftw.reshape((rotations_block.shape[0], -1))
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5))
+@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
 def project_relion_projector_half_spectrum_centered_rows(
     volume_relion_half,
     rotations_block,
@@ -57,6 +63,7 @@ def project_relion_projector_half_spectrum_centered_rows(
     r_max: int,
     padding_factor: int = 1,
     projector_output_size: int | None = None,
+    relion_acc_double_floorf_quirk: bool = False,
 ) -> jnp.ndarray:
     """Project RELION ``PPref`` data and return recovar-centered row order.
 
@@ -79,6 +86,7 @@ def project_relion_projector_half_spectrum_centered_rows(
         (projector_image_size, projector_image_size),
         int(r_max),
         int(padding_factor),
+        relion_acc_double_floorf_quirk,
     ).reshape((rotations_block.shape[0], projector_image_size, projector_image_size // 2 + 1))
     if projector_image_size == image_size:
         row_order = jnp.fft.fftshift(jnp.arange(image_size, dtype=jnp.int32))
@@ -100,7 +108,7 @@ def project_relion_projector_half_spectrum_centered_rows(
     return proj_full.at[:, full_indices].set(proj_fftw.reshape((rotations_block.shape[0], -1)))
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5))
+@partial(jax.jit, static_argnums=(2, 3, 4, 5, 7))
 def project_relion_projector_half_spectrum_centered_rows_at_indices(
     volume_relion_half,
     rotations_block,
@@ -109,6 +117,7 @@ def project_relion_projector_half_spectrum_centered_rows_at_indices(
     padding_factor: int = 1,
     projector_output_size: int | None = None,
     pixel_indices=None,
+    relion_acc_double_floorf_quirk: bool = False,
 ) -> jnp.ndarray:
     """Project RELION ``PPref`` data and gather centered-row half-image pixels.
 
@@ -129,6 +138,7 @@ def project_relion_projector_half_spectrum_centered_rows_at_indices(
         (projector_image_size, projector_image_size),
         int(r_max),
         int(padding_factor),
+        relion_acc_double_floorf_quirk,
     ).reshape((rotations_block.shape[0], projector_image_size, projector_image_size // 2 + 1))
 
     indices = jnp.asarray(pixel_indices, dtype=jnp.int32)
@@ -295,6 +305,7 @@ def compute_relion_projector_projections_block(
     projector_output_size: int | None = None,
     pixel_indices=None,
     relion_texture_interp: bool | None = None,
+    relion_acc_double_floorf_quirk: bool = False,
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block.
 
@@ -302,6 +313,10 @@ def compute_relion_projector_projections_block(
     custom CUDA projector is available.  Set
     ``RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP=0`` to force the manual/JAX
     diagnostic fallback.
+
+    ``relion_acc_double_floorf_quirk`` only applies to that manual/JAX
+    fallback (the texture path is float32-only hardware interpolation, unrelated
+    to this quirk); see ``recovar.core.relion_project`` module docstring.
     """
 
     image_size = int(image_shape[0])
@@ -356,6 +371,7 @@ def compute_relion_projector_projections_block(
             int(padding_factor),
             projector_output_size,
             pixel_indices,
+            relion_acc_double_floorf_quirk,
         )
     elif centered_rows:
         proj_half = project_relion_projector_half_spectrum_centered_rows(
@@ -365,6 +381,7 @@ def compute_relion_projector_projections_block(
             int(r_max),
             int(padding_factor),
             projector_output_size,
+            relion_acc_double_floorf_quirk,
         )
     else:
         proj_half = project_relion_projector_half_spectrum(
@@ -373,6 +390,7 @@ def compute_relion_projector_projections_block(
             image_shape,
             int(r_max),
             int(padding_factor),
+            relion_acc_double_floorf_quirk,
         )
     if dense_scale:
         token = (os.environ.get("RECOVAR_DENSE_MEANS_SCALE") or "-N2").strip()
@@ -480,12 +498,19 @@ def compute_projections_block(
     return_abs2: bool = True,
     relion_texture_interp: bool = True,
     force_jax: bool = False,
+    relion_acc_double_floorf_quirk: bool = False,  # noqa: ARG001 - accepted, not applicable here
 ):
     """Forward-slice one rotation block and optionally compute ``|proj|^2``.
 
     Dense scoring and noise accumulation need ``|proj|^2`` repeatedly enough to
     materialize it. Exact-local paths can pass ``return_abs2=False`` and compute
     norms on demand when that saves memory.
+
+    ``relion_acc_double_floorf_quirk`` is accepted only so callers can pass a
+    shared ``projection_kwargs`` dict without filtering; this path slices
+    recovar's own centered-grid volume (not RELION ``Projector::data``), so
+    the RELION GPU floorf-narrowing quirk (``recovar.core.relion_project``)
+    does not apply here and this flag has no effect.
     """
     proj_half = project_half_spectrum(
         volume,

@@ -669,6 +669,7 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     projection_padding_factor: int,
     projection_relion_texture_interp: bool | None,
     projection_pixel_indices,
+    projection_relion_acc_double_floorf_quirk: bool = False,
     projector_output_size: int,
     cache_row_capacity: int,
     max_global_rotation_id: int,
@@ -736,6 +737,7 @@ def _build_exact_local_relion_projection_cache_for_buckets(
             centered_rows=True,
             dense_scale=True,
             relion_texture_interp=projection_relion_texture_interp,
+            relion_acc_double_floorf_quirk=projection_relion_acc_double_floorf_quirk,
             projector_output_size=int(projector_output_size) if int(projector_output_size) > 0 else None,
             pixel_indices=projection_pixel_indices,
         )
@@ -908,6 +910,7 @@ def _project_local_bucket(
                 f"got {relion_projector_half.shape}",
             )
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
+        relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
             projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
@@ -928,6 +931,7 @@ def _project_local_bucket(
             centered_rows=True,
             dense_scale=True,
             relion_texture_interp=relion_texture_interp,
+            relion_acc_double_floorf_quirk=relion_acc_double_floorf_quirk,
             **projector_kwargs,
         )
         if window_spec.use_window:
@@ -1075,6 +1079,7 @@ def _project_packed_noise_rows(
                 f"got {relion_projector_half.shape}",
             )
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
+        relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
             projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
@@ -1095,6 +1100,7 @@ def _project_packed_noise_rows(
             centered_rows=True,
             dense_scale=True,
             relion_texture_interp=relion_texture_interp,
+            relion_acc_double_floorf_quirk=relion_acc_double_floorf_quirk,
             **projector_kwargs,
         )
         flat_proj_for_noise = proj_relion_flat
@@ -1861,6 +1867,7 @@ def run_local_em_exact(
     use_float64_normalization: bool = True,
     use_float64_projections: bool = False,
     projection_relion_texture_interp: bool = False,
+    projection_relion_acc_double_floorf_quirk: bool = False,
     projection_force_jax: bool = False,
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
@@ -2106,6 +2113,7 @@ def run_local_em_exact(
     n_windowed = window_spec.n_score
     projection_kwargs = window_spec.projection_kwargs()
     projection_kwargs["relion_texture_interp"] = projection_relion_texture_interp
+    projection_kwargs["relion_acc_double_floorf_quirk"] = projection_relion_acc_double_floorf_quirk
     projection_kwargs["force_jax"] = bool(projection_force_jax)
     projection_mode = _local_projection_mode(window_spec, projection_kwargs, relion_projector_half)
 
@@ -2707,6 +2715,7 @@ def run_local_em_exact(
                 relion_projector_r_max=int(relion_projector_r_max_big_jit),
                 projection_padding_factor=int(projection_padding_factor),
                 projection_relion_texture_interp=projection_relion_texture_interp,
+                projection_relion_acc_double_floorf_quirk=projection_relion_acc_double_floorf_quirk,
                 projection_pixel_indices=jnp.asarray(window_spec.projection_indices, dtype=jnp.int32),
                 projector_output_size=int(big_jit_relion_projector_output_size),
                 cache_row_capacity=int(relion_projection_cache_capacity_rows),

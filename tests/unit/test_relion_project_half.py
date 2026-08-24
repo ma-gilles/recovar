@@ -206,3 +206,110 @@ def test_centered_row_projector_can_use_explicit_coarse_output_size():
             rtol=1e-12,
             atol=1e-12,
         )
+
+
+def test_relion_acc_double_floorf_quirk_matches_default_away_from_integer_boundary():
+    """Away from an integer coordinate, the GPU floorf-narrowing quirk is a no-op."""
+    import jax.numpy as jnp
+
+    from recovar.core.relion_project import relion_project_half
+
+    n = 16
+    rng = np.random.default_rng(23)
+    volume = (
+        rng.normal(size=(n, n, n // 2 + 1)) + 1j * rng.normal(size=(n, n, n // 2 + 1))
+    ).astype(np.complex128)
+    # A generic (non-axis-aligned) rotation, far from any integer-coordinate edge case.
+    rotation = np.asarray(
+        [
+            [0.36, -0.48, 0.8],
+            [0.8, 0.6, 0.0],
+            [-0.48, 0.64, 0.6],
+        ],
+        dtype=np.float64,
+    )
+
+    default = np.asarray(
+        relion_project_half(jnp.asarray(volume), jnp.asarray(rotation), n, r_max=n // 2, padding_factor=1)
+    )
+    quirked = np.asarray(
+        relion_project_half(
+            jnp.asarray(volume),
+            jnp.asarray(rotation),
+            n,
+            r_max=n // 2,
+            padding_factor=1,
+            relion_acc_double_floorf_quirk=True,
+        )
+    )
+    np.testing.assert_allclose(quirked, default, rtol=1e-6, atol=1e-6)
+
+
+def test_relion_acc_double_floorf_quirk_flips_bucket_at_integer_boundary():
+    """RELION's GPU no_tex3D/BP.cuh floor with float32 ``floorf`` on the double
+    coordinate, unconditionally, even under ``ACC_DOUBLE_PRECISION``
+    (relion/src/acc/cuda/cuda_kernels/cuda_device_utils.cuh, BP.cuh). A
+    coordinate within a float32 ULP of an integer therefore floors to a
+    *different* integer than a native double floor would give, selecting a
+    different pair of interpolation neighbors and a fractional weight
+    computed against that (now wrong) integer -- not merely a smaller
+    rounding error.
+    """
+    import jax.numpy as jnp
+
+    from recovar.core.relion_project import relion_project_half
+
+    n = 32
+    # xp = 10 - 4e-7: float64 floors to 9. Cast to float32, this value rounds
+    # up to exactly 10.0 (float32 ULP at this magnitude is ~9.5e-7, so 4e-7 is
+    # within half a ULP) and floors to 10 -- a different integer bucket.
+    offset = 4e-7
+    xp0 = 10.0 - offset
+    assert np.floor(xp0) == 9.0
+    assert np.floor(np.float64(np.float32(xp0))) == 10.0
+
+    volume = np.zeros((n, n, n // 2 + 1), dtype=np.complex128)
+    y0r = n // 2  # yp = 0 -> y0 = 0 -> y0r = 0 - starting_y = n//2
+    z0r = n // 2
+    # A sharp spike at x-index 10 so the two floor choices (bracket [9,10] vs
+    # [10,11]) give visibly different interpolated values.
+    volume[z0r, y0r, 9] = 0.0
+    volume[z0r, y0r, 10] = 1.0
+    volume[z0r, y0r, 11] = 0.0
+
+    # R_relion is a synthetic (non-orthonormal) matrix, chosen only to make
+    # xp land exactly on xp0 at pixel (x=1, y=0) with yp = zp = 0.
+    rotation = np.asarray(
+        [
+            [xp0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+    default = np.asarray(
+        relion_project_half(jnp.asarray(volume), jnp.asarray(rotation), n, r_max=n // 2, padding_factor=1)
+    )
+    quirked = np.asarray(
+        relion_project_half(
+            jnp.asarray(volume),
+            jnp.asarray(rotation),
+            n,
+            r_max=n // 2,
+            padding_factor=1,
+            relion_acc_double_floorf_quirk=True,
+        )
+    )
+
+    fx_off = xp0 - 9
+    fx_on = xp0 - 10
+    expected_default = 0.0 + fx_off * (1.0 - 0.0)
+    expected_quirked = 1.0 + fx_on * (0.0 - 1.0)
+
+    np.testing.assert_allclose(default[0, 1], expected_default, rtol=0.0, atol=1e-12)
+    np.testing.assert_allclose(quirked[0, 1], expected_quirked, rtol=0.0, atol=1e-12)
+    # The two floor choices select different neighbor pairs; the resulting
+    # values differ by ~8e-7 here -- far above float64 rounding noise (~1e-15)
+    # and proof the flag actually changes which bucket is used.
+    assert abs(quirked[0, 1] - default[0, 1]) > 1e-8

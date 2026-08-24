@@ -1465,6 +1465,19 @@ _DENSE_EM_STATIC_KWARGS: dict = {
     "sparse_pass2": False,
 }
 
+# Off by default: reproduces RELION's GPU-accelerated projector/backprojector
+# narrowing coordinates to float32 before flooring, unconditionally, even under
+# ``ACC_DOUBLE_PRECISION`` (see ``recovar.core.relion_project`` module
+# docstring). Set ``RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK=1`` to bit-match
+# that GPU-double quirk in the local-search fine-pass projector fallback (it
+# only has an effect when the texture path is unavailable, e.g. under
+# ``use_float64_scoring``/``use_float64_projections``, since CUDA textures
+# cannot hold complex128).
+RELION_ACC_DOUBLE_FLOORF_QUIRK = bool(
+    _os_for_f64.environ.get("RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK", "0").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+
 
 def _diagnostic_float64_pass2_matches(debug_iteration: int | None) -> bool:
     """Select genuine-f64 pass 2 without perturbing an earlier f32 boundary."""
@@ -3242,6 +3255,7 @@ def _score_half_local(
             relion_projector_half=relion_projector_half,
             relion_projector_r_max=relion_projector_r_max,
             projection_relion_texture_interp=False,
+            projection_relion_acc_double_floorf_quirk=RELION_ACC_DOUBLE_FLOORF_QUIRK,
             use_float64_scoring=parent_use_float64_scoring,
             use_float64_projections=parent_use_float64_projections,
             do_gridding_correction=True,
@@ -3542,6 +3556,7 @@ def _score_half_local(
         # uses the manual supplied-PPref projector above, while fine pass 2
         # follows the user-switchable texture default.
         projection_relion_texture_interp=None,
+        projection_relion_acc_double_floorf_quirk=RELION_ACC_DOUBLE_FLOORF_QUIRK,
         use_float64_scoring=fine_use_float64_scoring,
         use_float64_projections=fine_use_float64_projections,
         do_gridding_correction=True,
