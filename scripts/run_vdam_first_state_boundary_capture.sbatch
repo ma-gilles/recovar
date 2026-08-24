@@ -31,6 +31,8 @@ TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-1003}
 TARGET_RELION_PERTURBATION=${TARGET_RELION_PERTURBATION:-0.322510}
 CAPTURE_LOCAL_SCORE=${CAPTURE_LOCAL_SCORE:-0}
 case "${CAPTURE_LOCAL_SCORE}" in 0|1) ;; *) echo "CAPTURE_LOCAL_SCORE must be 0 or 1" >&2; exit 2 ;; esac
+CAPTURE_NATIVE_REPLAY=${CAPTURE_NATIVE_REPLAY:-1}
+case "${CAPTURE_NATIVE_REPLAY}" in 0|1) ;; *) echo "CAPTURE_NATIVE_REPLAY must be 0 or 1" >&2; exit 2 ;; esac
 RELION_BINARY=${RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
 REFERENCE_RELION_DIR=${REFERENCE_RELION_DIR:-$(dirname "${RELION_OPTIMISER}")}
 NATIVE_ROOT=${OUTPUT_ROOT}/native_continuation
@@ -56,32 +58,33 @@ test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA25
 test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = "${EXPECTED_RELION_BIND_SHA256}"
 mkdir -p "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${PROVENANCE}"
 test -z "$(find "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${PROVENANCE}" -mindepth 1 -print -quit)"
-touch "${NATIVE_ROOT}/SAFE_TO_DELETE"
 
 gpu_uuid_before=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 case "${gpu_uuid_before}" in GPU-*) ;; *) echo "invalid GPU UUID: ${gpu_uuid_before}" >&2; exit 2 ;; esac
 
-VDAM_RELION_CONT_ROOT=${NATIVE_ROOT} \
-VDAM_RELION_CONT_INPUT_DIR=${DATA_DIR} \
-VDAM_RELION_CONT_OPTIMISER=${RELION_OPTIMISER} \
-VDAM_RELION_CONT_ITERATION=${TARGET_ITERATION} \
-VDAM_RELION_CONT_PART_ID=${TARGET_RELION_PART_ID} \
-VDAM_RELION_CONT_STACK_INDEX=${TARGET_STACK_INDEX} \
-VDAM_RELION_CONT_CAPTURE=1 \
-VDAM_RELION_CONT_PERTURBATION=${TARGET_RELION_PERTURBATION} \
-VDAM_RELION_BINARY=${RELION_BINARY} \
-bash "${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch"
+if [[ "${CAPTURE_NATIVE_REPLAY}" == 1 ]]; then
+  touch "${NATIVE_ROOT}/SAFE_TO_DELETE"
+  VDAM_RELION_CONT_ROOT=${NATIVE_ROOT} \
+  VDAM_RELION_CONT_INPUT_DIR=${DATA_DIR} \
+  VDAM_RELION_CONT_OPTIMISER=${RELION_OPTIMISER} \
+  VDAM_RELION_CONT_ITERATION=${TARGET_ITERATION} \
+  VDAM_RELION_CONT_PART_ID=${TARGET_RELION_PART_ID} \
+  VDAM_RELION_CONT_STACK_INDEX=${TARGET_STACK_INDEX} \
+  VDAM_RELION_CONT_CAPTURE=1 \
+  VDAM_RELION_CONT_PERTURBATION=${TARGET_RELION_PERTURBATION} \
+  VDAM_RELION_BINARY=${RELION_BINARY} \
+  bash "${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch"
 
-rg -q "_rlnSamplingPerturbInstance[[:space:]]+${TARGET_RELION_PERTURBATION}" \
-  "${NATIVE_ROOT}/relion/run_it${iteration_tag}_sampling.star"
-"${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_particle_state_trajectory.py" \
-  --recovar-dir "${REFERENCE_RELION_DIR}" --relion-dir "${NATIVE_ROOT}/relion" \
-  --iterations "${TARGET_ITERATION}" \
-  --output "${PROVENANCE}/native_replay_state_audit.json"
-"${PIXI_PY}" - "${PROVENANCE}/native_replay_state_audit.json" \
-  "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star" \
-  "${NATIVE_ROOT}/relion/run_it${iteration_tag}_data.star" \
-  "${TARGET_STACK_INDEX}" <<'PY'
+  rg -q "_rlnSamplingPerturbInstance[[:space:]]+${TARGET_RELION_PERTURBATION}" \
+    "${NATIVE_ROOT}/relion/run_it${iteration_tag}_sampling.star"
+  "${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_particle_state_trajectory.py" \
+    --recovar-dir "${REFERENCE_RELION_DIR}" --relion-dir "${NATIVE_ROOT}/relion" \
+    --iterations "${TARGET_ITERATION}" \
+    --output "${PROVENANCE}/native_replay_state_audit.json"
+  "${PIXI_PY}" - "${PROVENANCE}/native_replay_state_audit.json" \
+    "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star" \
+    "${NATIVE_ROOT}/relion/run_it${iteration_tag}_data.star" \
+    "${TARGET_STACK_INDEX}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -121,6 +124,9 @@ Path(sys.argv[1]).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n"
 if target_error > 5.0e-4:
     raise SystemExit("forced native continuation target Pmax differs from the sealed trajectory")
 PY
+else
+  test -z "$(find "${NATIVE_ROOT}" -mindepth 1 -print -quit)"
+fi
 
 gpu_uuid_after_relion=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 test "${gpu_uuid_after_relion}" = "${gpu_uuid_before}"
@@ -206,9 +212,9 @@ test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 gpu_uuid_after_recovar=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":200,"stopped_after_iteration":%d,"target_original_index":%d,"target_relion_part_id":%d,"target_stack_index":%d,"capture_local_score":%s,"recovar_wall_s":%d}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":200,"stopped_after_iteration":%d,"target_original_index":%d,"target_relion_part_id":%d,"target_stack_index":%d,"capture_local_score":%s,"capture_native_replay":%s,"recovar_wall_s":%d}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_ITERATION}" \
   "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" "${TARGET_STACK_INDEX}" \
-  "${CAPTURE_LOCAL_SCORE}" "${wall_s}" \
+  "${CAPTURE_LOCAL_SCORE}" "${CAPTURE_NATIVE_REPLAY}" "${wall_s}" \
   > "${PROVENANCE}/run.json"
 touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"

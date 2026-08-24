@@ -425,6 +425,9 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
         "TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-1003}",
         "TARGET_RELION_PERTURBATION=${TARGET_RELION_PERTURBATION:-0.322510}",
         "CAPTURE_LOCAL_SCORE=${CAPTURE_LOCAL_SCORE:-0}",
+        "CAPTURE_NATIVE_REPLAY=${CAPTURE_NATIVE_REPLAY:-1}",
+        'if [[ "${CAPTURE_NATIVE_REPLAY}" == 1 ]]; then',
+        'test -z "$(find "${NATIVE_ROOT}" -mindepth 1 -print -quit)"',
         "RECOVAR_LOCAL_SCORE_DUMP_DIR=${RECOVAR_SCORE_CAPTURE}",
         "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}",
         "RECOVAR_LOCAL_SCORE_DUMP_ITERATION=${TARGET_ITERATION}",
@@ -436,6 +439,7 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
         "target_error > 5.0e-4",
         '"nr_iter_schedule":200',
         '"stopped_after_iteration":%d',
+        '"capture_native_replay":%s',
         'test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"',
     ]
     missing = [token for token in expected_tokens if token not in capture]
