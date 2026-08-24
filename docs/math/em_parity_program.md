@@ -113,9 +113,25 @@ and 2.  Their iteration-2 shell-15 raw totals are identical at the native
 capture's printed precision; across per-particle direct-residual rows the
 relative L2 is `4.80e-7`, but signed shell-15 differences cancel to less than
 `1.1e-19`.  The RECOVAR numerator error is consequently outside the observed
-native-repeat floor.  The next implementation target is source-faithful
-per-particle Wavg noise sufficient-statistic formation and accumulation, not
-another projector/scatter composition.
+native-repeat floor.  A source-order Wavg experiment (`4a7aa71f`, unpushed)
+passes its two focused ordering tests (`12891138`), but the paired iteration-2
+jobs reject it as a repair: shell-15 raw numerator is `0.1246246435` in
+`12891483`, versus `0.1246247254` for the same-head control `12891607` and
+`0.124609` natively.  It removes only `8.20e-8`, about `0.52%` of the error,
+so no 200-iteration trajectory was spent on it.
+
+The causal search has moved one boundary earlier.  Native StoreWavg particle
+`1140` already has a fine-posterior relative L2 error of `4.44e-7` at
+iteration 1.  Focused operand audit `12891847` covers all 480 fine candidates
+and 596 score pixels.  Candidate rotations, projected references, and score
+weights are bit-exact; native raw `diff2` is reproduced exactly by both the
+native-shift and fused-translation replays.  Replacing only the image operand
+reproduces the live centered score residual (RMS `3.10e-5`, maximum
+`1.25e-4`), while reference-only and weight-only replays are zero.  The
+iteration-1 target is therefore the corrected particle-image formation before
+fine scoring, not Wavg particle reduction or another projector/scatter
+composition.  A diagnostic-only capture of that operand is the next bounded
+experiment.
 
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired
