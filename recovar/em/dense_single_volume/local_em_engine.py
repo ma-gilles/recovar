@@ -501,6 +501,26 @@ def _packed_noise_projection_chunk_rows(n_recon_pixels: int, *, batch_size: int 
     return max(1, int(target) // row_pixels)
 
 
+def _source_faithful_bpref_particle_chunk_size(
+    *,
+    image_count: int,
+    rotation_count: int,
+    n_recon_pixels: int,
+    max_gb: float,
+) -> int:
+    """Bound deferred BPref operands while preserving particle-major order.
+
+    The source-faithful path keeps a complex64 numerator and float32
+    denominator for every particle/rotation/pixel triplet.  Split only the
+    leading particle axis: consecutive calls then visit particles and every
+    rotation within each particle in the same order as RELION.
+    """
+
+    bytes_per_particle = max(1, int(rotation_count)) * max(1, int(n_recon_pixels)) * 12
+    cap_bytes = max(0, int(float(max_gb) * 1e9))
+    return min(max(1, int(image_count)), max(1, cap_bytes // bytes_per_particle))
+
+
 def _reconstruction_pack_large_bucket_quantum() -> int:
     raw = os.environ.get(EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV, "").strip()
     if raw:
@@ -3105,12 +3125,6 @@ def run_local_em_exact(
                 sparse_big_jit_mstep_cap_gb > 0.0
                 and sparse_big_jit_mstep_estimated_gb <= sparse_big_jit_mstep_cap_gb
             )
-        if source_faithful_bpref and use_big_jit_buckets_for_bucket:
-            # RELION's particle-owned fused scatter consumes both reduced
-            # operands together after scoring. Keep those tensors visible
-            # outside the bucket JIT so one ordered CUDA handler can issue
-            # the interleaved data/weight atomic stream.
-            sparse_big_jit_backprojection = True
         can_defer_big_jit_backprojection = (
             use_big_jit_buckets_for_bucket
             and significant_backprojection_candidate
@@ -3832,7 +3846,70 @@ def run_local_em_exact(
                 flat_packed_summed = flatten_bucket_rows(packed_summed)
                 flat_packed_ctf_probs = flatten_bucket_rows(packed_ctf_probs)
 
-            if return_big_jit_deferred_mstep_inputs and (not disable_adjoint_y or not disable_adjoint_ctf):
+            if (
+                return_big_jit_deferred_mstep_inputs
+                and source_faithful_bpref
+                and (not disable_adjoint_y or not disable_adjoint_ctf)
+            ):
+                # The fused scorer intentionally did not materialize the
+                # oversized (particle, rotation, pixel) BPref tensors. Reduce
+                # and scatter consecutive particle groups instead. Splitting
+                # the particle axis retains RELION's complete rotation/pixel
+                # traversal for one particle before advancing to the next.
+                n_recon_pixels = window_spec.n_recon if window_spec.use_window else int(n_half)
+                particle_chunk_size = _source_faithful_bpref_particle_chunk_size(
+                    image_count=unpadded_batch_size,
+                    rotation_count=int(packed_rotations_np.shape[1]),
+                    n_recon_pixels=n_recon_pixels,
+                    max_gb=sparse_big_jit_mstep_cap_gb,
+                )
+                if particle_chunk_size < unpadded_batch_size and not logged_deferred_mstep_chunking:
+                    logger.info(
+                        "Exact local source-faithful BPref particle chunking: "
+                        "particles=%d chunk_particles=%d packed_rows=%d n_recon_pixels=%d cap_gb=%.3f",
+                        unpadded_batch_size,
+                        particle_chunk_size,
+                        int(packed_rotations_np.shape[1]),
+                        n_recon_pixels,
+                        float(sparse_big_jit_mstep_cap_gb),
+                    )
+                    logged_deferred_mstep_chunking = True
+                shifted_recon_split_unpadded = shifted_recon_split[:unpadded_batch_size]
+                ctf2_over_nv_recon_unpadded = ctf2_over_nv_recon[:unpadded_batch_size]
+                for particle_start in range(0, unpadded_batch_size, particle_chunk_size):
+                    particle_stop = min(
+                        unpadded_batch_size,
+                        particle_start + particle_chunk_size,
+                    )
+                    mstep_t0 = time.time()
+                    chunk_summed, chunk_ctf_probs = compute_local_mstep_sums(
+                        packed_reconstruction_probs[particle_start:particle_stop],
+                        shifted_recon_split_unpadded[particle_start:particle_stop],
+                        ctf2_over_nv_recon_unpadded[particle_start:particle_stop],
+                        relion_x_half=True,
+                        sequential_translation_reduction=True,
+                    )
+                    if return_profile:
+                        _block_until_ready(chunk_summed, chunk_ctf_probs)
+                    timing.mstep_s += time.time() - mstep_t0
+
+                    adjoint_t0 = time.time()
+                    Ft_y, Ft_ctf = _accumulate_relion_physical_particle_grid(
+                        chunk_summed,
+                        chunk_ctf_probs,
+                        packed_mstep_rotations_np[particle_start:particle_stop],
+                        reconstruction_pack_mask_jnp[particle_start:particle_stop],
+                        Ft_y,
+                        Ft_ctf,
+                        pixel_indices=mstep_recon_window_indices,
+                        image_shape=image_shape,
+                        volume_shape=recon_volume_shape,
+                        max_r=mstep_adjoint_max_r,
+                    )
+                    if return_profile:
+                        _block_until_ready(Ft_y, Ft_ctf)
+                    timing.adjoint_y_s += time.time() - adjoint_t0
+            elif return_big_jit_deferred_mstep_inputs and (not disable_adjoint_y or not disable_adjoint_ctf):
                 if packed_reconstruction_probs is None:
                     raise RuntimeError("deferred big-JIT local M-step requires packed posterior rows")
                 if packed_reconstruction_probs_sum_t is None:

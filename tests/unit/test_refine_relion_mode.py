@@ -137,6 +137,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
     _pad_local_big_jit_image_axis,
     _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
+    _source_faithful_bpref_particle_chunk_size,
     run_local_em_exact,
 )
 from recovar.em.dense_single_volume.local_layout import (
@@ -3686,6 +3687,33 @@ def test_relion_physical_particle_grid_fuses_masked_data_and_weight(monkeypatch)
     assert captured["max_r"] == 3.0
     np.testing.assert_array_equal(np.asarray(data_out), np.ones(32, dtype=np.complex64))
     np.testing.assert_array_equal(np.asarray(weight_out), np.full(32, 2, dtype=np.float32))
+
+
+def test_source_faithful_bpref_chunks_only_particle_axis_to_memory_cap():
+    rotation_count = 4096
+    n_recon_pixels = 5100
+    bytes_per_particle = rotation_count * n_recon_pixels * 12
+    cap_gb = 6.0
+    expected = int(cap_gb * 1e9) // bytes_per_particle
+
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=300,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=cap_gb,
+    ) == expected
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=7,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=cap_gb,
+    ) == 7
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=300,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=0.0,
+    ) == 1
 
 
 def test_pad_local_big_jit_image_axis_masks_dummy_rows():

@@ -591,7 +591,7 @@ def test_deferred_big_jit_backprojects_vdam_residual_images():
 
     source = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
     start = source.index(
-        "if return_big_jit_deferred_mstep_inputs and (not disable_adjoint_y or not disable_adjoint_ctf):"
+        "elif return_big_jit_deferred_mstep_inputs and (not disable_adjoint_y or not disable_adjoint_ctf):"
     )
     stop = source.index("if return_big_jit_deferred_mstep_inputs and accumulate_noise:", start)
     deferred_mstep = source[start:stop]
@@ -599,6 +599,29 @@ def test_deferred_big_jit_backprojects_vdam_residual_images():
     assert "if mstep_subtract_ctf_projection:" in deferred_mstep
     assert "chunk_proj_for_residual = _project_packed_noise_rows(" in deferred_mstep
     assert "chunk_summed = chunk_summed - chunk_probs_sum_t[..., None] * frefctf_weighted" in deferred_mstep
+
+
+def test_source_faithful_bpref_respects_memory_gate_without_changing_particle_order():
+    """Large BPref buckets must defer by particles, never allocate past the cap."""
+
+    source = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
+    decision_start = source.index("sparse_big_jit_backprojection = False")
+    decision_stop = source.index("can_defer_big_jit_backprojection = (", decision_start)
+    decision = source[decision_start:decision_stop]
+    assert "sparse_big_jit_mstep_estimated_gb <= sparse_big_jit_mstep_cap_gb" in decision
+    assert "source_faithful_bpref" not in decision
+
+    deferred_start = source.index(
+        "return_big_jit_deferred_mstep_inputs\n                and source_faithful_bpref"
+    )
+    deferred_stop = source.index(
+        "elif return_big_jit_deferred_mstep_inputs and (not disable_adjoint_y or not disable_adjoint_ctf):",
+        deferred_start,
+    )
+    deferred = source[deferred_start:deferred_stop]
+    assert "for particle_start in range(" in deferred
+    assert "sequential_translation_reduction=True" in deferred
+    assert "_accumulate_relion_physical_particle_grid(" in deferred
 
 
 def test_relion_initialmodel_reference_checker_rejects_autorefine(tmp_path):
