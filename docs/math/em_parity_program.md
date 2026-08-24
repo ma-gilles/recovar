@@ -57,8 +57,14 @@ discriminating full frozen trajectory is `12885473_1`.  Executable inspection
 confirms three compiled `cuda_relion_vdam_mstep_fused_x_half` targets.  Its
 partial audit remains essentially exact through the old iteration-31 failure
 boundary (cross-engine FSC-AUC `0.999999999878`) with zero divergent particle
-states at iterations 1, 8, 16, 20, 24, and 31.  Both commits remain unpushed
-until the complete 0--200 audit and runtime measurement finish.  In parallel, the immutable 22-case
+states at iterations 1, 8, 16, 20, 24, and 31.  It is not a complete parity
+fix: the first strict map failure is iteration 73 (`0.99878735`, GT delta
+`-0.00062945`), and cross-engine FSC-AUC falls to `0.89064` by iteration 100
+while RECOVAR remains better against GT there by `+0.00455`.  The complete run
+continues for final/runtime evidence.  A second isolated worktree now tests
+the remaining shared boundary by projecting the reference inline in the same
+per-particle CUDA launch.  Both fused commits remain unpushed until the complete
+0--200 audit and runtime measurement finish.  In parallel, the immutable 22-case
 matrix, severe-memory case, and controlled same-GPU repeat panel continue as
 evidence collection; generic RECOVAR full/long tests are deliberately outside
 this EM-only validation scope.
