@@ -275,6 +275,31 @@ next cheapest experiment compares the complete candidate posterior against
 both already captured 200-particle native repeats to determine whether it is a
 stable out-of-repeat error or part of RELION's accelerated repeat spread.
 
+That repeat comparison is complete in clean CPU-only Slurm job `12908333`
+(4/4 focused tests).  All 200 identities close with zero support or argmax
+mismatch.  Pooled candidate posterior error is `1.51727e-5`/`1.38283e-5`,
+versus native-repeat error `1.47685e-5`/`1.72423e-5`; 57/100 and 67/100
+candidate particles lie within their corresponding native-repeat distance.
+Magnitude alone is therefore not a stable out-of-repeat discriminator.  The
+residual direction is different: candidate-versus-native-A has cosine only
+`0.47655`/`0.48200` with the native-B-versus-native-A residual and an
+orthogonal component of `90.32%`/`70.27%` of the native-repeat norm.  More
+importantly, 23/100 and 14/100 particles are bitwise identical across the two
+native posterior captures but differ in RECOVAR.  The active bounded analysis
+then compared pre-threshold normalized raw weights and centered log weights for
+the same complete panel.  That split is decisive: raw-weight support is exact
+for all 200 particles, while pooled pre-threshold errors reproduce the final
+posterior errors (`1.51691e-5`/`1.38295e-5`).  Centered log-weight RMS is
+`3.20382e-5`/`3.22615e-5`; 20/100 and 13/100 particles have exactly identical
+normalized raw weights in both native repeats but nonexact candidate weights.
+Thus exponentiation, normalization, and significance truncation are excluded
+for 33 stable identities: their difference already exists in centered scoring
+log weights.  The next bounded experiment captures detailed scoring operands
+for the largest stable identities (`138`, `82`, `171`, and `125`, with matched
+controls) and replays image, reference, CTF/noise, translation, and reduction
+one at a time.  No production arithmetic change is justified before that
+operand split.
+
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired
 full-schedule job `12889537_1` follows a different native trajectory by
