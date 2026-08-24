@@ -807,6 +807,7 @@ and the fixed RECOVAR-minus-RELION GT FSC-AUC floor remains -0.002.
 | gf15 | 77 | 0.658667288 | -0.007948350 |
 | gf16 | 76 | 0.957551841 | -0.000651299 |
 | gf18 | 31 | 0.675630118 | -0.003830814 |
+| gf19 | 65 | 0.681088003 | -0.001006762 |
 
 The no-CTF gf16 row is an important discriminator: its GT-quality delta stays
 inside the frozen nondegradation gate while its cross-engine trajectory still
@@ -851,3 +852,22 @@ nearest centered native RMS is `1.5012e-5`, below the native/native maximum
 guaranteeing a closer trajectory, so no production topology change is
 accepted.  The next discriminator is the aggregate iteration-2 noise update
 under deterministic-lane and native-atomic modes.
+
+That discriminator is complete.  Isolated diagnostic commit `f35844a9a`
+passes 4/4 focused routing/fail-closed tests.  Same-input iteration-2 jobs
+`12896342`--`12896345` all complete.  Shell 15 is `+1.5602497e-5` for the
+block-first control, `+1.5520540e-5` for deterministic native-lane, and
+`+1.5639750e-5` / `+1.5539167e-5` for two native-atomic runs.  Lane order
+improves only `8.20e-8` (0.53 percent), and native atomics straddle the same
+error.  All modes remain outside the native repeat floor, so they are rejected
+without a 200-iteration run.  Failed preflight submissions
+`12896228`--`12896231` produced no science.
+
+The controlled same-GPU gf01 repeat-4 panel `12880351` also completed its
+evidence before the expected strict-audit exit.  Candidate repeatability first
+falls below the native envelope at iteration 34.  Its worst
+candidate-repeat-minus-native-repeat FSC-AUC margin is `-0.0452569`; at
+iteration 200 the candidate repeat floor is `0.8348111` versus native
+`0.8753012`.  Candidate/native matching and GT quality later fail as well.
+The long-run instability is therefore not only a choice among stock RELION
+modes; RECOVAR's own repeat spread is materially larger.

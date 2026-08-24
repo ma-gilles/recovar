@@ -173,6 +173,18 @@ production topology change is accepted.  The next discriminator is the
 aggregate iteration-2 noise update under deterministic-lane and native-atomic
 modes.
 
+The aggregate discriminator rejects those modes.  Isolated commit
+`f35844a9a` passes 4/4 focused routing tests; jobs `12896342`--`12896345`
+measure shell-15 raw-numerator errors `+1.5602497e-5` (block-first),
+`+1.5520540e-5` (native-lane), and `+1.5639750e-5` / `+1.5539167e-5`
+(native-atomic repeats).  The best change is only `8.20e-8` or 0.53 percent,
+so no 200-iteration candidate is warranted.  Controlled same-GPU gf01 repeat
+panel `12880351` independently first fails candidate-repeat/native-repeat
+equivalence at iteration 34; its worst repeat-floor margin is `-0.0452569`,
+and the iteration-200 candidate/native repeat floors are `0.8348111` and
+`0.8753012`.  RECOVAR repeat instability is therefore materially larger than
+stock RELION's sampled repeat spread.
+
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired
 full-schedule job `12889537_1` follows a different native trajectory by
