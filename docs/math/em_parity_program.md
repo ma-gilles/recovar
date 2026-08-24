@@ -133,6 +133,20 @@ fine scoring, not Wavg particle reduction or another projector/scatter
 composition.  A diagnostic-only capture of that operand is the next bounded
 experiment.
 
+That bounded capture is now complete.  Diagnostic commit `5df279bdb` passes
+the focused dump and big-JIT plumbing tests, then true-schedule iteration-1
+job `12892595` records the pre-correction FFT, pixel correction, and corrected
+score image for particle `1140`.  GPU audit `12892638` finds the live internal
+product bit-exact at all 596 score pixels, but only 486/596 final corrected
+pixels match native RELION (relative L2 `2.58e-8`, maximum `1.22e-4`).
+Reconstructing RELION's XFLOAT correction from its captured RFLOAT CTF, with
+the established RECOVAR sign conversion, leaves 114 one-ULP differences
+(relative L2 `3.86e-8`, maximum `9.54e-7`).  The pre-correction and correction
+errors partially cancel, so changing the reciprocal path alone is not yet an
+accepted fix.  A private RELION worktree at `193fe7e` adds the missing
+uncorrected `Fimg` operand; CPU build `12893019` is the next fail-closed
+capture dependency.
+
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired
 full-schedule job `12889537_1` follows a different native trajectory by
