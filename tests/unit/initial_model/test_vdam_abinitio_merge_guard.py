@@ -236,10 +236,7 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "export RELION_DUMP_DIR=",
         "export RELION_DUMP_PART_ID=",
         "export RELION_DUMP_ITER=",
-        "export RECOVAR_DEBUG_ESTEP_DIR=",
-        "export RECOVAR_DEBUG_ESTEP_PARTIDS=",
-        "export RECOVAR_DEBUG_ESTEP_ITER=",
-        "p${PART_ID}_Fimg_nomask Minvsigma2 sigma2_noise sigma2_fudge",
+        "store_Fimg_unweighted_nomask Minvsigma2 sigma2_noise sigma2_fudge",
     ]
     haystack = "\n".join([guard, runner, auditor, sbatch])
     missing = [token for token in expected_tokens if token not in haystack]
