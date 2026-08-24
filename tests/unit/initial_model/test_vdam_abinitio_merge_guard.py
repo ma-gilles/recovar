@@ -366,10 +366,12 @@ def test_vdam_gui_default_full_suite_audits_every_200_iteration_checkpoint():
     assert suite["suite_id"] == "vdam-k1-gui-default-full-v1"
     assert suite["acceptance_contract"]["required_checkpoints"] == list(range(201))
     cases = suite["cases"]
-    assert [case["id"] for case in cases] == [f"vdam-gf{index:02d}" for index in range(1, 14)]
+    assert [case["id"] for case in cases] == [f"vdam-gf{index:02d}" for index in range(1, 23)]
     assert [case["definition"]["source_em_case_id"] for case in cases] == [
         "k1-11", "k1-16", "k1-24", "k1-32", "k1-15", "k1-17", "k1-21",
         "k1-23", "k1-26", "k1-27", "k1-28", "k1-29", "k1-30",
+        "k1-12", "k1-13", "k1-14", "k1-18", "k1-19", "k1-20", "k1-22",
+        "k1-25", "k1-31",
     ]
     gui_defaults = {
         "nr_classes": 1,
@@ -388,7 +390,7 @@ def test_vdam_gui_default_full_suite_audits_every_200_iteration_checkpoint():
         all(case["definition"][key] == value for key, value in gui_defaults.items())
         for case in cases
     )
-    assert "#SBATCH --array=1-13%4" in matrix
+    assert "#SBATCH --array=1-22%4" in matrix
     assert "JAX_COMPILATION_CACHE_DIR" in matrix
     assert "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS" in matrix
     assert "printf 'vdam-gf%02d'" in matrix
