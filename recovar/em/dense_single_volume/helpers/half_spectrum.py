@@ -76,19 +76,26 @@ def make_relion_noise_shell_indices_half(image_shape):
 
     height, width = int(image_shape[0]), int(image_shape[1])
     n_shells = height // 2 + 1
-    kx = np.arange(width // 2 + 1, dtype=np.int32)[None, :]
-    ky = np.arange(height, dtype=np.int32)
-    ky = np.where(ky <= height // 2, ky, ky - height)[:, None]
-    # Construct the FFTW half-plane radii from integer coordinates.  The
-    # generic centred-RFFT grid labels the horizontal Nyquist pixel
-    # (ky=0, kx=N/2) as a sentinel for even boxes, while RELION includes it in
-    # shell N/2.  That one-pixel denominator error is visible in every final
-    # noise shell and accumulates over long VDAM trajectories.
-    shell_indices = np.rint(np.sqrt(ky.astype(np.float64) ** 2 + kx.astype(np.float64) ** 2)).astype(
-        np.int32
+    shell_indices = np.asarray(make_shell_indices_half(image_shape), dtype=np.int32).reshape(
+        height,
+        width // 2 + 1,
     )
+    coords = np.asarray(
+        fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            voxel_size=1,
+            scaled=False,
+        ),
+    ).reshape(height, width // 2 + 1, 2)
+    kx = np.rint(coords[..., 0]).astype(np.int32)
+    ky = np.rint(coords[..., 1]).astype(np.int32)
+    # RECOVAR stores the vertical frequency axis centred, so RELION's unique
+    # +N/2 FFTW row appears here as -N/2.  Retain that Nyquist pixel at kx=0
+    # while dropping the other redundant negative-frequency kx=0 entries.
+    vertical_nyquist = (height % 2 == 0) & (ky == -(height // 2))
+    redundant_x0 = (kx == 0) & (ky < 0) & ~vertical_nyquist
     keep = shell_indices < n_shells
-    keep &= ~((kx == 0) & (ky < 0))
+    keep &= ~redundant_x0
     shell_indices = np.where(keep, shell_indices, n_shells)
     return jnp.asarray(shell_indices.reshape(-1), dtype=jnp.int32)
 

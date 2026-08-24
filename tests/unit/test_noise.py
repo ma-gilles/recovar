@@ -720,7 +720,7 @@ def test_normalize_wsum_to_sigma2_noise_drops_relion_shell_sentinels(monkeypatch
 
 
 @pytest.mark.parametrize("box_size", [32, 64, 100, 128, 256])
-def test_relion_noise_shell_indices_include_horizontal_nyquist(box_size):
+def test_relion_noise_shell_indices_include_vertical_nyquist(box_size):
     from recovar.em.dense_single_volume.helpers.half_spectrum import (
         make_relion_noise_shell_indices_half,
     )
@@ -733,7 +733,7 @@ def test_relion_noise_shell_indices_include_horizontal_nyquist(box_size):
     n_shells = box_size // 2 + 1
     counts = np.bincount(shell_indices[shell_indices < n_shells], minlength=n_shells)
 
-    assert shell_indices.reshape(box_size, n_shells)[0, box_size // 2] == box_size // 2
+    assert shell_indices.reshape(box_size, n_shells)[0, 0] == box_size // 2
     np.testing.assert_array_equal(counts, _relion_half_plane_shell_counts(image_shape))
 
 
