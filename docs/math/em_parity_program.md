@@ -60,18 +60,25 @@ discriminating full frozen trajectory is `12885473_1`.  Executable inspection
 confirms three compiled `cuda_relion_vdam_mstep_fused_x_half` targets.  Its
 partial audit remains essentially exact through the old iteration-31 failure
 boundary (cross-engine FSC-AUC `0.999999999878`) with zero divergent particle
-states at iterations 1, 8, 16, 20, 24, and 31.  It is not a complete parity
-fix: the first strict map failure is iteration 73 (`0.99878735`, GT delta
-`-0.00062945`), and cross-engine FSC-AUC falls to `0.89064` by iteration 100
-while RECOVAR remains better against GT there by `+0.00455`.  The complete run
-continues for final/runtime evidence.  A second isolated worktree now tests
+states at iterations 1, 8, 16, 20, 24, and 31.  The complete audit rejects
+fusion alone: the first strict map failure is iteration 73 (`0.99878735`, GT
+delta `-0.00062945`), the minimum cross-engine FSC-AUC is `0.82180983` at
+iteration 127, and a separate minimum GT delta of `-0.00236361` at iteration
+142 also fails.  Final cross-engine FSC-AUC is `0.979021996`; RECOVAR takes
+`2922.56` seconds versus RELION's `794.48` seconds (`3.68x`).  A second
+isolated worktree tests
 the remaining shared boundary by projecting the reference inline in the same
 per-particle CUDA launch.  Isolated commit `c80a1b754` passes its CUDA build
 (`12887299`), focused zero-projector GPU equivalence gate (`12887554`), and
 bounded iteration-1 diagnostic (`12887823`: exact particle state,
 cross-engine FSC-AUC `0.999999999959`, GT delta `-1.50e-8`).  Its full frozen
-gf01 discriminator is Slurm `12887981_1`.  The experimental commits remain
-unpushed until their complete 0--200 audits and runtime measurements finish.
+gf01 discriminator is Slurm `12887981_1`.  The executable cache contains the
+inline-projector target, but this variant is already rejected as a parity fix:
+its first strict failure is iteration 31 (cross-engine FSC-AUC `0.99756656`,
+GT delta `-0.00068389`), materially earlier than the fused preprojected
+control's iteration-73 failure.  It continues only to collect terminal and
+runtime evidence.  The experimental commits remain unpushed until their
+complete 0--200 audits and runtime measurements finish.
 In parallel, the immutable 22-case
 matrix, severe-memory case, and controlled same-GPU repeat panel continue as
 evidence collection; generic RECOVAR full/long tests are deliberately outside
