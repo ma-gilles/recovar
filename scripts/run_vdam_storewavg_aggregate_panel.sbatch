@@ -84,11 +84,18 @@ for path in "${HALF2_CAPTURES[@]}"; do
   ANALYZER_ARGS+=(--recovar-half2-capture "${path}")
 done
 if [[ -n "${NATIVE_PRODUCTION_DIRECTORY:-}" ]]; then
-  : "${RECOVAR_PRODUCTION_DIRECTORY:?set with NATIVE_PRODUCTION_DIRECTORY}"
-  ANALYZER_ARGS+=(
-    --native-production-directory "${NATIVE_PRODUCTION_DIRECTORY}"
-    --recovar-production-directory "${RECOVAR_PRODUCTION_DIRECTORY}"
-  )
+  ANALYZER_ARGS+=(--native-production-directory "${NATIVE_PRODUCTION_DIRECTORY}")
+  if [[ -n "${RECOVAR_PRODUCTION_DIRECTORY:-}" ]]; then
+    test -z "${RECOVAR_PRODUCTION_HALF1_DIRECTORY:-}${RECOVAR_PRODUCTION_HALF2_DIRECTORY:-}"
+    ANALYZER_ARGS+=(--recovar-production-directory "${RECOVAR_PRODUCTION_DIRECTORY}")
+  else
+    : "${RECOVAR_PRODUCTION_HALF1_DIRECTORY:?set both half-specific production directories}"
+    : "${RECOVAR_PRODUCTION_HALF2_DIRECTORY:?set both half-specific production directories}"
+    ANALYZER_ARGS+=(
+      --recovar-production-half1-directory "${RECOVAR_PRODUCTION_HALF1_DIRECTORY}"
+      --recovar-production-half2-directory "${RECOVAR_PRODUCTION_HALF2_DIRECTORY}"
+    )
+  fi
 fi
 
 "${PIXI_PY}" -m scripts.analyze_vdam_storewavg_aggregate_panel "${ANALYZER_ARGS[@]}"

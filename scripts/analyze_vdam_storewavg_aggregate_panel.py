@@ -35,7 +35,7 @@ from scripts.analyze_vdam_storewavg_panel import (
     _quantiles,
 )
 
-SCHEMA = "recovar.vdam_storewavg_aggregate_panel.v1"
+SCHEMA = "recovar.vdam_storewavg_aggregate_panel.v2"
 
 
 @dataclass
@@ -228,7 +228,7 @@ def analyze(
     half_capture_paths: dict[int, list[Path]],
     *,
     native_production_directory: Path | None = None,
-    recovar_production_directory: Path | None = None,
+    recovar_production_directories: dict[int, Path] | None = None,
     rotation_tolerance: float = 1.0e-5,
 ) -> dict[str, object]:
     import jax
@@ -490,9 +490,11 @@ def analyze(
             },
             "per_particle": summary["per_particle"],
         }
-        if native_production_directory is not None or recovar_production_directory is not None:
+        if native_production_directory is not None or recovar_production_directories is not None:
             _require(
-                native_production_directory is not None and recovar_production_directory is not None,
+                native_production_directory is not None
+                and recovar_production_directories is not None
+                and set(recovar_production_directories) == {1, 2},
                 "native and RECOVAR production directories must be supplied together",
             )
             native_data_name, native_weight_name, candidate_data_name, candidate_weight_name = (
@@ -505,10 +507,12 @@ def analyze(
                 native_production_directory / native_weight_name, complex_values=False
             )
             production_candidate_data = np.load(
-                recovar_production_directory / candidate_data_name, allow_pickle=False
+                recovar_production_directories[half] / candidate_data_name,
+                allow_pickle=False,
             )
             production_candidate_weight = np.load(
-                recovar_production_directory / candidate_weight_name, allow_pickle=False
+                recovar_production_directories[half] / candidate_weight_name,
+                allow_pickle=False,
             )
             bpref_data_scale, bpref_weight_scale = relion_bpref_frame_scales(
                 reference_capture.physical_image_size
@@ -521,10 +525,25 @@ def analyze(
             production_gap_weight = production_candidate_weight - production_native_weight
             panel_gap_data = panel_candidate_data - panel_native_data
             panel_gap_weight = panel_candidate_weight - panel_native_weight
-            report["independent_production_accumulator_comparison"] = {
-                "caveat": (
-                    "The native production accumulator is an independent native repeat; "
-                    "use residual geometry diagnostically, not as a bitwise closure gate."
+            native_matched = native_production_directory.resolve() == native_directory.resolve()
+            candidate_matched = all(
+                capture.path.parent.parent.resolve()
+                == recovar_production_directories[half].parent.resolve()
+                for capture in captures
+            )
+            report["production_accumulator_comparison"] = {
+                "capture_alignment": {
+                    "native_rows_and_accumulator_same_run": native_matched,
+                    "recovar_rows_and_accumulator_same_run": candidate_matched,
+                    "both_engines_matched": native_matched and candidate_matched,
+                },
+                "interpretation": (
+                    "Both engines' rows and production accumulators are same-run captures; "
+                    "the residual comparison isolates shared-double versus production-CUDA "
+                    "scatter topology."
+                    if native_matched and candidate_matched
+                    else "At least one row/accumulator pair is from an independent repeat; "
+                    "use residual geometry diagnostically, not as a closure gate."
                 ),
                 "panel_candidate_vs_production_candidate_data": _metric(
                     production_candidate_data, panel_candidate_data
@@ -581,7 +600,10 @@ def analyze(
             **(
                 {
                     "native_production_directory": str(native_production_directory.resolve()),
-                    "recovar_production_directory": str(recovar_production_directory.resolve()),
+                    "recovar_production_directories": {
+                        str(half): str(directory.resolve())
+                        for half, directory in recovar_production_directories.items()
+                    },
                 }
                 if native_production_directory is not None
                 else {}
@@ -599,16 +621,42 @@ def main() -> None:
     parser.add_argument("--recovar-half2-capture", required=True, action="append", type=Path)
     parser.add_argument("--native-production-directory", type=Path)
     parser.add_argument("--recovar-production-directory", type=Path)
+    parser.add_argument("--recovar-production-half1-directory", type=Path)
+    parser.add_argument("--recovar-production-half2-directory", type=Path)
     parser.add_argument("--rotation-tolerance", type=float, default=1.0e-5)
     parser.add_argument("--output-json", required=True, type=Path)
     args = parser.parse_args()
     _require(not args.output_json.exists(), f"refusing to overwrite {args.output_json}")
+    recovar_production_directories = None
+    if args.recovar_production_directory is not None:
+        _require(
+            args.recovar_production_half1_directory is None
+            and args.recovar_production_half2_directory is None,
+            "shared and half-specific RECOVAR production directories are mutually exclusive",
+        )
+        recovar_production_directories = {
+            1: args.recovar_production_directory,
+            2: args.recovar_production_directory,
+        }
+    elif (
+        args.recovar_production_half1_directory is not None
+        or args.recovar_production_half2_directory is not None
+    ):
+        _require(
+            args.recovar_production_half1_directory is not None
+            and args.recovar_production_half2_directory is not None,
+            "both half-specific RECOVAR production directories are required",
+        )
+        recovar_production_directories = {
+            1: args.recovar_production_half1_directory,
+            2: args.recovar_production_half2_directory,
+        }
     report = analyze(
         args.native_directory,
         args.relion_data_star,
         {1: args.recovar_half1_capture, 2: args.recovar_half2_capture},
         native_production_directory=args.native_production_directory,
-        recovar_production_directory=args.recovar_production_directory,
+        recovar_production_directories=recovar_production_directories,
         rotation_tolerance=args.rotation_tolerance,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
@@ -624,11 +672,11 @@ def main() -> None:
                 "shared_relion_double_scatter": values["shared_relion_double_scatter"],
                 **(
                     {
-                        "independent_production_accumulator_comparison": values[
-                            "independent_production_accumulator_comparison"
+                        "production_accumulator_comparison": values[
+                            "production_accumulator_comparison"
                         ]
                     }
-                    if "independent_production_accumulator_comparison" in values
+                    if "production_accumulator_comparison" in values
                     else {}
                 ),
             }

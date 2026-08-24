@@ -259,6 +259,22 @@ native iteration-1 run that captures both all 200 StoreWavg rows and its own
 two raw BPref accumulators; the runner now has a fail-closed combined-capture
 mode for that experiment.
 
+That matched capture is complete.  Native job `12908104` records all 200
+particle operands and both raw pseudo-halfset accumulators in one uninterrupted
+six-second iteration-1 run.  Aggregate job `12908179` then uses the
+corresponding same-run candidate accumulator for each half and passes 23/23
+focused tests.  The posterior-induced shared-scatter gap and the actual
+production-CUDA gap have data cosines `0.98359`/`0.97997` and weight cosines
+`0.98292`/`0.97525`.  Projection onto the production gap accounts for
+`96.66%`/`96.17%` of data and `96.33%`/`94.91%` of weight; the orthogonal
+component is `17.73%`/`19.54%` and `18.03%`/`21.52%`, respectively.  Posterior
+history is therefore the dominant causal component of the raw accumulator
+error.  The residual is now explicitly bounded to shared-double versus
+production-CUDA scatter topology.  Before changing scoring arithmetic, the
+next cheapest experiment compares the complete candidate posterior against
+both already captured 200-particle native repeats to determine whether it is a
+stable out-of-repeat error or part of RELION's accelerated repeat spread.
+
 Capture submissions `12889423` and `12889446` remain rejected by fail-closed
 provenance/native-state gates and provide no parity evidence.  Fresh paired
 full-schedule job `12889537_1` follows a different native trajectory by

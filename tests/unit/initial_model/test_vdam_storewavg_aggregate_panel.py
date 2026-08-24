@@ -4,12 +4,17 @@ import numpy as np
 import pytest
 
 from scripts.analyze_vdam_storewavg_aggregate_panel import (
+    SCHEMA,
     _align_native_rows,
     _particle_locations,
     _residual_geometry,
 )
 
 pytestmark = pytest.mark.unit
+
+
+def test_complete_panel_schema_requires_explicit_capture_alignment():
+    assert SCHEMA == "recovar.vdam_storewavg_aggregate_panel.v2"
 
 
 def test_align_native_rows_applies_complete_rotation_permutation():
