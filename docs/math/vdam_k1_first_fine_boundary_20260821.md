@@ -1755,3 +1755,23 @@ boundary across repeated H100 runs, accepting only repeats whose first 18
 iterations remain exact.  The full 200-iteration rerun and all 21 additional
 outlier/noise/pose/scale trajectories remain held, and no generic RECOVAR full
 or long suite ran.
+
+Experimental commit `011e8e639` adds that bounded gate without changing the
+science path.  `AUDIT_MODE=pretransition` preserves the 200-iteration schedule
+but stops after iteration 19, audits all map checkpoints 0--19 and particle
+states 1--19, and skips iteration-90-only expected-accuracy capture.  The
+adaptive-sampling auditor now also checks the persistent
+`rlnOrientationalPriorMode` state that closed the accepted iteration-90 cause.
+Three focused sampling-auditor tests and the new runner-contract test pass,
+along with Ruff, shell syntax, py_compile, and diff checks.  The experimental
+commit remains unpushed.
+
+Six H100 repeats are submitted as Slurm `12935875`--`12935880`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_it019_repeat_011e8e639_rN_20260825`.
+Each records the production fused local posterior and coarse significance
+operands for original particle row 1036 at iteration 19/current size 30.  The
+panel is designed to capture both the accepted and divergent sides of the
+approximately `4e-6` Pmax boundary so their incoming iteration-18 continuous
+states and fixed-particle scores can be compared directly.  The 200-iteration
+gate and 22-case matrix remain held pending this classification; no generic
+RECOVAR full or long test suite is being run.
