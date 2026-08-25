@@ -117,13 +117,13 @@ for ((iteration = 0; iteration <= 200; iteration++)); do
     fi
 done
 set +e
-"${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_kclass_trajectory.py" \
+"${PIXI_PY}" -m scripts.audit_vdam_kclass_trajectory \
     --candidate-dir "${RELION_DIR}" --reference-dir "${REFERENCE_RELION}" --K 1 \
     "${map_args[@]}" --minimum-fsc-auc 0.999 --minimum-assignment-accuracy 0.999 \
     --output-json "${ANALYSIS_DIR}/native_repeat_maps.json" \
     --output-shells-npz "${ANALYSIS_DIR}/native_repeat_shells.npz"
 map_status=$?
-"${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_particle_state_trajectory.py" \
+"${PIXI_PY}" -m scripts.audit_vdam_particle_state_trajectory \
     --recovar-dir "${RELION_DIR}" --relion-dir "${REFERENCE_RELION}" \
     --iterations "${particle_iterations[@]}" \
     --output "${ANALYSIS_DIR}/native_repeat_particles.json"

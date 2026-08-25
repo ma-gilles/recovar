@@ -503,6 +503,8 @@ def test_vdam_native_full_repeat_preserves_autonomous_schedule():
         'for ((iteration = 0; iteration <= 200; iteration++)); do',
         "native_repeat_maps.json",
         "native_repeat_particles.json",
+        '"${PIXI_PY}" -m scripts.audit_vdam_kclass_trajectory',
+        '"${PIXI_PY}" -m scripts.audit_vdam_particle_state_trajectory',
         'touch "${OUTPUT_ROOT}/SCIENCE_COMPLETED"',
         'touch "${OUTPUT_ROOT}/AUDIT_FAILED"',
         "#SBATCH --constraint=h100",
