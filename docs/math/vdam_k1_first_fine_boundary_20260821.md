@@ -1353,3 +1353,55 @@ boundary check and a true 200-iteration K=1 trajectory.  The remaining small
 particle-wise residual/image-power and support-mass differences stay tracked;
 they are not being declared exact parity yet.  No generic RECOVAR full or long
 test suite ran.
+
+## First rounded-rim 200-iteration trajectory
+
+The first true 200-iteration GUI-default baseline ran at experimental head
+`78cdc97ed` as H100 Slurm array task `12926196_1`.  Both engines completed,
+but the strict trajectory audit failed after 1 hour 7 minutes; peak batch RSS
+was 11.00 GB.  Native RELION required about 14 minutes, while RECOVAR required
+about 48 minutes, so runtime parity is not yet achieved.  Cases 2--22 remain
+held: no outlier, alternate pose/noise distribution, or scale trajectory is
+being released until this baseline transition is causally closed.
+
+The rounded-rim correction keeps maps numerically equivalent through a long
+prefix.  Cross-engine FSC AUC is `0.999999999939` at iteration 2, remains near
+one through iteration 69, and is `0.999999758` at iteration 85.  The first
+particle-state difference occurs at iteration 24 for exactly one particle
+(`1172@particles.128.mrcs`, RECOVAR row 193): only its psi child differs by
+`3.75000187` degrees, with a `2e-6` pmax difference; it reconverges at
+iteration 25.
+
+The consequential divergence localizes to the adaptive sampling transition:
+
+- iterations 82--87 have no divergent particles;
+- iterations 88 and 89 have two divergent particles each;
+- iteration 90 has 440 divergent particles, pose match `0.989`, and
+  translation match `0.8533`;
+- RECOVAR iteration 90 changes from 116 to 52 translations and records
+  `sampling_updated=true` at `current_size=64`, Healpix order 3;
+- the first cross-engine FSC gate failure is iteration 92, at
+  `0.9988480497` versus the `0.999` threshold;
+- minimum cross-engine FSC AUC is `0.9170677807` at iteration 141, while the
+  minimum RECOVAR-minus-RELION ground-truth FSC delta is `-0.0029190173`;
+- terminal iteration 200 cross-engine FSC AUC is `0.9845245403`, with
+  ground-truth FSC delta `+0.000196409`.
+
+Thus scientific quality versus ground truth often stays close, but exact
+trajectory parity fails and the current RECOVAR path is about 3.4 times slower
+than native for the 200-iteration engine phase.  The next bounded gate compares
+only RELION and RECOVAR sampling metadata at iterations 86--92 (offset range,
+offset step, angular order/step, perturbation, and translation count), then
+tests the transition without rerunning all 200 iterations.  Repeated JIT shapes
+and slower late-size steady-state kernels are separately tracked for runtime.
+
+Artifacts:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gui_full_rounded_78cdc97e_20260825/vdam-gf01/trajectory_audit.json`
+  (SHA-256
+  `e828f09b6fa136b5effdd0f0d3af69e662e103e999aba944361af1c8f95f7f45`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gui_full_rounded_78cdc97e_20260825/vdam-gf01/particle_state_trajectory_audit.json`
+  (SHA-256
+  `a7a388630288ef71eb548c5ad598526750543e46c3a7cb8cae417c9a6c68765e`).
+
+No generic RECOVAR full or long test suite ran.
