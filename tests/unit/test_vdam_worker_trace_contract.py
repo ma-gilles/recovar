@@ -18,3 +18,15 @@ def test_relion_worker_trace_runner_is_fail_closed_and_full_schedule():
     ]
     for text in required:
         assert text in runner
+
+
+def test_relion_worker_trace_build_seals_complete_gpu_patch():
+    build = (ROOT / "scripts/build_relion_vdam_worker_trace.sbatch").read_text()
+    required = [
+        "EXPECTED_RELION_BASE",
+        'diff "${EXPECTED_RELION_BASE}"..HEAD',
+        "src/ml_optimiser.cpp src/ml_optimiser.h",
+        "src/acc/cuda/cuda_ml_optimiser.cu",
+    ]
+    for text in required:
+        assert text in build

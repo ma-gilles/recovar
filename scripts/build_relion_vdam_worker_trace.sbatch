@@ -16,10 +16,13 @@ set -euo pipefail
 
 : "${RELION_SOURCE:?set the isolated RELION worker-trace source worktree}"
 : "${RELION_BUILD_ROOT:?set a disposable build/provenance root}"
+: "${EXPECTED_RELION_BASE:?pin the uninstrumented RELION source commit}"
 : "${EXPECTED_RELION_HEAD:?pin the worker-trace source commit}"
 
 test -f "${RELION_BUILD_ROOT}/SAFE_TO_DELETE"
 test "$(git -C "${RELION_SOURCE}" rev-parse HEAD)" = "${EXPECTED_RELION_HEAD}"
+test "$(git -C "${RELION_SOURCE}" merge-base "${EXPECTED_RELION_BASE}" HEAD)" = \
+    "${EXPECTED_RELION_BASE}"
 test -z "$(git -C "${RELION_SOURCE}" status --porcelain=v1 --untracked-files=no)"
 
 source /etc/profile.d/modules.sh
@@ -42,7 +45,9 @@ mkdir -p "${BUILD}" "${PROVENANCE}"
 
 git -C "${RELION_SOURCE}" show --stat --oneline HEAD \
     > "${PROVENANCE}/source_head.txt"
-git -C "${RELION_SOURCE}" diff HEAD^ -- src/ml_optimiser.cpp src/ml_optimiser.h \
+git -C "${RELION_SOURCE}" diff "${EXPECTED_RELION_BASE}"..HEAD -- \
+    src/ml_optimiser.cpp src/ml_optimiser.h \
+    src/acc/cuda/cuda_ml_optimiser.cu \
     > "${PROVENANCE}/worker_trace.patch"
 
 /usr/bin/cmake --fresh -S "${RELION_SOURCE}" -B "${BUILD}" \
@@ -80,6 +85,6 @@ strings "${BINARY}" | grep -Fx RELION_VDAM_WORKER_LOG_SCHEMA_V1 \
     > "${PROVENANCE}/schema_marker.txt"
 sha256sum "${BINARY}" "${PROVENANCE}/worker_trace.patch" \
     > "${PROVENANCE}/build.sha256"
-printf '{"job_id":"%s","source_head":"%s"}\n' \
-    "${SLURM_JOB_ID}" "${EXPECTED_RELION_HEAD}" \
+printf '{"job_id":"%s","source_base":"%s","source_head":"%s"}\n' \
+    "${SLURM_JOB_ID}" "${EXPECTED_RELION_BASE}" "${EXPECTED_RELION_HEAD}" \
     > "${PROVENANCE}/build_job.json"
