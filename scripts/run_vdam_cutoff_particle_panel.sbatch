@@ -31,7 +31,7 @@ RECOVAR_ROOT=${OUTPUT_ROOT}/recovar_prefix
 SCORE_ROOT=${OUTPUT_ROOT}/recovar_score
 PROVENANCE=${OUTPUT_ROOT}/provenance
 ANALYSIS=${OUTPUT_ROOT}/analysis
-PIXI_PY=${REPO_ROOT}/.pixi/envs/default/bin/python
+PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 CUDA_BINARY=${REPO_ROOT}/recovar/cuda/libcuda_backproject.so
 RELION_BIND_BINARY=${REPO_ROOT}/recovar/relion_bind/_relion_bind_core.cpython-311-x86_64-linux-gnu.so
 
