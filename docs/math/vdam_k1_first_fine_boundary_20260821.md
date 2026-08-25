@@ -2232,3 +2232,36 @@ Nsight job `12948880` is active on `della-h19g2`, pinned to full head
 `c2f9d66c0e4b64e49bdaea2199493e54dee224bd` and the qualified CUDA SHA above,
 and captures only iteration 159.  No optimization is accepted from host
 timing alone.
+
+The formal four-repeat summary `12939264` completes its full computation and
+exits `1:0` because the scientific result is `fail`, not because of the CPU
+cache warnings.  The first failed checkpoint is iteration 84 and 117/201
+checkpoints fail.  All four RECOVAR runs satisfy the frozen GT nondegradation
+gate at every checkpoint (minimum delta `-0.0014313519`), but cross-engine mode
+coverage is incomplete: the minimum candidate-best-native FSC-AUC is
+`0.9630186047` at iteration 173, and minimum native-best-candidate is
+`0.9120287616` at iteration 133.  RECOVAR repeat variability stays within the
+native envelope at 200/201 checkpoints; the one real spread failure is
+iteration 173, where the RECOVAR repeat floor is `0.9528717628` versus native
+`0.9760519203`.  This is an active K=1 default failure, not a tolerance
+candidate.  Shared-candidate ensemble job `12947773` is now released from its
+dependency and pending for CPU priority.
+
+Bounded Nsight `12948880` completes `0:0` but samples a warm stochastic state,
+not the intended transition: iteration 159 is `current_size=72` with two local
+buckets and pass 2 takes `2.3208 s`.  The two big-JIT modules execute in
+`0.1002`/`0.1031 s`, the fine-score kernels total `24.87 ms`, and there is no
+XLA compile range for them.  Five coarse launches instead total `12.0966 s`.
+The trace and SQLite SHA-256 values are
+`cf2e568d0e18762babb969ab056165ce2d7e7f1ad52272d826a4ddedbc27ae70`
+and `5574e66a5b62c9071a1cce0935086b8eab9b1501694dce3e2a61ad73135795f9`.
+
+Measurement-only local commit `b32ebc8e4` replaces unstable physical-iteration
+selection with a fail-closed exact-local shape trigger.  It captures the first
+non-score call matching an explicit `current_size:bucket_count`, is inert by
+default, records the target in run provenance, and rejects simultaneous
+iteration/shape selectors.  Focused validation passes 4/4 tests plus Ruff,
+byte-compilation, shell syntax, and diff checks; no generic suite ran.  Same-
+node shape capture `12950773` is active for `74:4`, source
+`b32ebc8e4c7aed984e69fc61ffcfcb485d8a905d`, and the qualified CUDA SHA.  The
+measurement commit remains local and unpushed.
