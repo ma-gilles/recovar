@@ -99,8 +99,12 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     projector_launcher = source.split(
         "cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(", 1
     )[1].split("__device__ __forceinline__ float relion_fine_diff2_update_f32", 1)[0]
-    assert "relion_vdam_native_sgd_f32_kernel<<<rotation_count, 128" in projector_launcher
+    assert "relion_vdam_native_sgd_f32_kernel<<<" in projector_launcher
+    assert "rotation_count, 128, 0, particle_streams[lane]" in projector_launcher
     assert "relion_vdam_denominator_after_sgd_f32_kernel<<<" in projector_launcher
+    assert "cudaStream_t particle_streams[3]" in projector_launcher
+    assert "pool_start += 3" in projector_launcher
+    assert "cudaStreamSynchronize(particle_streams[lane])" in projector_launcher
 
     wrapper = inspect.getsource(cuda_backproject.relion_vdam_mstep_fused_x_half)
     assert "data_real_volume = jnp.asarray(data_volume.real" in wrapper
