@@ -1243,3 +1243,55 @@ boundaries.  Reports:
   `0da4e9f372cb44df3dc754a22ef1748c2f84dc7408019ec0e79de9d0f5b81be1`).
 
 No generic RECOVAR full or long test suite ran.
+
+## Joint pseudo-halfset particle-stream discriminator
+
+Isolated, unpushed commit `650c8d54b` replaces RECOVAR's two serial
+pseudo-halfset E-steps with one globally ordered K=1 exact E-step.  Particle
+half ids travel through the existing local scorer and are consumed only by the
+source-faithful CUDA BPref boundary, which routes each particle's atomic
+updates into one of two grouped accumulators.  Pool-of-three chunk boundaries
+are kept continuous by forcing one bucket shape and rounding every non-tail
+FFI particle chunk down to a multiple of three.  Other engines and K>1 remain
+fail-closed on the old path.
+
+Focused H100 build/test job `12924054` completed in 2 minutes 52 seconds with
+1.98 GB peak RSS.  All 19 selected source, CUDA, group-routing, adapter, and
+pool-boundary tests passed in 6.16 seconds.  The grouped CUDA output agrees
+with separate one-half launches within the native float32 atomic tolerance;
+the qualified CUDA SHA-256 is
+`6e29e0cf2d6f880928493893fede6445bcd4520e9ecc68eae7e297865ef613de`.
+Build preflight `12924013` failed before compilation because `nvcc` was absent
+from the compute-node PATH; the runner now pins the qualified CUDA 13.1
+compiler.  Science preflight `12924228` likewise failed in two seconds before
+GPU work because the new disposable output root had not yet received its
+mandatory `SAFE_TO_DELETE` marker.
+
+The correctly pinned iteration-2 science job `12924274` completed in 59
+seconds with 3.13 GB peak RSS.  Both iteration-1 and iteration-2 metadata
+confirm `joint_halfset_particle_stream=true`, but the propagated boundary is
+unchanged:
+
+- direct-residual signed sum error `+1.5988481367e-5`;
+- `AA` signed sum error `-3.8716156432e-6`;
+- `XA` signed sum error `-9.9874459921e-6`;
+- inferred image-power signed sum error `-1.0443533354e-7`;
+- support-mass signed sum error `+2.1182779812e-5`.
+
+The prior pool-only direct-residual error was `+1.5958762627e-5`, so globally
+interleaving pseudo-halfsets does not explain the structured iteration-2
+reference error.  This topology is rejected and receives no 200-iteration
+trajectory.  Its report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_joint_halfset_it02_650c8d54_20260825/analysis/cutoff_particle_panel.json`
+(SHA-256
+`96a15d3b63549bf2ff839241808a10d4a633c5a8455b0af78bd35198178956e5`).
+
+The next bounded gate is shell-resolved incoming-reference localization.  The
+candidate iteration-1 map is inside the global native atomic repeat envelope,
+yet native iteration-2 cutoff components are much more repeatable than the
+candidate error.  Before another production change, compare candidate/native
+and native/native reconstructed references and texture-projector samples by
+Fourier shell, with special attention to the iteration-2 cutoff shell and the
+eight already-qualified largest `XA` contributors.  This will distinguish a
+low-shell reconstruction/layout defect from harmless high-shell atomic
+variation.  No generic RECOVAR full or long test suite ran.
