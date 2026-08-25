@@ -47,24 +47,35 @@ stable-repeat outliers, `144@1127` and `179@115`, then closed projected
 references, score weights, priors, raw-particle preprocessing/translation,
 fine diff2, and the final float32 log-weight table to the live RECOVAR scores.
 
-The production BPref captures exposed the missing wiring: InitialModel saved
-float64 reconstruction probabilities and never enabled
-`RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR`; the adapter left the already
-qualified EM CUDA posterior behind a default-off diagnostic switch.  Focused
-H100 jobs `12910179` and `12910180` passed 14/14 tests and replayed the saved
-candidate scores through RELION's exact float32 `expf`, Policy800 CUB
-sort/scan, divide, and significance path.  For both stable outliers, raw
-weights, sum weight, threshold, normalized posterior, reconstruction mask,
-and pruned reconstruction probabilities are bitwise identical to native
-RELION (2,720/2,720 and 512/512 values).  The existing float64 production
-probabilities remain nonexact at 868 and 113 active rows respectively.
-Padding the candidate tables to 118,784 slots does not change any native
-result, so candidate order/zero padding are excluded at this boundary.
+The first BPref captures appeared to expose missing production wiring:
+InitialModel's local big-JIT diagnostic saved float64 reconstruction
+probabilities while the already qualified EM CUDA posterior remained behind a
+default-off switch.  Focused H100 jobs `12910179` and `12910180` passed 14/14
+tests and replayed the saved candidate scores through RELION's exact float32
+`expf`, Policy800 CUB sort/scan, divide, and significance path.  For both
+stable outliers, raw weights, sum weight, threshold, normalized posterior,
+reconstruction mask, and pruned reconstruction probabilities are bitwise
+identical to native RELION (2,720/2,720 and 512/512 values).  Padding the
+candidate tables to 118,784 slots does not change any native result, so
+candidate order/zero padding are excluded at this boundary.
 
-The accepted bounded change makes the source-matched float32 posterior the
+The bounded production change makes the source-matched float32 posterior the
 default for K=1 RELION x-half reconstruction while retaining the environment
-switch as an explicit `0` rollback.  Next gates are a fresh iteration-1
-all-particle capture, the iteration-2 noise/cutoff boundary, and only then one
+switch as an explicit `0` rollback.  A follow-up trace found that the
+big-JIT M-step was using the new float32 tensor, but its observational capture
+incorrectly rebuilt `reconstruction_probs` from the generic float64
+`debug_probs`.  Commit `3188c7e95` makes the capture rebuild the same exact
+tensor from its returned score boundary and fail closed if the mask differs.
+H100 unit job `12910923` passes 2/2 focused tests.  Fresh production captures
+`12911029` and `12911030` now retain float32 reconstruction probabilities in
+both halves.  Independent audits `12911086` and `12911087` pass 16/16 tests
+each and prove the live InitialModel probabilities and masks bitwise exact to
+the stable native outliers: 2,720/2,720 and 512/512 values, zero error.
+
+The posterior boundary is therefore closed in production, but the whole
+iteration-1 M-step is not: fresh-repeat raw accumulator relative-L2 remains
+about `8.91e-6`/`1.00e-5` for data and `2.04e-6`/`2.49e-6` for weights.  The
+next causal gate is iteration-2 noise/cutoff propagation, followed by one
 representative 0..200 trajectory before promoting the change to the full
 22-cell trajectory matrix.  No generic RECOVAR suite is part of this gate.
 
