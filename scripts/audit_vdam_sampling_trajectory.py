@@ -22,7 +22,7 @@ def _native_tables(path: Path) -> dict[str, object]:
     return value
 
 
-def _native_model_sampling(path: Path) -> tuple[float, float, int]:
+def _native_model_sampling(path: Path) -> dict[str, float | int]:
     tables = _native_tables(path)
     classes = tables["model_classes"]
     if len(classes) != 1:
@@ -30,11 +30,15 @@ def _native_model_sampling(path: Path) -> tuple[float, float, int]:
     general = tables["model_general"]
     if not isinstance(general, dict):
         raise ValueError(f"expected scalar model_general block in {path}")
-    return (
-        float(classes.iloc[0]["rlnAccuracyRotations"]),
-        float(classes.iloc[0]["rlnAccuracyTranslationsAngst"]),
-        int(general["rlnOrientationalPriorMode"]),
-    )
+    return {
+        "sampling_acc_rot": float(classes.iloc[0]["rlnAccuracyRotations"]),
+        "sampling_acc_trans_angstrom": float(
+            classes.iloc[0]["rlnAccuracyTranslationsAngst"]
+        ),
+        "orientational_prior_mode": int(general["rlnOrientationalPriorMode"]),
+        "current_size": int(general["rlnCurrentImageSize"]),
+        "current_resolution_angstrom": float(general["rlnCurrentResolution"]),
+    }
 
 
 def _native_sampling(path: Path) -> dict[str, float | int]:
@@ -111,8 +115,14 @@ def audit_sampling_trajectory(
 
         candidate = json.loads(candidate_path.read_text())
         native = _native_sampling(sampling_path)
-        native_acc_rot, native_acc_trans, native_prior_mode = _native_model_sampling(model_path)
+        native_model = _native_model_sampling(model_path)
         native_changes = _native_changes(optimiser_path)
+        candidate_current_resolution = float(candidate["current_resolution"])
+        if candidate_current_resolution <= 0.0:
+            raise ValueError(
+                f"candidate current_resolution must be positive in {candidate_path}"
+            )
+        candidate_current_resolution_angstrom = 1.0 / candidate_current_resolution
         oversampling = int(candidate["oversampling"])
         native_n_translations = _native_translation_count(
             native,
@@ -138,9 +148,13 @@ def audit_sampling_trajectory(
                 candidate["random_perturbation"], native["random_perturbation"], atol=5.1e-6
             ),
             "translation_topology": int(candidate["n_translations"]) == native_n_translations,
-            "accuracy_rotation": _close(candidate["sampling_acc_rot"], native_acc_rot, atol=5.1e-4),
+            "accuracy_rotation": _close(
+                candidate["sampling_acc_rot"], native_model["sampling_acc_rot"], atol=5.1e-4
+            ),
             "accuracy_translation": _close(
-                candidate["sampling_acc_trans_angstrom"], native_acc_trans, atol=5.1e-7
+                candidate["sampling_acc_trans_angstrom"],
+                native_model["sampling_acc_trans_angstrom"],
+                atol=5.1e-7,
             ),
             "optimal_offset_change": _close(
                 candidate["current_changes_optimal_offsets_angstrom"],
@@ -148,7 +162,14 @@ def audit_sampling_trajectory(
                 atol=5.1e-7,
             ),
             "orientational_prior_mode": int(candidate["orientational_prior_mode"])
-            == native_prior_mode,
+            == int(native_model["orientational_prior_mode"]),
+            "current_size": int(candidate["current_size"])
+            == int(native_model["current_size"]),
+            "current_resolution": _close(
+                candidate_current_resolution_angstrom,
+                native_model["current_resolution_angstrom"],
+                atol=5.1e-7,
+            ),
         }
         if previous_native is not None:
             checks["sampling_updated"] = bool(candidate["sampling_updated"]) == native_updated
@@ -168,6 +189,10 @@ def audit_sampling_trajectory(
                     "sampling_accuracy_estimated": bool(
                         candidate.get("sampling_accuracy_estimated", True)
                     ),
+                    "current_size": int(candidate["current_size"]),
+                    "current_resolution": candidate_current_resolution,
+                    "current_resolution_angstrom": candidate_current_resolution_angstrom,
+                    "current_resolution_shell": int(candidate["current_resolution_shell"]),
                     "orientational_prior_mode": int(candidate["orientational_prior_mode"]),
                     "uniform_local_orientation_prior": bool(
                         candidate["uniform_local_orientation_prior"]
@@ -180,10 +205,8 @@ def audit_sampling_trajectory(
                 "native": {
                     **native,
                     "n_translations": native_n_translations,
-                    "sampling_acc_rot": native_acc_rot,
-                    "sampling_acc_trans_angstrom": native_acc_trans,
+                    **native_model,
                     "sampling_updated": native_updated,
-                    "orientational_prior_mode": native_prior_mode,
                     **native_changes,
                 },
                 "absolute_errors": {
@@ -195,9 +218,17 @@ def audit_sampling_trajectory(
                         float(candidate["offset_step_angstrom"])
                         - float(native["offset_step_angstrom"])
                     ),
-                    "sampling_acc_rot": abs(float(candidate["sampling_acc_rot"]) - native_acc_rot),
+                    "sampling_acc_rot": abs(
+                        float(candidate["sampling_acc_rot"])
+                        - float(native_model["sampling_acc_rot"])
+                    ),
                     "sampling_acc_trans_angstrom": abs(
-                        float(candidate["sampling_acc_trans_angstrom"]) - native_acc_trans
+                        float(candidate["sampling_acc_trans_angstrom"])
+                        - float(native_model["sampling_acc_trans_angstrom"])
+                    ),
+                    "current_resolution_angstrom": abs(
+                        candidate_current_resolution_angstrom
+                        - float(native_model["current_resolution_angstrom"])
                     ),
                     "current_changes_optimal_offsets_angstrom": abs(
                         float(candidate["current_changes_optimal_offsets_angstrom"])

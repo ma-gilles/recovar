@@ -19,6 +19,10 @@ def _write_iteration(
     candidate_translations: int = 52,
     candidate_prior_mode: int = 0,
     native_prior_mode: int = 0,
+    candidate_current_size: int = 28,
+    native_current_size: int = 28,
+    candidate_current_resolution_angstrom: float = 20.0,
+    native_current_resolution_angstrom: float = 20.0,
 ) -> None:
     tag = f"{iteration:03d}"
     candidate = {
@@ -33,6 +37,9 @@ def _write_iteration(
         "sampling_updated": False,
         "current_changes_optimal_offsets_angstrom": 1.25,
         "sampling_nr_iter_wo_resol_gain": 0,
+        "current_size": candidate_current_size,
+        "current_resolution": 1.0 / candidate_current_resolution_angstrom,
+        "current_resolution_shell": 5,
         "orientational_prior_mode": candidate_prior_mode,
         "uniform_local_orientation_prior": candidate_prior_mode == 1,
     }
@@ -60,7 +67,8 @@ def _write_iteration(
         "\n".join(
             [
                 "data_model_general",
-                "_rlnCurrentResolution 20.000000",
+                f"_rlnCurrentResolution {native_current_resolution_angstrom:.6f}",
+                f"_rlnCurrentImageSize {native_current_size}",
                 f"_rlnOrientationalPriorMode {native_prior_mode}",
                 "",
                 "data_model_classes",
@@ -142,3 +150,48 @@ def test_sampling_trajectory_reports_first_orientation_prior_mode_mismatch(tmp_p
     assert report["first_mismatch"]["orientational_prior_mode"] == 90
     assert report["iterations"][1]["candidate"]["orientational_prior_mode"] == 0
     assert report["iterations"][1]["native"]["orientational_prior_mode"] == 1
+
+
+def test_sampling_trajectory_reports_current_image_size_transition_lag(tmp_path):
+    candidate_dir = tmp_path / "candidate"
+    relion_dir = tmp_path / "relion"
+    candidate_dir.mkdir()
+    relion_dir.mkdir()
+    _write_iteration(candidate_dir, relion_dir, 172)
+    _write_iteration(
+        candidate_dir,
+        relion_dir,
+        173,
+        candidate_current_size=74,
+        native_current_size=72,
+    )
+
+    report = audit_sampling_trajectory(candidate_dir, relion_dir, pixel_size=2.0)
+
+    assert report["result"] == "fail"
+    assert report["first_mismatch"]["current_size"] == 173
+    assert report["first_mismatch"]["current_resolution"] is None
+    assert report["iterations"][1]["candidate"]["current_size"] == 74
+    assert report["iterations"][1]["native"]["current_size"] == 72
+
+
+def test_sampling_trajectory_reports_current_resolution_transition_lag(tmp_path):
+    candidate_dir = tmp_path / "candidate"
+    relion_dir = tmp_path / "relion"
+    candidate_dir.mkdir()
+    relion_dir.mkdir()
+    _write_iteration(candidate_dir, relion_dir, 171)
+    _write_iteration(
+        candidate_dir,
+        relion_dir,
+        172,
+        candidate_current_resolution_angstrom=20.1481481481,
+        native_current_resolution_angstrom=20.923077,
+    )
+
+    report = audit_sampling_trajectory(candidate_dir, relion_dir, pixel_size=2.0)
+
+    assert report["result"] == "fail"
+    assert report["first_mismatch"]["current_resolution"] == 172
+    assert report["first_mismatch"]["current_size"] is None
+    assert report["iterations"][1]["absolute_errors"]["current_resolution_angstrom"] > 0.7
