@@ -2267,3 +2267,37 @@ expanded SHA fails the exact-head guard; its output is excluded.  Corrected
 shape capture `12950828` is active for `74:4`, source
 `b32ebc8e4c2f5dfb01a9b417ebbbdd698ac59ce9`, and the qualified CUDA SHA.  The
 measurement commit remains local and unpushed.
+
+The one formal repeat-spread failure is now localized to an exact adaptive-
+resolution boundary, not a generic random map excursion.  At iteration 173,
+RECOVAR repeats 2 and 4 still use `current_size=74`, while both matching
+RELION repeats already use `72`; repeats 1 and 3 agree with RELION at `72`.
+The lag is one iteration for repeat 2 and two iterations for repeat 4, and
+the RECOVAR repeat floor recovers from `0.9528717628` at iteration 173 to
+`0.9859` at iteration 174.  Shell 27 is the decisive threshold: in repeat 2
+at iteration 172 RELION records `rlnSsnrMap=0.989837` while RECOVAR records
+`1.004969`; in repeat 4 at iteration 171 the values are `0.995230` and
+`1.021395`.  The difference is dominated by the higher RECOVAR reference
+tau2 rather than reference sigma2, so the next correctness boundary is the
+late reference/tau2 formation that feeds `updateSSNRarrays`.
+
+Local unpushed audit commit `3be85425e` closes the test blind spot exposed by
+that failure.  The full sampling-trajectory auditor now checks RELION's
+serialized current resolution and current image size at every selected
+checkpoint, while retaining the distinction between the resolution chosen
+after the M-step and the size used by that iteration.  Focused validation is
+`14/14` sampling/envelope tests plus Ruff and byte-compilation.  A replay of
+formal repeat 2 detects the real boundary exactly: first resolution mismatch
+at iteration 172, first image-size mismatch at iteration 173, and agreement
+again at iteration 174.  No generic RECOVAR suite ran.
+
+Exact-shape Nsight job `12950828` also closes without a usable trace for a
+scientifically explained reason.  Its inner 200-iteration run completes
+`0:0`, but the outer fail-closed profiler gate exits `1:0` because this
+stochastic repeat never produces the requested `74:4` exact-local shape.  At
+its slow size-74 phase it has three non-score buckets, including iteration
+170, where expectation takes `25.9544 s`; the complete run's maximum pass-2
+time is `12.1812 s`.  Dependent same-H100 job `12952330` is therefore pinned
+to the observed `74:3` shape, the same source
+`b32ebc8e4c2f5dfb01a9b417ebbbdd698ac59ce9`, and the same qualified CUDA
+SHA-256.  Candidate ensemble job `12947773` remains active independently.
