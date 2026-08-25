@@ -2301,3 +2301,57 @@ time is `12.1812 s`.  Dependent same-H100 job `12952330` is therefore pinned
 to the observed `74:3` shape, the same source
 `b32ebc8e4c2f5dfb01a9b417ebbbdd698ac59ce9`, and the same qualified CUDA
 SHA-256.  Candidate ensemble job `12947773` remains active independently.
+
+Same-H100 candidate envelope `12947773` is now complete and fails the frozen
+scientific contract.  Its map report SHA-256 is
+`28e0e343ea6c111cd26e0a6f08c0b09e939e3fc6e56cafb8b95c2d4fdb23e603`.
+Ground-truth nondegradation passes at all 201 checkpoints, but the candidate
+first leaves every native map mode at iteration 139 and misses at 62/201
+checkpoints through iteration 200.  The minimum candidate-best-native FSC-AUC
+is `0.9654143125` at iteration 173; the neighboring values are `0.99486076`
+at 172 and `0.99207845` at 174.  Its minimum RECOVAR-minus-RELION GT delta is
+`-0.0018244161` at iteration 160, still inside the unchanged `-0.002` gate.
+
+The first state-envelope report also fails, but its same-iteration
+`rlnNumberOfIterWithoutResolutionGain` comparison is invalid: RECOVAR records
+the counter before the E/M-step, while RELION serializes it after
+`updateCurrentResolution`.  Local unpushed commit `619352eba` therefore keeps
+that counter diagnostic-only while retaining complete sampling geometry,
+accuracy, update, current-resolution, and current-size checks as active
+acceptance fields.  It also incorporates the exact resolution/size auditor and
+locks the requested 22-case full-trajectory stress matrix (uniform, Kent, and
+anisotropic poses; white, radial, high, and low noise; CTF/translation/scale;
+junk and 20--70% outliers).  Focused validation is 15 state/sampling tests,
+the explicit stress-contract test, Ruff, byte-compilation, and shell syntax;
+no generic RECOVAR suite ran.  Corrected state-only rerun `12953825` is pending
+against the already completed candidate and native panel; it does not repeat
+the 35-minute map audit.
+
+Exact-shape profiler `12952330` captures the first cold `74:3` pass at
+iteration 161 before the outer trajectory stalls.  That pass takes
+`24.4791 s`, versus `1.8201 s` once warm.  Nsight attributes the cold boundary
+primarily to two `run_local_bucket_big_jit` compilations (`5.1710 s` total),
+two fused M-step compilations (`1.4992 s`), and XLA autotuning (`2.2344 s`);
+all CUDA kernels together take about `0.610 s`.  The leading kernels are the
+coarse VDAM SGD kernel (`0.2081 s`), XLA accumulation (`0.1609 s`), fine diff2
+(`0.0454 s`), and M-step sums (`0.0262 s`).  The trace SHA-256 is
+`43169b6e3d6e3d27825f125fc050dd2216e354b9ec68f9e5e3f2ffa9a8252534`.
+The scheduler denies a wall-limit extension and then fails to terminate at
+40 minutes, so the run is cancelled at `41:04` after all trace reports are
+safely materialized.  This is an orchestration cancellation, not a trajectory
+parity result.  The runtime target is now cold shape/compile reuse without
+changing the qualified numerical path.
+
+The correctness attack moves to the earlier causal boundary rather than
+rerunning the frozen matrix.  Across the formal repeats, candidate/native
+shell-27 tau2 first exceeds a mean ratio of `1.005` at iteration 98 and rises
+to about `1.017` by iteration 166, while sigma2 remains close.  Full-schedule
+M-step capture `12955511` is running on one H100 from local unpushed head
+`7f59c67176163990351318e07a67741fd4518b7b`, qualified CUDA SHA-256
+`b3a329a5f5559ca3bb3c436ab5a051bfe1666c317a2c2834daea1ae3c2c6939c`,
+and RELION binding SHA-256
+`fcbb2a8356c2f7ee88e947fa92c9f5bfc41535ed0a2c6a9124a2fad781a63b83`.
+At iteration 98 it compares raw BPref accumulators, post-apply data and noise
+momenta, and reference input/output formation.  Its focused harness validation
+is 4/4 tests plus Bash syntax, Ruff, and byte-compilation.  The remaining 21
+frozen stress trajectories stay held until the GUI-default K=1 gate closes.
