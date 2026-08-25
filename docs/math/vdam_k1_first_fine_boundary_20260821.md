@@ -949,3 +949,51 @@ accumulator mismatch already observed before reconstruction.  Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_it02_native_xa_top8_serial_40076ddd_20260824/analysis/state_audit.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_it02_native_xa_top8_serial_40076ddd_20260824/analysis/posterior_panel.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_it02_native_xa_top8_serial_40076ddd_20260824/analysis/reference_decomposition.json`
+
+## Hopper PTX/JIT M-step resource discriminator
+
+The separate-accumulator fused arm also tested whether the remaining native
+repeat-scale difference was caused by CUDA resource topology.  Static
+inspection first appeared to show stock RELION's SGD kernel at 40 registers
+and 48 bytes of shared storage.  The sm80-only candidate build in job
+`12913534` matched those cubin values exactly, but focused job `12913597`
+correctly rejected it on H100 with `no kernel image is available`: RELION's
+binary also embeds compute-80 PTX, so Hopper is not executing that inspected
+sm80 cubin directly.  Two source/routing guards passed before the two CUDA
+executions stopped; no boundary science ran.  The build's final inspection
+command also used a node-local path that was absent, producing exit 127 after
+the binary had built.  Both failures are retained as provenance failures.
+
+The corrected isolated commit `8a471b29e` is PTX-faithful.  RELION's native
+SGD PTX declares nine float32 Euler entries (36 bytes), so the candidate pads
+its six-entry compact rotation to the same PTX shared declaration and removes
+the artificial register cap.  PTX-only build job `12913683` completed with
+CUDA digest
+`d7566386a3c2fb6223f796f626af812b5f6036e9f73c8e4736ab70881464aa61`;
+the dumped candidate and native PTX both declare 36 shared bytes.  H100 job
+`12913762` then passed all four focused source, fused-interior, SGD-y-boundary,
+and fail-closed routing tests.  Initial submissions `12913773` and `12913774`
+stopped before work because their new disposable roots lacked the mandatory
+`SAFE_TO_DELETE` marker.  Resubmitted jobs `12913835` and `12913836` completed
+on distinct H100 UUIDs in 52 seconds each using the true 200-iteration
+schedule and stopping after the iteration-1 M-step capture.
+
+The result is null.  Native repeat relative L2 is
+`1.0812071e-5`/`1.0094684e-5` for the two data halves,
+`2.4511435e-6`/`1.9858739e-6` for weight, and `2.4726651e-6`
+after reconstruction.  Candidate repeat is much tighter, but cross-engine
+data/weight residuals remain `0.977`--`1.254x` the native repeat floor.  The
+reconstructed reference is already inside that floor at `0.725`/`0.820x`.
+Matching RELION's PTX target and static shared declaration therefore does not
+reproduce its atomic distribution and is rejected without a long trajectory.
+The isolated experimental commit remains unpushed.
+
+A new fail-closed paired M-step analyzer now loads both arms' qualified cross
+reports, compares native/native and RECOVAR/RECOVAR using their respective
+on-disk schemas, and emits per-stage native-floor ratios.  Its two focused
+unit tests pass; Ruff and diff checks pass.  No generic RECOVAR suite ran.
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_ptx_jit_repeat_panel_8a471b29_20260824.json`
+- `/scratch/gpfs/GILLES/mg6942/slurmo/relion-patched-ptx-20260824.txt`
+- `/scratch/gpfs/GILLES/mg6942/slurmo/vdam-ptx80-jit-ptx-12913683.txt`
