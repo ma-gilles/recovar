@@ -1295,3 +1295,61 @@ Fourier shell, with special attention to the iteration-2 cutoff shell and the
 eight already-qualified largest `XA` contributors.  This will distinguish a
 low-shell reconstruction/layout defect from harmless high-shell atomic
 variation.  No generic RECOVAR full or long test suite ran.
+
+## Rounded-shell Wavg reconstruction-support acceptance
+
+The shell-resolved audit found a deterministic boundary mismatch hidden by
+global map norms.  At iteration-2 `current_size=30`, RELION's Wavg/noise loop
+issues the full FFTW rectangle and accepts pixels whose *rounded* shell is at
+most 15.  RECOVAR projected and reconstructed only the exact Euclidean disk.
+On the 32-pixel particle grid, exact support contains 355 pixels while rounded
+support contains 372; 17 of RELION's 39 shell-15 pixels were therefore issued
+with image power but zero candidate `XA/AA` reference terms.
+
+The corrected top-eight captured-particle decomposition ran as H100 Slurm
+`12925327` in 15 seconds.  The omitted rim explains the prior reference error
+to numerical closure: summed `XA` error is `-2.2125492e-6`, with a
+`-2.2125974e-6` rim term; summed `AA` error is `-5.6053194e-7`, with a
+`-5.6055199e-7` rim term.  Posterior and inside-exact-disk reference terms are
+only order `1e-11`.  Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_joint_halfset_it02_650c8d54_20260825/analysis/rounded_rim_decomposition_top8_v2.json`
+(SHA-256
+`9615da6a7f98e0bb09f91aa77ea585f701bd3ec4040eb3e5ba8c8780dab7d4f3`).
+
+Experimental commit `2a4ccbeeb` propagates InitialModel's already-declared
+`recon_exact_radius=False` contract into the exact-local Fourier window.  The
+rounded pixels now participate in projected-reference residual and Wavg/noise
+accounting; the RELION-style CUDA BackProjector independently retains its
+exact rotated 3-D insertion cutoff, so the outer rim is not inserted into the
+volume.  A direct part-5 projector audit at experimental head `9b0735f1a`
+matches RELION's complete 372-pixel projection at `2.20831e-9` relative L2.
+Restoring the 17 pixels cancels the particle's `XA` defect from
+`-1.1806893e-6` to `-1.48614e-11`, and its `AA` defect to `+3.36908e-12`.
+Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_joint_halfset_it02_650c8d54_20260825/analysis/rounded_projection_part005.json`
+(SHA-256
+`4f8d2c0710c85d64612978e277ab5f990f7ca48806da90a291bb80d667cd55b0`).
+
+Focused H100 build/test job `12925660` completed in 2 minutes 51 seconds with
+2.04 GB peak RSS and all 22 selected Fourier-window, Wavg, adapter,
+joint-halfset, pool-boundary, and CUDA routing tests passing.  The full frozen
+200-particle iteration-2 gate `12925793` completed in 58 seconds with 3.14 GB
+peak RSS and 55 seconds of RECOVAR wall time.  It removes the propagated
+reference defect:
+
+- direct-residual signed error: `+7.7336232e-9`, down from
+  `+1.5988481e-5` (about 2,067-fold);
+- `XA` signed error: `+1.6671798e-11`, down from `-9.9874460e-6`;
+- `AA` signed error: `+2.9276316e-10`, down from `-3.8716156e-6`;
+- inferred image-power signed error: `+1.7833844e-8`;
+- support-mass signed error: `+1.9669235e-5`.
+
+The production report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_rounded_rim_it02_9b0735f1_20260825/analysis/cutoff_particle_panel.json`
+(SHA-256
+`69f9ca3e7ae543ab4f5e0d285f3182b1807eebe63bf5d03e10736394157a358f`).
+This causal gate is accepted.  It justifies the next iteration-1 accumulator
+boundary check and a true 200-iteration K=1 trajectory.  The remaining small
+particle-wise residual/image-power and support-mass differences stay tracked;
+they are not being declared exact parity yet.  No generic RECOVAR full or long
+test suite ran.
