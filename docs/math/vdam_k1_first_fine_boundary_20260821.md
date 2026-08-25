@@ -2117,3 +2117,17 @@ schedule envelopes remain explicit separate gates rather than being implied by
 the map result.  Focused auditor tests pass `6/6`; Ruff and byte-compilation
 also pass.  This commit is not pushed while the formal repeat panel is still
 running.
+
+Local unpushed runtime commits `b56280859` and `7bd6a8953` add measurement-only
+CUDA-profiler start/stop around one explicitly selected VDAM expectation
+iteration and make the existing Nsight wrapper select its stop iteration,
+audit mode, and trace label.  Default execution does not load the profiler.
+Focused validation passes `3/3` for the iteration/profiler contract and `1/1`
+for the wrapper, plus Ruff, byte-compilation, and shell syntax.  Setup attempt
+`12944169` stopped before science in two seconds because the abbreviated Git
+SHA did not satisfy the exact 40-character provenance guard.  Corrected H100
+Slurm `12944211` runs through iteration 150 from immutable source
+`7bd6a8953761b070a8c86e872e9f77aaa418ff42`, captures CUDA/NVTX/OSRT only for
+expectation iteration 150, and pins the already-qualified shared CUDA binary
+SHA-256 `b3a329a5f5559ca3bb3c436ab5a051bfe1666c317a2c2834daea1ae3c2c6939c`.
+No setup-failure output is reused.
