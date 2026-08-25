@@ -2654,3 +2654,47 @@ pending.  Only an allocation with UUID
 another GPU fails before launching RECOVAR.  No generic RECOVAR suite ran and
 the remaining 21 stress cells remain held until this full trajectory is
 classified.
+
+The exact-formal result rejects exact-count/pool as the production candidate.
+The UUID guard works as intended: sibling `12962260` lands on the wrong
+physical GPU and fails closed in three seconds before science, while sibling
+`12962263` acquires the sealed RELION GPU and completes iterations 0--200 in
+`31:49` science / `33:12` including audits.  Its first hard particle mismatch
+is iteration 42 (one translation choice for
+`1136@particles.128.mrcs`), earlier than static worker-8's iteration 84.  The
+first strict map failure is iteration 131 at FSC-AUC
+`0.9989390314608421`; minimum trajectory FSC-AUC is
+`0.9533737779301175`, and iteration 200 is `0.9926056852032877`.  Static
+worker-8 instead first fails the strict map gate at iteration 129, reaches a
+materially better minimum `0.9901038850705235`, and ends at
+`0.9936677536689421`.  Exact-count/pool report SHA-256 values are
+`c53d86aa869e53b557f5ff2a2c072abeec19bdc845dcce0b3e599748b66f6af4`
+for maps, `727967b49833ba8b426d208dfd2cd2ac2c0fd1379689754724b2e624c5230022`
+for particle state, and
+`652d63a01de81ca5de4a0d3870a83430ed304a432a9a9971368f4c781d78154a`
+for sampling.  The remaining 21 stress cells stay held.
+
+The completed four-repeat static-worker envelope also fails, rather than
+reclassifying the iteration-84 boundary as ordinary native repeatability.
+Job `12957075` completes both auditors in `26:25`; its nonzero exit is the
+expected gate result, not an execution failure.  The first particle outside
+all four native runs is iteration 84, again
+`129@particles.128.mrcs`.  The first map outside the frozen native-mode gate is
+iteration 131; minimum best-native FSC-AUC is `0.9831481130943629`, while the
+candidate-minus-best-native ground-truth floor remains nondegraded at
+`-0.0009750295208153792` versus the allowed `-0.002`.  The map, state, status,
+and shell report SHA-256 values are respectively
+`535f6da63eaed983f862348ad914600bf2fcff36417a13f3a087770563f42895`,
+`bb5cb89c5d6413f76f4f3461e48ff21df30d1c1b6a3a7f84a6b96b6d64ad1ba9`,
+`e5b8bba0df321c8095e668ec3f7960ea4f90f95c8253ce7193bc9ec43c394533`,
+and `9f987819f5f1c1c0189b293d2967724e896e00d1dee8047bd78dd8e5fc3ca5e6`.
+
+These two long gates close the scheduler-guess branch.  RELION source confirms
+that the actual topology is a 24-particle outer pool plus a one-particle
+OpenMP task distributor feeding eight blocking worker streams.  Rotation-count
+timing alone does not recover the authoritative worker-to-particle handoff.
+The next bounded discriminator is therefore a passive per-pool OpenMP owner
+trace in RELION and the matching RECOVAR worker trace, reusing the EM program's
+fail-closed capture/provenance pattern.  No further 0--200 or stress-matrix run
+is authorized until that observed schedule is replayed at the iteration-1 raw
+accumulator boundary.  No generic RECOVAR suite ran.
