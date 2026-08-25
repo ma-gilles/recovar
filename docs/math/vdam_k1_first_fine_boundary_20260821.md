@@ -1495,3 +1495,20 @@ trajectory.  It must reproduce accuracy `(1.823, 1.717 Angstrom)`, step
 `2.5755`, map FSC-AUC at least `0.999`, and the native particle translation
 grid before any 200-iteration rerun or robustness-case release.  No generic
 RECOVAR full or long test suite ran.
+
+The RFLOAT-reference hypothesis is rejected.  Slurm `12930126` completed in 6
+minutes 41 seconds of RECOVAR wall time (6 minutes 50 seconds including audits,
+7.49 GB peak step RSS) and reproduced the prior live accuracy
+`(1.824, 1.734 Angstrom)`, step `2.601`, and iteration-90 translation-match
+fraction `0.853333`.  Its minimum map FSC-AUC remains passing at
+`0.999124612323`, so this is a particle-grid failure rather than a gross map
+failure.  The float32 cast is removed at experimental head `c811548ef`.
+
+That head adds an opt-in exact live-operand capture for the expected-accuracy
+binding and extends the serialized replay report with operand-by-operand exact
+and maximum-absolute comparisons.  H100 Slurm `12930466` is the next bounded
+gate.  It reruns only through iteration 92, dumps the iteration-90 in-memory
+reference, Euler angles, particle IDs, classes, noise spectrum, optics vectors,
+and scalar binding inputs, then replays them from disk.  The first differing
+operand will determine the next production correction; no 200-iteration or
+robustness trajectory is released on this diagnostic alone.
