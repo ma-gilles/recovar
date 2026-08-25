@@ -1494,14 +1494,19 @@ def _diagnostic_float64_pass2_matches(debug_iteration: int | None) -> bool:
     return int(debug_iteration) in requested
 
 
-def _coarse_rotation_grid_dtype() -> np.dtype:
-    """Dtype for ``_relion_rotation_grid_float32``'s pass-1 scorer matrices.
+def _dense_global_scoring_dtype() -> np.dtype:
+    """Dtype for the dense/global (``use_local=False``) scoring path's
+    float64-sensitive operands: the pass-1 rotation grid built by
+    ``_relion_rotation_grid_float32``, and the offset/orientation log-prior
+    arrays built by ``make_relion_translation_log_prior`` /
+    ``make_relion_direction_log_prior`` and their prior-center helpers.
 
-    Pass 1 has no per-iteration diagnostic override (see
-    ``_local_search_precision_flags``), so this collapses the global
-    float64-scoring/-projections switches directly, matching RELION's
-    ``ACC_DOUBLE_PRECISION`` build where the host ``RFLOAT`` rotation
-    matrices are never narrowed to float before the (no-op) ``XFLOAT`` cast.
+    None of these have a per-iteration diagnostic override (see
+    ``_local_search_precision_flags`` for the local-search analog), so this
+    collapses the global float64-scoring/-projections switches directly,
+    matching RELION's ``ACC_DOUBLE_PRECISION`` build where the corresponding
+    host ``RFLOAT`` values are never narrowed to float before the (no-op)
+    ``XFLOAT`` cast.
     """
 
     if _DENSE_EM_STATIC_KWARGS["use_float64_scoring"] or _DENSE_EM_STATIC_KWARGS["use_float64_projections"]:
@@ -4481,16 +4486,16 @@ def _sealed_sampling_rotation_ids(sealed_sampling_state):
     ).astype(np.int64, copy=False)
 
 
-def _sealed_direction_log_prior(direction_prior, sealed_sampling_state):
+def _sealed_direction_log_prior(direction_prior, sealed_sampling_state, *, dtype: np.dtype = np.float32):
     """Expand a full direction prior onto the exact captured direction rows."""
 
-    prior = np.asarray(direction_prior, dtype=np.float32).reshape(-1)
+    prior = np.asarray(direction_prior, dtype=dtype).reshape(-1)
     direction_ids = np.asarray(sealed_sampling_state["directions_ipix"], dtype=np.int64)
     n_psi = int(np.asarray(sealed_sampling_state["psi_angles_deg"]).size)
     selected = np.tile(prior[direction_ids], n_psi)
-    result = np.full(selected.shape, -np.inf, dtype=np.float32)
+    result = np.full(selected.shape, -np.inf, dtype=dtype)
     positive = selected > 0.0
-    result[positive] = np.log(selected[positive]).astype(np.float32)
+    result[positive] = np.log(selected[positive]).astype(dtype)
     return result
 
 
@@ -4785,7 +4790,7 @@ def _run_relion_iteration_loop(
         current_rotations, current_rotation_eulers, current_translations = _sealed_sampling_base_grids(
             sealed_sampling_state,
             voxel_size_angstrom=cryo.voxel_size,
-            dtype=_coarse_rotation_grid_dtype(),
+            dtype=_dense_global_scoring_dtype(),
         )
         base_translations = np.asarray(current_translations, dtype=np.float64)
         current_healpix_order = int(sealed_sampling_state["healpix_order_original"])
@@ -4801,7 +4806,7 @@ def _run_relion_iteration_loop(
         )
     elif translations is None:
         current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(
-            current_healpix_order, dtype=_coarse_rotation_grid_dtype()
+            current_healpix_order, dtype=_dense_global_scoring_dtype()
         )
         base_translations = _translation_grid_for_class_count(
             schedule.init_translation_range,
@@ -4814,7 +4819,7 @@ def _run_relion_iteration_loop(
         )
     else:
         current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(
-            current_healpix_order, dtype=_coarse_rotation_grid_dtype()
+            current_healpix_order, dtype=_dense_global_scoring_dtype()
         )
         base_translations = np.asarray(translations, dtype=np.float64)
         current_translations = jnp.asarray(translations, dtype=jnp.float32)
@@ -5772,7 +5777,7 @@ def _run_relion_iteration_loop(
                     new_order,
                 )
                 current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(
-                    new_order, dtype=_coarse_rotation_grid_dtype()
+                    new_order, dtype=_dense_global_scoring_dtype()
                 )
                 current_healpix_order = new_order
             else:
@@ -6081,13 +6086,19 @@ def _run_relion_iteration_loop(
                 class_prior_k = class_direction_prior_per_half[_half_idx]
                 class_prior_order_k = class_direction_prior_order_per_half[_half_idx]
                 if class_prior_k is None and global_direction_prior_per_half[_half_idx] is not None:
-                    shared_prior = np.asarray(global_direction_prior_per_half[_half_idx], dtype=np.float32)
+                    shared_prior = np.asarray(
+                        global_direction_prior_per_half[_half_idx], dtype=_dense_global_scoring_dtype()
+                    )
                     class_prior_k = np.broadcast_to(shared_prior[None, :], (n_classes, shared_prior.size)).copy()
                     class_prior_order_k = global_direction_prior_order_per_half[_half_idx]
                 if class_prior_k is not None and class_prior_order_k == direction_prior_healpix_order:
                     class_rotation_log_prior_per_half[_half_idx] = np.stack(
                         [
-                            make_relion_direction_log_prior(class_prior_k[class_idx], direction_prior_healpix_order)
+                            make_relion_direction_log_prior(
+                                class_prior_k[class_idx],
+                                direction_prior_healpix_order,
+                                dtype=_dense_global_scoring_dtype(),
+                            )
                             for class_idx in range(n_classes)
                         ],
                         axis=0,
@@ -6105,11 +6116,12 @@ def _run_relion_iteration_loop(
             if prior_k is None or prior_order_k != direction_prior_healpix_order:
                 continue
             rotation_log_prior_per_half[_half_idx] = (
-                _sealed_direction_log_prior(prior_k, sealed_sampling_state)
+                _sealed_direction_log_prior(prior_k, sealed_sampling_state, dtype=_dense_global_scoring_dtype())
                 if sealed_sampling_state is not None
                 else make_relion_direction_log_prior(
                     prior_k,
                     direction_prior_healpix_order,
+                    dtype=_dense_global_scoring_dtype(),
                 )
             )
             logger.info(
@@ -6381,12 +6393,16 @@ def _run_relion_iteration_loop(
             trans_prior_center = relion_translation_prior_center(
                 previous_translations_k,
                 cryo.voxel_size,
+                dtype=_dense_global_scoring_dtype(),
             )
             local_trans_prior_center = relion_local_translation_prior_center(
                 previous_translations_k,
                 cryo.voxel_size,
+                dtype=_dense_global_scoring_dtype(),
             )
-            trans_sigma_center = relion_sigma_offset_prior_center(previous_translations_k)
+            trans_sigma_center = relion_sigma_offset_prior_center(
+                previous_translations_k, dtype=_dense_global_scoring_dtype()
+            )
             # A.1 fix: at iter 1 cold-start `previous_translations_k` is None, so
             # `trans_sigma_center` is None and em_engine's wsum_sigma2_offset
             # accumulator (em_engine.py:1636) is gated off. RELION still computes
@@ -6397,18 +6413,22 @@ def _run_relion_iteration_loop(
             # prior_centers=None means RELION's cold-start flat offset prior,
             # while an explicit zero center means a real Gaussian offset prior.
             trans_prior_center_for_engine = (
-                np.zeros(2, dtype=np.float32) if trans_sigma_center is None else trans_sigma_center
+                np.zeros(2, dtype=_dense_global_scoring_dtype())
+                if trans_sigma_center is None
+                else trans_sigma_center
             )
-            translation_prior_translations = np.asarray(base_translations, dtype=np.float32)
+            translation_prior_translations = np.asarray(base_translations, dtype=_dense_global_scoring_dtype())
             if current_translations.shape[0] != base_translations.shape[0]:
                 if current_translations.shape[0] == 1 and base_translations.shape[0] > 1:
                     center_idx = int(base_translations.shape[0] // 2)
                     translation_prior_translations = np.asarray(
                         base_translations[center_idx : center_idx + 1],
-                        dtype=np.float32,
+                        dtype=_dense_global_scoring_dtype(),
                     )
                 else:
-                    translation_prior_translations = np.asarray(current_translations, dtype=np.float32)
+                    translation_prior_translations = np.asarray(
+                        current_translations, dtype=_dense_global_scoring_dtype()
+                    )
             translation_log_prior = None
             if not use_local:
                 translation_log_prior = make_relion_translation_log_prior(
@@ -6417,6 +6437,7 @@ def _run_relion_iteration_loop(
                     sigma_offset_k,
                     trans_prior_center,
                     offset_range_pixels=None,
+                    dtype=_dense_global_scoring_dtype(),
                 )
             if experiment_datasets[k].n_units == 0:
                 logger.info("Skipping E-step/M-step accumulation for empty half-%d dataset", k + 1)
@@ -8827,7 +8848,7 @@ def _run_relion_iteration_loop(
         final_current_rotation_eulers = current_rotation_eulers
     else:
         final_current_rotations, final_current_rotation_eulers = _relion_rotation_grid_float32(
-            final_current_healpix_order, dtype=_coarse_rotation_grid_dtype()
+            final_current_healpix_order, dtype=_dense_global_scoring_dtype()
         )
     final_effective_rotations = final_current_rotations
     final_effective_rotation_eulers = np.asarray(final_current_rotation_eulers, dtype=np.float32)
@@ -9275,31 +9296,42 @@ def _run_relion_iteration_loop(
         final_trans_prior_center = relion_translation_prior_center(
             previous_translations_k,
             cryo.voxel_size,
+            dtype=_dense_global_scoring_dtype(),
         )
         final_local_trans_prior_center = relion_local_translation_prior_center(
             previous_translations_k,
             cryo.voxel_size,
+            dtype=_dense_global_scoring_dtype(),
         )
-        final_trans_sigma_center = relion_sigma_offset_prior_center(previous_translations_k)
+        final_trans_sigma_center = relion_sigma_offset_prior_center(
+            previous_translations_k, dtype=_dense_global_scoring_dtype()
+        )
         final_trans_prior_center_for_engine = (
-            np.zeros(2, dtype=np.float32) if final_trans_sigma_center is None else final_trans_sigma_center
+            np.zeros(2, dtype=_dense_global_scoring_dtype())
+            if final_trans_sigma_center is None
+            else final_trans_sigma_center
         )
-        final_translation_prior_translations = np.asarray(final_base_translations, dtype=np.float32)
+        final_translation_prior_translations = np.asarray(
+            final_base_translations, dtype=_dense_global_scoring_dtype()
+        )
         if final_current_translations.shape[0] != final_base_translations.shape[0]:
             if final_current_translations.shape[0] == 1 and final_base_translations.shape[0] > 1:
                 center_idx = int(final_base_translations.shape[0] // 2)
                 final_translation_prior_translations = np.asarray(
                     final_base_translations[center_idx : center_idx + 1],
-                    dtype=np.float32,
+                    dtype=_dense_global_scoring_dtype(),
                 )
             else:
-                final_translation_prior_translations = np.asarray(final_current_translations, dtype=np.float32)
+                final_translation_prior_translations = np.asarray(
+                    final_current_translations, dtype=_dense_global_scoring_dtype()
+                )
         final_translation_log_prior = make_relion_translation_log_prior(
             final_translation_prior_translations,
             cryo.voxel_size,
             final_sigma_offset_k,
             final_trans_prior_center,
             offset_range_pixels=None,
+            dtype=_dense_global_scoring_dtype(),
         )
         final_rotation_log_prior_k = None
         final_class_rotation_log_prior_k = None
@@ -9324,6 +9356,7 @@ def _run_relion_iteration_loop(
                     make_relion_direction_log_prior(
                         class_direction_prior_per_half[k][class_idx],
                         final_direction_prior_healpix_order,
+                        dtype=_dense_global_scoring_dtype(),
                     )
                     for class_idx in range(n_classes)
                 ],
@@ -9339,6 +9372,7 @@ def _run_relion_iteration_loop(
             final_rotation_log_prior_k = make_relion_direction_log_prior(
                 global_direction_prior_per_half[k],
                 final_direction_prior_healpix_order,
+                dtype=_dense_global_scoring_dtype(),
             )
         if final_use_local:
             final_result = _score_half_local_in_bpref_scope(

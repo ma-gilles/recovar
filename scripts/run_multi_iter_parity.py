@@ -583,6 +583,24 @@ def main():
     parser.add_argument("--iter", type=int, default=3, help="RELION iteration to start from")
     parser.add_argument("--max_iter", type=int, default=15)
     parser.add_argument(
+        "--replay-override-max-iter",
+        type=int,
+        default=None,
+        help=(
+            "Diagnostic only: only re-seed recovar's state from RELION's per-iteration "
+            "STAR files (model.star tau2/sigma2_noise, sampling.star, direction priors, "
+            "previous-best poses, etc.) through this recovar iteration number (1-indexed); "
+            "later iterations up to --max_iter run on recovar's own carried-forward state "
+            "instead. RELION's own multi-iteration trajectory never round-trips through "
+            "these STAR files (they are write-only output within one run; see "
+            "MlOptimiserMpi::iterate()), and their scalar RFLOAT columns are serialized at "
+            "only ~6-7 significant figures (metadata_table.cpp's %%12.6f/%%12.6e format), so "
+            "re-seeding every iteration compares against a precision-degraded target instead "
+            "of RELION's true internal state. Default (unset) re-seeds every iteration, "
+            "matching prior behavior."
+        ),
+    )
+    parser.add_argument(
         "--continuous-relion-noise-state",
         action="store_true",
         help=(
@@ -1556,6 +1574,16 @@ def main():
         iteration,
         args.max_iter,
     ):
+        if (
+            args.replay_override_max_iter is not None
+            and recovar_iter > args.replay_override_max_iter
+        ):
+            print(
+                f"  Replay state for recovar iter {recovar_iter + 1}: skipped "
+                f"(--replay-override-max-iter {args.replay_override_max_iter}); "
+                "carrying recovar's own state forward"
+            )
+            continue
         if not (relion_dir / f"{run_prefix}_it{relion_prev_iter:03d}_data.star").exists():
             print(
                 f"  Replay state for recovar iter {recovar_iter + 1}: RELION iter {relion_prev_iter:03d} not found, leaving override unset"

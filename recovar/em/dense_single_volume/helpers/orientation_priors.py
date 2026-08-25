@@ -12,11 +12,17 @@ import numpy as np
 from recovar.em.sampling import rotation_grid_n_in_planes, rotation_grid_size
 
 
-def relion_round_away_from_zero(values):
-    """Vectorized RELION ``ROUND`` macro: nearest integer, ties away from zero."""
+def relion_round_away_from_zero(values, *, dtype: np.dtype = np.float32):
+    """Vectorized RELION ``ROUND`` macro: nearest integer, ties away from zero.
+
+    ``dtype`` controls only the returned cast; the round itself is always
+    computed at float64. RELION's own ``ROUND`` macro operates on RFLOAT
+    (double under ``DoublePrec_CPU``/``DoublePrec_ACC``) throughout -- pass
+    ``np.float64`` to match a genuine double-precision comparison.
+    """
     arr = np.asarray(values, dtype=np.float64)
     rounded = np.where(arr >= 0.0, np.floor(arr + 0.5), -np.floor(-arr + 0.5))
-    return rounded.astype(np.float32, copy=False)
+    return rounded.astype(dtype, copy=False)
 
 
 def make_relion_translation_log_prior(
@@ -74,17 +80,19 @@ def make_relion_translation_log_prior(
     return log_prior[0] if shared else log_prior
 
 
-def relion_translation_search_base(previous_best_translations):
+def relion_translation_search_base(previous_best_translations, *, dtype: np.dtype = np.float32):
     """Return RELION's integer-pixel pre-shift for stored absolute offsets."""
     if previous_best_translations is None:
         return None
     previous_best_translations = np.asarray(previous_best_translations, dtype=np.float64)
     if previous_best_translations.size == 0:
-        return previous_best_translations.reshape(0, 2)
-    return relion_round_away_from_zero(previous_best_translations)
+        return previous_best_translations.reshape(0, 2).astype(dtype, copy=False)
+    return relion_round_away_from_zero(previous_best_translations, dtype=dtype)
 
 
-def relion_translation_prior_center(previous_best_translations, voxel_size, prior_offsets=None):
+def relion_translation_prior_center(
+    previous_best_translations, voxel_size, prior_offsets=None, *, dtype: np.dtype = np.float32
+):
     """Return RELION's offset-prior center in RECOVAR search-grid pixels.
 
     RELION's accelerated path builds ``pdf_offset`` from
@@ -93,19 +101,26 @@ def relion_translation_prior_center(previous_best_translations, voxel_size, prio
     rounded ``old_offset`` image pre-shift the score-grid prior center is
     ``(prior - rounded_old_offset) / pixel_size``.  In ordinary AutoRefine
     there is no separate origin prior, so ``prior`` defaults to zero.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running a genuine double-precision comparison should pass
+    ``np.float64`` explicitly. RELION itself never narrows this computation
+    (RFLOAT/XFLOAT are both double under double-precision builds).
     """
-    old_offset = relion_translation_search_base(previous_best_translations)
+    old_offset = relion_translation_search_base(previous_best_translations, dtype=dtype)
     if old_offset is None:
         return None
     voxel_size = float(voxel_size if voxel_size > 0 else 1.0)
     if prior_offsets is None:
-        prior = np.zeros_like(old_offset, dtype=np.float32)
+        prior = np.zeros_like(old_offset, dtype=dtype)
     else:
-        prior = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape)
-    return ((prior - old_offset) / voxel_size).astype(np.float32)
+        prior = np.asarray(prior_offsets, dtype=dtype).reshape(old_offset.shape)
+    return ((prior - old_offset) / voxel_size).astype(dtype)
 
 
-def relion_local_translation_prior_center(previous_best_translations, voxel_size, prior_offsets=None):
+def relion_local_translation_prior_center(
+    previous_best_translations, voxel_size, prior_offsets=None, *, dtype: np.dtype = np.float32
+):
     """Return RELION's local-search offset-prior center in RECOVAR pixels.
 
     RELION's accelerated global path and local-search path use different
@@ -115,19 +130,21 @@ def relion_local_translation_prior_center(previous_best_translations, voxel_size
     convention for ``pdf_offset``. With no explicit offset prior, that local
     convention is represented in RECOVAR's pixel grid as
     ``-rounded_old_offset / pixel_size``.
+
+    ``dtype`` -- see :func:`relion_translation_prior_center`.
     """
-    old_offset = relion_translation_search_base(previous_best_translations)
+    old_offset = relion_translation_search_base(previous_best_translations, dtype=dtype)
     if old_offset is None:
         return None
     voxel_size = float(voxel_size if voxel_size > 0 else 1.0)
     if prior_offsets is None:
-        prior = np.zeros_like(old_offset, dtype=np.float32)
+        prior = np.zeros_like(old_offset, dtype=dtype)
     else:
-        prior = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape)
-    return ((prior - old_offset) / voxel_size).astype(np.float32)
+        prior = np.asarray(prior_offsets, dtype=dtype).reshape(old_offset.shape)
+    return ((prior - old_offset) / voxel_size).astype(dtype)
 
 
-def relion_sigma_offset_prior_center(previous_best_translations, prior_offsets=None):
+def relion_sigma_offset_prior_center(previous_best_translations, prior_offsets=None, *, dtype: np.dtype = np.float32):
     """Return RELION's sigma-offset sufficient-statistic center in pixels.
 
     RELION's ``pdf_offset`` scoring path evaluates the coarse Angstrom
@@ -137,15 +154,17 @@ def relion_sigma_offset_prior_center(previous_best_translations, prior_offsets=N
     engines use pixel-space translation grids and convert squared distances to
     Angstroms themselves, so this center intentionally does not divide by
     pixel size.
+
+    ``dtype`` -- see :func:`relion_translation_prior_center`.
     """
-    old_offset = relion_translation_search_base(previous_best_translations)
+    old_offset = relion_translation_search_base(previous_best_translations, dtype=dtype)
     if old_offset is None:
         return None
     if prior_offsets is None:
-        prior = np.zeros_like(old_offset, dtype=np.float32)
+        prior = np.zeros_like(old_offset, dtype=dtype)
     else:
-        prior = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape)
-    return (prior - old_offset).astype(np.float32)
+        prior = np.asarray(prior_offsets, dtype=dtype).reshape(old_offset.shape)
+    return (prior - old_offset).astype(dtype)
 
 
 def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
@@ -311,7 +330,7 @@ def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order
     return out.astype(np.float32)
 
 
-def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=None):
+def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=None, *, dtype: np.dtype = np.float32):
     """Expand RELION's learned ``pdf_direction`` onto a rotation grid.
 
     When ``rotations`` is omitted, the prior is expanded onto RELION's
@@ -321,8 +340,14 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
     actual trial orientations. The optional ``rotations`` mode is therefore a
     geometry-based expansion helper for diagnostics only, not the RELION-parity
     path used in refinement.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running a genuine double-precision comparison should pass
+    ``np.float64`` explicitly. RELION's own ``pdf_direction``/log-prior
+    arithmetic never narrows below RFLOAT/XFLOAT (both double under
+    double-precision builds).
     """
-    direction_prior = np.asarray(direction_prior, dtype=np.float32).reshape(-1)
+    direction_prior = np.asarray(direction_prior, dtype=dtype).reshape(-1)
     n_rot = rotation_grid_size(healpix_order)
     n_pixels = n_rot // rotation_grid_n_in_planes(healpix_order)
     if direction_prior.shape[0] != n_pixels:
@@ -333,7 +358,7 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
     if rotations is None:
         pixel_idx = np.arange(n_rot, dtype=np.int64) % n_pixels
     else:
-        rotations = np.asarray(rotations, dtype=np.float32).reshape(-1, 3, 3)
+        rotations = np.asarray(rotations, dtype=dtype).reshape(-1, 3, 3)
         if rotations.shape[0] != n_rot:
             raise ValueError(
                 f"rotations must have shape ({n_rot}, 3, 3), got {rotations.shape}",
@@ -350,7 +375,7 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
         )
 
     prior_for_rotations = direction_prior[pixel_idx]
-    log_prior = np.full(prior_for_rotations.shape, -np.inf, dtype=np.float32)
+    log_prior = np.full(prior_for_rotations.shape, -np.inf, dtype=dtype)
     positive = prior_for_rotations > 0.0
-    log_prior[positive] = np.log(prior_for_rotations[positive]).astype(np.float32)
+    log_prior[positive] = np.log(prior_for_rotations[positive]).astype(dtype)
     return log_prior

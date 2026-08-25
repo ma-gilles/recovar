@@ -1243,7 +1243,7 @@ def update_posterior_noise_variance(
             noise_from_res=noise_from_res,
         )
 
-    new_previous_noise_radial = jnp.asarray(noise_from_res, dtype=jnp.float32)
+    new_previous_noise_radial = jnp.asarray(noise_from_res)
     noise_variance = _mean_noise_variance(noise_variance_per_half)
     return NoiseUpdateResult(
         noise_from_res=noise_from_res,

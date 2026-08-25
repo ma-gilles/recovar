@@ -1646,12 +1646,20 @@ def _prepare_per_image_pass2_inputs(
     fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
     relion_parent_execution_order=False,
+    dtype: np.dtype = np.float32,
 ):
     """Compute per-image oversampled rotations / parent maps / candidate masks.
 
     Mirrors the per-image branch in the reference implementation in
     :func:`compute_pass2_stats_sparse_perimage_reference` exactly so the
     batched path is a strict per-image equivalent.
+
+    ``dtype`` controls the precision of the RELION-supplied fine rotation
+    override (``fine_rotations_override`` / ``fine_mstep_rotations_override``).
+    RELION's own fine-search rotation matrices stay ``RFLOAT`` (double) end to
+    end in a double-precision build; pass ``precision_policy.score_real_dtype``
+    from the caller so this matches ``use_float64_scoring`` instead of always
+    narrowing to float32.
     """
     from recovar.em.sampling import get_oversampled_rotation_grid_from_samples
 
@@ -1680,7 +1688,7 @@ def _prepare_per_image_pass2_inputs(
     if fine_rotations_override is None and fine_rotation_parent_override is None:
         pass
     elif fine_rotations_override is not None and fine_rotation_parent_override is not None:
-        fine_rotations_np = np.asarray(fine_rotations_override, dtype=np.float32)
+        fine_rotations_np = np.asarray(fine_rotations_override, dtype=dtype)
         fine_parent_np = np.asarray(fine_rotation_parent_override, dtype=np.int64)
         if fine_parent_np.ndim != 1:
             raise ValueError("fine_rotation_parent_override must be a 1D array")
@@ -1697,7 +1705,7 @@ def _prepare_per_image_pass2_inputs(
     if fine_mstep_rotations_override is not None:
         if fine_rotations_np is None:
             raise ValueError("fine_mstep_rotations_override requires fine_rotations_override")
-        fine_mstep_rotations_np = np.asarray(fine_mstep_rotations_override, dtype=np.float32)
+        fine_mstep_rotations_np = np.asarray(fine_mstep_rotations_override, dtype=dtype)
         if fine_mstep_rotations_np.shape != fine_rotations_np.shape:
             raise ValueError(
                 "fine_mstep_rotations_override must match fine_rotations_override shape: "
@@ -10665,6 +10673,7 @@ def compute_pass2_stats_sparse_bucketed(
             _RELION_FINE_ROTATION_EXECUTION_ORDER_ENV,
             default=False,
         ),
+        dtype=precision_policy.score_real_dtype,
     )
     prep_s = time.time() - prep_t0
 
@@ -11064,7 +11073,7 @@ def compute_pass2_stats_sparse_bucketed(
                 projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
                 score_cache, recon_cache, recon_abs2_cache = _compute_sparse_pass2_windowed_projections_block(
                     mean_for_proj,
-                    jnp.asarray(fine_rotations_override, dtype=jnp.float32),
+                    jnp.asarray(fine_rotations_override, dtype=precision_policy.score_real_dtype),
                     image_shape,
                     proj_volume_shape,
                     disc_type,
@@ -11087,7 +11096,7 @@ def compute_pass2_stats_sparse_bucketed(
                 projection_kwargs = window_spec.projection_kwargs(return_abs2=None if not score_only else False)
                 proj_half_cache_flat, proj_abs2_cache_flat = _compute_sparse_pass2_projections_block(
                     mean_for_proj,
-                    jnp.asarray(fine_rotations_override, dtype=jnp.float32),
+                    jnp.asarray(fine_rotations_override, dtype=precision_policy.score_real_dtype),
                     image_shape,
                     proj_volume_shape,
                     disc_type,
@@ -12362,6 +12371,16 @@ def compute_pass2_stats_sparse_bucketed(
                         )
                     chunk_support_mass += np.asarray(jnp.sum(noise_probs, axis=(1, 2)), dtype=np.float64)
                     summed_masked_noise = compute_local_weighted_sums(noise_probs, shifted_noise_split)
+                    if _env_flag_enabled("RECOVAR_NOISE_DTYPE_DEBUG", default=False):
+                        logger.info(
+                            "RECOVAR_NOISE_DTYPE_DEBUG: proj_for_noise_chunk=%s proj_abs2_for_noise_chunk=%s "
+                            "summed_masked_noise=%s ctf_probs=%s noise_variance_for_noise=%s",
+                            proj_for_noise_chunk.dtype,
+                            proj_abs2_for_noise_chunk.dtype,
+                            summed_masked_noise.dtype,
+                            ctf_probs.dtype,
+                            noise_variance_for_noise.dtype,
+                        )
                     block_noise_shells, _, _ = _compute_noise_block_chunked(
                         flatten_bucket_rows(proj_for_noise_chunk),
                         flatten_bucket_rows(proj_abs2_for_noise_chunk),
@@ -12372,6 +12391,11 @@ def compute_pass2_stats_sparse_bucketed(
                         n_shells,
                         max_block_bytes=max_noise_block_bytes,
                     )
+                    if _env_flag_enabled("RECOVAR_NOISE_DTYPE_DEBUG", default=False):
+                        logger.info(
+                            "RECOVAR_NOISE_DTYPE_DEBUG: block_noise_shells=%s",
+                            block_noise_shells.dtype,
+                        )
                     block_noise_shells_np = np.asarray(
                         block_noise_shells,
                         dtype=np.float64,
@@ -13804,6 +13828,16 @@ def compute_pass2_stats_sparse_bucketed(
             else:
                 shifted_noise_split = shifted_score.reshape(batch, n_fine_trans, -1)
             summed_masked_noise = compute_local_weighted_sums(noise_probs, shifted_noise_split)
+            if _env_flag_enabled("RECOVAR_NOISE_DTYPE_DEBUG", default=False):
+                logger.info(
+                    "RECOVAR_NOISE_DTYPE_DEBUG(unchunked): proj_for_noise=%s proj_abs2_for_noise=%s "
+                    "summed_masked_noise=%s ctf_probs=%s noise_variance_for_noise=%s",
+                    proj_for_noise.dtype,
+                    proj_abs2_for_noise.dtype,
+                    summed_masked_noise.dtype,
+                    ctf_probs.dtype,
+                    noise_variance_for_noise.dtype,
+                )
             block_noise_shells, _, _ = _compute_noise_block_chunked(
                 flatten_bucket_rows(proj_for_noise),
                 flatten_bucket_rows(proj_abs2_for_noise),
@@ -13814,6 +13848,11 @@ def compute_pass2_stats_sparse_bucketed(
                 n_shells,
                 max_block_bytes=max_noise_block_bytes,
             )
+            if _env_flag_enabled("RECOVAR_NOISE_DTYPE_DEBUG", default=False):
+                logger.info(
+                    "RECOVAR_NOISE_DTYPE_DEBUG(unchunked): block_noise_shells=%s",
+                    block_noise_shells.dtype,
+                )
             block_noise_shells_np = np.asarray(block_noise_shells, dtype=np.float64)
             relion_wavg_atomic_scale_triplet_pixels_np = None
             if relion_wavg_atomic_scale_aa:
@@ -14499,6 +14538,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             fine_rotations_override=fine_rotations_override,
             fine_mstep_rotations_override=fine_mstep_rotations_override,
             fine_rotation_parent_override=fine_rotation_parent_override,
+            dtype=precision_policy.score_real_dtype,
         )
         for class_index in range(n_classes)
     ]
@@ -15147,7 +15187,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
                     score_cache, recon_cache, recon_abs2_cache = _compute_sparse_pass2_windowed_projections_block(
                         mean_for_proj_by_class[class_index],
-                        jnp.asarray(fine_rotations_override, dtype=jnp.float32),
+                        jnp.asarray(fine_rotations_override, dtype=precision_policy.score_real_dtype),
                         image_shape,
                         proj_volume_shape,
                         disc_type,
@@ -15170,7 +15210,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     projection_kwargs = window_spec.projection_kwargs(return_abs2=None)
                     proj_half_cache_flat, proj_abs2_cache_flat = _compute_sparse_pass2_projections_block(
                         mean_for_proj_by_class[class_index],
-                        jnp.asarray(fine_rotations_override, dtype=jnp.float32),
+                        jnp.asarray(fine_rotations_override, dtype=precision_policy.score_real_dtype),
                         image_shape,
                         proj_volume_shape,
                         disc_type,
@@ -17240,6 +17280,21 @@ def compute_k_class_pass2_stats_sparse_fused(
                     flat_proj_abs2_for_noise = flatten_bucket_rows(proj_abs2_by_class[class_index])
                     flat_summed_masked_noise = flatten_bucket_rows(summed_masked_noise)
                     flat_ctf_probs_for_noise = flatten_bucket_rows(ctf_probs_for_noise)
+                if _env_flag_enabled("RECOVAR_NOISE_DTYPE_DEBUG", default=False):
+                    logger.info(
+                        "RECOVAR_NOISE_DTYPE_DEBUG(fused): bucket_uses_active_rows=%s "
+                        "bucket_uses_compact_pairs=%s fused_noise_norm=%s "
+                        "proj_for_noise=%s proj_abs2=%s ctf_probs_for_noise=%s "
+                        "noise_variance_for_noise=%s summed_masked_noise=%s",
+                        bucket_uses_active_rows,
+                        bucket_uses_compact_pairs,
+                        fused_noise_norm,
+                        proj_for_noise_by_class[class_index].dtype,
+                        proj_abs2_by_class[class_index].dtype,
+                        ctf_probs_for_noise.dtype,
+                        noise_variance_for_noise.dtype,
+                        summed_masked_noise.dtype,
+                    )
                 if bucket_uses_active_rows and bucket_uses_compact_pairs:
                     block_noise_shells, block_norm_residual = _compute_active_noise_rows_chunked(
                         proj_for_noise_by_class[class_index],
@@ -17255,6 +17310,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                         batch_size=batch,
                         max_block_bytes=max_noise_block_bytes,
                     )
+                    if _env_flag_enabled("RECOVAR_NOISE_DTYPE_DEBUG", default=False):
+                        logger.info(
+                            "RECOVAR_NOISE_DTYPE_DEBUG(fused): block_noise_shells=%s",
+                            block_noise_shells.dtype,
+                        )
                     noise_wsum_total[class_index] += np.asarray(block_noise_shells, dtype=np.float64)
                     noise_norm_correction_total[class_index][image_indices] += np.asarray(
                         block_norm_residual,
@@ -17318,6 +17378,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                             summed_masked_noise,
                             ctf_probs_for_noise,
                             noise_variance_for_noise,
+                        )
+                    if _env_flag_enabled("RECOVAR_NOISE_DTYPE_DEBUG", default=False):
+                        logger.info(
+                            "RECOVAR_NOISE_DTYPE_DEBUG(fused): block_noise_shells=%s",
+                            block_noise_shells.dtype,
                         )
                     noise_wsum_total[class_index] += np.asarray(block_noise_shells, dtype=np.float64)
                     noise_norm_correction_total[class_index][image_indices] += np.asarray(

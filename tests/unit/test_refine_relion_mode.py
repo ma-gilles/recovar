@@ -252,7 +252,7 @@ def test_local_search_precision_global_switches_upgrade_both_passes(monkeypatch)
     assert iteration_loop_module._local_search_precision_flags(12, pass_index=2) == (True, True)
 
 
-def test_coarse_rotation_grid_dtype_tracks_global_float64_switches(monkeypatch):
+def test_dense_global_scoring_dtype_tracks_global_float64_switches(monkeypatch):
     """The coarse pass-1 scorer grid has no per-iteration diagnostic path.
 
     Unlike ``_local_search_precision_flags``, this dtype selector must react
@@ -262,14 +262,14 @@ def test_coarse_rotation_grid_dtype_tracks_global_float64_switches(monkeypatch):
 
     monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
     monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", False)
-    assert iteration_loop_module._coarse_rotation_grid_dtype() == np.float32
+    assert iteration_loop_module._dense_global_scoring_dtype() == np.float32
 
     monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
-    assert iteration_loop_module._coarse_rotation_grid_dtype() == np.float64
+    assert iteration_loop_module._dense_global_scoring_dtype() == np.float64
 
     monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
     monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", True)
-    assert iteration_loop_module._coarse_rotation_grid_dtype() == np.float64
+    assert iteration_loop_module._dense_global_scoring_dtype() == np.float64
 
 
 def test_relion_rotation_grid_float32_honors_explicit_float64_dtype():
@@ -320,6 +320,69 @@ def test_sealed_sampling_base_grids_honors_explicit_float64_dtype():
     assert eulers_f32.dtype == np.float32
     assert eulers_f64.dtype == np.float32
     np.testing.assert_array_equal(eulers_f32, eulers_f64)
+
+
+def test_dense_global_prior_helpers_honor_explicit_float64_dtype():
+    """The use_local=False offset/orientation log-prior helpers must not force float32.
+
+    Regression for the same bug class already fixed for rotation matrices:
+    RELION's own pdf_orientation/pdf_offset computation never narrows below
+    RFLOAT/XFLOAT (both double under double-precision builds), so these
+    helpers -- used only on the ``if not use_local:`` dense/global path in
+    ``_run_relion_iteration_loop`` -- must accept and honor an explicit
+    ``dtype=np.float64`` request instead of silently staying at float32.
+    """
+
+    previous_best_translations = np.asarray([[1.6, -2.4], [0.3, 5.1]], dtype=np.float64)
+    voxel_size = 3.0
+
+    base_f32 = relion_translation_search_base(previous_best_translations)
+    base_f64 = relion_translation_search_base(previous_best_translations, dtype=np.float64)
+    assert base_f32.dtype == np.float32
+    assert base_f64.dtype == np.float64
+    np.testing.assert_allclose(base_f32, base_f64, atol=1e-6, rtol=0.0)
+
+    center_f32 = relion_translation_prior_center(previous_best_translations, voxel_size)
+    center_f64 = relion_translation_prior_center(previous_best_translations, voxel_size, dtype=np.float64)
+    assert center_f32.dtype == np.float32
+    assert center_f64.dtype == np.float64
+    np.testing.assert_allclose(center_f32, center_f64, atol=1e-6, rtol=0.0)
+
+    local_center_f32 = relion_local_translation_prior_center(previous_best_translations, voxel_size)
+    local_center_f64 = relion_local_translation_prior_center(
+        previous_best_translations, voxel_size, dtype=np.float64
+    )
+    assert local_center_f32.dtype == np.float32
+    assert local_center_f64.dtype == np.float64
+    np.testing.assert_allclose(local_center_f32, local_center_f64, atol=1e-6, rtol=0.0)
+
+    sigma_center_f32 = relion_sigma_offset_prior_center(previous_best_translations)
+    sigma_center_f64 = relion_sigma_offset_prior_center(previous_best_translations, dtype=np.float64)
+    assert sigma_center_f32.dtype == np.float32
+    assert sigma_center_f64.dtype == np.float64
+    np.testing.assert_allclose(sigma_center_f32, sigma_center_f64, atol=1e-6, rtol=0.0)
+
+    translations = np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64)
+    log_prior_f32 = make_relion_translation_log_prior(
+        translations, voxel_size, sigma_offset_angstrom=10.0, prior_centers=center_f32
+    )
+    log_prior_f64 = make_relion_translation_log_prior(
+        translations,
+        voxel_size,
+        sigma_offset_angstrom=10.0,
+        prior_centers=center_f64,
+        dtype=np.float64,
+    )
+    assert log_prior_f32.dtype == np.float32
+    assert log_prior_f64.dtype == np.float64
+    np.testing.assert_allclose(log_prior_f32, log_prior_f64, atol=1e-5, rtol=0.0)
+
+    direction_prior = np.full(12, 1.0 / 12.0, dtype=np.float64)
+    direction_log_prior_f32 = make_relion_direction_log_prior(direction_prior, healpix_order=0)
+    direction_log_prior_f64 = make_relion_direction_log_prior(direction_prior, healpix_order=0, dtype=np.float64)
+    assert direction_log_prior_f32.dtype == np.float32
+    assert direction_log_prior_f64.dtype == np.float64
+    np.testing.assert_allclose(direction_log_prior_f32, direction_log_prior_f64, atol=1e-5, rtol=0.0)
 
 
 def test_local_search_precision_rejects_unknown_pass(monkeypatch):
@@ -9778,8 +9841,8 @@ class TestRelionModeSmokeTest:
             collapse_calls.append((np.asarray(rotation_posterior_sums).shape, int(healpix_order)))
             return learned_direction_priors[len(collapse_calls) - 1]
 
-        def fake_make_relion_direction_log_prior(direction_prior, healpix_order):
-            prior = np.asarray(direction_prior, dtype=np.float32)
+        def fake_make_relion_direction_log_prior(direction_prior, healpix_order, dtype=np.float32):
+            prior = np.asarray(direction_prior, dtype=dtype)
             make_prior_calls.append((prior.copy(), int(healpix_order)))
             if np.array_equal(prior, learned_direction_priors[0]):
                 return expected_rotation_log_priors[0]

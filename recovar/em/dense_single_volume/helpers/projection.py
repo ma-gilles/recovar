@@ -549,6 +549,18 @@ def compute_noise_block(
     block, binned to resolution shells. Inputs are un-Hermitian-weighted packed
     half spectra because RELION's noise update bins over its FFTW half-plane
     convention directly.
+
+    The returned per-shell blocks keep whatever real dtype ``a2``/``xa``
+    naturally promote to from the inputs (float32 if all inputs are float32,
+    float64 if any is float64) -- no explicit cast is applied. Callers
+    accumulate many of these blocks (one per rotation block/microbatch,
+    across every particle) into a single running sigma2_noise sum; an
+    unconditional float32 cast here used to truncate every block before that
+    accumulation, compounding error across the whole reduction, unlike
+    RELION's own ``wsum_model.sigma2_noise``, which stays RFLOAT (double
+    under double-precision builds) through the entire per-particle
+    accumulation. Pass float64 inputs (matching ``use_float64_scoring``/
+    ``use_float64_projections``) to get float64 accumulation here too.
     """
     ctf_has_mass = ctf_probs != 0.0
     ctf_probs_raw = jnp.where(ctf_has_mass, ctf_probs * noise_variance_half, 0.0)
@@ -560,12 +572,12 @@ def compute_noise_block(
     xa = jnp.where(cross.real != 0.0, noise_variance_half * cross.real, 0.0)
     block_noise = a2 - 2.0 * xa
 
-    noise_shells = bin_shell_values_jax(block_noise.astype(jnp.float32), shell_indices, shell_count)
+    noise_shells = bin_shell_values_jax(block_noise, shell_indices, shell_count)
     if not return_split:
-        zeros = jnp.zeros(shell_count, dtype=jnp.float32)
+        zeros = jnp.zeros(shell_count, dtype=block_noise.dtype)
         return noise_shells, zeros, zeros
-    a2_shells = bin_shell_values_jax(a2.astype(jnp.float32), shell_indices, shell_count)
-    xa_shells = bin_shell_values_jax(xa.astype(jnp.float32), shell_indices, shell_count)
+    a2_shells = bin_shell_values_jax(a2, shell_indices, shell_count)
+    xa_shells = bin_shell_values_jax(xa, shell_indices, shell_count)
     return noise_shells, a2_shells, xa_shells
 
 

@@ -934,8 +934,16 @@ def normalize_wsum_to_sigma2_noise(wsum_sigma2_noise, wsum_img_power, sumw, imag
         make_relion_noise_shell_indices_half,
     )
 
-    wsum_sigma2_noise = jnp.asarray(wsum_sigma2_noise, dtype=jnp.float32)
-    wsum_img_power = jnp.asarray(wsum_img_power, dtype=jnp.float32)
+    # Preserve whatever real dtype the caller's accumulators already carry
+    # (float64 end to end when use_float64_scoring/use_float64_projections
+    # are set) instead of forcing float32 here. RELION's own
+    # wsum_model.sigma2_noise stays RFLOAT (double under double-precision
+    # builds) through this exact division; the unconditional float32 casts
+    # this replaced discarded that precision right before the final divide,
+    # on top of whatever precision compute_noise_block's callers already
+    # accumulated it at.
+    wsum_sigma2_noise = jnp.asarray(wsum_sigma2_noise)
+    wsum_img_power = jnp.asarray(wsum_img_power)
     n_shells = image_shape[0] // 2 + 1
 
     shell_indices = make_relion_noise_shell_indices_half(image_shape)
@@ -963,7 +971,7 @@ def normalize_wsum_to_sigma2_noise(wsum_sigma2_noise, wsum_img_power, sumw, imag
     sigma2 = jnp.maximum(sigma2, 1e-15)
 
     # Fill zeros from previous shell (RELION ml_optimiser.cpp:5281-5284)
-    sigma2_np = np.asarray(sigma2, dtype=np.float32)
+    sigma2_np = np.asarray(sigma2)
     for i in range(1, len(sigma2_np)):
         if sigma2_np[i] < 1e-14 and sigma2_np[i - 1] > 1e-14:
             sigma2_np[i] = sigma2_np[i - 1]
