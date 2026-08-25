@@ -2698,3 +2698,50 @@ trace in RELION and the matching RECOVAR worker trace, reusing the EM program's
 fail-closed capture/provenance pattern.  No further 0--200 or stress-matrix run
 is authorized until that observed schedule is replayed at the iteration-1 raw
 accumulator boundary.  No generic RECOVAR suite ran.
+
+The passive native trace is now qualified, and it changes the interpretation
+of the long boundary.  Isolated RELION commits `70dbf37e`/`33c6acfe` add an
+environment-gated recorder at the actual CUDA worker claim site; with the
+environment unset the code path is inert.  Build job `12965076` completes in
+`1:43`, producing binary SHA-256
+`590afb03d769bccb2bcd10cb12b30a38b0f9a77a25440d39dddf67f459a56ceb`
+and full instrumentation-patch SHA-256
+`e813f4eb2be7045121b33914a224ff3992e0a9b928f2bb4ba784f7ba43088415`.
+The first capture exposed and fail-closed on a recorder placement in the CPU
+rather than CUDA worker loop; no scientific iteration completed in that run.
+Focused validator/contract checks after the correction pass `7/7`, together
+with Bash syntax and Ruff checks.
+
+Native trace jobs `12965214` and `12965225` then complete the full 0--200
+trajectory on physical H100 UUIDs `GPU-e2c3190a-...` and
+`GPU-ddb1592d-...` in `4:57` and `4:50`.  Both sealed 200-row iteration-1
+schedules pass the exact 24-particle-pool/eight-worker topology check.  Every
+worker owns exactly 25 particles, but the two native assignments differ at
+169 of 200 positions.  Despite that owner variation, each iteration-1 map
+matches the canonical native run at FSC-AUC about `0.999999999954`, and all
+3,000 pose/translation choices agree.  Worker labels are therefore genuinely
+runtime-nondeterministic and are not an invariant production schedule.
+
+The newly completed full native-vs-native audit is more important than an
+owner replay.  Against the canonical native trajectory made on physical UUID
+`GPU-235ec3bc-...`, both new native runs first fail the frozen `0.999` map gate
+at iteration 31 and reach their minima at iteration 119: `0.6676413803940733`
+for the e2 run and `0.6674598091049447` for the ddb run.  Their iteration-200
+FSC-AUC values are `0.8998051966651099` and `0.9095889691013362`, and their
+first hard particle differences versus canonical are already iteration 19.
+The two new native trajectories are substantially closer to one another, but
+still first fail at iteration 130, reach minimum FSC-AUC
+`0.9648137755552504` at iteration 176, end at `0.9933418978829993`, and first
+differ in hard particle state at iteration 72.  Map-report SHA-256 values are
+`22ee685c68f7d8de6e8b8c40a396e44a34d1230a73ee3bde279b84a99b1cef29`,
+`599940632b64d9b1afc15e42e0f5c779a57bc10862d5b5a4a7b538167e124ed8`,
+and `211057b72394105a4dbbcfe4e0bd294f40fb75290c387235593feef0305aa8b9`.
+
+Consequently, literal independent-run 0--200 identity is not a valid RELION
+parity contract: native RELION itself violates it strongly across physical
+H100s.  The frozen suite's same-physical-GPU requirement remains mandatory,
+and native run-to-run variability on one UUID must be measured before changing
+the candidate gate or adding replay logic.  Same-UUID repeat job `12965740` is
+running on the e2 H100 for that discriminator.  The other 21 robustness cells
+remain held until this native envelope is sealed.  No generic RECOVAR tests
+ran.
