@@ -1804,3 +1804,26 @@ H100 Slurm `12936211`, with all capture observers disabled.  This directly
 tests whether stock RELION itself preserves or flips the same iteration-19
 near-tie from a fixed incoming state before choosing the acceptance rule for
 long trajectories.  No generic RECOVAR suite ran.
+
+The 12 observer-free continuations complete in 30 seconds total and are
+repeat-stable against each other: zero hard pose/translation differences and
+maximum Pmax jitter `1.8e-5`.  They do **not**, however, replay the sealed
+autonomous iteration.  RELION continuation reconstructs the iteration-local
+1,000-particle subset/RNG stream rather than serializing and restoring its
+original autonomous history; all 1,000 reprocessed particles differ from the
+sealed iteration-19 state, and the target changes from fine Pmax `0.063007` to
+coarse Pmax about `0.295`.  This panel is therefore retained as a continuation
+repeat control but rejected as evidence about the autonomous near-tie.
+
+Experimental commit `11b140358` adds a fail-closed autonomous native-repeat
+gate.  It copies the exact sealed GUI-default RELION command, requires
+`--iter 200`, pins executable SHA-256
+`2d070d6456ae439c3890fcbd0f6e9c8e4e56bcc2ef79f55bfc58574e50f7a11b`,
+and audits all 201 maps and all 200 posterior particle states against the
+original native run.  Its focused contract test and shell syntax check pass;
+the commit remains unpushed.  Four independent full native H100 repeats are
+running as Slurm `12936720`--`12936723`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_native_full_repeat_11b140358_rN_20260825`.
+These runs define the scientifically valid autonomous native envelope before
+the RECOVAR 200-iteration and 22-case gates are released.  No generic RECOVAR
+full or long suite ran.
