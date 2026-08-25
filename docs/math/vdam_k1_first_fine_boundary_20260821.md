@@ -2167,3 +2167,45 @@ the unchanged `-0.002` gate while its single-oracle map trajectory does not.
 Repeat 4's audit and the restart-safe ensemble summary remain in progress
 under `12939263`/`12939264`; the candidate-envelope auditor will run only after
 those immutable artifacts close.
+
+The accumulator-donation experiment is rejected and restored locally.  H100
+Slurm `12945961` reduces iteration-150 pass 2 from `10.0448 s` to `7.6935 s`
+(`23.41%`), but leaves big-JIT time effectively unchanged (`6.4461 s` to
+`6.4240 s`) and changes scientific state: candidate/control active-particle
+states are exact through iteration 90, then all 840 selected particles differ
+at iteration 140 and all 920 differ at iteration 150.  Candidate/control map
+FSC-AUC is `0.9999999250` at iteration 90, `0.9934749859` at iteration 140,
+and `0.9936399177` at iteration 150.  Local commit `23b499342` restores the
+production decorator and records the rejection; neither the experimental nor
+restoration commits are pushed.  The next profiler target must be a warm late
+iteration, because iteration 150 is a cold schedule/shape transition.
+
+The correctness pool now has explicit map, particle-state, and sampling-mode
+ensemble gates.  Local commits `08bd550f1`, `cb2091ce1`, and `8cd1798d0`
+require every active candidate particle to match at least one native-repeat
+pose/translation state, require the complete candidate sampling state to match
+one whole native mode (not a cross-repeat field mixture), ignore expected
+accuracy fields only while they are explicitly unused, and fail closed on
+cross-GPU provenance.  The reusable CPU Slurm wrapper runs both gates even if
+one fails and records their independent statuses.  Focused validation is
+`19/19` auditor tests plus the wrapper test, Ruff, byte-compilation, and shell
+syntax; no generic suite ran.  These tooling commits remain local and unpushed.
+
+All four formal native/candidate pairs completed 200 iterations on the same
+physical H100.  Repeat 4's first hard particle difference is iteration 42;
+its minimum cross-engine FSC-AUC is `0.9107028723`, and its minimum
+RECOVAR-minus-RELION GT FSC-AUC is `-0.0014313519`, still inside the frozen
+`-0.002` GT gate.  Parent `12939263` exits `1:0` only because individual
+single-oracle audits are fail-closed; restart-safe ensemble summary `12939264`
+is running over all four complete repeats.
+
+The prior shared candidate was produced on a different physical H100, so the
+new provenance guard correctly excludes it from the formal panel comparison.
+Candidate-only same-GPU rerun `12947769` is pinned to `della-h19g2`, source
+`23b4993428d015d46fd574281489c2f8e1b0a5a8`, and CUDA SHA-256
+`b3a329a5f5559ca3bb3c436ab5a051bfe1666c317a2c2834daea1ae3c2c6939c`.
+Dependent CPU job `12947773` will run the map and state/schedule envelopes only
+after both that candidate and summary `12939264` finish.  Setup attempt
+`12947583` stopped before science because the output root lacked its required
+`SAFE_TO_DELETE` marker; its dependent `12947714` was cancelled before start
+and no artifact is reused.
