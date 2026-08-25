@@ -1116,3 +1116,31 @@ iteration-2 cutoff/noise state propagated from the now-qualified iteration-1
 M-step, followed by one representative true 200-iteration K=1 trajectory
 before expanding the trajectory matrix.  No generic RECOVAR full or long test
 suite ran.
+
+## Iteration-2 qualified-M-step propagation gate
+
+H100 Slurm `12920824` reran the complete 200-particle iteration-2 cutoff/noise
+panel at accepted head `25d7b6db0`, against the unchanged frozen native RELION
+data and component table.  It completed `0:0` in 61 seconds with 3.2 GB peak
+RSS.  Preflight `12920781` failed closed in two seconds because the submitted
+full Git SHA was mistyped; no science ran in that attempt.
+
+The source-faithful native-SGD body does not by itself close the propagated
+state.  At shell 15, direct-residual signed error is
+`+1.5975690968e-5`, versus the prior `+1.60060e-5`; `AA` and `XA` errors are
+`-3.8716139640e-6` and `-9.9874876848e-6`.  Inferred image-power error is only
+`-1.1731079750e-7`.  Thus the iteration-2 failure remains the reference-driven
+`XA/AA` boundary identified earlier, despite the now-qualified per-particle
+posterior and production GPU BPref arithmetic.
+
+The remaining implementation difference is aggregate launch topology.  Native
+RELION launches `orientation_num` blocks for each particle.  RECOVAR's current
+FFI launches the bucket-padded `rotation_count` for every particle and masks
+inactive rows by zero posterior; for the qualified particle-0 capture this is
+80 active rotations in a 1,024-row padded axis.  That produces the correct
+isolated contribution but changes block scheduling during full-particle atomic
+accumulation.  The next bounded discriminator passes exact per-particle
+rotation counts to the otherwise unchanged 523-line-matched kernel and repeats
+the iteration-1 aggregate plus iteration-2 cutoff gates.  It will receive no
+200-iteration trajectory unless those gates materially improve.  No generic
+RECOVAR suite ran.
