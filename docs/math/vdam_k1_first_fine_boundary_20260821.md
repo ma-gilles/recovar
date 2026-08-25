@@ -2536,3 +2536,64 @@ hash step, and none ran trajectory science.  An exact-GPU iteration-1 raw
 M-step discriminator is queued behind the score capture.  No generic RECOVAR
 tests ran, and the remaining 21 stress cases remain held until this causal
 boundary is resolved.
+
+The first full-operand score replay, job `12959751`, is excluded from causal
+use.  Although it completed on the exact formal H100, its autonomous candidate
+trajectory had already selected a different hard state at iteration 19 and the
+selected iteration-84 bucket was `16x100` instead of the sealed production
+`8x116` bucket.  Its target Pmax was `0.739860`, versus `0.291789` in the
+sealed fused-only candidate.  Those operands therefore describe a different
+trajectory mode and are not substituted for the iteration-84 boundary.
+
+Local unpushed commits `d3d928e0a` and `090c2ba1f` add a narrower diagnostic:
+the selected fused path returns only its already-computed raw/total score and
+rotation/translation priors, without materializing the large image/projector
+operands.  Focused H100 job `12960361` passes all 3 score-capture/analyzer
+tests.  Exact-formal-GPU job `12960380` then completes the true 200-iteration
+schedule through iteration 84 in `9:33` and writes the sealed target score
+table.  Across iterations 1--84, this independent run has only one transient
+hard-state difference from the earlier fused-only candidate (one particle at
+iteration 24); the selected iteration-84 particle retains the same pose and
+translation, and its Pmax changes by only `4.1e-5`.  Earlier Pmax differences
+occur before the iteration-selective diagnostic is active and reflect the
+known atomic repeat floor rather than observer mutation.
+
+The score decomposition is decisive.  On all 64 common candidates, centered
+combined rotation/translation prior has maximum error `2.6822e-6`, while the
+centered pre-prior likelihood score has maximum error `0.00403327` and RMS
+`0.00161887`.  For the two competing winners, native RELION favors mapped key
+`[1,86]` over `[5,86]` by log-weight `+0.00146484`; RECOVAR reverses that
+pair with margin `-0.00170898`.  Candidate support, 20-sample reconstruction
+mask, and mapped rotations remain identical.  The first iteration-84 hard
+flip is therefore raw likelihood spacing, not priors, support, pruning, or
+posterior normalization.  Report SHA-256 is
+`607c095f7d302ca78c3026c93aa8107afe5fa7e8e7de5b14f33ebad5fb5b3c20`.
+
+The first global dynamic-worker experiment does not close the earlier causal
+aggregate boundary.  Job `12959830` completes the iteration-1 M-step in 37
+seconds, but raw data residuals worsen to `1.00283e-5`/`1.00209e-5`, weight
+residuals are `2.15370e-6`/`1.87133e-6`, and reconstructed-reference residual
+is `2.12247e-6`.  Iteration-2 job `12960400` completes in 48 seconds; its
+incoming gradient and second-moment states are already nonexact, while its
+final reference residual is `1.03153e-6`.  The corresponding 0--20 run
+`12960527` completes the scientific step in 53 seconds.  Every one of its 21
+map checkpoints passes, with iteration-20 FSC-AUC `0.999999999944`, and every
+particle pose/translation agrees through iteration 20.  Its wrapper failure is
+the separately retained single-oracle sampling-accuracy/optimal-offset audit,
+not a map or hard-state failure.  Map and particle report SHA-256 values are
+`eed3121f8bdb1cef176667b922d976d063b94468c0aee3273e3aeda4b5e8f9e7`
+and `9d3a3a92018f7d46df0c50d3e58d58c51595b8c42ba9fc24f79778c73f563437`.
+
+RELION source inspection explains why the global distributor was the wrong
+counterfactual.  `--pool 3 --j 8` creates sequential 24-particle input pools;
+inside each pool, eight workers dynamically claim one particle at a time, and
+all workers barrier before the next pool is loaded.  Local unpushed commit
+`f0dee51c8` adds exactly those pool boundaries while leaving the accepted
+523-line native SGD kernel body and padded rotation launch unchanged.  H100
+gate `12961504` builds CUDA SHA-256
+`4162c378682f49837243b06627f78192af9e8ab382e1eb59c83d08b960cdadaf`
+and passes all 16 focused CUDA translation/routing tests in 7.18 seconds.
+Iteration-1 and iteration-2 bounded M-step jobs `12961519`/`12961520` are
+running; no 0--200 promotion is authorized unless those gates improve the
+raw-accumulator and propagated-state boundaries.  No generic RECOVAR suite
+ran.
