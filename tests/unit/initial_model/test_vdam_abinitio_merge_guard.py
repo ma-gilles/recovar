@@ -408,6 +408,30 @@ def test_vdam_gui_default_full_suite_audits_every_200_iteration_checkpoint():
         all(case["definition"][key] == value for key, value in gui_defaults.items())
         for case in cases
     )
+    coverage = {axis for case in cases for axis in case["coverage"]}
+    assert {
+        "baseline",
+        "outliers",
+        "severe_outliers",
+        "extreme_outliers",
+        "junk_particles",
+        "uniform_poses",
+        "anisotropic_poses",
+        "kent_poses",
+        "white_noise",
+        "radial_noise",
+        "low_noise",
+        "high_noise",
+        "very_high_noise",
+        "no_ctf",
+        "contrast_noise_scale",
+        "translations",
+        "high_resolution",
+        "small_n",
+        "midscale",
+        "full_gui_schedule",
+    } <= coverage
+    assert all("full_gui_schedule" in case["coverage"] for case in cases)
     assert "#SBATCH --array=1-22%4" in matrix
     assert "JAX_COMPILATION_CACHE_DIR" in matrix
     assert "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS" in matrix
