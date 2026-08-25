@@ -148,6 +148,23 @@ native accumulator storage topology: RELION atomically updates three disjoint
 real, imaginary, and weight arrays, while the candidate's complex accumulator
 interleaves real and imaginary values in one `float2` allocation.
 
+That storage-layout gate is also null.  Isolated commit `975500ffc` splits the
+fused accumulator into RELION-shaped real, imaginary, and weight allocations,
+aliases all three through the FFI, and recombines the data losslessly after the
+kernel.  H100 build `12913028` completes `0:0`; focused job `12913108` passes
+4/4 source, numerical-interior, native-y-boundary, and routing tests.  Paired
+full-schedule jobs `12913115`/`12913122` both complete `0:0`.  Candidate repeat
+relative-L2 remains only `1.52327e-7`/`1.87188e-7` for data and
+`8.24795e-8`/`8.99974e-8` for weights, versus native
+`9.33658e-6`/`1.07903e-5` and `2.43710e-6`/`2.12937e-6`.  Cross-engine
+distances remain `0.82--1.15x` one native-repeat distance.  Disjoint storage
+does not reproduce native atomic-order variance, so the commit remains
+unpushed and receives no trajectory.  The next implementation boundary is the
+native kernel's resource/occupancy topology (nine shared Euler values, inline
+projection, and exact compiled control flow), not host threads, source
+statement order, fused atomics, particle launch order, or output allocation
+layout.
+
 Source statement order alone is now rejected as sufficient.  Isolated commit
 `99681a33b` completed all 200 frozen `vdam-gf01` iterations (Slurm
 `12879549_1`): first strict failure is iteration 73, minimum/final cross-engine
