@@ -1653,3 +1653,75 @@ mistyped pinned commit, and an invalid whole-subset assertion after the native
 capture deliberately stopped at the target particle.  No generic RECOVAR
 full or long test suite ran, and all 21 additional 200-iteration robustness
 cases remain held.
+
+## Iteration-90 local-prior transition boundary
+
+The target-scoped continuation capture completed its science on H100 Slurm
+`12932544`.  Its final batch status is infrastructure-only: a test-only commit
+moved the experimental checkout after the job pinned its source head, so the
+post-run immutable-head assertion failed even though the relevant production
+source did not change.  The captured particle is
+`1010@particles.128.mrcs` (original row 1009, RELION internal part-id 14).
+Native target replay Pmax is `0.952955`, within `2.41e-4` of the sealed native
+trajectory value; RECOVAR remains on its accepted approximately `0.4969`
+branch.
+
+The fused fine-posterior audit proves that this is not only a shared-fine-score
+rounding defect.  Native retains 64 fine candidates, whereas RECOVAR routes
+32 parents across 84 translations.  The native best mapped key is `(25, 41)`
+at probability `0.952955`; RECOVAR selects `(18, 41)` at `0.496859`, and only
+`0.48747` of RECOVAR probability lies on native support.  Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_it090_first_particle_581e498b_20260825/analysis/fused_posterior.json`
+(SHA-256
+`0ec6fbc3961290394c6915d700fd92b240df99ad5e0bfaa4c42b4854a92b2e05`).
+
+The translated-image, score-weight, noise, and shared fine-score operands are
+already close enough that they cannot explain the support split.  Image and
+score-weight relative-L2 are approximately `4.9e-7` and `3.33e-7`; substituting
+RECOVAR's live projected reference reproduces the remaining shared-support raw
+score residual (RMS `0.057119`, maximum `0.123916`).  The iteration-89 MRCs
+differ by only `4.68026e-5` relative-L2, but projection amplifies that to
+`5.346e-4`.  Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_it090_first_particle_581e498b_20260825/analysis/native_translation.json`
+(SHA-256
+`c4a71e9f63dbae37d9ffe2e29e20b52e41859a5b4b184902dc61751b123e3da9`).
+
+A verbose coarse capture then isolated the discrete cause.  Of three same-head
+H100 repeats, only `12933447` followed the accepted pre-transition branch;
+`12933142` and `12933448` already had 417 iteration-89 particle differences
+and map minima near `0.7405`, so their dumps are quarantined.  The accepted
+coarse dump is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_it090_coarse_02a8583d_r2_20260825/significance/significance_orig001009_it090_cs064.npz`
+(SHA-256
+`5dc56cd498db0d647fd35e58c8cada3568d87b3a476e474bb5e86aa7982a222c`).
+
+On that fixed state, native RELION has exactly two significant coarse
+hypotheses, `(31098, 10)` and `(31385, 10)`, and selects `(31098, 10)`.
+RECOVAR has five, adding `(31336, 10)`, `(31337, 10)`, and `(31385, 11)`, and
+selects `(31385, 10)`.  The centered raw-score residual is only `0.059668` RMS,
+and is `0.00684`/`0.01843` at the two native hypotheses; it cannot cause the
+approximately `6.25` log-weight winner reversal.  The rotation prior does:
+native's live GPU orientation log prior is uniform at `-10.5149908066`, while
+RECOVAR applies learned values `-6.15377665` at rotation 31098 and
+`+0.08624665` at 31385.  Translation priors already match.
+
+The corresponding RELION state transition is explicit in the frozen output:
+`rlnOrientationalPriorMode` is `0` through iteration 89 and becomes `1` at
+iteration 90 while HEALPix remains 3.  Its stored angular-prior widths are
+zero, so the live operands are uniform direction and psi priors
+(`1/768 * 1/48`).  RECOVAR incorrectly continued to score with the nonuniform
+`pdf_direction`.  Replaying only the accepted RECOVAR coarse table with a
+uniform rotation prior restores RELION's exact winner and two-hypothesis
+support; learned-prior Pmax is `0.953176`, while the uniform-prior replay Pmax
+is `0.959020`.
+
+Experimental commit `41a773cf1` encodes the gradient InitialModel local-prior
+transition as persistent sampling state and switches the E-step rotation prior
+to uniform at that boundary.  Six focused transition/prior/E-step plumbing
+tests pass, along with Ruff, py_compile, and diff checks.  The commit remains
+unpushed.  Three independent H100 iteration-92 gates are Slurm `12934827`,
+`12934828`, and `12934829`.  They must both remove the iteration-90 support
+split on accepted branches and expose the unresolved pre-transition
+repeatability rate; one passing repeat is insufficient.  The full
+200-iteration rerun and all 21 additional outlier/noise/pose/scale trajectories
+remain held, and no generic RECOVAR full or long suite ran.
