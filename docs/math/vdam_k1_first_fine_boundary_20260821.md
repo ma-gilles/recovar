@@ -1827,3 +1827,22 @@ running as Slurm `12936720`--`12936723`, rooted at
 These runs define the scientifically valid autonomous native envelope before
 the RECOVAR 200-iteration and 22-case gates are released.  No generic RECOVAR
 full or long suite ran.
+
+The fresh autonomous controls already reproduce both sides of the target
+boundary before completion: native repeats 1--3 retain the sealed
+`(-122.42695, 30.332644, 13.941839)`-degree pose, while native repeat 4 selects
+`(-117.5254, 36.313398, 6.136272)` with the same 1.5-Angstrom translation
+change as RECOVAR's divergent repeat.  Native Pmax spans only
+`0.063003`--`0.063007`.  The iteration-19 hard split is therefore a measured
+stock-RELION autonomous mode, and a single-reference exact-particle gate is
+invalid for this chaotic long trajectory.
+
+This releases a repeat-aware full default gate, not the broad matrix.  A
+four-repeat paired GUI-default 200-iteration panel is submitted as H100 Slurm
+`12936969`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gui_default_repeat_panel_11b140358_20260825`.
+Each repeat runs stock RELION and RECOVAR on the same physical GPU, audits all
+201 checkpoints, retains the frozen FSC/GT thresholds, and additionally
+requires every candidate run to match a native mode and every native run to
+have a candidate mode.  The remaining 21 outlier/noise/pose/scale cases stay
+held until this default envelope passes.  No generic RECOVAR suite ran.
