@@ -54,7 +54,7 @@ if [[ -n "${RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_DIR:-}" ]]; then
   mkdir -p "${RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_DIR}"
 fi
 
-PIXI_PY="${REPO_ROOT}/.pixi/envs/default/bin/python"
+PIXI_PY="${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}"
 test -x "${PIXI_PY}"
 
 "${PIXI_PY}" - <<'PY'
