@@ -1405,3 +1405,46 @@ Artifacts:
   `a7a388630288ef71eb548c5ad598526750543e46c3a7cb8cae417c9a6c68765e`).
 
 No generic RECOVAR full or long test suite ran.
+
+## Adaptive-sampling expected-accuracy discriminator
+
+The iteration-90 transition failure is a crossed-parameter defect, not random
+trajectory drift.  RELION and RECOVAR agree through iteration 89 on Healpix
+order 3, psi step 7.5 degrees, translation range `9.002823` Angstrom, coarse
+translation step `3.0` Angstrom, and every sampling perturbation.  At iteration
+90 RELION changes to range `6.482290` Angstrom and step `2.575500` Angstrom;
+RECOVAR changed its range to `6.487914` Angstrom but incorrectly retained the
+`3.0` Angstrom step.
+
+The expected-accuracy inputs identify why.  RELION's
+`calculateExpectedAngularErrors` divides by the separate, fixed
+`sigma2_fudge=1`.  RECOVAR instead passed the dynamic reference-regularization
+`tau2_fudge_factor`.  This is nearly invisible while tau2 fudge is one, then
+amplifies with the VDAM schedule: native tau2 fudge is `1.854242` at iteration
+70, `3.821947` at iteration 80, and `3.995253` at iteration 90.  Accordingly,
+RECOVAR's iteration-90 accuracy estimate was `(3.730, 3.281 Angstrom)` versus
+RELION's `(1.823, 1.717 Angstrom)`.
+
+The saved-artifact source-boundary replay with the correct independent noise
+fudge exactly reproduces RELION at iteration 70: rotation accuracy `4.630` and
+translation accuracy `3.48075` Angstrom.  Replaying RECOVAR's saved iteration-89
+state gives rotation accuracy `1.828` (native `1.823`) and translation accuracy
+`1.717` Angstrom exactly.  The latter yields RELION's coarse translation step
+`min(1.5, 0.75 * 1.717) * 2 = 2.5755` Angstrom.  Both the native range and the
+slightly drifted saved-candidate range select the same 21 coarse / 84 fine
+translations at that corrected step.
+
+Experimental commit `82370f0f5` separates the two parameters, adds a direct
+saved-artifact expected-accuracy auditor, and guards against reusing dynamic
+tau2 in the accuracy binding.  All 53 focused native InitialModel driver tests
+pass; no generic RECOVAR full or long test suite ran.  The iteration-90 report
+is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gui_full_rounded_78cdc97e_20260825/vdam-gf01/analysis/expected_accuracy_sigma2_boundary_it090.json`
+(SHA-256
+`937f5f3844ad2ae44463db65a28d5c59c433e6fd0b5acd387d5383ced2caa0df`).
+
+Targeted H100 Slurm `12929306` is the production gate.  It runs only RECOVAR
+through iteration 92, reuses the existing native trajectory and compilation
+cache, and audits maps plus particle states across iterations 69--92.  The 21
+remaining 200-iteration robustness cases stay held until this transition gate
+passes.
