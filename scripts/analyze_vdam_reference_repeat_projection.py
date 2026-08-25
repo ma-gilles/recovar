@@ -135,7 +135,9 @@ def analyze(
                 padding_factor=1,
                 return_abs2=False,
                 centered_rows=True,
-                dense_scale=False,
+                # InitialModel's scoring/reconstruction projection frame is
+                # the RELION projector value multiplied by ``-ori_size^2``.
+                dense_scale=True,
                 projector_output_size=current_size,
                 pixel_indices=jnp.asarray(pixel_indices, dtype=jnp.int32),
                 relion_texture_interp=True,
