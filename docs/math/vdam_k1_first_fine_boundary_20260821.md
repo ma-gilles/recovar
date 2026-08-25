@@ -2745,3 +2745,79 @@ the candidate gate or adding replay logic.  Same-UUID repeat job `12965740` is
 running on the e2 H100 for that discriminator.  The other 21 robustness cells
 remain held until this native envelope is sealed.  No generic RECOVAR tests
 ran.
+
+The same-UUID discriminator confirms that the late trajectory is not a
+point-valued native oracle.  The second e2 run (`12965740`) completes on the
+same physical H100 as `12965214`; its 200 particle-to-worker assignments differ
+at 175 positions even though every worker still claims exactly 25 particles.
+Full CPU-Slurm audit `12965960` then compares the two independent native runs
+at every checkpoint from 0 through 200.  The old fixed `0.999` gate first
+fails at iteration 31, the minimum native-vs-native FSC-AUC is
+`0.6792833012912778` at iteration 118, and iteration 200 is
+`0.8892913459263536`.  Hard particle state first differs at iteration 19; by
+iteration 200, pose and translation match fractions are `0.7486667` and
+`0.6666667`.  The nonzero Slurm result is the expected old-gate
+classification, not an execution failure.
+
+This makes the earlier fixed point-oracle contract internally inconsistent:
+native RELION itself can be far below `0.999` on the same input, binary,
+physical GPU, and command.  The replacement contract remains fail-closed but
+uses native repeatability as the scientific floor:
+
+- at every map checkpoint, the candidate must meet the lower of the frozen
+  `0.999` gate and the observed same-GPU native repeat floor;
+- at every map checkpoint, candidate-to-GT FSC-AUC may trail the best native
+  repeat by no more than the frozen `0.002` allowance;
+- at every positive checkpoint, the candidate's nearest complete native hard
+  particle state may differ for no more particles than the worst native pair;
+- exact discrete search topology is mandatory through the first native hard
+  particle-state branch; later adaptive topology and all continuous schedule
+  quantities remain reported diagnostics rather than a false point oracle;
+- input identity, default parameters, artifact topology, RELION executable,
+  candidate CUDA binary, source heads, and same physical GPU remain mandatory.
+
+The static worker-8 baseline now has zero failures under that contract.  The
+sealed 201-checkpoint map report is reclassified without recomputing its maps
+or shell curves: the parent map and shell hashes remain
+`535f6da63eaed983f862348ad914600bf2fcff36417a13f3a087770563f42895`
+and `9f987819f5f1c1c0189b293d2967724e896e00d1dee8047bd78dd8e5fc3ca5e6`.
+The original strict point audit has 70 failures beginning at iteration 131;
+the repeatability-calibrated audit has zero failures.  Its minimum
+candidate-best-native FSC-AUC is `0.9831481130943629`, while the minimum GT
+delta remains `-0.0009750295208153792`, inside the frozen `-0.002` allowance.
+The derived report SHA-256 is
+`b12c06e31c5c0e0f3d0d73284a01b51e8b1799e8470af0e81e8975ee4e297199`.
+
+Focused CPU-Slurm state audit `12967101` completes in `1:24`.  All 200 positive
+particle checkpoints pass, the first four-repeat native hard-state branch is
+iteration 24, and the candidate-minus-native mismatch ceiling never exceeds
+zero.  All gated pre-branch search-topology checkpoints pass.  The separately
+retained strict continuous/adaptive diagnostic first differs at iteration 6
+and differs at 110 checkpoints, so the evidence is not hidden or rewritten.
+State report SHA-256 is
+`2ea5d94d8e1f0975db4ce0f406cf0f825c61c4738b3308f3c3622fa71dc819ce`.
+
+Two provenance guards also behaved as intended.  State-only job `12966993`
+stopped in 16 seconds when a mistakenly selected archived candidate named a
+different H100 UUID; pending job `12966333` was cancelled before allocation
+after the same path error was found.  The valid candidate is
+`vdam_worker8_formalgpu_attempt1_0f3642045_20260825`, not the later cross-GPU
+diagnostic root.  Correctly pinned combined recomputation `12967102` was then
+cancelled at zero elapsed time because the sealed parent map/shell evidence
+could be reclassified losslessly.  No science outputs were deleted and no GPU
+was allocated for these corrections.
+
+Focused contract evidence is `16 passed` for the state-boundary and 200-step
+suite checks, plus `27 passed` for the map, state, and sealed-reclassification
+auditors; Ruff, Bash syntax, and `git diff --check` pass.  No generic RECOVAR
+or generic long-test suite ran.
+
+The K=1 baseline gate is therefore sealed.  The next execution step is the
+remaining 21 full 0--200 GUI-default cells already frozen in
+`vdam_k1_gui_default_full_suite_v1.json`: outlier and junk fractions,
+uniform/anisotropic/Kent pose distributions, white/radial and low-to-very-high
+noise, no-CTF, contrast/noise scaling, translations, resolution, small-N, and
+midscale data.  Each cell must carry its own same-GPU native repeat panel and
+the same map, GT, hard-state, topology, runtime, and provenance gates; failures
+will be localized and fixed before moving to parameter, scale, real-data, or
+K>1 qualification.
