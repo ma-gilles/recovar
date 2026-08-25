@@ -711,20 +711,8 @@ def _estimate_native_sampling_accuracy(
 
     from recovar.relion_bind import _relion_bind_core as bind
 
-    # Stock RELION builds the active reference/projector from RFLOAT values.
-    # InitialModel keeps Iref in float64 on the RECOVAR side, so cross the
-    # native float32 boundary explicitly before calling the double-argument
-    # replay binding.  Without this quantisation, the expected-accuracy binary
-    # search can choose a neighbouring translation step even when the written
-    # iteration map agrees with RELION to float32 precision.
     refs_relion = np.stack(
-        [
-            np.asarray(recovar_volume_to_relion(ref), dtype=np.float32).astype(
-                np.float64,
-                copy=False,
-            )
-            for ref in np.asarray(state.Iref)
-        ],
+        [np.asarray(recovar_volume_to_relion(ref), dtype=np.float64) for ref in np.asarray(state.Iref)],
         axis=0,
     )
     current_image_size = int(state.current_size if state.current_size > 0 else state.ori_size)
@@ -752,6 +740,43 @@ def _estimate_native_sampling_accuracy(
         True,
         False,
     )
+    dump_dir = os.environ.get("RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR", "").strip()
+    dump_iterations = os.environ.get(
+        "RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_ITERATIONS",
+        "",
+    ).strip()
+    selected_dump_iterations = {
+        int(value.strip()) for value in dump_iterations.split(",") if value.strip()
+    }
+    if dump_dir and (
+        not selected_dump_iterations or int(state.iter) in selected_dump_iterations
+    ):
+        dump_path = Path(dump_dir)
+        dump_path.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            dump_path / f"iter{int(state.iter):03d}_expected_accuracy_inputs.npz",
+            refs_relion=refs_relion,
+            eulers=eulers,
+            trial_particle_ids=trial_particle_ids,
+            class_ids=class_ids,
+            pdf_class=np.asarray(state.pdf_class, dtype=np.float64),
+            sigma2_noise=np.asarray(state.sigma2_noise[0], dtype=np.float64),
+            defU=np.asarray(optics_state.defU, dtype=np.float64),
+            defV=np.asarray(optics_state.defV, dtype=np.float64),
+            defAngle=np.asarray(optics_state.defAngle, dtype=np.float64),
+            phase_shift=np.asarray(optics_state.phase_shift, dtype=np.float64),
+            voltage=np.asarray(float(optics_state.voltage), dtype=np.float64),
+            Cs=np.asarray(float(optics_state.Cs), dtype=np.float64),
+            Q0=np.asarray(float(optics_state.Q0), dtype=np.float64),
+            pixel_size=np.asarray(float(optics_state.pixel_size), dtype=np.float64),
+            ori_size=np.asarray(int(state.ori_size), dtype=np.int64),
+            current_image_size=np.asarray(current_image_size, dtype=np.int64),
+            padding_factor=np.asarray(int(padding_factor), dtype=np.int64),
+            sigma2_fudge=np.asarray(float(sigma2_fudge), dtype=np.float64),
+            random_seed=np.asarray(int(random_seed), dtype=np.int64),
+            acc_rot=np.asarray(float(out["acc_rot"]), dtype=np.float64),
+            acc_trans=np.asarray(float(out["acc_trans"]), dtype=np.float64),
+        )
     sampling_state.acc_rot = float(out["acc_rot"])
     sampling_state.acc_trans_angstrom = float(out["acc_trans"])
     return {

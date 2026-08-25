@@ -50,12 +50,15 @@ export CUDA_LAUNCH_BLOCKING=0
 export CUDA_VISIBLE_DEVICES=0
 export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
 export RECOVAR_CUDA_LIB=${CUDA_BINARY}
+export RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR=${OUTPUT_ROOT}/accuracy_inputs
+export RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_ITERATIONS=90
 export JAX_COMPILATION_CACHE_DIR=${BASELINE_ROOT%/*}/jax_compilation_cache
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0.01
 export TMPDIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/tmp
 export PIXI_HOME=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/pixi_home
 export RATTLER_CACHE_DIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/rattler_cache
-mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}"
+mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}" \
+  "${RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR}"
 
 git -C "${REPO_ROOT}" rev-parse HEAD > "${PROVENANCE_DIR}/repo_head.txt"
 sha256sum "${CUDA_BINARY}" "${DATA_DIR}/particles.star" > "${PROVENANCE_DIR}/input_sha256.txt"
@@ -95,6 +98,7 @@ printf '\n' >> "${PROVENANCE_DIR}/recovar_command.sh"
   --previous-prefix "${RECOVAR_DIR}/run_it089" \
   --target-prefix "${RELION_DIR}/run_it090" \
   --candidate-meta "${RECOVAR_DIR}/run_it090_recovar_meta.json" \
+  --live-inputs "${RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR}/iter090_expected_accuracy_inputs.npz" \
   --output "${ANALYSIS_DIR}/expected_accuracy_it090.json"
 
 map_args=()

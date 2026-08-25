@@ -48,6 +48,11 @@ def main() -> None:
         type=Path,
         help="optional live iteration metadata to compare with the serialized replay",
     )
+    parser.add_argument(
+        "--live-inputs",
+        type=Path,
+        help="optional exact live binding operands captured before the iteration",
+    )
     parser.add_argument("--random-seed", type=int, default=0)
     parser.add_argument("--padding-factor", type=int, default=1)
     parser.add_argument("--sigma2-fudge", type=float, default=1.0)
@@ -140,6 +145,71 @@ def main() -> None:
             observed_minus_serialized_replay_acc_trans_angstrom=(
                 observed_trans - float(out["acc_trans"])
             ),
+        )
+    if args.live_inputs is not None:
+        live = np.load(args.live_inputs)
+        live_out = bind.vdam_expected_angular_errors(
+            np.ascontiguousarray(live["refs_relion"], dtype=np.float64),
+            np.ascontiguousarray(live["eulers"], dtype=np.float64),
+            np.ascontiguousarray(live["trial_particle_ids"], dtype=np.int64),
+            np.ascontiguousarray(live["class_ids"], dtype=np.int32),
+            np.ascontiguousarray(live["pdf_class"], dtype=np.float64),
+            np.ascontiguousarray(live["sigma2_noise"], dtype=np.float64),
+            np.ascontiguousarray(live["defU"], dtype=np.float64),
+            np.ascontiguousarray(live["defV"], dtype=np.float64),
+            np.ascontiguousarray(live["defAngle"], dtype=np.float64),
+            np.ascontiguousarray(live["phase_shift"], dtype=np.float64),
+            float(live["voltage"]),
+            float(live["Cs"]),
+            float(live["Q0"]),
+            float(live["pixel_size"]),
+            int(live["ori_size"]),
+            int(live["current_image_size"]),
+            int(live["padding_factor"]),
+            1,
+            float(live["sigma2_fudge"]),
+            int(live["random_seed"]),
+            True,
+            False,
+        )
+
+        def _comparison(serialized, live_value) -> dict[str, object]:
+            lhs = np.asarray(serialized)
+            rhs = np.asarray(live_value)
+            same_shape = lhs.shape == rhs.shape
+            max_abs = None
+            if same_shape and lhs.size:
+                max_abs = float(
+                    np.max(np.abs(lhs.astype(np.float64) - rhs.astype(np.float64)))
+                )
+            return {
+                "same_shape": same_shape,
+                "exact": bool(same_shape and np.array_equal(lhs, rhs)),
+                "max_abs_error": max_abs,
+            }
+
+        serialized_operands = {
+            "refs_relion": reference[None],
+            "eulers": eulers,
+            "trial_particle_ids": trials,
+            "class_ids": class_ids,
+            "pdf_class": np.asarray([1.0], dtype=np.float64),
+            "sigma2_noise": noise,
+            "defU": optics.defU,
+            "defV": optics.defV,
+            "defAngle": optics.defAngle,
+            "phase_shift": optics.phase_shift,
+        }
+        payload.update(
+            live_inputs=str(args.live_inputs),
+            live_replay_acc_rot=float(live_out["acc_rot"]),
+            live_replay_acc_trans_angstrom=float(live_out["acc_trans"]),
+            live_recorded_acc_rot=float(live["acc_rot"]),
+            live_recorded_acc_trans_angstrom=float(live["acc_trans"]),
+            live_operand_comparison={
+                name: _comparison(serialized, live[name])
+                for name, serialized in serialized_operands.items()
+            },
         )
     rendered = json.dumps(payload, indent=2, sort_keys=True)
     if args.output is not None:

@@ -880,13 +880,12 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     assert meta["offset_step_angstrom"] == pytest.approx(3.0)
 
 
-def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatch):
+def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatch, tmp_path):
     import recovar.relion_bind as relion_bind
 
     captured = {}
 
     def fake_expected_accuracy(*args):
-        captured["refs_relion"] = np.asarray(args[0]).copy()
         captured["sigma2_fudge"] = args[17]
         return {
             "acc_rot": 1.823,
@@ -910,7 +909,7 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
         n_directions=1,
     )
     state.Iref[:] = 1.0
-    state.Iref.reshape(-1)[0] = 1.0 + 2.0**-30
+    state.iter = 90
     state.tau2_fudge_factor = 3.995253
     best_rotations = driver.sampling._relion_euler_angles_to_matrix(
         np.asarray([[10.0, 30.0, 20.0], [40.0, 60.0, 50.0]])
@@ -932,6 +931,8 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
         phase_shift=np.zeros(2),
     )
 
+    monkeypatch.setenv("RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_ITERATIONS", "80,90")
     meta = driver._estimate_native_sampling_accuracy(
         driver._initial_sampling_state(
             driver.NativeInitialModelOptions(fn_img="particles.star"),
@@ -949,19 +950,11 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
     assert captured["sigma2_fudge"] == pytest.approx(1.0)
     assert captured["sigma2_fudge"] != pytest.approx(state.tau2_fudge_factor)
     assert meta["estimated_acc_sigma2_fudge"] == pytest.approx(1.0)
-    expected_refs = np.stack(
-        [
-            np.asarray(driver.recovar_volume_to_relion(ref), dtype=np.float32).astype(np.float64)
-            for ref in state.Iref
-        ]
-    )
-    np.testing.assert_array_equal(captured["refs_relion"], expected_refs)
-    assert not np.array_equal(
-        captured["refs_relion"],
-        np.stack(
-            [np.asarray(driver.recovar_volume_to_relion(ref), dtype=np.float64) for ref in state.Iref]
-        ),
-    )
+    dump = np.load(tmp_path / "iter090_expected_accuracy_inputs.npz")
+    assert float(dump["sigma2_fudge"]) == pytest.approx(1.0)
+    assert float(dump["acc_rot"]) == pytest.approx(1.823)
+    assert float(dump["acc_trans"]) == pytest.approx(1.717)
+    np.testing.assert_array_equal(dump["trial_particle_ids"], np.asarray([1, 0]))
 
 
 def test_native_expectation_step_records_sampling_changes_each_gradient_iteration(monkeypatch):
