@@ -719,6 +719,87 @@ def test_normalize_wsum_to_sigma2_noise_drops_relion_shell_sentinels(monkeypatch
     )
 
 
+def test_normalize_wsum_to_sigma2_noise_preserves_float64_inputs(monkeypatch):
+    """Must not force float32: RELION's wsum_model.sigma2_noise stays RFLOAT
+    (double under double-precision builds) through this exact division.
+
+    Regression for the same bug class already fixed for rotation matrices
+    and priors: an unconditional float32 cast on the accumulated wsum
+    inputs, right before the final divide, discarding whatever precision
+    the caller's own accumulation (compute_noise_block and its callers)
+    already achieved.
+    """
+    import recovar.em.dense_single_volume.helpers.half_spectrum as half_spectrum
+
+    image_shape = (8, 8)
+    n_shells = image_shape[0] // 2 + 1
+
+    def fake_relion_shell_indices(_image_shape):
+        return jnp.asarray([-1, -1, 0, 0, 2, n_shells, 99], dtype=jnp.int32)
+
+    monkeypatch.setattr(
+        half_spectrum,
+        "make_relion_noise_shell_indices_half",
+        fake_relion_shell_indices,
+    )
+
+    got_f32 = noise.normalize_wsum_to_sigma2_noise(
+        wsum_sigma2_noise=jnp.zeros(n_shells, dtype=jnp.float32),
+        wsum_img_power=jnp.asarray([8.0, 20.0, 6.0, 8.0, 10.0], dtype=jnp.float32),
+        sumw=2.0,
+        image_shape=image_shape,
+    )
+    got_f64 = noise.normalize_wsum_to_sigma2_noise(
+        wsum_sigma2_noise=jnp.zeros(n_shells, dtype=jnp.float64),
+        wsum_img_power=jnp.asarray([8.0, 20.0, 6.0, 8.0, 10.0], dtype=jnp.float64),
+        sumw=2.0,
+        image_shape=image_shape,
+    )
+    assert np.asarray(got_f32).dtype == np.float32
+    assert np.asarray(got_f64).dtype == np.float64
+    np.testing.assert_allclose(np.asarray(got_f32), np.asarray(got_f64), rtol=0.0, atol=0.0)
+
+
+def test_compute_noise_block_preserves_float64_inputs():
+    """compute_noise_block must not force float32 on its returned per-shell blocks.
+
+    Callers accumulate many of these blocks (one per rotation block/particle
+    batch) into a running sigma2_noise sum; an unconditional float32 cast
+    here compounds error across that whole reduction, unlike RELION's own
+    per-particle RFLOAT accumulation.
+    """
+    from recovar.em.dense_single_volume.helpers.projection import compute_noise_block
+
+    n_rot, n_pix, n_shells = 3, 5, 3
+    rng = np.random.default_rng(0)
+    proj_half = jnp.asarray(rng.standard_normal((n_rot, n_pix)) + 1j * rng.standard_normal((n_rot, n_pix)))
+    proj_abs2_half = jnp.abs(proj_half) ** 2
+    summed_masked = jnp.asarray(rng.standard_normal((n_rot, n_pix)) + 1j * rng.standard_normal((n_rot, n_pix)))
+    ctf_probs = jnp.asarray(rng.uniform(0.1, 1.0, size=(n_rot, n_pix)))
+    noise_variance_half = jnp.asarray(rng.uniform(0.5, 2.0, size=(n_pix,)))
+    shell_indices = jnp.asarray([0, 1, 1, 2, 2], dtype=jnp.int32)
+
+    def run(dtype):
+        return compute_noise_block(
+            proj_half.astype(jnp.complex128 if dtype == jnp.float64 else jnp.complex64),
+            proj_abs2_half.astype(dtype),
+            summed_masked.astype(jnp.complex128 if dtype == jnp.float64 else jnp.complex64),
+            ctf_probs.astype(dtype),
+            noise_variance_half.astype(dtype),
+            shell_indices,
+            n_shells,
+            True,
+        )
+
+    noise_f32, a2_f32, xa_f32 = run(jnp.float32)
+    noise_f64, a2_f64, xa_f64 = run(jnp.float64)
+    assert np.asarray(noise_f32).dtype == np.float32
+    assert np.asarray(noise_f64).dtype == np.float64
+    assert np.asarray(a2_f64).dtype == np.float64
+    assert np.asarray(xa_f64).dtype == np.float64
+    np.testing.assert_allclose(np.asarray(noise_f32), np.asarray(noise_f64), rtol=1e-5, atol=1e-6)
+
+
 def test_estimate_initial_noise_spectrum_matches_image_power_scale():
     """The returned sigma² must agree with mean |F|² for noise-only images.
 
