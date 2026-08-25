@@ -646,6 +646,7 @@ def maybe_write_debug_score_dump(
     image_pre_shifts,
     scores,
     probs,
+    reconstruction_probs=None,
     log_Z,
     best_log_score,
     max_posterior,
@@ -690,11 +691,25 @@ def maybe_write_debug_score_dump(
 
     score_dtype = _debug_capture_dtype(scores)
     probability_dtype = _debug_capture_dtype(probs)
+    reconstruction_probability_dtype = (
+        _debug_capture_dtype(reconstruction_probs)
+        if reconstruction_probs is not None
+        else None
+    )
     log_z_dtype = _debug_capture_dtype(log_Z)
     best_score_dtype = _debug_capture_dtype(best_log_score)
     max_posterior_dtype = _debug_capture_dtype(max_posterior)
     scores_np = _target_rows_to_numpy(scores, target_rows, score_dtype)
     probs_np = _target_rows_to_numpy(probs, target_rows, probability_dtype)
+    reconstruction_probs_np = (
+        _target_rows_to_numpy(
+            reconstruction_probs,
+            target_rows,
+            reconstruction_probability_dtype,
+        )
+        if reconstruction_probs is not None
+        else None
+    )
     log_Z_np = _target_rows_to_numpy(log_Z, target_rows, log_z_dtype)
     best_log_score_np = _target_rows_to_numpy(best_log_score, target_rows, best_score_dtype)
     max_posterior_np = _target_rows_to_numpy(max_posterior, target_rows, max_posterior_dtype)
@@ -790,6 +805,18 @@ def maybe_write_debug_score_dump(
         raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
         raw_scores = np.where(rotation_mask[:, None], raw_scores, -np.inf)
         posterior = np.asarray(probs_np[compact_row, :actual_count, :], dtype=probability_dtype)
+        reconstruction_posterior = (
+            np.asarray(
+                reconstruction_probs_np[compact_row, :actual_count, :],
+                dtype=reconstruction_probability_dtype,
+            )
+            if reconstruction_probs_np is not None
+            else np.where(
+                reconstruction_sample_mask_np[compact_row, :actual_count, :],
+                posterior,
+                0.0,
+            )
+        )
         n_trans = int(translation_log_prior.shape[0])
         translation_indices = metadata["translation_indices"]
         translation_parent_indices = metadata["translation_parent_indices"]
@@ -871,6 +898,7 @@ def maybe_write_debug_score_dump(
                 else np.array([], dtype=np.float32)
             ),
             "posterior": posterior[None, :, :],
+            "reconstruction_probs": reconstruction_posterior[None, :, :],
             "reconstruction_sample_mask": reconstruction_sample_mask_row[None, :, :],
             "reconstruction_rotation_mask": reconstruction_rotation_mask_row[None, :],
             "n_significant_samples": np.array([int(n_significant_samples_np[compact_row])], dtype=np.int32),

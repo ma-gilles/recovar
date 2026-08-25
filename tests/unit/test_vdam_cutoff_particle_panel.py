@@ -29,13 +29,14 @@ def test_cutoff_particle_panel_closes_components_and_identity(tmp_path):
             current_size=np.asarray([4]),
             debug_wavg_cutoff_triplet_xa_aa_diff2=np.asarray([xa, aa, direct]) * n4,
             posterior=np.asarray([[[0.25, 0.75]]]),
+            reconstruction_probs=np.asarray([[[0.125, 0.0]]], dtype=np.float32),
             reconstruction_sample_mask=np.asarray([[[True, False]]]),
         )
         rows.append(
             "acc_components\titer=1"
             f"\tpart_id={part_id}\thalfset=-1\trandom_subset=-1\toptics_group=0\tshell=2"
             f"\tdirect_residual={direct}\taa={aa}\txa={xa}"
-            f"\tinferred_image_power={image_power}\tsumw_group=0.25\tNpix_per_shell=9\n"
+            f"\tinferred_image_power={image_power}\tsumw_group=0.125\tNpix_per_shell=9\n"
         )
     native_tsv = tmp_path / "sigma2_noise_components.tsv"
     native_tsv.write_text("".join(rows))

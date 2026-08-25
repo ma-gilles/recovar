@@ -116,9 +116,17 @@ def analyze(
             current_size = int(np.asarray(payload["current_size"]).reshape(-1)[0])
             triplet = np.asarray(payload["debug_wavg_cutoff_triplet_xa_aa_diff2"], dtype=np.float64)
             posterior = np.asarray(payload["posterior"], dtype=np.float64)
+            reconstruction_probs = np.asarray(
+                payload["reconstruction_probs"] if "reconstruction_probs" in payload else posterior,
+                dtype=np.float64,
+            )
             support = np.asarray(payload["reconstruction_sample_mask"], dtype=bool)
         _require(triplet.shape == (3,), f"invalid cutoff triplet topology: {score_path}")
         _require(posterior.shape == support.shape, f"posterior/support topology mismatch: {score_path}")
+        _require(
+            reconstruction_probs.shape == support.shape,
+            f"reconstruction-probability/support topology mismatch: {score_path}",
+        )
         cutoff_shell = current_size // 2
         cutoff_shells.add(cutoff_shell)
         native_key = (part_id, cutoff_shell)
@@ -136,7 +144,7 @@ def analyze(
         for name in _COMPONENTS:
             candidate_values[name].append(candidate[name])
             reference_values[name].append(reference[name])
-        candidate_mass = float(np.sum(posterior[support], dtype=np.float64))
+        candidate_mass = float(np.sum(reconstruction_probs[support], dtype=np.float64))
         reference_mass = float(native[native_key]["sumw_group"])
         candidate_support_mass.append(candidate_mass)
         reference_support_mass.append(reference_mass)

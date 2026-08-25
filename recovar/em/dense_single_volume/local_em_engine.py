@@ -3831,6 +3831,17 @@ def run_local_em_exact(
                         requested_iterations=debug_fused_posterior_dump_iterations,
                     )
                 if score_debug_bucket_matches and debug_score_dump_targets:
+                    reconstruction_probs_for_score_dump = (
+                        _exact_local_bpref_reconstruction_probs_for_capture(
+                            debug_scores_unpadded,
+                            debug_probs_unpadded,
+                            reconstruction_sample_mask_unpadded,
+                            use_relion_f32_fine_posterior=(
+                                use_relion_f32_fine_posterior
+                            ),
+                            adaptive_fraction=adaptive_fraction,
+                        )
+                    )
                     debug_score_dump_targets = maybe_write_debug_score_dump(
                         experiment_dataset=experiment_dataset,
                         local_layout=local_layout,
@@ -3838,6 +3849,7 @@ def run_local_em_exact(
                         image_pre_shifts=image_pre_shifts,
                         scores=debug_scores_unpadded,
                         probs=debug_probs_unpadded,
+                        reconstruction_probs=reconstruction_probs_for_score_dump,
                         log_Z=log_Z_unpadded,
                         best_log_score=best_log_score_unpadded,
                         max_posterior=max_posterior_unpadded,
@@ -4986,6 +4998,7 @@ def run_local_em_exact(
                 image_pre_shifts=image_pre_shifts,
                 scores=scores,
                 probs=probs,
+                reconstruction_probs=reconstruction_probs,
                 log_Z=log_Z,
                 best_log_score=best_log_score,
                 max_posterior=max_posterior,

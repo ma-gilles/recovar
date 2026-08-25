@@ -4500,6 +4500,10 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path, monkey
             image_pre_shifts=np.array([[2.0, -1.0]], dtype=np.float32),
             scores=np.array([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]], dtype=np.float32),
             probs=np.array([[[0.05, 0.10, 0.15], [0.20, 0.25, 0.25]]], dtype=np.float32),
+            reconstruction_probs=np.array(
+                [[[0.05, 0.0, 0.15], [0.0, 0.25, 0.25]]],
+                dtype=np.float32,
+            ),
             log_Z=np.array([7.0], dtype=np.float32),
             best_log_score=np.array([6.0], dtype=np.float32),
             max_posterior=np.array([0.25], dtype=np.float32),
@@ -4541,6 +4545,10 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path, monkey
         np.testing.assert_array_equal(dump["best_score_rotation_global_id"], np.array([7], dtype=np.int32))
         np.testing.assert_array_equal(dump["best_score_translation_index"], np.array([2], dtype=np.int32))
         np.testing.assert_allclose(dump["best_score_translation"], np.array([[0.0, 1.0]], dtype=np.float32))
+        np.testing.assert_array_equal(
+            dump["reconstruction_probs"],
+            np.array([[[0.05, 0.0, 0.15], [0.0, 0.25, 0.25]]], dtype=np.float32),
+        )
 
 
 def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translation_prior(monkeypatch, rng):
