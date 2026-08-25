@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import jax
@@ -76,6 +77,7 @@ def analyze(
     *,
     reference_label: str,
     native_repeat_label: str,
+    decomposition_report: Path | None = None,
 ) -> dict[str, object]:
     if reference_label not in maps or native_repeat_label not in maps:
         raise ValueError("reference and native-repeat labels must name supplied maps")
@@ -101,6 +103,16 @@ def analyze(
         }
 
     projection_records = []
+    cutoff_records = []
+    decomposition_by_original = {}
+    decomposition_physical_size = None
+    if decomposition_report is not None:
+        decomposition = json.loads(decomposition_report.read_text())
+        decomposition_by_original = {
+            int(row["original_index"]): row
+            for row in decomposition["per_particle"]
+        }
+        decomposition_physical_size = int(decomposition["identity"]["physical_image_size"])
     projectors_by_size: dict[int, dict[str, tuple[np.ndarray, int]]] = {}
     from recovar.em.dense_single_volume.helpers.fourier_window import (
         make_fourier_window_indices_np,
@@ -166,6 +178,95 @@ def analyze(
                 ),
             }
         )
+        if decomposition_report is not None:
+            match = re.search(r"_image_(\d+)_", score_path.name)
+            if match is None:
+                raise ValueError(f"cannot recover image id from score dump: {score_path}")
+            original_index = int(match.group(1))
+            if original_index not in decomposition_by_original:
+                raise ValueError(
+                    f"score image {original_index} is absent from decomposition report"
+                )
+            decomposition_row = decomposition_by_original[original_index]
+            capture = Path(decomposition_row["artifacts"]["capture_directory"])
+            part_id = int(decomposition_row["part_id"])
+            prefix = f"img0_part{part_id}_storeWavg_"
+            from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+                _make_relion_wavg_rectangle,
+            )
+            from scripts.analyze_vdam_storewavg_boundary import (
+                _load_native,
+                _match_rotations,
+            )
+            from scripts.analyze_vdam_storewavg_reference_decomposition import (
+                _current_size_from_rectangle_size,
+                _cutoff_sums,
+                _flat_complex,
+                _scalar,
+                _translate_native_rectangle,
+            )
+
+            native = _load_native(capture, prefix, load_projector=False)
+            rotation_map = _match_rotations(
+                np.asarray(native["rotations"], dtype=np.float32),
+                rotations,
+                1.0e-5,
+            )
+            rectangle_size = int(round(_scalar(capture / f"{prefix}image_size.bin")))
+            if _current_size_from_rectangle_size(rectangle_size) != current_size:
+                raise ValueError("native and candidate current sizes differ")
+            recon_indices_for_rectangle, _ = make_fourier_window_indices_np(
+                (decomposition_physical_size, decomposition_physical_size),
+                current_size,
+                include_dc=True,
+                exact_radius=True,
+            )
+            rectangle = _make_relion_wavg_rectangle(
+                (decomposition_physical_size, decomposition_physical_size),
+                current_size,
+                recon_indices_for_rectangle,
+            )
+            masked_image = _flat_complex(
+                capture,
+                "preprocess_img0_masked_fourier_post_optics",
+            ).astype(np.complex64)
+            translated = _translate_native_rectangle(
+                masked_image,
+                np.asarray(native["translation_angles"], dtype=np.float32),
+                current_size,
+            )[:, rectangle.exact_positions]
+            ctf = np.asarray(native["ctf"], dtype=np.float32)[rectangle.exact_positions]
+            cutoff_mask = (
+                np.asarray(rectangle.shell_indices)[rectangle.exact_positions]
+                == current_size // 2
+            )
+            cutoff = {}
+            for label, projection in projections.items():
+                native_frame_projection = (
+                    projection[rotation_map] * np.float32(-1.0 / n**2)
+                ).astype(np.complex64)
+                cutoff[label] = _cutoff_sums(
+                    native_frame_projection,
+                    translated,
+                    ctf,
+                    np.asarray(native["probabilities"], dtype=np.float32),
+                    cutoff_mask,
+                )
+            cutoff_records.append(
+                {
+                    "part_id": part_id,
+                    "original_index": original_index,
+                    "values": cutoff,
+                    "effects": {
+                        label: {
+                            name: float(values[name] - cutoff[reference_label][name])
+                            for name in ("xa", "aa")
+                        }
+                        for label, values in cutoff.items()
+                        if label != reference_label
+                    },
+                }
+            )
 
     def _pooled(label: str) -> dict[str, float]:
         candidate_sq = 0.0
@@ -193,6 +294,31 @@ def analyze(
             if native_floor > 0.0
             else float("inf")
         )
+    cutoff_summary = None
+    if cutoff_records:
+        cutoff_summary = {}
+        for label in maps:
+            if label == reference_label:
+                continue
+            cutoff_summary[label] = {}
+            for name in ("xa", "aa"):
+                effects = np.asarray(
+                    [row["effects"][label][name] for row in cutoff_records],
+                    dtype=np.float64,
+                )
+                cutoff_summary[label][name] = {
+                    "signed_sum": float(np.sum(effects)),
+                    "mean_abs": float(np.mean(np.abs(effects))),
+                    "max_abs": float(np.max(np.abs(effects))),
+                }
+        for name in ("xa", "aa"):
+            native_floor = abs(cutoff_summary[native_repeat_label][name]["signed_sum"])
+            for label in cutoff_summary:
+                cutoff_summary[label][name]["native_signed_sum_floor_ratio"] = (
+                    float(abs(cutoff_summary[label][name]["signed_sum"]) / native_floor)
+                    if native_floor > 0.0
+                    else float("inf")
+                )
     return {
         "schema": "recovar.vdam_reference_repeat_projection.v1",
         "identity": {
@@ -209,6 +335,8 @@ def analyze(
         "fourier_shells": shell_metrics,
         "projection_pooled": pooled,
         "per_score_dump": projection_records,
+        "cutoff_component_summary": cutoff_summary,
+        "per_particle_cutoff_components": cutoff_records,
     }
 
 
@@ -218,6 +346,7 @@ def main() -> None:
     parser.add_argument("--score-dump", action="append", required=True, type=Path)
     parser.add_argument("--reference-label", default="native_a")
     parser.add_argument("--native-repeat-label", default="native_b")
+    parser.add_argument("--decomposition-report", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     maps = {}
@@ -231,10 +360,24 @@ def main() -> None:
         [path.resolve() for path in args.score_dump],
         reference_label=args.reference_label,
         native_repeat_label=args.native_repeat_label,
+        decomposition_report=(
+            None
+            if args.decomposition_report is None
+            else args.decomposition_report.resolve()
+        ),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    print(json.dumps(report["projection_pooled"], indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "projection_pooled": report["projection_pooled"],
+                "cutoff_component_summary": report["cutoff_component_summary"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

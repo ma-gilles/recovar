@@ -24,6 +24,7 @@ REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR}}
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 CUDA_BINARY=${REPO_ROOT}/recovar/cuda/libcuda_backproject.so
 SCORE_IMAGE_IDS=${SCORE_IMAGE_IDS:-1001,1021,1022,1056,1084,1108,1121,1155}
+DECOMPOSITION_REPORT=${DECOMPOSITION_REPORT:-}
 
 test -x "${PIXI_PY}"
 test -s "${CUDA_BINARY}"
@@ -36,6 +37,11 @@ for image_id in "${image_ids[@]}"; do
   test -s "${score_path}"
   score_args+=(--score-dump "${score_path}")
 done
+decomposition_args=()
+if [[ -n "${DECOMPOSITION_REPORT}" ]]; then
+  test -s "${DECOMPOSITION_REPORT}"
+  decomposition_args+=(--decomposition-report "${DECOMPOSITION_REPORT}")
+fi
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV JAX_PLATFORMS JAX_PLATFORM_NAME
 export PYTHONNOUSERSITE=1
@@ -49,6 +55,7 @@ export RECOVAR_CUDA_LIB=${CUDA_BINARY}
   --map "native_a=${NATIVE_A_MAP}" \
   --map "native_b=${NATIVE_B_MAP}" \
   "${score_args[@]}" \
+  "${decomposition_args[@]}" \
   --output "${OUTPUT_JSON}"
 
 sha256sum "${OUTPUT_JSON}"
