@@ -102,8 +102,9 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "relion_vdam_native_sgd_f32_kernel<<<" in projector_launcher
     assert "rotation_count, 128, 0, particle_streams[lane]" in projector_launcher
     assert "relion_vdam_denominator_after_sgd_f32_kernel<<<" in projector_launcher
-    assert "cudaStream_t particle_streams[3]" in projector_launcher
-    assert "pool_start += 3" in projector_launcher
+    assert "constexpr int kRelionVdamWorkerStreams = 8" in projector_launcher
+    assert "particle % kRelionVdamWorkerStreams" in projector_launcher
+    assert "particle >= kRelionVdamWorkerStreams" in projector_launcher
     assert "cudaStreamSynchronize(particle_streams[lane])" in projector_launcher
     assert "reconstruction_groups_host[particle]" in projector_launcher
     assert "data_real_volume + accumulator_offset" in projector_launcher

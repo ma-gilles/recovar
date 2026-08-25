@@ -4772,7 +4772,11 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     cudaArray_t array_imag = nullptr;
     cudaTextureObject_t texture_real = 0;
     cudaTextureObject_t texture_imag = 0;
-    cudaStream_t particle_streams[3] = {nullptr, nullptr, nullptr};
+    // Frozen RELION GUI-default parity jobs run with --j 8.  RELION creates
+    // one class stream per OpenMP worker; --pool controls how many particles
+    // are read into the outer pool and does not set the worker-stream count.
+    constexpr int kRelionVdamWorkerStreams = 8;
+    cudaStream_t particle_streams[kRelionVdamWorkerStreams] = {};
     cudaEvent_t particle_inputs_ready = nullptr;
     int32_t* reconstruction_groups_host = nullptr;
     cudaError_t err = cudaMalloc(
@@ -4941,16 +4945,16 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             }
         }
 
-        // RELION processes --pool 3 with one CUDA class stream per OpenMP
-        // worker.  Each pool's three particles therefore update the shared
-        // BackProjector concurrently, followed by the host OpenMP barrier.
-        // Keep the setup on XLA's stream, then reproduce only that production
-        // backprojection schedule on three ordinary (blocking) CUDA streams.
+        // RELION's task distributor hands one particle at a time to each of
+        // its --j workers.  Each worker launches into its own blocking class
+        // stream and synchronizes that stream before requesting another task.
+        // Keep setup on XLA's stream, then reproduce the one-in-flight task per
+        // worker topology on ordinary (blocking) CUDA streams.
         err = cudaEventCreateWithFlags(&particle_inputs_ready, cudaEventDisableTiming);
         if (err != cudaSuccess) goto cleanup;
         err = cudaEventRecord(particle_inputs_ready, stream);
         if (err != cudaSuccess) goto cleanup;
-        for (int lane = 0; lane < 3; ++lane)
+        for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
         {
             err = cudaStreamCreate(&particle_streams[lane]);
             if (err != cudaSuccess) goto cleanup;
@@ -4975,55 +4979,55 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             texture_real,
             texture_imag,
         };
-        for (int64_t pool_start = 0; pool_start < n_particles; pool_start += 3)
+        for (int64_t particle = 0; particle < n_particles; ++particle)
         {
-            const int64_t pool_stop =
-                (pool_start + 3 < n_particles) ? pool_start + 3 : n_particles;
-            for (int64_t particle = pool_start; particle < pool_stop; ++particle)
+            const int lane = static_cast<int>(
+                particle % kRelionVdamWorkerStreams);
+            if (particle >= kRelionVdamWorkerStreams)
             {
-                const int lane = static_cast<int>(particle - pool_start);
-                const int64_t accumulator_offset =
-                    static_cast<int64_t>(reconstruction_groups_host[particle]) *
-                    accumulator_stride;
-                relion_vdam_native_sgd_f32_kernel<<<
-                    rotation_count, 128, 0, particle_streams[lane]>>>(
-                    projector,
-                    image_real + particle * image_stride,
-                    image_imag + particle * image_stride,
-                    translation_x,
-                    translation_y,
-                    nullptr,
-                    const_cast<float*>(
-                        posterior_over_weight_norm + particle * posterior_stride),
-                    const_cast<float*>(minvsigma2 + particle * image_stride),
-                    const_cast<float*>(ctf + particle * image_stride),
-                    static_cast<unsigned long>(translation_count),
-                    significant_weight,
-                    weight_norm,
-                    const_cast<float*>(projector_eulers + particle * euler_stride),
-                    data_real_volume + accumulator_offset,
-                    data_imag_volume + accumulator_offset,
-                    weight_volume + accumulator_offset,
-                    static_cast<int>(sqrtf(max_r2) + 0.5f),
-                    static_cast<int>(max_r2),
-                    static_cast<float>(upsampling),
-                    static_cast<unsigned>(image_w),
-                    static_cast<unsigned>(image_h),
-                    1,
-                    static_cast<unsigned>(pixel_count),
-                    static_cast<unsigned>(model_x),
-                    static_cast<unsigned>(model_y),
-                    model_init_y,
-                    model_init_z);
-                err = cudaGetLastError();
-                if (err != cudaSuccess) goto cleanup;
-            }
-            for (int64_t particle = pool_start; particle < pool_stop; ++particle)
-            {
-                const int lane = static_cast<int>(particle - pool_start);
                 err = cudaStreamSynchronize(particle_streams[lane]);
                 if (err != cudaSuccess) goto cleanup;
             }
+            const int64_t accumulator_offset =
+                static_cast<int64_t>(reconstruction_groups_host[particle]) *
+                accumulator_stride;
+            relion_vdam_native_sgd_f32_kernel<<<
+                rotation_count, 128, 0, particle_streams[lane]>>>(
+                projector,
+                image_real + particle * image_stride,
+                image_imag + particle * image_stride,
+                translation_x,
+                translation_y,
+                nullptr,
+                const_cast<float*>(
+                    posterior_over_weight_norm + particle * posterior_stride),
+                const_cast<float*>(minvsigma2 + particle * image_stride),
+                const_cast<float*>(ctf + particle * image_stride),
+                static_cast<unsigned long>(translation_count),
+                significant_weight,
+                weight_norm,
+                const_cast<float*>(projector_eulers + particle * euler_stride),
+                data_real_volume + accumulator_offset,
+                data_imag_volume + accumulator_offset,
+                weight_volume + accumulator_offset,
+                static_cast<int>(sqrtf(max_r2) + 0.5f),
+                static_cast<int>(max_r2),
+                static_cast<float>(upsampling),
+                static_cast<unsigned>(image_w),
+                static_cast<unsigned>(image_h),
+                1,
+                static_cast<unsigned>(pixel_count),
+                static_cast<unsigned>(model_x),
+                static_cast<unsigned>(model_y),
+                model_init_y,
+                model_init_z);
+            err = cudaGetLastError();
+            if (err != cudaSuccess) goto cleanup;
+        }
+        for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
+        {
+            err = cudaStreamSynchronize(particle_streams[lane]);
+            if (err != cudaSuccess) goto cleanup;
         }
         {
             const int64_t denominator_count =
@@ -5049,7 +5053,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     }
 
 cleanup:
-    for (int lane = 0; lane < 3; ++lane)
+    for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
         if (particle_streams[lane]) cudaStreamDestroy(particle_streams[lane]);
     if (particle_inputs_ready) cudaEventDestroy(particle_inputs_ready);
     if (reconstruction_groups_host) cudaFreeHost(reconstruction_groups_host);
