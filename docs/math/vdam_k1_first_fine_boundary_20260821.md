@@ -1575,3 +1575,81 @@ subset, projector refresh, expectation/pass-1/pass-2, M-step, state update,
 and artifact-boundary wall time by early, transition, and adaptive/late phase.
 The 22-case robustness matrix remains held pending the complete baseline and
 runtime result.  No generic RECOVAR full or long test suite ran.
+
+## Profiled 200-iteration completion gate
+
+The corrected iteration-90 seed contract is necessary but not sufficient for
+the complete trajectory.  Focused H100 Slurm `12931162` completed all 200
+RECOVAR science iterations at experimental head `c4aabc839` in 32 minutes
+42.87 seconds, with 9.62 GiB peak step RSS reported by Slurm (`10083596K`).  The
+batch then failed only its strict parity audits, as intended.  This is faster
+than the earlier approximately 48-minute candidate run but remains about 2.3x
+the approximately 14-minute native RELION baseline, so runtime parity is not
+accepted.
+
+The all-checkpoint map gate is effectively exact through iteration 89:
+iteration-89 FSC-AUC is `0.999999995229`.  Divergence begins on the corrected
+fine grid at iteration 90 (`0.999806085574`), first crosses the `0.999` gate at
+iteration 93 (`0.998852359624`), reaches its minimum at iteration 134
+(`0.938214029885`), and ends at only `0.987099107010` at iteration 200.  The
+report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gui_full_seed_profile_c4aabc83_20260825/analysis/full_trajectory_maps.json`
+(SHA-256
+`50dfc50c6602ee143a41724e795c3c8499a107e6ab7d30f1ff5a584e2c0c942a`);
+its shell archive SHA-256 is
+`b95d88a2f0c5b30845127eedcc76a1024b6578f5758c9a9083cad86917c20a08`.
+
+The post-hoc particle audit starts at iteration 1 because RELION's input-state
+iteration 0 has no posterior-Pmax column.  It finds one low-Pmax pose split at
+iteration 24, no divergent particles at iteration 89, then 15 at iteration
+90, 49 at iteration 92, and 520 at iteration 100 after the first differing
+translation grid.  At iteration 200 all 1,000 visited particles differ;
+pose-match fraction is `0.950667` and translation-match fraction is
+`0.666667`.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gui_full_seed_profile_c4aabc83_20260825/analysis/full_trajectory_particles.json`
+(SHA-256
+`45316c9b53d536a32626e728c13172ca2c3e8d3b30e9e660d2a4366be15da918`).
+
+A new full adaptive-sampling auditor makes the downstream control failure
+explicit.  HEALPix order and random perturbation remain exact for all 200
+iterations.  Offset range and step first differ at iteration 100, translation
+topology first differs at iteration 110, and the update/no-update decision
+first differs at iteration 140.  At iteration 170 RECOVAR uses range
+`3.202826` Angstrom, step `1.549125` Angstrom, and 52 fine translations,
+where RELION retains range `4.109667` Angstrom, step `1.447125` Angstrom, and
+the larger topology.  The first geometry error is already explained by the
+iteration-99 hidden-variable change: RECOVAR records `1.182642293` Angstrom
+versus RELION's `1.183376` Angstrom.  The schedule is therefore a downstream
+state symptom and must not be forced from oracle values.  Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gui_full_seed_profile_c4aabc83_20260825/analysis/full_sampling_trajectory.json`
+(SHA-256
+`01405d051bc072fd7c767ee525eba86d64687ab37b03ca36c27ad5a46cd233fe`).
+
+The profile assigns 1,883.88 of 1,925.00 measured pre-artifact seconds to the
+expectation step.  Sparse coarse pass 1 costs 1,212.42 seconds, sparse fine
+pass 2 costs 555.82 seconds, and the M-step only 29.45 seconds.  In iterations
+90--200, mean expectation time is 14.04 seconds: pass 1 averages 9.40 seconds
+and pass 2 averages 3.98 seconds.  Within pass 2, the combined big-JIT bucket
+time is 302.49 seconds; backprojection, packing, and raw-cache construction
+cost 56.64, 42.51, and 41.01 seconds respectively.  Runtime work must therefore
+target pass-1 scoring first and pass-2 big-JIT buckets second, not the M-step.
+The profile is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gui_full_seed_profile_c4aabc83_20260825/analysis/iteration_profile_summary.json`
+(SHA-256
+`53c742dd268543ffe04bf01b6dc18e2419dea753ddac71b7cd631dfd6240f562`).
+
+Experimental commit `815d4a0e4` adds the full schedule auditor, two focused
+unit regressions, excludes the structurally unauditable iteration-0 particle
+state from the full runner, and preserves schedule status independently of
+map, particle, and profile status.  Commit `581e498b2` makes single-particle
+native continuation captures target-scoped and pins them to the same H100
+class as the accepted trajectory.  All 62 focused native-driver and audit
+tests pass.  H100 Slurm `12932544` is capturing the iteration-90 fused
+posterior and exact score operands for the first strongly divergent particle,
+`1010@particles.128.mrcs` (original row 1009, RELION internal part-id 14).
+Infrastructure-only attempts `12932098`, `12932360`, and `12932421` stopped
+before RECOVAR science because of, respectively, script import context, a
+mistyped pinned commit, and an invalid whole-subset assertion after the native
+capture deliberately stopped at the target particle.  No generic RECOVAR
+full or long test suite ran, and all 21 additional 200-iteration robustness
+cases remain held.
