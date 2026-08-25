@@ -134,8 +134,17 @@ def analyze(
             (n, n),
             current_size,
             include_dc=True,
+            exact_radius=False,
+        )
+        exact_pixel_indices, _ = make_fourier_window_indices_np(
+            (n, n),
+            current_size,
+            include_dc=True,
             exact_radius=True,
         )
+        exact_projection_take = np.searchsorted(pixel_indices, exact_pixel_indices)
+        if not np.array_equal(pixel_indices[exact_projection_take], exact_pixel_indices):
+            raise ValueError("exact projection support is not contained in rounded support")
         rotations = np.asarray(score["local_rotation_matrices"], dtype=np.float32)
         projections = {}
         for label, (projector, r_max) in projectors_by_size[current_size].items():
@@ -153,7 +162,7 @@ def analyze(
                 projector_output_size=current_size,
                 pixel_indices=jnp.asarray(pixel_indices, dtype=jnp.int32),
                 relion_texture_interp=True,
-                mask_current_image_disk=True,
+                mask_current_image_disk=False,
             )
             projections[label] = np.asarray(jax.block_until_ready(projected), dtype=np.complex64)
         reference_projection = projections[reference_label]
@@ -171,7 +180,7 @@ def analyze(
                 "captured_candidate_validation": (
                     _metric(
                         np.asarray(score["debug_proj_for_recon"], dtype=np.complex64),
-                        projections["candidate"],
+                        projections["candidate"][:, exact_projection_take],
                     )
                     if "candidate" in projections and "debug_proj_for_recon" in score
                     else None
@@ -228,6 +237,17 @@ def analyze(
                 current_size,
                 recon_indices_for_rectangle,
             )
+            rounded_indices_for_rectangle, _ = make_fourier_window_indices_np(
+                (decomposition_physical_size, decomposition_physical_size),
+                current_size,
+                include_dc=True,
+                exact_radius=False,
+            )
+            rounded_rectangle = _make_relion_wavg_rectangle(
+                (decomposition_physical_size, decomposition_physical_size),
+                current_size,
+                rounded_indices_for_rectangle,
+            )
             masked_image = _flat_complex(
                 capture,
                 "preprocess_img0_masked_fourier_post_optics",
@@ -255,13 +275,16 @@ def analyze(
             if candidate_posterior.shape != native_posterior.shape:
                 raise ValueError("candidate and native posterior shapes differ")
             for label, projection in projections.items():
-                native_frame_exact = (
+                native_frame_rounded = (
                     projection[rotation_map] * np.float32(-1.0 / n**2)
                 ).astype(np.complex64)
+                native_frame_exact = native_frame_rounded[:, exact_projection_take]
                 exact_only = np.zeros_like(native_capture_projection)
                 exact_only[:, rectangle.exact_positions] = native_frame_exact
                 hybrid = native_capture_projection.copy()
                 hybrid[:, rectangle.exact_positions] = native_frame_exact
+                rounded_support = np.zeros_like(native_capture_projection)
+                rounded_support[:, rounded_rectangle.exact_positions] = native_frame_rounded
                 native_with_candidate_posterior = _cutoff_sums(
                     native_capture_projection,
                     translated,
@@ -275,10 +298,14 @@ def analyze(
                 hybrid_values = _cutoff_sums(
                     hybrid, translated, ctf, candidate_posterior, cutoff_mask
                 )
+                rounded_values = _cutoff_sums(
+                    rounded_support, translated, ctf, candidate_posterior, cutoff_mask
+                )
                 cutoff[label] = {
                     "native_reference_candidate_posterior": native_with_candidate_posterior,
                     "exact_only_candidate_posterior": exact_only_values,
                     "hybrid_candidate_posterior": hybrid_values,
+                    "rounded_support_candidate_posterior": rounded_values,
                 }
             captured_native_cutoff = _cutoff_sums(
                 native_capture_projection,
@@ -294,11 +321,16 @@ def analyze(
                     native_candidate = values["native_reference_candidate_posterior"][name]
                     exact_only = values["exact_only_candidate_posterior"][name]
                     hybrid = values["hybrid_candidate_posterior"][name]
+                    rounded = values["rounded_support_candidate_posterior"][name]
                     component_effects[label][name] = {
                         "posterior": float(native_candidate - captured_native_cutoff[name]),
                         "inside_exact_reference": float(hybrid - native_candidate),
                         "missing_rounded_rim": float(exact_only - hybrid),
                         "total_exact_only": float(exact_only - captured_native_cutoff[name]),
+                        "restored_candidate_rim": float(rounded - exact_only),
+                        "total_rounded_support": float(
+                            rounded - captured_native_cutoff[name]
+                        ),
                     }
             cutoff_records.append(
                 {
@@ -308,6 +340,13 @@ def analyze(
                     "captured_native_values": captured_native_cutoff,
                     "captured_native_projection_validation": _metric(
                         native_capture_projection[:, rectangle.exact_positions],
+                        (
+                            projections[reference_label][rotation_map][:, exact_projection_take]
+                            * np.float32(-1.0 / n**2)
+                        ).astype(np.complex64),
+                    ),
+                    "captured_native_rounded_projection_validation": _metric(
+                        native_capture_projection[:, rounded_rectangle.exact_positions],
                         (
                             projections[reference_label][rotation_map]
                             * np.float32(-1.0 / n**2)
@@ -355,6 +394,8 @@ def analyze(
                     "inside_exact_reference",
                     "missing_rounded_rim",
                     "total_exact_only",
+                    "restored_candidate_rim",
+                    "total_rounded_support",
                 ):
                     effects = np.asarray(
                         [
