@@ -25,6 +25,7 @@ STOP_ITERATION=${STOP_ITERATION:-92}
 STOP_TAG=$(printf '%03d' "${STOP_ITERATION}")
 AUDIT_MODE=${AUDIT_MODE:-transition}
 PROFILE_ITERATIONS=${PROFILE_ITERATIONS:-0}
+PIXEL_SIZE=${PIXEL_SIZE:-4.25}
 if [[ "${AUDIT_MODE}" != transition && "${AUDIT_MODE}" != full ]]; then
   echo "AUDIT_MODE must be transition or full" >&2
   exit 2
@@ -119,7 +120,11 @@ particle_iterations=()
 if [[ "${AUDIT_MODE}" == full ]]; then
   for ((iteration = 0; iteration <= STOP_ITERATION; iteration++)); do
     map_args+=(--checkpoint "${iteration}")
-    particle_iterations+=("${iteration}")
+    # RELION's iteration-0 data STAR is the input state and has no posterior
+    # Pmax column. Particle-state parity starts after the first E-step.
+    if (( iteration > 0 )); then
+      particle_iterations+=("${iteration}")
+    fi
   done
   map_report=${ANALYSIS_DIR}/full_trajectory_maps.json
   shell_report=${ANALYSIS_DIR}/full_trajectory_shells.npz
@@ -147,6 +152,16 @@ map_status=$?
   --output "${particle_report}"
 particle_status=$?
 
+if [[ "${AUDIT_MODE}" == full ]]; then
+  "${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_sampling_trajectory.py" \
+    --candidate-dir "${RECOVAR_DIR}" --relion-dir "${RELION_DIR}" \
+    --pixel-size "${PIXEL_SIZE}" \
+    --output "${ANALYSIS_DIR}/full_sampling_trajectory.json"
+  schedule_status=$?
+else
+  schedule_status=0
+fi
+
 if [[ -n "${RECOVAR_INITIAL_MODEL_PROFILE:-}" ]]; then
   "${PIXI_PY}" "${REPO_ROOT}/scripts/summarize_vdam_iteration_profiles.py" \
     --recovar-dir "${RECOVAR_DIR}" \
@@ -158,9 +173,9 @@ fi
 set -e
 
 sha256sum "${ANALYSIS_DIR}"/* > "${PROVENANCE_DIR}/analysis_sha256.txt"
-if (( map_status != 0 || particle_status != 0 || profile_status != 0 )); then
-  printf 'map_status=%s\nparticle_status=%s\nprofile_status=%s\n' \
-    "${map_status}" "${particle_status}" "${profile_status}" \
+if (( map_status != 0 || particle_status != 0 || schedule_status != 0 || profile_status != 0 )); then
+  printf 'map_status=%s\nparticle_status=%s\nschedule_status=%s\nprofile_status=%s\n' \
+    "${map_status}" "${particle_status}" "${schedule_status}" "${profile_status}" \
     > "${OUTPUT_ROOT}/AUDIT_FAILED"
   exit 1
 fi

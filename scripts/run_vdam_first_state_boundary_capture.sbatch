@@ -77,10 +77,13 @@ if [[ "${CAPTURE_NATIVE_REPLAY}" == 1 ]]; then
 
   rg -q "_rlnSamplingPerturbInstance[[:space:]]+${TARGET_RELION_PERTURBATION}" \
     "${NATIVE_ROOT}/relion/run_it${iteration_tag}_sampling.star"
-  "${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_particle_state_trajectory.py" \
-    --recovar-dir "${REFERENCE_RELION_DIR}" --relion-dir "${NATIVE_ROOT}/relion" \
-    --iterations "${TARGET_ITERATION}" \
-    --output "${PROVENANCE}/native_replay_state_audit.json"
+  (
+    cd "${REPO_ROOT}"
+    "${PIXI_PY}" -m scripts.audit_vdam_particle_state_trajectory \
+      --recovar-dir "${REFERENCE_RELION_DIR}" --relion-dir "${NATIVE_ROOT}/relion" \
+      --iterations "${TARGET_ITERATION}" \
+      --output "${PROVENANCE}/native_replay_state_audit.json"
+  )
   "${PIXI_PY}" - "${PROVENANCE}/native_replay_state_audit.json" \
     "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star" \
     "${NATIVE_ROOT}/relion/run_it${iteration_tag}_data.star" \
