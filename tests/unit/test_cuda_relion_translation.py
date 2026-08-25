@@ -59,6 +59,29 @@ def test_relion_translation_cuda_source_preserves_explicit_arithmetic():
     assert "translated_imag * factor" in source
 
 
+def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
+    import inspect
+
+    from recovar import cuda_backproject
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+    assert "bool SEPARATE_DATA = false" in source
+    assert "atomicAdd(&data_real_volume[off], sre);" in source
+    assert "atomicAdd(&data_imag_volume[off], sim);" in source
+    assert "float* data_real_volume" in source
+    assert "float* data_imag_volume" in source
+
+    wrapper = inspect.getsource(cuda_backproject.relion_vdam_mstep_fused_x_half)
+    assert "data_real_volume = jnp.asarray(data_volume.real" in wrapper
+    assert "data_imag_volume = jnp.asarray(data_volume.imag" in wrapper
+    assert "fused_data = jax.lax.complex(fused_real, fused_imag)" in wrapper
+
+
 @pytest.mark.gpu
 def test_relion_translate_score_f32_matches_float32_reference(
     monkeypatch,

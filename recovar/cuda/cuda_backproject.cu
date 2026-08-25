@@ -390,9 +390,11 @@ static __device__ __forceinline__ void scatter_trilinear(
  * model imaginary, and model weight consecutively for each neighbor; keeping
  * those atomics together is the sole semantic difference from invoking the
  * generic complex and real scatter paths separately. */
-template <bool CAPTURE_SIGNATURE, bool ACCUMULATE>
+template <bool CAPTURE_SIGNATURE, bool ACCUMULATE, bool SEPARATE_DATA = false>
 static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
     float2* __restrict__ data_volume,
+    float* __restrict__ data_real_volume,
+    float* __restrict__ data_imag_volume,
     float* __restrict__ weight_volume,
     float rk0, float rk1, float rk2,
     float data_re, float data_im, float Fweight,
@@ -489,8 +491,13 @@ static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
                     signature_neighbor_flags[signature_index] = neighbor_flags;
                 }
                 if constexpr (ACCUMULATE) {
-                    atomicAdd(&data_volume[off].x, sre);
-                    atomicAdd(&data_volume[off].y, sim);
+                    if constexpr (SEPARATE_DATA) {
+                        atomicAdd(&data_real_volume[off], sre);
+                        atomicAdd(&data_imag_volume[off], sim);
+                    } else {
+                        atomicAdd(&data_volume[off].x, sre);
+                        atomicAdd(&data_volume[off].y, sim);
+                    }
                     atomicAdd(&weight_volume[off], w * Fweight);
                 }
             }
@@ -1454,7 +1461,7 @@ relion_fused_x_half_backproject_kernel(
         const int stride1 = N2_eff;
         const int stride0 = N1 * N2_eff;
         scatter_trilinear_relion_fused_x_half<CAPTURE_SIGNATURE, ACCUMULATE>(
-            data_volume, weight_volume,
+            data_volume, nullptr, nullptr, weight_volume,
             rk0, rk1, rk2, data_re, data_im, Fweight,
             c0, c1, c2, N0, N1, N2_eff, stride0, stride1,
             row_pixel * 8,
@@ -4181,7 +4188,8 @@ __global__ void relion_vdam_mstep_fused_x_half_kernel(
     const float* translation_angles,
     const float2* reference,
     const float* rot,
-    float2* data_volume,
+    float* data_real_volume,
+    float* data_imag_volume,
     float* weight_volume,
     float* denominator_sum,
     int rotation_count,
@@ -4258,8 +4266,8 @@ __global__ void relion_vdam_mstep_fused_x_half_kernel(
         }
         const int stride1 = N2_eff;
         const int stride0 = N1 * N2_eff;
-        scatter_trilinear_relion_fused_x_half<false, true>(
-            data_volume, weight_volume,
+        scatter_trilinear_relion_fused_x_half<false, true, true>(
+            nullptr, data_real_volume, data_imag_volume, weight_volume,
             rk0, rk1, rk2, data_real, data_imag, Fweight,
             c0, c1, c2, N0, N1, N2_eff, stride0, stride1,
             0, nullptr, nullptr, nullptr);
@@ -4275,7 +4283,8 @@ cudaError_t launch_relion_vdam_mstep_fused_x_half(
     const float* translation_angles,
     const float2* reference,
     const float* rot,
-    float2* data_volume,
+    float* data_real_volume,
+    float* data_imag_volume,
     float* weight_volume,
     float* denominator_sum,
     int64_t n_particles,
@@ -4310,7 +4319,8 @@ cudaError_t launch_relion_vdam_mstep_fused_x_half(
             translation_angles,
             reference + particle * reference_stride,
             rot + particle * rotation_stride,
-            data_volume,
+            data_real_volume,
+            data_imag_volume,
             weight_volume,
             denominator_sum + particle * denominator_stride,
             (int)rotation_count,
@@ -7225,21 +7235,25 @@ ffi::Error RelionVdamMstepFusedXHalfImpl(
     ffi::AnyBuffer translation_angles,
     ffi::AnyBuffer reference,
     ffi::AnyBuffer rot,
-    ffi::AnyBuffer data_volume_in,
+    ffi::AnyBuffer data_real_volume_in,
+    ffi::AnyBuffer data_imag_volume_in,
     ffi::AnyBuffer weight_volume_in,
-    ffi::Result<ffi::AnyBuffer> data_volume_out,
+    ffi::Result<ffi::AnyBuffer> data_real_volume_out,
+    ffi::Result<ffi::AnyBuffer> data_imag_volume_out,
     ffi::Result<ffi::AnyBuffer> weight_volume_out,
     ffi::Result<ffi::AnyBuffer> denominator_sum)
 {
     if (images.element_type() != ffi::DataType::C64 ||
         reference.element_type() != ffi::DataType::C64 ||
-        data_volume_in.element_type() != ffi::DataType::C64 ||
-        data_volume_out->element_type() != ffi::DataType::C64 ||
         ctf.element_type() != ffi::DataType::F32 ||
         minvsigma2.element_type() != ffi::DataType::F32 ||
         posterior.element_type() != ffi::DataType::F32 ||
         translation_angles.element_type() != ffi::DataType::F32 ||
         rot.element_type() != ffi::DataType::F32 ||
+        data_real_volume_in.element_type() != ffi::DataType::F32 ||
+        data_imag_volume_in.element_type() != ffi::DataType::F32 ||
+        data_real_volume_out->element_type() != ffi::DataType::F32 ||
+        data_imag_volume_out->element_type() != ffi::DataType::F32 ||
         weight_volume_in.element_type() != ffi::DataType::F32 ||
         weight_volume_out->element_type() != ffi::DataType::F32 ||
         denominator_sum->element_type() != ffi::DataType::F32)
@@ -7276,13 +7290,17 @@ ffi::Error RelionVdamMstepFusedXHalfImpl(
             "RelionVdamMstepFusedXHalf: inconsistent particle/rotation/pixel topology");
 
     const int64_t volume_size = N0 * N1 * (N2 / 2 + 1);
-    const auto data_in_dims = data_volume_in.dimensions();
+    const auto data_real_in_dims = data_real_volume_in.dimensions();
+    const auto data_imag_in_dims = data_imag_volume_in.dimensions();
     const auto weight_in_dims = weight_volume_in.dimensions();
-    const auto data_out_dims = data_volume_out->dimensions();
+    const auto data_real_out_dims = data_real_volume_out->dimensions();
+    const auto data_imag_out_dims = data_imag_volume_out->dimensions();
     const auto weight_out_dims = weight_volume_out->dimensions();
-    if (data_in_dims.size() != 1 || data_in_dims[0] != volume_size ||
+    if (data_real_in_dims.size() != 1 || data_real_in_dims[0] != volume_size ||
+        data_imag_in_dims.size() != 1 || data_imag_in_dims[0] != volume_size ||
         weight_in_dims.size() != 1 || weight_in_dims[0] != volume_size ||
-        data_out_dims.size() != 1 || data_out_dims[0] != volume_size ||
+        data_real_out_dims.size() != 1 || data_real_out_dims[0] != volume_size ||
+        data_imag_out_dims.size() != 1 || data_imag_out_dims[0] != volume_size ||
         weight_out_dims.size() != 1 || weight_out_dims[0] != volume_size)
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedXHalf: accumulator sizes do not match");
@@ -7296,7 +7314,8 @@ ffi::Error RelionVdamMstepFusedXHalfImpl(
         static_cast<const float*>(translation_angles.untyped_data()),
         reinterpret_cast<const float2*>(reference.untyped_data()),
         static_cast<const float*>(rot.untyped_data()),
-        reinterpret_cast<float2*>(data_volume_out->untyped_data()),
+        static_cast<float*>(data_real_volume_out->untyped_data()),
+        static_cast<float*>(data_imag_volume_out->untyped_data()),
         static_cast<float*>(weight_volume_out->untyped_data()),
         static_cast<float*>(denominator_sum->untyped_data()),
         image_dims[0], posterior_dims[1], posterior_dims[2], pixel_count,
@@ -7326,6 +7345,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()

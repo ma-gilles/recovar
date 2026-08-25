@@ -1685,15 +1685,18 @@ def relion_vdam_mstep_fused_x_half(
     )
     rot6 = _rot_to_compact(kernel_rotations, jnp.float32).reshape(n_particles, n_rotations, 6)
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    data_real_volume = jnp.asarray(data_volume.real, dtype=jnp.float32)
+    data_imag_volume = jnp.asarray(data_volume.imag, dtype=jnp.float32)
     output_types = (
-        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(data_real_volume.shape, jnp.float32),
+        jax.ShapeDtypeStruct(data_imag_volume.shape, jnp.float32),
         jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
         jax.ShapeDtypeStruct(dense_reference.shape, jnp.float32),
     )
-    fused_data, fused_weight, dense_denominator = jax.ffi.ffi_call(
+    fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
         _TARGET_RELION_VDAM_MSTEP_FUSED_X_HALF,
         output_types,
-        input_output_aliases={7: 0, 8: 1},
+        input_output_aliases={7: 0, 8: 1, 9: 2},
         vmap_method="sequential",
     )(
         dense_images,
@@ -1703,7 +1706,8 @@ def relion_vdam_mstep_fused_x_half(
         translation_angles,
         dense_reference,
         rot6,
-        data_volume,
+        data_real_volume,
+        data_imag_volume,
         weight_volume,
         image_h=np.int64(current_h),
         image_w=np.int64(current_w),
@@ -1713,6 +1717,7 @@ def relion_vdam_mstep_fused_x_half(
         upsampling=kw["upsampling"],
         max_r2_x4=kw["max_r2_x4"],
     )
+    fused_data = jax.lax.complex(fused_real, fused_imag)
     full_h, full_w = map(int, image_shape)
     full_half_w = full_w // 2 + 1
     full_rows = pixel_indices // full_half_w
