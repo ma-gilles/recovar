@@ -39,6 +39,7 @@ SCHEMA = "recovar.vdam_candidate_state_envelope.v1"
 POSE_TOLERANCE_DEG = 1e-3
 TRANSLATION_TOLERANCE_ANGST = 1e-4
 _ACCURACY_CHECKS = frozenset(("accuracy_rotation", "accuracy_translation"))
+_DIAGNOSTIC_ONLY_FIELDS = frozenset(("nr_iter_without_resolution_gain",))
 
 
 class CandidateStateEnvelopeError(RuntimeError):
@@ -167,13 +168,17 @@ def classify_schedule_mode_envelope(
     ):
         raise CandidateStateEnvelopeError("candidate accuracy-estimation state differs across audits")
     normalized_checks = []
+    diagnostic_checks: list[dict[str, bool]] = []
     for row in native_rows:
         checks = dict(row["checks"])
-        if "nr_iter_without_resolution_gain" in row["candidate"] and "nr_iter_without_resolution_gain" in row["native"]:
-            checks["nr_iter_without_resolution_gain"] = int(
-                row["candidate"]["nr_iter_without_resolution_gain"]
-            ) == int(row["native"]["nr_iter_without_resolution_gain"])
         normalized_checks.append(checks)
+        diagnostic_checks.append(
+            {
+                name: int(row["candidate"][name]) == int(row["native"][name])
+                for name in _DIAGNOSTIC_ONLY_FIELDS
+                if name in row["candidate"] and name in row["native"]
+            }
+        )
     check_names = set(normalized_checks[0])
     if any(set(checks) != check_names for checks in normalized_checks[1:]):
         raise CandidateStateEnvelopeError("native schedule audits expose different check sets")
@@ -191,6 +196,11 @@ def classify_schedule_mode_envelope(
         "checks_matching_at_least_one_native": {
             name: any(bool(checks[name]) for checks in normalized_checks)
             for name in active_checks
+        },
+        "diagnostic_only_fields": sorted(_DIAGNOSTIC_ONLY_FIELDS),
+        "diagnostics_matching_at_least_one_native": {
+            name: any(bool(checks.get(name, False)) for checks in diagnostic_checks)
+            for name in sorted(_DIAGNOSTIC_ONLY_FIELDS)
         },
     }
 

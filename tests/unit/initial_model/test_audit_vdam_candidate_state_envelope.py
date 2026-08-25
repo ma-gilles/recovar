@@ -24,12 +24,25 @@ def _particles(states):
     )
 
 
-def _schedule_row(iteration, checks, *, estimated=True):
-    return {
+def _schedule_row(
+    iteration,
+    checks,
+    *,
+    estimated=True,
+    candidate_counter=None,
+    native_counter=None,
+):
+    row = {
         "iteration": iteration,
         "candidate": {"sampling_accuracy_estimated": estimated},
+        "native": {},
         "checks": checks,
     }
+    if candidate_counter is not None:
+        row["candidate"]["nr_iter_without_resolution_gain"] = candidate_counter
+    if native_counter is not None:
+        row["native"]["nr_iter_without_resolution_gain"] = native_counter
+    return row
 
 
 def test_particle_envelope_accepts_per_particle_native_modes():
@@ -92,6 +105,32 @@ def test_schedule_envelope_rejects_cross_repeat_field_chimera():
     )
     assert report["pass"] is False
     assert all(report["checks_matching_at_least_one_native"].values())
+
+
+def test_schedule_envelope_reports_pre_post_mstep_counter_without_gating_it():
+    report = classify_schedule_mode_envelope(
+        [
+            _schedule_row(
+                1,
+                {"healpix_order": True},
+                candidate_counter=0,
+                native_counter=1,
+            ),
+            _schedule_row(
+                1,
+                {"healpix_order": True},
+                candidate_counter=0,
+                native_counter=1,
+            ),
+        ]
+    )
+
+    assert report["pass"] is True
+    assert "nr_iter_without_resolution_gain" not in report["active_checks"]
+    assert report["diagnostic_only_fields"] == ["nr_iter_without_resolution_gain"]
+    assert report["diagnostics_matching_at_least_one_native"] == {
+        "nr_iter_without_resolution_gain": False
+    }
 
 
 def test_schedule_envelope_ignores_unused_accuracy_until_estimated():
