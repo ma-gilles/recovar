@@ -1080,6 +1080,8 @@ def _maybe_dump_bpref_contribution_rows(
     class_index: int = 0,
     mstep_shifted_recon=None,
     mstep_ctf2_over_nv=None,
+    inline_projector_data_volumes=None,
+    inline_projector_weight_volumes=None,
 ):
     """Dump posterior-reduced active rows for whole-accumulator scatter replay.
 
@@ -1157,6 +1159,39 @@ def _maybe_dump_bpref_contribution_rows(
     summed_np = _select_particle_axis(summed)
     ctf_probs_np = _select_particle_axis(ctf_probs)
     rotations_np = _select_particle_axis(rotations)
+    if inline_projector_data_volumes is None:
+        inline_projector_data_volumes_np = np.empty((0,), dtype=np.complex64)
+        inline_projector_weight_volumes_np = np.empty((0,), dtype=np.float32)
+    else:
+        if inline_projector_weight_volumes is None:
+            raise ValueError(
+                "inline-projector contribution data requires matching weight volumes"
+            )
+        inline_projector_data_volumes_np = np.asarray(
+            inline_projector_data_volumes,
+            dtype=np.complex64,
+        )
+        inline_projector_weight_volumes_np = np.asarray(
+            inline_projector_weight_volumes,
+            dtype=np.float32,
+        )
+        volume_shape_tuple = tuple(int(v) for v in volume_shape)
+        expected_volume_shape = (
+            original_indices.size,
+            volume_shape_tuple[0]
+            * volume_shape_tuple[1]
+            * (volume_shape_tuple[2] // 2 + 1),
+        )
+        if inline_projector_data_volumes_np.shape != expected_volume_shape:
+            raise ValueError(
+                "inline-projector contribution data shape mismatch: "
+                f"{inline_projector_data_volumes_np.shape} vs {expected_volume_shape}"
+            )
+        if inline_projector_weight_volumes_np.shape != expected_volume_shape:
+            raise ValueError(
+                "inline-projector contribution weight shape mismatch: "
+                f"{inline_projector_weight_volumes_np.shape} vs {expected_volume_shape}"
+            )
     if summed_np.shape[:2] != ctf_probs_np.shape[:2] or summed_np.shape[:2] != rotations_np.shape[:2]:
         raise ValueError("BPref contribution dump requires matching particle/rotation axes")
     if actual_counts_np.shape != (summed_np.shape[0],):
@@ -1377,6 +1412,11 @@ def _maybe_dump_bpref_contribution_rows(
         active_summed=summed_np[active_particle_rows, active_rotation_rows],
         active_ctf_probs=ctf_probs_np[active_particle_rows, active_rotation_rows],
         active_rotations=rotations_np[active_particle_rows, active_rotation_rows],
+        inline_projector_original_indices=original_indices[
+            : inline_projector_data_volumes_np.shape[0]
+        ],
+        inline_projector_data_volumes=inline_projector_data_volumes_np,
+        inline_projector_weight_volumes=inline_projector_weight_volumes_np,
     )
 
     device_signature_path = None

@@ -8065,6 +8065,8 @@ def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
     ]
     assert "if bpref_contribution_capture_active:" in source_capture_block
     assert "cuda_backproject.relion_vdam_mstep_sums_f32(" in source_capture_block
+    assert "inline_projector_data_volumes" in engine_src
+    assert "_accumulate_relion_vdam_physical_particle_grid(" in engine_src
 
 
 def test_local_exact_relion_translation_requires_half_spectrum_scoring():

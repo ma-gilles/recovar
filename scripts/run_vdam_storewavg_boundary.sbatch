@@ -62,6 +62,9 @@ fi
 if [[ -n "${NATIVE_PROJECTOR_PREFIX:-}" ]]; then
   ANALYZER_ARGS+=(--native-projector-prefix "${NATIVE_PROJECTOR_PREFIX}")
 fi
+if [[ -n "${NATIVE_PARTICLE_BPREF_PREFIX:-}" ]]; then
+  ANALYZER_ARGS+=(--native-particle-bpref-prefix "${NATIVE_PARTICLE_BPREF_PREFIX}")
+fi
 if [[ -n "${RECOVAR_ORIGINAL_INDEX:-}" ]]; then
   ANALYZER_ARGS+=(--recovar-original-index "${RECOVAR_ORIGINAL_INDEX}")
 fi

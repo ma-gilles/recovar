@@ -127,6 +127,73 @@ def _posterior_metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str,
     return result
 
 
+def _inline_projector_comparisons(
+    recovar: dict[str, np.ndarray],
+    particle_slot: int,
+    native_bpref_data: np.ndarray,
+    native_bpref_weight: np.ndarray,
+    controlled_bpref_data: np.ndarray,
+    controlled_bpref_weight: np.ndarray,
+    native_gpu_bpref_data: np.ndarray | None = None,
+    native_gpu_bpref_weight: np.ndarray | None = None,
+) -> dict[str, dict[str, object]]:
+    """Compare an optional production-projector particle capture by identity."""
+
+    if "inline_projector_data_volumes" not in recovar:
+        return {}
+    inline_original_indices = np.asarray(
+        recovar["inline_projector_original_indices"],
+        dtype=np.int64,
+    )
+    target_original_index = int(np.asarray(recovar["original_indices"])[particle_slot])
+    inline_matches = np.flatnonzero(inline_original_indices == target_original_index)
+    if not inline_matches.size:
+        return {}
+    _require(
+        inline_matches.size == 1,
+        "inline-projector capture does not uniquely identify the selected particle",
+    )
+    inline_slot = int(inline_matches[0])
+    inline_data = np.asarray(
+        recovar["inline_projector_data_volumes"][inline_slot],
+        dtype=np.complex64,
+    ).reshape(native_bpref_data.shape)
+    inline_weight = np.asarray(
+        recovar["inline_projector_weight_volumes"][inline_slot],
+        dtype=np.float32,
+    ).reshape(native_bpref_weight.shape)
+    result = {
+        "inline_projector_bpref_data": _metric(native_bpref_data, inline_data),
+        "inline_projector_bpref_weight": _metric(native_bpref_weight, inline_weight),
+        "inline_projector_bpref_data_same_posterior_control": _metric(
+            controlled_bpref_data,
+            inline_data,
+        ),
+        "inline_projector_bpref_weight_same_posterior_control": _metric(
+            controlled_bpref_weight,
+            inline_weight,
+        ),
+    }
+    if native_gpu_bpref_data is not None or native_gpu_bpref_weight is not None:
+        _require(
+            native_gpu_bpref_data is not None and native_gpu_bpref_weight is not None,
+            "native GPU particle BPref data and weight must be supplied together",
+        )
+        result.update(
+            {
+                "inline_projector_vs_native_gpu_bpref_data": _metric(
+                    np.asarray(native_gpu_bpref_data).reshape(inline_data.shape),
+                    inline_data,
+                ),
+                "inline_projector_vs_native_gpu_bpref_weight": _metric(
+                    np.asarray(native_gpu_bpref_weight).reshape(inline_weight.shape),
+                    inline_weight,
+                ),
+            }
+        )
+    return result
+
+
 def _match_rotations(native: np.ndarray, recovar: np.ndarray, tolerance: float) -> np.ndarray:
     native = np.asarray(native, dtype=np.float32).reshape(-1, 3, 3)
     recovar = np.asarray(recovar, dtype=np.float32).reshape(-1, 3, 3)
@@ -395,6 +462,38 @@ def _load_native(
     return result
 
 
+def _load_native_particle_bpref(
+    native_directory: Path,
+    prefix: str,
+) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+    """Load an isolated native CUDA backprojector accumulator capture."""
+
+    root = native_directory / prefix
+    dims_path = Path(f"{root}bp_dims.bin")
+    real_path = Path(f"{root}bp_real.bin")
+    imag_path = Path(f"{root}bp_imag.bin")
+    weight_path = Path(f"{root}bp_weight.bin")
+    dims = _flat(dims_path, np.dtype("<i4")).astype(np.int64)
+    _require(dims.size == 6, "native particle BPref dimensions changed")
+    voxel_count = int(np.prod(dims[:3], dtype=np.int64))
+    real = _flat(real_path, np.dtype("<f8"))
+    imag = _flat(imag_path, np.dtype("<f8"))
+    weight = _flat(weight_path, np.dtype("<f8"))
+    _require(
+        real.size == imag.size == weight.size == voxel_count,
+        "native particle BPref payload changed",
+    )
+    artifacts = {
+        "native_particle_bpref_prefix": prefix,
+        "native_particle_bpref_dims": dims.tolist(),
+        "native_particle_bpref_dims_sha256": _sha256(dims_path),
+        "native_particle_bpref_real_sha256": _sha256(real_path),
+        "native_particle_bpref_imag_sha256": _sha256(imag_path),
+        "native_particle_bpref_weight_sha256": _sha256(weight_path),
+    }
+    return (real + 1j * imag).astype(np.complex64), weight.astype(np.float32), artifacts
+
+
 def analyze(
     native_directory: Path,
     recovar_capture: Path,
@@ -406,6 +505,7 @@ def analyze(
     recovar_original_index: int | None,
     native_prefix: str,
     native_projector_prefix: str | None,
+    native_particle_bpref_prefix: str | None,
     recovar_score_dump: Path | None,
     physical_image_size: int,
     current_size: int,
@@ -415,12 +515,12 @@ def analyze(
 ) -> dict[str, object]:
     import jax
     import jax.numpy as jnp
+    from recovar.relion_bind._relion_bind_core import get_backprojector_data
 
     from recovar import cuda_backproject
     from recovar.em.dense_single_volume.helpers.projection import (
         compute_relion_projector_projections_block,
     )
-    from recovar.relion_bind._relion_bind_core import get_backprojector_data
 
     _require(jax.default_backend() == "gpu", "VDAM StoreWavg replay requires a GPU")
     native = _load_native(
@@ -578,6 +678,18 @@ def analyze(
     )
     data_scale = -float(physical_image_size) ** -2
     weight_scale = float(physical_image_size) ** -4
+    native_gpu_bpref_data = None
+    native_gpu_bpref_weight = None
+    native_gpu_bpref_artifacts = {}
+    if native_particle_bpref_prefix is not None:
+        native_gpu_bpref_data, native_gpu_bpref_weight, native_gpu_bpref_artifacts = (
+            _load_native_particle_bpref(
+                native_directory,
+                native_particle_bpref_prefix,
+            )
+        )
+        native_gpu_bpref_data = native_gpu_bpref_data * np.float32(data_scale)
+        native_gpu_bpref_weight = native_gpu_bpref_weight * np.float32(weight_scale)
     operand_comparisons = {}
     if score_dump is not None:
         recovar_shifted = np.asarray(score_dump["debug_shifted_recon"], dtype=np.complex64)
@@ -645,6 +757,16 @@ def analyze(
         padding_factor=padding_factor,
         get_backprojector_data=get_backprojector_data,
     )
+    inline_projector_comparisons = _inline_projector_comparisons(
+        recovar,
+        particle_slot,
+        native_bpref_data,
+        native_bpref_weight,
+        controlled_bpref_data,
+        controlled_bpref_weight,
+        native_gpu_bpref_data,
+        native_gpu_bpref_weight,
+    )
     return {
         "schema": SCHEMA,
         "identity": {
@@ -666,6 +788,7 @@ def analyze(
         "comparisons": {
             **posterior_comparisons,
             **operand_comparisons,
+            **inline_projector_comparisons,
             "gradient_numerator": _metric(native_data * data_scale, recovar_data),
             "gradient_denominator": _metric(native_weight * weight_scale, recovar_weight),
             "gradient_numerator_same_posterior_control": _metric(
@@ -707,6 +830,7 @@ def analyze(
                 if recovar_score_dump is not None
                 else {}
             ),
+            **native_gpu_bpref_artifacts,
         },
         "device": str(jax.devices()[0]),
     }
@@ -739,6 +863,13 @@ def main() -> None:
             "read from <native-prefix>wavg_ppref_."
         ),
     )
+    parser.add_argument(
+        "--native-particle-bpref-prefix",
+        help=(
+            "Optional prefix for an isolated native CUDA per-particle backprojector capture, "
+            "relative to --native-directory (for example img0_part0_backproject_)."
+        ),
+    )
     parser.add_argument("--physical-image-size", type=int, default=128)
     parser.add_argument("--current-size", type=int, default=38)
     parser.add_argument("--rotation-tolerance", type=float, default=1.0e-6)
@@ -769,6 +900,7 @@ def main() -> None:
         recovar_original_index=args.recovar_original_index,
         native_prefix=args.native_prefix,
         native_projector_prefix=args.native_projector_prefix,
+        native_particle_bpref_prefix=args.native_particle_bpref_prefix,
         recovar_score_dump=args.recovar_score_dump,
         physical_image_size=args.physical_image_size,
         current_size=args.current_size,

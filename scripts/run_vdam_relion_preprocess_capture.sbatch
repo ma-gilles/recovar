@@ -25,6 +25,7 @@ CAPTURE_ITERATION=${VDAM_PREPROCESS_ITERATION:-1}
 NR_ITER_SCHEDULE=${VDAM_PREPROCESS_NR_ITER_SCHEDULE:-${CAPTURE_ITERATION}}
 THREADS=${VDAM_PREPROCESS_THREADS:-8}
 CAPTURE_MSTEP=${VDAM_PREPROCESS_CAPTURE_MSTEP:-0}
+CAPTURE_PARTICLE_BPREF=${VDAM_PREPROCESS_CAPTURE_PARTICLE_BPREF:-0}
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 LAUNCHER=${REPO_ROOT}/scripts/run_vdam_relion_preprocess_capture.sbatch
 RELION_SOURCE=${VDAM_RELION_SOURCE:-/scratch/gpfs/GILLES/mg6942/relion}
@@ -42,6 +43,7 @@ test -z "$(find "${OUTPUT}" "${CAPTURE}" -mindepth 1 -print -quit)"
 test "${NR_ITER_SCHEDULE}" -ge "${CAPTURE_ITERATION}"
 test "${THREADS}" -ge 1
 case "${CAPTURE_MSTEP}" in 0|1) ;; *) echo "VDAM_PREPROCESS_CAPTURE_MSTEP must be 0 or 1" >&2; exit 2 ;; esac
+case "${CAPTURE_PARTICLE_BPREF}" in 0|1) ;; *) echo "VDAM_PREPROCESS_CAPTURE_PARTICLE_BPREF must be 0 or 1" >&2; exit 2 ;; esac
 if [[ "${CAPTURE_MSTEP}" = 1 ]]; then
     test "${CAPTURE_ITERATION}" -eq 1
 fi
@@ -93,6 +95,9 @@ fi
 export RELION_DUMP_DIR=${CAPTURE}
 export RELION_DUMP_PART_ID=${PART_ID}
 export RELION_DUMP_ITER=${CAPTURE_ITERATION}
+if [[ "${CAPTURE_PARTICLE_BPREF}" = 1 ]]; then
+    export RELION_ACC_DUMP_PARTICLE_BPREF=1
+fi
 if [[ "${CAPTURE_MSTEP}" = 1 ]]; then
     export RECOVAR_DEBUG_DUMP_DIR=${CAPTURE}
     export RECOVAR_DEBUG_DUMP_MSTEP_ITER=${CAPTURE_ITERATION}
@@ -166,6 +171,11 @@ for capture_part_id in ${PART_IDS//,/ }; do
     for suffix in sorted_weights sum_weight significant_weight eulers trans_xyz ctfs Fimg_unweighted_nomask; do
         test -s "${CAPTURE}/img0_part${capture_part_id}_storeWavg_${suffix}.bin"
     done
+    if [[ "${CAPTURE_PARTICLE_BPREF}" = 1 ]]; then
+        for suffix in bp_dims bp_real bp_imag bp_weight; do
+            test -s "${CAPTURE}/img0_part${capture_part_id}_backproject_${suffix}.bin"
+        done
+    fi
 done
 for required in Minvsigma2 sigma2_noise sigma2_fudge; do
     test -s "${CAPTURE}/${required}.bin"
@@ -177,7 +187,7 @@ if [[ "${CAPTURE_MSTEP}" = 1 ]]; then
         test -s "${CAPTURE}/${required}"
     done
 fi
-printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"part_ids":"%s","part_count":%d,"threads":%d,"capture_mstep":%d}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${PART_IDS}" "$(tr ',' '\n' <<<"${PART_IDS}" | wc -l)" "${THREADS}" "${CAPTURE_MSTEP}" \
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"part_ids":"%s","part_count":%d,"threads":%d,"capture_mstep":%d,"capture_particle_bpref":%d}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${CAPTURE_ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${PART_IDS}" "$(tr ',' '\n' <<<"${PART_IDS}" | wc -l)" "${THREADS}" "${CAPTURE_MSTEP}" "${CAPTURE_PARTICLE_BPREF}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"

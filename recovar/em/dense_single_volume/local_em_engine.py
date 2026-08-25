@@ -3881,6 +3881,69 @@ def run_local_em_exact(
                         raise RuntimeError(
                             "big-JIT BPref contribution capture requires returned M-step tensors and scores"
                         )
+                    inline_projector_data_volumes = None
+                    inline_projector_weight_volumes = None
+                    if (
+                        return_source_vdam_operands
+                        and os.environ.get(
+                            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES",
+                            "",
+                        ).strip()
+                    ):
+                        target_particle_rows = (
+                            _sparse_pass2_diagnostics._bpref_contribution_target_rows(
+                                experiment_dataset,
+                                unpadded_bucket.image_indices,
+                            )
+                        )
+                        inline_data_parts = []
+                        inline_weight_parts = []
+                        inline_row_mask = (
+                            reconstruction_rotation_mask_unpadded
+                            & jnp.asarray(unpadded_bucket.local_rotation_mask)
+                        )
+                        for target_particle_row in target_particle_rows.tolist():
+                            zero_data = jnp.zeros_like(Ft_y)
+                            zero_weight = jnp.zeros_like(Ft_ctf)
+                            target_slice = slice(
+                                int(target_particle_row),
+                                int(target_particle_row) + 1,
+                            )
+                            inline_data, inline_weight = (
+                                _accumulate_relion_vdam_physical_particle_grid(
+                                    source_vdam_images[target_slice],
+                                    source_vdam_ctf[target_slice],
+                                    source_vdam_minvsigma2[target_slice],
+                                    source_vdam_posterior[target_slice],
+                                    relion_score_translation_angles,
+                                    source_vdam_reference[target_slice],
+                                    _local_mstep_rotations(unpadded_bucket)[target_slice],
+                                    inline_row_mask[target_slice],
+                                    zero_data,
+                                    zero_weight,
+                                    projector_full=source_vdam_projector_full,
+                                    scoring_rotations=unpadded_bucket.local_rotations[
+                                        target_slice
+                                    ],
+                                    projector_r_max=relion_projector_r_max_big_jit,
+                                    projection_padding_factor=projection_padding_factor,
+                                    pixel_indices=mstep_recon_window_indices,
+                                    image_shape=image_shape,
+                                    volume_shape=recon_volume_shape,
+                                    max_r=mstep_adjoint_max_r,
+                                )
+                            )
+                            inline_data_parts.append(inline_data)
+                            inline_weight_parts.append(inline_weight)
+                        if inline_data_parts:
+                            inline_projector_data_volumes = jnp.stack(
+                                inline_data_parts,
+                                axis=0,
+                            )
+                            inline_projector_weight_volumes = jnp.stack(
+                                inline_weight_parts,
+                                axis=0,
+                            )
                     candidate_mask = jnp.broadcast_to(
                         jnp.asarray(unpadded_bucket.local_rotation_mask)[:, :, None],
                         debug_probs_unpadded.shape,
@@ -3975,6 +4038,8 @@ def run_local_em_exact(
                         shadow_only_mode=False,
                         shadow_score_bitwise_equal=True,
                         shadow_reduction_agreement=None,
+                        inline_projector_data_volumes=inline_projector_data_volumes,
+                        inline_projector_weight_volumes=inline_projector_weight_volumes,
                     )
                 if fused_debug_bucket_matches and debug_fused_posterior_dump_targets:
                     debug_fused_posterior_dump_targets = maybe_write_debug_fused_posterior_dump(

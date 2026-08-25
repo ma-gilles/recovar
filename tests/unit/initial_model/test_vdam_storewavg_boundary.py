@@ -6,6 +6,7 @@ import pytest
 from scripts.analyze_vdam_storewavg_boundary import (
     _complex_long_3d,
     _fftw_window_to_native_crop,
+    _inline_projector_comparisons,
     _load_unmasked_image,
     _match_rotations,
     _metric,
@@ -131,6 +132,37 @@ def test_posterior_metric_reports_mass_support_and_l1():
     assert result["support_mismatch_count"] == 2
     assert result["reference_positive_count"] == 2
     assert result["candidate_positive_count"] == 2
+
+
+def test_inline_projector_comparisons_selects_capture_by_original_identity():
+    native_data = np.asarray([1 + 2j, 3 + 4j], dtype=np.complex64)
+    native_weight = np.asarray([5.0, 6.0], dtype=np.float32)
+    controlled_data = native_data + np.complex64(1.0)
+    controlled_weight = native_weight + np.float32(1.0)
+    capture = {
+        "original_indices": np.asarray([20, 10], dtype=np.int64),
+        "inline_projector_original_indices": np.asarray([10], dtype=np.int64),
+        "inline_projector_data_volumes": native_data.reshape(1, -1),
+        "inline_projector_weight_volumes": native_weight.reshape(1, -1),
+    }
+
+    result = _inline_projector_comparisons(
+        capture,
+        particle_slot=1,
+        native_bpref_data=native_data,
+        native_bpref_weight=native_weight,
+        controlled_bpref_data=controlled_data,
+        controlled_bpref_weight=controlled_weight,
+        native_gpu_bpref_data=native_data,
+        native_gpu_bpref_weight=native_weight,
+    )
+
+    assert result["inline_projector_bpref_data"]["relative_l2"] == 0.0
+    assert result["inline_projector_bpref_weight"]["relative_l2"] == 0.0
+    assert result["inline_projector_vs_native_gpu_bpref_data"]["relative_l2"] == 0.0
+    assert result["inline_projector_vs_native_gpu_bpref_weight"]["relative_l2"] == 0.0
+    assert result["inline_projector_bpref_data_same_posterior_control"]["relative_l2"] > 0.0
+    assert result["inline_projector_bpref_weight_same_posterior_control"]["relative_l2"] > 0.0
 
 
 def test_complex_long_3d_reads_relion_multidimarray_dump(tmp_path):
