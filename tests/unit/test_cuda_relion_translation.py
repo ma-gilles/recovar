@@ -83,6 +83,25 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "__shared__ float E" not in fused_kernel
     assert "rk0 = (R[6] * x_unscaled + R[7] * y_unscaled)" in fused_kernel
 
+    native_kernel = source.split(
+        "__global__ void relion_vdam_native_sgd_f32_kernel(", 1
+    )[1].split("__global__ void relion_vdam_denominator_after_sgd_f32_kernel", 1)[0]
+    assert "RelionVdamProjectorKernel projector" in native_kernel
+    assert "float* image_real" in native_kernel
+    assert "float* image_imag" in native_kernel
+    assert "float* translation_x" in native_kernel
+    assert "float* translation_y" in native_kernel
+    assert "if (weight >= significant_weight)" in native_kernel
+    assert "weight = (weight / weight_norm) * ctf * minvsigma2;" in native_kernel
+    assert "RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x1, dd111);" in native_kernel
+    assert "denominator" not in native_kernel
+
+    projector_launcher = source.split(
+        "cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(", 1
+    )[1].split("__device__ __forceinline__ float relion_fine_diff2_update_f32", 1)[0]
+    assert "relion_vdam_native_sgd_f32_kernel<<<rotation_count, 128" in projector_launcher
+    assert "relion_vdam_denominator_after_sgd_f32_kernel<<<" in projector_launcher
+
     wrapper = inspect.getsource(cuda_backproject.relion_vdam_mstep_fused_x_half)
     assert "data_real_volume = jnp.asarray(data_volume.real" in wrapper
     assert "data_imag_volume = jnp.asarray(data_volume.imag" in wrapper

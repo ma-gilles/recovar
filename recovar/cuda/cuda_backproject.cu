@@ -4218,6 +4218,290 @@ __device__ __forceinline__ float2 relion_vdam_project_texture_f32(
             zp - static_cast<float>(tex_z_init) + 0.5f));
 }
 
+/* Preserve RELION's by-value projector layout and method body for the VDAM
+ * SGD discriminator.  The texture payload is pre-scaled into RELION's frame,
+ * so projection itself has the same arithmetic and control flow as BP.cuh. */
+struct RelionVdamProjectorKernel
+{
+    int mdlX, mdlXY, mdlZ;
+    int imgX, imgY, imgZ;
+    int mdlInitY, mdlInitZ;
+    int maxR, maxR2, maxR2_padded;
+    float padding_factor;
+    cudaTextureObject_t mdlReal;
+    cudaTextureObject_t mdlImag;
+
+    __device__ __forceinline__ void project3Dmodel(
+        int x,
+        int y,
+        float e0,
+        float e1,
+        float e3,
+        float e4,
+        float e6,
+        float e7,
+        float& real,
+        float& imag)
+    {
+        float xp = (e0 * x + e1 * y) * padding_factor;
+        float yp = (e3 * x + e4 * y) * padding_factor;
+        float zp = (e6 * x + e7 * y) * padding_factor;
+        int r2 = xp * xp + yp * yp + zp * zp;
+        if (r2 <= maxR2_padded)
+        {
+            if (xp < 0.0f)
+            {
+                xp = -xp;
+                yp = -yp;
+                zp = -zp;
+                yp -= mdlInitY;
+                zp -= mdlInitZ;
+                real = tex3D<float>(mdlReal, xp + 0.5f, yp + 0.5f, zp + 0.5f);
+                imag = -tex3D<float>(mdlImag, xp + 0.5f, yp + 0.5f, zp + 0.5f);
+            }
+            else
+            {
+                yp -= mdlInitY;
+                zp -= mdlInitZ;
+                real = tex3D<float>(mdlReal, xp + 0.5f, yp + 0.5f, zp + 0.5f);
+                imag = tex3D<float>(mdlImag, xp + 0.5f, yp + 0.5f, zp + 0.5f);
+            }
+        }
+        else
+        {
+            real = 0.0f;
+            imag = 0.0f;
+        }
+    }
+};
+
+__global__ void relion_vdam_scale_texture_f32_kernel(
+    float* real,
+    float* imag,
+    int64_t count,
+    float scale)
+{
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index >= count) return;
+    real[index] *= scale;
+    imag[index] *= scale;
+}
+
+__global__ void relion_vdam_split_translations_f32_kernel(
+    const float* translation_angles,
+    float* translation_x,
+    float* translation_y,
+    int64_t translation_count)
+{
+    const int64_t translation =
+        static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (translation >= translation_count) return;
+    translation_x[translation] = translation_angles[2 * translation];
+    translation_y[translation] = translation_angles[2 * translation + 1];
+}
+
+__device__ __forceinline__ void relion_vdam_translate_pixel_f32(
+    int x,
+    int y,
+    float tx,
+    float ty,
+    float& real,
+    float& imag,
+    float& translated_real,
+    float& translated_imag)
+{
+    float sine;
+    float cosine;
+    sincosf(x * tx + y * ty, &sine, &cosine);
+    translated_real = cosine * real - sine * imag;
+    translated_imag = cosine * imag + sine * real;
+}
+
+__global__ void relion_vdam_native_sgd_f32_kernel(
+    RelionVdamProjectorKernel projector,
+    float* image_real,
+    float* image_imag,
+    float* translation_x,
+    float* translation_y,
+    float* translation_z,
+    float* weights,
+    float* minvsigma2s,
+    float* ctfs,
+    unsigned long translation_count,
+    float significant_weight,
+    float weight_norm,
+    float* eulers,
+    float* model_real,
+    float* model_imag,
+    float* model_weight,
+    int max_r,
+    int max_r2,
+    float padding_factor,
+    unsigned image_x,
+    unsigned image_y,
+    unsigned image_z,
+    unsigned image_xyz,
+    unsigned model_x,
+    unsigned model_y,
+    int model_init_y,
+    int model_init_z)
+{
+    unsigned tid = threadIdx.x;
+    unsigned image = blockIdx.x;
+    int image_y_half = image_y / 2;
+    int max_r2_volume = max_r2 * padding_factor * padding_factor;
+    __shared__ float shared_eulers[9];
+    float minvsigma2, ctf, pixel_real, pixel_imag, Fweight, real, imag, weight;
+    if (tid < 9) shared_eulers[tid] = eulers[image * 9 + tid];
+    __syncthreads();
+
+    int pixel_pass_count = ceilf(static_cast<float>(image_xyz) / 128.0f);
+    for (unsigned pass = 0; pass < static_cast<unsigned>(pixel_pass_count); ++pass)
+    {
+        unsigned pixel = pass * 128 + tid;
+        if (pixel >= image_xyz) continue;
+        int x = pixel % image_x;
+        int y = static_cast<int>(pixel / image_x);
+        if (y > image_y_half) y -= image_y;
+
+        float reference_real = 0.0f;
+        float reference_imag = 0.0f;
+        projector.project3Dmodel(
+            x,
+            y,
+            shared_eulers[0],
+            shared_eulers[1],
+            shared_eulers[3],
+            shared_eulers[4],
+            shared_eulers[6],
+            shared_eulers[7],
+            reference_real,
+            reference_imag);
+
+        minvsigma2 = __ldg(&minvsigma2s[pixel]);
+        ctf = __ldg(&ctfs[pixel]);
+        pixel_real = __ldg(&image_real[pixel]);
+        pixel_imag = __ldg(&image_imag[pixel]);
+        Fweight = 0.0f;
+        real = 0.0f;
+        imag = 0.0f;
+        reference_real *= ctf;
+        reference_imag *= ctf;
+        float translated_real, translated_imag;
+
+        for (unsigned long translation = 0; translation < translation_count; ++translation)
+        {
+            weight = weights[image * translation_count + translation];
+            if (weight >= significant_weight)
+            {
+                weight = (weight / weight_norm) * ctf * minvsigma2;
+                Fweight += weight * ctf;
+                relion_vdam_translate_pixel_f32(
+                    x,
+                    y,
+                    translation_x[translation],
+                    translation_y[translation],
+                    pixel_real,
+                    pixel_imag,
+                    translated_real,
+                    translated_imag);
+                real += (translated_real - reference_real) * weight;
+                imag += (translated_imag - reference_imag) * weight;
+            }
+        }
+
+        if (Fweight > 0.0f)
+        {
+            float xp = (shared_eulers[0] * x + shared_eulers[1] * y) * padding_factor;
+            float yp = (shared_eulers[3] * x + shared_eulers[4] * y) * padding_factor;
+            float zp = (shared_eulers[6] * x + shared_eulers[7] * y) * padding_factor;
+            if ((xp * xp + yp * yp + zp * zp) > max_r2_volume) continue;
+            if (xp < 0.0f)
+            {
+                xp = -xp;
+                yp = -yp;
+                zp = -zp;
+                imag = -imag;
+            }
+
+            int x0 = floorf(xp);
+            float fx = xp - x0;
+            int x1 = x0 + 1;
+            int y0 = floorf(yp);
+            float fy = yp - y0;
+            y0 -= model_init_y;
+            int y1 = y0 + 1;
+            int z0 = floorf(zp);
+            float fz = zp - z0;
+            z0 -= model_init_z;
+            int z1 = z0 + 1;
+            float mfx = 1.0f - fx;
+            float mfy = 1.0f - fy;
+            float mfz = 1.0f - fz;
+
+#define RELION_VDAM_NATIVE_ATOMIC_TRIPLET(Z, Y, X, COEFFICIENT)                    \
+    atomicAdd(&model_real[(Z) * model_x * model_y + (Y) * model_x + (X)],          \
+              (COEFFICIENT) * real);                                               \
+    atomicAdd(&model_imag[(Z) * model_x * model_y + (Y) * model_x + (X)],          \
+              (COEFFICIENT) * imag);                                               \
+    atomicAdd(&model_weight[(Z) * model_x * model_y + (Y) * model_x + (X)],        \
+              (COEFFICIENT) * Fweight)
+
+            float dd000 = mfz * mfy * mfx;
+            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x0, dd000);
+            float dd001 = mfz * mfy * fx;
+            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x1, dd001);
+            float dd010 = mfz * fy * mfx;
+            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y1, x0, dd010);
+            float dd011 = mfz * fy * fx;
+            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y1, x1, dd011);
+            float dd100 = fz * mfy * mfx;
+            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y0, x0, dd100);
+            float dd101 = fz * mfy * fx;
+            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y0, x1, dd101);
+            float dd110 = fz * fy * mfx;
+            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x0, dd110);
+            float dd111 = fz * fy * fx;
+            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x1, dd111);
+#undef RELION_VDAM_NATIVE_ATOMIC_TRIPLET
+        }
+    }
+}
+
+__global__ void relion_vdam_denominator_after_sgd_f32_kernel(
+    const float* ctf,
+    const float* minvsigma2,
+    const float* posterior,
+    float* denominator,
+    int64_t particle_count,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pixel_count)
+{
+    const int64_t output = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const int64_t output_count = particle_count * rotation_count * pixel_count;
+    if (output >= output_count) return;
+    const int64_t pixel = output % pixel_count;
+    const int64_t particle_rotation = output / pixel_count;
+    const int64_t particle = particle_rotation / rotation_count;
+    const int64_t rotation = particle_rotation % rotation_count;
+    const float pixel_ctf = ctf[particle * pixel_count + pixel];
+    const float pixel_minvsigma2 = minvsigma2[particle * pixel_count + pixel];
+    float Fweight = 0.0f;
+    const int64_t posterior_base =
+        (particle * rotation_count + rotation) * translation_count;
+    for (int64_t translation = 0; translation < translation_count; ++translation)
+    {
+        const float posterior_value = posterior[posterior_base + translation];
+        if (posterior_value > 0.0f)
+        {
+            const float weight = posterior_value * pixel_ctf * pixel_minvsigma2;
+            Fweight += weight * pixel_ctf;
+        }
+    }
+    denominator[output] = Fweight;
+}
+
 template <bool INLINE_PROJECTOR>
 __global__ void relion_vdam_mstep_fused_x_half_kernel(
     const float2* images,
@@ -4478,6 +4762,10 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     const int64_t texture_voxels = static_cast<int64_t>(tex_x) * tex_y * tex_z;
     float* real = nullptr;
     float* imag = nullptr;
+    float* image_real = nullptr;
+    float* image_imag = nullptr;
+    float* translation_x = nullptr;
+    float* translation_y = nullptr;
     cudaArray_t array_real = nullptr;
     cudaArray_t array_imag = nullptr;
     cudaTextureObject_t texture_real = 0;
@@ -4509,6 +4797,17 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             static_cast<int>(projector_size));
     err = cudaGetLastError();
     if (err != cudaSuccess) goto cleanup;
+    {
+        const float projector_scale = -static_cast<float>(
+            physical_image_size * physical_image_size);
+        relion_vdam_scale_texture_f32_kernel<<<
+            static_cast<unsigned int>((texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE),
+            BLOCK_SIZE,
+            0,
+            stream>>>(real, imag, texture_voxels, projector_scale);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) goto cleanup;
+    }
 
     {
         cudaChannelFormatDesc desc = cudaCreateChannelDesc(
@@ -4564,54 +4863,122 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     }
 
     {
-        const int N2_eff = static_cast<int>(N2 / 2 + 1);
-        const float c0 = static_cast<float>(N0 / 2);
-        const float c1 = static_cast<float>(N1 / 2);
-        const float c2 = static_cast<float>(N2 / 2);
         const float max_r2 = static_cast<float>(max_r2_x4) / 4.0f;
         const int projector_max_r2_padded = padded_max_r * padded_max_r;
-        const float projector_scale = -static_cast<float>(
-            physical_image_size * physical_image_size);
         const int64_t image_stride = pixel_count;
         const int64_t posterior_stride = rotation_count * translation_count;
         const int64_t euler_stride = rotation_count * 9;
-        const int64_t rotation_stride = rotation_count * 6;
-        const int64_t denominator_stride = rotation_count * pixel_count;
+        const int64_t image_value_count = n_particles * pixel_count;
+        const int model_x = static_cast<int>(N2 / 2 + 1);
+        const int model_y = static_cast<int>(N1);
+        const int model_init_y = -static_cast<int>(N1 / 2);
+        const int model_init_z = -static_cast<int>(N0 / 2);
+        const float significant_weight = std::numeric_limits<float>::min();
+        const float weight_norm = 1.0f;
+
+        err = cudaMalloc(
+            reinterpret_cast<void**>(&image_real),
+            static_cast<size_t>(image_value_count) * sizeof(float));
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaMalloc(
+            reinterpret_cast<void**>(&image_imag),
+            static_cast<size_t>(image_value_count) * sizeof(float));
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaMalloc(
+            reinterpret_cast<void**>(&translation_x),
+            static_cast<size_t>(translation_count) * sizeof(float));
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaMalloc(
+            reinterpret_cast<void**>(&translation_y),
+            static_cast<size_t>(translation_count) * sizeof(float));
+        if (err != cudaSuccess) goto cleanup;
+
+        split_complex_float_kernel<<<
+            static_cast<unsigned int>((image_value_count + BLOCK_SIZE - 1) / BLOCK_SIZE),
+            BLOCK_SIZE,
+            0,
+            stream>>>(
+                reinterpret_cast<const float*>(images),
+                image_real,
+                image_imag,
+                static_cast<int>(image_value_count));
+        err = cudaGetLastError();
+        if (err != cudaSuccess) goto cleanup;
+        relion_vdam_split_translations_f32_kernel<<<
+            static_cast<unsigned int>((translation_count + BLOCK_SIZE - 1) / BLOCK_SIZE),
+            BLOCK_SIZE,
+            0,
+            stream>>>(translation_angles, translation_x, translation_y, translation_count);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) goto cleanup;
+
+        RelionVdamProjectorKernel projector{
+            tex_x,
+            tex_x * tex_y,
+            tex_z,
+            static_cast<int>(image_w),
+            static_cast<int>(image_h),
+            1,
+            tex_y_init,
+            tex_z_init,
+            projector_max_r,
+            projector_max_r * projector_max_r,
+            projector_max_r2_padded,
+            static_cast<float>(projection_padding_factor),
+            texture_real,
+            texture_imag,
+        };
         for (int64_t particle = 0; particle < n_particles; ++particle)
         {
-            relion_vdam_mstep_fused_x_half_kernel<true><<<rotation_count, 128, 0, stream>>>(
-                images + particle * image_stride,
-                ctf + particle * image_stride,
-                minvsigma2 + particle * image_stride,
-                posterior_over_weight_norm + particle * posterior_stride,
-                translation_angles,
+            relion_vdam_native_sgd_f32_kernel<<<rotation_count, 128, 0, stream>>>(
+                projector,
+                image_real + particle * image_stride,
+                image_imag + particle * image_stride,
+                translation_x,
+                translation_y,
                 nullptr,
-                texture_real,
-                texture_imag,
-                projector_eulers + particle * euler_stride,
-                rot + particle * rotation_stride,
+                const_cast<float*>(
+                    posterior_over_weight_norm + particle * posterior_stride),
+                const_cast<float*>(minvsigma2 + particle * image_stride),
+                const_cast<float*>(ctf + particle * image_stride),
+                static_cast<unsigned long>(translation_count),
+                significant_weight,
+                weight_norm,
+                const_cast<float*>(projector_eulers + particle * euler_stride),
                 data_real_volume,
                 data_imag_volume,
                 weight_volume,
-                denominator_sum + particle * denominator_stride,
-                static_cast<int>(rotation_count),
-                static_cast<int>(translation_count),
-                static_cast<int>(pixel_count),
-                static_cast<int>(image_h),
-                static_cast<int>(image_w),
-                static_cast<int>(N0),
-                static_cast<int>(N1),
-                N2_eff,
-                c0,
-                c1,
-                c2,
-                static_cast<int>(upsampling),
-                max_r2,
-                projection_padding_factor,
-                projector_max_r2_padded,
-                tex_y_init,
-                tex_z_init,
-                projector_scale);
+                static_cast<int>(sqrtf(max_r2) + 0.5f),
+                static_cast<int>(max_r2),
+                static_cast<float>(upsampling),
+                static_cast<unsigned>(image_w),
+                static_cast<unsigned>(image_h),
+                1,
+                static_cast<unsigned>(pixel_count),
+                static_cast<unsigned>(model_x),
+                static_cast<unsigned>(model_y),
+                model_init_y,
+                model_init_z);
+            err = cudaGetLastError();
+            if (err != cudaSuccess) goto cleanup;
+        }
+        {
+            const int64_t denominator_count =
+                n_particles * rotation_count * pixel_count;
+            relion_vdam_denominator_after_sgd_f32_kernel<<<
+                static_cast<unsigned int>(
+                    (denominator_count + BLOCK_SIZE - 1) / BLOCK_SIZE),
+                BLOCK_SIZE,
+                0,
+                stream>>>(
+                    ctf,
+                    minvsigma2,
+                    posterior_over_weight_norm,
+                    denominator_sum,
+                    n_particles,
+                    rotation_count,
+                    translation_count,
+                    pixel_count);
             err = cudaGetLastError();
             if (err != cudaSuccess) goto cleanup;
         }
@@ -4623,6 +4990,10 @@ cleanup:
     if (texture_imag) cudaDestroyTextureObject(texture_imag);
     if (array_real) cudaFreeArray(array_real);
     if (array_imag) cudaFreeArray(array_imag);
+    if (image_real) cudaFree(image_real);
+    if (image_imag) cudaFree(image_imag);
+    if (translation_x) cudaFree(translation_x);
+    if (translation_y) cudaFree(translation_y);
     if (real) cudaFree(real);
     if (imag) cudaFree(imag);
     return err;
