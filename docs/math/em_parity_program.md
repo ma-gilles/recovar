@@ -133,6 +133,21 @@ is not a valid point gate; the next causal gate must test whether matching the
 native repeat distribution, rather than one draw, is sufficient to preserve
 the iteration-2 cutoff and long trajectory.
 
+The source-faithful fused arm also fails that repeat-distribution gate.  After
+qualified rebuild `12912585`, fresh full-schedule repeat `12912674` completes
+`0:0` in 52 seconds and is paired with the earlier fused capture `12911801`.
+Native repeat relative-L2 is `9.71544e-6`/`9.82039e-6` for data and
+`2.45064e-6`/`2.50817e-6` for weights, whereas fused RECOVAR remains much more
+deterministic at `1.72101e-7`/`1.52556e-7` and
+`7.96698e-8`/`7.88732e-8`.  Reconstructed-reference repeat distances are
+`1.92968e-6` native and `6.36606e-7` fused.  Its cross-engine distances remain
+`0.79--1.30x` one native-repeat distance, but fusion does not reproduce
+RELION's device-order distribution.  The arm remains rejected without a
+200-iteration run.  The next bounded implementation gate is the still-unmatched
+native accumulator storage topology: RELION atomically updates three disjoint
+real, imaginary, and weight arrays, while the candidate's complex accumulator
+interleaves real and imaginary values in one `float2` allocation.
+
 Source statement order alone is now rejected as sufficient.  Isolated commit
 `99681a33b` completed all 200 frozen `vdam-gf01` iterations (Slurm
 `12879549_1`): first strict failure is iteration 73, minimum/final cross-engine
