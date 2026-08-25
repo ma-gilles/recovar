@@ -36,7 +36,6 @@ from .init import initialise_data_vs_prior_from_references, initialise_denovo_st
 from .iteration_loop import relion_solvent_flatten_state, relion_solvent_mask, run_vdam_iterations
 from .schedules import (
     DEFAULT_GRAD_EM_ITERS,
-    DEFAULT_GRAD_MU,
     DEFAULT_SIGMA2_FUDGE,
     GuiInitialModelDefaults,
     default_subset_sizes_for_3d_initial_model,
@@ -53,6 +52,8 @@ DEFAULT_RANDOM_SEED = INITIAL_MODEL_GUI_DEFAULTS.random_seed
 DEFAULT_OVERSAMPLING = INITIAL_MODEL_GUI_DEFAULTS.oversampling
 DEFAULT_PERTURBATION_FACTOR = INITIAL_MODEL_GUI_DEFAULTS.perturbation_factor
 RELION_INITIALMODEL_LOCAL_SEARCH_HEALPIX_ORDER = 4
+RELION_ORIENTATIONAL_PRIOR_NOPRIOR = 0
+RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI = 1
 RELION_INITIALMODEL_MIN_TRANSLATION_STEP_ANGSTROM = 1.5
 RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN = 1
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS = 999.0
@@ -194,6 +195,8 @@ class NativeSamplingState:
     nr_iter_wo_large_hidden_variable_changes: int = 0
     has_fine_enough_angular_sampling: bool = False
     last_current_resolution: float = 0.0
+    orientational_prior_mode: int = RELION_ORIENTATIONAL_PRIOR_NOPRIOR
+    uniform_local_orientation_prior: bool = False
 
     @property
     def offset_range_px(self) -> float:
@@ -607,21 +610,37 @@ def _relion_update_native_sampling_state(
         new_step = new_range / 4.0
 
     new_healpix_order = int(sampling_state.healpix_order)
-    if not (
+    requested_healpix_order = new_healpix_order + 1
+    gradient_ceiling_reached = (
         bool(do_grad)
         and not bool(do_auto_refine)
-        and (int(sampling_state.healpix_order) + 1) >= int(sampling_state.auto_local_healpix_order)
-    ):
-        new_healpix_order += 1
+        and requested_healpix_order >= int(sampling_state.auto_local_healpix_order)
+    )
+    if not gradient_ceiling_reached:
+        new_healpix_order = requested_healpix_order
 
     if new_step > float(sampling_state.offset_step_angstrom):
         new_step = float(sampling_state.offset_step_angstrom)
         new_range = float(sampling_state.offset_range_angstrom)
 
+    old_orientational_prior_mode = int(sampling_state.orientational_prior_mode)
+    old_uniform_local_orientation_prior = bool(sampling_state.uniform_local_orientation_prior)
+    if requested_healpix_order >= int(sampling_state.auto_local_healpix_order):
+        sampling_state.orientational_prior_mode = RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI
+        # RELION's gradient InitialModel stops at the exhaustive HEALPix-3
+        # grid, but its pinned updateAngularSampling path still switches to
+        # PRIOR_ROTTILT_PSI. The stored zero angular-prior widths then produce
+        # uniform direction and psi priors, as observed at the live GPU score
+        # boundary. Keep this transition explicit instead of carrying the
+        # learned pdf_direction into iteration 90 and later.
+        sampling_state.uniform_local_orientation_prior = bool(gradient_ceiling_reached)
+
     changed = (
         new_healpix_order != int(sampling_state.healpix_order)
         or abs(new_step - float(sampling_state.offset_step_angstrom)) > 1e-12
         or abs(new_range - float(sampling_state.offset_range_angstrom)) > 1e-12
+        or int(sampling_state.orientational_prior_mode) != old_orientational_prior_mode
+        or bool(sampling_state.uniform_local_orientation_prior) != old_uniform_local_orientation_prior
     )
     sampling_state.healpix_order = int(new_healpix_order)
     sampling_state.offset_step_angstrom = float(new_step)
@@ -1020,6 +1039,19 @@ def _class_direction_rotation_log_prior(state: InitialModelState, healpix_order:
     return out.astype(np.float32)
 
 
+def _class_rotation_log_prior_for_sampling(
+    state: InitialModelState,
+    sampling_state: NativeSamplingState | None,
+    healpix_order: int,
+) -> np.ndarray:
+    """Select the live RELION orientation-prior source for this sampling state."""
+
+    if sampling_state is not None and bool(sampling_state.uniform_local_orientation_prior):
+        n_rot = int(sampling.rotation_grid_size(int(healpix_order)))
+        return np.zeros((int(state.K), n_rot), dtype=np.float32)
+    return _class_direction_rotation_log_prior(state, int(healpix_order))
+
+
 def _expand_class_rotation_log_prior_for_dense_fine_grid(
     class_rotation_log_prior: np.ndarray,
     sampling_plan: NativeSamplingPlan,
@@ -1249,7 +1281,11 @@ def _native_expectation_step(
             class_log_priors=np.zeros(int(state.K), dtype=np.float64),
             pass1_healpix_order=pass1_healpix_order,
         )
-        class_rotation_log_prior = _class_direction_rotation_log_prior(state, int(sampling_plan.healpix_order))
+        class_rotation_log_prior = _class_rotation_log_prior_for_sampling(
+            state,
+            sampling_state,
+            int(sampling_plan.healpix_order),
+        )
         if not bool(config.engine_kwargs.get("sparse_pass2", False)):
             class_rotation_log_prior = _expand_class_rotation_log_prior_for_dense_fine_grid(
                 class_rotation_log_prior,
@@ -1293,6 +1329,8 @@ def _native_expectation_step(
                 sampling_acc_trans_angstrom=float(sampling_state.acc_trans_angstrom),
                 sampling_nr_iter_wo_resol_gain=int(sampling_state.nr_iter_wo_resol_gain),
                 sampling_has_fine_enough_angular_sampling=bool(sampling_state.has_fine_enough_angular_sampling),
+                orientational_prior_mode=int(sampling_state.orientational_prior_mode),
+                uniform_local_orientation_prior=bool(sampling_state.uniform_local_orientation_prior),
             )
         _update_particle_state_from_estep_meta(
             particle_state,

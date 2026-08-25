@@ -353,6 +353,8 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
         do_grad=True,
     ) is False
     assert sampling_state.healpix_order == 1
+    assert sampling_state.orientational_prior_mode == driver.RELION_ORIENTATIONAL_PRIOR_NOPRIOR
+    assert sampling_state.uniform_local_orientation_prior is False
     assert sampling_state.offset_range_angstrom == pytest.approx(12.75)
     assert sampling_state.offset_step_angstrom == pytest.approx(4.25)
 
@@ -363,6 +365,7 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
         do_grad=True,
     ) is True
     assert sampling_state.healpix_order == 2
+    assert sampling_state.orientational_prior_mode == driver.RELION_ORIENTATIONAL_PRIOR_NOPRIOR
     assert sampling_state.offset_range_angstrom == pytest.approx(8.2875)
     assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
     assert sampling_state.effective_offset_step_angstrom == pytest.approx(1.5)
@@ -375,6 +378,7 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
         do_grad=True,
     ) is True
     assert sampling_state.healpix_order == 3
+    assert sampling_state.orientational_prior_mode == driver.RELION_ORIENTATIONAL_PRIOR_NOPRIOR
     assert sampling_state.offset_range_angstrom == pytest.approx(10.77375)
     assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
 
@@ -388,6 +392,49 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     assert sampling_state.healpix_order == 3
     assert sampling_state.offset_range_angstrom == pytest.approx(10.0)
     assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
+    assert sampling_state.orientational_prior_mode == driver.RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI
+    assert sampling_state.uniform_local_orientation_prior is True
+
+
+def test_uniform_local_orientation_prior_replaces_learned_direction_prior():
+    state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=200, n_directions=12)
+    state.pdf_direction = np.linspace(1.0, 12.0, 12, dtype=np.float64)[None, :]
+    sampling_state = driver.NativeSamplingState(
+        healpix_order=0,
+        adaptive_oversampling=1,
+        offset_range_angstrom=12.0,
+        offset_step_angstrom=4.0,
+        offset_range_ori_angstrom=12.0,
+        offset_step_ori_angstrom=4.0,
+        pixel_size=2.0,
+        orientational_prior_mode=driver.RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI,
+        uniform_local_orientation_prior=True,
+    )
+
+    prior = driver._class_rotation_log_prior_for_sampling(state, sampling_state, healpix_order=0)
+
+    assert prior.shape == (1, driver.sampling.rotation_grid_size(0))
+    np.testing.assert_array_equal(prior, np.zeros_like(prior))
+
+
+def test_noprior_sampling_uses_learned_direction_prior(monkeypatch):
+    expected = np.asarray([[0.0, 1.0]], dtype=np.float32)
+    state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=200, n_directions=12)
+    sampling_state = driver.NativeSamplingState(
+        healpix_order=0,
+        adaptive_oversampling=1,
+        offset_range_angstrom=12.0,
+        offset_step_angstrom=4.0,
+        offset_range_ori_angstrom=12.0,
+        offset_step_ori_angstrom=4.0,
+        pixel_size=2.0,
+    )
+
+    monkeypatch.setattr(driver, "_class_direction_rotation_log_prior", lambda _state, _order: expected)
+
+    prior = driver._class_rotation_log_prior_for_sampling(state, sampling_state, healpix_order=0)
+
+    assert prior is expected
 
 
 def test_active_relion_initialmodel_max_significants_matches_gradient_default():
