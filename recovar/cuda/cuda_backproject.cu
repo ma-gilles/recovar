@@ -4218,6 +4218,7 @@ __device__ __forceinline__ float2 relion_vdam_project_texture_f32(
             zp - static_cast<float>(tex_z_init) + 0.5f));
 }
 
+template <bool INLINE_PROJECTOR>
 __global__ void relion_vdam_mstep_fused_x_half_kernel(
     const float2* images,
     const float* ctf,
@@ -4254,14 +4255,19 @@ __global__ void relion_vdam_mstep_fused_x_half_kernel(
 {
     const int rotation = (int)blockIdx.x;
     if (rotation >= rotation_count) return;
-    /* Stock RELION's compute_80 SGD PTX reserves nine float32 Euler entries.
-     * Preserve that JIT input footprint even though this compact rotation
-     * representation reads only six entries. */
+    /* The inline specialization uses RELION's same nine Euler entries for
+     * projection and backprojection. The preprojected specialization keeps
+     * the established six-entry compact mapping in the same allocation. */
     __shared__ float R[9];
-    if (threadIdx.x < 6) R[threadIdx.x] = rot[rotation * 6 + threadIdx.x];
-    __shared__ float E[9];
-    if (projector_eulers != nullptr && threadIdx.x < 9)
-        E[threadIdx.x] = projector_eulers[rotation * 9 + threadIdx.x];
+    if constexpr (INLINE_PROJECTOR)
+    {
+        if (threadIdx.x < 9)
+            R[threadIdx.x] = projector_eulers[rotation * 9 + threadIdx.x];
+    }
+    else if (threadIdx.x < 6)
+    {
+        R[threadIdx.x] = rot[rotation * 6 + threadIdx.x];
+    }
     __syncthreads();
 
     for (int pixel = (int)threadIdx.x; pixel < pixel_count; pixel += 128)
@@ -4272,19 +4278,25 @@ __global__ void relion_vdam_mstep_fused_x_half_kernel(
         const float image_ctf = ctf[pixel];
         const float image_minvsigma2 = minvsigma2[pixel];
         const float2 image_value = images[pixel];
-        const float2 reference_value = projector_eulers == nullptr
-            ? reference[rotation * pixel_count + pixel]
-            : relion_vdam_project_texture_f32(
+        float2 reference_value;
+        if constexpr (INLINE_PROJECTOR)
+        {
+            reference_value = relion_vdam_project_texture_f32(
                 projector_tex_real,
                 projector_tex_imag,
                 x,
                 y,
-                E,
+                R,
                 projector_padding_factor,
                 projector_max_r2_padded,
                 projector_tex_y_init,
                 projector_tex_z_init,
                 projector_scale);
+        }
+        else
+        {
+            reference_value = reference[rotation * pixel_count + pixel];
+        }
         const float reference_real = reference_value.x * image_ctf;
         const float reference_imag = reference_value.y * image_ctf;
         float data_real = 0.0f;
@@ -4312,9 +4324,21 @@ __global__ void relion_vdam_mstep_fused_x_half_kernel(
 
         const float y_unscaled = (float)y;
         const float x_unscaled = (float)x;
-        float rk0 = (R[3] * x_unscaled + R[0] * y_unscaled) * (float)upsampling;
-        float rk1 = (R[4] * x_unscaled + R[1] * y_unscaled) * (float)upsampling;
-        float rk2 = (R[5] * x_unscaled + R[2] * y_unscaled) * (float)upsampling;
+        float rk0;
+        float rk1;
+        float rk2;
+        if constexpr (INLINE_PROJECTOR)
+        {
+            rk0 = (R[6] * x_unscaled + R[7] * y_unscaled) * (float)upsampling;
+            rk1 = (R[3] * x_unscaled + R[4] * y_unscaled) * (float)upsampling;
+            rk2 = (R[0] * x_unscaled + R[1] * y_unscaled) * (float)upsampling;
+        }
+        else
+        {
+            rk0 = (R[3] * x_unscaled + R[0] * y_unscaled) * (float)upsampling;
+            rk1 = (R[4] * x_unscaled + R[1] * y_unscaled) * (float)upsampling;
+            rk2 = (R[5] * x_unscaled + R[2] * y_unscaled) * (float)upsampling;
+        }
         if (max_r2 >= 0.0f && relion_radius_squared(rk0, rk1, rk2) > max_r2) continue;
         if (rk2 < 0.0f)
         {
@@ -4375,7 +4399,7 @@ cudaError_t launch_relion_vdam_mstep_fused_x_half(
     const int64_t denominator_stride = rotation_count * pixel_count;
     for (int64_t particle = 0; particle < n_particles; ++particle)
     {
-        relion_vdam_mstep_fused_x_half_kernel<<<rotation_count, 128, 0, stream>>>(
+        relion_vdam_mstep_fused_x_half_kernel<false><<<rotation_count, 128, 0, stream>>>(
             images + particle * image_stride,
             ctf + particle * image_stride,
             minvsigma2 + particle * image_stride,
@@ -4555,7 +4579,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         const int64_t denominator_stride = rotation_count * pixel_count;
         for (int64_t particle = 0; particle < n_particles; ++particle)
         {
-            relion_vdam_mstep_fused_x_half_kernel<<<rotation_count, 128, 0, stream>>>(
+            relion_vdam_mstep_fused_x_half_kernel<true><<<rotation_count, 128, 0, stream>>>(
                 images + particle * image_stride,
                 ctf + particle * image_stride,
                 minvsigma2 + particle * image_stride,

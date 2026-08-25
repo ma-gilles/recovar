@@ -78,7 +78,10 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     fused_kernel = source.split(
         "__global__ void relion_vdam_mstep_fused_x_half_kernel(", 1
     )[1].split("cudaError_t launch_relion_vdam_mstep_fused_x_half", 1)[0]
+    assert "template <bool INLINE_PROJECTOR>" in source
     assert "__shared__ float R[9];" in fused_kernel
+    assert "__shared__ float E" not in fused_kernel
+    assert "rk0 = (R[6] * x_unscaled + R[7] * y_unscaled)" in fused_kernel
 
     wrapper = inspect.getsource(cuda_backproject.relion_vdam_mstep_fused_x_half)
     assert "data_real_volume = jnp.asarray(data_volume.real" in wrapper
