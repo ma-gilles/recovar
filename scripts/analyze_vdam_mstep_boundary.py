@@ -66,6 +66,18 @@ _STAGES = (
     ("post_first_moment_half0", "pipe_it1_c0_Igrad1_post.bin", "m1_h0_post.npy", True),
     ("post_first_moment_half1", "pipe_it1_c0_Igrad1_h_post.bin", "m1_h1_post.npy", True),
     ("post_second_moment", "pipe_it1_c0_Igrad2_post.bin", "m2_post.npy", True),
+    (
+        "post_apply_momenta_data",
+        "pipe_it1_c0_bp_data_post_applymomenta.bin",
+        "post_apply_data.npy",
+        True,
+    ),
+    (
+        "mom1_noise_power",
+        "pipe_it1_c0_mom1_noise_power.bin",
+        "mom1_noise_power.npy",
+        False,
+    ),
     ("reference_before_reconstruct", "mstep_it1_c0_iref_before.bin", "iref_relion_in.npy", False),
     ("reference_after_reconstruct", "mstep_it1_c0_iref_after.bin", "iref_out_relion_frame.npy", False),
 )
