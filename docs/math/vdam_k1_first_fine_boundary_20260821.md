@@ -1846,3 +1846,14 @@ Each repeat runs stock RELION and RECOVAR on the same physical GPU, audits all
 requires every candidate run to match a native mode and every native run to
 have a candidate mode.  The remaining 21 outlier/noise/pose/scale cases stay
 held until this default envelope passes.  No generic RECOVAR suite ran.
+
+Paired-panel attempt `12936969` stopped before science in three seconds.  Its
+GPU/CUDA/provenance preflight passed, but the clean-environment launcher ran a
+repository script by file path after unsetting `PYTHONPATH`, so the child
+could not import `recovar`.  Experimental commit `ef0d5bce8` switches that
+boundary to `python -m scripts.run_vdam_relion_parity_case`; a focused import
+contract test and shell syntax check pass.  The corrected fresh-root panel is
+running as Slurm `12937169` at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gui_default_repeat_panel_ef0d5bce_retry_20260825`;
+it passed the GPU/CUDA/provenance preflight.  No science output from the failed
+attempt is reused, and no generic RECOVAR suite ran.
