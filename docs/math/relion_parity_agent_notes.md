@@ -12453,3 +12453,87 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
     RELION CPU/double dump comparison of the raw per-shell accumulators
     (`wsum_model.sigma2_noise`/`sumw_group` before the final divide) rather
     than more recovar-side dtype changes.
+
+## 2026-08-25 ET — the two >1° pose mismatches at `--iter 0` are ordinary
+## pass-2 GPU arithmetic-parity near-ties, not a coarse (pass-1) or
+## implementational gap
+
+- Same `--iter 0 --max_iter 1` fixture as above. `pose_comparison_iter000.npz`
+  (`n=1000`) has exactly 2 particles with `angular_error_deg > 1°`: original
+  star rows 441 (4.96°, both half-2) and 585 (3.75°, half-2) — matching the
+  `full_angle_°`/`view_dir_°`/`in_plane_°` `max` values in the user's pose
+  refinement summary (mean/median/p90/p95/p99 are all ≈0, i.e. every other
+  particle matches to sub-degree precision).
+- **Traced the real coarse (pass-1) scoring path.** Both particles were
+  presumed to hit `compute_pass2_stats_sparse_bucketed`'s generic
+  adaptive-fraction significance pruning; they don't. `--iter 0` uses
+  RELION's GUI-default `--firstiter_cc` (`run_dense_k_class_em_adaptive`'s
+  `firstiter_cc_pass2_only_best_coarse=True` branch, `k_class.py:3060`),
+  which routes coarse scoring through
+  `_run_dense_k_class_joint_firstiter_score_probe` instead — a hard,
+  winner-take-all hard argmax over normalized-CC scores
+  (`_compute_k_class_significance_batched(..., score_mode="normalized_cc",
+  max_significants=1)`), confirmed by both particles' `sig_counts=1` in
+  `refinement_results.npz`.
+- **New diagnostic tooling** (both env-gated, off by default, unit-tested in
+  `tests/unit/test_pass1_pass2_top2_debug.py`):
+  - `k_class._log_pass1_top2_debug` /
+    `RECOVAR_PASS1_TOP2_DEBUG_INDICES=<within-half image indices>`: logs the
+    pass-1 coarse winner-take-all top-2 candidate CC score margin (using the
+    `offset_free` scores — the `absolute` ones lose exactly this margin to a
+    float32 cast after a large common offset add, per `significance.py`'s
+    own comment) and pose ids, optionally dumping the winner/runner-up
+    rotation matrices via `RECOVAR_PASS1_TOP2_DEBUG_DUMP_PATH`.
+  - `sparse_pass2_bucketed._log_pass2_top2_debug` /
+    `RECOVAR_PASS2_TOP2_DEBUG_INDICES=<original dataset image indices>`:
+    same idea for pass-2's fine/oversampled per-particle candidate scores
+    (`(B, R, T)` normalized-CC array), decoding the flat winner/runner-up
+    ids into `(rot, trans)`.
+- **Pass-1 (coarse) result: recovar picked the *correct* coarse cell for
+  both particles**, with a clean, well-resolved top-2 margin — not a
+  near-tie:
+
+  | | particle 441 | particle 585 |
+  |---|---|---|
+  | pass-1 top-2 CC margin | 0.00285 (0.5197 vs 0.5169) | 0.00215 (0.5982 vs 0.5960) |
+  | angle(RELION final, recovar's pass-1 winner) | **2.48°** | **3.51°** |
+  | angle(RELION final, recovar's pass-1 runner-up) | 10.73° | 5.82° |
+  | angle(recovar final, recovar's pass-1 winner) | 2.48° | 3.25° |
+
+  (Angles computed via `_angular_error_deg_from_rotations`'s trace formula,
+  reusing `run_multi_iter_parity.py`'s already-validated
+  `utils.R_from_relion` frame conversion for RELION's reported eulers —
+  same frame `run_multi_iter_parity.py` uses for the headline
+  `angular_error_deg` metric.) RELION's true final pose sits only 2.5-3.5°
+  from recovar's own pass-1 coarse pick — 4-5x closer than to recovar's
+  runner-up, and about the same distance recovar's own final answer ends up
+  from that same coarse pick. Both systems converged on the *same* healpix
+  cell (order 3, ~7.5° pixels); the ~0.002-0.003 margin (~0.4-0.5%
+  relative, ~4 orders of magnitude above float32 rounding) reflects a
+  clean, correct decision, not a coin-flip.
+- **Pass-2 (fine) result: this is where the actual divergence happens, and
+  it is a genuine near-tie.** Top-2 margins among the fine/oversampled
+  children of that shared coarse cell:
+
+  | | particle 441 | particle 585 |
+  |---|---|---|
+  | pass-2 top-2 CC margin | **2.49e-05** (0.52413278 vs 0.52410786) | **2.99e-05** (0.60363556 vs 0.60360570) |
+
+  Two orders of magnitude smaller than the pass-1 margins, and below
+  `recovar/em/CLAUDE.md`'s "~1e-4 is normally arithmetic-level parity"
+  reference scale for RELION-accelerated-GPU score differences. Given the
+  normalized-CC score is a sum over thousands of Fourier pixels, accumulated
+  float32-scale rounding differences between recovar's and RELION's GPU
+  kernels landing at this magnitude is exactly the expected/accepted regime,
+  not a resolvable implementational gap.
+- **Conclusion:** both flagged wrong-argmax particles are explained end to
+  end: pass-1 correctly narrows to RELION's true coarse cell with a
+  well-separated margin; pass-2's fine search inside that cell then flips
+  on an ordinary sub-1e-4 GPU arithmetic-parity near-tie. No code change
+  indicated by this investigation — it closes the "is this a small or a big
+  gap" question the per-shell/pose-refinement summary table raised. The two
+  new debug hooks (`RECOVAR_PASS1_TOP2_DEBUG_INDICES`,
+  `RECOVAR_PASS2_TOP2_DEBUG_INDICES`) are left in place, matching this
+  file's established pattern of permanent, off-by-default diagnostic
+  instrumentation, for any future particle-level pose-mismatch
+  investigation.

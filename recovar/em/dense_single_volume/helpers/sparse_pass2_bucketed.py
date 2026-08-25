@@ -2848,6 +2848,61 @@ def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
+_PASS2_TOP2_DEBUG_INDICES_ENV = "RECOVAR_PASS2_TOP2_DEBUG_INDICES"
+
+
+def _pass2_top2_debug_target_indices() -> tuple[int, ...]:
+    """Diagnostic only: original-dataset image indices to log the fine (pass-2)
+    top-2 candidate score margin for, mirroring
+    ``k_class._pass1_top2_debug_target_indices`` but for the oversampled
+    fine-grid decision within pass-1's surviving coarse cell(s), where the
+    per-particle candidate set actually differs (children of that
+    particle's own coarse winner).
+    """
+
+    raw = os.environ.get(_PASS2_TOP2_DEBUG_INDICES_ENV, "").strip()
+    if not raw:
+        return ()
+    return tuple(int(token) for token in raw.split(",") if token.strip())
+
+
+def _log_pass2_top2_debug(scores, image_indices, targets: tuple[int, ...], *, dataset_tag=None) -> None:
+    image_indices_np = np.asarray(image_indices, dtype=np.int64).reshape(-1)
+    for target in targets:
+        rows = np.flatnonzero(image_indices_np == target)
+        if rows.size == 0:
+            continue
+        row = int(rows[0])
+        flat = np.asarray(scores[row], dtype=np.float64).reshape(-1)
+        finite = flat[np.isfinite(flat)]
+        if finite.size < 1:
+            logger.warning("PASS2_TOP2_DEBUG dataset=%s image_idx=%d: no finite fine candidates", dataset_tag, target)
+            continue
+        order = np.argsort(finite)
+        best = float(finite[order[-1]])
+        second = float(finite[order[-2]]) if finite.size >= 2 else float("-inf")
+        n_row_trans = int(np.asarray(scores).shape[-1])
+        best_flat_id = int(np.flatnonzero(flat == best)[0])
+        second_candidates = np.flatnonzero(flat == second) if finite.size >= 2 else np.array([], dtype=np.int64)
+        second_flat_id = int(second_candidates[0]) if second_candidates.size else -1
+        logger.warning(
+            "PASS2_TOP2_DEBUG dataset=%s image_idx=%d n_candidates=%d best_score=%.8f second_score=%.8f "
+            "margin=%.8g best_flat_id=%d(rot=%d,trans=%d) second_flat_id=%d(rot=%d,trans=%d)",
+            dataset_tag,
+            target,
+            finite.size,
+            best,
+            second,
+            best - second,
+            best_flat_id,
+            best_flat_id // n_row_trans,
+            best_flat_id % n_row_trans,
+            second_flat_id,
+            second_flat_id // n_row_trans if second_flat_id >= 0 else -1,
+            second_flat_id % n_row_trans if second_flat_id >= 0 else -1,
+        )
+
+
 def _pass2_dump_enabled() -> bool:
     return bool(os.environ.get(_PASS2_DUMP_DIR_ENV)) and not _env_flag_enabled(
         _NORM_RESIDUAL_DUMP_ONLY_ENV,
@@ -13141,6 +13196,11 @@ def compute_pass2_stats_sparse_bucketed(
             else:
                 scores = _score_pass2_bucket_normalized_cc(*score_args)
             preprior_scores = scores
+            _pass2_top2_targets = _pass2_top2_debug_target_indices()
+            if _pass2_top2_targets:
+                _log_pass2_top2_debug(
+                    scores, image_indices, _pass2_top2_targets, dataset_tag=id(experiment_dataset)
+                )
             if bucket_shadow_only_mode:
                 if relion_exact_fine_normalized_cc:
                     shadow_scores = _score_pass2_bucket_relion_gpu_normalized_cc(

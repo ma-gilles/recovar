@@ -86,6 +86,95 @@ def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+_PASS1_TOP2_DEBUG_INDICES_ENV = "RECOVAR_PASS1_TOP2_DEBUG_INDICES"
+_PASS1_TOP2_DEBUG_DUMP_PATH_ENV = "RECOVAR_PASS1_TOP2_DEBUG_DUMP_PATH"
+
+
+def _pass1_top2_debug_target_indices() -> tuple[int, ...]:
+    """Diagnostic only: within-half image indices to log pass-1 top-2 CC margins for.
+
+    Comma-separated 0-indexed positions into ``experiment_dataset`` (the
+    per-half dataset actually scored by
+    ``_compute_k_class_significance_batched``, not the original combined
+    star-file row). Used to inspect how close RELION's coarse-tree winner-
+    take-all CC scoring came to flipping between the top-2 candidates for a
+    specific particle, without changing production behavior.
+    """
+
+    raw = os.environ.get(_PASS1_TOP2_DEBUG_INDICES_ENV, "").strip()
+    if not raw:
+        return ()
+    return tuple(int(token) for token in raw.split(",") if token.strip())
+
+
+def _log_pass1_top2_debug(
+    full_coarse_stats: dict,
+    indices: tuple[int, ...],
+    *,
+    dataset_tag=None,
+    rotations=None,
+    n_translations: int | None = None,
+) -> None:
+    # Use the offset-free scores, not the absolute (offset-added) ones:
+    # significance.py's own docstring warns adding the large common
+    # normalization offset before the float32 cast can erase exactly the
+    # sub-percent margins this diagnostic exists to measure.
+    best_score_raw = full_coarse_stats.get("class_best_offset_free_log_score_per_image")
+    second_score_raw = full_coarse_stats.get("class_second_best_offset_free_log_score_per_image")
+    if best_score_raw is None or second_score_raw is None:
+        logger.warning(
+            "RECOVAR_PASS1_TOP2_DEBUG_INDICES set but class_best/second_best "
+            "log scores were not returned (K != 1?)"
+        )
+        return
+    best_score = np.asarray(best_score_raw)
+    second_score = np.asarray(second_score_raw)
+    best_assign = full_coarse_stats.get("class_hard_assignments")
+    second_assign = full_coarse_stats.get("class_second_hard_assignments")
+    if best_score.size == 0 or second_score.size == 0:
+        logger.warning(
+            "RECOVAR_PASS1_TOP2_DEBUG_INDICES set but class_best/second_best "
+            "log scores are empty"
+        )
+        return
+    for idx in indices:
+        if idx < 0 or idx >= best_score.shape[-1]:
+            logger.warning("RECOVAR_PASS1_TOP2_DEBUG_INDICES index %d out of range", idx)
+            continue
+        best = float(best_score[0, idx])
+        second = float(second_score[0, idx])
+        best_id = None if best_assign is None else int(np.asarray(best_assign)[0, idx])
+        second_id = None if second_assign is None else int(np.asarray(second_assign)[0, idx])
+        best_rot_matrix = second_rot_matrix = None
+        if rotations is not None and n_translations and best_id is not None and second_id is not None:
+            rotations_np = np.asarray(rotations)
+            best_rot_matrix = rotations_np[best_id // int(n_translations)]
+            second_rot_matrix = rotations_np[second_id // int(n_translations)]
+            dump_path = os.environ.get(_PASS1_TOP2_DEBUG_DUMP_PATH_ENV)
+            if dump_path:
+                np.savez(
+                    dump_path.format(dataset_tag=dataset_tag, idx=idx),
+                    best_rot_matrix=best_rot_matrix,
+                    second_rot_matrix=second_rot_matrix,
+                    best_pose_id=best_id,
+                    second_pose_id=second_id,
+                    n_translations=int(n_translations),
+                    best_score=best,
+                    second_score=second,
+                )
+        logger.warning(
+            "PASS1_TOP2_DEBUG dataset=%s idx=%d best_score=%.8f second_score=%.8f margin=%.8g "
+            "best_pose_id=%s second_pose_id=%s",
+            dataset_tag,
+            idx,
+            best,
+            second,
+            best - second,
+            best_id,
+            second_id,
+        )
+
+
 def _k_class_fused_relion_fine_mstep_prune_mode_override(*, relion_fine_mstep_prune: bool) -> str | None:
     """Default K-class sparse pass-2 to joint pruning, unless explicitly overridden."""
 
@@ -1592,11 +1681,28 @@ def _run_dense_k_class_joint_firstiter_score_probe(
             debug_iteration=engine_kwargs.get("debug_iteration"),
         ),
         return_class_best=True,
-        return_class_second=bool(os.environ.get("RECOVAR_GLOBAL_WINNER_SUMMARY_PATH", "").strip()),
+        return_class_second=(
+            bool(os.environ.get("RECOVAR_GLOBAL_WINNER_SUMMARY_PATH", "").strip())
+            or bool(_pass1_top2_debug_target_indices())
+        ),
         debug_iteration=engine_kwargs.get("debug_iteration"),
         coarse_healpix_order=engine_kwargs.get("coarse_healpix_order"),
         coarse_rotation_ids=engine_kwargs.get("coarse_rotation_ids"),
     )[-1]
+    _top2_debug_indices = _pass1_top2_debug_target_indices()
+    if _top2_debug_indices:
+        # This is the RELION firstiter_cc winner-take-all coarse probe (K=1
+        # global search, iteration 1) -- the actual pass-1 code path for
+        # that scenario, distinct from the generic adaptive-fraction
+        # significance pruning in run_dense_k_class_em_adaptive's non-CC
+        # branch.
+        _log_pass1_top2_debug(
+            full_stats,
+            _top2_debug_indices,
+            dataset_tag=id(experiment_dataset),
+            rotations=rotations,
+            n_translations=int(np.asarray(translations).shape[0]),
+        )
 
     from recovar.em.global_winner_summary import maybe_dump_global_winner_summary
 
@@ -3089,6 +3195,10 @@ def run_dense_k_class_em_adaptive(
             debug_iteration=debug_iteration,
             translation_phase_source=coarse_translation_phase_source,
         )
+        _top2_debug_indices = _pass1_top2_debug_target_indices()
+        if _top2_debug_indices:
+            sig_kwargs["return_class_best"] = True
+            sig_kwargs["return_class_second"] = True
 
         with nvtx.annotate("kclass.adaptive.significance", color="orange", domain=NVTX_DOMAIN_EM):
             (
@@ -3114,6 +3224,14 @@ def run_dense_k_class_em_adaptive(
             _full_coarse_stats["significant_cutoff_counts"],
             dtype=np.int32,
         )
+        if _top2_debug_indices:
+            _log_pass1_top2_debug(
+                _full_coarse_stats,
+                _top2_debug_indices,
+                dataset_tag=id(experiment_dataset),
+                rotations=coarse_rotations_np,
+                n_translations=int(np.asarray(coarse_translations_np).shape[0]),
+            )
     pass1_s = time.time() - pass1_t0
 
     def _with_significant_counts(result: KClassEMResult) -> KClassEMResult:
