@@ -1775,3 +1775,32 @@ approximately `4e-6` Pmax boundary so their incoming iteration-18 continuous
 states and fixed-particle scores can be compared directly.  The 200-iteration
 gate and 22-case matrix remain held pending this classification; no generic
 RECOVAR full or long test suite is being run.
+
+All six bounded captures completed successfully in 63--74 seconds.  Every map
+prefix passes with minimum FSC-AUC `0.9999999999168`--`0.9999999999190`.
+Repeat 1 independently reproduces the one-particle iteration-19 split, while
+repeats 2--6 have no discrete particle differences through iteration 19.  The
+panel therefore contains both sides of the boundary under identical code,
+input, H100 class, and diagnostics.
+
+The captured cause is an exact float32 fine-posterior tie, not different
+candidate support.  All six runs retain the same 48 local rotations, 116
+translations, and 185 reconstruction samples.  In repeat 1, global rotations
+7585 and 8642 both serialize at probability `0.0630029514432`, so the earlier
+local flat index 635 wins.  In the five matching repeats, rotation 8642 wins
+by only `1.92e-6`--`5.77e-6` probability.  Bad-versus-good coarse raw-score
+RMS is `7.70e-5`, but an independent good-versus-good pair is slightly larger
+at `8.64e-5`.  Likewise, all iteration-18 candidate maps differ from one
+matching repeat by `1.68e-6`--`2.04e-6` relative L2; the divergent repeat is
+not an outlier at `1.88e-6`.  This rejects a new deterministic scoring or
+support formula defect at iteration 19 and localizes the branch to the
+already-measured CUDA atomic repeat envelope.
+
+Experimental commit `2558d79f9` adds an observer-free mode to the existing
+stock-RELION continuation repeat panel; its focused contract test and shell
+syntax check pass, and it remains unpushed.  Twelve same-GPU RELION
+continuations from the exact sealed iteration-18 optimiser are running as
+H100 Slurm `12936211`, with all capture observers disabled.  This directly
+tests whether stock RELION itself preserves or flips the same iteration-19
+near-tie from a fixed incoming state before choosing the acceptance rule for
+long trajectories.  No generic RECOVAR suite ran.
