@@ -1908,3 +1908,13 @@ previous RECOVAR alternate step exactly.  At iteration 200 native ranges span
 Schedule equality must therefore be assessed as native-mode coverage after
 the repeat floor, not equality to one oracle schedule.  No generic RECOVAR
 suite ran.
+
+Because Slurm denied a non-disruptive extension of paired job `12937169`'s
+four-hour limit, experimental commit `bd1327fa6` adds a restart-safe CPU-only
+ensemble summary.  It validates all four trajectory/provenance/GPU reports,
+reuses a completed summary if present, or runs the same full 4-by-4
+all-checkpoint audit if the parent science job reaches its time limit during
+the expensive final pairwise FSC stage.  Its focused contract test and shell
+syntax check pass.  Dependent CPU Slurm `12938147` is queued `afterany` on the
+paired panel, so completed GPU science cannot be lost or repeated merely to
+finish analysis.  No generic RECOVAR suite ran.
