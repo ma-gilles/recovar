@@ -77,17 +77,46 @@ iteration-1 M-step is not: fresh-repeat raw accumulator relative-L2 remains
 about `8.91e-6`/`1.00e-5` for data and `2.04e-6`/`2.49e-6` for weights.  The
 accepted-posterior iteration-2 discriminator `12911356` completed `0:0` in
 63 seconds against the identical frozen native data/component capture used by
-the earlier control.  Exact float32 posterior production reduces the
-shell-15 support-mass signed error from `+2.21958e-5` to `+8.22904e-7`
-(`96.3%`), but it leaves the causal raw-noise error effectively unchanged:
+the earlier control.  It leaves the causal raw-noise error effectively unchanged:
 `+1.60060e-5` becomes `+1.59974e-5` (only `0.054%` smaller).  The AA and XA
-signed errors remain `-3.87171e-6` and `-9.98757e-6`.  This confirms that the
-remaining iteration-2 cutoff/noise failure is propagated iteration-1
-reference/BPref arithmetic rather than posterior normalization.  The next
-causal gate returns to that production accumulator/reference boundary; one
+signed errors remain `-3.87171e-6` and `-9.98757e-6`.  Its initially reported
+support-mass improvement was later superseded because that diagnostic mixed
+the generic posterior with the production mask; corrected job `12912049`
+measures the native-dtype reconstruction tensor and gives `+2.28470e-5`.
+Together with the direct operand decomposition, the unchanged AA/XA boundary
+confirms that the remaining iteration-2 cutoff/noise failure is propagated
+iteration-1 reference/BPref arithmetic rather than the accepted iteration-1
+posterior correction.  The next causal gate returns to that production
+accumulator/reference boundary; one
 representative 0..200 trajectory follows only after a bounded discriminator
 materially closes it, before promotion to the full 22-cell trajectory matrix.
 No generic RECOVAR suite is part of this gate.
+
+The source-faithful fused residual/scatter arm was then rebased onto the exact
+posterior head in an isolated worktree (`a1c05c69f`).  Build/provenance job
+`12911670` completed `0:0`, and focused H100 job `12911766` passed all five
+selected source-order, scatter-boundary, routing, and posterior-interaction
+tests.  Matched M-step job `12911801` rejects the combination.  Against the
+same native accumulator capture, the fused and ordinary exact-posterior
+accumulators are effectively indistinguishable: half-1 data relative-L2 is
+`9.24987e-6` versus `9.24949e-6`, and weight is `2.30800e-6` versus
+`2.30983e-6`.  The fused reconstructed reference is worse (`2.51023e-6`
+versus `2.22717e-6`).  Frozen-native cutoff reruns `12912049` and `12912050`
+likewise reduce the shell-15 raw-noise signed error by only `1.75107e-7`, from
+`+1.60217e-5` to `+1.58466e-5` (`1.09%`).  This is not material closure, so
+the fused arm is rejected without a 200-iteration trajectory and remains
+unpushed.
+
+Those reruns also corrected an observational gap in the cutoff harness.  The
+score dump previously stored only the generic float64 posterior plus the
+production reconstruction mask, so its reported support mass did not measure
+the float32 M-step tensor.  Commit `0065204d2` records
+`reconstruction_probs` at native dtype and makes the analyzer prefer it.
+Focused Slurm job `12911970` passes 4/4 tests; Ruff on the touched files,
+py_compile, and diff checks pass.  Direct AA/XA/noise terms were already
+production values and are unchanged by this diagnostic correction.  The next
+bounded discriminator compares RELION's one-thread/one-stream accumulator to
+the candidate before attempting any CUDA multistream emulation.
 
 Source statement order alone is now rejected as sufficient.  Isolated commit
 `99681a33b` completed all 200 frozen `vdam-gf01` iterations (Slurm
