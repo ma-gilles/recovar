@@ -22,6 +22,7 @@ set -euo pipefail
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 STOP_ITERATION=${STOP_ITERATION:-92}
+STOP_TAG=$(printf '%03d' "${STOP_ITERATION}")
 CUDA_BINARY=${REPO_ROOT}/recovar/cuda/libcuda_backproject.so
 DATA_DIR=${BASELINE_ROOT}/data
 RELION_DIR=${BASELINE_ROOT}/relion
@@ -31,7 +32,7 @@ PROVENANCE_DIR=${OUTPUT_ROOT}/provenance
 
 test -f "${OUTPUT_ROOT}/SAFE_TO_DELETE"
 test -s "${DATA_DIR}/particles.star"
-test -s "${RELION_DIR}/run_it${STOP_ITERATION}_model.star"
+test -s "${RELION_DIR}/run_it${STOP_TAG}_model.star"
 test -x "${PIXI_PY}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
