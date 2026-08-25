@@ -1443,8 +1443,12 @@ is
 (SHA-256
 `937f5f3844ad2ae44463db65a28d5c59c433e6fd0b5acd387d5383ced2caa0df`).
 
-Targeted H100 Slurm `12929306` is the production gate.  It runs only RECOVAR
-through iteration 92, reuses the existing native trajectory and compilation
-cache, and audits maps plus particle states across iterations 69--92.  The 21
+Targeted H100 Slurm `12929393`, at experimental runner head `c7581d0fd`, is the
+production gate.  It runs only RECOVAR through iteration 92, reuses the
+existing native trajectory and compilation cache, and audits maps plus
+particle states across iterations 69--92.  Preflights `12929306` and `12929363`
+failed in two seconds before computation because of, respectively, an
+incorrectly expanded commit SHA and an unpadded iteration filename in the new
+runner; both are infrastructure-only failures with no science output.  The 21
 remaining 200-iteration robustness cases stay held until this transition gate
 passes.
