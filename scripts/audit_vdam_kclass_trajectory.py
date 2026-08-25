@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit K-class InitialModel trajectories with permutation-invariant FSC gates."""
+"""Audit InitialModel trajectories with permutation-invariant FSC gates."""
 
 from __future__ import annotations
 
@@ -125,8 +125,8 @@ def audit_trajectory(
     minimum_fsc_auc: float,
     minimum_assignment_accuracy: float,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
-    if K < 2:
-        raise ValueError("K-class audit requires K >= 2")
+    if K < 1:
+        raise ValueError("trajectory audit requires K >= 1")
     if not checkpoints or tuple(sorted(set(checkpoints))) != checkpoints:
         raise ValueError("checkpoints must be sorted and unique")
 

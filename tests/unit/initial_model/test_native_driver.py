@@ -886,6 +886,7 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
     captured = {}
 
     def fake_expected_accuracy(*args):
+        captured["refs_relion"] = np.asarray(args[0]).copy()
         captured["sigma2_fudge"] = args[17]
         return {
             "acc_rot": 1.823,
@@ -909,6 +910,7 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
         n_directions=1,
     )
     state.Iref[:] = 1.0
+    state.Iref.reshape(-1)[0] = 1.0 + 2.0**-30
     state.tau2_fudge_factor = 3.995253
     best_rotations = driver.sampling._relion_euler_angles_to_matrix(
         np.asarray([[10.0, 30.0, 20.0], [40.0, 60.0, 50.0]])
@@ -947,6 +949,19 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
     assert captured["sigma2_fudge"] == pytest.approx(1.0)
     assert captured["sigma2_fudge"] != pytest.approx(state.tau2_fudge_factor)
     assert meta["estimated_acc_sigma2_fudge"] == pytest.approx(1.0)
+    expected_refs = np.stack(
+        [
+            np.asarray(driver.recovar_volume_to_relion(ref), dtype=np.float32).astype(np.float64)
+            for ref in state.Iref
+        ]
+    )
+    np.testing.assert_array_equal(captured["refs_relion"], expected_refs)
+    assert not np.array_equal(
+        captured["refs_relion"],
+        np.stack(
+            [np.asarray(driver.recovar_volume_to_relion(ref), dtype=np.float64) for ref in state.Iref]
+        ),
+    )
 
 
 def test_native_expectation_step_records_sampling_changes_each_gradient_iteration(monkeypatch):

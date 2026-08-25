@@ -43,6 +43,11 @@ def main() -> None:
     parser.add_argument("--input-star", type=Path, required=True)
     parser.add_argument("--previous-prefix", type=Path, required=True)
     parser.add_argument("--target-prefix", type=Path, required=True)
+    parser.add_argument(
+        "--candidate-meta",
+        type=Path,
+        help="optional live iteration metadata to compare with the serialized replay",
+    )
     parser.add_argument("--random-seed", type=int, default=0)
     parser.add_argument("--padding-factor", type=int, default=1)
     parser.add_argument("--sigma2-fudge", type=float, default=1.0)
@@ -119,7 +124,23 @@ def main() -> None:
         "native_acc_trans_angstrom": native_acc_trans,
         "acc_rot_error": float(out["acc_rot"]) - native_acc_rot,
         "acc_trans_error_angstrom": float(out["acc_trans"]) - native_acc_trans,
+        "replay_source": "serialized_previous_iteration_artifacts",
     }
+    if args.candidate_meta is not None:
+        candidate_meta = json.loads(args.candidate_meta.read_text())
+        observed_rot = float(candidate_meta["estimated_acc_rot"])
+        observed_trans = float(candidate_meta["estimated_acc_trans_angstrom"])
+        payload.update(
+            candidate_meta=str(args.candidate_meta),
+            observed_acc_rot=observed_rot,
+            observed_acc_trans_angstrom=observed_trans,
+            observed_acc_rot_error=observed_rot - native_acc_rot,
+            observed_acc_trans_error_angstrom=observed_trans - native_acc_trans,
+            observed_minus_serialized_replay_acc_rot=observed_rot - float(out["acc_rot"]),
+            observed_minus_serialized_replay_acc_trans_angstrom=(
+                observed_trans - float(out["acc_trans"])
+            ),
+        )
     rendered = json.dumps(payload, indent=2, sort_keys=True)
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)

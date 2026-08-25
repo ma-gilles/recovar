@@ -94,6 +94,7 @@ printf '\n' >> "${PROVENANCE_DIR}/recovar_command.sh"
   --input-star "${DATA_DIR}/particles.star" \
   --previous-prefix "${RECOVAR_DIR}/run_it089" \
   --target-prefix "${RELION_DIR}/run_it090" \
+  --candidate-meta "${RECOVAR_DIR}/run_it090_recovar_meta.json" \
   --output "${ANALYSIS_DIR}/expected_accuracy_it090.json"
 
 map_args=()

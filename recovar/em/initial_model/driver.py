@@ -711,8 +711,20 @@ def _estimate_native_sampling_accuracy(
 
     from recovar.relion_bind import _relion_bind_core as bind
 
+    # Stock RELION builds the active reference/projector from RFLOAT values.
+    # InitialModel keeps Iref in float64 on the RECOVAR side, so cross the
+    # native float32 boundary explicitly before calling the double-argument
+    # replay binding.  Without this quantisation, the expected-accuracy binary
+    # search can choose a neighbouring translation step even when the written
+    # iteration map agrees with RELION to float32 precision.
     refs_relion = np.stack(
-        [np.asarray(recovar_volume_to_relion(ref), dtype=np.float64) for ref in np.asarray(state.Iref)],
+        [
+            np.asarray(recovar_volume_to_relion(ref), dtype=np.float32).astype(
+                np.float64,
+                copy=False,
+            )
+            for ref in np.asarray(state.Iref)
+        ],
         axis=0,
     )
     current_image_size = int(state.current_size if state.current_size > 0 else state.ori_size)
