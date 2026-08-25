@@ -2445,3 +2445,46 @@ map and particle audit statuses are both zero.  Same-H100 0--200 promotion
 binary above.  It will be compared against the formal four-repeat native
 envelope before any stress-matrix release.  No generic RECOVAR suite ran; the
 remaining 21 frozen cases remain held.
+
+The worker-8 0--200 formal-GPU trajectory is now complete.  Job `12956847`
+ran all 200 scientific iterations on physical GPU
+`GPU-235ec3bc-ca9f-1c0e-88eb-c8b37c5e0480` in `28:54.49`; its outer Slurm
+status is `1:0` only because the retained single-oracle audits fail.  Against
+the frozen repeat-1 RELION trajectory, all map checkpoints pass the unchanged
+`0.999` gate through iteration 128 and the first failure is iteration 129.
+FSC-AUC is `0.9999998501` at iteration 104, `0.9998592106` at 120, and
+`0.9936677537` at 200; the minimum across the trajectory is `0.9901038851`.
+The map, particle, sampling, and profile report SHA-256 values are
+`e40a49a6ccbcb90cabd07a829b07adc45c7f2d6fcfe837d803e317f082466745`,
+`f126f2921b14eab698d1a18b2411ccfeaf0341bb4b1088b6281baa3d4de6cfbd`,
+`714cbe007d975ba4d091323e3f72d79600c8552394a1251936e39e16002d85ea`,
+and `1a91de404c25064e25236f806b2e96f513c0deb8a547af15913cea97a3b2b763`.
+
+The single-oracle particle path is initially sparse and non-monotone rather
+than immediately unstable.  Exactly one hard winner differs at iterations 84,
+92, and 97, with exact hard state restored between those checkpoints.  The
+candidate again has zero hard differences at iteration 103, one translation
+winner at 104 and 105, and zero at 106.  Divergence then grows from one at 107
+to 36/3000 at iteration 120.  This is a large improvement over the prior
+candidate, but the late single-oracle trajectory is not closed.  Independent
+cross-GPU diagnostic `12956768` finishes its scientific step in `29:35.45`
+and enters a different late RELION mode; it is retained as robustness evidence
+and is not used for formal acceptance.  CPU job `12957075` is the preregistered
+map/state comparison against all four frozen native modes.
+
+The first iteration-104 native continuation changes the interpretation of the
+one-particle boundary.  Exact-formal-GPU job `12958359` restarts native RELION
+from the frozen repeat-1 iteration-103 optimiser, preserves perturbation
+`0.158883`, and captures internal particle 344 / source row 1307 / stack image
+1308.  Native RELION itself selects the alternate translation seen in the
+worker-8 candidate.  Replay Pmax is `0.471658` versus `0.470291` in the frozen
+full run, so the fail-closed harness correctly aborts before RECOVAR because
+the `5e-4` native-replay gate is exceeded.  The threshold is not weakened and
+the resulting verbose native score/posterior capture remains diagnostic-only.
+Sibling allocation `12958358` stops in four seconds on the wrong physical GPU.
+Candidate-only production fused-posterior capture `12958453` is running on the
+exact formal GPU; sibling `12958452` likewise stops before science on the wrong
+GPU.  This evidence shows that the iteration-104 winner is a native execution
+mode absent from the original four full repeats; it does not yet establish the
+first failure against an expanded native continuation envelope.  No generic
+RECOVAR tests ran, and the remaining 21 stress cases remain held.
