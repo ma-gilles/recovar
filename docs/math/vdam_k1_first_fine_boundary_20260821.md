@@ -2355,3 +2355,37 @@ At iteration 98 it compares raw BPref accumulators, post-apply data and noise
 momenta, and reference input/output formation.  Its focused harness validation
 is 4/4 tests plus Bash syntax, Ruff, and byte-compilation.  The remaining 21
 frozen stress trajectories stay held until the GUI-default K=1 gate closes.
+
+Full-schedule capture `12955511` completes both scientific arms through
+iteration 98 in `14:04`.  The Slurm wrapper reports `1:0` only because the
+post-run analyzer originally treated RELION's `(1, 1, 65)` MultidimArray shell
+header and RECOVAR's equivalent `(65,)` NumPy vector as incompatible.  Local
+unpushed runtime commit `d1b98e7b0` canonicalizes singleton-only shape
+differences and adds a regression test; the complete focused analyzer suite is
+`4/4`, with Ruff and byte-compilation also passing.  The already-complete
+trajectory artifacts are reused, so no GPU rerun is required.
+
+The iteration-98 result rejects the late M-step schedule as the causal source.
+RECOVAR computes `tau2_fudge=3.9997504916` and
+`grad_current_stepsize=0.5334314472`, which serialize exactly as RELION's
+`3.999751` and `0.533431`; effective step size is also `0.533430` in both
+captures.  The reconstruct input FSC spectrum is bitwise exact (`65/65`).
+However, the M-step is already receiving a divergent trajectory: incoming
+first-moment relative L2 is `0.9838199`/`1.0085798`, incoming second moment is
+`1.0275489`, and the reference before reconstruction is `0.2501801`.  Raw
+halfset accumulator relative L2 is `1.1917784`/`1.2561409`, post-apply data is
+`1.2497818`, moment-noise power is `0.0747206`, and the reconstructed reference
+is `0.2884436`.  Thus iteration 98 is a consequence boundary, not the first
+cause; the earliest proved causal boundary remains iteration 1, where incoming
+gradient state is bitwise exact and the first difference appears in raw BPref
+accumulation.
+
+As a secondary single-run diagnostic, shell 27 becomes populated at iteration
+76 and immediately differs: RECOVAR/native tau2 is `1.0969720` and DVP is
+`1.1018750`; the maximum through iteration 98 occurs at iteration 90
+(`1.2245999` tau2, `1.2185535` DVP), while sigma2 remains close.  At iteration
+98 the shell-27 ratios are `1.1539018` tau2, `1.1507121` DVP, and `1.0027706`
+sigma2.  This single captured run is not substituted for the formal
+four-repeat envelope; it reinforces that high-shell tau2/DVP amplifies an
+earlier expectation/accumulator difference.  No generic RECOVAR suite ran,
+and the 21 held stress trajectories remain gated.
