@@ -3745,6 +3745,26 @@ def run_local_em_exact(
                     ctf_probs,
                 ) = big_jit_result
                 summed = None
+                if bpref_contribution_capture_active:
+                    # The source-faithful production route deliberately avoids
+                    # materializing the large (particle, rotation, pixel)
+                    # numerator tensor.  Contribution capture is diagnostic and
+                    # needs those pre-scatter rows, so reproduce them only for
+                    # the selected capture bucket in RELION's native statement
+                    # order.  Recompute the denominator as well so both captured
+                    # operands come from the same reducer.
+                    from recovar import cuda_backproject
+
+                    summed, ctf_probs = cuda_backproject.relion_vdam_mstep_sums_f32(
+                        source_vdam_images,
+                        source_vdam_ctf,
+                        source_vdam_minvsigma2,
+                        source_vdam_posterior,
+                        relion_score_translation_angles,
+                        mstep_recon_window_indices,
+                        source_vdam_reference,
+                        image_shape,
+                    )
             elif return_big_jit_mstep_tensors:
                 (
                     Ft_y,

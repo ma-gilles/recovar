@@ -8059,6 +8059,13 @@ def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
     )
     assert "cuda_backproject.relion_vdam_mstep_fused_projector_x_half(" in accumulator_src
 
+    source_capture_block = engine_src[
+        engine_src.index("elif return_big_jit_mstep_tensors and return_source_vdam_operands:") :
+        engine_src.index("elif return_big_jit_mstep_tensors:", engine_src.index("elif return_big_jit_mstep_tensors and return_source_vdam_operands:"))
+    ]
+    assert "if bpref_contribution_capture_active:" in source_capture_block
+    assert "cuda_backproject.relion_vdam_mstep_sums_f32(" in source_capture_block
+
 
 def test_local_exact_relion_translation_requires_half_spectrum_scoring():
     with pytest.raises(
