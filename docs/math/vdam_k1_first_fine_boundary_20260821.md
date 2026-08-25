@@ -1182,3 +1182,64 @@ The next bounded gate must preserve physical particle order and one shared
 accumulator across RECOVAR's bucket/FFI boundaries, separating outer launch
 grouping from the now-rejected per-particle grid size.  No generic RECOVAR
 suite ran.
+
+## RELION pool-3 stream-topology discriminator
+
+Source inspection closes RELION's outer CUDA schedule.  With the GUI-default
+`--pool 3 --j 8`, `expectationSomeParticles` gives the three particles in one
+pool to one-particle OpenMP tasks.  Each worker owns a CUDA class stream and
+launches `runBackProjectKernel` into the `MlDeviceBundle`'s shared
+BackProjector.  The worker synchronizes its class stream after the particle;
+the OpenMP barrier then closes the three-particle pool.  RELION therefore has
+three potentially concurrent particle kernels, shared float32 atomics, and a
+barrier after each group of three.
+
+Isolated, unpushed commit `431083949` reproduces that schedule inside each
+candidate FFI call with three ordinary CUDA streams.  It also lets the
+fail-closed Slurm gates reuse a separately qualified Pixi environment, without
+changing VDAM defaults or science.  H100 build/test job `12922230` completed
+in 55 seconds with 1.74 GB peak RSS and all 15 focused CUDA translation/VDAM
+tests passing.  Preflight jobs `12922443` and `12922444` failed closed in two
+seconds because their expanded Git SHA was mistyped; they produced no science.
+
+The correctly pinned iteration-1 M-step job `12922464` completed in 51 seconds
+with 2.71 GB peak RSS.  Pool-3 streams improve raw accumulator relative L2 to
+`7.24985e-6`/`8.52167e-6` for data and
+`1.74336e-6`/`2.15094e-6` for weight.  The reconstructed-reference relative L2
+improves to `1.41860e-6`.  Independent native RELION M-step captures differ by
+`8.64718e-6`/`9.52974e-6` for data,
+`2.18868e-6`/`2.38532e-6` for weight, and `1.66747e-6` after reconstruction.
+The candidate aggregate and reconstructed map are therefore already inside
+the measured native aggregate repeat envelope; bitwise aggregate equality is
+not a valid stock-RELION target.
+
+The propagated-state gate is nevertheless negative.  Iteration-2 job
+`12922463` completed in 61 seconds with 3.22 GB peak RSS.  Its shell-15 direct
+residual error is `+1.5958762627e-5`, essentially unchanged from the accepted
+`+1.5975690968e-5`; `AA` and `XA` remain
+`-3.8717364616e-6` and `-9.9876405570e-6`.  By contrast, two native RELION
+iteration-2 captures differ by only `2.18058e-7` relative L2 in direct
+residual and retain identical hard poses/translations.  The structured
+candidate reference-projection error is therefore not explained by native
+aggregate nondeterminism.
+
+Pool-3 streams alone are rejected and receive no 200-iteration trajectory.
+The remaining source-topology mismatch is now more specific: RECOVAR executes
+pseudo-halfsets as two separate E-steps, while RELION processes the globally
+shuffled particle stream once and routes each particle to one of two shared
+BackProjectors by `part_id % 2`.  The next bounded gate must keep global
+particle/pool order while atomically routing into two halfset accumulators;
+only then can pool boundaries also remain continuous across bucket/FFI
+boundaries.  Reports:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_pool3_mstep_43108394_20260825/analysis/mstep_boundary.json`
+  (SHA-256
+  `6370a7041aa70daa8c1214ac6c2611331d43d5258663b15d683543ecc27cd7bc`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_pool3_mstep_43108394_20260825/analysis/native_repeat_cross_candidate.json`
+  (SHA-256
+  `cc631c1e22614aba7da7279188bfc5298c7dbd0fe783552d2edceacb2bff1728`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_pool3_it02_43108394_20260825/analysis/cutoff_particle_panel.json`
+  (SHA-256
+  `0da4e9f372cb44df3dc754a22ef1748c2f84dc7408019ec0e79de9d0f5b81be1`).
+
+No generic RECOVAR full or long test suite ran.
