@@ -1719,9 +1719,39 @@ Experimental commit `41a773cf1` encodes the gradient InitialModel local-prior
 transition as persistent sampling state and switches the E-step rotation prior
 to uniform at that boundary.  Six focused transition/prior/E-step plumbing
 tests pass, along with Ruff, py_compile, and diff checks.  The commit remains
-unpushed.  Three independent H100 iteration-92 gates are Slurm `12934827`,
-`12934828`, and `12934829`.  They must both remove the iteration-90 support
-split on accepted branches and expose the unresolved pre-transition
-repeatability rate; one passing repeat is insufficient.  The full
-200-iteration rerun and all 21 additional outlier/noise/pose/scale trajectories
-remain held, and no generic RECOVAR full or long suite ran.
+unpushed.
+
+Three independent H100 iteration-92 gates completed as Slurm `12934827`,
+`12934828`, and `12934829`.  The two runs that enter iteration 90 on the
+accepted state close the systematic transition failure:
+
+- `12934827` has zero divergent particles at iterations 89, 90, and 92;
+  minimum transition FSC-AUC is `0.999999908564`;
+- `12934829` has zero at iterations 89 and 90 and one near-tie particle at
+  iteration 92; minimum transition FSC-AUC is `0.999999987632`.
+
+Their respective map-report SHA-256 values are
+`0a54e65c5b14fc30872c0a8de14edb5901d65c2326c2eee7c0dfaf74f3ddf888`
+and
+`a3e94fe0e7820431aadc692f1508ec8acd9b79a6b4754fd956a135d05e43f252`;
+particle-report SHA-256 values are
+`9c764920b5f1b13368389b2789c58848dbf5ab207e4996a130d28ff0feb75dc6`
+and
+`4d9dddbfecacb759a3d0a07f953fb5ff4228da33d45792818d4774edb8f4261a`.
+This accepts the local-prior correction for its causal boundary.
+
+Repeat `12934828` independently reproduces the unresolved earlier branch:
+one particle first differs at iteration 19, five differ at iteration 20, and
+417 already differ at iteration 89.  Its minimum transition FSC-AUC is
+`0.740519727593`.  The first particle is
+`1037@particles.128.mrcs` (RECOVAR sorted row 43): at iteration 19 it differs
+by `7.527689` degrees and `1.5` Angstrom while Pmax differs by only `4e-6`.
+The post-hoc all-iteration particle report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_it092_prior_41a773cf_r2_20260825/analysis/pretransition_particles.json`
+(SHA-256
+`de6f4a2e96a2cf334ad576ec3c0ec233a9ed4afe59bf37ca0a074b92057df5e4`).
+The next bounded gate captures this particle's iteration-19 coarse/fine score
+boundary across repeated H100 runs, accepting only repeats whose first 18
+iterations remain exact.  The full 200-iteration rerun and all 21 additional
+outlier/noise/pose/scale trajectories remain held, and no generic RECOVAR full
+or long suite ran.
