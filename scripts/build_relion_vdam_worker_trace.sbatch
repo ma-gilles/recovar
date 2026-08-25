@@ -37,15 +37,16 @@ git -C "${RELION_SOURCE}" show --stat --oneline HEAD \
 git -C "${RELION_SOURCE}" diff HEAD^ -- src/ml_optimiser.cpp src/ml_optimiser.h \
     > "${PROVENANCE}/worker_trace.patch"
 
-cmake --fresh -S "${RELION_SOURCE}" -B "${BUILD}" \
+/usr/bin/cmake --fresh -S "${RELION_SOURCE}" -B "${BUILD}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER="$(command -v gcc)" \
     -DCMAKE_CXX_COMPILER="$(command -v g++)" \
     -DMPI_C_COMPILER="$(command -v mpicc)" \
     -DMPI_CXX_COMPILER="$(command -v mpicxx)" \
     -DCUDA=ON -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-12.6 \
-    -DCUDA_ARCH=80 -DGUI=OFF -DBUILD_TESTS=OFF
-cmake --build "${BUILD}" --target refine --parallel "${SLURM_CPUS_PER_TASK}"
+    -DCUDA_ARCH=80 -DGUI=OFF -DBUILD_TESTS=OFF \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+/usr/bin/cmake --build "${BUILD}" --target refine --parallel "${SLURM_CPUS_PER_TASK}"
 
 BINARY=${BUILD}/bin/relion_refine
 test -x "${BINARY}"
