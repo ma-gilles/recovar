@@ -1884,3 +1884,27 @@ measured native repeat floor; after that boundary it must compare the paired
 candidate/native ensembles and require nondegraded GT quality, native-scale
 repeat variability, schedule coverage, and runtime rather than oracle
 identity.  The paired panel remains active, and no generic RECOVAR suite ran.
+
+The fourth native audit completes the same classification.  Repeat 1 first
+crosses below FSC-AUC `0.999` at iteration 86, reaches `0.922091532234`, and
+ends at `0.985347414552`; all 1,000 visited iteration-200 particles differ.
+Map/particle report SHA-256 values for native repeats 1--4 are respectively:
+
+- `f8f24c39a9592a86362092f73cf743cd5f1dd693027e3314ef780776d8eb81da` /
+  `268ce7a521e8181ab59cfdd7679fb6c7b6e4afb367815e5ee87d4c9c12ed4101`;
+- `77f2dc765df449b4d7820010daa6ab67a65a5c661d13838a78eea45552cf87bc` /
+  `1047aa1ece4b44a448088149b42b158c557f1f077b901caebbd6fcdd7ffc65f7`;
+- `a7654846d4ce85390d6849d67db8235710eabbc702c800bae657b7f0253a47e8` /
+  `ec2ca4ea99d6c4fd1ad4b56361b7f01d6ec701928b9e502952c05a8e877f45f2`;
+- `44b8a794496c25e9027e6181f576dfb930cdebdc2eeceb909da5a076e59b2233` /
+  `9406b82186ff0f0c72e12f9d526e7276148f74f9f416afc6ee778c1f4902e3df`.
+
+The native schedule is itself mode-dependent while preserving HEALPix order
+3 and the perturbation stream.  At iteration 90 the sealed/native-repeat
+range-step pairs include `6.482290/2.5755`, `6.567306/2.569125`, and the
+iteration-19 alternate mode `5.961148/2.607375`; the latter matches the
+previous RECOVAR alternate step exactly.  At iteration 200 native ranges span
+`3.220735`--`4.109667` Angstrom and steps span `1.44075`--`1.581` Angstrom.
+Schedule equality must therefore be assessed as native-mode coverage after
+the repeat floor, not equality to one oracle schedule.  No generic RECOVAR
+suite ran.
