@@ -202,6 +202,7 @@ def analyze(
                 _current_size_from_rectangle_size,
                 _cutoff_sums,
                 _flat_complex,
+                _fine_reference_rectangle,
                 _scalar,
                 _translate_native_rectangle,
             )
@@ -241,6 +242,11 @@ def analyze(
                 == current_size // 2
             )
             cutoff = {}
+            native_capture_projection = _fine_reference_rectangle(
+                capture,
+                int(native["orientation_count"]),
+                rectangle_size,
+            )[:, rectangle.exact_positions]
             for label, projection in projections.items():
                 native_frame_projection = (
                     projection[rotation_map] * np.float32(-1.0 / n**2)
@@ -252,11 +258,26 @@ def analyze(
                     np.asarray(native["probabilities"], dtype=np.float32),
                     cutoff_mask,
                 )
+            captured_native_cutoff = _cutoff_sums(
+                native_capture_projection,
+                translated,
+                ctf,
+                np.asarray(native["probabilities"], dtype=np.float32),
+                cutoff_mask,
+            )
             cutoff_records.append(
                 {
                     "part_id": part_id,
                     "original_index": original_index,
                     "values": cutoff,
+                    "captured_native_values": captured_native_cutoff,
+                    "captured_native_projection_validation": _metric(
+                        native_capture_projection,
+                        (
+                            projections[reference_label][rotation_map]
+                            * np.float32(-1.0 / n**2)
+                        ).astype(np.complex64),
+                    ),
                     "effects": {
                         label: {
                             name: float(values[name] - cutoff[reference_label][name])
@@ -264,6 +285,13 @@ def analyze(
                         }
                         for label, values in cutoff.items()
                         if label != reference_label
+                    },
+                    "effects_vs_captured_native": {
+                        label: {
+                            name: float(values[name] - captured_native_cutoff[name])
+                            for name in ("xa", "aa")
+                        }
+                        for label, values in cutoff.items()
                     },
                 }
             )
@@ -295,6 +323,7 @@ def analyze(
             else float("inf")
         )
     cutoff_summary = None
+    cutoff_vs_captured_summary = None
     if cutoff_records:
         cutoff_summary = {}
         for label in maps:
@@ -319,6 +348,22 @@ def analyze(
                     if native_floor > 0.0
                     else float("inf")
                 )
+        cutoff_vs_captured_summary = {}
+        for label in maps:
+            cutoff_vs_captured_summary[label] = {}
+            for name in ("xa", "aa"):
+                effects = np.asarray(
+                    [
+                        row["effects_vs_captured_native"][label][name]
+                        for row in cutoff_records
+                    ],
+                    dtype=np.float64,
+                )
+                cutoff_vs_captured_summary[label][name] = {
+                    "signed_sum": float(np.sum(effects)),
+                    "mean_abs": float(np.mean(np.abs(effects))),
+                    "max_abs": float(np.max(np.abs(effects))),
+                }
     return {
         "schema": "recovar.vdam_reference_repeat_projection.v1",
         "identity": {
@@ -336,6 +381,7 @@ def analyze(
         "projection_pooled": pooled,
         "per_score_dump": projection_records,
         "cutoff_component_summary": cutoff_summary,
+        "cutoff_vs_captured_native_summary": cutoff_vs_captured_summary,
         "per_particle_cutoff_components": cutoff_records,
     }
 
@@ -373,6 +419,9 @@ def main() -> None:
             {
                 "projection_pooled": report["projection_pooled"],
                 "cutoff_component_summary": report["cutoff_component_summary"],
+                "cutoff_vs_captured_native_summary": report[
+                    "cutoff_vs_captured_native_summary"
+                ],
             },
             indent=2,
             sort_keys=True,
