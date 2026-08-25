@@ -468,7 +468,10 @@ def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
 
     expected_tokens = [
         "NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}",
+        "RELION_THREADS=${RELION_THREADS:-8}",
         '--iter "${NR_ITER_SCHEDULE}"',
+        '--cpus-per-task="${RELION_THREADS}"',
+        '--j "${RELION_THREADS}"',
         '--nr_iter "${NR_ITER_SCHEDULE}"',
         '--diagnostic_stop_after_iteration "${TARGET_ITERATION}"',
         'RECOVAR_DEBUG_DUMP_DIR=${NATIVE_MSTEP}',
@@ -481,6 +484,7 @@ def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
         "unset LD_LIBRARY_PATH",
         "unset MPI_ROOT CUDA_HOME",
         'test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"',
+        '"relion_threads":%d',
         "scripts.analyze_vdam_mstep_boundary",
         "BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}",
         'RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=1',

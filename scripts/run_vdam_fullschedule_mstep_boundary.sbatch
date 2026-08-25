@@ -24,6 +24,7 @@ set -euo pipefail
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 TARGET_ITERATION=${TARGET_ITERATION:-2}
 NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
+RELION_THREADS=${RELION_THREADS:-8}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-0}
 BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}
 BPREF_CONTRIBUTION_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE:-}
@@ -47,6 +48,8 @@ test -x "${VDAM_RELION_BINARY}"
 test -x "${PIXI_PY}"
 test "${TARGET_ITERATION}" -ge 1
 test "${TARGET_ITERATION}" -le "${NR_ITER_SCHEDULE}"
+test "${RELION_THREADS}" -ge 1
+test "${RELION_THREADS}" -le "${SLURM_CPUS_PER_TASK:-8}"
 if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
   test "${BPREF_CONTRIBUTION_HALF}" = 1 -o "${BPREF_CONTRIBUTION_HALF}" = 2
   test -n "${BPREF_CONTRIBUTION_CURRENT_SIZE}"
@@ -112,12 +115,12 @@ export RELION_ACC_DUMP_ITER=${TARGET_ITERATION}
 export RELION_ACC_DUMP_VERBOSE=0
 
 RELION_COMMAND=(
-  srun --ntasks=1 --cpus-per-task=8 --cpu-bind=none "${VDAM_RELION_BINARY}"
+  srun --ntasks=1 --cpus-per-task="${RELION_THREADS}" --cpu-bind=none "${VDAM_RELION_BINARY}"
   --o "${RELION_OUTPUT}/run" --iter "${NR_ITER_SCHEDULE}" --grad --denovo_3dref
   --grad_write_iter 1 --i particles.star --ctf --K 1 --sym C1
   --flatten_solvent --zero_mask --dont_combine_weights_via_disc --pool 3 --pad 1
   --particle_diameter 200 --oversampling 1 --healpix_order 1 --offset_range 6.0
-  --offset_step 2.0 --auto_sampling --tau2_fudge 4.0 --random_seed 0 --j 8 --gpu 0
+  --offset_step 2.0 --auto_sampling --tau2_fudge 4.0 --random_seed 0 --j "${RELION_THREADS}" --gpu 0
 )
 printf '%q ' "${RELION_COMMAND[@]}" > "${PROVENANCE}/relion_command.sh"
 printf '\n' >> "${PROVENANCE}/relion_command.sh"
@@ -287,8 +290,8 @@ sha256sum "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
   "${REPO_ROOT}/scripts/analyze_vdam_mstep_boundary.py" "${DATA_DIR}/particles.star" \
   "${CUDA_BINARY}" "${RELION_BIND_BINARY}" "${VDAM_RELION_BINARY}" \
   > "${PROVENANCE}/static_inputs.sha256"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"bpref_contribution_half":"%s","bpref_contribution_current_size":"%s"}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"bpref_contribution_half":"%s","bpref_contribution_current_size":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" \
-  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${BPREF_CONTRIBUTION_HALF}" \
+  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${BPREF_CONTRIBUTION_HALF}" \
   "${BPREF_CONTRIBUTION_CURRENT_SIZE}" > "${PROVENANCE}/run.json"
 touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
