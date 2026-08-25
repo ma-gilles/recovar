@@ -2472,19 +2472,23 @@ and enters a different late RELION mode; it is retained as robustness evidence
 and is not used for formal acceptance.  CPU job `12957075` is the preregistered
 map/state comparison against all four frozen native modes.
 
-The first iteration-104 native continuation changes the interpretation of the
-one-particle boundary.  Exact-formal-GPU job `12958359` restarts native RELION
+The first iteration-104 native continuation tests, but does not expand, the
+accepted one-particle boundary.  Exact-formal-GPU job `12958359` restarts native RELION
 from the frozen repeat-1 iteration-103 optimiser, preserves perturbation
 `0.158883`, and captures internal particle 344 / source row 1307 / stack image
-1308.  Native RELION itself selects the alternate translation seen in the
-worker-8 candidate.  Replay Pmax is `0.471658` versus `0.470291` in the frozen
-full run, so the fail-closed harness correctly aborts before RECOVAR because
-the `5e-4` native-replay gate is exceeded.  The threshold is not weakened and
-the resulting verbose native score/posterior capture remains diagnostic-only.
+1308.  The continued process selects the alternate translation seen in the
+worker-8 candidate, but replay Pmax is `0.471658` versus `0.470291` in the
+frozen uninterrupted run.  The fail-closed harness therefore correctly aborts
+before RECOVAR because the `5e-4` native-replay gate is exceeded.  Because
+`--continue` reloads the serialized iteration-103 reference while the sealed
+0--200 process carries its reference in memory, this near-tie flip may be a
+continuation/serialization artifact and is not an accepted live native mode.
+The threshold is not weakened and the resulting verbose native score/posterior
+capture remains diagnostic-only.
 Sibling allocation `12958358` stops in four seconds on the wrong physical GPU.
 Candidate-only production fused-posterior capture `12958453` is running on the
 exact formal GPU; sibling `12958452` likewise stops before science on the wrong
-GPU.  This evidence shows that the iteration-104 winner is a native execution
-mode absent from the original four full repeats; it does not yet establish the
-first failure against an expanded native continuation envelope.  No generic
-RECOVAR tests ran, and the remaining 21 stress cases remain held.
+GPU.  The iteration-104 full-trajectory winner therefore remains an unresolved
+parity boundary unless an uninterrupted native repeat or an in-memory-exact
+boundary replay demonstrates the alternate mode.  No generic RECOVAR tests
+ran, and the remaining 21 stress cases remain held.
