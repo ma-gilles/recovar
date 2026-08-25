@@ -23,6 +23,12 @@ REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 STOP_ITERATION=${STOP_ITERATION:-92}
 STOP_TAG=$(printf '%03d' "${STOP_ITERATION}")
+AUDIT_MODE=${AUDIT_MODE:-transition}
+PROFILE_ITERATIONS=${PROFILE_ITERATIONS:-0}
+if [[ "${AUDIT_MODE}" != transition && "${AUDIT_MODE}" != full ]]; then
+  echo "AUDIT_MODE must be transition or full" >&2
+  exit 2
+fi
 CUDA_BINARY=${REPO_ROOT}/recovar/cuda/libcuda_backproject.so
 DATA_DIR=${BASELINE_ROOT}/data
 RELION_DIR=${BASELINE_ROOT}/relion
@@ -52,6 +58,9 @@ export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
 export RECOVAR_CUDA_LIB=${CUDA_BINARY}
 export RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR=${OUTPUT_ROOT}/accuracy_inputs
 export RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_ITERATIONS=90
+if [[ "${PROFILE_ITERATIONS}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
+  export RECOVAR_INITIAL_MODEL_PROFILE=1
+fi
 export JAX_COMPILATION_CACHE_DIR=${BASELINE_ROOT%/*}/jax_compilation_cache
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0.01
 export TMPDIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/tmp
@@ -63,6 +72,9 @@ mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CA
 git -C "${REPO_ROOT}" rev-parse HEAD > "${PROVENANCE_DIR}/repo_head.txt"
 sha256sum "${CUDA_BINARY}" "${DATA_DIR}/particles.star" > "${PROVENANCE_DIR}/input_sha256.txt"
 nvidia-smi -q > "${PROVENANCE_DIR}/nvidia_smi.txt"
+printf 'audit_mode=%s\nstop_iteration=%s\nprofile_iterations=%s\n' \
+  "${AUDIT_MODE}" "${STOP_ITERATION}" "${PROFILE_ITERATIONS}" \
+  > "${PROVENANCE_DIR}/run_mode.txt"
 
 COMMAND=(
   "${PIXI_PY}" -m scripts.run_ab_initio
@@ -92,6 +104,7 @@ printf '\n' >> "${PROVENANCE_DIR}/recovar_command.sh"
 
 /usr/bin/time -v srun --ntasks=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-8}" --cpu-bind=none \
   "${COMMAND[@]}" > "${RECOVAR_DIR}/runner.stdout" 2> "${RECOVAR_DIR}/runner.stderr"
+touch "${OUTPUT_ROOT}/SCIENCE_COMPLETED"
 
 "${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_expected_accuracy.py" \
   --input-star "${DATA_DIR}/particles.star" \
@@ -102,19 +115,53 @@ printf '\n' >> "${PROVENANCE_DIR}/recovar_command.sh"
   --output "${ANALYSIS_DIR}/expected_accuracy_it090.json"
 
 map_args=()
-for iteration in 69 70 79 80 85 86 87 88 89 90 91 92; do
-  map_args+=(--checkpoint "${iteration}")
-done
+particle_iterations=()
+if [[ "${AUDIT_MODE}" == full ]]; then
+  for ((iteration = 0; iteration <= STOP_ITERATION; iteration++)); do
+    map_args+=(--checkpoint "${iteration}")
+    particle_iterations+=("${iteration}")
+  done
+  map_report=${ANALYSIS_DIR}/full_trajectory_maps.json
+  shell_report=${ANALYSIS_DIR}/full_trajectory_shells.npz
+  particle_report=${ANALYSIS_DIR}/full_trajectory_particles.json
+else
+  for iteration in 69 70 79 80 85 86 87 88 89 90 91 92; do
+    map_args+=(--checkpoint "${iteration}")
+  done
+  particle_iterations=(82 83 84 85 86 87 88 89 90 91 92)
+  map_report=${ANALYSIS_DIR}/sampling_transition_maps.json
+  shell_report=${ANALYSIS_DIR}/sampling_transition_shells.npz
+  particle_report=${ANALYSIS_DIR}/sampling_transition_particles.json
+fi
+set +e
 "${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_kclass_trajectory.py" \
   --candidate-dir "${RECOVAR_DIR}" --reference-dir "${RELION_DIR}" --K 1 \
   "${map_args[@]}" --minimum-fsc-auc 0.999 --minimum-assignment-accuracy 0.999 \
-  --output-json "${ANALYSIS_DIR}/sampling_transition_maps.json" \
-  --output-shells-npz "${ANALYSIS_DIR}/sampling_transition_shells.npz"
+  --output-json "${map_report}" \
+  --output-shells-npz "${shell_report}"
+map_status=$?
 
 "${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_particle_state_trajectory.py" \
   --recovar-dir "${RECOVAR_DIR}" --relion-dir "${RELION_DIR}" \
-  --iterations 82 83 84 85 86 87 88 89 90 91 92 \
-  --output "${ANALYSIS_DIR}/sampling_transition_particles.json"
+  --iterations "${particle_iterations[@]}" \
+  --output "${particle_report}"
+particle_status=$?
+
+if [[ -n "${RECOVAR_INITIAL_MODEL_PROFILE:-}" ]]; then
+  "${PIXI_PY}" "${REPO_ROOT}/scripts/summarize_vdam_iteration_profiles.py" \
+    --recovar-dir "${RECOVAR_DIR}" \
+    --output "${ANALYSIS_DIR}/iteration_profile_summary.json"
+  profile_status=$?
+else
+  profile_status=0
+fi
+set -e
 
 sha256sum "${ANALYSIS_DIR}"/* > "${PROVENANCE_DIR}/analysis_sha256.txt"
+if (( map_status != 0 || particle_status != 0 || profile_status != 0 )); then
+  printf 'map_status=%s\nparticle_status=%s\nprofile_status=%s\n' \
+    "${map_status}" "${particle_status}" "${profile_status}" \
+    > "${OUTPUT_ROOT}/AUDIT_FAILED"
+  exit 1
+fi
 touch "${OUTPUT_ROOT}/COMPLETED"
