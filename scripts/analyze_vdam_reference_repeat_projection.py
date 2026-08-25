@@ -201,8 +201,8 @@ def analyze(
             from scripts.analyze_vdam_storewavg_reference_decomposition import (
                 _current_size_from_rectangle_size,
                 _cutoff_sums,
-                _flat_complex,
                 _fine_reference_rectangle,
+                _flat_complex,
                 _scalar,
                 _translate_native_rectangle,
             )
