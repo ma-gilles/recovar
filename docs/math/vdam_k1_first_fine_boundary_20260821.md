@@ -1857,3 +1857,30 @@ running as Slurm `12937169` at
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gui_default_repeat_panel_ef0d5bce_retry_20260825`;
 it passed the GPU/CUDA/provenance preflight.  No science output from the failed
 attempt is reused, and no generic RECOVAR suite ran.
+
+All four fresh native science trajectories complete 200 iterations in
+290--327 seconds.  Their original Slurm jobs exit 1 only because both post-run
+auditors were still invoked by file path under the clean environment; the
+201-map and 200-particle artifacts are complete and preserved.  Experimental
+commit `c69c636ca` applies module execution to those auditors, its focused
+contract test and shell syntax check pass, and the audits are running post hoc
+without repeating GPU science.
+
+Three completed all-checkpoint native audits already prove substantial stock
+RELION long-trajectory chaos relative to the sealed original:
+
+- repeat 2 first crosses below FSC-AUC `0.999` at iteration 86, reaches
+  `0.919961346983`, and ends at `0.982637886189`;
+- repeat 3 first crosses at iteration 118, reaches `0.953235762642`, and ends
+  at `0.992013386123`;
+- repeat 4, which takes the iteration-19 alternate pose, first crosses at
+  iteration 31, reaches `0.668868711092`, and ends at `0.850538616596`.
+
+Native iteration-200 hard-state divergence is respectively 1,000, 276, and
+1,000 of the 1,000 visited particles for those repeats.  Thus a single-native
+late exact-map/particle gate cannot have zero failures even when evaluating
+RELION against itself.  The acceptance contract remains exact before the
+measured native repeat floor; after that boundary it must compare the paired
+candidate/native ensembles and require nondegraded GT quality, native-scale
+repeat variability, schedule coverage, and runtime rather than oracle
+identity.  The paired panel remains active, and no generic RECOVAR suite ran.
