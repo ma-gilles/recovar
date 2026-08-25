@@ -30,6 +30,7 @@ def validate_worker_trace(
     *,
     iteration: int,
     n_particles: int,
+    dataset_particles: int,
     n_threads: int,
     pool_size: int,
 ) -> dict[str, np.ndarray | int | list[int]]:
@@ -46,8 +47,12 @@ def validate_worker_trace(
         raise ValueError("sorted positions are not an exact zero-based particle bijection")
 
     original_ids = selected[:, 5]
-    if not np.array_equal(np.sort(original_ids), expected_positions):
-        raise ValueError("original particle IDs are not an exact zero-based particle bijection")
+    if (
+        np.unique(original_ids).size != n_particles
+        or np.any(original_ids < 0)
+        or np.any(original_ids >= dataset_particles)
+    ):
+        raise ValueError("original particle IDs are not unique rows in the full dataset")
     owners = selected[:, 6]
     if np.any(owners < 0) or np.any(owners >= n_threads):
         raise ValueError(f"worker IDs must be in [0, {n_threads})")
@@ -75,6 +80,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--trace", required=True, type=Path)
     parser.add_argument("--iteration", required=True, type=int)
     parser.add_argument("--n-particles", required=True, type=int)
+    parser.add_argument("--dataset-particles", required=True, type=int)
     parser.add_argument("--n-threads", type=int, default=8)
     parser.add_argument("--pool-size", type=int, default=24)
     parser.add_argument("--output-npz", required=True, type=Path)
@@ -90,6 +96,7 @@ def main() -> None:
         rows,
         iteration=args.iteration,
         n_particles=args.n_particles,
+        dataset_particles=args.dataset_particles,
         n_threads=args.n_threads,
         pool_size=args.pool_size,
     )
@@ -104,6 +111,7 @@ def main() -> None:
         schema_version=np.int64(1),
         iteration=np.int64(args.iteration),
         n_particles=np.int64(args.n_particles),
+        dataset_particles=np.int64(args.dataset_particles),
         n_threads=np.int64(args.n_threads),
         pool_size=np.int64(args.pool_size),
         owner_by_sorted_position=schedule["owner_by_sorted_position"],
@@ -120,6 +128,7 @@ def main() -> None:
         "source_trace_sha256": trace_sha256,
         "iteration": schedule["iteration"],
         "n_particles": args.n_particles,
+        "dataset_particles": args.dataset_particles,
         "n_threads": args.n_threads,
         "pool_size": args.pool_size,
         "pool_count": schedule["pool_count"],

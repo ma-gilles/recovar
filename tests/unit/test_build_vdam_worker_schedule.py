@@ -31,6 +31,7 @@ def test_valid_worker_trace_is_sealed_by_sorted_position(tmp_path):
         load_worker_trace(trace),
         iteration=1,
         n_particles=30,
+        dataset_particles=100,
         n_threads=8,
         pool_size=24,
     )
@@ -56,7 +57,12 @@ def test_worker_trace_rejects_duplicate_sorted_position(tmp_path):
     rows[1, 4] = rows[0, 4]
     with pytest.raises(ValueError, match="sorted positions"):
         validate_worker_trace(
-            rows, iteration=1, n_particles=30, n_threads=8, pool_size=24
+            rows,
+            iteration=1,
+            n_particles=30,
+            dataset_particles=100,
+            n_threads=8,
+            pool_size=24,
         )
 
 
@@ -68,5 +74,10 @@ def test_worker_trace_rejects_invalid_topology(tmp_path, column, value, match):
     rows[0, column] = value
     with pytest.raises(ValueError, match=match):
         validate_worker_trace(
-            rows, iteration=1, n_particles=30, n_threads=8, pool_size=24
+            rows,
+            iteration=1,
+            n_particles=30,
+            dataset_particles=100,
+            n_threads=8,
+            pool_size=24,
         )
