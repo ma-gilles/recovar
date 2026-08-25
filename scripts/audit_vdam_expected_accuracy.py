@@ -1,0 +1,131 @@
+#!/usr/bin/env python
+"""Re-evaluate RELION's VDAM expected-accuracy boundary from saved artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import mrcfile
+import numpy as np
+import starfile
+
+from recovar.em.initial_model.driver import (
+    _micrograph_sort_order,
+    _native_optics_state,
+    read_star,
+)
+from recovar.data_io.cryoem_dataset import load_dataset
+from recovar.relion_bind import _relion_bind_core as bind
+
+
+def _column(table, name: str) -> np.ndarray:
+    for candidate in (name, name.removeprefix("_")):
+        if candidate in table.columns:
+            return np.asarray(table[candidate])
+    raise KeyError(f"missing STAR column {name}")
+
+
+def _scalar(table, name: str) -> float:
+    if isinstance(table, dict):
+        for candidate in (name, name.removeprefix("rln"), f"_{name}"):
+            if candidate in table:
+                return float(table[candidate])
+    for candidate in (name, name.removeprefix("rln"), f"_{name}"):
+        if hasattr(table, "columns") and candidate in table.columns:
+            return float(np.asarray(table[candidate]).reshape(-1)[0])
+    raise KeyError(f"missing STAR scalar {name}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input-star", type=Path, required=True)
+    parser.add_argument("--previous-prefix", type=Path, required=True)
+    parser.add_argument("--target-prefix", type=Path, required=True)
+    parser.add_argument("--random-seed", type=int, default=0)
+    parser.add_argument("--padding-factor", type=int, default=1)
+    parser.add_argument("--sigma2-fudge", type=float, default=1.0)
+    parser.add_argument("--max-trials", type=int, default=100)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+
+    input_particles, input_optics = read_star(args.input_star)
+    order = _micrograph_sort_order(input_particles)
+    trials = np.asarray(order[: min(args.max_trials, order.size)], dtype=np.int64)
+    dataset = load_dataset(str(args.input_star), lazy=True)
+    optics = _native_optics_state(input_particles, input_optics, dataset)
+
+    previous_data, _ = read_star(f"{args.previous_prefix}_data.star")
+    target_model = starfile.read(f"{args.target_prefix}_model.star", always_dict=True)
+    previous_model = starfile.read(f"{args.previous_prefix}_model.star", always_dict=True)
+    with mrcfile.open(f"{args.previous_prefix}_class001.mrc", permissive=True) as handle:
+        reference = np.asarray(handle.data, dtype=np.float64).copy()
+
+    eulers = np.column_stack(
+        [
+            _column(previous_data, "_rlnAngleRot")[: trials.size],
+            _column(previous_data, "_rlnAngleTilt")[: trials.size],
+            _column(previous_data, "_rlnAnglePsi")[: trials.size],
+        ]
+    ).astype(np.float64, copy=False)
+    class_ids = _column(previous_data, "_rlnClassNumber")[: trials.size].astype(np.int32) - 1
+    noise = np.asarray(
+        previous_model["model_optics_group_1"]["rlnSigma2Noise"], dtype=np.float64
+    )
+    general = target_model["model_general"]
+    current_size = int(_scalar(general, "rlnCurrentImageSize"))
+    tau2_fudge = _scalar(general, "rlnTau2FudgeFactor")
+
+    out = bind.vdam_expected_angular_errors(
+        np.ascontiguousarray(reference[None]),
+        np.ascontiguousarray(eulers),
+        np.ascontiguousarray(trials),
+        np.ascontiguousarray(class_ids),
+        np.asarray([1.0], dtype=np.float64),
+        np.ascontiguousarray(noise),
+        np.ascontiguousarray(optics.defU, dtype=np.float64),
+        np.ascontiguousarray(optics.defV, dtype=np.float64),
+        np.ascontiguousarray(optics.defAngle, dtype=np.float64),
+        np.ascontiguousarray(optics.phase_shift, dtype=np.float64),
+        float(optics.voltage),
+        float(optics.Cs),
+        float(optics.Q0),
+        float(optics.pixel_size),
+        int(reference.shape[0]),
+        current_size,
+        int(args.padding_factor),
+        1,
+        float(args.sigma2_fudge),
+        int(args.random_seed),
+        True,
+        False,
+        np.arange(trials.size, dtype=np.int64),
+    )
+    classes = target_model["model_classes"]
+    native_acc_rot = _scalar(classes, "rlnAccuracyRotations")
+    native_acc_trans = _scalar(classes, "rlnAccuracyTranslationsAngst")
+    payload = {
+        "input_star": str(args.input_star),
+        "previous_prefix": str(args.previous_prefix),
+        "target_prefix": str(args.target_prefix),
+        "trials": int(trials.size),
+        "current_size": current_size,
+        "tau2_fudge": tau2_fudge,
+        "sigma2_fudge": float(args.sigma2_fudge),
+        "computed_acc_rot": float(out["acc_rot"]),
+        "computed_acc_trans_angstrom": float(out["acc_trans"]),
+        "native_acc_rot": native_acc_rot,
+        "native_acc_trans_angstrom": native_acc_trans,
+        "acc_rot_error": float(out["acc_rot"]) - native_acc_rot,
+        "acc_trans_error_angstrom": float(out["acc_trans"]) - native_acc_trans,
+    }
+    rendered = json.dumps(payload, indent=2, sort_keys=True)
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered + "\n")
+    print(rendered)
+
+
+if __name__ == "__main__":
+    main()

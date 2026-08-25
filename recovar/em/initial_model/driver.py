@@ -37,6 +37,7 @@ from .iteration_loop import relion_solvent_flatten_state, relion_solvent_mask, r
 from .schedules import (
     DEFAULT_GRAD_EM_ITERS,
     DEFAULT_GRAD_MU,
+    DEFAULT_SIGMA2_FUDGE,
     GuiInitialModelDefaults,
     default_subset_sizes_for_3d_initial_model,
 )
@@ -691,6 +692,7 @@ def _estimate_native_sampling_accuracy(
     particle_order: np.ndarray,
     random_seed: int,
     padding_factor: int,
+    sigma2_fudge: float,
 ) -> dict[str, object] | None:
     n_trials = min(100, int(particle_order.size))
     if n_trials <= 0:
@@ -733,7 +735,7 @@ def _estimate_native_sampling_accuracy(
         current_image_size,
         int(padding_factor),
         1,
-        float(state.tau2_fudge_factor),
+        float(sigma2_fudge),
         int(random_seed),
         True,
         False,
@@ -747,6 +749,7 @@ def _estimate_native_sampling_accuracy(
         "estimated_acc_trans_class": np.asarray(out["acc_trans_class"], dtype=np.float64),
         "estimated_acc_class_counts": np.asarray(out["class_counts"], dtype=np.int64),
         "estimated_acc_n_trials": int(n_trials),
+        "estimated_acc_sigma2_fudge": float(sigma2_fudge),
     }
 
 
@@ -1166,6 +1169,7 @@ def _native_expectation_step(
                     particle_order=np.asarray(particle_ids, dtype=np.int64),
                     random_seed=int(opts.random_seed),
                     padding_factor=int(opts.padding_factor),
+                    sigma2_fudge=DEFAULT_SIGMA2_FUDGE,
                 )
             sampling_updated = _prepare_native_sampling_for_iteration(
                 sampling_state,

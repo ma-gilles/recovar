@@ -781,6 +781,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
         particle_order,
         random_seed,
         padding_factor,
+        sigma2_fudge,
     ):
         estimate_calls.append(
             {
@@ -789,6 +790,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
                 "particle_order": np.asarray(particle_order, dtype=np.int64).copy(),
                 "random_seed": random_seed,
                 "padding_factor": padding_factor,
+                "sigma2_fudge": sigma2_fudge,
             }
         )
         sampling_state.acc_rot = 3.666
@@ -838,6 +840,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=2.125, K=1, nr_iter=200, n_directions=1)
     state.iter = 10
+    state.tau2_fudge_factor = 3.995253
     sampling_state.last_current_resolution = float(state.current_resolution)
 
     optics_state = driver.NativeOpticsState(
@@ -866,6 +869,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     np.testing.assert_array_equal(estimate_calls[0]["particle_order"], np.asarray([1, 0], dtype=np.int64))
     assert estimate_calls[0]["random_seed"] == 17
     assert estimate_calls[0]["padding_factor"] == 2
+    assert estimate_calls[0]["sigma2_fudge"] == pytest.approx(1.0)
     assert build_calls == [(10, 2, pytest.approx(10.366644))]
     assert meta["sampling_accuracy_estimated"] is True
     assert meta["estimated_acc_rot"] == pytest.approx(3.666)
@@ -874,6 +878,75 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     assert meta["sampling_acc_trans_angstrom"] == pytest.approx(2.125)
     assert meta["offset_range_angstrom"] == pytest.approx(10.366644)
     assert meta["offset_step_angstrom"] == pytest.approx(3.0)
+
+
+def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatch):
+    import recovar.relion_bind as relion_bind
+
+    captured = {}
+
+    def fake_expected_accuracy(*args):
+        captured["sigma2_fudge"] = args[17]
+        return {
+            "acc_rot": 1.823,
+            "acc_trans": 1.717,
+            "acc_rot_class": np.asarray([1.823]),
+            "acc_trans_class": np.asarray([1.717]),
+            "class_counts": np.asarray([2]),
+        }
+
+    monkeypatch.setattr(
+        relion_bind,
+        "_relion_bind_core",
+        SimpleNamespace(vdam_expected_angular_errors=fake_expected_accuracy),
+        raising=False,
+    )
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=2.125,
+        K=1,
+        nr_iter=200,
+        n_directions=1,
+    )
+    state.Iref[:] = 1.0
+    state.tau2_fudge_factor = 3.995253
+    best_rotations = driver.sampling._relion_euler_angles_to_matrix(
+        np.asarray([[10.0, 30.0, 20.0], [40.0, 60.0, 50.0]])
+    )
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((2, 2), dtype=np.float32),
+        class_assignments=np.zeros(2, dtype=np.int32),
+        max_posterior=np.ones(2, dtype=np.float32),
+        best_pose_rotations=best_rotations,
+    )
+    optics_state = driver.NativeOpticsState(
+        voltage=300.0,
+        Cs=2.7,
+        Q0=0.07,
+        pixel_size=2.125,
+        defU=np.full(2, 10000.0),
+        defV=np.full(2, 10000.0),
+        defAngle=np.zeros(2),
+        phase_shift=np.zeros(2),
+    )
+
+    meta = driver._estimate_native_sampling_accuracy(
+        driver._initial_sampling_state(
+            driver.NativeInitialModelOptions(fn_img="particles.star"),
+            pixel_size=2.125,
+        ),
+        state,
+        particle_state,
+        optics_state,
+        particle_order=np.asarray([1, 0]),
+        random_seed=0,
+        padding_factor=1,
+        sigma2_fudge=driver.DEFAULT_SIGMA2_FUDGE,
+    )
+
+    assert captured["sigma2_fudge"] == pytest.approx(1.0)
+    assert captured["sigma2_fudge"] != pytest.approx(state.tau2_fudge_factor)
+    assert meta["estimated_acc_sigma2_fudge"] == pytest.approx(1.0)
 
 
 def test_native_expectation_step_records_sampling_changes_each_gradient_iteration(monkeypatch):
