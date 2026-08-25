@@ -4208,7 +4208,10 @@ __global__ void relion_vdam_mstep_fused_x_half_kernel(
 {
     const int rotation = (int)blockIdx.x;
     if (rotation >= rotation_count) return;
-    __shared__ float R[6];
+    /* Stock RELION's compute_80 SGD PTX reserves nine float32 Euler entries.
+     * Preserve that JIT input footprint even though this compact rotation
+     * representation reads only six entries. */
+    __shared__ float R[9];
     if (threadIdx.x < 6) R[threadIdx.x] = rot[rotation * 6 + threadIdx.x];
     __syncthreads();
 

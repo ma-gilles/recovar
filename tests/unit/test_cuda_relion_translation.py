@@ -75,6 +75,10 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "atomicAdd(&data_imag_volume[off], sim);" in source
     assert "float* data_real_volume" in source
     assert "float* data_imag_volume" in source
+    fused_kernel = source.split(
+        "__global__ void relion_vdam_mstep_fused_x_half_kernel(", 1
+    )[1].split("cudaError_t launch_relion_vdam_mstep_fused_x_half", 1)[0]
+    assert "__shared__ float R[9];" in fused_kernel
 
     wrapper = inspect.getsource(cuda_backproject.relion_vdam_mstep_fused_x_half)
     assert "data_real_volume = jnp.asarray(data_volume.real" in wrapper
