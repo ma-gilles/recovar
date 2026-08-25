@@ -28,6 +28,142 @@ def _relative_l2(reference: np.ndarray, candidate: np.ndarray) -> float:
     return float(np.linalg.norm(candidate - reference) / denominator) if denominator else 0.0
 
 
+def _centered_metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, object]:
+    """Compare candidate spacing after removing one non-causal common offset."""
+
+    reference = np.asarray(reference, dtype=np.float64).reshape(-1)
+    candidate = np.asarray(candidate, dtype=np.float64).reshape(-1)
+    if reference.shape != candidate.shape or reference.size == 0:
+        raise ValueError("centered score comparison requires aligned nonempty vectors")
+    difference = candidate - reference
+    common_offset = float(np.mean(difference, dtype=np.float64))
+    centered_residual = difference - common_offset
+    centered_reference = reference - float(np.mean(reference, dtype=np.float64))
+    denominator = float(np.linalg.norm(centered_reference))
+    return {
+        "candidate_minus_native_common_offset": common_offset,
+        "relative_l2": (
+            float(np.linalg.norm(centered_residual) / denominator)
+            if denominator
+            else float(np.linalg.norm(centered_residual))
+        ),
+        "rms": float(np.sqrt(np.mean(centered_residual * centered_residual))),
+        "max_abs": float(np.max(np.abs(centered_residual))),
+        "exact_centered_count": int(np.count_nonzero(centered_residual == 0.0)),
+        "value_count": int(reference.size),
+    }
+
+
+def compare_score_spacing(
+    *,
+    native_rotation_ids: np.ndarray,
+    native_translation_ids: np.ndarray,
+    native_rotation_matrices: np.ndarray,
+    native_log_weights: np.ndarray,
+    native_combined_log_prior: np.ndarray,
+    live: dict[str, np.ndarray],
+) -> dict[str, object]:
+    """Compare captured pre-posterior score spacing on the mapped native support."""
+
+    required = {
+        "pass2_scores_total",
+        "rotation_log_prior",
+        "translation_log_prior",
+        "local_rotation_matrices",
+    }
+    missing = required - set(live)
+    if missing:
+        return {"status": "not_captured", "missing_fields": sorted(missing)}
+
+    native_rotation_ids = np.asarray(native_rotation_ids, dtype=np.int64).reshape(-1)
+    native_translation_ids = np.asarray(native_translation_ids, dtype=np.int64).reshape(-1)
+    native_log_weights = np.asarray(native_log_weights, dtype=np.float64).reshape(-1)
+    native_combined_log_prior = np.asarray(
+        native_combined_log_prior,
+        dtype=np.float64,
+    ).reshape(-1)
+    candidate_count = int(native_rotation_ids.size)
+    if not (
+        native_translation_ids.size
+        == native_log_weights.size
+        == native_combined_log_prior.size
+        == candidate_count
+    ):
+        raise ValueError("native score-stage capture arrays have inconsistent sizes")
+
+    live_rotations = np.asarray(live["local_rotation_matrices"], dtype=np.float64)
+    nearest, rotation_distance, orientation = _nearest_rotation_rows_by_matrix(
+        np.asarray(native_rotation_matrices, dtype=np.float64),
+        live_rotations,
+    )
+    if np.any(native_rotation_ids < 0) or np.any(native_rotation_ids >= nearest.size):
+        raise ValueError("native score rotation id is outside the captured rotation table")
+    mapped_rotations = nearest[native_rotation_ids]
+
+    total_scores = np.asarray(live["pass2_scores_total"], dtype=np.float64)
+    if total_scores.ndim == 3 and total_scores.shape[0] == 1:
+        total_scores = total_scores[0]
+    if total_scores.ndim != 2:
+        raise ValueError("captured total scores must be 2D after unbatching")
+    if np.any(native_translation_ids < 0) or np.any(
+        native_translation_ids >= total_scores.shape[1]
+    ):
+        raise ValueError("native score translation id is outside the RECOVAR table")
+    candidate_total = total_scores[mapped_rotations, native_translation_ids]
+
+    rotation_prior = np.asarray(live["rotation_log_prior"], dtype=np.float64)
+    translation_prior = np.asarray(live["translation_log_prior"], dtype=np.float64)
+    if rotation_prior.ndim == 2 and rotation_prior.shape[0] == 1:
+        rotation_prior = rotation_prior[0]
+    if translation_prior.ndim == 2 and translation_prior.shape[0] == 1:
+        translation_prior = translation_prior[0]
+    candidate_prior = (
+        rotation_prior[mapped_rotations] + translation_prior[native_translation_ids]
+    )
+    native_preprior = native_log_weights - native_combined_log_prior
+    candidate_preprior = candidate_total - candidate_prior
+
+    native_winner = int(np.argmax(native_log_weights))
+    candidate_winner = int(np.argmax(candidate_total))
+    winner_rows = [native_winner, candidate_winner]
+    return {
+        "status": "captured",
+        "candidate_count": candidate_count,
+        "rotation_matrix_orientation": orientation,
+        "rotation_matrix_max_frobenius": float(np.max(rotation_distance)),
+        "total_log_weight_centered": _centered_metric(
+            native_log_weights,
+            candidate_total,
+        ),
+        "combined_log_prior_centered": _centered_metric(
+            native_combined_log_prior,
+            candidate_prior,
+        ),
+        "preprior_score_centered": _centered_metric(
+            native_preprior,
+            candidate_preprior,
+        ),
+        "winner_pair": {
+            "native_winner_row": native_winner,
+            "candidate_winner_row": candidate_winner,
+            "native_winner_mapped_key": [
+                int(mapped_rotations[native_winner]),
+                int(native_translation_ids[native_winner]),
+            ],
+            "candidate_winner_mapped_key": [
+                int(mapped_rotations[candidate_winner]),
+                int(native_translation_ids[candidate_winner]),
+            ],
+            "native_margin_native_minus_candidate": float(
+                native_log_weights[winner_rows[0]] - native_log_weights[winner_rows[1]]
+            ),
+            "candidate_margin_native_minus_candidate": float(
+                candidate_total[winner_rows[0]] - candidate_total[winner_rows[1]]
+            ),
+        },
+    }
+
+
 def compare_posteriors(
     *,
     native_rotation_ids: np.ndarray,
@@ -176,6 +312,14 @@ def analyze(native_dir: Path, recovar_fused_posterior: Path) -> dict[str, object
         _flat_memmap(native_dir / "pass1_class0_fine_eulers.bin"),
         dtype=np.float64,
     ).reshape(-1, 3, 3)
+    native_log_weights = np.asarray(
+        _flat_memmap(native_dir / "pass1_fine_log_weight_preexp.bin"),
+        dtype=np.float64,
+    )
+    native_combined_log_prior = np.asarray(
+        _flat_memmap(native_dir / "pass1_candidate_combined_log_prior.bin"),
+        dtype=np.float64,
+    )
     comparison = compare_posteriors(
         native_rotation_ids=native_rotation_ids,
         native_translation_ids=native_translation_ids,
@@ -185,10 +329,19 @@ def analyze(native_dir: Path, recovar_fused_posterior: Path) -> dict[str, object
         native_reconstruction_mask=native_reconstruction_mask,
         live=live,
     )
+    score_spacing = compare_score_spacing(
+        native_rotation_ids=native_rotation_ids,
+        native_translation_ids=native_translation_ids,
+        native_rotation_matrices=native_rotation_matrices,
+        native_log_weights=native_log_weights,
+        native_combined_log_prior=native_combined_log_prior,
+        live=live,
+    )
     return {
         "schema": "recovar.vdam_fused_posterior_boundary.v1",
         "status": "complete",
         "comparison": comparison,
+        "score_spacing": score_spacing,
         "artifacts": {
             "native_directory": str(native_dir.resolve()),
             "recovar_fused_posterior": str(recovar_fused_posterior.resolve()),
