@@ -2486,9 +2486,53 @@ continuation/serialization artifact and is not an accepted live native mode.
 The threshold is not weakened and the resulting verbose native score/posterior
 capture remains diagnostic-only.
 Sibling allocation `12958358` stops in four seconds on the wrong physical GPU.
-Candidate-only production fused-posterior capture `12958453` is running on the
-exact formal GPU; sibling `12958452` likewise stops before science on the wrong
-GPU.  The iteration-104 full-trajectory winner therefore remains an unresolved
-parity boundary unless an uninterrupted native repeat or an in-memory-exact
-boundary replay demonstrates the alternate mode.  No generic RECOVAR tests
-ran, and the remaining 21 stress cases remain held.
+Candidate-only production fused-posterior capture `12958453` completes on the
+exact formal GPU in `13:56`; sibling `12958452` likewise stops before science
+on the wrong GPU.  The iteration-104 full-trajectory winner therefore remains
+an unresolved parity boundary unless an uninterrupted native repeat or an
+in-memory-exact boundary replay demonstrates the alternate mode.
+
+The earlier iteration-84 boundary is now reproduced without continuation.
+Exact-formal-GPU job `12958796` runs native RELION uninterrupted from iteration
+0 through the selected iteration-84 particle, then the wrapper deliberately
+stops the live process after writing the verbose capture.  It identifies
+internal particle 323 / source row 128 / stack image 129 and completes in 56
+seconds; sibling `12958795` stops before science on the wrong GPU.  Against
+this fresh live capture, the worker-8 trajectory still differs at exactly that
+one particle with a `3.697531` degree pose error, while translation agrees to
+about `2e-6` Angstrom.  Candidate-only exact-GPU job `12958889` independently
+replays the production trajectory through iteration 84 in `9:35` and writes
+the target fused posterior; sibling `12958888` stops at the UUID guard.
+
+The schema-correct fused-posterior comparison localizes the hard-state flip.
+RELION and RECOVAR have exactly the same 64-candidate support, the same
+20-sample reconstruction mask, and matching rotation matrices to at most
+`2.98e-8` Frobenius distance.  RELION's two leading hypotheses are mapped keys
+`[1,86]` and `[5,86]`, with probabilities `0.29173377` and `0.29130675`;
+RECOVAR assigns `0.29122007` and `0.29178941`, reversing their order.  Posterior
+L1 is `0.00154873`, relative L2 is `0.00164336`, and maximum absolute residual
+is `0.000513704`.  Thus iteration 84 is an upstream score-ordering boundary,
+not a support-pruning or adaptive-threshold boundary.  Focused job `12959527`
+passes all 16 float32 posterior tests before correctly failing to apply the
+older contribution-dump analyzer to this newer fused-posterior schema; the
+dedicated fused analyzer produces the completed report instead.  Exact score
+operand replay `12959751` is running to split the remaining difference among
+image preprocessing, projected reference, diff2, and prior terms.
+
+Source inspection exposes one remaining mismatch in the worker-8 experiment:
+RELION's eight host workers dynamically claim one particle at a time, while
+the first RECOVAR worker-8 candidate assigned particles to streams in a fixed
+single-host loop.  Local unpushed experiment `38e795895` replaces that loop
+with eight host threads and an atomic next-particle distributor; each thread
+owns one blocking CUDA stream and synchronizes its particle before claiming
+the next, matching RELION's `ThreadTaskDistributor` topology.  H100 gate
+`12959706` builds binary SHA-256
+`b436c7eefa6c022639e7a6a0995797cefe3e2bba4d11368b0e6a04b243b9e207`
+and passes all 16 focused translation/fused-M-step GPU tests.  Earlier gate
+allocations `12959482`, `12959499`, and `12959682` are setup-only failures from
+two incorrect expanded commit pins and one wrong provenance source filename;
+`12959499` nevertheless compiled and passed the same 16 tests before its final
+hash step, and none ran trajectory science.  An exact-GPU iteration-1 raw
+M-step discriminator is queued behind the score capture.  No generic RECOVAR
+tests ran, and the remaining 21 stress cases remain held until this causal
+boundary is resolved.
