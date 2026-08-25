@@ -2055,9 +2055,14 @@ diff checks pass; no generic suite ran.
 
 Full-qualification setup attempt `12941960` stopped before science in two
 seconds because the direct runner requires its output root to carry a
-pre-existing `SAFE_TO_DELETE` marker.  The corrected opt-in 200-iteration
-default qualification is H100 Slurm `12942022`, rooted at
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_shared_full_c2583f890_retry_20260825`.
+pre-existing `SAFE_TO_DELETE` marker.  Retry `12942022` also stopped before
+science in five seconds: Slurm inherited the tracking checkout as its current
+directory, so Python's empty-path import precedence correctly tripped the
+runtime-checkout provenance guard.  The corrected opt-in 200-iteration
+default qualification is H100 Slurm `12942089`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_shared_full_c2583f890_retry2_20260825`;
+Slurm's working directory is explicitly the immutable runtime checkout and
+the import/GPU/CUDA preflight has passed.
 It is pinned to immutable local unpushed source
 `c2583f890` and experimental H100 CUDA SHA-256
 `b3a329a5f5559ca3bb3c436ab5a051bfe1666c317a2c2834daea1ae3c2c6939c`.
@@ -2066,5 +2071,5 @@ schedule checkpoints.  Acceptance requires native-ensemble/GT/schedule
 coverage after the measured iteration-19 floor and at least 20% total RECOVAR
 wall reduction.  The formal immutable four-repeat production panel
 `12939263` continues independently, with `12939264` queued for restart-safe
-summary.  The performance worktree will remain unchanged while `12942022`
+summary.  The performance worktree will remain unchanged while `12942089`
 runs, and the frozen 21-case expansion remains held.
