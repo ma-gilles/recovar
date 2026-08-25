@@ -494,6 +494,24 @@ def test_vdam_native_continuation_repeat_panel_can_disable_observer():
     assert not missing, f"VDAM native repeat panel lost observer-free mode: {missing}"
 
 
+def test_vdam_native_full_repeat_preserves_autonomous_schedule():
+    runner = (REPO_ROOT / "scripts/run_vdam_native_full_repeat.sbatch").read_text()
+
+    expected_tokens = [
+        'command[command.index("--iter") + 1] != "200"',
+        'test "$(sha256sum "${RELION_BINARY}"',
+        'for ((iteration = 0; iteration <= 200; iteration++)); do',
+        "native_repeat_maps.json",
+        "native_repeat_particles.json",
+        'touch "${OUTPUT_ROOT}/SCIENCE_COMPLETED"',
+        'touch "${OUTPUT_ROOT}/AUDIT_FAILED"',
+        "#SBATCH --constraint=h100",
+        "#SBATCH --gres=gpu:h100:1",
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM native full repeat lost autonomous trajectory contract: {missing}"
+
+
 def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
     capture = (REPO_ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
 
