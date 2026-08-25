@@ -2389,3 +2389,59 @@ sigma2.  This single captured run is not substituted for the formal
 four-repeat envelope; it reinforces that high-shell tau2/DVP amplifies an
 earlier expectation/accumulator difference.  No generic RECOVAR suite ran,
 and the 21 held stress trajectories remain gated.
+
+The corrected state-only envelope closes the counter-temporality audit.  The
+first allocation, `12953825`, waited for CPU priority and then stopped before
+analysis because the submitted expanded SHA did not equal the actual
+`619352eba61d1439cd68f7b2b7e5dba2d92a9d27`; no report was produced by that
+attempt.  Corrected 2-CPU/16-GB job `12956653` completes the report in 52
+seconds and exits `1:0` for the retained scientific failure.  Particle state
+first leaves all four native modes at iteration 84 and fails 97/200
+checkpoints.  Whole-mode schedule state first fails at iteration 6 and fails
+108/200 checkpoints: optimal-offset change misses at 100 iterations, offset
+range at 101, offset step at 10, rotation accuracy at 10, and translation
+accuracy at 5.  The newly active resolution fields isolate exactly one current
+resolution miss at iteration 172 and one current-size miss at iteration 173.
+The pre/post-M-step resolution-gain counter is diagnostic-only and differs at
+181 iterations, as expected.  Report SHA-256 is
+`e180a0d5c1055333a38eb8bfa796efd3e7b71c1e2c95bc3e70d97fe6df8b28c7`.
+
+Source inspection then corrects the iteration-1 launch-topology hypothesis.
+The matched RELION job uses `--j 8`; RELION computes
+`nr_pool = --pool * --j` and gives one particle task at a time to eight OpenMP
+workers, each with a blocking class CUDA stream.  The prior RECOVAR experiment
+incorrectly interpreted `--pool 3` as three worker streams with a barrier after
+each group of three.  Local unpushed experiment `e479c2a0f` instead keeps one
+in-flight particle per eight worker streams.  Setup job `12956321` stops before
+build on another incorrect expanded SHA; corrected H100 job `12956370`
+completes in 52 seconds, passes all 16 focused CUDA translation/routing tests,
+and produces binary SHA-256
+`79f05a8676b5f6bfaf1669a4cda70be8b93ac1763212d4573ff70c03e9c6df93`.
+
+The worker-8 discriminator materially closes propagated iteration-2 state.
+Although its iteration-1 raw-accumulator relative L2 remains
+`8.0012e-6`/`9.3739e-6` and its reconstructed reference is `2.0513e-6`, the
+frozen iteration-2 component comparison improves by about four orders of
+magnitude: signed direct-residual error changes from about `+1.60e-5` to
+`-1.25e-9`, `AA` from `-3.87e-6` to `+1.82e-10`, and `XA` from `-9.99e-6`
+to `-2.99e-10`.  Two independent repeats `12956491`/`12956492` confirm the
+closure: direct-residual relative L2 stays in
+`[6.73e-7, 6.81e-7]`, `AA` in `[2.29e-6, 2.47e-6]`, and `XA` in
+`[3.70e-6, 3.87e-6]`.  Each repeat takes 60--62 seconds, comparable to the
+57--61 second controls.  Report SHA-256 values are
+`c7fd756b27270f648ec6ab8975a56f6048d7d2468676b51a7db9c6ec771b2b8d`,
+`7badaf7c00ecbda91f342969ff705530c6ab2c45a5003047896eb27315e77e88`,
+and `ef382f7984b613da0c2fa9a7ad43cc001db990ece404fba3e56c1e5f6970ba1b`.
+
+Local unpushed head `0f3642045` adds only the already-qualified singleton
+shell-vector analyzer fix, leaving the worker-8 CUDA binary unchanged.  Its
+first promoted 0--20 trajectory (`12956564`) passes all 21 map checkpoints
+with minimum cross-engine FSC-AUC `0.9999999999189698` and has zero active
+pose/translation divergences through iteration 20.  The wrapper exits `1:0`
+only because the standalone schedule audit still treats unused early accuracy
+sentinels and small serialized accuracy/optimal-offset differences as active;
+map and particle audit statuses are both zero.  Same-H100 0--200 promotion
+`12956768` is pinned to `della-h19g2`, source `0f3642045`, and the worker-8
+binary above.  It will be compared against the formal four-repeat native
+envelope before any stress-matrix release.  No generic RECOVAR suite ran; the
+remaining 21 frozen cases remain held.
