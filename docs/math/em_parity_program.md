@@ -114,9 +114,24 @@ the float32 M-step tensor.  Commit `0065204d2` records
 `reconstruction_probs` at native dtype and makes the analyzer prefer it.
 Focused Slurm job `12911970` passes 4/4 tests; Ruff on the touched files,
 py_compile, and diff checks pass.  Direct AA/XA/noise terms were already
-production values and are unchanged by this diagnostic correction.  The next
-bounded discriminator compares RELION's one-thread/one-stream accumulator to
-the candidate before attempting any CUDA multistream emulation.
+production values and are unchanged by this diagnostic correction.
+
+Commit `e17ca882e` then makes the boundary harness's native thread count
+explicit and records it in provenance.  Focused H100 guard job `12912220`
+passes.  Independent full-schedule `--j 1` iteration-1 jobs `12912266` and
+`12912267` both complete `0:0` in 38--40 seconds, but one host thread does not
+make the native GPU accumulator deterministic.  Native repeat relative-L2 is
+`8.91445e-6`/`8.32194e-6` for data, `2.02839e-6`/`1.86395e-6` for weights,
+and `1.33450e-6` for the reconstructed reference.  The corresponding RECOVAR
+repeat distances are only `1.91104e-7`/`2.13117e-7`,
+`1.05739e-7`/`1.14044e-7`, and `5.61788e-7`.  Each paired cross-engine distance
+is `0.77--1.36x` its native-repeat distance.  Host thread count is therefore
+rejected as the missing mechanism: the remaining iteration-1 BPref distance
+is already at the device-side native atomic/reduction-order envelope, even
+under `--j 1`.  Exact equality to one arbitrary native accumulator realization
+is not a valid point gate; the next causal gate must test whether matching the
+native repeat distribution, rather than one draw, is sufficient to preserve
+the iteration-2 cutoff and long trajectory.
 
 Source statement order alone is now rejected as sufficient.  Isolated commit
 `99681a33b` completed all 200 frozen `vdam-gf01` iterations (Slurm
