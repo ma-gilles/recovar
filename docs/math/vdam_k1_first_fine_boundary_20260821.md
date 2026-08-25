@@ -1959,3 +1959,49 @@ probe uses independent compiled-artifact copies and rejects on any particle,
 map, support, memory, or less-than-20-percent runtime failure.  No full VDAM
 trajectory and no generic RECOVAR test suite is spent on this performance
 probe.
+
+The standalone repeat-1 CPU audit finishes as Slurm `12939499` without
+repeating GPU science.  RECOVAR is exact to the paired native run through
+iteration 18; the first hard-state difference is the already classified
+iteration-19 native near-tie (one particle, `1037@particles.128.mrcs`), and
+five particles differ at iteration 20.  The first map checkpoint below
+FSC-AUC `0.999` is iteration 31 (`0.997566498504`), the minimum is
+`0.668409764290` at iteration 120, and the final is `0.856422986141`.
+Hard-state divergence grows to 440 visited particles at iteration 90 and
+1,000 at iteration 200.  The schedule audit first distinguishes translation
+topology/range at iteration 20, offset step at iteration 90, and the
+mode-dependent `sampling_updated` decision at iteration 140.  This is valid
+standalone evidence, but the launch-time source mutation means it remains
+excluded from the formal ensemble.  Map, particle, and sampling report
+SHA-256 values are respectively
+`8468df1ab80071ab2647827c84386299ec23e58315a741894ad662646dea4c94`,
+`bcaea5d3857279baa48b48faef09fd08403ad4daa0cc358ac6aa36648c380a69`,
+and `ad8b9126b96b0771d9a75dc693234d51e394c3662f56f9b99f4209284a6bec85`.
+
+The first bounded runtime hypothesis is rejected by same-H100 Slurm
+`12939602`.  Raising the score-tensor budget from 200 million to 800 million
+floats changes iteration-20 pass-1 time from `1.8761578 s` to `3.4010768 s`
+(`+81.3%`) while pass 2 remains `1.5857396 s` versus `1.5677228 s`.
+All hard particle states are identical through iteration 20 and the minimum
+between-arm map FSC-AUC is `0.9999999999101582`; map/particle comparison
+report SHA-256 values are
+`b78bad0ffdee7445a64c421da83ee0edcd1300f6d6b10fda036c1e07bae4701b`
+and `733abcb5105f7ba9899822c9f0c27f520c739a6be02f51cbbc28c3e9fd78e3fd`.
+The pool-3-aligned follow-up is also rejected by same-H100 Slurm `12939819`:
+a 103-million-float, three-image batch changes pass 1 from `1.9202456 s` to
+`6.1568847 s` (`+220.6%`) and total expectation from `4.2115306 s` to
+`8.4457539 s` (`+100.5%`).  Batch-size tuning is therefore closed as a useful
+performance lever.
+
+The active isolated runtime hypothesis is now repeated CUDA resource setup
+and synchronization in each parity-locked coarse-score call.  Timing-only
+Nsight Systems Slurm `12940146` profiles the unchanged default five-image
+iteration-20 path and accepts the hypothesis only if allocation, texture
+fill/copy, forced synchronization, and teardown consume at least 20% of
+aggregate pass-1 time.  Setup attempt `12940105` stopped before science in two
+seconds on an incorrect typed source-SHA guard; no output is reused.  The
+runtime changes remain local and unpushed.  The immutable four-repeat default
+panel `12939263` and restart-safe summary `12939264` continue independently;
+the snapshot checkout and its copied compiled artifacts have not changed.
+No generic RECOVAR suite ran, and the remaining 21 frozen trajectory cases
+remain held until the repeat-aware default gate is classified.
