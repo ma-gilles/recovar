@@ -197,6 +197,7 @@ def analyze(
             from scripts.analyze_vdam_storewavg_boundary import (
                 _load_native,
                 _match_rotations,
+                _production_score_gradient_rows,
             )
             from scripts.analyze_vdam_storewavg_reference_decomposition import (
                 _current_size_from_rectangle_size,
@@ -235,36 +236,70 @@ def analyze(
                 masked_image,
                 np.asarray(native["translation_angles"], dtype=np.float32),
                 current_size,
-            )[:, rectangle.exact_positions]
-            ctf = np.asarray(native["ctf"], dtype=np.float32)[rectangle.exact_positions]
-            cutoff_mask = (
-                np.asarray(rectangle.shell_indices)[rectangle.exact_positions]
-                == current_size // 2
             )
+            ctf = np.asarray(native["ctf"], dtype=np.float32)
+            cutoff_mask = np.asarray(rectangle.shell_indices) == current_size // 2
             cutoff = {}
             native_capture_projection = _fine_reference_rectangle(
                 capture,
                 int(native["orientation_count"]),
                 rectangle_size,
-            )[:, rectangle.exact_positions]
+            )
+            _score_data, _score_weight, candidate_posterior = (
+                _production_score_gradient_rows(score)
+            )
+            candidate_posterior = np.asarray(
+                candidate_posterior[rotation_map], dtype=np.float32
+            )
+            native_posterior = np.asarray(native["probabilities"], dtype=np.float32)
+            if candidate_posterior.shape != native_posterior.shape:
+                raise ValueError("candidate and native posterior shapes differ")
             for label, projection in projections.items():
-                native_frame_projection = (
+                native_frame_exact = (
                     projection[rotation_map] * np.float32(-1.0 / n**2)
                 ).astype(np.complex64)
-                cutoff[label] = _cutoff_sums(
-                    native_frame_projection,
+                exact_only = np.zeros_like(native_capture_projection)
+                exact_only[:, rectangle.exact_positions] = native_frame_exact
+                hybrid = native_capture_projection.copy()
+                hybrid[:, rectangle.exact_positions] = native_frame_exact
+                native_with_candidate_posterior = _cutoff_sums(
+                    native_capture_projection,
                     translated,
                     ctf,
-                    np.asarray(native["probabilities"], dtype=np.float32),
+                    candidate_posterior,
                     cutoff_mask,
                 )
+                exact_only_values = _cutoff_sums(
+                    exact_only, translated, ctf, candidate_posterior, cutoff_mask
+                )
+                hybrid_values = _cutoff_sums(
+                    hybrid, translated, ctf, candidate_posterior, cutoff_mask
+                )
+                cutoff[label] = {
+                    "native_reference_candidate_posterior": native_with_candidate_posterior,
+                    "exact_only_candidate_posterior": exact_only_values,
+                    "hybrid_candidate_posterior": hybrid_values,
+                }
             captured_native_cutoff = _cutoff_sums(
                 native_capture_projection,
                 translated,
                 ctf,
-                np.asarray(native["probabilities"], dtype=np.float32),
+                native_posterior,
                 cutoff_mask,
             )
+            component_effects = {}
+            for label, values in cutoff.items():
+                component_effects[label] = {}
+                for name in ("xa", "aa"):
+                    native_candidate = values["native_reference_candidate_posterior"][name]
+                    exact_only = values["exact_only_candidate_posterior"][name]
+                    hybrid = values["hybrid_candidate_posterior"][name]
+                    component_effects[label][name] = {
+                        "posterior": float(native_candidate - captured_native_cutoff[name]),
+                        "inside_exact_reference": float(hybrid - native_candidate),
+                        "missing_rounded_rim": float(exact_only - hybrid),
+                        "total_exact_only": float(exact_only - captured_native_cutoff[name]),
+                    }
             cutoff_records.append(
                 {
                     "part_id": part_id,
@@ -272,27 +307,13 @@ def analyze(
                     "values": cutoff,
                     "captured_native_values": captured_native_cutoff,
                     "captured_native_projection_validation": _metric(
-                        native_capture_projection,
+                        native_capture_projection[:, rectangle.exact_positions],
                         (
                             projections[reference_label][rotation_map]
                             * np.float32(-1.0 / n**2)
                         ).astype(np.complex64),
                     ),
-                    "effects": {
-                        label: {
-                            name: float(values[name] - cutoff[reference_label][name])
-                            for name in ("xa", "aa")
-                        }
-                        for label, values in cutoff.items()
-                        if label != reference_label
-                    },
-                    "effects_vs_captured_native": {
-                        label: {
-                            name: float(values[name] - captured_native_cutoff[name])
-                            for name in ("xa", "aa")
-                        }
-                        for label, values in cutoff.items()
-                    },
+                    "component_effects": component_effects,
                 }
             )
 
@@ -323,47 +344,30 @@ def analyze(
             else float("inf")
         )
     cutoff_summary = None
-    cutoff_vs_captured_summary = None
     if cutoff_records:
         cutoff_summary = {}
         for label in maps:
-            if label == reference_label:
-                continue
             cutoff_summary[label] = {}
             for name in ("xa", "aa"):
-                effects = np.asarray(
-                    [row["effects"][label][name] for row in cutoff_records],
-                    dtype=np.float64,
-                )
-                cutoff_summary[label][name] = {
-                    "signed_sum": float(np.sum(effects)),
-                    "mean_abs": float(np.mean(np.abs(effects))),
-                    "max_abs": float(np.max(np.abs(effects))),
-                }
-        for name in ("xa", "aa"):
-            native_floor = abs(cutoff_summary[native_repeat_label][name]["signed_sum"])
-            for label in cutoff_summary:
-                cutoff_summary[label][name]["native_signed_sum_floor_ratio"] = (
-                    float(abs(cutoff_summary[label][name]["signed_sum"]) / native_floor)
-                    if native_floor > 0.0
-                    else float("inf")
-                )
-        cutoff_vs_captured_summary = {}
-        for label in maps:
-            cutoff_vs_captured_summary[label] = {}
-            for name in ("xa", "aa"):
-                effects = np.asarray(
-                    [
-                        row["effects_vs_captured_native"][label][name]
-                        for row in cutoff_records
-                    ],
-                    dtype=np.float64,
-                )
-                cutoff_vs_captured_summary[label][name] = {
-                    "signed_sum": float(np.sum(effects)),
-                    "mean_abs": float(np.mean(np.abs(effects))),
-                    "max_abs": float(np.max(np.abs(effects))),
-                }
+                cutoff_summary[label][name] = {}
+                for component in (
+                    "posterior",
+                    "inside_exact_reference",
+                    "missing_rounded_rim",
+                    "total_exact_only",
+                ):
+                    effects = np.asarray(
+                        [
+                            row["component_effects"][label][name][component]
+                            for row in cutoff_records
+                        ],
+                        dtype=np.float64,
+                    )
+                    cutoff_summary[label][name][component] = {
+                        "signed_sum": float(np.sum(effects)),
+                        "mean_abs": float(np.mean(np.abs(effects))),
+                        "max_abs": float(np.max(np.abs(effects))),
+                    }
     return {
         "schema": "recovar.vdam_reference_repeat_projection.v1",
         "identity": {
@@ -381,7 +385,6 @@ def analyze(
         "projection_pooled": pooled,
         "per_score_dump": projection_records,
         "cutoff_component_summary": cutoff_summary,
-        "cutoff_vs_captured_native_summary": cutoff_vs_captured_summary,
         "per_particle_cutoff_components": cutoff_records,
     }
 
@@ -419,9 +422,6 @@ def main() -> None:
             {
                 "projection_pooled": report["projection_pooled"],
                 "cutoff_component_summary": report["cutoff_component_summary"],
-                "cutoff_vs_captured_native_summary": report[
-                    "cutoff_vs_captured_native_summary"
-                ],
             },
             indent=2,
             sort_keys=True,
