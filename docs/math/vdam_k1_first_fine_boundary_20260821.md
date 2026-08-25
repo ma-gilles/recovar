@@ -1987,21 +1987,36 @@ between-arm map FSC-AUC is `0.9999999999101582`; map/particle comparison
 report SHA-256 values are
 `b78bad0ffdee7445a64c421da83ee0edcd1300f6d6b10fda036c1e07bae4701b`
 and `733abcb5105f7ba9899822c9f0c27f520c739a6be02f51cbbc28c3e9fd78e3fd`.
-The pool-3-aligned follow-up is also rejected by same-H100 Slurm `12939819`:
-a 103-million-float, three-image batch changes pass 1 from `1.9202456 s` to
-`6.1568847 s` (`+220.6%`) and total expectation from `4.2115306 s` to
-`8.4457539 s` (`+100.5%`).  Batch-size tuning is therefore closed as a useful
-performance lever.
+Slurm `12939819` observes `1.9202456 s` versus `6.1568847 s` pass-1 wall for
+the default and 103-million-float arms, but its original "three-image batch"
+interpretation was wrong and the result is not a sealed steady-state
+rejection.  The iteration-20 pass-1 grid is the coarse `36,864` rotations by
+`29` translations, not the fine `294,912` by `116` grid in the summary.  The
+two caps are therefore 187 and 96 images.  For 200 selected particles they
+score two padded calls/374 rows and three padded calls/288 rows.  The 96-image
+arm compiled this previously unseen JAX shape during its timed iteration, so
+its `6.1568847 s` is a cold-shape observation.
 
-The active isolated runtime hypothesis is now repeated CUDA resource setup
-and synchronization in each parity-locked coarse-score call.  Timing-only
-Nsight Systems Slurm `12940146` profiles the unchanged default five-image
-iteration-20 path and accepts the hypothesis only if allocation, texture
-fill/copy, forced synchronization, and teardown consume at least 20% of
-aggregate pass-1 time.  Setup attempt `12940105` stopped before science in two
-seconds on an incorrect typed source-SHA guard; no output is reused.  The
-runtime changes remain local and unpushed.  The immutable four-repeat default
-panel `12939263` and restart-safe summary `12939264` continue independently;
-the snapshot checkout and its copied compiled artifacts have not changed.
-No generic RECOVAR suite ran, and the remaining 21 frozen trajectory cases
-remain held until the repeat-aware default gate is classified.
+The intervening CUDA resource-setup hypothesis is rejected by timing-only
+Nsight Systems H100 Slurm `12940146`.  Across all 21 coarse-projector calls
+through iteration 20, total call wall is `2733.548 ms` and the actual scoring
+kernels account for `2712.538 ms`; allocation, texture fill/copy,
+synchronization slack, destruction, and frees total only `21.010 ms` (`0.77%`
+of call time and `0.17%` of the `12.429 s` aggregate pass-1 wall).  The CUDA
+API/kernel/memory report SHA-256 values are
+`f0546d36eee1446987b1fdfb27afeb4c8b651fb0a9b83600b5a057d4a12a1213`,
+`0faf9d899d43b32d356d8c45946eb4bb33c9b245254c8511eb4ede2b37bf7823`,
+and `31ee66d8a7d367725c7d17ddec74b7187888d49ed3d875a1b3fd6a267c950f07`.
+No resource-lifetime change is justified.
+
+The active isolated runtime discriminator is same-H100 Slurm `12940613`,
+which repeats default versus 103 million floats after the 96-image executable
+has populated the immutable compilation cache.  It accepts only at least 20%
+pass-1 speedup with zero hard-state differences, native-envelope maps, and no
+OOM.  Setup attempt `12940105` stopped before science in two seconds on an
+incorrect typed source-SHA guard; no output is reused.  Runtime changes remain
+local and unpushed.  The immutable four-repeat default panel `12939263` and
+restart-safe summary `12939264` continue independently; the snapshot checkout
+and its copied compiled artifacts have not changed.  No generic RECOVAR suite
+ran, and the remaining 21 frozen trajectory cases remain held until the
+repeat-aware default gate is classified.
