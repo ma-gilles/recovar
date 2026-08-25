@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=vdam-gui-envelope
-#SBATCH --account=amits
+#SBATCH --account=gilles
 #SBATCH --partition=cryoem
+#SBATCH --qos=della-cryoem
 #SBATCH --array=2-22%4
-#SBATCH --gres=gpu:1
+#SBATCH --constraint=h100
+#SBATCH --gres=gpu:h100:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
