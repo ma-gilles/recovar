@@ -2597,3 +2597,60 @@ Iteration-1 and iteration-2 bounded M-step jobs `12961519`/`12961520` are
 running; no 0--200 promotion is authorized unless those gates improve the
 raw-accumulator and propagated-state boundaries.  No generic RECOVAR suite
 ran.
+
+The pool-barrier-only result is negative.  Jobs `12961519`/`12961520`
+complete in 41/48 seconds.  Iteration-1 raw data residuals are
+`8.98969e-6`/`9.27484e-6`, weight residuals are
+`2.36457e-6`/`2.15104e-6`, and reconstructed-reference residual worsens to
+`2.30904e-6`.  Iteration 2 already receives nonexact gradient state; its final
+reference residual is `9.94930e-7`.  Pool barriers without particle-dependent
+worker timing are therefore rejected as causal closure.
+
+The coupled discriminator adds the exact active rotation-block count for each
+particle, because that count determines when a worker becomes available to
+claim its next task.  Local unpushed commits `7c09b83ec`/`bfd5a9a5f` combine
+that existing exact-count experiment with the 24-particle/eight-worker pool.
+H100 job `12961709` passes all 16 CUDA routing tests; setup job `12961621`
+stops before build on a mistyped full SHA, and `12961628` builds successfully
+but exposes and stops on one grouped-test call that had not yet supplied the
+new count operand.  Neither failed job runs boundary science.
+
+The exact-count/pool result is materially closer at the first M-step.  Job
+`12961793` completes in 42 seconds with bitwise-exact incoming gradients and
+second moment.  Raw data residuals are `8.12595e-6`/`8.91127e-6`, weight
+residuals are `1.82100e-6`/`2.29253e-6`, and reconstructed-reference residual
+falls to `1.50647e-6`, versus `2.0513e-6` for static worker-8 and
+`2.12247e-6` for the global dynamic distributor.  Iteration-2 job `12961794`
+completes in 51 seconds; its incoming state is nonexact and its final reference
+residual is `1.20159e-6`.  Report SHA-256 values are
+`ef9f1c867c05264c49e369563da2b58dfce0cc9d80114cc21bcef341af8ae29e`
+and `f3700ed0d5c4137f12c5746358137e3f82a86383617716145d7a7d64c00ecb41`.
+
+A stricter outer-bucket experiment is also rejected at the causal boundary.
+Guarded local commit `dd8f6d814` keeps each heterogeneous 24-particle physical
+pool in one exact-count FFI call instead of splitting whenever padded rotation
+size changes; its three focused layout tests and H100 job `12961927` all pass.
+Iteration-1 job `12962010` worsens raw data to
+`9.77431e-6`/`1.10544e-5` and reconstructed reference to `2.93899e-6`.
+Although iteration-2 job `12962011` happens to end at `8.95758e-7`, it starts
+from a nonexact trajectory and cannot override the earlier causal regression.
+No long trajectory is authorized for this bucket variant.
+
+The exact-count/pool candidate passes its bounded scientific promotion.
+Job `12962194` completes the 0--20 science step in `64.40 s`; all 21 map
+checkpoints pass with minimum FSC-AUC `0.9999999999192933`, and all 3,000
+poses/translations agree at every iteration through 20.  Iteration-20 FSC-AUC
+is `0.9999999999606846`.  The outer `1:0` is exclusively the retained
+single-oracle sampling-accuracy/optimal-offset audit; map and particle statuses
+are both zero.  Map and particle report SHA-256 values are
+`ac2c770094fbca98a91b20712e2f8fe0dd96d7662d234053d4f64c7f452fc275`
+and `27fadbc238260c4de808406b31029cc45f526b846fcce5077cb8ba95f8e2cc1c`.
+
+Local unpushed orchestration commit `dbb55742f` adds an optional physical-GPU
+UUID guard to the trajectory runner; its focused contract test and Bash/Ruff
+checks pass.  Exact-formal-H100 0--200 siblings `12962260`/`12962263` are
+pending.  Only an allocation with UUID
+`GPU-235ec3bc-ca9f-1c0e-88eb-c8b37c5e0480` may enter science; any sibling on
+another GPU fails before launching RECOVAR.  No generic RECOVAR suite ran and
+the remaining 21 stress cells remain held until this full trajectory is
+classified.
