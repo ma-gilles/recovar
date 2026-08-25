@@ -2209,3 +2209,26 @@ after both that candidate and summary `12939264` finish.  Setup attempt
 `12947583` stopped before science because the output root lacked its required
 `SAFE_TO_DELETE` marker; its dependent `12947714` was cancelled before start
 and no artifact is reused.
+
+Same-H100 candidate `12947769` has now completed all 200 scientific iterations
+with status `0:0` for the timed RECOVAR step and `14:34.87` wall.  Provenance
+records physical GPU UUID `GPU-235ec3bc-ca9f-1c0e-88eb-c8b37c5e0480`, exactly
+the UUID used by the four-repeat panel.  Iteration-90 expected rotation and
+translation accuracies replay within `4.45e-16` and `1.56e-15` Angstrom.  The
+outer job exits `1:0` only because the retained single-oracle audits fail:
+first map failure is iteration 132, minimum cross-engine FSC-AUC is
+`0.9544534622` at iteration 173, final FSC-AUC is `0.9931815500`, and first
+hard particle divergence is iteration 84.  These point failures are not
+waived; candidate acceptance still belongs exclusively to dependent ensemble
+job `12947773` after repeat summary `12939264` finishes.
+
+The same run also identifies a sharper runtime trace target.  Iteration 159 is
+the maximum pass-2 event at `9.9204 s`: `current_size` changes 72 to 74, the
+profiled half-set changes from two sparse big-JIT buckets to four, padded rows
+jump from 31,488 to 63,488, and big-JIT wall reaches `7.0056 s`.
+Measurement-only commits `4adfafb9d`/`c2f9d66c0` record that one hypothesis
+without changing the restored production source behavior.  Same-node bounded
+Nsight job `12948880` is active on `della-h19g2`, pinned to full head
+`c2f9d66c0e4b64e49bdaea2199493e54dee224bd` and the qualified CUDA SHA above,
+and captures only iteration 159.  No optimization is accepted from host
+timing alone.
