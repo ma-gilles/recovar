@@ -41,13 +41,12 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _relion_cuda_translate_wavg_norm_images,
     _relion_cuda_fine_diff2_to_scores,
     _relion_cuda_pixel_correction_from_rfloat_ctf,
-    _relion_cuda_powerclass_highres_xi2_half,
-    _relion_cuda_powerclass_highres_xi2_half_atomic,
     _relion_cuda_powerclass_highres_norm_units,
+    _relion_cuda_powerclass_highres_xi2_half_atomic,
     _relion_cuda_powerclass_spectrum_norm_units,
+    _relion_cuda_translate_wavg_norm_images,
     _relion_f32_fine_reconstruction_probs,
     _relion_wavg_rectangle_triplet_terms,
     _relion_wavg_sequential_triplet_terms,
