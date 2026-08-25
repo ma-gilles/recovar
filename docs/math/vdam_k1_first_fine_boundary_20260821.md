@@ -2262,6 +2262,8 @@ non-score call matching an explicit `current_size:bucket_count`, is inert by
 default, records the target in run provenance, and rejects simultaneous
 iteration/shape selectors.  Focused validation passes 4/4 tests plus Ruff,
 byte-compilation, shell syntax, and diff checks; no generic suite ran.  Same-
-node shape capture `12950773` is active for `74:4`, source
-`b32ebc8e4c7aed984e69fc61ffcfcb485d8a905d`, and the qualified CUDA SHA.  The
+node setup `12950773` stops before science in two seconds because an incorrect
+expanded SHA fails the exact-head guard; its output is excluded.  Corrected
+shape capture `12950828` is active for `74:4`, source
+`b32ebc8e4c2f5dfb01a9b417ebbbdd698ac59ce9`, and the qualified CUDA SHA.  The
 measurement commit remains local and unpushed.
