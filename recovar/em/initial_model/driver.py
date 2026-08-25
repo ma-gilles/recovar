@@ -709,6 +709,19 @@ def _estimate_native_sampling_accuracy(
     if np.any(class_ids < 0) or np.any(class_ids >= int(state.K)):
         return None
 
+    random_seed_particle_ids = np.arange(n_trials, dtype=np.int64)
+    if state.sorted_particle_part_ids is not None:
+        sorted_particle_ids = np.asarray(state.sorted_particle_ids, dtype=np.int64)
+        sorted_part_ids = np.asarray(state.sorted_particle_part_ids, dtype=np.int64)
+        if sorted_particle_ids.shape != sorted_part_ids.shape:
+            raise ValueError("stored RELION particle ids and part ids must have matching shapes")
+        if sorted_particle_ids.size < particle_order.size or not np.array_equal(
+            sorted_particle_ids[: particle_order.size],
+            np.asarray(particle_order, dtype=np.int64),
+        ):
+            raise ValueError("sampling-accuracy particle order is not the stored RELION subset prefix")
+        random_seed_particle_ids = sorted_part_ids[:n_trials].copy()
+
     from recovar.relion_bind import _relion_bind_core as bind
 
     refs_relion = np.stack(
@@ -739,6 +752,9 @@ def _estimate_native_sampling_accuracy(
         int(random_seed),
         True,
         False,
+        # RELION seeds these trials with Experiment's internal ``part_id``,
+        # not the original input-table row ids carried by RECOVAR's dataset.
+        random_seed_particle_ids,
     )
     dump_dir = os.environ.get("RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR", "").strip()
     dump_iterations = os.environ.get(
@@ -774,6 +790,7 @@ def _estimate_native_sampling_accuracy(
             padding_factor=np.asarray(int(padding_factor), dtype=np.int64),
             sigma2_fudge=np.asarray(float(sigma2_fudge), dtype=np.float64),
             random_seed=np.asarray(int(random_seed), dtype=np.int64),
+            random_seed_particle_ids=random_seed_particle_ids,
             acc_rot=np.asarray(float(out["acc_rot"]), dtype=np.float64),
             acc_trans=np.asarray(float(out["acc_trans"]), dtype=np.float64),
         )
@@ -787,6 +804,7 @@ def _estimate_native_sampling_accuracy(
         "estimated_acc_class_counts": np.asarray(out["class_counts"], dtype=np.int64),
         "estimated_acc_n_trials": int(n_trials),
         "estimated_acc_sigma2_fudge": float(sigma2_fudge),
+        "estimated_acc_seed_part_ids": random_seed_particle_ids,
     }
 
 

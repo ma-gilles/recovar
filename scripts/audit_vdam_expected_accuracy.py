@@ -148,6 +148,11 @@ def main() -> None:
         )
     if args.live_inputs is not None:
         live = np.load(args.live_inputs)
+        live_seed_part_ids = (
+            np.asarray(live["random_seed_particle_ids"], dtype=np.int64)
+            if "random_seed_particle_ids" in live.files
+            else np.arange(np.asarray(live["trial_particle_ids"]).size, dtype=np.int64)
+        )
         live_out = bind.vdam_expected_angular_errors(
             np.ascontiguousarray(live["refs_relion"], dtype=np.float64),
             np.ascontiguousarray(live["eulers"], dtype=np.float64),
@@ -171,6 +176,7 @@ def main() -> None:
             int(live["random_seed"]),
             True,
             False,
+            np.ascontiguousarray(live_seed_part_ids, dtype=np.int64),
         )
 
         def _comparison(serialized, live_value) -> dict[str, object]:
@@ -192,6 +198,7 @@ def main() -> None:
             "refs_relion": reference[None],
             "eulers": eulers,
             "trial_particle_ids": trials,
+            "random_seed_particle_ids": np.arange(trials.size, dtype=np.int64),
             "class_ids": class_ids,
             "pdf_class": np.asarray([1.0], dtype=np.float64),
             "sigma2_noise": noise,
@@ -207,7 +214,10 @@ def main() -> None:
             live_recorded_acc_rot=float(live["acc_rot"]),
             live_recorded_acc_trans_angstrom=float(live["acc_trans"]),
             live_operand_comparison={
-                name: _comparison(serialized, live[name])
+                name: _comparison(
+                    serialized,
+                    live_seed_part_ids if name == "random_seed_particle_ids" else live[name],
+                )
                 for name, serialized in serialized_operands.items()
             },
         )

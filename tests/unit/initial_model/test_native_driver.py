@@ -886,7 +886,9 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
     captured = {}
 
     def fake_expected_accuracy(*args):
-        captured["sigma2_fudge"] = args[17]
+        captured["interpolator"] = args[17]
+        captured["sigma2_fudge"] = args[18]
+        captured["random_seed_particle_ids"] = np.asarray(args[22]).copy()
         return {
             "acc_rot": 1.823,
             "acc_trans": 1.717,
@@ -911,6 +913,8 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
     state.Iref[:] = 1.0
     state.iter = 90
     state.tau2_fudge_factor = 3.995253
+    state.sorted_particle_ids = np.asarray([1, 0], dtype=np.int64)
+    state.sorted_particle_part_ids = np.asarray([9, 4], dtype=np.int64)
     best_rotations = driver.sampling._relion_euler_angles_to_matrix(
         np.asarray([[10.0, 30.0, 20.0], [40.0, 60.0, 50.0]])
     )
@@ -949,12 +953,17 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
 
     assert captured["sigma2_fudge"] == pytest.approx(1.0)
     assert captured["sigma2_fudge"] != pytest.approx(state.tau2_fudge_factor)
+    assert captured["interpolator"] == 1
+    np.testing.assert_array_equal(captured["random_seed_particle_ids"], np.asarray([9, 4]))
+    assert not np.array_equal(captured["random_seed_particle_ids"], np.asarray([1, 0]))
     assert meta["estimated_acc_sigma2_fudge"] == pytest.approx(1.0)
+    np.testing.assert_array_equal(meta["estimated_acc_seed_part_ids"], np.asarray([9, 4]))
     dump = np.load(tmp_path / "iter090_expected_accuracy_inputs.npz")
     assert float(dump["sigma2_fudge"]) == pytest.approx(1.0)
     assert float(dump["acc_rot"]) == pytest.approx(1.823)
     assert float(dump["acc_trans"]) == pytest.approx(1.717)
     np.testing.assert_array_equal(dump["trial_particle_ids"], np.asarray([1, 0]))
+    np.testing.assert_array_equal(dump["random_seed_particle_ids"], np.asarray([9, 4]))
 
 
 def test_native_expectation_step_records_sampling_changes_each_gradient_iteration(monkeypatch):
