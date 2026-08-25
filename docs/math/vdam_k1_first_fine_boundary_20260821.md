@@ -1452,3 +1452,46 @@ incorrectly expanded commit SHA and an unpadded iteration filename in the new
 runner; both are infrastructure-only failures with no science output.  The 21
 remaining 200-iteration robustness cases stay held until this transition gate
 passes.
+
+## Live RFLOAT accuracy boundary
+
+H100 Slurm `12929393` completed the 92-iteration RECOVAR trajectory in 11
+minutes 25 seconds with 7.86 GB peak step RSS; the batch was marked failed only
+after computation because the reused permutation auditor unnecessarily
+rejected `K=1`.  The corrected auditor was run against those fixed artifacts,
+with a focused unit regression for its 1-by-1 assignment/FSC path.
+
+The independent-noise-fudge correction takes the right iteration-90 topology:
+range `6.48229004175` Angstrom, 21 coarse / 84 fine translations, and
+`sampling_updated=true`.  The signed shellwise FSC gate passes every requested
+checkpoint from iteration 69 through 92, with minimum FSC-AUC
+`0.999125104061` at iteration 92 and class-assignment accuracy one.  Map report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_sampling_sigma2_c7581d0f_20260825/analysis/sampling_transition_maps.json`
+(SHA-256
+`59e9f226eee5bcd6f591b775047a2d0068e08fd80f78b567fd2aeb56d83026ef`).
+
+The particle gate does not pass.  Live RECOVAR estimated translation accuracy
+`1.734` Angstrom and therefore used step `2.601` Angstrom, versus RELION's
+`1.717` and `2.5755`.  All 440 visited iteration-90 particles consequently
+move onto the neighbouring translation grid; translation-match fraction is
+`0.853333`, falling to `0.848` at iteration 92.  Particle report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_sampling_sigma2_c7581d0f_20260825/analysis/sampling_transition_particles.json`
+(SHA-256
+`346e87b2c06c3e2483e527a1dcceb2e44ede4754a8b9f32cdeb4b41fb9e6568e`).
+
+The same iteration-89 state replayed from its serialized float32 MRC gives
+RELION's `(1.823, 1.717 Angstrom)` exactly, while the live in-memory float64
+reference gives `(1.824, 1.734 Angstrom)`.  The enriched discriminator records
+both rather than mistaking serialized replay agreement for live agreement:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_sampling_sigma2_c7581d0f_20260825/analysis/expected_accuracy_it090.json`
+(SHA-256
+`278a36653d26a645d94621a4bacfac5dcca8e08c84d47f43319c9067d379ca9c`).
+
+Experimental commit `acc4929f0` now crosses RELION's RFLOAT/float32 reference
+boundary before the double-argument expected-accuracy replay binding.  The 58
+focused native-driver and trajectory-auditor tests pass.  Causal H100 rerun
+`12930126` is in progress through iteration 92 and reuses the same native
+trajectory.  It must reproduce accuracy `(1.823, 1.717 Angstrom)`, step
+`2.5755`, map FSC-AUC at least `0.999`, and the native particle translation
+grid before any 200-iteration rerun or robustness-case release.  No generic
+RECOVAR full or long test suite ran.
