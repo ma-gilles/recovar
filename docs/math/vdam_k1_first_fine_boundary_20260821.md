@@ -2105,3 +2105,15 @@ bucket before any new implementation change.  The existing full GUI-default
 matrix already covers 22 complete 0--200 trajectories; its remaining 21 cases
 stay held until the default ensemble gate is classified.  No generic RECOVAR
 suite ran.
+
+Local unpushed correctness-tooling commit `77c9bde5a` adds a fail-closed
+candidate-versus-native-envelope trajectory auditor.  It requires at least two
+complete native repeats with one immutable source/executable/physical-GPU
+provenance set, verifies candidate source/CUDA/GPU provenance and every frozen
+artifact/checkpoint, and retains the unchanged scientific gates: the candidate
+must match at least one native mode at FSC-AUC `0.999`, while its GT FSC-AUC
+must remain within `-0.002` of the **best** native repeat.  Particle and
+schedule envelopes remain explicit separate gates rather than being implied by
+the map result.  Focused auditor tests pass `6/6`; Ruff and byte-compilation
+also pass.  This commit is not pushed while the formal repeat panel is still
+running.
