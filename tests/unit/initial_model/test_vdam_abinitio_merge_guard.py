@@ -467,6 +467,21 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
     assert "--nr_iter 33" not in capture
 
 
+def test_vdam_sampling_gate_can_stop_at_pretransition_boundary():
+    runner = (REPO_ROOT / "scripts/run_vdam_sampling_transition_gate.sbatch").read_text()
+
+    expected_tokens = [
+        '"${AUDIT_MODE}" != pretransition',
+        'elif [[ "${AUDIT_MODE}" == pretransition ]]; then',
+        "pretransition_maps.json",
+        "pretransition_particles.json",
+        "if (( STOP_ITERATION >= 90 )); then",
+        '--diagnostic_stop_after_iteration "${STOP_ITERATION}"',
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM pretransition capture lost bounded audit wiring: {missing}"
+
+
 def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
     capture = (REPO_ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
 

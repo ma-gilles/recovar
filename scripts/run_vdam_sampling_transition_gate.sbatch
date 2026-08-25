@@ -26,8 +26,8 @@ STOP_TAG=$(printf '%03d' "${STOP_ITERATION}")
 AUDIT_MODE=${AUDIT_MODE:-transition}
 PROFILE_ITERATIONS=${PROFILE_ITERATIONS:-0}
 PIXEL_SIZE=${PIXEL_SIZE:-4.25}
-if [[ "${AUDIT_MODE}" != transition && "${AUDIT_MODE}" != full ]]; then
-  echo "AUDIT_MODE must be transition or full" >&2
+if [[ "${AUDIT_MODE}" != transition && "${AUDIT_MODE}" != pretransition && "${AUDIT_MODE}" != full ]]; then
+  echo "AUDIT_MODE must be transition, pretransition, or full" >&2
   exit 2
 fi
 CUDA_BINARY=${REPO_ROOT}/recovar/cuda/libcuda_backproject.so
@@ -57,8 +57,10 @@ export CUDA_LAUNCH_BLOCKING=0
 export CUDA_VISIBLE_DEVICES=0
 export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
 export RECOVAR_CUDA_LIB=${CUDA_BINARY}
-export RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR=${OUTPUT_ROOT}/accuracy_inputs
-export RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_ITERATIONS=90
+if (( STOP_ITERATION >= 90 )); then
+  export RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR=${OUTPUT_ROOT}/accuracy_inputs
+  export RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_ITERATIONS=90
+fi
 if [[ "${PROFILE_ITERATIONS}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
   export RECOVAR_INITIAL_MODEL_PROFILE=1
 fi
@@ -67,8 +69,10 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0.01
 export TMPDIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/tmp
 export PIXI_HOME=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/pixi_home
 export RATTLER_CACHE_DIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/rattler_cache
-mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}" \
-  "${RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR}"
+mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}"
+if (( STOP_ITERATION >= 90 )); then
+  mkdir -p "${RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR}"
+fi
 
 git -C "${REPO_ROOT}" rev-parse HEAD > "${PROVENANCE_DIR}/repo_head.txt"
 sha256sum "${CUDA_BINARY}" "${DATA_DIR}/particles.star" > "${PROVENANCE_DIR}/input_sha256.txt"
@@ -107,13 +111,15 @@ printf '\n' >> "${PROVENANCE_DIR}/recovar_command.sh"
   "${COMMAND[@]}" > "${RECOVAR_DIR}/runner.stdout" 2> "${RECOVAR_DIR}/runner.stderr"
 touch "${OUTPUT_ROOT}/SCIENCE_COMPLETED"
 
-"${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_expected_accuracy.py" \
-  --input-star "${DATA_DIR}/particles.star" \
-  --previous-prefix "${RECOVAR_DIR}/run_it089" \
-  --target-prefix "${RELION_DIR}/run_it090" \
-  --candidate-meta "${RECOVAR_DIR}/run_it090_recovar_meta.json" \
-  --live-inputs "${RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR}/iter090_expected_accuracy_inputs.npz" \
-  --output "${ANALYSIS_DIR}/expected_accuracy_it090.json"
+if (( STOP_ITERATION >= 90 )); then
+  "${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_expected_accuracy.py" \
+    --input-star "${DATA_DIR}/particles.star" \
+    --previous-prefix "${RECOVAR_DIR}/run_it089" \
+    --target-prefix "${RELION_DIR}/run_it090" \
+    --candidate-meta "${RECOVAR_DIR}/run_it090_recovar_meta.json" \
+    --live-inputs "${RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR}/iter090_expected_accuracy_inputs.npz" \
+    --output "${ANALYSIS_DIR}/expected_accuracy_it090.json"
+fi
 
 map_args=()
 particle_iterations=()
@@ -129,6 +135,16 @@ if [[ "${AUDIT_MODE}" == full ]]; then
   map_report=${ANALYSIS_DIR}/full_trajectory_maps.json
   shell_report=${ANALYSIS_DIR}/full_trajectory_shells.npz
   particle_report=${ANALYSIS_DIR}/full_trajectory_particles.json
+elif [[ "${AUDIT_MODE}" == pretransition ]]; then
+  for ((iteration = 0; iteration <= STOP_ITERATION; iteration++)); do
+    map_args+=(--checkpoint "${iteration}")
+    if (( iteration > 0 )); then
+      particle_iterations+=("${iteration}")
+    fi
+  done
+  map_report=${ANALYSIS_DIR}/pretransition_maps.json
+  shell_report=${ANALYSIS_DIR}/pretransition_shells.npz
+  particle_report=${ANALYSIS_DIR}/pretransition_particles.json
 else
   for iteration in 69 70 79 80 85 86 87 88 89 90 91 92; do
     map_args+=(--checkpoint "${iteration}")

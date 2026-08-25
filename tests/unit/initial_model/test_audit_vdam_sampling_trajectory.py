@@ -6,7 +6,6 @@ import pytest
 
 from scripts.audit_vdam_sampling_trajectory import audit_sampling_trajectory
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -18,6 +17,8 @@ def _write_iteration(
     candidate_range: float = 6.0,
     native_range: float = 6.0,
     candidate_translations: int = 52,
+    candidate_prior_mode: int = 0,
+    native_prior_mode: int = 0,
 ) -> None:
     tag = f"{iteration:03d}"
     candidate = {
@@ -32,13 +33,15 @@ def _write_iteration(
         "sampling_updated": False,
         "current_changes_optimal_offsets_angstrom": 1.25,
         "sampling_nr_iter_wo_resol_gain": 0,
+        "orientational_prior_mode": candidate_prior_mode,
+        "uniform_local_orientation_prior": candidate_prior_mode == 1,
     }
     (candidate_dir / f"run_it{tag}_recovar_meta.json").write_text(json.dumps(candidate))
     (relion_dir / f"run_it{tag}_sampling.star").write_text(
         "\n".join(
             [
                 "data_sampling_general",
-                f"_rlnHealpixOrder 3",
+                "_rlnHealpixOrder 3",
                 f"_rlnOffsetRange {native_range:.6f}",
                 "_rlnOffsetStep 3.000000",
                 "_rlnSamplingPerturbInstance 0.125000",
@@ -58,6 +61,7 @@ def _write_iteration(
             [
                 "data_model_general",
                 "_rlnCurrentResolution 20.000000",
+                f"_rlnOrientationalPriorMode {native_prior_mode}",
                 "",
                 "data_model_classes",
                 "loop_",
@@ -116,3 +120,25 @@ def test_sampling_trajectory_accepts_relion_serialization_rounding(tmp_path):
 
     assert report["result"] == "pass"
     assert all(value is None for value in report["first_mismatch"].values())
+
+
+def test_sampling_trajectory_reports_first_orientation_prior_mode_mismatch(tmp_path):
+    candidate_dir = tmp_path / "candidate"
+    relion_dir = tmp_path / "relion"
+    candidate_dir.mkdir()
+    relion_dir.mkdir()
+    _write_iteration(candidate_dir, relion_dir, 89)
+    _write_iteration(
+        candidate_dir,
+        relion_dir,
+        90,
+        candidate_prior_mode=0,
+        native_prior_mode=1,
+    )
+
+    report = audit_sampling_trajectory(candidate_dir, relion_dir, pixel_size=2.0)
+
+    assert report["result"] == "fail"
+    assert report["first_mismatch"]["orientational_prior_mode"] == 90
+    assert report["iterations"][1]["candidate"]["orientational_prior_mode"] == 0
+    assert report["iterations"][1]["native"]["orientational_prior_mode"] == 1

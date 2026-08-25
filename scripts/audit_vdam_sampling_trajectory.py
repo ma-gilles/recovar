@@ -8,11 +8,9 @@ import json
 import re
 from pathlib import Path
 
-import numpy as np
 import starfile
 
 from recovar.em import sampling
-
 
 _ITERATION_RE = re.compile(r"run_it(\d+)_recovar_meta\.json$")
 
@@ -24,13 +22,18 @@ def _native_tables(path: Path) -> dict[str, object]:
     return value
 
 
-def _model_accuracy(path: Path) -> tuple[float, float]:
-    classes = _native_tables(path)["model_classes"]
+def _native_model_sampling(path: Path) -> tuple[float, float, int]:
+    tables = _native_tables(path)
+    classes = tables["model_classes"]
     if len(classes) != 1:
         raise ValueError(f"K=1 sampling audit expected one model class in {path}")
+    general = tables["model_general"]
+    if not isinstance(general, dict):
+        raise ValueError(f"expected scalar model_general block in {path}")
     return (
         float(classes.iloc[0]["rlnAccuracyRotations"]),
         float(classes.iloc[0]["rlnAccuracyTranslationsAngst"]),
+        int(general["rlnOrientationalPriorMode"]),
     )
 
 
@@ -108,7 +111,7 @@ def audit_sampling_trajectory(
 
         candidate = json.loads(candidate_path.read_text())
         native = _native_sampling(sampling_path)
-        native_acc_rot, native_acc_trans = _model_accuracy(model_path)
+        native_acc_rot, native_acc_trans, native_prior_mode = _native_model_sampling(model_path)
         native_changes = _native_changes(optimiser_path)
         oversampling = int(candidate["oversampling"])
         native_n_translations = _native_translation_count(
@@ -144,6 +147,8 @@ def audit_sampling_trajectory(
                 native_changes["current_changes_optimal_offsets_angstrom"],
                 atol=5.1e-7,
             ),
+            "orientational_prior_mode": int(candidate["orientational_prior_mode"])
+            == native_prior_mode,
         }
         if previous_native is not None:
             checks["sampling_updated"] = bool(candidate["sampling_updated"]) == native_updated
@@ -160,6 +165,10 @@ def audit_sampling_trajectory(
                     "sampling_acc_rot": float(candidate["sampling_acc_rot"]),
                     "sampling_acc_trans_angstrom": float(candidate["sampling_acc_trans_angstrom"]),
                     "sampling_updated": bool(candidate["sampling_updated"]),
+                    "orientational_prior_mode": int(candidate["orientational_prior_mode"]),
+                    "uniform_local_orientation_prior": bool(
+                        candidate["uniform_local_orientation_prior"]
+                    ),
                     "current_changes_optimal_offsets_angstrom": float(
                         candidate["current_changes_optimal_offsets_angstrom"]
                     ),
@@ -171,6 +180,7 @@ def audit_sampling_trajectory(
                     "sampling_acc_rot": native_acc_rot,
                     "sampling_acc_trans_angstrom": native_acc_trans,
                     "sampling_updated": native_updated,
+                    "orientational_prior_mode": native_prior_mode,
                     **native_changes,
                 },
                 "absolute_errors": {
