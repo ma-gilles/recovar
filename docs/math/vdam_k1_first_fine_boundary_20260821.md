@@ -1144,3 +1144,41 @@ rotation counts to the otherwise unchanged 523-line-matched kernel and repeats
 the iteration-1 aggregate plus iteration-2 cutoff gates.  It will receive no
 200-iteration trajectory unless those gates materially improve.  No generic
 RECOVAR suite ran.
+
+## Exact per-particle rotation-count discriminator
+
+Isolated commit `90fa08f16` changes only the source-faithful FFI launch grid:
+each particle launches its number of packed active rotations instead of the
+bucket-padded rotation axis.  The 523-line-matched SGD kernel body, posterior,
+projector, translations, accumulator layout, and reconstruction are unchanged.
+H100 build/test job `12921237` completed in 52 seconds with all 15 CUDA
+translation tests passing.  Focused job `12921329` additionally proved that
+rows beyond the supplied particle count are excluded from both scatter and
+denominator.  Build attempt `12921218` used a relative Python path from
+`make -C` and test-selection attempt `12921308` matched no tests; both failed
+before scientific execution.
+
+The scientific result is negative.  Matched iteration-1 job `12921404`
+completed in 50 seconds.  Raw accumulator relative L2 is
+`8.72817e-6`/`1.10321e-5` for data and
+`2.08442e-6`/`2.24206e-6` for weight; reconstructed-reference relative L2
+worsens to `2.67134e-6`.  Frozen-native iteration-2 job `12921405` completed
+in 63 seconds.  Shell-15 direct-residual error changes from
+`+1.5975691e-5` to `+1.5874443e-5`, only a 0.63% improvement; `AA` and `XA`
+remain `-3.8716367e-6` and `-9.9874480e-6`.
+
+Exact active grid size is therefore rejected as the remaining propagated
+reference cause.  The experimental commit remains unpushed and receives no
+200-iteration trajectory.  Reports:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_exact_counts_mstep_90fa08f1_20260825/analysis/mstep_boundary.json`
+  (SHA-256
+  `1e59a7202c8d3eacb72371c884bb0840cb5faadfc30875d5b7b8e02f459c5766`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_exact_counts_it02_90fa08f1_20260825/analysis/cutoff_particle_panel.json`
+  (SHA-256
+  `6a89701254e9d357097dfab08524e2edaee3a2dad95698fa4deb0956397fbe13`).
+
+The next bounded gate must preserve physical particle order and one shared
+accumulator across RECOVAR's bucket/FFI boundaries, separating outer launch
+grouping from the now-rejected per-particle grid size.  No generic RECOVAR
+suite ran.
