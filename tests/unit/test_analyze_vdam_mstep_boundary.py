@@ -57,6 +57,23 @@ def test_vdam_mstep_analyzer_selects_requested_iteration(tmp_path):
     assert report["all_stages_bitwise_exact"] is True
 
 
+def test_vdam_mstep_analyzer_accepts_relion_shell_vector_shape(tmp_path):
+    native = tmp_path / "native"
+    recovar = tmp_path / "recovar"
+    native.mkdir()
+    recovar.mkdir()
+    for name, native_name, recovar_name, complex_values in analyzer._STAGES:
+        values = np.ones((1, 1, 5), dtype=np.complex128 if complex_values else np.float64)
+        _write_relion(native / native_name, values)
+        candidate = values.reshape(5) if name == "mom1_noise_power" else values
+        np.save(recovar / recovar_name, candidate)
+
+    report = analyzer.analyze(native, recovar)
+
+    assert report["all_stages_bitwise_exact"] is True
+    assert report["comparisons"]["mom1_noise_power"]["shape"] == [5]
+
+
 def test_vdam_mstep_cli_writes_json(tmp_path, monkeypatch):
     native = tmp_path / "native"
     recovar = tmp_path / "recovar"

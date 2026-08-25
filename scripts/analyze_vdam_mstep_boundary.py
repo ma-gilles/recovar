@@ -35,7 +35,16 @@ def _metric(candidate: np.ndarray, reference: np.ndarray) -> dict:
     candidate = np.asarray(candidate)
     reference = np.asarray(reference)
     if candidate.shape != reference.shape:
-        raise ValueError(f"shape mismatch: {candidate.shape} vs {reference.shape}")
+        # RELION's MultidimArray writer records one-dimensional shell vectors
+        # with its internal (z, y, x) header, e.g. (1, 1, 65), while NumPy
+        # naturally stores the corresponding RECOVAR vector as (65,).  Treat
+        # singleton-only dimensional differences as the same logical array.
+        candidate_squeezed = np.squeeze(candidate)
+        reference_squeezed = np.squeeze(reference)
+        if candidate_squeezed.shape != reference_squeezed.shape:
+            raise ValueError(f"shape mismatch: {candidate.shape} vs {reference.shape}")
+        candidate = candidate_squeezed
+        reference = reference_squeezed
     if not np.all(np.isfinite(candidate)) or not np.all(np.isfinite(reference)):
         raise ValueError("comparison contains non-finite values")
     denominator = float(np.linalg.norm(reference.reshape(-1)))
