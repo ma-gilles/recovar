@@ -2237,6 +2237,7 @@ def run_local_em_exact(
     relion_projector_r_max: int | None = None,
     do_gridding_correction: bool = False,
     square_window: bool = False,
+    recon_exact_radius: bool = True,
     image_corrections: np.ndarray | None = None,
     scale_corrections: np.ndarray | None = None,
     group_ids: np.ndarray | None = None,
@@ -2549,6 +2550,7 @@ def run_local_em_exact(
         n_half,
         reconstruction_current_size=mstep_current_size,
         square=square_window,
+        recon_exact_radius=bool(recon_exact_radius),
         include_recon_window=True,
     )
     use_window = window_spec.use_window

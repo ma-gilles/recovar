@@ -363,6 +363,30 @@ def test_relion_wavg_rectangle_matches_native_size60_topology_and_order():
     )
 
 
+def test_relion_wavg_rectangle_accepts_complete_rounded_shell_support():
+    image_shape = (32, 32)
+    current_size = 30
+    rounded_indices, _ = make_fourier_window_indices_np(
+        image_shape,
+        current_size,
+        include_dc=True,
+        exact_radius=False,
+    )
+
+    layout = _make_relion_wavg_rectangle(
+        image_shape,
+        current_size,
+        rounded_indices,
+    )
+
+    np.testing.assert_array_equal(
+        layout.centered_indices[layout.exact_positions],
+        rounded_indices,
+    )
+    assert layout.exact_positions.size == 372
+    assert np.count_nonzero(layout.shell_indices == current_size // 2) == 39
+
+
 def test_relion_wavg_rectangle_terms_keep_image_only_pixels_in_issue_stream():
     exact_terms = jnp.asarray(
         [

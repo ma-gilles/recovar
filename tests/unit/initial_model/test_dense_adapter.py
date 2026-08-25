@@ -898,6 +898,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         )
         calls["local_has_recon_square_window"] = "recon_square_window" in kwargs
         calls["local_has_recon_exact_radius"] = "recon_exact_radius" in kwargs
+        calls["local_recon_exact_radius"] = kwargs["recon_exact_radius"]
         calls["local_mstep_subtract_ctf_projection"] = kwargs["mstep_subtract_ctf_projection"]
         calls["local_mstep_relion_x_half"] = kwargs["mstep_relion_x_half"]
         calls["local_max_significants"] = kwargs["max_significants"]
@@ -1039,7 +1040,8 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_has_reconstruct_with_masked_images"] is False
     assert calls["local_has_reconstruction_subtract_projected_reference"] is False
     assert calls["local_has_recon_square_window"] is False
-    assert calls["local_has_recon_exact_radius"] is False
+    assert calls["local_has_recon_exact_radius"] is True
+    assert calls["local_recon_exact_radius"] is False
     assert calls["local_mstep_subtract_ctf_projection"] is True
     assert calls["local_mstep_relion_x_half"] is False
     assert calls["local_max_significants"] == -1

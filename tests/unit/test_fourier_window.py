@@ -583,6 +583,33 @@ class TestFourierWindowSpec:
         assert set(np.asarray(spec.score_indices_np)).issubset(set(np.asarray(spec.projection_indices_np)))
         assert set(np.asarray(spec.recon_indices_np)).issubset(set(np.asarray(spec.projection_indices_np)))
 
+    def test_initial_model_rounded_recon_window_keeps_cutoff_shell_rim(self):
+        shape = (32, 32)
+        n_half = shape[0] * (shape[1] // 2 + 1)
+        exact = make_fourier_window_spec(
+            shape,
+            30,
+            n_half,
+            recon_exact_radius=True,
+            include_recon_window=True,
+        )
+        rounded = make_fourier_window_spec(
+            shape,
+            30,
+            n_half,
+            recon_exact_radius=False,
+            include_recon_window=True,
+        )
+
+        exact_set = set(np.asarray(exact.recon_indices_np).tolist())
+        rounded_set = set(np.asarray(rounded.recon_indices_np).tolist())
+        assert exact_set < rounded_set
+        assert len(rounded_set - exact_set) == 17
+        assert rounded.n_recon == exact.n_recon + 17
+        assert set(np.asarray(rounded.recon_indices_np)).issubset(
+            set(np.asarray(rounded.projection_indices_np))
+        )
+
     def test_projection_union_preserves_no_recon_window_contract(self):
         spec = make_fourier_window_spec(IMAGE_SHAPE, 6, N_HALF, include_recon_window=False)
         values = jnp.arange(3 * N_HALF, dtype=jnp.float32).reshape(3, N_HALF)

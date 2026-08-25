@@ -33,6 +33,9 @@ unset RECOVAR_DISABLE_CUDA
 
 "${PIXI_PY}" -m pytest -q \
   "${REPO_ROOT}/tests/unit/test_cuda_relion_translation.py" \
+  "${REPO_ROOT}/tests/unit/test_fourier_window.py::TestFourierWindowSpec::test_initial_model_rounded_recon_window_keeps_cutoff_shell_rim" \
+  "${REPO_ROOT}/tests/unit/test_k1_scale_aa_pixels.py::test_relion_wavg_rectangle_accepts_complete_rounded_shell_support" \
+  "${REPO_ROOT}/tests/unit/initial_model/test_dense_adapter.py::test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior" \
   "${REPO_ROOT}/tests/unit/initial_model/test_dense_adapter.py::test_arrays_to_accumulators_splits_grouped_halfsets" \
   "${REPO_ROOT}/tests/unit/initial_model/test_dense_adapter.py::test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream" \
   "${REPO_ROOT}/tests/unit/test_refine_relion_mode.py::test_bucket_local_hypothesis_layout_aligns_preserved_chunks_to_pool_three"

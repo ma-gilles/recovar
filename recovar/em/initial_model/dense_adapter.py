@@ -1130,6 +1130,7 @@ def _run_sparse_pass2_initial_model_estep(
                     use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
                     do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
                     square_window=bool(group_kwargs.get("square_window", False)),
+                    recon_exact_radius=bool(group_kwargs.get("recon_exact_radius", True)),
                     image_corrections=group_kwargs.get("image_corrections"),
                     scale_corrections=group_kwargs.get("scale_corrections"),
                     image_pre_shifts=group_kwargs.get("image_pre_shifts"),

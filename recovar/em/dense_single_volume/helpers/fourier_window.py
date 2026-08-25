@@ -340,6 +340,7 @@ def make_fourier_window_spec(
     square=False,
     score_square=None,
     score_include_dc=False,
+    recon_exact_radius=True,
     projection_max_r=_DEFAULT_PROJECTION_MAX_R,
     include_recon_window=True,
     dtype=jnp.int32,
@@ -409,7 +410,7 @@ def make_fourier_window_spec(
             resolved_reconstruction_current_size,
             square=square,
             include_dc=True,
-            exact_radius=True,
+            exact_radius=bool(recon_exact_radius),
         )
         recon_indices = jnp.asarray(recon_indices_np, dtype=dtype)
     projection_recon_indices_np = score_indices_np if recon_indices_np is None else recon_indices_np

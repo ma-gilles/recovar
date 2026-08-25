@@ -4781,7 +4781,12 @@ def _make_relion_wavg_rectangle(
     current_size,
     recon_window_indices,
 ):
-    """Map exact BPref pixels into RELION's complete FFTW-ordered Wavg crop."""
+    """Map active reconstruction pixels into RELION's FFTW-ordered Wavg crop.
+
+    ``exact_positions`` retains its historical field name, but may describe
+    either the exact BackProjector disk or RELION InitialModel's rounded-shell
+    Wavg support. The supplied reconstruction indices select the contract.
+    """
 
     image_shape = tuple(int(value) for value in image_shape)
     current_size = int(current_size)
@@ -4810,10 +4815,14 @@ def _make_relion_wavg_rectangle(
         exact_radius=True,
     )
     recon_indices = np.asarray(recon_window_indices, dtype=np.int32).reshape(-1)
-    if not np.array_equal(np.sort(recon_indices), exact_indices):
+    exact_support = np.array_equal(np.sort(recon_indices), exact_indices)
+    rounded_support = np.array_equal(np.sort(recon_indices), rounded_indices)
+    if not (exact_support or rounded_support):
         raise ValueError(
-            "RELION Wavg rectangle requires the complete exact-radius BPref window: "
-            f"got {recon_indices.size} pixels, expected {exact_indices.size}"
+            "RELION Wavg rectangle requires a complete exact-radius or rounded-shell "
+            "reconstruction window: "
+            f"got {recon_indices.size} pixels, expected {exact_indices.size} or "
+            f"{rounded_indices.size}"
         )
 
     rectangle_position = {
@@ -4847,7 +4856,7 @@ def _make_relion_wavg_rectangle(
             f"got {rectangle_indices.size}, expected {expected_rectangle_size}"
         )
     if np.unique(exact_positions).size != exact_positions.size:
-        raise ValueError("RELION Wavg exact-radius position mapping is not bijective")
+        raise ValueError("RELION Wavg reconstruction position mapping is not bijective")
     return RelionWavgRectangle(
         centered_indices=rectangle_indices.astype(np.int32, copy=False),
         exact_positions=exact_positions,
