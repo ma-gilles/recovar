@@ -2073,3 +2073,35 @@ wall reduction.  The formal immutable four-repeat production panel
 `12939263` continues independently, with `12939264` queued for restart-safe
 summary.  The performance worktree will remain unchanged while `12942089`
 runs, and the frozen 21-case expansion remains held.
+
+The shared-reference candidate clears the complete default runtime gate.
+Slurm `12942089` produces all 201 maps, all 200 particle-state artifacts, the
+full schedule audit, and the iteration-90 expected-accuracy replay from the
+pinned source/binary above.  The RECOVAR trajectory itself finishes normally
+in `948.44 s`, versus `2294.3134 s` for the accepted legacy repeat: a
+`58.66%` reduction.  The paired legacy stock RELION wall is `285.1376 s`, so
+the candidate is still `3.326x` slower and comparable runtime remains open.
+Slurm's final `1:0` is the expected fail-closed single-oracle audit result,
+not a run or artifact failure.
+
+Against that one sealed native trajectory, the first hard particle difference
+is iteration 42 (one particle), the first map below `0.999` is iteration 119,
+the minimum cross-engine FSC-AUC is `0.9890884153` at iteration 139, and the
+iteration-200 value is `0.9916669728`.  This does not pass the frozen point
+gate and is not waived; final science classification waits for the immutable
+four-repeat native-mode/GT/schedule envelope `12939263`/`12939264`.  The map,
+particle, sampling, profile, and expected-accuracy report SHA-256 values are
+`4066a150e3347267c6194b742c68c21640b1764c59b74cb6b5f9722e7fc54160`,
+`fdfa4da66e7ecb3d3f88a174fe83f7ad33cdee23b731bd1ffa8d48908a17ec72`,
+`46d5847ea78730d3e358a837277a1b044a7962700924da389d6c558380f23dca`,
+`b2749dce5ef221bc881be659f476a4d77d9e965bc80cdd71690294673088b2ee`,
+and `f04eed3db6b09be3833159131a21ca8c03b90b9c7fcf769ddbe2914e7425d61`.
+
+The profile also freezes the next bounded performance target.  Across all 200
+iterations, expectation takes `869.0291 s`, pass 1 `335.5154 s`, and pass 2
+`415.9826 s`; over iterations 90--200, pass 1 is `266.8355 s` and pass 2 is
+`300.5365 s`.  The next experiment will profile a representative late pass-2
+bucket before any new implementation change.  The existing full GUI-default
+matrix already covers 22 complete 0--200 trajectories; its remaining 21 cases
+stay held until the default ensemble gate is classified.  No generic RECOVAR
+suite ran.
