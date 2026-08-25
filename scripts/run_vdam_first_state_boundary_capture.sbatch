@@ -33,6 +33,8 @@ TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-1003}
 TARGET_RELION_PERTURBATION=${TARGET_RELION_PERTURBATION:-0.322510}
 CAPTURE_LOCAL_SCORE=${CAPTURE_LOCAL_SCORE:-0}
 case "${CAPTURE_LOCAL_SCORE}" in 0|1) ;; *) echo "CAPTURE_LOCAL_SCORE must be 0 or 1" >&2; exit 2 ;; esac
+CAPTURE_FUSED_SCORES=${CAPTURE_FUSED_SCORES:-0}
+case "${CAPTURE_FUSED_SCORES}" in 0|1) ;; *) echo "CAPTURE_FUSED_SCORES must be 0 or 1" >&2; exit 2 ;; esac
 CAPTURE_NATIVE_REPLAY=${CAPTURE_NATIVE_REPLAY:-1}
 case "${CAPTURE_NATIVE_REPLAY}" in 0|1) ;; *) echo "CAPTURE_NATIVE_REPLAY must be 0 or 1" >&2; exit 2 ;; esac
 RELION_BINARY=${RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
@@ -152,6 +154,11 @@ export RATTLER_CACHE_DIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/rattler_cache
 export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR=${RECOVAR_CAPTURE}
 export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}
 export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION=${TARGET_ITERATION}
+if [[ "${CAPTURE_FUSED_SCORES}" == 1 ]]; then
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES=1
+else
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES
+fi
 unset RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY
 if [[ "${CAPTURE_LOCAL_SCORE}" == 1 ]]; then
   export RECOVAR_LOCAL_SCORE_DUMP_DIR=${RECOVAR_SCORE_CAPTURE}
@@ -209,6 +216,30 @@ test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_data.star"
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_model.star"
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_recovar_meta.json"
 test "$(find "${RECOVAR_CAPTURE}" -maxdepth 1 -type f -name 'local_fused_posterior_*.npz' | wc -l)" -eq 1
+if [[ "${CAPTURE_FUSED_SCORES}" == 1 ]]; then
+  "${PIXI_PY}" - "${RECOVAR_CAPTURE}" <<'PY'
+import sys
+from pathlib import Path
+
+import numpy as np
+
+paths = list(Path(sys.argv[1]).glob("local_fused_posterior_*.npz"))
+if len(paths) != 1:
+    raise SystemExit("expected exactly one fused-posterior capture")
+with np.load(paths[0], allow_pickle=False) as payload:
+    required = {
+        "pass2_scores_raw",
+        "pass2_scores_total",
+        "rotation_log_prior",
+        "translation_log_prior",
+    }
+    missing = required - set(payload.files)
+    if missing:
+        raise SystemExit(f"fused score capture is missing fields: {sorted(missing)}")
+    if payload["pass2_scores_total"].shape != payload["posterior"].shape:
+        raise SystemExit("fused score/posterior capture shapes differ")
+PY
+fi
 if [[ "${CAPTURE_LOCAL_SCORE}" == 1 ]]; then
   test "$(find "${RECOVAR_SCORE_CAPTURE}" -maxdepth 1 -type f -name 'local_score_*.npz' | wc -l)" -eq 1
 else
@@ -218,9 +249,9 @@ test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 gpu_uuid_after_recovar=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":200,"stopped_after_iteration":%d,"target_original_index":%d,"target_relion_part_id":%d,"target_stack_index":%d,"capture_local_score":%s,"capture_native_replay":%s,"recovar_wall_s":%d}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":200,"stopped_after_iteration":%d,"target_original_index":%d,"target_relion_part_id":%d,"target_stack_index":%d,"capture_local_score":%s,"capture_fused_scores":%s,"capture_native_replay":%s,"recovar_wall_s":%d}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_ITERATION}" \
   "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" "${TARGET_STACK_INDEX}" \
-  "${CAPTURE_LOCAL_SCORE}" "${CAPTURE_NATIVE_REPLAY}" "${wall_s}" \
+  "${CAPTURE_LOCAL_SCORE}" "${CAPTURE_FUSED_SCORES}" "${CAPTURE_NATIVE_REPLAY}" "${wall_s}" \
   > "${PROVENANCE}/run.json"
 touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"

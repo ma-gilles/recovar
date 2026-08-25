@@ -446,6 +446,7 @@ def maybe_write_debug_fused_posterior_dump(
     local_layout,
     bucket,
     image_pre_shifts,
+    scores=None,
     probs,
     log_Z,
     best_log_score,
@@ -483,6 +484,11 @@ def maybe_write_debug_fused_posterior_dump(
         return pending_targets
 
     probs_np = _target_rows_to_numpy(probs, target_rows, np.float32)
+    scores_np = (
+        _target_rows_to_numpy(scores, target_rows, np.float32)
+        if scores is not None
+        else None
+    )
     log_Z_np = _target_rows_to_numpy(log_Z, target_rows, np.float32)
     best_log_score_np = _target_rows_to_numpy(best_log_score, target_rows, np.float32)
     best_argmax_np = _target_rows_to_numpy(best_argmax, target_rows, np.int64)
@@ -536,6 +542,32 @@ def maybe_write_debug_fused_posterior_dump(
             dump_dir
             / f"local_fused_posterior_it{iteration_label:03d}_image_{original_idx}{label_suffix}.npz"
         )
+        score_payload = {}
+        if scores_np is not None:
+            rotation_log_prior = np.asarray(
+                bucket.local_rotation_log_prior[row, :actual_count],
+                dtype=np.float32,
+            )
+            translation_log_prior = np.asarray(
+                bucket.translation_log_prior[row],
+                dtype=np.float32,
+            )
+            total_scores = np.asarray(
+                scores_np[compact_row, :actual_count, :],
+                dtype=np.float32,
+            )
+            raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
+            raw_scores = np.where(
+                metadata["rotation_mask"][:, None],
+                raw_scores,
+                -np.inf,
+            )
+            score_payload = {
+                "pass2_scores_raw": raw_scores[None, :, :],
+                "pass2_scores_total": total_scores[None, :, :],
+                "rotation_log_prior": rotation_log_prior[None, :],
+                "translation_log_prior": translation_log_prior[None, :],
+            }
         np.savez_compressed(
             dump_path,
             selected_global_image_indices=np.array([original_idx], dtype=np.int64),
@@ -631,6 +663,7 @@ def maybe_write_debug_fused_posterior_dump(
             n_trans=np.array([n_trans], dtype=np.int32),
             grid_n_pixels=np.array([int(local_layout.n_pixels)], dtype=np.int32),
             grid_n_psi=np.array([int(local_layout.n_psi)], dtype=np.int32),
+            **score_payload,
         )
         if requested_iterations is None:
             pending_targets.remove(original_idx)

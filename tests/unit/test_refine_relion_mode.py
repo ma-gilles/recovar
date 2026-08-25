@@ -7619,6 +7619,7 @@ def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "0")
     monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR", str(fused_dump_dir))
     monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES", "0")
+    monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES", "1")
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT", raising=False)
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", raising=False)
 
@@ -7658,6 +7659,16 @@ def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
     with np.load(fused_dumps[0]) as dump:
         assert dump["posterior"].shape == (1, 3, 2)
         assert dump["best_score"].shape == (1,)
+        assert dump["pass2_scores_raw"].shape == (1, 3, 2)
+        assert dump["pass2_scores_total"].shape == (1, 3, 2)
+        np.testing.assert_allclose(
+            dump["pass2_scores_total"],
+            dump["pass2_scores_raw"]
+            + dump["rotation_log_prior"][:, :, None]
+            + dump["translation_log_prior"][:, None, :],
+            atol=1e-6,
+            rtol=1e-6,
+        )
 
 
 def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_path):
@@ -8015,9 +8026,18 @@ def test_local_score_debug_recon_projection_materialization_is_bucket_scoped():
     assert "jax.clear_caches()" in src
 
 
-def test_local_fused_posterior_debug_does_not_request_scores_without_score_dump():
+def test_local_fused_posterior_debug_requests_scores_only_with_explicit_flag():
     src = inspect.getsource(run_local_em_exact)
-    assert "return_big_jit_debug_scores = bool(score_debug_bucket_matches)" in src
+    assert "debug_fused_posterior_dump_scores = bool(" in src
+    assert 'and _env_flag("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES")' in src
+    debug_scores_block = src[
+        src.index("return_big_jit_debug_scores = bool(") :
+        src.index("return_big_jit_debug_operands = bool(")
+    ]
+    assert "score_debug_bucket_matches" in debug_scores_block
+    assert "bpref_contribution_capture_active" in debug_scores_block
+    assert "fused_debug_bucket_matches" in debug_scores_block
+    assert "debug_fused_posterior_dump_scores" in debug_scores_block
     assert "return_debug_scores=return_big_jit_debug_scores" in src
     assert "if return_big_jit_debug_scores" in src
     assert "if fused_debug_bucket_matches and debug_fused_posterior_dump_targets:" in src

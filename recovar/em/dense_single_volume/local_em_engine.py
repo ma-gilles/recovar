@@ -2469,6 +2469,10 @@ def run_local_em_exact(
         and current_size_matches_request(debug_fused_posterior_dump_current_sizes, current_size)
         and iteration_matches_request(debug_fused_posterior_dump_iterations, debug_iteration)
     )
+    debug_fused_posterior_dump_scores = bool(
+        debug_fused_posterior_dump_filter_matches
+        and _env_flag("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES")
+    )
     debug_noise_dump_filter_matches = (
         debug_noise_dump_dir is not None
         and current_size_matches_request(debug_noise_dump_current_sizes, current_size)
@@ -3594,7 +3598,12 @@ def run_local_em_exact(
                 or bpref_contribution_capture_active
             )
             return_big_jit_debug_scores = bool(
-                score_debug_bucket_matches or bpref_contribution_capture_active
+                score_debug_bucket_matches
+                or bpref_contribution_capture_active
+                or (
+                    fused_debug_bucket_matches
+                    and debug_fused_posterior_dump_scores
+                )
             )
             return_big_jit_debug_operands = bool(debug_score_dump_operands and score_debug_bucket_matches)
             if return_big_jit_debug_arrays:
@@ -4109,6 +4118,11 @@ def run_local_em_exact(
                         local_layout=local_layout,
                         bucket=unpadded_bucket,
                         image_pre_shifts=image_pre_shifts,
+                        scores=(
+                            debug_scores_unpadded
+                            if debug_fused_posterior_dump_scores
+                            else None
+                        ),
                         probs=debug_probs_unpadded,
                         log_Z=log_Z_unpadded,
                         best_log_score=best_log_score_unpadded,
