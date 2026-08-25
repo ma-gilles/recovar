@@ -108,7 +108,7 @@ export OMPI_MCA_shmem_mmap_enable_nfs_warning=0
 export CUDA_VISIBLE_DEVICES=0
 
 export RECOVAR_DEBUG_DUMP_DIR=${NATIVE_MSTEP}
-export RECOVAR_DEBUG_DUMP_MSTEP_ITER=1
+export RECOVAR_DEBUG_DUMP_MSTEP_ITER=${TARGET_ITERATION}
 export RELION_ACC_DUMP_DIR=${NATIVE_CAPTURE}
 export RELION_ACC_DUMP_PART_ID=${PART_ID}
 export RELION_ACC_DUMP_ITER=${TARGET_ITERATION}
@@ -160,9 +160,12 @@ set -e
 touch "${OUTPUT_ROOT}/NATIVE_STOPPED_AFTER_IT${target_tag}"
 
 for required in \
-  pipe_it1_c0_bp_data_pre_reweight.bin pipe_it1_c0_bp_weight.bin \
-  pipe_it1_c0_bp_data_h_pre_reweight.bin pipe_it1_c0_bp_weight_h.bin \
-  mstep_it1_c0_iref_before.bin mstep_it1_c0_iref_after.bin; do
+  pipe_it${TARGET_ITERATION}_c0_bp_data_pre_reweight.bin \
+  pipe_it${TARGET_ITERATION}_c0_bp_weight.bin \
+  pipe_it${TARGET_ITERATION}_c0_bp_data_h_pre_reweight.bin \
+  pipe_it${TARGET_ITERATION}_c0_bp_weight_h.bin \
+  mstep_it${TARGET_ITERATION}_c0_iref_before.bin \
+  mstep_it${TARGET_ITERATION}_c0_iref_after.bin; do
   test -s "${NATIVE_MSTEP}/${required}"
 done
 
@@ -182,7 +185,7 @@ unset MPI_ROOT CUDA_HOME OMPI_MCA_orte_tmpdir_base OMPI_MCA_shmem_mmap_enable_nf
 unset RECOVAR_DEBUG_DUMP_DIR RECOVAR_DEBUG_DUMP_MSTEP_ITER
 unset RELION_ACC_DUMP_DIR RELION_ACC_DUMP_PART_ID RELION_ACC_DUMP_ITER RELION_ACC_DUMP_VERBOSE
 export RECOVAR_MSTEP_DUMP_DIR=${RECOVAR_MSTEP}
-export RECOVAR_MSTEP_DUMP_ITER=1
+export RECOVAR_MSTEP_DUMP_ITER=${TARGET_ITERATION}
 if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
   mapfile -t contribution_metadata < <(
     "${PIXI_PY}" - "${DATA_DIR}/particles.star" \
@@ -225,10 +228,10 @@ PY
   contribution_particle_count=${contribution_metadata[1]}
   test "${contribution_particle_count}" -ge 1
   export RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR=${CONTRIBUTIONS}
-  export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=1
+  export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=${TARGET_ITERATION}
   export RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF=${BPREF_CONTRIBUTION_HALF}
   export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE}
-  export RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID=vdam-gf01-it1-half${BPREF_CONTRIBUTION_HALF}
+  export RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID=vdam-gf01-it${TARGET_ITERATION}-half${BPREF_CONTRIBUTION_HALF}
   export RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY=${PROVENANCE}/bpref_image_names.npy
   export RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256
   RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256=$(sha256sum "${contribution_stack}" | awk '{print $1}')
@@ -269,14 +272,14 @@ test -s "${RECOVAR_MSTEP}/accum_h0_data.npy"
 test -s "${RECOVAR_MSTEP}/iref_out_relion_frame.npy"
 if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
   test "$(find "${CONTRIBUTIONS}" -maxdepth 1 -type f \
-    -name 'bpref_contribution_rows_it001_h*.npz' | wc -l)" -ge 1
+    -name "bpref_contribution_rows_it${target_tag}_h*.npz" | wc -l)" -ge 1
 fi
 (
   cd "${REPO_ROOT}"
   "${PIXI_PY}" -m scripts.analyze_vdam_mstep_boundary \
     --native-directory "${NATIVE_MSTEP}" \
     --recovar-directory "${RECOVAR_MSTEP}" \
-    --iteration 1 \
+    --iteration "${TARGET_ITERATION}" \
     --output-json "${ANALYSIS}/mstep_boundary.json"
 )
 
