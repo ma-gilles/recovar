@@ -2020,3 +2020,49 @@ restart-safe summary `12939264` continue independently; the snapshot checkout
 and its copied compiled artifacts have not changed.  No generic RECOVAR suite
 ran, and the remaining 21 frozen trajectory cases remain held until the
 repeat-aware default gate is classified.
+
+The corrected warm-shape result closes score-budget tuning.  Slurm `12940613`
+still measures `1.9373736 s` default versus `5.9438605 s` at the 96-image cap
+for iteration-20 pass 1 (`+206.8%`).  Direct all-checkpoint comparison first
+selects the measured native iteration-19 alternate for one particle and differs
+for five at iteration 20; minimum between-arm FSC-AUC is
+`0.999989537494`.  Map/particle/shell report SHA-256 values are
+`57929ebd8c485824ef469d01258b17e8f8cbd571907e4253948079418b795c85`,
+`36ae899cac5b0e51908f8545a6ce45a423b12c5f6a9dfaca7e086f3918485955`,
+and `02206f5a8cffe3ea19a4eaded5a9ca2bac91855f46372bb4eda27e26f384d166`.
+
+An isolated opt-in kernel candidate now mirrors RELION's shared-reference
+staging without changing RECOVAR's already-qualified compact rotation frame,
+pixel/lane accumulation order, or atomic output topology.  Representative
+H100 Slurm `12941717` reduces a 187-image by 36,864-rotation by 29-translation
+call from median `0.3741495 s` to `0.0656711 s` (`82.45%`).  Candidate
+same-kernel atomic jitter (relative L2 `3.85e-8`, one synthetic hard near-tie)
+classifies the legacy-vs-candidate delta (`4.38e-8`, three synthetic hard
+near-ties); report SHA-256 is
+`e43a2352942d890137040c915497557f5abdb0fc5351c35db2a86a37f06ab0e6`.
+
+The real iteration-0--20 same-H100 gate, Slurm `12941792`, has zero hard
+particle differences from RELION in both arms and all maps pass.  Candidate
+minimum FSC-AUC is `0.9999999999195193`.  Iteration-20 pass 1 falls from
+`1.9457793 s` to `1.3525169 s` (`30.49%`), with pass 2 stable at
+`1.6432538 s` versus `1.6584010 s`.  Candidate map/particle/profile report
+SHA-256 values are
+`e328d9ccf0c0cb37e5de6923ca10f11f32b4d99432f7107d34f397b186d6e3a2`,
+`52e7a5358ed5c608d913cfcdcfabb6e5f3a8f5ea3b3398aef5794593e52a011f`,
+and `a34eb2629701044b3c0cbc12741b6e1398a30374277023345984c072a5b86737`.
+Focused source/flag tests, Ruff, pycompile, shell syntax, CUDA compilation, and
+diff checks pass; no generic suite ran.
+
+The opt-in full 200-iteration default qualification is now H100 Slurm
+`12941960`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_shared_full_c2583f890_20260825`.
+It is pinned to immutable local unpushed source
+`c2583f890` and experimental H100 CUDA SHA-256
+`b3a329a5f5559ca3bb3c436ab5a051bfe1666c317a2c2834daea1ae3c2c6939c`.
+It profiles every iteration and retains all 201 maps, 200 particle states, and
+schedule checkpoints.  Acceptance requires native-ensemble/GT/schedule
+coverage after the measured iteration-19 floor and at least 20% total RECOVAR
+wall reduction.  The formal immutable four-repeat production panel
+`12939263` continues independently, with `12939264` queued for restart-safe
+summary.  The performance worktree will remain unchanged while `12941960`
+runs, and the frozen 21-case expansion remains held.
