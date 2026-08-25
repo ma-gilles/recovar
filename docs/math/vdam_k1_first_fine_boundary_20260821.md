@@ -1026,3 +1026,35 @@ independent approximations.  Evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_inline_sep_repeat_panel_9cc94a79_20260824.json`
 - `/scratch/gpfs/GILLES/mg6942/slurmo/vdam-inline-separate-ptx-12914645.txt`
+
+## Single-Euler inline-projector discriminator
+
+Isolated commit `defa4e075` compile-time-specializes the fused kernel and uses
+one nine-float Euler tensor for both inline texture projection and native-order
+scatter.  Its compute-80 PTX has exactly one 36-byte shared allocation in the
+inline specialization.  PTX-only build job `12914984` completed with CUDA
+digest
+`aee4ec5ca832b0b3d844fde2bb238332774630c9a9f7b2844867bd5430bfa8d2`.
+Focused H100 job `12915212` passed all five source, fused-interior,
+SGD-y-boundary, zero-projector, and fail-closed routing tests.
+
+Paired true-200-schedule boundary jobs `12915367`/`12915368` completed in
+59/60 seconds on distinct H100 UUIDs.  Native-repeat relative L2 is
+`9.34808e-6`/`1.07796e-5` for data, `2.24983e-6`/`2.48560e-6`
+for weight, and `1.93312e-6` after reconstruction.  The two cross/native
+ratios are `0.920`--`1.044` for data, `0.922`--`1.087` for weight, and
+`1.041`/`1.245` for the reconstructed reference.  The candidate is therefore
+still at the native nondeterminism floor rather than materially closer, and is
+rejected without a long trajectory.  Its experimental commit remains
+unpushed.
+
+This closes the bounded resource/layout variants: matching PTX target, shared
+Euler footprint, accumulator storage, inline projection, and one-Euler reuse
+does not reproduce RELION's atomic distribution.  The next discriminator must
+mirror RELION's native SGD kernel body and control flow, including its image,
+translation, significant-weight, and atomic-triplet paths, before another
+trajectory is justified.  Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_single_euler_repeat_panel_defa4e07_20260824.json`
+- `/scratch/gpfs/GILLES/mg6942/slurmo/vdam-single-euler-ptx-12914984.txt`
+- `/scratch/gpfs/GILLES/mg6942/slurmo/vdam-single-euler-focused-12915212.out`
