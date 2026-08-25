@@ -512,6 +512,13 @@ def test_vdam_native_full_repeat_preserves_autonomous_schedule():
     assert not missing, f"VDAM native full repeat lost autonomous trajectory contract: {missing}"
 
 
+def test_vdam_paired_runner_imports_from_clean_environment():
+    runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+
+    assert '"${PIXI_PY}" -m scripts.run_vdam_relion_parity_case "${RUN_ARGS[@]}"' in runner
+    assert '"${PIXI_PY}" scripts/run_vdam_relion_parity_case.py' not in runner
+
+
 def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
     capture = (REPO_ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
 
