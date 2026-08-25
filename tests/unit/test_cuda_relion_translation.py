@@ -105,6 +105,9 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "cudaStream_t particle_streams[3]" in projector_launcher
     assert "pool_start += 3" in projector_launcher
     assert "cudaStreamSynchronize(particle_streams[lane])" in projector_launcher
+    assert "reconstruction_groups_host[particle]" in projector_launcher
+    assert "data_real_volume + accumulator_offset" in projector_launcher
+    assert "weight_volume + accumulator_offset" in projector_launcher
 
     wrapper = inspect.getsource(cuda_backproject.relion_vdam_mstep_fused_x_half)
     assert "data_real_volume = jnp.asarray(data_volume.real" in wrapper
@@ -651,6 +654,91 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
 
     for expected_value, actual_value in zip(expected, actual, strict=True):
         np.testing.assert_allclose(actual_value, expected_value, rtol=0.0, atol=0.0)
+
+
+@pytest.mark.gpu
+def test_relion_vdam_mstep_fused_projector_routes_reconstruction_groups(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    image_shape = (8, 8)
+    volume_shape = (11, 11, 11)
+    half_width = image_shape[1] // 2 + 1
+    pixel_indices = np.arange(image_shape[0] * half_width, dtype=np.int32)
+    volume_size = volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    rng = np.random.default_rng(9021)
+    n_particles = 6
+    images = (
+        rng.normal(size=(n_particles, pixel_indices.size))
+        + 1j * rng.normal(size=(n_particles, pixel_indices.size))
+    ).astype(np.complex64)
+    ctf = rng.uniform(0.25, 1.25, size=images.shape).astype(np.float32)
+    minvsigma2 = rng.uniform(0.5, 2.0, size=images.shape).astype(np.float32)
+    posterior = rng.uniform(0.0, 0.5, size=(n_particles, 2, 3)).astype(np.float32)
+    angles = np.asarray([[0.0, 0.0], [0.01, -0.02], [-0.03, 0.015]], dtype=np.float32)
+    rotations = np.broadcast_to(
+        np.eye(3, dtype=np.float32),
+        (n_particles, 2, 3, 3),
+    ).copy()
+    group_ids = np.asarray([0, 1, 0, 1, 1, 0], dtype=np.int32)
+
+    with jax.default_device(gpu_device):
+        grouped = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            jnp.zeros((2, volume_size), dtype=jnp.complex64),
+            jnp.zeros((2, volume_size), dtype=jnp.float32),
+            jnp.asarray(images),
+            jnp.asarray(ctf),
+            jnp.asarray(minvsigma2),
+            jnp.asarray(posterior),
+            jnp.asarray(angles),
+            jnp.asarray(pixel_indices),
+            jnp.zeros((11, 11, 11), dtype=jnp.complex64),
+            jnp.asarray(rotations),
+            image_shape,
+            volume_shape,
+            4.0,
+            4,
+            1,
+            reconstruction_group_ids=jnp.asarray(group_ids),
+        )
+        separate = []
+        for group_index in range(2):
+            select = group_ids == group_index
+            separate.append(
+                cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+                    jnp.zeros((volume_size,), dtype=jnp.complex64),
+                    jnp.zeros((volume_size,), dtype=jnp.float32),
+                    jnp.asarray(images[select]),
+                    jnp.asarray(ctf[select]),
+                    jnp.asarray(minvsigma2[select]),
+                    jnp.asarray(posterior[select]),
+                    jnp.asarray(angles),
+                    jnp.asarray(pixel_indices),
+                    jnp.zeros((11, 11, 11), dtype=jnp.complex64),
+                    jnp.asarray(rotations[select]),
+                    image_shape,
+                    volume_shape,
+                    4.0,
+                    4,
+                    1,
+                )
+            )
+        jax.block_until_ready((grouped, separate))
+
+    for value_index in (0, 1):
+        for group_index in range(2):
+            np.testing.assert_allclose(
+                np.asarray(grouped[value_index][group_index]),
+                np.asarray(separate[group_index][value_index]),
+                rtol=2e-5,
+                atol=2e-5,
+            )
 
 
 @pytest.mark.gpu

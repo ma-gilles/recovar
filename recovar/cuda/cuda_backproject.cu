@@ -4732,6 +4732,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     const float* translation_angles,
     const float* projector_eulers,
     const float* rot,
+    const int32_t* reconstruction_group_ids,
     float* data_real_volume,
     float* data_imag_volume,
     float* weight_volume,
@@ -4750,7 +4751,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     int64_t max_r2_x4,
     int physical_image_size,
     int projector_max_r,
-    int projection_padding_factor)
+    int projection_padding_factor,
+    int reconstruction_group_count)
 {
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * projection_padding_factor) + 0.5f));
@@ -4772,6 +4774,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     cudaTextureObject_t texture_imag = 0;
     cudaStream_t particle_streams[3] = {nullptr, nullptr, nullptr};
     cudaEvent_t particle_inputs_ready = nullptr;
+    int32_t* reconstruction_groups_host = nullptr;
     cudaError_t err = cudaMalloc(
         reinterpret_cast<void**>(&real),
         static_cast<size_t>(texture_voxels) * sizeof(float));
@@ -4871,6 +4874,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         const int64_t posterior_stride = rotation_count * translation_count;
         const int64_t euler_stride = rotation_count * 9;
         const int64_t image_value_count = n_particles * pixel_count;
+        const int64_t accumulator_stride = N0 * N1 * (N2 / 2 + 1);
         const int model_x = static_cast<int>(N2 / 2 + 1);
         const int model_y = static_cast<int>(N1);
         const int model_init_y = -static_cast<int>(N1 / 2);
@@ -4914,6 +4918,29 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         err = cudaGetLastError();
         if (err != cudaSuccess) goto cleanup;
 
+        err = cudaMallocHost(
+            reinterpret_cast<void**>(&reconstruction_groups_host),
+            static_cast<size_t>(n_particles) * sizeof(int32_t));
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaMemcpyAsync(
+            reconstruction_groups_host,
+            reconstruction_group_ids,
+            static_cast<size_t>(n_particles) * sizeof(int32_t),
+            cudaMemcpyDeviceToHost,
+            stream);
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaStreamSynchronize(stream);
+        if (err != cudaSuccess) goto cleanup;
+        for (int64_t particle = 0; particle < n_particles; ++particle)
+        {
+            if (reconstruction_groups_host[particle] < 0 ||
+                reconstruction_groups_host[particle] >= reconstruction_group_count)
+            {
+                err = cudaErrorInvalidValue;
+                goto cleanup;
+            }
+        }
+
         // RELION processes --pool 3 with one CUDA class stream per OpenMP
         // worker.  Each pool's three particles therefore update the shared
         // BackProjector concurrently, followed by the host OpenMP barrier.
@@ -4955,6 +4982,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             for (int64_t particle = pool_start; particle < pool_stop; ++particle)
             {
                 const int lane = static_cast<int>(particle - pool_start);
+                const int64_t accumulator_offset =
+                    static_cast<int64_t>(reconstruction_groups_host[particle]) *
+                    accumulator_stride;
                 relion_vdam_native_sgd_f32_kernel<<<
                     rotation_count, 128, 0, particle_streams[lane]>>>(
                     projector,
@@ -4971,9 +5001,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     significant_weight,
                     weight_norm,
                     const_cast<float*>(projector_eulers + particle * euler_stride),
-                    data_real_volume,
-                    data_imag_volume,
-                    weight_volume,
+                    data_real_volume + accumulator_offset,
+                    data_imag_volume + accumulator_offset,
+                    weight_volume + accumulator_offset,
                     static_cast<int>(sqrtf(max_r2) + 0.5f),
                     static_cast<int>(max_r2),
                     static_cast<float>(upsampling),
@@ -5022,6 +5052,7 @@ cleanup:
     for (int lane = 0; lane < 3; ++lane)
         if (particle_streams[lane]) cudaStreamDestroy(particle_streams[lane]);
     if (particle_inputs_ready) cudaEventDestroy(particle_inputs_ready);
+    if (reconstruction_groups_host) cudaFreeHost(reconstruction_groups_host);
     if (texture_real) cudaDestroyTextureObject(texture_real);
     if (texture_imag) cudaDestroyTextureObject(texture_imag);
     if (array_real) cudaFreeArray(array_real);
@@ -8057,6 +8088,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     int64_t physical_image_size,
     int64_t projector_max_r,
     int64_t projection_padding_factor,
+    int64_t reconstruction_group_count,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -8065,6 +8097,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     ffi::AnyBuffer translation_angles,
     ffi::AnyBuffer eulers,
     ffi::AnyBuffer rot,
+    ffi::AnyBuffer reconstruction_group_ids,
     ffi::AnyBuffer data_real_volume_in,
     ffi::AnyBuffer data_imag_volume_in,
     ffi::AnyBuffer weight_volume_in,
@@ -8085,6 +8118,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         translation_angles.element_type() != ffi::DataType::F32 ||
         eulers.element_type() != ffi::DataType::F32 ||
         rot.element_type() != ffi::DataType::F32 ||
+        reconstruction_group_ids.element_type() != ffi::DataType::S32 ||
         weight_volume_in.element_type() != ffi::DataType::F32 ||
         weight_volume_out->element_type() != ffi::DataType::F32 ||
         denominator_sum->element_type() != ffi::DataType::F32)
@@ -8093,7 +8127,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     if (image_h <= 0 || image_w != image_h / 2 + 1 ||
         N0 <= 0 || N0 != N1 || N1 != N2 || (N2 & 1) == 0 ||
         upsampling <= 0 || max_r2_x4 < 0 || physical_image_size <= 0 ||
-        projector_max_r <= 0 || projection_padding_factor <= 0)
+        projector_max_r <= 0 || projection_padding_factor <= 0 ||
+        reconstruction_group_count <= 0)
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedProjectorXHalf: invalid geometry");
 
@@ -8105,6 +8140,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     const auto translation_dims = translation_angles.dimensions();
     const auto euler_dims = eulers.dimensions();
     const auto rot_dims = rot.dimensions();
+    const auto reconstruction_group_dims = reconstruction_group_ids.dimensions();
     const auto denominator_dims = denominator_sum->dimensions();
     const int64_t pixel_count = image_h * image_w;
     if (projector_dims.size() != 3 || projector_dims[0] <= 0 ||
@@ -8119,6 +8155,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         euler_dims[1] != posterior_dims[1] || euler_dims[2] != 9 ||
         rot_dims.size() != 3 || rot_dims[0] != image_dims[0] ||
         rot_dims[1] != posterior_dims[1] || rot_dims[2] != 6 ||
+        reconstruction_group_dims.size() != 1 ||
+        reconstruction_group_dims[0] != image_dims[0] ||
         denominator_dims.size() != 3 || denominator_dims[0] != image_dims[0] ||
         denominator_dims[1] != posterior_dims[1] || denominator_dims[2] != pixel_count)
         return ffi::Error::InvalidArgument(
@@ -8131,12 +8169,20 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     const auto data_real_out_dims = data_real_volume_out->dimensions();
     const auto data_imag_out_dims = data_imag_volume_out->dimensions();
     const auto weight_out_dims = weight_volume_out->dimensions();
-    if (data_real_in_dims.size() != 1 || data_real_in_dims[0] != volume_size ||
-        data_imag_in_dims.size() != 1 || data_imag_in_dims[0] != volume_size ||
-        weight_in_dims.size() != 1 || weight_in_dims[0] != volume_size ||
-        data_real_out_dims.size() != 1 || data_real_out_dims[0] != volume_size ||
-        data_imag_out_dims.size() != 1 || data_imag_out_dims[0] != volume_size ||
-        weight_out_dims.size() != 1 || weight_out_dims[0] != volume_size)
+    const bool ungrouped_accumulators = reconstruction_group_count == 1;
+    const auto valid_accumulator_dims = [=](auto dims) {
+        return ungrouped_accumulators
+            ? (dims.size() == 1 && dims[0] == volume_size)
+            : (dims.size() == 2 &&
+               dims[0] == reconstruction_group_count &&
+               dims[1] == volume_size);
+    };
+    if (!valid_accumulator_dims(data_real_in_dims) ||
+        !valid_accumulator_dims(data_imag_in_dims) ||
+        !valid_accumulator_dims(weight_in_dims) ||
+        !valid_accumulator_dims(data_real_out_dims) ||
+        !valid_accumulator_dims(data_imag_out_dims) ||
+        !valid_accumulator_dims(weight_out_dims))
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedProjectorXHalf: accumulator sizes do not match");
 
@@ -8150,6 +8196,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<const float*>(translation_angles.untyped_data()),
         static_cast<const float*>(eulers.untyped_data()),
         static_cast<const float*>(rot.untyped_data()),
+        static_cast<const int32_t*>(reconstruction_group_ids.untyped_data()),
         static_cast<float*>(data_real_volume_out->untyped_data()),
         static_cast<float*>(data_imag_volume_out->untyped_data()),
         static_cast<float*>(weight_volume_out->untyped_data()),
@@ -8158,7 +8205,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         pixel_count, image_h, image_w, N0, N1, N2, upsampling, max_r2_x4,
         static_cast<int>(physical_image_size),
         static_cast<int>(projector_max_r),
-        static_cast<int>(projection_padding_factor));
+        static_cast<int>(projection_padding_factor),
+        static_cast<int>(reconstruction_group_count));
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -8179,6 +8227,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("physical_image_size")
         .Attr<int64_t>("projector_max_r")
         .Attr<int64_t>("projection_padding_factor")
+        .Attr<int64_t>("reconstruction_group_count")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

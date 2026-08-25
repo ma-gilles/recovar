@@ -1194,6 +1194,11 @@ def bucket_local_hypothesis_layout(
     for bucket_images in bucket_groups:
         bucket_size = int(bucket_sizes[int(bucket_images[0])])
         max_images = max(1, min(image_batch_size, max_hypotheses_per_microbatch // int(bucket_size)))
+        if preserve_image_order and max_images >= 3:
+            # RELION's InitialModel default processes pools of three particles.
+            # Keep static-shape FFI boundaries on pool boundaries so a new call
+            # never changes which physical particles may update BPref together.
+            max_images = max(3, (max_images // 3) * 3)
         for start in range(0, bucket_images.shape[0], max_images):
             image_indices = np.asarray(bucket_images[start : start + max_images], dtype=np.int32)
             actual_counts = layout.rotation_counts[image_indices].astype(np.int32, copy=False)

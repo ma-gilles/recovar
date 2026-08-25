@@ -746,6 +746,8 @@ def _run_sparse_pass2_initial_model_estep(
     *,
     class_log_priors,
     groups: list[tuple[int, np.ndarray]],
+    joint_particle_ids: np.ndarray,
+    joint_halfset_ids: np.ndarray | None,
     means,
     mean_variance,
     relion_projector_half_by_class: np.ndarray | None = None,
@@ -773,6 +775,29 @@ def _run_sparse_pass2_initial_model_estep(
     use_exact_relion_projector = relion_projector_half_by_class is not None
     if use_exact_relion_projector and relion_projector_r_max is None:
         raise ValueError("relion_projector_r_max is required with relion_projector_half_by_class")
+
+    joint_halfset_stream = bool(
+        state.pseudo_halfsets
+        and state.K == 1
+        and config.relion_bpref_frame
+        and use_exact_relion_projector
+        and not use_compact_sparse_pass2
+        and joint_halfset_ids is not None
+        and _uses_relion_cuda_image_preprocessing(experiment_dataset)
+    )
+    if joint_halfset_stream:
+        joint_particle_ids = np.asarray(joint_particle_ids, dtype=np.int64)
+        joint_halfset_ids = np.asarray(joint_halfset_ids, dtype=np.int32)
+        if joint_halfset_ids.shape != joint_particle_ids.shape:
+            raise ValueError("joint halfset ids must match the selected particle stream")
+        if np.any((joint_halfset_ids != 0) & (joint_halfset_ids != 1)):
+            raise ValueError("joint halfset ids must contain only 0/1 values")
+        processing_groups = [(0, joint_particle_ids, joint_halfset_ids)]
+    else:
+        processing_groups = [
+            (int(halfset_idx), np.asarray(image_indices, dtype=np.int64), None)
+            for halfset_idx, image_indices in groups
+        ]
 
     coarse_translations = _coarse_translations_from_config(config, options)
     translation_step = float(options.get("translation_step", _translation_step_from_grid(coarse_translations)))
@@ -837,7 +862,7 @@ def _run_sparse_pass2_initial_model_estep(
             RELION_SCORE_TENSOR_FLOAT_BUDGET / 1e6,
         )
 
-    for halfset_idx, image_indices in groups:
+    for halfset_idx, image_indices, reconstruction_group_ids in processing_groups:
         image_indices = np.asarray(image_indices, dtype=np.int64)
         if image_indices.size == 0:
             accumulators.extend(_empty_accumulator(state, k, int(halfset_idx)) for k in range(state.K))
@@ -1130,7 +1155,14 @@ def _run_sparse_pass2_initial_model_estep(
                     # support only. Fine pass-2 reconstruction uses adaptive_fraction
                     # without reapplying maximum_significants.
                     max_significants=-1,
-                    unify_local_bucket_sizes=_unify_local_bucket_sizes_enabled(),
+                    # A joint halfset stream must remain one physical bucket
+                    # sequence; changing bucket shapes would restart RELION's
+                    # pool-of-three phase at an artificial FFI boundary.
+                    unify_local_bucket_sizes=(
+                        True
+                        if reconstruction_group_ids is not None
+                        else _unify_local_bucket_sizes_enabled()
+                    ),
                     stats_use_reconstruction_probs=True,
                     class_posterior_sums_from_noise=False,
                     return_profile=return_profile,
@@ -1144,6 +1176,10 @@ def _run_sparse_pass2_initial_model_estep(
                     relion_exact_bpref_operands=bool(use_exact_local_relion_operands),
                     preserve_bpref_particle_order=bool(
                         use_exact_local_relion_operands and config.relion_bpref_frame
+                    ),
+                    reconstruction_group_ids=reconstruction_group_ids,
+                    reconstruction_group_count=(
+                        2 if reconstruction_group_ids is not None else None
                     ),
                     relion_exact_fine_diff2=use_exact_fine_diff2,
                     relion_exact_score_translation=use_exact_fine_diff2,
@@ -1166,17 +1202,33 @@ def _run_sparse_pass2_initial_model_estep(
                 result.Ft_y,
                 result.Ft_ctf,
                 state,
-                halfset_idx=int(halfset_idx),
+                halfset_idx=(
+                    None if reconstruction_group_ids is not None else int(halfset_idx)
+                ),
+                reconstruction_group_count=(
+                    2 if reconstruction_group_ids is not None else None
+                ),
                 relion_bpref_frame=config.relion_bpref_frame,
                 relion_projector_frame=config.relion_projector_frame,
                 padding_factor=config.padding_factor,
             )
         )
 
+    selected_particle_ids_by_result = (
+        {0: np.asarray(joint_particle_ids, dtype=np.int64)}
+        if joint_halfset_stream
+        else {
+            int(group_index): np.asarray(image_ids, dtype=np.int64)
+            for group_index, image_ids in groups
+        }
+    )
     meta = _sparse_pass2_estep_meta(
         halfset_results,
-        {int(group_index): np.asarray(image_ids, dtype=np.int64) for group_index, image_ids in groups},
+        selected_particle_ids_by_result,
     )
+    if joint_halfset_stream:
+        meta["halfset_ids"] = (0, 1)
+        meta["joint_halfset_particle_stream"] = True
     _add_accumulator_weight_meta(meta, accumulators, state.K)
     meta["pass2_engine"] = "compact" if use_compact_sparse_pass2 else "local"
     out = DenseInitialModelEstepResult(
@@ -1272,7 +1324,8 @@ def _arrays_to_accumulators(
     Ft_ctf_by_class,
     state: InitialModelState,
     *,
-    halfset_idx: int,
+    halfset_idx: int | None,
+    reconstruction_group_count: int | None = None,
     relion_bpref_frame: bool,
     relion_projector_frame: bool,
     padding_factor: int,
@@ -1283,46 +1336,72 @@ def _arrays_to_accumulators(
         data_scale, weight_scale = relion_bpref_frame_scales(state.ori_size)
     dump_dir = os.environ.get("RECOVAR_INITIAL_MODEL_ACCUM_DUMP_DIR")
 
+    grouped = halfset_idx is None
+    if grouped:
+        if reconstruction_group_count is None or int(reconstruction_group_count) <= 0:
+            raise ValueError(
+                "reconstruction_group_count is required for grouped accumulators"
+            )
+        output_halfsets = range(int(reconstruction_group_count))
+    else:
+        if reconstruction_group_count not in (None, 1):
+            raise ValueError(
+                "reconstruction_group_count is only valid for grouped accumulators"
+            )
+        output_halfsets = (int(halfset_idx),)
+
     accumulators: list[VdamAccumulator] = []
     for k in range(state.K):
-        converter = relion_x_public_output_to_bpref if relion_bpref_frame else run_em_output_to_bpref
-        bp_data, bp_weight = converter(
-            np.asarray(Ft_y_by_class[k]),
-            np.asarray(Ft_ctf_by_class[k]),
-            state.ori_size,
-            r_max,
-            padding_factor=padding_factor,
-        )
-        if relion_projector_frame and not relion_bpref_frame:
-            bp_data = bp_data[::-1, :, :]
-            bp_weight = bp_weight[::-1, :, :]
-        if dump_dir:
-            path = Path(dump_dir)
-            path.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(
-                path / f"accum_h{int(halfset_idx)}_k{int(k)}.npz",
-                Ft_y=np.asarray(Ft_y_by_class[k]),
-                Ft_ctf=np.asarray(Ft_ctf_by_class[k]),
-                bp_data_unscaled=np.asarray(bp_data),
-                bp_weight_unscaled=np.asarray(bp_weight),
-                bp_data_scaled=np.asarray(bp_data * data_scale),
-                bp_weight_scaled=np.asarray(bp_weight * weight_scale),
-                data_scale=np.float64(data_scale),
-                weight_scale=np.float64(weight_scale),
-                relion_projector_frame=np.bool_(relion_projector_frame),
-                relion_bpref_frame=np.bool_(relion_bpref_frame),
-                padding_factor=np.int32(padding_factor),
-                ori_size=np.int32(state.ori_size),
-                current_size=np.int32(state.current_size),
+        class_data = np.asarray(Ft_y_by_class[k])
+        class_weight = np.asarray(Ft_ctf_by_class[k])
+        if grouped and (
+            class_data.shape[0] != int(reconstruction_group_count)
+            or class_weight.shape[0] != int(reconstruction_group_count)
+        ):
+            raise ValueError(
+                "grouped accumulator arrays do not match reconstruction_group_count"
             )
-        accumulators.append(
-            VdamAccumulator(
-                data=bp_data * data_scale,
-                weight=bp_weight * weight_scale,
-                class_idx=k,
-                halfset_idx=halfset_idx,
+        for output_halfset in output_halfsets:
+            public_data = class_data[output_halfset] if grouped else class_data
+            public_weight = class_weight[output_halfset] if grouped else class_weight
+            converter = relion_x_public_output_to_bpref if relion_bpref_frame else run_em_output_to_bpref
+            bp_data, bp_weight = converter(
+                public_data,
+                public_weight,
+                state.ori_size,
+                r_max,
+                padding_factor=padding_factor,
             )
-        )
+            if relion_projector_frame and not relion_bpref_frame:
+                bp_data = bp_data[::-1, :, :]
+                bp_weight = bp_weight[::-1, :, :]
+            if dump_dir:
+                path = Path(dump_dir)
+                path.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(
+                    path / f"accum_h{int(output_halfset)}_k{int(k)}.npz",
+                    Ft_y=np.asarray(public_data),
+                    Ft_ctf=np.asarray(public_weight),
+                    bp_data_unscaled=np.asarray(bp_data),
+                    bp_weight_unscaled=np.asarray(bp_weight),
+                    bp_data_scaled=np.asarray(bp_data * data_scale),
+                    bp_weight_scaled=np.asarray(bp_weight * weight_scale),
+                    data_scale=np.float64(data_scale),
+                    weight_scale=np.float64(weight_scale),
+                    relion_projector_frame=np.bool_(relion_projector_frame),
+                    relion_bpref_frame=np.bool_(relion_bpref_frame),
+                    padding_factor=np.int32(padding_factor),
+                    ori_size=np.int32(state.ori_size),
+                    current_size=np.int32(state.current_size),
+                )
+            accumulators.append(
+                VdamAccumulator(
+                    data=bp_data * data_scale,
+                    weight=bp_weight * weight_scale,
+                    class_idx=k,
+                    halfset_idx=int(output_halfset),
+                )
+            )
     return accumulators
 
 
@@ -1413,7 +1492,7 @@ def run_dense_initial_model_estep(
     particle_ids: np.ndarray | None = None,
     halfset_ids: np.ndarray | None = None,
 ) -> DenseInitialModelEstepResult:
-    """Run the InitialModel E-step; pseudo-halfsets run as separate E-steps with shared priors."""
+    """Run the InitialModel E-step with RELION-compatible pseudo-halfset routing."""
     class_log_priors = (
         class_log_priors_from_state(state) if config.class_log_priors is None else np.asarray(config.class_log_priors)
     )
@@ -1423,6 +1502,19 @@ def run_dense_initial_model_estep(
         n_images=int(experiment_dataset.n_images),
         pseudo_halfsets=state.pseudo_halfsets,
     )
+    selected_particle_ids = (
+        np.arange(int(experiment_dataset.n_images), dtype=np.int64)
+        if particle_ids is None
+        else np.asarray(particle_ids, dtype=np.int64)
+    )
+    if state.pseudo_halfsets:
+        selected_halfset_ids = (
+            np.arange(selected_particle_ids.size, dtype=np.int32) % 2
+            if halfset_ids is None
+            else np.asarray(halfset_ids, dtype=np.int32)
+        )
+    else:
+        selected_halfset_ids = None
     engine_kwargs = _dense_engine_kwargs(state, config)
     means, mean_variance, relion_projector_half_by_class, relion_projector_r_max = _resolve_class_inputs(
         state,
@@ -1437,6 +1529,8 @@ def run_dense_initial_model_estep(
             config,
             class_log_priors=class_log_priors,
             groups=groups,
+            joint_particle_ids=selected_particle_ids,
+            joint_halfset_ids=selected_halfset_ids,
             means=means,
             mean_variance=mean_variance,
             relion_projector_half_by_class=relion_projector_half_by_class,

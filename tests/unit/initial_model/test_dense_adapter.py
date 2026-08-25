@@ -162,6 +162,46 @@ def test_arrays_to_accumulators_inverts_relion_x_public_layout_without_projector
     np.testing.assert_array_equal(actual.weight, bp_weight.astype(np.float64) * weight_scale)
 
 
+def test_arrays_to_accumulators_splits_grouped_halfsets():
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=1,
+        n_directions=4,
+    )
+    state.current_size = 4
+    public_size = 7 * 7 * 7
+    grouped_data = np.stack(
+        [
+            np.full(public_size, 1.0 + 2.0j, dtype=np.complex64),
+            np.full(public_size, 3.0 + 4.0j, dtype=np.complex64),
+        ]
+    )
+    grouped_weight = np.stack(
+        [
+            np.full(public_size, 5.0, dtype=np.float32),
+            np.full(public_size, 7.0, dtype=np.float32),
+        ]
+    )
+
+    actual = _arrays_to_accumulators(
+        grouped_data[None, ...],
+        grouped_weight[None, ...],
+        state,
+        halfset_idx=None,
+        reconstruction_group_count=2,
+        relion_bpref_frame=True,
+        relion_projector_frame=False,
+        padding_factor=1,
+    )
+
+    assert [value.halfset_idx for value in actual] == [0, 1]
+    assert [value.class_idx for value in actual] == [0, 0]
+    assert not np.array_equal(actual[0].data, actual[1].data)
+    assert not np.array_equal(actual[0].weight, actual[1].weight)
+
+
 def test_split_pseudo_halfset_particle_ids_uses_particle_id_parity():
     h0, h1 = split_pseudo_halfset_particle_ids(
         5,
@@ -1684,6 +1724,147 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [0, 2, 1, 3])
     np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1, 0, 1])
     assert "fused_pseudo_halfsets" not in result.meta
+
+
+def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypatch):
+    calls = {"significance": [], "local": []}
+
+    def fake_significance(dataset, means, noise_variance, rotations, translations, disc_type, **kwargs):
+        del means, noise_variance, translations, disc_type, kwargs
+        n_images = int(dataset.n_images)
+        calls["significance"].append(n_images)
+        return (
+            np.ones((1, int(np.asarray(rotations).shape[0])), dtype=bool),
+            np.ones(n_images, dtype=np.int32),
+            np.zeros(n_images, dtype=np.int32),
+            np.zeros(n_images, dtype=np.int32),
+            [[np.asarray([0], dtype=np.int32) for _ in range(n_images)]],
+            None,
+        )
+
+    def fake_build_layout(significant_samples, *args, **kwargs):
+        del args, kwargs
+        n_images = len(significant_samples)
+        return LocalHypothesisLayout(
+            n_global_rotations=1,
+            n_pixels=1,
+            n_psi=1,
+            rotation_offsets=np.arange(n_images + 1, dtype=np.int64),
+            rotation_ids_flat=np.zeros(n_images, dtype=np.int32),
+            rotations_flat=np.broadcast_to(
+                np.eye(3, dtype=np.float32),
+                (n_images, 3, 3),
+            ).copy(),
+            rotation_log_priors_flat=np.zeros(n_images, dtype=np.float32),
+            rotation_counts=np.ones(n_images, dtype=np.int32),
+            translation_grid=np.zeros((1, 2), dtype=np.float32),
+            translation_log_priors=np.zeros((n_images, 1), dtype=np.float32),
+            rotation_posterior_ids_flat=np.zeros(n_images, dtype=np.int32),
+        )
+
+    def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
+        del means, mean_variance, noise_variance, local_layout, disc_type
+        calls["local"].append(
+            {
+                "n_images": int(dataset.n_images),
+                "group_ids": np.asarray(kwargs["reconstruction_group_ids"]).copy(),
+                "group_count": kwargs["reconstruction_group_count"],
+                "preserve_order": kwargs["preserve_bpref_particle_order"],
+                "unify_buckets": kwargs["unify_local_bucket_sizes"],
+            }
+        )
+        result = _fake_result(n_classes=1, n=8, n_images=int(dataset.n_images), n_groups=2)
+        result.Ft_y = np.stack(
+            [
+                np.full(8**3, 1.0 + 0.0j, dtype=np.complex64),
+                np.full(8**3, 3.0 + 0.0j, dtype=np.complex64),
+            ],
+            axis=0,
+        )[None, ...]
+        result.Ft_ctf = np.stack(
+            [
+                np.full(8**3, 2.0, dtype=np.float32),
+                np.full(8**3, 4.0, dtype=np.float32),
+            ],
+            axis=0,
+        )[None, ...]
+        return result
+
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        fake_significance,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.build_pass2_hypothesis_layout",
+        fake_build_layout,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.run_local_k_class_em",
+        fake_run_local,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._uses_relion_cuda_image_preprocessing",
+        lambda dataset: True,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._resolve_class_inputs",
+        lambda state, config: (
+            np.zeros((1, 8**3), dtype=np.complex64),
+            np.ones((1, 8**3), dtype=np.float32),
+            np.zeros((1, 9, 9, 5), dtype=np.complex64),
+            4,
+        ),
+    )
+    monkeypatch.setattr(
+        "recovar.em.sampling._relion_adaptive_pass1_rotations_f32",
+        lambda *args, **kwargs: None,
+    )
+
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=1,
+        n_directions=4,
+        pseudo_halfsets=True,
+    )
+    config = DenseInitialModelEstepConfig(
+        means=None,
+        mean_variance=None,
+        noise_variance=np.ones(8 * 8, dtype=np.float32),
+        rotations=np.zeros((12, 3, 3), dtype=np.float32),
+        translations=np.zeros((1, 2), dtype=np.float32),
+        relion_bpref_frame=True,
+        pass2_engine="local",
+        engine_kwargs={
+            "sparse_pass2": True,
+            "healpix_order": 0,
+            "oversampling_order": 1,
+            "translation_step": 1.0,
+        },
+    )
+    particle_ids = np.asarray([3, 0, 2, 1], dtype=np.int64)
+    halfset_ids = np.asarray([1, 0, 0, 1], dtype=np.int8)
+
+    result = run_dense_initial_model_estep(
+        _Dataset(),
+        state,
+        config,
+        particle_ids=particle_ids,
+        halfset_ids=halfset_ids,
+    )
+
+    assert calls["significance"] == [4]
+    assert len(calls["local"]) == 1
+    np.testing.assert_array_equal(calls["local"][0]["group_ids"], halfset_ids)
+    assert calls["local"][0]["group_count"] == 2
+    assert calls["local"][0]["preserve_order"] is True
+    assert calls["local"][0]["unify_buckets"] is True
+    np.testing.assert_array_equal(result.meta["selected_particle_ids"], particle_ids)
+    assert result.meta["halfset_ids"] == (0, 1)
+    assert result.meta["joint_halfset_particle_stream"] is True
+    assert [accum.halfset_idx for accum in result.accumulators] == [0, 1]
+    assert not np.array_equal(result.accumulators[0].data, result.accumulators[1].data)
 
 
 def test_sparse_pass2_pass1_current_size_matches_relion_fixture_coarse_size():

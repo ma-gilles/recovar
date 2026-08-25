@@ -541,6 +541,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     image_shape,
     volume_shape,
     max_r,
+    reconstruction_group_ids=None,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -567,6 +568,15 @@ def _accumulate_relion_vdam_physical_particle_grid(
         raise ValueError("RELION VDAM rotations must match particle/rotation axes")
     if row_mask.shape != (particle_count, rotation_count):
         raise ValueError("RELION VDAM row mask must match particle/rotation axes")
+    if reconstruction_group_ids is not None:
+        reconstruction_group_ids = jnp.asarray(
+            reconstruction_group_ids,
+            dtype=jnp.int32,
+        )
+        if reconstruction_group_ids.shape != (particle_count,):
+            raise ValueError(
+                "RELION VDAM reconstruction groups must match the particle axis"
+            )
     posterior_over_weight_norm = jnp.where(
         row_mask[..., None],
         posterior_over_weight_norm,
@@ -586,6 +596,10 @@ def _accumulate_relion_vdam_physical_particle_grid(
         jnp.asarray(pixel_indices, dtype=jnp.int32),
     )
     if projector_full is None:
+        if reconstruction_group_ids is not None:
+            raise ValueError(
+                "grouped VDAM reconstruction requires the inline projector path"
+            )
         Ft_y, Ft_ctf, _ = cuda_backproject.relion_vdam_mstep_fused_x_half(
             *common_args,
             reference,
@@ -609,6 +623,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 float(max_r),
                 int(projector_r_max),
                 int(projection_padding_factor),
+                reconstruction_group_ids=reconstruction_group_ids,
             )
         )
     return Ft_y, Ft_ctf
@@ -2225,6 +2240,8 @@ def run_local_em_exact(
     image_corrections: np.ndarray | None = None,
     scale_corrections: np.ndarray | None = None,
     group_ids: np.ndarray | None = None,
+    reconstruction_group_ids: np.ndarray | None = None,
+    reconstruction_group_count: int | None = None,
     scale_correction_group_count: int | None = None,
     scale_correction_data_vs_prior: np.ndarray | None = None,
     image_pre_shifts: np.ndarray | None = None,
@@ -2279,6 +2296,37 @@ def run_local_em_exact(
     source_faithful_bpref = bool(
         preserve_bpref_particle_order and relion_exact_bpref_operands
     )
+    reconstruction_group_ids_np = None
+    resolved_reconstruction_group_count = 1
+    if reconstruction_group_ids is not None:
+        reconstruction_group_ids_np = np.asarray(reconstruction_group_ids)
+        if reconstruction_group_ids_np.dtype != np.int32:
+            raise TypeError("reconstruction_group_ids must be int32")
+        if reconstruction_group_ids_np.shape != (int(local_layout.n_images),):
+            raise ValueError(
+                "reconstruction_group_ids must match the local-layout image axis"
+            )
+        if reconstruction_group_count is None:
+            raise ValueError(
+                "reconstruction_group_count is required with reconstruction_group_ids"
+            )
+        resolved_reconstruction_group_count = int(reconstruction_group_count)
+        if resolved_reconstruction_group_count <= 0:
+            raise ValueError("reconstruction_group_count must be positive")
+        if np.any(reconstruction_group_ids_np < 0) or np.any(
+            reconstruction_group_ids_np >= resolved_reconstruction_group_count
+        ):
+            raise ValueError("reconstruction_group_ids contains an out-of-range group")
+        if score_only:
+            raise ValueError("grouped reconstruction is not supported in score-only mode")
+        if not source_faithful_bpref:
+            raise ValueError(
+                "grouped reconstruction requires source-faithful RELION BPref accumulation"
+            )
+    elif reconstruction_group_count not in (None, 1):
+        raise ValueError(
+            "reconstruction_group_ids is required when reconstruction_group_count is not one"
+        )
     if preserve_bpref_particle_order and not mstep_relion_x_half:
         raise ValueError("BPref particle-order preservation requires the RELION x-half M-step")
     if preserve_bpref_particle_order and not relion_exact_bpref_operands:
@@ -2542,8 +2590,13 @@ def run_local_em_exact(
         experiment_dataset.dtype,
         use_relion_x_half_mstep=bool(mstep_relion_x_half),
     )
-    Ft_y = jnp.zeros(score_only_accumulator_size, dtype=recon_y_accum_dtype)
-    Ft_ctf = jnp.zeros(score_only_accumulator_size, dtype=recon_ctf_accum_dtype)
+    accumulator_shape = (
+        (resolved_reconstruction_group_count, score_only_accumulator_size)
+        if reconstruction_group_ids_np is not None
+        else (score_only_accumulator_size,)
+    )
+    Ft_y = jnp.zeros(accumulator_shape, dtype=recon_y_accum_dtype)
+    Ft_ctf = jnp.zeros(accumulator_shape, dtype=recon_ctf_accum_dtype)
     hard_assignment = np.empty(n_images, dtype=np.int32)
     log_evidence_per_image = np.empty(n_images, dtype=np.float32)
     best_log_score_per_image = np.empty(n_images, dtype=np.float32)
@@ -3210,6 +3263,13 @@ def run_local_em_exact(
         timing.batch_fetch_s += time.time() - fetch_t0
         bucket = _reorder_bucket_to_indices(bucket, fetched_indices)
         batch_size = int(bucket.image_indices.shape[0])
+        bucket_reconstruction_group_ids = (
+            None
+            if reconstruction_group_ids_np is None
+            else reconstruction_group_ids_np[
+                np.asarray(bucket.image_indices, dtype=np.int64)
+            ]
+        )
         debug_fused_posterior_bucket_matches = (
             debug_fused_posterior_dump_filter_matches
             and _bucket_contains_debug_target(
@@ -4501,6 +4561,7 @@ def run_local_em_exact(
                     image_shape=image_shape,
                     volume_shape=recon_volume_shape,
                     max_r=mstep_adjoint_max_r,
+                    reconstruction_group_ids=bucket_reconstruction_group_ids,
                 )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)
@@ -6024,25 +6085,50 @@ def run_local_em_exact(
     _log_exact_local_progress(force=True, done=True)
     final_accumulator_t0 = time.time()
     if not score_only:
-        Ft_y, Ft_ctf = enforce_half_volume_x0(
-            Ft_y,
-            Ft_ctf,
-            recon_volume_shape,
-            logger=logger,
-            label="Exact local",
-            force_host=host_accumulator_finalize,
-        )
-        if return_half_volume_accumulators:
-            logger.info("Exact local M-step: keeping native half-volume accumulators for downstream reconstruction")
-        elif mstep_relion_x_half:
-            Ft_y, Ft_ctf = relion_x_half_accumulators_to_public_layout(
-                Ft_y,
-                Ft_ctf,
+        def _finalize_accumulator(data, weight, *, label):
+            data, weight = enforce_half_volume_x0(
+                data,
+                weight,
                 recon_volume_shape,
+                logger=logger,
+                label=label,
                 force_host=host_accumulator_finalize,
             )
+            if return_half_volume_accumulators:
+                return data, weight
+            if mstep_relion_x_half:
+                return relion_x_half_accumulators_to_public_layout(
+                    data,
+                    weight,
+                    recon_volume_shape,
+                    force_host=host_accumulator_finalize,
+                )
+            return half_volume_accumulators_to_full(
+                data,
+                weight,
+                recon_volume_shape,
+            )
+
+        if reconstruction_group_ids_np is None:
+            Ft_y, Ft_ctf = _finalize_accumulator(
+                Ft_y,
+                Ft_ctf,
+                label="Exact local",
+            )
         else:
-            Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
+            grouped = [
+                _finalize_accumulator(
+                    Ft_y[group_index],
+                    Ft_ctf[group_index],
+                    label=f"Exact local reconstruction group {group_index}",
+                )
+                for group_index in range(resolved_reconstruction_group_count)
+            ]
+            stack = np.stack if host_accumulator_finalize else jnp.stack
+            Ft_y = stack([value[0] for value in grouped], axis=0)
+            Ft_ctf = stack([value[1] for value in grouped], axis=0)
+        if return_half_volume_accumulators:
+            logger.info("Exact local M-step: keeping native half-volume accumulators for downstream reconstruction")
 
         if return_profile:
             _block_until_ready(Ft_y, Ft_ctf)

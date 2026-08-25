@@ -3628,6 +3628,43 @@ def test_bucket_local_hypothesis_layout_can_preserve_physical_image_order(monkey
     assert [bucket.bucket_rotation_count for bucket in buckets] == [16, 64, 16, 64]
 
 
+def test_bucket_local_hypothesis_layout_aligns_preserved_chunks_to_pool_three(monkeypatch):
+    monkeypatch.delenv("RECOVAR_LOCAL_BUCKET_UNIFY", raising=False)
+    rotation_counts = np.full(7, 16, dtype=np.int32)
+    rotation_offsets = np.concatenate([[0], np.cumsum(rotation_counts)]).astype(np.int64)
+    n_total = int(rotation_counts.sum())
+    layout = LocalHypothesisLayout(
+        n_global_rotations=n_total,
+        n_pixels=16,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=np.arange(n_total, dtype=np.int32),
+        rotations_flat=np.broadcast_to(
+            np.eye(3, dtype=np.float32),
+            (n_total, 3, 3),
+        ).copy(),
+        rotation_log_priors_flat=np.zeros(n_total, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((rotation_counts.size, 1), dtype=np.float32),
+    )
+
+    buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=7,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=7 * 16,
+        unify_bucket_sizes=False,
+        preserve_image_order=True,
+    )
+
+    assert [bucket.image_indices.size for bucket in buckets] == [6, 1]
+    np.testing.assert_array_equal(
+        np.concatenate([bucket.image_indices for bucket in buckets]),
+        np.arange(7, dtype=np.int32),
+    )
+
+
 def test_relion_physical_particle_grid_fuses_masked_data_and_weight(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
 

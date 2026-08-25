@@ -1752,6 +1752,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     max_r: float,
     projector_max_r: int,
     projection_padding_factor: int,
+    reconstruction_group_ids: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Project, form residuals, and scatter VDAM rows in one native launch."""
 
@@ -1799,6 +1800,22 @@ def relion_vdam_mstep_fused_projector_x_half(
         raise ValueError("translation_angles must have shape (translation,2)")
     if pixel_indices.shape != (images.shape[1],):
         raise ValueError("pixel_indices must match the compact pixel dimension")
+    if reconstruction_group_ids is None:
+        if data_volume.ndim != 1 or weight_volume.ndim != 1:
+            raise ValueError("ungrouped VDAM accumulators must be rank 1")
+        reconstruction_group_ids = jnp.zeros((n_particles,), dtype=jnp.int32)
+        reconstruction_group_count = 1
+    else:
+        reconstruction_group_ids = jnp.asarray(reconstruction_group_ids)
+        if reconstruction_group_ids.dtype != jnp.int32:
+            raise TypeError("reconstruction_group_ids must be int32")
+        if reconstruction_group_ids.shape != (n_particles,):
+            raise ValueError("reconstruction_group_ids must match the particle axis")
+        if data_volume.ndim != 2 or weight_volume.ndim != 2:
+            raise ValueError("grouped VDAM accumulators must be rank 2")
+        if data_volume.shape != weight_volume.shape or data_volume.shape[0] <= 0:
+            raise ValueError("grouped VDAM accumulators must have matching nonempty shapes")
+        reconstruction_group_count = int(data_volume.shape[0])
     _ensure_ffi()
 
     dense_images, dense_indices, current_h, current_w = _prepare_relion_x_half_block_topology_operands(
@@ -1840,7 +1857,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
         _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
         output_types,
-        input_output_aliases={8: 0, 9: 1, 10: 2},
+        input_output_aliases={9: 0, 10: 1, 11: 2},
         vmap_method="sequential",
     )(
         projector_full,
@@ -1851,6 +1868,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         translation_angles,
         eulers,
         rot6,
+        reconstruction_group_ids,
         data_real_volume,
         data_imag_volume,
         weight_volume,
@@ -1864,6 +1882,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         physical_image_size=np.int64(image_shape[0]),
         projector_max_r=np.int64(projector_max_r),
         projection_padding_factor=np.int64(projection_padding_factor),
+        reconstruction_group_count=np.int64(reconstruction_group_count),
     )
     fused_data = jax.lax.complex(fused_real, fused_imag)
     full_h, full_w = map(int, image_shape)
