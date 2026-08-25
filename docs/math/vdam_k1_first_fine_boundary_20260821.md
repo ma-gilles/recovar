@@ -1512,3 +1512,36 @@ reference, Euler angles, particle IDs, classes, noise spectrum, optics vectors,
 and scalar binding inputs, then replays them from disk.  The first differing
 operand will determine the next production correction; no 200-iteration or
 robustness trajectory is released on this diagnostic alone.
+
+The capture identified the omitted live argument.  RELION seeds every
+expected-accuracy trial with Experiment's internal `part_id`; for this sorted
+default stream those are `0..99`.  RECOVAR passed no explicit seed ids, so the
+binding fell back to original dataset rows `0, 9, 99, 999, ...`.  Supplying
+internal part ids makes the exact captured live operands replay to the same
+accuracy as the serialized path.  Experimental commit `0bd239f19` propagates
+the parallel stored RELION part-id stream, including shuffled nonzero-seed
+subsets, and records it in metadata and diagnostic captures.  The focused test
+now checks the actual `sigma2_fudge` argument (index 18), rather than
+accidentally checking the fixed interpolator argument at index 17, and checks
+the independent internal seed-id vector.  All 58 focused tests pass.
+
+Slurm `12930466` also exposed a separate repeatability failure before the
+sampling transition.  Although it ran the same scientific source on the same
+physical H100 as `12929393`, one borderline particle first selected a different
+pose/translation at iteration 19.  Five particles differed at iteration 20,
+and feedback grew the map relative-L2 difference from `2.53e-6` at iteration
+19 to `2.77e-3` at iteration 20 and `6.97e-2` at iteration 69.  Cross-engine
+FSC-AUC was therefore already `0.986749` at iteration 69 and the map gate
+failed, independently of the iteration-90 seed fix.  The exact input capture
+is preserved at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_sampling_live_inputs_c811548e_20260825/accuracy_inputs/iter090_expected_accuracy_inputs.npz`
+(SHA-256
+`e5d7a9f5e73f8917e9f9440717159a08663366fa69e5d491c06d6dfc0caba72c`).
+
+Three post-fix 92-iteration repeats are running as H100 Slurm `12930904`,
+`12930905`, and `12930906`.  They gate both the corrected live sampling seed
+contract and run-to-run stability.  A single passing repeat is insufficient:
+the transition fix must reproduce across the panel, and the pre-transition
+iteration-19 branch sensitivity must be bounded or removed before the full
+200-iteration baseline is released.  No generic RECOVAR full or long test
+suite ran.
