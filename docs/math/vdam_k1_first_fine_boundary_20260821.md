@@ -1545,3 +1545,33 @@ the transition fix must reproduce across the panel, and the pre-transition
 iteration-19 branch sensitivity must be bounded or removed before the full
 200-iteration baseline is released.  No generic RECOVAR full or long test
 suite ran.
+
+All three post-fix repeats pass.  They completed in 6 minutes 30--33 seconds of
+RECOVAR wall time and 6 minutes 44--47 seconds including audits, with 7.13--7.15
+GB peak step RSS.  Every run reproduces native expected accuracy exactly at
+all exposed long boundaries: iteration 70 is `(4.630, 3.48075 Angstrom)`,
+iteration 80 is `(1.721, 1.60225 Angstrom)`, and iteration 90 is
+`(1.823, 1.717 Angstrom)`.  Iteration 90 also matches range
+`6.48229004175` Angstrom, step `2.5755` Angstrom, and 84 fine translations.
+
+The three map gates pass through iteration 92 with minimum FSC-AUC
+`0.999170286449`--`0.999170740520` and assignment accuracy one.  The old
+systematic grid split is removed: iteration-90 divergent-particle count falls
+from 440 to 15, translation match rises from `0.853333` to `0.996`, and
+iteration-92 translation match is `0.985333`--`0.985667`.  The residual 49--50
+iteration-92 particle differences are on the common native grid and remain a
+repeatability/near-tie boundary for the full trajectory, not a scheduler
+defect.  Per-repeat map-report SHA-256 values are, in repeat order,
+`563512ade05a490515e8e3c26857bbde1c9f709ae8e5bbac4830b0dfff90ff87`,
+`2a977c266c722fe583fde108d7a5d5cb138f0c5801efd406722c4b9d265367e3`,
+and `9f368b2cccc492c2921b3a19743cdd088e9dee00eb3ed5f6d08c94eb51002f7b`.
+
+This accepts the sampling transition and justifies one RECOVAR-only
+200-iteration completion gate against the existing native trajectory.  Slurm
+`12931162`, at experimental head `c4aabc839`, is running with opt-in per-stage
+profiles and all 201 map and particle checkpoints.  It preserves science and
+profile evidence even if a strict audit fails.  The profiler reports schedule,
+subset, projector refresh, expectation/pass-1/pass-2, M-step, state update,
+and artifact-boundary wall time by early, transition, and adaptive/late phase.
+The 22-case robustness matrix remains held pending the complete baseline and
+runtime result.  No generic RECOVAR full or long test suite ran.
