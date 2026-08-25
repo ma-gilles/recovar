@@ -997,3 +997,32 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_ptx_jit_repeat_panel_8a471b29_20260824.json`
 - `/scratch/gpfs/GILLES/mg6942/slurmo/relion-patched-ptx-20260824.txt`
 - `/scratch/gpfs/GILLES/mg6942/slurmo/vdam-ptx80-jit-ptx-12913683.txt`
+
+## Accepted-posterior inline-projector discriminator
+
+Isolated commit `9cc94a796` reapplies the previously tested inline RELION
+texture projector on top of the accepted float32 posterior, fused residual
+formation, and separate real/imaginary/weight accumulator storage.  It remains
+an intermediate control with separate 36-byte projection and backprojection
+Euler tensors, not the final single-Euler native kernel body.  PTX build job
+`12914645` produced CUDA digest
+`4aadd0eea82aa70da29f573dce8059d5bae117aa73f7d8367903907f7399b026`;
+the job exited only at the final hash because the fresh worktree lacked the
+unchanged RELION Python binding artifact.  After linking the already-qualified
+binding, H100 job `12914671` passed all five focused projector, fused-interior,
+SGD-y-boundary, separate-storage, and routing gates.
+
+Paired true-200-schedule boundary jobs `12914695`/`12914696` completed on
+distinct H100 UUIDs in 51 seconds each.  Native repeat relative L2 is
+`8.97751e-6`/`9.38897e-6` for data, `1.68587e-6`/`2.27024e-6`
+for weight, and `1.39658e-6` after reconstruction.  Cross/native ratios are
+`0.951`--`1.287` for data, `0.917`--`1.624` for weight, and
+`1.479`/`1.590` for the reconstructed reference.  Inline projection worsens
+the repeat-aware reconstructed boundary and is rejected without a long
+trajectory.  The experimental commit remains unpushed.  The remaining exact
+kernel discriminator must use one native Euler tensor for both projection and
+scatter and mirror the native SGD control flow, rather than combining two
+independent approximations.  Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_inline_sep_repeat_panel_9cc94a79_20260824.json`
+- `/scratch/gpfs/GILLES/mg6942/slurmo/vdam-inline-separate-ptx-12914645.txt`
