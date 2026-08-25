@@ -2131,3 +2131,39 @@ Slurm `12944211` runs through iteration 150 from immutable source
 expectation iteration 150, and pins the already-qualified shared CUDA binary
 SHA-256 `b3a329a5f5559ca3bb3c436ab5a051bfe1666c317a2c2834daea1ae3c2c6939c`.
 No setup-failure output is reused.
+
+Bounded H100 Slurm `12944211` completes successfully and identifies host
+compilation, not fine projection arithmetic, as the late pass-2 bottleneck.
+At iteration 150, RECOVAR records `10.0448 s` for pass 2 and `6.4461 s` in two
+big-JIT buckets.  Nsight attributes only about `27.44 ms` to the two
+fine-score CUDA launches and `0.451 ms` to texture projection, while two
+`jit_run_local_bucket_big_jit` compilations consume `5.1137 s` and 20 XLA
+autotuner compilations consume another `2.5484 s`.  The trace, SQLite,
+CUDA-API, and kernel-summary SHA-256 values are
+`460d56e31292e69c962f38b99fe22255bbfe383672707765330f09fe6844ed6c`,
+`d996d1c3accdfbb3c43bf75f8e3259c517965af25934c1dd17ea3d80b3312161`,
+`bd69659433ed81b7b8b447dff2098eba0c12419f55382ba3bf0d7af89b027cdc`,
+and `df0e91a77c7e9efaa417bd359b4d62398144643feff754e5f772fb4056909726`.
+This evidence rejects projection-cache work as the next experiment.
+
+Inspection then exposes a signature-drift defect: the big-JIT decorator says
+it donates loop-carried `Ft_y`/`Ft_ctf`, but positional donation `(4, 5)` now
+names `corr_img_rfloat_square_half` and `mean_for_proj`.  The profile log emits
+unused-donation warnings for the changing score operands throughout the late
+trajectory.  Local unpushed runtime commit `250cf27c7` donates the two
+accumulators by name and adds a source regression guard.  Ruff,
+byte-compilation, and the guard pass.  A larger numerical unit reaches an
+unsupported login-node CUDA binary (`no kernel image`) and is classified as an
+environment failure; focused H100 replay `12945961` is the authoritative
+numeric/runtime A/B against `12944211`.  Setup attempt `12945899` is excluded
+before science after another abbreviated exact-SHA guard failure.  No runtime
+commit is pushed.
+
+The immutable default panel has produced all 200 RELION iterations in all four
+repeats.  Repeat 3 is fully audited: its first hard particle difference is
+iteration 72, minimum cross-engine FSC-AUC is `0.9197498003`, and minimum
+RECOVAR-minus-RELION GT FSC-AUC is `-0.0003295897`, so its GT trajectory passes
+the unchanged `-0.002` gate while its single-oracle map trajectory does not.
+Repeat 4's audit and the restart-safe ensemble summary remain in progress
+under `12939263`/`12939264`; the candidate-envelope auditor will run only after
+those immutable artifacts close.
