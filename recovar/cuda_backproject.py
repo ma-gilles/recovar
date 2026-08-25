@@ -524,6 +524,9 @@ _TARGET_RELION_TRANSLATE_BPREF_F32 = "cuda_relion_translate_bpref_f32"
 _TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
 _TARGET_RELION_VDAM_MSTEP_SUMS_F32 = "cuda_relion_vdam_mstep_sums_f32"
 _TARGET_RELION_VDAM_MSTEP_FUSED_X_HALF = "cuda_relion_vdam_mstep_fused_x_half"
+_TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF = (
+    "cuda_relion_vdam_mstep_fused_projector_x_half"
+)
 _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_rectangular_f32"
 )
@@ -602,6 +605,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_RELION_BPREF_OPERANDS_F32, "RelionBprefOperandsF32"),
     (_TARGET_RELION_VDAM_MSTEP_SUMS_F32, "RelionVdamMstepSumsF32"),
     (_TARGET_RELION_VDAM_MSTEP_FUSED_X_HALF, "RelionVdamMstepFusedXHalf"),
+    (
+        _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
+        "RelionVdamMstepFusedProjectorXHalf",
+    ),
     (
         _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
         "RelionCoarseDiff2RectangularF32",
@@ -1716,6 +1723,147 @@ def relion_vdam_mstep_fused_x_half(
         N2=kw["N2"],
         upsampling=kw["upsampling"],
         max_r2_x4=kw["max_r2_x4"],
+    )
+    fused_data = jax.lax.complex(fused_real, fused_imag)
+    full_h, full_w = map(int, image_shape)
+    full_half_w = full_w // 2 + 1
+    full_rows = pixel_indices // full_half_w
+    columns = pixel_indices % full_half_w
+    signed_rows = jnp.where(full_rows <= full_h // 2, full_rows, full_rows - full_h)
+    current_indices = jnp.mod(signed_rows, current_h) * current_w + columns
+    compact_denominator = jnp.take(dense_denominator, current_indices, axis=-1)
+    return fused_data, fused_weight, compact_denominator
+
+
+@functools.partial(jax.jit, static_argnums=(10, 11, 12, 13, 14))
+def relion_vdam_mstep_fused_projector_x_half(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    images: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior_over_weight_norm: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    projector_full: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+    projector_max_r: int,
+    projection_padding_factor: int,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Project, form residuals, and scatter VDAM rows in one native launch."""
+
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(
+            f"RELION fused VDAM projector requires an odd BPref grid, got {volume_shape}"
+        )
+    projector_full = jnp.asarray(projector_full)
+    if (
+        projector_full.dtype != jnp.complex64
+        or projector_full.ndim != 3
+        or projector_full.shape[0] <= 0
+        or projector_full.shape[1:] != (projector_full.shape[0], projector_full.shape[0])
+    ):
+        raise TypeError(
+            "projector_full must be a nonempty complex64 cube, got "
+            f"{projector_full.shape} {projector_full.dtype}"
+        )
+    if int(projector_max_r) <= 0 or int(projection_padding_factor) <= 0:
+        raise ValueError("projector radius and projection padding factor must be positive")
+    if images.dtype != jnp.complex64:
+        raise TypeError("images must be complex64")
+    if data_volume.dtype != jnp.complex64 or weight_volume.dtype != jnp.float32:
+        raise TypeError("VDAM accumulators must be complex64/float32")
+    for name, value in (
+        ("ctf", ctf),
+        ("minvsigma2", minvsigma2),
+        ("posterior_over_weight_norm", posterior_over_weight_norm),
+        ("translation_angles", translation_angles),
+        ("rotation_matrices", rotation_matrices),
+    ):
+        if value.dtype != jnp.float32:
+            raise TypeError(f"{name} must be float32, got {value.dtype}")
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError("pixel_indices must be int32")
+    if images.ndim != 2 or ctf.shape != images.shape or minvsigma2.shape != images.shape:
+        raise ValueError("images, ctf, and minvsigma2 must have matching shapes")
+    if posterior_over_weight_norm.ndim != 3 or posterior_over_weight_norm.shape[0] != images.shape[0]:
+        raise ValueError("posterior must have shape (particle,rotation,translation)")
+    n_particles, n_rotations, n_translations = map(int, posterior_over_weight_norm.shape)
+    if rotation_matrices.shape != (n_particles, n_rotations, 3, 3):
+        raise ValueError("rotation_matrices must match particle/rotation axes")
+    if translation_angles.shape != (n_translations, 2):
+        raise ValueError("translation_angles must have shape (translation,2)")
+    if pixel_indices.shape != (images.shape[1],):
+        raise ValueError("pixel_indices must match the compact pixel dimension")
+    _ensure_ffi()
+
+    dense_images, dense_indices, current_h, current_w = _prepare_relion_x_half_block_topology_operands(
+        images, pixel_indices, image_shape, max_r
+    )
+    dense_ctf, ctf_indices, ctf_h, ctf_w = _prepare_relion_x_half_block_topology_operands(
+        ctf, pixel_indices, image_shape, max_r
+    )
+    dense_minvsigma2, noise_indices, noise_h, noise_w = _prepare_relion_x_half_block_topology_operands(
+        minvsigma2, pixel_indices, image_shape, max_r
+    )
+    if (ctf_h, ctf_w) != (current_h, current_w) or (noise_h, noise_w) != (current_h, current_w):
+        raise ValueError("VDAM fused-projector operand topology metadata mismatch")
+    if not (ctf_indices.shape == noise_indices.shape == dense_indices.shape):
+        raise ValueError("VDAM fused-projector dense pixel topology mismatch")
+
+    flat_rotations = rotation_matrices.reshape(n_particles * n_rotations, 3, 3)
+    eulers = jnp.swapaxes(flat_rotations, -1, -2).reshape(
+        n_particles, n_rotations, 9
+    )
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(
+        flat_rotations, jnp.float32
+    )
+    rot6 = _rot_to_compact(kernel_rotations, jnp.float32).reshape(
+        n_particles, n_rotations, 6
+    )
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    denominator_type = jax.ShapeDtypeStruct(
+        (n_particles, n_rotations, current_h * current_w), jnp.float32
+    )
+    data_real_volume = jnp.asarray(data_volume.real, dtype=jnp.float32)
+    data_imag_volume = jnp.asarray(data_volume.imag, dtype=jnp.float32)
+    output_types = (
+        jax.ShapeDtypeStruct(data_real_volume.shape, jnp.float32),
+        jax.ShapeDtypeStruct(data_imag_volume.shape, jnp.float32),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+        denominator_type,
+    )
+    fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
+        _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
+        output_types,
+        input_output_aliases={8: 0, 9: 1, 10: 2},
+        vmap_method="sequential",
+    )(
+        projector_full,
+        dense_images,
+        dense_ctf,
+        dense_minvsigma2,
+        posterior_over_weight_norm,
+        translation_angles,
+        eulers,
+        rot6,
+        data_real_volume,
+        data_imag_volume,
+        weight_volume,
+        image_h=np.int64(current_h),
+        image_w=np.int64(current_w),
+        N0=kw["N0"],
+        N1=kw["N1"],
+        N2=kw["N2"],
+        upsampling=kw["upsampling"],
+        max_r2_x4=kw["max_r2_x4"],
+        physical_image_size=np.int64(image_shape[0]),
+        projector_max_r=np.int64(projector_max_r),
+        projection_padding_factor=np.int64(projection_padding_factor),
     )
     fused_data = jax.lax.complex(fused_real, fused_imag)
     full_h, full_w = map(int, image_shape)

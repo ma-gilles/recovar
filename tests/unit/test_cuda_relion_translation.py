@@ -85,6 +85,13 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "data_imag_volume = jnp.asarray(data_volume.imag" in wrapper
     assert "fused_data = jax.lax.complex(fused_real, fused_imag)" in wrapper
 
+    projector_wrapper = inspect.getsource(
+        cuda_backproject.relion_vdam_mstep_fused_projector_x_half
+    )
+    assert "data_real_volume = jnp.asarray(data_volume.real" in projector_wrapper
+    assert "data_imag_volume = jnp.asarray(data_volume.imag" in projector_wrapper
+    assert "fused_data = jax.lax.complex(fused_real, fused_imag)" in projector_wrapper
+
 
 @pytest.mark.gpu
 def test_relion_translate_score_f32_matches_float32_reference(
@@ -282,6 +289,29 @@ def test_relion_vdam_mstep_fused_x_half_validates_reference_shape():
             (8, 8),
             (7, 7, 7),
             2.0,
+        )
+
+
+def test_relion_vdam_mstep_fused_projector_x_half_validates_projector_shape():
+    import recovar.cuda_backproject as cuda_backproject
+
+    with pytest.raises(TypeError, match="projector_full must be a nonempty complex64 cube"):
+        cuda_backproject.relion_vdam_mstep_fused_projector_x_half.__wrapped__(
+            jnp.zeros((196,), dtype=jnp.complex64),
+            jnp.zeros((196,), dtype=jnp.float32),
+            jnp.zeros((1, 3), dtype=jnp.complex64),
+            jnp.ones((1, 3), dtype=jnp.float32),
+            jnp.ones((1, 3), dtype=jnp.float32),
+            jnp.ones((1, 2, 2), dtype=jnp.float32),
+            jnp.zeros((2, 2), dtype=jnp.float32),
+            jnp.arange(3, dtype=jnp.int32),
+            jnp.zeros((3, 3), dtype=jnp.complex64),
+            jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (1, 2, 3, 3)),
+            (8, 8),
+            (7, 7, 7),
+            2.0,
+            2,
+            1,
         )
 
 
@@ -533,6 +563,68 @@ def test_relion_vdam_mstep_fused_x_half_uses_native_sgd_y_boundaries(
     np.testing.assert_allclose(actual_data_np[5, 2, 0], np.exp(-0.3j), rtol=2e-6, atol=2e-6)
     np.testing.assert_allclose(actual_weight_np[[5, 5], [9, 2], [0, 0]], np.ones(2), rtol=0.0, atol=0.0)
     assert np.count_nonzero(actual_data_np) == 2
+
+
+@pytest.mark.gpu
+def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    image_shape = (8, 8)
+    volume_shape = (11, 11, 11)
+    max_r = 4.0
+    half_width = image_shape[1] // 2 + 1
+    pixel_indices = np.arange(image_shape[0] * half_width, dtype=np.int32)
+    volume_size = volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    rng = np.random.default_rng(9017)
+    images = (rng.normal(size=(1, pixel_indices.size)) + 1j * rng.normal(size=(1, pixel_indices.size))).astype(
+        np.complex64
+    )
+    ctf = rng.uniform(0.25, 1.25, size=images.shape).astype(np.float32)
+    minvsigma2 = rng.uniform(0.5, 2.0, size=images.shape).astype(np.float32)
+    posterior = rng.uniform(0.0, 0.5, size=(1, 2, 3)).astype(np.float32)
+    angles = np.asarray([[0.0, 0.0], [0.01, -0.02], [-0.03, 0.015]], dtype=np.float32)
+    rotations = np.broadcast_to(jnp.eye(3, dtype=jnp.float32), (1, 2, 3, 3))
+
+    with jax.default_device(gpu_device):
+        common = (
+            jnp.zeros((volume_size,), dtype=jnp.complex64),
+            jnp.zeros((volume_size,), dtype=jnp.float32),
+            jnp.asarray(images),
+            jnp.asarray(ctf),
+            jnp.asarray(minvsigma2),
+            jnp.asarray(posterior),
+            jnp.asarray(angles),
+            jnp.asarray(pixel_indices),
+        )
+        expected = cuda_backproject.relion_vdam_mstep_fused_x_half(
+            *common,
+            jnp.zeros((1, 2, pixel_indices.size), dtype=jnp.complex64),
+            rotations,
+            image_shape,
+            volume_shape,
+            max_r,
+        )
+        actual = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            *common,
+            jnp.zeros((11, 11, 11), dtype=jnp.complex64),
+            rotations,
+            image_shape,
+            volume_shape,
+            max_r,
+            4,
+            1,
+        )
+        jax.block_until_ready((expected, actual))
+
+    for expected_value, actual_value in zip(expected, actual, strict=True):
+        np.testing.assert_allclose(actual_value, expected_value, rtol=0.0, atol=0.0)
 
 
 @pytest.mark.gpu

@@ -85,9 +85,9 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _combined_noise_stats,
     _estimate_relion_em_batch_sizes,
     _exhaustive_grid_order_for_state,
+    _normalize_noise_variance_per_half,
     _relion_expectation_coarse_size_order,
     _relion_local_pass1_current_size,
-    _normalize_noise_variance_per_half,
     _replay_control_model_iteration,
     _rotation_eulers_for_canonical_or_custom_grid,
     refine_single_volume,
@@ -112,9 +112,9 @@ from recovar.em.dense_single_volume.local_debug import (
     maybe_write_debug_score_dump,
 )
 from recovar.em.dense_single_volume.local_em_engine import (
+    EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
     EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV,
     EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV,
-    EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
     EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
@@ -126,12 +126,12 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV,
     LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
     _accumulate_relion_physical_particle_grid,
+    _adjoint_slice_volume_maybe_windowed_row_chunks,
     _build_reconstruction_pack_indices,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_max_hypotheses_per_microbatch,
     _exact_local_xhalf_projection_microbatch_cap,
     _exact_local_xhalf_tail_microbatch_cap,
-    _adjoint_slice_volume_maybe_windowed_row_chunks,
     _local_processed_half_cache_enabled,
     _local_raw_cache_enabled,
     _pad_local_big_jit_image_axis,
@@ -8049,8 +8049,15 @@ def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
         "not disable_adjoint_y",
         "not disable_adjoint_ctf",
         "_accumulate_relion_vdam_physical_particle_grid(",
+        "relion_projector_half_to_texture_full(",
+        "projector_full=source_vdam_projector_full",
+        "scoring_rotations=packed_rotations_np",
     ):
         assert route_guard in engine_src
+    accumulator_src = inspect.getsource(
+        local_em_engine._accumulate_relion_vdam_physical_particle_grid
+    )
+    assert "cuda_backproject.relion_vdam_mstep_fused_projector_x_half(" in accumulator_src
 
 
 def test_local_exact_relion_translation_requires_half_spectrum_scoring():
@@ -11357,6 +11364,7 @@ class TestRelionModeSmokeTest:
         """Exercise the opt-in K=1 coarse scorer through significance."""
 
         import jax
+
         from recovar import cuda_backproject
 
         monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
@@ -13801,10 +13809,10 @@ class TestRelionDefault:
         """Passing ``options=RefinementOptions(...)`` overrides individual kwargs."""
         from recovar.em.dense_single_volume import (
             KClassOptions,
-            ReplayState,
             RefinementOptions,
             RefinementSchedule,
             RelionParityOptions,
+            ReplayState,
         )
 
         sentinel = {"convergence_state": object()}

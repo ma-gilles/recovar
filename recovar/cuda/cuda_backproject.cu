@@ -4180,6 +4180,44 @@ cudaError_t launch_relion_vdam_mstep_sums_f32(
     return cudaGetLastError();
 }
 
+__device__ __forceinline__ float2 relion_vdam_project_texture_f32(
+    cudaTextureObject_t tex_real,
+    cudaTextureObject_t tex_imag,
+    int x,
+    int y,
+    const float* euler,
+    int padding_factor,
+    int max_r2_padded,
+    int tex_y_init,
+    int tex_z_init,
+    float projector_scale)
+{
+    float xp = (euler[0] * x + euler[1] * y) * padding_factor;
+    float yp = (euler[3] * x + euler[4] * y) * padding_factor;
+    float zp = (euler[6] * x + euler[7] * y) * padding_factor;
+    const int r2 = static_cast<int>(xp * xp + yp * yp + zp * zp);
+    if (r2 > max_r2_padded) return make_float2(0.0f, 0.0f);
+    float imag_sign = 1.0f;
+    if (xp < 0.0f)
+    {
+        xp = -xp;
+        yp = -yp;
+        zp = -zp;
+        imag_sign = -1.0f;
+    }
+    return make_float2(
+        projector_scale * tex3D<float>(
+            tex_real,
+            xp + 0.5f,
+            yp - static_cast<float>(tex_y_init) + 0.5f,
+            zp - static_cast<float>(tex_z_init) + 0.5f),
+        projector_scale * imag_sign * tex3D<float>(
+            tex_imag,
+            xp + 0.5f,
+            yp - static_cast<float>(tex_y_init) + 0.5f,
+            zp - static_cast<float>(tex_z_init) + 0.5f));
+}
+
 __global__ void relion_vdam_mstep_fused_x_half_kernel(
     const float2* images,
     const float* ctf,
@@ -4187,6 +4225,9 @@ __global__ void relion_vdam_mstep_fused_x_half_kernel(
     const float* posterior_over_weight_norm,
     const float* translation_angles,
     const float2* reference,
+    cudaTextureObject_t projector_tex_real,
+    cudaTextureObject_t projector_tex_imag,
+    const float* projector_eulers,
     const float* rot,
     float* data_real_volume,
     float* data_imag_volume,
@@ -4204,7 +4245,12 @@ __global__ void relion_vdam_mstep_fused_x_half_kernel(
     float c1,
     float c2,
     int upsampling,
-    float max_r2)
+    float max_r2,
+    int projector_padding_factor,
+    int projector_max_r2_padded,
+    int projector_tex_y_init,
+    int projector_tex_z_init,
+    float projector_scale)
 {
     const int rotation = (int)blockIdx.x;
     if (rotation >= rotation_count) return;
@@ -4213,6 +4259,9 @@ __global__ void relion_vdam_mstep_fused_x_half_kernel(
      * representation reads only six entries. */
     __shared__ float R[9];
     if (threadIdx.x < 6) R[threadIdx.x] = rot[rotation * 6 + threadIdx.x];
+    __shared__ float E[9];
+    if (projector_eulers != nullptr && threadIdx.x < 9)
+        E[threadIdx.x] = projector_eulers[rotation * 9 + threadIdx.x];
     __syncthreads();
 
     for (int pixel = (int)threadIdx.x; pixel < pixel_count; pixel += 128)
@@ -4223,7 +4272,19 @@ __global__ void relion_vdam_mstep_fused_x_half_kernel(
         const float image_ctf = ctf[pixel];
         const float image_minvsigma2 = minvsigma2[pixel];
         const float2 image_value = images[pixel];
-        const float2 reference_value = reference[rotation * pixel_count + pixel];
+        const float2 reference_value = projector_eulers == nullptr
+            ? reference[rotation * pixel_count + pixel]
+            : relion_vdam_project_texture_f32(
+                projector_tex_real,
+                projector_tex_imag,
+                x,
+                y,
+                E,
+                projector_padding_factor,
+                projector_max_r2_padded,
+                projector_tex_y_init,
+                projector_tex_z_init,
+                projector_scale);
         const float reference_real = reference_value.x * image_ctf;
         const float reference_imag = reference_value.y * image_ctf;
         float data_real = 0.0f;
@@ -4321,6 +4382,9 @@ cudaError_t launch_relion_vdam_mstep_fused_x_half(
             posterior_over_weight_norm + particle * posterior_stride,
             translation_angles,
             reference + particle * reference_stride,
+            0,
+            0,
+            nullptr,
             rot + particle * rotation_stride,
             data_real_volume,
             data_imag_volume,
@@ -4338,11 +4402,206 @@ cudaError_t launch_relion_vdam_mstep_fused_x_half(
             c1,
             c2,
             (int)upsampling,
-            max_r2);
+            max_r2,
+            1,
+            0,
+            0,
+            0,
+            1.0f);
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) return err;
     }
     return cudaSuccess;
+}
+
+cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
+    cudaStream_t stream,
+    const float2* projector_full,
+    const float2* images,
+    const float* ctf,
+    const float* minvsigma2,
+    const float* posterior_over_weight_norm,
+    const float* translation_angles,
+    const float* projector_eulers,
+    const float* rot,
+    float* data_real_volume,
+    float* data_imag_volume,
+    float* weight_volume,
+    float* denominator_sum,
+    int64_t projector_size,
+    int64_t n_particles,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pixel_count,
+    int64_t image_h,
+    int64_t image_w,
+    int64_t N0,
+    int64_t N1,
+    int64_t N2,
+    int64_t upsampling,
+    int64_t max_r2_x4,
+    int physical_image_size,
+    int projector_max_r,
+    int projection_padding_factor)
+{
+    const int padded_max_r = static_cast<int>(floorf(
+        static_cast<float>(projector_max_r * projection_padding_factor) + 0.5f));
+    const int tex_x = padded_max_r + 2;
+    const int tex_y = 2 * padded_max_r + 3;
+    const int tex_z = 2 * padded_max_r + 3;
+    const int tex_y_init = -(padded_max_r + 1);
+    const int tex_z_init = -(padded_max_r + 1);
+    const int64_t texture_voxels = static_cast<int64_t>(tex_x) * tex_y * tex_z;
+    float* real = nullptr;
+    float* imag = nullptr;
+    cudaArray_t array_real = nullptr;
+    cudaArray_t array_imag = nullptr;
+    cudaTextureObject_t texture_real = 0;
+    cudaTextureObject_t texture_imag = 0;
+    cudaError_t err = cudaMalloc(
+        reinterpret_cast<void**>(&real),
+        static_cast<size_t>(texture_voxels) * sizeof(float));
+    if (err != cudaSuccess) goto cleanup;
+    err = cudaMalloc(
+        reinterpret_cast<void**>(&imag),
+        static_cast<size_t>(texture_voxels) * sizeof(float));
+    if (err != cudaSuccess) goto cleanup;
+
+    fill_relion_texture_compact_kernel<float><<<
+        static_cast<unsigned int>((texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE),
+        BLOCK_SIZE,
+        0,
+        stream>>>(
+            reinterpret_cast<const float*>(projector_full),
+            real,
+            imag,
+            tex_x,
+            tex_y,
+            tex_z,
+            tex_y_init,
+            tex_z_init,
+            static_cast<int>(projector_size),
+            static_cast<int>(projector_size),
+            static_cast<int>(projector_size));
+    err = cudaGetLastError();
+    if (err != cudaSuccess) goto cleanup;
+
+    {
+        cudaChannelFormatDesc desc = cudaCreateChannelDesc(
+            32, 0, 0, 0, cudaChannelFormatKindFloat);
+        cudaExtent extent = make_cudaExtent(
+            static_cast<size_t>(tex_x),
+            static_cast<size_t>(tex_y),
+            static_cast<size_t>(tex_z));
+        err = cudaMalloc3DArray(&array_real, &desc, extent);
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaMalloc3DArray(&array_imag, &desc, extent);
+        if (err != cudaSuccess) goto cleanup;
+
+        cudaMemcpy3DParms copy_params = {0};
+        copy_params.extent = extent;
+        copy_params.kind = cudaMemcpyDeviceToDevice;
+        copy_params.srcPtr = make_cudaPitchedPtr(
+            real,
+            static_cast<size_t>(tex_x) * sizeof(float),
+            static_cast<size_t>(tex_x),
+            static_cast<size_t>(tex_y));
+        copy_params.dstArray = array_real;
+        err = cudaMemcpy3DAsync(&copy_params, stream);
+        if (err != cudaSuccess) goto cleanup;
+        copy_params.srcPtr = make_cudaPitchedPtr(
+            imag,
+            static_cast<size_t>(tex_x) * sizeof(float),
+            static_cast<size_t>(tex_x),
+            static_cast<size_t>(tex_y));
+        copy_params.dstArray = array_imag;
+        err = cudaMemcpy3DAsync(&copy_params, stream);
+        if (err != cudaSuccess) goto cleanup;
+
+        cudaResourceDesc resource_real = {};
+        cudaResourceDesc resource_imag = {};
+        cudaTextureDesc texture_desc = {};
+        resource_real.resType = cudaResourceTypeArray;
+        resource_real.res.array.array = array_real;
+        resource_imag.resType = cudaResourceTypeArray;
+        resource_imag.res.array.array = array_imag;
+        texture_desc.filterMode = cudaFilterModeLinear;
+        texture_desc.readMode = cudaReadModeElementType;
+        texture_desc.normalizedCoords = false;
+        texture_desc.addressMode[0] = cudaAddressModeClamp;
+        texture_desc.addressMode[1] = cudaAddressModeClamp;
+        texture_desc.addressMode[2] = cudaAddressModeClamp;
+        err = cudaCreateTextureObject(
+            &texture_real, &resource_real, &texture_desc, nullptr);
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaCreateTextureObject(
+            &texture_imag, &resource_imag, &texture_desc, nullptr);
+        if (err != cudaSuccess) goto cleanup;
+    }
+
+    {
+        const int N2_eff = static_cast<int>(N2 / 2 + 1);
+        const float c0 = static_cast<float>(N0 / 2);
+        const float c1 = static_cast<float>(N1 / 2);
+        const float c2 = static_cast<float>(N2 / 2);
+        const float max_r2 = static_cast<float>(max_r2_x4) / 4.0f;
+        const int projector_max_r2_padded = padded_max_r * padded_max_r;
+        const float projector_scale = -static_cast<float>(
+            physical_image_size * physical_image_size);
+        const int64_t image_stride = pixel_count;
+        const int64_t posterior_stride = rotation_count * translation_count;
+        const int64_t euler_stride = rotation_count * 9;
+        const int64_t rotation_stride = rotation_count * 6;
+        const int64_t denominator_stride = rotation_count * pixel_count;
+        for (int64_t particle = 0; particle < n_particles; ++particle)
+        {
+            relion_vdam_mstep_fused_x_half_kernel<<<rotation_count, 128, 0, stream>>>(
+                images + particle * image_stride,
+                ctf + particle * image_stride,
+                minvsigma2 + particle * image_stride,
+                posterior_over_weight_norm + particle * posterior_stride,
+                translation_angles,
+                nullptr,
+                texture_real,
+                texture_imag,
+                projector_eulers + particle * euler_stride,
+                rot + particle * rotation_stride,
+                data_real_volume,
+                data_imag_volume,
+                weight_volume,
+                denominator_sum + particle * denominator_stride,
+                static_cast<int>(rotation_count),
+                static_cast<int>(translation_count),
+                static_cast<int>(pixel_count),
+                static_cast<int>(image_h),
+                static_cast<int>(image_w),
+                static_cast<int>(N0),
+                static_cast<int>(N1),
+                N2_eff,
+                c0,
+                c1,
+                c2,
+                static_cast<int>(upsampling),
+                max_r2,
+                projection_padding_factor,
+                projector_max_r2_padded,
+                tex_y_init,
+                tex_z_init,
+                projector_scale);
+            err = cudaGetLastError();
+            if (err != cudaSuccess) goto cleanup;
+        }
+        err = cudaStreamSynchronize(stream);
+    }
+
+cleanup:
+    if (texture_real) cudaDestroyTextureObject(texture_real);
+    if (texture_imag) cudaDestroyTextureObject(texture_imag);
+    if (array_real) cudaFreeArray(array_real);
+    if (array_imag) cudaFreeArray(array_imag);
+    if (real) cudaFree(real);
+    if (imag) cudaFree(imag);
+    return err;
 }
 
 __device__ __forceinline__ float relion_fine_diff2_update_f32(
@@ -7339,6 +7598,157 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("N2")
         .Attr<int64_t>("upsampling")
         .Attr<int64_t>("max_r2_x4")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
+    cudaStream_t stream,
+    int64_t image_h,
+    int64_t image_w,
+    int64_t N0,
+    int64_t N1,
+    int64_t N2,
+    int64_t upsampling,
+    int64_t max_r2_x4,
+    int64_t physical_image_size,
+    int64_t projector_max_r,
+    int64_t projection_padding_factor,
+    ffi::AnyBuffer projector_full,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer ctf,
+    ffi::AnyBuffer minvsigma2,
+    ffi::AnyBuffer posterior,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer eulers,
+    ffi::AnyBuffer rot,
+    ffi::AnyBuffer data_real_volume_in,
+    ffi::AnyBuffer data_imag_volume_in,
+    ffi::AnyBuffer weight_volume_in,
+    ffi::Result<ffi::AnyBuffer> data_real_volume_out,
+    ffi::Result<ffi::AnyBuffer> data_imag_volume_out,
+    ffi::Result<ffi::AnyBuffer> weight_volume_out,
+    ffi::Result<ffi::AnyBuffer> denominator_sum)
+{
+    if (projector_full.element_type() != ffi::DataType::C64 ||
+        images.element_type() != ffi::DataType::C64 ||
+        data_real_volume_in.element_type() != ffi::DataType::F32 ||
+        data_imag_volume_in.element_type() != ffi::DataType::F32 ||
+        data_real_volume_out->element_type() != ffi::DataType::F32 ||
+        data_imag_volume_out->element_type() != ffi::DataType::F32 ||
+        ctf.element_type() != ffi::DataType::F32 ||
+        minvsigma2.element_type() != ffi::DataType::F32 ||
+        posterior.element_type() != ffi::DataType::F32 ||
+        translation_angles.element_type() != ffi::DataType::F32 ||
+        eulers.element_type() != ffi::DataType::F32 ||
+        rot.element_type() != ffi::DataType::F32 ||
+        weight_volume_in.element_type() != ffi::DataType::F32 ||
+        weight_volume_out->element_type() != ffi::DataType::F32 ||
+        denominator_sum->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepFusedProjectorXHalf: invalid dtypes");
+    if (image_h <= 0 || image_w != image_h / 2 + 1 ||
+        N0 <= 0 || N0 != N1 || N1 != N2 || (N2 & 1) == 0 ||
+        upsampling <= 0 || max_r2_x4 < 0 || physical_image_size <= 0 ||
+        projector_max_r <= 0 || projection_padding_factor <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepFusedProjectorXHalf: invalid geometry");
+
+    const auto projector_dims = projector_full.dimensions();
+    const auto image_dims = images.dimensions();
+    const auto ctf_dims = ctf.dimensions();
+    const auto noise_dims = minvsigma2.dimensions();
+    const auto posterior_dims = posterior.dimensions();
+    const auto translation_dims = translation_angles.dimensions();
+    const auto euler_dims = eulers.dimensions();
+    const auto rot_dims = rot.dimensions();
+    const auto denominator_dims = denominator_sum->dimensions();
+    const int64_t pixel_count = image_h * image_w;
+    if (projector_dims.size() != 3 || projector_dims[0] <= 0 ||
+        projector_dims[1] != projector_dims[0] || projector_dims[2] != projector_dims[0] ||
+        image_dims.size() != 2 || image_dims[0] <= 0 || image_dims[1] != pixel_count ||
+        ctf_dims.size() != 2 || ctf_dims[0] != image_dims[0] || ctf_dims[1] != pixel_count ||
+        noise_dims.size() != 2 || noise_dims[0] != image_dims[0] || noise_dims[1] != pixel_count ||
+        posterior_dims.size() != 3 || posterior_dims[0] != image_dims[0] ||
+        posterior_dims[1] <= 0 || posterior_dims[2] <= 0 ||
+        translation_dims.size() != 2 || translation_dims[0] != posterior_dims[2] || translation_dims[1] != 2 ||
+        euler_dims.size() != 3 || euler_dims[0] != image_dims[0] ||
+        euler_dims[1] != posterior_dims[1] || euler_dims[2] != 9 ||
+        rot_dims.size() != 3 || rot_dims[0] != image_dims[0] ||
+        rot_dims[1] != posterior_dims[1] || rot_dims[2] != 6 ||
+        denominator_dims.size() != 3 || denominator_dims[0] != image_dims[0] ||
+        denominator_dims[1] != posterior_dims[1] || denominator_dims[2] != pixel_count)
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepFusedProjectorXHalf: inconsistent topology");
+
+    const int64_t volume_size = N0 * N1 * (N2 / 2 + 1);
+    const auto data_real_in_dims = data_real_volume_in.dimensions();
+    const auto data_imag_in_dims = data_imag_volume_in.dimensions();
+    const auto weight_in_dims = weight_volume_in.dimensions();
+    const auto data_real_out_dims = data_real_volume_out->dimensions();
+    const auto data_imag_out_dims = data_imag_volume_out->dimensions();
+    const auto weight_out_dims = weight_volume_out->dimensions();
+    if (data_real_in_dims.size() != 1 || data_real_in_dims[0] != volume_size ||
+        data_imag_in_dims.size() != 1 || data_imag_in_dims[0] != volume_size ||
+        weight_in_dims.size() != 1 || weight_in_dims[0] != volume_size ||
+        data_real_out_dims.size() != 1 || data_real_out_dims[0] != volume_size ||
+        data_imag_out_dims.size() != 1 || data_imag_out_dims[0] != volume_size ||
+        weight_out_dims.size() != 1 || weight_out_dims[0] != volume_size)
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepFusedProjectorXHalf: accumulator sizes do not match");
+
+    cudaError_t err = launch_relion_vdam_mstep_fused_projector_x_half(
+        stream,
+        reinterpret_cast<const float2*>(projector_full.untyped_data()),
+        reinterpret_cast<const float2*>(images.untyped_data()),
+        static_cast<const float*>(ctf.untyped_data()),
+        static_cast<const float*>(minvsigma2.untyped_data()),
+        static_cast<const float*>(posterior.untyped_data()),
+        static_cast<const float*>(translation_angles.untyped_data()),
+        static_cast<const float*>(eulers.untyped_data()),
+        static_cast<const float*>(rot.untyped_data()),
+        static_cast<float*>(data_real_volume_out->untyped_data()),
+        static_cast<float*>(data_imag_volume_out->untyped_data()),
+        static_cast<float*>(weight_volume_out->untyped_data()),
+        static_cast<float*>(denominator_sum->untyped_data()),
+        projector_dims[0], image_dims[0], posterior_dims[1], posterior_dims[2],
+        pixel_count, image_h, image_w, N0, N1, N2, upsampling, max_r2_x4,
+        static_cast<int>(physical_image_size),
+        static_cast<int>(projector_max_r),
+        static_cast<int>(projection_padding_factor));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionVdamMstepFusedProjectorXHalf,
+    RelionVdamMstepFusedProjectorXHalfImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("N0")
+        .Attr<int64_t>("N1")
+        .Attr<int64_t>("N2")
+        .Attr<int64_t>("upsampling")
+        .Attr<int64_t>("max_r2_x4")
+        .Attr<int64_t>("physical_image_size")
+        .Attr<int64_t>("projector_max_r")
+        .Attr<int64_t>("projection_padding_factor")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

@@ -37,8 +37,8 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
     relion_backprojector_volume_shape,
-    relion_x_half_mstep_accumulator_dtypes,
     relion_x_half_accumulators_to_public_layout,
+    relion_x_half_mstep_accumulator_dtypes,
 )
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
@@ -48,51 +48,22 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
 from recovar.em.dense_single_volume.helpers.jax_runtime import block_until_ready as _block_until_ready
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     _cast_shift_inputs,
-    apply_half_translation_phases as _apply_half_translation_phases,
-)
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    half_translation_phase_table as _half_translation_phase_table,
-)
-from recovar.em.dense_single_volume.helpers.preprocessing import (
     _norm_inputs,
     prepare_batch_preprocess_operands,
     process_half_image,
     resolve_image_mask_for_half_preprocess,
 )
-from recovar.em.dense_single_volume.local_timing import (  # noqa: F401
-    _LOCAL_ACCOUNTED_TIMING_FIELDS,
-    _LOCAL_ACCOUNTED_TIMING_SETUP_FIELDS,
-    _LOCAL_PREPROCESS_TIMER_KEYS,
-    _LOCAL_TIMING_PROFILE_FIELDS,
-    _LOCAL_TRANSFER_TIMER_KEYS,
-    _LocalTiming,
-    _local_timing_profile,
-    _new_local_preprocess_timer,
-    _new_local_transfer_timer,
-    _new_zero_timer,
-    _prefixed_timer_profile,
+from recovar.em.dense_single_volume.helpers.preprocessing import (
+    apply_half_translation_phases as _apply_half_translation_phases,
 )
-from recovar.em.dense_single_volume.local_caches import (  # noqa: F401
-    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB,
-    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
-    EXACT_LOCAL_RAW_CACHE_MAX_GB,
-    EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
-    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB,
-    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
-    _LocalProcessedHalfCache,
-    _all_integer_pre_shifts_or_none,
-    _build_local_processed_half_cache,
-    _build_local_raw_cache,
-    _local_processed_half_cache_enabled,
-    _local_raw_cache_enabled,
-    _sparse_big_jit_mstep_tensors_memory_gb,
-    _validate_native_half_batch,
+from recovar.em.dense_single_volume.helpers.preprocessing import (
+    half_translation_phase_table as _half_translation_phase_table,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_norm_residual_per_image as _compute_norm_residual_per_image,
-    compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
-    relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_projections_block as _compute_projections_block,
@@ -101,15 +72,20 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
+    compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     indexed_projection_available as _indexed_projection_available,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     project_indexed_half_spectrum as _project_indexed_half_spectrum,
 )
+from recovar.em.dense_single_volume.helpers.projection import (
+    relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
+)
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _make_relion_wavg_rectangle,
 )
-from recovar.em.dense_single_volume.helpers.timing import TimingAccumulator
 from recovar.em.dense_single_volume.helpers.translation_prior import (
     translation_prior_centers_for_images,
     translation_sqdist_angstrom,
@@ -126,8 +102,26 @@ from recovar.em.dense_single_volume.local_backprojection import (
 )
 from recovar.em.dense_single_volume.local_big_jit import (
     _noise_image_power_shells_and_per_image,
-    _preprocess_half as _big_jit_preprocess_half,
     run_local_bucket_big_jit,
+)
+from recovar.em.dense_single_volume.local_big_jit import (
+    _preprocess_half as _big_jit_preprocess_half,
+)
+from recovar.em.dense_single_volume.local_caches import (  # noqa: F401
+    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB,
+    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
+    EXACT_LOCAL_RAW_CACHE_MAX_GB,
+    EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
+    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB,
+    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
+    _all_integer_pre_shifts_or_none,
+    _build_local_processed_half_cache,
+    _build_local_raw_cache,
+    _local_processed_half_cache_enabled,
+    _local_raw_cache_enabled,
+    _LocalProcessedHalfCache,
+    _sparse_big_jit_mstep_tensors_memory_gb,
+    _validate_native_half_batch,
 )
 from recovar.em.dense_single_volume.local_debug import (
     current_size_matches_request,
@@ -151,16 +145,28 @@ from recovar.em.dense_single_volume.local_score_pass import (
     compute_reconstruction_support,
     compute_reconstruction_support_from_threshold,
     fused_score_normalize_mstep_abs2_on_demand,
-    fused_score_normalize_mstep_abs2_with_log_z_on_demand,
     fused_score_normalize_support_abs2_on_demand,
-    fused_score_normalize_support_probs_abs2_with_log_z_on_demand,
     fused_score_normalize_support_probs_abs2_on_demand,
+    fused_score_normalize_support_probs_abs2_with_log_z_on_demand,
     normalize_local_scores,
     normalize_local_scores_float32,
     normalize_local_scores_with_log_z,
     normalize_local_scores_with_log_z_float32,
     score_local_bucket_abs2_on_demand,
     score_local_bucket_abs2_weighted_on_demand,
+)
+from recovar.em.dense_single_volume.local_timing import (  # noqa: F401
+    _LOCAL_ACCOUNTED_TIMING_FIELDS,
+    _LOCAL_ACCOUNTED_TIMING_SETUP_FIELDS,
+    _LOCAL_PREPROCESS_TIMER_KEYS,
+    _LOCAL_TIMING_PROFILE_FIELDS,
+    _LOCAL_TRANSFER_TIMER_KEYS,
+    _local_timing_profile,
+    _LocalTiming,
+    _new_local_preprocess_timer,
+    _new_local_transfer_timer,
+    _new_zero_timer,
+    _prefixed_timer_profile,
 )
 from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 from recovar.reconstruction import noise as noise_utils
@@ -527,6 +533,10 @@ def _accumulate_relion_vdam_physical_particle_grid(
     Ft_y,
     Ft_ctf,
     *,
+    projector_full=None,
+    scoring_rotations=None,
+    projector_r_max=None,
+    projection_padding_factor=1,
     pixel_indices,
     image_shape,
     volume_shape,
@@ -565,7 +575,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
 
     from recovar import cuda_backproject
 
-    Ft_y, Ft_ctf, _ = cuda_backproject.relion_vdam_mstep_fused_x_half(
+    common_args = (
         Ft_y,
         Ft_ctf,
         images,
@@ -574,12 +584,33 @@ def _accumulate_relion_vdam_physical_particle_grid(
         posterior_over_weight_norm,
         jnp.asarray(translation_angles, dtype=jnp.float32),
         jnp.asarray(pixel_indices, dtype=jnp.int32),
-        reference,
-        rotations,
-        tuple(int(value) for value in image_shape),
-        tuple(int(value) for value in volume_shape),
-        float(max_r),
     )
+    if projector_full is None:
+        Ft_y, Ft_ctf, _ = cuda_backproject.relion_vdam_mstep_fused_x_half(
+            *common_args,
+            reference,
+            rotations,
+            tuple(int(value) for value in image_shape),
+            tuple(int(value) for value in volume_shape),
+            float(max_r),
+        )
+    else:
+        if scoring_rotations is None or projector_r_max is None:
+            raise ValueError(
+                "inline RELION VDAM projection requires scoring rotations and projector radius"
+            )
+        Ft_y, Ft_ctf, _ = (
+            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+                *common_args,
+                jnp.asarray(projector_full, dtype=jnp.complex64),
+                jnp.asarray(scoring_rotations, dtype=jnp.float32),
+                tuple(int(value) for value in image_shape),
+                tuple(int(value) for value in volume_shape),
+                float(max_r),
+                int(projector_r_max),
+                int(projection_padding_factor),
+            )
+        )
     return Ft_y, Ft_ctf
 
 
@@ -3005,6 +3036,7 @@ def run_local_em_exact(
     relion_projection_cache_max_estimated_gb = 0.0
     relion_projection_cache_n_projection_pixels = 0
     relion_projection_cache_id_map_rows = 0
+    source_vdam_projector_full = None
     if use_relion_projector:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
@@ -3034,6 +3066,14 @@ def run_local_em_exact(
                 big_jit_projection_pixel_indices_arg = jnp.asarray(window_spec.projection_indices, dtype=jnp.int32)
                 big_jit_projection_score_take_arg = jnp.asarray(window_spec.score_projection_take, dtype=jnp.int32)
                 big_jit_projection_recon_take_arg = jnp.asarray(window_spec.recon_projection_take, dtype=jnp.int32)
+        if source_faithful_bpref and not score_only:
+            from recovar.em.dense_single_volume.helpers.projection import (
+                relion_projector_half_to_texture_full,
+            )
+
+            source_vdam_projector_full = relion_projector_half_to_texture_full(
+                relion_projector_half_big_jit
+            )
     if (
         use_big_jit_buckets
         and compact_relion_projector_big_jit
@@ -4368,6 +4408,10 @@ def run_local_em_exact(
                     reconstruction_pack_mask_jnp,
                     Ft_y,
                     Ft_ctf,
+                    projector_full=source_vdam_projector_full,
+                    scoring_rotations=packed_rotations_np,
+                    projector_r_max=relion_projector_r_max_big_jit,
+                    projection_padding_factor=projection_padding_factor,
                     pixel_indices=mstep_recon_window_indices,
                     image_shape=image_shape,
                     volume_shape=recon_volume_shape,
