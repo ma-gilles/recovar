@@ -5,6 +5,7 @@ from pathlib import Path
 from scripts.audit_vdam_repeat_panel import classify_checkpoint
 
 SBATCH_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_vdam_relion_repeat_panel.sbatch"
+SUMMARY_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_vdam_repeat_panel_summary.sbatch"
 
 
 def test_repeat_panel_sbatch_keeps_sibling_repeat_roots_and_failed_evidence():
@@ -13,6 +14,20 @@ def test_repeat_panel_sbatch_keeps_sibling_repeat_roots_and_failed_evidence():
     assert 'PANEL_ROOT="${OUTPUT_ROOT}"' in text
     assert 'repeat_root="${PANEL_ROOT}/repeat-' in text
     assert '[[ ! -s "${audit_path}" ]]' in text
+
+
+def test_repeat_panel_summary_can_resume_after_science_job():
+    text = SUMMARY_PATH.read_text()
+
+    expected_tokens = [
+        'test -s "${repeat_root}/trajectory_audit.json"',
+        'if [[ -s "${REPORT}" && -s "${SHELLS}" ]]; then',
+        '"${PIXI_PY}" -m scripts.audit_vdam_repeat_panel',
+        "#SBATCH --partition=cpu",
+        "#SBATCH --time=08:00:00",
+    ]
+    missing = [token for token in expected_tokens if token not in text]
+    assert not missing, f"VDAM repeat summary lost restart-safe wiring: {missing}"
 
 
 def test_repeat_panel_accepts_bidirectional_native_mode_matches():
