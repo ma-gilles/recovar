@@ -220,6 +220,33 @@ def test_score_normalize_support_reuses_relion_f32_fine_posterior():
     np.testing.assert_array_equal(arrays[5], np.max(expected[0], axis=(1, 2)))
 
 
+def test_bpref_capture_rebuilds_relion_f32_mstep_probs_not_generic_debug_probs():
+    """The contribution fixture must expose the tensor used by the M-step."""
+
+    scores = jnp.asarray(
+        [[[0.0, -0.25, -1.0], [-1.5, -2.0, -3.0]]],
+        dtype=jnp.float32,
+    )
+    generic_probs = jnp.exp(scores.astype(jnp.float64))
+    generic_probs /= jnp.sum(generic_probs, axis=(1, 2), keepdims=True)
+    expected_probs, expected_mask, *_ = _relion_f32_fine_reconstruction_probs(
+        scores,
+        adaptive_fraction=0.999,
+    )
+
+    captured = local_em_engine._exact_local_bpref_reconstruction_probs_for_capture(
+        scores,
+        generic_probs,
+        expected_mask,
+        use_relion_f32_fine_posterior=True,
+        adaptive_fraction=0.999,
+    )
+
+    assert np.asarray(captured).dtype == np.float32
+    np.testing.assert_array_equal(np.asarray(captured), np.asarray(expected_probs))
+    assert not np.array_equal(np.asarray(captured), np.asarray(generic_probs))
+
+
 def test_local_em_engine_normcorr_full_box_current_size_guard():
     """Full-box local passes use current_size=None and must not divide it by two."""
     source = inspect.getsource(local_em_engine.run_local_em_exact)

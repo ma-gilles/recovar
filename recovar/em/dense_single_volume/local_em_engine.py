@@ -208,6 +208,40 @@ def _maybe_dump_exact_local_bpref_contribution_rows(**kwargs) -> None:
     _sparse_pass2_diagnostics._maybe_dump_bpref_contribution_rows(**kwargs)
 
 
+def _exact_local_bpref_reconstruction_probs_for_capture(
+    scores,
+    generic_probs,
+    reconstruction_sample_mask,
+    *,
+    use_relion_f32_fine_posterior: bool,
+    adaptive_fraction: float,
+):
+    """Return the same reconstruction weights consumed by the big-JIT M-step.
+
+    ``debug_probs`` deliberately exposes the generic normalized posterior for
+    score diagnostics.  It is not the M-step tensor when the RELION float32
+    exp/sort/scan/divide path is active, so a contribution capture must rebuild
+    that source-faithful tensor from the returned score boundary.
+    """
+
+    if not use_relion_f32_fine_posterior:
+        return jnp.where(reconstruction_sample_mask, generic_probs, 0.0)
+    reconstruction_probs, exact_mask, *_diagnostics = (
+        _sparse_pass2_diagnostics._relion_f32_fine_reconstruction_probs(
+            scores,
+            adaptive_fraction=float(adaptive_fraction),
+        )
+    )
+    if not np.array_equal(
+        np.asarray(exact_mask, dtype=bool),
+        np.asarray(reconstruction_sample_mask, dtype=bool),
+    ):
+        raise RuntimeError(
+            "big-JIT BPref capture rebuilt a different RELION reconstruction mask"
+        )
+    return reconstruction_probs
+
+
 def _exact_local_bpref_contribution_capture_active(
     *, current_size: int | None, debug_iteration: int | None
 ) -> bool:
@@ -3700,10 +3734,16 @@ def run_local_em_exact(
                         preprior_scores,
                         -jnp.inf,
                     )
-                    reconstruction_probs_for_dump = jnp.where(
-                        reconstruction_sample_mask_unpadded,
-                        debug_probs_unpadded,
-                        0.0,
+                    reconstruction_probs_for_dump = (
+                        _exact_local_bpref_reconstruction_probs_for_capture(
+                            debug_scores_unpadded,
+                            debug_probs_unpadded,
+                            reconstruction_sample_mask_unpadded,
+                            use_relion_f32_fine_posterior=(
+                                use_relion_f32_fine_posterior
+                            ),
+                            adaptive_fraction=adaptive_fraction,
+                        )
                     )
                     if reconstruction_probability_threshold_np is None:
                         reconstruction_threshold_for_dump = jnp.zeros(
