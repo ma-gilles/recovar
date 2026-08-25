@@ -20,6 +20,7 @@ if __package__:
         _candidate_provenance,
         _load_json,
         _native_panel_provenance,
+        require_same_physical_gpu,
     )
     from scripts.audit_vdam_sampling_trajectory import audit_sampling_trajectory
 else:
@@ -29,6 +30,7 @@ else:
         _candidate_provenance,
         _load_json,
         _native_panel_provenance,
+        require_same_physical_gpu,
     )
     from audit_vdam_sampling_trajectory import audit_sampling_trajectory
 
@@ -217,6 +219,7 @@ def audit_candidate_state_envelope(
         case_id=case_id,
         checkpoints=checkpoints,
     )
+    require_same_physical_gpu(candidate_provenance, native_provenance)
 
     materialization = _load_json(
         fixture_dir / "fixture_materialization.json", label="fixture materialization"

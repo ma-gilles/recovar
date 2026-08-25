@@ -144,6 +144,19 @@ def _native_panel_provenance(
     }
 
 
+def require_same_physical_gpu(
+    candidate_provenance: dict[str, str], native_provenance: dict[str, Any]
+) -> None:
+    """Reject a candidate/native envelope assembled across physical GPUs."""
+
+    candidate_gpu = str(candidate_provenance.get("physical_gpu_uuid", ""))
+    native_gpu = str(native_provenance.get("physical_gpu_uuid", ""))
+    if not candidate_gpu or candidate_gpu != native_gpu:
+        raise CandidateEnvelopeError(
+            f"candidate/native physical GPU differs: {candidate_gpu!r} vs {native_gpu!r}"
+        )
+
+
 def _metric(lhs: np.ndarray, rhs: np.ndarray, *, key: str, shellwise: dict[str, np.ndarray]) -> float:
     curve = np.asarray(shell_fsc(lhs, rhs), dtype=np.float64)
     if curve.size <= 1 or not np.any(np.isfinite(curve[1:])):
@@ -207,6 +220,7 @@ def audit_candidate_envelope(
     native_provenance = _native_panel_provenance(
         native_roots, suite_id=str(scorecard["suite_id"]), case_id=case_id, checkpoints=checkpoints
     )
+    require_same_physical_gpu(candidate_provenance, native_provenance)
     _require_artifacts(candidate_root, "recovar", checkpoints, label="candidate")
     for index, root in enumerate(native_roots, start=1):
         _require_artifacts(root, "relion", checkpoints, label=f"native repeat {index}")

@@ -99,9 +99,9 @@ def _native_root(root: Path, index: int) -> Path:
     (native / "paired_gpu_uuid.json").write_text(
         json.dumps(
             {
-                "physical_gpu_uuid": "GPU-native",
-                "relion_gpu_uuid": "GPU-native",
-                "recovar_gpu_uuid": "GPU-native",
+                "physical_gpu_uuid": "GPU-acde",
+                "relion_gpu_uuid": "GPU-acde",
+                "recovar_gpu_uuid": "GPU-acde",
             }
         )
     )
@@ -145,7 +145,7 @@ def test_candidate_envelope_audit_is_provenance_complete_and_fail_closed(tmp_pat
     (provenance / "input_sha256.txt").write_text(
         f"{'d' * 64}  /immutable/libcuda_backproject.so\n"
     )
-    (provenance / "nvidia_smi.txt").write_text("GPU UUID : GPU-candidate\n")
+    (provenance / "nvidia_smi.txt").write_text("GPU UUID : GPU-acde\n")
     native_roots = [_native_root(tmp_path, 1), _native_root(tmp_path, 2)]
 
     monkeypatch.setattr(audit_module, "_load_relion_volume", lambda path: np.zeros((2, 2, 2)))
@@ -175,6 +175,13 @@ def test_candidate_envelope_audit_is_provenance_complete_and_fail_closed(tmp_pat
     assert report["minimum_candidate_best_native_fsc_auc"] == pytest.approx(0.9995)
     assert report["minimum_candidate_minus_best_native_gt_fsc_auc"] == pytest.approx(-0.001)
     assert len(shells) == 12
+
+
+def test_candidate_envelope_rejects_cross_gpu_evidence():
+    candidate = {"physical_gpu_uuid": "GPU-aaaa"}
+    native = {"physical_gpu_uuid": "GPU-bbbb"}
+    with pytest.raises(CandidateEnvelopeError, match="physical GPU differs"):
+        audit_module.require_same_physical_gpu(candidate, native)
 
 
 def test_candidate_provenance_rejects_ambiguous_cuda_digest(tmp_path):
