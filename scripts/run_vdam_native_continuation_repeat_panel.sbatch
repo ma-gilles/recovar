@@ -19,10 +19,12 @@ set -euo pipefail
 
 PANEL_ROOT=${VDAM_RELION_REPEAT_ROOT}
 REPEAT_COUNT=${VDAM_RELION_REPEAT_COUNT:-8}
+CAPTURE=${VDAM_RELION_REPEAT_CAPTURE:-1}
 RUNNER=${VDAM_RELION_REPEAT_RUNNER:-scripts/run_vdam_relion_continuation_capture.sbatch}
 
 test -f "${PANEL_ROOT}/SAFE_TO_DELETE"
 test "${REPEAT_COUNT}" -ge 1
+case "${CAPTURE}" in 0|1) ;; *) echo "VDAM_RELION_REPEAT_CAPTURE must be 0 or 1" >&2; exit 2 ;; esac
 test -f "${RUNNER}"
 
 for repeat_index in $(seq 1 "${REPEAT_COUNT}"); do
@@ -30,7 +32,7 @@ for repeat_index in $(seq 1 "${REPEAT_COUNT}"); do
     mkdir -p "${repeat_root}"
     touch "${repeat_root}/SAFE_TO_DELETE"
     VDAM_RELION_CONT_ROOT=${repeat_root} \
-        VDAM_RELION_CONT_CAPTURE=1 \
+        VDAM_RELION_CONT_CAPTURE=${CAPTURE} \
         bash "${RUNNER}"
 done
 

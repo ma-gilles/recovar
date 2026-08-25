@@ -482,6 +482,18 @@ def test_vdam_sampling_gate_can_stop_at_pretransition_boundary():
     assert not missing, f"VDAM pretransition capture lost bounded audit wiring: {missing}"
 
 
+def test_vdam_native_continuation_repeat_panel_can_disable_observer():
+    runner = (REPO_ROOT / "scripts/run_vdam_native_continuation_repeat_panel.sbatch").read_text()
+
+    expected_tokens = [
+        "CAPTURE=${VDAM_RELION_REPEAT_CAPTURE:-1}",
+        'case "${CAPTURE}" in 0|1)',
+        "VDAM_RELION_CONT_CAPTURE=${CAPTURE}",
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM native repeat panel lost observer-free mode: {missing}"
+
+
 def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
     capture = (REPO_ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
 
