@@ -165,6 +165,9 @@ def audit_sampling_trajectory(
                     "sampling_acc_rot": float(candidate["sampling_acc_rot"]),
                     "sampling_acc_trans_angstrom": float(candidate["sampling_acc_trans_angstrom"]),
                     "sampling_updated": bool(candidate["sampling_updated"]),
+                    "sampling_accuracy_estimated": bool(
+                        candidate.get("sampling_accuracy_estimated", True)
+                    ),
                     "orientational_prior_mode": int(candidate["orientational_prior_mode"]),
                     "uniform_local_orientation_prior": bool(
                         candidate["uniform_local_orientation_prior"]
