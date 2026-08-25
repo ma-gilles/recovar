@@ -1918,3 +1918,44 @@ the expensive final pairwise FSC stage.  Its focused contract test and shell
 syntax check pass.  Dependent CPU Slurm `12938147` is queued `afterany` on the
 paired panel, so completed GPU science cannot be lost or repeated merely to
 finish analysis.  No generic RECOVAR suite ran.
+
+Paired job `12937169` completed repeat-1 RELION and RECOVAR science but was
+correctly rejected before its trajectory audit because the repository head
+changed from launch head `ef0d5bce8` to `bd1327fa6` while the job was active.
+The intervening commits changed runners/auditors rather than production
+science, but the immutable-source evidence contract does not permit that
+distinction after launch.  The preserved run took `276.6543 s` in stock
+RELION and `2305.7316 s` in RECOVAR (`8.33x`); a focused CPU-only post-hoc
+0--200 map, particle, and schedule audit is Slurm `12939499`.  It remains
+standalone evidence and is not mixed into a formal repeat ensemble.  The
+dependent summary `12938147` failed closed in three seconds because repeats
+2--4 were absent.
+
+A new immutable snapshot worktree at exact source head `ef0d5bce8` now owns
+the formal repeat gate.  Its compiled CUDA and RELION-binding artifacts are
+independent copies with SHA-256
+`e0aab7e1be93159e67c42c62f622062232a66646c91353e82c5917b0c0b24d39`
+and `fcbb2a8356c2f7ee88e947fa92c9f5bfc41535ed0a2c6a9124a2fad781a63b83`,
+respectively, so later rebuilds cannot mutate the running checkout.  The
+fresh four-repeat same-allocation H100 panel is Slurm `12939263`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gui_default_repeat_panel_ef0d5bce_frozen_retry3_20260825`;
+restart-safe CPU summary `12939264` is queued `afterany`.  Two setup attempts
+(`12939154` and the corresponding summary `12939155`) stopped before science
+because the new worktree initially lacked the ignored compiled RELION
+binding.  No output from those preflight failures is reused.
+
+Runtime investigation is isolated from correctness at local unpushed head
+`1bc960705`.  The accepted 200-iteration profile spends `1212.42 s` in sparse
+pass 1, versus `555.82 s` in sparse pass 2.  The one active hypothesis is
+that the fixed 200-million-float coarse-score budget is too conservative for
+an 80 GB H100: late iterations use only 5--13 images per batch and make about
+40--154 pass-1 calls.  An opt-in, fail-fast budget override and eight focused
+unit tests are complete (`8 passed`; Ruff, pycompile, and diff checks pass).
+The bounded same-GPU default-versus-800-million-float iteration-20 probe is
+Slurm `12939443`.  Earlier attempts `12939000`, `12939262` failed before
+science on, respectively, the missing ignored RELION binding and the CUDA
+binary SHA guard after the shared symlink target was rebuilt.  The corrected
+probe uses independent compiled-artifact copies and rejects on any particle,
+map, support, memory, or less-than-20-percent runtime failure.  No full VDAM
+trajectory and no generic RECOVAR test suite is spent on this performance
+probe.
