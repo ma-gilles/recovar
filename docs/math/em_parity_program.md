@@ -75,9 +75,19 @@ the stable native outliers: 2,720/2,720 and 512/512 values, zero error.
 The posterior boundary is therefore closed in production, but the whole
 iteration-1 M-step is not: fresh-repeat raw accumulator relative-L2 remains
 about `8.91e-6`/`1.00e-5` for data and `2.04e-6`/`2.49e-6` for weights.  The
-next causal gate is iteration-2 noise/cutoff propagation, followed by one
-representative 0..200 trajectory before promoting the change to the full
-22-cell trajectory matrix.  No generic RECOVAR suite is part of this gate.
+accepted-posterior iteration-2 discriminator `12911356` completed `0:0` in
+63 seconds against the identical frozen native data/component capture used by
+the earlier control.  Exact float32 posterior production reduces the
+shell-15 support-mass signed error from `+2.21958e-5` to `+8.22904e-7`
+(`96.3%`), but it leaves the causal raw-noise error effectively unchanged:
+`+1.60060e-5` becomes `+1.59974e-5` (only `0.054%` smaller).  The AA and XA
+signed errors remain `-3.87171e-6` and `-9.98757e-6`.  This confirms that the
+remaining iteration-2 cutoff/noise failure is propagated iteration-1
+reference/BPref arithmetic rather than posterior normalization.  The next
+causal gate returns to that production accumulator/reference boundary; one
+representative 0..200 trajectory follows only after a bounded discriminator
+materially closes it, before promotion to the full 22-cell trajectory matrix.
+No generic RECOVAR suite is part of this gate.
 
 Source statement order alone is now rejected as sufficient.  Isolated commit
 `99681a33b` completed all 200 frozen `vdam-gf01` iterations (Slurm
