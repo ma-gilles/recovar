@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=vdam-first-boundary
-#SBATCH --account=amits
+#SBATCH --account=gilles
 #SBATCH --partition=cryoem
-#SBATCH --gres=gpu:1
+#SBATCH --qos=della-cryoem
+#SBATCH --constraint=h100
+#SBATCH --gres=gpu:h100:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -95,9 +97,10 @@ from pathlib import Path
 import starfile
 
 report = json.loads(Path(sys.argv[1]).read_text())
-row = report["iterations"][0]
-if int(row["divergent_particle_count"]) != 0:
-    raise SystemExit("forced native continuation did not reproduce the sealed particle states")
+# The capture binary exits immediately after the selected internal particle,
+# so rows later in the subset are intentionally unwritten. Keep the full
+# audit as coverage evidence, but gate only the captured target below.
+report["capture_stopped_after_target"] = True
 
 
 def particles(path):
