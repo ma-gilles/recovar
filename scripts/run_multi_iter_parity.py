@@ -588,16 +588,26 @@ def main():
         default=None,
         help=(
             "Diagnostic only: only re-seed recovar's state from RELION's per-iteration "
-            "STAR files (model.star tau2/sigma2_noise, sampling.star, direction priors, "
-            "previous-best poses, etc.) through this recovar iteration number (1-indexed); "
-            "later iterations up to --max_iter run on recovar's own carried-forward state "
-            "instead. RELION's own multi-iteration trajectory never round-trips through "
-            "these STAR files (they are write-only output within one run; see "
-            "MlOptimiserMpi::iterate()), and their scalar RFLOAT columns are serialized at "
-            "only ~6-7 significant figures (metadata_table.cpp's %%12.6f/%%12.6e format), so "
-            "re-seeding every iteration compares against a precision-degraded target instead "
-            "of RELION's true internal state. Default (unset) re-seeds every iteration, "
-            "matching prior behavior."
+            "STAR files through this recovar iteration number (1-indexed); later "
+            "iterations up to --max_iter run on recovar's own carried-forward state "
+            "instead. Gates BOTH replay sources the engine reads every iteration: (1) "
+            "the explicit replay_iteration_overrides dict (model.star tau2/sigma2_noise, "
+            "direction priors, previous-best poses, image/scale corrections -- via this "
+            "script's own per-iteration override loop), and (2) RelionParityOptions."
+            "perturb_replay_max_iter (RefinementOptions.parity), which stops "
+            "_run_relion_iteration_loop's independent per-iteration reads of RELION's "
+            "sampling.star (healpix order, current_size, translation range/step), "
+            "control model.star, and run_it{N}_optimiser.star (convergence-tracking "
+            "state: stall counters, changes, has_converged) -- previously ungated by "
+            "this flag entirely, which is why 'Replay override: optimiser control <- ...' "
+            "kept firing past the intended cutoff. RELION's own multi-iteration "
+            "trajectory never round-trips through these STAR files (they are "
+            "write-only output within one run; see MlOptimiserMpi::iterate()), and "
+            "their scalar RFLOAT columns are serialized at only ~6-7 significant "
+            "figures (metadata_table.cpp's %%12.6f/%%12.6e format), so re-seeding every "
+            "iteration compares against a precision-degraded target instead of "
+            "RELION's true internal state. Default (unset) re-seeds every iteration "
+            "from both sources, matching prior behavior."
         ),
     )
     parser.add_argument(
@@ -1712,6 +1722,7 @@ def main():
                 perturb_factor=0.5,
                 perturb_replay_relion_dir=str(relion_dir),
                 perturb_replay_relion_prefix=run_prefix,
+                perturb_replay_max_iter=args.replay_override_max_iter,
                 emulate_relion_firstiter_cc=do_firstiter_cc,
                 relion_firstiter_ini_high_angstrom=relion_ini_high if args.iter == 0 else None,
                 first_iteration_score_mode=args.first_iteration_score_mode,

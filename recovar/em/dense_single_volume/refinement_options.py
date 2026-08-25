@@ -59,6 +59,16 @@ class RelionParityOptions:
     perturb_seed: int | None = None
     perturb_replay_relion_dir: str | None = None
     perturb_replay_relion_prefix: str = "run"
+    # Diagnostic-only cutoff (1-indexed recovar iteration): once the loop
+    # passes this iteration, `_run_relion_iteration_loop` stops reading
+    # RELION's per-iteration sampling/model/optimiser STAR files entirely
+    # (sampling grid, current_size, direction priors, convergence-tracking
+    # state) and carries recovar's own state forward instead. `None`
+    # (default) reads RELION's STAR files every iteration, matching prior
+    # behavior. See scripts/run_multi_iter_parity.py's
+    # --replay-override-max-iter, which sets this alongside
+    # replay.replay_iteration_overrides.
+    perturb_replay_max_iter: int | None = None
     perturb_replay_precision: Literal["auto", "seed_exact", "star"] = "auto"
     perturb_replay_restart_state_iterations: tuple[int, ...] = ()
     final_sampling_replay_relion_dir: str | None = None
@@ -82,6 +92,12 @@ class RelionParityOptions:
                 "image_fourier_backend must be "
                 "'host_numpy', 'jax_gpu', or 'relion_cuda', "
                 f"got {self.image_fourier_backend!r}"
+            )
+
+        if self.perturb_replay_max_iter is not None and self.perturb_replay_max_iter < 0:
+            raise ValueError(
+                "perturb_replay_max_iter must be non-negative, got "
+                f"{self.perturb_replay_max_iter!r}"
             )
 
         iterations = tuple(

@@ -4640,6 +4640,20 @@ def _numbered_relion_iteration(init_relion_iteration: int, local_iteration: int)
     return int(init_relion_iteration) + int(local_iteration) + 1
 
 
+def _past_perturb_replay_max_iter(iteration: int, perturb_replay_max_iter: int | None) -> bool:
+    """Return whether ``iteration`` (0-indexed) is past the diagnostic replay cutoff.
+
+    ``perturb_replay_max_iter`` is 1-indexed to match
+    ``scripts/run_multi_iter_parity.py``'s ``--replay-override-max-iter``
+    (and ``replay_iteration_overrides``, which the same flag also gates).
+    ``None`` means "no cutoff": every iteration stays in range.
+    """
+
+    if perturb_replay_max_iter is None:
+        return False
+    return (int(iteration) + 1) > int(perturb_replay_max_iter)
+
+
 def _run_relion_iteration_loop(
     experiment_datasets,
     init_volume,
@@ -4679,6 +4693,7 @@ def _run_relion_iteration_loop(
     tau2_fudge = parity.tau2_fudge
     perturb_replay_relion_dir = parity.perturb_replay_relion_dir
     perturb_replay_relion_prefix = parity.perturb_replay_relion_prefix
+    perturb_replay_max_iter = parity.perturb_replay_max_iter
     init_relion_iteration = schedule.init_relion_iteration
     final_replay_override = replay.final_replay_override
     n_classes = k_class.n_classes
@@ -5215,6 +5230,16 @@ def _run_relion_iteration_loop(
         iter_replay_override = None
         if replay.replay_iteration_overrides is not None and iteration < len(replay.replay_iteration_overrides):
             iter_replay_override = replay.replay_iteration_overrides[iteration]
+        if perturb_replay_relion_dir is not None and _past_perturb_replay_max_iter(
+            iteration, perturb_replay_max_iter
+        ):
+            logger.info(
+                "Replay override: disabling RELION per-iteration STAR replay from "
+                "iteration %d onward (--replay-override-max-iter %d)",
+                iteration + 1,
+                perturb_replay_max_iter,
+            )
+            perturb_replay_relion_dir = None
         relion_firstiter_cc_this_iter = bool(
             parity.emulate_relion_firstiter_cc and init_relion_iteration == 0 and iteration == 0
         )

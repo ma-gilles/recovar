@@ -575,6 +575,42 @@ def test_kclass_final_reconstruction_does_not_predivide_class_accumulators():
     assert "final_ft_y[class_idx] /" not in source
 
 
+@pytest.mark.parametrize(
+    ("iteration", "perturb_replay_max_iter", "expected_past_cutoff"),
+    [
+        (0, None, False),  # no cutoff: every iteration stays in range
+        (0, 1, False),  # iteration 0 -> recovar iter 1, at the cutoff
+        (1, 1, True),  # iteration 1 -> recovar iter 2, past the cutoff
+        (5, 1, True),  # cutoff stays exceeded on every later pass (monotonic)
+        (0, 0, True),  # cutoff 0 disables replay from the very first iteration
+    ],
+)
+def test_past_perturb_replay_max_iter_matches_one_indexed_cutoff(
+    iteration, perturb_replay_max_iter, expected_past_cutoff
+):
+    assert (
+        iteration_loop_module._past_perturb_replay_max_iter(iteration, perturb_replay_max_iter)
+        is expected_past_cutoff
+    )
+
+
+def test_run_relion_iteration_loop_clears_perturb_replay_dir_past_cutoff_source():
+    """Regression for the bug where --replay-override-max-iter only gated the
+    explicit ``replay_iteration_overrides`` dict, leaving
+    ``_run_relion_iteration_loop``'s independent per-iteration
+    sampling/model/optimiser STAR reads (including the "Replay override:
+    optimiser control <- ..." log line) active for every iteration
+    regardless of the cutoff. Asserts the loop body reassigns
+    ``perturb_replay_relion_dir`` itself (the same local variable every
+    downstream per-iteration STAR read in this function consults) via
+    ``_past_perturb_replay_max_iter``, rather than only gating
+    ``iter_replay_override``.
+    """
+    source = inspect.getsource(iteration_loop_module._run_relion_iteration_loop)
+    assert "perturb_replay_relion_dir = None" in source
+    assert "_past_perturb_replay_max_iter(" in source
+
+
 def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_rounding(monkeypatch, tmp_path):
     class State:
         healpix_order = 3
