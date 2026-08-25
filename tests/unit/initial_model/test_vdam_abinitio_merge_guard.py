@@ -243,11 +243,13 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "VDAM_PREPROCESS_EXPECTED_PART_COUNT",
         "VDAM_PREPROCESS_THREADS",
         "VDAM_PREPROCESS_CAPTURE_MSTEP",
+        "VDAM_PREPROCESS_REQUIRE_UNMASKED_WAVG_IMAGE",
         'test "${actual_part_count}" -eq "${EXPECTED_PART_COUNT}"',
         "export RELION_ACC_DUMP_PART_IDS=",
         "export RECOVAR_DEBUG_DUMP_DIR=",
         "pipe_it1_c0_bp_data_h_pre_reweight.bin",
         "img0_part${capture_part_id}_storeWavg_${suffix}.bin",
+        'if [[ "${REQUIRE_UNMASKED_WAVG_IMAGE}" = 1 ]]',
         "Minvsigma2 sigma2_noise sigma2_fudge",
     ]
     haystack = "\n".join([guard, runner, auditor, sbatch, preprocess_sbatch])

@@ -1058,3 +1058,61 @@ trajectory is justified.  Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_single_euler_repeat_panel_defa4e07_20260824.json`
 - `/scratch/gpfs/GILLES/mg6942/slurmo/vdam-single-euler-ptx-12914984.txt`
 - `/scratch/gpfs/GILLES/mg6942/slurmo/vdam-single-euler-focused-12915212.out`
+
+## Native-SGD production boundary closure
+
+The final isolated arm now mirrors RELION's native VDAM SGD kernel body rather
+than composing individually plausible projector and scatter variants.  The
+accepted production chain culminates in `fb162a1e1` and retains the earlier
+layout, physical-particle packing, one-Euler, and inline-projector changes only
+as prerequisites of that source-faithful kernel.  Its normalized compute-80
+PTX matches native RELION line for line: all 523 of 523 lines, including ABI,
+register, and 36-byte shared-Euler declarations.  Focused H100 job `12916461`
+passed all five CUDA source, routing, projection, boundary, and accumulator
+tests in 14.48 seconds.  The subsequently integrated PR head passed the full
+15-test CUDA translation file in focused H100 job `12920426` in 5.56 seconds.
+
+Aggregate paired iteration-1 jobs `12916504` and `12916505` still land at the
+native/native atomic repeatability floor.  That boundary cannot distinguish a
+source-faithful implementation from a different atomic distribution, so it is
+no longer used as the acceptance oracle.  Source-level contribution capture
+first established exact alignment for all 80 of 80 selected rotations in job
+`12917549`; the accepted posterior was already bitwise identical.
+
+The authoritative discriminator reruns RELION's production
+`runBackProjectKernel` for one selected particle into a zeroed temporary GPU
+BPref and compares that result with RECOVAR's inline production contribution.
+Native capture job `12919940` produced the complete iteration-1
+`(41, 41, 21)` data and weight buffers for the exact 3,000-particle gf01 input
+under the true 200-iteration schedule.  The wrapper's Slurm state is failed
+only because it still required the older `Fimg_unweighted_nomask` diagnostic;
+the new GPU BPref artifacts themselves are complete.  The runner now makes
+that obsolete image diagnostic optional in particle-BPref mode so subsequent
+capture status reflects the scientific artifact gate.
+
+Fail-closed analyzer job `12920218` completed successfully.  Native RELION and
+RECOVAR production contributions agree to float32 precision:
+
+- data relative L2 `3.107632513845835e-7`, cosine
+  `0.9999999999999516`;
+- weight relative L2 `2.0207509932595694e-7`, cosine
+  `0.9999999999999835`;
+- posterior bitwise exact, with zero support mismatch.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_native_particle_bpref_it1_20260825/analysis/storewavg_img0_native_gpu_bpref.json`
+(SHA-256
+`2f7ba86f54c249e0540cf936a48180329a0464a9f51707dee6c4febb5dbdd663`).
+The native real, imaginary, and weight capture SHA-256 values are respectively
+`6656db9a7cc8f7d5c5eb663dec82ad87471d6b471c570b397ee483ea78f136b1`,
+`d3fd7740c0ebcfa63e5ef8eda127e91ae2ba7ee254f4c59126a033f9fc4c7e2a`,
+and `fc1f49f7d6495700d5e63b9d488f6133391077452987d0e410fc012e54e04493`.
+
+This formally closes the K=1 iteration-1 production posterior/scatter
+boundary.  The earlier CPU binding replay's 6.16% data and 3.65% weight
+differences are rejected as a false diagnostic caused by using a CPU scatter
+path that is not RELION's production mechanism.  The next boundary is the
+iteration-2 cutoff/noise state propagated from the now-qualified iteration-1
+M-step, followed by one representative true 200-iteration K=1 trajectory
+before expanding the trajectory matrix.  No generic RECOVAR full or long test
+suite ran.
