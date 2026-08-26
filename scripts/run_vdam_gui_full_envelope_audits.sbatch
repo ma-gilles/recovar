@@ -22,8 +22,9 @@ VDAM_SCORECARD=${VDAM_SCORECARD:-${REPO_ROOT}/docs/math/vdam_k1_gui_default_full
 VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT:-4}
 EXPECTED_REPO_HEAD=${EXPECTED_REPO_HEAD:-}
 
-if (( SLURM_ARRAY_TASK_ID < 2 || SLURM_ARRAY_TASK_ID > 22 )); then
-    echo "VDAM envelope audit task must be in [2, 22]" >&2
+if [[ ! "${SLURM_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || \
+        (( SLURM_ARRAY_TASK_ID < 1 || SLURM_ARRAY_TASK_ID > 999 )); then
+    echo "VDAM envelope audit task must be an integer in [1, 999]" >&2
     exit 2
 fi
 test -x "${PIXI_PY}"
@@ -34,6 +35,19 @@ if [[ -n "${EXPECTED_REPO_HEAD}" ]]; then
 fi
 
 CASE_ID=$(printf 'vdam-gf%02d' "${SLURM_ARRAY_TASK_ID}")
+case_match_count=$("${PIXI_PY}" - "${VDAM_SCORECARD}" "${CASE_ID}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+scorecard = json.loads(Path(sys.argv[1]).read_text())
+print(sum(case.get("id") == sys.argv[2] for case in scorecard.get("cases", [])))
+PY
+)
+if [[ "${case_match_count}" != 1 ]]; then
+    echo "VDAM scorecard must contain exactly one ${CASE_ID}; found ${case_match_count}" >&2
+    exit 2
+fi
 PANEL_ROOT=${SCIENCE_ROOT}/${CASE_ID}
 CANDIDATE_ROOT=${PANEL_ROOT}/repeat-01/${CASE_ID}
 FIXTURE_DIR=${CANDIDATE_ROOT}/data
