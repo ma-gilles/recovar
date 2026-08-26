@@ -11,7 +11,12 @@ from typing import Any
 
 import numpy as np
 
-REPORT_SCHEMA = "recovar.em.k1_pass2_state_ab.v1"
+REPORT_SCHEMA = "recovar.em.k1_pass2_state_ab.v2"
+
+# A focused exact-state replay can use a one-step local iteration counter and a
+# different half-local storage coordinate from an autonomous trajectory.  Both
+# values remain useful provenance, but neither is a computed EM state field.
+COORDINATE_ONLY_FIELDS = frozenset({"iteration", "local_index"})
 
 FIELD_STAGES = (
     (
@@ -166,6 +171,7 @@ def analyze(*, reference_path: Path, candidate_path: Path) -> dict[str, Any]:
         common = set(reference.files) & set(candidate.files)
         stages: dict[str, Any] = {}
         first_unequal: dict[str, str] | None = None
+        first_scientific_unequal: dict[str, str] | None = None
         ordered_names: set[str] = set()
         for stage_name, field_names in FIELD_STAGES:
             stage: dict[str, Any] = {}
@@ -182,6 +188,15 @@ def analyze(*, reference_path: Path, candidate_path: Path) -> dict[str, Any]:
                 stage[field_name] = {"present_in_both": True, **metric}
                 if first_unequal is None and not bool(metric["byte_equal"]):
                     first_unequal = {"stage": stage_name, "field": field_name}
+                if (
+                    first_scientific_unequal is None
+                    and field_name not in COORDINATE_ONLY_FIELDS
+                    and not bool(metric["byte_equal"])
+                ):
+                    first_scientific_unequal = {
+                        "stage": stage_name,
+                        "field": field_name,
+                    }
             stages[stage_name] = stage
 
         remaining: dict[str, Any] = {}
@@ -191,7 +206,10 @@ def analyze(*, reference_path: Path, candidate_path: Path) -> dict[str, Any]:
             if np.issubdtype(lhs.dtype, np.number) and np.issubdtype(rhs.dtype, np.number):
                 remaining[field_name] = _metric(lhs, rhs)
 
-        summary: dict[str, Any] = {"first_unequal": first_unequal}
+        summary: dict[str, Any] = {
+            "first_unequal": first_unequal,
+            "first_scientific_unequal": first_scientific_unequal,
+        }
         for label, archive in (("reference", reference), ("candidate", candidate)):
             probs = np.asarray(archive["probs"], dtype=np.float64)
             summary[label] = {
@@ -200,6 +218,55 @@ def analyze(*, reference_path: Path, candidate_path: Path) -> dict[str, Any]:
                 "candidate_count": int(np.count_nonzero(archive["candidate_mask"])),
                 "reconstruction_support_count": int(
                     np.count_nonzero(archive["reconstruction_mask"])
+                ),
+            }
+
+        reference_mask = np.asarray(reference["candidate_mask"], dtype=bool)
+        candidate_mask = np.asarray(candidate["candidate_mask"], dtype=bool)
+        reference_probs = np.asarray(reference["probs"], dtype=np.float64)
+        candidate_probs = np.asarray(candidate["probs"], dtype=np.float64)
+        if (
+            reference_mask.shape == candidate_mask.shape
+            and reference_probs.shape == candidate_probs.shape == reference_mask.shape
+        ):
+            candidate_only = candidate_mask & ~reference_mask
+            reference_only = reference_mask & ~candidate_mask
+            common_mask = reference_mask & candidate_mask
+            common_mass = float(np.sum(candidate_probs[common_mask]))
+            common_probs = np.where(common_mask, candidate_probs, 0.0)
+            if common_mass > 0.0:
+                common_probs /= common_mass
+                common_pmax = float(np.max(common_probs))
+                common_delta = common_probs - reference_probs
+                reference_norm = float(np.linalg.norm(reference_probs.reshape(-1)))
+                common_relative_l2 = float(
+                    np.linalg.norm(common_delta.reshape(-1)) / reference_norm
+                ) if reference_norm else float(np.linalg.norm(common_delta.reshape(-1)))
+                common_max_abs = float(np.max(np.abs(common_delta)))
+            else:
+                common_pmax = None
+                common_relative_l2 = None
+                common_max_abs = None
+            pmax_gap = summary["reference"]["pmax"] - summary["candidate"]["pmax"]
+            topology_pmax_shift = (
+                None
+                if common_pmax is None
+                else common_pmax - summary["candidate"]["pmax"]
+            )
+            summary["candidate_topology_delta"] = {
+                "candidate_only_count": int(np.count_nonzero(candidate_only)),
+                "reference_only_count": int(np.count_nonzero(reference_only)),
+                "candidate_only_posterior_mass": float(
+                    np.sum(candidate_probs[candidate_only])
+                ),
+                "candidate_common_posterior_mass": common_mass,
+                "candidate_common_renormalized_pmax": common_pmax,
+                "candidate_common_renormalized_vs_reference_relative_l2": common_relative_l2,
+                "candidate_common_renormalized_vs_reference_max_abs": common_max_abs,
+                "pmax_gap_explained_by_candidate_only_fraction": (
+                    None
+                    if topology_pmax_shift is None or pmax_gap == 0.0
+                    else topology_pmax_shift / pmax_gap
                 ),
             }
 
