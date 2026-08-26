@@ -1452,6 +1452,7 @@ def _k1_skip_significance_pruning_enabled() -> bool:
 from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
     _maybe_dump_noise_update_debug,
     _save_iteration_intermediates,
+    _save_iteration_particle_states,
 )
 from recovar.em.dense_single_volume.ppca_bridge import (  # noqa: F401
     PPCAKClassScheduleBridge,
@@ -1880,6 +1881,7 @@ class PerHalfOutputs:
     translation_search_bases: list
     pose_rotations: list
     pose_rotation_eulers: list
+    significant_counts: list
     mstep_full_half_axis: list
     mstep_accumulator_shape: list
 
@@ -1904,6 +1906,7 @@ class PerHalfOutputs:
             translation_search_bases=[None, None],
             pose_rotations=[None, None],
             pose_rotation_eulers=[None, None],
+            significant_counts=[None, None],
             mstep_full_half_axis=[None, None],
             mstep_accumulator_shape=[None, None],
         )
@@ -1933,6 +1936,8 @@ class PerHalfOutputs:
             self.pose_rotations[idx] = hs.pose_rotations
         if hs.pose_rotation_eulers is not None:
             self.pose_rotation_eulers[idx] = hs.pose_rotation_eulers
+        if hs.significant_counts is not None:
+            self.significant_counts[idx] = np.asarray(hs.significant_counts, dtype=np.int32)
         self.mstep_full_half_axis[idx] = hs.mstep_full_half_axis
         self.mstep_accumulator_shape[idx] = hs.mstep_accumulator_shape
 
@@ -8838,6 +8843,7 @@ def _run_relion_iteration_loop(
         ]
         new_iter_best_rotations = [None, None]
         new_iter_best_rotation_eulers = [None, None]
+        new_iter_relative_translations = [None, None]
         new_iter_best_translations = [None, None]
         for k in range(2):
             if best_pose_rotations[k] is not None:
@@ -8879,6 +8885,7 @@ def _run_relion_iteration_loop(
                 best_trans = np.asarray(current_translations)[trans_idx]
             new_iter_best_rotations[k] = best_rots
             new_iter_best_rotation_eulers[k] = best_eulers
+            new_iter_relative_translations[k] = best_trans
             new_iter_best_translations[k] = _relion_metadata_translations(
                 prior_iter_best_translations[k],
                 best_trans,
@@ -8892,6 +8899,30 @@ def _run_relion_iteration_loop(
         best_translations_history.append(
             [np.asarray(t).copy() if t is not None else None for t in new_iter_best_translations]
         )
+        if save_intermediates_dir is not None:
+            original_image_indices_per_half = []
+            for k in range(2):
+                original_image_indices_per_half.append(
+                    np.asarray(
+                        experiment_datasets[k]._index_layout.original_image_indices_for_local(
+                            np.arange(experiment_datasets[k].n_images, dtype=np.int32)
+                        ),
+                        dtype=np.int64,
+                    )
+                )
+            _save_iteration_particle_states(
+                save_intermediates_dir,
+                iteration=iteration,
+                rotation_matrices_per_half=new_iter_best_rotations,
+                rotation_eulers_deg_per_half=new_iter_best_rotation_eulers,
+                relative_translations_pixels_per_half=new_iter_relative_translations,
+                absolute_translations_pixels_per_half=new_iter_best_translations,
+                max_posterior_per_half=max_posterior_per_half,
+                significant_counts_per_half=per_half.significant_counts,
+                hard_assignments_per_half=hard_assignments,
+                coarse_hard_assignments_per_half=coarse_ha,
+                original_image_indices_per_half=original_image_indices_per_half,
+            )
 
         current_rotation_matrices_combined = _concatenate_pose_stacks_or_none(
             new_iter_best_rotations,

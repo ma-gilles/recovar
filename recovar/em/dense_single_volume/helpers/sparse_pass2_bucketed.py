@@ -14776,7 +14776,8 @@ def compute_pass2_stats_sparse_bucketed(
         fine_score_corr_img = ctf2_over_nv_score
         fine_score_proj = proj_half
         if (
-            use_exact_relion_gaussian
+            fresh_k1_guard
+            and use_exact_relion_gaussian
             and direct_native_corr_img_score is not None
             and _env_flag_enabled(_RELION_NATIVE_FINE_SCORE_UNITS_ENV, default=True)
         ):

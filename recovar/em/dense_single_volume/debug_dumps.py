@@ -8,6 +8,8 @@ Extracted from ``iteration_loop.py``:
 - ``_save_iteration_intermediates`` writes per-iteration regularized and
   unregularized volumes, FSC, noise, tau2, hard assignments, and metadata
   when ``--save_intermediates_dir`` is provided.
+- ``_save_iteration_particle_states`` writes resolved particle poses,
+  posterior maxima, significance counts, and immutable source indices.
 """
 
 from __future__ import annotations
@@ -132,6 +134,62 @@ def _save_iteration_intermediates(
                 np.asarray(coarse_ha[k_half], dtype=np.int32),
             )
     logger.info("Saved intermediate volumes to %s (iteration %d)", save_dir, iteration)
+
+
+def _save_iteration_particle_states(
+    save_dir: str,
+    *,
+    iteration: int,
+    rotation_matrices_per_half,
+    rotation_eulers_deg_per_half,
+    relative_translations_pixels_per_half,
+    absolute_translations_pixels_per_half,
+    max_posterior_per_half,
+    significant_counts_per_half,
+    hard_assignments_per_half,
+    coarse_hard_assignments_per_half,
+    original_image_indices_per_half,
+) -> None:
+    """Write source-aligned resolved particle state for one sealed iteration."""
+
+    os.makedirs(save_dir, exist_ok=True)
+    per_half_fields = {
+        "rotation_matrices": rotation_matrices_per_half,
+        "rotation_eulers_deg": rotation_eulers_deg_per_half,
+        "relative_translations_pixels": relative_translations_pixels_per_half,
+        "absolute_translations_pixels": absolute_translations_pixels_per_half,
+        "max_posterior": max_posterior_per_half,
+        "significant_counts": significant_counts_per_half,
+        "fine_hard_assignment": hard_assignments_per_half,
+        "coarse_hard_assignment": coarse_hard_assignments_per_half,
+        "original_image_indices": original_image_indices_per_half,
+    }
+    for half_index in range(2):
+        payload = {
+            name: _dump_array_or_empty(values[half_index])
+            for name, values in per_half_fields.items()
+        }
+        populated_lengths = {
+            name: int(value.shape[0])
+            for name, value in payload.items()
+            if value.ndim > 0 and value.size > 0
+        }
+        if populated_lengths and len(set(populated_lengths.values())) != 1:
+            raise ValueError(
+                "particle-state fields are not source-aligned for "
+                f"half {half_index + 1}: {populated_lengths}"
+            )
+        particle_count = next(iter(populated_lengths.values()), 0)
+        payload["half_local_indices"] = np.arange(particle_count, dtype=np.int64)
+        payload["zero_based_iteration"] = np.asarray([iteration], dtype=np.int32)
+        payload["one_based_iteration"] = np.asarray([iteration + 1], dtype=np.int32)
+        payload["half"] = np.asarray([half_index + 1], dtype=np.int32)
+        output_path = os.path.join(
+            save_dir,
+            f"it{iteration:03d}_particle_state_half{half_index + 1}.npz",
+        )
+        np.savez(output_path, **payload)
+        logger.info("Saved particle-state diagnostics to %s", output_path)
 
 
 def _maybe_dump_noise_update_debug(
