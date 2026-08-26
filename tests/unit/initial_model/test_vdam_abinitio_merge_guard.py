@@ -696,6 +696,8 @@ def test_vdam_relion_continuation_can_capture_noise_sufficient_statistics():
         "VDAM_RELION_CONT_SIGMA2_NOISE_DUMP_DIR",
         'export RELION_DUMP_SIGMA2_NOISE_DIR=${SIGMA2_NOISE_DUMP_DIR}',
         'NR_ITER_SCHEDULE=${VDAM_RELION_CONT_NR_ITER_SCHEDULE:-${ITERATION}}',
+        'RELION_SKIP_MODULE=${VDAM_RELION_SKIP_MODULE:-0}',
+        'if [[ "${RELION_SKIP_MODULE}" == 0 ]]; then',
         'test "${NR_ITER_SCHEDULE}" -ge "${ITERATION}"',
         '--iter "${NR_ITER_SCHEDULE}"',
         '"nr_iter_schedule":%d',

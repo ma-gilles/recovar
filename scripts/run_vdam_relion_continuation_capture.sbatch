@@ -31,6 +31,7 @@ PERTURBATION=${VDAM_RELION_CONT_PERTURBATION:-}
 SIGMA2_NOISE_DUMP_DIR=${VDAM_RELION_CONT_SIGMA2_NOISE_DUMP_DIR:-}
 RELION_BINARY=${VDAM_RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
 RELION_RUNTIME=${VDAM_RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
+RELION_SKIP_MODULE=${VDAM_RELION_SKIP_MODULE:-0}
 OUTPUT=${ROOT}/relion
 CAPTURE=${ROOT}/capture
 
@@ -41,6 +42,7 @@ test -x "${RELION_BINARY}"
 test "${ITERATION}" -ge 1
 test "${NR_ITER_SCHEDULE}" -ge "${ITERATION}"
 case "${CAPTURE_ENABLED}" in 0|1) ;; *) echo "VDAM_RELION_CONT_CAPTURE must be 0 or 1" >&2; exit 2 ;; esac
+case "${RELION_SKIP_MODULE}" in 0|1) ;; *) echo "VDAM_RELION_SKIP_MODULE must be 0 or 1" >&2; exit 2 ;; esac
 mkdir -p "${OUTPUT}" "${CAPTURE}" "${ROOT}/provenance"
 test -z "$(find "${OUTPUT}" "${CAPTURE}" -mindepth 1 -print -quit)"
 
@@ -52,11 +54,13 @@ done < <(env)
 export TMPDIR=${ROOT}/runtime/${SLURM_JOB_ID}/tmp
 mkdir -p "${TMPDIR}"
 
-source /etc/profile.d/modules.sh
-set +u
-module purge
-module load relion/5.0.0/gcc-11.5.0
-set -u
+if [[ "${RELION_SKIP_MODULE}" == 0 ]]; then
+    source /etc/profile.d/modules.sh
+    set +u
+    module purge
+    module load relion/5.0.0/gcc-11.5.0
+    set -u
+fi
 MPI_ROOT=/usr/local/openmpi/cuda-12.6/4.1.6/gcc
 CUDA_HOME=/usr/local/cuda-12.6
 export PATH=${CUDA_HOME}/bin:${PATH}
