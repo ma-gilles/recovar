@@ -27076,3 +27076,54 @@ state locally; that improvement does not survive ordinary full dispatch. The
 remaining local pre-prior residual is only about `2e-5` in Pmax with exact
 candidate set, support, and winner and is not promoted as a production fix.
 The frozen score remains `31/34`; no case result or threshold is changed.
+
+## 2026-08-26 11:25 EDT — ordinary-dispatch row capture and provenance correction
+
+Focused case-10 job `12996049` is running on `della-h19g2` with ordinary
+pass-2 bucket dispatch (`RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET` unset).  It
+writes to
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_natural_full_dispatch_aca8_95aa2d3a6_20260826T1112ET`,
+with runtime root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_natural_full_dispatch_aca8_95aa2d3a6_20260826T1112ET`;
+both roots contain `SAFE_TO_DELETE`.  The source was pinned at
+`95aa2d3a647a4e89ab7553165cf41487f8aa9eb3`, full tracked worktree-diff
+SHA-256 `cc11fbd81a66c657872c3c703b924a3fe976b5fa2d2cb1b05d34e58fe0403385`,
+launcher SHA-256
+`e1de299901f3e34182f45891a7361867ac71d71dbbb1fd23a4cab9272d5f59fc`,
+and sealed CUDA SHA-256
+`aca8de06213bda21375f9cde0a7442275e84be8a092127d75392b15fae4e621f`.
+
+The environment audit found that this first natural-dispatch arm is not a
+one-variable comparison with stopped job `12993648`: the stopped arm used
+`RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=1`, while job `12996049` uses
+`0`.  The production terminal arms and frozen exact-interface baseline use
+`1`.  Therefore job `12996049` remains a useful factorial diagnostic but
+cannot alone attribute a row change to dispatch order.
+
+Clean same-node follow-up `12996264` was submitted with dependency
+`afterany:12996049`, requested node `della-h19g2`, ordinary dispatch, and
+`RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=1`.  It writes to
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_natural_full_dispatch_powernorm1_ab01_20260826T1125ET`,
+with runtime root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_natural_full_dispatch_powernorm1_ab01_20260826T1125ET`;
+both roots contain `SAFE_TO_DELETE`.  It pins source HEAD
+`ab01fd27b388f7a2639cfffc15f8f5c745d6e036` and the same tracked worktree,
+launcher, CUDA, particle, seed, and scientific options as the stopped arm,
+except for the intended ordinary-dispatch intervention.  Neither job was
+cancelled, signalled, suspended, requeued, or reprioritized.  The fixed score
+remains `31/34` pending the raw-intermediate comparisons and unchanged
+terminal FSC gate.
+
+The iteration-1 incoming-state audit shows that the power-spectrum flag does
+not alter the boundary consumed by the requested iteration-2 row comparison.
+Natural job `12996049` versus stopped job `12993648` is bit exact for all
+`147456` entries of the merged and per-half noise arrays, all `193` FSC
+entries, all `100000` hard and coarse assignments, all `331776` rotation-table
+entries, and all `58` translations.  The only unequal saved sufficient
+statistics are ordinary atomic-repeat differences: half-1 / half-2 `Ft_y`
+have `394 / 352` unequal voxels out of `1,520,875`, relative L2
+`1.3874175672e-9 / 1.3368087289e-9`; `Ft_ctf` has `10 / 14` unequal voxels,
+relative L2 `2.9962375557e-10 / 3.5189155342e-10`.  Thus job `12996049`
+enters physical iteration 2 from the same discrete scientific state and a map
+repeat floor, while job `12996264` remains the exact environment-matched
+confirmation.
