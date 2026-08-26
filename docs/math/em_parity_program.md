@@ -27477,3 +27477,43 @@ promoted as fresh parity.  After those jobs finish naturally, the model-STAR
 runtime override will be removed and the exact same-input row comparison will
 be rerun at size `58`.  No running or pending job was cancelled, modified,
 requeued, or reprioritized.  The fixed score remains `31/34`.
+
+## 2026-08-26 14:31 EDT — rejected override removed and fresh-size same-input gate queued
+
+The uncommitted `_read_relion_model_star_pixel_size` runtime override and its
+call site were removed from the primary worktree without touching the other
+K=1 WIP.  `run_full_refinement.py` is again clean relative to HEAD, so fresh
+RECOVAR retains the exact initial-reference MRC sampling and reproduces the
+source-proven 58-pixel remap.  The regression names now explicitly classify
+`58` as fresh-MRC behavior and `56` as model-STAR restart behavior.  Focused
+command
+
+```text
+.pixi/envs/default/bin/python -m pytest tests/unit/test_refine_relion_mode.py -k relion_optics_image_current_size -x --tb=short
+```
+
+passes `2/2` in `30.80` seconds after the checkout/JAX provenance gate.
+Primary local commits are `c237142e2` (test terminology) and `07d3102f8`
+(helper documentation); neither is pushed because the required validation
+gate has not completed.
+
+Correct fresh-size same-input job `13003491` is dependent on successful
+completion of native job `13002942`, requested on the same H100 node, and is
+pinned to primary HEAD `07d3102f8249d95aede4fecac92599bb5cba96f9`, source
+diff SHA-256
+`8b9e09a7326e7f39d431d1a666d6159fb3c8dddc4badd349bb5fd83cb05ad7af`,
+launcher SHA-256
+`fe49e5d1f8b0028d67a865e0d9448c2af92a13c4435a4145b028cf9302e89bec`,
+and sealed CUDA SHA-256
+`aca8de06213bda21375f9cde0a7442275e84be8a092127d75392b15fae4e621f`.
+It uses score size `58`, native-fine-score-units off, and the completed fresh
+RELION iteration-1 boundary.  Its run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_fresh_same_input_score58_07d3102_20260826T1430ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_fresh_same_input_score58_07d3102_20260826T1430ET`;
+both contain `SAFE_TO_DELETE`.
+
+Earlier dependent job `13003123` retains its original HEAD and size-56 pins.
+Because the primary HEAD advanced after that submission, it will fail closed
+at the provenance preflight and cannot emit a scientific result.  It remains
+untouched.  The fixed score remains `31/34`.
