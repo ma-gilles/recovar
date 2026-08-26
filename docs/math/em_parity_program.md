@@ -28029,3 +28029,68 @@ repeat-aware accumulator floor.  Another terminal case-5 trajectory is not a
 discovery experiment.  Case-4 focused job `13011025` is independently
 capturing its only iteration-2 pose outlier at the same ordered boundaries.
 The fixed terminal score remains `31/34`.
+
+## 2026-08-26 18:15 EDT — case-10 native-units terminal arm is rejected
+
+Terminal producer `12995074` completed its full numbered trajectory and final
+all-data pass.  Its complete FSC audit, job `13004066`, deliberately exited
+`2:0` because the frozen terminal quality gate failed; this was a scientific
+gate failure, not loss of the producer artifacts.  The numbered trajectory is
+still tightly matched through iteration 15: the final numbered half-1,
+half-2, and merged cross-engine FSC-AUC values are respectively
+`0.9999488686700507`, `0.9999442538080133`, and
+`0.9999671024191745`, with no topology failure.
+
+The final all-data products do not preserve that agreement.  Their half-1,
+half-2, and merged cross-engine FSC-AUC values are
+`0.9845436155634233`, `0.9832454141526883`, and
+`0.9812032697881328`.  The merged result is below both the frozen `0.995`
+acceptance threshold and the existing case-10 scorecard value
+`0.9943091830559498`.  Therefore the tested combination of native fine-score
+units, native texture, live initial noise, exact BPref operands, particle pool
+size 1, and execution-order chunk size 220 is rejected as a case-10 terminal
+correction.  It must not be promoted or used to update the fixed score.
+
+The durable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_improved_terminal_aca8_567b22d4ea_20260826T1025ET/analysis/terminal_fsc.json`.
+Its SHA-256 is
+`f1d3beeda15bc30845e2fb27bd313e2d97049a9fbd26a736a6e99e65813d7ad1`.
+Because the FSC command exits nonzero on a failed scientific gate, the chained
+intermediate analyzer did not run.  The saved `refinement_results.npz` and
+two approximately 1.15-GB final manifests remain available for a focused
+terminal-boundary comparison; rerunning the refinement is unnecessary.
+
+The shellwise partition confirms that this arm fails in the newly introduced
+high-frequency region.  With last numbered `current_size=68` and radius `34`,
+the final merged FSC-AUC is still `0.9955237082665618` inside the numbered
+radius.  The outside-radius FSC-AUC is `0.9781739462638495`, and
+`95.84196432944048%` of the total merged final deficit lies beyond radius 34.
+The final deficit is `571.3711993460932x` the iteration-15 numbered deficit.
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_improved_terminal_aca8_567b22d4ea_20260826T1025ET/analysis/terminal_grid_deficit.json`.
+
+CPU job `13012622` then compared every shared field in the final-pass
+manifests against the frozen best case-10 run at `0.9943091830559498`.  The
+static final-grid boundary is equal: current size, half-spectrum mode, scoring
+and projection precision, padding factors, perturbation state, local-search
+flag, effective rotations, and current translation grid are bit-exact.  The
+first unequal ordered field is `translation_log_prior` in both halves.  The
+candidate also arrives with materially different previous translations,
+pre-shifts, translation-prior centers, image and scale corrections, noise,
+and reference.  For example, the reference relative L2 is
+`0.005068515357651779 / 0.0053098107817528` for halves 1/2, and the
+translation-prior relative L2 is
+`0.09840947657030284 / 0.0997839995764819`.  Thus the terminal regression is
+inherited from the candidate's worse latent last-numbered particle/reference
+state and amplified by full-grid scoring; it is not caused by different final
+grid geometry.  The manifest report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_final_manifest_best_vs_rejected_20260826T1820ET/final_manifest_ab.json`
+(SHA-256
+`6489e034c96a1292f56c4f3535718f73b87253727a4092c82653cbc76e54b643`).
+The focused analyzer test passed (`6 passed in 17.31s`).
+
+This result strengthens the separation between the remaining defects.  Case
+10's numbered EM trajectory is already essentially matched, while its
+remaining error is created or amplified in finalization.  Cases 4 and 5 are
+instead being localized at the inherited iteration-1 reference boundary.
+The fixed terminal score remains `31/34`.
