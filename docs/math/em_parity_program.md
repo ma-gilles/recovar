@@ -519,6 +519,30 @@ and
 Thus GF47 is a schedule-equivalence and runtime failure despite acceptable map
 quality and hard particle state.
 
+The apparent GF47 iteration-2 particle-state split is now classified as a
+checkpoint-serialization defect. Diagnostic array `13010962` reached the
+pinned H100 in task 0 and completed a source-faithful native 0--200
+continuation, but failed closed because stack 1 was not in RELION's
+iteration-2 subset and therefore had no native score capture. That failure led
+to the upstream subset audit: candidate and native use the exact same 200
+particle identities, and native changes exactly those 200. RECOVAR's written
+STAR instead changed 386 identities because the writer reset `visited` to the
+current subset; the 186 identities selected at iteration 1 but not iteration 2
+reverted from their stored refined poses to the input STAR.
+
+Local unpushed commit `9685e93178e68ba366347cda1f7b6042be6b4c41`
+preserves cumulative VDAM visitation. A sealed-metadata replay carries those
+186 prior states forward and improves iteration-2 pose match from `0.938` to
+`1.0`; maximum angular error becomes `9.5836e-6` degrees and translation match
+remains `1.0`. Pmax differences are only serialized last digits (p95 `2e-6`,
+maximum `1.6e-5`) and remain subject to the native-envelope audit. Two focused
+state/writer guards pass, along with `py_compile` and `git diff --check`.
+Exact-H100 replacement array `13011552`, task 1, is running the complete
+0--200 trajectory against the existing four-repeat native GF47 panel. This
+correction changes checkpoint state fidelity only; GF47's iteration-10
+controller failure and 6.42x runtime remain open until the replacement audit
+says otherwise.
+
 GF48 (very high white noise with uniform poses, seed 29) is an authoritative
 map, particle, controller, and runtime failure in job `12999436`.  Map failure
 begins at iteration 45 and covers 156 checkpoints; minimum candidate-to-best-

@@ -9,7 +9,7 @@ version. The checked definition SHA-256 is
 
 | Fixed K=1 v3 suite | Passed | Evaluated | Denominator | Live science |
 |---|---:|---:|---:|---:|
-| All quality/state/schedule gates | **1** | 6 | 20 | 13 complete, 4 running, 3 queued |
+| All quality/state/schedule gates | **1** | 6 | 20 | 16 complete, 4 running, 0 queued |
 | Comparable same-H100 runtime | **0** | 6 | 20 | measured range: **6.42--9.40x RELION** |
 
 Progress against the unchanged strict denominator is **0 -> 1 accepted
@@ -20,7 +20,7 @@ trajectory**. Earlier expansion v2 remains a separate regression track at
 > Runtime, K>1, real-data, and final CLI/GUI qualification follow only after
 > the K=1 0--200 suite has no unexplained failures.
 
-Last scientific update: **2026-08-26 17:09 ET**
+Last scientific update: **2026-08-26 17:46 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -34,30 +34,41 @@ full/long suite** is being run for this campaign.
 | Gate | Current result | Required to close |
 |---|---|---|
 | Frozen K=1 v3 quality | **1/20 pass**, 6/20 evaluated | 20/20 accepted with no unexplained case |
-| Frozen K=1 v3 production | **13/20 complete**, 4 running, 3 queued | 20/20 science artifacts sealed |
+| Frozen K=1 v3 production | **16/20 complete**, 4 running, 0 queued | 20/20 science artifacts sealed |
 | Earlier 0--200 expansion | **5/15 accepted**, 10 classified failures; GF42 remains outside the sealed count | Every failure repaired and requalified |
 | First causal production fix | **151x lower iteration-1 map error**, focused guards 12/12 | Complete GF38 0--200 native-envelope audit |
+| Checkpoint-state fix | GF47 iteration-2 pose match **93.8% -> 100%** in sealed replay; focused guards 2/2 | Complete replacement 0--200 trajectory and audit |
 | Runtime | **0/6 comparable**; current range **6.42--9.40x RELION** | Comparable same-H100 wall time |
 | K>1 / real data | Existing short K=2/K=4 panels pass; final campaign deliberately deferred | Requalify after K=1 closes |
 | CLI / GUI | Unified backend/default contract exists | Final defaults and important controls requalified |
 
 ### Latest change
 
-The first exact production defect is repaired locally at unpushed commit
-`6387ff7c9`: the oversampling-zero big-JIT now preserves RELION's retained
-coarse posterior mass. Exact-H100 iteration-1 evidence improves posterior
-relative-L2 **258x**, noise relative-L2 **343x**, and map relative-L2 **151x**.
-Full 0--200 science task `13008435` completed all 201 checkpoints naturally in
-2,152 seconds on the reference H100. Its private read-only CUDA binary retained
-the pinned digest before and after science. Focused native-envelope audit
-`13010186` is pending scheduler priority; the trajectory is not counted as a
-pass until that audit is terminal.
+GF47's apparent first particle-state split at iteration 2 is now localized to
+checkpoint serialization, not the E-step. RECOVAR and RELION select the exact
+same 200 particle identities, and native changes exactly those identities.
+RECOVAR nevertheless rewrote 186 particles visited only by iteration 1 back to
+their input-STAR poses because its `visited` mask was reset to the current
+subset. Local unpushed commit `9685e9317` preserves cumulative visitation.
+Replaying the sealed iteration-1/2 metadata changes pose match from **93.8% to
+100%** (maximum angular difference `9.58e-6` degrees) while translation match
+remains 100%. Focused guards pass 2/2. Exact-H100 replacement trajectory array
+`13011552`, task 1, is running; no score changes until its audit is terminal.
+
+The first exact production defect remains repaired locally at unpushed commit
+`6387ff7c9`: the oversampling-zero big-JIT preserves RELION's retained coarse
+posterior mass. Exact-H100 iteration-1 evidence improves posterior relative-L2
+**258x**, noise relative-L2 **343x**, and map relative-L2 **151x**. Full 0--200
+science task `13008435` completed all 201 checkpoints naturally in 2,152
+seconds on the reference H100. Focused native-envelope audit `13010186` is
+pending scheduler priority; the trajectory is not counted as a pass until that
+audit is terminal.
 
 ### What is still failing
 
 | Failure class | Current evidence | Next closure gate |
 |---|---|---|
-| Map/particle parity | GF43, GF46, GF48; GF45 needs authoritative seeded re-audit | classify earliest boundary and repair without changing gates |
+| Map/particle parity | GF43, GF46, GF48; GF45 needs authoritative seeded re-audit; GF47 checkpoint repair is requalifying | classify earliest boundary and repair without changing gates |
 | Controller topology | GF47 and GF48 diverge before an admissible native branch | reproduce RELION schedule decisions exactly |
 | Runtime | every audited v3 case is 6.42--9.40x slower | profile only after a repaired trajectory passes end to end |
 | Coverage | 14/20 v3 cases not yet audited | finish science and dependent focused audits |
@@ -86,16 +97,16 @@ artifact topology, and wall time.
 | GF50 | 29 | low noise, Kent | complete | pending | pending | pending | pending | audit queued |
 | GF51 | 29 | no CTF, radial noise | complete | pending | pending | pending | pending | audit queued |
 | GF52 | 29 | Kent, junk particles, translations | complete | pending | pending | pending | pending | audit queued |
-| GF53 | 29 | high resolution, radial noise | running | -- | -- | -- | -- | running |
+| GF53 | 29 | high resolution, radial noise | complete | pending | pending | pending | pending | audit queued |
 | GF54 | 29 | midscale, Kent, radial noise | complete | pending | pending | pending | pending | audit queued |
 | GF55 | 101 | anisotropic, outliers, high noise | complete | pending | pending | pending | pending | audit queued |
 | GF56 | 101 | Kent, outliers, high noise | complete | pending | pending | pending | pending | audit queued |
 | GF57 | 101 | anisotropic, severe outliers, radial/high noise | running | -- | -- | -- | -- | running |
-| GF58 | 101 | extreme outliers, uniform, white noise | running | -- | -- | -- | -- | running |
-| GF59 | 101 | very-high noise, uniform, white noise | running | -- | -- | -- | -- | running |
-| GF60 | 101 | low noise, uniform | queued | -- | -- | -- | -- | queued |
-| GF61 | 101 | low noise, Kent | queued | -- | -- | -- | -- | queued |
-| GF62 | 101 | Kent, junk particles, translations | queued | -- | -- | -- | -- | queued |
+| GF58 | 101 | extreme outliers, uniform, white noise | complete | pending | pending | pending | pending | audit queued |
+| GF59 | 101 | very-high noise, uniform, white noise | complete | pending | pending | pending | pending | audit queued |
+| GF60 | 101 | low noise, uniform | running | -- | -- | -- | -- | running |
+| GF61 | 101 | low noise, Kent | running | -- | -- | -- | -- | running |
+| GF62 | 101 | Kent, junk particles, translations | running | -- | -- | -- | -- | running |
 
 The earlier expansion's accepted rows are GF27 (70% outliers), GF35
 (`tau2_fudge=2`), GF36 (very-high noise with tau2 variants), GF37 (Healpix 2),
@@ -173,12 +184,13 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Promote repaired GF38 posterior mass through 0--200 | science `13008435` complete; focused audit `13010186` pending | complete map/state/schedule/native-envelope acceptance |
-| 2 | Seeded GF29 / GF43 / GF45 calibrated audits | 13002876 / 13002877 / 13004501 pending | authoritative map/state/schedule results |
-| 3 | GF49--GF62 trajectory matrix | science 12996103; audit 12999424 | every row terminal and sealed |
-| 4 | GF41 authoritative re-audit | 12999430 pending | calibrated particle-state result |
-| 5 | Production correction | local `6387ff7c9`; focused 12/12 and iteration-1 discriminator pass | full trajectory passes before implementation is published |
-| 6 | Runtime, K>1, real-data, CLI/GUI finalization | deferred behind K=1 | comparable runtime and zero suite failures |
+| 1 | Requalify cumulative GF47 checkpoint state | exact-H100 array `13011552`; task 1 running | regenerated 0--200 state audit removes false early particle split |
+| 2 | Promote repaired GF38 posterior mass through 0--200 | science `13008435` complete; focused audit `13010186` pending | complete map/state/schedule/native-envelope acceptance |
+| 3 | Seeded GF29 / GF43 / GF45 calibrated audits | 13002876 / 13002877 / 13004501 pending | authoritative map/state/schedule results |
+| 4 | GF49--GF62 trajectory matrix | science 12996103; audit 12999424 | every row terminal and sealed |
+| 5 | GF41 authoritative re-audit | 12999430 pending | calibrated particle-state result |
+| 6 | Local corrections | `6387ff7c9` posterior mass; `9685e9317` cumulative checkpoint state | full trajectories pass before implementation is published |
+| 7 | Runtime, K>1, real-data, CLI/GUI finalization | deferred behind K=1 | comparable runtime and zero suite failures |
 
 Implementation and diagnostic experiments remain in isolated local worktrees.
 Only tracking/evidence commits are pushed to this PR while the science change
