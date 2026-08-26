@@ -146,7 +146,9 @@ if [[ "${NR_ITER_SCHEDULE}" -gt "${CAPTURE_ITERATION}" ]]; then
             | awk -v job="${SLURM_JOB_ID}" '$0 ~ "^" job "\\.[0-9]+$" {step=$0} END {print step}'
     )
     if [[ -n "${active_step}" ]]; then
-        scancel "${active_step}"
+        # The step can finish between squeue and scancel.  Do not let that
+        # expected race abort capture validation under set -e.
+        scancel "${active_step}" 2>/dev/null || kill "${runner_pid}" 2>/dev/null || true
     else
         kill "${runner_pid}" 2>/dev/null || true
     fi

@@ -16,6 +16,8 @@ set -euo pipefail
 : "${NATIVE_IMAGE:?submit with NATIVE_IMAGE=/scratch/.../*nomask.bin}"
 : "${RECOVAR_CAPTURE:?submit with RECOVAR_CAPTURE=/scratch/...npz}"
 : "${OUTPUT_JSON:?submit with OUTPUT_JSON=/scratch/...json}"
+: "${RECOVAR_CUDA_LIB_SOURCE:?set the immutable qualified CUDA binary}"
+: "${EXPECTED_CUDA_SHA256:?pin the qualified CUDA binary hash}"
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 RUN_ID="${SLURM_JOB_ID:-manual}"
@@ -28,8 +30,13 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TMPDIR="/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${RUN_ID}/tmp"
 export PIXI_HOME="/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${RUN_ID}/pixi_home"
 export RATTLER_CACHE_DIR="/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${RUN_ID}/rattler_cache"
-export RECOVAR_CUDA_LIB="${REPO_ROOT}/recovar/cuda/libcuda_backproject.so"
-mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" /scratch/gpfs/GILLES/mg6942/slurmo
+export RECOVAR_CUDA_LIB="/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${RUN_ID}/cuda/libcuda_backproject.so"
+test -s "${RECOVAR_CUDA_LIB_SOURCE}"
+test "$(sha256sum "${RECOVAR_CUDA_LIB_SOURCE}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
+mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "$(dirname "${RECOVAR_CUDA_LIB}")" /scratch/gpfs/GILLES/mg6942/slurmo
+cp --no-preserve=mode,ownership,timestamps "${RECOVAR_CUDA_LIB_SOURCE}" "${RECOVAR_CUDA_LIB}"
+chmod u+rw "${RECOVAR_CUDA_LIB}"
+test "$(sha256sum "${RECOVAR_CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 
 PIXI_PY="${REPO_ROOT}/.pixi/envs/default/bin/python"
 "${PIXI_PY}" - <<'PY'
