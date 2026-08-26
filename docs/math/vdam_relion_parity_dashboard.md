@@ -20,7 +20,7 @@ trajectory**. Earlier expansion v2 remains a separate regression track at
 > Runtime, K>1, real-data, and final CLI/GUI qualification follow only after
 > the K=1 0--200 suite has no unexplained failures.
 
-Last scientific update: **2026-08-26 16:32 ET**
+Last scientific update: **2026-08-26 17:09 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -47,9 +47,11 @@ The first exact production defect is repaired locally at unpushed commit
 `6387ff7c9`: the oversampling-zero big-JIT now preserves RELION's retained
 coarse posterior mass. Exact-H100 iteration-1 evidence improves posterior
 relative-L2 **258x**, noise relative-L2 **343x**, and map relative-L2 **151x**.
-Full 0--200 promotion task `13008433_1` has cleared the reference-H100 and
-qualified CUDA/FFI gates. Its CUDA binary is a private read-only copy with the
-pinned digest, so the previous stale-timestamp auto-build cannot recur.
+Full 0--200 science task `13008435` completed all 201 checkpoints naturally in
+2,152 seconds on the reference H100. Its private read-only CUDA binary retained
+the pinned digest before and after science. Focused native-envelope audit
+`13010186` is pending scheduler priority; the trajectory is not counted as a
+pass until that audit is terminal.
 
 ### What is still failing
 
@@ -139,9 +141,10 @@ Arrays `13007637` and `13008037` exited 75 before science because Slurm
 assigned non-reference GPUs. Task `13008278_1` reached the reference GPU but
 was canceled before science when a stale-timestamp check attempted to rebuild
 the shared qualified CUDA binary; the shared digest remained unchanged. Safe
-replacement task `13008433_1` uses a private, read-only, digest-pinned CUDA
-copy, has cleared the reference-H100 and CUDA/FFI gates, and is the full 0--200
-promotion against the existing four-repeat native envelope.
+replacement science task `13008435` used a private, read-only, digest-pinned
+CUDA copy and completed all numbered iterations 0--200 with exit 0 in 2,152
+seconds. Dependent audit `13010186` is pending against the existing four-repeat
+native envelope.
 
 Key sealed evidence:
 
@@ -157,6 +160,7 @@ Key sealed evidence:
 |---|---:|---:|---:|
 | GF47 extreme outliers | 299.1 s | 1920.9 s | **6.42x** |
 | GF48 very-high noise | 286.8 s | 1962.6 s | **6.84x** |
+| GF38 oversampling zero, repaired; audit pending | 308.4 s | 2152.0 s | **6.98x** |
 | GF43 baseline | 297.3 s | 2186.4 s | **7.35x** |
 | GF44 anisotropic/outliers | 286.2 s | 2298.7 s | **8.03x** |
 | GF45 Kent/outliers, old source | 297.4 s | 2473.8 s | **8.32x** |
@@ -169,7 +173,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Promote repaired GF38 posterior mass through 0--200 | science `13008433_1` passed reference-H100 + CUDA/FFI gates; audit submits after completion | complete map/state/schedule/native-envelope acceptance |
+| 1 | Promote repaired GF38 posterior mass through 0--200 | science `13008435` complete; focused audit `13010186` pending | complete map/state/schedule/native-envelope acceptance |
 | 2 | Seeded GF29 / GF43 / GF45 calibrated audits | 13002876 / 13002877 / 13004501 pending | authoritative map/state/schedule results |
 | 3 | GF49--GF62 trajectory matrix | science 12996103; audit 12999424 | every row terminal and sealed |
 | 4 | GF41 authoritative re-audit | 12999430 pending | calibrated particle-state result |

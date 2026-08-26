@@ -491,13 +491,14 @@ shared path. The array was stopped immediately; its canonical library still
 has the qualified SHA-256
 `87274beac3a7b5af59947199588955366485d22780239f4c94fd5afc13f8e337`.
 
-Safe replacement array `13008433` stages that exact binary into its disposable
-output root, gives the private copy a current timestamp, verifies that RECOVAR
-resolves it as non-stale, makes it read-only, and checks its digest before and
-after science. Exact-reference-GPU task `13008433_1` has cleared the CUDA/FFI
-gate and is running the complete 0--200 candidate against the sealed
-four-repeat GF38 native panel. Its dependent focused audit remains the gate
-for accepting the correction.
+Safe replacement array `13008433` staged that exact binary into its disposable
+output root, gave the private copy a current timestamp, verified that RECOVAR
+resolved it as non-stale, made it read-only, and checked its digest before and
+after science. Exact-reference-GPU task `13008435` completed all numbered
+iterations 0--200 naturally with exit 0 in 2,152 seconds. The same-H100 native
+median is 308.4 seconds, so the provisional runtime ratio is 6.98x. Dependent
+focused audit `13010186` is pending against the sealed four-repeat GF38 native
+panel and remains the gate for accepting the correction.
 
 GF47 (extreme outliers with uniform poses and white noise, seed 29) passes the
 complete 0--200 calibrated map and particle envelopes but fails controller
