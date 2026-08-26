@@ -6014,8 +6014,20 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
     )
 
 
-def test_run_local_em_exact_external_pmax_scales_in_one_score_pass(rng, monkeypatch):
-    monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
+@pytest.mark.parametrize(
+    "disable_big_jit",
+    [False, True],
+    ids=["big-jit", "fallback"],
+)
+def test_run_local_em_exact_external_pmax_scales_in_one_score_pass(
+    rng,
+    monkeypatch,
+    disable_big_jit,
+):
+    if disable_big_jit:
+        monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
+    else:
+        monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=132)
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0

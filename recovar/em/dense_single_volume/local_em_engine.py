@@ -3551,6 +3551,19 @@ def run_local_em_exact(
                 if normalization_log_evidence_np is not None
                 else jnp.zeros(batch_size, dtype=jnp.float32)
             )
+            normalization_max_posterior_arg = (
+                jnp.asarray(
+                    pad_axis(
+                        normalization_max_posterior_np[bucket_image_indices],
+                        0,
+                        batch_size,
+                        value=0,
+                    ),
+                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
+                )
+                if normalization_max_posterior_np is not None
+                else jnp.zeros(batch_size, dtype=jnp.float32)
+            )
             local_rotation_log_prior_arg = jnp.asarray(bucket.local_rotation_log_prior)
             if class_log_prior != 0.0:
                 local_rotation_log_prior_arg = local_rotation_log_prior_arg + jnp.asarray(
@@ -3698,6 +3711,7 @@ def run_local_em_exact(
                 group_ids_arg,
                 normalization_log_z_arg,
                 normalization_log_evidence_arg,
+                normalization_max_posterior_arg,
                 reconstruction_probability_threshold_arg,
                 config,
                 mask_mode=big_jit_mask_mode,
@@ -3746,6 +3760,7 @@ def run_local_em_exact(
                 include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
                 has_normalization_log_z=normalization_log_z_np is not None,
                 has_normalization_log_evidence=normalization_log_evidence_np is not None,
+                has_normalization_max_posterior=normalization_max_posterior_np is not None,
                 has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
                 score_only=score_only,
                 use_relion_projector=bool(use_relion_projector),

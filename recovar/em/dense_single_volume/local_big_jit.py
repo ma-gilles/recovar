@@ -373,7 +373,9 @@ def _score_normalize_support(
     normalization_log_z,
     reconstruction_probability_threshold=None,
     *,
+    normalization_max_posterior=None,
     has_normalization_log_z: bool,
+    has_normalization_max_posterior: bool = False,
     has_reconstruction_probability_threshold: bool = False,
     half_spectrum_scoring: bool,
     use_float64_normalization: bool,
@@ -427,7 +429,19 @@ def _score_normalize_support(
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
     row_has_score = jnp.isfinite(best_log_score) & valid_image_mask
-    if has_normalization_log_z:
+    if has_normalization_log_z and has_normalization_max_posterior:
+        raise ValueError(
+            "normalization_log_z and normalization_max_posterior are mutually exclusive"
+        )
+    if has_normalization_max_posterior:
+        normalization_dtype = jnp.float64 if use_float64_normalization else scores.real.dtype
+        raw_pmax = jnp.asarray(normalization_max_posterior, dtype=normalization_dtype)
+        valid_pmax = jnp.isfinite(raw_pmax) & (raw_pmax > 0.0) & (raw_pmax <= 1.0)
+        row_has_mass = row_has_score & valid_pmax
+        safe_pmax = jnp.where(row_has_mass, raw_pmax, jnp.asarray(1.0, dtype=raw_pmax.dtype))
+        fine_best = best_log_score.astype(normalization_dtype)
+        log_Z = jnp.where(row_has_mass, fine_best - jnp.log(safe_pmax), 0.0)
+    elif has_normalization_log_z:
         raw_log_Z = normalization_log_z.astype(scores.real.dtype)
         row_has_mass = row_has_score & jnp.isfinite(raw_log_Z)
         log_Z = jnp.where(row_has_mass, raw_log_Z, 0.0)
@@ -555,7 +569,9 @@ def _score_normalize_mstep(
     ctf2_over_nv_recon,
     reconstruction_probability_threshold=None,
     *,
+    normalization_max_posterior=None,
     has_normalization_log_z: bool,
+    has_normalization_max_posterior: bool = False,
     has_reconstruction_probability_threshold: bool = False,
     half_spectrum_scoring: bool,
     use_float64_normalization: bool,
@@ -593,7 +609,9 @@ def _score_normalize_mstep(
         valid_image_mask,
         normalization_log_z,
         reconstruction_probability_threshold,
+        normalization_max_posterior=normalization_max_posterior,
         has_normalization_log_z=has_normalization_log_z,
+        has_normalization_max_posterior=has_normalization_max_posterior,
         has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
         half_spectrum_scoring=half_spectrum_scoring,
         use_float64_normalization=use_float64_normalization,
@@ -851,6 +869,7 @@ def _project_local_half_spectrum(
         "include_unweighted_norm_high_shell",
         "has_normalization_log_z",
         "has_normalization_log_evidence",
+        "has_normalization_max_posterior",
         "has_reconstruction_probability_threshold",
         "score_only",
         "use_relion_projector",
@@ -918,6 +937,7 @@ def run_local_bucket_big_jit(
     group_ids,
     normalization_log_z,
     normalization_log_evidence,
+    normalization_max_posterior,
     reconstruction_probability_threshold,
     config,
     *,
@@ -967,6 +987,7 @@ def run_local_bucket_big_jit(
     include_unweighted_norm_high_shell: bool,
     has_normalization_log_z: bool,
     has_normalization_log_evidence: bool,
+    has_normalization_max_posterior: bool,
     has_reconstruction_probability_threshold: bool,
     score_only: bool = False,
     use_relion_projector: bool = False,
@@ -984,6 +1005,12 @@ def run_local_bucket_big_jit(
     computed projection/preprocessing operands.
     """
 
+    if has_normalization_max_posterior and (
+        has_normalization_log_z or has_normalization_log_evidence
+    ):
+        raise ValueError(
+            "normalization_max_posterior is mutually exclusive with external log normalization"
+        )
     if score_only and (
         (not disable_adjoint_y)
         or (not disable_adjoint_ctf)
@@ -1467,7 +1494,9 @@ def run_local_bucket_big_jit(
             valid_image_mask,
             effective_normalization_log_z,
             reconstruction_probability_threshold,
+            normalization_max_posterior=normalization_max_posterior,
             has_normalization_log_z=effective_has_normalization_log_z,
+            has_normalization_max_posterior=has_normalization_max_posterior,
             has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
             half_spectrum_scoring=half_spectrum_scoring,
             use_float64_normalization=use_float64_normalization,
@@ -1563,7 +1592,9 @@ def run_local_bucket_big_jit(
             valid_image_mask,
             effective_normalization_log_z,
             reconstruction_probability_threshold,
+            normalization_max_posterior=normalization_max_posterior,
             has_normalization_log_z=effective_has_normalization_log_z,
+            has_normalization_max_posterior=has_normalization_max_posterior,
             has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
             half_spectrum_scoring=half_spectrum_scoring,
             use_float64_normalization=use_float64_normalization,
@@ -1649,7 +1680,9 @@ def run_local_bucket_big_jit(
         shifted_recon_split,
         ctf2_over_nv_recon,
         reconstruction_probability_threshold=reconstruction_probability_threshold,
+        normalization_max_posterior=normalization_max_posterior,
         has_normalization_log_z=effective_has_normalization_log_z,
+        has_normalization_max_posterior=has_normalization_max_posterior,
         has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
         half_spectrum_scoring=half_spectrum_scoring,
         use_float64_normalization=use_float64_normalization,
