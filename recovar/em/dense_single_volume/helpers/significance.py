@@ -1051,6 +1051,9 @@ def _maybe_dump_k_class_significance_batch(
     coarse_gaussian_initial_diff2=None,
     coarse_gaussian_score_indices=None,
     translation_phase_source=None,
+    relion_projector_half=None,
+    relion_projector_r_max=None,
+    projection_padding_factor=None,
     relion_f32_sum_weight=None,
     relion_f32_significant_weight=None,
     relion_f32_cutoff_count=None,
@@ -1106,6 +1109,18 @@ def _maybe_dump_k_class_significance_batch(
     target_pos_to_dump_row = None
     if target_local_positions is not None:
         target_pos_to_dump_row = {int(p): row for row, p in enumerate(np.asarray(target_local_positions).tolist())}
+
+    projector_half_per_class = None
+    if relion_projector_half is not None:
+        projector_half_per_class = np.stack(
+            [np.asarray(value, dtype=np.complex64) for value in relion_projector_half],
+            axis=0,
+        )
+        if projector_half_per_class.shape[0] != n_classes:
+            raise ValueError(
+                "RELION projector dump class count differs from significance class count: "
+                f"{projector_half_per_class.shape[0]} != {n_classes}",
+            )
 
     for local_pos, original_idx in enumerate(original_indices):
         if int(original_idx) not in target_original_indices:
@@ -1241,6 +1256,17 @@ def _maybe_dump_k_class_significance_batch(
                 np.asarray(translation_phase_source)
                 if translation_phase_source is not None
                 else np.empty((0, 2), dtype=np.float64)
+            ),
+            relion_projector_half_per_class=(
+                projector_half_per_class
+                if projector_half_per_class is not None
+                else np.empty((0,), dtype=np.complex64)
+            ),
+            relion_projector_r_max=np.int64(
+                -1 if relion_projector_r_max is None else int(relion_projector_r_max)
+            ),
+            projection_padding_factor=np.int64(
+                -1 if projection_padding_factor is None else int(projection_padding_factor)
             ),
             relion_f32_sum_weight=(
                 np.float32(np.asarray(relion_f32_sum_weight)[local_pos])
@@ -3954,6 +3980,9 @@ def _compute_k_class_significance_batched(
                 coarse_gaussian_initial_diff2=coarse_gaussian_initial_diff2,
                 coarse_gaussian_score_indices=coarse_gaussian_score_indices,
                 translation_phase_source=translations_source,
+                relion_projector_half=relion_projector_half,
+                relion_projector_r_max=relion_projector_r_max,
+                projection_padding_factor=projection_padding_factor,
                 relion_f32_sum_weight=(
                     _batch_sum_weight if relion_f32_coarse_support_enabled else None
                 ),

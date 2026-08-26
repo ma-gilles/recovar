@@ -7,6 +7,7 @@ from scripts.analyze_vdam_coarse_projector_boundary import (
     _centered_metric,
     _complex_metric,
     _flat_dump,
+    _load_captured_recovar_projector,
     _load_projector,
     _native_current_fft_rows,
 )
@@ -46,6 +47,26 @@ def test_flat_dump_rejects_trailing_payload(tmp_path):
         stream.write(b"x")
     with pytest.raises(ValueError, match="payload"):
         _flat_dump(path, np.dtype("<f8"))
+
+
+def test_load_captured_recovar_projector_validates_k1_metadata():
+    projector = np.arange(24, dtype=np.float32).reshape(1, 3, 4, 2).astype(
+        np.complex64
+    )
+    result = _load_captured_recovar_projector(
+        {
+            "relion_projector_half_per_class": projector,
+            "relion_projector_r_max": np.asarray(7, dtype=np.int64),
+            "projection_padding_factor": np.asarray(1, dtype=np.int64),
+        }
+    )
+
+    assert result is not None
+    observed, r_max, padding_factor = result
+    np.testing.assert_array_equal(observed, projector[0])
+    assert r_max == 7
+    assert padding_factor == 1
+    assert _load_captured_recovar_projector({}) is None
 
 
 def test_centered_metric_removes_only_a_common_offset():

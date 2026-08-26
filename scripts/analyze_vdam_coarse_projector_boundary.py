@@ -57,6 +57,34 @@ def _load_projector(native_directory: Path, prefix: str) -> tuple[np.ndarray, in
     return projector.reshape(zdim, ydim, xdim), r_max
 
 
+def _load_captured_recovar_projector(
+    coarse: dict[str, np.ndarray],
+) -> tuple[np.ndarray, int, int] | None:
+    """Load the exact in-memory RECOVAR projector saved by a targeted dump."""
+
+    values = np.asarray(
+        coarse.get("relion_projector_half_per_class", np.empty((0,), np.complex64)),
+        dtype=np.complex64,
+    )
+    if values.size == 0:
+        return None
+    if values.ndim != 4 or values.shape[0] != 1:
+        raise ValueError(
+            "captured RECOVAR projector must have shape (1, z, y, x), got "
+            f"{values.shape}",
+        )
+    r_max = int(np.asarray(coarse["relion_projector_r_max"]).reshape(-1)[0])
+    padding_factor = int(
+        np.asarray(coarse["projection_padding_factor"]).reshape(-1)[0]
+    )
+    if r_max < 0 or padding_factor < 1:
+        raise ValueError(
+            "captured RECOVAR projector metadata is invalid: "
+            f"r_max={r_max}, padding_factor={padding_factor}",
+        )
+    return values[0], r_max, padding_factor
+
+
 def _centered_metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | int]:
     reference = np.asarray(reference, dtype=np.float32)
     candidate = np.asarray(candidate, dtype=np.float32)
@@ -182,6 +210,7 @@ def analyze(
     projector, r_max = _load_projector(native_directory, projector_prefix)
     with np.load(recovar_coarse_dump, allow_pickle=False) as payload:
         coarse = {name: np.asarray(payload[name]) for name in payload.files}
+    recovar_projector_capture = _load_captured_recovar_projector(coarse)
 
     current_size = int(np.asarray(coarse["current_size"]).reshape(-1)[0])
     rotations = np.asarray(coarse["rotations"], dtype=np.float32)
@@ -246,6 +275,35 @@ def analyze(
             (projected, shifted, replay_diff2, fused_replay_diff2)
         )
     )
+    recovar_projector_fused_replay_diff2 = None
+    if recovar_projector_capture is not None:
+        recovar_projector, recovar_r_max, recovar_padding_factor = (
+            recovar_projector_capture
+        )
+        if recovar_padding_factor != 1:
+            raise ValueError(
+                "fused RECOVAR projector replay currently requires padding factor 1, "
+                f"got {recovar_padding_factor}",
+            )
+        recovar_projector_fused_replay_diff2 = np.asarray(
+            jax.block_until_ready(
+                cuda_backproject.relion_coarse_diff2_projector_f32(
+                    relion_projector_half_to_texture_full(
+                        jnp.asarray(recovar_projector, dtype=jnp.complex64)
+                    ),
+                    jnp.asarray(rotations, dtype=jnp.float32),
+                    jnp.asarray(unshifted[None], dtype=jnp.complex64),
+                    jnp.asarray(translation_angles, dtype=jnp.float32),
+                    jnp.asarray(pixel_weight[None], dtype=jnp.float32),
+                    jnp.asarray(initial_diff2.reshape(1), dtype=jnp.float32),
+                    jnp.asarray(full_to_compact, dtype=jnp.int32),
+                    current_size=current_size,
+                    physical_image_size=physical_image_size,
+                    model_max_r=recovar_r_max,
+                )
+            ),
+            dtype=np.float32,
+        ).reshape(-1)
 
     native_diff2 = _flat_dump(
         Path(native_directory) / native_score_name,
@@ -270,8 +328,7 @@ def analyze(
     if debug_npz is not None:
         debug_npz = Path(debug_npz)
         debug_npz.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(
-            debug_npz,
+        debug_values = dict(
             native_diff2=native_diff2,
             production_diff2=production_diff2,
             preprojected_replay_diff2=replay_diff2,
@@ -285,9 +342,51 @@ def analyze(
             unshifted=unshifted,
             pixel_weight=pixel_weight,
         )
+        if recovar_projector_fused_replay_diff2 is not None:
+            debug_values["recovar_projector_fused_replay_diff2"] = (
+                recovar_projector_fused_replay_diff2
+            )
+        np.savez_compressed(debug_npz, **debug_values)
+
+    comparisons = {
+        "native_vs_recovar_production_centered_diff2": _centered_metric(
+            native_diff2,
+            production_diff2,
+        ),
+        "native_vs_native_ppref_replay_centered_diff2": _centered_metric(
+            native_diff2,
+            replay_diff2,
+        ),
+        "recovar_production_vs_native_ppref_replay_centered_diff2": _centered_metric(
+            production_diff2,
+            replay_diff2,
+        ),
+        "native_vs_fused_native_ppref_replay_centered_diff2": _centered_metric(
+            native_diff2,
+            fused_replay_diff2,
+        ),
+        "preprojected_vs_fused_native_ppref_replay_centered_diff2": _centered_metric(
+            replay_diff2,
+            fused_replay_diff2,
+        ),
+        "native_fine_projector_replay": fine_projector_checks,
+    }
+    if recovar_projector_fused_replay_diff2 is not None:
+        comparisons[
+            "recovar_production_vs_fused_recovar_ppref_replay_centered_diff2"
+        ] = _centered_metric(
+            production_diff2,
+            recovar_projector_fused_replay_diff2,
+        )
+        comparisons[
+            "native_vs_fused_recovar_ppref_replay_centered_diff2"
+        ] = _centered_metric(
+            native_diff2,
+            recovar_projector_fused_replay_diff2,
+        )
 
     return {
-        "schema": "recovar.vdam_coarse_projector_boundary.v1",
+        "schema": "recovar.vdam_coarse_projector_boundary.v2",
         "status": "ok",
         "identity": {
             "current_size": current_size,
@@ -296,30 +395,9 @@ def analyze(
             "translation_count": int(translations.shape[0]),
             "projector_shape": list(projector.shape),
             "projector_r_max": int(r_max),
+            "captured_recovar_projector": recovar_projector_capture is not None,
         },
-        "comparisons": {
-            "native_vs_recovar_production_centered_diff2": _centered_metric(
-                native_diff2,
-                production_diff2,
-            ),
-            "native_vs_native_ppref_replay_centered_diff2": _centered_metric(
-                native_diff2,
-                replay_diff2,
-            ),
-            "recovar_production_vs_native_ppref_replay_centered_diff2": _centered_metric(
-                production_diff2,
-                replay_diff2,
-            ),
-            "native_vs_fused_native_ppref_replay_centered_diff2": _centered_metric(
-                native_diff2,
-                fused_replay_diff2,
-            ),
-            "preprojected_vs_fused_native_ppref_replay_centered_diff2": _centered_metric(
-                replay_diff2,
-                fused_replay_diff2,
-            ),
-            "native_fine_projector_replay": fine_projector_checks,
-        },
+        "comparisons": comparisons,
         "artifacts": {
             "native_directory": str(Path(native_directory).resolve()),
             "recovar_coarse_dump": str(Path(recovar_coarse_dump).resolve()),

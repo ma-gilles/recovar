@@ -387,6 +387,9 @@ def test_kclass_dump_helper_accepts_operand_kwargs():
         "projected_reference_norm_score_per_class",
         "projected_cross_score_per_class",
         "coarse_gaussian_shifted_corrected",
+        "relion_projector_half",
+        "relion_projector_r_max",
+        "projection_padding_factor",
     }
     missing = required - set(sig.parameters)
     assert not missing, (
@@ -417,6 +420,9 @@ def test_kclass_dump_call_site_passes_operand_kwargs():
         "projected_reference_norm_score_per_class=",
         "projected_cross_score_per_class=projected_cross_score_per_class",
         "coarse_gaussian_shifted_corrected=coarse_gaussian_shifted_corrected",
+        "relion_projector_half=relion_projector_half",
+        "relion_projector_r_max=relion_projector_r_max",
+        "projection_padding_factor=projection_padding_factor",
     ):
         assert needle in window, f"K-class dump call site lost kwarg: {needle!r}"
     # The half_weights_used branch must distinguish windowed vs
@@ -541,6 +547,10 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
         n_images * n_trans * n_pix,
         dtype=np.float32,
     ).reshape(n_images, n_trans, n_pix).astype(np.complex64)
+    relion_projector_half = [
+        np.full((3, 4, 2), class_index + 1j, dtype=np.complex64)
+        for class_index in range(n_classes)
+    ]
     projected_reference_rotation_ids = np.asarray([0, 2], dtype=np.int32)
     projected_reference_per_class = np.arange(
         n_classes * projected_reference_rotation_ids.size * n_pix,
@@ -590,6 +600,9 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
         window_indices=window_indices,
         half_weights_used=half_weights_used,
         coarse_gaussian_shifted_corrected=coarse_gaussian_shifted_corrected,
+        relion_projector_half=relion_projector_half,
+        relion_projector_r_max=7,
+        projection_padding_factor=1,
         projected_reference_rotation_ids=projected_reference_rotation_ids,
         projected_reference_per_class=projected_reference_per_class,
         projected_reference_norm_score_per_class=(
@@ -607,6 +620,9 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
         "window_indices",
         "half_weights",
         "coarse_gaussian_shifted_corrected",
+        "relion_projector_half_per_class",
+        "relion_projector_r_max",
+        "projection_padding_factor",
     ):
         assert name in payload.files, f"Dump npz is missing schema field {name!r}"
     assert payload["shifted_data"].dtype == np.complex128
@@ -614,6 +630,7 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     assert payload["window_indices"].dtype == np.int32
     assert payload["half_weights"].dtype == np.float64
     assert payload["coarse_gaussian_shifted_corrected"].dtype == np.complex64
+    assert payload["relion_projector_half_per_class"].dtype == np.complex64
     assert payload["projected_reference_rotation_ids"].dtype == np.int32
     assert payload["projected_reference_per_class"].dtype == np.complex128
     assert payload["projected_reference_norm_score_per_class"].dtype == np.float64
@@ -621,6 +638,9 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     assert payload["window_indices"].shape == (n_pix,)
     assert payload["half_weights"].shape == (n_pix,)
     assert payload["coarse_gaussian_shifted_corrected"].shape == (n_trans, n_pix)
+    assert payload["relion_projector_half_per_class"].shape == (n_classes, 3, 4, 2)
+    assert int(payload["relion_projector_r_max"]) == 7
+    assert int(payload["projection_padding_factor"]) == 1
     assert payload["projected_reference_rotation_ids"].shape == (2,)
     assert payload["projected_reference_per_class"].shape == (n_classes, 2, n_pix)
     assert payload["projected_reference_norm_score_per_class"].shape == (
