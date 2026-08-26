@@ -79,8 +79,26 @@ if [[ "${CAPTURE_NATIVE_REPLAY}" == 1 ]]; then
   VDAM_RELION_BINARY=${RELION_BINARY} \
   bash "${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch"
 
-  rg -q "_rlnSamplingPerturbInstance[[:space:]]+${TARGET_RELION_PERTURBATION}" \
-    "${NATIVE_ROOT}/relion/run_it${iteration_tag}_sampling.star"
+  "${PIXI_PY}" - \
+    "${NATIVE_ROOT}/relion/run_it${iteration_tag}_sampling.star" \
+    "${TARGET_RELION_PERTURBATION}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+match = re.search(r"_rlnSamplingPerturbInstance\s+([-+0-9.eE]+)", text)
+if match is None:
+    raise SystemExit("continued sampling STAR lacks the perturbation field")
+observed = float(match.group(1))
+expected = float(sys.argv[2])
+# RELION serializes this internal value with six digits after the decimal.
+if abs(observed - expected) > 5.01e-7:
+    raise SystemExit(
+        "serialized perturbation differs from the forced full-precision value: "
+        f"observed={observed:.9g} expected={expected:.17g}"
+    )
+PY
   (
     cd "${REPO_ROOT}"
     "${PIXI_PY}" -m scripts.audit_vdam_particle_state_trajectory \

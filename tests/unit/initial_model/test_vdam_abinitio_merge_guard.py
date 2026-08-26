@@ -479,6 +479,8 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
         "RECOVAR_LOCAL_SCORE_DUMP_OPERANDS=1",
         "RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY",
         "native_replay_state_audit.json",
+        "serialized perturbation differs from the forced full-precision value",
+        "abs(observed - expected) > 5.01e-7",
         'report["capture_stopped_after_target"] = True',
         'report["target_pmax"]',
         "target_error > 5.0e-4",
