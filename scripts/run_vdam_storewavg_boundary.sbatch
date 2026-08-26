@@ -78,4 +78,4 @@ fi
 if [[ -n "${RECOVAR_SCORE_DUMP:-}" ]]; then
   ANALYZER_ARGS+=(--recovar-score-dump "${RECOVAR_SCORE_DUMP}")
 fi
-"${PIXI_PY}" scripts/analyze_vdam_storewavg_boundary.py "${ANALYZER_ARGS[@]}"
+"${PIXI_PY}" -m scripts.analyze_vdam_storewavg_boundary "${ANALYZER_ARGS[@]}"
