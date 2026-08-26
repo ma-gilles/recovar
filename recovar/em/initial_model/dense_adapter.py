@@ -16,8 +16,8 @@ from typing import Any, Callable
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_step
 from recovar.em.dense_single_volume.batch_planning import RELION_SCORE_TENSOR_FLOAT_BUDGET
+from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_step
 from recovar.em.dense_single_volume.helpers.resolution import compute_coarse_image_size
 from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
 from recovar.em.dense_single_volume.k_class import (
@@ -66,6 +66,7 @@ _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
 _UNIFY_LOCAL_BUCKET_SIZES_ENV = "RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES"
 _COMPACT_SPARSE_PASS2_ENV = "RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2"
 _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
+_RELION_F32_COARSE_TIE_ULPS_ENV = "RECOVAR_INITIAL_MODEL_RELION_F32_COARSE_TIE_ULPS"
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,19 @@ def _unify_local_bucket_sizes_enabled() -> bool:
 
     setting = os.environ.get(_UNIFY_LOCAL_BUCKET_SIZES_ENV, "1").strip().lower()
     return setting not in {"0", "false", "no", "off"}
+
+
+def _initial_model_relion_f32_coarse_tie_ulps() -> int:
+    """Resolve the scoped coarse-cutoff ULP envelope for diagnostic A/B runs."""
+
+    setting = os.environ.get(_RELION_F32_COARSE_TIE_ULPS_ENV, "2").strip()
+    try:
+        value = int(setting)
+    except ValueError as error:
+        raise ValueError(f"{_RELION_F32_COARSE_TIE_ULPS_ENV} must be an integer") from error
+    if value < 0 or value > 16:
+        raise ValueError(f"{_RELION_F32_COARSE_TIE_ULPS_ENV} must be in [0, 16]")
+    return value
 
 
 def _compact_sparse_pass2_enabled(n_classes: int, pass2_engine: str = "auto") -> bool:
@@ -939,7 +953,7 @@ def _run_sparse_pass2_initial_model_estep(
             # scheduled in a separate launch. Preserve the native inclusive
             # support envelope without changing supplied-map EM.
             relion_f32_coarse_tie_ulps=(
-                2
+                _initial_model_relion_f32_coarse_tie_ulps()
                 if state.K == 1
                 and use_exact_relion_projector
                 and _uses_relion_cuda_image_preprocessing(group_dataset)

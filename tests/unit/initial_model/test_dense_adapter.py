@@ -14,6 +14,7 @@ from recovar.em.initial_model.dense_adapter import (
     _arrays_to_accumulators,
     _estep_meta,
     _initial_model_pass2_layout,
+    _initial_model_relion_f32_coarse_tie_ulps,
     _relion_projector_to_dense_volume,
     _resolve_class_inputs,
     _resolve_sparse_pass1_current_size,
@@ -26,6 +27,17 @@ from recovar.em.initial_model.dense_adapter import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def test_initial_model_coarse_tie_ulp_diagnostic_override(monkeypatch):
+    variable = "RECOVAR_INITIAL_MODEL_RELION_F32_COARSE_TIE_ULPS"
+    monkeypatch.delenv(variable, raising=False)
+    assert _initial_model_relion_f32_coarse_tie_ulps() == 2
+    monkeypatch.setenv(variable, "0")
+    assert _initial_model_relion_f32_coarse_tie_ulps() == 0
+    monkeypatch.setenv(variable, "17")
+    with pytest.raises(ValueError, match=r"must be in \[0, 16\]"):
+        _initial_model_relion_f32_coarse_tie_ulps()
 
 
 def test_coarse_significance_batch_is_unchanged_for_small_pose_grids():
