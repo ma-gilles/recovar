@@ -27267,3 +27267,49 @@ and
 The next exact causal gates remain the projection-cache A/B with unchanged
 dispatch and the deployed-revision one-tuple native operand comparison.  The
 fixed K=1 score remains `31/34`.
+
+## 2026-08-26 13:00 EDT — exact fine capture exposes a 56-versus-58 score window
+
+Focused deployed-lineage continuation job `12999455` completed `0:0` in
+`00:14:36` with `SUCCESS_12999455`.  It used optimiser SHA-256
+`16eb9db6e2b34d32d0a9ba31fb0d032f3fcb578262ecf38178d104389ba83797`,
+physical-order seed `1711`, perturbation `0.009284287691116333`, deployed
+RELION binary SHA-256
+`1c3f67f52a7663f29c3cc0c8aacc995eba27517961e24ee4a1be01b6413c0b1d`,
+and source row `75571` / stack image `75572`.  Its capture remains inert at
+the fixed map/topology boundary.
+
+The authoritative fine-operand artifact is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_exact_fine_operand_cont_bc1778a_20260826T1245ET/capture/part72860_stack75572_class1.fine-operand-v1.bin`
+(SHA-256
+`0f1b0574a4588783d3970aae055f1d11297985fb02affd2a35e4aa053330db4e`).
+Its exact runtime dimensions are one candidate and `1624 = 56 * 29` packed
+Fourier pixels.  RECOVAR's exact-native-state row dump instead reports
+`current_size=58` and uses `1740 = 58 * 30` square score pixels.  The staged
+analyzer correctly rejects those arrays before any arithmetic comparison with
+`current size differs`.
+
+The deterministic origin is now localized.  RECOVAR retained the exact MRC
+header ratio `544 / 384 = 1.416666666...` as the runtime model pixel size,
+while the particle optics table stores `1.416667`.  Its RELION optics remap
+therefore rounds model size `56` upward to particle score size `58`.  Native
+RELION's iteration-2 fine kernel proves that the runtime model/particle window
+is `56`; `run_it001_half1_model.star` records `_rlnPixelSize 1.416667`.
+
+The candidate keeps the exact MRC-header sampling for the already-demonstrated
+initial-reference low-pass boundary, but reads the runtime model pixel size
+from RELION's model STAR.  It also restores native fine-score units to an
+explicit opt-in diagnostic because all three terminal native-unit arms were
+regressive.  Focused CPU Slurm job `13000378` passed all five selected tests
+in `68.70s`.  Candidate row job `13000515` is pinned to primary-worktree diff
+SHA-256
+`82bac43444725dbabfaf0878bed23fa443119f05ac9144d1542c447b1fc8c26e`,
+sealed CUDA SHA-256
+`aca8de06213bda21375f9cde0a7442275e84be8a092127d75392b15fae4e621f`,
+native `current_size=56`, expected coarse significant count `20`, and a
+stopped fine capture for source row `75571`.  Its run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_model_star_score56_ab01_20260826T1300ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_model_star_score56_ab01_20260826T1300ET`;
+both contain `SAFE_TO_DELETE`.  No scorecard value changes before this causal
+gate completes; the fixed K=1 score remains `31/34`.
