@@ -2912,3 +2912,54 @@ not scientific failures.  The exact production bind binary (SHA-256
 is now installed locally, and fresh gf03/gf05 four-repeat 0--200 replacement
 tasks `12972009_[3,5]` are running on H100s from a new fail-closed output root.
 No generic RECOVAR test, full suite, or long-test ran.
+
+The next two completed production audits separate a repeatability artifact from
+a genuine outlier failure.  `vdam-gf04` (`k1-32`, midscale/Kent/radial noise)
+finishes science in `56:23`, with a `6.214x` RECOVAR/native-median runtime
+ratio.  Its state, particle, schedule, and pre-divergence topology envelopes
+all pass.  Seven strict best-repeat map diagnostics fail only at iterations
+194--200, but the repeatability-calibrated map has zero failures; its minimum
+candidate-minus-worst-native GT delta is `-0.00016833219235840025`.  The case
+therefore passes the complete calibrated contract.
+
+`vdam-gf05` (`k1-15`, 20% outliers, white noise, uniform poses) finishes
+science in `58:53`, at `7.090x` native median, and remains a genuine failure.
+Its calibrated map gate fails 48 checkpoints, from iteration 86 through 141;
+the strict diagnostic fails 113 checkpoints beginning at iteration 86.  The
+particle-state envelope first leaves the native hard-state modes at iteration
+29, the schedule gate first fails at iteration 20, and the particle gate first
+fails at iteration 75.  Thus this cell is not explainable by choosing a
+different valid native repeat.  Dynamic-scheduler replacements for both gf03
+and gf05 remain active as `12972009_[3,5]`; both replacement candidates have
+now reached iteration 200 and are completing their same-GPU native repeat
+panels before audit.
+
+The live campaign dashboard now reports `2` pass (`gf02`, `gf04`), `2`
+genuine fail (`gf03`, `gf05`), one audit pending, four science running, and 13
+not started.  Across the six completed science panels, the RECOVAR/native
+median runtime ratio spans `5.334x`--`8.810x` with median `6.688x`; runtime
+parity therefore remains an explicit failure.  Local dashboard commit
+`c9e9dfe3f` accepts legacy, native-v2, and sealed-v1-to-v2 evidence, reports
+strict and calibrated failures separately, verifies reclassification parent
+hashes, and selects the most authoritative per-case audit without mixing
+equally authoritative directories.  Its focused tests pass `9/9`; Ruff and
+diff checks pass.
+
+Runtime profiling localizes `1844.0851` seconds, or `96.659%` of the measured
+RECOVAR iteration time, to expectation: coarse pass 1 consumes `966.7121`
+seconds and sparse fine pass 2 consumes `766.4768` seconds.  The corresponding
+native RELION expectation total is `227.867` seconds, an `8.09x` expectation
+gap.  At iteration 150 both engines process the same 920-particle subset;
+RECOVAR expectation takes `14.541` seconds versus RELION's `2.026` seconds.
+This rules out I/O and M-step work as the primary runtime cause and makes
+coarse scoring plus fine posterior/backprojection the next profiling target;
+additional blind batch-size sweeps are not justified.
+
+Finally, failed scientific audits were found to write valid JSON/NPZ reports
+but return before the GUI wrapper created `evidence.sha256`.  Local commit
+`2c2811176` now preserves the scientific exit code only after checking and
+hashing all four audit outputs.  Its focused wrapper test passes, with Bash
+syntax, Ruff, and diff checks clean.  The still-pending audit array was
+replaced without discarding compute; array `12973235_[6-22]` uses this sealed
+failure path and per-job CPU compilation caches.  No generic RECOVAR test,
+full suite, or long-test ran.
