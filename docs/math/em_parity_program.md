@@ -37,6 +37,83 @@ respectively, while the
 20,000-particle `vdam-gf20` case takes `7.07x`.  The earlier completed small
 cases span `2.36--2.88x`.
 
+### 2026-08-25 VDAM 0--200 robustness-envelope campaign
+
+The active replacement campaign freezes 22 K=1 GUI-default trajectories and
+audits every numbered checkpoint from iteration 0 through 200.  The matrix
+covers uniform, anisotropic, and Kent pose distributions; white, radial,
+low-, high-, and very-high-noise arms; 20--70% outliers and junk particles;
+no-CTF and independent-scale controls; translations, high resolution,
+small-N, and midscale cases.  Production science is Slurm array `12970815`
+at source `db89de857`; the failure-sealing CPU audit array is `12973235` at
+`2c28111768`.  Every completed audit writes and verifies a four-report
+`evidence.sha256` ledger even when the scientific gate fails.  This is the
+only active test program: no generic RECOVAR full or long suite is being run.
+
+The no-CTF/radial-noise `vdam-gf08` arm is the newest sealed production pass.
+Science job `12971945` and audit `12973235_8` cover all 201 checkpoints on one
+H100 with four native RELION repeats.  The calibrated map envelope passes
+0/201 failures; minimum candidate-to-best-native FSC-AUC is `0.9352237471`,
+minimum candidate-minus-best-native GT FSC-AUC is `-0.0066570362`, and the
+corresponding worst-native delta is `-0.0012355495`, within the observed
+native GT span of `0.0066826046`.  Particle state and sampled schedule topology
+pass; the first native hard-state split is iteration 13.  The raw strict
+schedule diagnostic first differs at iteration 3 and remains observational,
+not an independent failure after native divergence.  The map and state report
+SHA-256 values are `0ffe3b591b95e0857cd85c15024d7aa4e666209b3d990c09742e48d51b4e5be8`
+and `f42bb803f1826fae543c3a136f325460e415bc3bdbd0cf367f8f6e5624c39ba5`;
+the evidence-ledger digest is
+`659358a655198939bc2966960ea39df0accb0ddfb9206efc9287fa84c51028ee`.
+RECOVAR takes `6.078x` the median native wall time.  Together with the already
+sealed `vdam-gf02`, `vdam-gf04`, `vdam-gf06`, and `vdam-gf07` arms, the current
+production dashboard is five passes, two genuine failures, one completed
+science arm awaiting audit, four running science arms, and ten not yet
+started.
+
+A bounded dynamic-worker full-trajectory discriminator at `00c6ef413` confirms
+that the remaining outlier failures are sensitive to RELION's nondeterministic
+OpenMP-to-CUDA-stream ownership, but it is not a universal repair.  RELION
+source verifies the tested topology: `--pool 3 --j 8` forms 24-particle outer
+pools, a mutex-protected one-particle task distributor feeds eight workers,
+and each worker owns a persistent blocking class stream.  Dynamic `vdam-gf03`
+worsens from the production arm's 44 calibrated failures at iterations
+146--189 to 142 failures beginning at iteration 31 and continuing from 60
+through 200.  Its minimum candidate-minus-worst-native GT delta is
+`-0.0036510648`, particle state first fails at iteration 17, and sampled
+schedule topology first fails at iteration 30.  This rejects promotion of the
+dynamic scheduler across the panel.
+
+The same dynamic scheduler materially repairs the severe `vdam-gf05` map and
+particle trajectory: it removes all 48 production calibrated map failures and
+passes all 201 map checkpoints, with minimum candidate-minus-worst-native GT
+delta `-0.0001719818`; particle state also passes.  Its old state report is
+marked failed only because it compared RELION's serialized six-decimal
+`offset_range` with RECOVAR's full-precision value.  At iteration 20 those
+values are `7.668234` and `7.6682346703` Angstrom with the same 3-Angstrom
+step, and both generate the same 21 coarse translations byte for byte (84
+hypotheses after oversampling).  Focused commit `f09f4a269` therefore gates
+the exact sampled translation/rotation grid while retaining raw scalar fields
+as strict diagnostics; its focused audit file passes 16/16 tests.  A sealed
+state-only re-audit is pending as Slurm `12975591`.  The original map and state
+SHA-256 values are `235ecc559123fe77f603683fc2c6b4b32078f3f23091d299a7c1bd993704ebfe`
+and `bfcd0f54701d307f5a7409049b7021589f5694ab98214bf197e2d89be6290b79`.
+The tracker will not combine these authorities until the new state evidence
+ledger completes and a provenance-preserving combined classification is
+sealed.
+
+The first bounded runtime experiment is also rejected.  Diagnostic commit
+`590af60ad` raises the coarse score-tensor materialization ceiling from the
+unchanged default to 3 GB and stops the `vdam-gf02` trajectory after iteration
+151.  Across iterations 1--151, expectation time changes only from
+`1278.482` to `1268.249` seconds (`-0.80%`) and total profiled time from
+`1310.018` to `1299.388` seconds (`-0.81%`).  The adaptive 90--151 phase is
+actually `+0.50%` slower.  Worse, trajectory correctness first leaves the
+map gate at iteration 91 and particle state at iteration 82.  The larger cap
+is not promoted or exposed in CLI/GUI.  The next runtime boundary is reducing
+full-score materialization and postprocessing/significance traffic while
+preserving the accepted default trajectory, not another blind batch-cap
+sweep.
+
 ### 2026-08-24 VDAM float32 fine-posterior default boundary
 
 The complete eight-repeat, 200-particle native ensemble invalidated the earlier
