@@ -12,6 +12,9 @@ def test_candidate_panel_runner_is_strict_reusable_and_fail_closed():
     assert "EXPECTED_REPO_HEAD" in source
     assert "EXPECTED_CUDA_SHA256" in source
     assert "EXPECTED_RELION_BIND_SHA256" in source
+    assert 'test "$(sha256sum "${RELION_BIND_MATCHES[0]}"' in source
+    assert "binding_path.is_file()" in source
+    assert 'pathlib.Path(_relion_bind_core.__file__).resolve()).startswith' not in source
     assert "TARGET_GPU_UUID" in source
     assert "VDAM_TARGET_GPU_MISS" in source
     assert "exit 75" in source

@@ -124,10 +124,11 @@ from recovar.relion_bind import _relion_bind_core
 
 repo = pathlib.Path(__import__("os").environ["RECOVAR_EXPECTED_REPO_ROOT"]).resolve()
 assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo) + "/")
-assert str(pathlib.Path(_relion_bind_core.__file__).resolve()).startswith(str(repo) + "/")
+binding_path = pathlib.Path(_relion_bind_core.__file__).resolve()
+assert binding_path.is_file()
 assert any(device.platform in {"gpu", "cuda"} for device in jax.devices())
 assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
-print("VDAM candidate-only GPU/CUDA-FFI gate passed", jax.devices())
+print("VDAM candidate-only GPU/CUDA-FFI gate passed", jax.devices(), binding_path)
 PY
 
 "${PIXI_PY}" - "${VDAM_SCORECARD}" "${CASE_ID}" "${FIXTURE_DIR}" \
