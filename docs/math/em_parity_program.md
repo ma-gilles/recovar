@@ -28137,6 +28137,48 @@ Ruff passes, and `git diff --check` passes.  The fixed terminal score remains
 accumulation/order state feeding the demonstrated iteration-2 reference
 error.
 
+## 2026-08-26 19:50 EDT — repeat-aware case-5 BPref prefix discriminator running
+
+The case-4 physical-order selection was first regenerated from its documented
+inputs and reproduced byte for byte at SHA-256
+`ef535005e7a0c7393770ace23945df0a03efa04a7189ed6f67165ada81954987`.
+The same identity-checked builder then generated a dense case-5 selection at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_case05_bpref_prefix_selection_20260826T1935ET/case05_dense_long.json`
+(SHA-256
+`9eb4013ffec7f4b28b5ff9eac6543922ab5104f7cc0c98ca17cbb7d0c21dae2c`).
+It joins immutable `rlnImageName` identities and selects physical half-local
+ordinals `0,1,2,3,7,15,31,63,127,255,511,1023,2047,4095,8191,16383,32767,49628`
+in both halves.
+
+Two independent native RELION iteration-1 prefix captures are jobs `13015019`
+and `13015109`.  They use the same capture-qualified RELION revision and
+binary as the case-4 prefix experiment, seed `1705`, `--j 1`, pool `12`, and
+write respectively beneath
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_native_bpref_prefix_20260826T1945ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_native_bpref_prefix_repeat2_20260826T1950ET`.
+Matching RECOVAR exact-interface half captures are jobs `13015087` and
+`13015088`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_recovar_bpref_prefix_h1_20260826T1945ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_recovar_bpref_prefix_h2_20260826T1945ET`.
+They pin primary HEAD `07d3102f8249d95aede4fecac92599bb5cba96f9`, scoped
+scientific diff SHA-256
+`8b9e09a7326e7f39d431d1a666d6159fb3c8dddc4badd349bb5fd83cb05ad7af`,
+and CUDA-library SHA-256
+`aca8de06213bda21375f9cde0a7442275e84be8a092127d75392b15fae4e621f`.
+All run and runtime roots contain `SAFE_TO_DELETE`.
+
+CPU audit job `13015147` has dependency
+`afterok:13015019:13015109:13015087:13015088`.  It will compare every
+captured cumulative numerator and denominator against primary RELION and
+divide that residual by the independent RELION-repeat residual.  This is the
+first case-5 experiment able to distinguish a deterministic first-particle or
+first-update defect, stationary accumulation semantics, and native scheduling
+noise at the demonstrated iteration-1 reference boundary.  No trajectory,
+threshold, finalization policy, or fixed score changes while this discriminator
+is pending; the score remains `31/34`.
+
 ## 2026-08-26 18:15 EDT — case-10 native-units terminal arm is rejected
 
 Terminal producer `12995074` completed its full numbered trajectory and final
