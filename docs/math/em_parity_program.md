@@ -157,9 +157,9 @@ midscale distributions with independent perturbation seed 29.  Cases
 seed 101.  Every case retains K=1 GUI defaults, four same-GPU native RELION
 repeats, and all numbered checkpoints 0--200.  Focused matrix guard
 `12996061` passes 1/1 selected test.  Science is array `12996103` with four
-H100 workers; calibrated fail-sealed audits are array `12996104` at immutable
-audit head `c28d6957c7`.  The implementation/matrix commit remains local and
-unpushed.
+H100 workers; the initial calibrated audit array `12996104` targeted immutable
+audit head `c28d6957c7` and is superseded below after its launcher-isolation
+failure.  The implementation/matrix commit remains local and unpushed.
 
 Strict-head low-noise results are now sealed.  `vdam-gf29` (uniform) fails
 map/state but passes sampled schedule: map failure begins at iteration 32,
@@ -199,10 +199,9 @@ translations/classes/Pmax; an unvisited particle in the 100-particle trial
 therefore disabled the all-or-nothing estimate.  Local science commit
 `ed1beaef9` seeds those input orientations, rejects partial/non-finite Euler
 metadata, and adds a source/GPU/CUDA/binding-pinned bounded replay.  Nine
-orientation/expected-accuracy tests and the focused runner guard pass.  GF29
-iteration-30 discriminator `12996939` is queued behind the same-GPU GF38
-capture; full GF29/GF30 0--200 reruns remain gated on exact iteration-30
-sampling and particle-state agreement.
+orientation/expected-accuracy tests and the focused runner guard pass.  The
+completed exact-GPU discriminator and promoted full GF29/GF30 trajectories
+are reported below.
 
 Strict-head GF41 science job `12995783` completed all 201 checkpoints in
 `1855` seconds on the frozen H100, versus `265.3--269.6` seconds for native
@@ -211,8 +210,57 @@ Its calibrated audit initially failed closed because provenance recorded the
 same pinned CUDA SHA at both immutable and staged paths.  Local audit commit
 `05e72bfb2` accepts duplicate paths only when their digest is identical and
 still rejects conflicting CUDA digests; its two focused provenance tests
-pass.  Replacement calibrated audit `12997169` is running.  Both commits
-remain local and unpushed.
+pass.  That older-schema replacement is superseded below by the authoritative
+calibrated audit at head `945a4201f`.  Both implementation/audit commits remain
+local and unpushed.
+
+The authoritative `c28d6957c7` GF33 high-resolution/radial audit is now
+sealed as a scientific failure.  Particle state first leaves the four-repeat
+native envelope at iteration 40 (56/200 particles at that checkpoint), map
+failure begins at iteration 43 and covers 157 checkpoints, and native hard
+state first splits at iteration 22.  Sampled-schedule acceptance passes while
+the strict adaptive diagnostic first differs at iteration 22.  Minimum
+candidate-to-best-native FSC-AUC is `0.6914129773`; minimum candidate-minus-
+best/worst-native GT deltas are `-0.0037902269` / `-0.0005553962` within a
+maximum native GT span of `0.0058619641`.
+
+GF29's actual frozen STAR confirms complete expected-accuracy seed coverage:
+all 3,000 particles begin unvisited, all 3,000 now receive finite nonzero
+input rotations, and all first-100 RELION-order trial Euler rows are finite.
+The exact-GPU bounded run `12999300` at local science head `580477763` then
+completed checkpoints 0--30.  All 31 map/class checkpoints pass with minimum
+FSC-AUC `0.9999999997868`, and iteration 30 now exactly follows RELION's
+order-3 local-prior transition with range `5.368539897` Angstrom, step
+`2.479875` Angstrom, and 52 translations.  The remaining strict sampled-state
+diagnostic is numerical rather than topological: rotation accuracy differs by
+`0.002` degrees at iteration 30, following earlier `0.005--0.015` degree and
+`0.00425` Angstrom estimate differences; the first sub-micro-Angstrom optimal-
+offset diagnostic mismatch is iteration 8.  Those gates remain visible and
+unchanged.  Full 0--200 seeded GF29 task `12999877` is running on its native
+physical H100 under probe array `12999873`.  GF30's first array `12999874`
+failed closed because all four probes ran while v3 GF49 owned the target H100;
+replacement array `13000009` is dependent on that owner and will start only
+after release.  Both full runs remain pinned to their frozen native fixtures.
+
+GF38 same-projector capture is source-frozen at `b6e28079b` and queued as
+`12998647` immediately after unrelated exact-GPU owner `12996264` exits.
+Analyzer-only commits `0a0c5537d` / `b66919bc5` live in a separate worktree,
+pin source, CUDA SHA, physical UUID, and an external pixi interpreter, and
+pass their focused guard; analyzer array `12998650` follows the capture.  The
+capture root was restored to only its `SAFE_TO_DELETE` marker before this
+submission.
+
+Expanded v3 science GF43--GF45 completed in jobs `12996115`--`12996117`;
+GF46--GF49 are running and GF50--GF62 remain queued.  Pending science excludes
+H19g2 so the matrix continues without taking either pinned diagnostic GPU.
+The first GF43--GF45 audits failed before scientific analysis because Slurm's
+inherited science workdir caused `python -m scripts` to import the v3 checkout
+instead of immutable audit head `c28d6957c7`.  Calibrated audit commit
+`945a4201f` accepts identical staged/immutable CUDA digests, forces both audit
+launchers to change into their pinned repository, and passes five provenance
+plus two launcher tests.  Replacement v3 audit array `12999424` and strict
+GF41 audit `12999430` use that head.  No implementation commit was pushed and
+no generic RECOVAR full or long suite was run.
 
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
