@@ -27586,3 +27586,42 @@ All four roots contain `SAFE_TO_DELETE`.  Both audits pin primary HEAD
 These measurements will select repeat-aware source rows for focused early-
 boundary captures; they do not alter either trajectory or the fixed `31/34`
 score.
+
+## 2026-08-26 14:50 EDT — case-4 native reconstruction gate queued at first map boundary
+
+Case 4 already has exact iteration-1 particle Pmax for all `100,000`
+particles, native-repeat-scale BPref prefix residuals, and a reproducible
+iteration-2 support defect that is removed by substituting RELION's
+iteration-1 PPref.  The first demonstrated causal boundary is therefore the
+iteration-1 reconstructed reference.  The earlier native reconstruction
+attempt used a tapered post-reconstruction spectrum and was invalid; only the
+case-10 boundary had subsequently been repeated with the correct untapered
+pre-reconstruction tau2.
+
+CPU job `13004358` now reconstructs the case-4 per-half untapered
+pre-reconstruction tau2 from the saved iteration-1 post-join BPref arrays and
+`refinement_results.npz`, with full half axis `0`.  Dependent H100 jobs
+`13004376` and `13004377` feed the saved RECOVAR half-1 and half-2 numerator,
+denominator, and validated tau2 into native RELION
+`BackProjector::reconstruct`, then compare the native result against both the
+RECOVAR and RELION iteration-1 maps using signed shellwise FSC/FSC-AUC.
+
+All three jobs pin primary HEAD
+`07d3102f8249d95aede4fecac92599bb5cba96f9`.  The tau2 launcher/analyzer
+SHA-256 values are
+`7a88a690f4e3ada45743e4d966ed127c3d3c5629c73b87b03b0731960f9e9c77`
+and
+`6327fe39cba7dceadf65fc560e9008af67aadc313226477c9584dae058efcd90`;
+the native-reconstruction launcher/analyzer values are
+`ac5411bd698342f36382b274b11ebe401bf5796fdbc48ee171832ea02460440c`
+and
+`85c63fb0ac0c2385cb9a7a5ddf1a5128ca08ed1cbc94e16525d1b2404612456f`.
+The per-half runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case04_native_reconstruct_it1_h1_axis0_20260826T1450ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case04_native_reconstruct_it1_h2_axis0_20260826T1450ET`;
+both contain `SAFE_TO_DELETE`.  This gate changes no EM state or scorecard
+value.  Preferential movement of the same native reconstruction toward RELION
+would identify a reconstruction convention defect; equal or RECOVAR-favored
+movement would reject reconstruction and return the target to the saved BPref
+operands/regularization inputs.
