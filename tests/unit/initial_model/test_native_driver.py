@@ -752,6 +752,21 @@ def test_update_particle_state_preserves_best_pose_metadata():
     np.testing.assert_array_equal(particle_state.best_pose_rotation_orders, [2, -1, 2])
     np.testing.assert_array_equal(particle_state.visited, [True, False, True])
 
+    driver._update_particle_state_from_estep_meta(
+        particle_state,
+        {
+            "selected_particle_ids": np.asarray([1], dtype=np.int64),
+            "pose_assignments": np.asarray([0], dtype=np.int32),
+        },
+        np.asarray([[1.0, -1.0]], dtype=np.float32),
+    )
+
+    # RELION writes the latest state for every particle visited by any earlier
+    # VDAM subset, not only the identities selected by the current iteration.
+    np.testing.assert_array_equal(particle_state.visited, [True, True, True])
+    np.testing.assert_allclose(particle_state.best_pose_rotations[[2, 0]], rotations)
+    np.testing.assert_array_equal(particle_state.best_pose_rotation_ids, [7, -1, 11])
+
 
 def test_best_eulers_from_particle_state_prefers_stored_rotation_matrices():
     grid_eulers = driver.sampling.get_relion_rotation_grid_eulers(1, rotation_index_order="relion")

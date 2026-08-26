@@ -1384,7 +1384,8 @@ def _update_particle_state_from_estep_meta(
     N = particle_state.translation_offsets.shape[0]
     if np.any(ids < 0) or np.any(ids >= N):
         raise ValueError("selected_particle_ids contains entries outside the particle state table")
-    particle_state.visited = np.zeros(N, dtype=bool)
+    if particle_state.visited is None or np.asarray(particle_state.visited).shape != (N,):
+        particle_state.visited = np.zeros(N, dtype=bool)
     particle_state.visited[ids] = True
 
     if (pose := meta.get("pose_assignments")) is not None:
