@@ -31,7 +31,8 @@ BPREF_CONTRIBUTION_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE:-}
 RELION_SOURCE=${VDAM_RELION_SOURCE:-/scratch/gpfs/GILLES/mg6942/relion}
 RELION_RUNTIME=${VDAM_RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
-CUDA_BINARY=${REPO_ROOT}/recovar/cuda/libcuda_backproject.so
+CUDA_SOURCE_BINARY=${RECOVAR_CUDA_LIB_SOURCE:-${REPO_ROOT}/recovar/cuda/libcuda_backproject.so}
+CUDA_BINARY=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/cuda/libcuda_backproject.so
 RELION_BIND_BINARY=${REPO_ROOT}/recovar/relion_bind/_relion_bind_core.cpython-311-x86_64-linux-gnu.so
 RELION_OUTPUT=${OUTPUT_ROOT}/relion
 RECOVAR_OUTPUT=${OUTPUT_ROOT}/recovar
@@ -57,7 +58,8 @@ if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
 fi
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
-test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
+test -s "${CUDA_SOURCE_BINARY}"
+test "$(sha256sum "${CUDA_SOURCE_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = "${EXPECTED_RELION_BIND_SHA256}"
 mkdir -p "${RELION_OUTPUT}" "${RECOVAR_OUTPUT}" "${NATIVE_MSTEP}" \
   "${RECOVAR_MSTEP}" "${NATIVE_CAPTURE}" "${PROVENANCE}" "${ANALYSIS}" \
@@ -82,6 +84,10 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
 export RECOVAR_CUDA_LIB=${CUDA_BINARY}
 mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}"
+mkdir -p "$(dirname "${CUDA_BINARY}")"
+cp --no-preserve=mode,ownership,timestamps "${CUDA_SOURCE_BINARY}" "${CUDA_BINARY}"
+chmod u+rw "${CUDA_BINARY}"
+test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 
 gpu_uuid_before=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
@@ -171,6 +177,8 @@ done
 
 gpu_uuid_after_relion=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 test "${gpu_uuid_after_relion}" = "${gpu_uuid_before}"
+test "$(sha256sum "${CUDA_SOURCE_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
+test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 
 set +u
 module purge
@@ -285,13 +293,15 @@ fi
 
 gpu_uuid_after_recovar=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"
+test "$(sha256sum "${CUDA_SOURCE_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
+test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 git -C "${RELION_SOURCE}" rev-parse HEAD > "${PROVENANCE}/relion_head.txt"
 git -C "${RELION_SOURCE}" diff --binary | sha256sum > "${PROVENANCE}/relion_diff.sha256"
 sha256sum "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
   "${REPO_ROOT}/scripts/analyze_vdam_mstep_boundary.py" "${DATA_DIR}/particles.star" \
-  "${CUDA_BINARY}" "${RELION_BIND_BINARY}" "${VDAM_RELION_BINARY}" \
+  "${CUDA_SOURCE_BINARY}" "${CUDA_BINARY}" "${RELION_BIND_BINARY}" "${VDAM_RELION_BINARY}" \
   > "${PROVENANCE}/static_inputs.sha256"
 printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"bpref_contribution_half":"%s","bpref_contribution_current_size":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" \
