@@ -6,8 +6,8 @@
 #SBATCH --array=2-22%4
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
 #SBATCH --time=08:00:00
 #SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-gui-audit-%A_%a.out
 
