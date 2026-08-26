@@ -367,6 +367,29 @@ for particle state, and
 `e5b8bba0df321c8095e668ec3f7960ea4f90f95c8253ce7193bc9ec43c394533`
 for the combined status.
 
+The bounded GF38 iteration-1 M-step discriminator has now completed in job
+`13002231` from local diagnostic head `c15c2d3c5`.  It uses the frozen
+oversampling-zero case under the full 200-iteration controller but stops after
+the first reconstruction.  Both incoming first-moment half maps and the shared
+second moment are bitwise exact over all `1,064,960` complex values.  The first
+nonexact stage is the raw BPref accumulation: data relative-L2 is
+`0.00262556` / `0.00275510` for the two pseudo halves and weight relative-L2 is
+`0.00162419` / `0.00144560`.  The discrepancy propagates through reweighting
+and momentum application to a reconstructed-reference relative-L2 of
+`0.000705050`; the reference entering reconstruction differs only at binary64
+roundoff (`3.35e-16` relative-L2).  This proves that GF38's iteration-1 map
+drift is created by particle-weighted backprojection before SSNR/reconstruction,
+not by the input gradient state, MRC serialization, or projector construction.
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf38_it1_mstep_c15c2d3c_87274be_v2_20260826/analysis/mstep_boundary.json`
+(SHA-256
+`96302c189a16b463768efedd3cdd4ec35941265b09e1fea787a0bb39af120052`).
+The next causal gate captures exact per-hypothesis BPref operands and
+per-particle fused-projector accumulators from the same boundary to distinguish
+posterior/support differences from scatter/reduction arithmetic.  This is a
+diagnostic result only; no production change was made or pushed, and no generic
+RECOVAR full or long suite was run.
+
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
 `vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC
