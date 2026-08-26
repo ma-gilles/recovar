@@ -231,6 +231,8 @@ def test_native_coarse_image_analyzer_closes_unit_and_pixel_mapping(tmp_path):
 
     assert result["corrected_image"]["metrics"]["native_vs_exact"]["mismatch_component_count"] == 0
     assert result["corrected_image"]["metrics"]["native_vs_live"]["relative_l2"] == 0.0
+    assert result["corrected_image"]["comparison_qualification"].startswith("unqualified")
+    assert result["corrected_image"]["closer_arm_by_relative_l2_unqualified"] == "exact"
     assert result["pixel_weight"]["metrics"]["native_vs_exact"]["mismatch_component_count"] == 0
 
 

@@ -26700,3 +26700,123 @@ any correction is implemented.  Its run and runtime roots are
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET`;
 both contain `SAFE_TO_DELETE`.
+
+## 2026-08-26 08:30 EDT — native-unit terminal results do not close the final-only gates
+
+The three native-unit terminal producers and their frozen terminal audits have
+completed.  All numbered-iteration comparisons and controller-topology gates
+pass, but all three final merged comparisons remain below the fixed signed
+FSC-AUC threshold of `0.995`:
+
+| Case | Last numbered merged FSC-AUC | Final merged FSC-AUC | Gap to `0.995` |
+| ---: | ---: | ---: | ---: |
+| 4 | `0.9995453228236552` | `0.9903218484585244` | `0.00467815154147555` |
+| 5 | `0.9999309111909351` | `0.9805469247996108` | `0.014453075200389187` |
+| 10 | `0.9999678264470926` | `0.9810318473022998` | `0.013968152697700242` |
+
+The authoritative reports are:
+
+* `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_native_units_terminal_567b22d4ea_20260825T2350ET/analysis/terminal_fsc.json`;
+* `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_native_units_terminal_567b22d4ea_20260825T2350ET/analysis/terminal_fsc.json`;
+* `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_units_terminal_567b22d4ea_20260825T2340ET/analysis/terminal_fsc.json`.
+
+Each report has an empty topology-failure list and identifies only the final
+merged FSC-AUC as the earliest failing gate.  The native-unit conversion is
+therefore not sufficient to repair the remaining K=1 cases.  The fixed frozen
+score remains `31/34`; no result has been promoted.  The next causal decision
+remains the native row-28262 coarse-boundary comparison from job `12989952`,
+which will determine whether the autonomous corrected image and 18-member
+coarse support agree with uninterrupted RELION or whether the serialized
+exact-state 17-member support is the correct target.
+
+## 2026-08-26 09:15 EDT — uninterrupted RELION falsifies the row-28262 support hypothesis
+
+Native RELION job `12989952` completed successfully in `01:21:16`, and its
+capture is non-perturbing: the inertness status is `map_stable` in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET/analysis/RELION_CAPTURE_INERTNESS.json`
+(SHA-256
+`8fbf0e945d271a70d626e39ba251d704c6496f7714c49764519ebb0730e3df17`).
+The run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET`;
+both contain `SAFE_TO_DELETE`.
+
+The decisive result reverses the serialized-state interpretation. Native
+RELION selects `18` coarse hypotheses, exactly the autonomous RECOVAR support,
+including `(rotation=25462, translation=16)`. Both engines retain the same
+winner `(27004, 13)`. Native versus autonomous RECOVAR has zero support
+mismatches, `18/18` selected hypotheses, posterior total variation
+`1.8164958170601866e-5`, centered raw-score maximum absolute difference
+`0.0006103515625`, centered raw-score RMS `0.00013183506212256074`, and total
+log-weight maximum absolute difference `0.000732421875`. By contrast, native
+RELION versus the serialized exact-state replay has one support mismatch,
+`18` versus `17` selected hypotheses, and posterior total variation
+`0.00013147075598896372`.
+
+The native-versus-autonomous report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET/analysis/K1_CASE10_ROW028262_NATIVE_VS_LIVE_VERBOSE_COARSE.json`
+(SHA-256
+`c920e5c9fc501106fa755651fc8616d719d30e8931aee7e4435e17695e92e274`).
+The native-versus-serialized report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET/analysis/K1_CASE10_ROW028262_NATIVE_VS_EXACT_VERBOSE_COARSE.json`
+(SHA-256
+`286e0aa76cf400d5661dbc95fe0163e83b9f944b42401d0b0c060a722797ebc6`).
+Therefore, the apparent `17`-versus-`18` defect is a false oracle introduced by
+the precision lost through serialized STAR state. No normalization or
+support-threshold change is justified by row `28262`.
+
+The native and autonomous inverse-noise/CTF-squared pixel weights are bit exact
+for all `1740/1740` float32 components. Native versus serialized exact-state
+weights differ in `879` components by at most `7` ULP. The corrected-image
+comparison is not yet scientifically qualified because native RELION and
+RECOVAR phase/Fourier-coordinate conventions have not been aligned; its
+relative-L2 arm ranking must not be used as evidence. Pass-0 and pass-1 native
+corrected images and weights are byte-identical, excluding native pass
+selection as the source of that apparent image mismatch. The diagnostic is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET/analysis/K1_CASE10_ROW028262_NATIVE_COARSE_IMAGE_BOUNDARY.json`
+(SHA-256
+`1d8fc51287f369886cfe686a4aad35684f84a5ac7104093bea7585aadf082858`).
+
+## 2026-08-26 09:20 EDT — full-population iteration-2 ranking selects row 75571
+
+The complete native-RELION versus RECOVAR case-10 iteration-2 audit covers all
+`100000` particles. Pmax RMSE is `4.25022263489509e-5`, maximum absolute Pmax
+residual is `0.00850090507602691`, and `26` particles differ in significant
+support count, always by exactly one. Rotations agree within `0.01` degrees
+for `99999/100000` particles; six translations differ by more than `0.01`
+Angstrom. This separates small continuous posterior drift from rare hard-pose
+outliers rather than conflating them.
+
+Row `52958` has the largest Pmax residual but has already been exhaustively
+localized in the earlier native-unit work. Row `75571` (stack index `75572`,
+half 2) is the next decisive target because it combines a large Pmax residual
+(`0.46400922536849976` RECOVAR versus `0.470971` RELION) with a genuine support
+count mismatch (`20` versus `19`) while retaining a near-identical hard pose
+and translation. Row `76381` is reserved for a separate hard-pose diagnostic:
+its support and Pmax are nearly equal but its rotation differs by
+`139.990809` degrees and its translation by `2.55393` Angstrom.
+
+The audit report and arrays are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET/analysis/full_population_it002_native_vs_recovar/particle_state.json`
+(SHA-256
+`3a997ef0934b32a9f090686583952050ce2e0c32cad1f3c03c4fba2e561dc006`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET/analysis/full_population_it002_native_vs_recovar/particle_state_arrays.npz`
+(SHA-256
+`250767642c2cc5324c09a9b06c8f0a35bf6ba617ca6e23e48a63b932a042cca2`).
+
+Two matched, focused row-75571 captures are now running without changing or
+cancelling any existing job. Native RELION job `12992836` writes to
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row75571_567b22d4ea_20260826T0905ET`,
+with runtime root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_native_row75571_567b22d4ea_20260826T0905ET`.
+Autonomous RECOVAR coarse-capture job `12992894` writes to
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_autonomous_coarse_aca8_567b22d4ea_20260826T0908ET`,
+with runtime root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_567b22d4ea_20260826T0908ET`.
+All four roots contain `SAFE_TO_DELETE`. Their first comparison will decide
+whether the real `20`-versus-`19` discrepancy already exists in coarse tuple
+selection or first appears during fine expansion, normalization, or
+significant-support selection. The fixed score remains `31/34` until a
+terminal comparison crosses the unchanged `0.995` signed FSC-AUC gate.

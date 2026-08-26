@@ -10,7 +10,10 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.parse_relion_dump_dir import parse_dump_dir
+if __package__:
+    from scripts.parse_relion_dump_dir import parse_dump_dir
+else:
+    from parse_relion_dump_dir import parse_dump_dir
 
 REQUIRED_NATIVE = {
     "pass0_coarse_candidate_rot_idx",

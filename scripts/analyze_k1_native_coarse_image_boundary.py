@@ -193,7 +193,7 @@ def analyze(
         "exact_vs_live": _metric(exact_weight, live_weight),
     }
     return {
-        "schema": "recovar.em.k1_native_coarse_image_boundary.v1",
+        "schema": "recovar.em.k1_native_coarse_image_boundary.v2",
         "status": "complete",
         "identity": {
             "source_row_zero_based": original_index,
@@ -210,7 +210,11 @@ def analyze(
             "metrics": image_metrics,
             "native_to_exact_scalar_fit": _scalar_fit(native_image, exact_image),
             "native_to_live_scalar_fit": _scalar_fit(native_image, live_image),
-            "closer_arm_by_relative_l2": min(
+            "comparison_qualification": (
+                "unqualified until the native RELION and RECOVAR corrected-image "
+                "phase and Fourier-coordinate conventions are aligned"
+            ),
+            "closer_arm_by_relative_l2_unqualified": min(
                 ("exact", "live"),
                 key=lambda arm: image_metrics[f"native_vs_{arm}"]["relative_l2"],
             ),
