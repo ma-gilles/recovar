@@ -24,6 +24,8 @@ set -euo pipefail
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 TARGET_ITERATION=${TARGET_ITERATION:-33}
 NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
+VDAM_SCORECARD=${VDAM_SCORECARD:-}
+CASE_ID=${CASE_ID:-}
 # These are deliberately different identity spaces for the sealed gf01
 # boundary: RECOVAR selects the zero-based source STAR row, while RELION's
 # capture selects its shuffled internal particle id and verifies the 1-based
@@ -54,6 +56,11 @@ test -s "${DATA_DIR}/particles.star"
 test -s "${RELION_OPTIMISER}"
 test "${TARGET_ITERATION}" -ge 1
 test "${NR_ITER_SCHEDULE}" -ge "${TARGET_ITERATION}"
+if [[ -n "${VDAM_SCORECARD}" || -n "${CASE_ID}" ]]; then
+  test -n "${VDAM_SCORECARD}"
+  test -n "${CASE_ID}"
+  test -s "${VDAM_SCORECARD}"
+fi
 iteration_tag=$(printf '%03d' "${TARGET_ITERATION}")
 test -s "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star"
 test -s "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_sampling.star"
@@ -213,37 +220,104 @@ else
 fi
 mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
 
-COMMAND=(
-  "${PIXI_PY}" -m scripts.run_ab_initio
-  --i "${DATA_DIR}/particles.star"
-  --o "${RECOVAR_ROOT}/run"
-  --nr_iter 200
-  --grad_write_iter 1
-  --K 1
-  --tau2_fudge 4
-  --sym C1
-  --do_run_C1 1
-  --particle_diameter 200
-  --random_seed 0
-  --healpix_order 1
-  --oversampling 1
-  --offset_range 6
-  --offset_step 2
-  --padding_factor 1
-  --image_batch_size 500
-  --datadir "${DATA_DIR}"
-  --gpu 0
-  --require_custom_cuda
-  --diagnostic_stop_after_iteration "${TARGET_ITERATION}"
+if [[ -n "${VDAM_SCORECARD}" ]]; then
+  command_json=${PROVENANCE}/recovar_command.json
+  "${PIXI_PY}" - "${VDAM_SCORECARD}" "${CASE_ID}" "${DATA_DIR}" \
+    "${RECOVAR_ROOT}/run" "${TARGET_ITERATION}" "${NR_ITER_SCHEDULE}" \
+    "${command_json}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from scripts.run_vdam_relion_parity_case import build_recovar_command
+
+scorecard_path = Path(sys.argv[1])
+case_id = sys.argv[2]
+fixture_dir = Path(sys.argv[3])
+output_prefix = Path(sys.argv[4])
+target_iteration = int(sys.argv[5])
+nr_iter_schedule = int(sys.argv[6])
+output_json = Path(sys.argv[7])
+scorecard = json.loads(scorecard_path.read_text())
+matches = [row for row in scorecard.get("cases", []) if row.get("id") == case_id]
+if len(matches) != 1:
+    raise SystemExit(
+        f"expected exactly one scorecard definition for {case_id}, found {len(matches)}"
+    )
+definition = matches[0]["definition"]
+if int(definition["nr_classes"]) != 1:
+    raise SystemExit("first-state boundary capture currently requires K=1")
+if int(definition["nr_iter"]) != nr_iter_schedule:
+    raise SystemExit(
+        "scorecard nr_iter differs from NR_ITER_SCHEDULE: "
+        f"{definition['nr_iter']} != {nr_iter_schedule}"
+    )
+input_name = (
+    "particles_relion_identity_ctf.star"
+    if (fixture_dir / "particles_relion_identity_ctf.star").is_file()
+    else "particles.star"
 )
+command = build_recovar_command(
+    input_star=fixture_dir / input_name,
+    output_prefix=output_prefix,
+    fixture_dir=fixture_dir,
+    definition=definition,
+    image_batch_size=500,
+)
+command.extend(["--diagnostic_stop_after_iteration", str(target_iteration)])
+output_json.write_text(json.dumps({"argv": command}, indent=2, sort_keys=True) + "\n")
+PY
+  mapfile -d '' -t COMMAND < <("${PIXI_PY}" - "${command_json}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+for token in json.loads(Path(sys.argv[1]).read_text())["argv"]:
+    sys.stdout.buffer.write(str(token).encode() + b"\0")
+PY
+  )
+else
+  COMMAND=(
+    "${PIXI_PY}" -m scripts.run_ab_initio
+    --i "${DATA_DIR}/particles.star"
+    --o "${RECOVAR_ROOT}/run"
+    --nr_iter "${NR_ITER_SCHEDULE}"
+    --grad_write_iter 1
+    --K 1
+    --tau2_fudge 4
+    --sym C1
+    --do_run_C1 1
+    --particle_diameter 200
+    --random_seed 0
+    --healpix_order 1
+    --oversampling 1
+    --offset_range 6
+    --offset_step 2
+    --padding_factor 1
+    --image_batch_size 500
+    --datadir "${DATA_DIR}"
+    --gpu 0
+    --require_custom_cuda
+    --diagnostic_stop_after_iteration "${TARGET_ITERATION}"
+  )
+fi
 printf '%q ' "${COMMAND[@]}" > "${PROVENANCE}/recovar_command.sh"
 printf '\n' >> "${PROVENANCE}/recovar_command.sh"
-sha256sum "${REPO_ROOT}/scripts/run_vdam_first_state_boundary_capture.sbatch" \
-  "${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch" \
-  "${DATA_DIR}/particles.star" "${RELION_OPTIMISER}" \
-  "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star" \
-  "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_sampling.star" "${CUDA_BINARY}" \
-  "${RELION_BIND_BINARY}" "${RELION_BINARY}" > "${PROVENANCE}/static_inputs.sha256"
+STATIC_INPUTS=(
+  "${REPO_ROOT}/scripts/run_vdam_first_state_boundary_capture.sbatch"
+  "${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch"
+  "${DATA_DIR}/particles.star"
+  "${RELION_OPTIMISER}"
+  "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star"
+  "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_sampling.star"
+  "${CUDA_BINARY}"
+  "${RELION_BIND_BINARY}"
+  "${RELION_BINARY}"
+)
+if [[ -n "${VDAM_SCORECARD}" ]]; then
+  STATIC_INPUTS+=("${VDAM_SCORECARD}")
+fi
+sha256sum "${STATIC_INPUTS[@]}" > "${PROVENANCE}/static_inputs.sha256"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 
 start_epoch=$(date +%s)
@@ -295,9 +369,33 @@ if [[ "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" != "${EXPECTED_CUDA_SHA
   echo "VDAM boundary CUDA library changed during science" >&2
   exit 2
 fi
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":200,"stopped_after_iteration":%d,"target_original_index":%d,"target_relion_part_id":%d,"target_stack_index":%d,"capture_local_score":%s,"capture_fused_scores":%s,"capture_native_replay":%s,"recovar_wall_s":%d}\n' \
-  "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_ITERATION}" \
-  "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" "${TARGET_STACK_INDEX}" \
-  "${CAPTURE_LOCAL_SCORE}" "${CAPTURE_FUSED_SCORES}" "${CAPTURE_NATIVE_REPLAY}" "${wall_s}" \
-  > "${PROVENANCE}/run.json"
+"${PIXI_PY}" - "${PROVENANCE}/run.json" "${SLURM_JOB_ID}" \
+  "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${NR_ITER_SCHEDULE}" \
+  "${TARGET_ITERATION}" "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" \
+  "${TARGET_STACK_INDEX}" "${CAPTURE_LOCAL_SCORE}" "${CAPTURE_FUSED_SCORES}" \
+  "${CAPTURE_NATIVE_REPLAY}" "${wall_s}" "${CASE_ID}" "${VDAM_SCORECARD}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = {
+    "job_id": sys.argv[2],
+    "git_head": sys.argv[3],
+    "physical_gpu_uuid": sys.argv[4],
+    "nr_iter_schedule": int(sys.argv[5]),
+    "stopped_after_iteration": int(sys.argv[6]),
+    "target_original_index": int(sys.argv[7]),
+    "target_relion_part_id": int(sys.argv[8]),
+    "target_stack_index": int(sys.argv[9]),
+    "capture_local_score": bool(int(sys.argv[10])),
+    "capture_fused_scores": bool(int(sys.argv[11])),
+    "capture_native_replay": bool(int(sys.argv[12])),
+    "recovar_wall_s": int(sys.argv[13]),
+    "case_id": sys.argv[14] or None,
+    "scorecard": sys.argv[15] or None,
+}
+Path(sys.argv[1]).write_text(
+    json.dumps(payload, indent=2, sort_keys=True) + "\n"
+)
+PY
 touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
