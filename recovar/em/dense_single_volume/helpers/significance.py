@@ -3340,6 +3340,17 @@ def _compute_k_class_significance_batched(
                 f"{_SIGNIFICANCE_DUMP_PASSIVE_CACHE_ENV}=1 does not support "
                 "the fused pass-1 diagnostic path"
             )
+        if relion_f32_coarse_support_enabled and use_fused_pass1:
+            raise RuntimeError(
+                "RELION float32 coarse support requires access to pre-prior "
+                "scores for min_diff2 offset reconstruction"
+            )
+
+        relion_raw_score_max = (
+            jnp.full(batch_size, -jnp.inf, dtype=jnp.float32)
+            if relion_f32_coarse_support_enabled
+            else None
+        )
 
         # Precompute fused-path inputs once per batch (constant across class/block).
         if use_fused_pass1:
@@ -3414,6 +3425,11 @@ def _compute_k_class_significance_batched(
                         scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
                     if passive_raw_score_blocks_per_class is not None:
                         passive_raw_score_blocks_per_class[class_index].append(scores)
+                    if relion_raw_score_max is not None:
+                        relion_raw_score_max = jnp.maximum(
+                            relion_raw_score_max,
+                            jnp.max(scores.reshape(batch_size, -1), axis=1),
+                        )
                     # Capture pre-prior raw scores for dump targets BEFORE _add_priors.
                     # scores shape: (batch_size, rotation_block_size, n_trans).
                     # For comparison vs RELION exp_Mweight_diff2, recovar's score is
@@ -3697,6 +3713,7 @@ def _compute_k_class_significance_batched(
                     adaptive_fraction=float(adaptive_fraction),
                     max_significants=max_significants,
                     tie_score_ulps=int(relion_f32_coarse_tie_ulps),
+                    min_diff2_offsets=-relion_raw_score_max,
                 )
                 relion_f32_sum_weight[start_idx:end_idx] = np.asarray(
                     _batch_sum_weight[:actual_batch_size],

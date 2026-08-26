@@ -62,6 +62,7 @@ def relion_cuda_f32_coarse_posterior(
     adaptive_fraction=0.999,
     max_significants=500,
     tie_score_ulps=0,
+    min_diff2_offsets=None,
 ):
     """Reproduce RELION CUDA coarse-weight and significance arithmetic.
 
@@ -70,6 +71,13 @@ def relion_cuda_f32_coarse_posterior(
     ``expf``, radix-sorts positive weights in ascending order, and uses an
     inclusive float32 scan to select the lower-tail cutoff.  The surviving
     weights remain normalized by the full, pre-pruning sum.
+
+    RELION constructs each coarse log weight as ``prior + min_diff2 - diff2``
+    before finding the maximum and adding the exponentiation offset. Although
+    ``min_diff2`` is common to every pose, omitting it can change float32
+    cancellation in ``score + (50 - maximum)`` and collapse adjacent cutoff
+    scores into a false tie. ``min_diff2_offsets`` restores that absolute
+    score frame without changing normalized probabilities mathematically.
 
     ``cutoff_count`` is the pre-tie rank serialized by RELION. ``mask`` and
     ``n_significant`` include every positive weight tied at the cutoff.
@@ -83,17 +91,25 @@ def relion_cuda_f32_coarse_posterior(
         raise ValueError("tie_score_ulps must be non-negative")
 
     scores_f32 = jnp.asarray(scores_flat, dtype=jnp.float32)
+    if min_diff2_offsets is not None:
+        offsets_f32 = jnp.asarray(min_diff2_offsets, dtype=jnp.float32)
+        if offsets_f32.ndim != 1 or offsets_f32.shape[0] != scores_f32.shape[0]:
+            raise ValueError(
+                "min_diff2_offsets must have shape (n_images,), got "
+                f"{offsets_f32.shape} for scores {scores_f32.shape}",
+            )
+        scores_f32 = scores_f32 + offsets_f32[:, None]
     finite = jnp.isfinite(scores_f32)
     best = jnp.max(jnp.where(finite, scores_f32, -jnp.inf), axis=1)
     has_finite = jnp.isfinite(best)
     safe_best = jnp.where(has_finite, best, jnp.float32(0.0))
+    exponent_add = jnp.float32(50.0) - safe_best
     use_native_cuda = False
     if jax.default_backend() == "gpu":
         from recovar import cuda_backproject
 
         use_native_cuda = cuda_backproject.custom_cuda_requested()
     if use_native_cuda:
-        exponent_add = jnp.float32(50.0) - safe_best
         raw_weights = jax.vmap(cuda_backproject.relion_exponentiate_f32)(
             jnp.where(finite, scores_f32, -jnp.inf),
             exponent_add,
@@ -104,7 +120,7 @@ def relion_cuda_f32_coarse_posterior(
     else:
         shifted = jnp.where(
             finite,
-            scores_f32 - safe_best[:, None] + jnp.float32(50.0),
+            scores_f32 + exponent_add[:, None],
             -jnp.inf,
         )
         raw_weights = jnp.where(

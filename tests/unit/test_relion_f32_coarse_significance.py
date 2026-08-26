@@ -25,7 +25,8 @@ def _numpy_reference(scores, adaptive_fraction, max_significants):
         if not np.any(finite):
             continue
         best = np.max(row[finite])
-        shifted = np.where(finite, row - best + np.float32(50.0), -np.inf).astype(np.float32)
+        exponent_add = np.float32(50.0) - best
+        shifted = np.where(finite, row + exponent_add, -np.inf).astype(np.float32)
         raw = np.where(shifted < np.float32(-88.0), np.float32(0.0), np.exp(shifted)).astype(
             np.float32,
         )
@@ -76,12 +77,9 @@ def test_relion_cuda_f32_coarse_posterior_matches_numpy_reference():
         (actual[4], expected[4]),
         (actual[5], expected[5]),
     ):
-        np.testing.assert_allclose(
-            actual_value,
-            expected_value,
-            rtol=np.finfo(np.float32).eps,
-            atol=0.0,
-        )
+        # NumPy and XLA's expf/divide sequences can differ by two final
+        # binary32 ULPs. Support, rank, and cutoff remain exact above.
+        np.testing.assert_array_max_ulp(actual_value, expected_value, maxulp=2)
 
 
 def test_relion_cuda_f32_coarse_posterior_expands_cutoff_ties_after_rank_cap():
@@ -96,6 +94,32 @@ def test_relion_cuda_f32_coarse_posterior_expands_cutoff_ties_after_rank_cap():
     np.testing.assert_array_equal(np.asarray(mask), [[True, True, True, True, False]])
     np.testing.assert_array_equal(np.asarray(n_significant), [4])
     np.testing.assert_array_equal(np.asarray(cutoff_count), [2])
+
+
+def test_relion_cuda_f32_coarse_posterior_preserves_min_diff2_score_frame():
+    # GF46 iteration 4: omitting RELION's common min_diff2 term changes the
+    # float32 cancellation in score + (50 - max). The rank-2/rank-3 scores
+    # then exponentiate to a false tie and incorrectly expand maxsig=2.
+    scores = np.asarray(
+        [[-10.894744873046875, -12.985563278198242, -12.985567092895508]],
+        dtype=np.float32,
+    )
+    _, unshifted_mask, unshifted_count, _, _, _ = relion_cuda_f32_coarse_posterior(
+        scores,
+        adaptive_fraction=0.999,
+        max_significants=2,
+    )
+    _, native_frame_mask, native_frame_count, _, _, _ = relion_cuda_f32_coarse_posterior(
+        scores,
+        adaptive_fraction=0.999,
+        max_significants=2,
+        min_diff2_offsets=np.asarray([6.2932538986206055], dtype=np.float32),
+    )
+
+    np.testing.assert_array_equal(np.asarray(unshifted_mask), [[True, True, True]])
+    np.testing.assert_array_equal(np.asarray(unshifted_count), [3])
+    np.testing.assert_array_equal(np.asarray(native_frame_mask), [[True, True, False]])
+    np.testing.assert_array_equal(np.asarray(native_frame_count), [2])
 
 
 def test_diagnostic_coarse_support_can_absorb_two_ulp_atomic_cutoff_split():
