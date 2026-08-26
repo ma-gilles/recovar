@@ -3229,6 +3229,70 @@ continuation capture is queued as `12984862`; not-yet-started canonical
 gf30--gf42 tasks are temporarily held so this causal job receives the next
 H100 slot.  No generic RECOVAR test, full suite, or long-test ran.
 
+## 2026-08-26 repeat-calibrated map and gf03 M-step localization
+
+Direct relative-L2 map calibration changes the priority of the earlier gf14
+boundary.  Full 201-checkpoint jobs `12987839`, `12987838`, and `12987840`
+compare the candidate map to each of four native repeats and compare every
+native pair at the same checkpoint.  Gf14 is outside the native direct-L2
+diameter at only 14/201 checkpoints (`23--28` and `35--42`), with a maximum
+candidate/native-repeat ratio of `1.41095`; iteration 102 is within the native
+diameter at ratio `0.04369`, and iterations 173 and 200 are also within it at
+`0.617` and `0.711`.  Thus gf14's previously selected hard-state boundary is
+native-instability-limited rather than a qualified deterministic defect.
+
+Gf03 is qualitatively different: all 200 post-initial checkpoints are outside
+the four-repeat direct-L2 diameter.  The first candidate/native best distance
+is `2.62175e-6` versus a native maximum of `7.12107e-7` (`3.6817x`) at
+iteration 1; ratios reach `25.70x` at iteration 17, `971.59x` at iteration 31,
+`1781.25x` at iteration 46, and remain `1.6345x` at iteration 200.  Gf05 is a
+secondary finite-window failure: 24/201 checkpoints, continuously iterations
+79--102, are outside the native diameter; its maximum ratio is `1.91728` at
+iteration 82 and it returns inside the repeat envelope later in the run.  The
+authoritative report SHA-256 values are `0b86605cfbeab5f7d6502bf4330770603c3a09cb1237d31c0573206715e123ef`
+for gf03, `9e521992227508dfbef2dd5420cdbf7a54a93ba0cdafe5e75af91f5c8da8a58c`
+for gf05, and `002dcdd48e5f9ed09d1b393c8ae0663b0e8ee0c1cd02ee4ad3e498cf8862a550`
+for gf14.
+
+Same-physical-H100 M-step repeat panel `12987988` then localizes gf03's first
+iteration.  Both arms ran on
+`GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`.  Incoming gradients and second
+moment are exact.  Half 0 raw data and weight are within or at the native
+repeat floor, but half 1 is not: candidate/native raw-data distances are
+`2.664x` and `2.624x` the native-repeat distance; raw-weight distances are
+`2.773x` and `2.718x`; post-first-moment half-1 distances are `8.739x` and
+`8.730x`.  The reconstructed reference after the update is `2.720x` and
+`2.889x` the native-repeat distance.  The report SHA-256 is
+`0e03c30cafb92d404d706ad65b7ba1a8d46888a2949139bac34c634dcc529702`.
+This excludes incoming map state, projection, half 0, and reconstruction as
+the first systematic boundary and places it in half 1's raw BPref production.
+
+Joint-halfset contribution job `12988519` completed from local diagnostic head
+`43ab80e7b` with the qualified CUDA digest.  It proves that InitialModel uses
+one physical engine call labeled capture half 1 while reconstruction-group ID
+1 owns the production half-2 accumulator.  Four shards contain 53,392 rows
+across all 200 particles.  The isolated production half-2 comparison
+reproduces the raw mismatch (`3.29480e-5` data relative L2 and `8.24746e-6`
+weight relative L2).  The generic reduced-row CPU-double replay does not close
+either production accumulator (about `1.643` data relative L2), because this
+configuration's production path is the fused VDAM projector/residual/scatter
+kernel rather than that generic reduced-row scatter.  Exact per-particle
+outputs of the production fused path are therefore the active next boundary;
+job `12988880` is submitted from local diagnostic head `b066aed7e`.  None of
+these diagnostic commits is pushed.
+
+Expansion case gf28 (`very_high_noise_seed17_200iter`) also sealed a genuine
+failure in canonical science `12984860_28` and audit `12984872_28`.  Its first
+map-envelope failure is iteration 39 (`0.99893044` best-native FSC-AUC versus
+the frozen `0.999` gate); the minimum best-native FSC-AUC reaches
+`0.53767753`.  The candidate is not GT-degraded relative to the native
+envelope at the early failure, but later adaptive offset range/step and
+continuous accuracy values leave every sampled native schedule mode.  This is
+a science failure, not an audit or infrastructure failure.  Canonical gf27
+passes its audit; gf29 science is complete and its audit is active, while
+gf30--gf33 science is running and gf34--gf42 remain queued under the four-task
+limit.  No generic RECOVAR test, full suite, or long-test ran.
+
 ## Code references
 
 - `scripts/run_vdam_gui_full_envelope_case.sbatch`
