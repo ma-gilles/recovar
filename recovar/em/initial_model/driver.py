@@ -27,7 +27,13 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     relion_translation_prior_center,
 )
 from recovar.reconstruction.noise import make_radial_noise
-from recovar.utils.helpers import R_to_relion, get_gpu_memory_total, recovar_volume_to_relion, write_relion_mrc
+from recovar.utils.helpers import (
+    R_from_relion,
+    R_to_relion,
+    get_gpu_memory_total,
+    recovar_volume_to_relion,
+    write_relion_mrc,
+)
 
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
@@ -426,11 +432,30 @@ def _particle_state_from_star(main_star, dataset) -> NativeParticleState:
         max_posterior = np.asarray(pmax_col.astype(float).to_numpy(), dtype=np.float32)
         if not np.all(np.isfinite(max_posterior)):
             raise ValueError("_rlnMaxValueProbDistribution values must be finite")
+
+    angle_names = ("_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi")
+    angle_columns = tuple(_star_column(main_star, name) for name in angle_names)
+    if any(column is not None for column in angle_columns) and not all(column is not None for column in angle_columns):
+        missing = [name for name, column in zip(angle_names, angle_columns) if column is None]
+        raise ValueError(f"STAR file must provide all Euler-angle columns; missing {', '.join(missing)}")
+    best_pose_rotations = None
+    if all(column is not None for column in angle_columns):
+        eulers = np.stack(
+            [np.asarray(column.astype(float).to_numpy(), dtype=np.float64) for column in angle_columns],
+            axis=1,
+        )
+        if not np.all(np.isfinite(eulers)):
+            raise ValueError("STAR Euler angles must be finite")
+        # RELION keeps the input metadata orientations available before every
+        # gradient subset has been visited. Sampling-accuracy estimation uses
+        # those orientations, then replaces rows as fresh E-step poses arrive.
+        best_pose_rotations = np.asarray(R_from_relion(eulers, degrees=True), dtype=np.float32)
     return NativeParticleState(
         translation_offsets=_image_origin_offsets_pixels_from_star(main_star, dataset),
         class_assignments=class_assignments,
         max_posterior=max_posterior,
         pose_assignments=np.full(n_images, -1, dtype=np.int32),
+        best_pose_rotations=best_pose_rotations,
         visited=max_posterior > 0.0,
     )
 

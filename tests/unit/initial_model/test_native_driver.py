@@ -267,6 +267,128 @@ def test_particle_state_from_star_preserves_class_and_pmax_columns():
     np.testing.assert_array_equal(state.class_assignments, [1, 0])
     np.testing.assert_allclose(state.max_posterior, [0.9, 0.25])
     np.testing.assert_array_equal(state.pose_assignments, [-1, -1])
+    assert state.best_pose_rotations is None
+
+
+def test_particle_state_from_star_seeds_input_euler_orientations_for_all_particles():
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs", "3@stack.mrcs"],
+            "_rlnAngleRot": [10.0, -75.0, 179.0],
+            "_rlnAngleTilt": [35.0, 80.0, 120.0],
+            "_rlnAnglePsi": [-20.0, 45.0, 91.0],
+        }
+    )
+
+    state = driver._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=3))
+
+    expected_eulers = main[["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"]].to_numpy(dtype=np.float64)
+    np.testing.assert_array_equal(
+        state.best_pose_rotations,
+        driver.R_from_relion(expected_eulers, degrees=True).astype(np.float32),
+    )
+    np.testing.assert_array_equal(state.visited, np.zeros(3, dtype=bool))
+    assert driver._best_eulers_from_particle_state(
+        state,
+        np.asarray([2, 0, 1], dtype=np.int64),
+        rotation_grid_order=1,
+    ) is not None
+
+
+def test_sampling_accuracy_uses_seeded_star_eulers_before_particles_are_visited(monkeypatch):
+    import recovar.relion_bind as relion_bind
+
+    captured = {}
+
+    def fake_expected_accuracy(*args):
+        captured["eulers"] = np.asarray(args[1]).copy()
+        captured["particle_ids"] = np.asarray(args[2]).copy()
+        return {
+            "acc_rot": 2.5,
+            "acc_trans": 1.25,
+            "acc_rot_class": np.asarray([2.5]),
+            "acc_trans_class": np.asarray([1.25]),
+            "class_counts": np.asarray([2]),
+        }
+
+    monkeypatch.setattr(
+        relion_bind,
+        "_relion_bind_core",
+        SimpleNamespace(vdam_expected_angular_errors=fake_expected_accuracy),
+        raising=False,
+    )
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs", "3@stack.mrcs"],
+            "_rlnAngleRot": [10.0, -75.0, 179.0],
+            "_rlnAngleTilt": [35.0, 80.0, 120.0],
+            "_rlnAnglePsi": [-20.0, 45.0, 91.0],
+        }
+    )
+    particle_state = driver._particle_state_from_star(main, SimpleNamespace(voxel_size=2.0, n_images=3))
+    state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=200, n_directions=1)
+    state.Iref[:] = 1.0
+    optics_state = driver.NativeOpticsState(
+        voltage=300.0,
+        Cs=2.7,
+        Q0=0.07,
+        pixel_size=2.0,
+        defU=np.full(3, 10000.0),
+        defV=np.full(3, 10000.0),
+        defAngle=np.zeros(3),
+        phase_shift=np.zeros(3),
+    )
+
+    meta = driver._estimate_native_sampling_accuracy(
+        driver._initial_sampling_state(driver.NativeInitialModelOptions(fn_img="particles.star"), pixel_size=2.0),
+        state,
+        particle_state,
+        optics_state,
+        particle_order=np.asarray([2, 0], dtype=np.int64),
+        random_seed=0,
+        padding_factor=1,
+        sigma2_fudge=driver.DEFAULT_SIGMA2_FUDGE,
+    )
+
+    assert meta is not None
+    assert meta["estimated_acc_trans_angstrom"] == 1.25
+    np.testing.assert_array_equal(captured["particle_ids"], np.asarray([2, 0], dtype=np.int64))
+    np.testing.assert_array_equal(
+        captured["eulers"],
+        driver.R_to_relion(particle_state.best_pose_rotations[[2, 0]], degrees=True),
+    )
+    np.testing.assert_array_equal(particle_state.visited, np.zeros(3, dtype=bool))
+
+
+@pytest.mark.parametrize("missing_name", ["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"])
+def test_particle_state_from_star_rejects_partial_euler_triplet(missing_name):
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs"],
+            "_rlnAngleRot": [10.0],
+            "_rlnAngleTilt": [35.0],
+            "_rlnAnglePsi": [-20.0],
+        }
+    ).drop(columns=missing_name)
+
+    with pytest.raises(ValueError, match="all Euler-angle columns"):
+        driver._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=1))
+
+
+@pytest.mark.parametrize("angle_name", ["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"])
+def test_particle_state_from_star_rejects_nonfinite_euler_angles(angle_name):
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs"],
+            "_rlnAngleRot": [10.0],
+            "_rlnAngleTilt": [35.0],
+            "_rlnAnglePsi": [-20.0],
+        }
+    )
+    main.loc[0, angle_name] = np.nan
+
+    with pytest.raises(ValueError, match="Euler angles must be finite"):
+        driver._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=1))
 
 
 def test_sampling_plan_oversamples_relion_grid():
