@@ -3024,16 +3024,16 @@ def run_dense_k_class_em_adaptive(
     n_classes = int(means_array.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
 
-    coarse_rotations_np = np.asarray(coarse_rotations, dtype=np.float32)
-    coarse_translations_np = np.asarray(coarse_translations, dtype=np.float32)
-    fine_rotations_np = np.asarray(fine_rotations, dtype=np.float32)
+    coarse_rotations_np = np.asarray(coarse_rotations)
+    coarse_translations_np = np.asarray(coarse_translations)
+    fine_rotations_np = np.asarray(fine_rotations)
     fine_mstep_rotations_np = (
         None
         if fine_mstep_rotations_override is None
-        else np.asarray(fine_mstep_rotations_override, dtype=np.float32)
+        else np.asarray(fine_mstep_rotations_override)
     )
     fine_translations_source_np = np.asarray(fine_translations)
-    fine_translations_np = np.asarray(fine_translations_source_np, dtype=np.float32)
+    fine_translations_np = np.asarray(fine_translations_source_np)
     rot_parent_map_np = np.asarray(rot_parent_map, dtype=np.int64)
     trans_parent_map_np = np.asarray(trans_parent_map, dtype=np.int64)
 

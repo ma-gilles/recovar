@@ -1830,11 +1830,9 @@ def _compute_k_class_significance_batched(
     if class_log_priors_np.shape != (n_classes,):
         raise ValueError(f"class_log_priors must have shape ({n_classes},), got {class_log_priors_np.shape}")
 
-    rotations = np.asarray(rotations, dtype=np.float32)
     translations_source = np.asarray(
         translations if translation_phase_source is None else translation_phase_source,
     )
-    translations = np.asarray(translations, dtype=np.float32)
     if translations_source.shape != translations.shape:
         raise ValueError(
             "translation_phase_source must match translations: "

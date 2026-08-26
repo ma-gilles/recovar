@@ -99,8 +99,8 @@ def _build_firstiter_cc_pass2_grids(
     the fine translation grid, returns parent_maps that index from fine to
     coarse.
     """
-    coarse_rot_np = np.asarray(coarse_rotations, dtype=np.float32)
-    coarse_trans_np = np.asarray(coarse_translations, dtype=np.float32)
+    coarse_rot_np = np.asarray(coarse_rotations)
+    coarse_trans_np = np.asarray(coarse_translations)
     base_translations_f64 = np.asarray(base_translations, dtype=np.float64)
     if int(adaptive_oversampling) <= 0:
         n_rot = int(coarse_rot_np.shape[0])
@@ -140,12 +140,10 @@ def _build_firstiter_cc_pass2_grids(
         oversampling_order=adaptive_os,
         random_perturbation=float(random_perturbation),
         return_mstep_rotations=return_mstep_rotations,
+        dtype=coarse_rotations.dtype,
     )
     fine_rotations, rot_parent_map = fine_rotation_outputs[:2]
     fine_mstep_rotations = fine_rotation_outputs[2] if return_mstep_rotations else None
-    fine_rotations = np.asarray(fine_rotations, dtype=np.float32)
-    if fine_mstep_rotations is not None:
-        fine_mstep_rotations = np.asarray(fine_mstep_rotations, dtype=np.float32)
     rot_parent_map = np.asarray(rot_parent_map, dtype=np.int64)
 
     fine_base_translations, trans_parent_map = get_oversampled_translation_grid(
