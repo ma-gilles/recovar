@@ -90,10 +90,63 @@ passes 7/7 selected tests.  Paired one-iteration discriminator `12992651`
 then completed RELION and RECOVAR on the same H100 in 41 seconds with no
 particle-state mismatch; because changing `nr_iter` changes the scientific
 schedule, this is execution evidence only.  The qualifying four-repeat
-0--200 `vdam-gf38` envelope is job `12992706`.  `vdam-gf33`, `vdam-gf36`,
-`vdam-gf37`, and `vdam-gf39` remain in science, and `vdam-gf40`--`vdam-gf42`
-are pending.  These local science commits are not pushed by this tracking
-update.
+0--200 `vdam-gf38` envelope is job `12992706`.
+
+The calibrated expansion audit has since sealed additional outcomes.  Both
+`vdam-gf36` (very-high noise, tau2-fudge 2, fudge 8) and `vdam-gf37`
+(Healpix order 2) pass their complete 201-checkpoint map/state envelopes.
+`vdam-gf39` (translation range 4, step 1) remains a genuine state failure on
+the frozen source.  `vdam-gf40` (translation range 8, step 2) passes map,
+particle, and sampled-schedule gates: minimum candidate-to-best-native
+FSC-AUC is `0.9187386199`, minimum candidate-minus-best/worst-native GT deltas
+are `-0.0063220086` / `-0.0015139531`, and the maximum native GT span is
+`0.0067439339`.  `vdam-gf41` (particle diameter 160) passes the complete map
+envelope but fails particle state first at iteration 68 for the single
+particle `1157@particles.128.mrcs`; its first native hard-state split is
+iteration 12 and sampled schedule passes.  Its map minima are
+`0.9022615327`, `-0.0057247721`, and `-0.0017123488`, within a maximum native
+GT span of `0.0045174984`.  `vdam-gf42` (padding factor 2) remains in science
+as `12984860_42`, with dependent audit `12984872_42`.
+
+Strict-head candidate audits now bind science and calibrated-audit worktrees
+independently.  Local orchestration commits `3222c3e0b` and `581468f9e`
+pin both heads, namespace evidence by audit head, and stage the verified CUDA
+library in each disposable runtime.  Focused jobs `12995354` and `12995617`
+pass their selected runner tests.  The first sealed strict-head result,
+`vdam-gf28`, remains a genuine very-high-noise failure: map and particle state
+fail, schedule passes, the first map failure is iteration 39, and particle
+state first fails at iteration 30 with 27/200 mismatches while all four native
+repeats agree.  Its minimum candidate-to-best-native FSC-AUC is
+`0.5349048684`; minimum candidate-minus-best/worst-native GT deltas are
+`-0.0110536942` / `-0.0039860559`, outside a maximum native GT span of
+`0.0072695635`.  Strict `vdam-gf29` and `vdam-gf30` audits are running as
+`12995043` and `12995168`; the remaining strict candidates stay queued to
+their frozen physical GPUs.
+
+The corrected grouped `vdam-gf38` os0 candidate completed all four native
+repeats and all 201 RECOVAR checkpoints, but its authoritative calibrated
+audit `12995073` fails.  Map failure starts at iteration 20 and covers 181
+checkpoints; minimum candidate-to-best-native FSC-AUC is `0.5067533087`,
+minimum candidate-minus-best/worst-native GT deltas are `-0.0035993625` /
+`-0.0014094021`, and the maximum native GT span is `0.0092578706`.  Particle
+state first fails at iteration 4 for `1073@particles.128.mrcs`; sampled
+schedule topology passes, and native hard state first diverges at iteration
+18.  An exact same-GPU replay using RECOVAR's full-precision iteration-4
+perturbation `0.2147974967956543` reproduces the sealed RECOVAR state with
+zero pose/translation mismatches over 3,000 particles.  At the failing
+particle, native RELION retains probability mass `0.9417769033` on the 16
+reconstructed hypotheses while the captured RECOVAR local posterior
+renormalizes that support to `1.0`; their Pmax values are `0.4598267735` and
+`0.4830448329`.  Local diagnostic commits `ea3ca8190` and `f83eaa127` capture
+the full RECOVAR coarse denominator and stage pinned CUDA; focused jobs
+`12995618` and `12995729` pass.  The first projector analysis was submitted
+incorrectly to CPU and failed before analysis because it requires the CUDA
+score kernel.  Same-H100 replacement `12995891` is the active discriminator.
+
+All implementation and diagnostic commits in this update remain local and
+unpushed.  No generic RECOVAR full or long suite was run; the active compute
+is exclusively the VDAM/InitialModel 0--200 trajectory, calibrated audit, and
+earliest-boundary program requested for this PR.
 
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
