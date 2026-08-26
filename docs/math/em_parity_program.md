@@ -409,6 +409,22 @@ and
 Thus GF47 is a schedule-equivalence and runtime failure despite acceptable map
 quality and hard particle state.
 
+GF48 (very high white noise with uniform poses, seed 29) is an authoritative
+map, particle, controller, and runtime failure in job `12999436`.  Map failure
+begins at iteration 45 and covers 156 checkpoints; minimum candidate-to-best-
+native FSC-AUC is `0.5662328509`.  Minimum candidate-minus-best/worst-native GT
+deltas are `-0.0068909599` / `-0.0031841063`, outside a maximum native GT span
+of `0.0046829573`.  Particle state first exceeds the zero-mismatch four-repeat
+native ceiling at iteration 30 for 31/200 audited particles, while native hard
+state first splits at iteration 29.  The strict adaptive diagnostic first
+differs at iteration 6 and pre-divergence controller topology first fails at
+iteration 10.  RECOVAR takes `1962.6` seconds versus a `286.8` second native
+median (`6.84x`).  Map, state, and combined-status SHA-256 values are
+`58090a4fba7466cd850ae2b7eeeb3f81acd2a57f57cf54a2046b32c201821512`,
+`246ae748d1960bd01f8644c589a187d6b77afcb6c58bed0fe7700cb314e6d16c`,
+and
+`e5b8bba0df321c8095e668ec3f7960ea4f90f95c8253ce7193bc9ec43c394533`.
+
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
 `vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC
