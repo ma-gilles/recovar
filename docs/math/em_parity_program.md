@@ -250,6 +250,22 @@ pass their focused guard; analyzer array `12998650` follows the capture.  The
 capture root was restored to only its `SAFE_TO_DELETE` marker before this
 submission.
 
+The exact-GPU GF38 same-projector discriminator is now sealed.  Capture task
+`12998647_3` and analyzer task `12998650_2` completed on physical GPU
+`GPU-ddb1592d-744e-ea56-d0a3-aec6e7c97d10`; their sibling probes exited 75
+on non-target GPUs by design.  RECOVAR production and the fused replay of its
+captured in-memory projector agree to RMS `5.8842e-6` (16,152/16,704 values
+bit-exact), while RELION versus that RECOVAR-projector replay has RMS
+`0.0210512`.  Replacing only the projector with RELION's captured PPref lowers
+the RELION score residual to RMS `0.0044966`, localizing most of the first
+coarse divergence to projector construction/convention rather than the fused
+production scorer.  RELION's captured fine references are bit-exact over all
+7,680 complex values only after transposing the native Euler matrices.  The
+remaining same-projector fused-score residual is real but smaller: maximum
+`0.0106812`, RMS `0.0044966`.  Report/capture SHA-256 values are
+`61d99529d4c2dab21eaf5a56921f7920cb889a1b45d963bc0a2b0d215c949d9c` and
+`ce6e223de78457c502da5ee88255a0be992bf1873725aa0f2b1bb4b15d75989c`.
+
 Expanded v3 science GF43--GF45 completed in jobs `12996115`--`12996117`;
 GF46--GF49 are running and GF50--GF62 remain queued.  Pending science excludes
 H19g2 so the matrix continues without taking either pinned diagnostic GPU.
@@ -317,8 +333,9 @@ map envelope at iteration 44; 157 map checkpoints fail.  Minimum candidate-
 to-best-native FSC-AUC is `0.6687246752`; minimum candidate-minus-best/worst-
 native GT deltas are `-0.0076223197` / `-0.0030671947` outside maximum native
 GT span `0.0067173985`.  RECOVAR is `8.32x` slower (`2473.8` versus `297.4`
-seconds median).  Full seeded rerun array `13001264` is submitted to the same
-physical H100 and retains the frozen four-repeat panel.
+seconds median).  The first seeded probe array `13001264` missed the target
+GPU; replacement array `13001371` is dependency-pinned behind its current
+owner and retains the frozen four-repeat panel on the same physical H100.
 
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
