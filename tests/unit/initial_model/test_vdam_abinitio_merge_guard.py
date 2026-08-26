@@ -440,6 +440,57 @@ def test_vdam_gui_default_full_suite_audits_every_200_iteration_checkpoint():
     assert "run_vdam_relion_parity_case.sbatch" in matrix
 
 
+def test_vdam_full_trajectory_expansion_covers_seed_and_parameter_robustness():
+    suite = json.loads(
+        (REPO_ROOT / "docs/math/vdam_k1_full_trajectory_expansion_v2.json").read_text()
+    )
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-full-trajectory-expansion-v2"
+    assert suite["acceptance_contract"]["required_checkpoints"] == list(range(201))
+    cases = suite["cases"]
+    assert [case["id"] for case in cases] == [f"vdam-gf{index:02d}" for index in range(23, 43)]
+    assert all(case["definition"]["nr_classes"] == 1 for case in cases)
+    assert all(case["definition"]["nr_iter"] == 200 for case in cases)
+    assert all(case["definition"]["random_seed"] == 17 for case in cases[:12])
+    assert all("seed_replica" in case["coverage"] for case in cases[:12])
+    assert all("parameter_override" in case["coverage"] for case in cases[12:])
+    coverage = {axis for case in cases for axis in case["coverage"]}
+    assert {
+        "uniform_poses",
+        "anisotropic_poses",
+        "kent_poses",
+        "white_noise",
+        "radial_noise",
+        "low_noise",
+        "high_noise",
+        "very_high_noise",
+        "outliers",
+        "severe_outliers",
+        "extreme_outliers",
+        "junk_particles",
+        "no_ctf",
+        "translations",
+        "high_resolution",
+        "midscale",
+        "tau2_fudge",
+        "healpix_order",
+        "oversampling",
+        "offset_search",
+        "particle_diameter",
+        "padding_factor",
+    } <= coverage
+    by_id = {case["id"]: case["definition"] for case in cases}
+    assert by_id["vdam-gf35"]["tau2_fudge"] == 2
+    assert by_id["vdam-gf36"]["tau2_fudge"] == 8
+    assert by_id["vdam-gf37"]["healpix_order"] == 2
+    assert by_id["vdam-gf38"]["oversampling"] == 0
+    assert (by_id["vdam-gf39"]["offset_range_px"], by_id["vdam-gf39"]["offset_step_px"]) == (4, 1)
+    assert (by_id["vdam-gf40"]["offset_range_px"], by_id["vdam-gf40"]["offset_step_px"]) == (8, 2)
+    assert by_id["vdam-gf41"]["particle_diameter_angstrom"] == 160
+    assert by_id["vdam-gf42"]["padding_factor"] == 2
+
+
 def test_vdam_case_runner_uses_job_scoped_runtime_roots():
     runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
     expected_tokens = [

@@ -25,8 +25,9 @@ VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT:-4}
 RELION_REFINE=${RELION_REFINE:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
 EXPECTED_REPO_HEAD=${EXPECTED_REPO_HEAD:-}
 
-if (( SLURM_ARRAY_TASK_ID < 2 || SLURM_ARRAY_TASK_ID > 22 )); then
-    echo "VDAM envelope task must be in [2, 22]" >&2
+if [[ ! "${SLURM_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || \
+        (( SLURM_ARRAY_TASK_ID < 1 || SLURM_ARRAY_TASK_ID > 999 )); then
+    echo "VDAM envelope task must be an integer in [1, 999]" >&2
     exit 2
 fi
 if [[ ! "${VDAM_REPEAT_COUNT}" =~ ^[0-9]+$ ]] || (( VDAM_REPEAT_COUNT < 2 )); then
@@ -42,6 +43,19 @@ if [[ -n "${EXPECTED_REPO_HEAD}" ]]; then
 fi
 
 CASE_ID=$(printf 'vdam-gf%02d' "${SLURM_ARRAY_TASK_ID}")
+case_match_count=$("${PIXI_PY}" - "${VDAM_SCORECARD}" "${CASE_ID}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+scorecard = json.loads(Path(sys.argv[1]).read_text())
+print(sum(case.get("id") == sys.argv[2] for case in scorecard.get("cases", [])))
+PY
+)
+if [[ "${case_match_count}" != 1 ]]; then
+    echo "VDAM scorecard must contain exactly one ${CASE_ID}; found ${case_match_count}" >&2
+    exit 2
+fi
 PANEL_ROOT=${OUTPUT_ROOT}/${CASE_ID}
 if [[ -d "${PANEL_ROOT}" ]] && [[ -n "$(find "${PANEL_ROOT}" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
     echo "refusing to reuse non-empty panel root: ${PANEL_ROOT}" >&2

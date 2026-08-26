@@ -11,6 +11,9 @@ def test_gui_full_envelope_runner_reuses_one_candidate_for_native_repeats():
     assert "#SBATCH --array=2-22%4" in source
     assert "#SBATCH --constraint=h100" in source
     assert "#SBATCH --gres=gpu:h100:1" in source
+    assert 'SLURM_ARRAY_TASK_ID > 999' in source
+    assert 'case.get("id") == sys.argv[2]' in source
+    assert 'case_match_count' in source
     assert "VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT:-4}" in source
     assert source.count("scripts.run_vdam_relion_parity_case") == 1
     assert "scripts.run_vdam_relion_native_repeat" in source
