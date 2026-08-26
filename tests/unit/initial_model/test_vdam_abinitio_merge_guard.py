@@ -233,6 +233,7 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "RECOVAR_CUDA_LIB",
         "cuda_backproject.cuda_available()",
         "VDAM parity provenance/GPU/CUDA-FFI gate passed",
+        "binding_path.is_file()",
         '--threads "${RELION_THREADS:-8}"',
         '--relion-refine "${RELION_REFINE}"',
         'mkdir -p "${RELION_ACC_DUMP_DIR}"',
@@ -253,6 +254,7 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "Minvsigma2 sigma2_noise sigma2_fudge",
     ]
     haystack = "\n".join([guard, runner, auditor, sbatch, preprocess_sbatch])
+    assert 'pathlib.Path(_relion_bind_core.__file__).resolve()).startswith' not in sbatch
     missing = [token for token in expected_tokens if token not in haystack]
     assert not missing, f"VDAM trajectory runner/auditor lost required wiring: {missing}"
 

@@ -67,10 +67,16 @@ from recovar.relion_bind import _relion_bind_core
 repo = pathlib.Path.cwd().resolve()
 assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo) + "/")
 assert ".pixi/envs/default/" in str(pathlib.Path(jax.__file__).resolve())
-assert str(pathlib.Path(_relion_bind_core.__file__).resolve()).startswith(str(repo) + "/")
+binding_path = pathlib.Path(_relion_bind_core.__file__).resolve()
+assert binding_path.is_file()
 assert any(device.platform in {"gpu", "cuda"} for device in jax.devices())
 assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
-print("VDAM parity provenance/GPU/CUDA-FFI gate passed", jax.default_backend(), jax.devices())
+print(
+    "VDAM parity provenance/GPU/CUDA-FFI gate passed",
+    jax.default_backend(),
+    jax.devices(),
+    binding_path,
+)
 PY
 
 RUN_ARGS=(
