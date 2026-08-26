@@ -33,6 +33,7 @@ CAPTURE_STACK_INDEX=${VDAM_NATIVE_CAPTURE_STACK_INDEX:-}
 CAPTURE_PERTURBATION=${VDAM_NATIVE_CAPTURE_PERTURBATION:-}
 CAPTURE_ONLY=${VDAM_NATIVE_CAPTURE_ONLY:-0}
 RELION_SKIP_MODULE=${VDAM_RELION_SKIP_MODULE:-0}
+TARGET_GPU_UUID=${VDAM_TARGET_GPU_UUID:-}
 
 case "${CAPTURE_ONLY}" in 0|1) ;; *) echo "VDAM_NATIVE_CAPTURE_ONLY must be 0 or 1" >&2; exit 2 ;; esac
 case "${RELION_SKIP_MODULE}" in 0|1) ;; *) echo "VDAM_RELION_SKIP_MODULE must be 0 or 1" >&2; exit 2 ;; esac
@@ -125,6 +126,11 @@ printf '%q ' "${RELION_COMMAND[@]}" > "${PROVENANCE_DIR}/relion_command.sh"
 printf '\n' >> "${PROVENANCE_DIR}/relion_command.sh"
 
 gpu_uuid_before=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | tr -d '[:space:]')
+case "${gpu_uuid_before}" in GPU-*) ;; *) echo "invalid GPU UUID: ${gpu_uuid_before}" >&2; exit 2 ;; esac
+if [[ -n "${TARGET_GPU_UUID}" ]] && [[ "${gpu_uuid_before}" != "${TARGET_GPU_UUID}" ]]; then
+    echo "VDAM_TARGET_GPU_MISS expected=${TARGET_GPU_UUID} observed=${gpu_uuid_before}" >&2
+    exit 75
+fi
 start_epoch=$(date +%s)
 (
     cd "${DATA_DIR}"

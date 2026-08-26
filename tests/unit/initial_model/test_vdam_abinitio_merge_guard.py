@@ -716,11 +716,13 @@ def test_vdam_native_full_repeat_supports_focused_coarse_capture():
         "VDAM_NATIVE_CAPTURE_STACK_INDEX",
         "VDAM_NATIVE_CAPTURE_PERTURBATION",
         "VDAM_NATIVE_CAPTURE_ONLY",
+        "VDAM_TARGET_GPU_UUID",
         'RELION_SKIP_MODULE=${VDAM_RELION_SKIP_MODULE:-0}',
         "RELION_ACC_DUMP_DIR=${CAPTURE_DIR}",
         "RELION_ACC_DUMP_ITER=${CAPTURE_ITERATION}",
         "RELION_FORCE_SAMPLING_PERTURB=${CAPTURE_PERTURBATION}",
         'test -s "${CAPTURE_DIR}/pass0_coarse_raw_diff2.bin"',
+        "VDAM_TARGET_GPU_MISS",
         'touch "${OUTPUT_ROOT}/CAPTURE_COMPLETED"',
     ]
     missing = [token for token in expected_tokens if token not in runner]
