@@ -262,6 +262,64 @@ plus two launcher tests.  Replacement v3 audit array `12999424` and strict
 GF41 audit `12999430` use that head.  No implementation commit was pushed and
 no generic RECOVAR full or long suite was run.
 
+GF29's promoted run has independently passed a live prefix audit through
+iteration 92.  Checkpoints 30, 31, 32, 40, 60, 80, and 92 all pass the fixed
+map/class gate, with minimum FSC-AUC `0.9999999917233`; the old candidate first
+failed at iteration 32 and later reached only `0.7286295738`.  Evidence SHA-256
+values are `c95f28921c0f41a5680b3cec83bfe5ea5e37ce974177be30d8601015b388f771`
+for the map report and
+`e12add0db70b471a68f0ecd068abf64b86be8969aa97c8393d3cd77d6bff294d`
+for its shellwise ledger.  Full task `12999877` continues toward iteration
+200; this prefix does not promote terminal status.
+
+The apparent GF29 Euler-state failure is separately localized to the exported
+particle ledger.  `_update_particle_state_from_estep_meta` reset `visited` to
+only the current 200-particle minibatch on every iteration, so the STAR writer
+reverted every non-current row to its input orientation and class even though
+the in-process matrices remained cumulative.  Native RELION preserves prior
+visited rows.  Local implementation commit `ea6ff3a21` makes visitation
+cumulative and adds a two-update regression; three focused particle-state
+tests pass.  Exact-GPU bounded validation array `13000902` follows operand-
+capture array `13000313`, which records live expected-accuracy inputs at
+iterations 10, 20, and 30 from diagnostic commit `f0452b850`.  The first
+serialized replay already shows why rounding is not a repair: at iteration
+10, live candidate/native accuracy is `3.938` / `3.933` degrees, whereas
+reloading the candidate iteration-9 MRC/STAR gives `3.855` degrees.
+
+The first corrected v3 audit, GF44 (anisotropic poses, outliers, high noise,
+seed 29), passes the complete calibrated map, particle, and pre-divergence
+schedule envelopes in job `12999432`.  Native hard state first splits at
+iteration 9 and the strict adaptive diagnostic first differs at iteration 25.
+Minimum candidate-to-best-native FSC-AUC is `0.6299379787`; minimum candidate-
+minus-best/worst-native GT deltas are `-0.0090012262` / `-0.0016874842` within
+a maximum native GT span of `0.0088631630`.  This is native-envelope quality
+parity, not a claim of a unique deterministic hard-state trajectory after the
+native repeats split.  RECOVAR wall time is `2298.7` seconds versus a `286.2`
+second native median on the same H100, an independent `8.03x` runtime failure.
+
+The same corrected audit seals GF43 (baseline, seed 29) as a genuine long-
+trajectory failure.  Its first map-envelope miss is iteration 73 and covers
+14 checkpoints; particle state first exceeds the native-repeat ceiling at
+iteration 91, while native hard state first splits at iteration 19 and the
+pre-divergence schedule gate passes.  Minimum candidate-to-best-native
+FSC-AUC is `0.9880544034`; minimum candidate-minus-best/worst-native GT deltas
+are `-0.0016417001` / `-0.0011835697` within maximum native GT span
+`0.0009982957`.  RECOVAR takes `2186.4` seconds versus a `297.3` second native
+median (`7.35x`).  Full seeded rerun array `13001263` is active on its frozen
+physical H100; it tests whether the orientation seed also closes this later
+branch.
+
+GF45 (Kent poses, outliers, high noise, seed 29) is a distinct iteration-30
+autosampling failure on the old source.  All four native repeats agree at the
+boundary, but the candidate leaves their particle envelope for 31/200 active
+particles, misses the local-prior translation topology, and first fails the
+map envelope at iteration 44; 157 map checkpoints fail.  Minimum candidate-
+to-best-native FSC-AUC is `0.6687246752`; minimum candidate-minus-best/worst-
+native GT deltas are `-0.0076223197` / `-0.0030671947` outside maximum native
+GT span `0.0067173985`.  RECOVAR is `8.32x` slower (`2473.8` versus `297.4`
+seconds median).  Full seeded rerun array `13001264` is submitted to the same
+physical H100 and retains the frozen four-repeat panel.
+
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
 `vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC
