@@ -27848,3 +27848,74 @@ residual will justify preserving the postprocessed real half-reference between
 RECOVAR iterations; otherwise the first unequal projected-reference,
 shifted-image, CTF, inverse-noise, or reduction term decides the next
 correction.
+
+## 2026-08-26 16:50 EDT — case-10 raw score localizes to the unshifted image, not reference or phase
+
+The corrected direct-real-reference control `13007686` completed successfully
+in `00:26:21`.  Unlike the earlier coordinate-invalid arm, it supplied MRCs
+whose raw arrays were transformed into RECOVAR's real-volume frame before the
+direct projector handoff.  The control retained all `640/640` fine candidates,
+hard winner `(12,69)`, and `69/69` significant support.  It reduced the
+score-active projected-reference relative L2 error from
+`5.197868106899187e-7` to `1.346226134814438e-8`, but the production raw score
+remained exactly `1337.7706298828125`, versus native RELION
+`1337.76708984375`.  Preserving the process-resident real reference therefore
+repairs the reference operand but does not repair the remaining score gap.
+
+Pixel-mask substitutions then falsified the apparent positive-y-Nyquist lead.
+The six active `+N/2` pixels contain the largest shifted-image elementwise
+differences, but substituting all six native values changes the raw score by
+exactly zero.  Substituting the native shifted image everywhere except those
+six pixels gives the native raw score.  The large Nyquist difference is thus
+an inert representation difference at this tuple.
+
+The non-Nyquist shifted operand was split into its unshifted Fourier source and
+translation phase.  Substituting only the native phase leaves the RECOVAR raw
+score unchanged at `1337.7706298828125`; substituting only the native
+unshifted source closes it to `1337.76708984375`.  The observed non-Nyquist
+phase residual is `1.1271538958926283e-7` relative L2 and is non-causal in this
+intervention.  The unshifted-image mismatch is `1.3263295743012642e-6`
+relative L2, but is nearly a pure scalar: the fitted native/RECOVAR scale is
+`0.999998677726137`, leaving only `1.0362118500623737e-7` relative L2 after a
+real scalar fit.  RECOVAR's replay normalization factor is float32
+`0.9984847`, reconstructed from six-digit STAR values `0.297831 / 0.298283`.
+This makes retained in-memory normalization precision the leading explanation
+of the case-10 same-input residual; like the direction prior, it must be
+distinguished from a live production mismatch before any code correction.
+
+The ordinary and corrected-direct operand reports are respectively
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_fresh_same_input_score58_07d3102_20260826T1430ET/analysis/K1_CASE10_ROW075571_IT2_WINNER_OPERANDS_PHASE_SPLIT.json`
+(SHA-256
+`63138cf19f89f292e3095535276a81836b075bc2457ccfefce6e7558992dfb1f`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_fresh_same_input_directreal_relionframe_score58_07d3102_20260826T1620ET/analysis/K1_CASE10_ROW075571_IT2_WINNER_OPERANDS_PHASE_SPLIT.json`
+(SHA-256
+`a869339eb3e151f71f5309a38238220749259f459e88a9bded8d3d2fb7cff7b0`).
+The direct stage report has SHA-256
+`54ed9c1dfc4cb373190896fb63744041c2243e31d00bdfbfccdc486406106562`.
+
+Fresh case-5 native job `13005698` completed successfully in `01:10:41` and
+captured the exact uninterrupted iteration-2 preprocessing, coarse, fine,
+posterior, and BPref boundaries for immutable source row `8791` / stack
+`8792`.  Its fine table has `416` candidates, native winner row `92`, and `84`
+reconstruction candidates; its coarse threshold contains `13` candidates.
+The capture root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row08791_fresh_verbose_it2_07d3102_20260826T1525ET`,
+and capture inertness passed with report SHA-256
+`6953269f53df45f6d9588d5437a9a9c66905fff389f04017b3ead8c178a0d14d`.
+Fresh case-4 native job `13005697` also completed successfully; its focused
+harvest follows the case-5 comparison.
+
+Focused fresh RECOVAR case-5 job `13009186` is queued to reproduce only the
+same physical iteration-2 boundary at current size `56`, stop after source row
+`8791`, and dump the raw pass-2 operands.  It does not run a terminal
+trajectory.  A bounded case-10 preprocessing replay is also queued as
+`13009448`.  Two prior 30-second attempts (`13008593`, `13008821`) failed
+closed before science output because the selected native BPref factor had zero
+pixel rows and because its Nyquist coordinate labels were not one-to-one.  The
+retry uses the demonstrated full-to-compact lookup and the source-faithful
+direct CTF fallback; neither failed attempt is interpreted numerically.
+
+The fixed score remains `31/34`.  These results remove the reference and
+translation-phase branches and move the first live discriminator to
+normalization / real-space preprocessing / FFT at fresh iteration 2.

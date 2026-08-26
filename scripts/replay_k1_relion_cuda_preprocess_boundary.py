@@ -91,6 +91,7 @@ def main() -> None:
     integer_shift_rows = []
     records = []
     native_targets = []
+    native_target_rows = []
     compact_indices = []
     native_preprocess_captures = []
     for stack, original in args.particle:
@@ -122,23 +123,65 @@ def main() -> None:
         fine = load_fine_operand_capture(fine_path)
         factor = load_factor_capture(factor_path)
         pixels = fine.pixels.reshape(fine.candidates.size, fine.image_size)[0]
-        _require(factor.pixels.shape == pixels.shape, f"stack {stack}: native pixel count changed")
-        _require(
-            np.array_equal(factor.pixels["x"], pixels["x"])
-            and np.array_equal(factor.pixels["y"], pixels["y"]),
-            f"stack {stack}: native factor/fine pixel coordinates changed",
-        )
         native_image = (
             np.asarray(pixels["image_real"], dtype=np.float32)
             + np.complex64(1j) * np.asarray(pixels["image_imag"], dtype=np.float32)
         ).astype(np.complex64)
-        native_processed = (native_image * factor.pixels["ctf"]).astype(np.complex64)
         with np.load(recovar_path, allow_pickle=False) as recovar:
             compact = np.asarray(recovar["window_indices"], dtype=np.int32)
+            direct_ctf = (
+                np.asarray(recovar["direct_ctf_rfloat_score"], dtype=np.float32)
+                if "direct_ctf_rfloat_score" in recovar.files
+                else None
+            )
+        current_size = next(
+            size
+            for size in range(2, args.physical_image_size + 1, 2)
+            if size * (size // 2 + 1) == fine.image_size
+        )
+        full_to_compact = _relion_cuda_fine_full_to_compact_lookup(
+            (args.physical_image_size, args.physical_image_size),
+            current_size,
+            compact,
+        )
+        supported_full = np.flatnonzero(full_to_compact >= 0)
+        supported_compact = full_to_compact[supported_full]
+        _require(
+            np.array_equal(np.sort(supported_compact), np.arange(compact.size)),
+            f"stack {stack}: fine/current-size support does not cover score window",
+        )
+        native_rows = np.empty(compact.size, dtype=np.int32)
+        native_rows[supported_compact] = supported_full
+        if factor.pixels.shape == pixels.shape:
+            _require(
+                np.array_equal(factor.pixels["x"], pixels["x"])
+                and np.array_equal(factor.pixels["y"], pixels["y"]),
+                f"stack {stack}: native factor/fine pixel coordinates changed",
+            )
+            native_processed = np.empty(compact.size, dtype=np.complex64)
+            native_processed[supported_compact] = (
+                native_image[supported_full] * factor.pixels["ctf"][supported_full]
+            ).astype(np.complex64)
+            native_ctf_source = "native_bpref_factor_capture"
+        else:
+            _require(
+                factor.pixels.size == 0 and direct_ctf is not None,
+                f"stack {stack}: incomplete native factor capture has no CTF fallback",
+            )
+            _require(
+                direct_ctf.shape == compact.shape,
+                f"stack {stack}: direct CTF/score window topology changed",
+            )
+            native_processed = np.empty(compact.size, dtype=np.complex64)
+            native_processed[supported_compact] = (
+                native_image[supported_full] * direct_ctf[supported_compact]
+            ).astype(np.complex64)
+            native_ctf_source = "recovar_source_faithful_direct_ctf_fallback"
         raw_images.append(np.asarray(raw_stack[stack - 1], dtype=np.float32))
         normalization_factors.append(normalization)
         integer_shift_rows.append(integer_shift)
         native_targets.append(native_processed)
+        native_target_rows.append(native_rows)
         compact_indices.append(compact)
         native_preprocess_captures.append(preprocess_capture)
         records.append(
@@ -153,6 +196,7 @@ def main() -> None:
                     if preprocess_capture is not None
                     else "serialized_star"
                 ),
+                "native_ctf_source": native_ctf_source,
                 "native_preprocess_capture": (
                     str(preprocess_capture.path.resolve())
                     if preprocess_capture is not None
@@ -191,33 +235,16 @@ def main() -> None:
 
     n2 = np.float32(args.physical_image_size**2)
     dump = {}
-    for row, (record, native, compact, preprocess_capture) in enumerate(
+    for row, (record, native_compact, native_rows, compact, preprocess_capture) in enumerate(
         zip(
             records,
             native_targets,
+            native_target_rows,
             compact_indices,
             native_preprocess_captures,
             strict=True,
         )
     ):
-        supported_native_rows = {
-            (int(x), int(y)): index
-            for index, (x, y) in enumerate(
-                zip(
-                    load_factor_capture(Path(record["factor_capture"])).pixels["x"],
-                    load_factor_capture(Path(record["factor_capture"])).pixels["y"],
-                    strict=True,
-                )
-            )
-        }
-        half_width = args.physical_image_size // 2 + 1
-        centered_rows = compact // half_width
-        coordinates = [
-            (int(index % half_width), int(centered - args.physical_image_size // 2))
-            for index, centered in zip(compact, centered_rows, strict=True)
-        ]
-        native_rows = np.asarray([supported_native_rows[key] for key in coordinates], dtype=np.int32)
-        native_compact = native[native_rows]
         record["metrics"] = {}
         if preprocess_capture is not None:
             record["native_repeat_metrics"] = {
@@ -226,8 +253,8 @@ def main() -> None:
                     raw_images[row].reshape(args.physical_image_size, -1),
                 ),
                 "fine_processed_fourier": _metric(
-                    native,
-                    preprocess_capture.masked_fourier_post_optics.reshape(-1),
+                    native_compact,
+                    preprocess_capture.masked_fourier_post_optics.reshape(-1)[native_rows],
                 ),
             }
         dump[f"stack{record['stack_index_one_based']}_native_processed"] = native_compact

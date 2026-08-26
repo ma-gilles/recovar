@@ -103,6 +103,148 @@ def _factorial_operand_substitutions(
     return results
 
 
+def _masked_shifted_substitutions(
+    *,
+    relion_reference: np.ndarray,
+    relion_shifted: np.ndarray,
+    relion_correction: np.ndarray,
+    relion_highres: np.float32,
+    recovar_reference: np.ndarray,
+    recovar_shifted: np.ndarray,
+    recovar_correction: np.ndarray,
+    recovar_highres: np.float32,
+    mask: np.ndarray,
+) -> dict[str, float]:
+    """Replace the shifted-image operand inside or outside one pixel mask."""
+
+    mask = np.asarray(mask, dtype=bool).reshape(-1)
+    native_shifted = np.asarray(relion_shifted, dtype=np.complex64).reshape(-1)
+    recovar_shifted = np.asarray(recovar_shifted, dtype=np.complex64).reshape(-1)
+    _require(mask.shape == native_shifted.shape, "shifted-image mask shape differs")
+    _require(recovar_shifted.shape == native_shifted.shape, "shifted-image shapes differ")
+    native_inside = recovar_shifted.copy()
+    native_inside[mask] = native_shifted[mask]
+    native_outside = recovar_shifted.copy()
+    native_outside[~mask] = native_shifted[~mask]
+    return {
+        "recovar": float(
+            _sass_tree_raw_diff2(
+                recovar_reference,
+                recovar_shifted,
+                recovar_correction,
+                recovar_highres,
+            )[0]
+        ),
+        "native_shifted_inside_mask_only": float(
+            _sass_tree_raw_diff2(
+                recovar_reference,
+                native_inside,
+                recovar_correction,
+                recovar_highres,
+            )[0]
+        ),
+        "native_shifted_outside_mask_only": float(
+            _sass_tree_raw_diff2(
+                recovar_reference,
+                native_outside,
+                recovar_correction,
+                recovar_highres,
+            )[0]
+        ),
+        "native_shifted_all": float(
+            _sass_tree_raw_diff2(
+                recovar_reference,
+                native_shifted,
+                recovar_correction,
+                recovar_highres,
+            )[0]
+        ),
+        "native_all": float(
+            _sass_tree_raw_diff2(
+                relion_reference,
+                native_shifted,
+                relion_correction,
+                relion_highres,
+            )[0]
+        ),
+    }
+
+
+def _shifted_source_phase_substitutions(
+    *,
+    relion_reference: np.ndarray,
+    relion_unshifted: np.ndarray,
+    relion_shifted: np.ndarray,
+    recovar_reference: np.ndarray,
+    recovar_unshifted: np.ndarray,
+    recovar_shifted: np.ndarray,
+    recovar_correction: np.ndarray,
+    recovar_highres: np.float32,
+    active_mask: np.ndarray,
+) -> tuple[dict[str, float], np.ndarray, np.ndarray, np.ndarray]:
+    """Split a shifted-image mismatch into source FFT and phase operands."""
+
+    relion_unshifted = np.asarray(relion_unshifted, dtype=np.complex64).reshape(-1)
+    relion_shifted = np.asarray(relion_shifted, dtype=np.complex64).reshape(-1)
+    recovar_unshifted = np.asarray(recovar_unshifted, dtype=np.complex64).reshape(-1)
+    recovar_shifted = np.asarray(recovar_shifted, dtype=np.complex64).reshape(-1)
+    active_mask = np.asarray(active_mask, dtype=bool).reshape(-1)
+    _require(
+        relion_unshifted.shape
+        == relion_shifted.shape
+        == recovar_unshifted.shape
+        == recovar_shifted.shape
+        == active_mask.shape,
+        "shifted source/phase operand shapes differ",
+    )
+    valid = active_mask & (np.abs(relion_unshifted) > np.float32(1.0e-12))
+    valid &= np.abs(recovar_unshifted) > np.float32(1.0e-12)
+    relion_phase = np.zeros(relion_unshifted.shape, dtype=np.complex64)
+    recovar_phase = np.zeros(relion_unshifted.shape, dtype=np.complex64)
+    relion_phase[valid] = np.divide(
+        relion_shifted[valid], relion_unshifted[valid], dtype=np.complex64
+    )
+    recovar_phase[valid] = np.divide(
+        recovar_shifted[valid], recovar_unshifted[valid], dtype=np.complex64
+    )
+    with_native_source = recovar_shifted.copy()
+    with_native_phase = recovar_shifted.copy()
+    with_native_source_and_phase = recovar_shifted.copy()
+    with_native_source[valid] = np.multiply(
+        relion_unshifted[valid], recovar_phase[valid], dtype=np.complex64
+    )
+    with_native_phase[valid] = np.multiply(
+        recovar_unshifted[valid], relion_phase[valid], dtype=np.complex64
+    )
+    with_native_source_and_phase[valid] = np.multiply(
+        relion_unshifted[valid], relion_phase[valid], dtype=np.complex64
+    )
+
+    def raw(shifted: np.ndarray) -> float:
+        return float(
+            _sass_tree_raw_diff2(
+                recovar_reference,
+                shifted,
+                recovar_correction,
+                recovar_highres,
+            )[0]
+        )
+
+    return (
+        {
+            "recovar": raw(recovar_shifted),
+            "native_unshifted_source_only": raw(with_native_source),
+            "native_translation_phase_only": raw(with_native_phase),
+            "native_unshifted_source_and_phase": raw(with_native_source_and_phase),
+            "native_shifted_direct": raw(relion_shifted),
+            "valid_pixel_count": int(np.count_nonzero(valid)),
+        },
+        relion_phase,
+        recovar_phase,
+        valid,
+    )
+
+
 def _largest_mismatches(
     relion: np.ndarray,
     recovar: np.ndarray,
@@ -428,6 +570,42 @@ def analyze(
         "factorial native replay differs from the direct replay",
     )
 
+    current_half_width = current_size // 2 + 1
+    positive_y_nyquist = np.zeros(capture.image_size, dtype=bool)
+    positive_y_nyquist[supported_full] = (
+        supported_full // current_half_width == current_size // 2
+    )
+    nyquist_substitutions = _masked_shifted_substitutions(
+        relion_reference=relion_reference,
+        relion_shifted=relion_shifted,
+        relion_correction=relion_corr,
+        relion_highres=relion_sum,
+        recovar_reference=recovar_reference,
+        recovar_shifted=recovar_shifted,
+        recovar_correction=recovar_corr,
+        recovar_highres=recovar_sum,
+        mask=positive_y_nyquist,
+    )
+    non_nyquist_active = np.zeros(capture.image_size, dtype=bool)
+    non_nyquist_active[supported_full] = True
+    non_nyquist_active &= ~positive_y_nyquist
+    (
+        shifted_source_phase_substitutions,
+        relion_observed_phase,
+        recovar_observed_phase,
+        phase_valid,
+    ) = _shifted_source_phase_substitutions(
+        relion_reference=relion_reference,
+        relion_unshifted=relion_unshifted,
+        relion_shifted=relion_shifted,
+        recovar_reference=recovar_reference,
+        recovar_unshifted=recovar_unshifted,
+        recovar_shifted=recovar_shifted,
+        recovar_correction=recovar_corr,
+        recovar_highres=recovar_sum,
+        active_mask=non_nyquist_active,
+    )
+
     stage_arrays = {
         "projected_reference": (relion_reference, recovar_reference),
         "unshifted_image": (relion_unshifted, recovar_unshifted),
@@ -510,6 +688,9 @@ def analyze(
         "stage_metrics_domain": "complete RELION current-size FFT rectangle",
         "score_active_pixel_stage_metrics": score_active_stage_metrics,
         "score_active_image_scalar_fits": score_active_scalar_fits,
+        "non_nyquist_observed_translation_phase_metric": _metric(
+            relion_observed_phase[phase_valid], recovar_observed_phase[phase_valid]
+        ),
         "score_active_pixel_stage_metrics_domain": (
             "RECOVAR compact support embedded in the RELION current-size FFT rectangle"
         ),
@@ -533,6 +714,14 @@ def analyze(
             "recovar_host_replay": float(recovar_raw_replay),
             "substitutions": substitutions,
             "factorial_substitutions": factorial_substitutions,
+            "positive_y_nyquist_shifted_substitutions": {
+                "mask_definition": "FFTW current-size row +N/2 on score-active pixels",
+                "masked_pixel_count": int(np.count_nonzero(positive_y_nyquist)),
+                **nyquist_substitutions,
+            },
+            "non_nyquist_shifted_source_phase_substitutions": (
+                shifted_source_phase_substitutions
+            ),
         },
         "native_capture_validation": validation,
         "artifacts": {

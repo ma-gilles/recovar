@@ -4,8 +4,10 @@ import pytest
 from scripts.analyze_k1_fine_operand_tuple import (
     _factorial_operand_substitutions,
     _largest_mismatches,
+    _masked_shifted_substitutions,
     _optimal_scalar_fit,
     _score_window_rows_from_relion_full,
+    _shifted_source_phase_substitutions,
 )
 
 
@@ -98,6 +100,64 @@ def test_factorial_operand_substitutions_covers_all_combinations():
     assert "recovar" in results
     assert "native_reference_shifted_correction_highres" in results
     assert results["recovar"] != results["native_reference_shifted_correction_highres"]
+
+
+@pytest.mark.unit
+def test_masked_shifted_substitutions_separates_inside_and_outside_pixels():
+    recovar_shifted = np.asarray([0.0, 0.0, 0.0], dtype=np.complex64)
+    native_shifted = np.asarray([1.0, 2.0, 4.0], dtype=np.complex64)
+    common = {
+        "relion_reference": np.zeros(3, dtype=np.complex64),
+        "relion_shifted": native_shifted,
+        "relion_correction": np.ones(3, dtype=np.float32),
+        "relion_highres": np.float32(0.0),
+        "recovar_reference": np.zeros(3, dtype=np.complex64),
+        "recovar_shifted": recovar_shifted,
+        "recovar_correction": np.ones(3, dtype=np.float32),
+        "recovar_highres": np.float32(0.0),
+    }
+
+    result = _masked_shifted_substitutions(
+        **common,
+        mask=np.asarray([False, True, False]),
+    )
+
+    assert result["recovar"] == 0.0
+    # The native fine-score kernel applies the explicit x-half multiplicity,
+    # so these three x=0 pixels each contribute one half of their square.
+    assert result["native_shifted_inside_mask_only"] == 2.0
+    assert result["native_shifted_outside_mask_only"] == 8.5
+    assert result["native_shifted_all"] == 10.5
+    assert result["native_all"] == 10.5
+
+
+@pytest.mark.unit
+def test_shifted_source_phase_substitutions_separates_operands():
+    recovar_source = np.asarray([1.0 + 0.0j, 2.0 + 0.0j], dtype=np.complex64)
+    native_source = np.asarray([3.0 + 0.0j, 4.0 + 0.0j], dtype=np.complex64)
+    recovar_phase = np.asarray([1.0 + 0.0j, 0.0 + 1.0j], dtype=np.complex64)
+    native_phase = np.asarray([0.0 + 1.0j, -1.0 + 0.0j], dtype=np.complex64)
+    result, observed_native, observed_recovar, valid = (
+        _shifted_source_phase_substitutions(
+            relion_reference=np.zeros(2, dtype=np.complex64),
+            relion_unshifted=native_source,
+            relion_shifted=native_source * native_phase,
+            recovar_reference=np.zeros(2, dtype=np.complex64),
+            recovar_unshifted=recovar_source,
+            recovar_shifted=recovar_source * recovar_phase,
+            recovar_correction=np.ones(2, dtype=np.float32),
+            recovar_highres=np.float32(0.0),
+            active_mask=np.ones(2, dtype=bool),
+        )
+    )
+
+    assert valid.tolist() == [True, True]
+    assert np.array_equal(observed_native, native_phase)
+    assert np.array_equal(observed_recovar, recovar_phase)
+    assert result["valid_pixel_count"] == 2
+    assert result["native_unshifted_source_only"] != result["recovar"]
+    assert result["native_translation_phase_only"] == result["recovar"]
+    assert result["native_unshifted_source_and_phase"] == result["native_shifted_direct"]
 
 
 @pytest.mark.unit
