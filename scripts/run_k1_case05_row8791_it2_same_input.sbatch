@@ -24,7 +24,7 @@ trap 'status=$?; printf "ERROR status=%d line=%d command=%q\n" "${status}" "${LI
 REPO=${REPO:-/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820}
 SOURCE_ROOT=${SOURCE_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET}
 CASE_DIR=${CASE_DIR:-${SOURCE_ROOT}/cases/5_very_high_noise_100k_g256_white_noise10_bf80}
-RELION_DIR=${RELION_DIR:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row08791_fresh_verbose_it2_07d3102_20260826T1525ET/relion}
+NATIVE_STATE_DIR=${RELION_DIR:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row08791_fresh_verbose_it2_07d3102_20260826T1525ET/relion}
 CUDA_LIB=${CUDA_LIB:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_cuda_sealed_aca8_20260826T0605ET/libcuda_backproject.so}
 TARGET_SOURCE_ROW=${TARGET_SOURCE_ROW:-8791}
 TARGET_CURRENT_SIZE=${TARGET_CURRENT_SIZE:-56}
@@ -45,8 +45,8 @@ for value_name in TARGET_SOURCE_ROW TARGET_CURRENT_SIZE EXPECTED_COARSE_SIGNIFIC
 done
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 test -s "${CASE_DIR}/data/particles.star"
-test -s "${RELION_DIR}/run_it001_optimiser.star"
-test -s "${RELION_DIR}/run_it001_data.star"
+test -s "${NATIVE_STATE_DIR}/run_it001_optimiser.star"
+test -s "${NATIVE_STATE_DIR}/run_it001_data.star"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO}" diff --binary | sha256sum | awk '{print $1}')" = "${EXPECTED_REPO_DIFF_SHA256}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -116,7 +116,7 @@ unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 nvidia-smi --query-gpu=uuid,name,memory.total,driver_version --format=csv,noheader > "${RUN_ROOT}/provenance/gpu_${SLURM_JOB_ID}.txt"
 env | sort > "${RUN_ROOT}/provenance/environment_${SLURM_JOB_ID}.txt"
 git -C "${REPO}" status --short --branch > "${RUN_ROOT}/provenance/repo_status_${SLURM_JOB_ID}.txt"
-sha256sum "${LAUNCHER}" "${CUDA_LIB}" "${RELION_DIR}/run_it001_optimiser.star" "${RELION_DIR}/run_it001_data.star" > "${RUN_ROOT}/provenance/static_inputs_${SLURM_JOB_ID}.sha256"
+sha256sum "${LAUNCHER}" "${CUDA_LIB}" "${NATIVE_STATE_DIR}/run_it001_optimiser.star" "${NATIVE_STATE_DIR}/run_it001_data.star" > "${RUN_ROOT}/provenance/static_inputs_${SLURM_JOB_ID}.sha256"
 
 cd "${REPO}"
 "${PYTHON}" - <<'PY'
@@ -133,7 +133,7 @@ assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_erro
 PY
 
 command=("${PYTHON}" -m scripts.run_multi_iter_parity
-    --relion_dir "${RELION_DIR}"
+    --relion_dir "${NATIVE_STATE_DIR}"
     --data_star "${CASE_DIR}/data/particles.star"
     --iter 1 --max_iter 1
     --continuous-relion-noise-state
