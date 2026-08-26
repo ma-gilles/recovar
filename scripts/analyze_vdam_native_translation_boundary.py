@@ -62,6 +62,21 @@ def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | i
     }
 
 
+def _candidate_reference_rows(
+    reference_by_rotation: np.ndarray,
+    candidate_rotation_rows: np.ndarray,
+) -> np.ndarray:
+    """Expand one reference per rotation into the captured candidate order."""
+
+    reference = np.asarray(reference_by_rotation)
+    rows = np.asarray(candidate_rotation_rows, dtype=np.int64).reshape(-1)
+    if reference.ndim != 2:
+        raise ValueError("projected references must have shape [rotation, pixel]")
+    if np.any(rows < 0) or np.any(rows >= reference.shape[0]):
+        raise ValueError("candidate rotation row lies outside projected references")
+    return reference[rows]
+
+
 def _positive_weight_metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | int]:
     """Separate a common multiplicative scale from positive score weights."""
 
@@ -468,6 +483,180 @@ def _current_crop_to_compact(crop: np.ndarray, current_size: int) -> np.ndarray:
     return lookup
 
 
+def _load_native_projector(native_dir: Path) -> tuple[np.ndarray, int, int, np.ndarray]:
+    """Load the in-memory RELION ``PPref`` sealed by the fine-pass capture."""
+
+    prefix = Path(native_dir) / "pass1_class0_ppref_"
+    dims = np.asarray(_flat_memmap(Path(f"{prefix}dims.bin"), np.int32), dtype=np.int64)
+    if dims.size != 7:
+        raise ValueError(f"RELION PPref dimensions must contain seven values, got {dims.size}")
+    xdim, ydim, zdim, _xinit, _yinit, _zinit, r_max = map(int, dims)
+    real = np.asarray(_flat_memmap(Path(f"{prefix}real.bin")), dtype=np.float32)
+    imag = np.asarray(_flat_memmap(Path(f"{prefix}imag.bin")), dtype=np.float32)
+    if real.size != imag.size or real.size != xdim * ydim * zdim:
+        raise ValueError("RELION PPref payload does not match its captured dimensions")
+    padding_value = float(_scalar(Path(f"{prefix}padding_factor.bin")))
+    padding_factor = int(round(padding_value))
+    if padding_factor < 1 or float(padding_factor) != padding_value:
+        raise ValueError(f"invalid RELION PPref padding factor: {padding_value}")
+    projector = (real + np.complex64(1j) * imag).astype(np.complex64)
+    return projector.reshape(zdim, ydim, xdim), r_max, padding_factor, dims
+
+
+def _projection_source_boundary(
+    *,
+    native_dir: Path,
+    native_map_path: Path,
+    recovar_map_path: Path,
+    native_reference: np.ndarray,
+    live_reference: np.ndarray,
+    live_rotations: np.ndarray,
+    candidate_rotation_rows: np.ndarray,
+    score_indices: np.ndarray,
+    score_half_weights: np.ndarray,
+    full_size: int,
+    current_size: int,
+) -> dict[str, object]:
+    """Locate a projected-reference gap across map, PPref, and texture stages."""
+
+    from recovar.em.dense_single_volume.helpers.projection import (
+        compute_relion_projector_projections_block,
+    )
+    from recovar.em.initial_model.dense_adapter import (
+        reference_to_relion_projector_half_maps,
+    )
+    from recovar.utils.helpers import load_relion_volume
+    from scripts.analyze_em_k1_fine_ppref_source_boundary import (
+        classify_source_boundary,
+    )
+    from scripts.audit_em_k1_membership_capture_inertness import _metrics as _map_metrics
+
+    native_map = np.asarray(load_relion_volume(native_map_path), dtype=np.float32)
+    recovar_map = np.asarray(load_relion_volume(recovar_map_path), dtype=np.float32)
+    expected_shape = (int(full_size),) * 3
+    if native_map.shape != expected_shape or recovar_map.shape != expected_shape:
+        raise ValueError(
+            "projection-source maps must match the physical image box: "
+            f"native={native_map.shape}, recovar={recovar_map.shape}, expected={expected_shape}"
+        )
+
+    frozen_projector, r_max, padding_factor, projector_dims = _load_native_projector(native_dir)
+    rebuilt_native, native_r_max = reference_to_relion_projector_half_maps(
+        native_map[None],
+        current_size=int(current_size),
+        padding_factor=int(padding_factor),
+    )
+    rebuilt_recovar, recovar_r_max = reference_to_relion_projector_half_maps(
+        recovar_map[None],
+        current_size=int(current_size),
+        padding_factor=int(padding_factor),
+    )
+    if int(native_r_max) != int(r_max) or int(recovar_r_max) != int(r_max):
+        raise ValueError(
+            "rebuilt PPref radius differs from the capture: "
+            f"captured={r_max}, native={native_r_max}, recovar={recovar_r_max}"
+        )
+    rebuilt_native = np.asarray(rebuilt_native[0], dtype=np.complex64)
+    rebuilt_recovar = np.asarray(rebuilt_recovar[0], dtype=np.complex64)
+
+    def _project(projector: np.ndarray) -> np.ndarray:
+        projected, _ = compute_relion_projector_projections_block(
+            jnp.asarray(projector, dtype=jnp.complex64),
+            jnp.asarray(live_rotations, dtype=jnp.float32),
+            (int(full_size), int(full_size)),
+            r_max=int(r_max),
+            padding_factor=int(padding_factor),
+            return_abs2=False,
+            centered_rows=True,
+            dense_scale=True,
+            projector_output_size=int(current_size),
+            pixel_indices=jnp.asarray(score_indices, dtype=jnp.int32),
+            relion_texture_interp=True,
+            mask_current_image_disk=False,
+        )
+        return np.asarray(jax.block_until_ready(projected), dtype=np.complex64)
+
+    frozen_projection = _project(frozen_projector)
+    rebuilt_native_projection = _project(rebuilt_native)
+    rebuilt_recovar_projection = _project(rebuilt_recovar)
+    active = np.asarray(score_half_weights, dtype=np.float32) > 0.0
+    if not np.any(active):
+        raise ValueError("projection-source boundary has no active score pixels")
+    candidate_rows = np.asarray(candidate_rotation_rows, dtype=np.int64)
+    captured_native = np.asarray(native_reference, dtype=np.complex64)[:, active]
+    captured_recovar = np.asarray(live_reference, dtype=np.complex64)[:, active]
+
+    comparisons = {
+        "frozen_ppref_texture_vs_native_capture": _metric(
+            captured_native,
+            frozen_projection[candidate_rows][:, active],
+        ),
+        "native_map_rebuilt_ppref_vs_frozen_ppref": _metric(
+            frozen_projector,
+            rebuilt_native,
+        ),
+        "native_map_rebuilt_projection_vs_native_capture": _metric(
+            captured_native,
+            rebuilt_native_projection[candidate_rows][:, active],
+        ),
+        "recovar_map_rebuilt_projection_vs_recovar_capture": _metric(
+            captured_recovar,
+            rebuilt_recovar_projection[candidate_rows][:, active],
+        ),
+        "native_capture_vs_recovar_capture": _metric(
+            captured_native,
+            captured_recovar,
+        ),
+        "frozen_ppref_vs_recovar_map_rebuilt_ppref": _metric(
+            frozen_projector,
+            rebuilt_recovar,
+        ),
+    }
+    frozen_texture = comparisons["frozen_ppref_texture_vs_native_capture"]
+    native_rebuild = comparisons["native_map_rebuilt_ppref_vs_frozen_ppref"]
+    recovar_replay = comparisons["recovar_map_rebuilt_projection_vs_recovar_capture"]
+    cross_projection = comparisons["native_capture_vs_recovar_capture"]
+    frozen_texture_exact = (
+        int(frozen_texture["exact_count"]) == int(frozen_texture["value_count"])
+    )
+    classification = classify_source_boundary(
+        frozen_relion_texture_exact=frozen_texture_exact,
+        relion_map_rebuild_relative_l2=float(native_rebuild["relative_l2"]),
+        recovar_map_replay_relative_l2=float(recovar_replay["relative_l2"]),
+        cross_engine_projection_relative_l2=float(cross_projection["relative_l2"]),
+        map_states_equal=bool(np.array_equal(native_map, recovar_map)),
+    )
+    closure_floor = max(
+        float(native_rebuild["relative_l2"]),
+        float(recovar_replay["relative_l2"]),
+        np.finfo(np.float64).tiny,
+    )
+    return {
+        "classification": classification,
+        "first_open_boundary": (
+            "iteration-start map state"
+            if classification == "fine_projection_difference_is_iteration_start_map_state"
+            else "map-to-PPref or texture projection boundary remains open"
+        ),
+        "map_comparison": _map_metrics(native_map, recovar_map),
+        "comparisons": comparisons,
+        "identity": {
+            "projector_dims_xyz_and_origins_rmax": projector_dims.tolist(),
+            "projector_r_max": int(r_max),
+            "projector_padding_factor": int(padding_factor),
+            "active_score_pixel_count": int(np.count_nonzero(active)),
+        },
+        "fixed_gates": {
+            "rebuild_relative_l2_gate": 1.0e-7,
+            "source_separation_ratio_gate": 100.0,
+            "observed_source_separation_ratio": float(
+                float(cross_projection["relative_l2"]) / closure_floor
+            ),
+            "frozen_texture_requires_array_equal": True,
+        },
+    }
+
+
 def analyze(
     native_dir: Path,
     live_score_path: Path,
@@ -484,8 +673,12 @@ def analyze(
     native_fine_operand_path: Path | None = None,
     native_model_path: Path | None = None,
     recovar_model_path: Path | None = None,
+    native_map_path: Path | None = None,
+    recovar_map_path: Path | None = None,
 ) -> dict[str, object]:
     native_dir = Path(native_dir)
+    if (native_map_path is None) != (recovar_map_path is None):
+        raise ValueError("native and RECOVAR map paths must be provided together")
     with np.load(live_score_path, allow_pickle=False) as payload:
         live = {name: np.array(payload[name]) for name in payload.files}
 
@@ -633,7 +826,10 @@ def analyze(
     )
     native_reference = native_reference[:, crop]
     native_shifted = native_shifted[:, crop]
-    live_reference = np.asarray(live["debug_proj_weighted"], dtype=np.complex64)[rotation]
+    live_reference = _candidate_reference_rows(
+        np.asarray(live["debug_proj_weighted"], dtype=np.complex64),
+        rotation,
+    )
     live_shifted_weighted = np.asarray(live["debug_shifted_score"], dtype=np.complex64)[translation]
 
     base_corrected = -scale * (
@@ -848,6 +1044,21 @@ def analyze(
             live_shifted_weighted,
         ),
     }
+    projection_source_boundary = None
+    if native_map_path is not None:
+        projection_source_boundary = _projection_source_boundary(
+            native_dir=native_dir,
+            native_map_path=Path(native_map_path),
+            recovar_map_path=Path(recovar_map_path),
+            native_reference=native_reference,
+            live_reference=live_reference,
+            live_rotations=np.asarray(live["local_rotation_matrices"], dtype=np.float32),
+            candidate_rotation_rows=rotation,
+            score_indices=score_indices,
+            score_half_weights=score_half_weights,
+            full_size=full_size,
+            current_size=current_size,
+        )
     if (native_model_path is None) != (recovar_model_path is None):
         raise ValueError("native and RECOVAR model paths must be provided together")
     if native_model_path is not None:
@@ -1107,6 +1318,7 @@ def analyze(
             "storewavg_operands_available": storewavg_available,
         },
         "comparisons": comparisons,
+        "projection_source_boundary": projection_source_boundary,
         "artifacts": {
             "native_directory": str(native_dir.resolve()),
             "live_score_dump": str(Path(live_score_path).resolve()),
@@ -1135,6 +1347,16 @@ def analyze(
                 if recovar_model_path is not None
                 else None
             ),
+            "native_map": (
+                str(Path(native_map_path).resolve())
+                if native_map_path is not None
+                else None
+            ),
+            "recovar_map": (
+                str(Path(recovar_map_path).resolve())
+                if recovar_map_path is not None
+                else None
+            ),
         },
     }
 
@@ -1155,6 +1377,8 @@ def main() -> None:
     parser.add_argument("--native-fine-operand", type=Path)
     parser.add_argument("--native-model", type=Path)
     parser.add_argument("--recovar-model", type=Path)
+    parser.add_argument("--native-map", type=Path)
+    parser.add_argument("--recovar-map", type=Path)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     if args.output_json.exists():
@@ -1174,6 +1398,8 @@ def main() -> None:
         native_fine_operand_path=args.native_fine_operand,
         native_model_path=args.native_model,
         recovar_model_path=args.recovar_model,
+        native_map_path=args.native_map,
+        recovar_map_path=args.recovar_map,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

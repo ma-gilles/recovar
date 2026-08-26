@@ -1,16 +1,20 @@
 """Unit tests for the VDAM native translation-boundary analyzer."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from scripts.analyze_vdam_native_translation_boundary import (
     _captured_native_current_size,
+    _candidate_reference_rows,
     _centered_diff2_replay_stats,
     _centered_residual_decomposition,
     _centered_score_stage_boundary,
     _current_crop_to_compact,
     _diff2_replay_boundary,
     _flat_real_dump,
+    _load_native_projector,
     _metric,
     _native_crop_rows,
     _native_current_fft_rows,
@@ -18,9 +22,11 @@ from scripts.analyze_vdam_native_translation_boundary import (
     _positive_weight_metric,
     _preprocess_capture,
     _top_pair_score_boundary,
+    analyze,
 )
 
 pytestmark = pytest.mark.unit
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_native_crop_rows_map_centered_half_to_relion_fftw_crop():
@@ -62,6 +68,17 @@ def test_metric_reports_exact_complex_values_and_residual():
     assert result["exact_count"] == 1
     assert result["value_count"] == 2
     assert result["max_abs"] == pytest.approx(1.0)
+
+
+def test_candidate_reference_rows_maps_rotation_rows_exactly_once():
+    by_rotation = np.asarray(
+        [[1 + 1j, 2 + 2j], [3 + 3j, 4 + 4j], [5 + 5j, 6 + 6j]],
+        dtype=np.complex64,
+    )
+
+    candidate = _candidate_reference_rows(by_rotation, np.asarray([2, 0, 2, 1]))
+
+    np.testing.assert_array_equal(candidate, by_rotation[[2, 0, 2, 1]])
 
 
 def test_positive_weight_metric_factors_out_common_scale():
@@ -192,6 +209,62 @@ def _write_flat_real(path, values):
     with path.open("wb") as stream:
         np.asarray([values.size], dtype=np.int32).tofile(stream)
         values.tofile(stream)
+
+
+def _write_flat(path, values, dtype):
+    values = np.asarray(values, dtype=dtype)
+    with path.open("wb") as stream:
+        np.asarray([values.size], dtype=np.int32).tofile(stream)
+        values.tofile(stream)
+
+
+def test_load_native_projector_preserves_capture_layout(tmp_path):
+    dims = np.asarray([3, 3, 3, 0, -1, -1, 1], dtype=np.int32)
+    values = np.arange(27, dtype=np.float64)
+    _write_flat(tmp_path / "pass1_class0_ppref_dims.bin", dims, np.int32)
+    _write_flat(tmp_path / "pass1_class0_ppref_real.bin", values, np.float64)
+    _write_flat(tmp_path / "pass1_class0_ppref_imag.bin", -values, np.float64)
+    np.asarray([1.0], dtype=np.float64).tofile(
+        tmp_path / "pass1_class0_ppref_padding_factor.bin"
+    )
+
+    projector, r_max, padding_factor, loaded_dims = _load_native_projector(tmp_path)
+
+    assert projector.shape == (3, 3, 3)
+    assert projector.dtype == np.complex64
+    assert r_max == 1
+    assert padding_factor == 1
+    np.testing.assert_array_equal(loaded_dims, dims)
+    np.testing.assert_array_equal(
+        projector.reshape(-1),
+        values.astype(np.float32) - np.complex64(1j) * values.astype(np.float32),
+    )
+
+
+def test_analyze_requires_native_and_recovar_maps_as_a_pair(tmp_path):
+    with pytest.raises(ValueError, match="map paths must be provided together"):
+        analyze(
+            tmp_path,
+            tmp_path / "missing-score.npz",
+            full_size=8,
+            native_map_path=tmp_path / "native.mrc",
+        )
+
+
+def test_native_translation_runner_pins_repo_cuda_and_binding_provenance():
+    source = (REPO_ROOT / "scripts/run_vdam_native_translation_boundary.sbatch").read_text()
+
+    for token in (
+        "EXPECTED_REPO_HEAD",
+        "EXPECTED_CUDA_SHA256",
+        "EXPECTED_RELION_BIND_SHA256",
+        "STAGED_CUDA_DIR",
+        'cp "${CUDA_SOURCE_LIB}" "${RECOVAR_CUDA_LIB}"',
+        "VDAM native translation CUDA library changed during import",
+        "VDAM native translation CUDA library changed during science",
+    ):
+        assert token in source
+    assert source.count("git status --porcelain=v1 --untracked-files=no") == 2
 
 
 def test_captured_native_current_size_reads_exact_scalar(tmp_path):
