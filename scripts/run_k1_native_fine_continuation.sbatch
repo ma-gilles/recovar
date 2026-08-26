@@ -39,12 +39,25 @@ EXPECTED_RELION_SOURCE_HEAD=${EXPECTED_RELION_SOURCE_HEAD:-f8355ba9ef87ee28f3ae7
 EXPECTED_RELION_SOURCE_TREE=${EXPECTED_RELION_SOURCE_TREE:-3111173edb150f98bc2446efc54229ff736b40a1}
 EXPECTED_RELION_SOURCE_DIFF_SHA256=${EXPECTED_RELION_SOURCE_DIFF_SHA256:-15e9cceb38815cc85ed946e1bb5ee8a9b42f89a530cf8d5af2d76e83228be3f9}
 EXPECTED_AUDIT_REPO_HEAD=${EXPECTED_AUDIT_REPO_HEAD:-187a9f60cdea19363d49d46099b052f23288f05a}
+FINE_OPERAND_ROTATION_LOCAL=${FINE_OPERAND_ROTATION_LOCAL:-}
+FINE_OPERAND_TRANSLATIONS=${FINE_OPERAND_TRANSLATIONS:-}
+FINE_OPERAND_TRANSLATIONS=${FINE_OPERAND_TRANSLATIONS//:/,}
 
 CAPTURE=${RUN_ROOT}/capture
 RELION_OUT=${RUN_ROOT}/relion
 
 test "${TARGET_STACK_ONE_BASED}" -gt 0
 test "${TARGET_ITERATION}" -gt 0
+if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" || -n "${FINE_OPERAND_TRANSLATIONS}" ]]; then
+  [[ "${FINE_OPERAND_ROTATION_LOCAL}" =~ ^[0-9]+$ ]]
+  IFS=',' read -r -a fine_operand_translation_values <<< "${FINE_OPERAND_TRANSLATIONS}"
+  test "${#fine_operand_translation_values[@]}" -gt 0
+  for translation in "${fine_operand_translation_values[@]}"; do
+    [[ "${translation}" =~ ^[0-9]+$ ]]
+  done
+  test "$(printf '%s\n' "${fine_operand_translation_values[@]}" | sort -u | wc -l)" \
+    -eq "${#fine_operand_translation_values[@]}"
+fi
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 test -x "${PYTHON}"
 test -s "${DATA_DIR}/particles.star"
@@ -112,6 +125,13 @@ export RELION_PREITER_PARTICLE_ORDER_SEED=${PHYSICAL_ORDER_SEED}
 export RELION_PREITER_PARTICLE_ORDER_ITER=${TARGET_ITERATION}
 export RELION_SAMPLING_PERTURBATION_OVERRIDE=${SAMPLING_PERTURBATION_OVERRIDE}
 export RELION_SAMPLING_PERTURBATION_OVERRIDE_ITER=${TARGET_ITERATION}
+if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" ]]; then
+  export RELION_FINE_OPERAND_CAPTURE=1
+  export RELION_FINE_OPERAND_CAPTURE_ROTATION_LOCAL=${FINE_OPERAND_ROTATION_LOCAL}
+  export RELION_FINE_OPERAND_CAPTURE_TRANSLATIONS=${FINE_OPERAND_TRANSLATIONS}
+  export RELION_FINE_OPERAND_CAPTURE_EXPECTED_CANDIDATES=${#fine_operand_translation_values[@]}
+  export RELION_FINE_OPERAND_CAPTURE_MAX_BYTES=2000000000
+fi
 
 command=(srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
   --continue "${CONTINUE_STAR}" --o "${RELION_OUT}/run"
@@ -136,6 +156,11 @@ factor=$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.bpre-v2.bin')
 test -n "${fine_score}" -a -n "${factor}"
 test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-score-v1.bin' | wc -l)" -eq 1
 test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.bpre-v2.bin' | wc -l)" -eq 1
+if [[ -n "${FINE_OPERAND_ROTATION_LOCAL}" ]]; then
+  test "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-operand-v1.bin' | wc -l)" -eq 1
+else
+  test -z "$(find "${CAPTURE}" -maxdepth 1 -type f -name '*.fine-operand-v1.bin' -print -quit)"
+fi
 test -s "$(printf '%s/run_it%03d_data.star' "${RELION_OUT}" "${TARGET_ITERATION}")"
 "${PYTHON}" - "${fine_score}" "${factor}" "${TARGET_STACK_ONE_BASED}" "${TARGET_ITERATION}" <<'PY'
 import sys
