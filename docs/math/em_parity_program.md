@@ -27566,3 +27566,23 @@ and intermediate analyzer SHA-256
 It writes `analysis/terminal_fsc.json` and
 `analysis/terminal_intermediates.json` inside the existing producer root.  No
 dependent terminal audit had previously been attached to this producer.
+
+Read-only last-numbered particle-state audits `13004153` and `13004154` were
+submitted for the remaining final-only case-4 and case-5 trajectories.  They
+join RECOVAR and RELION by immutable source identity at RECOVAR/RELION
+iterations `16/17` and `15/16`, respectively, then record pose, translation,
+Pmax, significant-support, and final-state distributions.  Their producer
+roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET`;
+the matching runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case04_terminal_exactnative_staticattrs_20260825T0800ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case05_terminal_exactnative_staticattrs_20260825T0800ET`.
+All four roots contain `SAFE_TO_DELETE`.  Both audits pin primary HEAD
+`07d3102f8249d95aede4fecac92599bb5cba96f9` and launcher SHA-256
+`316c156bd3edac36e07eef4de335c5c5d4e4d0f2462d55b2f0de7cb403a7a843`.
+These measurements will select repeat-aware source rows for focused early-
+boundary captures; they do not alter either trajectory or the fixed `31/34`
+score.
