@@ -1654,12 +1654,15 @@ def _prepare_per_image_pass2_inputs(
     :func:`compute_pass2_stats_sparse_perimage_reference` exactly so the
     batched path is a strict per-image equivalent.
 
-    ``dtype`` controls the precision of the RELION-supplied fine rotation
-    override (``fine_rotations_override`` / ``fine_mstep_rotations_override``).
-    RELION's own fine-search rotation matrices stay ``RFLOAT`` (double) end to
-    end in a double-precision build; pass ``precision_policy.score_real_dtype``
-    from the caller so this matches ``use_float64_scoring`` instead of always
-    narrowing to float32.
+    ``dtype`` controls the precision of every fine/oversampled rotation
+    matrix this function builds or accepts: the RELION-supplied fine
+    rotation override (``fine_rotations_override`` /
+    ``fine_mstep_rotations_override``) *and* the standard
+    ``get_oversampled_rotation_grid_from_samples`` grid built when no
+    override is supplied. RELION's own fine-search rotation matrices stay
+    ``RFLOAT`` (double) end to end in a double-precision build; pass
+    ``precision_policy.score_real_dtype`` from the caller so this matches
+    ``use_float64_scoring`` instead of always narrowing to float32.
     """
     from recovar.em.sampling import get_oversampled_rotation_grid_from_samples
 
@@ -1780,9 +1783,10 @@ def _prepare_per_image_pass2_inputs(
                         oversampling_order=oversampling_order,
                         random_perturbation=random_perturbation,
                         return_rotation_indices=True,
+                        dtype=dtype,
                     )
                     full_support_rotation_cache = (
-                        np.asarray(full_rots, dtype=np.float32),
+                        np.asarray(full_rots, dtype=dtype),
                         np.asarray(full_parent_map, dtype=np.int32),
                         np.asarray(full_rot_indices, dtype=np.int64),
                     )
@@ -1806,8 +1810,9 @@ def _prepare_per_image_pass2_inputs(
                 oversampling_order=oversampling_order,
                 random_perturbation=random_perturbation,
                 return_rotation_indices=True,
+                dtype=dtype,
             )
-            oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
+            oversampled_rots = np.asarray(oversampled_rots, dtype=dtype)
             parent_map = np.asarray(parent_map, dtype=np.int32)
             oversampled_rot_indices = np.asarray(oversampled_rot_indices, dtype=np.int64)
             oversampled_rots, parent_map, oversampled_rot_indices = _reorder_children(
@@ -2852,18 +2857,48 @@ _PASS2_TOP2_DEBUG_INDICES_ENV = "RECOVAR_PASS2_TOP2_DEBUG_INDICES"
 
 
 def _pass2_top2_debug_target_indices() -> tuple[int, ...]:
-    """Diagnostic only: original-dataset image indices to log the fine (pass-2)
-    top-2 candidate score margin for, mirroring
-    ``k_class._pass1_top2_debug_target_indices`` but for the oversampled
-    fine-grid decision within pass-1's surviving coarse cell(s), where the
-    per-particle candidate set actually differs (children of that
-    particle's own coarse winner).
+    """Diagnostic only: original (combined, pre-half-split) dataset image
+    indices to log the fine (pass-2) top-2 candidate score margin for,
+    mirroring ``k_class._pass1_top2_debug_target_indices`` but for the
+    oversampled fine-grid decision within pass-1's surviving coarse
+    cell(s), where the per-particle candidate set actually differs
+    (children of that particle's own coarse winner). Resolved to this
+    call's local (within-half) index space via
+    ``_resolve_local_target_indices`` before use -- a half-1 and a half-2
+    particle can share the same local position, so matching on the raw
+    env value directly would silently also hit an unrelated particle in
+    the other half.
     """
 
     raw = os.environ.get(_PASS2_TOP2_DEBUG_INDICES_ENV, "").strip()
     if not raw:
         return ()
     return tuple(int(token) for token in raw.split(",") if token.strip())
+
+
+def _resolve_local_target_indices(experiment_dataset, original_targets: tuple[int, ...]) -> tuple[int, ...]:
+    """Map original (combined dataset) indices to this half's local indices.
+
+    Only returns the subset of ``original_targets`` actually present in
+    ``experiment_dataset`` (e.g. the half this call is scoring). Required
+    because pass-1/pass-2 debug/override target indices are specified in
+    original-dataset space but ``image_indices`` inside the per-half
+    scoring functions is local (within-half) space, and two different
+    halves' particles can land on the same local position.
+    """
+
+    if not original_targets:
+        return ()
+    resolver = getattr(experiment_dataset, "local_image_indices_from_original", None)
+    if not callable(resolver):
+        raise RuntimeError(
+            "pass1/pass2 top-2 debug/override requires "
+            "experiment_dataset.local_image_indices_from_original()"
+        )
+    local = np.asarray(
+        resolver(np.asarray(original_targets, dtype=np.int64), allow_missing=True)
+    )
+    return tuple(int(v) for v in local if v >= 0)
 
 
 def _log_pass2_top2_debug(scores, image_indices, targets: tuple[int, ...], *, dataset_tag=None) -> None:
@@ -5871,9 +5906,15 @@ def _score_pass2_bucket_gaussian_algebraic_single_cached(
 
 
 def _relion_cuda_fine_reduce_lanes(lanes):
-    """Reduce the 256 shared-memory lanes used by RELION CUDA REF3D fine diff2."""
+    """Reduce the 256 shared-memory lanes used by RELION CUDA REF3D fine diff2.
 
-    lanes = jnp.asarray(lanes, dtype=jnp.float32)
+    Preserves the caller's dtype (promoted against float32 as a floor) instead
+    of forcing float32, so a caller that has already promoted its operands to
+    float64 (to match a ``ACC_DOUBLE_PRECISION`` RELION oracle) is not
+    silently narrowed back down here.
+    """
+
+    lanes = jnp.asarray(lanes, dtype=jnp.result_type(lanes, jnp.float32))
     if lanes.shape[-1] != _RELION_CUDA_FINE_REF3D_BLOCK_SIZE:
         raise ValueError(
             "RELION CUDA fine reduction needs exactly "
@@ -6062,16 +6103,23 @@ def _relion_cuda_fine_normalized_cc_score(
     """Reproduce RELION CUDA's 256-lane fine normalized-CC reduction.
 
     The pinned ``cuda_kernel_diff2_CC_fine<REF3D=true>`` accumulates numerator
-    and reference norm over pixels ``tid + pass * 256`` in float32, then uses
-    the same shared-memory tree as fine Gaussian ``diff2``.  RECOVAR stores
-    the score window in centered compact order, so ``relion_full_to_compact``
-    restores RELION's packed current-size FFTW pixel order before accumulation.
+    and reference norm over pixels ``tid + pass * 256`` in RELION's XFLOAT,
+    then uses the same shared-memory tree as fine Gaussian ``diff2``. XFLOAT is
+    float32 in RELION's default accelerated build but float64 whenever
+    ``ACC_DOUBLE_PRECISION`` is set (our double-precision oracle build); this
+    reduction follows the caller's operand dtype instead of hardcoding
+    float32, so it matches whichever precision the RELION oracle actually
+    used. RECOVAR stores the score window in centered compact order, so
+    ``relion_full_to_compact`` restores RELION's packed current-size FFTW
+    pixel order before accumulation.
     """
 
-    reference = jnp.asarray(reference, dtype=jnp.complex64)
-    shifted_score = jnp.asarray(shifted_score, dtype=jnp.complex64)
-    score_weight = jnp.asarray(score_weight, dtype=jnp.float32)
-    half_weights = jnp.asarray(half_weights, dtype=jnp.float32)
+    complex_dtype = jnp.result_type(reference, shifted_score, jnp.complex64)
+    real_dtype = jnp.result_type(score_weight, half_weights, jnp.float32)
+    reference = jnp.asarray(reference, dtype=complex_dtype)
+    shifted_score = jnp.asarray(shifted_score, dtype=complex_dtype)
+    score_weight = jnp.asarray(score_weight, dtype=real_dtype)
+    half_weights = jnp.asarray(half_weights, dtype=real_dtype)
     n_values = int(reference.shape[-1])
     if (
         shifted_score.shape[-1] != n_values
@@ -6088,7 +6136,7 @@ def _relion_cuda_fine_normalized_cc_score(
     )
     norm_shape = jnp.broadcast_shapes(reference.shape[:-1], score_weight.shape[:-1])
     if n_values == 0:
-        return jnp.full(numerator_shape, -jnp.inf, dtype=jnp.float32)
+        return jnp.full(numerator_shape, -jnp.inf, dtype=real_dtype)
 
     if relion_full_to_compact is None:
         relion_full_to_compact = jnp.arange(n_values, dtype=jnp.int32)
@@ -6109,8 +6157,8 @@ def _relion_cuda_fine_normalized_cc_score(
         [(0, padded_size - full_image_size)],
         constant_values=-1,
     )
-    numerator_lanes = jnp.zeros(numerator_shape + (block_size,), dtype=jnp.float32)
-    norm_lanes = jnp.zeros(norm_shape + (block_size,), dtype=jnp.float32)
+    numerator_lanes = jnp.zeros(numerator_shape + (block_size,), dtype=real_dtype)
+    norm_lanes = jnp.zeros(norm_shape + (block_size,), dtype=real_dtype)
 
     def accumulate_pass(pass_index, lane_values):
         numerator, norm = lane_values
@@ -6130,7 +6178,7 @@ def _relion_cuda_fine_normalized_cc_score(
         norm_terms = (
             ref_pass.real * ref_pass.real + ref_pass.imag * ref_pass.imag
         ) * score_weight_pass * half_weight_pass
-        zero = jnp.asarray(0.0, dtype=jnp.float32)
+        zero = jnp.asarray(0.0, dtype=real_dtype)
         numerator_terms = jnp.where(valid_pixel, numerator_terms, zero)
         norm_terms = jnp.where(valid_pixel, norm_terms, zero)
         return numerator + numerator_terms, norm + norm_terms
@@ -6144,7 +6192,7 @@ def _relion_cuda_fine_normalized_cc_score(
     numerator = _relion_cuda_fine_reduce_lanes(numerator_lanes)
     norm = _relion_cuda_fine_reduce_lanes(norm_lanes)
     return numerator / jnp.sqrt(
-        jnp.maximum(norm, jnp.asarray(1e-30, dtype=jnp.float32))
+        jnp.maximum(norm, jnp.asarray(1e-30, dtype=real_dtype))
     )
 
 
@@ -6695,8 +6743,13 @@ def _score_pass2_bucket_normalized_cc(
     cross_products = (
         proj_half[:, :, None, :].real * shifted_score[:, None, :, :].real
         + proj_half[:, :, None, :].imag * shifted_score[:, None, :, :].imag
-    ) * jnp.asarray(half_weights, dtype=jnp.float32)[None, None, None, :]
-    cross = -2.0 * jnp.sum(cross_products, axis=-1, dtype=jnp.float32)
+    ) * jnp.asarray(half_weights, dtype=proj_half.real.dtype)[None, None, None, :]
+    # Sum in the operands' own precision (natural promotion) rather than
+    # forcing float32 -- this term is the CC numerator and must match the
+    # denominator's precision (below, via Precision.HIGHEST) or a genuine
+    # near-tie candidate ranking can flip relative to RELION's RFLOAT/XFLOAT
+    # arithmetic. See docs/math/relion_parity_agent_notes.md.
+    cross = -2.0 * jnp.sum(cross_products, axis=-1)
     proj_abs2_weighted = (
         proj_half.real * proj_half.real + proj_half.imag * proj_half.imag
     ) * half_weights[None, None, :]
@@ -6725,8 +6778,11 @@ def _score_pass2_bucket_normalized_cc_single_cached(
     cross_products = (
         proj_half[:, None, :].real * shifted_score[None, :, :].real
         + proj_half[:, None, :].imag * shifted_score[None, :, :].imag
-    ) * jnp.asarray(half_weights, dtype=jnp.float32)[None, None, :]
-    cross = -2.0 * jnp.sum(cross_products, axis=-1, dtype=jnp.float32)
+    ) * jnp.asarray(half_weights, dtype=proj_half.real.dtype)[None, None, :]
+    # See _score_pass2_bucket_normalized_cc: sum in the operands' own
+    # precision instead of forcing float32, to match the einsum denominator's
+    # precision below and avoid spurious near-tie ranking flips.
+    cross = -2.0 * jnp.sum(cross_products, axis=-1)
     proj_abs2_weighted = (
         proj_half.real * proj_half.real + proj_half.imag * proj_half.imag
     ) * half_weights[None, :]
@@ -6914,8 +6970,10 @@ def _score_pass2_pairs_normalized_cc(
     proj_pair = proj_half[row, safe_rotation_row, :]
     cross_products = (
         proj_pair.real * shifted_pair.real + proj_pair.imag * shifted_pair.imag
-    ) * jnp.asarray(half_weights, dtype=jnp.float32)[None, None, :]
-    cross = -2.0 * jnp.sum(cross_products, axis=-1, dtype=jnp.float32)
+    ) * jnp.asarray(half_weights, dtype=proj_pair.real.dtype)[None, None, :]
+    # See _score_pass2_bucket_normalized_cc: sum in the operands' own
+    # precision instead of forcing float32.
+    cross = -2.0 * jnp.sum(cross_products, axis=-1)
     proj_abs2_weighted = (
         proj_pair.real * proj_pair.real + proj_pair.imag * proj_pair.imag
     ) * half_weights[None, None, :]
@@ -13196,7 +13254,9 @@ def compute_pass2_stats_sparse_bucketed(
             else:
                 scores = _score_pass2_bucket_normalized_cc(*score_args)
             preprior_scores = scores
-            _pass2_top2_targets = _pass2_top2_debug_target_indices()
+            _pass2_top2_targets = _resolve_local_target_indices(
+                experiment_dataset, _pass2_top2_debug_target_indices()
+            )
             if _pass2_top2_targets:
                 _log_pass2_top2_debug(
                     scores, image_indices, _pass2_top2_targets, dataset_tag=id(experiment_dataset)
