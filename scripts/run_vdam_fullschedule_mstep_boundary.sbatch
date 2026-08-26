@@ -290,6 +290,23 @@ fi
     --iteration "${TARGET_ITERATION}" \
     --output-json "${ANALYSIS}/mstep_boundary.json"
 )
+if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
+  mapfile -t contribution_paths < <(
+    find "${CONTRIBUTIONS}" -maxdepth 1 -type f \
+      -name "bpref_contribution_rows_it${target_tag}_h*.npz" | sort
+  )
+  test "${#contribution_paths[@]}" -ge 1
+  (
+    cd "${REPO_ROOT}"
+    "${PIXI_PY}" -m scripts.analyze_vdam_bpref_accumulator_boundary \
+      "${contribution_paths[@]}" \
+      --native-directory "${NATIVE_MSTEP}" \
+      --recovar-directory "${RECOVAR_MSTEP}" \
+      --half "${BPREF_CONTRIBUTION_HALF}" \
+      --output-json "${ANALYSIS}/bpref_accumulator_boundary.json"
+  )
+  test -s "${ANALYSIS}/bpref_accumulator_boundary.json"
+fi
 
 gpu_uuid_after_recovar=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"
@@ -300,7 +317,9 @@ test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 git -C "${RELION_SOURCE}" rev-parse HEAD > "${PROVENANCE}/relion_head.txt"
 git -C "${RELION_SOURCE}" diff --binary | sha256sum > "${PROVENANCE}/relion_diff.sha256"
 sha256sum "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
-  "${REPO_ROOT}/scripts/analyze_vdam_mstep_boundary.py" "${DATA_DIR}/particles.star" \
+  "${REPO_ROOT}/scripts/analyze_vdam_mstep_boundary.py" \
+  "${REPO_ROOT}/scripts/analyze_vdam_bpref_accumulator_boundary.py" \
+  "${DATA_DIR}/particles.star" \
   "${CUDA_SOURCE_BINARY}" "${CUDA_BINARY}" "${RELION_BIND_BINARY}" "${VDAM_RELION_BINARY}" \
   > "${PROVENANCE}/static_inputs.sha256"
 printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"bpref_contribution_half":"%s","bpref_contribution_current_size":"%s"}\n' \
