@@ -2863,3 +2863,52 @@ translation, contrast, resolution, small-N, and midscale cells.  Each task
 runs one RECOVAR trajectory and four same-allocation native repeats before it
 can write `SCIENCE_COMPLETED`; the current CPU envelope audit is applied only
 after that marker.  No generic RECOVAR test, full suite, or long-test ran.
+
+The first production wave has now sealed `vdam-gf03` (`k1-24`: Kent poses,
+outliers, and high noise).  Science task `12970815_3` completes in `52:11` on
+physical H100 UUID `GPU-75c2d200-...`; its four native RELION trajectories
+take `258.8124`, `264.6445`, `266.1478`, and `275.7535` seconds, while the
+single RECOVAR trajectory takes `1415.6495` seconds (`5.334x` the native
+median).  The point-reference reports fail as expected after native branching.
+More importantly, this is not only a best-repeat calibration artifact: across
+all four native runs RECOVAR trails the worst native GT FSC-AUC by a minimum
+`-0.0030531335069303514` at iteration 170 and violates the unchanged `-0.002`
+allowance at 44 checkpoints, iterations 146--189.  The implementation remains
+failed for this cell pending a corrected candidate; dependent CPU audit
+`12971002_3` is still computing the full map/state envelope.
+
+This result also exposed that the prior GT gate was not native-self-consistent.
+At iteration 123, two genuine same-GPU RELION repeats differ by
+`0.003918882002530252` FSC-AUC, so the lower native repeat would itself fail a
+`-0.002` comparison to the best repeat.  Local unpushed commit `64b4929f1`
+therefore keeps candidate-minus-best-native GT as a strict diagnostic but
+gates quality against the worst observed same-GPU native mode with the same,
+unchanged `-0.002` allowance.  It reports both deltas and the native GT span,
+bumps the evidence schemas, and can reclassify sealed v1 evidence without
+rewriting the parent report.  The policy has `20/20` focused tests passing and
+Ruff/diff checks clean.  This does not rescue `vdam-gf03`, which fails even the
+new self-consistent rule.
+
+The same-GPU batch-size discriminator rejects batch 200 as a runtime fix.
+Sequential diagnostic-through-iteration-100 job `12971397` runs batch 500 and
+batch 200 on physical UUID `GPU-e2c3190a-...`; wall times are respectively
+`708.82` and `723.16` seconds, so batch 200 is `2.02%` slower while reducing
+peak RSS only from `8508380K` to `8437576K`.  A separate full batch-200 job
+`12971279` completes in `1614.54` seconds on another H100, but the controlled
+same-device pair shows that apparent cross-node speedup is not reliable.
+Batch 500 remains the production default.
+
+The next causal candidate combines the existing full-panel runner with the
+previously validated dynamic eight-worker scheduler, 24-particle pool
+barriers, and exact per-particle rotation counts.  Local unpushed production
+head `00c6ef413` contains only those six focused commits on top of
+`db89de857`.  H100 build/gate job `12971920` passes all `16/16` CUDA tests and
+seals CUDA-library SHA-256
+`502bc8a64b1e52d2f97e7509c241c57716ce8d655f175f0f2797cc784c4caeff`.
+Initial tasks `12971921_[3,5]` fail before science because the new worktree
+lacked the ignored local RELION-bind binary; they consume 4/11 seconds and are
+not scientific failures.  The exact production bind binary (SHA-256
+`fcbb2a8356c2f7ee88e947fa92c9f5bfc41535ed0a2c6a9124a2fad781a63b83`)
+is now installed locally, and fresh gf03/gf05 four-repeat 0--200 replacement
+tasks `12972009_[3,5]` are running on H100s from a new fail-closed output root.
+No generic RECOVAR test, full suite, or long-test ran.
