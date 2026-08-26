@@ -428,6 +428,38 @@ Iteration-1 native/RECOVAR coarse operands are being recaptured in job
 `13004374` to distinguish an initial noise-construction error from downstream
 noise-state drift before a production change.
 
+The fresh full-schedule GF38 discriminator now closes that question.  Native
+array `13005286` and candidate array `13005504` both used the same physical
+H100, exact target particle `1072`, oversampling zero, and the complete
+200-iteration controller; each stopped only after the iteration-1 diagnostic
+boundary.  Analyzer array `13005746` task `13005748` compares 16,704 coarse
+scores.  Native versus candidate production `diff2` has RMS
+`3.2772763e-5`, maximum absolute error `1.2207031e-4`, and 12,239 bitwise-exact
+values.  Replacing the candidate weight with fresh native `corr_img` does not
+improve this boundary (RMS `3.2728501e-5`), unlike the 124x collapse at
+iteration 4.  Thus initial radial score weights are already at the scorer's
+residual floor and the material mismatch is introduced by a state update.
+The sealed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf38_it1_initial_weight_boundary_6c171147_87274be_v2_20260826/analysis/coarse_projector_boundary.json`
+(SHA-256
+`24b2a0e393ebf707cb538afcef6e3ecdc0f09ebbb4506a97ed029055a91ec863`).
+
+The fresh model STARs identify the first such update.  Iteration-0
+`sigma2_noise` agrees at relative L2 `9.1892e-8`, whereas iteration 1 differs
+at `1.59216e-4`; high-shell candidate values are about `0.0164%` low.  Above
+the active residual cutoff the update is pure image power, so inverting the
+RELION momentum update independently across 45 shells yields a native retained
+posterior denominator of `199.6766047` mean (`199.6766128` median, standard
+deviation `0.0001985`), versus candidate metadata `noise_sumw=200.0`.  The
+candidate target's saved fine posterior sums to `0.99999994`, while the earlier
+native StoreWavg capture retained mass `0.99863716`.  This is consistent with
+RELION accumulating retained posterior mass and the candidate renormalizing
+each local posterior to unit mass.  The next bounded implementation gate is to
+carry the full coarse denominator into fine posterior/noise statistics, prove
+the iteration-1 model update, and only then promote the correction to the
+complete GF38 0--200 trajectory.  No production change was made or pushed and
+no generic RECOVAR full or long suite was run.
+
 GF47 (extreme outliers with uniform poses and white noise, seed 29) passes the
 complete 0--200 calibrated map and particle envelopes but fails controller
 topology.  All map checkpoints pass with minimum candidate-to-best-native

@@ -5,9 +5,9 @@
 > Runtime, K>1, real-data, and final CLI/GUI qualification follow only after
 > the K=1 0--200 suite has no unexplained failures.
 
-Last scientific update: **2026-08-26 15:30 ET**  
-Tracking head: `e9fe6d6d1`  
-Base: PR #158 (shared supplied-map EM machinery)  
+Last scientific update: **2026-08-26 15:41 ET**
+Tracking branch: `codex/vdam-relion-parity-20260820`
+Base: PR #158 (shared supplied-map EM machinery)
 Policy: focused VDAM tests and frozen trajectories only; **no generic RECOVAR
 full/long suite** is being run for this campaign.
 
@@ -15,10 +15,10 @@ full/long suite** is being run for this campaign.
 
 | Gate | Current result | Required to close |
 |---|---|---|
-| K=1 v3 full trajectories | **6/20 audited**, 9 science-complete, 4 running, 7 queued | 20/20 audited |
+| K=1 v3 full trajectories | **6/20 audited**, 10 science-complete, 4 running, 6 queued | 20/20 audited |
 | K=1 v3 all-gate acceptance | **1/6 accepted** | 20/20 accepted with no unexplained case |
 | Earlier 0--200 expansion | **5/15 accepted**, 10 classified failures; GF42 still outside the sealed count | Every failure repaired or causally classified and requalified |
-| Earliest exact boundary | **Localized** to radial inverse-noise/coarse score weights | Correct construction and exact iteration-1 replay |
+| Earliest exact boundary | **Localized** to the first noise update's retained-posterior denominator | Preserve RELION posterior mass and pass exact iteration-1 replay |
 | Runtime | **6.42--9.40x RELION** on audited v3 H100 cases | Comparable same-GPU wall time |
 | K>1 / real data | Existing short K=2/K=4 panels pass; final campaign deliberately deferred | Requalify after K=1 closes |
 | CLI / GUI | Unified backend/default contract exists | Final defaults and important controls requalified |
@@ -44,13 +44,13 @@ artifact topology, and wall time.
 | GF47 | 29 | extreme outliers, uniform, white noise | complete | pass | pass | fail @10 | 6.42x | **FAIL: controller/runtime** |
 | GF48 | 29 | very-high noise, uniform, white noise | complete | fail @45 | fail @30 | fail @10 | 6.84x | **FAIL** |
 | GF49 | 29 | low noise, uniform | complete | pending | pending | pending | pending | audit queued |
-| GF50 | 29 | low noise, Kent | running | -- | -- | -- | -- | running |
+| GF50 | 29 | low noise, Kent | complete | pending | pending | pending | pending | audit queued |
 | GF51 | 29 | no CTF, radial noise | complete | pending | pending | pending | pending | audit queued |
 | GF52 | 29 | Kent, junk particles, translations | complete | pending | pending | pending | pending | audit queued |
 | GF53 | 29 | high resolution, radial noise | running | -- | -- | -- | -- | running |
 | GF54 | 29 | midscale, Kent, radial noise | running | -- | -- | -- | -- | running |
 | GF55 | 101 | anisotropic, outliers, high noise | running | -- | -- | -- | -- | running |
-| GF56 | 101 | Kent, outliers, high noise | queued | -- | -- | -- | -- | queued |
+| GF56 | 101 | Kent, outliers, high noise | running | -- | -- | -- | -- | running |
 | GF57 | 101 | anisotropic, severe outliers, radial/high noise | queued | -- | -- | -- | -- | queued |
 | GF58 | 101 | extreme outliers, uniform, white noise | queued | -- | -- | -- | -- | queued |
 | GF59 | 101 | very-high noise, uniform, white noise | queued | -- | -- | -- | -- | queued |
@@ -78,18 +78,27 @@ The causal ladder is now:
 | Native `corr_img` factorial | coarse-score RMS 0.00449659 -> 0.0000362248 (**124x reduction**) | dominant error is the incoming radial score weight |
 | Translation/accumulation-expression A/B | no improvement | coarse translation and written reduction expression rejected |
 | Shell analysis | within-shell ratios constant to ~4e-8; shell means 0.99991797--1.00019730 | radial inverse-noise construction/state is the current locus |
+| Fresh iteration-1 capture | native-vs-candidate score RMS 0.0000327728; native `corr_img` does not improve it | initial score weights are already correct to the residual floor |
+| First noise update | iteration-0 noise rel-L2 9.19e-8; iteration-1 rel-L2 1.592e-4 | mismatch is introduced by the update, not initialization |
+| High-shell denominator | native inferred sum-weight 199.6766 vs candidate metadata 200.0 | candidate renormalizes retained posterior mass to one |
 
-This places the defect upstream of CUDA hypothesis scoring and BPref scatter,
-and upstream of SSNR/reconstruction. The next exact gate is a fresh native and
-candidate iteration-1 capture under the full 200-iteration schedule. It will
-decide whether the shell-weight error is present in initial noise construction
-or first appears after the initial noise-state update.
+The fresh full-schedule discriminator closes the initialization question.
+Iteration-1 scoring is already at the same roughly `3.3e-5` residual floor
+whether candidate or native `corr_img` is replayed; the 124x native-weight
+rescue appears only after later state updates.  RELION's model update carries
+approximately `199.6766` total retained posterior mass, whereas candidate
+metadata records `200.0`.  The candidate target posterior likewise sums to
+`0.99999994`, confirming local renormalization.  The next correction is
+therefore narrowly scoped to preserving RELION's coarse-denominator posterior
+mass in noise accumulation, followed by an exact iteration-1 replay and the
+complete GF38 0--200 discriminator.
 
 Key sealed evidence:
 
 - M-step boundary: `mstep_boundary.json`, SHA-256 `96302c189a16b463768efedd3cdd4ec35941265b09e1fea787a0bb39af120052`
 - Particle posterior: `storewavg_particle0_posterior.json`, SHA-256 `2020b2260deeb25485c46d8c72e5855880820d1032962d195a8111c37966539d`
 - Native-correlation factorial: `coarse_projector_boundary.json`, SHA-256 `2ccace9f0bc98b9acd5a5f075fd4d3195931569fce0f9ebcbbe88880aa8640af`
+- Fresh iteration-1 score/noise discriminator: `coarse_projector_boundary.json`, SHA-256 `24b2a0e393ebf707cb538afcef6e3ecdc0f09ebbb4506a97ed029055a91ec863`
 
 ## Runtime
 
@@ -109,7 +118,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Fresh GF38 native iteration-1 coarse/noise capture | launcher validated; submission next | initial-vs-updated radial-weight locus decided |
+| 1 | Preserve GF38 retained posterior mass in the first noise update | diagnosis sealed; focused correction next | exact iteration-1 noise/model replay, then full 0--200 GF38 audit |
 | 2 | Seeded GF29 / GF43 / GF45 calibrated audits | 13002876 / 13002877 / 13004501 pending | authoritative map/state/schedule results |
 | 3 | GF49--GF62 trajectory matrix | science 12996103; audit 12999424 | every row terminal and sealed |
 | 4 | GF41 authoritative re-audit | 12999430 pending | calibrated particle-state result |
