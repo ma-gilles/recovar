@@ -27714,3 +27714,89 @@ import and direct-real iteration-2 replays remain jobs `13003491` and
 `13003930`, respectively, both dependent on successful capture completion.
 The fixed K=1 score remains `31/34`; these audits change localization, not a
 scorecard result.
+
+## 2026-08-26 15:30 EDT — full particle trajectories localize both final-only failures to iteration 2
+
+Low-memory read-only jobs `13004993` and `13004994` completed successfully in
+`00:00:29` and `00:00:28`.  They first established that the last-numbered
+states of cases 4 and 5 contain broad particle-state discrepancies rather than
+an isolated final-reconstruction error.  Case 4 at RELION iteration 17 has
+Pmax RMSE `0.03548793556524725`, `17,615/100,000` different significant-
+support counts, `5,825` rotation errors above `0.01` degrees, and `4,799`
+translation errors above `0.01` Angstrom.  Case 5 at iteration 16 has Pmax
+RMSE `0.009680268746887847`, `28,127/100,000` different support counts,
+`5,945` rotation errors above `0.01` degrees, and `3,557` translation errors
+above `0.01` Angstrom.  Current size and HEALPix order remain exact at both
+last-numbered boundaries.
+
+Jobs `13005188` and `13005189` then audited every numbered particle state for
+cases 4 and 5.  Both completed `0:0` in `00:02:55` and `00:02:50`.  Every
+particle Pmax, support count, pose, and translation is exact at iteration 1.
+The first material discrepancies are already present at iteration 2:
+
+* case 4: Pmax RMSE `0.0007077700129871572`, `28` support-count mismatches,
+  and one pose outlier.  Immutable source row `17393` differs by
+  `129.76737642383011` degrees and `5.72173755741425` Angstrom even though its
+  significant-support count remains `32` in both engines.  Source row `31559`
+  has the largest Pmax delta, `-0.21217443607521058`, and support `5` versus
+  `4`;
+* case 5: Pmax RMSE `0.00012121064740324134`, `39` support-count mismatches,
+  and one pose outlier.  Immutable source row `8791` differs by
+  `157.02530991419087` degrees with support `13` in both engines.  Source row
+  `73200` has the largest Pmax delta, `+0.030169887294769326`, and support `7`
+  versus `8`.
+
+By iteration 3, case 4 has `18` angular and `30` translation outliers above
+`0.01`; case 5 has `11` and `26`.  The discrepancies then grow throughout the
+numbered trajectories.  This chronology falsifies the final pass, final
+reconstruction, and late controller as the common root of either remaining
+final-only failure.  It selects the rare iteration-2 score/argmax boundaries
+for focused operand capture.
+
+The complete case-4 report and arrays are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis/particle_state_trajectory_full_1512ET/particle_state.json`
+(SHA-256
+`9c28eb5cf585480cd21be6c2f4cb0770e1ecc50a8fac824f8cf0f9b558e994ff`)
+and `particle_state_arrays.npz` (SHA-256
+`edb9b2dc72749e1f05fbf52bd3fbf843860d7816c38ecbd5c11e1f8bdf03dbeb`).
+The case-5 report and arrays are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis/particle_state_trajectory_full_1512ET/particle_state.json`
+(SHA-256
+`008f6ffd5564e98ccbd5cba4af407aee97a949d1b6be322d8275ac67c5994bd9`)
+and `particle_state_arrays.npz` (SHA-256
+`56d2a11093dda7c1aef2a37c2db53c017b72530b7fbe38294d37d557b511a4a4`).
+
+Fresh RELION iteration-2 verbose-score jobs `13005697` and `13005698` now
+capture exactly case-4 source row `17393` and case-5 source row `8791` on
+H100s.  Their run roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_row17393_fresh_verbose_it2_07d3102_20260826T1525ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row08791_fresh_verbose_it2_07d3102_20260826T1525ET`;
+the matching runtime roots are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/` with the same final
+components.  All four roots contain `SAFE_TO_DELETE`.  Both jobs pin primary
+HEAD `07d3102f8249d95aede4fecac92599bb5cba96f9`, launcher SHA-256
+`2e6dc0ca8b0f0a25fa29effd6a3abbdcef70a458e23fe4103ed2664eb3edc64b`,
+and patched RELION binary SHA-256
+`a9a961340af621d1cd581ccea2e96274f978b53213f9606c9f0e30d271903b8c`.
+After each capture, a focused RECOVAR boundary replay will consume the saved
+iteration-1 state and stop after the selected iteration-2 particle, so the
+first unequal tuple, raw score component, prior, normalization, or support
+decision can be identified without another terminal trajectory.
+
+Separately, the fresh case-10 row-75571 native operand capture is internally
+exact: its source, SASS reduction replay, and production raw `diff2` all equal
+`1337.76708984375`.  Comparison against the older autonomous RECOVAR capture
+retains the same `640/640` candidate set, winner `(12,69)`, and `69/69`
+support, but first differs in the pre-prior centered score.  At the selected
+tuple the production raw scores differ by one float32 step,
+`1337.76708984375` versus `1337.7672119140625`; the first pixel operand labeled
+unequal is the projected reference after unit conversion.  This comparison is
+not yet causal because the RECOVAR arm used a different autonomous incoming
+state.  Same-input ordinary-map job `13003491` is running, and direct-real
+control `13003930` is queued.  Their operand comparisons, rather than the
+autonomous comparison, decide whether the defect is the imported reference /
+projector boundary or image normalization / translation.  The autonomous
+stage and operand reports have SHA-256 values
+`b49f4609ea85c808f6cc9d6eddc8bebd9849f314eb48d90f1e36e4e63aa4b43c`
+and `715a771189eb29b93383e00d327b2db77204635948352a32f9bcbfd7d78295f0`.
