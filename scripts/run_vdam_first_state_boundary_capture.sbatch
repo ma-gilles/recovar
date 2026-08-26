@@ -53,7 +53,8 @@ RECOVAR_SCORE_CAPTURE=${OUTPUT_ROOT}/recovar_score
 RECOVAR_COARSE_CAPTURE=${OUTPUT_ROOT}/recovar_coarse
 PROVENANCE=${OUTPUT_ROOT}/provenance
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
-CUDA_BINARY=${RECOVAR_CUDA_LIB_OVERRIDE:-${REPO_ROOT}/recovar/cuda/libcuda_backproject.so}
+CUDA_SOURCE_BINARY=${RECOVAR_CUDA_LIB_OVERRIDE:-${REPO_ROOT}/recovar/cuda/libcuda_backproject.so}
+CUDA_BINARY=${OUTPUT_ROOT}/runtime/native/libcuda_backproject.so
 RELION_BIND_BINARY=${REPO_ROOT}/recovar/relion_bind/_relion_bind_core.cpython-311-x86_64-linux-gnu.so
 
 test -f "${OUTPUT_ROOT}/SAFE_TO_DELETE"
@@ -93,7 +94,7 @@ test -x "${RELION_BINARY}"
 test -x "${PIXI_PY}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
-test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
+test "$(sha256sum "${CUDA_SOURCE_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = "${EXPECTED_RELION_BIND_SHA256}"
 gpu_uuid_before=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 case "${gpu_uuid_before}" in GPU-*) ;; *) echo "invalid GPU UUID: ${gpu_uuid_before}" >&2; exit 2 ;; esac
@@ -103,6 +104,10 @@ if [[ -n "${TARGET_GPU_UUID}" ]] && [[ "${gpu_uuid_before}" != "${TARGET_GPU_UUI
 fi
 mkdir -p "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${RECOVAR_COARSE_CAPTURE}" "${PROVENANCE}"
 test -z "$(find "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${RECOVAR_COARSE_CAPTURE}" "${PROVENANCE}" -mindepth 1 -print -quit)"
+mkdir -p "$(dirname "${CUDA_BINARY}")"
+cp --reflink=auto "${CUDA_SOURCE_BINARY}" "${CUDA_BINARY}"
+chmod 0755 "${CUDA_BINARY}"
+test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 
 (
   unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV JAX_PLATFORMS JAX_PLATFORM_NAME
@@ -346,6 +351,7 @@ STATIC_INPUTS=(
   "${RELION_OPTIMISER}"
   "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star"
   "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_sampling.star"
+  "${CUDA_SOURCE_BINARY}"
   "${CUDA_BINARY}"
   "${RELION_BIND_BINARY}"
   "${RELION_BINARY}"
@@ -413,6 +419,7 @@ if [[ "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" != "${EXPECTED_CUDA_SHA
   echo "VDAM boundary CUDA library changed during science" >&2
   exit 2
 fi
+test "$(sha256sum "${CUDA_SOURCE_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 "${PIXI_PY}" - "${PROVENANCE}/run.json" "${SLURM_JOB_ID}" \
   "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${NR_ITER_SCHEDULE}" \
   "${TARGET_ITERATION}" "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" \
