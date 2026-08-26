@@ -23,6 +23,7 @@ set -euo pipefail
 
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 TARGET_ITERATION=${TARGET_ITERATION:-33}
+NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 # These are deliberately different identity spaces for the sealed gf01
 # boundary: RECOVAR selects the zero-based source STAR row, while RELION's
 # capture selects its shuffled internal particle id and verifies the 1-based
@@ -51,6 +52,8 @@ RELION_BIND_BINARY=${REPO_ROOT}/recovar/relion_bind/_relion_bind_core.cpython-31
 test -f "${OUTPUT_ROOT}/SAFE_TO_DELETE"
 test -s "${DATA_DIR}/particles.star"
 test -s "${RELION_OPTIMISER}"
+test "${TARGET_ITERATION}" -ge 1
+test "${NR_ITER_SCHEDULE}" -ge "${TARGET_ITERATION}"
 iteration_tag=$(printf '%03d' "${TARGET_ITERATION}")
 test -s "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star"
 test -s "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_sampling.star"
@@ -72,6 +75,7 @@ if [[ "${CAPTURE_NATIVE_REPLAY}" == 1 ]]; then
   VDAM_RELION_CONT_INPUT_DIR=${DATA_DIR} \
   VDAM_RELION_CONT_OPTIMISER=${RELION_OPTIMISER} \
   VDAM_RELION_CONT_ITERATION=${TARGET_ITERATION} \
+  VDAM_RELION_CONT_NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE} \
   VDAM_RELION_CONT_PART_ID=${TARGET_RELION_PART_ID} \
   VDAM_RELION_CONT_STACK_INDEX=${TARGET_STACK_INDEX} \
   VDAM_RELION_CONT_CAPTURE=1 \
@@ -109,7 +113,7 @@ PY
   "${PIXI_PY}" - "${PROVENANCE}/native_replay_state_audit.json" \
     "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star" \
     "${NATIVE_ROOT}/relion/run_it${iteration_tag}_data.star" \
-    "${TARGET_STACK_INDEX}" <<'PY'
+    "${TARGET_STACK_INDEX}" "${NR_ITER_SCHEDULE}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -117,10 +121,11 @@ from pathlib import Path
 import starfile
 
 report = json.loads(Path(sys.argv[1]).read_text())
-# The capture binary exits immediately after the selected internal particle,
-# so rows later in the subset are intentionally unwritten. Keep the full
-# audit as coverage evidence, but gate only the captured target below.
-report["capture_stopped_after_target"] = True
+# The continuation must retain the autonomous 200-iteration schedule because
+# RELION derives its VDAM subset annealing from the total iteration count.
+# Only the requested iteration is audited and captured below.
+report["native_replay_full_schedule"] = True
+report["native_replay_nr_iter_schedule"] = int(sys.argv[5])
 
 
 def particles(path):

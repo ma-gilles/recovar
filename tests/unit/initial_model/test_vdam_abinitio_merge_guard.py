@@ -459,6 +459,7 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
         "--nr_iter 200",
         '--diagnostic_stop_after_iteration "${TARGET_ITERATION}"',
         "VDAM_RELION_CONT_OPTIMISER=${RELION_OPTIMISER}",
+        "VDAM_RELION_CONT_NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE}",
         "VDAM_RELION_CONT_CAPTURE=1",
         "VDAM_RELION_CONT_STACK_INDEX=${TARGET_STACK_INDEX}",
         "VDAM_RELION_CONT_PERTURBATION=${TARGET_RELION_PERTURBATION}",
@@ -481,7 +482,8 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
         "native_replay_state_audit.json",
         "serialized perturbation differs from the forced full-precision value",
         "abs(observed - expected) > 5.01e-7",
-        'report["capture_stopped_after_target"] = True',
+        'report["native_replay_full_schedule"] = True',
+        'report["native_replay_nr_iter_schedule"] = int(sys.argv[5])',
         'report["target_pmax"]',
         "target_error > 5.0e-4",
         "#SBATCH --constraint=h100",
@@ -598,7 +600,10 @@ def test_vdam_relion_continuation_can_capture_noise_sufficient_statistics():
     expected_tokens = [
         "VDAM_RELION_CONT_SIGMA2_NOISE_DUMP_DIR",
         'export RELION_DUMP_SIGMA2_NOISE_DIR=${SIGMA2_NOISE_DUMP_DIR}',
-        '--iter "${ITERATION}"',
+        'NR_ITER_SCHEDULE=${VDAM_RELION_CONT_NR_ITER_SCHEDULE:-${ITERATION}}',
+        'test "${NR_ITER_SCHEDULE}" -ge "${ITERATION}"',
+        '--iter "${NR_ITER_SCHEDULE}"',
+        '"nr_iter_schedule":%d',
     ]
     missing = [token for token in expected_tokens if token not in continuation]
     assert not missing, f"VDAM continuation lost capture/target-iteration wiring: {missing}"
