@@ -27656,3 +27656,61 @@ and
 The first-boundary target therefore remains the exact BPref operands,
 regularization inputs, or their accumulation state, not the reconstruction
 solver or any FSC/support threshold.
+
+## 2026-08-26 15:00 EDT — case-4/5 iteration-1 amplitude mismatch falsified
+
+Read-only CPU job `13004502` completed successfully in `00:00:31`.  It used
+the existing map-amplitude trajectory analyzer to compare the first RECOVAR
+numbered half maps against the matching fresh RELION iteration-1 half maps for
+both remaining final-only cases.  Its run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining_map_amplitude_it1_07d3102_20260826T1500ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_remaining_map_amplitude_it1_07d3102_20260826T1500ET`;
+both contain `SAFE_TO_DELETE`.
+
+The result rejects a hidden global or radial amplitude mismatch at this
+boundary.  The unscaled relative L2 residuals are
+`1.6955955572939274e-7 / 1.6877292807748745e-7` for case-4 halves 1/2 and
+`1.7619879599806154e-7 / 1.766871093877853e-7` for case-5 halves 1/2.  The
+fitted global scales are exactly `1` except for case-4 half 2 at
+`1.0000001192092896`.  Across all four halves, fitted shell scales remain
+inside `[0.9998722672462463, 1.000045895576477]`, and independent shell
+rescaling makes the residual slightly worse rather than better.  Thus neither
+map-wide scale nor shellwise regularization scale is a useful discriminator
+for the eventual case-4/5 final failures.
+
+The complete result is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining_map_amplitude_it1_07d3102_20260826T1500ET/MAP_AMPLITUDE_IT1.json`
+(SHA-256
+`def6188c93c2df05b843fa3052584b92324b275afad2cb024f8f3731d719e633`).
+This preserves the first-boundary target as source-ID-aligned particle state
+and exact BPref operands/accumulation, not an FSC-invisible radial map scale.
+
+## 2026-08-26 15:05 EDT — case-10 native-units trajectory does not improve
+
+CPU audit job `13003318` completed successfully in `00:35:45` and measured
+the in-progress numbered prefix through RECOVAR iteration index 10 / RELION
+iteration 11 for producer `12995074`.  All eleven available numbered pairs
+pass the frozen FSC and topology gates, but the candidate does not close the
+trajectory gap.  Its merged cross-engine FSC-AUC is
+`0.999961705478966` at RELION iteration 10 and `0.9999673815434663` at
+iteration 11.  The iteration-10 value is slightly below the earlier
+native-units result `0.9999629767697457` and materially below the exact-native-
+interface trajectory `0.9999947407203629`.  The candidate therefore provides
+no evidence for promotion even if its terminal pass later satisfies the loose
+`0.995` score gate.
+
+The audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_improved_terminal_aca8_567b22d4ea_20260826T1025ET/analysis_live_it010_20260826T1420ET/fsc.json`
+(SHA-256
+`f400aeb182d8d9760b348c6e6f7a6b547aaec38d25f48f05fe12dcfc7620cd1a`).
+Producer `12995074` remains untouched in its final all-data pass, with full
+numbered/final audit `13004066` still attached by `afterok` dependency.
+
+The decisive case-10 experiment remains native fresh capture `13002942`.  At
+the latest check it was `0.87 / 1.07` hours through fresh RELION expectation
+iteration 1, inside its `01:30:00` allocation.  The controlled ordinary map-
+import and direct-real iteration-2 replays remain jobs `13003491` and
+`13003930`, respectively, both dependent on successful capture completion.
+The fixed K=1 score remains `31/34`; these audits change localization, not a
+scorecard result.
