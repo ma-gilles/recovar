@@ -609,6 +609,26 @@ def test_vdam_relion_continuation_can_capture_noise_sufficient_statistics():
     assert not missing, f"VDAM continuation lost capture/target-iteration wiring: {missing}"
 
 
+def test_vdam_native_observer_pair_keeps_same_gpu_and_full_schedule():
+    runner = (REPO_ROOT / "scripts/run_vdam_native_observer_pair.sbatch").read_text()
+
+    expected_tokens = [
+        "run_variant observer_off_a 0",
+        "run_variant observer_on 1",
+        "run_variant observer_off_b 0",
+        '--iter "${NR_ITER_SCHEDULE}"',
+        'export RELION_ACC_DUMP_PART_ID=${TARGET_PART_ID}',
+        'export RELION_ACC_DUMP_VERBOSE=0',
+        'test "${gpu_uuid_after}" = "${gpu_uuid_before}"',
+        "observer_off_repeat_pmax_absolute_error",
+        "observer_on_minus_off_a_pmax",
+        "recovar.vdam_native_observer_pair.v1",
+        'touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"',
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM native observer pair lost A/B/A controls: {missing}"
+
+
 def test_native_vdam_tau2_refresh_and_ssnr_diagnostics_are_merge_guarded():
     """Protect the K=1 current-size parity fix.
 
