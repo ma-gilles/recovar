@@ -350,6 +350,23 @@ seconds median).  The first seeded probe array `13001264` missed the target
 GPU; replacement array `13001371` is dependency-pinned behind its current
 owner and retains the frozen four-repeat panel on the same physical H100.
 
+GF46 (severe radial-noise anisotropic outliers, seed 29) is also sealed as an
+authoritative v3 failure in job `12999434`.  Particle state first exceeds the
+four-repeat native envelope at iteration 4 for
+`286@particles.128.mrcs`; map failure begins at iteration 20 and covers 24
+checkpoints.  Native hard state first splits at iteration 2, the pre-divergence
+schedule topology passes, and the strict adaptive diagnostic first differs at
+iteration 9.  Minimum candidate-to-best-native FSC-AUC is `0.5432449143`;
+minimum candidate-minus-best/worst-native GT deltas are `-0.0083159142` /
+`-0.0035195494` outside a maximum native GT span of `0.0070245528`.
+RECOVAR requires `4388.6` seconds versus a `466.8` second native median on the
+same H100, a `9.40x` runtime failure.  Evidence SHA-256 values are
+`ceff1bdd0de2548b6e5f6482b609cf6b74ba3a30041e10432c0307c5d2b45f89`
+for maps, `9aa32eb719a780049ff66307c8cac8aed53094c7ba599f5b207e75eb54e9e1b3`
+for particle state, and
+`e5b8bba0df321c8095e668ec3f7960ea4f90f95c8253ce7193bc9ec43c394533`
+for the combined status.
+
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
 `vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC
