@@ -543,6 +543,10 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
         '"stopped_after_iteration":%d',
         '"capture_native_replay":%s',
         'test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"',
+        "RECOVAR_CUDA_LIB_OVERRIDE",
+        "VDAM boundary GPU/CUDA-FFI gate passed",
+        "VDAM boundary CUDA library changed during import",
+        "VDAM boundary CUDA library changed during science",
     ]
     missing = [token for token in expected_tokens if token not in capture]
     assert not missing, f"VDAM first-boundary capture lost full-schedule isolation: {missing}"

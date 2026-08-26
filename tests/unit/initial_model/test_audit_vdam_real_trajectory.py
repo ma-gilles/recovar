@@ -58,6 +58,8 @@ def test_real_data_sbatch_sets_paired_launch_mode_before_gpu_gate():
     assert 'RECOVAR_CUDA_LIB_OVERRIDE' in text
     assert 'EXPECTED_CUDA_SHA256="${EXPECTED_CUDA_SHA256:-}"' in text
     assert '"cuda_library_sha256": os.environ["RECOVAR_CUDA_LIB_SHA256"]' in text
+    assert "VDAM real-data CUDA library changed during import" in text
+    assert "VDAM real-data CUDA library changed during science" in text
     assert '"${PIXI_PY}" -m scripts.run_ab_initio' in text
     assert '"${PIXI_PY}" scripts/run_ab_initio.py' not in text
     assert '"${PIXI_PY}" -m scripts.audit_vdam_real_trajectory' in text

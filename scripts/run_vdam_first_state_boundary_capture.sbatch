@@ -45,8 +45,8 @@ RECOVAR_ROOT=${OUTPUT_ROOT}/recovar_prefix
 RECOVAR_CAPTURE=${OUTPUT_ROOT}/recovar_fused
 RECOVAR_SCORE_CAPTURE=${OUTPUT_ROOT}/recovar_score
 PROVENANCE=${OUTPUT_ROOT}/provenance
-PIXI_PY=${REPO_ROOT}/.pixi/envs/default/bin/python
-CUDA_BINARY=${REPO_ROOT}/recovar/cuda/libcuda_backproject.so
+PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
+CUDA_BINARY=${RECOVAR_CUDA_LIB_OVERRIDE:-${REPO_ROOT}/recovar/cuda/libcuda_backproject.so}
 RELION_BIND_BINARY=${REPO_ROOT}/recovar/relion_bind/_relion_bind_core.cpython-311-x86_64-linux-gnu.so
 
 test -f "${OUTPUT_ROOT}/SAFE_TO_DELETE"
@@ -68,6 +68,25 @@ test -z "$(find "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOV
 
 gpu_uuid_before=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 case "${gpu_uuid_before}" in GPU-*) ;; *) echo "invalid GPU UUID: ${gpu_uuid_before}" >&2; exit 2 ;; esac
+
+(
+  unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV JAX_PLATFORMS JAX_PLATFORM_NAME
+  export PYTHONNOUSERSITE=1
+  export XLA_PYTHON_CLIENT_PREALLOCATE=false
+  export RECOVAR_CUDA_LIB=${CUDA_BINARY}
+  "${PIXI_PY}" - <<'PY'
+import jax
+import recovar.cuda_backproject as cuda_backproject
+
+assert any(device.platform in {"gpu", "cuda"} for device in jax.devices())
+assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
+print("VDAM boundary GPU/CUDA-FFI gate passed", jax.devices())
+PY
+)
+if [[ "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" != "${EXPECTED_CUDA_SHA256}" ]]; then
+  echo "VDAM boundary CUDA library changed during import" >&2
+  exit 2
+fi
 
 if [[ "${CAPTURE_NATIVE_REPLAY}" == 1 ]]; then
   touch "${NATIVE_ROOT}/SAFE_TO_DELETE"
@@ -272,6 +291,10 @@ test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 gpu_uuid_after_recovar=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
 test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"
+if [[ "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" != "${EXPECTED_CUDA_SHA256}" ]]; then
+  echo "VDAM boundary CUDA library changed during science" >&2
+  exit 2
+fi
 printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":200,"stopped_after_iteration":%d,"target_original_index":%d,"target_relion_part_id":%d,"target_stack_index":%d,"capture_local_score":%s,"capture_fused_scores":%s,"capture_native_replay":%s,"recovar_wall_s":%d}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_ITERATION}" \
   "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" "${TARGET_STACK_INDEX}" \

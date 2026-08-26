@@ -124,6 +124,10 @@ assert any(device.platform in {"gpu", "cuda"} for device in jax.devices())
 assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
 print("VDAM real-data GPU/CUDA-FFI gate passed", jax.devices())
 PY
+if [[ "$(sha256sum "${RECOVAR_CUDA_LIB}" | awk '{print $1}')" != "${CUDA_LIBRARY_SHA256}" ]]; then
+  echo "VDAM real-data CUDA library changed during import" >&2
+  exit 2
+fi
 
 RELION_CMD=(
   "${RELION_REFINE}"
@@ -178,6 +182,10 @@ RECOVAR_WALL_S="${SECONDS}"
 GPU_UUID_AFTER_RECOVAR="$(nvidia-smi --query-gpu=uuid --format=csv,noheader | tr -d '[:space:]')"
 test "${GPU_UUID_BEFORE}" = "${GPU_UUID_AFTER_RELION}"
 test "${GPU_UUID_BEFORE}" = "${GPU_UUID_AFTER_RECOVAR}"
+if [[ "$(sha256sum "${RECOVAR_CUDA_LIB}" | awk '{print $1}')" != "${CUDA_LIBRARY_SHA256}" ]]; then
+  echo "VDAM real-data CUDA library changed during science" >&2
+  exit 2
+fi
 
 if [[ "$(git rev-parse HEAD)" != "${SOURCE_GIT_HEAD}" ]] ||
    [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then

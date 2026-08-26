@@ -22,6 +22,9 @@ def test_gui_full_envelope_runner_reuses_one_candidate_for_native_repeats():
     assert "RECOVAR_CUDA_LIB_OVERRIDE" in source
     assert "EXPECTED_CUDA_SHA256" in source
     assert '"cuda_library_sha256"' in source
+    assert "VDAM envelope GPU/CUDA-FFI gate passed" in source
+    assert "VDAM envelope CUDA library changed during import" in source
+    assert "VDAM envelope CUDA library changed during science" in source
     assert "status --porcelain=v1 --untracked-files=no" in source
     assert "SCIENCE_COMPLETED" in source
     assert "science_manifest.json" in source

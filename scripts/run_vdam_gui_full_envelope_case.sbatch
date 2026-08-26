@@ -86,6 +86,19 @@ export PIXI_HOME=${PANEL_ROOT}/runtime/${SLURM_JOB_ID}/pixi_home
 export RATTLER_CACHE_DIR=${PANEL_ROOT}/runtime/${SLURM_JOB_ID}/rattler_cache
 mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}"
 
+"${PIXI_PY}" - <<'PY'
+import jax
+import recovar.cuda_backproject as cuda_backproject
+
+assert any(device.platform in {"gpu", "cuda"} for device in jax.devices())
+assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
+print("VDAM envelope GPU/CUDA-FFI gate passed", jax.devices())
+PY
+if [[ "$(sha256sum "${RECOVAR_CUDA_LIB}" | awk '{print $1}')" != "${CUDA_LIBRARY_SHA256}" ]]; then
+    echo "VDAM envelope CUDA library changed during import" >&2
+    exit 2
+fi
+
 repeat_one_root=${PANEL_ROOT}/repeat-01
 set +e
 "${PIXI_PY}" -m scripts.run_vdam_relion_parity_case \
@@ -120,6 +133,11 @@ for repeat_index in $(seq 2 "${VDAM_REPEAT_COUNT}"); do
         --scorecard "${VDAM_SCORECARD}" --relion-refine "${RELION_REFINE}" \
         --threads 8
 done
+
+if [[ "$(sha256sum "${RECOVAR_CUDA_LIB}" | awk '{print $1}')" != "${CUDA_LIBRARY_SHA256}" ]]; then
+    echo "VDAM envelope CUDA library changed during science" >&2
+    exit 2
+fi
 
 "${PIXI_PY}" - "${PANEL_ROOT}" "${CASE_ID}" "${VDAM_REPEAT_COUNT}" \
     "$(git -C "${REPO_ROOT}" rev-parse HEAD)" <<'PY'
