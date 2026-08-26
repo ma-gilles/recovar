@@ -410,6 +410,24 @@ The next repair gate is therefore exact native coarse-score denominator
 arithmetic; changing BPref scatter or SSNR/reconstruction would target a
 downstream symptom.
 
+GF38 native-PPref factorial job `13004214_1` now localizes that coarse-score
+term to the incoming score weight.  Replacing only RECOVAR's per-pixel weight
+with native RELION `corr_img` (converted by the exact `128^4` Fourier
+normalization) reduces centered coarse `diff2` RMS from `0.00449659` to
+`3.62248e-5`, a `124x` collapse; maximum error falls from `0.0106812` to
+`9.15527e-5`, and bitwise equality rises from 1/16,704 to 3,343/16,704.  The
+corrected Fourier image itself is the expected `-128^2` multiple of RELION's
+image to relative L2 `8.65e-8`.  Weight ratios are constant within every
+radial shell to about `4e-8`, while shell means span `0.99991797`--`1.00019730`;
+this identifies inverse-noise state/construction, rather than CTF, translation,
+projection, or reduction arithmetic.  Direct A/B kernels for RELION's coarse
+translation and written accumulation expressions did not improve the
+same-input residual.  The factorial report SHA-256 is
+`2ccace9f0bc98b9acd5a5f075fd4d3195931569fce0f9ebcbbe88880aa8640af`.
+Iteration-1 native/RECOVAR coarse operands are being recaptured in job
+`13004374` to distinguish an initial noise-construction error from downstream
+noise-state drift before a production change.
+
 GF47 (extreme outliers with uniform poses and white noise, seed 29) passes the
 complete 0--200 calibrated map and particle envelopes but fails controller
 topology.  All map checkpoints pass with minimum candidate-to-best-native
