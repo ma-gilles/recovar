@@ -74,8 +74,8 @@ def relion_cuda_f32_coarse_posterior(
     ``cutoff_count`` is the pre-tie rank serialized by RELION. ``mask`` and
     ``n_significant`` include every positive weight tied at the cutoff.
     ``tie_score_ulps`` optionally absorbs a small score-level atomic-rounding
-    envelope below that exact cutoff; fresh InitialModel uses this only for
-    its source-faithful K=1 coarse CUDA boundary.
+    envelope below that exact cutoff. It is an explicit diagnostic control;
+    production InitialModel keeps the exact threshold comparison.
     """
 
     tie_score_ulps = int(tie_score_ulps)

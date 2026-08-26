@@ -98,7 +98,7 @@ def test_relion_cuda_f32_coarse_posterior_expands_cutoff_ties_after_rank_cap():
     np.testing.assert_array_equal(np.asarray(cutoff_count), [2])
 
 
-def test_initialmodel_coarse_support_absorbs_two_ulp_atomic_cutoff_split():
+def test_diagnostic_coarse_support_can_absorb_two_ulp_atomic_cutoff_split():
     scores = np.asarray([[-350.5212707519531, -350.5213317871094]], dtype=np.float32)
 
     _, strict_mask, strict_count, strict_cutoff, _, _ = relion_cuda_f32_coarse_posterior(
@@ -118,7 +118,7 @@ def test_initialmodel_coarse_support_absorbs_two_ulp_atomic_cutoff_split():
     np.testing.assert_array_equal(np.asarray(strict_cutoff), [1])
     np.testing.assert_array_equal(np.asarray(expanded_mask), [[True, True]])
     np.testing.assert_array_equal(np.asarray(expanded_count), [2])
-    # RELION serializes the pre-tie rank even when threshold ties expand the
+    # The diagnostic preserves the pre-envelope rank while expanding the
     # materialized support.
     np.testing.assert_array_equal(np.asarray(expanded_cutoff), [1])
 

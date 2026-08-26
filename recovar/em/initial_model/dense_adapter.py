@@ -114,7 +114,7 @@ def _unify_local_bucket_sizes_enabled() -> bool:
 def _initial_model_relion_f32_coarse_tie_ulps() -> int:
     """Resolve the scoped coarse-cutoff ULP envelope for diagnostic A/B runs."""
 
-    setting = os.environ.get(_RELION_F32_COARSE_TIE_ULPS_ENV, "2").strip()
+    setting = os.environ.get(_RELION_F32_COARSE_TIE_ULPS_ENV, "0").strip()
     try:
         value = int(setting)
     except ValueError as error:
@@ -947,11 +947,10 @@ def _run_sparse_pass2_initial_model_estep(
                 use_exact_relion_projector
                 and _uses_relion_cuda_image_preprocessing(group_dataset)
             ),
-            # RELION's source build keeps exact threshold ties, while the
-            # equivalent standalone coarse scorer can move the last retained
-            # K=1 sample by up to two float32 score ULPs as its atomics are
-            # scheduled in a separate launch. Preserve the native inclusive
-            # support envelope without changing supplied-map EM.
+            # Production follows RELION's exact threshold comparison.  The
+            # optional score-ULP envelope is diagnostic-only: native CUDA
+            # launches can straddle a near-tied cutoff, but expanding every
+            # cutoff changes stable supports in other particles.
             relion_f32_coarse_tie_ulps=(
                 _initial_model_relion_f32_coarse_tie_ulps()
                 if state.K == 1

@@ -32,9 +32,9 @@ pytestmark = pytest.mark.unit
 def test_initial_model_coarse_tie_ulp_diagnostic_override(monkeypatch):
     variable = "RECOVAR_INITIAL_MODEL_RELION_F32_COARSE_TIE_ULPS"
     monkeypatch.delenv(variable, raising=False)
-    assert _initial_model_relion_f32_coarse_tie_ulps() == 2
-    monkeypatch.setenv(variable, "0")
     assert _initial_model_relion_f32_coarse_tie_ulps() == 0
+    monkeypatch.setenv(variable, "2")
+    assert _initial_model_relion_f32_coarse_tie_ulps() == 2
     monkeypatch.setenv(variable, "17")
     with pytest.raises(ValueError, match=r"must be in \[0, 16\]"):
         _initial_model_relion_f32_coarse_tie_ulps()
