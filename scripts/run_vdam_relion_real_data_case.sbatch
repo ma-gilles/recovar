@@ -22,12 +22,20 @@ PIXI_PY="${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}"
 cd "${REPO_ROOT}"
 SOURCE_GIT_HEAD="$(git rev-parse HEAD)"
 EXPECTED_REPO_HEAD="${EXPECTED_REPO_HEAD:-}"
+RECOVAR_CUDA_LIB_PATH="${RECOVAR_CUDA_LIB_OVERRIDE:-${REPO_ROOT}/recovar/cuda/libcuda_backproject.so}"
+EXPECTED_CUDA_SHA256="${EXPECTED_CUDA_SHA256:-}"
 if [[ -n "${EXPECTED_REPO_HEAD}" ]] && [[ "${SOURCE_GIT_HEAD}" != "${EXPECTED_REPO_HEAD}" ]]; then
   echo "VDAM real-data qualification source differs from EXPECTED_REPO_HEAD" >&2
   exit 2
 fi
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   echo "VDAM real-data qualification requires a clean tracked worktree" >&2
+  exit 2
+fi
+test -s "${RECOVAR_CUDA_LIB_PATH}"
+CUDA_LIBRARY_SHA256="$(sha256sum "${RECOVAR_CUDA_LIB_PATH}" | awk '{print $1}')"
+if [[ -n "${EXPECTED_CUDA_SHA256}" ]] && [[ "${CUDA_LIBRARY_SHA256}" != "${EXPECTED_CUDA_SHA256}" ]]; then
+  echo "VDAM real-data CUDA library differs from EXPECTED_CUDA_SHA256" >&2
   exit 2
 fi
 
@@ -60,7 +68,8 @@ export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/rattler_cache"
 export RECOVAR_CACHE_DIR="${RECOVAR_CACHE_DIR-}"
 export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${OUTPUT_ROOT}/jax_cache}"
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS="${JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS:-0}"
-export RECOVAR_CUDA_LIB="${REPO_ROOT}/recovar/cuda/libcuda_backproject.so"
+export RECOVAR_CUDA_LIB="${RECOVAR_CUDA_LIB_PATH}"
+export RECOVAR_CUDA_LIB_SHA256="${CUDA_LIBRARY_SHA256}"
 mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}" \
   "${OUTPUT_ROOT}/relion" "${OUTPUT_ROOT}/recovar" /scratch/gpfs/GILLES/mg6942/slurmo
 touch "${OUTPUT_ROOT}/SAFE_TO_DELETE"
@@ -229,6 +238,8 @@ report = {
     "relion_reference": relion_reference,
     "relion_wall_s": int(sys.argv[4]),
     "recovar_wall_s": int(sys.argv[5]),
+    "cuda_library": os.environ["RECOVAR_CUDA_LIB"],
+    "cuda_library_sha256": os.environ["RECOVAR_CUDA_LIB_SHA256"],
     "cuda_launch_blocking": os.environ.get("CUDA_LAUNCH_BLOCKING") == "1",
     "cuda_launch_blocking_value": os.environ.get("CUDA_LAUNCH_BLOCKING"),
     "recovar_cache_dir": os.environ.get("RECOVAR_CACHE_DIR"),
