@@ -3046,3 +3046,50 @@ remain below `8.93e-7`.  Focused H100 job `12976868` is therefore queued to
 capture the complete iteration-2 native and RECOVAR M-step boundary under the
 true 200-iteration schedule.  No speculative full trajectory is being run for
 this diagnosis, and no generic RECOVAR test, full suite, or long-test ran.
+
+## 2026-08-26 gf10 iteration-2 coarse-support closure and full promotion
+
+Passive native posterior capture `12978475` localizes gf10's first material
+reference split one iteration earlier than the first hard-state mismatch.  At
+iteration 2 for `1058@particles.128.mrcs`, sealed RELION retains 96 fine
+rotations while the prior RECOVAR candidate retains 88.  The eight native-only
+rotations are all children of coarse rotation 512, direction 42 / psi 8, at
+translation 14 and carry `0.1294854045` posterior mass.  On the 88 common
+rotations the posterior cosine is `0.9999999931`, and both engines select the
+same pose and translation.  The missing parent alone explains the Pmax split:
+RELION is `0.2748737931`, while the old candidate is `0.3157681227`.
+
+Coarse dump `12978781` identifies the exact boundary.  RELION's two boundary
+parents have bitwise-equal float32 raw weights and its inclusive cutoff retains
+both.  In the standalone RECOVAR launch, parent 436 is last retained at
+`-346.65008544921875` and parent 512 is excluded at
+`-346.6501159667969`, one float32 score ULP lower.  RELION live-prior capture
+`12979970` proves that both native execution branches use identical direction
+priors, rejecting stale or normalized priors as the remaining cause.  The
+source audit did find that RELION stores absolute `log(pdf_direction)`, while
+RECOVAR had subtracted a common mean-PDF scale.  Local implementation commit
+`151c6cb2d` restores that source expression, but scientific jobs `12979813`,
+`12979889`, and native-texture A/B `12979920` show that the independent coarse
+launch can still place the boundary parent one or two score ULPs below the
+cutoff.  Projector texture selection is therefore not causal.
+
+Local implementation commit `db0b20a99` preserves RELION's inclusive coarse
+support under the measured two-ULP atomic-rounding envelope.  It is guarded to
+fresh K=1 InitialModel with the exact RELION projector and CUDA preprocessing;
+supplied-map EM is unchanged.  Five focused unit/source/merge guards pass in
+`26.13 s`.  H100 scientific gate `12980137` then closes the frozen iteration-2
+boundary: 96/96 rotations match, native-only and RECOVAR-only counts are zero,
+fine-posterior support mismatch count is zero, the winner is identical, and
+Pmax is `0.2748737931` native versus `0.2748737633` RECOVAR (absolute error
+`2.98e-8`).  Posterior cosine is `0.9999999999676772`, L1 error is
+`7.9930e-6`, and relative L2 is `8.0657e-6`.  Evidence is in
+`vdam_gf10_coarse_tie_2ulp_it2_db0b20a99_20260826/analysis/posterior_support_boundary.json`.
+
+This is a first-boundary closure, not yet a trajectory pass.  Full gf10
+0--200 envelope job `12980190_10` is running from exact head `db0b20a99` with
+four native repeats on the same H100, all frozen map/state/schedule checkpoints,
+and aggregate repeatability calibration.  The production dashboard meanwhile
+stands at 7 pass, 6 fail, 1 audit pending, 4 science running, and 4 not started:
+gf11 and gf15 newly pass; gf13's audit is active; gf16--gf19 science is active.
+Observed RECOVAR/native-median runtime is still failed at `5.334x`--`11.398x`
+(median `6.592x`).  No generic RECOVAR test, full suite, or long-test ran.
