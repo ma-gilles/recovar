@@ -27229,3 +27229,41 @@ gate must freeze the incoming iteration-2 maps and state, then compare the
 same particle and candidate tuples with only the intended execution-path
 intervention.  The fixed K=1 score remains `31/34`; no production default or
 scorecard value changes.
+
+## 2026-08-26 12:32 EDT — power-matched row boundary rejects dispatch as a fix
+
+Same-H100, power-spectrum-matched ordinary-dispatch job `12996916` reached
+source row `75571` at physical iteration 2.  Relative to prioritized control
+`12993648`, the coarse winner remains exact at `(30280, 25)`, but the coarse
+significant count changes from `20` to `19`.  One threshold-edge hypothesis
+at `(33856, 17)` is excluded even though its centered pre-exponent is the same
+when printed in float32 (`-8.037353515625`).  The coarse Pmax changes from
+`0.4312054216861725` to `0.431195467710495`.
+
+The first unequal coarse operand is the corrected Fourier image, relative L2
+`1.2842041499e-7`.  The fine dump identifies its upstream scalar change:
+`relion_preprocess_normalization_factor` is `0.998483419418335` in the control
+and `0.9984833598136902` in the ordinary-dispatch arm, exactly one float32 ULP.
+Scale correction, CTF, inverse noise, pixel correction, rotations,
+translations, and both priors remain bit exact.
+
+The lost coarse parent reduces the fine candidate set from `640` to `608`.
+The fine winner remains `(12, 69)`, but fine Pmax moves from
+`0.46401613598439645` to `0.470945411238186`, whereas deployed native RELION
+is approximately `0.4639952072`.  Thus the power-matched dispatch intervention
+moves this target substantially farther from RELION.  Dispatch is rejected as
+a production fix for this remaining K=1 boundary; the threshold discontinuity
+is useful evidence about sensitivity, not evidence that RELION's physical
+shuffle should be imposed on RECOVAR.
+
+The coarse and fine reports are respectively
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_natural_full_dispatch_powernorm1_parallel_ab01_20260826T1150ET/analysis/K1_CASE10_ROW075571_PRIORITIZED_VS_NATURAL_POWERNORM1_COARSE.json`
+(SHA-256
+`0680ed68b0346ae1e8371f48992d1ea0b0d03cd35fe3605c42d2c6f9a7cee2e5`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_natural_full_dispatch_powernorm1_parallel_ab01_20260826T1150ET/analysis/K1_CASE10_ROW075571_PRIORITIZED_VS_NATURAL_POWERNORM1_FINE.json`
+(SHA-256
+`6f49196f3fc72f89a8ebc51d2fb6c36ddec1b3d6ff301b4e518bdb737d8afc60`).
+The next exact causal gates remain the projection-cache A/B with unchanged
+dispatch and the deployed-revision one-tuple native operand comparison.  The
+fixed K=1 score remains `31/34`.
