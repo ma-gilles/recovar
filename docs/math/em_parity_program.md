@@ -188,6 +188,32 @@ the required physical GPU.  Pending v3 tasks are held only for that short
 capture and will be released immediately afterward.  No generic RECOVAR
 suite was run.
 
+The strict low-noise failures now have a shared iteration-30 mechanism.
+RECOVAR remains at `sampling_acc_trans_angstrom=999` through the expected-
+accuracy cadence, so its GF29/GF30 translation ranges are respectively
+`10.737079794` and `10.995797472` Angstrom.  Native RELION estimates finite
+translation accuracy, uses steps `2.479875` / `2.435250` Angstrom, and halves
+those ranges to `5.368540` / `5.497899` Angstrom.  The input STAR already
+contains valid orientations for all particles, but RECOVAR initialized only
+translations/classes/Pmax; an unvisited particle in the 100-particle trial
+therefore disabled the all-or-nothing estimate.  Local science commit
+`ed1beaef9` seeds those input orientations, rejects partial/non-finite Euler
+metadata, and adds a source/GPU/CUDA/binding-pinned bounded replay.  Nine
+orientation/expected-accuracy tests and the focused runner guard pass.  GF29
+iteration-30 discriminator `12996939` is queued behind the same-GPU GF38
+capture; full GF29/GF30 0--200 reruns remain gated on exact iteration-30
+sampling and particle-state agreement.
+
+Strict-head GF41 science job `12995783` completed all 201 checkpoints in
+`1855` seconds on the frozen H100, versus `265.3--269.6` seconds for native
+RELION repeats (median `267.8` seconds), a current `6.93x` runtime failure.
+Its calibrated audit initially failed closed because provenance recorded the
+same pinned CUDA SHA at both immutable and staged paths.  Local audit commit
+`05e72bfb2` accepts duplicate paths only when their digest is identical and
+still rejects conflicting CUDA digests; its two focused provenance tests
+pass.  Replacement calibrated audit `12997169` is running.  Both commits
+remain local and unpushed.
+
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
 `vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC
