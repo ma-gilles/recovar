@@ -27127,3 +27127,74 @@ relative L2 `2.9962375557e-10 / 3.5189155342e-10`.  Thus job `12996049`
 enters physical iteration 2 from the same discrete scientific state and a map
 repeat floor, while job `12996264` remains the exact environment-matched
 confirmation.
+
+## 2026-08-26 11:50 EDT — coarse gate and exact same-GPU dispatch arm
+
+The ordinary-dispatch, power-spectrum-off arm `12996049` wrote its physical
+iteration-2 row-75571 coarse capture before entering half-2 pass 2.  Against
+stopped/prioritized job `12993648`, both arms select exactly `20` significant
+coarse hypotheses, the same hard coordinate `(30280, 25)`, and bit-exact
+significant mask, rotations, translations, priors, CTF/pixel weights, and
+score indices.  Coarse Pmax changes only from `0.4312054216861725` to
+`0.4312058091163635`, or `3.8743019104e-7`.
+
+The first unequal captured field precedes coarse scoring:
+`coarse_gaussian_unshifted_corrected` differs at relative L2
+`4.8648322552e-7`.  A complex least-squares scalar explains most of that
+change (`alpha - 1 = -4.7895663e-7 - 3.2898095e-9j`); the residual relative
+L2 is `8.5180183e-8`.  This identifies a per-particle correction boundary
+that the globally saved, bit-exact noise arrays did not expose.  Consequently
+the earlier claim that `RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM` was inert
+at the iteration-2 scoring input is withdrawn.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_natural_full_dispatch_aca8_95aa2d3a6_20260826T1112ET/analysis/K1_CASE10_ROW075571_PRIORITIZED_VS_NATURAL_COARSE.json`
+(control capture SHA-256
+`33008181aead2bb0ffe14d012e0bb66dc89084a3e66030230b1c2d5eee1f3a16`,
+candidate SHA-256
+`dc06fea53ca582b8b9c6813fc686086fb8120e127c3d281e6cbd65aa2c8789eb`).
+
+To avoid waiting serially for the environment-matched arm, independent job
+`12996916` was submitted without altering either existing job.  It writes to
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_natural_full_dispatch_powernorm1_parallel_ab01_20260826T1150ET`,
+with runtime root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_natural_full_dispatch_powernorm1_parallel_ab01_20260826T1150ET`;
+both contain `SAFE_TO_DELETE`.  It started on the exact same physical H100 as
+prioritized control `12993648`, UUID
+`GPU-990435ac-e5fe-18d9-c741-59b8fd9c9439`.  The commits between control HEAD
+`567b22d4e` and candidate HEAD `ab01fd27b` change no `recovar/` scientific
+source; they contain only the inert full-dispatch launcher control, analyzers,
+tests, and scorecards.  Environment comparison leaves the intended
+`RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET` / ordinary-dispatch intervention plus
+paths and provenance identifiers.  The CUDA library remains sealed at
+`aca8de06213bda21375f9cde0a7442275e84be8a092127d75392b15fae4e621f`.
+Dependency-bound job `12996264` remains untouched as an additional repeat.
+No K=1 scorecard value changes; the fixed score remains `31/34`.
+
+The same ordinary-dispatch arm subsequently wrote the natural-position fine
+capture.  Relative to stopped/prioritized job `12993648`, candidate geometry
+is exact (`640/640`), fine reconstruction support is exact (`69/69`), and the
+winner is exact at local coordinate `(12, 69)`.  Natural versus prioritized
+Pmax is `0.4639954721182334` versus `0.46401613598439645`; deployed native
+RELION is `0.46399520722759474`, so the natural arm is only
+`2.6489063866e-7` from native.
+
+The first unequal fine field is exactly
+`relion_preprocess_normalization_factor`: `0.9984829425811768` natural versus
+`0.998483419418335` prioritized, a one-float32-step change of
+`-4.7683715820e-7`.  Geometry, priors, CTF, inverse noise, scale correction,
+pixel correction, and lookup indices are exact.  The changed corrected image
+produces raw-diff2 relative L2 `9.7290146925e-7`, posterior relative L2
+`5.4421683230e-5`, but no discrete support or winner change.  Projection
+differences are only `2.2366557272e-10` relative L2, consistent with the
+incoming map repeat floor.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_natural_full_dispatch_aca8_95aa2d3a6_20260826T1112ET/analysis/K1_CASE10_ROW075571_PRIORITIZED_VS_NATURAL_FINE.json`
+(natural capture SHA-256
+`cca4b4560debf47f2ace6a47077ee13bbeffe96499fd66b021f4b87a24fed859`,
+prioritized SHA-256
+`64f97bf2168ebdc988b94328c741ed42755e1fc656485d1f85dedc51646ce9bf`).
+
+This result sharply weakens bucket priority as the local cause.  Both dump
+arms disable the projection cache by default and both avoid the old
+production row value near `0.470933`.  The leading local discriminator is now
+the shared cache-off/dump execution path versus the ordinary cached path,
+subject to the exact same-H100, power-spectrum-matched result from job
+`12996916`.  No cache default or production behavior changes before that gate.
