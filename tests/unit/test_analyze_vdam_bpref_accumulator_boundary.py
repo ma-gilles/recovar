@@ -123,3 +123,5 @@ def test_big_jit_bpref_capture_observes_production_tensors_without_disabling_pat
     assert "or bpref_contribution_capture_active" in source
     assert "big-JIT BPref contribution capture requires returned M-step tensors and scores" in source
     assert source.count("_maybe_dump_exact_local_bpref_contribution_rows(") >= 3
+    assert "zero_data = jnp.zeros_like(Ft_y[0])" in source
+    assert "zero_weight = jnp.zeros_like(Ft_ctf[0])" in source

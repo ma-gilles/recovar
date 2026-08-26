@@ -3974,8 +3974,15 @@ def run_local_em_exact(
                             & jnp.asarray(unpadded_bucket.local_rotation_mask)
                         )
                         for target_particle_row in target_particle_rows.tolist():
-                            zero_data = jnp.zeros_like(Ft_y)
-                            zero_weight = jnp.zeros_like(Ft_ctf)
+                            if bucket_reconstruction_group_ids is None:
+                                zero_data = jnp.zeros_like(Ft_y)
+                                zero_weight = jnp.zeros_like(Ft_ctf)
+                            else:
+                                # The diagnostic replays one particle without a
+                                # group-ID operand, so give the ungrouped kernel
+                                # one group's native x-half accumulator shape.
+                                zero_data = jnp.zeros_like(Ft_y[0])
+                                zero_weight = jnp.zeros_like(Ft_ctf[0])
                             target_slice = slice(
                                 int(target_particle_row),
                                 int(target_particle_row) + 1,
