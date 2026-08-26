@@ -27442,3 +27442,38 @@ and
 both contain `SAFE_TO_DELETE`.  No normalization correction or terminal run
 is authorized until that fresh tuple is compared.  The fixed score remains
 `31/34`.
+
+## 2026-08-26 14:16 EDT — source proof reclassifies 56 as restart-only and restores fresh size 58
+
+The deployed RELION source resolves the apparent score-window contradiction
+before the fresh capture completes.  On a fresh run,
+`MlModel::initialiseFromImages` reads `mymodel.pixel_size` from the input MRC
+header and retains it in process.  At each iteration RELION computes
+
+```text
+remap_sizes = (optics_pixel_size * image_size)
+              / (model_pixel_size * model_size)
+image_current_size = 2 * CEIL(0.5 * remap_sizes * model_current_size)
+```
+
+For case 10, the fresh resident MRC sampling is `544/384 =
+1.416666666...`, the optics value is `1.416667`, and model current size is
+`56`.  Therefore `remap_sizes=1.0000002352941175`, the `CEIL` argument is
+`28.00000658823529`, and the fresh image score size is `58`.  A continuation
+instead reloads the six-decimal model STAR value `1.416667`; its remap is
+exactly one, its `CEIL` argument is exactly `28`, and its score size is `56`.
+
+Thus the exact 56-window artifact is authoritative for RELION continuation
+semantics only.  It is not the geometry of the uninterrupted fixed scorecard.
+The uncommitted RECOVAR model-STAR runtime-pixel-size candidate is rejected as
+a fresh-K=1 production change.  Its worse iteration-1 merged FSC-AUC
+`0.9999999509789376` versus the prior `0.9999999994939385` is consistent with
+changing the fresh path from the correct 58 window to restart-only 56.
+
+Fresh job `13002942` remains valuable as the runtime capture confirmation.
+Already-submitted dependent job `13003123` is retained untouched as a
+deliberate 56-window restart-geometry diagnostic; no result from it can be
+promoted as fresh parity.  After those jobs finish naturally, the model-STAR
+runtime override will be removed and the exact same-input row comparison will
+be rerun at size `58`.  No running or pending job was cancelled, modified,
+requeued, or reprioritized.  The fixed score remains `31/34`.
