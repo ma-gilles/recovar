@@ -26800,20 +26800,22 @@ also ranks row `52958` first, row `75571` second, and row `28262` third after
 subtracting native repeat displacement. Row `52958` has already been
 exhaustively localized. Row `75571` (stack index `75572`, half 2) is therefore
 still the next decisive deployed-lineage target; it combines a large Pmax residual
-(`0.46400922536849976` RECOVAR versus `0.470971` RELION) with a genuine support
-count mismatch (`20` versus `19`) while retaining a near-identical hard pose
-and translation. Row `76381` is reserved for a separate hard-pose diagnostic:
+(`0.47093307971954346` RECOVAR versus `0.464002` RELION) with a genuine support
+count mismatch (`19` versus `20`) while retaining a near-identical hard pose
+and translation. The independent native repeat is `0.463994` with support
+count `20`, so the repeat-adjusted excess absolute Pmax residual is
+`0.00692308`. Row `76381` is reserved for a separate hard-pose diagnostic:
 its support and Pmax are nearly equal but its rotation differs by
 `139.990809` degrees and its translation by `2.55393` Angstrom.
 
 The audit report and arrays are
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET/analysis/full_population_it002_native_vs_recovar/particle_state.json`
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis/terminal_state_it2_native_repeat_arrays/particle_state.json`
 (SHA-256
-`3a997ef0934b32a9f090686583952050ce2e0c32cad1f3c03c4fba2e561dc006`)
+`ca1a44f6fbce19a6903f5cbd8eda1c39ce85cc6fba6b0a09c58f923f652a810f`)
 and
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET/analysis/full_population_it002_native_vs_recovar/particle_state_arrays.npz`
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis/terminal_state_it2_native_repeat_arrays/particle_state_arrays.npz`
 (SHA-256
-`250767642c2cc5324c09a9b06c8f0a35bf6ba617ca6e23e48a63b932a042cca2`).
+`9a7d3d4127542d304e3e8cce80a46815d05d0e9231668430b5c07cdf71282c8c`).
 
 Two focused row-75571 captures were launched without changing or cancelling
 any existing job. Newer-lineage native RELION job `12992836` writes to
@@ -26909,3 +26911,40 @@ Its runtime root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_native_fine_cont_exactrev_567b22d4ea_20260826T0944ET`;
 both roots contain `SAFE_TO_DELETE`. The existing newer-lineage job remains
 untouched and will be classified only as a lineage control.
+
+## 2026-08-26 09:56 EDT — deployed-lineage row-75571 capture validated
+
+Authoritative native RELION continuation job `12993846` completed successfully
+in `00:13:55`; `SUCCESS_12993846` is present. The capture remains scientifically
+inert at the fixed map/topology boundary: its iteration-2 merged FSC-AUC versus
+the frozen native control is `0.999999999193552`, the selected controller
+topology is exact, and the inertness report status is `map_stable`. The report
+is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_native_fine_cont_exactrev_567b22d4ea_20260826T0944ET/analysis/RELION_CAPTURE_INERTNESS.json`
+(SHA-256
+`e2ecfacfa3af6c6337e88340a24a4a586a32ed2d779853f58d5ef39f150d46ee`).
+
+The native fine table contains `640` active candidate tuples and the geometry
+capture retains `69` significant fine hypotheses. The native hard winner has
+local fine coordinates `(rotation=12, translation=69)`. The fine-score capture
+is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_native_fine_cont_exactrev_567b22d4ea_20260826T0944ET/capture/part72860_stack75572_class1.fine-score-v1.bin`
+(SHA-256
+`aba6e69b296a0f92ea9586415fa4ce7720d28293543c0ee64202218e7070ae65`),
+and the matching factor capture is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_native_fine_cont_exactrev_567b22d4ea_20260826T0944ET/capture/part72860_stack75572_img0_class1.bpre-v2.bin`
+(SHA-256
+`3c299c74858bf8e5399d2a318dc989b80379bda75c310e4244b4d6bbb6096779`).
+The written row state is Pmax `0.463995` with `20` significant samples, matching
+the frozen deployed reference (`0.464002`, `20`) and its independent repeat
+(`0.463994`, `20`). This confirms that the repeat-aware row selection remains
+valid while correcting the reversed values in the earlier narrative.
+
+Autonomous RECOVAR fine-capture job `12993648` and exact-native-state RECOVAR
+job `12994070` are traversing the real pass-2 production dispatch. Row `75571`
+belongs to half 2, so the stop-after-target hook intentionally does not bypass
+the preceding half-1 execution; once half 2 begins, the stopped diagnostic
+moves the target-containing bucket ahead of unrelated half-2 buckets. No
+support, score, or parity conclusion is accepted until each RECOVAR job writes
+its success marker and the direct staged analyzer identifies the first unequal
+boundary. The fixed score therefore remains `31/34`.
