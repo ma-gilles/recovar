@@ -14,6 +14,33 @@ as the next product milestone rather than mixing it into the first closure.
 
 ## VDAM active experiment — 2026-08-20
 
+### 2026-08-26 GF47 cumulative state and controller precision
+
+The first GF47 particle-state split was a checkpoint-serialization defect, not
+an E-step subset mismatch. At iteration 2 RECOVAR and RELION select the same
+200 identities, but RECOVAR reset `particle_state.visited` to that iteration's
+subset and therefore wrote 186 particles visited only at iteration 1 back at
+their input-STAR poses. Local unpushed commit `9685e9317` preserves cumulative
+visitation. A sealed iteration-1/2 replay improves pose match from 93.8% to
+100%, with maximum angular difference `9.58e-6` degrees and 100% translation
+match. Two focused state/STAR guards pass. Exact-H100 replacement array
+`13011552`, target task 1, is running all numbered checkpoints 0--200 against
+the existing four-repeat native panel.
+
+A second, independent GF47 defect explains the strict pre-branch schedule
+failure at iteration 10. The GPU scoring grid correctly uses float32, while
+RELION persists particle origins and performs hidden-variable monitoring in
+CPU `RFLOAT` double precision. RECOVAR had reused the float32 grid for both.
+Local unpushed commit `0a001923e` adds a distinct float64 metadata-translation
+grid and stops narrowing previous translations before controller monitoring.
+Sealed replay changes the iteration-10 range from `14.077556407` to
+`14.077556605`; the latter serializes to native `14.077557` and is within the
+unchanged `5.1e-7` schedule gate. Six focused sampling/state/controller tests,
+`py_compile`, scoped Ruff, and `git diff --check` pass. Exact-H100 iteration-10
+array `13011940` is held behind the cumulative-state trajectory. If it passes,
+the composed local head `0a001923e` will be promoted to a fresh 0--200
+same-H100 candidate and calibrated audit. No generic RECOVAR suite was run.
+
 ### 2026-08-26 strict coarse cutoff and expanded 0--200 matrix
 
 The production K=1 InitialModel coarse-significance comparison is strict again

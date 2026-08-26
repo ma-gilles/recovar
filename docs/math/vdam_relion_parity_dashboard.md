@@ -9,7 +9,7 @@ version. The checked definition SHA-256 is
 
 | Fixed K=1 v3 suite | Passed | Evaluated | Denominator | Live science |
 |---|---:|---:|---:|---:|
-| All quality/state/schedule gates | **1** | 6 | 20 | 16 complete, 4 running, 0 queued |
+| All quality/state/schedule gates | **1** | 6 | 20 | 17 complete, 3 running, 0 queued |
 | Comparable same-H100 runtime | **0** | 6 | 20 | measured range: **6.42--9.40x RELION** |
 
 Progress against the unchanged strict denominator is **0 -> 1 accepted
@@ -20,7 +20,7 @@ trajectory**. Earlier expansion v2 remains a separate regression track at
 > Runtime, K>1, real-data, and final CLI/GUI qualification follow only after
 > the K=1 0--200 suite has no unexplained failures.
 
-Last scientific update: **2026-08-26 17:46 ET**
+Last scientific update: **2026-08-26 18:19 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -34,10 +34,11 @@ full/long suite** is being run for this campaign.
 | Gate | Current result | Required to close |
 |---|---|---|
 | Frozen K=1 v3 quality | **1/20 pass**, 6/20 evaluated | 20/20 accepted with no unexplained case |
-| Frozen K=1 v3 production | **16/20 complete**, 4 running, 0 queued | 20/20 science artifacts sealed |
+| Frozen K=1 v3 production | **17/20 complete**, 3 running, 0 queued | 20/20 science artifacts sealed |
 | Earlier 0--200 expansion | **5/15 accepted**, 10 classified failures; GF42 remains outside the sealed count | Every failure repaired and requalified |
 | First causal production fix | **151x lower iteration-1 map error**, focused guards 12/12 | Complete GF38 0--200 native-envelope audit |
 | Checkpoint-state fix | GF47 iteration-2 pose match **93.8% -> 100%** in sealed replay; focused guards 2/2 | Complete replacement 0--200 trajectory and audit |
+| Controller-precision fix | GF47 iteration-10 range now serializes exactly like RELION in sealed replay; focused guards 6/6 | Complete exact-H100 iteration-10 discriminator, then combined 0--200 audit |
 | Runtime | **0/6 comparable**; current range **6.42--9.40x RELION** | Comparable same-H100 wall time |
 | K>1 / real data | Existing short K=2/K=4 panels pass; final campaign deliberately deferred | Requalify after K=1 closes |
 | CLI / GUI | Unified backend/default contract exists | Final defaults and important controls requalified |
@@ -55,6 +56,17 @@ Replaying the sealed iteration-1/2 metadata changes pose match from **93.8% to
 remains 100%. Focused guards pass 2/2. Exact-H100 replacement trajectory array
 `13011552`, task 1, is running; no score changes until its audit is terminal.
 
+GF47 also had a distinct pre-branch controller miss at iteration 10. RELION's
+GPU search grid is float32, but persistent particle origins and hidden-variable
+monitoring use CPU `RFLOAT` double precision. RECOVAR incorrectly reused the
+float32 search translations for both roles. Local unpushed commit `0a001923e`
+keeps the GPU grid float32 while preserving float64 metadata translations.
+Sealed replay moves the iteration-10 range from `14.077556407` to
+`14.077556605`, which serializes to RELION's `14.077557` and falls inside the
+unchanged `5.1e-7` gate. Focused guards pass 6/6. Exact-H100 iteration-10
+array `13011940` is dependency-held behind the cumulative-state trajectory;
+only a passing discriminator will promote the combined fix to 0--200.
+
 The first exact production defect remains repaired locally at unpushed commit
 `6387ff7c9`: the oversampling-zero big-JIT preserves RELION's retained coarse
 posterior mass. Exact-H100 iteration-1 evidence improves posterior relative-L2
@@ -69,7 +81,7 @@ audit is terminal.
 | Failure class | Current evidence | Next closure gate |
 |---|---|---|
 | Map/particle parity | GF43, GF46, GF48; GF45 needs authoritative seeded re-audit; GF47 checkpoint repair is requalifying | classify earliest boundary and repair without changing gates |
-| Controller topology | GF47 and GF48 diverge before an admissible native branch | reproduce RELION schedule decisions exactly |
+| Controller topology | GF47 iteration-10 precision repair is requalifying; GF48 still diverges before an admissible native branch | reproduce RELION schedule decisions exactly |
 | Runtime | every audited v3 case is 6.42--9.40x slower | profile only after a repaired trajectory passes end to end |
 | Coverage | 14/20 v3 cases not yet audited | finish science and dependent focused audits |
 
@@ -101,7 +113,7 @@ artifact topology, and wall time.
 | GF54 | 29 | midscale, Kent, radial noise | complete | pending | pending | pending | pending | audit queued |
 | GF55 | 101 | anisotropic, outliers, high noise | complete | pending | pending | pending | pending | audit queued |
 | GF56 | 101 | Kent, outliers, high noise | complete | pending | pending | pending | pending | audit queued |
-| GF57 | 101 | anisotropic, severe outliers, radial/high noise | running | -- | -- | -- | -- | running |
+| GF57 | 101 | anisotropic, severe outliers, radial/high noise | complete | pending | pending | pending | pending | audit queued |
 | GF58 | 101 | extreme outliers, uniform, white noise | complete | pending | pending | pending | pending | audit queued |
 | GF59 | 101 | very-high noise, uniform, white noise | complete | pending | pending | pending | pending | audit queued |
 | GF60 | 101 | low noise, uniform | running | -- | -- | -- | -- | running |
@@ -185,12 +197,13 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
 | 1 | Requalify cumulative GF47 checkpoint state | exact-H100 array `13011552`; task 1 running | regenerated 0--200 state audit removes false early particle split |
-| 2 | Promote repaired GF38 posterior mass through 0--200 | science `13008435` complete; focused audit `13010186` pending | complete map/state/schedule/native-envelope acceptance |
-| 3 | Seeded GF29 / GF43 / GF45 calibrated audits | 13002876 / 13002877 / 13004501 pending | authoritative map/state/schedule results |
-| 4 | GF49--GF62 trajectory matrix | science 12996103; audit 12999424 | every row terminal and sealed |
-| 5 | GF41 authoritative re-audit | 12999430 pending | calibrated particle-state result |
-| 6 | Local corrections | `6387ff7c9` posterior mass; `9685e9317` cumulative checkpoint state | full trajectories pass before implementation is published |
-| 7 | Runtime, K>1, real-data, CLI/GUI finalization | deferred behind K=1 | comparable runtime and zero suite failures |
+| 2 | Requalify GF47 controller precision | local `0a001923e`; exact-H100 iteration-10 array `13011940` dependency-held | exact strict range/schedule gate, then combined 0--200 trajectory |
+| 3 | Promote repaired GF38 posterior mass through 0--200 | science `13008435` complete; focused audit `13010186` pending | complete map/state/schedule/native-envelope acceptance |
+| 4 | Seeded GF29 / GF43 / GF45 calibrated audits | 13002876 / 13002877 / 13004501 running | authoritative map/state/schedule results |
+| 5 | GF49--GF62 trajectory matrix | 17/20 science complete; GF60--GF62 running in `12996103`; four audits running in `12999424` | every row terminal and sealed |
+| 6 | GF41 authoritative re-audit | `12999430` running | calibrated particle-state result |
+| 7 | Local corrections | `6387ff7c9` posterior mass; `9685e9317` cumulative checkpoint state; `0a001923e` metadata precision | full trajectories pass before implementation is published |
+| 8 | Runtime, K>1, real-data, CLI/GUI finalization | deferred behind K=1 | comparable runtime and zero suite failures |
 
 Implementation and diagnostic experiments remain in isolated local worktrees.
 Only tracking/evidence commits are pushed to this PR while the science change
