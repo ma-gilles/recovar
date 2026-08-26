@@ -30,6 +30,7 @@ BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}
 BPREF_CONTRIBUTION_CAPTURE_HALF=${BPREF_CONTRIBUTION_CAPTURE_HALF:-${BPREF_CONTRIBUTION_HALF}}
 BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP=${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP:-}
 BPREF_CONTRIBUTION_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE:-}
+BPREF_CONTRIBUTION_ORIGINAL_INDICES=${BPREF_CONTRIBUTION_ORIGINAL_INDICES:-}
 RELION_SOURCE=${VDAM_RELION_SOURCE:-/scratch/gpfs/GILLES/mg6942/relion}
 RELION_RUNTIME=${VDAM_RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
@@ -58,6 +59,12 @@ if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
   test "${BPREF_CONTRIBUTION_CAPTURE_HALF}" = 1 -o "${BPREF_CONTRIBUTION_CAPTURE_HALF}" = 2
   if [[ -n "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" ]]; then
     test "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" -eq "$((BPREF_CONTRIBUTION_HALF - 1))"
+  fi
+  if [[ -n "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" ]]; then
+    if [[ -n "$(printf '%s' "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" | tr -d '0-9,;[:space:]')" ]]; then
+      echo "BPREF_CONTRIBUTION_ORIGINAL_INDICES contains invalid characters" >&2
+      exit 2
+    fi
   fi
   test -n "${BPREF_CONTRIBUTION_CURRENT_SIZE}"
   test "${BPREF_CONTRIBUTION_CURRENT_SIZE}" -ge 1
@@ -245,6 +252,9 @@ PY
   export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=${TARGET_ITERATION}
   export RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF=${BPREF_CONTRIBUTION_CAPTURE_HALF}
   export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE}
+  if [[ -n "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" ]]; then
+    export RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES=${BPREF_CONTRIBUTION_ORIGINAL_INDICES}
+  fi
   export RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID=vdam-gf01-it${TARGET_ITERATION}-capture-half${BPREF_CONTRIBUTION_CAPTURE_HALF}
   export RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY=${PROVENANCE}/bpref_image_names.npy
   export RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256
@@ -335,9 +345,10 @@ sha256sum "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
   "${DATA_DIR}/particles.star" \
   "${CUDA_SOURCE_BINARY}" "${CUDA_BINARY}" "${RELION_BIND_BINARY}" "${VDAM_RELION_BINARY}" \
   > "${PROVENANCE}/static_inputs.sha256"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s"}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" \
   "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${BPREF_CONTRIBUTION_HALF}" \
   "${BPREF_CONTRIBUTION_CAPTURE_HALF}" "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" \
-  "${BPREF_CONTRIBUTION_CURRENT_SIZE}" > "${PROVENANCE}/run.json"
+  "${BPREF_CONTRIBUTION_CURRENT_SIZE}" "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" \
+  > "${PROVENANCE}/run.json"
 touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"

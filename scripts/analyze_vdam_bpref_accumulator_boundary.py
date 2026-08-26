@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,9 @@ from recovar.em.bpref_contribution_replay import (
     load_bpref_contribution_bundle,
     replay_relion_double,
     summarize_bpref_contribution_bundle,
+)
+from recovar.em.dense_single_volume.local_backprojection import (
+    enforce_relion_half_volume_x0_hermitian_host,
 )
 from recovar.em.initial_model.layout import relion_bpref_frame_scales
 
@@ -110,6 +114,111 @@ def _to_relion_bpref_frame(
     )
 
 
+def _inline_projector_replays(
+    bundle,
+    *,
+    reconstruction_group: int,
+    ori_size: int,
+) -> tuple[dict[str, BPrefAccumulatorReplay], dict[str, object]]:
+    """Sum exact one-particle fused-projector outputs for one joint halfset."""
+
+    data_parts = []
+    weight_parts = []
+    identities = []
+    for shard in bundle.shards:
+        values = shard.values
+        data = np.asarray(values["inline_projector_data_volumes"])
+        weight = np.asarray(values["inline_projector_weight_volumes"])
+        original = np.asarray(values["inline_projector_original_indices"], dtype=np.int64)
+        if data.size == 0:
+            if weight.size or original.size:
+                raise ValueError("incomplete inline-projector BPref capture")
+            continue
+        if data.ndim != 2 or weight.shape != data.shape or original.shape != (data.shape[0],):
+            raise ValueError("inline-projector BPref contribution topology is malformed")
+        particle_original = np.asarray(values["original_indices"], dtype=np.int64)
+        particle_groups = np.asarray(values["reconstruction_group_ids"], dtype=np.int32)
+        if particle_groups.shape != particle_original.shape:
+            raise ValueError("inline-projector capture lacks joint-halfset group ownership")
+        group_by_original = {
+            int(original_index): int(group)
+            for original_index, group in zip(particle_original, particle_groups)
+        }
+        try:
+            inline_groups = np.asarray(
+                [group_by_original[int(original_index)] for original_index in original],
+                dtype=np.int32,
+            )
+        except KeyError as exc:
+            raise ValueError(
+                "inline-projector identity does not close against captured particles"
+            ) from exc
+        selected = inline_groups == int(reconstruction_group)
+        data_parts.extend(np.asarray(data[selected], dtype=np.complex64))
+        weight_parts.extend(np.asarray(weight[selected], dtype=np.float32))
+        identities.extend(original[selected].tolist())
+    if not data_parts:
+        return {}, {"status": "not_captured"}
+    if len(set(identities)) != len(identities):
+        raise ValueError("inline-projector particle identities are duplicated")
+
+    volume_shape = tuple(
+        int(value) for value in np.asarray(bundle.boundary_values["volume_shape"])
+    )
+    half_shape = (*volume_shape[:2], volume_shape[2] // 2 + 1)
+    expected_size = int(np.prod(half_shape))
+    if any(np.asarray(part).size != expected_size for part in data_parts + weight_parts):
+        raise ValueError("inline-projector accumulator size differs from capture boundary")
+
+    def _sum(dtype_data, dtype_weight, precision):
+        data_total = np.zeros((expected_size,), dtype=dtype_data)
+        weight_total = np.zeros((expected_size,), dtype=dtype_weight)
+        for data_part, weight_part in zip(data_parts, weight_parts):
+            data_total += np.asarray(data_part, dtype=dtype_data).reshape(-1)
+            weight_total += np.asarray(weight_part, dtype=dtype_weight).reshape(-1)
+        data_total = enforce_relion_half_volume_x0_hermitian_host(
+            data_total,
+            volume_shape,
+        )
+        weight_total = enforce_relion_half_volume_x0_hermitian_host(
+            weight_total,
+            volume_shape,
+        )
+        return _to_relion_bpref_frame(
+            BPrefAccumulatorReplay(
+                data=np.asarray(data_total).reshape(half_shape),
+                weight=np.asarray(weight_total).reshape(half_shape),
+                backend="recovar_inline_vdam_projector_particle_sum",
+                order="captured_particle_execution",
+                precision=precision,
+                launch_topology="one_fused_projector_launch_per_particle_then_host_sum",
+            ),
+            ori_size=ori_size,
+        )
+
+    replays = {
+        "sequential_float32": _sum(
+            np.complex64,
+            np.float32,
+            "per-particle complex64/float32; sequential complex64/float32 host sum",
+        ),
+        "sequential_float64": _sum(
+            np.complex128,
+            np.float64,
+            "per-particle complex64/float32; sequential complex128/float64 host sum",
+        ),
+    }
+    identity_bytes = np.asarray(identities, dtype=np.int64).tobytes(order="C")
+    return replays, {
+        "status": "complete",
+        "reconstruction_group": int(reconstruction_group),
+        "particle_count": len(identities),
+        "particle_original_indices_sha256": hashlib.sha256(identity_bytes).hexdigest(),
+        "first_particle_original_index": int(identities[0]),
+        "last_particle_original_index": int(identities[-1]),
+    }
+
+
 def analyze(
     contribution_paths: list[Path],
     native_directory: Path,
@@ -179,11 +288,39 @@ def analyze(
             deterministic["execution"], deterministic["canonical"]
         ),
     }
+    inline_replays = {}
+    inline_summary = {"status": "not_requested"}
+    if reconstruction_group is not None:
+        inline_replays, inline_summary = _inline_projector_replays(
+            bundle,
+            reconstruction_group=reconstruction_group,
+            ori_size=ori_size,
+        )
+        for name, replay in inline_replays.items():
+            comparisons[f"candidate_vs_inline_projector_{name}"] = (
+                accumulator_replay_metrics(candidate, replay)
+            )
+            comparisons[f"native_vs_inline_projector_{name}"] = (
+                accumulator_replay_metrics(native, replay)
+            )
+        if len(inline_replays) == 2:
+            comparisons["inline_projector_float32_vs_float64"] = (
+                accumulator_replay_metrics(
+                    inline_replays["sequential_float32"],
+                    inline_replays["sequential_float64"],
+                )
+            )
     execution = deterministic["execution"]
     geometry = {
         "data": _geometry(candidate.data, native.data, execution.data),
         "weight": _geometry(candidate.weight, native.weight, execution.weight),
     }
+    inline_geometry = {}
+    for name, replay in inline_replays.items():
+        inline_geometry[name] = {
+            "data": _geometry(candidate.data, native.data, replay.data),
+            "weight": _geometry(candidate.weight, native.weight, replay.weight),
+        }
     ranking = _rank_particle_sources(
         bundle.concatenate(
             "execution",
@@ -201,6 +338,8 @@ def analyze(
         "bundle": summarize_bpref_contribution_bundle(bundle),
         "comparisons": comparisons,
         "relion_double_execution_geometry": geometry,
+        "inline_projector": inline_summary,
+        "inline_projector_geometry": inline_geometry,
         "particle_source_ranking": ranking,
         "top_particle_source_ranking": ranking[:20],
     }

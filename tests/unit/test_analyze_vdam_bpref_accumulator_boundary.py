@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -6,6 +7,7 @@ import pytest
 from recovar.em.bpref_contribution_replay import BPrefAccumulatorReplay
 from scripts.analyze_vdam_bpref_accumulator_boundary import (
     _geometry,
+    _inline_projector_replays,
     _rank_particle_sources,
     _to_relion_bpref_frame,
 )
@@ -62,6 +64,52 @@ def test_relion_bpref_frame_conversion_applies_fft_sign_and_scales():
     assert converted.order == replay.order
     assert converted.precision == replay.precision
     assert converted.launch_topology == replay.launch_topology
+
+
+@pytest.mark.unit
+def test_inline_projector_replay_selects_joint_reconstruction_group():
+    half_size = 3 * 3 * 2
+    shard = SimpleNamespace(
+        values={
+            "inline_projector_data_volumes": np.asarray(
+                [np.ones(half_size), np.full(half_size, 2.0)],
+                dtype=np.complex64,
+            ),
+            "inline_projector_weight_volumes": np.asarray(
+                [np.ones(half_size), np.full(half_size, 3.0)],
+                dtype=np.float32,
+            ),
+            "inline_projector_original_indices": np.asarray([10, 20], dtype=np.int64),
+            "original_indices": np.asarray([10, 20], dtype=np.int64),
+            "reconstruction_group_ids": np.asarray([0, 1], dtype=np.int32),
+        }
+    )
+    bundle = SimpleNamespace(
+        shards=(shard,),
+        boundary_values={"volume_shape": np.asarray([3, 3, 3], dtype=np.int32)},
+    )
+
+    replays, summary = _inline_projector_replays(
+        bundle,
+        reconstruction_group=1,
+        ori_size=4,
+    )
+    group_zero, _ = _inline_projector_replays(
+        bundle,
+        reconstruction_group=0,
+        ori_size=4,
+    )
+
+    np.testing.assert_array_equal(
+        replays["sequential_float32"].data,
+        2.0 * group_zero["sequential_float32"].data,
+    )
+    np.testing.assert_array_equal(
+        replays["sequential_float32"].weight,
+        3.0 * group_zero["sequential_float32"].weight,
+    )
+    assert summary["particle_count"] == 1
+    assert summary["first_particle_original_index"] == 20
 
 
 @pytest.mark.unit
