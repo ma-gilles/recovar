@@ -26639,3 +26639,64 @@ boundary (`current_size=110`, HEALPix order `3`, global search).  The report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_native_units_terminal_567b22d4ea_20260825T2350ET/analysis_controller_it005_login_20260826T0318ET/controller.json`
 (SHA-256
 `bae0aad823b71b353192df158ebb2de3398b900367ae2a30ef4030f6304a2bec`).
+
+## 2026-08-26 07:50 EDT — row-28262 first unequal operand
+
+The focused case-10 iteration-2 capture now localizes the one-hypothesis
+support crossing before fine scoring.  The exact-state arm selects `17`
+coarse hypotheses and the autonomous arm selects `18`, while both retain the
+same hard coordinate `(rotation=27004, translation=13)`.  The newly included
+coordinate is `(25462, 16)`.  Map substitution alone keeps the exact
+`17`-hypothesis support.  The target-versus-winner centered raw-score margin
+moves by `0.0001220703125` from exact state to exact state with the autonomous
+map, then by another `0.00048828125` from the map-only arm to the fully
+autonomous arm.  The corresponding prior-margin change is exactly zero.
+
+The three-arm report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row28262_autonomous_coarse_aca8_567b22d4ea_20260826T0654ET/analysis/K1_CASE10_ROW028262_EXACT_MAP_LIVE_TRIAD.json`
+(SHA-256
+`c1b309c04be5a5536967c02c82e0f247fa56c3352b30da348d942ef66e17f0eb`).
+Its first unequal captured scientific field is
+`coarse_gaussian_unshifted_corrected`, with relative L2
+`1.8566018057e-6`.  A best scalar fit from exact to autonomous is
+`0.9999981560950645`; the residual after that scalar has relative L2
+`2.1676e-7`.
+
+Slurm job `12989609` completed the required two-projection capture in
+`00:17:54`.  Its run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row28262_autonomous_coarse2_aca8_567b22d4ea_20260826T0728ET`
+and its runtime root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row28262_autonomous_coarse2_aca8_567b22d4ea_20260826T0728ET`;
+both contain `SAFE_TO_DELETE`.  The capture includes rotations `25462` and
+`27004` and preserves the autonomous support count of `18`.
+
+The exact eight-arm operand swap attributes the decisive
+crossing-versus-winner margin change as follows:
+
+| Operand changed from autonomous to exact-state | Margin change |
+| --- | ---: |
+| corrected coarse image | `-0.00048828125` |
+| inverse-noise / CTF-squared weight | `0` |
+| initial image-power `diff2` term | `0` |
+
+For the exact cutoff coordinate versus the winner, the corrected image
+contributes `-0.00030517578125`, the weight contributes
+`-0.00006103515625`, and the initial image-power term contributes zero.  The
+factorial recomputation reproduces the production score panel with relative
+L2 `5.8312332828e-8` and maximum absolute difference `0.000244140625`.  The
+report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row28262_autonomous_coarse2_aca8_567b22d4ea_20260826T0728ET/analysis/K1_CASE10_ROW028262_COARSE_OPERAND_SWAP.json`
+(SHA-256
+`1d67a05a841c6ec4e1c52d812bcd40522f341d2e013abaf5cf0580460cf5cca2`).
+
+This identifies the corrected coarse image as the RECOVAR-side mediator, but
+does not yet establish that its autonomous value is wrong.  The exact-state
+arm derives its normalization from six-decimal STAR values, and earlier rows
+showed that uninterrupted native RELION can agree bit-for-bit with RECOVAR
+while differing from the serialized factor by several float32 ULPs.  Native
+RELION job `12989952` is therefore capturing row `28262` at iteration 2 before
+any correction is implemented.  Its run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET`;
+both contain `SAFE_TO_DELETE`.
