@@ -148,6 +148,46 @@ unpushed.  No generic RECOVAR full or long suite was run; the active compute
 is exclusively the VDAM/InitialModel 0--200 trajectory, calibrated audit, and
 earliest-boundary program requested for this PR.
 
+Twenty additional GUI-default K=1 trajectories are frozen at local commit
+`984637b7d` in `vdam-k1-full-trajectory-expansion-v3`.  Cases `vdam-gf43`--
+`vdam-gf54` repeat baseline, anisotropic/Kent pose, low/high/very-high-noise,
+20--70% outlier, no-CTF radial-noise, junk-translation, high-resolution, and
+midscale distributions with independent perturbation seed 29.  Cases
+`vdam-gf55`--`vdam-gf62` repeat the eight highest-risk distributions with
+seed 101.  Every case retains K=1 GUI defaults, four same-GPU native RELION
+repeats, and all numbered checkpoints 0--200.  Focused matrix guard
+`12996061` passes 1/1 selected test.  Science is array `12996103` with four
+H100 workers; calibrated fail-sealed audits are array `12996104` at immutable
+audit head `c28d6957c7`.  The implementation/matrix commit remains local and
+unpushed.
+
+Strict-head low-noise results are now sealed.  `vdam-gf29` (uniform) fails
+map/state but passes sampled schedule: map failure begins at iteration 32,
+particle state at iteration 30, minimum candidate-to-best-native FSC-AUC is
+`0.7286295738`, and minimum candidate-minus-best/worst-native GT deltas are
+`-0.0025413868` / `-0.0025072290` within a native GT span of
+`0.0003406974`.  `vdam-gf30` (Kent) likewise fails map/state and passes
+sampled schedule: map failure begins at iteration 31, particle state at 30,
+minimum candidate-to-best-native FSC-AUC is `0.9006663293`, and minimum
+candidate-minus-best/worst-native GT deltas are `-0.0052648961` /
+`-0.0024626094` within a native GT span of `0.0028846820`.  These strict-head
+results reject the coarse-cutoff change as a repair for either low-noise arm.
+
+Same-H100 GF38 coarse replay `12996072` completed after staging the verified
+CUDA binary in a writable runtime.  Native-vs-RECOVAR production centered
+coarse `diff2` has max/RMS error `0.08859253` / `0.02104604`; replay through
+the fused RELION-projector scorer reduces native error to `0.01068115` /
+`0.00449695`, and the captured rotation geometry is exact after the expected
+matrix transpose.  This first report used native RELION's captured PPref, so
+it does not yet separate reference drift from scoring arithmetic.  Local
+diagnostic commit `b6e28079b` adds the exact in-memory RECOVAR PPref to the
+coarse dump and compares production against a same-projector fused replay;
+focused CPU job `12996173` passes 9/9 tests.  The corresponding pinned-H100
+capture is array `12996201`, scheduled immediately after `vdam-gf43` releases
+the required physical GPU.  Pending v3 tasks are held only for that short
+capture and will be released immediately afterward.  No generic RECOVAR
+suite was run.
+
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
 `vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC
