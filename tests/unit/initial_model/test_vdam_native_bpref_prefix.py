@@ -21,15 +21,34 @@ def _write_prefix(
     weight: np.ndarray,
 ) -> None:
     shape = data.shape
-    prefix = directory / f"half0_part{part_id}_stack{original_index + 1}_bpref_prefix_"
+    prefix = directory / f"half-1_part{part_id}_stack{original_index + 1}_bpref_prefix_"
     metadata = np.asarray(
-        [1, 1, 0, part_id, original_index + 1, 0, 1, shape[2], shape[1], shape[0], 0, 0, 2, 4, data.size],
+        [
+            1,
+            1,
+            (1 << 64) - 1,
+            part_id,
+            original_index + 1,
+            0,
+            1,
+            shape[2],
+            shape[1],
+            shape[0],
+            0,
+            0,
+            2,
+            4,
+            data.size,
+        ],
         dtype="<u8",
     )
     _write_flat(Path(str(prefix) + "metadata.bin"), metadata)
     _write_flat(Path(str(prefix) + "real.bin"), data.real.astype("<f4"))
     _write_flat(Path(str(prefix) + "imag.bin"), data.imag.astype("<f4"))
     _write_flat(Path(str(prefix) + "weight.bin"), weight.astype("<f4"))
+    _write_flat(Path(str(prefix) + "operand_eulers.bin"), np.eye(3, dtype="<f4").reshape(-1))
+    _write_flat(Path(str(prefix) + "operand_weights.bin"), np.asarray([1.0], dtype="<f4"))
+    _write_flat(Path(str(prefix) + "operand_controls.bin"), np.asarray([0.0, 1.0], dtype="<f4"))
 
 
 def test_native_bpref_prefix_matches_sequential_recovar_contributions(tmp_path: Path) -> None:
@@ -63,6 +82,11 @@ def test_native_bpref_prefix_matches_sequential_recovar_contributions(tmp_path: 
         inline_projector_data_volumes=np.stack([first_data, second_data]),
         inline_projector_weight_volumes=np.stack([first_weight, second_weight]),
         image_shape=np.asarray([128, 128], dtype=np.int32),
+        original_indices=np.asarray([9, 999], dtype=np.int64),
+        reconstruction_probs=np.ones((2, 1, 1), dtype=np.float32),
+        active_particle_rows=np.asarray([0, 1], dtype=np.int32),
+        active_rotation_rows=np.asarray([0, 0], dtype=np.int32),
+        active_rotations=np.stack([np.eye(3, dtype=np.float32)] * 2),
     )
 
     report = analyze(native_directory, [recovar_capture])
@@ -75,6 +99,8 @@ def test_native_bpref_prefix_matches_sequential_recovar_contributions(tmp_path: 
     assert report["summary"]["final_prefix_weight"]["relative_l2"] == 0.0
     assert report["summary"]["increment_data_relative_l2"]["max"] == 0.0
     assert report["summary"]["increment_weight_relative_l2"]["max"] == 0.0
+    assert report["summary"]["posterior_on_matched_rotations_relative_l2"]["max"] == 0.0
+    assert report["summary"]["extra_candidate_rotation_mass"]["max"] == 0.0
 
 
 def test_native_bpref_prefix_reports_one_particle_increment_error(tmp_path: Path) -> None:
@@ -99,6 +125,11 @@ def test_native_bpref_prefix_reports_one_particle_increment_error(tmp_path: Path
         inline_projector_data_volumes=np.asarray([contribution * np.complex64(2.0)]),
         inline_projector_weight_volumes=np.asarray([weight]),
         image_shape=np.asarray([128, 128], dtype=np.int32),
+        original_indices=np.asarray([9], dtype=np.int64),
+        reconstruction_probs=np.ones((1, 1, 1), dtype=np.float32),
+        active_particle_rows=np.asarray([0], dtype=np.int32),
+        active_rotation_rows=np.asarray([0], dtype=np.int32),
+        active_rotations=np.asarray([np.eye(3, dtype=np.float32)]),
     )
 
     report = analyze(native_directory, [recovar_capture])
