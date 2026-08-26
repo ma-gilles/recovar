@@ -257,11 +257,17 @@ on non-target GPUs by design.  RECOVAR production and the fused replay of its
 captured in-memory projector agree to RMS `5.8842e-6` (16,152/16,704 values
 bit-exact), while RELION versus that RECOVAR-projector replay has RMS
 `0.0210512`.  Replacing only the projector with RELION's captured PPref lowers
-the RELION score residual to RMS `0.0044966`, localizing most of the first
-coarse divergence to projector construction/convention rather than the fused
-production scorer.  RELION's captured fine references are bit-exact over all
-7,680 complex values only after transposing the native Euler matrices.  The
-remaining same-projector fused-score residual is real but smaller: maximum
+the RELION score residual to RMS `0.0044966`.  A subsequent exact-input CPU
+replay rules out projector construction as the source of the larger term:
+building PPref from RELION's serialized iteration-3 MRC reproduces all 18,513
+captured complex values bit-for-bit, and rebuilding the candidate PPref from
+its serialized MRC agrees to relative L2 `4.35e-9`.  The candidate/native
+iteration-3 maps already differ by relative L2 `5.07e-4`; their PPrefs inherit
+relative L2 `4.99e-4`.  The dominant coarse residual is therefore inherited
+reference drift from the earlier M-step, not an axis/conjugation/scale error
+in the projector builder.  RELION's captured fine references are bit-exact
+over all 7,680 complex values only after transposing the native Euler matrices.
+The remaining native-PPref fused-score residual is real but smaller: maximum
 `0.0106812`, RMS `0.0044966`.  Report/capture SHA-256 values are
 `61d99529d4c2dab21eaf5a56921f7920cb889a1b45d963bc0a2b0d215c949d9c` and
 `ce6e223de78457c502da5ee88255a0be992bf1873725aa0f2b1bb4b15d75989c`.
