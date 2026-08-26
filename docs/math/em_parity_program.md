@@ -62,6 +62,42 @@ runtime range is now 5.89--11.58x RELION. The repaired GF29 expansion case also
 passes its authoritative audit, raising expansion v2 to 6/15. GF41 remains a
 map-pass/particle-fail repair target. No generic RECOVAR suite was run.
 
+The frozen v3 board has since reached 19/20 completed science trajectories and
+16/20 terminal audits. The accepted score remains 2/20 (GF44 and GF45); no
+denominator or tolerance changed. Seeded GF43 now passes particle and schedule
+but first fails map at iteration 146, improving the original map/state boundary
+at 73/91 without qualifying the row. GF54 fails state at 30 and map at 45;
+GF55 fails state at 40 and map at 46; GF56 fails state at 29, schedule at 30,
+and map at 45; GF57 fails state at 11 and map at 44; GF58 fails state at 48 and
+map at 94. GF62 passes map and particle envelopes but fails the strict schedule
+gate at iteration 20. The final science row, GF61, is still running; GF53 and
+GF60 audits are running and GF59 is dependency-held.
+
+The repaired GF38 full trajectory is also terminal and is not accepted. Its
+first remaining schedule/state/map failures are iterations 3/27/60. At the
+iteration-3 controller boundary every other active field passes all four
+native repeats, while candidate `optimal_offset_change=3.303406559990986`
+differs from native's serialized `3.303406` by `5.5999e-7`, just outside the
+unchanged `5.1e-7` gate. Because that full run predates the metadata-`RFLOAT`
+precision correction, composed-head iteration-3 discriminator `13014075` is
+queued before attributing the residual to new science.
+
+GF47 full-run provenance was deliberately restarted twice rather than
+promoting ambiguous output. Array `13013006` failed its target preflight from
+the wrong working directory. Target `13013240_1` exposed a stale-timestamp
+CUDA rebuild and was canceled; its changed binary digest disqualifies it.
+Fresh exact-H100 target `13014045_1` runs from immutable head `0a001923e` with
+the qualified private CUDA SHA-256
+`87274beac3a7b5af59947199588955366485d22780239f4c94fd5afc13f8e337`
+in a read-only directory. No result from the rejected attempts is promoted.
+
+Fresh same-H100 GF46 iteration-4 captures are now complete: native target
+`13013676` reran the sealed original command with the instrumented RELION
+binary, and matching RECOVAR target `13014043` captured candidate fine/coarse
+scores from head `0a001923e`. The next causal step compares the captured
+support, score, posterior, and argmax for original particle 285 (STAR particle
+286 / native internal part 2067). No generic RECOVAR suite was run.
+
 ### 2026-08-26 strict coarse cutoff and expanded 0--200 matrix
 
 The production K=1 InitialModel coarse-significance comparison is strict again
