@@ -476,14 +476,13 @@ def _bpref_contribution_target_rows(experiment_dataset, image_indices) -> np.nda
     """Return bucket rows selected by the optional frozen original-index target."""
 
     local_indices = np.asarray(image_indices, dtype=np.int64)
-    target_raw = os.environ.get(
-        "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES",
-        "",
-    ).strip()
-    if not target_raw:
+    target_values = parse_env_int_set(
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES"
+    )
+    if not target_values:
         return np.arange(local_indices.size, dtype=np.int64)
     targets = np.asarray(
-        [int(value.strip()) for value in target_raw.split(",") if value.strip()],
+        sorted(target_values),
         dtype=np.int64,
     )
     original_indices = _original_indices_for_local(experiment_dataset, local_indices)

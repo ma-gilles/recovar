@@ -5,6 +5,9 @@ import numpy as np
 import pytest
 
 from recovar.em.bpref_contribution_replay import BPrefAccumulatorReplay
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _bpref_contribution_target_rows,
+)
 from scripts.analyze_vdam_bpref_accumulator_boundary import (
     _geometry,
     _inline_projector_replays,
@@ -110,6 +113,24 @@ def test_inline_projector_replay_selects_joint_reconstruction_group():
     )
     assert summary["particle_count"] == 1
     assert summary["first_particle_original_index"] == 20
+
+
+@pytest.mark.unit
+def test_bpref_target_rows_accept_slurm_safe_semicolon_list(monkeypatch):
+    dataset = SimpleNamespace(
+        dataset_indices=np.asarray([10, 20, 30, 40], dtype=np.int64)
+    )
+    monkeypatch.setenv(
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES",
+        "10; 30;40",
+    )
+
+    selected = _bpref_contribution_target_rows(
+        dataset,
+        np.asarray([0, 1, 2, 3], dtype=np.int64),
+    )
+
+    np.testing.assert_array_equal(selected, np.asarray([0, 2, 3], dtype=np.int64))
 
 
 @pytest.mark.unit
