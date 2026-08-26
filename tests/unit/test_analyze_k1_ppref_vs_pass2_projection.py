@@ -1,6 +1,17 @@
 import numpy as np
 
-from scripts.analyze_k1_ppref_vs_pass2_projection import _metric
+from scripts.analyze_k1_ppref_vs_pass2_projection import (
+    _align_native_ppref_to_live_score_gauge,
+    _metric,
+)
+
+
+def test_native_ppref_alignment_changes_only_common_ctf_gauge() -> None:
+    native = np.asarray([1 + 2j, -3 + 4j], dtype=np.complex64)
+    np.testing.assert_array_equal(
+        _align_native_ppref_to_live_score_gauge(native),
+        -native,
+    )
 
 
 def test_metric_reports_exact_complex_components() -> None:

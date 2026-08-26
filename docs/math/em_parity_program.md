@@ -27919,3 +27919,113 @@ direct CTF fallback; neither failed attempt is interpreted numerically.
 The fixed score remains `31/34`.  These results remove the reference and
 translation-phase branches and move the first live discriminator to
 normalization / real-space preprocessing / FFT at fresh iteration 2.
+
+## 2026-08-26 17:24 EDT — case-5 pose flip localizes to the inherited projected reference
+
+Focused fresh RECOVAR job `13009186` completed successfully in `00:18:37`
+and stopped immediately after writing source row `8791` at physical iteration
+2.  The native and RECOVAR fine candidate sets are exactly equal at
+`416/416`; the orientation prior is bit-exact; both reconstruction supports
+contain the same `84` tuples.  The first unequal scientific field is the
+centered raw fine score, with maximum absolute error `0.005126953125` and
+relative L2 `8.993241479059527e-5`.  That error reverses a near tie: native
+RELION chooses `(rotation 3, translation 12)` with posterior
+`0.10957800596952438`, while RECOVAR chooses `(23, 12)` with posterior
+`0.10942588746547699`.  This is the exact `157.025`-degree iteration-2 pose
+outlier identified by the full particle-state trajectory.
+
+The corrected operand factorial rules out the particle side.  `corr_img` is
+bit-exact.  The shifted image has relative L2 `7.164121378686589e-8`, and
+substituting the complete native shifted operand does not materially improve
+the centered score.  The projected reference differs at relative L2
+`3.730603329837875e-5`, maximum absolute error
+`3.133609425276518e-7`.  Substituting only that native reference lowers the
+centered-score relative L2 from `2.8990772370555e-5` to
+`6.086397491441848e-7`, close to the independent native repeat floor.  The
+stage and operand reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row08791_recovar_fresh_fine_it2_07d3102_20260826T1650ET/analysis/native_verbose_fine_state.json`
+(SHA-256
+`d74857d2ba32bd049900f4ed0000cffd6e9398c95bce2650fd6f2fcfbd10d210`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row08791_recovar_fresh_fine_it2_07d3102_20260826T1650ET/analysis/native_fine_operand_boundary_unitsfixed_v3.json`
+(SHA-256
+`72d990c0f43a27435c361dd4c37275e1943088c334470d79b75a57b05ee455f0`).
+
+The operand analyzer initially applied RECOVAR's historical `N^2` conversion
+twice to the raw-score snapshots.  Current strict-parity captures already
+store projected references, shifted images, and `corr_img` in RELION score
+units; only the direct preprocessing snapshots need the Fourier conversion.
+The corrected analyzer retains the common CTF-gauge sign alignment and passes
+its focused unit tests (`3 passed`).
+
+Replaying the exact native iteration-2 `PPref` through the same CUDA texture
+projector yields the same `3.772364884096534e-5` projection-scale discrepancy
+against the live RECOVAR pass-2 projection.  This confirms that the captured
+reference difference is the incoming projector-state difference; it is not a
+particle image, score-reduction, or phase artifact.  It does not by itself
+distinguish inherited iteration-1 state from live PPref construction.  The
+report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row08791_recovar_fresh_fine_it2_07d3102_20260826T1650ET/analysis/native_ppref_vs_live_pass2_projection_unitsfixed_v3.json`
+(SHA-256
+`262625b304cda7fe0e56fc7db5a6e5b69c63283b221a930a4f14c760d1c83885`).
+
+The exact-state discriminator therefore continues RECOVAR directly from the
+fresh native RELION iteration-1 optimiser/data boundary, executes only
+physical iteration 2, and stops on row `8791`.  Its first submission,
+`13010890`, failed closed in four seconds before science because the launcher
+created `output/intermediates` before asserting that `output` was empty.  The
+corrected retry is job `13010902`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row08791_it2_same_input_retry_07d3102_20260826T1745ET`;
+the matching runtime root is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/`.  Both roots contain
+`SAFE_TO_DELETE`.  If the native state restores rotation `3`, the autonomous
+flip is inherited from iteration 1; persistence would instead select the
+iteration-2 PPref construction path.  The fixed score remains `31/34`.
+
+## 2026-08-26 17:38 EDT — exact iteration-1 state repairs the case-5 157-degree flip
+
+Corrected same-input job `13010902` completed successfully in `00:11:50`.
+It continued directly from the fresh native RELION iteration-1 optimiser and
+data boundary, executed only physical iteration 2, and stopped after writing
+source row `8791`.  The complete `1,069,056`-tuple coarse table preserves the
+native winner `(15683, 3)`, the native `13`-parent support, and zero support
+mismatches.  The coarse posterior total variation is
+`3.8762851029001616e-5`; it causes no discrete routing difference.
+
+At fine resolution the native and RECOVAR sets remain exactly `416/416`, the
+reconstruction supports remain exactly `84/84`, and RECOVAR now selects the
+native winner `(rotation 3, translation 12)`.  The autonomous RECOVAR arm had
+selected rotation `23`.  The incoming-state intervention therefore repairs
+the full `157.025`-degree pose outlier without changing candidate generation,
+support semantics, or any acceptance threshold.
+
+The operand movement identifies the dominant mediator.  Projected-reference
+relative L2 falls from `3.730603329837875e-5` in the autonomous arm to
+`2.0046753360713966e-7`, an approximately `186x` collapse.  Centered raw
+fine-score relative L2 falls from `8.993241479059527e-5` to
+`4.889536228963223e-6`, approximately `18.4x`.  The residual serialized-state
+differences do not alter the winner or support.  This proves that the
+iteration-2 pose defect is inherited from the iteration-1 reference/state
+boundary; it is not created by iteration-2 coarse/fine tuple construction,
+fine reduction, priors, normalization, or significance.
+
+The durable fine-stage, operand, and coarse reports are respectively
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row08791_it2_same_input_retry_07d3102_20260826T1745ET/analysis/native_verbose_fine_state.json`
+(SHA-256
+`74458edbe2dffce9ea38a1126e9743ce10bfdeb8276d371c7d80e693e4b818a9`),
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row08791_it2_same_input_retry_07d3102_20260826T1745ET/analysis/native_fine_operand_boundary.json`
+(SHA-256
+`33bec05a464f4df08c1db47c1a3784a6c295e6df1644243675caade545a941ab`),
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_row08791_it2_same_input_retry_07d3102_20260826T1745ET/analysis/native_verbose_coarse_boundary.json`
+(SHA-256
+`b119e84f1a1a44ec92c3c0312d22846e792e66e544bade94f906ddd53885cdfc`).
+The pass-2 artifact SHA-256 is
+`bb147d202b55810a24d4fdda9e98b5988a75a43737b8034b62760e4df83823e2`.
+
+The next first-boundary target is consequently the iteration-1 M-step/reference
+state, using the already established exact-native BPref interface and
+repeat-aware accumulator floor.  Another terminal case-5 trajectory is not a
+discovery experiment.  Case-4 focused job `13011025` is independently
+capturing its only iteration-2 pose outlier at the same ordered boundaries.
+The fixed terminal score remains `31/34`.

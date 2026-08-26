@@ -75,6 +75,12 @@ def _metric(candidate: np.ndarray, reference: np.ndarray) -> dict[str, Any]:
     }
 
 
+def _align_native_ppref_to_live_score_gauge(values: np.ndarray) -> np.ndarray:
+    """Convert native PPref texture output to the strict RECOVAR score gauge."""
+
+    return np.negative(np.asarray(values, dtype=np.complex64), dtype=np.complex64)
+
+
 def analyze(
     *,
     ppref_path: Path,
@@ -118,12 +124,22 @@ def analyze(
             padding_factor=2,
             return_abs2=False,
             centered_rows=True,
-            dense_scale=True,
+            # Current strict-parity pass-2 captures store projections in
+            # RELION score units.  The captured PPref is already in the same
+            # convention, so applying RECOVAR's historical dense -N^2 scale
+            # here would introduce a spurious factor of 65,536 at box 256.
+            dense_scale=False,
             projector_output_size=image_current_size,
             pixel_indices=jnp.asarray(window_indices),
             relion_texture_interp=True,
         )
-        rebuilt_blocks.append(np.asarray(jax.block_until_ready(rebuilt), dtype=np.complex64))
+        # RECOVAR's strict score capture uses the common CTF gauge opposite to
+        # native RELION.  Both image and reference are negated in that gauge;
+        # align the standalone native PPref projection before replaying it
+        # against RECOVAR's captured shifted image.
+        rebuilt_blocks.append(
+            _align_native_ppref_to_live_score_gauge(jax.block_until_ready(rebuilt))
+        )
     rebuilt_projection = np.concatenate(rebuilt_blocks, axis=0)
     _require(rebuilt_projection.shape == live_projection.shape, "rebuilt projection shape differs")
 

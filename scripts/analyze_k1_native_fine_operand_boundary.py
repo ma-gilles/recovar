@@ -141,6 +141,30 @@ def _complex_metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, A
     return _metric(packed_ref, packed_cand)
 
 
+def _align_recovar_operands_to_native_units(
+    *,
+    direct_preprocessed: np.ndarray,
+    direct_corrected: np.ndarray,
+    score_reference: np.ndarray,
+    score_shifted: np.ndarray,
+    score_corr: np.ndarray,
+    physical_image_size: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Align strict-pass-2 snapshots to native RELION's Fourier/CTF gauge."""
+
+    fft_scale = np.float32(physical_image_size * physical_image_size)
+    return (
+        np.divide(direct_preprocessed, fft_scale, dtype=np.complex64),
+        np.negative(
+            np.divide(direct_corrected, fft_scale, dtype=np.complex64),
+            dtype=np.complex64,
+        ),
+        np.negative(score_reference, dtype=np.complex64),
+        np.negative(score_shifted, dtype=np.complex64),
+        np.asarray(score_corr, dtype=np.float32),
+    )
+
+
 def _center(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, dtype=np.float32)
     return np.subtract(values, np.max(values), dtype=np.float32)
@@ -405,40 +429,30 @@ def analyze(
     recovar_corr[valid] = recovar_corr_compact[compact_rows]
     recovar_raw = recovar_raw_dense[mapped_rotation, mapped_translation]
 
-    # RECOVAR's full-image Fourier convention is larger than RELION's by N^2.
-    # The captured RELION CTF has the opposite sign, so both the CTF-weighted
-    # reference and corrected image share a harmless global minus sign.  Align
-    # that common gauge before comparing either operand.  Xi^-2 carries the
-    # compensating N^4 factor in native RELION.
-    fft_scale = np.float32(physical_image_size * physical_image_size)
+    # The direct RECOVAR preprocessing snapshots retain RECOVAR's full-image
+    # Fourier convention, which is larger than RELION's by N^2.  The raw-score
+    # operand snapshots (reference, shifted image, and corr_img) are already
+    # emitted in RELION score units and must not be scaled a second time.
+    # The captured RELION CTF has the opposite sign, so the direct corrected
+    # image also needs the harmless common minus sign before comparison.
     recovar_preprocessed = np.zeros((image_size,), dtype=np.complex64)
     recovar_corrected = np.zeros((image_size,), dtype=np.complex64)
-    recovar_preprocessed[valid] = np.divide(
-        recovar_preprocessed_compact[compact_rows],
-        fft_scale,
-        dtype=np.complex64,
-    )
-    recovar_corrected[valid] = np.negative(
-        np.divide(
-            recovar_corrected_compact[compact_rows],
-            fft_scale,
-            dtype=np.complex64,
-        ),
-        dtype=np.complex64,
-    )
-    recovar_ref = np.negative(
-        np.divide(recovar_ref, fft_scale, dtype=np.complex64),
-        dtype=np.complex64,
-    )
-    recovar_shifted = np.negative(
-        np.divide(recovar_shifted, fft_scale, dtype=np.complex64),
-        dtype=np.complex64,
-    )
-    recovar_corr = np.multiply(
+    (
+        aligned_preprocessed,
+        aligned_corrected,
+        recovar_ref,
+        recovar_shifted,
         recovar_corr,
-        np.multiply(fft_scale, fft_scale, dtype=np.float32),
-        dtype=np.float32,
+    ) = _align_recovar_operands_to_native_units(
+        direct_preprocessed=recovar_preprocessed_compact[compact_rows],
+        direct_corrected=recovar_corrected_compact[compact_rows],
+        score_reference=recovar_ref,
+        score_shifted=recovar_shifted,
+        score_corr=recovar_corr,
+        physical_image_size=physical_image_size,
     )
+    recovar_preprocessed[valid] = aligned_preprocessed
+    recovar_corrected[valid] = aligned_corrected
 
     mapped_compact = np.zeros(recovar_corr_compact.size, dtype=bool)
     mapped_compact[compact_rows] = True
@@ -602,7 +616,7 @@ def analyze(
             float(np.max(inferred_highres)),
         ],
         "recovar_highres_xi2_half": float(recovar_highres_xi2_half),
-        "recovar_to_native_fourier_scale": float(fft_scale),
+        "recovar_to_native_fourier_scale": float(physical_image_size**2),
         "recovar_to_native_common_ctf_sign": -1,
         "first_non_bit_exact_boundary": first_unequal,
         "ordered_boundaries": list(ordered),

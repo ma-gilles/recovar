@@ -15,6 +15,9 @@ import starfile
 
 from recovar.cuda_backproject import relion_preprocess_real_f32
 from recovar.data_io.image_backends import _centered_rfft2_jax
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_cuda_fine_full_to_compact_lookup,
+)
 
 if __package__:
     from .compare_k1_relion_recovar_fine_operands import _json_default, _metric

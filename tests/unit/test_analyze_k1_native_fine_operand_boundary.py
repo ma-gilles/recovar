@@ -3,10 +3,42 @@ from __future__ import annotations
 import numpy as np
 
 from scripts.analyze_k1_native_fine_operand_boundary import (
+    _align_recovar_operands_to_native_units,
     _metric,
     _native_gaussian_components,
     _native_to_recovar_compact,
 )
+
+
+def test_strict_score_operands_are_not_rescaled_twice():
+    native_preprocessed = np.asarray([1 + 2j], dtype=np.complex64)
+    native_corrected = np.asarray([3 - 4j], dtype=np.complex64)
+    native_reference = np.asarray([[5 + 6j]], dtype=np.complex64)
+    native_shifted = np.asarray([[7 - 8j]], dtype=np.complex64)
+    native_corr = np.asarray([9], dtype=np.float32)
+    n2 = np.float32(16)
+
+    actual = _align_recovar_operands_to_native_units(
+        direct_preprocessed=native_preprocessed * n2,
+        direct_corrected=-native_corrected * n2,
+        score_reference=-native_reference,
+        score_shifted=-native_shifted,
+        score_corr=native_corr,
+        physical_image_size=4,
+    )
+
+    for observed, expected in zip(
+        actual,
+        (
+            native_preprocessed,
+            native_corrected,
+            native_reference,
+            native_shifted,
+            native_corr,
+        ),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(observed, expected)
 
 
 def test_metric_accepts_noncontiguous_panel_slices():
