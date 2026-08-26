@@ -2963,3 +2963,32 @@ syntax, Ruff, and diff checks clean.  The still-pending audit array was
 replaced without discarding compute; array `12973235_[6-22]` uses this sealed
 failure path and per-job CPU compilation caches.  No generic RECOVAR test,
 full suite, or long-test ran.
+
+The replacement audit path has now sealed two more complete 0--200 cells and
+verified all four hashes in each evidence ledger.  `vdam-gf06` (`k1-17`, junk
+particles with white noise and uniform poses) passes every calibrated map,
+particle, schedule, and pre-divergence-topology gate.  Its minimum
+candidate-best-native FSC-AUC is `0.9999434410578132`; the minimum
+candidate-minus-best-native GT delta is `-0.0011063869354540137`, and the
+minimum candidate-minus-worst-native GT delta is only
+`-1.177971908628006e-07`.  RECOVAR remains `8.810x` slower than native median,
+the worst runtime ratio observed so far.
+
+`vdam-gf07` (`k1-21`, Kent poses and high noise) also passes the calibrated
+contract.  Native same-GPU variability is large in this cell: the minimum
+candidate-best-native FSC-AUC is `0.7542879609983933`, the maximum native GT
+span is `0.012283137527371757`, and 125 strict best-repeat checkpoints fail.
+All 201 repeatability-calibrated map checkpoints nevertheless pass, with a
+minimum candidate-minus-worst-native GT delta of
+`-2.0158690906130206e-07`; particle, schedule, and pre-divergence topology
+also pass.  The first native hard-state split is iteration 7, which explains
+why a single fixed-reference trajectory is not a valid acceptance oracle for
+this dataset.
+
+The live dashboard is therefore `4` pass (`gf02`, `gf04`, `gf06`, `gf07`),
+`2` genuine fail (`gf03`, `gf05`), `1` audit pending (`gf08`), `4` science
+running (`gf09`--`gf12`), and `11` not started.  Runtime parity is still
+failed: the completed-panel range is `5.334x`--`8.810x`, with median `6.497x`.
+Audit jobs `12973235_6` and `12973235_7` complete in `28:57` and `20:16` with
+exit zero; `sha256sum -c evidence.sha256` passes for both.  No generic RECOVAR
+test, full suite, or long-test ran.
