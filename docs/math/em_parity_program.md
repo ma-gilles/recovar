@@ -28098,6 +28098,45 @@ atomic soft-mask/FFT repeat envelope.  No terminal trajectory and no tie
 tolerance is justified before that result.  The fixed terminal score remains
 `31/34`.
 
+## 2026-08-26 19:16 EDT — case-4 particle residual is inside the native atomic repeat envelope
+
+The bounded source-row `17393` replay completed on one local A100 after a
+fresh multi-architecture CUDA build.  The normalized and integer-shifted real
+image is bit-exact in every mode.  RECOVAR's deterministic soft-mask result
+has masked-Fourier relative L2 `5.0979788736526894e-8` against the native
+capture, maximum absolute component error `9.313225746154785e-10`, and
+`3077` unequal float32 components out of `10,200`.
+
+One hundred executions of the diagnostic native-atomic reduction span
+masked-Fourier relative L2 from exactly `0` to
+`1.0703189299601598e-7`.  Three executions reproduce the captured native
+background float32 word exactly and reproduce the complete `5100`-complex-
+pixel Fourier image bit for bit.  The other executions visit `41` distinct
+background words.  Masked-real relative L2 spans `0` through
+`7.183424785150865e-9`; its maximum absolute error is one float32 ULP
+(`5.960464477539063e-8`).  Native pre- and post-optics Fourier captures are
+bit-exact, so optics remapping contributes no hidden discrepancy for this
+particle.
+
+The live `5.10e-8` Fourier residual is therefore centered inside the observed
+native atomic schedule envelope rather than outside it.  Together with the
+exact native fine-score tie, this falsifies a deterministic case-4 particle
+preprocessing formula defect at the first pose flip.  A production switch to
+schedule-dependent native atomics or a heuristic tie tolerance is not
+justified: either would exchange one legal repeat outcome for another without
+closing a stable cross-engine boundary.
+
+The durable report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_preprocess_repeat_20260826T1930ET/case04_preprocess_repeat.json`
+(SHA-256
+`6f32d959a369aa9edca3fbeaaa0afa3b70e9c144d1ef137667cb8efec9ffa5d4`).
+The run root contains `SAFE_TO_DELETE`.  Focused analyzer tests pass (`7`
+tests total across the native fine-operand and repeat analyzers), targeted
+Ruff passes, and `git diff --check` passes.  The fixed terminal score remains
+`31/34`; the next active causal boundary is case 5's iteration-1 BPref
+accumulation/order state feeding the demonstrated iteration-2 reference
+error.
+
 ## 2026-08-26 18:15 EDT — case-10 native-units terminal arm is rejected
 
 Terminal producer `12995074` completed its full numbered trajectory and final
