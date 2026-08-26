@@ -4,9 +4,9 @@
 #SBATCH --partition=cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=08:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
+#SBATCH --time=02:00:00
 #SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-candidate-envelope-%j.out
 
 set -euo pipefail
