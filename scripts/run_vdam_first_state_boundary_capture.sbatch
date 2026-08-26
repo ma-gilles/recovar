@@ -34,11 +34,14 @@ TARGET_GPU_UUID=${TARGET_GPU_UUID:-}
 TARGET_ORIGINAL_INDEX=${TARGET_ORIGINAL_INDEX:-1002}
 TARGET_RELION_PART_ID=${TARGET_RELION_PART_ID:-6}
 TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-1003}
-TARGET_RELION_PERTURBATION=${TARGET_RELION_PERTURBATION:-0.322510}
+TARGET_RELION_PERTURBATION=${TARGET_RELION_PERTURBATION:-}
+TARGET_RELION_PERTURBATION_SOURCE=${TARGET_RELION_PERTURBATION_SOURCE:-}
 CAPTURE_LOCAL_SCORE=${CAPTURE_LOCAL_SCORE:-0}
 case "${CAPTURE_LOCAL_SCORE}" in 0|1) ;; *) echo "CAPTURE_LOCAL_SCORE must be 0 or 1" >&2; exit 2 ;; esac
 CAPTURE_FUSED_SCORES=${CAPTURE_FUSED_SCORES:-0}
 case "${CAPTURE_FUSED_SCORES}" in 0|1) ;; *) echo "CAPTURE_FUSED_SCORES must be 0 or 1" >&2; exit 2 ;; esac
+CAPTURE_COARSE_SCORE=${CAPTURE_COARSE_SCORE:-0}
+case "${CAPTURE_COARSE_SCORE}" in 0|1) ;; *) echo "CAPTURE_COARSE_SCORE must be 0 or 1" >&2; exit 2 ;; esac
 CAPTURE_NATIVE_REPLAY=${CAPTURE_NATIVE_REPLAY:-1}
 case "${CAPTURE_NATIVE_REPLAY}" in 0|1) ;; *) echo "CAPTURE_NATIVE_REPLAY must be 0 or 1" >&2; exit 2 ;; esac
 RELION_BINARY=${RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
@@ -47,6 +50,7 @@ NATIVE_ROOT=${OUTPUT_ROOT}/native_continuation
 RECOVAR_ROOT=${OUTPUT_ROOT}/recovar_prefix
 RECOVAR_CAPTURE=${OUTPUT_ROOT}/recovar_fused
 RECOVAR_SCORE_CAPTURE=${OUTPUT_ROOT}/recovar_score
+RECOVAR_COARSE_CAPTURE=${OUTPUT_ROOT}/recovar_coarse
 PROVENANCE=${OUTPUT_ROOT}/provenance
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 CUDA_BINARY=${RECOVAR_CUDA_LIB_OVERRIDE:-${REPO_ROOT}/recovar/cuda/libcuda_backproject.so}
@@ -65,6 +69,26 @@ fi
 iteration_tag=$(printf '%03d' "${TARGET_ITERATION}")
 test -s "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_data.star"
 test -s "${REFERENCE_RELION_DIR}/run_it${iteration_tag}_sampling.star"
+if [[ -z "${TARGET_RELION_PERTURBATION}" ]]; then
+  if [[ -z "${TARGET_RELION_PERTURBATION_SOURCE}" ]]; then
+    TARGET_RELION_PERTURBATION_SOURCE=$(dirname "${REFERENCE_RELION_DIR}")/recovar/run_it${iteration_tag}_recovar_meta.json
+  fi
+  test -s "${TARGET_RELION_PERTURBATION_SOURCE}"
+  TARGET_RELION_PERTURBATION=$("${PIXI_PY}" - "${TARGET_RELION_PERTURBATION_SOURCE}" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+
+value = float(json.loads(Path(sys.argv[1]).read_text())["random_perturbation"])
+if not math.isfinite(value) or not -0.5 <= value <= 0.5:
+    raise SystemExit(f"invalid full-precision perturbation: {value!r}")
+print(repr(value))
+PY
+  )
+else
+  TARGET_RELION_PERTURBATION_SOURCE=${TARGET_RELION_PERTURBATION_SOURCE:-environment}
+fi
 test -x "${RELION_BINARY}"
 test -x "${PIXI_PY}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
@@ -77,8 +101,8 @@ if [[ -n "${TARGET_GPU_UUID}" ]] && [[ "${gpu_uuid_before}" != "${TARGET_GPU_UUI
   echo "VDAM_TARGET_GPU_MISS expected=${TARGET_GPU_UUID} observed=${gpu_uuid_before}" >&2
   exit 75
 fi
-mkdir -p "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${PROVENANCE}"
-test -z "$(find "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${PROVENANCE}" -mindepth 1 -print -quit)"
+mkdir -p "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${RECOVAR_COARSE_CAPTURE}" "${PROVENANCE}"
+test -z "$(find "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${RECOVAR_COARSE_CAPTURE}" "${PROVENANCE}" -mindepth 1 -print -quit)"
 
 (
   unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV JAX_PLATFORMS JAX_PLATFORM_NAME
@@ -222,6 +246,14 @@ else
   unset RECOVAR_LOCAL_SCORE_DUMP_DIR RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES
   unset RECOVAR_LOCAL_SCORE_DUMP_ITERATION RECOVAR_LOCAL_SCORE_DUMP_OPERANDS
 fi
+if [[ "${CAPTURE_COARSE_SCORE}" == 1 ]]; then
+  export RECOVAR_SIGNIFICANCE_DUMP_DIR=${RECOVAR_COARSE_CAPTURE}
+  export RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDEX}
+  export RECOVAR_SIGNIFICANCE_DUMP_ITERATION=${TARGET_ITERATION}
+else
+  unset RECOVAR_SIGNIFICANCE_DUMP_DIR RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES
+  unset RECOVAR_SIGNIFICANCE_DUMP_ITERATION
+fi
 mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
 
 if [[ -n "${VDAM_SCORECARD}" ]]; then
@@ -321,6 +353,9 @@ STATIC_INPUTS=(
 if [[ -n "${VDAM_SCORECARD}" ]]; then
   STATIC_INPUTS+=("${VDAM_SCORECARD}")
 fi
+if [[ "${TARGET_RELION_PERTURBATION_SOURCE}" != environment ]]; then
+  STATIC_INPUTS+=("${TARGET_RELION_PERTURBATION_SOURCE}")
+fi
 sha256sum "${STATIC_INPUTS[@]}" > "${PROVENANCE}/static_inputs.sha256"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 
@@ -365,6 +400,11 @@ if [[ "${CAPTURE_LOCAL_SCORE}" == 1 ]]; then
 else
   test -z "$(find "${RECOVAR_SCORE_CAPTURE}" -mindepth 1 -print -quit)"
 fi
+if [[ "${CAPTURE_COARSE_SCORE}" == 1 ]]; then
+  test "$(find "${RECOVAR_COARSE_CAPTURE}" -maxdepth 1 -type f -name 'significance_*.npz' | wc -l)" -eq 1
+else
+  test -z "$(find "${RECOVAR_COARSE_CAPTURE}" -mindepth 1 -print -quit)"
+fi
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 gpu_uuid_after_recovar=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
@@ -377,7 +417,9 @@ fi
   "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${NR_ITER_SCHEDULE}" \
   "${TARGET_ITERATION}" "${TARGET_ORIGINAL_INDEX}" "${TARGET_RELION_PART_ID}" \
   "${TARGET_STACK_INDEX}" "${CAPTURE_LOCAL_SCORE}" "${CAPTURE_FUSED_SCORES}" \
-  "${CAPTURE_NATIVE_REPLAY}" "${wall_s}" "${CASE_ID}" "${VDAM_SCORECARD}" <<'PY'
+  "${CAPTURE_COARSE_SCORE}" "${CAPTURE_NATIVE_REPLAY}" "${wall_s}" "${CASE_ID}" \
+  "${VDAM_SCORECARD}" "${TARGET_RELION_PERTURBATION}" \
+  "${TARGET_RELION_PERTURBATION_SOURCE}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -393,10 +435,13 @@ payload = {
     "target_stack_index": int(sys.argv[9]),
     "capture_local_score": bool(int(sys.argv[10])),
     "capture_fused_scores": bool(int(sys.argv[11])),
-    "capture_native_replay": bool(int(sys.argv[12])),
-    "recovar_wall_s": int(sys.argv[13]),
-    "case_id": sys.argv[14] or None,
-    "scorecard": sys.argv[15] or None,
+    "capture_coarse_score": bool(int(sys.argv[12])),
+    "capture_native_replay": bool(int(sys.argv[13])),
+    "recovar_wall_s": int(sys.argv[14]),
+    "case_id": sys.argv[15] or None,
+    "scorecard": sys.argv[16] or None,
+    "target_relion_perturbation": float(sys.argv[17]),
+    "target_relion_perturbation_source": sys.argv[18],
 }
 Path(sys.argv[1]).write_text(
     json.dumps(payload, indent=2, sort_keys=True) + "\n"
