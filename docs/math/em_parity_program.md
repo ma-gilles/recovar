@@ -27035,7 +27035,44 @@ paths. The previous terminal used CUDA library SHA-256
 `2fd2e29a29a52a3d08cba0a7a163264878b324d92d27e13924d5c4cb2164e8e3`;
 the new terminal uses sealed CUDA SHA-256
 `aca8de06213bda21375f9cde0a7442275e84be8a092127d75392b15fae4e621f`.
-Thus job `12995074` is the clean binary-level terminal A/B. If its trajectory
-improves, the rebuilt CUDA implementation is causal. If it reproduces the old
-terminal trajectory, the focused arm's diagnostic batch/execution shape is
-the remaining explanation for the row-level improvement.
+Thus job `12995074` isolates the binary at the configured source and command
+level, but it is not a same-physical-GPU A/B: the previous producer ran on
+`della-h19g3` and the new producer runs on `della-h19g1`. A material trajectory
+improvement would still require separating the binary effect from the H100
+repeat envelope. If it reproduces the old terminal trajectory, the focused
+arm's diagnostic batch/execution shape remains the explanation for the
+row-level improvement.
+
+## 2026-08-26 11:08 EDT — full-dispatch gate falsifies the row-75571 repair
+
+Producer `12995074` sealed physical iteration 2 without changing controller
+topology. Read-only FSC audit `12995916` completed `0:0` in `00:02:15` and
+wrote
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_improved_terminal_aca8_567b22d4ea_20260826T1025ET/analysis_live_it002_20260826T1102ET/fsc.json`
+(SHA-256
+`fbbe89f87948c64a3ae7fa0f6ff66e5c2142cb6f13e56fd417f1786cb8a2abbc`).
+The sealed CUDA build gives iteration-2 merged / half-1 / half-2 signed
+cross-engine FSC-AUC
+`0.9999999994074495 / 0.9999999993085412 / 0.9999999993059565`, with merged
+RECOVAR-minus-RELION GT-FSC-AUC delta `+2.852022368271534e-8`. The previous
+native-unit producer gives merged FSC-AUC `0.999999999425802`; the earlier
+exact-native-interface producer gives `0.9999999994380956`. The sealed build
+therefore does not improve the first measurable full-dispatch map boundary.
+
+The iteration-1 comparison is consistent with an ordinary atomic repeat
+floor rather than a different scientific state. Hard and coarse assignments,
+FSC, noise, tau2, rotations, translations, and controller metadata are
+bitwise exact. Per half, only `328 / 352` of `1,520,875` numerator voxels and
+`18 / 20` denominator voxels differ. Numerator relative L2 is
+`1.1993539495e-9 / 1.3834681178e-9`; denominator relative L2 is
+`3.4769154222e-10 / 4.2979828030e-10`. Regularized half-map relative L2 is
+`1.7199649482e-9 / 1.7120167506e-9`, while merged cross-engine FSC-AUC changes
+by only approximately `2e-15`.
+
+This full-dispatch result falsifies the interpretation that the sealed binary
+globally repaired source row `75571`. The stopped one-particle arm changed the
+target-containing half-2 bucket execution shape and produced an exact discrete
+state locally; that improvement does not survive ordinary full dispatch. The
+remaining local pre-prior residual is only about `2e-5` in Pmax with exact
+candidate set, support, and winner and is not promoted as a production fix.
+The frozen score remains `31/34`; no case result or threshold is changed.
