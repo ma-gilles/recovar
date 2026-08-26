@@ -25,5 +25,10 @@ def test_candidate_panel_runner_is_strict_reusable_and_fail_closed():
     assert 'int(definition["nr_classes"]) != 1' in source
     assert 'int(definition["nr_iter"]) != 200' in source
     assert "scripts/run_vdam_candidate_envelope_audits.sbatch" in source
+    assert "VDAM_DEFER_AUDIT=${VDAM_DEFER_AUDIT:-1}" in source
+    assert '--dependency="afterok:${SLURM_JOB_ID}"' in source
+    assert "VDAM_MARK_CANDIDATE_COMPLETE=1" in source
+    assert "AUDIT_SUBMITTED" in source
+    assert 'sha256sum "${ANALYSIS_DIR}"/*' not in source
     assert "SCIENCE_COMPLETED" in source
     assert "COMPLETED" in source

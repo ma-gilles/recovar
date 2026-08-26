@@ -15,4 +15,8 @@ def test_candidate_envelope_runner_is_fail_closed_and_runs_both_gates():
     assert 'native_args+=(--native-root "${native_root}")' in source
     assert "candidate_native_envelope_shells.npz" in source
     assert "candidate_state_envelope.json" in source
-    assert "(( map_status == 0 && state_status == 0 ))" in source
+    assert "JAX_PLATFORMS=cpu" in source
+    assert "JAX_COMPILATION_CACHE_DIR" in source
+    assert "VDAM_MARK_CANDIDATE_COMPLETE" in source
+    assert 'touch "${CANDIDATE_ROOT}/COMPLETED"' in source
+    assert "if (( map_status != 0 || state_status != 0 )); then" in source

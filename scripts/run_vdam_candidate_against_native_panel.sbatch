@@ -27,6 +27,7 @@ REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 VDAM_SCORECARD=${VDAM_SCORECARD:-${REPO_ROOT}/docs/math/vdam_k1_gui_default_full_suite_v1.json}
 VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT:-4}
+VDAM_DEFER_AUDIT=${VDAM_DEFER_AUDIT:-1}
 RECOVAR_CUDA_LIB_PATH=${RECOVAR_CUDA_LIB_OVERRIDE:-${REPO_ROOT}/recovar/cuda/libcuda_backproject.so}
 CANDIDATE_ROOT=${OUTPUT_ROOT}/${CASE_ID}
 RECOVAR_DIR=${CANDIDATE_ROOT}/recovar
@@ -36,6 +37,10 @@ ANALYSIS_DIR=${CANDIDATE_ROOT}/analysis/native_envelope
 test -x "${PIXI_PY}"
 test -s "${VDAM_SCORECARD}"
 test -s "${RECOVAR_CUDA_LIB_PATH}"
+case "${VDAM_DEFER_AUDIT}" in
+    0|1) ;;
+    *) echo "VDAM_DEFER_AUDIT must be 0 or 1" >&2; exit 2 ;;
+esac
 test -f "${PANEL_ROOT}/SAFE_TO_DELETE"
 test -s "${FIXTURE_DIR}/fixture_materialization.json"
 test -s "${FIXTURE_DIR}/particles.star"
@@ -218,6 +223,21 @@ PY
 export CANDIDATE_ROOT PANEL_ROOT FIXTURE_DIR VDAM_SCORECARD CASE_ID PIXEL_SIZE
 export VDAM_REPEAT_COUNT REPO_ROOT EXPECTED_REPO_HEAD PIXI_PY_OVERRIDE="${PIXI_PY}"
 export ANALYSIS_DIR
+if [[ "${VDAM_DEFER_AUDIT}" == 1 ]]; then
+    test -n "${SLURM_JOB_ID:-}"
+    audit_job_id=$(sbatch --parsable --dependency="afterok:${SLURM_JOB_ID}" \
+        --export="ALL,CANDIDATE_ROOT=${CANDIDATE_ROOT},PANEL_ROOT=${PANEL_ROOT},FIXTURE_DIR=${FIXTURE_DIR},VDAM_SCORECARD=${VDAM_SCORECARD},CASE_ID=${CASE_ID},PIXEL_SIZE=${PIXEL_SIZE},VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT},REPO_ROOT=${REPO_ROOT},EXPECTED_REPO_HEAD=${EXPECTED_REPO_HEAD},PIXI_PY_OVERRIDE=${PIXI_PY},ANALYSIS_DIR=${ANALYSIS_DIR},VDAM_MARK_CANDIDATE_COMPLETE=1" \
+        "${REPO_ROOT}/scripts/run_vdam_candidate_envelope_audits.sbatch")
+    printf '{"schema":"recovar.vdam_candidate_deferred_audit.v1","science_job_id":"%s","audit_job_id":"%s"}\n' \
+        "${SLURM_JOB_ID}" "${audit_job_id}" > "${PROVENANCE_DIR}/deferred_audit.json"
+    touch "${CANDIDATE_ROOT}/AUDIT_SUBMITTED"
+    exit 0
+fi
 bash "${REPO_ROOT}/scripts/run_vdam_candidate_envelope_audits.sbatch"
-sha256sum "${ANALYSIS_DIR}"/* > "${PROVENANCE_DIR}/analysis_sha256.txt"
+sha256sum \
+    "${ANALYSIS_DIR}/candidate_native_envelope.json" \
+    "${ANALYSIS_DIR}/candidate_native_envelope_shells.npz" \
+    "${ANALYSIS_DIR}/candidate_state_envelope.json" \
+    "${ANALYSIS_DIR}/candidate_envelope_status.json" \
+    > "${PROVENANCE_DIR}/analysis_sha256.txt"
 touch "${CANDIDATE_ROOT}/COMPLETED"

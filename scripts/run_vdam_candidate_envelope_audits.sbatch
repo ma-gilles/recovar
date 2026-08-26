@@ -22,6 +22,7 @@ REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT:-4}
 ANALYSIS_DIR=${ANALYSIS_DIR:-${CANDIDATE_ROOT}/analysis/native_envelope}
+VDAM_MARK_CANDIDATE_COMPLETE=${VDAM_MARK_CANDIDATE_COMPLETE:-0}
 
 test -x "${PIXI_PY}"
 test -s "${VDAM_SCORECARD}"
@@ -36,6 +37,10 @@ if [[ ! "${VDAM_REPEAT_COUNT}" =~ ^[0-9]+$ ]] || (( VDAM_REPEAT_COUNT < 2 )); th
     echo "VDAM_REPEAT_COUNT must be an integer of at least two" >&2
     exit 2
 fi
+case "${VDAM_MARK_CANDIDATE_COMPLETE}" in
+    0|1) ;;
+    *) echo "VDAM_MARK_CANDIDATE_COMPLETE must be 0 or 1" >&2; exit 2 ;;
+esac
 
 native_args=()
 for repeat_index in $(seq 1 "${VDAM_REPEAT_COUNT}"); do
@@ -49,11 +54,15 @@ done
 
 mkdir -p "${ANALYSIS_DIR}"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
+unset CUDA_VISIBLE_DEVICES CUDA_DEVICE_ORDER JAX_PLATFORM_NAME JAX_PLATFORMS
 export PYTHONNOUSERSITE=1
+export JAX_PLATFORMS=cpu
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TMPDIR=${ANALYSIS_DIR}/runtime/${SLURM_JOB_ID}/tmp
 export PIXI_HOME=${ANALYSIS_DIR}/runtime/${SLURM_JOB_ID}/pixi_home
 export RATTLER_CACHE_DIR=${ANALYSIS_DIR}/runtime/${SLURM_JOB_ID}/rattler_cache
-mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
+export JAX_COMPILATION_CACHE_DIR=${ANALYSIS_DIR}/runtime/${SLURM_JOB_ID}/jax_cpu_cache
+mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}"
 
 set +e
 "${PIXI_PY}" -m scripts.audit_vdam_candidate_native_envelope \
@@ -89,4 +98,16 @@ status["result"] = "pass" if not status["map_exit_status"] and not status["state
 (root / "candidate_envelope_status.json").write_text(json.dumps(status, indent=2, sort_keys=True) + "\n")
 print(json.dumps(status, indent=2, sort_keys=True))
 PY
-(( map_status == 0 && state_status == 0 ))
+if (( map_status != 0 || state_status != 0 )); then
+    exit 1
+fi
+if [[ "${VDAM_MARK_CANDIDATE_COMPLETE}" == 1 ]]; then
+    test -d "${CANDIDATE_ROOT}/provenance"
+    sha256sum \
+        "${ANALYSIS_DIR}/candidate_native_envelope.json" \
+        "${ANALYSIS_DIR}/candidate_native_envelope_shells.npz" \
+        "${ANALYSIS_DIR}/candidate_state_envelope.json" \
+        "${ANALYSIS_DIR}/candidate_envelope_status.json" \
+        > "${CANDIDATE_ROOT}/provenance/analysis_sha256.txt"
+    touch "${CANDIDATE_ROOT}/COMPLETED"
+fi
