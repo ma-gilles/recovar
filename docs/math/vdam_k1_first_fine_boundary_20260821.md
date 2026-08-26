@@ -3174,3 +3174,66 @@ Finally, frozen four-dataset real-particle requalification for EMPIAR-10076,
 10073, 10345, and filtered 10180 is submitted as H100 array
 `12982102_[1-4]` on exact head `1221f4247`.  No generic RECOVAR test, full
 suite, or long-test ran.
+
+## 2026-08-26 sealed expansion and real-data results
+
+Authoritative gf12 audit `12982859_12` replayed its complete SHA-256 ledger.
+The map envelope passes with zero calibrated failures and a minimum
+candidate-minus-worst-native GT FSC-AUC of `-2.2712e-5`.  State parity still
+fails: the first schedule failure is iteration 50 and the first particle-state
+failure is iteration 142.  Corrected reruns gf03 and gf05 also remain real
+failures.  Gf03 first leaves the particle envelope at iteration 17, crosses
+the map gate at iteration 31, and has 142 map failures with a minimum GT margin
+of `-0.0099163`.  Gf05 first fails schedule at iteration 20, particle state at
+iteration 75, and map at iteration 86; it has 68 map failures and a minimum
+margin of `-0.00410518`.
+
+The first three completed expansion cases also seal genuine failures.  Gf23
+first leaves the particle envelope at iteration 13 and has four map failures
+from iteration 71, although its minimum GT margin is only `-3.7637e-7`.  Gf24
+first leaves the particle envelope at iteration 30 and has 94 map failures
+from iteration 37 with minimum margin `-6.5122e-4`.  Gf25 first leaves the
+particle envelope at iteration 30 and has 67 map failures from iteration 42
+with minimum margin `-0.00351182`.  All three preserve the accepted schedule
+topology.  Across these cases, particle or schedule divergence precedes map
+degradation, so the next implementation gate remains the first hard-winner
+boundary rather than the later reconstructed-map crossing.
+
+The initial expansion array was discovered to contain mixed CUDA binaries:
+gf23--gf26 started with qualified SHA-256 `87274beac3a7b5af59947199588955366485d22780239f4c94fd5afc13f8e337`,
+while a source-mtime-triggered automatic rebuild changed later tasks to
+`8a217af23c941d335c52ca52b4ba0fdbd337b222cbac3de421931638f4dbb4d7`.
+Pending tasks were canceled without deleting completed evidence.  The
+alternate-SHA tranche is A/B-only and excluded from the canonical scorecard.
+Local unpushed runner head `281b07a3c` now accepts an external CUDA library,
+checks its expected digest before launch, imports CUDA as a preflight, checks
+the digest again after import and after science, and records the exact path and
+digest in the outer manifest.  Nine focused tests pass in `37.09 s`; Bash
+syntax checks pass.  The qualified library is installed with a fresh mtime as
+a read-only file in a non-writable artifact directory.  Replacement canonical
+gf27--gf42 science is `12984860`, with fail-sealed audits `12984872`.
+
+The corrected four-dataset real-data array `12984861` completed from exact
+runner head `281b07a3c` and the qualified CUDA digest.  Results are:
+
+| Case | Dataset | Result | Minimum cross-engine FSC-AUC | State boundary | RECOVAR / RELION |
+|---|---|---:|---:|---|---:|
+| r01 | EMPIAR-10076 | pass | `0.9999999807` | exact through iteration 8 | `181 / 32 s = 5.66x` |
+| r02 | EMPIAR-10073 | fail | `0.9999999667` | one particle at iteration 8: `70695@particles.256.mrcs`, `1.40001 A` translation error | `172 / 32 s = 5.38x` |
+| r03 | EMPIAR-10345 | fail | `0.9999974071` | one particle at iteration 8: `3138@particles.256.mrcs`, `17.6366 deg`, `4.25326 A`, Pmax error `0.014253` | `198 / 31 s = 6.39x` |
+| r04 | EMPIAR-10180 | pass | `0.9999999988` | exact through iteration 8 | `189 / 65 s = 2.91x` |
+
+The gf14 first candidate-only particle state is iteration 102 for
+`1122@particles.128.mrcs`.  Instrumented fused/local score and native
+continuation capture is queued as `12984862`; not-yet-started canonical
+gf30--gf42 tasks are temporarily held so this causal job receives the next
+H100 slot.  No generic RECOVAR test, full suite, or long-test ran.
+
+## Code references
+
+- `scripts/run_vdam_gui_full_envelope_case.sbatch`
+- `scripts/run_vdam_relion_real_data_case.sbatch`
+- `scripts/run_vdam_first_state_boundary_capture.sbatch`
+- `scripts/audit_vdam_candidate_native_envelope.py`
+- `scripts/audit_vdam_candidate_state_envelope.py`
+- `scripts/audit_vdam_real_trajectory.py`
