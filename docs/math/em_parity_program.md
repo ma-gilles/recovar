@@ -27198,3 +27198,34 @@ production row value near `0.470933`.  The leading local discriminator is now
 the shared cache-off/dump execution path versus the ordinary cached path,
 subject to the exact same-H100, power-spectrum-matched result from job
 `12996916`.  No cache default or production behavior changes before that gate.
+
+## 2026-08-26 12:05 EDT — iteration-1 repeat control bounds the dispatch effect
+
+Same-H100, power-spectrum-matched ordinary-dispatch job `12996916` completed
+physical iteration 1, making its saved incoming iteration-2 state directly
+comparable with prioritized control `12993648`.  All hard and coarse
+assignments, FSC, merged and per-half noise, tau2, rotations, translations,
+and controller metadata are bit exact.  The only unequal saved sufficient
+statistics are sparse atomic-repeat changes.  Ordinary-dispatch versus
+prioritized half-1 / half-2 numerator relative L2 is
+`1.3457458030e-9 / 1.5772792591e-9`; denominator relative L2 is
+`5.7889872648e-10 / 4.1293678099e-10`; regularized half-map relative L2 is
+`1.8887108604e-9 / 1.8562606225e-9`.
+
+Crucially, the same physical H100 also has an identical-dispatch repeat pair:
+coarse-stop job `12992894` (root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_autonomous_coarse_aca8_567b22d4ea_20260826T0908ET`)
+and fine-stop job `12993648`.  Their half-1 / half-2 numerator relative L2 is
+`1.3996383504e-9 / 1.3474035221e-9`; denominator relative L2 is
+`4.9532750844e-10 / 5.0171232214e-10`; regularized half-map relative L2 is
+`1.5157428756e-9 / 1.6316219067e-9`.  The changed-dispatch deltas are therefore
+not materially separated from the measured identical-dispatch repeat floor.
+
+This comparison falsifies attribution of the saved iteration-1 map difference
+to dispatch order.  It does not prove that dispatch has zero effect on every
+individual atomic addition, but it establishes that autonomous iteration-2
+row differences at this scale cannot identify that effect.  The next causal
+gate must freeze the incoming iteration-2 maps and state, then compare the
+same particle and candidate tuples with only the intended execution-path
+intervention.  The fixed K=1 score remains `31/34`; no production default or
+scorecard value changes.
