@@ -387,6 +387,9 @@ def analyze(
     verbose_raw = _load_flat_real(
         native_verbose_dir / "pass1_exp_Mweight_raw_preprior.bin"
     ).astype(np.float32)
+    native_combined_log_prior = _load_flat_real(
+        native_verbose_dir / "pass1_candidate_combined_log_prior.bin"
+    ).astype(np.float32)
     verbose_rotation_indices = _load_flat_int(
         native_verbose_dir / "pass1_acc_rot_idx.bin"
     )
@@ -395,6 +398,7 @@ def analyze(
     _require(
         verbose_rotation_indices.shape
         == verbose_translation_ids.shape
+        == native_combined_log_prior.shape
         == (verbose_count,),
         "verbose candidate identity arrays are misaligned",
     )
@@ -691,6 +695,17 @@ def analyze(
         )
         for name, score in counterfactual_winner_scores.items()
     }
+    counterfactual_winners_native_prior = {
+        name: _winner_report(
+            raw_score=score,
+            combined_log_prior=native_combined_log_prior,
+            native_rotation=verbose_rotation_indices,
+            native_translation=verbose_translation_ids,
+            recovar_rotation=mapped_rotation,
+            recovar_translation=mapped_translation,
+        )
+        for name, score in counterfactual_winner_scores.items()
+    }
 
     files = sorted(native_verbose_dir.glob("pass1_*.bin"))
     return {
@@ -741,6 +756,9 @@ def analyze(
         "legacy_repeat_diagnostics": legacy_repeat_diagnostics,
         "counterfactual_centered_score_metrics": counterfactuals,
         "counterfactual_hard_winners_with_recovar_prior": counterfactual_winners,
+        "counterfactual_hard_winners_with_native_prior": (
+            counterfactual_winners_native_prior
+        ),
         "artifacts": {
             "native_verbose_dir": str(native_verbose_dir.resolve()),
             "native_verbose_files": [

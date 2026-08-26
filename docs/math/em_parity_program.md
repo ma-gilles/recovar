@@ -28030,6 +28030,74 @@ discovery experiment.  Case-4 focused job `13011025` is independently
 capturing its only iteration-2 pose outlier at the same ordered boundaries.
 The fixed terminal score remains `31/34`.
 
+## 2026-08-26 19:05 EDT — case-4 iteration-2 flip is an exact native tie with two tiny live mediators
+
+Focused autonomous RECOVAR job `13011025` completed successfully.  It stopped
+after capturing source row `17393` at physical iteration 2.  The complete
+`1,069,056`-tuple coarse table has the same native and RECOVAR winner
+`(15366, 4)`, the same `32/32` support, zero support mismatches, and posterior
+total variation `6.75975849e-6`.  The fine boundary likewise has exactly the
+same `1024/1024` candidate keys and `129/129` significant-support keys.  This
+rules out candidate generation, parent routing, and support semantics at the
+first discrete case-4 disagreement.
+
+The disagreement is a zero-margin native fine-score tie.  Native RELION's
+tuples `(rotation 41, translation 41)` and `(74, 12)` have exactly equal
+float32 total log weight; stable order selects `(41, 41)`.  RECOVAR selects
+`(74, 12)` with float32 margin `0.000244140625`, producing the observed
+`129.8`-degree flip.  The orientation-prior maximum error is only one float32
+ULP (`4.76837158203125e-7`), the translation-prior maximum error is
+`9.5367431640625e-7`, and substituting the exact native prior does not change
+the autonomous RECOVAR winner.
+
+The live operand factorial identifies two independently sufficient tiny
+mediators.  The masked Fourier particle differs first after preprocessing and
+optics correction at relative L2 `4.93661577e-8`; the projected reference
+differs at relative L2 `1.22656672e-7`.  Preserving RECOVAR's captured scorer
+residual while substituting either the complete native shifted image or only
+the native projected reference restores the exact tie, where stable order
+again selects `(41, 41)`.  Substituting only `corr_img` or only the positive
+Nyquist translation lane does not.  Thus case 4 is not the clean single-map
+boundary seen in case 5: particle preprocessing and inherited reference drift
+are each large enough to cross a native zero-margin decision surface.
+
+The durable autonomous reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_row17393_recovar_fresh_fine_it2_07d3102_20260826T1750ET/analysis/native_verbose_coarse_boundary.json`
+(SHA-256
+`3f1c8482622de7000674161fd8f26b10bd513373b4046bedbbbc7d8e1f1288b`),
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_row17393_recovar_fresh_fine_it2_07d3102_20260826T1750ET/analysis/native_verbose_fine_state.json`
+(SHA-256
+`987d71deb9e1c6fd06ad08a5ad92ae942f0e529df351b2d5ec3b7a64fb7e5f69`),
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_row17393_recovar_fresh_fine_it2_07d3102_20260826T1750ET/analysis/native_fine_operand_boundary_winners_v2.json`
+(SHA-256
+`e018b6cbb0554ef9bd37691c22ca13a9b193a34c2efcf3b15d66726c98b580b8`).
+The captured pass-2 artifact SHA-256 is
+`be591f4867620e32bd816cd6bf0510817998a3e6bce332e513030e781b6ee133`.
+
+Same-input retry job `13011876` also completed successfully after two
+infrastructure-only preflight failures (`13011652`, wrong case path;
+`13011834`, missing RELION environment).  Its serialized native restart does
+not repair the case-4 winner.  Six-decimal restart serialization enlarges the
+shifted-image relative L2 to `1.73977e-6` and the orientation-prior maximum
+error to `4.72069e-4`.  With the serialized RECOVAR prior, even the native raw
+fine score selects `(74, 12)`; with the exact native prior, the native raw
+score recovers the exact tie.  This makes the restart scientifically
+confounded for the zero-margin case-4 discriminator, unlike case 5, where the
+state intervention repaired a wide enough margin despite serialization.
+The exact-state operand report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_row17393_it2_same_input_retry2_07d3102_20260826T1825ET/analysis/native_fine_operand_boundary_winners_v2.json`
+(SHA-256
+`33c62c8eb13fc54faf959ebceaf7c5abedf817cd96ac5a900032b7dac5dd38dd`).
+
+The next bounded discriminator is therefore a repeated source-row `17393`
+preprocessing replay at the normalized-real, soft-mask, FFT, and optics
+boundaries.  It will determine whether the observed `4.94e-8` live particle
+residual is a reproducible implementation mismatch or lies within the native
+atomic soft-mask/FFT repeat envelope.  No terminal trajectory and no tie
+tolerance is justified before that result.  The fixed terminal score remains
+`31/34`.
+
 ## 2026-08-26 18:15 EDT — case-10 native-units terminal arm is rejected
 
 Terminal producer `12995074` completed its full numbered trajectory and final
