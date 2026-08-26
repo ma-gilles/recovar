@@ -27517,3 +27517,38 @@ Earlier dependent job `13003123` retains its original HEAD and size-56 pins.
 Because the primary HEAD advanced after that submission, it will fail closed
 at the provenance preflight and cannot emit a scientific result.  It remains
 untouched.  The fixed score remains `31/34`.
+
+## 2026-08-26 14:40 EDT — direct-real fresh replay removes a known projector confound
+
+Review of the queued size-58 same-input arm identified one already-demonstrated
+map-import confound.  Its default continuation path loads RELION's written
+iteration-1 MRC, transforms it to RECOVAR's resident Fourier representation,
+and later transforms it back to real space before building `Projector::data`.
+RELION's uninterrupted process builds the iteration-2 projector directly from
+its resident real reference.  The earlier row-52958 intervention showed that
+the extra RECOVAR round trip changes float32 projector components and can move
+threshold-edge coarse parents.
+
+Focused job `13003930` was therefore submitted as a second arm with dependency
+`afterok:13002942`, requested on the same H100 node `della-h20g2`.  It differs
+from the ordinary imported-map job `13003491` only by supplying the fresh
+`run_it001_half{1,2}_class001.mrc` files explicitly and enabling the existing
+`--initial-mrc-projector-direct` diagnostic.  It remains a stopped one-row
+iteration-2 capture, not a trajectory run.  The run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_fresh_same_input_directreal_score58_07d3102_20260826T1440ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_fresh_same_input_directreal_score58_07d3102_20260826T1440ET`;
+both contain `SAFE_TO_DELETE`.
+
+The job pins primary HEAD
+`07d3102f8249d95aede4fecac92599bb5cba96f9`, scientific source-diff SHA-256
+`8b9e09a7326e7f39d431d1a666d6159fb3c8dddc4badd349bb5fd83cb05ad7af`,
+launcher SHA-256
+`fe49e5d1f8b0028d67a865e0d9448c2af92a13c4435a4145b028cf9302e89bec`,
+runner SHA-256
+`c5f843e17924748f07fe28a2eb2dbac3a9da4fba3cdff967afddad4b32e85d47`,
+and sealed CUDA SHA-256
+`aca8de06213bda21375f9cde0a7442275e84be8a092127d75392b15fae4e621f`.
+The ordinary and direct-real arms together distinguish map-import error from
+fine-score, prior, posterior, significance, and BPref-operand error.  No
+production projector default or fixed score changes before this A/B is read.
