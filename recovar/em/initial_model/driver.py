@@ -168,6 +168,7 @@ class NativeSamplingPlan:
     coarse_translations: np.ndarray | None = None
     coarse_prior_translations: np.ndarray | None = None
     translation_parent: np.ndarray | None = None
+    metadata_translations: np.ndarray | None = None
 
 
 @dataclass
@@ -891,11 +892,12 @@ def _build_sampling_plan(
     source_units_per_pixel = (
         float(sampling_state.pixel_size) if sampling_state is not None else 1.0
     )
-    coarse_translations = sampling.get_relion_translation_grid(
+    metadata_coarse_translations = sampling.get_relion_translation_grid(
         max_pixel=offset_range_px,
         pixel_offset=offset_step_px,
         source_units_per_pixel=source_units_per_pixel,
-    ).astype(np.float32)
+    )
+    coarse_translations = metadata_coarse_translations.astype(np.float32)
     coarse_pass1_translations = (
         sampling.apply_relion_translation_perturbation(coarse_translations, random_perturbation, offset_step_px).astype(
             np.float32
@@ -907,6 +909,7 @@ def _build_sampling_plan(
     if oversampling == 0:
         rotations = sampling.get_relion_hidden_rotation_grid(healpix_order, matrices=True).astype(np.float32)
         translations = coarse_translations
+        metadata_translations = metadata_coarse_translations
         if perturbed:
             rotations = sampling.apply_relion_rotation_perturbation(
                 rotations, random_perturbation, sampling.relion_angular_sampling_deg(healpix_order)
@@ -914,6 +917,9 @@ def _build_sampling_plan(
             translations = sampling.apply_relion_translation_perturbation(
                 translations, random_perturbation, offset_step_px
             ).astype(np.float32)
+            metadata_translations = sampling.apply_relion_translation_perturbation(
+                metadata_translations, random_perturbation, offset_step_px
+            )
         translation_parent = None
     else:
         rotations, _ = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
@@ -925,8 +931,20 @@ def _build_sampling_plan(
         oversampled_trans, _translation_parent = sampling.get_oversampled_translation_grid(
             coarse_translations, pixel_offset=offset_step_px, oversampling_order=oversampling
         )
+        metadata_translations, _metadata_translation_parent = sampling.get_oversampled_translation_grid(
+            metadata_coarse_translations,
+            pixel_offset=offset_step_px,
+            oversampling_order=oversampling,
+        )
+        if not np.array_equal(_translation_parent, _metadata_translation_parent):
+            raise RuntimeError("GPU and metadata translation parent maps differ")
         translations = sampling.apply_relion_translation_perturbation(
             oversampled_trans.astype(np.float32, copy=False), random_perturbation, offset_step_pixels=offset_step_px
+        )
+        metadata_translations = sampling.apply_relion_translation_perturbation(
+            metadata_translations,
+            random_perturbation,
+            offset_step_pixels=offset_step_px,
         )
         translation_parent = np.asarray(_translation_parent, dtype=np.int64)
 
@@ -943,6 +961,7 @@ def _build_sampling_plan(
         coarse_translations=coarse_pass1_translations,
         coarse_prior_translations=coarse_translations,
         translation_parent=translation_parent,
+        metadata_translations=np.asarray(metadata_translations, dtype=np.float64),
     )
 
 
@@ -1301,7 +1320,7 @@ def _native_expectation_step(
             _active_relion_initialmodel_max_significants(state, do_grad=do_grad),
         )
         config.engine_kwargs["debug_iteration"] = iteration
-        previous_translations = np.asarray(particle_state.translation_offsets, dtype=np.float32).copy()
+        previous_translations = np.asarray(particle_state.translation_offsets, dtype=np.float64).copy()
         previous_classes = np.asarray(particle_state.class_assignments, dtype=np.int32).copy()
         result = run_dense_initial_model_estep(
             dataset, state, config, particle_ids=particle_ids, halfset_ids=halfset_ids
@@ -1339,7 +1358,11 @@ def _native_expectation_step(
         _update_particle_state_from_estep_meta(
             particle_state,
             result.meta,
-            sampling_plan.translations,
+            (
+                sampling_plan.translations
+                if sampling_plan.metadata_translations is None
+                else sampling_plan.metadata_translations
+            ),
         )
         if sampling_state is not None and _should_record_native_sampling_changes(
             iteration=iteration,
@@ -1390,7 +1413,7 @@ def _update_particle_state_from_estep_meta(
 
     if (pose := meta.get("pose_assignments")) is not None:
         assignments = np.asarray(pose, dtype=np.int64).reshape(-1)
-        trans = np.asarray(translations, dtype=np.float32)
+        trans = np.asarray(translations, dtype=np.float64)
         translation_ids = np.mod(assignments, int(trans.shape[0]))
         base = relion_round_away_from_zero(particle_state.translation_offsets[ids])
         particle_state.translation_offsets[ids] = base + trans[translation_ids, :2]

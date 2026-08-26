@@ -237,7 +237,54 @@ def test_sampling_plan_oversamples_relion_grid():
 
     assert plan.rotations.shape == (4608, 3, 3)
     assert plan.translations.shape == (116, 2)
+    assert plan.translations.dtype == np.float32
+    assert plan.metadata_translations.shape == plan.translations.shape
+    assert plan.metadata_translations.dtype == np.float64
     assert plan.random_perturbation == 0.0
+
+
+def test_native_expectation_step_uses_rfloat_metadata_translations(monkeypatch):
+    metadata_translation = np.float64(1.00000006)
+
+    def fake_build_sampling_plan(opts, *, iteration):
+        return driver.NativeSamplingPlan(
+            rotations=np.zeros((1, 3, 3), dtype=np.float32),
+            translations=np.asarray([[0.0, 0.0], [metadata_translation, 0.0]], dtype=np.float32),
+            metadata_translations=np.asarray([[0.0, 0.0], [metadata_translation, 0.0]], dtype=np.float64),
+            random_perturbation=0.0,
+        )
+
+    def fake_run_dense(dataset, state, config, *, particle_ids, halfset_ids):
+        return SimpleNamespace(
+            accumulators=[],
+            meta={
+                "selected_particle_ids": np.asarray([0], dtype=np.int64),
+                "pose_assignments": np.asarray([1], dtype=np.int32),
+                "class_assignments": np.asarray([0], dtype=np.int32),
+                "max_posterior_per_image": np.asarray([0.75], dtype=np.float32),
+            },
+        )
+
+    monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
+    monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((1, 2), dtype=np.float64),
+        class_assignments=np.zeros(1, dtype=np.int32),
+        max_posterior=np.zeros(1, dtype=np.float32),
+    )
+    state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=1)
+    state.iter = 1
+
+    expectation_step = driver._native_expectation_step(
+        SimpleNamespace(voxel_size=1.0, n_images=1),
+        driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=1),
+        np.ones(5, dtype=np.float32),
+        particle_state,
+    )
+    expectation_step(state, np.asarray([0]), np.asarray([0], dtype=np.int8))
+
+    assert particle_state.translation_offsets[0, 0] == metadata_translation
+    assert particle_state.translation_offsets[0, 0] != np.float64(np.float32(metadata_translation))
 
 
 def test_native_driver_rejects_unimplemented_direct_symmetry_before_io():
