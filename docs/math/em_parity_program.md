@@ -27552,3 +27552,17 @@ and sealed CUDA SHA-256
 The ordinary and direct-real arms together distinguish map-import error from
 fine-score, prior, posterior, significance, and BPref-operand error.  No
 production projector default or fixed score changes before this A/B is read.
+
+Complete case-10 trajectory audit job `13004066` is attached to terminal
+producer `12995074` with dependency `afterok`.  It runs the repository's full
+numbered-plus-final signed FSC/FSC-AUC and intermediate-state audit with the
+fixed case-10 RELION and GT inputs.  The audit pins primary HEAD
+`07d3102f8249d95aede4fecac92599bb5cba96f9`, launcher SHA-256
+`83913b5b0c765f8a407375a6dbc626f05279c8b262c6e8f6aa39cc608fe9670b`,
+FSC analyzer SHA-256
+`06057bbbdfb7facc840e28af1e158d1b86dc3c059a5ad691b9c49c901b747a6a`,
+and intermediate analyzer SHA-256
+`eb160be9c13762aae67a92aa2b21243d339d09175d14bd503196fa02bd138bba`.
+It writes `analysis/terminal_fsc.json` and
+`analysis/terminal_intermediates.json` inside the existing producer root.  No
+dependent terminal audit had previously been attached to this producer.
