@@ -14,6 +14,70 @@ as the next product milestone rather than mixing it into the first closure.
 
 ## VDAM active experiment — 2026-08-20
 
+### 2026-08-26 strict coarse cutoff and expanded 0--200 matrix
+
+The production K=1 InitialModel coarse-significance comparison is strict again
+at local implementation commit `47144f731`: the default ULP expansion is zero,
+while `RECOVAR_INITIAL_MODEL_RELION_F32_COARSE_TIE_ULPS` remains an explicit
+diagnostic-only override.  This follows exact native support captures rather
+than a point-FSC choice.  For the unstable `vdam-gf03` iteration-1 half-2
+particle 106 boundary, native RELION selects 63 coarse rotations / 504 fine
+rotations at the exact threshold.  The strict candidate selects the same 504
+fine rotations with zero extra support mass; its 100-particle prefix ends at
+data/weight relative-L2 `1.4423915e-5` / `3.4246777e-6`.  The report SHA-256 is
+`57bb57c2005fad74a5ef784a3864d65c509476a593aa1c9e89bd72b845f36577`.
+The former two-ULP diagnostic admits an excluded eight-child block for that
+particle and worsens the final prefix to `3.7235812e-5` / `8.6550000e-6`.
+Native `vdam-gf10` launches independently straddle their own cutoff, producing
+88- and 96-fine-rotation modes, so the two-ULP arm represented one native race
+outcome rather than RELION's comparison semantics.  Focused CPU Slurm job
+`12991486` passes all three strict-default/cutoff tests; no generic RECOVAR
+suite was run.
+
+Candidate-only panel reuse is now available at local commit `168d336e3`.  It
+pins the candidate source, canonical CUDA SHA-256
+`87274beac3a7b5af59947199588955366485d22780239f4c94fd5afc13f8e337`,
+RELION-binding SHA-256
+`fcbb2a8356c2f7ee88e947fa92c9f5bfc41535ed0a2c6a9124a2fad781a63b83`,
+fixture identity, and the native panel's physical GPU.  A wrong H100 UUID exits
+before creating science output; a matching allocation runs all iterations
+0--200 and both map/state envelope gates without rerunning four native RELION
+trajectories.  Focused CPU job `12991681` passes 2/2 runner tests.  Strict
+`vdam-gf03` and `vdam-gf10` candidates are queued as `12991892` and `12991893`
+against their frozen four-repeat panels.
+
+The independent expansion array `12984860` / audit array `12984872` adds 16
+more 201-checkpoint trajectories spanning 70% outliers, very-high and low
+noise, uniform/Kent poses, no-CTF radial noise, junk translations, alternate
+random seeds, tau2-fudge 2/8, Healpix 2, oversampling 0, translation range/step,
+particle diameter, and padding factor.  At source `281b07a3c`, `vdam-gf27`
+(70% outliers, seed 17) and `vdam-gf35` (tau2-fudge 2) pass both calibrated map
+and state envelopes.  Their minimum candidate-to-best-native FSC-AUC values
+are `0.9638110882` and `0.9979593576`; `vdam-gf35`'s minimum candidate-minus-
+worst-native GT delta is `-4.6644538e-5` within a maximum native GT span of
+`0.0041330066`.
+
+Five completed expansion arms are genuine failures, not tolerance changes:
+
+| Case | Coverage | First particle failure | First map failure | Minimum best-native FSC-AUC | Minimum best-native GT delta |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `vdam-gf28` | very-high noise, seed 17 | 15 | 39 | `0.5376775263` | `-0.0018438568` |
+| `vdam-gf29` | low-noise uniform poses, seed 17 | 30 | 32 | `0.7286371718` | `-0.0025422397` |
+| `vdam-gf30` | low-noise Kent poses, seed 17 | 30 | 31 | `0.9121117916` | `-0.0029845692` |
+| `vdam-gf31` | no-CTF radial noise, seed 17 | 136 | 120 | `0.9183661735` | `-0.0033953615` |
+| `vdam-gf32` | Kent poses plus junk translations, seed 17 | 40 | 52 | `0.9180824976` | `-0.0014719965` |
+
+The old `vdam-gf38` oversampling-zero run failed before science because the
+adapter combined RELION's keep-all symbolic pass 2 with the pruned float32
+fine-posterior kernel.  Local commit `1b12fc06c` restricts that kernel to
+positive oversampling and retains the already implemented coarse-normalized
+keep-all path at os0.  Focused CPU job `12991860` passes 6/6 selected tests.  A
+fresh four-native-repeat 0--200 envelope is running as Slurm `12991898`.
+`vdam-gf34` is awaiting its final audit classification; `vdam-gf33`,
+`vdam-gf36`, `vdam-gf37`, and `vdam-gf39` remain in science, and
+`vdam-gf40`--`vdam-gf42` are pending.  These local science commits are not
+pushed by this tracking update.
+
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
 `vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC
