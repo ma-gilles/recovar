@@ -2992,3 +2992,57 @@ failed: the completed-panel range is `5.334x`--`8.810x`, with median `6.497x`.
 Audit jobs `12973235_6` and `12973235_7` complete in `28:57` and `20:16` with
 exit zero; `sha256sum -c evidence.sha256` passes for both.  No generic RECOVAR
 test, full suite, or long-test ran.
+
+`vdam-gf08` is now sealed as a fifth passing production cell.  Audit
+`12973235_8` verifies all four evidence-ledger entries and passes the
+repeatability-calibrated map, particle, schedule, and exact pre-divergence
+topology gates at every checkpoint.  RECOVAR takes `6.078x` the median native
+runtime.  Its minimum candidate-best-native FSC-AUC is
+`0.9352237471`; the minimum candidate-minus-worst-native GT FSC-AUC is
+`-0.0012355495`, inside the frozen allowance.  Thirteen later native hard-state
+branches and three strict continuous-schedule diagnostics remain reported and
+do not replace the exact sampled-grid gate.
+
+The dynamic eight-worker candidate closes `vdam-gf05` under a higher-authority
+combined evidence seal.  Its map trajectory has zero calibrated failures and
+minimum candidate-minus-worst-native GT FSC-AUC `-0.0001719818130507672`.
+Focused state-only Slurm `12975591` passes all particle and exact sampled-grid
+topology checkpoints in 57 seconds; the first native hard-state split is
+iteration 29.  Combiner head `0d3c705f5` independently verifies the original
+four-file map ledger and the one-file state ledger, rejects self-reference and
+identity ambiguity, and writes a new one-file combination ledger.  The
+resulting dashboard classifies this dynamic gf05 replacement `pass`; the raw
+continuous offset-range diagnostic still differs first at iteration 10 and
+remains visible.  Runtime remains failed at `7.240x` native median.
+
+Production `vdam-gf10` (`k1-27`: 70 percent outliers, white noise, uniform
+poses) is a severe genuine failure.  Same-GPU science `12972872` and sealed
+audit `12973235_10` show calibrated and strict map failures at all 188
+checkpoints from iteration 13 through 200, particle divergence beginning at
+iteration 4, and exact schedule-topology divergence beginning at iteration 10.
+The minimum candidate-best-native FSC-AUC is `0.5165886315`; the minimum
+candidate-minus-worst-native GT delta is `-0.00407888999`.  RECOVAR is
+`5.723x` slower than native median.  The first hard-state mismatch is exactly
+one particle, `1085@particles.128.mrcs`, an injected outlier; all 3,000
+candidate/native particle states agree through iteration 3.
+
+Bounded first-divergence capture `12976492` reproduces RELION's iteration-4
+target Pmax to `1e-6` from the full internal RECOVAR perturbation value, then
+captures both engines' posterior operands for that one particle.  Focused
+translation-boundary analysis `12976722` proves that RECOVAR's production
+fine-score CUDA kernel replays RELION's scores exactly from RELION operands:
+both the native pair replay and fused-translation replay have zero centered
+residual.  Candidate image and noise differences are negligible.  The winner
+flip is instead entirely reference-driven: the iteration-3 projected-reference
+operand differs by `0.0284975` relative L2 and reverses the native top-pair
+likelihood margin by about `13.0031` log units.  Orientation-prior centered RMS
+is only `0.01827`, and translation-prior RMS is `4.29e-5`.
+
+Direct map-state localization confirms the first material reference boundary:
+the iteration-1 candidate map is within the four-repeat native floor
+(`7.45e-7`--`9.38e-7` cross-engine versus a `5.64e-7`--`1.08e-6` native
+range), but iteration 2 jumps to `5.69e-5` cross-engine while native repeats
+remain below `8.93e-7`.  Focused H100 job `12976868` is therefore queued to
+capture the complete iteration-2 native and RECOVAR M-step boundary under the
+true 200-iteration schedule.  No speculative full trajectory is being run for
+this diagnosis, and no generic RECOVAR test, full suite, or long-test ran.
