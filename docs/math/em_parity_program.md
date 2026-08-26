@@ -26724,12 +26724,11 @@ Each report has an empty topology-failure list and identifies only the final
 merged FSC-AUC as the earliest failing gate.  The native-unit conversion is
 therefore not sufficient to repair the remaining K=1 cases.  The fixed frozen
 score remains `31/34`; no result has been promoted.  The next causal decision
-remains the native row-28262 coarse-boundary comparison from job `12989952`,
-which will determine whether the autonomous corrected image and 18-member
-coarse support agree with uninterrupted RELION or whether the serialized
-exact-state 17-member support is the correct target.
+remains a deployed-lineage native comparison. Job `12989952` is a useful
+newer-lineage diagnostic but cannot decide the fixed scorecard's
+`17`-versus-`18` support target.
 
-## 2026-08-26 09:15 EDT — uninterrupted RELION falsifies the row-28262 support hypothesis
+## 2026-08-26 09:15 EDT — newer-lineage row-28262 diagnostic is non-authoritative
 
 Native RELION job `12989952` completed successfully in `01:21:16`, and its
 capture is non-perturbing: the inertness status is `map_stable` in
@@ -26742,7 +26741,10 @@ and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET`;
 both contain `SAFE_TO_DELETE`.
 
-The decisive result reverses the serialized-state interpretation. Native
+This job uses patched RELION binary SHA-256
+`a9a961340af621d1cd581ccea2e96274f978b53213f9606c9f0e30d271903b8c`,
+the newer `mt19937` / `std::shuffle` lineage rather than the frozen scorecard's
+deployed `srand` / `random_shuffle` lineage. Within that newer lineage, native
 RELION selects `18` coarse hypotheses, exactly the autonomous RECOVAR support,
 including `(rotation=25462, translation=16)`. Both engines retain the same
 winner `(27004, 13)`. Native versus autonomous RECOVAR has zero support
@@ -26762,9 +26764,13 @@ The native-versus-serialized report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET/analysis/K1_CASE10_ROW028262_NATIVE_VS_EXACT_VERBOSE_COARSE.json`
 (SHA-256
 `286e0aa76cf400d5661dbc95fe0163e83b9f944b42401d0b0c060a722797ebc6`).
-Therefore, the apparent `17`-versus-`18` defect is a false oracle introduced by
-the precision lost through serialized STAR state. No normalization or
-support-threshold change is justified by row `28262`.
+This comparison therefore does not establish that the deployed-lineage
+`17`-member support is a serialization artifact. The authoritative
+deployed-lineage continuation `12983522` and its identical-boundary RECOVAR
+arm `12983535` both select `17` coarse hypotheses and `128` fine-support
+tuples. No normalization or support-threshold change is justified by row
+`28262`, but the reason is exact deployed-lineage agreement, not the
+newer-lineage `18`-member result.
 
 The native and autonomous inverse-noise/CTF-squared pixel weights are bit exact
 for all `1740/1740` float32 components. Native versus serialized exact-state
@@ -26778,19 +26784,22 @@ selection as the source of that apparent image mismatch. The diagnostic is
 (SHA-256
 `1d8fc51287f369886cfe686a4aad35684f84a5ac7104093bea7585aadf082858`).
 
-## 2026-08-26 09:20 EDT — full-population iteration-2 ranking selects row 75571
+## 2026-08-26 09:20 EDT — repeat-aware deployed ranking still selects row 75571
 
-The complete native-RELION versus RECOVAR case-10 iteration-2 audit covers all
-`100000` particles. Pmax RMSE is `4.25022263489509e-5`, maximum absolute Pmax
+The newer-lineage native-RELION versus RECOVAR case-10 iteration-2 audit covers
+all `100000` particles. Pmax RMSE is `4.25022263489509e-5`, maximum absolute Pmax
 residual is `0.00850090507602691`, and `26` particles differ in significant
 support count, always by exactly one. Rotations agree within `0.01` degrees
 for `99999/100000` particles; six translations differ by more than `0.01`
-Angstrom. This separates small continuous posterior drift from rare hard-pose
-outliers rather than conflating them.
+Angstrom. These aggregate values are secondary lineage diagnostics, not fixed
+scorecard acceptance evidence.
 
-Row `52958` has the largest Pmax residual but has already been exhaustively
-localized in the earlier native-unit work. Row `75571` (stack index `75572`,
-half 2) is the next decisive target because it combines a large Pmax residual
+The independent deployed-lineage repeat-aware report (SHA-256
+`ca1a44f6fbce19a6903f5cbd8eda1c39ce85cc6fba6b0a09c58f923f652a810f`)
+also ranks row `52958` first, row `75571` second, and row `28262` third after
+subtracting native repeat displacement. Row `52958` has already been
+exhaustively localized. Row `75571` (stack index `75572`, half 2) is therefore
+still the next decisive deployed-lineage target; it combines a large Pmax residual
 (`0.46400922536849976` RECOVAR versus `0.470971` RELION) with a genuine support
 count mismatch (`20` versus `19`) while retaining a near-identical hard pose
 and translation. Row `76381` is reserved for a separate hard-pose diagnostic:
@@ -26806,8 +26815,8 @@ and
 (SHA-256
 `250767642c2cc5324c09a9b06c8f0a35bf6ba617ca6e23e48a63b932a042cca2`).
 
-Two matched, focused row-75571 captures are now running without changing or
-cancelling any existing job. Native RELION job `12992836` writes to
+Two focused row-75571 captures were launched without changing or cancelling
+any existing job. Newer-lineage native RELION job `12992836` writes to
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row75571_567b22d4ea_20260826T0905ET`,
 with runtime root
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_native_row75571_567b22d4ea_20260826T0905ET`.
@@ -26815,11 +26824,11 @@ Autonomous RECOVAR coarse-capture job `12992894` writes to
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_autonomous_coarse_aca8_567b22d4ea_20260826T0908ET`,
 with runtime root
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_567b22d4ea_20260826T0908ET`.
-All four roots contain `SAFE_TO_DELETE`. Their first comparison will decide
-whether the real `20`-versus-`19` discrepancy already exists in coarse tuple
-selection or first appears during fine expansion, normalization, or
-significant-support selection. The fixed score remains `31/34` until a
-terminal comparison crosses the unchanged `0.995` signed FSC-AUC gate.
+All four roots contain `SAFE_TO_DELETE`. Job `12992836` is retained as a
+non-authoritative lineage diagnostic and will not be cancelled, but only the
+deployed-lineage replacement described below can authorize a fixed-score
+conclusion. The fixed score remains `31/34` until a terminal comparison crosses
+the unchanged `0.995` signed FSC-AUC gate.
 
 ## 2026-08-26 09:38 EDT — row-75571 RECOVAR coarse state and focused fine capture
 
@@ -26870,12 +26879,33 @@ native factor and fine-score captures. It validates byte-exact rotation-table
 identity, translation-ID coordinates, candidate tuples, centered raw scores,
 both priors, combined log weights, normalized posterior, significant support,
 and the hard winner. Its focused synthetic tests pass (`2 passed, 9
-deselected`). Applied retrospectively to row `28262`, it finds `576` native
+deselected`). Applied retrospectively across the newer-lineage native and
+serialized deployed-lineage row `28262` states, it finds `576` native
 versus `544` serialized-state fine tuples, with all `544` common support flags
-exact and ten selected native-only fine tuples. This proves that the false
-serialized coarse-support difference propagates only by adding the expected
-fine children; it does not reveal a separate common-candidate support-rule
-defect. The report is
+exact and ten selected native-only fine tuples. This shows that the observed
+coarse candidate-set difference propagates by adding fine children and does
+not reveal a common-candidate support-rule mismatch within this mixed-lineage
+comparison. It does not identify which candidate set is correct for the fixed
+scorecard. The report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET/analysis/K1_CASE10_ROW028262_NATIVE_VERBOSE_VS_SERIALIZED_FINE_STATE.json`
 (SHA-256
 `bed2fe0d0d5080f681772bedd2f4ab1844996f687a12c252b84af8a0979f2544`).
+
+## 2026-08-26 09:44 EDT — deployed-lineage row-75571 replacement launched
+
+The provenance audit identified the lineage mismatch before any row-75571
+native result was accepted. The frozen scorecard uses the deployed
+`srand` / `random_shuffle` lineage. The authoritative replacement is native
+continuation job `12993846`, using binary SHA-256
+`1c3f67f52a7663f29c3cc0c8aacc995eba27517961e24ee4a1be01b6413c0b1d`,
+source HEAD `f8355ba9ef87ee28f3ae7bfe937c3f2589ab7bd3`, and the canonical case-10
+iteration-1 optimiser SHA-256
+`16eb9db6e2b34d32d0a9ba31fb0d032f3fcb578262ecf38178d104389ba83797`.
+It restores physical-order seed `1711` and sampling perturbation
+`0.009284287691116333`, captures stack image `75572` at physical iteration 2,
+and writes to
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_native_fine_cont_exactrev_567b22d4ea_20260826T0944ET`.
+Its runtime root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_native_fine_cont_exactrev_567b22d4ea_20260826T0944ET`;
+both roots contain `SAFE_TO_DELETE`. The existing newer-lineage job remains
+untouched and will be classified only as a lineage control.
