@@ -485,9 +485,10 @@ Iteration-1 `sigma2_noise` relative-L2 improves from `1.59216e-4` to
 Initial full-trajectory probes `13007637` all exited 75 before science because
 Slurm reused the same non-reference GPU.  Replacement array `13008037` holds
 wrong-GPU probes briefly so its remaining tasks can reach the reference GPU;
-it is capacity-pending behind the current node owner.  The complete 0--200
-candidate against the sealed four-repeat GF38 native panel, followed by its
-dependent focused audit, remains the gate for accepting the correction.
+tasks 0 and 1 exited 75 as intended, and exact-reference-GPU task
+`13008037_2` is now running.  The complete 0--200 candidate against the sealed
+four-repeat GF38 native panel, followed by its dependent focused audit, remains
+the gate for accepting the correction.
 
 GF47 (extreme outliers with uniform poses and white noise, seed 29) passes the
 complete 0--200 calibrated map and particle envelopes but fails controller

@@ -5,7 +5,7 @@
 > Runtime, K>1, real-data, and final CLI/GUI qualification follow only after
 > the K=1 0--200 suite has no unexplained failures.
 
-Last scientific update: **2026-08-26 16:14 ET**
+Last scientific update: **2026-08-26 16:23 ET**
 Tracking branch: `codex/vdam-relion-parity-20260820`
 Base: PR #158 (shared supplied-map EM machinery)
 Policy: focused VDAM tests and frozen trajectories only; **no generic RECOVAR
@@ -15,7 +15,7 @@ full/long suite** is being run for this campaign.
 
 | Gate | Current result | Required to close |
 |---|---|---|
-| K=1 v3 full trajectories | **6/20 audited**, 12 science-complete, 4 running, 4 queued | 20/20 audited |
+| K=1 v3 full trajectories | **6/20 audited**, 13 science-complete, 4 running, 3 queued | 20/20 audited |
 | K=1 v3 all-gate acceptance | **1/6 accepted** | 20/20 accepted with no unexplained case |
 | Earlier 0--200 expansion | **5/15 accepted**, 10 classified failures; GF42 still outside the sealed count | Every failure repaired or causally classified and requalified |
 | Earliest exact boundary | **Repaired locally**: iteration-1 map error improved 151x | Pass the complete GF38 0--200 native-envelope audit |
@@ -50,10 +50,10 @@ artifact topology, and wall time.
 | GF53 | 29 | high resolution, radial noise | running | -- | -- | -- | -- | running |
 | GF54 | 29 | midscale, Kent, radial noise | complete | pending | pending | pending | pending | audit queued |
 | GF55 | 101 | anisotropic, outliers, high noise | complete | pending | pending | pending | pending | audit queued |
-| GF56 | 101 | Kent, outliers, high noise | running | -- | -- | -- | -- | running |
+| GF56 | 101 | Kent, outliers, high noise | complete | pending | pending | pending | pending | audit queued |
 | GF57 | 101 | anisotropic, severe outliers, radial/high noise | running | -- | -- | -- | -- | running |
 | GF58 | 101 | extreme outliers, uniform, white noise | running | -- | -- | -- | -- | running |
-| GF59 | 101 | very-high noise, uniform, white noise | queued | -- | -- | -- | -- | queued |
+| GF59 | 101 | very-high noise, uniform, white noise | running | -- | -- | -- | -- | running |
 | GF60 | 101 | low noise, uniform | queued | -- | -- | -- | -- | queued |
 | GF61 | 101 | low noise, Kent | queued | -- | -- | -- | -- | queued |
 | GF62 | 101 | Kent, junk particles, translations | queued | -- | -- | -- | -- | queued |
@@ -98,8 +98,8 @@ Exact-GPU task `13007504_1` changes aggregate `noise_sumw` from `200.0` to
 The target posterior mass is `0.99811662` versus native `0.99811831`, with
 identical support and argmax.  Iteration-1 noise relative-L2 improves 343x and
 the map improves 151x.  This implementation remains isolated and unpushed;
-full 0--200 array `13008037` is capacity-pending for the reference GPU and is
-the promotion gate against the existing four-repeat native envelope.
+full 0--200 task `13008037_2` is running on the reference GPU and is the
+promotion gate against the existing four-repeat native envelope.
 
 Key sealed evidence:
 
@@ -127,7 +127,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Promote repaired GF38 posterior mass through 0--200 | science 13008037 capacity-pending; audit submits after completion | complete map/state/schedule/native-envelope acceptance |
+| 1 | Promote repaired GF38 posterior mass through 0--200 | science 13008037_2 running on reference H100; audit submits after completion | complete map/state/schedule/native-envelope acceptance |
 | 2 | Seeded GF29 / GF43 / GF45 calibrated audits | 13002876 / 13002877 / 13004501 pending | authoritative map/state/schedule results |
 | 3 | GF49--GF62 trajectory matrix | science 12996103; audit 12999424 | every row terminal and sealed |
 | 4 | GF41 authoritative re-audit | 12999430 pending | calibrated particle-state result |
