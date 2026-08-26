@@ -18,9 +18,14 @@ REPO_ROOT="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")
 SCORECARD="${VDAM_REAL_SCORECARD:-${REPO_ROOT}/docs/math/vdam_k1_real_data_suite_v1.json}"
 CASE_ID="${CASE_ID:-vdam-r01}"
 RELION_REFINE="${RELION_REFINE:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}"
-PIXI_PY="${REPO_ROOT}/.pixi/envs/default/bin/python"
+PIXI_PY="${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}"
 cd "${REPO_ROOT}"
 SOURCE_GIT_HEAD="$(git rev-parse HEAD)"
+EXPECTED_REPO_HEAD="${EXPECTED_REPO_HEAD:-}"
+if [[ -n "${EXPECTED_REPO_HEAD}" ]] && [[ "${SOURCE_GIT_HEAD}" != "${EXPECTED_REPO_HEAD}" ]]; then
+  echo "VDAM real-data qualification source differs from EXPECTED_REPO_HEAD" >&2
+  exit 2
+fi
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   echo "VDAM real-data qualification requires a clean tracked worktree" >&2
   exit 2
@@ -126,7 +131,7 @@ RELION_CMD=(
 )
 
 RECOVAR_CMD=(
-  "${PIXI_PY}" scripts/run_ab_initio.py
+  "${PIXI_PY}" -m scripts.run_ab_initio
   --i "${INPUT_STAR}" --o "${OUTPUT_ROOT}/recovar/run"
   --nr_iter "${NR_ITER}" --grad_write_iter 1 --K "${K}" --tau2_fudge "${TAU2_FUDGE}"
   --sym "${SYM}" --do_run_C1 1 --particle_diameter "${PARTICLE_DIAMETER}"
@@ -235,7 +240,7 @@ report = {
 (root / "run_provenance.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
 
-"${PIXI_PY}" scripts/audit_vdam_real_trajectory.py \
+"${PIXI_PY}" -m scripts.audit_vdam_real_trajectory \
   --scorecard "${SCORECARD}" --case-id "${CASE_ID}" \
   --recovar-dir "${OUTPUT_ROOT}/recovar" --relion-dir "${OUTPUT_ROOT}/relion" \
   --provenance "${OUTPUT_ROOT}/run_provenance.json" \

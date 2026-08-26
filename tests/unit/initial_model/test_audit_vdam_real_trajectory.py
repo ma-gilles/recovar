@@ -53,6 +53,11 @@ def test_real_data_sbatch_sets_paired_launch_mode_before_gpu_gate():
     assert '"recovar_cache_dir": os.environ.get("RECOVAR_CACHE_DIR")' in text
     assert '"jax_compilation_cache_dir": os.environ.get("JAX_COMPILATION_CACHE_DIR")' in text
     assert 'SOURCE_GIT_HEAD="$(git rev-parse HEAD)"' in text
+    assert 'PIXI_PY="${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}"' in text
+    assert 'EXPECTED_REPO_HEAD="${EXPECTED_REPO_HEAD:-}"' in text
+    assert '"${PIXI_PY}" -m scripts.run_ab_initio' in text
+    assert '"${PIXI_PY}" scripts/run_ab_initio.py' not in text
+    assert '"${PIXI_PY}" -m scripts.audit_vdam_real_trajectory' in text
     assert "qualification worktree changed during execution" in text
     assert '"git_head": sys.argv[8]' in text
     assert '"tracked_worktree_clean_at_provenance"' in text
