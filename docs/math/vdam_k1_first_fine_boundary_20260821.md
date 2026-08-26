@@ -3093,3 +3093,82 @@ stands at 7 pass, 6 fail, 1 audit pending, 4 science running, and 4 not started:
 gf11 and gf15 newly pass; gf13's audit is active; gf16--gf19 science is active.
 Observed RECOVAR/native-median runtime is still failed at `5.334x`--`11.398x`
 (median `6.592x`).  No generic RECOVAR test, full suite, or long-test ran.
+
+## 2026-08-26 full-trajectory expansion and runtime gate
+
+The exact `db0b20a99` gf10 science panel is complete.  H100 job `12980190_10`
+ran the corrected candidate and four native RELION repeats through every
+checkpoint 0--200 on physical GPU
+`GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`, completing in `01:04:55` with
+exit zero.  Its science manifest preserves source head
+`db0b20a993638b8a4278303bd87e8e528f032d4f`.  Legacy-policy audit
+`12982025_10` exited one only on its v1 point-reference map gate.  Exact
+`2c28111768` fail-sealed audit `12982857_10` then completed in `00:30:42` with
+exit zero.  Its SHA-256 ledger replays all four reports: the v2 map has zero
+repeatability-calibrated failures across iterations 0--200 while retaining 111
+strict point-reference diagnostics beginning at iteration 17; particle,
+adaptive-schedule, and pre-divergence topology envelopes all pass.  The
+minimum candidate-minus-worst-native GT FSC-AUC is `-0.0013352`, above the
+frozen `-0.002` gate.  Two
+four-second exact-audit preflights (`12982766_10`, `12982795_14`) used a
+nonexistent Pixi path and produced no scientific report; their replacement
+jobs use the frozen correctness environment.  The gf14 science job
+`12980393_14` is complete.  Authoritative audit `12982858_14` sealed and
+replayed its full SHA-256 ledger before exiting one: state and schedule pass,
+but the v2 map envelope has 28 calibrated failures at iterations 173--200 and
+reaches `-0.0030333` FSC-AUC versus the worst native GT mode.  Native hard
+state branches first at iteration 46; the candidate first enters a particle
+state absent from all four recorded native repeats at iteration 102, so that
+is the next causal boundary rather than the later map-threshold crossing.
+Gf12 science `12980801_12` is complete and authoritative audit `12982859_12`
+is active.
+
+A second frozen trajectory tranche adds 20 further 200-iteration K=1 cases.
+Cases gf23--gf34 are independent random-seed replicas spanning uniform,
+anisotropic, and Kent poses; white/radial low, high, and very-high noise;
+20--70 percent outliers; junk particles; no-CTF; translations; high-resolution
+and midscale fixtures.  Cases gf35--gf42 vary important user controls:
+`tau2_fudge`, Healpix order, oversampling, offset range/step, particle
+diameter, and padding.  Scorecard
+`docs/math/vdam_k1_full_trajectory_expansion_v2.json` requires all 201
+checkpoints without changing map or state tolerances.  Three focused
+scorecard/runner/audit tests pass in `28.60 s`; Bash syntax and diff checks are
+clean.  Local unpushed source head `1221f4247` is frozen for H100 science array
+`12981717_[23-42]`.  The generalized audit guard was rebased onto the
+authoritative failure-sealing policy as local head `c28d6957c`; its focused
+contract passes in `11.91 s`, and per-task `aftercorr` audit array
+`12983362_[23-42]` replaces the earlier non-sealing/all-or-nothing guards
+before any science completes.  Known
+old-production failures gf03/gf05/gf09/gf16/gf18 are independently
+requalified on the same corrected source by science array `12981834` and
+per-task authoritative audit array `12983363`.  Newly completed old-source
+gf17 is also covered by corrected science `12983235_17` and audit
+`12983236_17`; this
+required run has per-iteration stage profiling enabled, so runtime localization
+does not consume an extra trajectory.
+
+The shared-reference CUDA staging optimization has passed its bounded H100
+runtime probe but is not promoted.  Job `12981690` verifies binary SHA-256
+`464b8db0a605c7c1fff84e88f5f15887697a801afca4a85d666df7aef05b1e15`
+and reduces the coarse-launch median from `0.3769551 s` to `0.0660075 s`
+(`82.49%` reduction, `5.71x` speedup).  The stress operands are not bitwise
+identical: 136,022,332 of 199,913,472 values match exactly and three of 187
+hard winners change.  Therefore the optimization remains opt-in while full
+gf10 0--200 job `12981745_10` and authoritative audit `12982860_10` test
+whether the new two-ULP support envelope contains the numerical reorderings in
+an autonomous trajectory.  Science completed in `00:50:28`.  The shared
+candidate took `1348.979 s` versus `2168.458 s` for the legacy candidate on the
+same case, a `37.79%` end-to-end reduction; it remains `5.158x` the paired
+native `261.499 s`, so runtime closure is not claimed.
+
+The production worker8 dashboard has advanced to 9 pass, 9 fail, zero audit
+pending, three science running, and one not started; observed runtime is
+`5.334x`--`11.398x` native (median `6.806x`).  Gf16 fails no-CTF/high-white
+noise from iteration 117 plus state/schedule; gf18 passes the calibrated map
+envelope but fails particle state; and newly sealed gf17 has 14 calibrated map
+failures under contrast/noise-scale stress while schedule passes.  The
+corrected reruns above test all three rather than extrapolating from gf10.
+Finally, frozen four-dataset real-particle requalification for EMPIAR-10076,
+10073, 10345, and filtered 10180 is submitted as H100 array
+`12982102_[1-4]` on exact head `1221f4247`.  No generic RECOVAR test, full
+suite, or long-test ran.
