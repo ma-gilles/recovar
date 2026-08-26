@@ -27625,3 +27625,34 @@ value.  Preferential movement of the same native reconstruction toward RELION
 would identify a reconstruction convention defect; equal or RECOVAR-favored
 movement would reject reconstruction and return the target to the saved BPref
 operands/regularization inputs.
+
+All three jobs completed successfully: `13004358` in `00:00:11`, `13004376`
+in `00:00:32`, and `13004377` in `00:00:31`.  The validated untapered tau2
+has `129` shells and per-half maximum `61036.37109375`; its report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis/pre_reconstruction_tau2_case04_it1_axis0/REPORT.json`
+(SHA-256
+`f94a52d428027d209cd95de84f1bd2acf08b4e3c54e8e4ae8ab0dc7d9551f525`).
+
+The native reconstruction does not move preferentially toward RELION.  In
+half 1 its sign-aligned masked FSC-AUC is `0.9513836592882764` against RECOVAR
+and `0.9513836262059447` against RELION, a closeness difference of only
+`3.30823317e-8`.  In half 2 the corresponding values are
+`0.9514847230970048` and `0.9514846933753721`, a difference of
+`2.97216327e-8`.  The original RECOVAR-versus-RELION maps are already at
+`0.9999999999900067 / 0.9999999999899615` for halves 1/2.  As in the case-10
+control, the binding solver's much larger common deviation from both engines
+makes it unsuitable as a replacement, while its near-equal closeness rejects
+native reconstruction as the cross-engine discriminator for the saved
+operands.
+
+The half reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis/native_bpref_reconstruct_case04_it1_h1_axis0/AUDIT.json`
+(SHA-256
+`4fcd9ed1c9faf38a50026052d6d68b1ff54a38f735cfa00ed27040712df71e49`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis/native_bpref_reconstruct_case04_it1_h2_axis0/AUDIT.json`
+(SHA-256
+`318631314839f16af97b8884b877c8f70066c82dce61c4e6e6685ca395830b9c`).
+The first-boundary target therefore remains the exact BPref operands,
+regularization inputs, or their accumulation state, not the reconstruction
+solver or any FSC/support threshold.
