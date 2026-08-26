@@ -3153,10 +3153,12 @@ runtime probe but is not promoted.  Job `12981690` verifies binary SHA-256
 and reduces the coarse-launch median from `0.3769551 s` to `0.0660075 s`
 (`82.49%` reduction, `5.71x` speedup).  The stress operands are not bitwise
 identical: 136,022,332 of 199,913,472 values match exactly and three of 187
-hard winners change.  Therefore the optimization remains opt-in while full
-gf10 0--200 job `12981745_10` and authoritative audit `12982860_10` test
-whether the new two-ULP support envelope contains the numerical reorderings in
-an autonomous trajectory.  Science completed in `00:50:28`.  The shared
+hard winners change.  Full gf10 0--200 job `12981745_10` completed in
+`00:50:28`, and authoritative audit `12982860_10` sealed exit zero in
+`00:20:06`: the v2 map has zero calibrated failures, while particle and
+schedule envelopes pass.  Its minimum candidate-minus-worst-native GT FSC-AUC
+is `-0.0016029`.  Thus shared staging is scientifically qualified on this one
+full trajectory but remains opt-in pending broader cases.  The shared
 candidate took `1348.979 s` versus `2168.458 s` for the legacy candidate on the
 same case, a `37.79%` end-to-end reduction; it remains `5.158x` the paired
 native `261.499 s`, so runtime closure is not claimed.
