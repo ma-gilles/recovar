@@ -42,9 +42,17 @@ RELION-binding SHA-256
 fixture identity, and the native panel's physical GPU.  A wrong H100 UUID exits
 before creating science output; a matching allocation runs all iterations
 0--200 and both map/state envelope gates without rerunning four native RELION
-trajectories.  Focused CPU job `12991681` passes 2/2 runner tests.  Strict
-`vdam-gf03` and `vdam-gf10` candidates are queued as `12991892` and `12991893`
-against their frozen four-repeat panels.
+trajectories.  Focused CPU job `12991681` passes 2/2 runner tests.  Local
+commits `07630dd0d` and `1c40e0406` additionally permit the SHA-qualified
+RELION binding to be shared by symlink instead of incorrectly requiring its
+resolved binary to live inside every worktree; focused CPU jobs `12992060`
+and `12992423` pass 2/2 and 1/1 selected runner tests.  The first strict jobs
+were cancelled before science after exposing that infrastructure guard.
+Replacement strict 0--200 candidates at exact local head `1c40e0406` are
+queued as `12992665`--`12992676` for `vdam-gf03`, `vdam-gf10`, and expansion
+cases `vdam-gf27`--`vdam-gf32`, `vdam-gf34`, and `vdam-gf35` against their
+frozen four-repeat panels.  Each replacement is pinned to the panel's
+physical H100 UUID and reuses all native trajectories.
 
 The independent expansion array `12984860` / audit array `12984872` adds 16
 more 201-checkpoint trajectories spanning 70% outliers, very-high and low
@@ -57,7 +65,7 @@ are `0.9638110882` and `0.9979593576`; `vdam-gf35`'s minimum candidate-minus-
 worst-native GT delta is `-4.6644538e-5` within a maximum native GT span of
 `0.0041330066`.
 
-Five completed expansion arms are genuine failures, not tolerance changes:
+Six completed expansion arms are genuine failures, not tolerance changes:
 
 | Case | Coverage | First particle failure | First map failure | Minimum best-native FSC-AUC | Minimum best-native GT delta |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -66,17 +74,26 @@ Five completed expansion arms are genuine failures, not tolerance changes:
 | `vdam-gf30` | low-noise Kent poses, seed 17 | 30 | 31 | `0.9121117916` | `-0.0029845692` |
 | `vdam-gf31` | no-CTF radial noise, seed 17 | 136 | 120 | `0.9183661735` | `-0.0033953615` |
 | `vdam-gf32` | Kent poses plus junk translations, seed 17 | 40 | 52 | `0.9180824976` | `-0.0014719965` |
+| `vdam-gf34` | midscale Kent poses plus radial noise, seed 17 | 20 | 22 | `0.5540298272` | `-0.0017986200` |
 
 The old `vdam-gf38` oversampling-zero run failed before science because the
 adapter combined RELION's keep-all symbolic pass 2 with the pruned float32
 fine-posterior kernel.  Local commit `1b12fc06c` restricts that kernel to
 positive oversampling and retains the already implemented coarse-normalized
-keep-all path at os0.  Focused CPU job `12991860` passes 6/6 selected tests.  A
-fresh four-native-repeat 0--200 envelope is running as Slurm `12991898`.
-`vdam-gf34` is awaiting its final audit classification; `vdam-gf33`,
-`vdam-gf36`, `vdam-gf37`, and `vdam-gf39` remain in science, and
-`vdam-gf40`--`vdam-gf42` are pending.  These local science commits are not
-pushed by this tracking update.
+keep-all path at os0.  Focused CPU job `12991860` passes 6/6 selected tests.
+The resulting run `12991898` advanced beyond that first guard and exposed a
+second exact execution bug at iteration 1: the direct fused x-half kernel owns
+one accumulator, but the joint pseudo-halfset stream supplied a two-group
+accumulator.  Local commit `5d9fa894b` routes grouped os0 physical operands
+through the existing group-aware outer scatter.  Focused CPU job `12992328`
+passes 7/7 selected tests.  Paired one-iteration discriminator `12992651`
+then completed RELION and RECOVAR on the same H100 in 41 seconds with no
+particle-state mismatch; because changing `nr_iter` changes the scientific
+schedule, this is execution evidence only.  The qualifying four-repeat
+0--200 `vdam-gf38` envelope is job `12992706`.  `vdam-gf33`, `vdam-gf36`,
+`vdam-gf37`, and `vdam-gf39` remain in science, and `vdam-gf40`--`vdam-gf42`
+are pending.  These local science commits are not pushed by this tracking
+update.
 
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
