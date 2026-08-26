@@ -27800,3 +27800,51 @@ projector boundary or image normalization / translation.  The autonomous
 stage and operand reports have SHA-256 values
 `b49f4609ea85c808f6cc9d6eddc8bebd9849f314eb48d90f1e36e4e63aa4b43c`
 and `715a771189eb29b93383e00d327b2db77204635948352a32f9bcbfd7d78295f0`.
+
+## 2026-08-26 16:10 EDT — same-input case-10 comparison reaches raw fine score
+
+H100 job `13003491` completed the ordinary imported-map replay of physical
+iteration 2 for case-10 immutable source row `75571` (half 2).  The RECOVAR
+capture and native uninterrupted RELION iteration-2 factor/fine-score
+sidecars have the same `640/640` active class-pose tuples, hard winner
+`(12, 69)`, and `69/69` significant support.  The first unequal computational
+boundary is the centered pre-prior fine score: maximum absolute error
+`2.4418532848358154e-4`, relative L2 `5.8323173327470295e-6`.  The induced
+posterior maximum error is `3.292365692503241e-5`, relative L2
+`8.141480458516621e-5`.  Thus candidate construction, candidate qualification,
+argmax, and significant-support selection are exact for this particle; the
+remaining causal target is inside the raw image/reference likelihood operands.
+
+The capture is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_fresh_same_input_score58_07d3102_20260826T1430ET/pass2/pass2_orig075571_cs058.npz`
+(SHA-256
+`4aac9c9fd1a9a7310d39c40f787e4c0d7b528d7faa0a4e53f66a619bc181e60f`).
+The staged report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_fresh_same_input_score58_07d3102_20260826T1430ET/analysis/K1_CASE10_ROW075571_IT2_FINE_STAGES.json`
+(SHA-256
+`1d40e431ac5c3bb18b525b913c7c76795e3fb0a3526f0d2a6808ec0d8e3dc674`).
+
+The apparently separate orientation-log-prior maximum error
+`1.0442733764648438e-4` is now explained as a serialized-replay precision
+limit, not a live prior formula defect.  The target is in half 2.  RECOVAR
+consumes exactly the values written in `run_it001_half2_model.star`: the three
+selected coarse directions use `0.004154`, `0.004434`, and `0.0008588491`.
+RELION's uninterrupted process retains more precise in-memory
+`pdf_direction` values, whose captured float32 logs are
+`-5.483579158782959`, `-5.418439865112305`, and `-7.059917449951172`;
+taking float32 logs of the serialized inputs gives RECOVAR's
+`-5.4836835861206055`, `-5.418453216552734`, and `-7.059917449951172`.
+The first two residuals are constant within their complete eight-child
+oversampling groups and the third is bit exact.  This is the expected loss
+when an in-memory RELION state is reconstructed from its limited-precision
+STAR representation.  It does not precede or explain the raw-score mismatch.
+
+Direct process-resident real-reference job `13003930` is the current causal
+gate.  It changes only the projector input handoff, avoiding the imported
+MRC -> Fourier -> real round trip while retaining the same state, candidates,
+GPU path, and particle identity.  CPU operand job `13006514` will compare the
+ordinary arm pixel by pixel.  A material collapse of the direct-real raw-score
+residual will justify preserving the postprocessed real half-reference between
+RECOVAR iterations; otherwise the first unequal projected-reference,
+shifted-image, CTF, inverse-noise, or reduction term decides the next
+correction.
