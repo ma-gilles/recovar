@@ -217,9 +217,8 @@ def _native_gaussian_components(
     return pixel_terms, pre_tree_lanes, raw_score
 
 
-def _counterfactual_metrics(
+def _counterfactual_scores(
     *,
-    native_raw: np.ndarray,
     native_ref: np.ndarray,
     native_shifted: np.ndarray,
     native_corr: np.ndarray,
@@ -228,7 +227,7 @@ def _counterfactual_metrics(
     recovar_corr: np.ndarray,
     native_highres_xi2_half: np.float32,
     recovar_highres_xi2_half: np.float32,
-) -> dict[str, Any]:
+) -> dict[str, np.ndarray]:
     arms = {
         "recovar_all": (recovar_ref, recovar_shifted, recovar_corr),
         "native_corr_only": (recovar_ref, recovar_shifted, native_corr),
@@ -237,8 +236,7 @@ def _counterfactual_metrics(
         "native_reference_and_shifted": (native_ref, native_shifted, recovar_corr),
         "native_all_operands": (native_ref, native_shifted, native_corr),
     }
-    centered_native = _center(native_raw)
-    reports: dict[str, Any] = {}
+    scores: dict[str, np.ndarray] = {}
     for name, operands in arms.items():
         highres = (
             native_highres_xi2_half
@@ -246,8 +244,85 @@ def _counterfactual_metrics(
             else recovar_highres_xi2_half
         )
         *_, score = _native_gaussian_components(*operands, highres)
-        reports[name] = _metric(centered_native, _center(score))
-    return reports
+        scores[name] = score
+    return scores
+
+
+def _counterfactual_metrics(
+    *,
+    native_raw: np.ndarray,
+    scores: dict[str, np.ndarray],
+) -> dict[str, Any]:
+    centered_native = _center(native_raw)
+    return {
+        name: _metric(centered_native, _center(score))
+        for name, score in scores.items()
+    }
+
+
+def _winner_report(
+    *,
+    raw_score: np.ndarray,
+    combined_log_prior: np.ndarray,
+    native_rotation: np.ndarray,
+    native_translation: np.ndarray,
+    recovar_rotation: np.ndarray,
+    recovar_translation: np.ndarray,
+) -> dict[str, Any]:
+    """Select the first maximum after RELION-style float32 score/prior addition."""
+
+    raw = np.asarray(raw_score, dtype=np.float32).reshape(-1)
+    prior = np.asarray(combined_log_prior, dtype=np.float32).reshape(-1)
+    arrays = tuple(
+        np.asarray(value, dtype=np.int64).reshape(-1)
+        for value in (
+            native_rotation,
+            native_translation,
+            recovar_rotation,
+            recovar_translation,
+        )
+    )
+    _require(raw.size > 0, "winner score panel is empty")
+    _require(prior.shape == raw.shape, "winner prior is misaligned")
+    _require(all(value.shape == raw.shape for value in arrays), "winner keys are misaligned")
+    total = np.add(np.negative(raw, dtype=np.float32), prior, dtype=np.float32)
+    _require(bool(np.all(np.isfinite(total))), "winner totals must be finite")
+    winner = int(np.argmax(total))
+    if total.size == 1:
+        margin = np.float32(np.inf)
+    else:
+        second = np.partition(total, total.size - 2)[total.size - 2]
+        margin = np.subtract(total[winner], second, dtype=np.float32)
+    native_rot, native_trans, recovar_rot, recovar_trans = arrays
+    return {
+        "candidate_index_in_native_order": winner,
+        "native_coordinate": [int(native_rot[winner]), int(native_trans[winner])],
+        "recovar_coordinate": [int(recovar_rot[winner]), int(recovar_trans[winner])],
+        "raw_score": float(raw[winner]),
+        "combined_log_prior": float(prior[winner]),
+        "total_log_weight": float(total[winner]),
+        "total_log_weight_float32_bits": int(total[winner].view(np.uint32)),
+        "margin_to_second_float32": float(margin),
+        "first_maximum_tie_count": int(np.count_nonzero(total == total[winner])),
+    }
+
+
+def _apply_counterfactual_delta(
+    captured_raw: np.ndarray,
+    counterfactual_raw: np.ndarray,
+    recomputed_control_raw: np.ndarray,
+) -> np.ndarray:
+    """Change one recomputed operand while retaining the captured scorer residual."""
+
+    captured = np.asarray(captured_raw, dtype=np.float32)
+    counterfactual = np.asarray(counterfactual_raw, dtype=np.float32)
+    control = np.asarray(recomputed_control_raw, dtype=np.float32)
+    _require(
+        captured.shape == counterfactual.shape == control.shape,
+        "counterfactual score delta is misaligned",
+    )
+    delta = np.subtract(counterfactual, control, dtype=np.float32)
+    return np.add(captured, delta, dtype=np.float32)
 
 
 def _native_to_recovar_compact(
@@ -380,6 +455,8 @@ def analyze(
             archive["raw_operand_corr_img_score"], dtype=np.float32
         )
         recovar_raw_dense = np.asarray(archive["raw_operand_raw_diff2"], dtype=np.float32)
+        scores_pre_prior = np.asarray(archive["scores_pre_prior"], dtype=np.float64)
+        scores_with_prior = np.asarray(archive["scores_with_prior"], dtype=np.float64)
         half_weights = np.asarray(archive["raw_operand_half_weights"], dtype=np.float32)
         recovar_highres_xi2_half = np.asarray(
             archive["raw_operand_highres_xi2_half"], dtype=np.float32
@@ -428,6 +505,11 @@ def analyze(
     recovar_shifted[:, valid] = recovar_shifted_compact[mapped_translation][:, compact_rows]
     recovar_corr[valid] = recovar_corr_compact[compact_rows]
     recovar_raw = recovar_raw_dense[mapped_rotation, mapped_translation]
+    combined_log_prior = np.subtract(
+        scores_with_prior[mapped_rotation, mapped_translation],
+        scores_pre_prior[mapped_rotation, mapped_translation],
+        dtype=np.float64,
+    ).astype(np.float32)
 
     # The direct RECOVAR preprocessing snapshots retain RECOVAR's full-image
     # Fourier convention, which is larger than RELION's by N^2.  The raw-score
@@ -553,8 +635,7 @@ def analyze(
         ),
         None,
     )
-    counterfactuals = _counterfactual_metrics(
-        native_raw=verbose_raw,
+    counterfactual_scores = _counterfactual_scores(
         native_ref=native_ref,
         native_shifted=native_shifted,
         native_corr=native_corr,
@@ -563,6 +644,10 @@ def analyze(
         recovar_corr=recovar_corr,
         native_highres_xi2_half=native_highres_xi2_half,
         recovar_highres_xi2_half=recovar_highres_xi2_half,
+    )
+    counterfactuals = _counterfactual_metrics(
+        native_raw=verbose_raw,
+        scores=counterfactual_scores,
     )
     nyquist_corrected_shifted = recovar_shifted.copy()
     nyquist_corrected_shifted[:, nyquist_valid] = native_shifted[:, nyquist_valid]
@@ -576,6 +661,36 @@ def analyze(
         _center(verbose_raw),
         _center(nyquist_corrected_score),
     )
+    counterfactual_winner_scores = {
+        "native_verbose_raw": verbose_raw,
+        "recovar_captured_raw": recovar_raw,
+        **counterfactual_scores,
+        "native_positive_nyquist_shifted_only": nyquist_corrected_score,
+    }
+    delta_counterfactual_scores = {
+        f"captured_plus_{name}_delta": _apply_counterfactual_delta(
+            recovar_raw,
+            score,
+            counterfactual_scores["recovar_all"],
+        )
+        for name, score in {
+            **counterfactual_scores,
+            "native_positive_nyquist_shifted_only": nyquist_corrected_score,
+        }.items()
+        if name != "recovar_all"
+    }
+    counterfactual_winner_scores.update(delta_counterfactual_scores)
+    counterfactual_winners = {
+        name: _winner_report(
+            raw_score=score,
+            combined_log_prior=combined_log_prior,
+            native_rotation=verbose_rotation_indices,
+            native_translation=verbose_translation_ids,
+            recovar_rotation=mapped_rotation,
+            recovar_translation=mapped_translation,
+        )
+        for name, score in counterfactual_winner_scores.items()
+    }
 
     files = sorted(native_verbose_dir.glob("pass1_*.bin"))
     return {
@@ -625,6 +740,7 @@ def analyze(
         "boundaries": boundaries,
         "legacy_repeat_diagnostics": legacy_repeat_diagnostics,
         "counterfactual_centered_score_metrics": counterfactuals,
+        "counterfactual_hard_winners_with_recovar_prior": counterfactual_winners,
         "artifacts": {
             "native_verbose_dir": str(native_verbose_dir.resolve()),
             "native_verbose_files": [

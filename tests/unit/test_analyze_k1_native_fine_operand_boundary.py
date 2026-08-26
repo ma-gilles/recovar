@@ -4,9 +4,11 @@ import numpy as np
 
 from scripts.analyze_k1_native_fine_operand_boundary import (
     _align_recovar_operands_to_native_units,
+    _apply_counterfactual_delta,
     _metric,
     _native_gaussian_components,
     _native_to_recovar_compact,
+    _winner_report,
 )
 
 
@@ -85,3 +87,34 @@ def test_native_to_recovar_compact_preserves_signed_fftw_rows():
     np.testing.assert_array_equal(mapping[3], lookup[3 * recovar_xdim : 3 * recovar_xdim + 4])
     np.testing.assert_array_equal(mapping[4], lookup[6 * recovar_xdim : 6 * recovar_xdim + 4])
     np.testing.assert_array_equal(mapping[5], lookup[7 * recovar_xdim : 7 * recovar_xdim + 4])
+
+
+def test_winner_report_uses_float32_total_and_first_tie():
+    report = _winner_report(
+        raw_score=np.asarray([3645.34130859375, 3644.734375], dtype=np.float32),
+        combined_log_prior=np.asarray([-8.655330657958984, -9.262240409851074]),
+        native_rotation=np.asarray([41, 74]),
+        native_translation=np.asarray([41, 12]),
+        recovar_rotation=np.asarray([9, 3]),
+        recovar_translation=np.asarray([7, 2]),
+    )
+
+    assert report["candidate_index_in_native_order"] == 0
+    assert report["native_coordinate"] == [41, 41]
+    assert report["recovar_coordinate"] == [9, 7]
+    assert report["margin_to_second_float32"] == 0.0
+    assert report["first_maximum_tie_count"] == 2
+
+
+def test_counterfactual_delta_preserves_captured_scorer_residual():
+    captured = np.asarray([10.0, 20.0], dtype=np.float32)
+    recomputed_control = np.asarray([9.5, 20.25], dtype=np.float32)
+    counterfactual = np.asarray([8.5, 21.0], dtype=np.float32)
+
+    actual = _apply_counterfactual_delta(
+        captured,
+        counterfactual,
+        recomputed_control,
+    )
+
+    np.testing.assert_array_equal(actual, np.asarray([9.0, 20.75], dtype=np.float32))
