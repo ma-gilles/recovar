@@ -35,6 +35,8 @@ FORCE_FULL_COARSE_GRID=${K1_FORCE_FULL_COARSE_GRID:-0}
 SERIAL_PARTICLE_LAUNCHES=${K1_SERIAL_PARTICLE_LAUNCHES:-0}
 NATIVE_FINE_SCORE_UNITS=${K1_NATIVE_FINE_SCORE_UNITS:-1}
 TRANSLATION_ANGLE_SCALE=${K1_TRANSLATION_ANGLE_SCALE:-}
+INTERNAL_FOURIER_DUMP_DIR=${K1_INTERNAL_FOURIER_DUMP_DIR:-}
+INTERNAL_FOURIER_DUMP_ITERATION=${K1_INTERNAL_FOURIER_DUMP_ITERATION:-}
 ENABLE_PARITY_DUMP=${K1_ENABLE_PARITY_DUMP:-}
 if [[ -z "${ENABLE_PARITY_DUMP}" ]]; then
     if [[ "${MAX_ITER}" == 2 ]]; then
@@ -73,6 +75,16 @@ if [[ -n "${PASS2_DUMP_ORIGINAL_INDICES}" && "${MAX_ITER}" != 2 ]]; then
     echo "K1_PASS2_DUMP_ORIGINAL_INDICES requires K1_MAX_ITER=2" >&2
     exit 2
 fi
+if [[ -n "${INTERNAL_FOURIER_DUMP_DIR}" || -n "${INTERNAL_FOURIER_DUMP_ITERATION}" ]]; then
+    if [[ -z "${INTERNAL_FOURIER_DUMP_DIR}" || -z "${INTERNAL_FOURIER_DUMP_ITERATION}" ]]; then
+        echo "K1 internal Fourier dump directory and iteration must be supplied together" >&2
+        exit 2
+    fi
+    if [[ "${INTERNAL_FOURIER_DUMP_DIR:0:1}" != / ]]; then
+        echo "K1_INTERNAL_FOURIER_DUMP_DIR must be absolute" >&2
+        exit 2
+    fi
+fi
 case "${BPREF_PARTICLE_POOL_SIZE}" in
     ''|*[!0-9]*|0*) echo "K1_BPREF_PARTICLE_POOL_SIZE must be a canonical positive integer" >&2; exit 2 ;;
 esac
@@ -105,14 +117,15 @@ esac
 
 ROOT=${RUN_ROOT}
 RUNTIME=${RUNTIME_ROOT}
-REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820
+REPO=${K1_REPO_OVERRIDE:-/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820}
 FIXED_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET
 CASE=${FIXED_ROOT}/cases/${CASE_NAME}
 DATA=${CASE}/data
 RELION=${CASE}/relion_ref
 OUTPUT=${ROOT}/output
-PYTHON=${REPO}/.pixi/envs/default/bin/python
-PIXI_ENV=${REPO}/.pixi/envs/default
+PIXI_ENV=${K1_PIXI_ENV_OVERRIDE:-${REPO}/.pixi/envs/default}
+PYTHON=${PIXI_ENV}/bin/python
+export PIXI_ENV
 CUDA_LIB=${CUDA_LIB_OVERRIDE:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_preprocess_stage_split_20260821T1600ET/cuda/libcuda_backproject.so}
 RELION_BIND=${FIXED_ROOT}/relion_bind_build/shared
 LAUNCHER=${REPO}/scripts/run_k1_remaining_it1_exact_corr_img.sbatch
@@ -127,6 +140,10 @@ if [[ -n "${BPREF_NOISE_OVERRIDE}" ]]; then
     : "${EXPECTED_BPREF_NOISE_SHA256:?BPref noise override must pin its SHA-256}"
     test "${BPREF_NOISE_OVERRIDE:0:1}" = / -a -s "${BPREF_NOISE_OVERRIDE}"
     test "$(sha256sum "${BPREF_NOISE_OVERRIDE}" | awk '{print $1}')" = "${EXPECTED_BPREF_NOISE_SHA256}"
+fi
+if [[ -n "${INTERNAL_FOURIER_DUMP_DIR}" ]]; then
+    mkdir -p "${INTERNAL_FOURIER_DUMP_DIR}"
+    test -z "$(find "${INTERNAL_FOURIER_DUMP_DIR}" -mindepth 1 -print -quit)"
 fi
 RELION_BIND_LIB=$(find "${RELION_BIND}" -maxdepth 1 -type f -name '_relion_bind_core*.so' -print -quit)
 test "$(sha256sum "${RELION_BIND_LIB}" | awk '{print $1}')" = 56acdddab6d25bd83aac5e338162c4819f85ec26f68511458618f143c2b604b7
@@ -192,6 +209,10 @@ fi
 if [[ -n "${BPREF_NOISE_OVERRIDE}" ]]; then
     export RECOVAR_K1_BPREF_NOISE_VARIANCE_OVERRIDE_PATH=${BPREF_NOISE_OVERRIDE}
 fi
+if [[ -n "${INTERNAL_FOURIER_DUMP_DIR}" ]]; then
+    export RECOVAR_K1_INTERNAL_FOURIER_DUMP_DIR=${INTERNAL_FOURIER_DUMP_DIR}
+    export RECOVAR_K1_INTERNAL_FOURIER_DUMP_ITERATION=${INTERNAL_FOURIER_DUMP_ITERATION}
+fi
 if [[ "${MAX_ITER}" != 1 ]]; then
     export RECOVAR_SAVE_INTERMEDIATES_DIR=1
     export RECOVAR_SAVE_INTERMEDIATES_SKIP_UNREGULARIZED=1
@@ -225,6 +246,7 @@ git -C "${REPO}" diff --binary -- recovar/em recovar/cuda/cuda_backproject.cu \
 
 cd "${REPO}"
 "${PYTHON}" - <<'PY'
+import os
 from pathlib import Path
 import jax
 import recovar
@@ -232,7 +254,8 @@ from recovar import cuda_backproject
 
 root = Path.cwd().resolve()
 assert Path(recovar.__file__).resolve().is_relative_to(root)
-assert Path(jax.__file__).resolve().is_relative_to(root / ".pixi/envs/default")
+pixi_env = Path(os.environ["PIXI_ENV"]).resolve()
+assert Path(jax.__file__).resolve().is_relative_to(pixi_env)
 assert len(jax.devices("gpu")) == 1 and "H100" in jax.devices("gpu")[0].device_kind.upper()
 assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
 PY
@@ -242,7 +265,7 @@ if [[ "${SKIP_FINAL}" == 1 ]]; then
     FINAL_ARGS+=(--skip_final_iteration)
 fi
 INTERMEDIATE_ARGS=()
-if [[ "${MAX_ITER}" != 1 ]]; then
+if [[ "${MAX_ITER}" != 1 || -n "${INTERNAL_FOURIER_DUMP_DIR}" ]]; then
     mkdir -p "${OUTPUT}/intermediates"
     INTERMEDIATE_ARGS+=(
         --save_intermediates_dir "${OUTPUT}/intermediates"
@@ -303,6 +326,13 @@ fi
 find "${OUTPUT}" -type f -print0 | sort -z | xargs -0 sha256sum > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
 if [[ -n "${PASS2_DUMP_ORIGINAL_INDICES}" ]]; then
     find "${RECOVAR_PASS2_DUMP_DIR}" -type f -print0 \
+        | sort -z | xargs -0 sha256sum >> "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
+fi
+if [[ -n "${INTERNAL_FOURIER_DUMP_DIR}" ]]; then
+    printf -v internal_iteration_tag '%03d' "${INTERNAL_FOURIER_DUMP_ITERATION}"
+    test -s "${INTERNAL_FOURIER_DUMP_DIR}/it${internal_iteration_tag}_half1_mean_ft.npz"
+    test -s "${INTERNAL_FOURIER_DUMP_DIR}/it${internal_iteration_tag}_half2_mean_ft.npz"
+    find "${INTERNAL_FOURIER_DUMP_DIR}" -type f -print0 \
         | sort -z | xargs -0 sha256sum >> "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
 fi
 printf '{"job_id":"%s","wall_s":%d,"case_index":%d,"max_iter":%d,"skip_final":%d,"live_initial_noise":%d,"native_texture":%d,"full_coarse_grid":%d,"serial_particle_launches":%d,"native_fine_score_units":%d,"translation_angle_scale":"%s","parity_dump":%d}\n' \
