@@ -1020,7 +1020,14 @@ def _n_directions_for_healpix_order(healpix_order: int) -> int:
 
 
 def _class_direction_rotation_log_prior(state: InitialModelState, healpix_order: int) -> np.ndarray:
-    """Return RELION's class-specific direction prior over coarse rotations."""
+    """Return RELION's class-specific direction prior over coarse rotations.
+
+    RELION copies ``pdf_direction`` into an ``RFLOAT`` buffer and its CUDA
+    ``initOrientations`` kernel stores ``log(pdf)`` directly in ``XFLOAT``.
+    Do not remove the class-common scale before taking the logarithm.  Although
+    that scale cancels analytically, changing it changes float32 addition and
+    adaptive-significance ties.
+    """
 
     n_psi = int(sampling.rotation_grid_n_in_planes(int(healpix_order)))
     n_dir = _n_directions_for_healpix_order(int(healpix_order))
@@ -1028,14 +1035,11 @@ def _class_direction_rotation_log_prior(state: InitialModelState, healpix_order:
     pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
     if pdf_direction.shape != (int(state.K), n_dir):
         pdf_direction = np.full((int(state.K), n_dir), 1.0 / float(int(state.K) * n_dir), dtype=np.float64)
-    mean_pdf = float(np.mean(pdf_direction))
-    if mean_pdf <= 0.0 or not np.isfinite(mean_pdf):
-        return np.zeros((int(state.K), n_rot), dtype=np.float32)
     direction_ids = np.arange(n_rot, dtype=np.int64) // n_psi
     values = pdf_direction[:, direction_ids]
     out = np.full(values.shape, -1.0e30, dtype=np.float64)
     positive = values > 0.0
-    out[positive] = np.log(values[positive] / mean_pdf)
+    out[positive] = np.log(values[positive])
     return out.astype(np.float32)
 
 

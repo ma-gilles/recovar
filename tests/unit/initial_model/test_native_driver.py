@@ -437,6 +437,34 @@ def test_noprior_sampling_uses_learned_direction_prior(monkeypatch):
     assert prior is expected
 
 
+def test_direction_prior_preserves_relion_absolute_log_scale_and_cutoff_tie():
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=2.0,
+        K=1,
+        nr_iter=200,
+        n_directions=12,
+    )
+    state.pdf_direction[0, 9] = 0.0194935499409
+    state.pdf_direction[0, 10] = 0.0206643770425
+
+    prior = driver._class_direction_rotation_log_prior(state, healpix_order=0)
+    n_psi = driver.sampling.rotation_grid_n_in_planes(0)
+
+    expected_9 = np.float32(np.log(state.pdf_direction[0, 9]))
+    expected_10 = np.float32(np.log(state.pdf_direction[0, 10]))
+    np.testing.assert_array_equal(prior[0, 9 * n_psi : (9 + 1) * n_psi], expected_9)
+    np.testing.assert_array_equal(prior[0, 10 * n_psi : (10 + 1) * n_psi], expected_10)
+
+    # Frozen gf10 coarse operands: RELION's absolute log(pdf_direction)
+    # makes these rank-21/rank-22 values bitwise tied. Dividing pdf_direction
+    # by its mean before log separated them by one float32 ULP and dropped an
+    # eight-child fine-rotation parent from the inclusive cutoff support.
+    raw_scores = np.asarray([-346.5836181640625, -346.6419677734375], dtype=np.float32)
+    tied = raw_scores + np.asarray([expected_9, expected_10], dtype=np.float32)
+    assert tied[0].view(np.uint32) == tied[1].view(np.uint32)
+
+
 def test_active_relion_initialmodel_max_significants_matches_gradient_default():
     state = initialise_denovo_state(ori_size=16, pixel_size=1.0, K=3, nr_iter=8, n_directions=1)
 
