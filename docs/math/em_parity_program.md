@@ -26820,3 +26820,62 @@ whether the real `20`-versus-`19` discrepancy already exists in coarse tuple
 selection or first appears during fine expansion, normalization, or
 significant-support selection. The fixed score remains `31/34` until a
 terminal comparison crosses the unchanged `0.995` signed FSC-AUC gate.
+
+## 2026-08-26 09:38 EDT — row-75571 RECOVAR coarse state and focused fine capture
+
+Autonomous RECOVAR job `12992894` completed successfully in `00:14:01` and
+wrote the requested case-10 iteration-2 row-75571 coarse boundary. The capture
+contains `20` significant hypotheses, maximum coarse posterior
+`0.4311988651752472`, and winner `(rotation=30280, translation=25)`. Its least
+selected hypothesis is `(33856, 17)` with probability
+`0.00013936456525698304`; the first excluded hypothesis is `(30280, 27)` with
+probability `0.0001075480759027414`. Their centered total-log-weight separation
+is `0.2591552734375`, so this is not an immediately adjacent numerical tie in
+the autonomous arm.
+
+The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_autonomous_coarse_aca8_567b22d4ea_20260826T0908ET`
+and the runtime root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_autonomous_coarse_aca8_567b22d4ea_20260826T0908ET`;
+both contain `SAFE_TO_DELETE`. The capture is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_autonomous_coarse_aca8_567b22d4ea_20260826T0908ET/coarse/significance_orig075571_it002_cs058.npz`
+(SHA-256
+`034f5b0649e9b7160678bc36449c8785bd3180a7e799d834f95ce1ac6b68901e`).
+Its validation report has SHA-256
+`9dbeb1a22e0de0c2dae476b499c3cf91c2e69a3527b464dfef78d4230d635ef9`,
+and `SUCCESS_12992894` is present.
+
+The fresh-run launcher now supports a focused `fine` stage. It passively
+caches the exact coarse state, writes raw pass-2 operands for only the target
+row, and raises the existing stop-after-target completion sentinel before any
+unneeded M-step or trajectory work. `bash -n` and `git diff --check` pass. The
+launcher SHA-256 is
+`1362513a13bbe62b1294fde61fc6bb3119e39e2fd8055a4e9698e06eb471d672`;
+the pinned full primary-worktree diff is
+`f4d933100a705d423eed15b6158aae145b20bda429e80d37ea95417bcaac8fcb`;
+the sealed CUDA SHA-256 remains
+`aca8de06213bda21375f9cde0a7442275e84be8a092127d75392b15fae4e621f`.
+
+Submission `12993418` failed closed in two seconds because the submit command
+provided the selected-source diff hash where the launcher requires the full
+worktree diff hash. It produced no scientific artifact. Corrected job
+`12993648` is running with isolated run and runtime roots
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_autonomous_fine_aca8_567b22d4ea_20260826T0936ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_autonomous_fine_aca8_567b22d4ea_20260826T0936ET`;
+both contain `SAFE_TO_DELETE`.
+
+A new direct verbose-fine analyzer removes the earlier dependency on separate
+native factor and fine-score captures. It validates byte-exact rotation-table
+identity, translation-ID coordinates, candidate tuples, centered raw scores,
+both priors, combined log weights, normalized posterior, significant support,
+and the hard winner. Its focused synthetic tests pass (`2 passed, 9
+deselected`). Applied retrospectively to row `28262`, it finds `576` native
+versus `544` serialized-state fine tuples, with all `544` common support flags
+exact and ten selected native-only fine tuples. This proves that the false
+serialized coarse-support difference propagates only by adding the expected
+fine children; it does not reveal a separate common-candidate support-rule
+defect. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_row28262_567b22d4ea_20260826T0738ET/analysis/K1_CASE10_ROW028262_NATIVE_VERBOSE_VS_SERIALIZED_FINE_STATE.json`
+(SHA-256
+`bed2fe0d0d5080f681772bedd2f4ab1844996f687a12c252b84af8a0979f2544`).

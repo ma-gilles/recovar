@@ -20,6 +20,9 @@ from scripts.analyze_k1_native_verbose_coarse_boundary import (
 from scripts.analyze_k1_native_verbose_coarse_boundary import (
     analyze as analyze_native_verbose_coarse,
 )
+from scripts.analyze_k1_native_verbose_fine_state import (
+    analyze as analyze_native_verbose_fine,
+)
 
 
 def _payload():
@@ -313,3 +316,95 @@ def test_native_verbose_coarse_analyzer_closes_identical_boundary(tmp_path):
     assert result["summary"]["posterior_total_variation"] == 0.0
     assert result["residuals"]["raw_score_centered"]["max_abs"] == 0.0
     assert result["residuals"]["total_log_weight_centered"]["max_abs"] == 0.0
+
+
+def test_native_verbose_fine_analyzer_closes_identical_boundary(tmp_path):
+    native_dir = tmp_path / "native_fine"
+    native_dir.mkdir()
+    recovar_rotations = np.asarray(
+        [
+            np.eye(3),
+            [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        ],
+        dtype=np.float32,
+    )
+    recovar_translations = np.asarray(
+        [[-1.0, 0.5], [0.0, 0.0], [1.0, -0.5]], dtype=np.float32
+    )
+    rotation_rows = np.asarray([0, 0, 1], dtype=np.int32)
+    translation_rows = np.asarray([0, 2, 1], dtype=np.int32)
+    raw_cost = np.asarray([2.0, 3.0, 4.0], dtype=np.float32)
+    orientation_prior = np.asarray([0.25, 0.25, 0.5], dtype=np.float32)
+    translation_prior = np.asarray([-0.1, -0.3, -0.2], dtype=np.float32)
+    combined_prior = orientation_prior + translation_prior
+    probability = np.asarray([0.7, 0.2, 0.1], dtype=np.float32)
+    selected = np.asarray([True, True, False])
+
+    def write_flat(name, values, dtype):
+        values = np.asarray(values, dtype=dtype)
+        with (native_dir / f"{name}.bin").open("wb") as stream:
+            stream.write(np.asarray(values.size, dtype="<i4").tobytes())
+            stream.write(values.tobytes())
+
+    write_flat("pass1_acc_rot_idx", rotation_rows, "<i4")
+    write_flat("pass1_acc_trans_idx", translation_rows, "<i4")
+    write_flat("pass1_candidate_combined_log_prior", combined_prior, "<f8")
+    write_flat("pass1_candidate_in_reconstruction_set", selected, "<i4")
+    write_flat("pass1_candidate_offset_log_prior", translation_prior, "<f8")
+    write_flat("pass1_candidate_orientation_log_prior", orientation_prior, "<f8")
+    write_flat(
+        "pass1_candidate_translation_x",
+        recovar_translations[translation_rows, 0],
+        "<f8",
+    )
+    write_flat(
+        "pass1_candidate_translation_y",
+        recovar_translations[translation_rows, 1],
+        "<f8",
+    )
+    write_flat("pass1_candidate_weight_normalized", probability, "<f8")
+    write_flat(
+        "pass1_class0_fine_eulers",
+        recovar_rotations.transpose(0, 2, 1).reshape(-1),
+        "<f8",
+    )
+    write_flat("pass1_exp_Mweight_raw_preprior", raw_cost, "<f8")
+
+    shape = (2, 3)
+    candidate_mask = np.zeros(shape, dtype=bool)
+    candidate_mask[rotation_rows, translation_rows] = True
+    scores_pre_prior = np.full(shape, -np.inf, dtype=np.float32)
+    scores_with_prior = np.full(shape, -np.inf, dtype=np.float32)
+    probs = np.zeros(shape, dtype=np.float32)
+    reconstruction_mask = np.zeros(shape, dtype=bool)
+    scores_pre_prior[rotation_rows, translation_rows] = -raw_cost
+    scores_with_prior[rotation_rows, translation_rows] = -raw_cost + combined_prior
+    probs[rotation_rows, translation_rows] = probability
+    reconstruction_mask[rotation_rows, translation_rows] = selected
+    recovar_path = tmp_path / "recovar_fine.npz"
+    np.savez(
+        recovar_path,
+        candidate_mask=candidate_mask,
+        current_size=np.asarray(6),
+        fine_translations=recovar_translations,
+        original_index=np.asarray(7),
+        probs=probs,
+        reconstruction_mask=reconstruction_mask,
+        rotation_log_prior=np.asarray([0.25, 0.5], dtype=np.float32),
+        rotations=recovar_rotations,
+        scores_pre_prior=scores_pre_prior,
+        scores_with_prior=scores_with_prior,
+        translation_log_prior=np.asarray([-0.1, -0.2, -0.3], dtype=np.float32),
+    )
+
+    result = analyze_native_verbose_fine(
+        native_dump_dir=native_dir,
+        recovar_capture=recovar_path,
+    )
+
+    assert result["candidate_sets"]["native_only_count"] == 0
+    assert result["candidate_sets"]["recovar_only_count"] == 0
+    assert result["first_exact_unequal_boundary"] is None
+    assert result["posterior"]["native_significant_count"] == 2
+    assert result["posterior"]["recovar_significant_count"] == 2
+    assert result["posterior"]["winner_exact"]
