@@ -116,11 +116,16 @@ def analyze(
     recovar_directory: Path,
     *,
     half: int,
+    reconstruction_group: int | None = None,
 ) -> dict[str, object]:
     bundle = load_bpref_contribution_bundle(contribution_paths)
     boundary_half = int(np.asarray(bundle.boundary_values["half"]).item())
-    if boundary_half != half:
+    if reconstruction_group is None and boundary_half != half:
         raise ValueError(f"captured half {boundary_half} does not match requested half {half}")
+    if reconstruction_group is not None and int(reconstruction_group) != half - 1:
+        raise ValueError(
+            "InitialModel reconstruction groups are zero-based and must equal half - 1"
+        )
     native_data_name, native_weight_name, candidate_data_name, candidate_weight_name = (
         _production_names(half)
     )
@@ -150,6 +155,7 @@ def analyze(
                 order=order,
                 get_backprojector_data=get_backprojector_data,
                 interpolator=TRILINEAR,
+                reconstruction_group=reconstruction_group,
             ),
             ori_size=ori_size,
         )
@@ -178,11 +184,20 @@ def analyze(
         "data": _geometry(candidate.data, native.data, execution.data),
         "weight": _geometry(candidate.weight, native.weight, execution.weight),
     }
-    ranking = _rank_particle_sources(bundle.concatenate("execution"))
+    ranking = _rank_particle_sources(
+        bundle.concatenate(
+            "execution",
+            reconstruction_group=reconstruction_group,
+        )
+    )
     return {
         "schema": SCHEMA,
         "status": "complete",
         "half": int(half),
+        "capture_context_half": boundary_half,
+        "reconstruction_group": (
+            None if reconstruction_group is None else int(reconstruction_group)
+        ),
         "bundle": summarize_bpref_contribution_bundle(bundle),
         "comparisons": comparisons,
         "relion_double_execution_geometry": geometry,
@@ -197,6 +212,7 @@ def main() -> None:
     parser.add_argument("--native-directory", required=True, type=Path)
     parser.add_argument("--recovar-directory", required=True, type=Path)
     parser.add_argument("--half", required=True, type=int, choices=(1, 2))
+    parser.add_argument("--reconstruction-group", type=int)
     parser.add_argument("--output-json", required=True, type=Path)
     args = parser.parse_args()
     report = analyze(
@@ -204,6 +220,7 @@ def main() -> None:
         args.native_directory,
         args.recovar_directory,
         half=args.half,
+        reconstruction_group=args.reconstruction_group,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

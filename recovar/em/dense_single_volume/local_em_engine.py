@@ -4111,6 +4111,11 @@ def run_local_em_exact(
                         shadow_reduction_agreement=None,
                         inline_projector_data_volumes=inline_projector_data_volumes,
                         inline_projector_weight_volumes=inline_projector_weight_volumes,
+                        reconstruction_group_ids=(
+                            None
+                            if bucket_reconstruction_group_ids is None
+                            else bucket_reconstruction_group_ids[:unpadded_batch_size]
+                        ),
                     )
                 if fused_debug_bucket_matches and debug_fused_posterior_dump_targets:
                     debug_fused_posterior_dump_targets = maybe_write_debug_fused_posterior_dump(
@@ -5516,6 +5521,7 @@ def run_local_em_exact(
                     shadow_only_mode=False,
                     shadow_score_bitwise_equal=True,
                     shadow_reduction_agreement=None,
+                    reconstruction_group_ids=bucket_reconstruction_group_ids,
                 )
             scores = None
 

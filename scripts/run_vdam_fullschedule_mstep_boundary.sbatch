@@ -27,6 +27,8 @@ NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 RELION_THREADS=${RELION_THREADS:-8}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-0}
 BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}
+BPREF_CONTRIBUTION_CAPTURE_HALF=${BPREF_CONTRIBUTION_CAPTURE_HALF:-${BPREF_CONTRIBUTION_HALF}}
+BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP=${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP:-}
 BPREF_CONTRIBUTION_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE:-}
 RELION_SOURCE=${VDAM_RELION_SOURCE:-/scratch/gpfs/GILLES/mg6942/relion}
 RELION_RUNTIME=${VDAM_RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
@@ -53,6 +55,10 @@ test "${RELION_THREADS}" -ge 1
 test "${RELION_THREADS}" -le "${SLURM_CPUS_PER_TASK:-8}"
 if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
   test "${BPREF_CONTRIBUTION_HALF}" = 1 -o "${BPREF_CONTRIBUTION_HALF}" = 2
+  test "${BPREF_CONTRIBUTION_CAPTURE_HALF}" = 1 -o "${BPREF_CONTRIBUTION_CAPTURE_HALF}" = 2
+  if [[ -n "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" ]]; then
+    test "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" -eq "$((BPREF_CONTRIBUTION_HALF - 1))"
+  fi
   test -n "${BPREF_CONTRIBUTION_CURRENT_SIZE}"
   test "${BPREF_CONTRIBUTION_CURRENT_SIZE}" -ge 1
 fi
@@ -237,9 +243,9 @@ PY
   test "${contribution_particle_count}" -ge 1
   export RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR=${CONTRIBUTIONS}
   export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=${TARGET_ITERATION}
-  export RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF=${BPREF_CONTRIBUTION_HALF}
+  export RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF=${BPREF_CONTRIBUTION_CAPTURE_HALF}
   export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE}
-  export RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID=vdam-gf01-it${TARGET_ITERATION}-half${BPREF_CONTRIBUTION_HALF}
+  export RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID=vdam-gf01-it${TARGET_ITERATION}-capture-half${BPREF_CONTRIBUTION_CAPTURE_HALF}
   export RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY=${PROVENANCE}/bpref_image_names.npy
   export RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256
   RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256=$(sha256sum "${contribution_stack}" | awk '{print $1}')
@@ -296,6 +302,12 @@ if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
       -name "bpref_contribution_rows_it${target_tag}_h*.npz" | sort
   )
   test "${#contribution_paths[@]}" -ge 1
+  BPREF_ANALYZER_GROUP_ARGS=()
+  if [[ -n "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" ]]; then
+    BPREF_ANALYZER_GROUP_ARGS=(
+      --reconstruction-group "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}"
+    )
+  fi
   (
     cd "${REPO_ROOT}"
     "${PIXI_PY}" -m scripts.analyze_vdam_bpref_accumulator_boundary \
@@ -303,6 +315,7 @@ if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
       --native-directory "${NATIVE_MSTEP}" \
       --recovar-directory "${RECOVAR_MSTEP}" \
       --half "${BPREF_CONTRIBUTION_HALF}" \
+      "${BPREF_ANALYZER_GROUP_ARGS[@]}" \
       --output-json "${ANALYSIS}/bpref_accumulator_boundary.json"
   )
   test -s "${ANALYSIS}/bpref_accumulator_boundary.json"
@@ -322,8 +335,9 @@ sha256sum "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
   "${DATA_DIR}/particles.star" \
   "${CUDA_SOURCE_BINARY}" "${CUDA_BINARY}" "${RELION_BIND_BINARY}" "${VDAM_RELION_BINARY}" \
   > "${PROVENANCE}/static_inputs.sha256"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"bpref_contribution_half":"%s","bpref_contribution_current_size":"%s"}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" \
   "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${BPREF_CONTRIBUTION_HALF}" \
+  "${BPREF_CONTRIBUTION_CAPTURE_HALF}" "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" \
   "${BPREF_CONTRIBUTION_CURRENT_SIZE}" > "${PROVENANCE}/run.json"
 touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"

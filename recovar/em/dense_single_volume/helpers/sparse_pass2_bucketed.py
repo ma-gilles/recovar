@@ -1082,6 +1082,7 @@ def _maybe_dump_bpref_contribution_rows(
     mstep_ctf2_over_nv=None,
     inline_projector_data_volumes=None,
     inline_projector_weight_volumes=None,
+    reconstruction_group_ids=None,
 ):
     """Dump posterior-reduced active rows for whole-accumulator scatter replay.
 
@@ -1156,6 +1157,20 @@ def _maybe_dump_bpref_contribution_rows(
         return values_np
 
     actual_counts_np = _select_particle_axis(actual_counts).astype(np.int64, copy=False)
+    if reconstruction_group_ids is None:
+        captured_reconstruction_group_ids = np.empty((0,), dtype=np.int32)
+    else:
+        captured_reconstruction_group_ids = _select_particle_axis(
+            reconstruction_group_ids
+        ).astype(np.int32, copy=False)
+        if captured_reconstruction_group_ids.shape != (original_indices.size,):
+            raise ValueError(
+                "BPref contribution dump reconstruction_group_ids shape mismatch"
+            )
+        if np.any(captured_reconstruction_group_ids < 0):
+            raise ValueError(
+                "BPref contribution dump reconstruction_group_ids must be non-negative"
+            )
     summed_np = _select_particle_axis(summed)
     ctf_probs_np = _select_particle_axis(ctf_probs)
     rotations_np = _select_particle_axis(rotations)
@@ -1408,6 +1423,12 @@ def _maybe_dump_bpref_contribution_rows(
         active_particle_rows=active_particle_rows.astype(np.int32, copy=False),
         active_rotation_rows=active_rotation_rows.astype(np.int32, copy=False),
         active_original_indices=original_indices[active_particle_rows],
+        reconstruction_group_ids=captured_reconstruction_group_ids,
+        active_reconstruction_group_ids=(
+            captured_reconstruction_group_ids[active_particle_rows]
+            if captured_reconstruction_group_ids.size
+            else np.empty((0,), dtype=np.int32)
+        ),
         active_global_rotation_indices=rotation_indices_np[active_particle_rows, active_rotation_rows],
         active_summed=summed_np[active_particle_rows, active_rotation_rows],
         active_ctf_probs=ctf_probs_np[active_particle_rows, active_rotation_rows],
