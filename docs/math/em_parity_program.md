@@ -27313,3 +27313,23 @@ and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_model_star_score56_ab01_20260826T1300ET`;
 both contain `SAFE_TO_DELETE`.  No scorecard value changes before this causal
 gate completes; the fixed K=1 score remains `31/34`.
+
+## 2026-08-26 13:10 EDT — size mismatch is a first-class captured boundary
+
+CPU Slurm job `13000693` completed `0:0` in `00:00:14`.  The updated focused
+analyzer now records a structural score-window mismatch instead of attempting
+to compare differently shaped score operands.  It reports the first exact
+unequal boundary as `current_size`: deployed RELION uses `56` and `1624`
+packed square Fourier pixels, while the prior RECOVAR capture uses `58` and
+`1740`.  Particle identity remains aligned at source row `75571`, stack image
+`75572`, native particle id `72860`.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_score_window_analysis_20260826T1305ET/K1_CASE10_ROW075571_SCORE_WINDOW_MISMATCH.json`
+(SHA-256
+`54e940376fd506d21b0e7ba7de77fac7b263b5f55df34a947b85eab22e62b436`).
+The same job passed all three focused analyzer tests in `2.66s`.  GPU candidate
+job `13000515` has independently logged runtime `current_size=56`,
+`score_pixels=1624`, and `translation_tile_half_pixels=1624`.  Its stopped
+iteration-2 row capture remains the causal gate before any terminal case-10
+run.  The fixed score remains `31/34`.
