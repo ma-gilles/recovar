@@ -482,13 +482,22 @@ Iteration-1 `sigma2_noise` relative-L2 improves from `1.59216e-4` to
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf38_os0_pmax_fix_it1_6387ff7c_87274be_v4_20260826/probe-1/analysis_fresh_fused_posterior.json`
 (SHA-256
 `6b005700b90ea2fe0cc802b6e45e332882118df782580fd2c711105c465455e3`).
-Initial full-trajectory probes `13007637` all exited 75 before science because
-Slurm reused the same non-reference GPU.  Replacement array `13008037` holds
-wrong-GPU probes briefly so its remaining tasks can reach the reference GPU;
-tasks 0 and 1 exited 75 as intended, and exact-reference-GPU task
-`13008037_2` is now running.  The complete 0--200 candidate against the sealed
-four-repeat GF38 native panel, followed by its dependent focused audit, remains
-the gate for accepting the correction.
+Initial full-trajectory arrays `13007637` and `13008037` exited 75 before
+science because Slurm assigned only non-reference GPUs. In replacement array
+`13008278`, task 1 reached the reference GPU but was canceled before science:
+the configured qualified CUDA library predated the current worktree's CUDA
+source, so RECOVAR's staleness guard began rebuilding into that configured
+shared path. The array was stopped immediately; its canonical library still
+has the qualified SHA-256
+`87274beac3a7b5af59947199588955366485d22780239f4c94fd5afc13f8e337`.
+
+Safe replacement array `13008433` stages that exact binary into its disposable
+output root, gives the private copy a current timestamp, verifies that RECOVAR
+resolves it as non-stale, makes it read-only, and checks its digest before and
+after science. Exact-reference-GPU task `13008433_1` has cleared the CUDA/FFI
+gate and is running the complete 0--200 candidate against the sealed
+four-repeat GF38 native panel. Its dependent focused audit remains the gate
+for accepting the correction.
 
 GF47 (extreme outliers with uniform poses and white noise, seed 29) passes the
 complete 0--200 calibrated map and particle envelopes but fails controller

@@ -1,13 +1,31 @@
-<!-- vdam-relion-parity-dashboard-v2 -->
-# VDAM / InitialModel RELION parity dashboard
+<!-- frozen-vdam-parity-scorecard-v3 -->
+### Frozen VDAM / InitialModel RELION parity scorecard
+
+This PR carries a fixed-denominator K=1 full-trajectory suite modeled on the
+EM PR scorecard. The v3 denominator is **20 cases**, every case spans numbered
+iterations **0--200**, and adding or changing cases requires a new suite
+version. The checked definition SHA-256 is
+`9842b2c9cb7646d75127541801ef5982ed19e4a80485f9ce586ceabdb3ed0091`.
+
+| Fixed K=1 v3 suite | Passed | Evaluated | Denominator | Live science |
+|---|---:|---:|---:|---:|
+| All quality/state/schedule gates | **1** | 6 | 20 | 13 complete, 4 running, 3 queued |
+| Comparable same-H100 runtime | **0** | 6 | 20 | measured range: **6.42--9.40x RELION** |
+
+Progress against the unchanged strict denominator is **0 -> 1 accepted
+trajectory**. Earlier expansion v2 remains a separate regression track at
+**5/15 accepted** and cannot change the v3 score.
 
 > **Status: draft, not merge-ready.** K=1 correctness is the active gate.
 > Runtime, K>1, real-data, and final CLI/GUI qualification follow only after
 > the K=1 0--200 suite has no unexplained failures.
 
-Last scientific update: **2026-08-26 16:23 ET**
+Last scientific update: **2026-08-26 16:32 ET**
+
 Tracking branch: `codex/vdam-relion-parity-20260820`
+
 Base: PR #158 (shared supplied-map EM machinery)
+
 Policy: focused VDAM tests and frozen trajectories only; **no generic RECOVAR
 full/long suite** is being run for this campaign.
 
@@ -15,13 +33,32 @@ full/long suite** is being run for this campaign.
 
 | Gate | Current result | Required to close |
 |---|---|---|
-| K=1 v3 full trajectories | **6/20 audited**, 13 science-complete, 4 running, 3 queued | 20/20 audited |
-| K=1 v3 all-gate acceptance | **1/6 accepted** | 20/20 accepted with no unexplained case |
-| Earlier 0--200 expansion | **5/15 accepted**, 10 classified failures; GF42 still outside the sealed count | Every failure repaired or causally classified and requalified |
-| Earliest exact boundary | **Repaired locally**: iteration-1 map error improved 151x | Pass the complete GF38 0--200 native-envelope audit |
-| Runtime | **6.42--9.40x RELION** on audited v3 H100 cases | Comparable same-GPU wall time |
+| Frozen K=1 v3 quality | **1/20 pass**, 6/20 evaluated | 20/20 accepted with no unexplained case |
+| Frozen K=1 v3 production | **13/20 complete**, 4 running, 3 queued | 20/20 science artifacts sealed |
+| Earlier 0--200 expansion | **5/15 accepted**, 10 classified failures; GF42 remains outside the sealed count | Every failure repaired and requalified |
+| First causal production fix | **151x lower iteration-1 map error**, focused guards 12/12 | Complete GF38 0--200 native-envelope audit |
+| Runtime | **0/6 comparable**; current range **6.42--9.40x RELION** | Comparable same-H100 wall time |
 | K>1 / real data | Existing short K=2/K=4 panels pass; final campaign deliberately deferred | Requalify after K=1 closes |
 | CLI / GUI | Unified backend/default contract exists | Final defaults and important controls requalified |
+
+### Latest change
+
+The first exact production defect is repaired locally at unpushed commit
+`6387ff7c9`: the oversampling-zero big-JIT now preserves RELION's retained
+coarse posterior mass. Exact-H100 iteration-1 evidence improves posterior
+relative-L2 **258x**, noise relative-L2 **343x**, and map relative-L2 **151x**.
+Full 0--200 promotion task `13008433_1` has cleared the reference-H100 and
+qualified CUDA/FFI gates. Its CUDA binary is a private read-only copy with the
+pinned digest, so the previous stale-timestamp auto-build cannot recur.
+
+### What is still failing
+
+| Failure class | Current evidence | Next closure gate |
+|---|---|---|
+| Map/particle parity | GF43, GF46, GF48; GF45 needs authoritative seeded re-audit | classify earliest boundary and repair without changing gates |
+| Controller topology | GF47 and GF48 diverge before an admissible native branch | reproduce RELION schedule decisions exactly |
+| Runtime | every audited v3 case is 6.42--9.40x slower | profile only after a repaired trajectory passes end to end |
+| Coverage | 14/20 v3 cases not yet audited | finish science and dependent focused audits |
 
 No tolerance, baseline, or denominator has been widened to obtain a pass.
 Native-repeat envelopes are used only when RELION itself branches; a candidate
@@ -97,9 +134,14 @@ Exact-GPU task `13007504_1` changes aggregate `noise_sumw` from `200.0` to
 `199.676544`, within `6.1e-5` of the independently inferred native value.
 The target posterior mass is `0.99811662` versus native `0.99811831`, with
 identical support and argmax.  Iteration-1 noise relative-L2 improves 343x and
-the map improves 151x.  This implementation remains isolated and unpushed;
-full 0--200 task `13008037_2` is running on the reference GPU and is the
-promotion gate against the existing four-repeat native envelope.
+the map improves 151x. This implementation remains isolated and unpushed.
+Arrays `13007637` and `13008037` exited 75 before science because Slurm
+assigned non-reference GPUs. Task `13008278_1` reached the reference GPU but
+was canceled before science when a stale-timestamp check attempted to rebuild
+the shared qualified CUDA binary; the shared digest remained unchanged. Safe
+replacement task `13008433_1` uses a private, read-only, digest-pinned CUDA
+copy, has cleared the reference-H100 and CUDA/FFI gates, and is the full 0--200
+promotion against the existing four-repeat native envelope.
 
 Key sealed evidence:
 
@@ -127,7 +169,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Promote repaired GF38 posterior mass through 0--200 | science 13008037_2 running on reference H100; audit submits after completion | complete map/state/schedule/native-envelope acceptance |
+| 1 | Promote repaired GF38 posterior mass through 0--200 | science `13008433_1` passed reference-H100 + CUDA/FFI gates; audit submits after completion | complete map/state/schedule/native-envelope acceptance |
 | 2 | Seeded GF29 / GF43 / GF45 calibrated audits | 13002876 / 13002877 / 13004501 pending | authoritative map/state/schedule results |
 | 3 | GF49--GF62 trajectory matrix | science 12996103; audit 12999424 | every row terminal and sealed |
 | 4 | GF41 authoritative re-audit | 12999430 pending | calibrated particle-state result |
