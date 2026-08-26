@@ -390,6 +390,25 @@ posterior/support differences from scatter/reduction arithmetic.  This is a
 diagnostic result only; no production change was made or pushed, and no generic
 RECOVAR full or long suite was run.
 
+GF47 (extreme outliers with uniform poses and white noise, seed 29) passes the
+complete 0--200 calibrated map and particle envelopes but fails controller
+topology.  All map checkpoints pass with minimum candidate-to-best-native
+FSC-AUC `0.9982383861`; minimum candidate-minus-best/worst-native GT deltas are
+`-0.0014346773` / `-0.0000222320` within a maximum native GT span of
+`0.0014187309`.  Particle state never exceeds the native-repeat ceiling, and
+native hard state first splits at iteration 25.  The candidate nevertheless
+uses a different offset range beginning at iteration 10, before native hard
+divergence, so both the pre-divergence topology and strict adaptive-schedule
+gates fail there.  RECOVAR wall time is `1920.9` seconds versus a `299.1`
+second same-H100 native median (`6.42x`).  Map, state, and combined-status
+SHA-256 values are
+`f324ed0d333b03a9b2f08a75069d228581cdc7a4694b0979643cec8bee67def5`,
+`2120cc1a45e7c356d05e43d09b88b34c57b96e3154cddfba433495eaa7d918b0`,
+and
+`d32bbb6f63ea1d394a7ada6f24d00c37f83cf5eda4acc633f7061c7b8df46d07`.
+Thus GF47 is a schedule-equivalence and runtime failure despite acceptable map
+quality and hard particle state.
+
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
 `vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC
