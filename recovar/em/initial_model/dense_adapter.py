@@ -124,6 +124,29 @@ def _initial_model_relion_f32_coarse_tie_ulps() -> int:
     return value
 
 
+def _initial_model_relion_f32_fine_posterior_enabled(
+    *,
+    n_classes: int,
+    relion_bpref_frame: bool,
+    oversampling_order: int,
+    backend_enabled: bool,
+) -> bool:
+    """Use the pruned native fine posterior only for an oversampled pass 2.
+
+    RELION still executes a symbolic second pass when adaptive oversampling is
+    zero, but that pass reconstructs every coarse sample selected by pass 1.
+    Its coarse normalization is already supplied separately, so the pruned
+    float32 fine-posterior kernel is neither required nor compatible there.
+    """
+
+    return bool(
+        int(n_classes) == 1
+        and relion_bpref_frame
+        and int(oversampling_order) > 0
+        and backend_enabled
+    )
+
+
 def _compact_sparse_pass2_enabled(n_classes: int, pass2_engine: str = "auto") -> bool:
     """Resolve the InitialModel pass-2 engine without changing K=1 defaults.
 
@@ -1167,10 +1190,11 @@ def _run_sparse_pass2_initial_model_estep(
                     # x=0 enforcement and layout expansion avoid compiling two
                     # new volume-shaped JAX programs at every resolution step.
                     host_accumulator_finalize=True,
-                    relion_f32_fine_posterior=bool(
-                        state.K == 1
-                        and config.relion_bpref_frame
-                        and sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled()
+                    relion_f32_fine_posterior=_initial_model_relion_f32_fine_posterior_enabled(
+                        n_classes=state.K,
+                        relion_bpref_frame=config.relion_bpref_frame,
+                        oversampling_order=oversampling_order,
+                        backend_enabled=sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled(),
                     ),
                     # RELION's symbolic pass 2 at os0 retains every sample selected
                     # by pass 1. It does not apply another adaptive-fraction prune.

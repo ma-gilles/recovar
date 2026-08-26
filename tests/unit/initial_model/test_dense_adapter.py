@@ -15,6 +15,7 @@ from recovar.em.initial_model.dense_adapter import (
     _estep_meta,
     _initial_model_pass2_layout,
     _initial_model_relion_f32_coarse_tie_ulps,
+    _initial_model_relion_f32_fine_posterior_enabled,
     _relion_projector_to_dense_volume,
     _resolve_class_inputs,
     _resolve_sparse_pass1_current_size,
@@ -38,6 +39,34 @@ def test_initial_model_coarse_tie_ulp_diagnostic_override(monkeypatch):
     monkeypatch.setenv(variable, "17")
     with pytest.raises(ValueError, match=r"must be in \[0, 16\]"):
         _initial_model_relion_f32_coarse_tie_ulps()
+
+
+@pytest.mark.parametrize(
+    ("n_classes", "relion_bpref_frame", "oversampling_order", "backend_enabled", "expected"),
+    [
+        (1, True, 1, True, True),
+        (1, True, 0, True, False),
+        (1, True, 1, False, False),
+        (1, False, 1, True, False),
+        (2, True, 1, True, False),
+    ],
+)
+def test_initial_model_f32_fine_posterior_excludes_zero_oversampling(
+    n_classes,
+    relion_bpref_frame,
+    oversampling_order,
+    backend_enabled,
+    expected,
+):
+    assert (
+        _initial_model_relion_f32_fine_posterior_enabled(
+            n_classes=n_classes,
+            relion_bpref_frame=relion_bpref_frame,
+            oversampling_order=oversampling_order,
+            backend_enabled=backend_enabled,
+        )
+        is expected
+    )
 
 
 def test_coarse_significance_batch_is_unchanged_for_small_pose_grids():
