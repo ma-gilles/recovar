@@ -52,12 +52,16 @@ def _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction: float):
     )
 
 
-@partial(jax.jit, static_argnames=("adaptive_fraction", "max_significants"))
+@partial(
+    jax.jit,
+    static_argnames=("adaptive_fraction", "max_significants", "tie_score_ulps"),
+)
 def relion_cuda_f32_coarse_posterior(
     scores_flat,
     *,
     adaptive_fraction=0.999,
     max_significants=500,
+    tie_score_ulps=0,
 ):
     """Reproduce RELION CUDA coarse-weight and significance arithmetic.
 
@@ -67,9 +71,16 @@ def relion_cuda_f32_coarse_posterior(
     inclusive float32 scan to select the lower-tail cutoff.  The surviving
     weights remain normalized by the full, pre-pruning sum.
 
-    ``cutoff_count`` is the pre-tie rank serialized by RELION.  ``mask`` and
+    ``cutoff_count`` is the pre-tie rank serialized by RELION. ``mask`` and
     ``n_significant`` include every positive weight tied at the cutoff.
+    ``tie_score_ulps`` optionally absorbs a small score-level atomic-rounding
+    envelope below that exact cutoff; fresh InitialModel uses this only for
+    its source-faithful K=1 coarse CUDA boundary.
     """
+
+    tie_score_ulps = int(tie_score_ulps)
+    if tie_score_ulps < 0:
+        raise ValueError("tie_score_ulps must be non-negative")
 
     scores_f32 = jnp.asarray(scores_flat, dtype=jnp.float32)
     finite = jnp.isfinite(scores_f32)
@@ -133,6 +144,23 @@ def relion_cuda_f32_coarse_posterior(
     mask = has_mass[:, None] & (raw_weights > jnp.float32(0.0)) & (
         raw_weights >= threshold[:, None]
     )
+    if tie_score_ulps > 0:
+        cutoff_score = jnp.min(
+            jnp.where(mask, scores_f32, jnp.float32(jnp.inf)),
+            axis=1,
+        )
+        expanded_cutoff_score = cutoff_score
+        for _ in range(tie_score_ulps):
+            expanded_cutoff_score = jnp.nextafter(
+                expanded_cutoff_score,
+                jnp.full_like(expanded_cutoff_score, -jnp.inf),
+            )
+        mask = mask | (
+            has_mass[:, None]
+            & finite
+            & (raw_weights > jnp.float32(0.0))
+            & (scores_f32 >= expanded_cutoff_score[:, None])
+        )
     safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
     if use_native_cuda:
         probabilities = jax.vmap(cuda_backproject.relion_divide_f32)(

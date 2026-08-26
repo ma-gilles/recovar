@@ -933,6 +933,18 @@ def _run_sparse_pass2_initial_model_estep(
                 use_exact_relion_projector
                 and _uses_relion_cuda_image_preprocessing(group_dataset)
             ),
+            # RELION's source build keeps exact threshold ties, while the
+            # equivalent standalone coarse scorer can move the last retained
+            # K=1 sample by up to two float32 score ULPs as its atomics are
+            # scheduled in a separate launch. Preserve the native inclusive
+            # support envelope without changing supplied-map EM.
+            relion_f32_coarse_tie_ulps=(
+                2
+                if state.K == 1
+                and use_exact_relion_projector
+                and _uses_relion_cuda_image_preprocessing(group_dataset)
+                else 0
+            ),
             # VDAM changes its subset size almost every iteration. Keep the
             # coarse scorer's image axis fixed so JAX reuses one executable
             # instead of compiling each tail mini-batch shape.

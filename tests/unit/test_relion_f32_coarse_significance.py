@@ -98,6 +98,31 @@ def test_relion_cuda_f32_coarse_posterior_expands_cutoff_ties_after_rank_cap():
     np.testing.assert_array_equal(np.asarray(cutoff_count), [2])
 
 
+def test_initialmodel_coarse_support_absorbs_two_ulp_atomic_cutoff_split():
+    scores = np.asarray([[-350.5212707519531, -350.5213317871094]], dtype=np.float32)
+
+    _, strict_mask, strict_count, strict_cutoff, _, _ = relion_cuda_f32_coarse_posterior(
+        scores,
+        adaptive_fraction=0.999,
+        max_significants=1,
+    )
+    _, expanded_mask, expanded_count, expanded_cutoff, _, _ = relion_cuda_f32_coarse_posterior(
+        scores,
+        adaptive_fraction=0.999,
+        max_significants=1,
+        tie_score_ulps=2,
+    )
+
+    np.testing.assert_array_equal(np.asarray(strict_mask), [[True, False]])
+    np.testing.assert_array_equal(np.asarray(strict_count), [1])
+    np.testing.assert_array_equal(np.asarray(strict_cutoff), [1])
+    np.testing.assert_array_equal(np.asarray(expanded_mask), [[True, True]])
+    np.testing.assert_array_equal(np.asarray(expanded_count), [2])
+    # RELION serializes the pre-tie rank even when threshold ties expand the
+    # materialized support.
+    np.testing.assert_array_equal(np.asarray(expanded_cutoff), [1])
+
+
 def test_relion_cuda_f32_tail_target_preserves_text_to_float_semantics():
     sum_weight = np.asarray([2.8323050236340316e22], dtype=np.float32)
     target = np.asarray(_relion_cuda_f32_tail_target(sum_weight, 0.999))

@@ -2015,6 +2015,7 @@ def _compute_k_class_significance_batched(
     coarse_rotation_ids=None,
     translation_phase_source=None,
     relion_coarse_gaussian_default: bool = False,
+    relion_f32_coarse_tie_ulps: int = 0,
     pad_final_image_batch: bool = False,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
@@ -3669,6 +3670,7 @@ def _compute_k_class_significance_batched(
                     batch_values,
                     adaptive_fraction=float(adaptive_fraction),
                     max_significants=max_significants,
+                    tie_score_ulps=int(relion_f32_coarse_tie_ulps),
                 )
                 relion_f32_sum_weight[start_idx:end_idx] = np.asarray(
                     _batch_sum_weight[:actual_batch_size],

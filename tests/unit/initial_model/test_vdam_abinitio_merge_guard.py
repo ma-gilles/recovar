@@ -719,6 +719,7 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
             "def _class_direction_rotation_log_prior",
             "class_rotation_log_prior",
             "out[positive] = np.log(values[positive])",
+            "relion_f32_coarse_tie_ulps=(",
             "rotation_log_prior=_class_pass2_rotation_log_prior(group_kwargs, class_index)",
             "local_layout = tuple(local_layouts)",
             "allow_empty=True",
