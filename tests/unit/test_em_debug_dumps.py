@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.debug_dumps import _save_iteration_particle_states
+from recovar.em.dense_single_volume.debug_dumps import (
+    _maybe_save_k1_internal_fourier_references,
+    _save_iteration_particle_states,
+)
 
 
 def _per_half(value1, value2):
@@ -62,4 +65,54 @@ def test_save_iteration_particle_states_rejects_misaligned_fields(tmp_path):
             hard_assignments_per_half=one,
             coarse_hard_assignments_per_half=one,
             original_image_indices_per_half=one,
+        )
+
+
+def test_save_k1_internal_fourier_references_is_exact_and_iteration_gated(tmp_path, monkeypatch):
+    output_dir = tmp_path / "internal_maps"
+    monkeypatch.setenv("RECOVAR_K1_INTERNAL_FOURIER_DUMP_DIR", str(output_dir))
+    monkeypatch.setenv("RECOVAR_K1_INTERNAL_FOURIER_DUMP_ITERATION", "1")
+    means = [
+        np.asarray([1 + 2j, 3 + 4j], dtype=np.complex64),
+        np.asarray([5 + 6j, 7 + 8j], dtype=np.complex128),
+    ]
+
+    _maybe_save_k1_internal_fourier_references(
+        iteration=0,
+        means=means,
+        k_class_enabled=False,
+    )
+    assert not output_dir.exists()
+
+    _maybe_save_k1_internal_fourier_references(
+        iteration=1,
+        means=means,
+        k_class_enabled=False,
+    )
+
+    for half_index, expected in enumerate(means, start=1):
+        path = output_dir / f"it001_half{half_index}_mean_ft.npz"
+        with np.load(path, allow_pickle=False) as payload:
+            actual = payload["mean_vol_ft"]
+        assert actual.dtype == expected.dtype
+        np.testing.assert_array_equal(actual, expected)
+
+
+def test_save_k1_internal_fourier_references_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECOVAR_K1_INTERNAL_FOURIER_DUMP_DIR", str(tmp_path))
+    means = [np.ones(2, dtype=np.complex64), np.ones(2, dtype=np.complex64)]
+
+    with pytest.raises(ValueError, match="DUMP_ITERATION.*required"):
+        _maybe_save_k1_internal_fourier_references(
+            iteration=0,
+            means=means,
+            k_class_enabled=False,
+        )
+
+    monkeypatch.setenv("RECOVAR_K1_INTERNAL_FOURIER_DUMP_ITERATION", "0")
+    with pytest.raises(ValueError, match="restricted to K=1"):
+        _maybe_save_k1_internal_fourier_references(
+            iteration=0,
+            means=means,
+            k_class_enabled=True,
         )

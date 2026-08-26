@@ -29,11 +29,64 @@ from recovar.em.sampling import rotation_grid_size
 
 logger = logging.getLogger(__name__)
 
+_K1_INTERNAL_FOURIER_DUMP_DIR_ENV = "RECOVAR_K1_INTERNAL_FOURIER_DUMP_DIR"
+_K1_INTERNAL_FOURIER_DUMP_ITERATION_ENV = "RECOVAR_K1_INTERNAL_FOURIER_DUMP_ITERATION"
+
 
 def _dump_array_or_empty(arr):
     if arr is None:
         return np.empty(0, dtype=np.float32)
     return np.asarray(arr)
+
+
+def _maybe_save_k1_internal_fourier_references(*, iteration: int, means, k_class_enabled: bool) -> None:
+    """Save one exact in-memory K=1 half-map boundary when explicitly requested."""
+
+    output_dir = os.environ.get(_K1_INTERNAL_FOURIER_DUMP_DIR_ENV, "").strip()
+    if not output_dir:
+        return
+    iteration_text = os.environ.get(_K1_INTERNAL_FOURIER_DUMP_ITERATION_ENV, "").strip()
+    if not iteration_text:
+        raise ValueError(
+            f"{_K1_INTERNAL_FOURIER_DUMP_ITERATION_ENV} is required when "
+            f"{_K1_INTERNAL_FOURIER_DUMP_DIR_ENV} is set"
+        )
+    try:
+        target_iteration = int(iteration_text)
+    except ValueError as exc:
+        raise ValueError(
+            f"{_K1_INTERNAL_FOURIER_DUMP_ITERATION_ENV} must be an integer"
+        ) from exc
+    if target_iteration < 0:
+        raise ValueError(f"{_K1_INTERNAL_FOURIER_DUMP_ITERATION_ENV} must be non-negative")
+    if int(iteration) != target_iteration:
+        return
+    if k_class_enabled:
+        raise ValueError("exact internal Fourier reference dumping is restricted to K=1")
+    if len(means) != 2:
+        raise ValueError(f"expected two K=1 half references, got {len(means)}")
+
+    os.makedirs(output_dir, exist_ok=True)
+    for half_index, mean in enumerate(means, start=1):
+        value = np.asarray(mean)
+        if not np.issubdtype(value.dtype, np.complexfloating) or not np.isfinite(value).all():
+            raise ValueError(f"half {half_index} internal reference must be finite complex data")
+        output_path = os.path.join(
+            output_dir,
+            f"it{int(iteration):03d}_half{half_index}_mean_ft.npz",
+        )
+        if os.path.exists(output_path):
+            raise FileExistsError(f"refusing to overwrite internal Fourier reference: {output_path}")
+        temporary_path = output_path + ".tmp.npz"
+        if os.path.exists(temporary_path):
+            raise FileExistsError(f"refusing to overwrite temporary Fourier reference: {temporary_path}")
+        np.savez(temporary_path, mean_vol_ft=value)
+        os.replace(temporary_path, output_path)
+    logger.info(
+        "Saved exact internal K=1 Fourier references to %s (iteration %d)",
+        output_dir,
+        iteration,
+    )
 
 
 def _save_iteration_intermediates(
@@ -92,6 +145,11 @@ def _save_iteration_intermediates(
                     from_ft=True,
                     voxel_size=voxel_size,
                 )
+    _maybe_save_k1_internal_fourier_references(
+        iteration=iteration,
+        means=means,
+        k_class_enabled=k_class_enabled,
+    )
     np.save(
         os.path.join(save_dir, f"it{iteration:03d}_fsc.npy"),
         np.asarray(fsc) if fsc is not None else np.array([], dtype=np.float32),
