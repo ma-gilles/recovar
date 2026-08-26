@@ -271,6 +271,13 @@ The remaining native-PPref fused-score residual is real but smaller: maximum
 `0.0106812`, RMS `0.0044966`.  Report/capture SHA-256 values are
 `61d99529d4c2dab21eaf5a56921f7920cb889a1b45d963bc0a2b0d215c949d9c` and
 `ce6e223de78457c502da5ee88255a0be992bf1873725aa0f2b1bb4b15d75989c`.
+The next bounded GF38 gate is the iteration-1 oversampling-zero M-step: the
+iteration-0 maps are bit-identical and particle winners still match, but the
+first reconstructed maps differ by relative L2 `4.9073e-4` (`2.7642e-4`
+after optimal scaling).  The existing fail-closed full-schedule M-step runner
+will be parameterized for the frozen case and will compare both pseudo-half
+raw BPref accumulators, gradient moments, SSNR arrays, and reconstructed
+reference before any production change.
 
 Expanded v3 science GF43--GF45 completed in jobs `12996115`--`12996117`;
 GF46--GF49 are running and GF50--GF62 remain queued.  Pending science excludes
