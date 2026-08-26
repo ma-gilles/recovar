@@ -327,7 +327,7 @@ def test_identical_euler_arrays_have_exact_zero_angular_error():
 
 @pytest.mark.unit
 def test_cli_writes_versioned_json_and_has_explicit_help(tmp_path):
-    results, source, relion, _control = _fixture(tmp_path)
+    results, source, relion, control = _fixture(tmp_path)
     output = tmp_path / "audit.json"
 
     status = auditor.main(
@@ -338,6 +338,8 @@ def test_cli_writes_versioned_json_and_has_explicit_help(tmp_path):
             str(source),
             "--relion-star",
             str(relion),
+            "--relion-control-star",
+            str(control),
             "--output-json",
             str(output),
         ]
@@ -353,6 +355,10 @@ def test_cli_writes_versioned_json_and_has_explicit_help(tmp_path):
         assert str(arrays["schema"]) == auditor.ARRAY_SCHEMA
         assert "it001_pmax_delta" in arrays.files
         assert "it001_rotation_view_deg" in arrays.files
+        assert "it001_control_pmax_candidate" in arrays.files
+        assert "it001_control_pmax_reference" in arrays.files
+        assert "it001_control_pmax_delta" in arrays.files
+        assert "it001_control_support_delta" in arrays.files
     manifest = manifest_path.read_text()
     assert str(output.resolve()) in manifest
     assert str(arrays_path.resolve()) in manifest

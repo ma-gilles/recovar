@@ -143,6 +143,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _rectangular_active_prematmul_is_efficient,
     _relion_cuda_corr_img_from_native_noise_variance,
     _relion_cuda_corr_img_from_rfloat_ctf,
+    _relion_cuda_native_corr_img_from_noise_variance,
     _relion_cuda_pixel_correction_from_rfloat_ctf,
     _relion_fine_mstep_prune_mode,
     _relion_joint_winner_take_all_masks,
@@ -273,6 +274,16 @@ def test_relion_corr_img_converts_noise_units_after_native_xfloat_product():
         )
     )
     np.testing.assert_array_equal(actual, expected)
+
+    actual_native = np.asarray(
+        _relion_cuda_native_corr_img_from_noise_variance(
+            recovar_noise_variance,
+            ctf_rfloat,
+            image_shape,
+            scale,
+        )
+    )
+    np.testing.assert_array_equal(actual_native, native_corr)
 
 
 def test_relion_pixel_correction_divides_by_rfloat_ctf_before_xfloat_cast():

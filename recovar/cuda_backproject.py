@@ -525,6 +525,9 @@ _TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
 _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_rectangular_f32"
 )
+_TARGET_RELION_COARSE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
+    "cuda_relion_coarse_diff2_fused_translate_rectangular_f32"
+)
 _TARGET_RELION_COARSE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_native_texture_rectangular_f32"
 )
@@ -539,6 +542,9 @@ _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32 = (
 )
 _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_fused_translate_rectangular_f32"
+)
+_TARGET_RELION_FINE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32 = (
+    "cuda_relion_fine_diff2_native_texture_rectangular_f32"
 )
 _TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
 _TARGET_RELION_EXPONENTIATE_F32 = "cuda_relion_exponentiate_f32"
@@ -596,6 +602,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionCoarseDiff2RectangularF32",
     ),
     (
+        _TARGET_RELION_COARSE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32,
+        "RelionCoarseDiff2FusedTranslateRectangularF32",
+    ),
+    (
         _TARGET_RELION_COARSE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32,
         "RelionCoarseDiff2NativeTextureRectangularF32",
     ),
@@ -614,6 +624,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32,
         "RelionFineDiff2FusedTranslateRectangularF32",
+    ),
+    (
+        _TARGET_RELION_FINE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32,
+        "RelionFineDiff2NativeTextureRectangularF32",
     ),
     (_TARGET_RELION_FINE_DIFF2_PAIRS_F32, "RelionFineDiff2PairsF32"),
     (_TARGET_RELION_EXPONENTIATE_F32, "RelionExponentiateF32"),
@@ -1532,13 +1546,15 @@ def _validate_relion_fine_diff2_inputs(
     _ensure_ffi()
 
 
-@jax.jit
+@functools.partial(jax.jit, static_argnames=("serial_particle_launches",))
 def relion_coarse_diff2_rectangular_f32(
     reference: jax.Array,
     shifted_image: jax.Array,
     weight: jax.Array,
     initial_diff2: jax.Array,
     full_to_compact: jax.Array,
+    *,
+    serial_particle_launches: bool = False,
 ) -> jax.Array:
     """Evaluate RELION's coarse Gaussian CUDA reduction topology.
 
@@ -1547,7 +1563,9 @@ def relion_coarse_diff2_rectangular_f32(
     ``full_to_compact=(F,)``. The kernel uses RELION's 128-thread,
     16-orientation blocks and its native per-translation lane assignment. The
     lane partials are combined with CUDA atomics on top of the supplied
-    high-resolution image term, as in RELION's coarse scorer.
+    high-resolution image term, as in RELION's coarse scorer. The optional
+    serial launch mode is a bounded parity diagnostic that emits one complete
+    CUDA grid per particle, matching RELION's host launch granularity.
     """
 
     _validate_relion_fine_diff2_inputs(
@@ -1590,7 +1608,115 @@ def relion_coarse_diff2_rectangular_f32(
         _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
         out_type,
         vmap_method="sequential",
-    )(reference, shifted_image, weight, initial_diff2, full_to_compact)
+    )(
+        reference,
+        shifted_image,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        serial_particle_launches=np.int64(bool(serial_particle_launches)),
+    )
+
+
+@functools.partial(jax.jit, static_argnames=("current_size",))
+def relion_coarse_diff2_fused_translate_rectangular_f32(
+    reference: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+    *,
+    current_size: int,
+) -> jax.Array:
+    """Evaluate RELION's fused coarse translation and Gaussian score.
+
+    Shapes are ``reference=(R,N)``, ``image=(B,N)``,
+    ``translation_angles=(T,2)``, ``weight=(B,N)``,
+    ``initial_diff2=(B,)``, and ``full_to_compact=(F,)``. The kernel keeps
+    the shared reference layout used by the coarse pass while translating
+    each particle inside RELION's 128-thread, 16-orientation score block.
+    """
+
+    reference = jnp.asarray(reference)
+    image = jnp.asarray(image)
+    translation_angles = jnp.asarray(translation_angles)
+    weight = jnp.asarray(weight)
+    initial_diff2 = jnp.asarray(initial_diff2)
+    full_to_compact = jnp.asarray(full_to_compact)
+    if reference.dtype != jnp.complex64 or image.dtype != jnp.complex64:
+        raise TypeError(
+            "fused RELION coarse diff2 reference/image must be complex64, got "
+            f"{reference.dtype} and {image.dtype}"
+        )
+    if (
+        translation_angles.dtype != jnp.float32
+        or weight.dtype != jnp.float32
+        or initial_diff2.dtype != jnp.float32
+    ):
+        raise TypeError(
+            "fused RELION coarse diff2 angles/weight/initial must be float32, got "
+            f"{translation_angles.dtype}, {weight.dtype}, and {initial_diff2.dtype}"
+        )
+    if full_to_compact.dtype != jnp.int32:
+        raise TypeError(
+            f"fused RELION coarse diff2 lookup must be int32, got {full_to_compact.dtype}"
+        )
+    if (
+        reference.ndim != 2
+        or image.ndim != 2
+        or translation_angles.ndim != 2
+        or translation_angles.shape[1] != 2
+        or weight.ndim != 2
+        or initial_diff2.ndim != 1
+        or full_to_compact.ndim != 1
+        or image.shape != weight.shape
+        or reference.shape[1] != image.shape[1]
+        or initial_diff2.shape != (image.shape[0],)
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or image.shape[0] <= 0
+        or translation_angles.shape[0] <= 0
+        or translation_angles.shape[0] > 128
+    ):
+        raise ValueError(
+            "fused RELION coarse diff2 operands have inconsistent shapes or "
+            "more than 128 translations: "
+            f"{reference.shape}, {image.shape}, {translation_angles.shape}, "
+            f"{weight.shape}, {initial_diff2.shape}, {full_to_compact.shape}"
+        )
+    current_size = int(current_size)
+    expected_full_pixels = current_size * (current_size // 2 + 1)
+    if current_size <= 0 or full_to_compact.shape != (expected_full_pixels,):
+        raise ValueError(
+            "fused RELION coarse diff2 lookup does not match current_size: "
+            f"current_size={current_size}, lookup={full_to_compact.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("fused RELION coarse diff2 requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "fused RELION coarse diff2 was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    out_type = jax.ShapeDtypeStruct(
+        (image.shape[0], reference.shape[0], translation_angles.shape[0]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        reference,
+        image,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        current_size=current_size,
+    )
 
 
 @jax.jit
@@ -2034,6 +2160,139 @@ def relion_fine_diff2_fused_translate_rectangular_f32(
     )
 
 
+@functools.partial(
+    jax.jit,
+    static_argnames=("current_size", "padding_factor", "projector_max_r"),
+)
+def relion_fine_diff2_native_texture_rectangular_f32(
+    projector_full: jax.Array,
+    rotation_matrices: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+    *,
+    current_size: int,
+    padding_factor: int,
+    projector_max_r: int,
+) -> jax.Array:
+    """Evaluate RELION fine diff2 with native texture projection.
+
+    Shapes are ``projector_full=(P,P,P)``,
+    ``rotation_matrices=(B,R,3,3)``, ``image=(B,N)``,
+    ``translation_angles=(T,2)``, ``weight=(B,N)``,
+    ``initial_diff2=(B,)``, and ``full_to_compact=(F,)``.  Projection,
+    translation, the 256-lane fine reduction, and the high-resolution Xi2/2
+    addition execute in the same CUDA kernel topology as RELION's
+    ``cuda_kernel_diff2_fine<true,false,256,7>`` path.  The result has shape
+    ``(B,R,T)``.
+    """
+
+    projector_full = jnp.asarray(projector_full)
+    rotation_matrices = jnp.asarray(rotation_matrices)
+    image = jnp.asarray(image)
+    translation_angles = jnp.asarray(translation_angles)
+    weight = jnp.asarray(weight)
+    initial_diff2 = jnp.asarray(initial_diff2)
+    full_to_compact = jnp.asarray(full_to_compact)
+    if projector_full.dtype != jnp.complex64 or image.dtype != jnp.complex64:
+        raise TypeError(
+            "native-texture RELION fine diff2 projector/image must be "
+            f"complex64, got {projector_full.dtype} and {image.dtype}"
+        )
+    if (
+        rotation_matrices.dtype != jnp.float32
+        or translation_angles.dtype != jnp.float32
+        or weight.dtype != jnp.float32
+        or initial_diff2.dtype != jnp.float32
+    ):
+        raise TypeError(
+            "native-texture RELION fine diff2 rotations/angles/weight/initial "
+            "must be float32"
+        )
+    if full_to_compact.dtype != jnp.int32:
+        raise TypeError(
+            "native-texture RELION fine diff2 lookup must be int32, got "
+            f"{full_to_compact.dtype}"
+        )
+    if (
+        projector_full.ndim != 3
+        or projector_full.shape[0] <= 0
+        or projector_full.shape[1:] != (projector_full.shape[0], projector_full.shape[0])
+        or rotation_matrices.ndim != 4
+        or rotation_matrices.shape[2:] != (3, 3)
+        or image.ndim != 2
+        or translation_angles.ndim != 2
+        or translation_angles.shape[1] != 2
+        or weight.ndim != 2
+        or initial_diff2.ndim != 1
+        or full_to_compact.ndim != 1
+        or rotation_matrices.shape[0] != image.shape[0]
+        or rotation_matrices.shape[0] != weight.shape[0]
+        or rotation_matrices.shape[0] != initial_diff2.shape[0]
+        or image.shape != weight.shape
+        or rotation_matrices.shape[0] <= 0
+        or rotation_matrices.shape[1] <= 0
+        or image.shape[1] <= 0
+        or translation_angles.shape[0] <= 0
+    ):
+        raise ValueError(
+            "native-texture RELION fine diff2 operands have inconsistent "
+            f"shapes: projector={projector_full.shape}, "
+            f"rotations={rotation_matrices.shape}, image={image.shape}, "
+            f"angles={translation_angles.shape}, weight={weight.shape}, "
+            f"initial={initial_diff2.shape}, lookup={full_to_compact.shape}"
+        )
+    current_size = int(current_size)
+    padding_factor = int(padding_factor)
+    projector_max_r = int(projector_max_r)
+    expected_full_pixels = current_size * (current_size // 2 + 1)
+    if current_size <= 0 or full_to_compact.shape != (expected_full_pixels,):
+        raise ValueError(
+            "native-texture RELION fine diff2 lookup does not match "
+            f"current_size={current_size}: {full_to_compact.shape}"
+        )
+    if padding_factor <= 0 or projector_max_r <= 0:
+        raise ValueError(
+            "native-texture RELION fine diff2 needs positive padding_factor "
+            f"and projector_max_r, got {padding_factor} and {projector_max_r}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("native-texture RELION fine diff2 requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "native-texture RELION fine diff2 was explicitly requested but "
+            "custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    out_type = jax.ShapeDtypeStruct(
+        (
+            rotation_matrices.shape[0],
+            rotation_matrices.shape[1],
+            translation_angles.shape[0],
+        ),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        projector_full,
+        rotation_matrices,
+        image,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        current_size=current_size,
+        padding_factor=padding_factor,
+        projector_max_r=projector_max_r,
+    )
+
+
 @jax.jit
 def relion_fine_diff2_pairs_f32(
     reference: jax.Array,
@@ -2450,7 +2709,6 @@ def relion_fused_x_half_backproject_indexed(
     )
 
 
-@functools.partial(jax.jit, static_argnums=(10, 11, 12))
 def relion_firstiter_bpref_fused_x_half(
     data_volume: jax.Array,
     weight_volume: jax.Array,
@@ -2462,6 +2720,43 @@ def relion_firstiter_bpref_fused_x_half(
     native_euler_matrices: jax.Array,
     significant_weight: jax.Array,
     weight_norm: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, jax.Array]:
+    """Dispatch the exact-source kernel with host-known scalar attributes."""
+
+    significant_weight_scalar = float(np.asarray(significant_weight).reshape(()))
+    weight_norm_scalar = float(np.asarray(weight_norm).reshape(()))
+    return _relion_firstiter_bpref_fused_x_half_static(
+        data_volume,
+        weight_volume,
+        image,
+        ctf,
+        minvsigma2,
+        posterior,
+        translation_angles,
+        native_euler_matrices,
+        significant_weight_scalar,
+        weight_norm_scalar,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(8, 9, 10, 11, 12))
+def _relion_firstiter_bpref_fused_x_half_static(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    image: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    native_euler_matrices: jax.Array,
+    significant_weight: float,
+    weight_norm: float,
     image_shape: Tuple[int, int],
     volume_shape: Tuple[int, int, int],
     max_r: float,
@@ -2519,14 +2814,10 @@ def relion_firstiter_bpref_fused_x_half(
             f"shape {(posterior.shape[0], 3, 3)}, got "
             f"{native_euler_matrices.shape}/{native_euler_matrices.dtype}"
         )
-    for label, value in (
-        ("significant_weight", significant_weight),
-        ("weight_norm", weight_norm),
-    ):
-        if value.dtype != jnp.dtype(jnp.float32) or value.shape != (1,):
-            raise TypeError(
-                f"RELION firstiter fused BPref {label} must be a one-element float32 vector"
-            )
+    if not np.isfinite(significant_weight) or not np.isfinite(weight_norm):
+        raise ValueError("RELION firstiter fused BPref scalar attributes must be finite")
+    if weight_norm <= 0.0:
+        raise ValueError("RELION firstiter fused BPref weight norm must be positive")
     if data_volume.dtype != jnp.dtype(jnp.complex64) or data_volume.shape != (
         expected_volume_size,
     ):
@@ -2543,28 +2834,35 @@ def relion_firstiter_bpref_fused_x_half(
         )
 
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    kw["significant_weight"] = np.float32(significant_weight)
+    kw["weight_norm"] = np.float32(weight_norm)
+    data_volume_real = jnp.real(data_volume).astype(jnp.float32)
+    data_volume_imag = jnp.imag(data_volume).astype(jnp.float32)
     out_types = (
-        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(data_volume_real.shape, data_volume_real.dtype),
+        jax.ShapeDtypeStruct(data_volume_imag.shape, data_volume_imag.dtype),
         jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
     )
-    return jax.ffi.ffi_call(
+    data_real_out, data_imag_out, weight_out = jax.ffi.ffi_call(
         _TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF,
         out_types,
-        input_output_aliases={8: 0, 9: 1},
+        input_output_aliases={8: 0, 9: 1, 10: 2},
         vmap_method="sequential",
     )(
-        image,
+        jnp.real(image).astype(jnp.float32),
+        jnp.imag(image).astype(jnp.float32),
         ctf,
         minvsigma2,
         posterior,
-        translation_angles,
+        translation_angles[:, 0],
+        translation_angles[:, 1],
         native_euler_matrices.reshape(posterior.shape[0], 9),
-        significant_weight,
-        weight_norm,
-        data_volume,
+        data_volume_real,
+        data_volume_imag,
         weight_volume,
         **kw,
     )
+    return jax.lax.complex(data_real_out, data_imag_out), weight_out
 
 
 @functools.partial(jax.jit, static_argnums=(8, 9, 10))

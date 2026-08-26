@@ -38,6 +38,59 @@ def test_relion_translation_angles_match_captured_float32_bits():
     )
 
 
+def test_relion_translation_angle_scale_changes_only_final_angle_operand():
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_translation_angles_f32,
+    )
+
+    translations = np.asarray([[0.25, -1.75]], dtype=np.float64)
+    baseline_translations = translations.copy()
+    angle_scale = np.float64("0.99999976470593788")
+    angles = _relion_translation_angles_f32(
+        translations,
+        (384, 384),
+        angle_scale=angle_scale,
+    )
+    expected = np.asarray(
+        -2.0 * np.pi * translations * angle_scale / 384.0,
+        dtype=np.float32,
+    )
+
+    np.testing.assert_array_equal(angles.view(np.uint32), expected.view(np.uint32))
+    np.testing.assert_array_equal(translations, baseline_translations)
+
+
+def test_relion_k1_translation_angle_scale_uses_model_over_optics_pixel_size():
+    from recovar.em.dense_single_volume.iteration_loop import (
+        _relion_k1_translation_angle_scale,
+    )
+
+    scale = _relion_k1_translation_angle_scale(
+        n_classes=1,
+        model_pixel_size=544.0 / 384.0,
+        optics_pixel_sizes=np.asarray([1.416667], dtype=np.float64),
+    )
+    assert scale == pytest.approx(0.99999976470593788, rel=0.0, abs=1e-16)
+    assert _relion_k1_translation_angle_scale(
+        n_classes=4,
+        model_pixel_size=544.0 / 384.0,
+        optics_pixel_sizes=np.asarray([1.416667], dtype=np.float64),
+    ) == 1.0
+
+
+def test_relion_k1_translation_angle_scale_rejects_heterogeneous_optics():
+    from recovar.em.dense_single_volume.iteration_loop import (
+        _relion_k1_translation_angle_scale,
+    )
+
+    with pytest.raises(NotImplementedError, match="one shared optics pixel size"):
+        _relion_k1_translation_angle_scale(
+            n_classes=1,
+            model_pixel_size=1.5,
+            optics_pixel_sizes=np.asarray([1.5, 1.6], dtype=np.float64),
+        )
+
+
 def test_relion_translation_cuda_source_preserves_explicit_arithmetic():
     source = (
         Path(__file__).resolve().parents[2]

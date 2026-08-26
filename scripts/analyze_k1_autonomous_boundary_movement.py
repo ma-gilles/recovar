@@ -10,7 +10,6 @@ from typing import Any
 
 import numpy as np
 
-
 SCHEMA = "recovar.em.k1_autonomous_boundary_movement.v1"
 POSE_THRESHOLD_DEG = 0.01
 TRANSLATION_THRESHOLD_ANGSTROM = 0.01

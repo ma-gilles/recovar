@@ -546,6 +546,19 @@ def _compact_error_arrays(rec: dict[str, Any], rel: dict[str, Any]) -> dict[str,
     return arrays
 
 
+def _compact_control_error_arrays(
+    control: dict[str, Any], reference: dict[str, Any]
+) -> dict[str, np.ndarray]:
+    """Return identity-aligned RELION-repeat arrays with unambiguous names."""
+
+    compact = _compact_error_arrays(control, reference)
+    renamed: dict[str, np.ndarray] = {}
+    for name, values in compact.items():
+        name = name.replace("_recovar", "_candidate").replace("_relion", "_reference")
+        renamed[f"control_{name}"] = values
+    return renamed
+
+
 def _binary_tail_enrichment(exposure: np.ndarray, pose_tail: np.ndarray) -> dict[str, Any]:
     """Summarize whether an identity-aligned exposure precedes a pose tail."""
     exposure = np.asarray(exposure, dtype=bool).reshape(-1)
@@ -1276,6 +1289,7 @@ def audit(
 
             control = _not_measured("no RELION/RELION control STAR supplied for this iteration")
             relative_to_control = _not_measured("no RELION/RELION control STAR supplied for this iteration")
+            compact_control_errors: dict[str, np.ndarray] = {}
             if control_stars and rel_iteration in control_stars:
                 control_state, _ = _load_relion_state(control_stars[rel_iteration], identities)
                 control_reference_state = rel_state
@@ -1291,6 +1305,9 @@ def audit(
                 )
                 relative_to_control = _control_error_comparison(
                     rec_state, rel_state, control_state, control_reference_state
+                )
+                compact_control_errors = _compact_control_error_arrays(
+                    control_state, control_reference_state
                 )
 
             compact_errors = _compact_error_arrays(rec_state, rel_state)
@@ -1315,7 +1332,7 @@ def audit(
                 artifact_arrays.update(
                     {
                         f"it{rel_iteration:03d}_{name}": value
-                        for name, value in compact_errors.items()
+                        for name, value in (compact_errors | compact_control_errors).items()
                     }
                 )
 

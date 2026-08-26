@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=k1c10-bpref16-r
+#SBATCH --job-name=k1-bpref-prefix-r
 #SBATCH --partition=cryoem
 #SBATCH --account=gilles
 #SBATCH --qos=della-cryoem
@@ -20,11 +20,23 @@ set -euo pipefail
 : "${EXPECTED_LAUNCHER_SHA256:?EXPECTED_LAUNCHER_SHA256 is required}"
 : "${EXPECTED_CUDA_LIB_SHA256:?EXPECTED_CUDA_LIB_SHA256 is required}"
 : "${ENABLE_LIVE_INITIAL_NOISE:?ENABLE_LIVE_INITIAL_NOISE is required}"
+: "${CASE_SOURCE:?CASE_SOURCE is required}"
+: "${CASE_NAME:?CASE_NAME is required}"
+: "${PREFIX_SELECTION_JSON:?PREFIX_SELECTION_JSON is required}"
+: "${EXPECTED_SELECTION_SHA256:?EXPECTED_SELECTION_SHA256 is required}"
+: "${EXPECTED_DATA_STAR_SHA256:?EXPECTED_DATA_STAR_SHA256 is required}"
+: "${PARTICLE_STACK:?PARTICLE_STACK is required}"
+: "${EXPECTED_STACK_SIZE:?EXPECTED_STACK_SIZE is required}"
+: "${CURRENT_SIZE:?CURRENT_SIZE is required}"
+: "${SEED:?SEED is required}"
 
 case "${ENABLE_LIVE_INITIAL_NOISE}" in
     0|1) ;;
     *) echo "ENABLE_LIVE_INITIAL_NOISE must be 0 or 1" >&2; exit 2 ;;
 esac
+[[ "${CURRENT_SIZE}" =~ ^[0-9]+$ ]]
+[[ "${SEED}" =~ ^[0-9]+$ ]]
+[[ "${EXPECTED_STACK_SIZE}" =~ ^[0-9]+$ ]]
 CAPTURE_HIGH_PRECISION_CONTRIBUTIONS=${CAPTURE_HIGH_PRECISION_CONTRIBUTIONS:-0}
 case "${CAPTURE_HIGH_PRECISION_CONTRIBUTIONS}" in
     0|1) ;;
@@ -48,11 +60,12 @@ if [[ "${CAPTURE_ACCUMULATOR_DELTA}" == 1 && \
 fi
 OFFSET_RANGE_PIXELS=${OFFSET_RANGE_PIXELS:-3.0}
 OFFSET_STEP_PIXELS=${OFFSET_STEP_PIXELS:-1.0}
+TRANSLATION_ANGLE_SCALE=${TRANSLATION_ANGLE_SCALE:-}
 
 ROOT=${RUN_ROOT}
 RUNTIME=${RUNTIME_ROOT}
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820
-CASE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0
+CASE=${CASE_SOURCE}
 DATA=${CASE}/data
 CONTROL=${CASE}/relion_ref
 PYTHON=${REPO}/.pixi/envs/default/bin/python
@@ -60,7 +73,6 @@ PIXI_ENV=${REPO}/.pixi/envs/default
 LAUNCHER=${REPO}/scripts/run_k1_case10_it1_bpref_panel16_recovar.sbatch
 CUDA_LIB=${CUDA_LIB_OVERRIDE:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_it1_bpref_fma_44d770de3_20260823T1938ET/cuda/libcuda_backproject.so}
 RELION_BIND=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET/relion_bind_build/shared
-ORIGINAL_INDICES=0,14275,28628,42698,57062,71399,85827,99997,3,14301,28522,43039,57231,71452,85593,99999
 CONTRIBUTIONS=${ROOT}/recovar/contributions
 ACCUM=${ROOT}/recovar/accum
 PREJOIN=${ROOT}/recovar/prejoin
@@ -68,12 +80,34 @@ ACCUMULATOR_DELTA=${ROOT}/recovar/accumulator_delta
 IMAGE_NAMES=${ROOT}/provenance/image_names.npy
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
+test -s "${PREFIX_SELECTION_JSON}"
+test "$(sha256sum "${PREFIX_SELECTION_JSON}" | awk '{print $1}')" = "${EXPECTED_SELECTION_SHA256}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO}" diff --binary -- recovar/em recovar/cuda/cuda_backproject.cu recovar/cuda_backproject.py scripts/run_full_refinement.py | sha256sum | awk '{print $1}')" = "${EXPECTED_SOURCE_DIFF_SHA256}"
 test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_LIB_SHA256}"
-test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = 3be82df3627e0d6c3c12d1eb42e1ab0c7feb09117bb66a38cc53c0621e9f8436
-test "$(stat -Lc %s "${DATA}/particles.384.mrcs")" = 58982401024
+test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = "${EXPECTED_DATA_STAR_SHA256}"
+test -s "${PARTICLE_STACK}"
+test "$(stat -Lc %s "${PARTICLE_STACK}")" = "${EXPECTED_STACK_SIZE}"
+readarray -t selection_values < <("${PYTHON}" - "${PREFIX_SELECTION_JSON}" "${CASE_NAME}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as stream:
+    selection = json.load(stream)
+assert selection["schema"] == "recovar-k1-bpref-prefix-selection-v2"
+assert selection["case"] == sys.argv[2]
+assert selection["physical_iteration"] == 1
+half1 = selection["half1"]["original_indices"]
+half2 = selection["half2"]["original_indices"]
+assert len(half1) > 0 and len(half1) == len(half2)
+assert len(set(half1 + half2)) == len(half1) + len(half2)
+print(",".join(str(value) for value in half1 + half2))
+print(len(half1) + len(half2))
+PY
+)
+ORIGINAL_INDICES=${selection_values[0]}
+SELECTION_COUNT=${selection_values[1]}
 
 mkdir -p "${ROOT}/recovar/output" "${ROOT}/recovar/pass2" "${ROOT}/logs" \
     "${ROOT}/provenance"
@@ -82,6 +116,7 @@ for directory in "${ROOT}/recovar/output" "${ROOT}/recovar/pass2"; do
 done
 mkdir -p "${RUNTIME}/tmp" "${RUNTIME}/pixi_home" "${RUNTIME}/rattler_cache" \
     "${RUNTIME}/pycache" "${RUNTIME}/jax_cache" "${RUNTIME}/cuda_cache"
+cp "${PREFIX_SELECTION_JSON}" "${ROOT}/provenance/prefix_selection.json"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
@@ -120,10 +155,13 @@ export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
 export RECOVAR_K1_RELION_FIRSTITER_FUSED_BPREF=${FIRSTITER_FUSED_BPREF:-1}
+if [[ -n "${TRANSLATION_ANGLE_SCALE}" ]]; then
+    export RECOVAR_K1_RELION_TRANSLATION_ANGLE_SCALE=${TRANSLATION_ANGLE_SCALE}
+fi
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
 export RECOVAR_PASS2_DUMP_DIR=${ROOT}/recovar/pass2
 export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${ORIGINAL_INDICES}
-export RECOVAR_PASS2_DUMP_CURRENT_SIZE=58
+export RECOVAR_PASS2_DUMP_CURRENT_SIZE=${CURRENT_SIZE}
 export RECOVAR_PASS2_DUMP_CLASS=1
 unset RECOVAR_PASS2_DUMP_RAW_OPERANDS
 if [[ "${CAPTURE_HIGH_PRECISION_CONTRIBUTIONS}" == 1 ]]; then
@@ -131,11 +169,11 @@ if [[ "${CAPTURE_HIGH_PRECISION_CONTRIBUTIONS}" == 1 ]]; then
     test -z "$(find "${CONTRIBUTIONS}" -mindepth 1 -print -quit)"
     export RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR=${CONTRIBUTIONS}
     export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=1
-    export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=58
+    export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=${CURRENT_SIZE}
     export RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES=${ORIGINAL_INDICES}
-    export RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID=case10-it1-factor-panel16
+    export RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID=${CASE_NAME}-it1-prefix
     export RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY=${IMAGE_NAMES}
-    export RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256=6abfc7829307ed63cc1b8b24ba99ec1afca25e5467876ef056034a9dd8779585
+    export RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256=$(sha256sum "${PARTICLE_STACK}" | awk '{print $1}')
     export RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE=1
 fi
 if [[ "${CAPTURE_BPREF_BOUNDARY}" == 1 ]]; then
@@ -144,22 +182,37 @@ if [[ "${CAPTURE_BPREF_BOUNDARY}" == 1 ]]; then
     export RECOVAR_BPREF_ACCUM_DUMP_DIR=${ACCUM}
     export RECOVAR_BPREF_PREJOIN_DUMP_DIR=${PREJOIN}
     export RECOVAR_BPREF_BOUNDARY_DUMP_ITERATION=1
-    export RECOVAR_BPREF_BOUNDARY_DUMP_RUN_ID=case10-it1-exact-bpref-scale-order
+    export RECOVAR_BPREF_BOUNDARY_DUMP_RUN_ID=${CASE_NAME}-it1-prefix
 fi
 if [[ "${CAPTURE_ACCUMULATOR_DELTA}" == 1 ]]; then
     mkdir -p "${ACCUMULATOR_DELTA}"
     test -z "$(find "${ACCUMULATOR_DELTA}" -mindepth 1 -print -quit)"
-    if [[ "${ACCUMULATOR_DELTA_HALF}" == 1 ]]; then
-        ACCUMULATOR_DELTA_INDICES=0,14275,28628,42698,57062,71399,85827,99997
-    else
-        ACCUMULATOR_DELTA_INDICES=3,14301,28522,43039,57231,71452,85593,99999
+    if [[ -n "${ACCUMULATOR_DELTA_SELECTION_JSON:-}" ]]; then
+        test -s "${ACCUMULATOR_DELTA_SELECTION_JSON}"
+        ACCUMULATOR_DELTA_INDICES=$("${PYTHON}" - "${ACCUMULATOR_DELTA_SELECTION_JSON}" "${ACCUMULATOR_DELTA_HALF}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as stream:
+    selection = json.load(stream)
+assert selection["schema"] == "recovar-k1-bpref-prefix-selection-v2"
+print(",".join(str(value) for value in selection[f"half{sys.argv[2]}"]["original_indices"]))
+PY
+)
+    elif [[ -z "${ACCUMULATOR_DELTA_INDICES:-}" ]]; then
+        if [[ "${ACCUMULATOR_DELTA_HALF}" == 1 ]]; then
+            ACCUMULATOR_DELTA_INDICES=0,14275,28628,42698,57062,71399,85827,99997
+        else
+            ACCUMULATOR_DELTA_INDICES=3,14301,28522,43039,57231,71452,85593,99999
+        fi
     fi
+    ACCUMULATOR_DELTA_COUNT=$(awk -F, '{print NF}' <<< "${ACCUMULATOR_DELTA_INDICES}")
     export RECOVAR_BPREF_ACCUMULATOR_DELTA_DUMP_DIR=${ACCUMULATOR_DELTA}
     export RECOVAR_BPREF_ACCUMULATOR_DELTA_ORIGINAL_INDICES=${ACCUMULATOR_DELTA_INDICES}
     export RECOVAR_BPREF_ACCUMULATOR_DELTA_ITERATION=1
     export RECOVAR_BPREF_ACCUMULATOR_DELTA_HALF=${ACCUMULATOR_DELTA_HALF}
-    export RECOVAR_BPREF_ACCUMULATOR_DELTA_MAX_PARTICLES=8
-    export RECOVAR_BPREF_ACCUMULATOR_DELTA_MAX_BYTES=536870912
+    export RECOVAR_BPREF_ACCUMULATOR_DELTA_MAX_PARTICLES=${ACCUMULATOR_DELTA_COUNT}
+    export RECOVAR_BPREF_ACCUMULATOR_DELTA_MAX_BYTES=${ACCUMULATOR_DELTA_MAX_BYTES:-805306368}
     export RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY=${IMAGE_NAMES}
 fi
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
@@ -168,7 +221,9 @@ cd "${REPO}"
 git -C "${REPO}" status --short --branch > "${ROOT}/provenance/repo_status_${SLURM_JOB_ID}.txt"
 git -C "${REPO}" diff --binary -- recovar/em recovar/cuda/cuda_backproject.cu recovar/cuda_backproject.py scripts/run_full_refinement.py \
     > "${ROOT}/provenance/recovar_source_diff_${SLURM_JOB_ID}.patch"
-sha256sum "${LAUNCHER}" "${CUDA_LIB}" > "${ROOT}/provenance/static_inputs_${SLURM_JOB_ID}.sha256"
+sha256sum "${LAUNCHER}" "${CUDA_LIB}" "${DATA}/particles.star" \
+    "${ROOT}/provenance/prefix_selection.json" \
+    > "${ROOT}/provenance/static_inputs_${SLURM_JOB_ID}.sha256"
 nvidia-smi -q > "${ROOT}/provenance/nvidia_smi_${SLURM_JOB_ID}.txt"
 env | sort > "${ROOT}/provenance/environment_${SLURM_JOB_ID}.txt"
 if [[ "${CAPTURE_HIGH_PRECISION_CONTRIBUTIONS}" == 1 || \
@@ -213,7 +268,7 @@ recovar_command=(
     --healpix_order 3 --auto_local_healpix_order 4
     --offset_range "${OFFSET_RANGE_PIXELS}" --offset_step "${OFFSET_STEP_PIXELS}"
     --adaptive_oversampling 1 --init_resolution 30.0 --image_batch_size 187
-    --rotation_block_size 8192 --seed 1710 --perturb_seed 1710
+    --rotation_block_size 8192 --seed "${SEED}" --perturb_seed "${SEED}"
     --particle_diameter_ang 200 --tau2_fudge 1.0 --max_significants -1
     --firstiter_cc --apply-initial-lowpass --image-fourier-backend relion_cuda
     --save_intermediates_dir "${ROOT}/recovar/output/intermediates"
@@ -228,7 +283,7 @@ recovar_start=$(date +%s)
 "${recovar_command[@]}" > "${ROOT}/recovar/output/run.log" 2>&1
 printf '{"wall_s":%d}\n' "$(( $(date +%s) - recovar_start ))" \
     > "${ROOT}/provenance/walltime_recovar_${SLURM_JOB_ID}.json"
-test "$(find "${ROOT}/recovar/pass2" -maxdepth 1 -name '*.npz' | wc -l)" -eq 16
+test "$(find "${ROOT}/recovar/pass2" -maxdepth 1 -name '*.npz' | wc -l)" -eq "${SELECTION_COUNT}"
 if [[ "${CAPTURE_HIGH_PRECISION_CONTRIBUTIONS}" == 1 ]]; then
     test "$(find "${CONTRIBUTIONS}" -maxdepth 1 -name 'bpref_contribution_rows_it001_h*_*.npz' | wc -l)" -ge 1
     "${PYTHON}" - "${CONTRIBUTIONS}" "${ORIGINAL_INDICES}" <<'PY'
@@ -251,17 +306,17 @@ if [[ "${CAPTURE_BPREF_BOUNDARY}" == 1 ]]; then
     test -s "${PREJOIN}/recovar_bpref_prejoin_it001.npz"
 fi
 if [[ "${CAPTURE_ACCUMULATOR_DELTA}" == 1 ]]; then
-    test "$(find "${ACCUMULATOR_DELTA}" -maxdepth 1 -name 'bpref_accumulator_delta_it001_h*.npz' | wc -l)" -eq 8
+    test "$(find "${ACCUMULATOR_DELTA}" -maxdepth 1 -name 'bpref_accumulator_delta_it001_h*.npz' | wc -l)" -eq "${ACCUMULATOR_DELTA_COUNT}"
 fi
 ! rg -q 'Traceback|RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent' \
     "${ROOT}/recovar/output/run.log"
 
 find "${ROOT}/recovar" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
-printf '{"job_id":"%s","particle_count":16,"live_initial_noise":%s,"high_precision_contributions":%s,"bpref_boundary":%s,"accumulator_delta":%s,"accumulator_delta_half":%s,"offset_range_pixels":%s,"offset_step_pixels":%s}\n' \
-    "${SLURM_JOB_ID}" "${ENABLE_LIVE_INITIAL_NOISE}" \
+printf '{"job_id":"%s","case":"%s","particle_count":%s,"current_size":%s,"seed":%s,"live_initial_noise":%s,"high_precision_contributions":%s,"bpref_boundary":%s,"accumulator_delta":%s,"accumulator_delta_half":%s,"offset_range_pixels":%s,"offset_step_pixels":%s,"translation_angle_scale":"%s"}\n' \
+    "${SLURM_JOB_ID}" "${CASE_NAME}" "${SELECTION_COUNT}" "${CURRENT_SIZE}" "${SEED}" "${ENABLE_LIVE_INITIAL_NOISE}" \
     "${CAPTURE_HIGH_PRECISION_CONTRIBUTIONS}" "${CAPTURE_BPREF_BOUNDARY}" \
     "${CAPTURE_ACCUMULATOR_DELTA}" "${ACCUMULATOR_DELTA_HALF}" \
-    "${OFFSET_RANGE_PIXELS}" "${OFFSET_STEP_PIXELS}" \
+    "${OFFSET_RANGE_PIXELS}" "${OFFSET_STEP_PIXELS}" "${TRANSLATION_ANGLE_SCALE}" \
     > "${ROOT}/provenance/completion_${SLURM_JOB_ID}.json"
 touch "${ROOT}/SUCCESS_${SLURM_JOB_ID}"

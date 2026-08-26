@@ -221,6 +221,7 @@ def _run_local_search_iteration(
     stats_use_reconstruction_probs=False,
     score_only=False,
     source_faithful_spectrum_norm=False,
+    relion_translation_angle_scale=1.0,
     rotation_grid_mstep_rotations=None,
     generate_relion_mstep_rotations=False,
 ):
@@ -420,6 +421,7 @@ def _run_local_search_iteration(
             class_posterior_sums_from_noise=bool(reconstruct_significant_only and accumulate_noise),
             debug_iteration=debug_iteration,
             translation_prior_centers=translation_prior_centers,
+            relion_translation_angle_scale=relion_translation_angle_scale,
         )
         use_noise_class_sums = bool(reconstruct_significant_only and accumulate_noise)
         class_mstep_posterior_sums = (
@@ -502,6 +504,7 @@ def _run_local_search_iteration(
             stats_use_reconstruction_probs=stats_use_reconstruction_probs,
             score_only=score_only,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+            relion_translation_angle_scale=relion_translation_angle_scale,
         )
 
     result = _unpack_local_search_engine_outputs(

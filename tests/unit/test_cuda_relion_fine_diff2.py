@@ -135,6 +135,44 @@ def test_relion_fused_translate_cuda_source_pins_native_block_topology():
     assert "lane_sums[lane_index] = relion_fine_diff2_update_f32(" in source
 
 
+def test_relion_fine_native_texture_source_pins_production_topology():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+
+    kernel_name = source.index(
+        "relion_fine_diff2_native_texture_rectangular_f32_kernel"
+    )
+    start = source.rindex("__global__", 0, kernel_name)
+    block = source[start : source.index("cudaError_t", start)]
+    assert "__launch_bounds__(kRelionFineDiff2BlockSize)" in block
+    assert "kRelionFineDiff2Ref3dJobChunk" in block
+    assert "relion_coarse_project_texture_f32(" in block
+    assert "relion_score_translate_f32(" in block
+    assert "relion_fine_diff2_update_f32(" in block
+    assert "for (int width = kRelionFineDiff2BlockSize / 2" in block
+    assert "initial_diff2[0]" in block
+
+    launcher_start = source.index(
+        "launch_relion_fine_diff2_native_texture_rectangular_f32"
+    )
+    launcher = source[launcher_start : source.index("__global__", launcher_start)]
+    assert "float* particle_output = nullptr" in launcher
+    assert "for (int64_t batch = 0; batch < batch_size; ++batch)" in launcher
+    assert "eulers + batch * rotation_count * 9" in launcher
+    assert "image + batch * compact_pixel_count" in launcher
+    assert "weight + batch * compact_pixel_count" in launcher
+    assert "initial_diff2 + batch" in launcher
+    assert "output + batch * hypotheses_per_particle" in launcher
+    assert "cudaMemcpyDeviceToDevice" in launcher
+
+    assert "RelionFineDiff2NativeTextureRectangularF32Impl" in source
+    assert "RelionFineDiff2NativeTextureRectangularF32," in source
+
+
 def test_relion_coarse_diff2_cuda_source_pins_production_topology():
     source = (
         Path(__file__).resolve().parents[2]
@@ -152,6 +190,49 @@ def test_relion_coarse_diff2_cuda_source_pins_production_topology():
     assert "threadIdx.x / translation_count" in block
     assert "pixel_in_chunk += active_lanes" in block
     assert "atomicAdd(" in block
+
+
+def test_relion_coarse_diff2_cuda_source_pins_serial_particle_diagnostic():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+
+    start = source.index("launch_relion_coarse_diff2_rectangular_f32")
+    block = source[start : source.index(
+        "launch_relion_coarse_diff2_fused_translate_rectangular_f32", start
+    )]
+    assert "if (serial_particle_launches)" in block
+    assert "for (int64_t batch = 0; batch < batch_size; ++batch)" in block
+    assert "static_cast<unsigned int>(rotation_blocks)" in block
+    assert "shifted_image + image_offset" in block
+    assert "output + output_offset" in block
+
+    iteration_loop = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "em"
+        / "dense_single_volume"
+        / "iteration_loop.py"
+    ).read_text()
+    assert (
+        "RECOVAR_K1_COARSE_GAUSSIAN_FORCE_FULL_ROTATION_GRID_DIAGNOSTIC"
+        in iteration_loop
+    )
+    assert '"RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"' in iteration_loop
+    assert "and not native_texture_scoring" in iteration_loop
+    assert "return plan.image_batch_size, int(n_rot)" in iteration_loop
+
+    fused_start = source.index(
+        "relion_coarse_diff2_fused_translate_rectangular_f32_kernel"
+    )
+    fused_block = source[fused_start : source.index("cudaError_t", fused_start)]
+    assert "relion_coarse_score_translate_f32(" in fused_block
+    assert "thread % translation_count" in fused_block
+    assert "thread / translation_count" in fused_block
+    assert "atomicAdd(" in fused_block
 
 
 def test_relion_coarse_normalized_cc_source_pins_native_tree_and_atomics():
@@ -214,7 +295,12 @@ def test_relion_coarse_native_texture_source_pins_fused_projection_topology():
     assert "for (int64_t batch = 0; batch < batch_size; ++batch)" in source
     assert "image + batch * compact_pixel_count" in source
     assert "weight + batch * compact_pixel_count" in source
-    assert "output + batch * hypotheses_per_batch" in source
+    assert "float* particle_output = nullptr" in source
+    assert "relion_coarse_diff2_zero_f32_kernel<<<" in source
+    assert "relion_coarse_diff2_add_initial_f32_kernel<<<" in source
+    assert "particle_output," in source
+    assert "output + batch * hypotheses_per_particle" in source
+    assert "cudaMemcpyDeviceToDevice" in source
     assert "static_cast<unsigned int>(rotation_blocks)" in source
 
     from recovar.em.dense_single_volume.helpers import significance
@@ -286,6 +372,28 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assert not significance._k1_coarse_gaussian_sincosf_enabled(default=True)
     monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF", "1")
     assert significance._k1_coarse_gaussian_sincosf_enabled()
+
+    monkeypatch.delenv(
+        "RECOVAR_K1_COARSE_GAUSSIAN_FINE_TREE_DIAGNOSTIC",
+        raising=False,
+    )
+    assert not significance._k1_coarse_gaussian_fine_tree_enabled()
+    monkeypatch.setenv(
+        "RECOVAR_K1_COARSE_GAUSSIAN_FINE_TREE_DIAGNOSTIC",
+        "1",
+    )
+    assert significance._k1_coarse_gaussian_fine_tree_enabled()
+
+    monkeypatch.delenv(
+        "RECOVAR_K1_COARSE_GAUSSIAN_SERIAL_PARTICLE_LAUNCHES_DIAGNOSTIC",
+        raising=False,
+    )
+    assert not significance._k1_coarse_gaussian_serial_particle_launches_enabled()
+    monkeypatch.setenv(
+        "RECOVAR_K1_COARSE_GAUSSIAN_SERIAL_PARTICLE_LAUNCHES_DIAGNOSTIC",
+        "1",
+    )
+    assert significance._k1_coarse_gaussian_serial_particle_launches_enabled()
 
     monkeypatch.delenv("RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS", raising=False)
     assert not significance._k1_relion_exact_coarse_operands_enabled()
@@ -591,6 +699,167 @@ def test_relion_coarse_diff2_rectangular_matches_atomic_envelope(
 
 
 @pytest.mark.gpu
+def test_relion_coarse_native_texture_is_bitwise_batch_context_invariant(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """A particle must score identically alone or inside a larger batch."""
+
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(193)
+    current_size = 16
+    projector_size = 32
+    batch_size = 3
+    rotation_count = 17
+    translation_count = 29
+    pixel_count = current_size * (current_size // 2 + 1)
+    projector = (
+        rng.normal(0, 0.02, (projector_size,) * 3)
+        + 1j * rng.normal(0, 0.02, (projector_size,) * 3)
+    ).astype(np.complex64)
+    rotations = np.repeat(
+        np.eye(3, dtype=np.float32)[None, :, :],
+        rotation_count,
+        axis=0,
+    )
+    image = (
+        rng.normal(0, 0.02, (batch_size, pixel_count))
+        + 1j * rng.normal(0, 0.02, (batch_size, pixel_count))
+    ).astype(np.complex64)
+    translation_angles = rng.uniform(
+        -0.5,
+        0.5,
+        (translation_count, 2),
+    ).astype(np.float32)
+    weight = rng.uniform(0, 150_000, (batch_size, pixel_count)).astype(
+        np.float32
+    )
+    initial_diff2 = rng.uniform(10_000, 20_000, batch_size).astype(np.float32)
+    lookup = np.arange(pixel_count, dtype=np.int32)
+
+    def score(image_arg, weight_arg, initial_arg):
+        return cuda_backproject.relion_coarse_diff2_native_texture_rectangular_f32(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            jnp.asarray(image_arg),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight_arg),
+            jnp.asarray(initial_arg),
+            jnp.asarray(lookup),
+            current_size,
+            2,
+            7,
+        )
+
+    with jax.default_device(gpu_device):
+        batched = np.asarray(score(image, weight, initial_diff2))
+        individual = np.concatenate(
+            [
+                np.asarray(
+                    score(
+                        image[index : index + 1],
+                        weight[index : index + 1],
+                        initial_diff2[index : index + 1],
+                    )
+                )
+                for index in range(batch_size)
+            ],
+            axis=0,
+        )
+
+    np.testing.assert_array_equal(
+        batched.view(np.uint32),
+        individual.view(np.uint32),
+    )
+
+
+@pytest.mark.gpu
+def test_relion_fine_native_texture_is_bitwise_batch_context_invariant(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """Native fine scoring must preserve particle-local launch semantics."""
+
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(197)
+    current_size = 16
+    projector_size = 32
+    batch_size = 3
+    rotation_count = 5
+    translation_count = 7
+    pixel_count = current_size * (current_size // 2 + 1)
+    projector = (
+        rng.normal(0, 0.02, (projector_size,) * 3)
+        + 1j * rng.normal(0, 0.02, (projector_size,) * 3)
+    ).astype(np.complex64)
+    rotations = np.repeat(
+        np.eye(3, dtype=np.float32)[None, None, :, :],
+        batch_size * rotation_count,
+        axis=0,
+    ).reshape(batch_size, rotation_count, 3, 3)
+    image = (
+        rng.normal(0, 0.02, (batch_size, pixel_count))
+        + 1j * rng.normal(0, 0.02, (batch_size, pixel_count))
+    ).astype(np.complex64)
+    translation_angles = rng.uniform(
+        -0.5,
+        0.5,
+        (translation_count, 2),
+    ).astype(np.float32)
+    weight = rng.uniform(0, 150_000, (batch_size, pixel_count)).astype(
+        np.float32
+    )
+    initial_diff2 = rng.uniform(10_000, 20_000, batch_size).astype(np.float32)
+    lookup = np.arange(pixel_count, dtype=np.int32)
+
+    def score(rotations_arg, image_arg, weight_arg, initial_arg):
+        return cuda_backproject.relion_fine_diff2_native_texture_rectangular_f32(
+            jnp.asarray(projector),
+            jnp.asarray(rotations_arg),
+            jnp.asarray(image_arg),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight_arg),
+            jnp.asarray(initial_arg),
+            jnp.asarray(lookup),
+            current_size=current_size,
+            padding_factor=2,
+            projector_max_r=7,
+        )
+
+    with jax.default_device(gpu_device):
+        batched = np.asarray(score(rotations, image, weight, initial_diff2))
+        individual = np.concatenate(
+            [
+                np.asarray(
+                    score(
+                        rotations[index : index + 1],
+                        image[index : index + 1],
+                        weight[index : index + 1],
+                        initial_diff2[index : index + 1],
+                    )
+                )
+                for index in range(batch_size)
+            ],
+            axis=0,
+        )
+
+    np.testing.assert_array_equal(
+        batched.view(np.uint32),
+        individual.view(np.uint32),
+    )
+
+
+@pytest.mark.gpu
 def test_relion_fine_diff2_rectangular_matches_production_tree_bitwise(
     monkeypatch,
     custom_cuda_lib,
@@ -690,6 +959,22 @@ def test_relion_coarse_diff2_fails_closed_without_gpu(monkeypatch):
             jnp.ones((1, 2), dtype=jnp.float32),
             jnp.zeros((1,), dtype=jnp.float32),
             jnp.asarray([0, 1], dtype=jnp.int32),
+        )
+
+
+def test_relion_fused_translate_coarse_diff2_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_coarse_diff2_fused_translate_rectangular_f32.__wrapped__(
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.zeros((1,), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            current_size=1,
         )
 
 

@@ -95,6 +95,24 @@ Each row contains four class-level FSC-AUC checks at the frozen `0.995` gate. A 
 | `strict-k1-v12-20260821` | 2026-08-21T05:30:00+00:00 | `fdec6f931d22` | 31 | +1 | 3 | 0 |
 
 <!-- BEGIN MANUAL POST-SNAPSHOT DIAGNOSTICS -->
+## Current exact-BPref candidate prefix gate
+
+**3 / 3 remaining K=1 cases pass their latest sealed numbered prefix.**
+
+This live prefix gate does not promote the frozen terminal score, which remains
+31 / 34 until complete autonomous trajectories and final maps pass. It is a
+fixed three-case early-warning metric using the same signed FSC-AUC and
+numbered-map thresholds, plus exact current-size and HEALPix controller checks.
+
+| Prefix pass | Case | Latest FSC iteration | Controller exact through | Merged cross-engine FSC-AUC | GT delta | Repaired native-winner row | Science job |
+|---|---|---:|---:|---:|---:|---:|---:|
+| [x] | `k1-04` | 6 | 6 | 0.999965438723 | -0.000138832821 | 82009 | 12931179 |
+| [x] | `k1-05` | 7 | 7 | 0.999992077105 | +0.000000506887 | 94083 | 12931180 |
+| [x] | `k1-10` | 15 | 15 | 0.999994449866 | -0.000008931805 | — | 12931181 |
+
+Machine-readable live evidence:
+`docs/math/em_k1_remaining3_live_prefix_scorecard_v1.json`.
+
 ## Current K=1 case-7 bounded metric
 
 This fixed 100,000-particle iteration-2 boundary is an early diagnostic, not

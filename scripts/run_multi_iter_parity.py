@@ -1026,6 +1026,15 @@ def main():
         help="Diagnostic RECOVAR-frame half-2 map replacing the starting RELION map.",
     )
     parser.add_argument(
+        "--initial-mrc-projector-direct",
+        action="store_true",
+        help=(
+            "Diagnostic map intervention only: construct first-iteration RELION "
+            "Projector::data directly from the loaded --initial-half*-mrc arrays, "
+            "without the internal Fourier forward/inverse round trip."
+        ),
+    )
+    parser.add_argument(
         "--fresh-initial-reference-mrc",
         type=str,
         default=None,
@@ -1673,6 +1682,15 @@ def main():
         )
         vol_ft_h1 = np.array(ftu.get_dft3(jnp.array(vol_h1))).reshape(-1)
         vol_ft_h2 = np.array(ftu.get_dft3(jnp.array(vol_h2))).reshape(-1)
+        if args.initial_mrc_projector_direct:
+            initial_reference_real_for_projector = [
+                np.asarray(vol_h1, dtype=np.float64),
+                np.asarray(vol_h2, dtype=np.float64),
+            ]
+            print(
+                "  Diagnostic initial MRC projector: direct process-resident real maps "
+                "(no Fourier forward/inverse round trip)"
+            )
     else:
         vol_h1 = helpers.load_relion_volume(f"{prefix}_half1_class001.mrc")
         vol_h2 = helpers.load_relion_volume(f"{prefix}_half2_class001.mrc")

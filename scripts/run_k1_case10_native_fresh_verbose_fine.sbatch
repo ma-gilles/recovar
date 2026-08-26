@@ -35,6 +35,10 @@ CAPTURE=${RUN_ROOT}/capture
 OUT=${RUN_ROOT}/relion
 
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
+mkdir -p "${CAPTURE}" "${OUT}" "${RUN_ROOT}/analysis" \
+  "${RUN_ROOT}/provenance" "${RUN_ROOT}/logs"
+mkdir -p "${RUNTIME_ROOT}/tmp" "${RUNTIME_ROOT}/pixi_home" \
+  "${RUNTIME_ROOT}/rattler_cache" "${RUNTIME_ROOT}/pycache"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(sha256sum "${BINARY}" | awk '{print $1}')" = a9a961340af621d1cd581ccea2e96274f978b53213f9606c9f0e30d271903b8c

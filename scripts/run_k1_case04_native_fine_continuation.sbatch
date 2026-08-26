@@ -22,16 +22,21 @@ ROOT=${RUN_ROOT}
 RUNTIME=${RUNTIME_ROOT}
 TARGET_STACK_ONE_BASED=${TARGET_STACK_ONE_BASED:-61418}
 CAPTURE_COARSE=${CAPTURE_COARSE:-0}
+CAPTURE_PPREF=${CAPTURE_PPREF:-0}
 EXPECTED_COARSE_SIGNIFICANT_COUNT=${EXPECTED_COARSE_SIGNIFICANT_COUNT:-}
 TARGET_ITERATION=2
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 LAUNCHER=${REPO}/scripts/run_k1_case04_native_fine_continuation.sbatch
 SOURCE_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET
-CASE=${SOURCE_ROOT}/cases/4_high_noise_100k_g256_white_noise3_bf80
+CASE=${K1_NATIVE_CASE_DIR:-${SOURCE_ROOT}/cases/4_high_noise_100k_g256_white_noise3_bf80}
 DATA=${CASE}/data
-CONTROL=${CASE}/relion_ref
-CONTINUE=${CONTROL}/run_it001_optimiser.star
+CONTROL=${K1_NATIVE_CONTROL_DIR:-${CASE}/relion_ref}
+CONTINUE=${K1_NATIVE_CONTINUE_STAR:-${CONTROL}/run_it001_optimiser.star}
+PHYSICAL_ORDER_SEED=${K1_NATIVE_PHYSICAL_ORDER_SEED:-1705}
+SAMPLING_PERTURBATION=${K1_NATIVE_SAMPLING_PERTURBATION:-0.18417978286743164}
+EXPECTED_CONTINUE_SHA256=${K1_NATIVE_EXPECTED_CONTINUE_SHA256:-881de25817c531ecc6df6879171d942152e27f8cfebfaf3db29c2052b0463b91}
+EXPECTED_PARTICLES_SHA256=${K1_NATIVE_EXPECTED_PARTICLES_SHA256:-0a90714711cdf0a1820d46fa82460d828b87e1ecbd2e49de645170863546ac98}
 AUDIT_REPO=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_factor_recovar_187a9f60_20260808T1100ET/checkout
 RELION_SOURCE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_relion_k1_preiter_order_replay_6982c77_20260803T0215ET/source
 RELION_BINARY=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_relion_k1_preiter_order_replay_6982c77_20260803T0215ET/build/bin/relion_refine_mpi
@@ -41,15 +46,13 @@ RELION_OUT=${ROOT}/relion
 
 test "${TARGET_STACK_ONE_BASED}" -gt 0
 case "${CAPTURE_COARSE}" in 0|1) ;; *) echo "CAPTURE_COARSE must be 0 or 1" >&2; exit 2 ;; esac
-if test "${CAPTURE_COARSE}" = 1; then
-  test -n "${EXPECTED_COARSE_SIGNIFICANT_COUNT}"
-fi
+case "${CAPTURE_PPREF}" in 0|1) ;; *) echo "CAPTURE_PPREF must be 0 or 1" >&2; exit 2 ;; esac
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(sha256sum "${RELION_BINARY}" | awk '{print $1}')" = 1c3f67f52a7663f29c3cc0c8aacc995eba27517961e24ee4a1be01b6413c0b1d
-test "$(sha256sum "${CONTINUE}" | awk '{print $1}')" = 881de25817c531ecc6df6879171d942152e27f8cfebfaf3db29c2052b0463b91
-test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = 0a90714711cdf0a1820d46fa82460d828b87e1ecbd2e49de645170863546ac98
+test "$(sha256sum "${CONTINUE}" | awk '{print $1}')" = "${EXPECTED_CONTINUE_SHA256}"
+test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = "${EXPECTED_PARTICLES_SHA256}"
 test "$(git -C "${RELION_SOURCE}" rev-parse HEAD)" = f8355ba9ef87ee28f3ae7bfe937c3f2589ab7bd3
 test "$(git -C "${RELION_SOURCE}" rev-parse HEAD^{tree})" = 3111173edb150f98bc2446efc54229ff736b40a1
 test "$(git -C "${RELION_SOURCE}" diff --binary | sha256sum | awk '{print $1}')" = 15e9cceb38815cc85ed946e1bb5ee8a9b42f89a530cf8d5af2d76e83228be3f9
@@ -66,7 +69,7 @@ unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
 while IFS='=' read -r variable_name _; do
   case "${variable_name}" in
-    RECOVAR_*|RELION_BPRE_*|RELION_FINE_*|RELION_PREITER_*|RELION_SAMPLING_PERTURBATION_*)
+    RECOVAR_*|RELION_BPRE_*|RELION_FINE_*|RELION_PPREF_*|RELION_PREITER_*|RELION_SAMPLING_PERTURBATION_*)
       unset "${variable_name}"
       ;;
   esac
@@ -110,12 +113,16 @@ if test "${CAPTURE_COARSE}" = 1; then
   export RELION_COARSE_CAPTURE_ITER=${TARGET_ITERATION}
   export RELION_COARSE_CAPTURE_STACK=${TARGET_STACK_ONE_BASED}
 fi
+if test "${CAPTURE_PPREF}" = 1; then
+  export RELION_PPREF_CAPTURE_DIR=${CAPTURE}
+  export RELION_PPREF_CAPTURE_ITER=${TARGET_ITERATION}
+fi
 
 # A continuation reconstructs sorted_idx and sampling state. Restore the
 # uninterrupted fresh-run physical order and exact iteration-2 perturbation.
-export RELION_PREITER_PARTICLE_ORDER_SEED=1705
+export RELION_PREITER_PARTICLE_ORDER_SEED=${PHYSICAL_ORDER_SEED}
 export RELION_PREITER_PARTICLE_ORDER_ITER=${TARGET_ITERATION}
-export RELION_SAMPLING_PERTURBATION_OVERRIDE=0.18417978286743164
+export RELION_SAMPLING_PERTURBATION_OVERRIDE=${SAMPLING_PERTURBATION}
 export RELION_SAMPLING_PERTURBATION_OVERRIDE_ITER=${TARGET_ITERATION}
 
 command=(srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
@@ -170,7 +177,7 @@ from scripts.analyze_k1_native_coarse_boundary import load_native_coarse_capture
 
 path = Path(sys.argv[1])
 stack = int(sys.argv[2])
-expected_significant = int(sys.argv[3])
+expected_significant = None if not sys.argv[3] else int(sys.argv[3])
 output = Path(sys.argv[4])
 capture = load_native_coarse_capture(path)
 header = capture.header
@@ -178,7 +185,8 @@ assert int(header[1]) == 2
 assert int(header[2]) == stack
 assert int(header[4]) == 36864
 assert int(header[5]) == 29
-assert int(header[9]) == expected_significant
+if expected_significant is not None:
+    assert int(header[9]) == expected_significant
 output.write_text(json.dumps({
     "status": "complete",
     "path": str(path.resolve()),
@@ -192,9 +200,28 @@ output.write_text(json.dumps({
 }, indent=2, sort_keys=True) + "\n")
 PY
 fi
-rg -q '\[RELION_PREITER_PARTICLE_ORDER\] iteration 2 effective_seed 1705 particles 100000' \
+if test "${CAPTURE_PPREF}" = 1; then
+  test "$(find "${CAPTURE}" -maxdepth 1 -type f -name 'ppref_iter002_rank*_model*.bin' | wc -l)" -eq 2
+  "${PYTHON}" - "${CAPTURE}" <<'PY'
+import sys
+from pathlib import Path
+
+from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
+
+items = [
+    _load_ppref(path)[1]
+    for path in sorted(Path(sys.argv[1]).glob("ppref_iter002_rank*_model*.bin"))
+]
+assert {int(item["iteration"]) for item in items} == {2}
+assert {int(item["rank"]) for item in items} == {1, 2}
+assert {int(item["model"]) for item in items} == {0}
+PY
+else
+  test -z "$(find "${CAPTURE}" -maxdepth 1 -type f -name 'ppref_iter*_rank*_model*.bin' -print -quit)"
+fi
+rg -q "\[RELION_PREITER_PARTICLE_ORDER\] iteration 2 effective_seed ${PHYSICAL_ORDER_SEED} particles 100000" \
   "${RELION_OUT}/runner.stderr"
-rg -q '\[RELION_SAMPLING_PERTURBATION_OVERRIDE\] iter 2 requested 0\.18417978286743164 applied 0\.18417978286743164' \
+rg -q "\[RELION_SAMPLING_PERTURBATION_OVERRIDE\] iter 2 requested ${SAMPLING_PERTURBATION} applied ${SAMPLING_PERTURBATION}" \
   "${RELION_OUT}/runner.stdout"
 ! rg -qi 'Traceback|Out of memory|CUDA_ERROR_OUT_OF_MEMORY' "${RELION_OUT}/runner.stderr"
 

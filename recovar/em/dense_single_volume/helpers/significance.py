@@ -33,6 +33,12 @@ _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
 )
 _K1_COARSE_GAUSSIAN_FFI_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_FFI"
 _K1_COARSE_GAUSSIAN_SINCOSF_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF"
+_K1_COARSE_GAUSSIAN_FINE_TREE_ENV = (
+    "RECOVAR_K1_COARSE_GAUSSIAN_FINE_TREE_DIAGNOSTIC"
+)
+_K1_COARSE_GAUSSIAN_SERIAL_PARTICLE_LAUNCHES_ENV = (
+    "RECOVAR_K1_COARSE_GAUSSIAN_SERIAL_PARTICLE_LAUNCHES_DIAGNOSTIC"
+)
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
 )
@@ -149,6 +155,41 @@ def _k1_coarse_gaussian_sincosf_enabled(*, default: bool = False) -> bool:
     )
 
 
+def _k1_coarse_gaussian_fine_tree_enabled(*, default: bool = False) -> bool:
+    """Return whether the bounded deterministic fine-tree diagnostic is active."""
+
+    token = os.environ.get(
+        _K1_COARSE_GAUSSIAN_FINE_TREE_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_K1_COARSE_GAUSSIAN_FINE_TREE_ENV}={token!r}",
+    )
+
+
+def _k1_coarse_gaussian_serial_particle_launches_enabled(
+    *, default: bool = False,
+) -> bool:
+    """Return whether coarse CUDA grids are launched one particle at a time."""
+
+    token = os.environ.get(
+        _K1_COARSE_GAUSSIAN_SERIAL_PARTICLE_LAUNCHES_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        "Unsupported "
+        f"{_K1_COARSE_GAUSSIAN_SERIAL_PARTICLE_LAUNCHES_ENV}={token!r}",
+    )
+
+
 def _k1_coarse_gaussian_native_texture_enabled(*, default: bool = False) -> bool:
     """Return whether projection and coarse scoring run in one RELION kernel."""
 
@@ -245,6 +286,7 @@ def _relion_coarse_gaussian_square_operands_sincosf(
     image_shape,
     *,
     translation_phase_source=None,
+    relion_translation_angle_scale=1.0,
     return_unshifted=False,
 ):
     """Build corrected coarse images with RELION's CUDA ``sincosf`` path."""
@@ -275,7 +317,11 @@ def _relion_coarse_gaussian_square_operands_sincosf(
     shifted_corrected = cuda_backproject.relion_translate_score_f32(
         jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
         jnp.asarray(
-            _relion_translation_angles_f32(translation_phase_source, image_shape),
+            _relion_translation_angles_f32(
+                translation_phase_source,
+                image_shape,
+                angle_scale=relion_translation_angle_scale,
+            ),
             dtype=jnp.float32,
         ),
         score_indices,
@@ -1943,6 +1989,7 @@ def _compute_k_class_significance_batched(
     coarse_rotation_ids=None,
     translation_phase_source=None,
     relion_coarse_gaussian_default: bool = False,
+    relion_translation_angle_scale: float = 1.0,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
 
@@ -2132,6 +2179,32 @@ def _compute_k_class_significance_batched(
             f"{_K1_RELION_EXACT_COARSE_OPERANDS_ENV} requires "
             f"{_K1_COARSE_GAUSSIAN_FFI_ENV}=1 and "
             f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV}=1",
+        )
+    coarse_gaussian_fine_tree_enabled = (
+        _k1_coarse_gaussian_fine_tree_enabled() and score_mode == "gaussian"
+    )
+    if coarse_gaussian_fine_tree_enabled and not exact_coarse_operands_enabled:
+        raise ValueError(
+            f"{_K1_COARSE_GAUSSIAN_FINE_TREE_ENV} requires "
+            f"{_K1_RELION_EXACT_COARSE_OPERANDS_ENV}=1",
+        )
+    if coarse_gaussian_fine_tree_enabled:
+        logger.warning(
+            "K=1 deterministic fine-tree coarse-score diagnostic enabled; "
+            "only a one-particle capture is supported",
+        )
+    coarse_gaussian_serial_particle_launches = (
+        _k1_coarse_gaussian_serial_particle_launches_enabled()
+        and score_mode == "gaussian"
+    )
+    if coarse_gaussian_serial_particle_launches and not coarse_gaussian_ffi_enabled:
+        raise ValueError(
+            f"{_K1_COARSE_GAUSSIAN_SERIAL_PARTICLE_LAUNCHES_ENV} requires "
+            f"{_K1_COARSE_GAUSSIAN_FFI_ENV}=1",
+        )
+    if coarse_gaussian_serial_particle_launches:
+        logger.warning(
+            "K=1 serial per-particle coarse CUDA launch diagnostic enabled",
         )
     coarse_gaussian_native_texture_requested = (
         _k1_coarse_gaussian_native_texture_enabled(
@@ -2387,7 +2460,11 @@ def _compute_k_class_significance_batched(
             dtype=jnp.int32,
         )
         tree_rescore_translation_angles = jnp.asarray(
-            _relion_translation_angles_f32(translations_source, image_shape),
+            _relion_translation_angles_f32(
+                translations_source,
+                image_shape,
+                angle_scale=relion_translation_angle_scale,
+            ),
             dtype=jnp.float32,
         )
         logger.warning(
@@ -2593,7 +2670,34 @@ def _compute_k_class_significance_batched(
                 coarse_gaussian_pixel_weight,
                 coarse_gaussian_initial_diff2,
                 coarse_gaussian_full_to_compact,
+                serial_particle_launches=coarse_gaussian_serial_particle_launches,
             )
+            if (
+                coarse_gaussian_fine_tree_enabled
+                and fine_tree_target_local_positions is not None
+            ):
+                if fine_tree_target_local_positions.size != 1:
+                    raise RuntimeError(
+                        f"{_K1_COARSE_GAUSSIAN_FINE_TREE_ENV} is restricted to "
+                        "one explicitly dumped target row",
+                    )
+                target_rows = jnp.asarray(
+                    fine_tree_target_local_positions,
+                    dtype=jnp.int32,
+                )
+                target_diff2 = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+                    proj_score[None, :, :],
+                    coarse_gaussian_unshifted_corrected[target_rows],
+                    coarse_gaussian_translation_angles,
+                    coarse_gaussian_pixel_weight[target_rows],
+                    coarse_gaussian_full_to_compact,
+                    current_size=score_size,
+                )
+                target_diff2 = jnp.add(
+                    target_diff2,
+                    coarse_gaussian_initial_diff2[target_rows, None, None],
+                )
+                diff2 = diff2.at[target_rows].set(target_diff2)
             return -diff2
         if use_window:
             if projector_returns_compact:
@@ -2709,7 +2813,6 @@ def _compute_k_class_significance_batched(
     tree_rescore_ambiguous = 0
     tree_rescore_winner_changes = 0
     tree_rescore_exact_ties = 0
-
     start_idx = 0
     image_indices = np.arange(n_images)
     for batch_data, _, _, ctf_params, _, _, indices in experiment_dataset.iter_batches(
@@ -2994,6 +3097,7 @@ def _compute_k_class_significance_batched(
                     translations,
                     image_shape,
                     translation_phase_source=translations_source,
+                    relion_translation_angle_scale=relion_translation_angle_scale,
                     return_unshifted=True,
                 )
             else:
@@ -3034,7 +3138,11 @@ def _compute_k_class_significance_batched(
                 )
 
                 coarse_gaussian_translation_angles = jnp.asarray(
-                    _relion_translation_angles_f32(translations_source, image_shape),
+                    _relion_translation_angles_f32(
+                        translations_source,
+                        image_shape,
+                        angle_scale=relion_translation_angle_scale,
+                    ),
                     dtype=jnp.float32,
                 )
                 coarse_gaussian_shifted_corrected = cuda_backproject.relion_translate_score_f32(
@@ -3084,6 +3192,42 @@ def _compute_k_class_significance_batched(
                 _positions = np.flatnonzero(np.isin(_orig, np.fromiter(_dump_targets, dtype=np.int64)))
                 if _positions.size:
                     dump_target_local_positions = _positions.astype(np.int64)
+        fine_tree_target_local_positions = None
+        if coarse_gaussian_fine_tree_enabled:
+            # A downstream pass-2 capture names its particle through the
+            # pass-2 target variable and deliberately leaves the intrusive
+            # pass-1 dump disabled. Resolve the deterministic coarse-rescore
+            # target independently so it still controls fine candidate
+            # construction.
+            _fine_tree_targets = parse_env_int_set(
+                "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES",
+            )
+            if not _fine_tree_targets:
+                _fine_tree_targets = parse_env_int_set(
+                    "RECOVAR_PASS2_DUMP_ORIGINAL_INDICES",
+                )
+            if not _fine_tree_targets or len(_fine_tree_targets) != 1:
+                raise RuntimeError(
+                    f"{_K1_COARSE_GAUSSIAN_FINE_TREE_ENV} requires exactly "
+                    "one original particle index through "
+                    "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES or "
+                    "RECOVAR_PASS2_DUMP_ORIGINAL_INDICES",
+                )
+            _local_for_fine_tree = np.asarray(indices, dtype=np.int64)
+            _orig_for_fine_tree = _original_indices_for_local(
+                experiment_dataset,
+                _local_for_fine_tree,
+            )
+            _fine_tree_positions = np.flatnonzero(
+                np.isin(
+                    _orig_for_fine_tree,
+                    np.fromiter(_fine_tree_targets, dtype=np.int64),
+                ),
+            )
+            if _fine_tree_positions.size:
+                fine_tree_target_local_positions = _fine_tree_positions.astype(
+                    np.int64,
+                )
         # Per-class collectors for raw (pre-prior) score blocks at target rows.
         # Shape after concat per class: (n_targets, n_rot, n_trans)
         dump_target_pre_prior_blocks_per_class = (
@@ -3129,6 +3273,11 @@ def _compute_k_class_significance_batched(
             n_trans,
             use_float64_scoring=use_float64_scoring,
         )
+        # RELION centers raw diff2 before adding priors.  Preserve the raw
+        # block tensors so the support pass can reproduce that float32 order
+        # without recomputing projections and scores.
+        if relion_f32_coarse_support_enabled:
+            cache_score_blocks = True
         cached_class_score_blocks = [] if cache_score_blocks else None
         if passive_score_dump and cached_class_score_blocks is None:
             raise RuntimeError(
@@ -3225,6 +3374,7 @@ def _compute_k_class_significance_batched(
                     if r1 > n_rot:
                         valid = n_rot - r0
                         scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
+                    raw_scores = scores
                     if passive_raw_score_blocks_per_class is not None:
                         passive_raw_score_blocks_per_class[class_index].append(scores)
                     # Capture pre-prior raw scores for dump targets BEFORE _add_priors.
@@ -3243,7 +3393,10 @@ def _compute_k_class_significance_batched(
                             )
                         )
                     scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
-                    if dump_target_with_prior_blocks_per_class is not None:
+                    if (
+                        dump_target_with_prior_blocks_per_class is not None
+                        and not relion_f32_coarse_support_enabled
+                    ):
                         actual_rot = min(rotation_block_size, n_rot - r0)
                         dump_target_with_prior_blocks_per_class[class_index].append(
                             np.asarray(
@@ -3252,7 +3405,9 @@ def _compute_k_class_significance_batched(
                             )
                         )
                     if cached_score_blocks is not None:
-                        cached_score_blocks.append(scores)
+                        cached_score_blocks.append(
+                            raw_scores if relion_f32_coarse_support_enabled else scores,
+                        )
                     class_max, class_sum = _update_logsumexp(class_max, class_sum, scores)
                     global_max, global_sum = _update_logsumexp(global_max, global_sum, scores)
                 flat_scores = scores.reshape(batch_size, -1)
@@ -3458,6 +3613,7 @@ def _compute_k_class_significance_batched(
         ]
 
         class_weight_mats = []
+        exact_max_posterior_batch = None
         if collect_significance:
             for class_index, mean_for_proj in enumerate(means_for_proj):
                 class_weight_blocks = []
@@ -3477,7 +3633,8 @@ def _compute_k_class_significance_batched(
                         if r1 > n_rot:
                             valid = n_rot - r0
                             scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
-                        scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
+                        if not relion_f32_coarse_support_enabled:
+                            scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
                     else:
                         scores = cached_class_score_blocks[class_index][block_index]
                     actual_rot = min(rotation_block_size, n_rot - r0)
@@ -3495,9 +3652,43 @@ def _compute_k_class_significance_batched(
             batch_values = jnp.concatenate(class_weight_mats, axis=1)
             if relion_f32_coarse_support_enabled:
                 from recovar.em.dense_single_volume.helpers.oversampling import (
+                    relion_cuda_f32_coarse_log_weights,
                     relion_cuda_f32_coarse_posterior,
                 )
 
+                raw_scores = batch_values.reshape(batch_size, n_rot, n_trans)
+                if rotation_log_prior_padded is None:
+                    exact_rotation_prior = jnp.zeros(n_rot, dtype=jnp.float32)
+                else:
+                    exact_rotation_prior = jnp.asarray(
+                        rotation_log_prior_padded[0, :n_rot],
+                        dtype=jnp.float32,
+                    )
+                exact_rotation_prior = exact_rotation_prior + jnp.asarray(
+                    class_log_priors_np[0],
+                    dtype=jnp.float32,
+                )
+                if batch_translation_log_prior is None:
+                    exact_translation_prior = jnp.zeros(
+                        (batch_size, n_trans),
+                        dtype=jnp.float32,
+                    )
+                elif translation_log_prior.ndim == 1:
+                    exact_translation_prior = jnp.broadcast_to(
+                        jnp.asarray(batch_translation_log_prior, dtype=jnp.float32)[None, :],
+                        (batch_size, n_trans),
+                    )
+                else:
+                    exact_translation_prior = jnp.asarray(
+                        batch_translation_log_prior,
+                        dtype=jnp.float32,
+                    )
+                exact_log_weights = relion_cuda_f32_coarse_log_weights(
+                    raw_scores,
+                    exact_rotation_prior,
+                    exact_translation_prior,
+                )
+                batch_values = exact_log_weights.reshape(batch_size, -1)
                 (
                     batch_weights,
                     batch_sig_mask,
@@ -3510,11 +3701,29 @@ def _compute_k_class_significance_batched(
                     adaptive_fraction=float(adaptive_fraction),
                     max_significants=max_significants,
                 )
+                # From this point the score cache represents RELION's exact
+                # pre-exponent values, which keeps passive dumps aligned with
+                # the actual support calculation.
+                for block_index in range(n_blocks):
+                    r0 = block_index * rotation_block_size
+                    r1 = min(r0 + rotation_block_size, n_rot)
+                    cached_class_score_blocks[0][block_index] = exact_log_weights[:, r0:r1, :]
+                    if dump_target_with_prior_blocks_per_class is not None:
+                        dump_target_with_prior_blocks_per_class[0].append(
+                            np.asarray(
+                                exact_log_weights[dump_target_local_positions, r0:r1, :],
+                                dtype=np.float64,
+                            ),
+                        )
                 batch_sig_rot_mask = jnp.any(
                     batch_sig_mask.reshape(batch_size, n_classes * n_rot, n_trans),
                     axis=2,
                 )
+                best_argmax_batch = jnp.argmax(batch_weights, axis=1).astype(jnp.int32)
+                best_class_batch = jnp.zeros(batch_size, dtype=jnp.int32)
+                exact_max_posterior_batch = jnp.max(batch_weights, axis=1)
             else:
+                exact_max_posterior_batch = None
                 batch_weights = batch_values
                 (
                     batch_sig_mask,
@@ -3553,7 +3762,13 @@ def _compute_k_class_significance_batched(
         normalization_log_evidence[start_idx:end_idx] = global_log_z_np + log_score_offset
         log_evidence[start_idx:end_idx] = normalization_log_evidence[start_idx:end_idx].astype(np.float32)
         best_log_score[start_idx:end_idx] = (best_score_np + log_score_offset).astype(np.float32)
-        max_posterior[start_idx:end_idx] = np.exp(best_score_np - global_log_z_np).astype(np.float32)
+        if exact_max_posterior_batch is None:
+            max_posterior[start_idx:end_idx] = np.exp(best_score_np - global_log_z_np).astype(np.float32)
+        else:
+            max_posterior[start_idx:end_idx] = np.asarray(
+                exact_max_posterior_batch,
+                dtype=np.float32,
+            )
         for class_index, class_log_z in enumerate(class_log_z_values):
             class_log_evidence[class_index, start_idx:end_idx] = (
                 np.asarray(class_log_z, dtype=np.float64) + log_score_offset

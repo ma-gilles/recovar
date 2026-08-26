@@ -709,6 +709,7 @@ def run_em(
     score_only: bool = False,
     relion_half_volume_mstep: bool = False,
     return_half_volume_accumulators: bool = False,
+    relion_translation_angle_scale: float = 1.0,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -817,6 +818,10 @@ def run_em(
         immediately reconstruct from the accumulators.
     """
     overall_t0 = time.time()
+    if float(relion_translation_angle_scale) != 1.0:
+        raise NotImplementedError(
+            "RELION model/optics translation-angle scaling requires the exact sparse or local scorer"
+        )
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]
     image_indices = np.arange(experiment_dataset.n_units) if image_indices is None else np.asarray(image_indices)

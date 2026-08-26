@@ -30,6 +30,11 @@ PASS2_DUMP_ORIGINAL_INDICES=${K1_PASS2_DUMP_ORIGINAL_INDICES:-}
 BPREF_PARTICLE_POOL_SIZE=${K1_BPREF_PARTICLE_POOL_SIZE:-1}
 BPREF_EXECUTION_ORDER_CHUNK_SIZE=${K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE:-220}
 ENABLE_LIVE_INITIAL_NOISE=${K1_ENABLE_LIVE_INITIAL_NOISE:-0}
+ENABLE_NATIVE_TEXTURE=${K1_ENABLE_NATIVE_TEXTURE:-0}
+FORCE_FULL_COARSE_GRID=${K1_FORCE_FULL_COARSE_GRID:-0}
+SERIAL_PARTICLE_LAUNCHES=${K1_SERIAL_PARTICLE_LAUNCHES:-0}
+NATIVE_FINE_SCORE_UNITS=${K1_NATIVE_FINE_SCORE_UNITS:-1}
+TRANSLATION_ANGLE_SCALE=${K1_TRANSLATION_ANGLE_SCALE:-}
 ENABLE_PARITY_DUMP=${K1_ENABLE_PARITY_DUMP:-}
 if [[ -z "${ENABLE_PARITY_DUMP}" ]]; then
     if [[ "${MAX_ITER}" == 2 ]]; then
@@ -48,6 +53,16 @@ if [[ "${SKIP_FINAL}" != 0 && "${SKIP_FINAL}" != 1 ]]; then
 fi
 if [[ "${ENABLE_LIVE_INITIAL_NOISE}" != 0 && "${ENABLE_LIVE_INITIAL_NOISE}" != 1 ]]; then
     echo "K1_ENABLE_LIVE_INITIAL_NOISE must be 0 or 1" >&2
+    exit 2
+fi
+for binary_setting in ENABLE_NATIVE_TEXTURE FORCE_FULL_COARSE_GRID SERIAL_PARTICLE_LAUNCHES NATIVE_FINE_SCORE_UNITS; do
+    if [[ "${!binary_setting}" != 0 && "${!binary_setting}" != 1 ]]; then
+        echo "${binary_setting} must be 0 or 1" >&2
+        exit 2
+    fi
+done
+if [[ "${FORCE_FULL_COARSE_GRID}" == 1 && "${ENABLE_NATIVE_TEXTURE}" != 1 && "${SERIAL_PARTICLE_LAUNCHES}" != 1 ]]; then
+    echo "K1_FORCE_FULL_COARSE_GRID requires native texture or serial particle launches" >&2
     exit 2
 fi
 if [[ "${ENABLE_PARITY_DUMP}" != 0 && "${ENABLE_PARITY_DUMP}" != 1 ]]; then
@@ -105,7 +120,7 @@ LAUNCHER=${REPO}/scripts/run_k1_remaining_it1_exact_corr_img.sbatch
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test -z "$(find "${OUTPUT}" -mindepth 1 -print -quit)"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
-test "$(git -C "${REPO}" diff --binary -- recovar/em scripts/run_full_refinement.py | sha256sum | awk '{print $1}')" = "${EXPECTED_SOURCE_DIFF_SHA256}"
+test "$(git -C "${REPO}" diff --binary -- recovar/em recovar/cuda/cuda_backproject.cu recovar/cuda_backproject.py scripts/run_full_refinement.py | sha256sum | awk '{print $1}')" = "${EXPECTED_SOURCE_DIFF_SHA256}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_LIB_SHA256}"
 if [[ -n "${BPREF_NOISE_OVERRIDE}" ]]; then
@@ -155,15 +170,25 @@ export RECOVAR_EXPECTED_REPO_ROOT=${REPO}
 export RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION=0.40
 export RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0
 export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0
-export RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=0
+export RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=${ENABLE_NATIVE_TEXTURE}
+if [[ "${FORCE_FULL_COARSE_GRID}" == 1 ]]; then
+    export RECOVAR_K1_COARSE_GAUSSIAN_FORCE_FULL_ROTATION_GRID_DIAGNOSTIC=1
+fi
+if [[ "${SERIAL_PARTICLE_LAUNCHES}" == 1 ]]; then
+    export RECOVAR_K1_COARSE_GAUSSIAN_SERIAL_PARTICLE_LAUNCHES_DIAGNOSTIC=1
+fi
 export RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN=4e-6
 export RECOVAR_K1_RELION_LIVE_INITIAL_NOISE=${ENABLE_LIVE_INITIAL_NOISE}
 export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=1
 export RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=1
 export RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS=1
+export RECOVAR_K1_RELION_NATIVE_FINE_SCORE_UNITS=${NATIVE_FINE_SCORE_UNITS}
 export RECOVAR_K1_RELION_EXACT_CTF_STAR=${DATA}/particles.star
 export RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE=${BPREF_EXECUTION_ORDER_CHUNK_SIZE}
 export RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE=${BPREF_PARTICLE_POOL_SIZE}
+if [[ -n "${TRANSLATION_ANGLE_SCALE}" ]]; then
+    export RECOVAR_K1_RELION_TRANSLATION_ANGLE_SCALE=${TRANSLATION_ANGLE_SCALE}
+fi
 if [[ -n "${BPREF_NOISE_OVERRIDE}" ]]; then
     export RECOVAR_K1_BPREF_NOISE_VARIANCE_OVERRIDE_PATH=${BPREF_NOISE_OVERRIDE}
 fi
@@ -194,7 +219,9 @@ unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
 nvidia-smi --query-gpu=uuid,name,memory.total --format=csv,noheader > "${ROOT}/provenance/gpu_${SLURM_JOB_ID}.txt"
 env | sort > "${ROOT}/provenance/environment_${SLURM_JOB_ID}.txt"
 git -C "${REPO}" status --short --branch > "${ROOT}/provenance/git_status_${SLURM_JOB_ID}.txt"
-git -C "${REPO}" diff --binary -- recovar/em scripts/run_full_refinement.py > "${ROOT}/provenance/recovar_source_diff_${SLURM_JOB_ID}.patch"
+git -C "${REPO}" diff --binary -- recovar/em recovar/cuda/cuda_backproject.cu \
+    recovar/cuda_backproject.py scripts/run_full_refinement.py \
+    > "${ROOT}/provenance/recovar_source_diff_${SLURM_JOB_ID}.patch"
 
 cd "${REPO}"
 "${PYTHON}" - <<'PY'
@@ -278,8 +305,10 @@ if [[ -n "${PASS2_DUMP_ORIGINAL_INDICES}" ]]; then
     find "${RECOVAR_PASS2_DUMP_DIR}" -type f -print0 \
         | sort -z | xargs -0 sha256sum >> "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
 fi
-printf '{"job_id":"%s","wall_s":%d,"case_index":%d,"max_iter":%d,"skip_final":%d,"live_initial_noise":%d,"parity_dump":%d}\n' \
+printf '{"job_id":"%s","wall_s":%d,"case_index":%d,"max_iter":%d,"skip_final":%d,"live_initial_noise":%d,"native_texture":%d,"full_coarse_grid":%d,"serial_particle_launches":%d,"native_fine_score_units":%d,"translation_angle_scale":"%s","parity_dump":%d}\n' \
     "${SLURM_JOB_ID}" "${wall_s}" "${K1_CASE_INDEX}" "${MAX_ITER}" "${SKIP_FINAL}" \
-    "${ENABLE_LIVE_INITIAL_NOISE}" "${ENABLE_PARITY_DUMP}" \
+    "${ENABLE_LIVE_INITIAL_NOISE}" "${ENABLE_NATIVE_TEXTURE}" "${FORCE_FULL_COARSE_GRID}" \
+    "${SERIAL_PARTICLE_LAUNCHES}" "${NATIVE_FINE_SCORE_UNITS}" "${TRANSLATION_ANGLE_SCALE}" \
+    "${ENABLE_PARITY_DUMP}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/SUCCESS_${SLURM_JOB_ID}"

@@ -1858,6 +1858,7 @@ def run_local_em_exact(
     score_with_masked_images: bool = True,
     half_spectrum_scoring: bool = False,
     relion_exact_score_translation: bool = False,
+    relion_translation_angle_scale: float = 1.0,
     use_float64_scoring: bool = False,
     use_float64_normalization: bool = True,
     use_float64_projections: bool = False,
@@ -2519,6 +2520,7 @@ def run_local_em_exact(
             local_layout.translation_grid,
             image_shape,
             enabled=relion_exact_score_translation,
+            angle_scale=relion_translation_angle_scale,
         )
     )
     if return_profile:

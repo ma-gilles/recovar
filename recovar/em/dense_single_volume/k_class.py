@@ -953,6 +953,9 @@ def _run_sparse_k_class_adaptive_pass2(
             base_engine_kwargs.get("bpref_device_signature_active", False)
         ),
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        relion_translation_angle_scale=float(
+            base_engine_kwargs.get("relion_translation_angle_scale", 1.0)
+        ),
     )
     preserve_bpref_particle_order = _apply_bpref_particle_order_policy(
         common,
@@ -1628,6 +1631,10 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         coarse_healpix_order=engine_kwargs.get("coarse_healpix_order"),
         coarse_rotation_ids=engine_kwargs.get("coarse_rotation_ids"),
         translation_phase_source=engine_kwargs.get("translation_phase_source"),
+        relion_translation_angle_scale=engine_kwargs.get(
+            "relion_translation_angle_scale",
+            1.0,
+        ),
     )[-1]
 
     from recovar.em.global_winner_summary import maybe_dump_global_winner_summary
@@ -2066,6 +2073,9 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
             pass2_kwargs.get("bpref_device_signature_active", False)
         ),
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        relion_translation_angle_scale=float(
+            pass2_kwargs.get("relion_translation_angle_scale", 1.0)
+        ),
     )
     _apply_bpref_particle_order_policy(
         common,
@@ -3147,6 +3157,10 @@ def run_dense_k_class_em_adaptive(
             relion_projector_texture_interp=coarse_relion_projector_texture_interp,
             debug_iteration=debug_iteration,
             translation_phase_source=coarse_translation_phase_source,
+            relion_translation_angle_scale=engine_kwargs.get(
+                "relion_translation_angle_scale",
+                1.0,
+            ),
             relion_coarse_gaussian_default=bool(
                 engine_kwargs.get("preserve_bpref_particle_order", False)
             ),

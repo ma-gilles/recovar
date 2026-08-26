@@ -47,6 +47,34 @@ def _array_metrics(control: np.ndarray, candidate: np.ndarray) -> dict[str, obje
     }
 
 
+def _target_row_metrics(control: np.ndarray, candidate: np.ndarray, position: int) -> dict[str, object]:
+    """Compare one particle row without discarding vector-valued observables."""
+    lhs = np.asarray(control)[position]
+    rhs = np.asarray(candidate)[position]
+    metrics = _array_metrics(np.atleast_1d(lhs), np.atleast_1d(rhs))
+    if np.asarray(lhs).ndim == 0:
+        control_value = np.asarray(lhs).item()
+        candidate_value = np.asarray(rhs).item()
+        metrics.update(
+            {
+                "control": control_value,
+                "candidate": candidate_value,
+                "candidate_minus_control": candidate_value - control_value,
+            }
+        )
+        if np.issubdtype(np.asarray(lhs).dtype, np.floating):
+            metrics["control_f32"] = _f32(float(control_value))
+            metrics["candidate_f32"] = _f32(float(candidate_value))
+    else:
+        metrics.update(
+            {
+                "control": np.asarray(lhs).tolist(),
+                "candidate": np.asarray(rhs).tolist(),
+            }
+        )
+    return metrics
+
+
 def analyze(
     *,
     control_path: Path,
@@ -76,6 +104,7 @@ def analyze(
 
         target_fields: dict[str, object] = {}
         for name in (
+            "log_evidence",
             "wsum_norm_correction",
             "norm_corrections",
             "image_corrections",
@@ -94,6 +123,7 @@ def analyze(
                 "candidate_minus_control": candidate_value - control_value,
             }
             if name in {
+                "log_evidence",
                 "wsum_norm_correction",
                 "norm_corrections",
                 "image_corrections",
@@ -104,6 +134,30 @@ def analyze(
                 record["control_f32"] = _f32(float(control_value))
                 record["candidate_f32"] = _f32(float(candidate_value))
             target_fields[name] = record
+
+        # Preserve an exhaustive view of every common numeric dump field.  In
+        # addition to protecting against instrumentation drift, this exposes
+        # vector-valued particle observables and half-global state that the
+        # hand-selected summaries above do not know about yet.
+        common_fields = sorted(set(control.files) & set(candidate.files))
+        all_common_fields: dict[str, object] = {}
+        all_particle_aligned_fields: dict[str, object] = {}
+        n_particles = int(control_ids.size)
+        for key in common_fields:
+            lhs = np.asarray(control[key])
+            rhs = np.asarray(candidate[key])
+            if not (np.issubdtype(lhs.dtype, np.number) and np.issubdtype(rhs.dtype, np.number)):
+                continue
+            if lhs.shape != rhs.shape:
+                all_common_fields[key] = {
+                    "shape_equal": False,
+                    "control_shape": list(lhs.shape),
+                    "candidate_shape": list(rhs.shape),
+                }
+                continue
+            all_common_fields[key] = {"shape_equal": True, **_array_metrics(lhs, rhs)}
+            if key.startswith(prefix) and lhs.ndim >= 1 and lhs.shape[0] == n_particles:
+                all_particle_aligned_fields[key] = _target_row_metrics(lhs, rhs, position)
 
         global_fields: dict[str, object] = {}
         for name in ("avg_norm_correction", "sumw", "Ft_y_total", "Ft_ctf_total"):
@@ -122,6 +176,7 @@ def analyze(
             name: _array_metrics(control[name], candidate[name])
             for name in (
                 "sigma2_noise",
+                prefix + "rotation_posterior_sums",
                 prefix + "wsum_sigma2_noise",
                 prefix + "wsum_img_power",
                 prefix + "norm_corrections",
@@ -156,6 +211,8 @@ def analyze(
         "target": target_fields,
         "half_state": global_fields,
         "arrays": array_fields,
+        "all_common_numeric_fields": all_common_fields,
+        "target_all_particle_aligned_fields": all_particle_aligned_fields,
         "artifacts": {
             "control": str(control_path.resolve()),
             "control_sha256": _sha256(control_path),

@@ -233,6 +233,7 @@ _SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTE
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
 _RELION_FINE_DIFF2_FUSED_FFI_ENV = "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI"
+_RELION_NATIVE_FINE_SCORE_UNITS_ENV = "RECOVAR_K1_RELION_NATIVE_FINE_SCORE_UNITS"
 _RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV = "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH"
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
 _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
@@ -2003,7 +2004,7 @@ def _translation_phase_table_for_indices(
     return translation_phases_half[:, pixel_indices]
 
 
-def _relion_translation_angles_f32(translations, image_shape):
+def _relion_translation_angles_f32(translations, image_shape, *, angle_scale=1.0):
     """Return RELION fine-score ``(tx, ty)`` radians with host rounding."""
 
     image_size = int(image_shape[0])
@@ -2015,6 +2016,14 @@ def _relion_translation_angles_f32(translations, image_shape):
             "RELION score translations must have shape (T, 2), got "
             f"{translations_f64.shape}"
         )
+    angle_scale = float(angle_scale)
+    if not np.isfinite(angle_scale) or angle_scale <= 0.0:
+        raise ValueError("RELION translation angle scale must be positive and finite")
+    # RELION stores sampling translations in model-pixel units, then converts
+    # them through the particle optics pixel size before the final XFLOAT
+    # angle cast. Scaling here changes only the score/BPref phase operand; the
+    # candidate grid and reported pose coordinates remain in model pixels.
+    translations_f64 = translations_f64 * angle_scale
     return np.asarray(
         -2.0 * np.pi * translations_f64 / float(image_size),
         dtype=np.float32,
@@ -2026,6 +2035,7 @@ def _relion_cuda_score_translation_angles_if_available(
     image_shape,
     *,
     enabled,
+    angle_scale=1.0,
 ):
     """Prepare exact score-translation angles or retain the JAX fallback."""
 
@@ -2043,7 +2053,11 @@ def _relion_cuda_score_translation_angles_if_available(
         "Exact RELION fine Gaussian scoring: using CUDA sincosf score translation"
     )
     return jnp.asarray(
-        _relion_translation_angles_f32(translations, image_shape),
+        _relion_translation_angles_f32(
+            translations,
+            image_shape,
+            angle_scale=angle_scale,
+        ),
         dtype=jnp.float32,
     )
 
@@ -5503,6 +5517,7 @@ def _write_bpref_accumulator_delta_v1(
     isolated_layout: str,
     volume_shape,
     max_r: float | None,
+    operand_bundle: dict[str, np.ndarray] | None = None,
 ) -> Path:
     """Atomically write one production boundary and its zero-prefix replay."""
 
@@ -5531,6 +5546,16 @@ def _write_bpref_accumulator_delta_v1(
         == isolated_weight.shape
     ):
         raise RuntimeError("BPref accumulator-delta stage shapes are inconsistent")
+    operand_bundle = {} if operand_bundle is None else {
+        str(key): np.asarray(value) for key, value in operand_bundle.items()
+    }
+    reserved_keys = {
+        "schema", "iteration", "half", "original_index", "before_data",
+        "before_weight", "after_data", "after_weight", "isolated_data",
+        "isolated_weight",
+    }
+    if reserved_keys.intersection(operand_bundle):
+        raise RuntimeError("BPref accumulator-delta operand keys collide with core fields")
     artifact_bytes = int(
         before_data.nbytes
         + before_weight.nbytes
@@ -5538,6 +5563,7 @@ def _write_bpref_accumulator_delta_v1(
         + after_weight.nbytes
         + isolated_data.nbytes
         + isolated_weight.nbytes
+        + sum(value.nbytes for value in operand_bundle.values())
     )
     if artifact_bytes * int(config["max_particles"]) > int(config["max_bytes"]):
         raise RuntimeError(
@@ -5581,6 +5607,7 @@ def _write_bpref_accumulator_delta_v1(
             after_weight=after_weight,
             isolated_data=isolated_data,
             isolated_weight=isolated_weight,
+            **operand_bundle,
         )
     os.replace(temporary, path)
     return path
@@ -5593,6 +5620,8 @@ def _accumulate_relion_firstiter_bpref_fused(
     posterior,
     rotations,
     actual_counts,
+    particle_half_local_indices,
+    particle_original_indices,
     data_volume,
     weight_volume,
     *,
@@ -5615,6 +5644,29 @@ def _accumulate_relion_firstiter_bpref_fused(
         raise ValueError("firstiter fused BPref image/CTF rows must be aligned")
     if raw_minvsigma2.shape != (int(raw_images.shape[1]),):
         raise ValueError("firstiter fused BPref inverse-noise row is not pixel-aligned")
+    particle_half_local_indices = np.asarray(
+        particle_half_local_indices, dtype=np.int64
+    ).reshape(-1)
+    particle_original_indices = np.asarray(
+        particle_original_indices, dtype=np.int64
+    ).reshape(-1)
+    if (
+        particle_half_local_indices.shape != actual_counts.shape
+        or particle_original_indices.shape != actual_counts.shape
+    ):
+        raise ValueError(
+            "firstiter fused BPref particle identities do not match posterior rows"
+        )
+
+    delta_config = _bpref_accumulator_delta_config()
+    if delta_config is not None:
+        context_iteration = int(_bpref_contribution_context["iteration"])
+        context_half = int(_bpref_contribution_context["half"])
+        if (
+            context_iteration != int(delta_config["iteration"])
+            or context_half != int(delta_config["half"])
+        ):
+            delta_config = None
 
     centered_pixel_indices = jnp.asarray(centered_pixel_indices, dtype=jnp.int32)
     fftw_pixel_indices = jnp.asarray(fftw_pixel_indices, dtype=jnp.int32)
@@ -5658,13 +5710,23 @@ def _accumulate_relion_firstiter_bpref_fused(
     if current_half_width != current_height // 2 + 1:
         raise RuntimeError("firstiter fused BPref did not form an FFTW half square")
 
-    threshold = jnp.asarray([np.float32(adaptive_fraction)], dtype=jnp.float32)
-    weight_norm = jnp.ones((1,), dtype=jnp.float32)
+    # RELION passes these host-known values as kernel parameters. Keeping them
+    # as Python scalars avoids a per-particle device-to-host synchronization in
+    # the exact-source CUDA FFI target.
+    threshold = float(np.float32(adaptive_fraction))
+    weight_norm = 1.0
     translation_angles = jnp.asarray(translation_angles, dtype=jnp.float32)
     current_image_shape = (int(current_height), int(current_height))
     for particle_index, count in enumerate(actual_counts.tolist()):
         if count <= 0:
             continue
+        original_index = int(particle_original_indices[particle_index])
+        capture_particle = bool(
+            delta_config is not None
+            and original_index in delta_config["original_indices"]
+        )
+        before_data = np.asarray(data_volume).copy() if capture_particle else None
+        before_weight = np.asarray(weight_volume).copy() if capture_particle else None
         particle_posterior = jnp.asarray(
             posterior[particle_index, :count], dtype=jnp.float32
         )
@@ -5686,6 +5748,72 @@ def _accumulate_relion_firstiter_bpref_fused(
             volume_shape,
             max_r,
         )
+        if capture_particle:
+            isolated_data, isolated_weight = (
+                cuda_backproject.relion_firstiter_bpref_fused_x_half(
+                    jnp.zeros_like(data_volume),
+                    jnp.zeros_like(weight_volume),
+                    dense_images[particle_index],
+                    dense_ctf[particle_index],
+                    dense_minvsigma2[particle_index],
+                    particle_posterior,
+                    translation_angles,
+                    native_eulers,
+                    threshold,
+                    weight_norm,
+                    current_image_shape,
+                    volume_shape,
+                    max_r,
+                )
+            )
+            _write_bpref_accumulator_delta_v1(
+                config=delta_config,
+                original_index=original_index,
+                particle_launch_ordinal=int(
+                    particle_half_local_indices[particle_index]
+                ),
+                particle_rotation_count=count,
+                before_data=before_data,
+                before_weight=before_weight,
+                after_data=np.asarray(data_volume).copy(),
+                after_weight=np.asarray(weight_volume).copy(),
+                isolated_data=np.asarray(isolated_data).copy(),
+                isolated_weight=np.asarray(isolated_weight).copy(),
+                isolated_layout=(
+                    "RECOVAR firstiter fused interleaved complex64 data plus "
+                    "float32 weight"
+                ),
+                volume_shape=volume_shape,
+                max_r=max_r,
+                operand_bundle={
+                    "operand_source_image": np.asarray(
+                        dense_images[particle_index], dtype=np.complex64
+                    ).copy(),
+                    "operand_ctf": np.asarray(
+                        dense_ctf[particle_index], dtype=np.float32
+                    ).copy(),
+                    "operand_minvsigma2": np.asarray(
+                        dense_minvsigma2[particle_index], dtype=np.float32
+                    ).copy(),
+                    "operand_posterior": np.asarray(
+                        particle_posterior, dtype=np.float32
+                    ).copy(),
+                    "operand_translation_angles": np.asarray(
+                        translation_angles, dtype=np.float32
+                    ).copy(),
+                    "operand_eulers": np.asarray(
+                        native_eulers, dtype=np.float32
+                    ).copy(),
+                    "operand_threshold": np.asarray(threshold, dtype=np.float32).copy(),
+                    "operand_weight_norm": np.asarray(weight_norm, dtype=np.float32).copy(),
+                    "operand_centered_pixel_indices": np.asarray(
+                        centered_pixel_indices, dtype=np.int32
+                    ).copy(),
+                    "operand_fftw_pixel_indices": np.asarray(
+                        fftw_pixel_indices, dtype=np.int32
+                    ).copy(),
+                },
+            )
     return data_volume, weight_volume
 
 
@@ -6929,14 +7057,10 @@ def _relion_cuda_corr_img_from_native_noise_variance(
     if tuple(image_shape) != (image_size, image_size):
         raise ValueError(f"RELION corr_img requires a square image, got {image_shape}")
     native_fourier_scale_rfloat = jnp.asarray(image_size**4, dtype=jnp.float64)
-    native_variance = (
-        jnp.asarray(noise_variance, dtype=jnp.float64)
-        / native_fourier_scale_rfloat
-    )
-    native_inverse_noise = jnp.reciprocal(native_variance).astype(jnp.float32)
-    native_corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
-        native_inverse_noise,
+    native_corr_img = _relion_cuda_native_corr_img_from_noise_variance(
+        noise_variance,
         ctf_rfloat,
+        image_shape,
         scale,
     )
     # XLA's float32 division may lower to a reciprocal multiply and differs
@@ -6946,6 +7070,30 @@ def _relion_cuda_corr_img_from_native_noise_variance(
     return (
         native_corr_img.astype(jnp.float64) / native_fourier_scale_rfloat
     ).astype(jnp.float32)
+
+
+def _relion_cuda_native_corr_img_from_noise_variance(
+    noise_variance,
+    ctf_rfloat,
+    image_shape,
+    scale=None,
+):
+    """Return RELION's native-unit XFLOAT ``corr_img`` before FFT rescaling."""
+
+    image_size = int(image_shape[0])
+    if tuple(image_shape) != (image_size, image_size):
+        raise ValueError(f"RELION corr_img requires a square image, got {image_shape}")
+    native_fourier_scale_rfloat = jnp.asarray(image_size**4, dtype=jnp.float64)
+    native_variance = (
+        jnp.asarray(noise_variance, dtype=jnp.float64)
+        / native_fourier_scale_rfloat
+    )
+    native_inverse_noise = jnp.reciprocal(native_variance).astype(jnp.float32)
+    return _relion_cuda_corr_img_from_rfloat_ctf(
+        native_inverse_noise,
+        ctf_rfloat,
+        scale,
+    )
 
 
 def _relion_cuda_pixel_correction_from_rfloat_ctf(scale, ctf_rfloat):
@@ -11186,6 +11334,7 @@ def _prepare_bucket_io(
     )
     batch_scale = jnp.asarray(batch_scale_np, dtype=ctf_half.dtype)
     relion_score_corr_img_half = None
+    relion_native_score_corr_img_half = None
     direct_pixel_correction_full = None
     if relion_exact_bpref_operands:
         if relion_preprocess_kwargs is None:
@@ -11208,6 +11357,14 @@ def _prepare_bucket_io(
             ctf_half_rfloat,
             image_shape,
             batch_scale[:, None] if scale_corrections is not None else None,
+        )
+        relion_native_score_corr_img_half = (
+            _relion_cuda_native_corr_img_from_noise_variance(
+                noise_variance_half[None, :],
+                ctf_half_rfloat,
+                image_shape,
+                batch_scale[:, None] if scale_corrections is not None else None,
+            )
         )
     else:
         inverse_noise_half = None
@@ -11626,6 +11783,7 @@ def _prepare_bucket_io(
         batch_scale_np,
         inverse_noise_half,
         ctf_half_rfloat,
+        relion_native_score_corr_img_half,
         direct_bpref_image_half,
         direct_bpref_ctf_half,
         direct_bpref_minvsigma2_half,
@@ -11695,6 +11853,7 @@ def compute_pass2_stats_sparse_bucketed(
     include_unweighted_norm_high_shell: bool = True,
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
+    relion_translation_angle_scale: float = 1.0,
 ):
     """Bucketed batched implementation of sparse pass-2 oversampling.
 
@@ -12524,6 +12683,7 @@ def compute_pass2_stats_sparse_bucketed(
             fine_translations_source,
             image_shape,
             enabled=use_exact_relion_gaussian or relion_exact_bpref_operands,
+            angle_scale=relion_translation_angle_scale,
         )
     )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
@@ -12841,6 +13001,7 @@ def compute_pass2_stats_sparse_bucketed(
             direct_batch_scale_corrections,
             direct_inverse_noise_half,
             direct_ctf_rfloat_half,
+            direct_native_corr_img_half,
             direct_bpref_image_half,
             direct_bpref_ctf_half,
             direct_bpref_minvsigma2_half,
@@ -12876,6 +13037,13 @@ def compute_pass2_stats_sparse_bucketed(
                 if direct_inverse_noise_half is None
                 else direct_inverse_noise_half[jnp.asarray(window_indices, dtype=jnp.int32)]
             )
+            direct_native_corr_img_score = (
+                None
+                if direct_native_corr_img_half is None
+                else direct_native_corr_img_half[
+                    :, jnp.asarray(window_indices, dtype=jnp.int32)
+                ]
+            )
             direct_ctf_rfloat_score = (
                 None
                 if direct_ctf_rfloat_half is None
@@ -12890,6 +13058,7 @@ def compute_pass2_stats_sparse_bucketed(
             )
         else:
             direct_inverse_noise_score = direct_inverse_noise_half
+            direct_native_corr_img_score = direct_native_corr_img_half
             direct_ctf_rfloat_score = direct_ctf_rfloat_half
             direct_ctf_rfloat_recon = direct_ctf_rfloat_half
         relion_highres_xi2_half = None
@@ -14603,6 +14772,33 @@ def compute_pass2_stats_sparse_bucketed(
         # Score: (B, R, T)
         shifted_corrected_score_split = shifted_corrected_score.reshape(batch, n_fine_trans, -1)
         direct_half_weights = half_weights_windowed if use_window else half_weights
+        fine_score_shifted = shifted_corrected_score_split
+        fine_score_corr_img = ctf2_over_nv_score
+        fine_score_proj = proj_half
+        if (
+            use_exact_relion_gaussian
+            and direct_native_corr_img_score is not None
+            and _env_flag_enabled(_RELION_NATIVE_FINE_SCORE_UNITS_ENV, default=True)
+        ):
+            # RELION evaluates fine diff2 in its unnormalised FFT units.  The
+            # three factors cancel algebraically, but keeping RECOVAR's N^2
+            # image/reference scale and N^-4 corr_img scale changes float32
+            # pixel products.  Convert the complex operands to native units
+            # and consume corr_img before its lossy N^-4 storage conversion.
+            native_fft_scale = jnp.asarray(
+                int(np.prod(image_shape)), dtype=jnp.float32
+            )
+            fine_score_shifted = (
+                jnp.asarray(fine_score_shifted, dtype=jnp.complex64)
+                / native_fft_scale
+            ).astype(jnp.complex64)
+            fine_score_proj = (
+                jnp.asarray(fine_score_proj, dtype=jnp.complex64)
+                / native_fft_scale
+            ).astype(jnp.complex64)
+            fine_score_corr_img = jnp.asarray(
+                direct_native_corr_img_score, dtype=jnp.float32
+            )
         shadow_score_bitwise_equal = False
         raw_diff2 = None
         if relion_firstiter_score_mode == "normalized_cc":
@@ -14634,9 +14830,9 @@ def compute_pass2_stats_sparse_bucketed(
                 shadow_score_bitwise_equal = True
         elif use_exact_relion_gaussian:
             raw_diff2 = _score_pass2_bucket_relion_gpu_diff2_raw(
-                shifted_corrected_score_split,
-                ctf2_over_nv_score,
-                proj_half,
+                fine_score_shifted,
+                fine_score_corr_img,
+                fine_score_proj,
                 direct_half_weights,
                 relion_score_full_to_compact,
                 relion_highres_xi2_half,
@@ -14665,9 +14861,9 @@ def compute_pass2_stats_sparse_bucketed(
                     min_diff2=min_diff2,
                 )
                 shadow_scores = _score_pass2_bucket_relion_gpu_diff2(
-                    shifted_corrected_score_split,
-                    ctf2_over_nv_score,
-                    proj_half,
+                    fine_score_shifted,
+                    fine_score_corr_img,
+                    fine_score_proj,
                     direct_half_weights,
                     jnp.asarray(log_prior),
                     bucket_translation_prior,
@@ -14918,11 +15114,11 @@ def compute_pass2_stats_sparse_bucketed(
                 reconstruction_mask=reconstruction_mask,
                 reconstruction_probs=reconstruction_probs,
                 reconstruction_n_significant=reconstruction_n_significant,
-                ctf2_over_nv_score=ctf2_over_nv_score,
-                proj_half=proj_half,
+                ctf2_over_nv_score=fine_score_corr_img,
+                proj_half=fine_score_proj,
                 half_weights_used=half_weights_windowed if use_window else half_weights,
                 window_indices=window_indices_np,
-                shifted_corrected_score_split=shifted_corrected_score_split,
+                shifted_corrected_score_split=fine_score_shifted,
                 direct_score_input=direct_score_input,
                 direct_preprocessed_score_input=direct_preprocessed_score_input,
                 direct_pixel_correction=direct_pixel_correction,
@@ -15186,6 +15382,8 @@ def compute_pass2_stats_sparse_bucketed(
                     mstep_probs,
                     jnp.asarray(mstep_rotations),
                     actual_counts,
+                    np.asarray(image_indices, dtype=np.int64),
+                    _original_indices_for_local(experiment_dataset, image_indices),
                     Ft_y_total,
                     Ft_ctf_total,
                     centered_pixel_indices=centered_recon_indices,
@@ -15846,6 +16044,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
     bpref_device_signature_active: bool = False,
+    relion_translation_angle_scale: float = 1.0,
 ) -> SparseKClassPass2FusedResult:
     """Evaluate K-class sparse pass-2 in one joint class-normalized sweep.
 
@@ -16825,6 +17024,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             fine_translations,
             image_shape,
             enabled=use_exact_relion_gaussian,
+            angle_scale=relion_translation_angle_scale,
         )
     )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
@@ -17231,6 +17431,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             _direct_batch_scale_corrections,
             _direct_inverse_noise_half,
             _direct_ctf_rfloat_half,
+            _direct_native_corr_img_half,
             _direct_bpref_image_half,
             _direct_bpref_ctf_half,
             _direct_bpref_minvsigma2_half,

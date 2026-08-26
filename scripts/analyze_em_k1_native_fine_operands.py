@@ -67,6 +67,18 @@ def _relative_l2(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.linalg.norm((np.asarray(left) - np.asarray(right)).reshape(-1)) / denominator)
 
 
+def _score_unit_factors(score_units: str, full_image_size: int) -> tuple[np.float32, np.float32]:
+    """Return native-complex multiplier and native-corr divisor for a score frame."""
+
+    if full_image_size <= 0:
+        raise ValueError("full_image_size must be positive")
+    if score_units == "native":
+        return np.float32(1.0), np.float32(1.0)
+    if score_units == "normalized":
+        return np.float32(full_image_size**2), np.float32(full_image_size**4)
+    raise ValueError(f"unsupported score units: {score_units!r}")
+
+
 def _winner_boundary(
     *,
     native_raw_cost: np.ndarray,
@@ -233,6 +245,7 @@ def analyze(
     *,
     full_image_size: int,
     chunk_size: int,
+    recovar_score_units: str = "normalized",
     alternate_reference_npz: Path | None = None,
 ) -> dict:
     dump_dir = Path(dump_dir)
@@ -298,12 +311,12 @@ def analyze(
     )
     valid = lookup >= 0
     compact = lookup[valid]
-    scale = np.float32(full_image_size**2)
+    scale, corr_divisor = _score_unit_factors(recovar_score_units, full_image_size)
 
     native_corr = np.asarray(_flat_memmap(dump_dir / "pass1_img0_corr_img.bin"), dtype=np.float32)
     if native_corr.size != native_pixel_count:
         raise ValueError("native corr_img has the wrong current-size topology")
-    native_weight = native_corr / np.float32(full_image_size**4)
+    native_weight = native_corr / corr_divisor
     rec_weight = np.zeros(native_pixel_count, dtype=np.float32)
     rec_weight[valid] = np.asarray(
         rec["ctf2_over_nv_score"] * rec["half_weights"],
@@ -445,6 +458,7 @@ def analyze(
         "recovar_original_index": int(rec["original_index"]),
         "candidate_count": int(candidate_count),
         "candidate_keys_exact": True,
+        "recovar_score_units": recovar_score_units,
         "rotation_matrix_orientation": orientation,
         "rotation_matrix_median_frobenius": float(np.median(rotation_distance)),
         "rotation_matrix_max_frobenius": float(np.max(rotation_distance)),
@@ -490,6 +504,12 @@ def main() -> None:
     parser.add_argument("--recovar-pass2-npz", required=True, type=Path)
     parser.add_argument("--full-image-size", type=int, default=128)
     parser.add_argument("--chunk-size", type=int, default=64)
+    parser.add_argument(
+        "--recovar-score-units",
+        choices=("native", "normalized"),
+        default="normalized",
+        help="unit frame stored in RECOVAR's captured fine-score operands",
+    )
     parser.add_argument("--alternate-reference-npz", type=Path)
     parser.add_argument("--output-json", required=True, type=Path)
     args = parser.parse_args()
@@ -498,6 +518,7 @@ def main() -> None:
         args.recovar_pass2_npz,
         full_image_size=args.full_image_size,
         chunk_size=args.chunk_size,
+        recovar_score_units=args.recovar_score_units,
         alternate_reference_npz=args.alternate_reference_npz,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)

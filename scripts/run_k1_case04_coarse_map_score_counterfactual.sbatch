@@ -36,6 +36,10 @@ RECOVAR_MAP=${K1_CASE04_MAP_SCORE_RECOVAR_MAP:-${RECOVAR_ROOT}/output/intermedia
 NATIVE_MAP_CONVENTION=${K1_CASE04_MAP_SCORE_NATIVE_MAP_CONVENTION:-relion}
 RECOVAR_MAP_CONVENTION=${K1_CASE04_MAP_SCORE_RECOVAR_MAP_CONVENTION:-recovar}
 OUTPUT=${K1_CASE04_MAP_SCORE_OUTPUT:-${ROOT}/analysis/COARSE_MAP_SCORE_COUNTERFACTUAL.json}
+WINNER=${K1_MAP_SCORE_WINNER:-26325,19}
+TARGET=${K1_MAP_SCORE_TARGET:-27095,14}
+NATIVE_DIRECTIONS=${K1_MAP_SCORE_NATIVE_DIRECTIONS:-768}
+NATIVE_PSI=${K1_MAP_SCORE_NATIVE_PSI:-48}
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
@@ -45,6 +49,10 @@ for artifact in "${NATIVE_CAPTURE}" "${RECOVAR_CAPTURE}" "${NATIVE_MAP}" "${RECO
     test -s "${artifact}"
 done
 test ! -e "${OUTPUT}"
+[[ "${WINNER}" =~ ^[0-9]+,[0-9]+$ ]]
+[[ "${TARGET}" =~ ^[0-9]+,[0-9]+$ ]]
+[[ "${NATIVE_DIRECTIONS}" =~ ^[1-9][0-9]*$ ]]
+[[ "${NATIVE_PSI}" =~ ^[1-9][0-9]*$ ]]
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
@@ -81,8 +89,9 @@ command=("${PYTHON}" -m scripts.analyze_k1_coarse_map_score_counterfactual
   --native-map "${NATIVE_MAP}" --recovar-map "${RECOVAR_MAP}"
   --native-map-convention "${NATIVE_MAP_CONVENTION}"
   --recovar-map-convention "${RECOVAR_MAP_CONVENTION}"
-  --winner 26325,19 --target 27095,14
-  --native-directions 768 --native-psi 48 --output-json "${OUTPUT}")
+  --winner "${WINNER}" --target "${TARGET}"
+  --native-directions "${NATIVE_DIRECTIONS}" --native-psi "${NATIVE_PSI}"
+  --output-json "${OUTPUT}")
 printf '%q ' "${command[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 cd "${REPO}"

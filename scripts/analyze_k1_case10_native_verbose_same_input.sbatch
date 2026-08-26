@@ -17,6 +17,12 @@ set -euo pipefail
 : "${EXPECTED_REPO_HEAD:?EXPECTED_REPO_HEAD is required}"
 : "${EXPECTED_LAUNCHER_SHA256:?EXPECTED_LAUNCHER_SHA256 is required}"
 
+TARGET_SOURCE_ROW=${K1_CASE10_TARGET_SOURCE_ROW:-68955}
+case "${TARGET_SOURCE_ROW}" in
+  ''|*[!0-9]*) echo "K1_CASE10_TARGET_SOURCE_ROW must be a non-negative integer" >&2; exit 2 ;;
+esac
+printf -v TARGET_SOURCE_PADDED '%06d' "${TARGET_SOURCE_ROW}"
+
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 LAUNCHER=${REPO}/scripts/analyze_k1_case10_native_verbose_same_input.sbatch
@@ -49,7 +55,7 @@ export PIXI_HOME=${RUNTIME_ROOT}/pixi_home
 export RATTLER_CACHE_DIR=${RUNTIME_ROOT}/rattler_cache
 export PYTHONPYCACHEPREFIX=${RUNTIME_ROOT}/pycache
 
-output=${ANALYSIS}/K1_CASE10_ROW68955_NATIVE_VS_SAME_INPUT_FINE_OPERANDS.json
+output=${ANALYSIS}/K1_CASE10_ROW${TARGET_SOURCE_PADDED}_NATIVE_VS_SAME_INPUT_FINE_OPERANDS.json
 test ! -e "${output}"
 cd "${REPO}"
 "${PYTHON}" -m scripts.analyze_k1_native_fine_operand_boundary \

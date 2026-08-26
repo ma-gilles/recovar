@@ -52,6 +52,51 @@ def _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction: float):
     )
 
 
+def relion_cuda_f32_coarse_log_weights(
+    raw_scores,
+    rotation_log_prior,
+    translation_log_prior,
+):
+    """Apply RELION's coarse CUDA prior/min-diff arithmetic in float32.
+
+    ``raw_scores`` is RECOVAR's negative-diff2 table up to an arbitrary
+    per-image additive constant.  RELION's CUDA kernel evaluates
+
+    ``orientation_prior + offset_prior + min_diff2 - diff2``
+
+    in that exact left-associative order.  Adding priors to the large absolute
+    raw scores and centering afterwards is algebraically equivalent, but can
+    erase one-ULP pose margins at the significance cutoff.
+    """
+
+    raw = jnp.asarray(raw_scores, dtype=jnp.float32)
+    if raw.ndim != 3:
+        raise ValueError(f"raw_scores must have shape (batch, rotations, translations), got {raw.shape}")
+    rotation_prior = jnp.asarray(rotation_log_prior, dtype=jnp.float32).reshape(-1)
+    translation_prior = jnp.asarray(translation_log_prior, dtype=jnp.float32)
+    if translation_prior.ndim == 1:
+        translation_prior = jnp.broadcast_to(
+            translation_prior[None, :],
+            (raw.shape[0], translation_prior.shape[0]),
+        )
+    if translation_prior.ndim != 2:
+        raise ValueError("translation_log_prior must be one- or two-dimensional")
+    if raw.shape[1:] != (rotation_prior.shape[0], translation_prior.shape[1]):
+        raise ValueError(
+            "raw-score and prior topology mismatch: "
+            f"raw={raw.shape}, rotation={rotation_prior.shape}, translation={translation_prior.shape}",
+        )
+
+    finite = jnp.isfinite(raw) & jnp.isfinite(rotation_prior)[None, :, None]
+    finite &= jnp.isfinite(translation_prior)[:, None, :]
+    raw_best = jnp.max(jnp.where(finite, raw, -jnp.inf), axis=(1, 2))
+    min_diff2 = -raw_best
+    diff2 = -raw
+    prior_sum = rotation_prior[None, :, None] + translation_prior[:, None, :]
+    log_weights = (prior_sum + min_diff2[:, None, None]) - diff2
+    return jnp.where(finite, log_weights, -jnp.inf)
+
+
 @partial(jax.jit, static_argnames=("adaptive_fraction", "max_significants"))
 def relion_cuda_f32_coarse_posterior(
     scores_flat,
@@ -776,6 +821,7 @@ def compute_pass2_stats_sparse(
     include_unweighted_norm_high_shell: bool = True,
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
+    relion_translation_angle_scale: float = 1.0,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -929,10 +975,15 @@ def compute_pass2_stats_sparse(
             include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
             preserve_bpref_particle_order=preserve_bpref_particle_order,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+            relion_translation_angle_scale=relion_translation_angle_scale,
         )
 
     if relion_projector_half is not None:
         raise NotImplementedError("RELION projector sparse pass-2 requires the bucketed implementation")
+    if float(relion_translation_angle_scale) != 1.0:
+        raise NotImplementedError(
+            "RELION model/optics translation-angle scaling requires the bucketed sparse pass-2 path"
+        )
     if reconstruction_current_size is not None:
         raise NotImplementedError(
             "separate score/reconstruction current sizes require the bucketed sparse pass-2 path",

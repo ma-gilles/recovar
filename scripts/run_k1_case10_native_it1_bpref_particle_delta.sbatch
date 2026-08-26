@@ -22,7 +22,7 @@ ROOT=${RUN_ROOT}
 RUNTIME=${RUNTIME_ROOT}
 REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820
 SOURCE_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET
-CASE=${SOURCE_ROOT}/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0
+CASE=${K1_NATIVE_CASE_DIR:-${SOURCE_ROOT}/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0}
 DATA=${CASE}/data
 CONTROL=${CASE}/relion_ref
 LAUNCHER=${REPO}/scripts/run_k1_case10_native_it1_bpref_particle_delta.sbatch
@@ -34,16 +34,28 @@ PYTHON=${REPO}/.pixi/envs/default/bin/python
 DELTA=${ROOT}/bpref_particle_delta
 RELION_OUT=${ROOT}/relion
 ANALYSIS=${ROOT}/analysis
-PART_IDS=0,4754,20701,36334,52295,68226,84255,99998,33334,4784,20584,36715,52483,68284,83995,5
+PART_IDS=${K1_NATIVE_PART_IDS:-0,4754,20701,36334,52295,68226,84255,99998,33334,4784,20584,36715,52483,68284,83995,5}
+RANDOM_SEED=${K1_NATIVE_RANDOM_SEED:-1710}
+AUTO_ITER_MAX=${K1_NATIVE_AUTO_ITER_MAX:-2}
+STACK_PATH=${K1_NATIVE_STACK_PATH:-${DATA}/particles.384.mrcs}
+EXPECTED_DATA_STAR_SHA256=${K1_NATIVE_EXPECTED_DATA_STAR_SHA256:-3be82df3627e0d6c3c12d1eb42e1ab0c7feb09117bb66a38cc53c0621e9f8436}
+EXPECTED_REFERENCE_SHA256=${K1_NATIVE_EXPECTED_REFERENCE_SHA256:-d1d52afee6161d295f907a7dc633bb2cc3b7c7d2d575f6347297567375af78c2}
+EXPECTED_STACK_BYTES=${K1_NATIVE_EXPECTED_STACK_BYTES:-58982401024}
+PARTICLE_COUNT=$(awk -F, '{print NF}' <<< "${PART_IDS}")
+case "${RANDOM_SEED}" in ''|*[!0-9]*) echo "K1_NATIVE_RANDOM_SEED must be a non-negative integer" >&2; exit 2 ;; esac
+case "${AUTO_ITER_MAX}" in ''|*[!0-9]*) echo "K1_NATIVE_AUTO_ITER_MAX must be a positive integer" >&2; exit 2 ;; esac
+test "${AUTO_ITER_MAX}" -gt 0
+test "${PARTICLE_COUNT}" -gt 0
 
 test -f "${ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME}/SAFE_TO_DELETE"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(git -C "${RELION_SOURCE}" rev-parse HEAD)" = ed53c60d83125902c456b7fc5461c78c3966b306
 test "$(git -C "${RELION_SOURCE}" diff --binary | sha256sum | awk '{print $1}')" = "${EXPECTED_RELION_SOURCE_DIFF_SHA256}"
 test "$(sha256sum "${RELION_BINARY}" | awk '{print $1}')" = "${EXPECTED_RELION_BINARY_SHA256}"
-test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = 3be82df3627e0d6c3c12d1eb42e1ab0c7feb09117bb66a38cc53c0621e9f8436
-test "$(sha256sum "${DATA}/reference_init_relion.mrc" | awk '{print $1}')" = d1d52afee6161d295f907a7dc633bb2cc3b7c7d2d575f6347297567375af78c2
-test "$(stat -Lc %s "${DATA}/particles.384.mrcs")" = 58982401024
+test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = "${EXPECTED_DATA_STAR_SHA256}"
+test "$(sha256sum "${DATA}/reference_init_relion.mrc" | awk '{print $1}')" = "${EXPECTED_REFERENCE_SHA256}"
+test "${STACK_PATH:0:1}" = / -a -f "${STACK_PATH}"
+test "$(stat -Lc %s "${STACK_PATH}")" = "${EXPECTED_STACK_BYTES}"
 
 mkdir -p "${DELTA}" "${RELION_OUT}" "${ANALYSIS}" "${ROOT}/logs" \
     "${ROOT}/provenance" "${RUNTIME}/tmp" "${RUNTIME}/pixi_home" \
@@ -92,7 +104,7 @@ command=(srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
   --auto_refine --split_random_halves --particle_diameter 200 --ini_high 30
   --firstiter_cc --ctf --flatten_solvent --zero_mask --low_resol_join_halves 40
   --norm --scale --healpix_order 3 --offset_range 3.0 --offset_step 1.0
-  --oversampling 1 --pad 2 --random_seed 1710 --auto_iter_max 2
+  --oversampling 1 --pad 2 --random_seed "${RANDOM_SEED}" --auto_iter_max "${AUTO_ITER_MAX}"
   --pool 3 --gpu 0:0:0 --j 4)
 printf '%q ' "${command[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
@@ -103,7 +115,7 @@ start_epoch=$(date +%s)
 ) > "${RELION_OUT}/runner.stdout" 2> "${RELION_OUT}/runner.stderr"
 wall_s=$(( $(date +%s) - start_epoch ))
 
-test "$(find "${DELTA}" -maxdepth 1 -name '*.bin' | wc -l)" -eq 64
+test "$(find "${DELTA}" -maxdepth 1 -name '*.bin' | wc -l)" -eq "$((4 * PARTICLE_COUNT))"
 "${PYTHON}" "${AUDIT_REPO}/scripts/audit_relion_control_reproducibility.py" \
     --control-dir "${CONTROL}" --candidate-dir "${RELION_OUT}" --iterations 1 \
     --map-fsc-auc-threshold 0.999999 \
@@ -121,7 +133,7 @@ PY
 find "${DELTA}" "${RELION_OUT}" "${ANALYSIS}" -type f -print0 \
     | sort -z | xargs -0 sha256sum \
     > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
-printf '{"job_id":"%s","wall_s":%d,"physical_iteration":1,"particle_count":16}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" \
+printf '{"job_id":"%s","wall_s":%d,"physical_iteration":1,"particle_count":%d,"random_seed":%d,"auto_iter_max":%d}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${PARTICLE_COUNT}" "${RANDOM_SEED}" "${AUTO_ITER_MAX}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/SUCCESS_${SLURM_JOB_ID}"

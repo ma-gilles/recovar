@@ -6,6 +6,7 @@ import pytest
 from scripts.analyze_em_k1_native_fine_operands import (
     _full_to_compact,
     _infer_float32_common_addend,
+    _score_unit_factors,
     _tree_sum,
     _winner_boundary,
 )
@@ -45,6 +46,16 @@ def test_infer_float32_common_addend_replays_large_costs():
 
     np.testing.assert_array_equal(base + inferred, target)
     assert exact == base.size
+
+
+def test_score_unit_factors_distinguish_native_and_normalized_frames():
+    assert _score_unit_factors("native", 384) == (np.float32(1.0), np.float32(1.0))
+    assert _score_unit_factors("normalized", 384) == (
+        np.float32(384**2),
+        np.float32(384**4),
+    )
+    with pytest.raises(ValueError, match="unsupported score units"):
+        _score_unit_factors("unknown", 384)
 
 
 def test_winner_boundary_reports_opposite_native_and_recovar_preferences():

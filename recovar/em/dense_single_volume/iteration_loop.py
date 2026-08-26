@@ -225,6 +225,31 @@ def _translation_grid_for_class_count(max_pixel, pixel_offset, *, n_classes):
     return get_translation_grid(max_pixel, pixel_offset)
 
 
+def _relion_k1_translation_angle_scale(
+    *,
+    n_classes: int,
+    model_pixel_size: float,
+    optics_pixel_sizes,
+) -> float:
+    """Convert K=1 model-pixel translations to the shared optics pixel size."""
+
+    if int(n_classes) != 1 or optics_pixel_sizes is None:
+        return 1.0
+    model_pixel_size = float(model_pixel_size)
+    optics = np.asarray(optics_pixel_sizes, dtype=np.float64).reshape(-1)
+    if not np.isfinite(model_pixel_size) or model_pixel_size <= 0.0:
+        raise ValueError("RELION model pixel size must be positive and finite")
+    if optics.size == 0 or not np.all(np.isfinite(optics)) or np.any(optics <= 0.0):
+        raise ValueError("RELION optics pixel sizes must be non-empty, positive, and finite")
+    unique_optics = np.unique(optics)
+    if unique_optics.size != 1:
+        raise NotImplementedError(
+            "K=1 exact RELION translation phases currently require one shared optics pixel size; "
+            "per-particle optics scaling is not yet implemented"
+        )
+    return model_pixel_size / float(unique_optics[0])
+
+
 def _significance_dump_half_indices(
     *,
     numbered_iteration: int,
@@ -2410,6 +2435,7 @@ def _score_half_dense(
     coarse_rotation_ids=None,
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
+    relion_translation_angle_scale: float = 1.0,
 ) -> HalfScoreResult:
     """Dense (non-local-search) E+M scoring for one half-set.
 
@@ -2458,6 +2484,7 @@ def _score_half_dense(
         "translation_prior_centers": trans_prior_center_for_engine,
         "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
         "relion_firstiter_winner_take_all": firstiter_winner_take_all_this_iter,
+        "relion_translation_angle_scale": float(relion_translation_angle_scale),
     }
     if model_current_size_for_engine is not None:
         em_kwargs["reconstruction_current_size"] = model_current_size_for_engine
@@ -3072,6 +3099,7 @@ def _score_half_local(
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
     source_faithful_spectrum_norm: bool = False,
+    relion_translation_angle_scale: float = 1.0,
 ) -> HalfScoreResult:
     """Local-search E+M scoring for one half-set.
 
@@ -3300,6 +3328,7 @@ def _score_half_local(
             apply_max_significants_to_support=True,
             score_only=True,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+            relion_translation_angle_scale=relion_translation_angle_scale,
         )
         parent_profile = parent_outputs[-1]
         significant_sample_indices = parent_profile["reconstruction_sample_indices_by_image"]
@@ -3513,6 +3542,7 @@ def _score_half_local(
                 ),
                 score_only=True,
                 source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                relion_translation_angle_scale=relion_translation_angle_scale,
             )
         finally:
             os.environ.update(saved_local_debug_env)
@@ -3611,6 +3641,7 @@ def _score_half_local(
         return_significant_counts=False,
         score_only=diagnostic_score_only,
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        relion_translation_angle_scale=relion_translation_angle_scale,
         rotation_grid_mstep_rotations=local_search_mstep_rotations,
         generate_relion_mstep_rotations=True,
     )
@@ -5062,6 +5093,19 @@ def _run_relion_iteration_loop(
     )
     if not np.isfinite(model_pixel_size) or model_pixel_size <= 0.0:
         raise ValueError(f"RELION model pixel size must be positive, got {model_pixel_size}")
+    relion_translation_angle_scale = _relion_k1_translation_angle_scale(
+        n_classes=n_classes,
+        model_pixel_size=model_pixel_size,
+        optics_pixel_sizes=optics_pixel_sizes,
+    )
+    if relion_translation_angle_scale != 1.0:
+        logger.info(
+            "RELION K=1 translation phases: model_pixel_size=%.12g "
+            "optics_pixel_size=%.12g angle_scale=%.17g",
+            model_pixel_size,
+            float(optics_pixel_sizes[0]),
+            relion_translation_angle_scale,
+        )
     _validate_bpref_particle_order_scope(
         preserve_bpref_particle_order=preserve_bpref_particle_order,
         n_classes=n_classes,
@@ -5331,6 +5375,24 @@ def _run_relion_iteration_loop(
 
     def _safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None, current_size_for_batch=None):
         """Reduce batch sizes for large pose grids to avoid GPU OOM."""
+        force_full_coarse_grid = os.environ.get(
+            "RECOVAR_K1_COARSE_GAUSSIAN_FORCE_FULL_ROTATION_GRID_DIAGNOSTIC",
+        ) == "1"
+        serial_particle_launches = os.environ.get(
+            "RECOVAR_K1_COARSE_GAUSSIAN_SERIAL_PARTICLE_LAUNCHES_DIAGNOSTIC",
+        ) == "1"
+        native_texture_scoring = os.environ.get(
+            "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE",
+        ) == "1"
+        if (
+            force_full_coarse_grid
+            and not serial_particle_launches
+            and not native_texture_scoring
+        ):
+            raise RuntimeError(
+                "The K=1 full coarse rotation-grid diagnostic requires either "
+                "serial per-particle CUDA launches or native texture scoring",
+            )
         plan = _estimate_relion_em_batch_sizes(
             requested_image_batch_size=image_batch_size,
             requested_rotation_block_size=rotation_block_size,
@@ -5370,6 +5432,24 @@ def _run_relion_iteration_loop(
                 plan.usable_estimate_gb,
                 plan.gpu_used_estimate_gb,
             )
+        if force_full_coarse_grid:
+            effective_classes = int(n_classes if classes is None else classes)
+            if effective_classes != 1:
+                raise RuntimeError(
+                    "The full coarse rotation-grid diagnostic is restricted to K=1",
+                )
+            logger.warning(
+                "K=1 diagnostic overriding planned rotation block %d with full "
+                "RELION grid %d; %s avoids the planner's dense pose-pixel tile",
+                int(plan.rotation_block_size),
+                int(n_rot),
+                (
+                    "serial FFI scoring"
+                    if serial_particle_launches
+                    else "native texture scoring"
+                ),
+            )
+            return plan.image_batch_size, int(n_rot)
         return plan.image_batch_size, plan.rotation_block_size
 
     # State: two half-set references.  For K-class refinement each half stores
@@ -7389,6 +7469,7 @@ def _run_relion_iteration_loop(
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    relion_translation_angle_scale=relion_translation_angle_scale,
                 )
                 ha_k = local_result.ha
                 Ft_y_k = local_result.Ft_y
@@ -7464,6 +7545,7 @@ def _run_relion_iteration_loop(
                     coarse_rotation_ids=coarse_rotation_ids_for_scoring,
                     preserve_bpref_particle_order=preserve_bpref_particle_order,
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    relion_translation_angle_scale=relion_translation_angle_scale,
                 )
                 ha_k = adaptive_result.ha
                 Ft_y_k = adaptive_result.Ft_y
@@ -7528,6 +7610,7 @@ def _run_relion_iteration_loop(
                     best_pose_translations=best_pose_translations,
                     preserve_bpref_particle_order=preserve_bpref_particle_order,
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    relion_translation_angle_scale=relion_translation_angle_scale,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     debug_iteration=numbered_relion_iteration,
@@ -10381,6 +10464,7 @@ def _run_relion_iteration_loop(
                 local_profile_history=local_profile_history,
                 relion_projector_half=final_relion_projector_half_by_half[k],
                 relion_projector_r_max=final_relion_projector_r_max_by_half[k],
+                relion_translation_angle_scale=relion_translation_angle_scale,
             )
         else:
             final_result = _score_half_dense_in_bpref_scope(
@@ -10436,6 +10520,7 @@ def _run_relion_iteration_loop(
                 debug_iteration=final_sampling_relion_iteration,
                 preserve_bpref_particle_order=preserve_bpref_particle_order,
                 source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                relion_translation_angle_scale=relion_translation_angle_scale,
             )
         if final_result.best_pose_translations is not None:
             final_result.best_pose_translations = _relion_metadata_translations(
