@@ -25,6 +25,7 @@ TARGET_ITERATION=${TARGET_ITERATION:-2}
 NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 TARGET_PART_ID=${TARGET_PART_ID:-66}
 TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-1058}
+OBSERVER_ORDER=${OBSERVER_ORDER:-off_on_off}
 PIXI_PY=${REPO_ROOT}/.pixi/envs/default/bin/python
 PROVENANCE=${OUTPUT_ROOT}/provenance
 ANALYSIS=${OUTPUT_ROOT}/analysis
@@ -35,6 +36,10 @@ test -x "${RELION_BINARY}"
 test -x "${PIXI_PY}"
 test "${TARGET_ITERATION}" -ge 1
 test "${NR_ITER_SCHEDULE}" -ge "${TARGET_ITERATION}"
+case "${OBSERVER_ORDER}" in
+  off_on_off|on_off_on) ;;
+  *) echo "OBSERVER_ORDER must be off_on_off or on_off_on" >&2; exit 2 ;;
+esac
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 test "$(sha256sum "${RELION_BINARY}" | awk '{print $1}')" = "${EXPECTED_RELION_SHA256}"
@@ -141,14 +146,23 @@ run_variant() {
   fi
 }
 
-run_variant observer_off_a 0
-run_variant observer_on 1
-run_variant observer_off_b 0
+if [[ "${OBSERVER_ORDER}" == off_on_off ]]; then
+  run_variant observer_off_a 0
+  run_variant observer_on 1
+  run_variant observer_off_b 0
+  variant_names=(observer_off_a observer_on observer_off_b)
+else
+  run_variant observer_on_a 1
+  run_variant observer_off 0
+  run_variant observer_on_b 1
+  variant_names=(observer_on_a observer_off observer_on_b)
+fi
 unset RELION_ACC_DUMP_DIR RELION_ACC_DUMP_PART_ID RELION_ACC_DUMP_ITER RELION_ACC_DUMP_VERBOSE
 
 target_tag=$(printf '%03d' "${TARGET_ITERATION}")
 "${PIXI_PY}" - "${OUTPUT_ROOT}" "${target_tag}" "${TARGET_STACK_INDEX}" \
-  "${gpu_uuid_before}" "${ANALYSIS}/observer_pair.json" <<'PY'
+  "${gpu_uuid_before}" "${ANALYSIS}/observer_pair.json" "${OBSERVER_ORDER}" \
+  "${variant_names[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -160,8 +174,12 @@ iteration_tag = sys.argv[2]
 stack_index = int(sys.argv[3])
 gpu_uuid = sys.argv[4]
 output = Path(sys.argv[5])
+observer_order = sys.argv[6]
+variant_names = sys.argv[7:]
+if len(variant_names) != 3:
+    raise SystemExit("observer pair requires exactly three variant names")
 variants = {}
-for name in ("observer_off_a", "observer_on", "observer_off_b"):
+for name in variant_names:
     value = starfile.read(root / name / f"run_it{iteration_tag}_data.star")
     particles = value["particles"] if isinstance(value, dict) else value
     row = particles[
@@ -186,14 +204,25 @@ for name in ("observer_off_a", "observer_on", "observer_off_b"):
 report = {
     "schema": "recovar.vdam_native_observer_pair.v1",
     "physical_gpu_uuid": gpu_uuid,
+    "observer_order": observer_order,
     "variants": variants,
-    "observer_off_repeat_pmax_absolute_error": abs(
-        variants["observer_off_a"]["pmax"] - variants["observer_off_b"]["pmax"]
+    "same_observer_repeat_pmax_absolute_error": abs(
+        variants[variant_names[0]]["pmax"] - variants[variant_names[2]]["pmax"]
     ),
-    "observer_on_minus_off_a_pmax": (
-        variants["observer_on"]["pmax"] - variants["observer_off_a"]["pmax"]
+    "middle_minus_first_pmax": (
+        variants[variant_names[1]]["pmax"] - variants[variant_names[0]]["pmax"]
     ),
 }
+if observer_order == "off_on_off":
+    report["observer_off_repeat_pmax_absolute_error"] = report[
+        "same_observer_repeat_pmax_absolute_error"
+    ]
+    report["observer_on_minus_off_a_pmax"] = report["middle_minus_first_pmax"]
+else:
+    report["observer_on_repeat_pmax_absolute_error"] = report[
+        "same_observer_repeat_pmax_absolute_error"
+    ]
+    report["observer_off_minus_on_a_pmax"] = report["middle_minus_first_pmax"]
 output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 print(json.dumps(report, indent=2, sort_keys=True))
 PY
@@ -204,7 +233,8 @@ test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 sha256sum "${REPO_ROOT}/scripts/run_vdam_native_observer_pair.sbatch" \
   "${DATA_DIR}/particles.star" "${RELION_BINARY}" > "${PROVENANCE}/static_inputs.sha256"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_iteration":%d,"nr_iter_schedule":%d,"target_part_id":%d,"target_stack_index":%d}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_iteration":%d,"nr_iter_schedule":%d,"target_part_id":%d,"target_stack_index":%d,"observer_order":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_ITERATION}" \
-  "${NR_ITER_SCHEDULE}" "${TARGET_PART_ID}" "${TARGET_STACK_INDEX}" > "${PROVENANCE}/run.json"
+  "${NR_ITER_SCHEDULE}" "${TARGET_PART_ID}" "${TARGET_STACK_INDEX}" "${OBSERVER_ORDER}" \
+  > "${PROVENANCE}/run.json"
 touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
