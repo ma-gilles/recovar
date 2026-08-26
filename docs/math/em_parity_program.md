@@ -390,6 +390,26 @@ posterior/support differences from scatter/reduction arithmetic.  This is a
 diagnostic result only; no production change was made or pushed, and no generic
 RECOVAR full or long suite was run.
 
+That exact-operand gate completed in job `13002569`, and the particle-0
+StoreWavg replay completed in job `13002969`.  Native RELION and RECOVAR retain
+the same 17 hypotheses, but RELION divides them by the full coarse denominator
+and preserves mass `0.9986371638`, whereas RECOVAR's local pass renormalizes the
+retained rows to `1.0000000137`.  The resulting posterior relative-L2 is
+`0.00136533`, commensurate with the pseudo-half raw-weight accumulator error
+`0.00162550`; posterior cosine is `0.999999999999142`, so the error is almost a
+pure common rescaling rather than a support, rotation, or scatter mismatch.
+The captured RECOVAR local raw-weight sum is `9.9509512e21`, while native
+StoreWavg carries the full-coarse `sum_weight=9.9645370e21`.  Together with the
+earlier same-projector score residual, this localizes the first map drift to the
+coarse-score/denominator boundary feeding the oversampling-zero M-step.  The
+BPref and particle-posterior reports have SHA-256 values
+`934058c962cded89a6486410c60efc2fb6ea402a8ab1673c1f3c505bd85fa3df`
+and
+`2020b2260deeb25485c46d8c72e5855880820d1032962d195a8111c37966539d`.
+The next repair gate is therefore exact native coarse-score denominator
+arithmetic; changing BPref scatter or SSNR/reconstruction would target a
+downstream symptom.
+
 GF47 (extreme outliers with uniform poses and white noise, seed 29) passes the
 complete 0--200 calibrated map and particle envelopes but fails controller
 topology.  All map checkpoints pass with minimum candidate-to-best-native
