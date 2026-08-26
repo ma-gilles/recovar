@@ -26,6 +26,19 @@ DATA_DIR=${REFERENCE_ROOT}/data
 RELION_DIR=${OUTPUT_ROOT}/relion
 ANALYSIS_DIR=${OUTPUT_ROOT}/analysis
 PROVENANCE_DIR=${OUTPUT_ROOT}/provenance
+CAPTURE_DIR=${VDAM_NATIVE_CAPTURE_DIR:-}
+CAPTURE_ITERATION=${VDAM_NATIVE_CAPTURE_ITERATION:-1}
+CAPTURE_PART_ID=${VDAM_NATIVE_CAPTURE_PART_ID:-0}
+CAPTURE_STACK_INDEX=${VDAM_NATIVE_CAPTURE_STACK_INDEX:-}
+CAPTURE_PERTURBATION=${VDAM_NATIVE_CAPTURE_PERTURBATION:-}
+CAPTURE_ONLY=${VDAM_NATIVE_CAPTURE_ONLY:-0}
+RELION_SKIP_MODULE=${VDAM_RELION_SKIP_MODULE:-0}
+
+case "${CAPTURE_ONLY}" in 0|1) ;; *) echo "VDAM_NATIVE_CAPTURE_ONLY must be 0 or 1" >&2; exit 2 ;; esac
+case "${RELION_SKIP_MODULE}" in 0|1) ;; *) echo "VDAM_RELION_SKIP_MODULE must be 0 or 1" >&2; exit 2 ;; esac
+if [[ "${CAPTURE_ONLY}" == 1 ]]; then
+    test -n "${CAPTURE_DIR}"
+fi
 
 test -f "${OUTPUT_ROOT}/SAFE_TO_DELETE"
 test -z "$(find "${OUTPUT_ROOT}" -mindepth 1 ! -name SAFE_TO_DELETE -print -quit)"
@@ -35,6 +48,10 @@ test -s "${DATA_DIR}/particles.star"
 test -x "${PIXI_PY}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 mkdir -p "${RELION_DIR}" "${ANALYSIS_DIR}" "${PROVENANCE_DIR}"
+if [[ -n "${CAPTURE_DIR}" ]]; then
+    mkdir -p "${CAPTURE_DIR}"
+    test -z "$(find "${CAPTURE_DIR}" -mindepth 1 -print -quit)"
+fi
 
 mapfile -d '' -t RELION_COMMAND < <("${PIXI_PY}" - "${REFERENCE_COMMAND}" "${RELION_DIR}/run" <<'PY'
 import json
@@ -70,13 +87,28 @@ export PIXI_HOME=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/pixi_home
 export RATTLER_CACHE_DIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/rattler_cache
 mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
 
+if [[ -n "${CAPTURE_DIR}" ]]; then
+    export RELION_ACC_DUMP_DIR=${CAPTURE_DIR}
+    export RELION_ACC_DUMP_PART_ID=${CAPTURE_PART_ID}
+    export RELION_ACC_DUMP_ITER=${CAPTURE_ITERATION}
+    export RELION_ACC_DUMP_VERBOSE=1
+    if [[ -n "${CAPTURE_STACK_INDEX}" ]]; then
+        export RELION_ACC_DUMP_STACK_INDEX=${CAPTURE_STACK_INDEX}
+    fi
+    if [[ -n "${CAPTURE_PERTURBATION}" ]]; then
+        export RELION_FORCE_SAMPLING_PERTURB=${CAPTURE_PERTURBATION}
+    fi
+fi
+
 ORIGINAL_PATH=${PATH}
 ORIGINAL_LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}
-source /etc/profile.d/modules.sh
-set +u
-module purge
-module load relion/5.0.0/gcc-11.5.0
-set -u
+if [[ "${RELION_SKIP_MODULE}" == 0 ]]; then
+    source /etc/profile.d/modules.sh
+    set +u
+    module purge
+    module load relion/5.0.0/gcc-11.5.0
+    set -u
+fi
 RELION_RUNTIME=${VDAM_RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
 MPI_ROOT=/usr/local/openmpi/cuda-12.6/4.1.6/gcc
 CUDA_HOME=/usr/local/cuda-12.6
@@ -103,10 +135,24 @@ wall_s=$(( $(date +%s) - start_epoch ))
 gpu_uuid_after=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | tr -d '[:space:]')
 test "${gpu_uuid_before}" = "${gpu_uuid_after}"
 test -s "${RELION_DIR}/run_it200_model.star"
+if [[ -n "${CAPTURE_DIR}" ]]; then
+    test -s "${CAPTURE_DIR}/Pmax.bin"
+    test -s "${CAPTURE_DIR}/pass0_coarse_raw_diff2.bin"
+    test -s "${CAPTURE_DIR}/pass1_exp_Mweight_posterior.bin"
+fi
 touch "${OUTPUT_ROOT}/SCIENCE_COMPLETED"
 export PATH=${ORIGINAL_PATH}
 export LD_LIBRARY_PATH=${ORIGINAL_LD_LIBRARY_PATH}
 unset MPI_ROOT CUDA_HOME
+
+if [[ "${CAPTURE_ONLY}" == 1 ]]; then
+    printf '{"job_id":"%s","wall_s":%d,"gpu_uuid":"%s","capture_iteration":%d,"capture_part_id":%d,"capture_stack_index":"%s"}\n' \
+        "${SLURM_JOB_ID}" "${wall_s}" "${gpu_uuid_before}" "${CAPTURE_ITERATION}" \
+        "${CAPTURE_PART_ID}" "${CAPTURE_STACK_INDEX}" \
+        > "${PROVENANCE_DIR}/capture_completion.json"
+    touch "${OUTPUT_ROOT}/CAPTURE_COMPLETED"
+    exit 0
+fi
 
 map_args=()
 particle_iterations=()

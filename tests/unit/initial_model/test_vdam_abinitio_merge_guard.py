@@ -706,6 +706,27 @@ def test_vdam_relion_continuation_can_capture_noise_sufficient_statistics():
     assert not missing, f"VDAM continuation lost capture/target-iteration wiring: {missing}"
 
 
+def test_vdam_native_full_repeat_supports_focused_coarse_capture():
+    runner = (REPO_ROOT / "scripts/run_vdam_native_full_repeat.sbatch").read_text()
+
+    expected_tokens = [
+        "VDAM_NATIVE_CAPTURE_DIR",
+        "VDAM_NATIVE_CAPTURE_ITERATION",
+        "VDAM_NATIVE_CAPTURE_PART_ID",
+        "VDAM_NATIVE_CAPTURE_STACK_INDEX",
+        "VDAM_NATIVE_CAPTURE_PERTURBATION",
+        "VDAM_NATIVE_CAPTURE_ONLY",
+        'RELION_SKIP_MODULE=${VDAM_RELION_SKIP_MODULE:-0}',
+        "RELION_ACC_DUMP_DIR=${CAPTURE_DIR}",
+        "RELION_ACC_DUMP_ITER=${CAPTURE_ITERATION}",
+        "RELION_FORCE_SAMPLING_PERTURB=${CAPTURE_PERTURBATION}",
+        'test -s "${CAPTURE_DIR}/pass0_coarse_raw_diff2.bin"',
+        'touch "${OUTPUT_ROOT}/CAPTURE_COMPLETED"',
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM native repeat lost focused capture wiring: {missing}"
+
+
 def test_vdam_native_observer_pair_keeps_same_gpu_and_full_schedule():
     runner = (REPO_ROOT / "scripts/run_vdam_native_observer_pair.sbatch").read_text()
 
