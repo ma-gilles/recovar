@@ -27333,3 +27333,112 @@ job `13000515` has independently logged runtime `current_size=56`,
 `score_pixels=1624`, and `translation_tile_half_pixels=1624`.  Its stopped
 iteration-2 row capture remains the causal gate before any terminal case-10
 run.  The fixed score remains `31/34`.
+
+## 2026-08-26 13:25 EDT — matched cache arm does not repair the row boundary
+
+Projection-cache job `12998007` reached the requested source-row `75571`
+coarse and fine captures and then exited `1:0` through the preregistered
+stop-after-dump terminal after `00:37:18`.  Relative to cache-off control
+`12993648`, its projected-reference delta is only `3.1972961299e-10`
+relative L2.  The first material input change is instead the same one-float32
+ULP preprocessing normalization change already seen in the independent
+ordinary-dispatch arm: `0.998483419418335` to `0.9984833598136902`.
+
+That input perturbation drops coarse support from `20` to `19`, fine
+candidates from `640` to `608`, and fine significant support from `69` to
+`64`.  The winner remains `(12, 69)`, but Pmax moves from
+`0.46401613598439645` to `0.470945411238186`, farther from deployed RELION's
+approximately `0.4639952072`.  Thus enabling the projection cache neither
+localizes nor repairs the first row mismatch and is rejected as the next
+production intervention.
+
+The coarse and fine reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_prioritized_cacheon_powernorm1_ab01_20260826T1215ET/analysis/K1_CASE10_ROW075571_CACHEOFF_VS_CACHEON_POWERNORM1_COARSE.json`
+(SHA-256
+`c81a5795db4ea2cf64b8453a25e6ca6506274683eb7e53370a3c86f350ceebcb`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_prioritized_cacheon_powernorm1_ab01_20260826T1215ET/analysis/K1_CASE10_ROW075571_CACHEOFF_VS_CACHEON_POWERNORM1_FINE.json`
+(SHA-256
+`659ed9524fc4e0e678f66137b808058ae53c665ec507bcf75c24c8079d958ac4`).
+The fixed score remains `31/34`.
+
+## 2026-08-26 13:32 EDT — native-sized arm worsens the first map boundary
+
+Candidate job `13000515` completed physical iteration 1 with the demonstrated
+native `56`-pixel / `1624`-rectangle score window.  Independent CPU FSC job
+`13001353` completed `0:0` and reports merged iteration-1 signed non-DC
+FSC-AUC `0.9999999509789376` against canonical RELION.  The prior exact-native
+interface control is `0.9999999994939385`; the score-window intervention
+therefore increases the direct map deficit from approximately `5.06e-10` to
+`4.90e-8`.  It remains far above the fixed `0.995` gate, but it moves in the
+wrong preregistered direction at the earliest complete map boundary.
+
+This movement is not native RELION repeat variance.  Fresh deployed-lineage
+RELION repeat job `12997941` produced iteration-1 maps whose canonical-repeat
+FSC-AUC is `0.9999999999465631 / 0.9999999999448262 / 0.9999999999727067`
+for half 1, half 2, and merged.  CPU comparison job `13001556` completed
+`0:0` in `00:00:28`.
+
+The candidate FSC report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_model_star_score56_ab01_20260826T1300ET/analysis_live_it1_retry/fsc.json`
+(SHA-256
+`b8b470478eb1fe1ba28ec5224bf53849299741d30728a4ef00332edf204f75b0`).
+The native-repeat output is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_relion_fresh_repeat_it1_fsc_20260826T1330ET/slurm-13001556.out`
+(SHA-256
+`1f0cda1b3abcc53ed13133c0b0b640f1e8494511c75a0be2b60ab2a978fb75b0`).
+The stopped iteration-2 source-row comparison remains necessary to determine
+whether the native-size correction improves local operands but exposes a
+separate compensating error.  No terminal run or production promotion is
+authorized by the map result; the fixed score remains `31/34`.
+
+## 2026-08-26 14:05 EDT — exact 56-window tuple localizes, but continuation state confounds normalization
+
+Candidate job `13000515` completed naturally `0:0` in `00:41:47` and wrote
+the requested source-row `75571` coarse and fine captures at native
+`current_size=56`.  The fine tuple is identity exact against deployed RELION:
+source row `75571`, stack image `75572`, native particle `72860`, rotation
+local/global `12/276996`, and translation `69`.  Rotation is exact after the
+known transpose and translation differs by at most
+`8.47105108281454e-10`.
+
+On the `1275` score-active pixels, projected-reference relative L2 is
+`1.3814104028572464e-4`.  Corrected unshifted and shifted image relative L2
+are `2.4809119552318263e-5` and `2.481216365201719e-5`.  A single real scalar
+`1.0000248081986458` / `1.0000248113025605` reduces those image residuals to
+`2.760942107129539e-7` / `2.706970240129173e-7`, respectively.  Native and
+RECOVAR production/replay raw `diff2` are `1244.90283203125` and
+`1244.8389892578125`.  Substituting only the native shifted image gives
+`1244.90234375`; substituting both native reference and shifted image gives
+the exact native score.  Correction-weight and high-shell substitutions do
+not change this tuple in binary32.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_model_star_score56_ab01_20260826T1300ET/analysis/K1_CASE10_ROW075571_EXACT_NATIVE_VS_MODEL_STAR_SCORE56_FINE_OPERAND.json`
+(SHA-256
+`03e39c47da29bfedf4fcd3df3e058175fa59f8686d643fc965b87505e80edfb1`).
+CPU analysis job `13002368` completed `0:0` in `00:00:11`; its stderr contains
+only the expected CPU-only JAX CUDA fallback warning.
+
+The apparent scalar is exactly consistent with the normalization quotient in
+the native continuation STAR: `_rlnNormCorrection=0.298283` and half-2
+`_rlnNormCorrectionAverage=0.297831` give float32 factor `0.9984847`, whose
+ratio to RECOVAR's resident factor is approximately `1.0000249`.  This is not
+yet evidence for a RECOVAR normalization bug.  The audited case-4 boundary
+already demonstrated that six-decimal STAR serialization can create the same
+effect while fresh uninterrupted RELION and RECOVAR normalization factors are
+binary32 exact.  The row-75571 native operand artifact used here was likewise
+created with `--continue run_it001_optimiser.star`.
+
+Fresh deployed-lineage job `13002942` therefore replaces the continuation as
+the decisive normalization/scorer gate.  It runs RELION uninterrupted from
+iteration 0 through the exact iteration-2 row-75571 tuple, with natural
+fresh-run order, seed `1710`, the same deployed binary SHA-256
+`1c3f67f52a7663f29c3cc0c8aacc995eba27517961e24ee4a1be01b6413c0b1d`,
+and exact one-tuple BPref/fine-operand capture.  Its run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_exact_fine_operand_fresh_3350982_20260826T1515ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_exact_fine_operand_fresh_3350982_20260826T1515ET`;
+both contain `SAFE_TO_DELETE`.  No normalization correction or terminal run
+is authorized until that fresh tuple is compared.  The fixed score remains
+`31/34`.
