@@ -26948,3 +26948,94 @@ moves the target-containing bucket ahead of unrelated half-2 buckets. No
 support, score, or parity conclusion is accepted until each RECOVAR job writes
 its success marker and the direct staged analyzer identifies the first unequal
 boundary. The fixed score therefore remains `31/34`.
+
+## 2026-08-26 10:28 EDT — row-75571 discrete fine state is repaired
+
+Autonomous RECOVAR job `12993648` wrote the requested production-path coarse
+and fine boundaries. The Slurm allocation ended `FAILED 1:0` only because its
+wrapper incorrectly expected the caught `Pass2DumpComplete` terminal condition
+to return nonzero and searched for an obsolete log prefix. The scientific
+command returned zero, the log records target progress `1/1`, no resource or
+accounting failure is present, and both capture schemas validate. The launcher
+now requires a zero command status and the stable completion substring;
+`bash -n` and `git diff --check` pass, and its new SHA-256 is
+`e34dfbf2df50b54d3c9c7b73a5b8efc61d82b7a509632ca7e8c4510229d581fb`.
+The failed allocation is not relabeled successful and has no success marker.
+
+The passive coarse capture selects `20` hypotheses with Pmax
+`0.4312054216861725` and winner `(30280, 25)`. Relative to the earlier intrusive
+host-materialized capture, support and winner are exact, while posterior total
+variation is `3.3508064909853146e-5`, Pmax changes by
+`6.556510925292969e-6`, and centered raw-score maximum absolute difference is
+`0.0006103515625`. The passive production-path capture, not the intrusive arm,
+is therefore the input used for fine-state attribution. Its path is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_autonomous_fine_aca8_567b22d4ea_20260826T0936ET/coarse/significance_orig075571_it002_cs058.npz`
+(SHA-256
+`33008181aead2bb0ffe14d012e0bb66dc89084a3e66030230b1c2d5eee1f3a16`).
+
+The direct deployed-native versus autonomous fine comparison is discrete-state
+exact: `640/640` candidate tuples, `69/69` significant hypotheses, and winner
+`(12, 69)` all agree. The first exact unequal field is the centered pre-prior
+score, whose maximum absolute difference is `0.0002975761890411377`.
+Orientation-prior maximum absolute difference is `0.00010442733764648438`,
+translation-prior maximum absolute difference is `4.76837158203125e-7`, and
+posterior maximum absolute difference is `2.094224765269992e-5`. The native
+and RECOVAR Pmax values are `0.46399520722759474` and
+`0.46401613598439645`, a residual of `2.0928756801708026e-5`. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_native_fine_cont_exactrev_567b22d4ea_20260826T0944ET/analysis/K1_CASE10_ROW075571_NATIVE_VS_AUTONOMOUS_FINE_STAGES.json`
+(SHA-256
+`a74b23462bae8ac309de13f12ef304080c1188e84980e1afa854268fefe7b38d`),
+and the RECOVAR fine capture is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_autonomous_fine_aca8_567b22d4ea_20260826T0936ET/pass2/pass2_orig075571_cs058.npz`
+(SHA-256
+`64f97bf2168ebdc988b94328c741ed42755e1fc656485d1f85dedc51646ce9bf`).
+
+Compared with the previous exact-interface terminal state for the same source
+row, whose RECOVAR Pmax was `0.47093307971954346` against deployed RELION
+`0.464002` and whose coarse significant count was `19` versus `20`, the current
+focused arm reduces the Pmax error by approximately `331x` and repairs both
+coarse and fine discrete state. This is a focused early-boundary improvement,
+not a terminal FSC acceptance result. It is not yet attributable to source
+alone: the focused arm also uses the sealed CUDA binary and a stopped
+one-particle diagnostic execution shape.
+
+Exact-native-state RECOVAR job `12994070` completed `0:0` in `00:31:18` with
+`SUCCESS_12994070`. It keeps all `640` candidates, all `69` support hypotheses,
+and the winner exact. Substituting the native serialized maps and state makes
+the orientation prior bit exact and reduces centered pre-prior maximum error
+to `0.0002456158399581909`, but the RECOVAR Pmax is
+`0.4640188152651324`, a `2.3608037537647952e-5` residual from native and
+slightly farther than the autonomous arm. Native-state substitution therefore
+does not collapse the remaining continuous posterior difference. The earliest
+unequal local boundary remains pre-prior scoring, with no candidate, support,
+or winner consequence for this particle. The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_same_input_exactrev_native_texture_567b22d4ea_20260826T0950ET/analysis/K1_CASE10_ROW075571_IT2_FINE_STAGES.json`
+(SHA-256
+`c076e6978617f6a54a1bd53bbf87885b9c6c05aece60a1410ca01a74d5e70d03`).
+
+Because the current WIP has a large, discrete early-state improvement, a
+fixed-policy terminal case-10 gate was launched immediately rather than
+waiting for another speculative scorer change. Job `12995074` uses source diff
+SHA-256
+`814e93dfc21d55dd4421e4020f5e9d7eb203f011079f2973f59a434f27550278`
+and sealed CUDA SHA-256
+`aca8de06213bda21375f9cde0a7442275e84be8a092127d75392b15fae4e621f`.
+Its run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row75571_improved_terminal_aca8_567b22d4ea_20260826T1025ET`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case10_row75571_improved_terminal_aca8_567b22d4ea_20260826T1025ET`;
+both contain `SAFE_TO_DELETE`. The unchanged terminal acceptance metric is
+signed shellwise FSC with normalized non-DC FSC-AUC at the fixed `0.995` gate.
+
+The new terminal producer and the previous native-unit terminal producer have
+byte-identical scientific source patches (SHA-256
+`814e93dfc21d55dd4421e4020f5e9d7eb203f011079f2973f59a434f27550278`),
+identical RECOVAR/RELION options, and command lines differing only in output
+paths. The previous terminal used CUDA library SHA-256
+`2fd2e29a29a52a3d08cba0a7a163264878b324d92d27e13924d5c4cb2164e8e3`;
+the new terminal uses sealed CUDA SHA-256
+`aca8de06213bda21375f9cde0a7442275e84be8a092127d75392b15fae4e621f`.
+Thus job `12995074` is the clean binary-level terminal A/B. If its trajectory
+improves, the rebuilt CUDA implementation is causal. If it reproduces the old
+terminal trajectory, the focused arm's diagnostic batch/execution shape is
+the remaining explanation for the row-level improvement.
