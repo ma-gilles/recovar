@@ -41,6 +41,27 @@ array `13011940` is held behind the cumulative-state trajectory. If it passes,
 the composed local head `0a001923e` will be promoted to a fresh 0--200
 same-H100 candidate and calibrated audit. No generic RECOVAR suite was run.
 
+The exact-H100 controller discriminator `13011940_1` has now completed at
+`0a001923e`. Its iteration-10 offset range is `14.07755660521083` Angstrom,
+only `3.9479e-7` from native `14.077557`. The calibrated schedule-mode envelope
+passes every active check against all four native repeats; report SHA-256 is
+`fea5a1824e0f29a4f516098ba0d58ab7715440a15add2d614afda2c9342fb5bc`.
+The cumulative-only task wrote all checkpoints 0--200 and RECOVAR exited 0,
+but its outer job correctly failed the final provenance gate because the
+worktree advanced during execution. It remains diagnostic-only. A new
+immutable worktree pins the composed head, and exact-H100 full trajectory
+array `13013006` is the promoted discriminator.
+
+The v3 audit has reached ten terminal cases. GF45 now passes map, particle,
+and schedule envelopes after input-orientation seeding, raising the frozen
+score to 2/10. GF49 passes particle and schedule gates but first fails map at
+iteration 115. GF50 fails particle state at 40 and map at 41; GF51 fails state
+at 39 and map at 74; GF52 fails state, map, and schedule at 40. Their runtime
+ratios are respectively 11.07x, 11.58x, 5.89x, and 8.20x. The observed v3
+runtime range is now 5.89--11.58x RELION. The repaired GF29 expansion case also
+passes its authoritative audit, raising expansion v2 to 6/15. GF41 remains a
+map-pass/particle-fail repair target. No generic RECOVAR suite was run.
+
 ### 2026-08-26 strict coarse cutoff and expanded 0--200 matrix
 
 The production K=1 InitialModel coarse-significance comparison is strict again
