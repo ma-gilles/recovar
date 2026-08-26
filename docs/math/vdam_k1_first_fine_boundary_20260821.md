@@ -2821,3 +2821,45 @@ midscale data.  Each cell must carry its own same-GPU native repeat panel and
 the same map, GT, hard-state, topology, runtime, and provenance gates; failures
 will be localized and fixed before moving to parameter, scale, real-data, or
 K>1 qualification.
+
+The first robustness cell now passes that complete contract.  `vdam-gf02`
+(`k1-16`: anisotropic poses, outliers, and high noise) runs all checkpoints
+0--200 plus four independent native RELION trajectories in one H100 allocation
+as Slurm job `12967505_2`.  The panel completes in `55:35` on physical UUID
+`GPU-202f2d43-...`, with science source `db89de857` and manifest SHA-256
+`3e5be259d1961552c4a34c3cfcb1771670f2d9688c1b57dcdea687afd43df70c`.
+The four native runtimes are `254.7305`, `253.1328`, `252.7026`, and
+`250.5184` seconds.  RECOVAR takes `1691.4024` seconds, or `6.6876x` the
+median native runtime, so runtime parity remains explicitly unqualified even
+though the correctness gate passes.
+
+Focused CPU audit `12970038_2` completes in `25:31` with exit zero and peak RSS
+`768116K`.  The repeatability-calibrated map gate passes all 201 checkpoints:
+minimum candidate-best-native FSC-AUC is `0.9025892080924967`, and minimum
+candidate-minus-best-native GT FSC-AUC is `-0.0009234422988315949`, inside the
+frozen `-0.002` allowance.  Hard particle state passes all 200 positive
+checkpoints, the first native hard-state split is iteration 54, and all exact
+pre-split topology gates pass.  The separately retained strict adaptive and
+continuous diagnostic fails first at iteration 10.  Map, shell, state, and
+status SHA-256 values are respectively
+`e998e17e8f0efe166d1b6c33c7c4aa03836eb12d7a9cd371545a73aa951fe4f1`,
+`b5a24cfe7e90dbac7468dbbf6275d0efdb26b5143b2d60a7bf0e0e9d30970d7a`,
+`308e752718a16ccb247568496f77f9626ab081bd7ba156c2afa051431c8db68c`,
+and `58bfdbfeb51c1d6901e7419677e1ac8d8df3226d0474b8934d657118acb4a78e`.
+
+The first audit attempt exposed an orchestration-schema mismatch rather than a
+science failure: new panels seal `run_provenance.json` and
+`paired_gpu_uuid.json`, while the auditor accepted only the older
+`provenance/*.txt` layout.  The current auditor now validates both formats,
+including launch/completion source identity, clean tracked state, CUDA-library
+digest, and exact paired GPU identity.  Focused provenance/map/state/wrapper
+coverage passes `28/28`; Ruff, Bash syntax, and diff checks pass.  The fix is
+local implementation commit `7d78beb89` and remains unpushed.
+
+With the pilot qualified, full GUI-default robustness array `12970815` is now
+running `vdam-gf03` through `vdam-gf22` at four concurrent H100s.  This covers
+the remaining Kent/anisotropic/uniform pose, junk/outlier, noise, no-CTF,
+translation, contrast, resolution, small-N, and midscale cells.  Each task
+runs one RECOVAR trajectory and four same-allocation native repeats before it
+can write `SCIENCE_COMPLETED`; the current CPU envelope audit is applied only
+after that marker.  No generic RECOVAR test, full suite, or long-test ran.
