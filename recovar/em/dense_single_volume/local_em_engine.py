@@ -2206,6 +2206,34 @@ def _build_nonzero_reconstruction_pack_indices(
     )
 
 
+def _return_local_big_jit_mstep_tensors(
+    *,
+    sparse_big_jit_backprojection: bool,
+    source_faithful_bpref: bool,
+    grouped_reconstruction: bool,
+    reconstruct_significant_only: bool,
+    disable_adjoint_y: bool,
+    disable_adjoint_ctf: bool,
+) -> bool:
+    """Keep grouped os0 BPref scatter outside the ungrouped fused kernel.
+
+    The direct fused x-half call owns one accumulator.  A joint pseudo-halfset
+    stream owns one accumulator per half, so the keep-all oversampling-zero
+    path must return its physical operands and use the existing group-aware
+    inline-projector scatter in the outer loop.
+    """
+
+    grouped_keep_all_source_mstep = bool(
+        source_faithful_bpref
+        and grouped_reconstruction
+        and not reconstruct_significant_only
+    )
+    return bool(
+        (sparse_big_jit_backprojection or grouped_keep_all_source_mstep)
+        and (not disable_adjoint_y or not disable_adjoint_ctf)
+    )
+
+
 @nvtx.annotate("local.run_local_em_exact", color="purple", domain=NVTX_DOMAIN_EM)
 def run_local_em_exact(
     experiment_dataset,
@@ -3572,8 +3600,13 @@ def run_local_em_exact(
                 has_reconstruction_probability_threshold = True
 
             projection_max_r_big_jit = window_spec.dense_big_jit_max_r()
-            return_big_jit_mstep_tensors = sparse_big_jit_backprojection and (
-                not disable_adjoint_y or not disable_adjoint_ctf
+            return_big_jit_mstep_tensors = _return_local_big_jit_mstep_tensors(
+                sparse_big_jit_backprojection=sparse_big_jit_backprojection,
+                source_faithful_bpref=source_faithful_bpref,
+                grouped_reconstruction=reconstruction_group_ids_np is not None,
+                reconstruct_significant_only=reconstruct_significant_only,
+                disable_adjoint_y=disable_adjoint_y,
+                disable_adjoint_ctf=disable_adjoint_ctf,
             )
             return_source_vdam_operands = bool(
                 return_big_jit_mstep_tensors
@@ -4195,20 +4228,10 @@ def run_local_em_exact(
             pack_t0 = time.time()
             reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)[:unpadded_batch_size]
             local_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)[:unpadded_batch_size]
-            # Latent bug fix 2026-05-08: the pack branch below uses ``summed``
-            # and ``ctf_probs`` which the upstream big_jit only returns when
-            # ``return_big_jit_mstep_tensors`` is True. That gate is set to
-            # ``sparse_big_jit_backprojection AND (not disable_adjoint_y or
-            # not disable_adjoint_ctf)`` (this file, line 1532). The probe
-            # phase of run_local_k_class_em (k_class.py:874) sets both adjoint
-            # disables, so summed/ctf_probs are None and the previous
-            # ``if sparse_big_jit_backprojection:`` gate would crash with
-            # NoneType subscription when the memory heuristic enabled
-            # sparse_big_jit. Mirror the upstream gate so we only enter the
-            # pack branch when summed/ctf_probs are actually returned (and
-            # the downstream ``if sparse_big_jit_backprojection and not
-            # disable_adjoint_y/ctf`` consumers at lines 1716/1736 can use
-            # them).
+            # Pack only outputs explicitly returned by the big JIT.  Besides
+            # the sparse M-step path, grouped oversampling-zero VDAM returns
+            # physical operands here so the outer group-aware scatter can
+            # route each particle to its pseudo-halfset accumulator.
             packed_reconstruction_probs = None
             packed_reconstruction_probs_sum_t = None
             packed_source_vdam_images = None
