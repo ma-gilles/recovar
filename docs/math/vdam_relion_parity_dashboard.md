@@ -5,7 +5,7 @@
 > Runtime, K>1, real-data, and final CLI/GUI qualification follow only after
 > the K=1 0--200 suite has no unexplained failures.
 
-Last scientific update: **2026-08-26 15:41 ET**
+Last scientific update: **2026-08-26 16:14 ET**
 Tracking branch: `codex/vdam-relion-parity-20260820`
 Base: PR #158 (shared supplied-map EM machinery)
 Policy: focused VDAM tests and frozen trajectories only; **no generic RECOVAR
@@ -15,10 +15,10 @@ full/long suite** is being run for this campaign.
 
 | Gate | Current result | Required to close |
 |---|---|---|
-| K=1 v3 full trajectories | **6/20 audited**, 10 science-complete, 4 running, 6 queued | 20/20 audited |
+| K=1 v3 full trajectories | **6/20 audited**, 12 science-complete, 4 running, 4 queued | 20/20 audited |
 | K=1 v3 all-gate acceptance | **1/6 accepted** | 20/20 accepted with no unexplained case |
 | Earlier 0--200 expansion | **5/15 accepted**, 10 classified failures; GF42 still outside the sealed count | Every failure repaired or causally classified and requalified |
-| Earliest exact boundary | **Localized** to the first noise update's retained-posterior denominator | Preserve RELION posterior mass and pass exact iteration-1 replay |
+| Earliest exact boundary | **Repaired locally**: iteration-1 map error improved 151x | Pass the complete GF38 0--200 native-envelope audit |
 | Runtime | **6.42--9.40x RELION** on audited v3 H100 cases | Comparable same-GPU wall time |
 | K>1 / real data | Existing short K=2/K=4 panels pass; final campaign deliberately deferred | Requalify after K=1 closes |
 | CLI / GUI | Unified backend/default contract exists | Final defaults and important controls requalified |
@@ -48,11 +48,11 @@ artifact topology, and wall time.
 | GF51 | 29 | no CTF, radial noise | complete | pending | pending | pending | pending | audit queued |
 | GF52 | 29 | Kent, junk particles, translations | complete | pending | pending | pending | pending | audit queued |
 | GF53 | 29 | high resolution, radial noise | running | -- | -- | -- | -- | running |
-| GF54 | 29 | midscale, Kent, radial noise | running | -- | -- | -- | -- | running |
-| GF55 | 101 | anisotropic, outliers, high noise | running | -- | -- | -- | -- | running |
+| GF54 | 29 | midscale, Kent, radial noise | complete | pending | pending | pending | pending | audit queued |
+| GF55 | 101 | anisotropic, outliers, high noise | complete | pending | pending | pending | pending | audit queued |
 | GF56 | 101 | Kent, outliers, high noise | running | -- | -- | -- | -- | running |
-| GF57 | 101 | anisotropic, severe outliers, radial/high noise | queued | -- | -- | -- | -- | queued |
-| GF58 | 101 | extreme outliers, uniform, white noise | queued | -- | -- | -- | -- | queued |
+| GF57 | 101 | anisotropic, severe outliers, radial/high noise | running | -- | -- | -- | -- | running |
+| GF58 | 101 | extreme outliers, uniform, white noise | running | -- | -- | -- | -- | running |
 | GF59 | 101 | very-high noise, uniform, white noise | queued | -- | -- | -- | -- | queued |
 | GF60 | 101 | low noise, uniform | queued | -- | -- | -- | -- | queued |
 | GF61 | 101 | low noise, Kent | queued | -- | -- | -- | -- | queued |
@@ -64,7 +64,7 @@ and GF40 (translation range/step 8/2). Its failures are retained as regression
 targets; they are not removed from the program when a newer seed matrix is
 added.
 
-## Dominant K=1 blocker: GF38 oversampling-zero score weights
+## Repaired first K=1 boundary: GF38 oversampling-zero posterior mass
 
 The first map drift is no longer an undifferentiated reconstruction failure.
 The causal ladder is now:
@@ -81,17 +81,25 @@ The causal ladder is now:
 | Fresh iteration-1 capture | native-vs-candidate score RMS 0.0000327728; native `corr_img` does not improve it | initial score weights are already correct to the residual floor |
 | First noise update | iteration-0 noise rel-L2 9.19e-8; iteration-1 rel-L2 1.592e-4 | mismatch is introduced by the update, not initialization |
 | High-shell denominator | native inferred sum-weight 199.6766 vs candidate metadata 200.0 | candidate renormalizes retained posterior mass to one |
+| Production boundary | fallback local E-step accepts coarse Pmax; big-JIT never receives it | selected os0 hypotheses are silently renormalized only in production |
+| Bounded correction | target posterior rel-L2 1.883e-3 -> 7.309e-6; noise rel-L2 1.592e-4 -> 4.645e-7 | cause and first update are repaired |
+| Iteration-1 map | scaled rel-L2 2.759e-4 -> 1.822e-6 (**151x**) | promoted full-trajectory discriminator is justified |
 
 The fresh full-schedule discriminator closes the initialization question.
 Iteration-1 scoring is already at the same roughly `3.3e-5` residual floor
 whether candidate or native `corr_img` is replayed; the 124x native-weight
-rescue appears only after later state updates.  RELION's model update carries
-approximately `199.6766` total retained posterior mass, whereas candidate
-metadata records `200.0`.  The candidate target posterior likewise sums to
-`0.99999994`, confirming local renormalization.  The next correction is
-therefore narrowly scoped to preserving RELION's coarse-denominator posterior
-mass in noise accumulation, followed by an exact iteration-1 replay and the
-complete GF38 0--200 discriminator.
+rescue appears only after later state updates.  The production big-JIT omitted
+the coarse Pmax normalization that its fallback path already honored, so the
+100 selected os0 hypotheses were renormalized to unit mass.
+
+Local correction `6387ff7c9` threads that normalization through the big-JIT.
+Exact-GPU task `13007504_1` changes aggregate `noise_sumw` from `200.0` to
+`199.676544`, within `6.1e-5` of the independently inferred native value.
+The target posterior mass is `0.99811662` versus native `0.99811831`, with
+identical support and argmax.  Iteration-1 noise relative-L2 improves 343x and
+the map improves 151x.  This implementation remains isolated and unpushed;
+full 0--200 array `13008037` is capacity-pending for the reference GPU and is
+the promotion gate against the existing four-repeat native envelope.
 
 Key sealed evidence:
 
@@ -99,6 +107,7 @@ Key sealed evidence:
 - Particle posterior: `storewavg_particle0_posterior.json`, SHA-256 `2020b2260deeb25485c46d8c72e5855880820d1032962d195a8111c37966539d`
 - Native-correlation factorial: `coarse_projector_boundary.json`, SHA-256 `2ccace9f0bc98b9acd5a5f075fd4d3195931569fce0f9ebcbbe88880aa8640af`
 - Fresh iteration-1 score/noise discriminator: `coarse_projector_boundary.json`, SHA-256 `24b2a0e393ebf707cb538afcef6e3ecdc0f09ebbb4506a97ed029055a91ec863`
+- Corrected posterior discriminator: `analysis_fresh_fused_posterior.json`, SHA-256 `6b005700b90ea2fe0cc802b6e45e332882118df782580fd2c711105c465455e3`
 
 ## Runtime
 
@@ -118,11 +127,11 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Preserve GF38 retained posterior mass in the first noise update | diagnosis sealed; focused correction next | exact iteration-1 noise/model replay, then full 0--200 GF38 audit |
+| 1 | Promote repaired GF38 posterior mass through 0--200 | science 13008037 capacity-pending; audit submits after completion | complete map/state/schedule/native-envelope acceptance |
 | 2 | Seeded GF29 / GF43 / GF45 calibrated audits | 13002876 / 13002877 / 13004501 pending | authoritative map/state/schedule results |
 | 3 | GF49--GF62 trajectory matrix | science 12996103; audit 12999424 | every row terminal and sealed |
 | 4 | GF41 authoritative re-audit | 12999430 pending | calibrated particle-state result |
-| 5 | Production correction | not started | exact focused replay, then promoted 0--200 discriminator |
+| 5 | Production correction | local `6387ff7c9`; focused 12/12 and iteration-1 discriminator pass | full trajectory passes before implementation is published |
 | 6 | Runtime, K>1, real-data, CLI/GUI finalization | deferred behind K=1 | comparable runtime and zero suite failures |
 
 Implementation and diagnostic experiments remain in isolated local worktrees.

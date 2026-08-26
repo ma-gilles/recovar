@@ -460,6 +460,35 @@ the iteration-1 model update, and only then promote the correction to the
 complete GF38 0--200 trajectory.  No production change was made or pushed and
 no generic RECOVAR full or long suite was run.
 
+That bounded implementation gate is now repaired at local, unpushed head
+`6387ff7c9381e72861fb0171cb9b7e84419cba70`.  The exact-local fallback already
+accepted the coarse pass Pmax, but the production big-JIT interface exposed
+only external log normalization.  Consequently the oversampling-zero M-step
+silently renormalized its selected coarse support to unit mass.  The correction
+threads the existing coarse Pmax through the fused boundary and uses it to
+construct the same local log denominator as the fallback.  Focused CPU guards
+pass 12/12, including the production and fallback arms; no generic suite was
+run.
+
+Exact-H100 parent array `13007504`, task `13007504_1` (allocation/provenance
+job `13007509`), completed naturally in 42 seconds.  The target posterior mass
+is now `0.9981166243` versus native `0.9981183054`; posterior relative-L2
+improves from `0.00188252` to `7.30940e-6`, with identical 100-hypothesis
+support and argmax.  Aggregate `noise_sumw` changes from `200.0` to
+`199.6765442`, within `6.1e-5` of the independently inferred native value.
+Iteration-1 `sigma2_noise` relative-L2 improves from `1.59216e-4` to
+`4.64459e-7`, and the scaled map relative-L2 improves from `2.75861e-4` to
+`1.82194e-6`.  The posterior report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf38_os0_pmax_fix_it1_6387ff7c_87274be_v4_20260826/probe-1/analysis_fresh_fused_posterior.json`
+(SHA-256
+`6b005700b90ea2fe0cc802b6e45e332882118df782580fd2c711105c465455e3`).
+Initial full-trajectory probes `13007637` all exited 75 before science because
+Slurm reused the same non-reference GPU.  Replacement array `13008037` holds
+wrong-GPU probes briefly so its remaining tasks can reach the reference GPU;
+it is capacity-pending behind the current node owner.  The complete 0--200
+candidate against the sealed four-repeat GF38 native panel, followed by its
+dependent focused audit, remains the gate for accepting the correction.
+
 GF47 (extreme outliers with uniform poses and white noise, seed 29) passes the
 complete 0--200 calibrated map and particle envelopes but fails controller
 topology.  All map checkpoints pass with minimum candidate-to-best-native
