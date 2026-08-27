@@ -609,6 +609,7 @@ def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bo
         "captured_block_start",
         "captured_block_grid",
         "captured_native_grid",
+        "captured_native_count",
     }:
         return False
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
@@ -644,6 +645,7 @@ def _relion_vdam_worker_lanes_for_images(
         "captured_block_start",
         "captured_block_grid",
         "captured_native_grid",
+        "captured_native_count",
     }:
         if not _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration):
             return None
@@ -680,12 +682,14 @@ def _relion_vdam_worker_lanes_for_images(
         "captured_block_start",
         "captured_block_grid",
         "captured_native_grid",
+        "captured_native_count",
     }:
         raise ValueError(
             "VDAM worker replay topology must be 'captured', 'single', or "
             "'single_rotation', 'single_rotation_f64', 'single_rotation_reverse', "
             "'single_rotation_sm132', 'captured_block_start', "
-            "'captured_block_grid', or 'captured_native_grid'"
+            "'captured_block_grid', 'captured_native_grid', or "
+            "'captured_native_count'"
         )
     return owners.astype(np.int32, copy=False)
 
@@ -704,7 +708,7 @@ def _relion_vdam_native_grid_counts_for_images(
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology != "captured_native_grid":
+    if topology not in {"captured_native_grid", "captured_native_count"}:
         return None
     orders = _relion_vdam_block_start_orders_for_images(
         experiment_dataset,
@@ -736,6 +740,16 @@ def _relion_vdam_native_grid_counts_for_images(
     if np.any(counts <= 0) or np.any(counts > rotation_count):
         raise ValueError("native-grid replay count is outside the candidate bucket")
     return counts
+
+
+def _relion_vdam_identity_native_grid_replay() -> bool:
+    """Return whether native grid counts should keep identity physical rows."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return topology == "captured_native_count"
 
 
 def _relion_vdam_candidate_trace_ids_for_images(experiment_dataset, image_indices):
@@ -5308,6 +5322,11 @@ def run_local_em_exact(
                     ),
                     debug_iteration=debug_iteration,
                 )
+                if _relion_vdam_identity_native_grid_replay():
+                    # RELION launches physical block IDs directly.  Preserve its
+                    # sealed per-particle grid cardinality without translating
+                    # those IDs through the captured chronology permutation.
+                    block_start_order = None
                 _maybe_write_vdam_candidate_block_map(
                     particle_ids=candidate_trace_ids,
                     reconstruction_take_indices=reconstruction_take_indices,
