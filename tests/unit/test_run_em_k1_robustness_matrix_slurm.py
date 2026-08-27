@@ -1215,6 +1215,16 @@ def test_existing_relion_prefix_exposes_scoped_native_texture_diagnostic():
     )
 
 
+def test_existing_relion_prefix_supports_inert_production_candidate_capture():
+    launcher = (REPO_ROOT / "scripts" / "run_k1_existing_relion_prefix.sbatch").read_text()
+
+    assert "PRODUCTION_CANDIDATE_CAPTURE=${PRODUCTION_CANDIDATE_CAPTURE:-0}" in launcher
+    assert "RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR" in launcher
+    assert "finalize_raw_capture_directory" in launcher
+    assert "BIND_BUILD_DIR=${RELION_BIND:-" in launcher
+    assert "export RECOVAR_RELION_BIND_BUILD_DIR=${BIND_BUILD_DIR}" in launcher
+
+
 def test_case05_bpref_pool_launcher_pins_overridable_cuda_library():
     launcher = (REPO_ROOT / "scripts" / "run_k1_case05_it1_bpref_pool3.sbatch").read_text()
 

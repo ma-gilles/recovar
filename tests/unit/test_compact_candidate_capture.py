@@ -429,11 +429,36 @@ def test_raw_capture_validation_rejects_corrupted_pmax(tmp_path, monkeypatch):
     with np.load(shard, allow_pickle=False) as data:
         arrays = {name: np.asarray(data[name]) for name in data.files}
     arrays["pmax"] = arrays["pmax"].copy()
-    arrays["pmax"][0] = np.nextafter(arrays["pmax"][0], np.float32(0.0))
+    arrays["pmax"][0] = np.nextafter(
+        np.nextafter(arrays["pmax"][0], np.float32(0.0)),
+        np.float32(0.0),
+    )
     np.savez(shard, **arrays)
 
     with pytest.raises(capture.CompactCaptureError, match="reproduce Pmax"):
         capture.validate_raw_capture_shard(shard)
+
+
+@pytest.mark.unit
+def test_raw_capture_validation_allows_one_float32_ulp_between_pmax_paths(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(capture, "_capture_counter", 0)
+    capture.maybe_capture_k1_production_bucket(**_capture_inputs())
+    shard = next(tmp_path.glob("*.npz"))
+    with np.load(shard, allow_pickle=False) as data:
+        arrays = {name: np.asarray(data[name]) for name in data.files}
+    arrays["posterior"] = arrays["posterior"].astype(np.float64)
+    winner = int(arrays["winner_candidate_index"][0])
+    rounded = np.asarray(arrays["posterior"][winner], dtype=np.float32)
+    arrays["pmax"] = arrays["pmax"].astype(np.float32)
+    arrays["pmax"][0] = np.nextafter(rounded, np.float32(0.0))
+    np.savez(shard, **arrays)
+
+    inventory = capture.validate_raw_capture_shard(shard)
+    assert inventory["particle_count"] == arrays["local_indices"].size
 
 
 @pytest.mark.unit

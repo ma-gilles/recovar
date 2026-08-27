@@ -22,7 +22,7 @@ set -euo pipefail
 REPO=${REPO:-/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_norm_matrix_fb3995ca_20260821}
 PYTHON=${PYTHON:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_normspectrum_fb3995ca_20260821T2025ET/venv/bin/python}
 CUDA_LIB=${CUDA_LIB:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_normspectrum_fb3995ca_20260821T2025ET/cuda/libcuda_backproject.so}
-RELION_BIND_DIR=${RELION_BIND:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_normspectrum_fb3995ca_20260821T2025ET/relion_bind_build/shared}
+BIND_BUILD_DIR=${RELION_BIND:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_normspectrum_fb3995ca_20260821T2025ET/relion_bind_build/shared}
 EXPECTED_HEAD=${EXPECTED_HEAD:-fb3995ca08192fe31956fc853a305eb94f1e0739}
 EXPECTED_REPO_DIFF_SHA256=${EXPECTED_REPO_DIFF_SHA256:-}
 EXPECTED_LAUNCHER_SHA256=${EXPECTED_LAUNCHER_SHA256:-}
@@ -34,9 +34,11 @@ STOP_AFTER_TARGET=${STOP_AFTER_TARGET:-0}
 PROJECTION_ROTATIONS=${PROJECTION_ROTATIONS:-}
 PASSIVE_SIGNIFICANCE_DUMP=${PASSIVE_SIGNIFICANCE_DUMP:-0}
 PASSIVE_STOP_AFTER_TARGET=${PASSIVE_STOP_AFTER_TARGET:-0}
+PRODUCTION_CANDIDATE_CAPTURE=${PRODUCTION_CANDIDATE_CAPTURE:-0}
 ENABLE_EXACT_BPREF=${ENABLE_EXACT_BPREF:-0}
 ENABLE_LIVE_INITIAL_NOISE=${ENABLE_LIVE_INITIAL_NOISE:-0}
 ENABLE_NATIVE_TEXTURE=${ENABLE_NATIVE_TEXTURE:-0}
+ENABLE_F32_FINE_POSTERIOR=${ENABLE_F32_FINE_POSTERIOR:-0}
 SPECTRUM_NORM=${SPECTRUM_NORM:-1}
 NOISE_DEBUG_DUMP=${NOISE_DEBUG_DUMP:-0}
 NORM_RESIDUAL_DUMP=${NORM_RESIDUAL_DUMP:-0}
@@ -47,9 +49,11 @@ SOFTMASK_REDUCTION=${SOFTMASK_REDUCTION:-control}
 case "${STOP_AFTER_TARGET}" in 0|1) ;; *) echo "STOP_AFTER_TARGET must be 0 or 1" >&2; exit 2 ;; esac
 case "${PASSIVE_SIGNIFICANCE_DUMP}" in 0|1) ;; *) echo "PASSIVE_SIGNIFICANCE_DUMP must be 0 or 1" >&2; exit 2 ;; esac
 case "${PASSIVE_STOP_AFTER_TARGET}" in 0|1) ;; *) echo "PASSIVE_STOP_AFTER_TARGET must be 0 or 1" >&2; exit 2 ;; esac
+case "${PRODUCTION_CANDIDATE_CAPTURE}" in 0|1) ;; *) echo "PRODUCTION_CANDIDATE_CAPTURE must be 0 or 1" >&2; exit 2 ;; esac
 case "${ENABLE_EXACT_BPREF}" in 0|1) ;; *) echo "ENABLE_EXACT_BPREF must be 0 or 1" >&2; exit 2 ;; esac
 case "${ENABLE_LIVE_INITIAL_NOISE}" in 0|1) ;; *) echo "ENABLE_LIVE_INITIAL_NOISE must be 0 or 1" >&2; exit 2 ;; esac
 case "${ENABLE_NATIVE_TEXTURE}" in 0|1) ;; *) echo "ENABLE_NATIVE_TEXTURE must be 0 or 1" >&2; exit 2 ;; esac
+case "${ENABLE_F32_FINE_POSTERIOR}" in 0|1) ;; *) echo "ENABLE_F32_FINE_POSTERIOR must be 0 or 1" >&2; exit 2 ;; esac
 case "${SPECTRUM_NORM}" in 0|1) ;; *) echo "SPECTRUM_NORM must be 0 or 1" >&2; exit 2 ;; esac
 case "${NOISE_DEBUG_DUMP}" in 0|1) ;; *) echo "NOISE_DEBUG_DUMP must be 0 or 1" >&2; exit 2 ;; esac
 case "${NORM_RESIDUAL_DUMP}" in 0|1) ;; *) echo "NORM_RESIDUAL_DUMP must be 0 or 1" >&2; exit 2 ;; esac
@@ -67,11 +71,15 @@ if [[ "${PASSIVE_STOP_AFTER_TARGET}" = 1 && "${PASSIVE_SIGNIFICANCE_DUMP}" != 1 
   echo "PASSIVE_STOP_AFTER_TARGET requires PASSIVE_SIGNIFICANCE_DUMP=1" >&2
   exit 2
 fi
+if [[ "${PRODUCTION_CANDIDATE_CAPTURE}" = 1 && ( "${STOP_AFTER_TARGET}" = 1 || "${PASSIVE_SIGNIFICANCE_DUMP}" = 1 || "${NORM_RESIDUAL_DUMP}" = 1 ) ]]; then
+  echo "PRODUCTION_CANDIDATE_CAPTURE is mutually exclusive with pass-1/pass-2 dump modes" >&2
+  exit 2
+fi
 if [[ -n "${TARGET_SOURCE_ROWS}" ]]; then
   [[ "${TARGET_CURRENT_SIZE}" =~ ^[0-9]+$ ]]
   [[ "${TARGET_ITERATION}" =~ ^[0-9]+$ ]]
   test "${TARGET_ITERATION}" -le "${MAX_ITER}"
-elif [[ "${STOP_AFTER_TARGET}" = 1 || "${PASSIVE_SIGNIFICANCE_DUMP}" = 1 || "${NORM_RESIDUAL_DUMP}" = 1 || -n "${PROJECTION_ROTATIONS}" ]]; then
+elif [[ "${STOP_AFTER_TARGET}" = 1 || "${PASSIVE_SIGNIFICANCE_DUMP}" = 1 || "${NORM_RESIDUAL_DUMP}" = 1 || "${PRODUCTION_CANDIDATE_CAPTURE}" = 1 || -n "${PROJECTION_ROTATIONS}" ]]; then
   echo "targeted dump settings require TARGET_SOURCE_ROWS" >&2
   exit 2
 fi
@@ -135,7 +143,7 @@ NVIDIA_LIBS=$(find "${NVIDIA_ROOT}" -type d -name lib | paste -sd: -)
 export LD_LIBRARY_PATH=${NVIDIA_LIBS}:/usr/local/cuda-12.8/targets/x86_64-linux/lib:${PIXI_ENV}/lib:${LD_LIBRARY_PATH:-}
 export CUDA_VISIBLE_DEVICES=0
 export RECOVAR_CUDA_LIB=${CUDA_LIB}
-export RECOVAR_RELION_BIND_BUILD_DIR=${RELION_BIND_DIR}
+export RECOVAR_RELION_BIND_BUILD_DIR=${BIND_BUILD_DIR}
 
 # Match the fixed terminal matrix. The production source-faithful spectrum
 # normalization and exact BPref defaults are intentionally not overridden.
@@ -143,6 +151,7 @@ export RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION=.40
 export RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0
 export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0
 export RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=${ENABLE_NATIVE_TEXTURE}
+export RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR=${ENABLE_F32_FINE_POSTERIOR}
 export RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE=220
 export RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM=${SPECTRUM_NORM}
 unset RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS
@@ -160,7 +169,12 @@ if [[ "${NOISE_DEBUG_DUMP}" = 1 ]]; then
   export RECOVAR_NOISE_DEBUG_DUMP_ITERATION=0
 fi
 unset RECOVAR_FINAL_ALL_DATA_GRID_CORRECT RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER
-if [[ -n "${TARGET_SOURCE_ROWS}" ]]; then
+if [[ -n "${TARGET_SOURCE_ROWS}" && "${PRODUCTION_CANDIDATE_CAPTURE}" = 1 ]]; then
+  export RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR=${ROOT}/production_candidates
+  export RECOVAR_COMPACT_CANDIDATE_CAPTURE_ITERATION=${TARGET_ITERATION}
+  export RECOVAR_COMPACT_CANDIDATE_CAPTURE_ORIGINAL_INDICES=${TARGET_SOURCE_ROWS}
+  mkdir -p "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}"
+elif [[ -n "${TARGET_SOURCE_ROWS}" ]]; then
   export RECOVAR_SIGNIFICANCE_DUMP_DIR=${ROOT}/pass1
   export RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES=${TARGET_SOURCE_ROWS}
   export RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE=${TARGET_CURRENT_SIZE}
@@ -305,6 +319,33 @@ fi
 test "${command_status}" -eq 0
 test -s "${OUTPUT}/refinement_results.npz"
 
+if [[ "${PRODUCTION_CANDIDATE_CAPTURE}" = 1 ]]; then
+  "${PYTHON}" - "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}" \
+    "${TARGET_SOURCE_ROWS}" "${TARGET_ITERATION}" <<'PY'
+import sys
+from pathlib import Path
+
+import numpy as np
+
+from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
+    finalize_raw_capture_directory,
+)
+
+capture_dir = Path(sys.argv[1]).resolve()
+target_original_indices = np.asarray(
+    [int(token) for token in sys.argv[2].split(",")],
+    dtype=np.int64,
+)
+marker = finalize_raw_capture_directory(
+    capture_dir,
+    expected_iteration=int(sys.argv[3]),
+    expected_original_indices=target_original_indices,
+)
+assert marker["particle_count"] == target_original_indices.size, marker
+print(marker)
+PY
+fi
+
 "${PYTHON}" -m scripts.audit_k1_fsc_trajectory \
   --case-root "${CASE_SOURCE}" \
   --recovar-dir "${OUTPUT}" \
@@ -325,6 +366,12 @@ test -s "${OUTPUT}/refinement_results.npz"
 sha256sum "${OUTPUT}/refinement_results.npz" "${ANALYSIS}/prefix_fsc.json" \
   "${ANALYSIS}/prefix_fsc_shellwise.npz" "${ANALYSIS}/prefix_intermediates.json" \
   > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
+if [[ "${PRODUCTION_CANDIDATE_CAPTURE}" = 1 ]]; then
+  sha256sum "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}"/*.npz \
+    "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}"/RAW_CAPTURE.sha256 \
+    "${RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR}"/RAW_CAPTURE_COMPLETE.json \
+    >> "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
+fi
 printf '{"case":"%s","job_id":"%s","wall_s":%d,"max_iter":%d,"mode":"matrix_faithful_existing_relion_prefix"}\n' \
   "${CASE_NAME}" "${SLURM_JOB_ID}" "${wall_s}" "${MAX_ITER}" \
   > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"

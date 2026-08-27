@@ -78,6 +78,29 @@ def _require_dtype(array: np.ndarray, dtype, name: str) -> None:
         raise CompactCaptureError(f"{name} dtype must be {np.dtype(dtype)}, got {array.dtype}")
 
 
+def _matches_pmax_rounding(pmax, posterior) -> bool:
+    """Allow the separate production Pmax path one destination-dtype ULP.
+
+    Chunked production computes global Pmax and retained per-candidate
+    posteriors through separate, algebraically equivalent normalization paths.
+    When Pmax is float32 but the retained posterior is float64, their final
+    rounding can differ by one float32 ULP.  Anything larger is a corrupt or
+    coordinate-mismatched capture.
+    """
+
+    pmax_value = np.asarray(pmax)
+    if pmax_value.shape != () or not np.issubdtype(pmax_value.dtype, np.floating):
+        return False
+    rounded = np.asarray(posterior, dtype=pmax_value.dtype)
+    if rounded.shape != ():
+        return False
+    if bool(pmax_value == rounded):
+        return True
+    lower = np.nextafter(rounded, np.asarray(-np.inf, dtype=rounded.dtype))
+    upper = np.nextafter(rounded, np.asarray(np.inf, dtype=rounded.dtype))
+    return bool((pmax_value == lower) or (pmax_value == upper))
+
+
 def validate_raw_capture_shard(path: Path) -> dict[str, object]:
     """Strictly validate one raw production shard and return its inventory."""
 
@@ -270,7 +293,10 @@ def validate_raw_capture_shard(path: Path) -> dict[str, object]:
         winner_in_fragment = fragment_start <= winner < fragment_stop
         if winner_in_fragment:
             fragment_winner = winner - fragment_start
-            if arrays["pmax"][row] != posterior[fragment_winner]:
+            if not _matches_pmax_rounding(
+                arrays["pmax"][row],
+                posterior[fragment_winner],
+            ):
                 raise CompactCaptureError("raw shard winner posterior does not reproduce Pmax")
             if arrays["score_center"][row] != arrays["raw_combined_score"][c0 + fragment_winner]:
                 raise CompactCaptureError("raw shard winner score does not reproduce score_center")
