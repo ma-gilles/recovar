@@ -355,6 +355,7 @@ EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV = "RECOVAR_EXACT_LOCAL_SPARSE_ADJOINT
 EXACT_LOCAL_PROGRESS_CHUNKS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS"
 EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"
 RELION_VDAM_WORKER_SCHEDULE_ENV = "RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ"
+RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV = "RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY"
 DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS = 1000
 DEFAULT_EXACT_LOCAL_PROGRESS_SECONDS = 300
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
@@ -431,6 +432,16 @@ def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
         raise ValueError(
             "VDAM worker replay is missing selected stack indices "
             f"{missing[:8].tolist()}"
+        )
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    if topology == "single":
+        owners = np.zeros_like(owners)
+    elif topology != "captured":
+        raise ValueError(
+            "VDAM worker replay topology must be 'captured' or 'single'"
         )
     return owners.astype(np.int32, copy=False)
 
