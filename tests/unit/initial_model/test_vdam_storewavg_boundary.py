@@ -13,6 +13,7 @@ from scripts.analyze_vdam_storewavg_boundary import (
     _native_gradient_rows,
     _posterior_metric,
     _positive_rotation_mask,
+    _real_2d_or_flat,
     _production_score_gradient_rows,
     _restore_storewavg_inverse_noise_dc,
     _scatter_relion_rows,
@@ -192,6 +193,19 @@ def test_complex_long_3d_reads_relion_multidimarray_dump(tmp_path):
     shifted_path = tmp_path / "store_Fimg_shifted_t0_nomask.bin"
     shifted_path.write_bytes(dimensions.tobytes() + values.tobytes())
     np.testing.assert_array_equal(_load_unmasked_image(shifted_path), values)
+
+
+def test_real_2d_or_flat_reads_storewavg_accptr_dump(tmp_path):
+    flat_path = tmp_path / "Minvsigma2.bin"
+    values = np.asarray([1.25, 2.5, 5.0], dtype="<f8")
+    flat_path.write_bytes(np.asarray([values.size], dtype="<i4").tobytes() + values.tobytes())
+
+    np.testing.assert_array_equal(_real_2d_or_flat(flat_path), values)
+
+    matrix_path = tmp_path / "matrix.bin"
+    matrix = values.reshape(1, 3)
+    matrix_path.write_bytes(np.asarray(matrix.shape, dtype="<i4").tobytes() + matrix.tobytes())
+    np.testing.assert_array_equal(_real_2d_or_flat(matrix_path), matrix)
 
 
 def test_load_unmasked_image_rejects_masked_scoring_operand(tmp_path):

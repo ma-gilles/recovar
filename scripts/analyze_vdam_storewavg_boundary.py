@@ -51,6 +51,17 @@ def _real_2d(path: Path) -> np.ndarray:
     return values.reshape(rows, columns)
 
 
+def _real_2d_or_flat(path: Path) -> np.ndarray:
+    """Read either a 2-D RELION dump or an AccPtr flat-real dump."""
+
+    payload = path.read_bytes()
+    _require(len(payload) >= 4, f"truncated real array: {path}")
+    count = struct.unpack_from("<i", payload)[0]
+    if count >= 0 and len(payload) == 4 + count * np.dtype("<f8").itemsize:
+        return np.frombuffer(payload, dtype="<f8", offset=4).copy()
+    return _real_2d(path)
+
+
 def _complex_2d(path: Path) -> np.ndarray:
     payload = path.read_bytes()
     _require(len(payload) >= 8, f"truncated complex 2-D array: {path}")
@@ -515,8 +526,8 @@ def analyze(
     *,
     native_image_path: Path | None,
     native_inverse_noise_path: Path,
-    native_sigma2_noise_path: Path,
-    native_sigma2_fudge_path: Path,
+    native_sigma2_noise_path: Path | None,
+    native_sigma2_fudge_path: Path | None,
     recovar_original_index: int | None,
     native_prefix: str,
     native_projector_prefix: str | None,
@@ -636,13 +647,27 @@ def analyze(
         current_size=current_size,
     )
     native_ctf = np.asarray(native["ctf"], dtype=np.float32)[crop_indices]
-    inverse_noise = _real_2d(native_inverse_noise_path).astype(np.float32).reshape(-1)[crop_indices]
-    inverse_noise = _restore_storewavg_inverse_noise_dc(
-        inverse_noise,
-        crop_indices,
-        _real_2d(native_sigma2_noise_path),
-        _scalar(native_sigma2_fudge_path),
+    inverse_noise = _real_2d_or_flat(native_inverse_noise_path).astype(np.float32).reshape(-1)[
+        crop_indices
+    ]
+    _require(
+        (native_sigma2_noise_path is None) == (native_sigma2_fudge_path is None),
+        "native sigma2_noise and sigma2_fudge must be supplied together",
     )
+    if native_sigma2_noise_path is not None and native_sigma2_fudge_path is not None:
+        inverse_noise = _restore_storewavg_inverse_noise_dc(
+            inverse_noise,
+            crop_indices,
+            _real_2d_or_flat(native_sigma2_noise_path),
+            _scalar(native_sigma2_fudge_path),
+        )
+    else:
+        dc_rows = np.flatnonzero(crop_indices == 0)
+        _require(dc_rows.size == 1, "StoreWavg crop must contain exactly one DC lane")
+        _require(
+            np.isfinite(inverse_noise[dc_rows[0]]) and inverse_noise[dc_rows[0]] > 0.0,
+            "captured StoreWavg inverse-noise DC must be positive",
+        )
     native_image = _load_unmasked_image(native_image_path).astype(np.complex64).reshape(-1)[crop_indices]
 
     translated = cuda_backproject.relion_translate_score_f32(
@@ -842,10 +867,17 @@ def analyze(
             "native_unmasked_image_sha256": _sha256(native_image_path),
             "native_inverse_noise": str(native_inverse_noise_path.resolve()),
             "native_inverse_noise_sha256": _sha256(native_inverse_noise_path),
-            "native_sigma2_noise": str(native_sigma2_noise_path.resolve()),
-            "native_sigma2_noise_sha256": _sha256(native_sigma2_noise_path),
-            "native_sigma2_fudge": str(native_sigma2_fudge_path.resolve()),
-            "native_sigma2_fudge_sha256": _sha256(native_sigma2_fudge_path),
+            **(
+                {
+                    "native_sigma2_noise": str(native_sigma2_noise_path.resolve()),
+                    "native_sigma2_noise_sha256": _sha256(native_sigma2_noise_path),
+                    "native_sigma2_fudge": str(native_sigma2_fudge_path.resolve()),
+                    "native_sigma2_fudge_sha256": _sha256(native_sigma2_fudge_path),
+                }
+                if native_sigma2_noise_path is not None
+                and native_sigma2_fudge_path is not None
+                else {"native_inverse_noise_includes_dc": True}
+            ),
             "recovar_capture": str(recovar_capture.resolve()),
             "recovar_capture_sha256": _sha256(recovar_capture),
             **(
@@ -916,12 +948,20 @@ def main() -> None:
         native_sigma2_noise_path=(
             args.native_sigma2_noise
             if args.native_sigma2_noise is not None
-            else args.native_directory / "sigma2_noise.bin"
+            else (
+                args.native_directory / "sigma2_noise.bin"
+                if (args.native_directory / "sigma2_noise.bin").is_file()
+                else None
+            )
         ),
         native_sigma2_fudge_path=(
             args.native_sigma2_fudge
             if args.native_sigma2_fudge is not None
-            else args.native_directory / "sigma2_fudge.bin"
+            else (
+                args.native_directory / "sigma2_fudge.bin"
+                if (args.native_directory / "sigma2_fudge.bin").is_file()
+                else None
+            )
         ),
         recovar_original_index=args.recovar_original_index,
         native_prefix=args.native_prefix,
