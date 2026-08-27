@@ -34,6 +34,16 @@ case "${TARGET_SOURCE_ROW}" in
   ''|*[!0-9]*) echo "K1_CASE10_TARGET_SOURCE_ROW must be a non-negative integer" >&2; exit 2 ;;
 esac
 TARGET_STACK_INDEX=$((TARGET_SOURCE_ROW + 1))
+TARGET_CURRENT_SIZE=${K1_ROW_TARGET_CURRENT_SIZE:-58}
+PHYSICAL_IMAGE_SIZE=${K1_ROW_PHYSICAL_IMAGE_SIZE:-384}
+case "${TARGET_CURRENT_SIZE}" in
+  ''|*[!0-9]*) echo "K1_ROW_TARGET_CURRENT_SIZE must be a positive integer" >&2; exit 2 ;;
+  0) echo "K1_ROW_TARGET_CURRENT_SIZE must be positive" >&2; exit 2 ;;
+esac
+case "${PHYSICAL_IMAGE_SIZE}" in
+  ''|*[!0-9]*) echo "K1_ROW_PHYSICAL_IMAGE_SIZE must be a positive integer" >&2; exit 2 ;;
+  0) echo "K1_ROW_PHYSICAL_IMAGE_SIZE must be positive" >&2; exit 2 ;;
+esac
 COARSE_PROJECTION_ROTATIONS=${K1_CASE10_COARSE_PROJECTION_ROTATIONS:-}
 COARSE_TARGET_TUPLES=${K1_CASE10_COARSE_TARGET_TUPLES:-}
 INITIAL_HALF1_MRC=${K1_CASE10_INITIAL_HALF1_MRC:-}
@@ -111,16 +121,16 @@ if [[ -n "${INITIAL_HALF1_MRC}" && -n "${INITIAL_HALF1_FT_NPZ}" ]]; then
 fi
 ROOT=${RUN_ROOT}
 RUNTIME=${RUNTIME_ROOT}
-REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820
+REPO=${K1_ROW_REPO_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820}
 FIXED_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET
-CASE=${FIXED_ROOT}/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0
+CASE=${K1_ROW_CASE_ROOT:-${FIXED_ROOT}/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0}
 DATA=${CASE}/data
 RELION=${K1_ROW12334_RELION_DIR:-${CASE}/relion_ref}
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
 CUDA_LIB=${K1_ROW12334_CUDA_LIB:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_preprocess_stage_split_20260821T1600ET/cuda/libcuda_backproject.so}
 RELION_BIND=${FIXED_ROOT}/relion_bind_build/shared
-NATIVE_ROOT=${K1_CASE10_NATIVE_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_fine_stack12335_it2_20260821T2200ET}
+NATIVE_ROOT=${K1_ROW_NATIVE_ROOT:-${K1_CASE10_NATIVE_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_fine_stack12335_it2_20260821T2200ET}}
 NATIVE_FACTOR=$(find "${NATIVE_ROOT}/capture" -maxdepth 1 -type f \
     -name "*stack${TARGET_STACK_INDEX}_img0_class1.bpre-v2.bin" -print -quit)
 NATIVE_FINE=$(find "${NATIVE_ROOT}/capture" -maxdepth 1 -type f \
@@ -211,7 +221,7 @@ fi
 if [[ "${STAGE}" = fine ]]; then
     export RECOVAR_PASS2_DUMP_DIR=${PASS2}
     export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES=${TARGET_SOURCE_ROW}
-    export RECOVAR_PASS2_DUMP_CURRENT_SIZE=58
+    export RECOVAR_PASS2_DUMP_CURRENT_SIZE=${TARGET_CURRENT_SIZE}
     export RECOVAR_PASS2_DUMP_ITERATION=1
     export RECOVAR_PASS2_DUMP_CLASS=1
     export RECOVAR_PASS2_DUMP_RAW_OPERANDS=1
@@ -223,14 +233,14 @@ if [[ "${STAGE}" = fine ]]; then
         # must continue through the production coarse-to-fine handoff.
         export RECOVAR_SIGNIFICANCE_DUMP_DIR=${COARSE}
         export RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES=${TARGET_SOURCE_ROW}
-        export RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE=58
+        export RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE=${TARGET_CURRENT_SIZE}
         export RECOVAR_SIGNIFICANCE_DUMP_ITERATION=2
         export RECOVAR_SIGNIFICANCE_DUMP_PASSIVE_CACHE=1
     fi
 else
     export RECOVAR_SIGNIFICANCE_DUMP_DIR=${COARSE}
     export RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES=${TARGET_SOURCE_ROW}
-    export RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE=58
+    export RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE=${TARGET_CURRENT_SIZE}
     export RECOVAR_SIGNIFICANCE_DUMP_ITERATION=2
     export RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF=1
     export RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET=1
@@ -317,18 +327,19 @@ wall_s=$(( $(date +%s) - start_epoch ))
 if [[ "${STAGE}" = fine ]]; then
     test "${command_status}" -ne 0
     printf -v target_source_padded '%06d' "${TARGET_SOURCE_ROW}"
-    capture=${PASS2}/pass2_orig${target_source_padded}_cs058.npz
+    printf -v target_size_padded '%03d' "${TARGET_CURRENT_SIZE}"
+    capture=${PASS2}/pass2_orig${target_source_padded}_cs${target_size_padded}.npz
     report=${ANALYSIS}/K1_CASE10_ROW${target_source_padded}_IT2_FINE_STAGES.json
     test -s "${capture}"
-    test "$(find "${PASS2}" -maxdepth 1 -type f -name 'pass2_orig*_cs058.npz' | wc -l)" -eq 1
+    test "$(find "${PASS2}" -maxdepth 1 -type f -name "pass2_orig*_cs${target_size_padded}.npz" | wc -l)" -eq 1
     rg -q 'Sparse K=1 pass-2 stop-after-dump requested .*target-set progress 1/1' \
         "${ROOT}/logs/run_${SLURM_JOB_ID}.log"
     rg -q 'Pass2DumpComplete: requested RECOVAR pass-2 dump target set was written' \
         "${ROOT}/logs/run_${SLURM_JOB_ID}.log"
     if [[ "${PASSIVE_SIGNIFICANCE_DUMP}" = 1 ]]; then
-        coarse_capture=${COARSE}/significance_orig${target_source_padded}_it002_cs058.npz
+        coarse_capture=${COARSE}/significance_orig${target_source_padded}_it002_cs${target_size_padded}.npz
         test -s "${coarse_capture}"
-        test "$(find "${COARSE}" -maxdepth 1 -type f -name 'significance_orig*_it002_cs058.npz' | wc -l)" -eq 1
+        test "$(find "${COARSE}" -maxdepth 1 -type f -name "significance_orig*_it002_cs${target_size_padded}.npz" | wc -l)" -eq 1
         "${PYTHON}" - "${coarse_capture}" <<'PY'
 import sys
 
@@ -342,7 +353,7 @@ PY
         --native-factor "${NATIVE_FACTOR}" \
         --native-fine-score "${NATIVE_FINE}" \
         --recovar-capture "${capture}" \
-        --physical-image-size 384 \
+        --physical-image-size "${PHYSICAL_IMAGE_SIZE}" \
         --top-count 30 \
         --output-json "${report}" \
         > "${ROOT}/logs/analyze_${SLURM_JOB_ID}.log" 2>&1
@@ -368,10 +379,11 @@ PY
 else
     test "${command_status}" -eq 0
     printf -v target_source_padded '%06d' "${TARGET_SOURCE_ROW}"
-    capture=${COARSE}/significance_orig${target_source_padded}_it002_cs058.npz
+    printf -v target_size_padded '%03d' "${TARGET_CURRENT_SIZE}"
+    capture=${COARSE}/significance_orig${target_source_padded}_it002_cs${target_size_padded}.npz
     report=${ANALYSIS}/K1_CASE10_ROW${target_source_padded}_IT2_COARSE_TARGET.json
     test -s "${capture}"
-    test "$(find "${COARSE}" -maxdepth 1 -type f -name 'significance_orig*_it002_cs058.npz' | wc -l)" -eq 1
+    test "$(find "${COARSE}" -maxdepth 1 -type f -name "significance_orig*_it002_cs${target_size_padded}.npz" | wc -l)" -eq 1
     rg -q 'coarse-significance dump completed; stopping before pass-2/M-step work' \
         "${ROOT}/logs/run_${SLURM_JOB_ID}.log"
     "${PYTHON}" - "${capture}" "${report}" "${COARSE_TARGET_TUPLES}" <<'PY'
