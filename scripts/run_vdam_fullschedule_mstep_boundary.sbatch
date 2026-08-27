@@ -53,7 +53,7 @@ IREF_REPLAY_TEMPLATE=${RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE:-}
 REPLAY_NATIVE_REFERENCES=${VDAM_REPLAY_NATIVE_REFERENCES:-0}
 GPU_RELEASE_MAX_USED_MIB=${VDAM_GPU_RELEASE_MAX_USED_MIB:-1024}
 GPU_RELEASE_TIMEOUT_S=${VDAM_GPU_RELEASE_TIMEOUT_S:-120}
-BOUNDARY_XLA_MEM_FRACTION=${VDAM_XLA_PYTHON_CLIENT_MEM_FRACTION:-0.95}
+BOUNDARY_XLA_MEM_FRACTION=${VDAM_XLA_PYTHON_CLIENT_MEM_FRACTION:-0.50}
 NATIVE_SECOND_MOMENT_REPLAY=${VDAM_NATIVE_SECOND_MOMENT_REPLAY:-0}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-0}
 BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}
@@ -324,13 +324,15 @@ done
 test "${target_complete}" -eq 1
 active_step=$(
   squeue --steps -j "${SLURM_JOB_ID}" -h -o '%i' \
-    | awk -v job="${SLURM_JOB_ID}" '$0 ~ "^" job "\\.[0-9]+$" {step=$0} END {print step}'
+    | awk '$0 ~ /\.[0-9]+$/ && $0 !~ /\.(batch|extern)$/ {step=$0} END {print step}'
 )
-if [[ -n "${active_step}" ]]; then
-  scancel "${active_step}"
-else
+if [[ -z "${active_step}" ]]; then
+  echo "failed to resolve the active RELION Slurm step for ${SLURM_JOB_ID}" >&2
   kill "${relion_pid}" 2>/dev/null || true
+  exit 2
 fi
+printf '%s\n' "${active_step}" > "${PROVENANCE}/native_relion_step_id.txt"
+scancel "${active_step}"
 set +e
 wait "${relion_pid}"
 set -e
