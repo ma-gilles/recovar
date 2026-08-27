@@ -44,7 +44,7 @@ SHA-256 values.
 | Current readout | Evidence | Decision |
 |---|---|---|
 | Frozen score | **2/20** strict; **0/20** runtime | draft, not merge-ready |
-| Latest closed boundary | GF47 untraced exact-grid panel `13034998` completed both same-H100 arms in 74 s | reference `1.485x / 1.306x`; post-second moment `0.837x / 1.039x`; tracing is not the repair, no long run |
+| Latest closed boundary | GF47 matched-resource exact-grid target-GPU panel `13035456` completed both arms in 76 s | exact frozen GPU `GPU-6222...`; reference `1.353x / 1.272x`, so no promotion or long run |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
 | GF47 reverse float32 order | panel `13026879`, audit `13026880` terminal | reference is inside its fresh native floor, but post-second-moment error is **2.90--3.57x** the floor; no promotion |
@@ -61,6 +61,8 @@ SHA-256 values.
 | GF47 exact-native-cardinality replay | H100 gate `13034888` passes 24/24; traced panel `13034951` completes in 76 s | exact 48,824-block native grids and 26,241 contributors per arm; mixed reference/post-second ratios fail the promotion floor |
 | GF47 untraced exact-grid control | panel `13034998` completes in 74 s | both reference arms fail at `1.485x / 1.306x`; tracing perturbs scheduling but does not explain the residual |
 | GF47 CUDA resource topology | sealed `cuobjdump` audit of the exact binaries | candidate SGD uses **48 registers / 1,060 B shared** per block; native 2D-data SGD uses **40 registers / 48 B shared**; compile-time trace/order specialization is next |
+| GF47 compile-time SGD specialization | H100 gate `13035150` passes 24/24; all specializations compile at 40 registers | non-target panel `13035208` passes reference at `0.666x / 0.668x`, but target-GPU `13035456` fails at `1.353x / 1.272x`; not robust |
+| GF47 exact physical identity grid | implementation next | retain sealed native per-particle counts and workers, remove captured row indirection, launch identity physical rows with the 40-register kernel |
 
 > **Status: draft, not merge-ready.** K=1 correctness is the active gate.
 > Runtime optimization starts from a sealed passing trajectory; K>1,
@@ -78,7 +80,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 07:22 ET**
+Last scientific update: **2026-08-27 07:39 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -106,7 +108,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | exact rows/cardinality and traced/untraced controls are closed; compiled kernel occupancy differs from native | `13034998` rejects tracing; binary audit: candidate 48 registers / 1,060 B shared versus native 40 / 48 | no score change; compile out inactive trace paths and specialize captured-order dispatch, then require the native resource/short-parity gates |
+| 1 | GF47 repeatability starts @1 | register occupancy now matches native, but captured row indirection remains and target-GPU parity fails | `13035150`: 40-register gate; `13035208`: non-target reference `0.666x / 0.668x`; exact target `13035456`: `1.353x / 1.272x` | no score change; launch native counts with identity physical rows, then require a two-arm pass on frozen `GPU-6222...` |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -464,6 +466,37 @@ trace and captured-order paths, then inspects the resulting binary before any
 science run. It advances only if the untraced exact-grid specialization closes
 the native 40-register occupancy class (or a separately justified equivalent)
 and subsequently beats the unchanged two-arm numerical floor.
+
+Local head `f1dce072f` completes that specialization. H100 CUDA/FFI gate
+`13035150` passes **24/24** focused tests in 56 seconds; qualified CUDA SHA-256
+is `6bf04699b95a...`. All float32 captured/untraced SGD variants now compile at
+**40 registers**, matching the native occupancy-limiting register count.
+Specialized resource-report SHA-256 is `1558e8249de9...`.
+
+The first same-H100 untraced panel `13035208` completes in 74 seconds and beats
+the reference floor in both arms at **0.666x / 0.668x**. That is a valid short
+promotion on `GPU-9f98...`, but the frozen GF47 envelope was produced on
+`GPU-6222...`; no trajectory was launched from a different physical GPU.
+Node-pinned panel `13035316` then showed that `della-h19g4` exposes multiple
+H100 UUIDs. It received `GPU-9904...` and gave mixed reference ratios
+`1.040x / 0.547x`, so it was retained only as non-target diagnostic evidence.
+
+Commit `04727ef61` adds a fail-before-output physical-UUID guard to the repeat
+panel. Guarded attempt `13035437` and fan-out attempts `13035455`/`13035457`
+exited in 2--4 seconds with code 75 on wrong GPUs; pending `13035458` was
+cancelled once the target allocation started. Job `13035456` then ran both
+arms on the exact frozen `GPU-6222c402...` and completed in 76 seconds. Its
+reference ratios are **1.353x / 1.272x** and post-second ratios are
+**0.580x / 1.165x**. The target-GPU gate therefore fails, no 0--200 run was
+submitted, and the score remains 2/20. Target report SHA-256 is
+`e066e5607fb6...`.
+
+The remaining static launch difference is the captured-order lookup itself.
+Native RELION launches identity physical block IDs; RECOVAR currently assigns
+captured logical rows to those IDs. The next bounded topology keeps the sealed
+native per-particle grid cardinalities and worker ownership but launches
+identity physical rows through the matched 40-register specialization. This
+removes non-coalesced row indirection without changing operands or arithmetic.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
@@ -853,7 +886,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 repeatability before another trajectory | traced exact-grid `13034951` proves row/cardinality identity; untraced `13034998` fails both reference arms; CUDA audit finds candidate/native resource topology at 48/1,060 versus 40/48 registers/shared bytes | compile-time-specialize inactive trace/order paths, match native occupancy, then beat the unchanged short gate before any 201-checkpoint run |
+| 1 | Close GF47 repeatability before another trajectory | compile-time specialization matches native at 40 registers; non-target `13035208` passes, but exact frozen-GPU `13035456` fails reference at `1.353x / 1.272x` | retain native counts/workers but remove captured row indirection; pass two arms on `GPU-6222...` before any 201-checkpoint run |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
