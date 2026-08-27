@@ -48,6 +48,7 @@ SHA-256 values.
 | Latest full qualification | science `13038307` completed all 201 checkpoints; audit `13040047` is terminal fail-closed | first failures: schedule @58, particle @61, map @80; runtime **7.79x** native; score remains **2/20** |
 | First-particle cause | exact it61 capture `13042355`; H100 operand replay `13043203` completed | **iteration-start map state**, not support, priors, image preprocessing, projector construction, noise weighting, or posterior math |
 | Reference-clamp discriminator | exact-H100 task `13044790_2` / science step `13045526` completed 61 checkpoints in 377 s | **0 particle failures through it61**; all 61 replayed maps bitwise exact; operative schedule fields match |
+| Late M-step operand boundary | exact-H100 task `13047664_1` / internal job `13047681` completed through it60 in 404 s | **0 particle failures through it60**; incoming `Igrad2` is the leading open state at `1.606e-3` relative L2, versus `2.88e-6--8.57e-6` for fresh raw BPref terms |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -88,7 +89,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 11:43 ET**
+Last scientific update: **2026-08-27 12:24 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -116,7 +117,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 reconstruction/update substage | clamping only post-M-step references to native repeat 1 keeps all particles and operative schedule fields on that trajectory through it61 | exact-H100 `13044790_2` / `13045526`: 61/61 maps bitwise exact, zero divergent particles, target 604 returns to native pose | none; split raw BPref, moment state, and reconstructGrad at the late pre-failure M-step |
+| 1 | GF47 accumulated gradient/momentum state | paired native-map replay keeps 3,000/3,000 particles and every operative schedule field aligned through it60; the reconstruction input map is aligned to `2.54e-8` relative L2 | exact-H100 `13047664_1` / `13047681`: incoming `Igrad1` is `3.33e-6--7.94e-6`, incoming `Igrad2` is **`1.606e-3`**, fresh raw BPref terms are `2.88e-6--8.57e-6`, reconstructed reference is `1.038e-4` | none; replay/substitute carried moments and locate their earliest causal iteration before another 0--200 run |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -135,6 +136,37 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+The late pre-failure GF47 M-step is now split on a paired, state-aligned
+trajectory. Local science commit `1afccd18c` extends the bounded runner to
+reuse the qualified worker schedule and materialized native block chronology,
+pin the physical H100, replay each freshly generated native reference, and
+dump the unmodified iteration-60 M-step operands before the diagnostic clamp.
+Exact-H100 array task `13047664_1` (internal Slurm job `13047681`) stopped the
+native step exactly at iteration 60 and completed the candidate and analyzer
+in 404 seconds. All 60 replayed maps are bitwise exact to that paired native
+run. The particle audit has **zero divergent particles at all 60 checkpoints**
+and minimum pose/translation match fractions of `1.0`; every operative
+sampling field also matches.
+
+The leading open input is now the carried gradient state, not the newly
+computed particle state. At iteration 60, incoming `Igrad1` differs by
+`3.33e-6--7.94e-6` relative L2 and incoming `Igrad2` by **`1.606e-3`**.
+Fresh raw BPref data/weight differences are only `2.88e-6--8.57e-6`, while
+`reconstructGrad` produces a `1.038e-4` reference difference. The paired
+reference entering reconstruction is already aligned to `2.54e-8`. This
+closes the black-box reconstruction boundary to accumulated gradient/momentum
+state, with second moment the largest measured operand. M-step, particle, and
+sampling report SHA-256 values are `b33fafa1f8ab...`, `0acdd8f3694f...`, and
+`c2dd22ec46c0...`.
+
+Three preceding placement/orchestration attempts (`13046699`, `13047060`,
+`13047397`) are explicitly non-scoring. They exposed an array-specific Slurm
+step-ID mismatch that left native RELION alive beside RECOVAR and caused
+artificial OOMs. Commit `1afccd18c` makes numeric-step resolution
+format-independent and fail-closed; the valid arm records native step
+`13047664_1.0` terminal before RECOVAR and 0 MiB used at the handoff. The
+frozen score remains **2/20** and no acceptance rule changed.
 
 The inherited-map diagnosis now survives a trajectory-level intervention.
 Local science commit `76ce63d7e` adds a fail-closed diagnostic that replaces
