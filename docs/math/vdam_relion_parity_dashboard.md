@@ -63,7 +63,8 @@ SHA-256 values.
 | GF47 CUDA resource topology | sealed `cuobjdump` audit of the exact binaries | candidate SGD uses **48 registers / 1,060 B shared** per block; native 2D-data SGD uses **40 registers / 48 B shared**; compile-time trace/order specialization is next |
 | GF47 compile-time SGD specialization | H100 gate `13035150` passes 24/24; all specializations compile at 40 registers | non-target panel `13035208` passes reference at `0.666x / 0.668x`, but target-GPU `13035456` fails at `1.353x / 1.272x`; not robust |
 | GF47 exact physical identity grid | local `1459edb1c`; H100 gate `13035817` passes 25/25; exact-GPU panel `13035899` completes | every raw data/weight half is inside the native-repeat magnitude, but reference is `1.668x / 1.346x` and post-second is `1.182x / 1.888x`; row indirection rejected |
-| GF47 native per-worker issue order | implementation next | retain exact counts/identity rows and replay the sealed particle issue rank within each native worker stream |
+| GF47 native per-worker issue order | sealed trace comparison | all eight worker chains are already exact, with zero inversions; this axis is closed |
+| GF47 CUDA toolchain / device code | qualification next | RELION: CUDA 12.6, `sm_80` cubin + `compute_80` PTX JIT on H100; RECOVAR: CUDA 13.1 native `sm_90` cubin, no PTX |
 
 > **Status: draft, not merge-ready.** K=1 correctness is the active gate.
 > Runtime optimization starts from a sealed passing trajectory; K>1,
@@ -81,7 +82,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 07:58 ET**
+Last scientific update: **2026-08-27 08:05 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -109,7 +110,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | native count, identity rows, and register occupancy are matched; target-GPU reference parity still fails | `13035817`: 25/25; exact target `13035899`: raw halves inside floor, reference `1.668x / 1.346x`, post-second `1.182x / 1.888x` | no score change; replay sealed per-worker particle issue order, then require a two-arm pass on frozen `GPU-6222...` |
+| 1 | GF47 repeatability starts @1 | native count, identity rows, worker chains, and register occupancy are matched; device code generation is not | `13035899`: raw halves inside floor, reference `1.668x / 1.346x`; RELION is CUDA-12.6 `compute_80` PTX-JIT, RECOVAR is CUDA-13.1 `sm_90` SASS | no score change; compile RECOVAR with RELION's CUDA/toolchain/target contract, then require a two-arm pass on frozen `GPU-6222...` |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -518,12 +519,22 @@ fail at **1.668x / 1.346x**; post-second moment fails at
 submitted. Report SHA-256 is `597b0fd78de3...`.
 
 Identity block rows therefore improve raw-error magnitude but do not reproduce
-native error structure after reconstruction. The next static launch mismatch
-is particle issue order inside each worker stream: RECOVAR retains the native
-owner but currently scans its bucket-local particle axis, whereas the sealed
-worker schedule also records RELION's issue rank. The next bounded topology
-will preserve exact counts and identity rows while replaying that rank per
-worker; it must pass the same exact-GPU two-arm gate before any 0--200 run.
+native error structure after reconstruction. A direct traced-panel comparison
+confirms that the candidate issue sequence already matches RELION exactly in
+each of the eight worker lanes: **0 inversions** in all eight chains. This is
+consistent with sealed owner replay `13023005`; particle issue rank is not a
+new discriminator and no redundant implementation is warranted.
+
+The remaining static code-generation contract is materially different.
+Instrumented RELION job `13031123` was built with CUDA **12.6** and
+`CUDA_ARCH=80`; its executable embeds seven `sm_80` cubins and seven
+`compute_80` PTX images. H100 cannot execute `sm_80` cubins directly and uses
+the embedded PTX path. RECOVAR gate `13035817` was built with CUDA **13.1** as
+native `sm_90` SASS and embeds no PTX. Thus the two nominally matched kernels
+still reach H100 through different compiler and driver-JIT paths. The next
+bounded control builds RECOVAR with CUDA 12.6 and the same `sm_80` plus
+`compute_80` fatbinary contract, audits its selected resources, and applies
+the unchanged exact-GPU two-arm gate before any 0--200 run.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
@@ -913,7 +924,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 repeatability before another trajectory | identity-grid `13035899` puts every raw half inside the native magnitude, but exact-GPU reference still fails at `1.668x / 1.346x` | replay sealed per-worker particle issue rank with native counts/identity rows; pass two arms on `GPU-6222...` before any 201-checkpoint run |
+| 1 | Close GF47 repeatability before another trajectory | identity-grid `13035899` puts every raw half inside the native magnitude; all eight worker issue chains are already exact; compiler/device-code path still differs | build RECOVAR with RELION's CUDA-12.6 `sm_80` + `compute_80` PTX contract; pass two arms on `GPU-6222...` before any 201-checkpoint run |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
