@@ -44,7 +44,7 @@ SHA-256 values.
 | Current readout | Evidence | Decision |
 |---|---|---|
 | Frozen score | **2/20** strict; **0/20** runtime | draft, not merge-ready |
-| Latest closed boundary | captured-order + trace-shape panel `13037200` completed both exact frozen seed-29 arms in 83 s | exact `GPU-6222...`; reference is mixed at **1.783x / 0.943x**, so repeat-robust promotion fails and no trajectory is active |
+| Latest closed boundary | native trace-operation-order panel `13037659` completed both exact frozen seed-29 arms in 78 s | exact `GPU-6222...`; reference **fails** at `1.423x / 1.469x`, so matching the 40-register class is insufficient and no trajectory is active |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -67,7 +67,7 @@ SHA-256 values.
 | GF47 native per-worker issue order | sealed trace comparison | all eight worker chains are already exact, with zero inversions; this axis is closed |
 | GF47 CUDA toolchain / device code | gate `13036222` passes 25/25; exact-GPU panel `13036273` completes | CUDA-12.6/PTX matching improves reference to `1.439x / 1.221x` and post-second to `1.052x / 0.196x`, but compiler target alone is insufficient |
 | GF47 native trace instruction shape | seed-0 `13036723` passes, exact frozen seed-29 `13037011` fails | seed dependence is decisive: reference changes from `0.923x / 0.740x` to `2.841x / 2.355x`; no promotion |
-| GF47 captured order + trace shape | local `58469769a`; H100 gate `13037149` passes 27/27; exact-GPU panel `13037200` completes | post-second passes at `0.296x / 0.790x`, but reference is mixed at **1.783x / 0.943x**; captured order helps one repeat only and is rejected for promotion |
+| GF47 captured order + trace shape | native-order local `64db9df71`; H100 gate `13037580` passes 28/28; exact-GPU panel `13037659` completes | trace specialization reaches **40 registers / 40 B shared** versus native **40 / 48**, but reference fails at **1.423x / 1.469x**; register pressure alone is rejected |
 
 > **Status: draft, not merge-ready.** K=1 correctness is the active gate.
 > Runtime optimization starts from a sealed passing trajectory; K>1,
@@ -85,7 +85,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 08:49 ET**
+Last scientific update: **2026-08-27 09:06 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -113,7 +113,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | exact seed, native counts/workers, captured 51,888-row order, CUDA-12.6/PTX, and trace shape are now combined | `13037200`: post-second `0.296x / 0.790x`, reference **1.783x / 0.943x**; one arm passes and one fails | no score change; isolate the remaining physical scheduling/resource-topology sensitivity and require two-arm robustness |
+| 1 | GF47 repeatability starts @1 | exact seed/counts/workers/order, CUDA-12.6/PTX, trace shape, and 40-register kernel class are now combined | `13037659`: reference **1.423x / 1.469x**; raw boundaries straddle the native floor and noise is `2.745x / 3.858x` | no score change; close the remaining shared-memory/source and physical launch-scheduling differences, then require two-arm robustness |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -600,6 +600,26 @@ The two-arm promotion gate rejects it, and no 0--200 trajectory is submitted.
 The report SHA-256 is `32e3b477a2e4...`; sealed arm-A schedule and chronology
 SHA-256 values are `a02c779f173f...` and `f16a14512623...`.
 
+Source comparison then exposes a concrete trace-order difference: native
+RELION reads the first-atomic timer before interpolation indices and
+coefficients become live, while the candidate did so after computing them.
+Local commit `64db9df71` moves the instruction to the native point and adds a
+source-order guard. Focused CPU validation passes **16/16**; matched-toolchain
+H100 gate `13037580` passes **28/28** and seals CUDA SHA-256
+`90fab33796ae...`. The captured-order + trace specialization drops from 48 to
+**40 registers**, matching native's register class; shared allocation remains
+40 B versus native 48 B. Setup-only jobs `13037521` and `13037545` fail before
+compilation because of a bad head digest and Slurm comma parsing respectively;
+they contain no science result.
+
+Exact-target seed-29 panel `13037659` completes both arms in 78 seconds. The
+reconstructed-reference ratios are **1.423x / 1.469x**, post-second is
+`1.103x / 0.940x`, and noise power is `2.745x / 3.858x`. Thus the corrected
+source order and 40-register kernel alter the scheduler outcome but do not
+close parity robustly. No trajectory is submitted. Report SHA-256 is
+`bcf56394c2dd...`; sealed arm-A schedule and chronology SHA-256 values are
+`def306c6a832...` and `c29c4fb11611...`.
+
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
 two exact-owner replays with eight concurrent host issuers ran on GPU
@@ -988,7 +1008,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 seed-29 short gate | combined captured-order + trace-shape `13037200` passes one reference arm and fails the other at `1.783x / 0.943x`; no trajectory is active | close physical scheduling/resource sensitivity; pass two exact-GPU arms before any 201-checkpoint run |
+| 1 | Close GF47 seed-29 short gate | native trace-order `13037659` matches the 40-register class but fails reference at `1.423x / 1.469x`; no trajectory is active | close the remaining shared-memory/source and physical launch-scheduling differences; pass two exact-GPU arms before any 201-checkpoint run |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
