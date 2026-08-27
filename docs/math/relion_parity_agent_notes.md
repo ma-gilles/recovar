@@ -13742,3 +13742,228 @@ quality against RELION** -- only that they introduce zero CPU-testable
 regressions and are individually justified against RELION source, per the
 Numeric And Quality Contract's own standard that "not measured" is not
 "same."
+
+## 2026-08-27 double-precision float32-forcing audit, round 3: the reference
+## volume actually being projected -- two narrow-then-widen bugs found and
+## fixed, both verified against RELION source; first GPU/RELION-oracle
+## comparison this session (Slurm `gpu` partition, commit `423b8d32`),
+## resolving round 2's open "not attempted to completion" item
+
+User-reported starting point (verbatim): "it seems that the actual volume
+reference to be projected is still complex64 instead of complex128. As far
+as I understand things are still limited by the initial float32 real space
+mrc file read. But I'm guessing at some point after reading it - relion
+casts it to double precision." This hypothesis was correct on both counts,
+confirmed via RELION source read (`ml_model.cpp:MlModel::readImages`,
+`ml_model.h`'s `Iref` as `std::vector<MultidimArray<RFLOAT>>`,
+`projector.h`'s `Projector::data` as `MultidimArray<Complex>` where
+`Complex = tComplex<RFLOAT>` in `complex.h`; `RFLOAT` is `double` unless the
+`RELION_SINGLE_PRECISION` build flag is set, which our oracle build does
+not set -- this is independent of `ACC_DOUBLE_PRECISION`, which instead
+controls the GPU-kernel-side `XFLOAT`). RELION widens the on-disk float32
+MRC to double as part of `Image<RFLOAT>::read()` itself, and everything
+downstream -- including the FFT that builds `Projector::data` -- runs at
+that same double precision.
+
+### Bug #1: `scripts/run_full_refinement.py` initial volume loading
+
+The initial reference MRC (always float32 on disk, per `recovar/CLAUDE.md`'s
+FFT/MRC convention notes) was cast to `np.float32`/`np.complex64`
+immediately after `load_mrc`/`get_dft3`, in all three volume-loading
+branches (frozen-boundary K-per-half merge, K=1, K-class). This produced
+`init_vol_ft`, which seeds `init_volume=jnp.asarray(init_vol_ft)` --
+the array that becomes the refinement engine's initial model state for
+*every* subsequent iteration. No matter how carefully every later cast in
+the codebase is fixed (rounds 1-2, plus `DensePrecisionPolicy.
+cast_projection_volume` gated on the same `RECOVAR_USE_FLOAT64_PROJECTIONS`
+flag), a narrow-then-widen bug at the source can never be recovered
+downstream -- `cast_projection_volume` widening a complex64 array to
+complex128 just zero-pads the lost mantissa bits, it does not reconstruct
+them.
+
+Fix: introduced `_init_volume_dtype`/`_init_volume_complex_dtype`, gated on
+`RECOVAR_USE_FLOAT64_PROJECTIONS` (checked directly via `os.environ`, same
+truthy-string parsing convention used elsewhere in this file), and used
+them at all six narrowing sites (frozen-boundary merge x2, K=1 x2 including
+the post-lowpass-filter branch, K-class per-class x2, K-class representative
+volume x1). Deliberately gated on `_PROJECTIONS` alone, not
+`_dense_global_scoring_dtype`'s `_SCORING OR _PROJECTIONS` -- this matches
+`projection_complex_dtype`'s own condition in `dtype_policy.py` exactly,
+so a caller requesting float64 scoring without float64 projections doesn't
+pay an unrequested memory/precision cost on the projection path.
+
+One pre-existing variable, `init_reference_real_for_projector` (the
+`--firstiter_cc`-specific RELION-exact real-reference handoff, consumed at
+`refine_single_volume(..., init_reference_real=init_reference_real_for_
+projector)`), was already unconditionally `np.float64` before this round --
+confirmed via code read, left untouched. This matters for interpreting the
+GPU validation below: in `--firstiter_cc` mode, RELION iteration 1's
+scoring projector is built from this already-correct handoff, not from
+`init_vol_ft`. **A one-iteration parity run does not exercise bug #1's fix
+at all** -- `init_vol_ft`'s dtype only becomes the volume actually
+projected starting at iteration 2 (once the model state derived from
+`init_volume=jnp.asarray(init_vol_ft)` is what the next iteration's
+projector is built from). This was caught before over-claiming validation
+coverage; see the GPU results below, which use `--max_iter 2` specifically
+for this reason.
+
+### Bug #2: `recovar/reconstruction/relion_functions.py:
+### _pad_volume_for_projection_host`
+
+More architecturally significant than bug #1: this is the host-side FFT
+fallback that `pad_volume_for_projection` (the dispatcher) takes whenever
+the padded grid is too large for the cuFFT workspace budget
+(`_RELION_PROJECTION_PAD_HOST_FFT_MIN_VOXELS = 200_000_000`, i.e. roughly
+`N >= 293` at the RELION-matching `padding_factor=2`), and it ran
+*unconditionally* on both its input and output cast to `np.complex64` --
+completely independent of any caller-supplied dtype, `RECOVAR_USE_FLOAT64_
+PROJECTIONS`, or bug #1's fix. Since `pad_volume_for_projection` is called
+every iteration whenever `projection_padding_factor > 1` (the RELION-
+matching default), this would have silently discarded bug #1's fix -- and
+any future fix at any other site -- for every realistically large box size
+(256^3+ classes, high-resolution refinements), regardless of how carefully
+upstream precision was arranged. This is exactly the "narrow-then-widen"
+pattern this file has repeatedly flagged as the highest-value bug class to
+find in this audit.
+
+Fix: preserve `vol_ft_flat`'s own dtype throughout -- `real_dtype` derived
+from whether the input is complex128 vs complex64, the final
+`vol_ft_padded` cast to `vol_ft_flat.dtype` instead of hardcoded
+`np.complex64`, and the sphere-mask coordinate array's dtype matched to
+`real_dtype` (this one doesn't affect precision either way since its
+values are exact half-integers, but keeping it consistent avoids an
+unnecessary float32/float64 mixed-dtype op). One implementation snag:
+an initial attempt also cast the IFFT output (`vol_real`) to `real_dtype`
+before padding, which triggered `ComplexWarning: Casting complex values to
+real discards the imaginary part` (the array is nominally real but stays
+complex-typed, matching the original code's behavior) -- removed that
+extra cast; `vol_real` stays complex throughout exactly as it did before
+this fix, only the *width* changed.
+
+The separate in-JAX branch of `pad_volume_for_projection` (taken for
+smaller grids, using `jnp`-based `get_idft3`/`get_dft3`) was checked and
+already correctly preserves dtype with no forced cast -- no fix needed
+there. Its sphere-mask `coords = jnp.arange(pN, dtype=jnp.float32)` was
+deliberately left alone for the same exact-value reason as above.
+
+Also examined and explicitly left alone (out of the live E/M-step scope):
+`relion_reconstruct()`/`relion_style_triangular_kernel`'s
+`noise_variance.astype(np.float32)` around line 1417 -- a different,
+non-EM-iteration reconstruction pipeline, not the volume-being-projected
+concern this round targeted.
+
+### Testing this round
+
+- `test_pad_volume_for_projection_host_preserves_double_precision` added
+  directly after the existing `test_projection_padding_host_path_matches_
+  device_path` in `tests/unit/test_relion_functions.py`, reusing that
+  test's `monkeypatch.setattr(rf, "_RELION_PROJECTION_PAD_HOST_FFT_MIN_
+  VOXELS", 1)` pattern to force the host path on a small (8,8,8) test
+  volume. Asserts dtype preservation (complex128 in -> complex128 out,
+  complex64 in -> complex64 out, with and without gridding correction) and
+  numerical accuracy against an independently-computed float64 reference:
+  double-precision path max abs error `0 <  1e-9`, more accurate than the
+  float32 path's `8.034e-06` by construction. Full file:
+  `40 passed, 9 skipped` (pre-existing `libfftw3.so.3` gaps, unrelated).
+- `python3 -m py_compile` clean on all three touched files.
+- Related `tests/unit/test_run_full_refinement_*.py` files: `137 passed,
+  5 skipped, 1 pre-existing-and-confirmed-unrelated failure`.
+
+### GPU/RELION parity check: completed this session on the `gpu` Slurm
+### partition, resolving round 2's open item
+
+Per the user's explicit instruction, ran on Slurm's plain `gpu` partition
+(not `gpu_devel`, which round 2 found stuck `PENDING` on
+`QOSMaxCpuPerUserLimit` -- `sacctmgr show qos` confirms `part_gpu` caps
+only `gres/gpu=24` with no CPU limit, unlike `part_gpu_devel`'s `cpu=10`),
+loading GPU support via the exact `.vscode/load_env.sh` module sequence
+(`CMake`, `OpenMPI`, `FFTW`, `libdeflate`, `RELION/5.0.0-foss-2022b-
+CUDA-12.1.1`, then `module unload CUDA`).
+
+**First attempt (job 60344312) landed on a broken node**: `nvidia-smi`
+succeeded (A100-SXM4-80GB visible) but `jax.devices()` silently fell back
+to `[CpuDevice(id=0)]`, with `E... platform_util.cc:250] Failed to create
+stream executor for device CUDA:0: CUDA error: : CUDA_ERROR_UNKNOWN:
+unknown error` in stderr. This triggered `recovar.utils.helpers.get_gpu_
+memory_total`'s known CPU-RAM-autodetection bug (round 2's documented
+"Recommendation for next session" item) -- batch sizing assumed 469 GB
+(half the physical node's 938 GB RAM) was available, and the double-
+precision run (float64 arrays are 2x the memory of float32) crashed with
+`jax.errors.JaxRuntimeError: ... Out of memory allocating 1966558150656
+bytes` (~1.8 TB) partway through pass-2 M-step.
+
+**Root-caused via a dedicated diagnostic job** (`diag_gpu_visibility.
+sbatch`, 4 variants: no modules at all via `env -i`, current-shell-minus-
+contaminants, the full `.vscode/load_env.sh` sequence, and that sequence
+with `LD_LIBRARY_PATH` forcibly cleared) run twice: once landing again on
+the same bad node (`r816u35n07`) where even the *cleanest possible*
+environment (zero modules, `env -i` with only `PATH`/`HOME`/`USER`) still
+failed identically with `CUDA_ERROR_UNKNOWN` -- proving conclusively this
+is a node-level driver/hardware fault, **not** caused by the `.vscode/
+load_env.sh` module sequence or any RELION/CUDA module interaction. A
+second run of the same diagnostic, excluding that node, landed on
+`r908u24n02` (Tesla V100-PCIE-16GB) and passed all four variants cleanly
+(`devices: [CudaDevice(id=0)]` every time, including with the full module
+sequence loaded) -- confirming the `.vscode/load_env.sh` modules are safe
+to use for GPU jax work and do not need to be avoided or reordered.
+
+**Fix applied for future jobs**: added `#SBATCH --exclude=r816u35n07` and a
+fail-fast `assert jax.devices()[0].platform == "gpu"` right after the
+provenance print (so a future bad-node draw aborts in seconds instead of
+burning 45 minutes of CPU-fallback runtime and OOMing). Recorded here so a
+future session doesn't have to re-diagnose `r816u35n07` from scratch --
+this is a cluster infrastructure fault worth reporting/excluding at the
+Slurm config level if it recurs, not a code issue.
+
+**Successful runs**, both against the `relion_em_test_double_seeded`
+oracle (igg_1d K=1 `--firstiter_cc`, `--random_seed 1783599264`,
+`--healpix_order 3`), on node `r907u32n01` (V100):
+
+- `--max_iter 1` (job 60344370, `devices: [CudaDevice(id=0)]` confirmed,
+  6m22s total for both double+control runs): double-precision half1/half2/
+  merged `corr=0.999999/0.999999/0.999999`, FSC-AUC `0.999935`; float32
+  control `corr=1.000000/0.999999/0.999999`, FSC-AUC `0.999940`. As noted
+  above, this run does **not** differentially exercise bug #1's fix
+  (`--firstiter_cc` iteration 1 uses the pre-existing correct handoff) nor
+  bug #2's fix (128^3 test volume, well under the ~293^3 host-path
+  threshold) -- it only confirms the double-precision path runs correctly
+  end-to-end on real GPU hardware without regressing quality.
+- `--max_iter 2` (job 60344461, 5m15s total): double-precision
+  `corr=0.999999/0.999997/0.999999`, FSC-AUC `0.999591`; float32 control
+  `corr=0.999999/0.999997/0.999999`, FSC-AUC `0.999592`. This run **does**
+  exercise bug #1's fix (iteration 2's scoring projector is built from the
+  `init_vol_ft`-seeded, then M-step-reconstructed, model state). Both
+  precision modes comfortably clear the project's `>=0.999` parity-gate
+  criterion (per `CLAUDE.md`'s "Pre-PR parity smoke" section) with
+  negligible difference between them at this small (128^3, 500+500
+  particle) fixture size -- consistent with expectations, since float32
+  vs float64 differences are expected to matter more at larger box sizes/
+  more iterations than at a 2-iteration, 128^3 smoke check. Bug #2's fix
+  (the >=293^3 host-path threshold) is still **not** exercised by this
+  fixture size; no larger-box GPU run was performed this session due to
+  scope/time -- `test_pad_volume_for_projection_host_preserves_double_
+  precision`'s direct unit-level verification is the only evidence for
+  bug #2's numerical correctness so far. A future session wanting to
+  empirically exercise bug #2 on GPU should use a >=293^3 (or override
+  `_RELION_PROJECTION_PAD_HOST_FFT_MIN_VOXELS` to force the host path at
+  smaller sizes, as the unit test does) fixture with
+  `projection_padding_factor > 1`.
+
+Committed as `423b8d32` on `double_parity` (3 files: `scripts/run_full_
+refinement.py`, `recovar/reconstruction/relion_functions.py`, `tests/unit/
+test_relion_functions.py`).
+
+### Still open
+
+- The P0/P1/P2 backlog from round 1's 150+-site audit (see the "Backlog"
+  section above) remains unfixed -- not addressed this round, which was
+  scoped entirely to the user's specific volume-precision report.
+- `recovar.utils.helpers.get_gpu_memory_total`'s CPU-RAM-autodetection bug
+  (reads physical node RAM via `psutil.virtual_memory().available` rather
+  than the cgroup-limited Slurm allocation) is still unfixed and caused
+  the first GPU-job attempt's crash once GPU fell back to CPU. It is
+  unrelated to double-precision correctness (round 2 already established
+  this) but is a real, reproducible infrastructure bug worth its own fix
+  in a future session.
+- Bug #2's fix has no GPU-scale empirical validation yet (only the CPU
+  unit test) -- see above.

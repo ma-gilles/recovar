@@ -15876,3 +15876,58 @@ already had several other jobs running); not pursued further this session.
 (or the prior round's) -- only CPU-regression-clean, individually
 RELION-source-justified.** This remains the mandatory first step of any
 follow-up session before further fixing, per the validation ladder.
+
+### 2026-08-27 continuation 2: reference-volume dtype fixed (user-reported);
+### first GPU/RELION-oracle comparison this session obtained, resolving the
+### "GPU/RELION parity check blocked" item above
+
+User reported the actual volume being projected during EM scoring was still
+`complex64`, correctly hypothesizing the float32-on-disk MRC read was the
+root cause and that RELION widens to double after reading. Confirmed via
+source read and fixed two narrow-then-widen bugs: `scripts/run_full_
+refinement.py`'s initial-volume loading (all three branches: frozen-
+boundary, K=1, K-class), and `recovar/reconstruction/relion_functions.py:
+_pad_volume_for_projection_host` (the host-side FFT fallback for grids
+`>=~293^3` at `padding_factor=2` -- was unconditionally forcing complex64
+every iteration, independent of any upstream fix). Full detail, RELION
+source citations, and the diagnostic trail in `docs/math/relion_parity_
+agent_notes.md`'s 2026-08-27 "round 3" entry. Committed as `423b8d32`.
+
+**GPU/RELION parity obtained this session**, per the user's instruction to
+use the `gpu` Slurm partition (not `gpu_devel`, which round 2 found stuck
+pending on a CPU-quota QOS limit) with GPU support loaded via `.vscode/
+load_env.sh`'s exact module sequence. First attempt landed on a node
+(`r816u35n07`) with a broken CUDA driver (`nvidia-smi` OK, but `cuInit`-
+level `CUDA_ERROR_UNKNOWN`) that silently fell back to CPU and then hit the
+still-unfixed `get_gpu_memory_total` CPU-RAM-autodetection bug flagged in
+the entry above; root-caused via a dedicated diagnostic job (confirmed
+node-specific, not a module-loading issue) and worked around with
+`--exclude=r816u35n07` plus a fail-fast GPU-visibility assertion for future
+jobs. Two successful runs against `relion_em_test_double_seeded` (igg_1d
+K=1 `--firstiter_cc`) on a V100 node:
+
+- `--max_iter 1`: double-precision merged `corr=0.999999`, FSC-AUC
+  `0.999935`; float32 control merged `corr=0.999999`, FSC-AUC `0.999940`.
+- `--max_iter 2` (needed to actually exercise the `init_vol_ft` fix, since
+  `--firstiter_cc` iteration 1 uses an already-correct separate handoff):
+  double-precision merged `corr=0.999999`, FSC-AUC `0.999591`; float32
+  control merged `corr=0.999999`, FSC-AUC `0.999592`.
+
+Both precision modes clear the `>=0.999` parity gate with no regression
+from the fix, at this fixture's small (128^3) scale. This is the first
+actual RELION-compared quality evidence obtained in this `double_parity`
+audit track (rounds 1-2's fixes were CPU-regression-tested only, per their
+own entries' explicit caveats) -- it validates only this round's two fixes
+plus, incidentally, that the accumulated rounds 1-2 fixes (also active via
+`RECOVAR_USE_FLOAT64_SCORING=1` in the same runs) don't regress quality
+either, though rounds 1-2 were not isolated/attributed individually in
+this comparison.
+
+**Still open** (unchanged from the entry above except as noted): the P0/P1/
+P2 backlog list is untouched this round (out of scope -- this round was
+scoped to the user's specific volume-precision report); `get_gpu_memory_
+total`'s CPU-RAM bug is still unfixed (caused this round's first GPU-job
+attempt to crash once it silently fell back to CPU -- confirmed unrelated
+to precision correctness); bug #2's fix (`_pad_volume_for_projection_host`)
+has no GPU-scale empirical validation, only the CPU unit test, since this
+fixture (128^3) is well under its `>=293^3` host-path threshold.
