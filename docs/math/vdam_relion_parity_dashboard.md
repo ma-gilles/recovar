@@ -1,33 +1,59 @@
 <!-- frozen-vdam-parity-scorecard-v3 -->
-### Frozen VDAM / InitialModel RELION parity scorecard
+### Frozen VDAM / InitialModel RELION parity scorecard v3
 
-This PR carries a fixed-denominator K=1 full-trajectory suite modeled on the
-EM PR scorecard. The v3 denominator is **20 cases**, every case spans numbered
-iterations **0--200**, and adding or changing cases requires a new suite
-version. The checked definition SHA-256 is
+**K=1 fixed-suite score: 2 / 20 strict trajectories passing (20 / 20
+evaluated).**
+
+**K=1 same-H100 runtime score: 0 / 20 comparable (RECOVAR is currently
+4.91--11.58x RELION).**
+
+Suite: `vdam-k1-gui-default-full20` (version 3; denominator frozen at 20).
+Frozen case-definition SHA-256:
 `9842b2c9cb7646d75127541801ef5982ed19e4a80485f9ce586ceabdb3ed0091`.
 
-| Fixed K=1 v3 suite | Passed | Evaluated | Denominator | Live science |
-|---|---:|---:|---:|---:|
-| All quality/state/schedule gates | **2** | 20 | 20 | 20 complete, 0 running, 0 queued |
-| Comparable same-H100 runtime | **0** | 20 | 20 | measured range: **4.91--11.58x RELION** |
+| Fixed K=1 v3 suite | Strict pass | Map pass | Particle pass | Schedule pass | Evaluated |
+|---|---:|---:|---:|---:|---:|
+| GUI/default, iterations 0--200 | **2/20** | **5/20** | **6/20** | **13/20** | **20/20** |
 
-Progress against the unchanged strict denominator is **0 -> 2 accepted
-trajectories**. Earlier expansion v2 remains a separate regression track at
-**6/15 accepted** and cannot change the v3 score.
+Progress against the unchanged denominator is **0 -> 2 strict passes**. A
+checked case means that its complete map, particle-state, and pre-divergence
+schedule contract passed; unchecked cases remain in the denominator. No
+tolerance, baseline, case, or acceptance definition was changed to obtain a
+pass.
+
+The separate v2 expansion snapshot remains **6/15 accepted**. It covers
+additional parameter stresses, is retained as a regression track, and cannot
+change the frozen v3 score. K>1, real-data, and runtime are likewise separate
+gates and cannot inflate K=1 correctness.
+
+The checked-in scorecard, evidence, validator, and tests are:
+
+- `docs/math/vdam_relion_parity_scorecard_v1.json`
+- `docs/math/vdam_relion_parity_scorecard.md`
+- `docs/math/vdam_relion_parity_dashboard.md`
+- `docs/math/vdam_relion_parity_evidence_ledger_20260824_exactfine.json`
+- `scripts/summarize_vdam_relion_parity_scorecard.py`
+- `tests/unit/initial_model/test_vdam_relion_parity_scorecard.py`
+
+Current diagnostic work is **non-scoring** until a fresh immutable candidate
+passes all 201 checkpoints against the frozen same-physical-H100 native
+envelope. Every promoted result records source, executable, CUDA and RELION
+binding digests, fixture, GPU UUID, command, Slurm jobs, report paths, and
+SHA-256 values.
+
+| Current readout | Evidence | Decision |
+|---|---|---|
+| Frozen score | **2/20** strict; **0/20** runtime | draft, not merge-ready |
+| Latest closed boundary | GF38 iteration-3 controller matches 4/4 native repeats | GF38 now fails later: schedule @20, particle @27, map @60 |
+| GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
+| GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
+| GF47 reverse float32 order | panel `13026879`, audit `13026880` terminal | reference is inside its fresh native floor, but post-second-moment error is **2.90--3.57x** the floor; no promotion |
+| GF47 native `Igrad2` oracle | panel `13027533` terminal | second moment becomes exact, but reference changes only to **1.03x / 0.72x** its native floor; not the dominant missing operation |
+| Next repair order | GF47 native float32 scheduling -> GF46 coarse cutoff @4 -> GF38 controller @20 | a full 0--200 rerun follows only a positive bounded discriminator |
 
 > **Status: draft, not merge-ready.** K=1 correctness is the active gate.
-> Runtime, K>1, real-data, and final CLI/GUI qualification follow only after
-> the K=1 0--200 suite has no unexplained failures.
-
-| Executive readout | Current evidence |
-|---|---|
-| Verdict | **Not merge-ready**: K=1 quality is 2/20 and runtime is 0/20 |
-| Newly closed boundary | **GF38 iteration-3 controller passes** all active fields against 4/4 native repeats |
-| Earliest active science blockers | GF46 coarse cutoff @4; GF47 repeatability starts @1; GF38 accuracy controller @20 |
-| Latest qualification | GF47 frozen serial-orientation job `13025432` is running beyond iteration 176; binary64-accumulator panel `13026518` and audit `13026519` are terminal |
-| Latest focused discriminator | Binary64 storage is bitwise repeatable but worsens reference error to **9.19--9.77e-6** versus a **1.64e-6** native floor; RELION's float32 accumulation order is part of the target |
-| Publication policy | Science fixes remain local/unpushed; this PR publishes only the live evidence dashboard |
+> Runtime optimization starts from a sealed passing trajectory; K>1,
+> real-data, and final CLI/GUI qualification follow K=1 closure.
 
 #### Frozen case checkboxes
 
@@ -41,7 +67,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 01:06 ET**
+Last scientific update: **2026-08-27 01:40 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -69,7 +95,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | serial float32 fixes repeat spread but retains particle 2411's divergent branch; binary64 proves the target is not the exact mathematical sum | f64 panel `13026518`: RECOVAR repeats are bitwise exact, but raw/reference/noise errors all move outside the native floor; next test deterministic float32 orientation orders | no promotion; finish the run and find a stable float32 order inside the full native trajectory envelope |
+| 1 | GF47 repeatability starts @1 | serial float32 fixes repeat spread but retains particle 2411's divergent branch; binary64 proves the target is not the exact mathematical sum | sealed audit `13026777`: particle @58, schedule @59, map @79; reverse order and native-`Igrad2` oracle are both non-solutions | no promotion; next test must model a concrete native CUDA scheduling topology |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -103,15 +129,15 @@ atomic interleaving drives the repeatability failure. A systematic
 post-second-moment mismatch remains (`2.75--3.10x` the native envelope), so
 the short panel does not change the score.
 
-Frozen 0--200 candidate job `13025432` is running from local unpushed head
-`ad0573df5` against the existing four-run GF47 native envelope. It is pinned
+Frozen 0--200 candidate job `13025432` completed all 201 checkpoints from
+local unpushed head `ad0573df5` against the existing four-run GF47 native
+envelope. It was pinned
 to the original node and physical GPU, the frozen v3 scorecard, qualified CUDA digest `c39994b6e42a...`,
 RELION binding digest `fcbb2a8356c2...`, and worker-schedule digest
 `fedf84049b0b...`. The runner now fail-closes on those controls, explicitly
 restores the diagnostic topology after its environment scrub, and submits the
 full map/state/schedule envelope audit automatically after science. No generic
-RECOVAR full or long suite is involved. No score will be promoted unless the
-complete 0--200 audit passes. Placement attempts `13024925`, `13024949`,
+RECOVAR full or long suite was involved. Placement attempts `13024925`, `13024949`,
 `13024950`, `13025040`, and `13025075` exited 75 before science on nonmatching
 GPUs; `13025129` reached the correct GPU but rejected the older default
 scorecard before science. They are infrastructure/provenance gates, not parity
@@ -123,14 +149,13 @@ contains only the 200 particles selected at iteration 1. The
 `single_rotation` topology intentionally discards captured owners and sends
 every later particle to lane 0, so local commit `ad0573df5` still validates
 the trace schema but no longer requires later subsets to join to iteration-1
-IDs. Focused schedule tests pass, and replacement `13025432` has crossed the
-previous iteration-2 stop. This is harness qualification, not a parity score.
-It has also crossed the former iteration-58 numerical butterfly: direct map
-relative-L2 at iterations 57, 58, and 59 is respectively `0.000296`,
+IDs. Focused schedule tests pass, and replacement `13025432` crossed the
+previous iteration-2 stop. It also crossed the former iteration-58 numerical
+butterfly in the direct-map metric: relative-L2 at iterations 57, 58, and 59
+is respectively `0.000296`,
 `0.000522`, and `0.000710`, versus native repeat diameters `0.0258`, `0.0266`,
-and `0.0273`. Those are 1.15%, 1.96%, and 2.60% of the native envelope.
-This live partial check is diagnostic-only; the automatic sealed audit still
-controls promotion.
+and `0.0273`. Those are 1.15%, 1.96%, and 2.60% of the native direct-map
+diameter; the strict FSC/FSC-AUC audit below still controls promotion.
 
 The matching partial particle audit is now decisive and prevents promotion.
 At iteration 58, 199/200 active particles match at least one of the four
@@ -140,9 +165,17 @@ all four native repeats select `(-143.051050, 101.809809, 161.281477)` with
 Pmax spanning `0.127128--0.257153`. Translation is exactly the same
 `(0.536160, -3.713840)` on both sides. This reproduces the older divergent
 mode exactly: deterministic serial orientation-block ordering repairs
-repeatability but does not repair the stable trajectory branch. Job
-`13025432` continues to iteration 200 to seal later map and schedule evidence,
-but it cannot change the frozen score.
+repeatability but does not repair the stable trajectory branch.
+
+Deferred audit `13026777` is now terminal and fail-closed with exit `1:0`.
+Particle state first fails at iteration 58 on that same particle; schedule
+first fails at 59 because `optimal_offset_change` matches no native repeat;
+the strict map gate first fails at 79 and fails 122/201 checkpoints. At 79,
+the candidate-to-best-native FSC-AUC is `0.998834761`, below the unchanged
+`0.999` cross-engine gate; its GT nondegradation check still passes. The run
+took 2,616 seconds versus the 299.1-second native median (**8.75x**).
+Map/state/status report SHA-256 values are `319ca5bf5230...`,
+`1ba614b21916...`, and `e5b8bba0df32...`. The score remains 2/20.
 
 Binary64-accumulator discriminator `13026518` and dependent aggregate audit
 `13026519` are terminal from local unpushed commit `75acbdef2`. Projection,
@@ -157,6 +190,29 @@ versus `1.64e-6`. RELION's float32 rounding order is therefore part of the
 effective target; replacing it with the exact high-precision sum cannot solve
 GF47. The sealed report SHA-256 is `4f3c1e780fda...`. The next bounded family
 is deterministic float32 orientation order, beginning with reverse order.
+
+That reverse-order discriminator is now terminal. Paired panel `13026879`
+completed in 95 seconds and dependent aggregate audit `13026880` completed in
+3 seconds from local unpushed commit `21a0546a8`. Both RECOVAR repeats remain
+stable (`1.42e-8` reconstructed-reference repeat spread). Cross-engine raw
+BPref data and weight stay near or inside the fresh paired-native floor, and
+the reconstructed-reference errors (`2.19e-6`, `1.73e-6`) are below that
+panel's `2.95e-6` native-repeat floor. The leading systematic boundary does
+not improve: post-second-moment errors are **2.90x** and **3.57x** the native
+floor, versus **2.75x** and **3.10x** for ascending serial order. Reverse
+orientation order is therefore rejected as a promotion. Report SHA-256 is
+`843ee68ac2b7...`. Arbitrary order search will not be scored; the next bounded
+test must model a concrete native CUDA scheduling topology.
+
+Paired native-second-moment oracle `13027533` completed in 96 seconds from
+local unpushed commit `7137ed541`. It replaces only iteration-1 `Igrad2_post`
+with the exact paired-native buffer; all E-step, raw BPref, first-moment,
+reconstruction, and controller work remains RECOVAR. The intended boundary
+becomes exact in both arms, but reconstructed-reference errors move only from
+the ascending serial control's `1.06x` / `0.97x` native-floor ratios to
+`1.03x` / `0.72x`. This does not identify `Igrad2` as the dominant missing
+iteration-1 operation, so the substitution is not promoted. Report SHA-256 is
+`94004dec050f...`; the local oracle remains diagnostic-only and unpushed.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
@@ -546,7 +602,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 repeatability before another trajectory | job `13020545` rejects the two generic EM reduction toggles; source audit proves the existing VDAM direct kernel already mirrors native sequential translation reduction and fused scatter | passively capture native dynamic worker assignment, replay the worker/stream schedule in RECOVAR, then requalify iteration 0--2 and 0--200 |
+| 1 | Close GF47 repeatability before another trajectory | serial full trajectory `13025432` and audit `13026777` are terminal: state @58, schedule @59, map @79, 8.75x runtime; f64, reverse-order, and native-`Igrad2` panels are rejected | test a concrete native CUDA block-scheduling topology; promote only after a positive short panel and fresh 0--200 pass |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
