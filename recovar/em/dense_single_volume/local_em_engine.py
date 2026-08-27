@@ -422,7 +422,7 @@ def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology == "single_rotation":
+    if topology in {"single_rotation", "single_rotation_f64"}:
         # This diagnostic intentionally discards captured owners and serializes
         # every particle and orientation block.  The v2 trace still gets fully
         # schema-validated above, but later VDAM iterations may select particles
@@ -448,7 +448,7 @@ def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
     elif topology != "captured":
         raise ValueError(
             "VDAM worker replay topology must be 'captured', 'single', or "
-            "'single_rotation'"
+            "'single_rotation', or 'single_rotation_f64'"
         )
     return owners.astype(np.int32, copy=False)
 
@@ -461,7 +461,18 @@ def _relion_vdam_serial_rotation_replay() -> bool:
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    return bool(path) and topology == "single_rotation"
+    return bool(path) and topology in {"single_rotation", "single_rotation_f64"}
+
+
+def _relion_vdam_float64_accumulator_replay() -> bool:
+    """Return whether the diagnostic uses binary64 accumulator storage."""
+
+    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return bool(path) and topology == "single_rotation_f64"
 
 
 def _bucket_contains_debug_target(experiment_dataset, image_indices, pending_targets: set[int] | None) -> bool:
@@ -634,6 +645,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     reconstruction_group_ids=None,
     worker_lane_ids=None,
     serial_rotation_replay=False,
+    float64_accumulator_replay=False,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -718,6 +730,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 reconstruction_group_ids=reconstruction_group_ids,
                 worker_lane_ids=worker_lane_ids,
                 serial_rotation_replay=serial_rotation_replay,
+                float64_accumulator_replay=float64_accumulator_replay,
             )
         )
     return Ft_y, Ft_ctf
@@ -4727,6 +4740,9 @@ def run_local_em_exact(
                         unpadded_bucket.image_indices,
                     ),
                     serial_rotation_replay=_relion_vdam_serial_rotation_replay(),
+                    float64_accumulator_replay=(
+                        _relion_vdam_float64_accumulator_replay()
+                    ),
                 )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)

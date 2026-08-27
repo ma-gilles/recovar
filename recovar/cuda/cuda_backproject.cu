@@ -44,6 +44,7 @@
 #include <limits>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include "xla/ffi/api/ffi.h"
 
 namespace ffi = xla::ffi;
@@ -4318,6 +4319,7 @@ __device__ __forceinline__ void relion_vdam_translate_pixel_f32(
     translated_imag = cosine * imag + sine * real;
 }
 
+template <typename Accumulator>
 __global__ void relion_vdam_native_sgd_f32_kernel(
     RelionVdamProjectorKernel projector,
     float* image_real,
@@ -4332,9 +4334,9 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
     float significant_weight,
     float weight_norm,
     float* eulers,
-    float* model_real,
-    float* model_imag,
-    float* model_weight,
+    Accumulator* model_real,
+    Accumulator* model_imag,
+    Accumulator* model_weight,
     int max_r,
     int max_r2,
     float padding_factor,
@@ -4442,11 +4444,11 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
 
 #define RELION_VDAM_NATIVE_ATOMIC_TRIPLET(Z, Y, X, COEFFICIENT)                    \
     atomicAdd(&model_real[(Z) * model_x * model_y + (Y) * model_x + (X)],          \
-              (COEFFICIENT) * real);                                               \
+              static_cast<Accumulator>((COEFFICIENT) * real));                      \
     atomicAdd(&model_imag[(Z) * model_x * model_y + (Y) * model_x + (X)],          \
-              (COEFFICIENT) * imag);                                               \
+              static_cast<Accumulator>((COEFFICIENT) * imag));                      \
     atomicAdd(&model_weight[(Z) * model_x * model_y + (Y) * model_x + (X)],        \
-              (COEFFICIENT) * Fweight)
+              static_cast<Accumulator>((COEFFICIENT) * Fweight))
 
             float dd000 = mfz * mfy * mfx;
             RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x0, dd000);
@@ -4467,6 +4469,16 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
 #undef RELION_VDAM_NATIVE_ATOMIC_TRIPLET
         }
     }
+}
+
+template <typename Output, typename Input>
+__global__ void relion_vdam_cast_accumulator_kernel(
+    const Input* input,
+    Output* output,
+    int64_t count)
+{
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index < count) output[index] = static_cast<Output>(input[index]);
 }
 
 __global__ void relion_vdam_denominator_after_sgd_f32_kernel(
@@ -4756,7 +4768,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     int projection_padding_factor,
     int reconstruction_group_count,
     bool parallel_worker_replay,
-    bool serial_rotation_replay)
+    bool serial_rotation_replay,
+    bool float64_accumulator_replay)
 {
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * projection_padding_factor) + 0.5f));
@@ -4784,6 +4797,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     cudaEvent_t particle_inputs_ready = nullptr;
     int32_t* reconstruction_groups_host = nullptr;
     int32_t* worker_lanes_host = nullptr;
+    double* data_real_volume_f64 = nullptr;
+    double* data_imag_volume_f64 = nullptr;
+    double* weight_volume_f64 = nullptr;
     cudaError_t err = cudaMalloc(
         reinterpret_cast<void**>(&real),
         static_cast<size_t>(texture_voxels) * sizeof(float));
@@ -4884,6 +4900,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         const int64_t euler_stride = rotation_count * 9;
         const int64_t image_value_count = n_particles * pixel_count;
         const int64_t accumulator_stride = N0 * N1 * (N2 / 2 + 1);
+        const int64_t accumulator_count =
+            static_cast<int64_t>(reconstruction_group_count) * accumulator_stride;
         const int model_x = static_cast<int>(N2 / 2 + 1);
         const int model_y = static_cast<int>(N1);
         const int model_init_y = -static_cast<int>(N1 / 2);
@@ -4931,6 +4949,30 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             reinterpret_cast<void**>(&reconstruction_groups_host),
             static_cast<size_t>(n_particles) * sizeof(int32_t));
         if (err != cudaSuccess) goto cleanup;
+        if (float64_accumulator_replay)
+        {
+            const size_t accumulator_bytes =
+                static_cast<size_t>(accumulator_count) * sizeof(double);
+            err = cudaMalloc(reinterpret_cast<void**>(&data_real_volume_f64), accumulator_bytes);
+            if (err != cudaSuccess) goto cleanup;
+            err = cudaMalloc(reinterpret_cast<void**>(&data_imag_volume_f64), accumulator_bytes);
+            if (err != cudaSuccess) goto cleanup;
+            err = cudaMalloc(reinterpret_cast<void**>(&weight_volume_f64), accumulator_bytes);
+            if (err != cudaSuccess) goto cleanup;
+            const unsigned int cast_blocks = static_cast<unsigned int>(
+                (accumulator_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+            relion_vdam_cast_accumulator_kernel<double, float><<<
+                cast_blocks, BLOCK_SIZE, 0, stream>>>(
+                data_real_volume, data_real_volume_f64, accumulator_count);
+            relion_vdam_cast_accumulator_kernel<double, float><<<
+                cast_blocks, BLOCK_SIZE, 0, stream>>>(
+                data_imag_volume, data_imag_volume_f64, accumulator_count);
+            relion_vdam_cast_accumulator_kernel<double, float><<<
+                cast_blocks, BLOCK_SIZE, 0, stream>>>(
+                weight_volume, weight_volume_f64, accumulator_count);
+            err = cudaGetLastError();
+            if (err != cudaSuccess) goto cleanup;
+        }
         err = cudaMallocHost(
             reinterpret_cast<void**>(&worker_lanes_host),
             static_cast<size_t>(n_particles) * sizeof(int32_t));
@@ -5001,7 +5043,14 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             texture_real,
             texture_imag,
         };
-        const auto launch_particle = [&](int64_t particle, int lane) {
+        const auto launch_particle_with_accumulators = [&](
+            int64_t particle,
+            int lane,
+            auto* accumulator_real,
+            auto* accumulator_imag,
+            auto* accumulator_weight) {
+            using Accumulator =
+                std::remove_pointer_t<decltype(accumulator_real)>;
             const int64_t accumulator_offset =
                 static_cast<int64_t>(reconstruction_groups_host[particle]) *
                 accumulator_stride;
@@ -5010,7 +5059,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             {
                 const int64_t rotation_offset = serial_rotation_replay ? launch : 0;
                 const int64_t grid_rotations = serial_rotation_replay ? 1 : rotation_count;
-                relion_vdam_native_sgd_f32_kernel<<<
+                relion_vdam_native_sgd_f32_kernel<Accumulator><<<
                     grid_rotations, 128, 0, particle_streams[lane]>>>(
                     projector,
                     image_real + particle * image_stride,
@@ -5029,9 +5078,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     const_cast<float*>(
                         projector_eulers + particle * euler_stride +
                         rotation_offset * 9),
-                    data_real_volume + accumulator_offset,
-                    data_imag_volume + accumulator_offset,
-                    weight_volume + accumulator_offset,
+                    accumulator_real + accumulator_offset,
+                    accumulator_imag + accumulator_offset,
+                    accumulator_weight + accumulator_offset,
                     static_cast<int>(sqrtf(max_r2) + 0.5f),
                     static_cast<int>(max_r2),
                     static_cast<float>(upsampling),
@@ -5047,6 +5096,14 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 if (launch_error != cudaSuccess) return launch_error;
             }
             return cudaSuccess;
+        };
+        const auto launch_particle = [&](int64_t particle, int lane) {
+            if (float64_accumulator_replay)
+                return launch_particle_with_accumulators(
+                    particle, lane, data_real_volume_f64, data_imag_volume_f64,
+                    weight_volume_f64);
+            return launch_particle_with_accumulators(
+                particle, lane, data_real_volume, data_imag_volume, weight_volume);
         };
         if (parallel_worker_replay)
         {
@@ -5107,6 +5164,22 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             err = cudaStreamSynchronize(particle_streams[lane]);
             if (err != cudaSuccess) goto cleanup;
         }
+        if (float64_accumulator_replay)
+        {
+            const unsigned int cast_blocks = static_cast<unsigned int>(
+                (accumulator_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+            relion_vdam_cast_accumulator_kernel<float, double><<<
+                cast_blocks, BLOCK_SIZE, 0, stream>>>(
+                data_real_volume_f64, data_real_volume, accumulator_count);
+            relion_vdam_cast_accumulator_kernel<float, double><<<
+                cast_blocks, BLOCK_SIZE, 0, stream>>>(
+                data_imag_volume_f64, data_imag_volume, accumulator_count);
+            relion_vdam_cast_accumulator_kernel<float, double><<<
+                cast_blocks, BLOCK_SIZE, 0, stream>>>(
+                weight_volume_f64, weight_volume, accumulator_count);
+            err = cudaGetLastError();
+            if (err != cudaSuccess) goto cleanup;
+        }
         {
             const int64_t denominator_count =
                 n_particles * rotation_count * pixel_count;
@@ -5136,6 +5209,9 @@ cleanup:
     if (particle_inputs_ready) cudaEventDestroy(particle_inputs_ready);
     if (reconstruction_groups_host) cudaFreeHost(reconstruction_groups_host);
     if (worker_lanes_host) cudaFreeHost(worker_lanes_host);
+    if (data_real_volume_f64) cudaFree(data_real_volume_f64);
+    if (data_imag_volume_f64) cudaFree(data_imag_volume_f64);
+    if (weight_volume_f64) cudaFree(weight_volume_f64);
     if (texture_real) cudaDestroyTextureObject(texture_real);
     if (texture_imag) cudaDestroyTextureObject(texture_imag);
     if (array_real) cudaFreeArray(array_real);
@@ -8174,6 +8250,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     int64_t reconstruction_group_count,
     int64_t parallel_worker_replay,
     int64_t serial_rotation_replay,
+    int64_t float64_accumulator_replay,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -8217,7 +8294,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         projector_max_r <= 0 || projection_padding_factor <= 0 ||
         reconstruction_group_count <= 0 ||
         (parallel_worker_replay != 0 && parallel_worker_replay != 1) ||
-        (serial_rotation_replay != 0 && serial_rotation_replay != 1))
+        (serial_rotation_replay != 0 && serial_rotation_replay != 1) ||
+        (float64_accumulator_replay != 0 && float64_accumulator_replay != 1))
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedProjectorXHalf: invalid geometry");
 
@@ -8301,7 +8379,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<int>(projection_padding_factor),
         static_cast<int>(reconstruction_group_count),
         parallel_worker_replay != 0,
-        serial_rotation_replay != 0);
+        serial_rotation_replay != 0,
+        float64_accumulator_replay != 0);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -8325,6 +8404,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("reconstruction_group_count")
         .Attr<int64_t>("parallel_worker_replay")
         .Attr<int64_t>("serial_rotation_replay")
+        .Attr<int64_t>("float64_accumulator_replay")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
