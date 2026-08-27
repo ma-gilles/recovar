@@ -50,7 +50,8 @@ SHA-256 values.
 | GF47 reverse float32 order | panel `13026879`, audit `13026880` terminal | reference is inside its fresh native floor, but post-second-moment error is **2.90--3.57x** the floor; no promotion |
 | GF47 native `Igrad2` oracle | panel `13027533` terminal | second moment becomes exact, but reference changes only to **1.03x / 0.72x** its native floor; not the dominant missing operation |
 | GF47 H100 SM-strided float32 | panel `13028122` terminal | post-second-moment ratio improves to **1.56--1.68x** from **2.75--3.10x**; reference is **0.961--0.963x** its native floor |
-| Live GF47 SM132 boundary | full task `13028369_2` (`13028371`) has crossed iteration 161 on recorded GPU index 2 / UUID `GPU-6222...` | particles pass @58/@59 and strict map parity now passes @79 (`0.999157509`, formerly `0.998834761`); schedule still fails @58 as a cross-repeat mixture, so the score remains unchanged pending all 201 checkpoints and the sealed audit |
+| GF47 SM132 full qualification | science `13028371` completed 201 checkpoints; audit `13029112` is terminal fail-closed | first failures: schedule @58, particle @61, map @80; runtime **9.23x** native; score unchanged |
+| GF47 iteration-58 score capture | exact-GPU job `13029200` completed from the same immutable head/binary | native-4 mode beats the native-1 runner-up by `0.002014`, entirely in raw data score; posterior/tie-break semantics are rejected |
 
 > **Status: draft, not merge-ready.** K=1 correctness is the active gate.
 > Runtime optimization starts from a sealed passing trajectory; K>1,
@@ -68,7 +69,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 02:39 ET**
+Last scientific update: **2026-08-27 03:17 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -96,7 +97,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | a 132-SM-strided float32 order cuts the post-second-moment floor ratio about 44% while preserving reference parity | full task `13028369_2` repairs the serial particle split @58 and strict map failure @79, but its live calibrated audit still finds a whole-native-schedule failure @58 | no score change; let 0--200 finish, seal every gate, then localize the now-narrower schedule boundary |
+| 1 | GF47 repeatability starts @1 | a 132-SM-strided float32 order cuts the post-second-moment floor ratio about 44% while preserving reference parity | sealed task `13028371` moves particle failure 58 -> 61 and map failure 79 -> 80, but moves schedule failure 59 -> 58; score capture `13029200` localizes the transition to incoming-map data score | no score change; capture/replay real H100 block chronology, then rerun the fixed 0--200 gate |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -226,35 +227,47 @@ first moment, noise, and reference remain at or inside their paired-native
 floors; reconstructed-reference ratios are `0.963x` and `0.961x`. The leading
 post-second-moment ratios improve from the ascending serial control's
 `2.75x` / `3.10x` to `1.68x` / `1.56x`. Report SHA-256 is
-`ed0e98a7b146...`. This passes the short promotion criterion, so digest-pinned
-full array task `13028369_2` (Slurm job `13028371`) is running against the
-unchanged four-repeat GF47 envelope on the original physical H100. Provenance
-records both `SLURM_JOB_GPUS=2` and UUID `GPU-6222c402...`, exactly matching
-the accepted native panel. Pre-science attempts `13028205`, `13028298`,
+`ed0e98a7b146...`. This passed the short promotion criterion, so digest-pinned
+full task `13028369_2` (Slurm job `13028371`) ran against the unchanged
+four-repeat GF47 envelope on the original physical H100. Provenance records
+both `SLURM_JOB_GPUS=2` and UUID `GPU-6222c402...`, exactly matching the
+accepted native panel. Pre-science attempts `13028205`, `13028298`,
 `13028317`, and `13028342` respectively rejected a missing isolated Python
 override and three wrong GPU UUIDs; array tasks 1 and 3 also rejected wrong
 UUIDs in seconds, and pending tasks 4--8 were canceled as soon as task 2
-acquired the target. They are infrastructure gates, not parity results. The
-run has crossed iteration 99. A calibrated non-scoring live audit at iterations
-58--59 shows a genuine boundary improvement: every active particle now matches
-at least one native state at both checkpoints, including the particle that the
-serial trajectory missed at 58, and the complete schedule matches native repeat
-1 at 59. Iteration 58 still matches no *single complete* native schedule. Its
-offset range (`9.211616345` Angstrom) matches repeat 1 (`9.211616`), while its
-offset-change value (`2.878784465` Angstrom) matches repeat 4 (`2.878784`);
-no single repeat matches both active fields. Rotation/translation accuracy is
-intentionally outside this checkpoint's gate because accuracy estimation is
-not active yet. Matching individual active fields across different repeats is
-not accepted. This is an early failure localization, not a scoring audit. The
-frozen score remains 2/20 until all 201 checkpoints and the automatic sealed
-audit are terminal.
+acquired the target. They are infrastructure gates, not parity results.
 
-The old strict map boundary is independently repaired at iteration 79. The
-SM132 candidate's best-native FSC-AUC is `0.999157509`, above the unchanged
-`0.999` gate and above the serial candidate's failing `0.998834761`; its
-candidate-minus-best-native GT FSC-AUC is `-0.000534989`, which also passes the
-unchanged `-0.001` nondegradation gate. This checkpoint is positive live
-evidence only: the iteration-58 schedule failure still prevents promotion.
+The full science job completed all 201 checkpoints in 2,762 seconds. Automatic
+audit `13029112` is terminal fail-closed with exit `1:0`. Schedule first fails
+at iteration 58: offset range (`9.211616345` Angstrom) matches repeat 1 while
+offset change (`2.878784465` Angstrom) matches repeat 4, so no single complete
+native schedule matches. Accuracy fields are correctly inactive there.
+Particles remain inside the four-repeat envelope through iteration 60, then
+first fail at 61 on `604@particles.128.mrcs` (one unmatched active particle;
+maximum nearest-native pose error `3.82999` degrees). Thus SM132 shifts the
+serial particle boundary from 58 to 61, but does not close it.
+
+The strict map boundary likewise moves only one checkpoint, from 79 to 80.
+Iteration 79 improves from the serial candidate's failing `0.998834761` to
+`0.999157509`, but iteration 80 falls to `0.998955489` and 121/201 checkpoints
+fail. The minimum best-native FSC-AUC is `0.996981405`. GT nondegradation
+passes all 201 checkpoints under the frozen `-0.002` gate; its minimum delta is
+`-0.001315197`. Runtime is **9.23x** the 299.1-second native median. Map, state,
+status, and completion report SHA-256 values are `0815b7504371...`,
+`5fac40a308ba...`, `e5b8bba0df32...`, and `00cf819a5158...`. The frozen score
+remains 2/20.
+
+Exact-GPU iteration-58 capture job `13029200` then reused the EM coarse,
+operand, and fused-posterior capture machinery for source row 2706
+(`2707@particles.128.mrcs`). It reproduces the production winner exactly and
+changes Pmax by only `1.71e-4`. The native-repeat-4 mode is first with posterior
+`0.284572` and total score `-5.022034`; the native-repeat-1 mode is second with
+posterior `0.283999` and total score `-5.024048`. Their `0.002014` gap is
+entirely raw data score; rotation and translation priors cancel. A broad
+epsilon tie-break is therefore rejected. Fused, local-score, and coarse-capture
+SHA-256 values are `272f6f04fe40...`, `284c819b43a0...`, and
+`ef98e6702817...`. The next bounded discriminator is passive native H100
+orientation-block chronology followed by replay, not a posterior-rule change.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
@@ -644,7 +657,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 repeatability before another trajectory | H100 SM-strided panel `13028122` improves the leading residual; full task `13028369_2` has crossed iteration 161 and repairs particle parity @58/@59 plus strict map parity @79, but live schedule parity still fails @58 | finish all 201 checkpoints and the unchanged automatic audit; then repair the sealed first boundary without changing the gate |
+| 1 | Close GF47 repeatability before another trajectory | SM132 full job `13028371` / audit `13029112` are terminal: schedule @58, particle @61, map @80, **9.23x** runtime; score capture `13029200` rejects posterior tie-breaking and targets incoming-map arithmetic | capture/replay real H100 orientation-block chronology, pass a bounded repeat panel, then rerun all 201 unchanged checkpoints |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
