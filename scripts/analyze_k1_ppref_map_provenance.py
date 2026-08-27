@@ -91,8 +91,53 @@ def _load_verbose_ppref(directory: Path) -> tuple[np.ndarray, dict[str, object]]
     }
 
 
+def _load_setup_ppref(directory: Path) -> tuple[np.ndarray, dict[str, object]]:
+    """Load the contiguous complex-double PPref emitted by expectation setup."""
+
+    data_path = directory / "ppref_c0_data_post_setup.bin"
+    meta_path = directory / "ppref_c0_meta.txt"
+    metadata_text = {}
+    for line in meta_path.read_text().splitlines():
+        key, separator, value = line.partition("=")
+        _require(bool(separator) and bool(key) and bool(value), f"invalid PPref metadata line: {line!r}")
+        metadata_text[key] = value
+    required = {"iter", "r_max", "ori_size", "padding_factor", "z", "y", "x"}
+    _require(required <= metadata_text.keys(), f"setup PPref metadata lacks {sorted(required - metadata_text.keys())}")
+
+    payload = data_path.read_bytes()
+    _require(len(payload) >= 12, f"truncated setup PPref dump: {data_path}")
+    shape = struct.unpack_from("<iii", payload)
+    expected_shape = tuple(int(metadata_text[axis]) for axis in ("z", "y", "x"))
+    _require(shape == expected_shape and min(shape) > 0, "setup PPref shape differs from metadata")
+    count = int(np.prod(shape))
+    _require(len(payload) == 12 + count * 16, f"setup PPref payload size mismatch: {data_path}")
+    ppref = np.frombuffer(payload, dtype="<c16", count=count, offset=12).copy()
+    ppref = ppref.astype(np.complex64).reshape(shape)
+    r_max = int(metadata_text["r_max"])
+    return ppref, {
+        "version": "expectation-setup-contiguous",
+        "iteration": int(metadata_text["iter"]),
+        "rank": None,
+        "model": 0,
+        "current_size": 2 * r_max,
+        "image_current_size": int(shape[2]),
+        "original_image_size": int(metadata_text["ori_size"]),
+        "shape_zyx": list(shape),
+        "origin_xyz": [0, -(shape[1] // 2), -(shape[0] // 2)],
+        "r_max": r_max,
+        "padding_factor": float(metadata_text["padding_factor"]),
+        "complex_count": int(ppref.size),
+    }
+
+
 def _load_native_ppref(path: Path) -> tuple[np.ndarray, dict[str, object]]:
-    return _load_verbose_ppref(path) if path.is_dir() else _load_ppref(path)
+    if not path.is_dir():
+        return _load_ppref(path)
+    if (path / "pass1_class0_ppref_real.bin").is_file():
+        return _load_verbose_ppref(path)
+    if (path / "ppref_c0_data_post_setup.bin").is_file():
+        return _load_setup_ppref(path)
+    raise FileNotFoundError(f"no supported PPref dump found in {path}")
 
 
 def _metric(candidate: np.ndarray, reference: np.ndarray) -> dict[str, float | int]:

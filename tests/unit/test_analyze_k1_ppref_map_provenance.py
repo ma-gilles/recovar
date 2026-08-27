@@ -9,6 +9,7 @@ import pytest
 
 from scripts.analyze_k1_ppref_map_provenance import (
     _load_relion_iref,
+    _load_setup_ppref,
     _load_verbose_ppref,
     _metric,
     _parse_iref_spec,
@@ -120,6 +121,41 @@ def test_load_verbose_ppref_decodes_counted_arrays(tmp_path):
     np.testing.assert_array_equal(ppref.reshape(-1).imag, -values.astype(np.float32))
     assert metadata["current_size"] == 2
     assert metadata["image_current_size"] == 4
+    assert metadata["origin_xyz"] == [0, -1, -1]
+    assert metadata["r_max"] == 1
+    assert metadata["padding_factor"] == 2.0
+
+
+def test_load_setup_ppref_decodes_contiguous_complex_doubles(tmp_path):
+    shape = (3, 3, 2)
+    values = (np.arange(18) + 1j * -np.arange(18)).astype(np.complex128)
+    (tmp_path / "ppref_c0_data_post_setup.bin").write_bytes(
+        struct.pack("<iii", *shape) + values.tobytes()
+    )
+    (tmp_path / "ppref_c0_meta.txt").write_text(
+        "\n".join(
+            (
+                "iter=2",
+                "r_max=1",
+                "ori_size=8",
+                "padding_factor=2.000000",
+                "z=3",
+                "y=3",
+                "x=2",
+            )
+        )
+        + "\n"
+    )
+
+    ppref, metadata = _load_setup_ppref(tmp_path)
+
+    assert ppref.shape == shape
+    np.testing.assert_array_equal(ppref.reshape(-1), values.astype(np.complex64))
+    assert metadata["version"] == "expectation-setup-contiguous"
+    assert metadata["iteration"] == 2
+    assert metadata["current_size"] == 2
+    assert metadata["image_current_size"] == 2
+    assert metadata["original_image_size"] == 8
     assert metadata["origin_xyz"] == [0, -1, -1]
     assert metadata["r_max"] == 1
     assert metadata["padding_factor"] == 2.0

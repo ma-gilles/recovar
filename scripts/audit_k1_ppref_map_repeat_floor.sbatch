@@ -39,7 +39,23 @@ test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(sha256sum "${ANALYZER}" | awk '{print $1}')" = "${EXPECTED_ANALYZER_SHA256}"
 test "$(sha256sum "${RELION_BIND}/_relion_bind_core.cpython-311-x86_64-linux-gnu.so" | awk '{print $1}')" = 56acdddab6d25bd83aac5e338162c4819f85ec26f68511458618f143c2b604b7
-test -s "${NATIVE_PPREF_DIR}/pass1_class0_ppref_real.bin"
+ppref_inputs=()
+if test -s "${NATIVE_PPREF_DIR}/pass1_class0_ppref_real.bin"; then
+    mapfile -t ppref_inputs < <(
+        find "${NATIVE_PPREF_DIR}" -maxdepth 1 -type f \
+            -name 'pass1_class0_ppref_*.bin' -print | sort
+    )
+elif test -s "${NATIVE_PPREF_DIR}/ppref_c0_data_post_setup.bin" \
+    -a -s "${NATIVE_PPREF_DIR}/ppref_c0_meta.txt"; then
+    ppref_inputs=(
+        "${NATIVE_PPREF_DIR}/ppref_c0_data_post_setup.bin"
+        "${NATIVE_PPREF_DIR}/ppref_c0_meta.txt"
+    )
+else
+    echo "no supported native PPref dump in ${NATIVE_PPREF_DIR}" >&2
+    exit 2
+fi
+test "${#ppref_inputs[@]}" -gt 0
 test -s "${PRIMARY_MAP}" -a -s "${REPEAT_MAP}" -a -s "${RECOVAR_MAP}"
 if test -n "${IREF_PATH}"; then
     test -s "${IREF_PATH}"
@@ -77,7 +93,7 @@ nvidia-smi --query-gpu=uuid,name,memory.total --format=csv,noheader \
 env | sort > "${RUN_ROOT}/provenance/environment_${SLURM_JOB_ID}.txt"
 hash_inputs=("${LAUNCHER}" "${ANALYZER}"
     "${RELION_BIND}/_relion_bind_core.cpython-311-x86_64-linux-gnu.so"
-    "${PRIMARY_MAP}" "${REPEAT_MAP}" "${RECOVAR_MAP}")
+    "${ppref_inputs[@]}" "${PRIMARY_MAP}" "${REPEAT_MAP}" "${RECOVAR_MAP}")
 if test -n "${IREF_PATH}"; then
     hash_inputs+=("${IREF_PATH}")
 fi

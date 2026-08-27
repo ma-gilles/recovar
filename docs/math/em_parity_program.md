@@ -29778,3 +29778,73 @@ next translational accuracy `1.6901` A agrees with native's `1.690084` A;
 the rotational accuracy differs only at the third decimal (`1.895` versus
 native `1.893`).  This remains continuous-state drift below every observed
 controller threshold, not a branch disagreement.
+
+Case 10 then reproduced the complete 15-numbered-iteration topology and
+entered the converged final all-data Nyquist pass at 12:53 EDT.  The final
+path uses full current size `384`, per-half noise spectra, local parent/fine
+orders `5/6`, physical RELION iteration `16`, seed `1726`, and perturbation
+`+0.38609`.  These are the intended native final semantics.
+
+Read-only source-ID job `13049777` captured the last-numbered particle state
+before finalization.  At physical iteration 15, Pmax RMSE is
+`0.002943799698437222`; support counts differ for `31067 / 100000` particles;
+`96.370%` of poses are within `0.01` degrees and `96.780%` of translations
+within `0.01` A.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_current_b39_20260827T0732ET/analysis/live_particle_state_it15_v2_1256ET/particle_state.json`
+(SHA-256
+`974af8ef12590e1a4a2dbad84ab3bc334b487aced6b97ef443510b0640980a5c`).
+An initial wrapper job, `13049723`, failed in three seconds at its deliberate
+repository-head gate because the submitted expected hash contained a manual
+transcription error; it ran no analysis.  The corrected retry above completed
+`0:0` in 27 seconds.  This last-numbered capture provides the exact latent
+boundary for an immediate pose/reference/final-operand discriminator if the
+final FSC gate remains red.
+
+## 2026-08-27 13:10 EDT — direct in-memory Iref closes the remaining reference-lifecycle boundary
+
+Native capture job `13046857` wrote an exact-size process-memory reference
+dump at physical iteration 2:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_row84206_native_iref_it2_b39_20260827T1202ET/capture/iref_c0_pre_setup.bin`.
+Its `452984844` bytes are exactly a 12-byte `(z,y,x)` header plus `384^3`
+float64 voxels, and repeated SHA-256 reads are stable at
+`57ae84f6718e271fbe3e632da384074d5bad63713e0e77d377fb2fa2850e856d`.
+
+The two RELION followers share the diagnostic filenames, and the last writer
+differs by artifact.  GPU job `13050067` first compared the captured Iref to
+the primary half-1 live projector and correctly showed a gross approximately
+`0.019` mismatch.  GPU job `13050235` then identifies the Iref as half 2:
+after RELION-to-RECOVAR frame conversion, the real in-memory Iref differs from
+the primary numbered half-2 map by relative-L2
+`1.2533155954756687e-7`.  The independent native-repeat half-2 numbered map
+differs by `1.3978475318866569e-6`, while the current b39 RECOVAR half-2 map
+differs by `1.3973206188209164e-6`.  RECOVAR is therefore marginally closer
+to this primary process-memory Iref than the independent native repeat is.
+The authoritative half-2 report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_ppref_native_iref_half2_20260827T1308ET/analysis/NATIVE_PPREF_MAP_REPEAT_FLOOR.json`
+(SHA-256
+`8a2c3c746e2ddb51c1a64980c6b3c17323c1d29f93fa6a9ef3e807405a69d8f1`).
+
+The shared setup PPref was independently overwritten by half 1.  GPU job
+`13050307` classifies it unambiguously: rebuilding from the primary numbered
+half-1 map gives relative-L2 `1.3060581392397896e-7`, the independent native
+repeat gives `3.162091941258183e-6`, and current b39 RECOVAR gives
+`1.0134908289525155e-6`.  Its report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_ppref_shared_half1_classify_20260827T1310ET/analysis/NATIVE_PPREF_MAP_REPEAT_FLOOR.json`
+(SHA-256
+`3bc0f2276d2672a88268ba1fc0b04ce4fc65e8280aa126297f68957de9cad7b2`).
+The original mixed-half report is retained for provenance at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_ppref_native_iref_20260827T1303ET/analysis/NATIVE_PPREF_MAP_REPEAT_FLOOR.json`
+(SHA-256
+`5145dd03692944688ddfefa8771d6e14b5f877c6f90a4b419a8661aa5469807f`),
+but is not a same-half scientific comparison.
+
+This direct process-memory experiment closes the remaining map lifecycle and
+MRC-serialization question: current RECOVAR's incoming reference is inside
+deployed native repeat variability.  No reference serialization or projector
+patch is justified.  The analyzer now supports RELION's contiguous
+complex-double expectation-setup PPref format, and the launcher hashes either
+supported PPref representation.  Ruff, the focused provenance unit suite,
+`bash -n`, and `git diff --check` pass.  Analyzer SHA-256 is
+`fa67d15e6abdf98f4c17d668703047ff14908464816781a1eb4253cb939c6124`;
+launcher SHA-256 is
+`33da1fbc3c868809e714532f208e78389ef9d2b445df3531fd80025125ba9b69`.
