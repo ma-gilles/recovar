@@ -239,6 +239,25 @@ def test_captured_native_grid_trace_shape_keeps_captured_rows(
     )
 
 
+def test_native_trace_first_atomic_precedes_interpolation_registers():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar/cuda/cuda_backproject.cu"
+    ).read_text()
+    kernel = source.split(
+        "__global__ void relion_vdam_native_sgd_f32_kernel(", maxsplit=1
+    )[1].split(
+        "__global__ void relion_vdam_cast_accumulator_kernel(", maxsplit=1
+    )[0]
+
+    trace_position = kernel.index("trace_record->first_atomic_globaltimer =")
+    interpolation_position = kernel.index("int x0 = floorf(xp);")
+    first_atomic_position = kernel.index(
+        "RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x0, dd000);"
+    )
+    assert trace_position < interpolation_position < first_atomic_position
+
+
 def test_block_start_replay_rejects_a_different_rotation_bucket(tmp_path, monkeypatch):
     schedule, chronology = _write_inputs(tmp_path)
     _configure(monkeypatch, schedule, chronology)

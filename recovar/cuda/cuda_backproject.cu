@@ -4637,6 +4637,11 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
                 zp = -zp;
                 imag = -imag;
             }
+            if constexpr (Trace)
+                if (trace_record != nullptr && trace_first_atomic_claimed == 0 &&
+                    atomicCAS(&trace_first_atomic_claimed, 0, 1) == 0)
+                    trace_record->first_atomic_globaltimer =
+                        vdam_candidate_globaltimer();
 
             int x0 = floorf(xp);
             float fx = xp - x0;
@@ -4662,11 +4667,6 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
               static_cast<Accumulator>((COEFFICIENT) * Fweight))
 
             float dd000 = mfz * mfy * mfx;
-            if constexpr (Trace)
-                if (trace_record != nullptr && trace_first_atomic_claimed == 0 &&
-                    atomicCAS(&trace_first_atomic_claimed, 0, 1) == 0)
-                    trace_record->first_atomic_globaltimer =
-                        vdam_candidate_globaltimer();
             RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x0, dd000);
             float dd001 = mfz * mfy * fx;
             RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x1, dd001);
