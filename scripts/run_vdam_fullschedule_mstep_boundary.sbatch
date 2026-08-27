@@ -31,8 +31,11 @@ WORKER_TRACE_PARTICLES=${RELION_VDAM_WORKER_TRACE_PARTICLES:-200}
 WORKER_TRACE_DATASET_PARTICLES=${RELION_VDAM_WORKER_TRACE_DATASET_PARTICLES:-3000}
 WORKER_TRACE_POOL_SIZE=${RELION_VDAM_WORKER_TRACE_POOL_SIZE:-24}
 BLOCK_TRACE_REPLAY=${RELION_VDAM_BLOCK_TRACE_REPLAY:-0}
+BLOCK_TRACE_CAPTURE=${RELION_VDAM_BLOCK_TRACE_CAPTURE:-${BLOCK_TRACE_REPLAY}}
 BLOCK_TRACE_CAPACITY=${RELION_VDAM_BLOCK_TRACE_CAPACITY:-1000000}
 BLOCK_TRACE_SM_COUNT=${RELION_VDAM_BLOCK_TRACE_SM_COUNT:-132}
+CANDIDATE_BLOCK_TRACE_CAPTURE=${RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_CAPTURE:-0}
+CANDIDATE_BLOCK_TRACE_CAPACITY=${RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_CAPACITY:-1000000}
 WORKER_REPLAY_TOPOLOGY=${RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY:-captured}
 NATIVE_SECOND_MOMENT_REPLAY=${VDAM_NATIVE_SECOND_MOMENT_REPLAY:-0}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-0}
@@ -59,6 +62,8 @@ WORKER_TRACE=${PROVENANCE}/relion_worker_trace_it001.tsv
 WORKER_SCHEDULE=${ANALYSIS}/relion_worker_schedule_it001.npz
 BLOCK_TRACE=${PROVENANCE}/relion_block_trace_it001.bin
 BLOCK_CHRONOLOGY=${ANALYSIS}/relion_block_chronology_it001.npz
+CANDIDATE_BLOCK_TRACE=${PROVENANCE}/recovar_block_trace_it001.bin
+CANDIDATE_BLOCK_CHRONOLOGY=${ANALYSIS}/recovar_block_chronology_it001.npz
 
 test -f "${OUTPUT_ROOT}/SAFE_TO_DELETE"
 test -s "${DATA_DIR}/particles.star"
@@ -70,6 +75,8 @@ test "${RELION_THREADS}" -ge 1
 test "${RELION_THREADS}" -le "${SLURM_CPUS_PER_TASK:-8}"
 test "${WORKER_TRACE_REPLAY}" = 0 -o "${WORKER_TRACE_REPLAY}" = 1
 test "${BLOCK_TRACE_REPLAY}" = 0 -o "${BLOCK_TRACE_REPLAY}" = 1
+test "${BLOCK_TRACE_CAPTURE}" = 0 -o "${BLOCK_TRACE_CAPTURE}" = 1
+test "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 0 -o "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1
 test "${NATIVE_SECOND_MOMENT_REPLAY}" = 0 -o "${NATIVE_SECOND_MOMENT_REPLAY}" = 1
 if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
   test "${TARGET_ITERATION}" -eq 1
@@ -78,12 +85,21 @@ if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
   test "${WORKER_TRACE_DATASET_PARTICLES}" -ge "${WORKER_TRACE_PARTICLES}"
   test "${WORKER_TRACE_POOL_SIZE}" -ge 1
 fi
-if [[ "${BLOCK_TRACE_REPLAY}" = 1 ]]; then
+if [[ "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1 ]]; then
   test "${WORKER_TRACE_REPLAY}" = 1
   test "${TARGET_ITERATION}" -eq 1
-  test "${WORKER_REPLAY_TOPOLOGY}" = captured_block_start
+  test "${WORKER_REPLAY_TOPOLOGY}" = captured
+  test "${CANDIDATE_BLOCK_TRACE_CAPACITY}" -ge 1
+fi
+if [[ "${BLOCK_TRACE_CAPTURE}" = 1 ]]; then
+  test "${WORKER_TRACE_REPLAY}" = 1
+  test "${TARGET_ITERATION}" -eq 1
   test "${BLOCK_TRACE_CAPACITY}" -ge 1
   test "${BLOCK_TRACE_SM_COUNT}" -ge 1
+fi
+if [[ "${BLOCK_TRACE_REPLAY}" = 1 ]]; then
+  test "${BLOCK_TRACE_CAPTURE}" = 1
+  test "${WORKER_REPLAY_TOPOLOGY}" = captured_block_start
 elif [[ "${WORKER_REPLAY_TOPOLOGY}" = captured_block_start ]]; then
   echo "captured_block_start requires native block tracing in the same arm" >&2
   exit 2
@@ -170,7 +186,7 @@ if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
   export RELION_VDAM_WORKER_LOG=${WORKER_TRACE}
   export RELION_VDAM_WORKER_TRACE_ITER=1
 fi
-if [[ "${BLOCK_TRACE_REPLAY}" = 1 ]]; then
+if [[ "${BLOCK_TRACE_CAPTURE}" = 1 ]]; then
   export RELION_VDAM_BLOCK_TRACE=${BLOCK_TRACE}
   export RELION_VDAM_BLOCK_TRACE_ITER=1
   export RELION_VDAM_BLOCK_TRACE_CAPACITY=${BLOCK_TRACE_CAPACITY}
@@ -238,7 +254,7 @@ if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
     "${ANALYSIS}/relion_worker_schedule_it001.json" \
     > "${PROVENANCE}/relion_worker_schedule.sha256"
 fi
-if [[ "${BLOCK_TRACE_REPLAY}" = 1 ]]; then
+if [[ "${BLOCK_TRACE_CAPTURE}" = 1 ]]; then
   test -s "${BLOCK_TRACE}"
   (
     cd "${REPO_ROOT}"
@@ -303,6 +319,11 @@ if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
 fi
 if [[ "${BLOCK_TRACE_REPLAY}" = 1 ]]; then
   export RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${BLOCK_CHRONOLOGY}
+fi
+if [[ "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1 ]]; then
+  export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE=${CANDIDATE_BLOCK_TRACE}
+  export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_ITER=1
+  export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_CAPACITY=${CANDIDATE_BLOCK_TRACE_CAPACITY}
 fi
 if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
   mapfile -t contribution_metadata < <(
@@ -429,6 +450,23 @@ if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
 fi
 
 gpu_uuid_after_recovar=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
+if [[ "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1 ]]; then
+  test -s "${CANDIDATE_BLOCK_TRACE}"
+  (
+    cd "${REPO_ROOT}"
+    "${PIXI_PY}" -m scripts.build_vdam_block_chronology \
+      --capture "${CANDIDATE_BLOCK_TRACE}" --iteration 1 \
+      --n-particles "${WORKER_TRACE_PARTICLES}" \
+      --n-threads "${RELION_THREADS}" --n-classes 1 \
+      --sm-count "${BLOCK_TRACE_SM_COUNT}" \
+      --output-npz "${CANDIDATE_BLOCK_CHRONOLOGY}" \
+      --output-json "${ANALYSIS}/recovar_block_chronology_it001.json"
+  )
+  test -s "${CANDIDATE_BLOCK_CHRONOLOGY}"
+  sha256sum "${CANDIDATE_BLOCK_TRACE}" "${CANDIDATE_BLOCK_CHRONOLOGY}" \
+    "${ANALYSIS}/recovar_block_chronology_it001.json" \
+    > "${PROVENANCE}/recovar_block_chronology.sha256"
+fi
 test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"
 test "$(sha256sum "${CUDA_SOURCE_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
@@ -443,9 +481,9 @@ sha256sum "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
   "${DATA_DIR}/particles.star" \
   "${CUDA_SOURCE_BINARY}" "${CUDA_BINARY}" "${RELION_BIND_BINARY}" "${VDAM_RELION_BINARY}" \
   > "${PROVENANCE}/static_inputs.sha256"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"block_trace_replay":%d,"worker_replay_topology":"%s","native_second_moment_replay":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"block_trace_capture":%d,"block_trace_replay":%d,"candidate_block_trace_capture":%d,"worker_replay_topology":"%s","native_second_moment_replay":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" \
-  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${WORKER_TRACE_REPLAY}" "${BLOCK_TRACE_REPLAY}" "${WORKER_REPLAY_TOPOLOGY}" "${NATIVE_SECOND_MOMENT_REPLAY}" "${BPREF_CONTRIBUTION_HALF}" \
+  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${WORKER_TRACE_REPLAY}" "${BLOCK_TRACE_CAPTURE}" "${BLOCK_TRACE_REPLAY}" "${CANDIDATE_BLOCK_TRACE_CAPTURE}" "${WORKER_REPLAY_TOPOLOGY}" "${NATIVE_SECOND_MOMENT_REPLAY}" "${BPREF_CONTRIBUTION_HALF}" \
   "${BPREF_CONTRIBUTION_CAPTURE_HALF}" "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" \
   "${BPREF_CONTRIBUTION_CURRENT_SIZE}" "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" \
   > "${PROVENANCE}/run.json"

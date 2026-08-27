@@ -58,3 +58,25 @@ def test_fullschedule_boundary_seals_and_replays_each_native_block_chronology():
     ]
     for text in required:
         assert text in runner
+
+
+def test_fullschedule_boundary_can_seal_passive_candidate_block_chronology():
+    runner = (ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
+    required = [
+        "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_CAPTURE",
+        "export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE=${CANDIDATE_BLOCK_TRACE}",
+        "export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_ITER=1",
+        "--capture \"${CANDIDATE_BLOCK_TRACE}\"",
+        "--output-npz \"${CANDIDATE_BLOCK_CHRONOLOGY}\"",
+        'test "${WORKER_REPLAY_TOPOLOGY}" = captured',
+    ]
+    for text in required:
+        assert text in runner
+
+
+def test_native_block_capture_is_independent_of_serial_replay_topology():
+    runner = (ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
+    assert "RELION_VDAM_BLOCK_TRACE_CAPTURE" in runner
+    assert 'if [[ "${BLOCK_TRACE_CAPTURE}" = 1 ]]; then' in runner
+    assert 'if [[ "${BLOCK_TRACE_REPLAY}" = 1 ]]; then' in runner
+    assert 'test "${BLOCK_TRACE_CAPTURE}" = 1' in runner
