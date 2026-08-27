@@ -5375,7 +5375,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 int64_t rotation_offset = serial_rotation_replay
                     ? (reverse_rotation_replay ? rotation_count - 1 - launch : launch)
                     : 0;
-                if (captured_rotation_replay)
+                if (captured_rotation_replay && serial_rotation_replay)
                     rotation_offset = rotation_replay_order_host[
                         particle * rotation_count + launch];
                 if (serial_rotation_replay && rotation_replay_stride > 0)
