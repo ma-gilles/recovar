@@ -48,6 +48,7 @@ class DenseScoreConstraints:
     n_rot: int
     n_trans: int
     n_rot_padded: int
+    prior_dtype: object = np.float32
 
     @classmethod
     def from_inputs(
@@ -60,14 +61,22 @@ class DenseScoreConstraints:
         n_rot: int,
         n_trans: int,
         n_rot_padded: int,
+        dtype: np.dtype = np.float32,
     ) -> "DenseScoreConstraints":
+        """``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+        callers running double-precision scoring should pass ``np.float64`` --
+        the rotation/translation log-priors added directly into scores must
+        follow the same precision as the rest of the score, not be silently
+        floored to float32 (RELION's ``pdf_orientation``/``pdf_offset`` are
+        RFLOAT, never narrowed).
+        """
         rotation_prior_jnp = None
         per_image_rotation_prior = False
         rotation_prior_minmax = None
         if rotation_log_prior is not None:
-            rotation_np = np.asarray(rotation_log_prior, dtype=np.float32)
+            rotation_np = np.asarray(rotation_log_prior, dtype=dtype)
             if rotation_np.ndim == 1:
-                padded = np.full(n_rot_padded, -1e30, dtype=np.float32)
+                padded = np.full(n_rot_padded, -1e30, dtype=dtype)
                 padded[:n_rot] = rotation_np
             elif rotation_np.ndim == 2:
                 if rotation_np.shape != (n_images, n_rot):
@@ -75,7 +84,7 @@ class DenseScoreConstraints:
                         "rotation_log_prior must have shape "
                         f"({n_images}, {n_rot}) when image-specific, got {rotation_np.shape}",
                     )
-                padded = np.full((n_images, n_rot_padded), -1e30, dtype=np.float32)
+                padded = np.full((n_images, n_rot_padded), -1e30, dtype=dtype)
                 padded[:, :n_rot] = rotation_np
                 per_image_rotation_prior = True
             else:
@@ -89,7 +98,7 @@ class DenseScoreConstraints:
         per_image_translation_prior = False
         translation_prior_minmax = None
         if translation_log_prior is not None:
-            translation_np = np.asarray(translation_log_prior, dtype=np.float32)
+            translation_np = np.asarray(translation_log_prior, dtype=dtype)
             if translation_np.ndim == 1:
                 if translation_np.shape != (n_trans,):
                     raise ValueError(
@@ -165,6 +174,7 @@ class DenseScoreConstraints:
             n_rot=int(n_rot),
             n_trans=int(n_trans),
             n_rot_padded=int(n_rot_padded),
+            prior_dtype=dtype,
         )
 
     def block_inputs(
@@ -185,7 +195,7 @@ class DenseScoreConstraints:
         actual_count = int(rows.size)
         batch_count = int(batch_count)
         if self.rotation_log_prior is None:
-            rotation_prior = jnp.zeros((batch_count, rotation_block_size), dtype=jnp.float32)
+            rotation_prior = jnp.zeros((batch_count, rotation_block_size), dtype=self.prior_dtype)
         elif self.per_image_rotation_prior:
             rotation_prior = self.rotation_log_prior[rows, r0:r1]
             if batch_count != actual_count:
@@ -201,7 +211,7 @@ class DenseScoreConstraints:
             )
 
         if self.translation_log_prior is None:
-            translation_prior = jnp.zeros((batch_count, self.n_trans), dtype=jnp.float32)
+            translation_prior = jnp.zeros((batch_count, self.n_trans), dtype=self.prior_dtype)
         elif self.per_image_translation_prior:
             translation_prior = self.translation_log_prior[rows]
             if batch_count != actual_count:

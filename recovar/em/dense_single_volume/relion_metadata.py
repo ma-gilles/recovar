@@ -16,7 +16,9 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
 )
 
 
-def _relion_metadata_translations(previous_best_translations, selected_relative_translations):
+def _relion_metadata_translations(
+    previous_best_translations, selected_relative_translations, *, dtype: np.dtype = np.float32
+):
     """Return RELION-style metadata offsets after selecting relative shifts.
 
     RELION applies the rounded previous offset to the image before scoring,
@@ -24,12 +26,21 @@ def _relion_metadata_translations(previous_best_translations, selected_relative_
     ``rounded_old_offset + sampled_translation`` back to metadata. Keeping
     that absolute value is required for the next iteration's pre-shift and
     sigma-offset sufficient statistic.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running a genuine double-precision comparison should pass
+    ``np.float64``. RELION's own per-particle offset metadata
+    (``exp_metadata``, ``EMDL_ORIENT_ORIGIN_X/Y_ANGSTROM``) is never narrowed
+    to float -- ``exp_metadata`` is declared ``MultidimArray<RFLOAT>`` and
+    ``EMDL_ORIENT_ORIGIN_X_ANGSTROM`` is registered ``EMDL_DOUBLE``, backed by
+    ``std::vector<double>`` in ``MetaDataContainer`` (RELION
+    ``src/ml_optimiser.h``, ``src/metadata_label.h``, ``src/metadata_container.h``).
     """
-    selected = np.asarray(selected_relative_translations, dtype=np.float32)
-    base = relion_translation_search_base(previous_best_translations)
+    selected = np.asarray(selected_relative_translations, dtype=dtype)
+    base = relion_translation_search_base(previous_best_translations, dtype=dtype)
     if base is None:
         return selected
-    return (np.asarray(base, dtype=np.float32).reshape(selected.shape) + selected).astype(np.float32)
+    return (np.asarray(base, dtype=dtype).reshape(selected.shape) + selected).astype(dtype)
 
 
 def _relion_half_plane_shell_counts(image_shape):

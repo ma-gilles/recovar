@@ -1553,6 +1553,7 @@ def _scatter_dense_k_class_result(
     best_pose_rotation_eulers,
     best_pose_translations,
     require_best_pose_details: bool = True,
+    pose_dtype: np.dtype = np.float32,
 ):
     """Scatter ``run_dense_k_class_em*`` result into per-half output lists.
 
@@ -1596,10 +1597,15 @@ def _scatter_dense_k_class_result(
     if require_best_pose_details:
         if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
             raise RuntimeError("Dense K-class path did not return best pose details")
-        best_rots = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
+        # See the cross-iteration pose-state comment at the
+        # ``new_iter_best_rotations``/``new_iter_best_translations`` call
+        # site: RELION's exp_metadata is never narrowed to float, so
+        # rotations/translations follow ``pose_dtype``
+        # (``_dense_global_scoring_dtype()``); Euler angles stay float32.
+        best_rots = np.asarray(k_class_result.best_pose_rotations, dtype=pose_dtype)
         best_pose_rotations[k] = best_rots
         best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
-        best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
+        best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=pose_dtype)
     return (
         ha_k,
         k_class_result.Ft_y,
@@ -2694,6 +2700,7 @@ def _score_half_dense(
             best_pose_rotation_eulers=best_pose_rotation_eulers,
             best_pose_translations=best_pose_translations,
             require_best_pose_details=return_best_pose_details,
+            pose_dtype=_dense_global_scoring_dtype(),
         )
         coarse_ha_k = None
         if trans_pmap_for_collapse is not None and n_trans_fine_for_collapse is not None:
@@ -5025,11 +5032,13 @@ def _run_relion_iteration_loop(
     # pdf_orientation is a non-uniform prior over HEALPix directions.
     # RELION applies this in the next E-step.  recovar must do the same.
     if replay.init_direction_prior is not None and k_class_enabled:
-        class_direction_prior_per_half = normalize_class_direction_prior_per_half(replay.init_direction_prior, n_classes)
+        class_direction_prior_per_half = normalize_class_direction_prior_per_half(
+            replay.init_direction_prior, n_classes, dtype=_dense_global_scoring_dtype()
+        )
         for k in range(2):
             if class_direction_prior_per_half[k] is None:
                 continue
-            prior_k = np.asarray(class_direction_prior_per_half[k], dtype=np.float32)
+            prior_k = np.asarray(class_direction_prior_per_half[k], dtype=_dense_global_scoring_dtype())
             class_direction_prior_per_half[k] = prior_k
             class_direction_prior_order_per_half[k] = infer_direction_prior_healpix_order(prior_k[0])
             logger.info(
@@ -5039,11 +5048,13 @@ def _run_relion_iteration_loop(
                 prior_k.shape[1],
             )
     elif replay.init_direction_prior is not None:
-        global_direction_prior_per_half = normalize_direction_prior_per_half(replay.init_direction_prior)
+        global_direction_prior_per_half = normalize_direction_prior_per_half(
+            replay.init_direction_prior, dtype=_dense_global_scoring_dtype()
+        )
         for k in range(2):
             if global_direction_prior_per_half[k] is None:
                 continue
-            prior_k = np.asarray(global_direction_prior_per_half[k], dtype=np.float32)
+            prior_k = np.asarray(global_direction_prior_per_half[k], dtype=_dense_global_scoring_dtype())
             global_direction_prior_per_half[k] = prior_k
             global_direction_prior_order_per_half[k] = infer_direction_prior_healpix_order(prior_k)
             logger.info(
@@ -6325,7 +6336,9 @@ def _run_relion_iteration_loop(
             rotation_log_prior_k = rotation_log_prior_per_half[k]
             class_rotation_log_prior_k = class_rotation_log_prior_per_half[k]
             previous_translations_k = relion_half_inputs.previous_best_translations[k]
-            translation_search_base = relion_translation_search_base(previous_translations_k)
+            translation_search_base = relion_translation_search_base(
+                previous_translations_k, dtype=_dense_global_scoring_dtype()
+            )
             translation_search_bases[k] = translation_search_base
             sigma_offset_k = _sigma_offset_for_half(
                 current_sigma_offset_angstrom,
@@ -7613,6 +7626,7 @@ def _run_relion_iteration_loop(
                     direction_prior_k = collapse_rotation_posterior_to_direction_prior(
                         np.asarray(rotation_posterior_per_half[k], dtype=np.float64),
                         k1_direction_prior_order,
+                        dtype=_dense_global_scoring_dtype(),
                     )
                     try:
                         make_relion_direction_log_prior(direction_prior_k, k1_direction_prior_order)
@@ -7637,6 +7651,7 @@ def _run_relion_iteration_loop(
                     class_rotation_posterior_per_half,
                     n_classes,
                     current_healpix_order,
+                    dtype=_dense_global_scoring_dtype(),
                 )
                 for k in range(2):
                     class_direction_prior_per_half[k] = combined_class_direction_prior.copy()
@@ -7923,15 +7938,27 @@ def _run_relion_iteration_loop(
         new_iter_best_rotations = [None, None]
         new_iter_best_rotation_eulers = [None, None]
         new_iter_best_translations = [None, None]
+        # Cross-iteration pose/translation state: RELION carries this in
+        # ``exp_metadata`` (``MultidimArray<RFLOAT>``) and writes it back via
+        # ``EMDL_ORIENT_ORIGIN_X/Y_ANGSTROM`` (registered ``EMDL_DOUBLE``,
+        # backed by ``std::vector<double>`` in ``MetaDataContainer``) -- never
+        # narrowed to float, so this snapshot must follow the same dtype as
+        # the rest of the dense/global-path float64-sensitive operands
+        # (``_dense_global_scoring_dtype``). Euler angles are left at float32:
+        # they are RELION's public per-particle metadata angles and, unlike
+        # the rotation matrix/translation used directly in scoring
+        # arithmetic, degree-valued float32 has ample precision relative to
+        # any HEALPix grid spacing used in practice.
+        _pose_state_dtype = _dense_global_scoring_dtype()
         for k in range(2):
             if best_pose_rotations[k] is not None:
-                best_rots = np.asarray(best_pose_rotations[k], dtype=np.float32)
+                best_rots = np.asarray(best_pose_rotations[k], dtype=_pose_state_dtype)
                 best_eulers = (
                     np.asarray(best_pose_rotation_eulers[k], dtype=np.float32)
                     if best_pose_rotation_eulers[k] is not None
                     else utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
                 )
-                best_trans = np.asarray(best_pose_translations[k], dtype=np.float32)
+                best_trans = np.asarray(best_pose_translations[k], dtype=_pose_state_dtype)
             elif use_local:
                 rot_idx = hard_assignments[k] // current_translations.shape[0]
                 trans_idx = hard_assignments[k] % current_translations.shape[0]
@@ -7946,7 +7973,7 @@ def _run_relion_iteration_loop(
                     )
                     best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
                 else:
-                    best_rots = np.asarray(local_search_rotations, dtype=np.float32)[rot_idx]
+                    best_rots = np.asarray(local_search_rotations, dtype=_pose_state_dtype)[rot_idx]
                     if local_search_rotation_eulers is not None:
                         best_eulers = np.asarray(local_search_rotation_eulers, dtype=np.float32)[rot_idx]
                     else:
@@ -7958,7 +7985,7 @@ def _run_relion_iteration_loop(
                 # rotation-translation row index here.
                 rot_idx = hard_assignments[k] // current_translations.shape[0]
                 trans_idx = hard_assignments[k] % current_translations.shape[0]
-                best_rots = np.asarray(pose_rotations[k], dtype=np.float32)[rot_idx]
+                best_rots = np.asarray(pose_rotations[k], dtype=_pose_state_dtype)[rot_idx]
                 best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
                 best_trans = np.asarray(current_translations)[trans_idx]
             new_iter_best_rotations[k] = best_rots
@@ -7966,6 +7993,7 @@ def _run_relion_iteration_loop(
             new_iter_best_translations[k] = _relion_metadata_translations(
                 prior_iter_best_translations[k],
                 best_trans,
+                dtype=_pose_state_dtype,
             )
         previous_best_rotations = new_iter_best_rotations
         relion_half_inputs.previous_best_rotation_eulers = new_iter_best_rotation_eulers
@@ -8061,6 +8089,7 @@ def _run_relion_iteration_loop(
                 relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
                 do_norm_correction=True,
                 do_scale_correction=relion_follower_scale_state is None,
+                dtype=_dense_global_scoring_dtype(),
             )
             if relion_follower_scale_state is None:
                 relion_half_inputs.image_corrections = norm_scale_update.image_corrections_per_half
@@ -8740,17 +8769,21 @@ def _run_relion_iteration_loop(
                 _final_replay_fields.append("noise_variance")
             _final_replay_dir_prior = final_replay_override.get("direction_prior")
             if _final_replay_dir_prior is not None:
+                _final_replay_prior_dtype = _dense_global_scoring_dtype()
                 if k_class_enabled:
                     _final_replay_priors = normalize_class_direction_prior_per_half(
                         _final_replay_dir_prior,
                         n_classes,
+                        dtype=_final_replay_prior_dtype,
                     )
                 else:
-                    _final_replay_priors = normalize_direction_prior_per_half(_final_replay_dir_prior)
+                    _final_replay_priors = normalize_direction_prior_per_half(
+                        _final_replay_dir_prior, dtype=_final_replay_prior_dtype
+                    )
                 for _half_idx in range(2):
                     if _final_replay_priors[_half_idx] is None:
                         continue
-                    _prior_k = np.asarray(_final_replay_priors[_half_idx], dtype=np.float32)
+                    _prior_k = np.asarray(_final_replay_priors[_half_idx], dtype=_final_replay_prior_dtype)
                     _prior_order_k = infer_direction_prior_healpix_order(
                         _prior_k[0] if k_class_enabled else _prior_k
                     )
@@ -8762,6 +8795,7 @@ def _run_relion_iteration_loop(
                                         _prior_k[class_idx],
                                         _prior_order_k,
                                         state.healpix_order,
+                                        dtype=_final_replay_prior_dtype,
                                     )
                                     for class_idx in range(n_classes)
                                 ],
@@ -8772,12 +8806,14 @@ def _run_relion_iteration_loop(
                                 _prior_k,
                                 _prior_order_k,
                                 state.healpix_order,
+                                dtype=_final_replay_prior_dtype,
                             )
                         _prior_order_k = state.healpix_order
                     if k_class_enabled:
                         class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior_per_half(
                             [_prior_k, None] if _half_idx == 0 else [None, _prior_k],
                             n_classes,
+                            dtype=_final_replay_prior_dtype,
                         )[_half_idx]
                         class_direction_prior_order_per_half[_half_idx] = _prior_order_k
                     else:
@@ -9311,7 +9347,9 @@ def _run_relion_iteration_loop(
         # Run on each half-set's particles (avoids loading all particles at once),
         # then accumulate Ft_y/Ft_ctf and noise stats from BOTH halves.
         previous_translations_k = relion_half_inputs.previous_best_translations[k]
-        translation_search_base = relion_translation_search_base(previous_translations_k)
+        translation_search_base = relion_translation_search_base(
+            previous_translations_k, dtype=_dense_global_scoring_dtype()
+        )
         final_outs.translation_search_bases[k] = translation_search_base
         final_sigma_offset_k = _sigma_offset_for_half(
             current_sigma_offset_angstrom,
@@ -9515,6 +9553,7 @@ def _run_relion_iteration_loop(
             final_result.best_pose_translations = _relion_metadata_translations(
                 relion_half_inputs.previous_best_translations[k],
                 final_result.best_pose_translations,
+                dtype=_dense_global_scoring_dtype(),
             )
         final_outs.update_from(k, final_result)
         _record_score_profile(

@@ -167,8 +167,16 @@ def relion_sigma_offset_prior_center(previous_best_translations, prior_offsets=N
     return (prior - old_offset).astype(dtype)
 
 
-def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
-    """Collapse per-rotation posterior mass onto RELION's HEALPix directions."""
+def collapse_rotation_posterior_to_direction_prior(
+    rotation_posterior_sums, healpix_order, *, dtype: np.dtype = np.float32
+):
+    """Collapse per-rotation posterior mass onto RELION's HEALPix directions.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running double-precision scoring should pass ``np.float64``.
+    RELION's ``pdf_direction`` is ``std::vector<MultidimArray<RFLOAT>>``
+    (RELION ``src/ml_model.h``), never narrowed to float.
+    """
     rotation_posterior_sums = np.asarray(rotation_posterior_sums, dtype=np.float64).reshape(-1)
     n_rot = rotation_grid_size(healpix_order)
     if rotation_posterior_sums.shape[0] != n_rot:
@@ -184,7 +192,7 @@ def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, heal
         direction_weights.fill(1.0 / max(n_pixels, 1))
     else:
         direction_weights /= total
-    return direction_weights.astype(np.float32)
+    return direction_weights.astype(dtype)
 
 
 def infer_direction_prior_healpix_order(direction_prior):
@@ -198,40 +206,48 @@ def infer_direction_prior_healpix_order(direction_prior):
     return order
 
 
-def normalize_direction_prior_per_half(direction_prior):
+def normalize_direction_prior_per_half(direction_prior, *, dtype: np.dtype = np.float32):
     """Return a two-element list of RELION ``pdf_direction`` arrays.
 
     RELION auto-refine stores separate learned orientation distributions for
     the two half-models.  Replay callers should pass ``[half1, half2]``.  A
     single 1D vector remains accepted for older unit tests and non-auto-refine
     callers, and is shared across both halves.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running double-precision scoring should pass ``np.float64`` --
+    RELION's ``pdf_direction`` is never narrowed (see
+    ``collapse_rotation_posterior_to_direction_prior``).
     """
     if direction_prior is None:
         return [None, None]
 
     if isinstance(direction_prior, (list, tuple)) and len(direction_prior) == 2:
         return [
-            None if direction_prior[0] is None else np.asarray(direction_prior[0], dtype=np.float32).reshape(-1),
-            None if direction_prior[1] is None else np.asarray(direction_prior[1], dtype=np.float32).reshape(-1),
+            None if direction_prior[0] is None else np.asarray(direction_prior[0], dtype=dtype).reshape(-1),
+            None if direction_prior[1] is None else np.asarray(direction_prior[1], dtype=dtype).reshape(-1),
         ]
 
-    arr = np.asarray(direction_prior, dtype=np.float32)
+    arr = np.asarray(direction_prior, dtype=dtype)
     if arr.ndim == 2 and arr.shape[0] == 2:
         return [arr[0].reshape(-1), arr[1].reshape(-1)]
     arr = arr.reshape(-1)
     return [arr.copy(), arr.copy()]
 
 
-def normalize_class_direction_prior(direction_prior, n_classes):
+def normalize_class_direction_prior(direction_prior, n_classes, *, dtype: np.dtype = np.float32):
     """Return per-class conditional RELION direction priors.
 
     RELION's ``pdf_direction[class]`` rows are joint class-direction masses in
     the no-orientation-prior branch, so row sums may equal ``pdf_class`` rather
     than one.  RECOVAR keeps ``class_log_priors`` separate, so K-class callers
     use row-normalized conditionals here and pass the class prior explicitly.
+
+    ``dtype`` defaults to float32; double-precision callers should pass
+    ``np.float64`` -- see ``normalize_direction_prior_per_half``.
     """
 
-    arr = np.asarray(direction_prior, dtype=np.float32)
+    arr = np.asarray(direction_prior, dtype=dtype)
     if arr.ndim == 1:
         arr = np.broadcast_to(arr[None, :], (int(n_classes), arr.shape[0])).copy()
     elif arr.ndim == 2 and arr.shape[0] == int(n_classes):
@@ -247,10 +263,10 @@ def normalize_class_direction_prior(direction_prior, n_classes):
     row_sums = arr.sum(axis=1, keepdims=True)
     if np.any(row_sums <= 0.0):
         raise ValueError("each class direction prior row must have positive mass")
-    return (arr / row_sums).astype(np.float32)
+    return (arr / row_sums).astype(dtype)
 
 
-def normalize_class_direction_prior_per_half(direction_prior, n_classes):
+def normalize_class_direction_prior_per_half(direction_prior, n_classes, *, dtype: np.dtype = np.float32):
     """Return two per-half arrays with shape ``(n_classes, n_dirs)``."""
 
     n_classes = int(n_classes)
@@ -263,25 +279,25 @@ def normalize_class_direction_prior_per_half(direction_prior, n_classes):
         return [
             None
             if direction_prior[0] is None
-            else normalize_class_direction_prior(direction_prior[0], n_classes),
+            else normalize_class_direction_prior(direction_prior[0], n_classes, dtype=dtype),
             None
             if direction_prior[1] is None
-            else normalize_class_direction_prior(direction_prior[1], n_classes),
+            else normalize_class_direction_prior(direction_prior[1], n_classes, dtype=dtype),
         ]
 
-    arr = np.asarray(direction_prior, dtype=np.float32)
+    arr = np.asarray(direction_prior, dtype=dtype)
     if arr.ndim == 3 and arr.shape[0] == 2 and arr.shape[1] == n_classes:
         return [
-            normalize_class_direction_prior(arr[0], n_classes),
-            normalize_class_direction_prior(arr[1], n_classes),
+            normalize_class_direction_prior(arr[0], n_classes, dtype=dtype),
+            normalize_class_direction_prior(arr[1], n_classes, dtype=dtype),
         ]
     if arr.ndim == 2 and n_classes == 1 and arr.shape[0] == 2:
         return [
-            normalize_class_direction_prior(arr[0], n_classes),
-            normalize_class_direction_prior(arr[1], n_classes),
+            normalize_class_direction_prior(arr[0], n_classes, dtype=dtype),
+            normalize_class_direction_prior(arr[1], n_classes, dtype=dtype),
         ]
 
-    shared = normalize_class_direction_prior(arr, n_classes)
+    shared = normalize_class_direction_prior(arr, n_classes, dtype=dtype)
     return [shared.copy(), shared.copy()]
 
 
@@ -308,8 +324,12 @@ def class_weights_from_direction_prior(direction_prior, n_classes):
     return None
 
 
-def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order):
-    """Remap a RELION direction prior between HEALPix orders."""
+def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order, *, dtype: np.dtype = np.float32):
+    """Remap a RELION direction prior between HEALPix orders.
+
+    ``dtype`` defaults to float32; double-precision callers should pass
+    ``np.float64`` -- see ``normalize_direction_prior_per_half``.
+    """
     direction_prior = np.asarray(direction_prior, dtype=np.float64).reshape(-1)
     if src_order == dst_order:
         out = direction_prior.copy()
@@ -327,7 +347,7 @@ def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order
         out.fill(1.0 / max(out.shape[0], 1))
     else:
         out /= total
-    return out.astype(np.float32)
+    return out.astype(dtype)
 
 
 def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=None, *, dtype: np.dtype = np.float32):

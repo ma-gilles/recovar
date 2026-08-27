@@ -9873,9 +9873,9 @@ class TestRelionModeSmokeTest:
         def fake_rotation_grid_size(_order):
             return N_ROTATIONS
 
-        def fake_collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
+        def fake_collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order, dtype=np.float32):
             collapse_calls.append((np.asarray(rotation_posterior_sums).shape, int(healpix_order)))
-            return learned_direction_priors[len(collapse_calls) - 1]
+            return np.asarray(learned_direction_priors[len(collapse_calls) - 1], dtype=dtype)
 
         def fake_make_relion_direction_log_prior(direction_prior, healpix_order, dtype=np.float32):
             prior = np.asarray(direction_prior, dtype=dtype)

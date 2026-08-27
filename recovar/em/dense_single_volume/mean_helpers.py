@@ -217,7 +217,9 @@ def _combined_noise_stats(noise_stats_per_half):
     )
 
 
-def _combined_class_direction_prior_from_halves(class_rotation_posterior_per_half, n_classes: int, healpix_order: int):
+def _combined_class_direction_prior_from_halves(
+    class_rotation_posterior_per_half, n_classes: int, healpix_order: int, *, dtype: np.dtype = np.float32
+):
     """Collapse Class3D rotation posterior sums after undoing RECOVAR's half split.
 
     RELION Class3D has a single ``mymodel.pdf_direction[class]`` updated from
@@ -237,7 +239,9 @@ def _combined_class_direction_prior_from_halves(class_rotation_posterior_per_hal
             combined = per_class if combined is None else combined + per_class
         if combined is None:
             return None
-        combined_priors.append(collapse_rotation_posterior_to_direction_prior(combined, healpix_order))
+        combined_priors.append(
+            collapse_rotation_posterior_to_direction_prior(combined, healpix_order, dtype=dtype)
+        )
     return np.stack(combined_priors, axis=0)
 
 
@@ -893,8 +897,15 @@ def update_relion_norm_scale_corrections(
     do_scale_correction: bool = True,
     scale_relaxation_mu: float = 0.0,
     eps: float = 1e-30,
+    dtype: np.dtype = np.float32,
 ) -> NormScaleCorrectionUpdateResult:
     """Update RELION-style per-image norm and per-group scale corrections.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running double-precision scoring should pass ``np.float64``.
+    Every quantity here is computed in float64 internally; only the returned
+    arrays were being floored to float32 unconditionally, discarding that
+    precision before it ever reaches the next E-step's CTF/scale weighting.
 
     The existing scoring paths consume two per-image arrays:
     ``image_corrections = (avg_norm / normcorr) * scale[group_id]`` and
@@ -1100,11 +1111,11 @@ def update_relion_norm_scale_corrections(
         scale_per_image_new = scale_new[group_ids]
         image_corr_new = image_norm_factor * scale_per_image_new
 
-        out_norm.append(jnp.asarray(normcorr_new, dtype=jnp.float32))
+        out_norm.append(jnp.asarray(normcorr_new, dtype=dtype))
         out_avg_norm.append(avg_norm_new)
-        out_group_scale.append(jnp.asarray(scale_new, dtype=jnp.float32))
-        out_scale_corr.append(jnp.asarray(scale_per_image_new, dtype=jnp.float32))
-        out_image_corr.append(jnp.asarray(image_corr_new, dtype=jnp.float32))
+        out_group_scale.append(jnp.asarray(scale_new, dtype=dtype))
+        out_scale_corr.append(jnp.asarray(scale_per_image_new, dtype=dtype))
+        out_image_corr.append(jnp.asarray(image_corr_new, dtype=dtype))
         out_zero_norm_counts.append(zero_norm_count)
 
     return NormScaleCorrectionUpdateResult(
