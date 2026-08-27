@@ -357,6 +357,7 @@ EXACT_LOCAL_PROGRESS_CHUNKS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS"
 EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"
 RELION_VDAM_WORKER_SCHEDULE_ENV = "RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ"
 RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV = "RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY"
+RELION_VDAM_WORKER_STREAM_COUNT = 8
 RELION_VDAM_BLOCK_CHRONOLOGY_ENV = "RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ"
 VDAM_CANDIDATE_BLOCK_TRACE_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE"
 VDAM_CANDIDATE_BLOCK_MAP_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP"
@@ -637,13 +638,24 @@ def _relion_vdam_worker_lanes_for_images(
     """Resolve optional native worker owners into the current physical bucket order."""
 
     path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    if not path:
-        return None
-    owner_by_stack_index = _load_relion_vdam_worker_schedule(path)
     topology = os.environ.get(
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
+    if topology == "round_robin":
+        if path:
+            raise ValueError(
+                "round-robin VDAM worker replay cannot also use a captured schedule"
+            )
+        image_indices_array = np.asarray(image_indices)
+        return (
+            np.arange(image_indices_array.size, dtype=np.int32)
+            .reshape(image_indices_array.shape)
+            % RELION_VDAM_WORKER_STREAM_COUNT
+        )
+    if not path:
+        return None
+    owner_by_stack_index = _load_relion_vdam_worker_schedule(path)
     if topology in {
         "captured_block_start",
         "captured_block_grid",
