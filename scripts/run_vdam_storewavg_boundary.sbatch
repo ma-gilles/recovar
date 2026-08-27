@@ -21,6 +21,8 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 RUN_ID="${SLURM_JOB_ID:-manual}"
+POSTERIOR_ONLY=${POSTERIOR_ONLY:-0}
+test "${POSTERIOR_ONLY}" = 0 -o "${POSTERIOR_ONLY}" = 1
 cd "${REPO_ROOT}"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV JAX_PLATFORM_NAME
@@ -77,5 +79,8 @@ if [[ -n "${RECOVAR_ORIGINAL_INDEX:-}" ]]; then
 fi
 if [[ -n "${RECOVAR_SCORE_DUMP:-}" ]]; then
   ANALYZER_ARGS+=(--recovar-score-dump "${RECOVAR_SCORE_DUMP}")
+fi
+if [[ "${POSTERIOR_ONLY}" = 1 ]]; then
+  ANALYZER_ARGS+=(--posterior-only)
 fi
 "${PIXI_PY}" -m scripts.analyze_vdam_storewavg_boundary "${ANALYZER_ARGS[@]}"

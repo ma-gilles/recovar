@@ -765,6 +765,19 @@ def test_vdam_relion_continuation_can_capture_noise_sufficient_statistics():
     assert not missing, f"VDAM continuation lost capture/target-iteration wiring: {missing}"
 
 
+def test_vdam_storewavg_runner_supports_fail_closed_posterior_only_replay():
+    runner = (REPO_ROOT / "scripts/run_vdam_storewavg_boundary.sbatch").read_text()
+
+    expected_tokens = [
+        "POSTERIOR_ONLY=${POSTERIOR_ONLY:-0}",
+        'test "${POSTERIOR_ONLY}" = 0 -o "${POSTERIOR_ONLY}" = 1',
+        'if [[ "${POSTERIOR_ONLY}" = 1 ]]; then',
+        "ANALYZER_ARGS+=(--posterior-only)",
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM StoreWavg runner lost posterior-only wiring: {missing}"
+
+
 def test_vdam_native_full_repeat_supports_focused_coarse_capture():
     runner = (REPO_ROOT / "scripts/run_vdam_native_full_repeat.sbatch").read_text()
 
