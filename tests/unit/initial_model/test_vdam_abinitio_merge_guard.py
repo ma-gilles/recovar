@@ -689,6 +689,18 @@ def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
         '--iteration "${TARGET_ITERATION}"',
         '"nr_iter_schedule":%d',
         '"stopped_after_iteration":%d',
+        "VDAM_WORKER_SCHEDULE_NPZ",
+        "EXPECTED_WORKER_SCHEDULE_SHA256",
+        "VDAM_BLOCK_CHRONOLOGY_NPZ",
+        "EXPECTED_BLOCK_CHRONOLOGY_SHA256",
+        'RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ=${CANDIDATE_WORKER_SCHEDULE}',
+        'RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${CANDIDATE_BLOCK_CHRONOLOGY}',
+        "RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE",
+        "VDAM_REPLAY_NATIVE_REFERENCES",
+        'IREF_REPLAY_TEMPLATE=${RELION_OUTPUT}/run_it{iteration:03d}_class{k:03d}.mrc',
+        '"replay_native_references":%d',
+        "TARGET_GPU_UUID=${TARGET_GPU_UUID:-}",
+        "VDAM_TARGET_GPU_MISS",
     ]
     missing = [token for token in expected_tokens if token not in capture]
     assert not missing, f"VDAM M-step capture lost full-schedule isolation: {missing}"
